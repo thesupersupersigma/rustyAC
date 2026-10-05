@@ -1,0 +1,9 @@
+[package]
+name = "rustyac-physics"
+description = "rustyAC physics: swappable systems with a Vanilla (1:1 Assetto Corsa) implementation each"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
