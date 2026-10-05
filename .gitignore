@@ -1,0 +1,12 @@
+# Folders
+prompts/
+ghidra/
+tools/_pydeps/
+re/
+
+# CSV's
+e30_magione_ai.csv
+f2004_spa_ai.csv
+tools/kawaiidra-mcp/
+cardata/
+oracle/
