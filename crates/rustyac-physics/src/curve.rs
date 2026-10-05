@@ -3,13 +3,17 @@
 //! (`CubicSpline<float,float>`).
 //!
 //! Operation order follows the disassembly, not the pseudo-C; all arithmetic is f32.
-//! Reading a curve from a `.lut` file or an inline ini value (`Curve::load`,
-//! `INIReader::getCurve`) is NOT ported yet; [`Curve::from_lut_text`] is a plain stand-in.
+//! `Curve::load` (a `.lut` file), `scale` and `getPairAtIndex` are ported too; inline ini
+//! tables are `INIReader::getCurve`, see [`crate::data::ini`].
 
 // Comparisons are spelled the way the original branches so NaN takes the same path.
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::implicit_saturating_sub)]
 
+use std::path::Path;
 use std::sync::OnceLock;
+
+use crate::data::ini::{sibling_acd, text_mode};
+use crate::math::wcstod;
 
 /// `CubicSpline<float,float>::Element` (0x14 bytes): one cubic piece starting at `x`.
 /// The PDB member names were not read; `a..d` are the usual spline coefficient names.
@@ -44,25 +48,87 @@ impl Curve {
         curve
     }
 
-    /// Stand-in loader (not a port of `Curve::load`): one `x|y` pair per line, `;` starts a
-    /// comment, blank lines are skipped. Numbers are parsed as f64 and narrowed to f32.
+    /// The text of a `.lut` file, read the way [`Curve::load`] reads it.
     pub fn from_lut_text(text: &str) -> Result<Curve, String> {
         let mut curve = Curve::new();
-        for raw in text.lines() {
-            let line = raw.split(';').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-            let pair = line.split_once('|').and_then(|(x, y)| {
-                Some((
-                    x.trim().parse::<f64>().ok()? as f32,
-                    y.trim().parse::<f64>().ok()? as f32,
-                ))
-            });
-            let (x, y) = pair.ok_or_else(|| format!("bad lut line {raw:?}"))?;
-            curve.add_value(x, y);
-        }
+        curve.load_lines(text)?;
         Ok(curve)
+    }
+
+    /// `Curve::load` @ 0x140206a50: replaces the table with the contents of a `.lut` file.
+    /// A file that cannot be opened leaves the curve empty ("ERROR: Lut file not found").
+    ///
+    /// Every line is cut at `|` (empty pieces dropped, like `wcstok`); a line with exactly
+    /// two pieces is a point, anything else is skipped. Both numbers are parsed like C
+    /// `wcstod`, so trailing text such as a comment is ignored; a piece that does not start
+    /// with a number makes the game throw, which is the `Err` here.
+    pub fn load(&mut self, path: &Path) -> Result<(), String> {
+        if let Some(acd) = sibling_acd(path).filter(|acd| acd.is_file()) {
+            return Err(format!(
+                "{} exists: the game would read {} from that archive, which is not ported",
+                acd.display(),
+                path.display()
+            ));
+        }
+        self.references.clear();
+        self.values.clear();
+        self.c_spline = OnceLock::new();
+        let Ok(bytes) = std::fs::read(path) else {
+            return Ok(());
+        };
+        // a default-locale wide stream: every byte is one character
+        let text: String = text_mode(&bytes).iter().map(|&b| b as char).collect();
+        self.load_lines(&text)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    fn load_lines(&mut self, text: &str) -> Result<(), String> {
+        for line in text.split('\n') {
+            let pieces: Vec<&str> = line.split('|').filter(|p| !p.is_empty()).collect();
+            let [reference, value] = pieces[..] else {
+                continue;
+            };
+            // the value is parsed first, like the original
+            let value = wcstod(value);
+            let reference = wcstod(reference);
+            if value.consumed == 0 || reference.consumed == 0 {
+                return Err(format!("lut line {line:?}: invalid stof argument"));
+            }
+            if value.out_of_range || reference.out_of_range {
+                return Err(format!("lut line {line:?}: stof argument out of range"));
+            }
+            self.add_value(reference.value as f32, value.value as f32);
+        }
+        Ok(())
+    }
+
+    /// `Curve::scale` @ 0x1402073e0: multiplies every value (not the references).
+    pub fn scale(&mut self, scale: f32) {
+        self.c_spline = OnceLock::new();
+        for value in &mut self.values {
+            *value *= scale;
+        }
+    }
+
+    /// `Curve::getPairAtIndex` @ 0x140206940: `(reference, value)`, or `(0, 0)` when the
+    /// index is outside the table.
+    pub fn get_pair_at_index(&self, index: i32) -> (f32, f32) {
+        match usize::try_from(index) {
+            Ok(i) if i < self.values.len() && i < self.references.len() => {
+                (self.references[i], self.values[i])
+            }
+            _ => (0.0, 0.0),
+        }
+    }
+
+    /// `references`: the x column.
+    pub fn references(&self) -> &[f32] {
+        &self.references
+    }
+
+    /// `values`: the y column.
+    pub fn values(&self) -> &[f32] {
+        &self.values
     }
 
     /// `Curve::addValue` @ 0x140205ae0

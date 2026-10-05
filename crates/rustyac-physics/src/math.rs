@@ -1,12 +1,13 @@
-//! The C runtime maths functions the Vanilla physics calls, with AC's exact results.
+//! The C runtime functions the Vanilla physics calls, with AC's exact results.
 //!
-//! `acs.exe` imports `sinf`, `cosf`, `tanf`, `powf` and `sqrtf` from `MSVCR120.dll` (the
-//! Visual C++ 2013 runtime). Rust's own `f32::sin` etc. end up in a different runtime (the
-//! UCRT). Measured on this machine the two agree bit for bit (20 million random inputs per
-//! function, see the ignored `std_vs_msvcr120` test), but nothing guarantees that for every
-//! input, CPU or future toolchain. So on Windows the DLL the game itself uses is loaded at
-//! run time and its functions are called directly: "same bits as AC" then holds by
-//! construction instead of by observation.
+//! `acs.exe` imports `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `powf`, `sqrtf` and
+//! the number parsers `wcstod` / `wcstol` from `MSVCR120.dll` (the Visual C++ 2013 runtime).
+//! Rust's own `f32::sin` etc. end up in a different runtime (the UCRT). Measured on this
+//! machine the two agree bit for bit (20 million random inputs per function, see the ignored
+//! `std_vs_msvcr120` test), but nothing guarantees that for every input, CPU or future
+//! toolchain. So on Windows the DLL the game itself uses is loaded at run time and its
+//! functions are called directly: "same bits as AC" then holds by construction instead of
+//! by observation.
 //!
 //! If `MSVCR120.dll` is not installed (or on another OS) the std functions are used instead
 //! and [`backend`] reports [`Backend::Std`]. Setting the environment variable
@@ -17,7 +18,7 @@
 
 use std::sync::OnceLock;
 
-/// Which implementation the transcendental functions resolve to.
+/// Which implementation the runtime functions resolve to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     /// `MSVCR120.dll`, the runtime `acs.exe` itself imports. Bit-exact with the game.
@@ -29,13 +30,24 @@ pub enum Backend {
 
 type F1 = unsafe extern "C" fn(f32) -> f32;
 type F2 = unsafe extern "C" fn(f32, f32) -> f32;
+type Wcstod = unsafe extern "C" fn(*const u16, *mut *mut u16) -> f64;
+type Wcstol = unsafe extern "C" fn(*const u16, *mut *mut u16, i32) -> i32;
+type Errno = unsafe extern "C" fn() -> *mut i32;
+
+/// `ERANGE`, the errno value `wcstod` / `wcstol` report overflow with.
+const ERANGE: i32 = 34;
 
 struct Crt {
     backend: Backend,
     sinf: F1,
     cosf: F1,
     tanf: F1,
+    asinf: F1,
+    acosf: F1,
+    atanf: F1,
     powf: F2,
+    /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
+    parse: Option<(Wcstod, Wcstol, Errno)>,
 }
 
 unsafe extern "C" fn std_sinf(x: f32) -> f32 {
@@ -47,6 +59,15 @@ unsafe extern "C" fn std_cosf(x: f32) -> f32 {
 unsafe extern "C" fn std_tanf(x: f32) -> f32 {
     x.tan()
 }
+unsafe extern "C" fn std_asinf(x: f32) -> f32 {
+    x.asin()
+}
+unsafe extern "C" fn std_acosf(x: f32) -> f32 {
+    x.acos()
+}
+unsafe extern "C" fn std_atanf(x: f32) -> f32 {
+    x.atan()
+}
 unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
 }
@@ -56,7 +77,11 @@ const STD: Crt = Crt {
     sinf: std_sinf,
     cosf: std_cosf,
     tanf: std_tanf,
+    asinf: std_asinf,
+    acosf: std_acosf,
+    atanf: std_atanf,
     powf: std_powf,
+    parse: None,
 };
 
 #[cfg(windows)]
@@ -71,8 +96,8 @@ mod msvcr120 {
     }
 
     pub fn load() -> Option<Crt> {
-        // SAFETY: plain Win32 calls with NUL-terminated names; the four exports are the
-        // documented C functions `float f(float)` / `float f(float, float)`.
+        // SAFETY: plain Win32 calls with NUL-terminated names; the exports are the documented
+        // C functions with the signatures of the `F1` / `F2` / `Wcstod` / ... aliases.
         unsafe {
             let module = LoadLibraryA(c"msvcr120.dll".as_ptr().cast());
             if module.is_null() {
@@ -87,7 +112,15 @@ mod msvcr120 {
                 sinf: std::mem::transmute::<*mut c_void, super::F1>(get(c"sinf")?),
                 cosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"cosf")?),
                 tanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"tanf")?),
+                asinf: std::mem::transmute::<*mut c_void, super::F1>(get(c"asinf")?),
+                acosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"acosf")?),
+                atanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"atanf")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
+                parse: Some((
+                    std::mem::transmute::<*mut c_void, super::Wcstod>(get(c"wcstod")?),
+                    std::mem::transmute::<*mut c_void, super::Wcstol>(get(c"wcstol")?),
+                    std::mem::transmute::<*mut c_void, super::Errno>(get(c"_errno")?),
+                )),
             })
         }
     }
@@ -133,6 +166,27 @@ pub fn tanf(x: f32) -> f32 {
     unsafe { (crt().tanf)(x) }
 }
 
+/// `asinf` (MSVCR120).
+#[inline]
+pub fn asinf(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().asinf)(x) }
+}
+
+/// `acosf` (MSVCR120).
+#[inline]
+pub fn acosf(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().acosf)(x) }
+}
+
+/// `atanf` (MSVCR120).
+#[inline]
+pub fn atanf(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().atanf)(x) }
+}
+
 /// `powf` (MSVCR120).
 #[inline]
 pub fn powf(x: f32, y: f32) -> f32 {
@@ -144,6 +198,195 @@ pub fn powf(x: f32, y: f32) -> f32 {
 #[inline]
 pub fn sqrtf(x: f32) -> f32 {
     x.sqrt()
+}
+
+/// `_fdtest(&x) > 0` as the game uses it: true for an infinity or a NaN.
+#[inline]
+pub fn fdtest_inf_or_nan(x: f32) -> bool {
+    !x.is_finite()
+}
+
+/// `_dtest(&x) > 0`: the f64 version of [`fdtest_inf_or_nan`].
+#[inline]
+pub fn dtest_inf_or_nan(x: f64) -> bool {
+    !x.is_finite()
+}
+
+/// What a C number parser returned.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Parsed<T> {
+    pub value: T,
+    /// How many UTF-16 units of the input were used, leading white space included.
+    /// `0` means "no number here" (`std::stof` / `std::stoi` throw `invalid_argument`).
+    pub consumed: usize,
+    /// `errno == ERANGE` (`std::stof` / `std::stoi` throw `out_of_range`).
+    pub out_of_range: bool,
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// `wcstod` (MSVCR120): parses the longest number at the start of `text`. This is what
+/// `INIReader::getFloat` and `Curve::load` use (inlined `std::stof`), so "1.5 ; note" is
+/// 1.5. The Visual C++ 2013 parser is not guaranteed to round the last bit like Rust's,
+/// which is why the game's own function is called when the runtime is available.
+pub fn wcstod(text: &str) -> Parsed<f64> {
+    let Some((wcstod, _, errno)) = crt().parse else {
+        return std_wcstod(text);
+    };
+    let buffer = wide(text);
+    let mut end = std::ptr::null_mut();
+    // SAFETY: `buffer` is NUL-terminated and outlives the call; `end` points into it.
+    unsafe {
+        *errno() = 0;
+        let value = wcstod(buffer.as_ptr(), &mut end);
+        Parsed {
+            value,
+            consumed: end.cast_const().offset_from(buffer.as_ptr()) as usize,
+            out_of_range: *errno() == ERANGE,
+        }
+    }
+}
+
+/// `wcstol(text, &end, 10)` (MSVCR120), see [`wcstod`]. `long` is 32 bits on Windows.
+pub fn wcstol(text: &str) -> Parsed<i32> {
+    let Some((_, wcstol, errno)) = crt().parse else {
+        return std_wcstol(text);
+    };
+    let buffer = wide(text);
+    let mut end = std::ptr::null_mut();
+    // SAFETY: as `wcstod`.
+    unsafe {
+        *errno() = 0;
+        let value = wcstol(buffer.as_ptr(), &mut end, 10);
+        Parsed {
+            value,
+            consumed: end.cast_const().offset_from(buffer.as_ptr()) as usize,
+            out_of_range: *errno() == ERANGE,
+        }
+    }
+}
+
+/// C `iswspace` for the characters that can appear in a data file.
+fn is_c_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r')
+}
+
+/// Fallback for [`wcstod`] without MSVCR120: `[space] [sign] digits [. digits] [e|d exp]`.
+fn std_wcstod(text: &str) -> Parsed<f64> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() && is_c_space(chars[i]) {
+        i += 1;
+    }
+    let mut number = String::new();
+    if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+        number.push(chars[i]);
+        i += 1;
+    }
+    let mut digits = 0;
+    let mut nonzero = false;
+    let mut seen_point = false;
+    while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '.' && !seen_point)) {
+        seen_point |= chars[i] == '.';
+        digits += chars[i].is_ascii_digit() as usize;
+        nonzero |= matches!(chars[i], '1'..='9');
+        number.push(chars[i]);
+        i += 1;
+    }
+    if digits == 0 {
+        return Parsed {
+            value: 0.0,
+            consumed: 0,
+            out_of_range: false,
+        };
+    }
+    if i < chars.len() && matches!(chars[i], 'e' | 'E' | 'd' | 'D') {
+        let mut j = i + 1;
+        let mut exponent = String::from("e");
+        if j < chars.len() && (chars[j] == '+' || chars[j] == '-') {
+            exponent.push(chars[j]);
+            j += 1;
+        }
+        let first_digit = j;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            exponent.push(chars[j]);
+            j += 1;
+        }
+        if j > first_digit {
+            number.push_str(&exponent);
+            i = j;
+        }
+    }
+    let value: f64 = number.parse().unwrap_or(0.0);
+    Parsed {
+        value,
+        consumed: chars[..i].iter().map(|c| c.len_utf16()).sum(),
+        out_of_range: value.is_infinite() || (value == 0.0 && nonzero),
+    }
+}
+
+/// Fallback for [`wcstol`] without MSVCR120.
+fn std_wcstol(text: &str) -> Parsed<i32> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() && is_c_space(chars[i]) {
+        i += 1;
+    }
+    let negative = i < chars.len() && chars[i] == '-';
+    if i < chars.len() && (chars[i] == '+' || chars[i] == '-') {
+        i += 1;
+    }
+    let first_digit = i;
+    let mut value: i64 = 0;
+    let mut out_of_range = false;
+    while i < chars.len() && chars[i].is_ascii_digit() {
+        value = value * 10 + chars[i] as i64 - '0' as i64;
+        if value > i32::MAX as i64 + 1 {
+            out_of_range = true;
+            value = i32::MAX as i64 + 1;
+        }
+        i += 1;
+    }
+    if i == first_digit {
+        return Parsed {
+            value: 0,
+            consumed: 0,
+            out_of_range: false,
+        };
+    }
+    let value = if negative { -value } else { value };
+    out_of_range |= value > i32::MAX as i64;
+    Parsed {
+        value: value.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        consumed: chars[..i].iter().map(|c| c.len_utf16()).sum(),
+        out_of_range,
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn number_prefix_parsing() {
+        for parse in [wcstod, std_wcstod] {
+            assert_eq!(parse("1.5 ; note").value, 1.5);
+            assert_eq!(parse("1.5 ; note").consumed, 3);
+            assert_eq!(parse("\t-0.25e1x").value, -2.5);
+            assert_eq!(parse("abc").consumed, 0);
+            assert_eq!(parse("").consumed, 0);
+            assert_eq!(parse("7.").value, 7.0);
+            assert_eq!(parse(".5").value, 0.5);
+        }
+        for parse in [wcstol, std_wcstol] {
+            assert_eq!(parse("10").value, 10);
+            assert_eq!(parse(" -3.9").value, -3);
+            assert_eq!(parse("x").consumed, 0);
+            assert!(parse("99999999999").out_of_range);
+        }
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -206,21 +449,26 @@ mod std_vs_msvcr120 {
                 .wrapping_add(1442695040888963407);
             (state >> 11) as f64 / (1u64 << 53) as f64
         };
-        let mut diff = [0usize; 4];
+        let mut diff = [0usize; 7];
         for _ in 0..N {
             // angles as the tyre model sees them, loads and exponents as getStaticDY does
             let angle = ((unit() - 0.5) * 3.2) as f32;
             let base = (unit() * 20000.0) as f32;
             let exponent = (0.3 + unit() * 2.7) as f32;
+            let ratio = ((unit() - 0.5) * 2.0) as f32;
             unsafe {
                 diff[0] += ((crt.sinf)(angle).to_bits() != angle.sin().to_bits()) as usize;
                 diff[1] += ((crt.cosf)(angle).to_bits() != angle.cos().to_bits()) as usize;
                 diff[2] += ((crt.tanf)(angle).to_bits() != angle.tan().to_bits()) as usize;
                 diff[3] += ((crt.powf)(base, exponent).to_bits() != base.powf(exponent).to_bits())
                     as usize;
+                diff[4] += ((crt.asinf)(ratio).to_bits() != ratio.asin().to_bits()) as usize;
+                diff[5] += ((crt.acosf)(ratio).to_bits() != ratio.acos().to_bits()) as usize;
+                diff[6] += ((crt.atanf)(angle).to_bits() != angle.atan().to_bits()) as usize;
             }
         }
-        for (name, count) in ["sinf", "cosf", "tanf", "powf"].iter().zip(diff) {
+        let names = ["sinf", "cosf", "tanf", "powf", "asinf", "acosf", "atanf"];
+        for (name, count) in names.iter().zip(diff) {
             println!("{name}: {count} of {N} results differ between MSVCR120 and Rust std");
         }
     }

@@ -4,9 +4,11 @@
 //! into forces. [`VanillaSctm`] is AC's only implementation of it (`SCTM`, used by cars whose
 //! tyres.ini has `VERSION >= 10`).
 
+mod data;
 pub mod oracle_csv;
 mod sctm;
 
+pub use data::{BrushSlipProvider, TyreCompoundDef, TyreData, TyreModelData, TyrePatchData};
 pub use sctm::{calc_load_sens_mult, VanillaSctm};
 
 /// `TyreModelInput` (0x30 bytes in AC). Field order and types match the original.
