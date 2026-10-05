@@ -1,0 +1,14 @@
+[package]
+name = "sctm_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test oracle: sweeps Assetto Corsa's own SCTM::solve (loaded from acs.exe, never executed as a program)"
+
+[dependencies]
+
+[profile.release]
+opt-level = 2
+
+# standalone crate, not part of any parent workspace
+[workspace]
