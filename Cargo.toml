@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+# the oracle maps acs.exe into its own process; it stays a separate crate
+exclude = ["tools/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["thesupersupersigma"]
+publish = false
