@@ -1,0 +1,10 @@
+; synthetic test table (not car data): deg C -> grip multiplier
+0|0.88
+30|0.91
+55|0.97
+75|1.0
+105|1.0
+130|0.97
+170|0.93
+230|0.85
+300|0.6

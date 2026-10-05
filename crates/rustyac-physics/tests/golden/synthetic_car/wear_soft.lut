@@ -1,0 +1,8 @@
+; synthetic test table (not car data): virtual km -> grip percent
+0|100
+1.5|99.4
+6|97.5
+15|94
+28|90.5
+45|86
+70|78

@@ -5,7 +5,11 @@
 //!     For every tyres.ini: let the game load it, compare every loaded value with the Rust
 //!     loader, then compare `SCTM::solve` with `VanillaSctm` on random inputs.
 //! tyre_oracle run --car <dir> [--axle front|rear|both] [--scenario <name>|all] [--out <dir>] [--check]
-//!     Record scripted scenarios of `Tyre::step` for `tyre_compare`.
+//!                 [--steps <n>] [--golden]
+//!     Record scripted scenarios of `Tyre::step` for `tyre_compare`. `--check` replays each
+//!     one through `VanillaTyre` straight away. `--steps` cuts a scenario short; `--golden`
+//!     writes the compact form the checked-in test uses (the inputs plus one hash of the
+//!     outputs per step) instead of the full recording.
 
 mod acs;
 mod game;
@@ -16,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use rustyac_physics::data::tyres_ini::{init_compounds, Axle};
 use rustyac_physics::tyre::rig::scenarios::{self, Wheel, SCENARIOS};
-use rustyac_physics::tyre::rig::{self, Recording, Rig, StepInput};
+use rustyac_physics::tyre::rig::{self, Golden, Recording, Rig, StepInput};
 use rustyac_physics::tyre::{TyreModel, VanillaSctm};
 
 use game::{Game, SctmInput};
@@ -26,7 +30,8 @@ const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assett
 fn usage() -> String {
     "usage: tyre_oracle coverage --car <dir> [--car <dir> ...] [--n <rows per compound>] [--seed <seed>] \
      [--csv-out <dir>]\n       \
-     tyre_oracle run --car <dir> [--axle front|rear|both] [--scenario <name>|all] [--out <dir>] [--check]\n       \
+     tyre_oracle run --car <dir> [--axle front|rear|both] [--scenario <name>|all] [--out <dir>] [--check] \
+     [--steps <n>] [--golden]\n       \
      common: [--acs <path to acs.exe>] [--verbose]   (--verbose keeps the game's own console output)"
         .to_string()
 }
@@ -43,6 +48,8 @@ struct Args {
     scenario: String,
     out: PathBuf,
     check: bool,
+    steps: Option<usize>,
+    golden: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -59,6 +66,8 @@ fn parse_args() -> Result<Args, String> {
         scenario: "all".into(),
         out: PathBuf::from("oracle/tyre"),
         check: false,
+        steps: None,
+        golden: false,
     };
     while let Some(flag) = it.next() {
         let mut value = || {
@@ -84,6 +93,14 @@ fn parse_args() -> Result<Args, String> {
             "--scenario" => a.scenario = value()?,
             "--out" => a.out = PathBuf::from(value()?),
             "--check" => a.check = true,
+            "--steps" => {
+                a.steps = Some(
+                    value()?
+                        .parse()
+                        .map_err(|_| "--steps: not a number".to_string())?,
+                )
+            }
+            "--golden" => a.golden = true,
             _ => return Err(format!("unknown argument {flag}\n{}", usage())),
         }
     }
@@ -400,7 +417,8 @@ fn run(game: &Game, args: &Args) -> Result<bool, String> {
             static_load: if axle == Axle::Front { 2800.0 } else { 3400.0 },
         };
         for name in &names {
-            let inputs = scenarios::scenario(name, axle, &wheel).expect("known scenario");
+            let mut inputs = scenarios::scenario(name, axle, &wheel).expect("known scenario");
+            inputs.truncate(args.steps.unwrap_or(usize::MAX));
             let compound = scenarios::compound_for(name).min(tyres.compound_defs.len() as i32 - 1);
             game.set_world(&inputs[0]);
             let tyre = game.new_tyre(&game_path(dir), axle.tyre_index());
@@ -421,11 +439,17 @@ fn run(game: &Game, args: &Args) -> Result<bool, String> {
                 inputs,
                 outputs,
             };
-            let file = args
-                .out
-                .join(format!("{}_{}_{name}.csv", car_name(dir), axle.name()));
-            std::fs::write(&file, recording.to_text())
-                .map_err(|e| format!("{}: {e}", file.display()))?;
+            let (extension, text) = if args.golden {
+                ("golden", Golden::from_recording(&recording).to_text())
+            } else {
+                ("csv", recording.to_text())
+            };
+            let file = args.out.join(format!(
+                "{}_{}_{name}.{extension}",
+                car_name(dir),
+                axle.name()
+            ));
+            std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
             print!("{}: {} steps", file.display(), recording.inputs.len());
             if args.check {
                 let replay = rig::replay(&recording, dir)?;

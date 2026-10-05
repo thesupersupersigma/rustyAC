@@ -8,7 +8,7 @@ use super::{StepInput, DT};
 use crate::data::tyres_ini::Axle;
 
 /// Every scenario, in the order the oracle runs them.
-pub const SCENARIOS: [&str; 11] = [
+pub const SCENARIOS: [&str; 12] = [
     "warmup",
     "brake_lockup",
     "wheelspin",
@@ -20,6 +20,7 @@ pub const SCENARIOS: [&str; 11] = [
     "random",
     "tester",
     "nan_inputs",
+    "golden_mix",
 ];
 
 /// The few tyre numbers the scripts need to place the hub sensibly.
@@ -564,6 +565,63 @@ pub fn scenario(name: &str, axle: Axle, wheel: &Wheel) -> Option<Vec<StepInput>>
                 });
             }
         }
+        // a little of everything in 500 steps, for the checked-in golden test
+        "golden_mix" => {
+            for i in 0..500 {
+                let speed = ramp(i, 30, 200, 0.0, 28.0) - ramp(i, 230, 300, 0.0, 14.0);
+                let slip = ramp(i, 90, 160, 0.0, 0.07) - ramp(i, 300, 340, 0.0, 0.05);
+                let load = load0 * (1.0 + 0.4 * ramp(i, 200, 240, 0.0, 1.0));
+                s.push(speed, slip, -0.03, load, |input, wheel| {
+                    input.torque_mode = [2, 1, 0, 2, 1][i / 100];
+                    input.driven = !front && (100..300).contains(&i);
+                    if input.driven {
+                        input.set_angular_velocity = Some(rolling(speed, 0.06));
+                    }
+                    input.electric_torque =
+                        ramp(i, 5, 40, 0.0, 1500.0) - ramp(i, 60, 90, 0.0, 1300.0);
+                    input.brake_torque =
+                        ramp(i, 215, 235, 0.0, 4000.0) - ramp(i, 280, 300, 0.0, 4000.0);
+                    input.hub_angular_velocity = [0.0, 0.3, 0.0];
+                    input.mechanical_damage_rate = 1.0;
+                    input.tyre_consumption_rate = 25.0;
+                    input.allow_tyre_blankets = (400..460).contains(&i);
+                    if i == 410 {
+                        input.set_blankets = Some(true);
+                    }
+                    if (320..340).contains(&i) {
+                        input.ground_y = -0.2;
+                    }
+                    if (345..350).contains(&i) {
+                        input.ground_y = input.hub_matrix[13] - wheel.rim_radius + 0.003;
+                    }
+                    if (350..375).contains(&i) {
+                        let tilt = ramp(i, 350, 362, 0.0, 0.4) - ramp(i, 362, 375, 0.0, 0.4);
+                        input.ground_normal = [tilt.sin(), tilt.cos(), 0.0];
+                    }
+                    if (380..430).contains(&i) {
+                        input.grip_mod = 0.7;
+                        input.dirt_additive_k = 1.5;
+                        input.damping = 0.08;
+                        input.granularity = 1.0;
+                        input.sin_height = 0.008;
+                        input.sin_length = 2.5;
+                    }
+                    if (440..455).contains(&i) {
+                        input.ai_mult = 1.2;
+                    }
+                    if (460..475).contains(&i) {
+                        input.ext_active = true;
+                        input.ext_load = 5000.0;
+                        input.ext_slip_angle = 0.1;
+                        input.ext_slip_ratio = -0.2;
+                    }
+                    if (480..486).contains(&i) {
+                        input.has_hit = false;
+                    }
+                    input.has_car = !(490..500).contains(&i);
+                });
+            }
+        }
         _ => return None,
     }
     Some(s.steps)
@@ -580,7 +638,7 @@ mod tests {
             for axle in [Axle::Front, Axle::Rear] {
                 let a = scenario(name, axle, &wheel).unwrap();
                 let b = scenario(name, axle, &wheel).unwrap();
-                assert!(a.len() >= 2000, "{name}: {} steps", a.len());
+                assert!(a.len() >= 500, "{name}: {} steps", a.len());
                 let words = |steps: &[StepInput]| -> Vec<Vec<u64>> {
                     steps.iter().map(StepInput::to_words).collect()
                 };

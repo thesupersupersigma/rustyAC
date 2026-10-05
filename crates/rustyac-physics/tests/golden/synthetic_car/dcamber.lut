@@ -1,0 +1,10 @@
+; synthetic test table (not car data): signed camber deg -> lateral grip multiplier
+-12|0.82
+-6|0.93
+-3|0.985
+-1|1.0
+0|1.0
+1|1.012
+3|1.03
+6|1.01
+12|0.9

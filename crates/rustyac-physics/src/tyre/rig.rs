@@ -809,6 +809,136 @@ impl Recording {
     }
 }
 
+/// A compact recording for a checked-in test: the inputs of every step (only the values
+/// that changed since the step before) and one hash of AC's outputs per step.
+#[derive(Clone, Debug, Default)]
+pub struct Golden {
+    pub header: Vec<(String, String)>,
+    pub inputs: Vec<StepInput>,
+    /// [`output_hash`] of AC's snapshot after each step.
+    pub hashes: Vec<u64>,
+}
+
+/// FNV-1a over the recorded words, with every NaN replaced by one canonical NaN first (see
+/// [`same_value`]).
+pub fn output_hash(kinds: &[char], words: &[u64]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for (&kind, &word) in kinds.iter().zip(words) {
+        let word = match kind {
+            'f' if f32::from_bits(word as u32).is_nan() => 0x7fc0_0000,
+            'd' if f64::from_bits(word).is_nan() => 0x7ff8_0000_0000_0000,
+            _ => word,
+        };
+        for byte in word.to_le_bytes() {
+            hash = (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+impl Golden {
+    pub fn from_recording(recording: &Recording) -> Golden {
+        let kinds: Vec<char> = output_fields().iter().map(|n| field_kind(n)).collect();
+        Golden {
+            header: recording.header.clone(),
+            inputs: recording.inputs.clone(),
+            hashes: recording
+                .outputs
+                .iter()
+                .map(|words| output_hash(&kinds, words))
+                .collect(),
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.header
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// One line per step: `column:hex` for every input word that differs from the step
+    /// before (all of them on the first line), then `;` and the output hash.
+    pub fn to_text(&self) -> String {
+        let mut text = String::from("#");
+        for (key, value) in &self.header {
+            text.push_str(&format!(" {key}={value}"));
+        }
+        text.push('\n');
+        let mut previous: Vec<u64> = Vec::new();
+        for (input, hash) in self.inputs.iter().zip(&self.hashes) {
+            let words = input.to_words();
+            let cells: Vec<String> = words
+                .iter()
+                .enumerate()
+                .filter(|(i, word)| previous.get(*i) != Some(word))
+                .map(|(i, word)| format!("{i:x}:{word:x}"))
+                .collect();
+            text.push_str(&cells.join(","));
+            text.push_str(&format!(";{hash:x}"));
+            text.push('\n');
+            previous = words;
+        }
+        text
+    }
+
+    pub fn parse(text: &str) -> Result<Golden, String> {
+        let mut lines = text.lines();
+        let first = lines.next().ok_or("empty golden file")?;
+        let mut golden = Golden {
+            header: first
+                .trim_start_matches('#')
+                .split_whitespace()
+                .filter_map(|pair| pair.split_once('='))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Golden::default()
+        };
+        let mut words = vec![0u64; input_fields().len()];
+        for (number, line) in lines.enumerate() {
+            let bad = || format!("golden step {number}: malformed line");
+            let (cells, hash) = line.split_once(';').ok_or_else(bad)?;
+            for cell in cells.split(',').filter(|c| !c.is_empty()) {
+                let (index, word) = cell.split_once(':').ok_or_else(bad)?;
+                let index = usize::from_str_radix(index, 16).map_err(|_| bad())?;
+                *words.get_mut(index).ok_or_else(bad)? =
+                    u64::from_str_radix(word, 16).map_err(|_| bad())?;
+            }
+            golden.inputs.push(StepInput::from_words(&words));
+            golden
+                .hashes
+                .push(u64::from_str_radix(hash, 16).map_err(|_| bad())?);
+        }
+        Ok(golden)
+    }
+
+    /// Replays the inputs through a fresh [`VanillaTyre`]; `Err` names the first step whose
+    /// outputs do not hash to AC's.
+    pub fn check(&self, data_path: &Path) -> Result<(), String> {
+        let axle = Axle::parse(self.get("axle").ok_or("golden file has no axle")?)?;
+        let compound: i32 = self
+            .get("compound")
+            .and_then(|c| c.parse().ok())
+            .ok_or("golden file has no compound index")?;
+        let first = self.inputs.first().ok_or("golden file has no steps")?;
+        let mut rig = Rig::new(data_path, axle, compound, first)?;
+        let kinds: Vec<char> = output_fields().iter().map(|n| field_kind(n)).collect();
+        for (step, (input, &expected)) in self.inputs.iter().zip(&self.hashes).enumerate() {
+            let got = output_hash(&kinds, &rig.step(input));
+            if got != expected {
+                return Err(format!(
+                    "{} {}: step {step} of {} is not AC's (record the scenario with \
+                     tyre_oracle and run tyre_compare to see which value differs)",
+                    self.get("scenario").unwrap_or("?"),
+                    axle.name(),
+                    self.inputs.len()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Where a replay first left AC's recording.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Divergence {

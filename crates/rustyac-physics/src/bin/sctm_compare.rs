@@ -124,7 +124,10 @@ fn run() -> Result<bool, String> {
     if let Some(p) = &args.dcamber_lut {
         sctm.d_camber_curve = load_lut(p)?;
     }
-    sctm.use_smooth_d_camber_curve = args.dcamber_smooth;
+    // an override only: the car's own DCAMBER_LUT_SMOOTH is kept otherwise
+    if args.dcamber_smooth {
+        sctm.use_smooth_d_camber_curve = true;
+    }
 
     let text =
         std::fs::read_to_string(&args.csv).map_err(|e| format!("{}: {e}", args.csv.display()))?;

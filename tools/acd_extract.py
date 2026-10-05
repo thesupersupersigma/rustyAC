@@ -93,6 +93,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--car", required=True, help="car folder containing data.acd")
     ap.add_argument("--out", required=True, help="output directory")
+    ap.add_argument("--name", help="folder name to derive the key from, for a car folder that "
+                                   "was renamed after packing (default: the folder's own name)")
     a = ap.parse_args()
 
     car = Path(a.car)
@@ -104,7 +106,7 @@ def main():
         sys.exit("refusing to write inside the car folder")
     out.mkdir(parents=True, exist_ok=True)
 
-    key = key_from_string(car.resolve().name)
+    key = key_from_string(a.name or car.resolve().name)
     count = 0
     for name, data in read_acd(acd, key):
         target = (out / name).resolve()
