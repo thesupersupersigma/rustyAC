@@ -8,3 +8,4 @@ pub mod curve;
 pub mod data;
 pub mod math;
 pub mod tyre;
+pub mod vecmath;

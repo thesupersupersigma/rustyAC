@@ -11,7 +11,7 @@
 // Comparisons are spelled the way the original branches so NaN takes the same path.
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp)]
 
-use super::{TyreModel, TyreModelInput, TyreModelOutput};
+use super::{TyreCompoundDef, TyreModel, TyreModelInput, TyreModelOutput};
 use crate::curve::Curve;
 use crate::math::{cosf, powf, sinf, sqrtf, tanf};
 
@@ -157,6 +157,14 @@ fn clamp01(x: f32) -> f32 {
 }
 
 impl TyreModel for VanillaSctm {
+    fn get_static_dy(&self, load: f32) -> f32 {
+        VanillaSctm::get_static_dy(self, load)
+    }
+
+    fn set_compound(&mut self, def: &TyreCompoundDef) {
+        def.mirror_into_sctm(self);
+    }
+
     /// `SCTM::solve` @ 0x14044bc20
     fn solve(&self, r#in: &TyreModelInput) -> TyreModelOutput {
         let mut out = TyreModelOutput::default();

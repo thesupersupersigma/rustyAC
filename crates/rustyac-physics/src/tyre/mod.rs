@@ -1,15 +1,32 @@
-//! The tyre force model slot.
+//! The tyre.
+//!
+//! [`VanillaTyre`] is AC's `Tyre` for tyres.ini `VERSION >= 10`: ground contact, slip, forces
+//! into the hub, wheel speed, temperatures, pressure and wear, once per physics step. It
+//! talks to the rest of the car through [`Suspension`], [`RayTrackCollisionProvider`] and
+//! [`TyreCar`], and owns a force model:
 //!
 //! [`TyreModel`] is AC's `ITyreModel`: one `solve` call turning the state of a contact patch
-//! into forces. [`VanillaSctm`] is AC's only implementation of it (`SCTM`, used by cars whose
-//! tyres.ini has `VERSION >= 10`).
+//! into forces. [`VanillaSctm`] is AC's only implementation of it (`SCTM`).
 
 mod data;
+mod interfaces;
 pub mod oracle_csv;
+pub mod rig;
 mod sctm;
+mod status;
+mod thermal;
+mod vanilla_tyre;
 
 pub use data::{BrushSlipProvider, TyreCompoundDef, TyreData, TyreModelData, TyrePatchData};
+pub use interfaces::{
+    RayCastResult, RayTrackCollisionProvider, SurfaceDef, Suspension, TorqueModeEx, TyreCar,
+};
 pub use sctm::{calc_load_sens_mult, VanillaSctm};
+pub use status::{TyreExternalInputs, TyreInputs, TyreStatus};
+pub use thermal::{TyreThermalPatch, VanillaTyreThermalModel};
+pub use vanilla_tyre::{
+    ks_calc_camber_rad, ks_calc_contact_patch_length, ks_calc_slip_angle_rad, VanillaTyre,
+};
 
 /// `TyreModelInput` (0x30 bytes in AC). Field order and types match the original.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -63,4 +80,13 @@ pub struct TyreModelOutput {
 pub trait TyreModel {
     /// `ITyreModel::solve` (vtable slot 1).
     fn solve(&self, input: &TyreModelInput) -> TyreModelOutput;
+
+    /// Peak lateral friction coefficient at `load`, for `TyreStatus::D`. Not part of AC's
+    /// `ITyreModel`: `Tyre::addTyreForcesV10` calls `SCTM::getStaticDY` on its own SCTM
+    /// directly.
+    fn get_static_dy(&self, load: f32) -> f32;
+
+    /// Take the parameters of a compound. Not part of AC's `ITyreModel` either:
+    /// `Tyre::setCompound` writes the SCTM's members itself.
+    fn set_compound(&mut self, def: &TyreCompoundDef);
 }

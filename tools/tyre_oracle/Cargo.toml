@@ -1,0 +1,16 @@
+[package]
+name = "tyre_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test oracle: drives Assetto Corsa's own Tyre::step (loaded from acs.exe, never executed as a program) on a single-wheel rig"
+
+[dependencies]
+# only for the shared rig (scenario scripts, recording format) and the in-process comparison
+rustyac-physics = { path = "../../crates/rustyac-physics" }
+
+[profile.release]
+opt-level = 2
+
+# standalone crate, not part of the parent workspace
+[workspace]
