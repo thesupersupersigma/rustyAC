@@ -14,3 +14,4 @@ f2004_spa_ai.csv
 # Build output
 target/
 __pycache__/
+tools/rea/
