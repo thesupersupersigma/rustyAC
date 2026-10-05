@@ -402,7 +402,7 @@ impl GameTyre<'_> {
     pub fn set_compound(&self, cindex: i32) -> bool {
         let f: extern "C" fn(*mut u8, i32) -> u8 =
             unsafe { std::mem::transmute(self.game.acs.addr(RVA_TYRE_SET_COMPOUND)) };
-        f(self.ptr, cindex) & 0xff != 0
+        f(self.ptr, cindex) != 0
     }
 
     pub fn compound_count(&self) -> usize {
