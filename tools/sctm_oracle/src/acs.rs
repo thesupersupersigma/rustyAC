@@ -10,6 +10,7 @@ use std::path::Path;
 pub const RVA_SCTM_CTOR: usize = 0x44b8c0; // SCTM::SCTM
 pub const RVA_SCTM_SOLVE: usize = 0x44bc20; // SCTM::solve
 pub const RVA_SCTM_VFTABLE: usize = 0x1416580; // SCTM::`vftable' (slot 1 = solve)
+pub const RVA_CURVE_ADD_VALUE: usize = 0x205ae0; // Curve::addValue(float, float)
 pub const RVA_CALC_LOAD_SENS_MULT: usize = 0x27f770; // calcLoadSensMult(float, float, float)
 pub const RVA_TAN_FLOAT: usize = 0xbf630; // float tan(float), as used by Tyre::initCompounds
 pub const RVA_DEG2RAD_CONST: usize = 0x14196dc; // the 0.017453f literal initCompounds multiplies by

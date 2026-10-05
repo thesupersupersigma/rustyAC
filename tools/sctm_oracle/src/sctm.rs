@@ -1,7 +1,9 @@
 //! The game's SCTM object and its solve() argument structs.
 //! Layouts: re/tyre/types/{SCTM,TyreModelInput,TyreModelOutput}.txt (from acs.pdb).
 
-use crate::acs::{Acs, RVA_DEG2RAD_CONST, RVA_SCTM_CTOR, RVA_SCTM_SOLVE, RVA_SCTM_VFTABLE};
+use crate::acs::{
+    Acs, RVA_CURVE_ADD_VALUE, RVA_DEG2RAD_CONST, RVA_SCTM_CTOR, RVA_SCTM_SOLVE, RVA_SCTM_VFTABLE,
+};
 use crate::ini::Section;
 
 const SCTM_SIZE: usize = 0x1e8;
@@ -21,8 +23,11 @@ const CAMBER_GAIN: usize = 0x30;
 const DCAMBER0: usize = 0x34;
 const DCAMBER1: usize = 0x38;
 const CF_X_MULT: usize = 0x3c;
+const DY_LOAD_CURVE: usize = 0x40;
+const DX_LOAD_CURVE: usize = 0xc0;
 const PRESSURE_CF_GAIN: usize = 0x140;
 const BRAKE_DX_MOD: usize = 0x144;
+const DCAMBER_CURVE: usize = 0x148;
 const USE_SMOOTH_DCAMBER_CURVE: usize = 0x1c8;
 const DCAMBER_BLEND: usize = 0x1cc;
 const COMBINED_FACTOR: usize = 0x1d0;
@@ -74,9 +79,25 @@ pub struct Params {
     pub fields: Vec<(&'static str, f32)>,
 }
 
+/// Values forced onto the object after the ini ones, to reach the branches of solve() that
+/// the car's own data does not use. Curves are (reference, value) pairs.
+#[derive(Default)]
+pub struct Overrides {
+    pub combined_factor: Option<f32>,
+    pub dy_curve: Option<Vec<(f32, f32)>>,
+    pub dx_curve: Option<Vec<(f32, f32)>>,
+    pub dcamber_lut: Option<Vec<(f32, f32)>>,
+    pub dcamber_smooth: bool,
+}
+
 impl Sctm {
     /// Mirrors what Tyre::initCompounds + Tyre::setCompound do for a VERSION >= 10 compound.
-    pub fn new(acs: &Acs, sec: &Section, version: i32) -> Result<(Sctm, Params), String> {
+    pub fn new(
+        acs: &Acs,
+        sec: &Section,
+        version: i32,
+        overrides: &Overrides,
+    ) -> Result<(Sctm, Params), String> {
         if version < 10 {
             return Err(format!("tyres.ini VERSION={version}: SCTM is only used for VERSION >= 10"));
         }
@@ -138,14 +159,34 @@ impl Sctm {
             ("pressureCfGain", PRESSURE_CF_GAIN, sec.float("PRESSURE_FLEX_GAIN")?),
             ("brakeDXMod", BRAKE_DX_MOD, brake_dx_mod),
             // TyreModelData's default is 0.0, which setCompound copies over SCTM's own 2.0
-            ("combinedFactor", COMBINED_FACTOR, sec.float_opt("COMBINED_FACTOR")?.unwrap_or(0.0)),
+            (
+                "combinedFactor",
+                COMBINED_FACTOR,
+                match overrides.combined_factor {
+                    Some(v) => v,
+                    None => sec.float_opt("COMBINED_FACTOR")?.unwrap_or(0.0),
+                },
+            ),
         ];
         unsafe {
             for &(_, offset, value) in &fields {
                 (obj.add(offset) as *mut f32).write(value);
             }
-            // no DCAMBER_LUT, so the smooth flag stays false
-            obj.add(USE_SMOOTH_DCAMBER_CURVE).write(0);
+            // false unless overridden: the ini has no DCAMBER_LUT
+            obj.add(USE_SMOOTH_DCAMBER_CURVE).write(overrides.dcamber_smooth as u8);
+            // the three Curves were built empty by the game's constructor; fill them with the
+            // game's own Curve::addValue
+            let add_value: extern "system" fn(*mut u8, f32, f32) =
+                std::mem::transmute(acs.addr(RVA_CURVE_ADD_VALUE));
+            for (offset, pairs) in [
+                (DY_LOAD_CURVE, &overrides.dy_curve),
+                (DX_LOAD_CURVE, &overrides.dx_curve),
+                (DCAMBER_CURVE, &overrides.dcamber_lut),
+            ] {
+                for &(reference, value) in pairs.iter().flatten() {
+                    add_value(obj.add(offset), reference, value);
+                }
+            }
         }
         let mut reported: Vec<(&'static str, f32)> =
             fields.iter().map(|&(name, _, value)| (name, value)).collect();
