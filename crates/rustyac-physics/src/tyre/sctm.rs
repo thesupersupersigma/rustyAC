@@ -8,6 +8,9 @@
 //! Fields are the PDB member names in snake_case (`lsMultY` -> `ls_mult_y`). `SCTM::solve`
 //! has no named locals left in the PDB, so its locals are descriptive names of my own.
 
+// Comparisons are spelled the way the original branches so NaN takes the same path.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp)]
+
 use super::{TyreModel, TyreModelInput, TyreModelOutput};
 use crate::curve::Curve;
 use crate::math::{cosf, powf, sinf, sqrtf, tanf};
@@ -206,7 +209,9 @@ impl TyreModel for VanillaSctm {
         } else if !self.use_smooth_d_camber_curve {
             d_y *= self.d_camber_curve.get_value(camber_signed * 57.29578);
         } else {
-            d_y *= self.d_camber_curve.get_cubic_spline_value(camber_signed * 57.29578);
+            d_y *= self
+                .d_camber_curve
+                .get_cubic_spline_value(camber_signed * 57.29578);
         }
 
         // less grip the faster the rubber slides over the road
@@ -217,7 +222,11 @@ impl TyreModel for VanillaSctm {
         let slide_x = cos_slip_angle * (speed * slip_ratio);
         let slide_speed = sqrtf(slide_y * slide_y + slide_x * slide_x);
         // `cmova`: a NaN slip ratio also picks the limit
-        let slip_ratio_limited = if slip_ratio > -0.99999 { slip_ratio } else { -0.99999 };
+        let slip_ratio_limited = if slip_ratio > -0.99999 {
+            slip_ratio
+        } else {
+            -0.99999
+        };
         let speed_div = slide_speed * self.speed_sensitivity + 1.0;
         let pressure_cf = self.pressure_cf_gain * r#in.pressure_ratio + 1.0;
         d_y /= speed_div;
@@ -292,9 +301,18 @@ mod tests {
     fn early_exit_is_all_zero() {
         let sctm = VanillaSctm::default();
         let zero = TyreModelOutput::default();
-        let rolling = TyreModelInput { load: 4000.0, speed: 20.0, u: 1.0, ..Default::default() };
+        let rolling = TyreModelInput {
+            load: 4000.0,
+            speed: 20.0,
+            u: 1.0,
+            ..Default::default()
+        };
         assert_eq!(sctm.solve(&rolling), zero);
-        let airborne = TyreModelInput { load: 0.0, slip_angle_rad: 0.1, ..rolling };
+        let airborne = TyreModelInput {
+            load: 0.0,
+            slip_angle_rad: 0.1,
+            ..rolling
+        };
         assert_eq!(sctm.solve(&airborne), zero);
     }
 }

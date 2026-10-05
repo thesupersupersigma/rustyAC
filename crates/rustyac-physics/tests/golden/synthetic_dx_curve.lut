@@ -1,0 +1,9 @@
+; synthetic test table (not car data): load N | longitudinal peak friction
+0|2.7
+800|2.4
+1600|2.1
+3200|1.83
+4800|1.7
+6400|1.6
+9600|1.5
+12800|1.41

@@ -150,9 +150,31 @@ fn run() -> Result<bool, String> {
         "maths    {}",
         match math::backend() {
             Backend::Msvcr120 => "MSVCR120.dll (the runtime acs.exe uses)",
-            Backend::Std => "Rust std -- NOT the game's runtime, last-bit differences expected",
+            Backend::Std => "Rust std (not the runtime acs.exe uses)",
         }
     );
+    for (name, value) in [
+        ("lsMultY", sctm.ls_mult_y),
+        ("lsExpY", sctm.ls_exp_y),
+        ("lsMultX", sctm.ls_mult_x),
+        ("lsExpX", sctm.ls_exp_x),
+        ("Fz0", sctm.fz0),
+        ("maxSlip0", sctm.max_slip0),
+        ("maxSlip1", sctm.max_slip1),
+        ("asy", sctm.asy),
+        ("falloffSpeed", sctm.falloff_speed),
+        ("speedSensitivity", sctm.speed_sensitivity),
+        ("camberGain", sctm.camber_gain),
+        ("dcamber0", sctm.dcamber0),
+        ("dcamber1", sctm.dcamber1),
+        ("cfXmult", sctm.cf_x_mult),
+        ("pressureCfGain", sctm.pressure_cf_gain),
+        ("brakeDXMod", sctm.brake_dx_mod),
+        ("dCamberBlend", sctm.d_camber_blend),
+        ("combinedFactor", sctm.combined_factor),
+    ] {
+        println!("  SCTM.{name} = {value} ({:#010x})", value.to_bits());
+    }
 
     let mut stats: [FieldStats; 7] = Default::default();
     let mut exact_rows = 0;
@@ -180,10 +202,21 @@ fn run() -> Result<bool, String> {
         exact_rows += row_exact as usize;
     }
 
-    println!("\n{:<7} {:>8} {:>10} {:>9} {:>13} {:>8}", "field", "rows", "bit-exact", "%", "max abs err", "max ULP");
+    println!(
+        "\n{:<7} {:>8} {:>10} {:>9} {:>13} {:>8}",
+        "field", "rows", "bit-exact", "%", "max abs err", "max ULP"
+    );
     for (name, s) in OUTPUT_FIELDS.iter().zip(&stats) {
-        let pct = if rows.is_empty() { 100.0 } else { 100.0 * s.exact as f64 / rows.len() as f64 };
-        let ulp = if s.max_ulp == u32::MAX { "NaN".to_string() } else { s.max_ulp.to_string() };
+        let pct = if rows.is_empty() {
+            100.0
+        } else {
+            100.0 * s.exact as f64 / rows.len() as f64
+        };
+        let ulp = if s.max_ulp == u32::MAX {
+            "NaN".to_string()
+        } else {
+            s.max_ulp.to_string()
+        };
         println!(
             "{:<7} {:>8} {:>10} {:>8.4}% {:>13e} {:>8}",
             name,

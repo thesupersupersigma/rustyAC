@@ -72,9 +72,14 @@ pub fn sctm_from_ini(
     axle: Axle,
     compound: Option<&str>,
 ) -> Result<SctmCompound, String> {
-    let version = ini.section("HEADER").ok_or("tyres.ini has no [HEADER]")?.int("VERSION")?;
+    let version = ini
+        .section("HEADER")
+        .ok_or("tyres.ini has no [HEADER]")?
+        .int("VERSION")?;
     if version < 10 {
-        return Err(format!("tyres.ini VERSION={version}: SCTM is only used for VERSION >= 10"));
+        return Err(format!(
+            "tyres.ini VERSION={version}: SCTM is only used for VERSION >= 10"
+        ));
     }
     let sec = find_compound(ini, axle, compound)?;
     Ok(SctmCompound {
@@ -94,7 +99,11 @@ fn find_compound<'a>(
     let prefix = axle.section_prefix();
     let mut names = Vec::new();
     for n in 0.. {
-        let name = if n == 0 { prefix.to_string() } else { format!("{prefix}_{n}") };
+        let name = if n == 0 {
+            prefix.to_string()
+        } else {
+            format!("{prefix}_{n}")
+        };
         let Some(sec) = ini.section(&name) else { break };
         let full = sec.text("NAME").unwrap_or("");
         let short = sec.text("SHORT_NAME").unwrap_or("");

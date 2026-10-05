@@ -27,7 +27,10 @@ pub fn parse(text: &str) -> Result<Vec<OracleRow>, String> {
     let (_, header) = lines.next().ok_or("empty csv")?;
     let names: Vec<&str> = header.trim().split(',').collect();
     let col = |name: &str| {
-        names.iter().position(|n| *n == name).ok_or_else(|| format!("csv has no {name} column"))
+        names
+            .iter()
+            .position(|n| *n == name)
+            .ok_or_else(|| format!("csv has no {name} column"))
     };
     let case_col = names.iter().position(|n| *n == "case");
     let axle_col = col("axle")?;
@@ -59,7 +62,11 @@ pub fn parse(text: &str) -> Result<Vec<OracleRow>, String> {
         let line = index + 1;
         let cells: Vec<&str> = raw.split(',').collect();
         if cells.len() != names.len() {
-            return Err(format!("line {line}: {} cells, header has {}", cells.len(), names.len()));
+            return Err(format!(
+                "line {line}: {} cells, header has {}",
+                cells.len(),
+                names.len()
+            ));
         }
         let float = |c: usize| {
             cells[c]
@@ -104,7 +111,15 @@ pub fn parse(text: &str) -> Result<Vec<OracleRow>, String> {
 
 /// The seven outputs in [`OUTPUT_FIELDS`] order.
 pub fn fields(out: &TyreModelOutput) -> [f32; 7] {
-    [out.fy, out.fx, out.mz, out.trail, out.nd_slip, out.dy, out.dx]
+    [
+        out.fy,
+        out.fx,
+        out.mz,
+        out.trail,
+        out.nd_slip,
+        out.dy,
+        out.dx,
+    ]
 }
 
 /// Number of representable f32 values between `a` and `b` (0 = identical bits, +0 and -0
@@ -126,7 +141,9 @@ pub fn ulp_distance(a: f32, b: f32) -> u32 {
             magnitude
         }
     };
-    (ordered(a) - ordered(b)).unsigned_abs().min(u32::MAX as u64 - 1) as u32
+    (ordered(a) - ordered(b))
+        .unsigned_abs()
+        .min(u32::MAX as u64 - 1) as u32
 }
 
 #[cfg(test)]

@@ -33,7 +33,8 @@ impl Ini {
             } else if let (Some((key, value)), Some(sec)) =
                 (line.split_once('='), sections.last_mut())
             {
-                sec.values.insert(key.trim().to_string(), value.trim().to_string());
+                sec.values
+                    .insert(key.trim().to_string(), value.trim().to_string());
             }
         }
         Ini { sections }
@@ -64,7 +65,8 @@ impl Section {
     }
 
     pub fn float(&self, key: &str) -> Result<f32, String> {
-        self.float_opt(key)?.ok_or_else(|| format!("[{}] is missing {key}", self.name))
+        self.float_opt(key)?
+            .ok_or_else(|| format!("[{}] is missing {key}", self.name))
     }
 
     pub fn int(&self, key: &str) -> Result<i32, String> {

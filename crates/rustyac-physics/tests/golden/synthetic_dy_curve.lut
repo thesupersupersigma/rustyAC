@@ -1,0 +1,11 @@
+; synthetic test table (not car data): load N | lateral peak friction
+0|2.6
+500|2.45
+1000|2.31
+2000|2.02
+3000|1.86
+4000|1.75
+5500|1.63
+7000|1.55
+9000|1.47
+12000|1.38

@@ -6,6 +6,9 @@
 //! Reading a curve from a `.lut` file or an inline ini value (`Curve::load`,
 //! `INIReader::getCurve`) is NOT ported yet; [`Curve::from_lut_text`] is a plain stand-in.
 
+// Comparisons are spelled the way the original branches so NaN takes the same path.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::implicit_saturating_sub)]
+
 use std::sync::OnceLock;
 
 /// `CubicSpline<float,float>::Element` (0x14 bytes): one cubic piece starting at `x`.
@@ -51,7 +54,10 @@ impl Curve {
                 continue;
             }
             let pair = line.split_once('|').and_then(|(x, y)| {
-                Some((x.trim().parse::<f64>().ok()? as f32, y.trim().parse::<f64>().ok()? as f32))
+                Some((
+                    x.trim().parse::<f64>().ok()? as f32,
+                    y.trim().parse::<f64>().ok()? as f32,
+                ))
             });
             let (x, y) = pair.ok_or_else(|| format!("bad lut line {raw:?}"))?;
             curve.add_value(x, y);
@@ -100,8 +106,9 @@ impl Curve {
 
     /// `Curve::getCubicSplineValue` @ 0x1402068f0
     pub fn get_cubic_spline_value(&self, r#ref: f32) -> f32 {
-        let elements =
-            self.c_spline.get_or_init(|| compute_coefficients(&self.references, &self.values));
+        let elements = self
+            .c_spline
+            .get_or_init(|| compute_coefficients(&self.references, &self.values));
         value_at(elements, r#ref)
     }
 }
@@ -148,7 +155,15 @@ fn compute_coefficients(x: &[f32], y: &[f32]) -> Vec<Element> {
         b[j] = (y[j + 1] - y[j]) / h[j] - ((c[j] * 2.0 + c[j + 1]) * h[j]) * 0.333_333_34;
         d[j] = (c[j + 1] - c[j]) / (h[j] * 3.0);
     }
-    (0..n).map(|i| Element { x: x[i], a: y[i], b: b[i], c: c[i], d: d[i] }).collect()
+    (0..n)
+        .map(|i| Element {
+            x: x[i],
+            a: y[i],
+            b: b[i],
+            c: c[i],
+            d: d[i],
+        })
+        .collect()
 }
 
 /// `CubicSpline<float,float>::valueAt` @ 0x140207410
@@ -203,6 +218,9 @@ mod tests {
             assert!((curve.get_cubic_spline_value(x) - y).abs() < 1e-4, "at {x}");
         }
         // fewer than three points: AC leaves the spline empty and returns 0
-        assert_eq!(Curve::from_pairs(&[(0.0, 1.0), (1.0, 2.0)]).get_cubic_spline_value(0.5), 0.0);
+        assert_eq!(
+            Curve::from_pairs(&[(0.0, 1.0), (1.0, 2.0)]).get_cubic_spline_value(0.5),
+            0.0
+        );
     }
 }
