@@ -19,6 +19,19 @@
 //! ODE is copyright (c) 2001-2007 Russell L. Smith and is used here under its BSD-style
 //! licence; see `LICENSE-ODE` next to this crate's `Cargo.toml`.
 
+// A transcription: loops index like the original, sums are written in the operand order of
+// the machine code, and the float comparisons are the machine code's own (they decide what
+// a NaN does: `x < 0.0 || x > 0.0` is not `x != 0.0`).
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_memcpy,
+    clippy::assign_op_pattern,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::double_comparisons,
+    clippy::manual_range_contains,
+    clippy::nonminimal_bool
+)]
+
 pub mod common;
 pub mod joint;
 pub mod mass;
