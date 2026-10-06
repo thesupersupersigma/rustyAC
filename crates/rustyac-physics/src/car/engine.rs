@@ -11,7 +11,7 @@ use std::path::Path;
 use super::dynamic_controller::{CarSignals, DynamicController};
 use super::replay::TraceValue;
 use crate::curve::Curve;
-use crate::data::ini::IniReader;
+use crate::data::ini::{append_path, IniReader};
 use crate::math::{powf, sin};
 
 /// AC's `SACEngineInput` (0x10 bytes). Only `gasInput` and `rpm` are ever filled.
@@ -414,8 +414,21 @@ impl VanillaEngine {
     /// `Engine::loadINI` @ 0x140286100.
     fn load_ini(&mut self, data_path: &Path) -> Result<(), String> {
         let ini = IniReader::load(&data_path.join("engine.ini"))?;
+        if ini.ready {
+            // only printed by the game, but parsed: a version that is not a number stops it
+            ini.get_int("HEADER", "VERSION")?;
+        }
         let power_curve = ini.get_string("HEADER", "POWER_CURVE");
-        self.data.power_curve.load(&data_path.join(power_curve))?;
+        // the name is appended to the data path as text, whatever it looks like
+        self.data.power_curve.load(&append_path(data_path, &power_curve))?;
+        if self.data.power_curve.get_count() == 0 {
+            // `Engine::precalculatePowerAndTorque` reads in front of an empty table: the game
+            // dies while it creates such a car (no engine.ini, no or an empty power file)
+            return Err(format!(
+                "{}: the power curve {power_curve:?} is missing or empty (the game crashes on such a car)",
+                ini.filename.display()
+            ));
+        }
         self.data.minimum = ini.get_int("ENGINE_DATA", "MINIMUM")?;
         if self.data.minimum == 0 {
             self.data.minimum = 1000;
@@ -536,9 +549,9 @@ impl VanillaEngine {
         self.max_torque_nm = 0.0;
         self.max_power_rpm = 0.0;
         self.max_torque_rpm = 0.0;
-        // `Curve::getMaxReference` @ 0x140206930: the last reference of the table
+        // `Curve::getMaxReference` @ 0x140206930: the last reference of the table (an empty
+        // table is refused by the loader; the game reads in front of it here)
         let Some(&last) = self.data.power_curve.references().last() else {
-            // the game reads in front of an empty table here; an empty power curve is refused
             return;
         };
         if !(last > 0.0) {

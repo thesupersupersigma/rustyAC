@@ -529,7 +529,9 @@ run` takes about seven seconds.)
 2. **The port was written from the listings, the briefs were the second reading.** Three of the
    four briefs arrived after the code for their part existed; two of the helpers compared
    their brief with the working tree on their own. That found one difference (push-to-pass:
-   the cool-down clock starts full), fixed before the first run.
+   the cool-down clock starts full), fixed before the first run. The first free run of all
+   eleven recordings then matched without a correction; the differences found afterwards are
+   those of the review (6.3), all in loaders and none in a compared value.
 3. **Slots in the chassis, not systems inside the feed.** Task 08 suggested a ported system
    could live in a feed hook. The setup items point into brakes, drivetrain and engine, and
    `SetupManager::step` runs inside the car's step, so the systems are members of the car
@@ -552,9 +554,10 @@ run` takes about seven seconds.)
    (compared on `f2004_pt_ctrl`), the control lock and gentle stop of `Car::step` (not
    reachable in a recording; reviewed).
 8. **Cars the port refuses with a message**: four-wheel drive, `kers.ini` / `ers.ini`,
-   `ctrl_4ws.ini`, an unknown `[TRACTION] TYPE` (the game reports "TRACTION NOT FOUND" and
-   goes on as rear-wheel drive without driven wheels), `[PUSH_TO_PASS]` without a turbo (a
-   critical error in the game).
+   `ctrl_4ws.ini`, an unknown `[TRACTION] TYPE` (the game only warns "TRACTION NOT FOUND" and
+   goes on as rear-wheel drive with no tyre flagged as driven), `[PUSH_TO_PASS]` without a
+   turbo (a critical error in the game), a car without a usable power curve (the game crashes
+   while creating it).
 9. **Golden files changed format** (`CHGOLD02`): the feed has more fields. The two excerpts of
    Task 08 were rewritten with the same steps and the same hashes of the game's values.
 10. **Files outside the repository**: none written by this task's tools. The agent harness
@@ -579,7 +582,10 @@ run` takes about seven seconds.)
    it and the port does what the oracle does. For the F2004 every ratio is in its list; for
    three shipped cars one is not (`ks_maserati_250f_12cyl`, `ks_maserati_250f_6cyl`,
    `ks_mercedes_c9`): a real session with those starts with other ratios than a recording
-   would. Seven cars use gear sets (`USE_GEARSET`), also not mirrored.
+   would. Only the last of the three is a car the port accepts (the Maseratis have a rigid rear
+   axle): its first gear is 3.3125 in a real session and 2.2857 here. Seven cars use gear sets
+   (`USE_GEARSET`), also not mirrored. Should the port follow the real screen (which no
+   recording can confirm until the oracle mirrors the gear tab too), or stay with the oracle?
 3. **`car_oracle`'s own single-tyre check fails for the F40** (`car_oracle all` ends with
    "below 100 %" for it): that check (Task 06) replays each tyre alone and does not know that
    the session start changes this car's tyre pressures. The recording itself is sound (two
@@ -603,6 +609,25 @@ run` takes about seven seconds.)
 ### 6.3 Review of the untested branches
 
 <!-- REVIEW:BEGIN -->
-(Three read-only reviewers are comparing the finished port with the disassembly for the
-branches of 6.2 item 1; their findings go here.)
+Three read-only reviewers compared the finished port with the disassembly, each on a part of
+the code and with the list of what the recordings never reach (6.2 item 1), looking for a
+difference rather than for agreement. They found none in anything a recorded drive, or normal
+driving of a shipped car in the ported systems, reaches. What they found, and what was done:
+
+| Files | Result |
+|---|---|
+| `dynamic_controller.rs`, `brakes.rs`, the anti-roll bars' controllers, the control lock | No difference in these files. Checked instruction by instruction: all 24 input names and numbers, `getInput` with its jump table (also the front-wheel-drive and four-wheel-drive forms of the slip-ratio inputs), `eval` with every NaN direction and both limit tests, the smoothing constant, a controller file that does not open or has no stage; every brake default, the loader's read order and fall-backs (a missing `brakes.ini` or `setup.ini`, only `[TEMPS_FRONT]`), `step` with a cockpit bias, the load-based balance at zero load, the hybrid's rear correction, the aids' brake request, an AI driver's `aiMult`; `stepTemps`, `reset`, `setManualFrontBias` at both limits; the lock and gentle-stop overrides and the locked branch of `pollControls`. Two findings at the edges: (1) a table given as a **file name that is rooted** (`LUT=C:\x.lut`, `LUT=/x.lut`): the game appends the text to the ini's folder, `IniReader::get_curve` (Task 05 code) used a path join, which lets a rooted name replace the folder. **Fixed** (`append_path`, with a test). (2) The test rig applied a cockpit bias click inside its controls poll, which a car with locked controls skips; in the game the click comes from a command queue and does not depend on the poll. **Fixed**: `replay::step_recorded` runs the click before the step. |
+| `engine.rs`, the water temperature, the fuel hand-over | Four loader edge cases, no difference in `Engine::step`, the turbos, push-to-pass, the throttle maps or the damage and air terms (all read block by block with the NaN direction of every compare, the restrictor, the stall branch, negative and NaN revs, a wastegate of 0, limiter rates that are negative or above 1000). (1) **No power curve** (no `engine.ini`, a power file that is missing or holds no point): the game reads in front of an empty table and dies while it creates the car; the port built an engine without torque. **Fixed**: such a car is refused with a message. (2) `[HEADER] VERSION` is only printed by the game but parsed, so a version that is not a number stops the game. **Fixed**: parsed. (3) The power file's name is appended as text, like the tables above. **Fixed**. (4) Two loops in the loader that only print a table never end when `[COAST_REF] RPM` or `[THROTTLE_RESPONSE] RPM_REFERENCE` is near 2^31: not ported (they change no value), noted here. |
+| `drivetrain.rs`, `shift_assists.rs`, the drivetrain parts of `chassis.rs`, the setup items | No difference in `step2WD`, the helpers, the gear logic or the item table (read in full: every start value, the loader with `COUNT <= 0`, a gearbox inertia of 0 and no protection section, the gearbox lock before a session start in both jump-start modes, `gearUp` with a negative gear, `gearDown` from reverse and with a NaN projection, the H-shifter with a window of 0 and with wear, the clutch state at an engine speed of exactly 0, the locked-wheels block with the clutch closed, a spool after a setup change, the auto-shifter's first use, slip gate and standstill down-shift, the automatic clutch in neutral at speed and with a profile whose section is missing, both paddles in one step, the order of `Car::step` and `Car::stepComponents`). Three findings: (1) the **gear tab of the real setup screen** can replace a default ratio at a session start; the port, like the oracle, does not do that. Not changed: it is question 6.2 item 2, and the reviewer adds that `ks_mercedes_c9` is a car the port accepts (first gear 3.3125 in a real session, 2.2857 here). (2) An **unknown `[TRACTION] TYPE`** is only a warning in the game: the car goes on as rear-wheel drive with no tyre flagged as driven. The port still refuses such a car, by choice (6.1 item 8). (3) `AutoBlip`'s `ELECTRONIC` flag would read a NaN as "on" where the game reads "off". **Fixed** (not reachable: the number parser cannot produce a NaN). |
+
+None of the fixes changes a compared value: every set of recordings (3.1, 3.2), the fault check
+and the tests were run again afterwards with the same result.
+
+The reviewers could not check: the C runtime's internals (`powf`, the double `sin`; the port
+calls the game's own DLL when it is installed); the routes through a `data.acd` archive and a
+`data_<config>` folder (the port refuses the first and ignores the second, as before); the game
+code that sets the driving-aid switches, hands out push-to-pass activations, sets the
+restrictor or locks the gearbox during a real session; the timing of the cockpit command queue;
+whether anything in the game catches the exception of a value that is not a number. They built
+and ran nothing.
 <!-- REVIEW:END -->

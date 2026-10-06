@@ -292,6 +292,18 @@ fn source_from_index(index: u32) -> Option<ForceSource> {
     SOURCES.get(index as usize).copied()
 }
 
+/// One step of the chassis with a recorded feed: first the commands the game runs from its
+/// queue before the step (a click of the cockpit brake bias; they do not depend on the
+/// controls being polled), then [`RollingChassis::step`] with a [`RecordedFeed`].
+pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &RecordedStep) {
+    if step.bias_clicks != 0 {
+        if let Some(brakes) = &mut chassis.brake_system {
+            brakes.set_manual_front_bias(step.bias_clicks);
+        }
+    }
+    chassis.step(DT, physics_time, &mut RecordedFeed { step });
+}
+
 /// A [`ChassisFeed`] that hands the chassis one recorded step.
 ///
 /// The recordings hold the tyre's inputs as `Tyre::step` found them, so everything the ABS,
@@ -309,12 +321,6 @@ pub struct RecordedFeed<'a> {
 
 impl ChassisFeed for RecordedFeed<'_> {
     fn poll_controls(&mut self, chassis: &mut RollingChassis) {
-        // a click of the cockpit brake bias: a queued command the game runs before the step
-        if self.step.bias_clicks != 0 {
-            if let Some(brakes) = &mut chassis.brake_system {
-                brakes.set_manual_front_bias(self.step.bias_clicks);
-            }
-        }
         chassis.controls = self.step.controls;
     }
 
@@ -1115,7 +1121,7 @@ impl Golden {
         let kinds: Vec<char> = fields().iter().map(|field| field.kind).collect();
         for (index, step) in self.steps.iter().enumerate() {
             let number = self.first + index;
-            chassis.step(DT, self.setup.time_of_step(number), &mut RecordedFeed { step: &step.feed });
+            step_recorded(&mut chassis, self.setup.time_of_step(number), &step.feed);
             let bodies = body_words(&chassis);
             if bodies != step.bodies {
                 let at = bodies.iter().zip(&step.bodies).position(|(a, b)| a != b).unwrap();

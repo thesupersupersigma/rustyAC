@@ -228,7 +228,9 @@ impl AutoBlip {
         blip.blip_profile.add_value(ini.get_float("AUTOBLIP", "POINT_1")?, level);
         blip.blip_profile.add_value(ini.get_float("AUTOBLIP", "POINT_2")?, 0.0);
         blip.blip_perform_time = blip.blip_profile.references().last().copied().unwrap_or(0.0) as f64;
-        blip.is_electronic = ini.get_float("AUTOBLIP", "ELECTRONIC")? != 0.0;
+        // `ucomiss` + `jne`: not zero and a number
+        let electronic = ini.get_float("AUTOBLIP", "ELECTRONIC")?;
+        blip.is_electronic = electronic < 0.0 || electronic > 0.0;
         blip.blip_start_time = 0.0;
         blip.is_active = true;
         Ok(blip)

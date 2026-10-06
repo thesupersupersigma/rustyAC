@@ -42,8 +42,7 @@ use std::path::{Path, PathBuf};
 
 use record::Recording;
 use rustyac_physics::car::replay::{
-    self, body_words, Field, Golden, GoldenStep, Ground, RecordedCall, RecordedFeed, RecordedStep, RecordedWheel, RunSetup,
-    DT, WHEELS,
+    self, body_words, Field, Golden, GoldenStep, Ground, RecordedCall, RecordedStep, RecordedWheel, RunSetup, WHEELS,
 };
 use rustyac_physics::car::{CarControls, ChassisEnvironment, EngineFeed, ForceSource, RollingChassis};
 
@@ -665,7 +664,7 @@ fn compare(
         let feed = recorded_step(recording, step)?;
         let request_before = chassis.drivetrain.as_ref().map(|d| d.base().gear_request.request as i32).unwrap_or(0);
         let paddles_before = (chassis.gear_changer.last_gear_up, chassis.gear_changer.last_gear_dn);
-        chassis.step(DT, setup.time_of_step(step), &mut RecordedFeed { step: &feed });
+        replay::step_recorded(&mut chassis, setup.time_of_step(step), &feed);
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
         let mut differing = Vec::new();
@@ -925,7 +924,7 @@ fn write_excerpt(
     let mut chassis = setup.build(data)?;
     for step in 0..first {
         let feed = recorded_step(recording, step)?;
-        chassis.step(DT, setup.time_of_step(step), &mut RecordedFeed { step: &feed });
+        replay::step_recorded(&mut chassis, setup.time_of_step(step), &feed);
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
         if let Some(k) = (0..rust.len()).find(|&k| !replay::same_value(columns.kinds[k], game[k], rust[k])) {
@@ -988,7 +987,7 @@ fn write_excerpt(
     // and the free run itself must still agree at the end of the excerpt
     for step in first..first + count {
         let feed = recorded_step(recording, step)?;
-        chassis.step(DT, golden.setup.time_of_step(step), &mut RecordedFeed { step: &feed });
+        replay::step_recorded(&mut chassis, golden.setup.time_of_step(step), &feed);
         if body_words(&chassis) != golden.steps[step - first].bodies {
             return Err(format!("step {step}: the free run left the game"));
         }

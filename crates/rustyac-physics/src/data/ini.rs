@@ -102,6 +102,15 @@ fn trim2(text: &mut String) {
     }
 }
 
+/// `folder + L"/" + name`, the way the game builds the path of a file an ini names: plain
+/// text, never a "join" in which a rooted `name` would replace the folder.
+pub fn append_path(folder: &Path, name: &str) -> PathBuf {
+    let mut path = folder.as_os_str().to_os_string();
+    path.push("/");
+    path.push(name);
+    PathBuf::from(path)
+}
+
 impl IniReader {
     /// `INIReader::INIReader(const std::wstring&)` @ 0x1402340a0 + `INIReader::load`
     /// @ 0x140237140, for a file that is not inside an archive.
@@ -301,8 +310,9 @@ impl IniReader {
     pub fn get_curve(&self, section: &str, key: &str) -> Result<Curve, String> {
         let text = self.get_string(section, key);
         let (Some(open), Some(close)) = (text.find('('), text.find(')')) else {
-            // Path::getPath(filename) + L"/" + value
-            let path = self.filename.parent().unwrap_or(Path::new("")).join(&text);
+            // Path::getPath(filename) + L"/" + value: text is appended, so a value that
+            // looks like an absolute path does not replace the folder
+            let path = append_path(self.filename.parent().unwrap_or(Path::new("")), &text);
             let mut curve = Curve::new();
             if path.is_file() {
                 curve.load(&path)?;
@@ -414,6 +424,15 @@ mod tests {
         assert_eq!(c.get_value(5.0), 2.0);
         assert!(r.get_curve("A", "BAD").is_err());
         assert_eq!(r.get_curve("A", "NOFILE").unwrap().get_count(), 0);
+    }
+
+    #[test]
+    fn a_named_file_is_appended_to_the_folder_as_text() {
+        let folder = Path::new("content/cars/x/data");
+        assert_eq!(append_path(folder, "power.lut"), PathBuf::from("content/cars/x/data/power.lut"));
+        // a rooted name does not replace the folder, as `Path::join` would have it
+        assert_eq!(append_path(folder, "/power.lut"), PathBuf::from("content/cars/x/data//power.lut"));
+        assert!(append_path(folder, r"C:\luts\a.lut").starts_with("content"));
     }
 
     #[test]
