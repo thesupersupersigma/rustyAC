@@ -145,8 +145,16 @@ def const_note(img, va, size):
 
 def dis(img, syms, va, size):
     if size is None:
-        s, _ = syms.sess.findSymbolByRVAEx(va - img.base, T_FUNCTION)
-        size = s.length if s is not None else 0x400
+        size = 0
+        for tag in (T_FUNCTION, T_PUBLIC):      # libraries without debug info only have publics
+            try:
+                s, _ = syms.sess.findSymbolByRVAEx(va - img.base, tag)
+                size = s.length
+            except Exception:
+                continue
+            if size:
+                break
+        size = size or 0x400
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     md.detail = True
     code = img.read(va, size)
