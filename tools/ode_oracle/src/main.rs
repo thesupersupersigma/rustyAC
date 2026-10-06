@@ -23,8 +23,9 @@
 //!     1 to 64 rows, and the small rotation and vector functions on random and awkward input.
 //!     Writes `oracle/ode/matrix_results.md` and the vectors of
 //!     `crates/rustyac-ode/tests/golden_functions.rs`.
-//! ode_oracle bench [--steps <n>]
-//!     Step time of the car layout: the game's ODE against the Rust port.
+//! ode_oracle bench [--steps <n>] [--feedback]
+//!     Step time of the car layout: the game's ODE against the Rust port, without joint feedback
+//!     buffers as in the game, or with them.
 //!
 //! Common: [--acs <path to acs.exe>]
 
@@ -55,7 +56,7 @@ fn usage() -> String {
      ode_oracle replay [<recording> ...] [--verbose]\n       \
      ode_oracle excerpt\n       \
      ode_oracle matrix\n       \
-     ode_oracle bench [--steps <n>]\n       \
+     ode_oracle bench [--steps <n>] [--feedback]\n       \
      common: [--acs <path to acs.exe>]"
         .to_string()
 }
@@ -72,6 +73,7 @@ struct Args {
     steps: Option<usize>,
     first_seed: Option<u64>,
     verbose: bool,
+    feedback: bool,
     record: Option<PathBuf>,
     acs: PathBuf,
 }
@@ -86,6 +88,7 @@ fn parse_args() -> Result<Args, String> {
         steps: None,
         first_seed: None,
         verbose: false,
+        feedback: false,
         record: None,
         acs: PathBuf::from(DEFAULT_ACS),
     };
@@ -98,6 +101,7 @@ fn parse_args() -> Result<Args, String> {
             "--steps" => a.steps = Some(number(value()?)?),
             "--first-seed" => a.first_seed = Some(number(value()?)? as u64),
             "--verbose" => a.verbose = true,
+            "--feedback" => a.feedback = true,
             "--record" => a.record = Some(PathBuf::from(value()?)),
             "--acs" => a.acs = PathBuf::from(value()?),
             other if !other.starts_with("--") => a.files.push(PathBuf::from(other)),
@@ -159,7 +163,19 @@ fn scene_of(kind: &str, seed: u64) -> Result<Scene, String> {
     })
 }
 
+/// Keeps the port's "not implemented: bounded rows" message off the screen (the engine wrapper
+/// catches that panic and the world ends there); every other panic is reported as usual.
+fn quiet_bounded_rows() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !info.to_string().contains(engine::BOUNDED_ROWS_MESSAGE) {
+            default_hook(info);
+        }
+    }));
+}
+
 fn micro_command(args: &Args) -> Result<(), String> {
+    quiet_bounded_rows();
     for wanted in &args.types {
         if !TYPES.iter().any(|t| t.0 == wanted) {
             let names: Vec<&str> = TYPES.iter().map(|t| t.0).collect();
@@ -192,6 +208,8 @@ fn micro_command(args: &Args) -> Result<(), String> {
         let mut setup_exact_worlds = 0;
         let mut not_finite = 0;
         let mut no_feedback = 0;
+        let mut ended_early = 0;
+        let mut steps_cut = 0;
         let mut first: Option<String> = None;
         for w in 0..worlds {
             let seed = args.first_seed.unwrap_or(0) + w as u64;
@@ -223,6 +241,13 @@ fn micro_command(args: &Args) -> Result<(), String> {
             setup_exact_worlds += outcome.setup_exact as usize;
             not_finite += outcome.not_finite as usize;
             no_feedback += !scene.feedback as usize;
+            if let Some(at) = outcome.bounded_at {
+                ended_early += 1;
+                steps_cut += steps - at;
+                if args.verbose {
+                    println!("  {}: ended at step {at}, a slider reached a stop (bounded row)", scene.name);
+                }
+            }
             total.nan_steps += outcome.nan_steps;
             total.asleep += outcome.asleep;
             total.short_rods += outcome.short_rods;
@@ -272,6 +297,13 @@ fn micro_command(args: &Args) -> Result<(), String> {
                     "{not_finite} of the {worlds} worlds reached a value that is not finite; {} steps had a NaN \
                      in the reference state (NaN against NaN counts as equal)",
                     total.nan_steps
+                )
+            }),
+            (ended_early > 0).then(|| {
+                format!(
+                    "{ended_early} of the {worlds} worlds were ended early, in the step in which a slider reached \
+                     one of its far stops, because ODE then adds a bounded row (stage 2); {steps_cut} steps were \
+                     not run for that reason"
                 )
             }),
             (total.asleep > 0).then(|| format!("bodies were disabled (asleep) in {} body-steps", total.asleep)),
@@ -373,6 +405,7 @@ const GOLDEN: [(&str, u64, usize); 31] = [
 /// Small worlds of every type written as op streams with a hash of the game's state after
 /// every step, for the crate's own test (which then needs no game).
 fn golden_command(args: &Args) -> Result<(), String> {
+    quiet_bounded_rows();
     let acs = acs::Acs::load(&args.acs)?;
     engine::init_ode(&acs);
     let dir = repo_root().join("crates/rustyac-ode/tests/data/ops");
@@ -391,6 +424,9 @@ fn golden_command(args: &Args) -> Result<(), String> {
         let outcome = micro::run(&mut scene, &mut ac, &mut rust, steps, None, Some(&mut golden));
         if outcome.exact_steps != outcome.steps || !outcome.setup_exact {
             return Err(format!("{}: the Rust port differs ({})", scene.name, outcome.first.unwrap_or_default()));
+        }
+        if outcome.bounded_at.is_some() && scan.is_empty() {
+            return Err(format!("{}: reaches a slider stop, not usable as a golden world", scene.name));
         }
         if scan.is_empty() {
             let path = dir.join(format!("{name}_{seed}.odeops"));
@@ -441,8 +477,8 @@ fn matrix_command(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// Rough step time of the car layout in both engines (each stepped on its own, same forces,
-/// no joint feedback buffers, as in the game).
+/// Rough step time of the car layout in both engines (each stepped on its own, same forces;
+/// no joint feedback buffers, as in the game, unless `--feedback` is given).
 fn bench_command(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     engine::init_ode(&acs);
@@ -458,8 +494,8 @@ fn bench_command(args: &Args) -> Result<(), String> {
             let mut driver_rust = micro::Driver::default();
             ac.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
             rust.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
-            ac.set_feedback(false);
-            rust.set_feedback(false);
+            ac.set_feedback(args.feedback);
+            rust.set_feedback(args.feedback);
             for op in &scene.setup.clone() {
                 driver_ac.apply(&mut ac, op);
                 driver_rust.apply(&mut rust, op);
@@ -487,8 +523,9 @@ fn bench_command(args: &Args) -> Result<(), String> {
         }
     }
     println!(
-        "car layout (6 bodies, 21 joints, 26 rows), {steps} steps, best of 5: acs.exe dWorldStep {:.2} us/step, \
-         rustyac-ode World::step {:.2} us/step (ratio {:.2})",
+        "car layout (6 bodies, 21 joints, 26 rows, {} joint feedback buffers), {steps} steps, best of 5: acs.exe \
+         dWorldStep {:.2} us/step, rustyac-ode World::step {:.2} us/step (ratio {:.2})",
+        if args.feedback { "with" } else { "no" },
         best[0] * 1e6,
         best[1] * 1e6,
         best[1] / best[0]

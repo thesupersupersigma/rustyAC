@@ -126,6 +126,12 @@ pub trait Engine {
     fn rows(&self) -> u32 {
         0
     }
+    /// The last step needed something the engine does not have (the Rust port, stage 1: a
+    /// bounded constraint row, which a slider gets when it reaches one of its stops). The
+    /// engine's state is undefined afterwards.
+    fn unsupported(&self) -> bool {
+        false
+    }
     fn body_state(&self, b: usize) -> BodyState;
     fn mass_state(&self, b: usize) -> MassState;
     fn joint_state(&self, j: usize) -> JointState;
@@ -144,13 +150,24 @@ pub struct RustEngine {
     joints: Vec<rustyac_ode::JointId>,
     rows: u32,
     feedback: bool,
+    unsupported: bool,
 }
 
 impl RustEngine {
     pub fn new() -> RustEngine {
-        RustEngine { world: World::new(), bodies: Vec::new(), joints: Vec::new(), rows: 0, feedback: true }
+        RustEngine {
+            world: World::new(),
+            bodies: Vec::new(),
+            joints: Vec::new(),
+            rows: 0,
+            feedback: true,
+            unsupported: false,
+        }
     }
 }
+
+/// The message of the port's `unimplemented!` for bounded rows.
+pub const BOUNDED_ROWS_MESSAGE: &str = "bounded constraint rows";
 
 fn take3(v: &[f32]) -> [f32; 3] {
     [v[0], v[1], v[2]]
@@ -369,10 +386,29 @@ impl Engine for RustEngine {
         joint.flags = (joint.flags | set) & !clear;
     }
     fn step(&mut self, h: f32) {
-        self.rows = self.world.step(h).max_rows;
+        // the stage 1 stepper stops with `unimplemented!` at a bounded row; any other panic
+        // is a fault and goes on
+        let world = &mut self.world;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| world.step(h))) {
+            Ok(stats) => self.rows = stats.max_rows,
+            Err(payload) => {
+                let text = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                if !text.contains(BOUNDED_ROWS_MESSAGE) {
+                    std::panic::resume_unwind(payload);
+                }
+                self.unsupported = true;
+            }
+        }
     }
     fn rows(&self) -> u32 {
         self.rows
+    }
+    fn unsupported(&self) -> bool {
+        self.unsupported
     }
     fn body_state(&self, b: usize) -> BodyState {
         let body = self.world.body(self.bodies[b]);

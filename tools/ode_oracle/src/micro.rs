@@ -1105,6 +1105,9 @@ pub struct Outcome {
     pub last_resort: usize,
     /// Joint-steps in which a joint was disabled or held only kinematic bodies (tag -1).
     pub idle_joints: usize,
+    /// The step in which the game's ODE added a bounded row (a slider reached a stop): stage 2.
+    /// The world ends there; that step is not counted.
+    pub bounded_at: Option<usize>,
     /// How often each operation (by its golden-file code) was applied before the first step …
     pub setup_ops: [usize; 28],
     /// … and between steps.
@@ -1376,6 +1379,10 @@ pub fn run<A: Engine, R: Engine>(
         }
         ac.step(scene.h);
         rust.step(scene.h);
+        if rust.unsupported() {
+            outcome.bounded_at = Some(step);
+            break;
+        }
         outcome.max_rows = outcome.max_rows.max(rust.rows());
         let mut step_first: Vec<String> = Vec::new();
         let mut exact = true;
