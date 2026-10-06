@@ -650,6 +650,96 @@ pub fn snapshot(tyre: &VanillaTyre, calls: &[Call]) -> Vec<u64> {
     w
 }
 
+/// The inverse of [`snapshot`]: puts a tyre back into the state a snapshot was taken from.
+/// The recorded calls are not state and are skipped; `surfaceDef` is rebuilt by the next
+/// step anyway. Everything a compound or the car's files set (data, curves, the force
+/// model) is left as it is, so the tyre must have been built the same way.
+pub fn restore(tyre: &mut VanillaTyre, words: &[u64]) {
+    let mut at = MAX_CALLS * 11 + 1;
+    let mut next = || {
+        let word = words[at];
+        at += 1;
+        word
+    };
+    let s = &mut tyre.status;
+    s.depth = fw(next());
+    s.load = fw(next());
+    s.camber_rad = fw(next());
+    s.slip_angle_rad = fw(next());
+    s.slip_ratio = fw(next());
+    s.angular_velocity = fw(next());
+    s.fy = fw(next());
+    s.fx = fw(next());
+    s.mz = fw(next());
+    s.is_locked = next() != 0;
+    s.slip_factor = fw(next());
+    s.nd_slip = fw(next());
+    s.dist_to_ground = fw(next());
+    s.dy = fw(next());
+    s.dx = fw(next());
+    s.d = fw(next());
+    s.dirty_level = fw(next());
+    s.rolling_resistence = fw(next());
+    s.thermal_input = fw(next());
+    s.feedback_torque = fw(next());
+    s.loaded_radius = fw(next());
+    s.effective_radius = fw(next());
+    s.live_radius = fw(next());
+    s.pressure_static = fw(next());
+    s.pressure_dynamic = fw(next());
+    s.virtual_km = f64::from_bits(next());
+    s.last_temp_imo = [fw(next()), fw(next()), fw(next())];
+    s.peak_sa = fw(next());
+    s.grain = f64::from_bits(next());
+    s.blister = f64::from_bits(next());
+    s.inflation = fw(next());
+    s.flat_spot = f64::from_bits(next());
+    s.last_grain = fw(next());
+    s.last_blister = fw(next());
+    s.normalized_slide_x = fw(next());
+    s.normalized_slide_y = fw(next());
+    s.final_dy = fw(next());
+    s.wear_mult = fw(next());
+    for v in [
+        &mut tyre.world_position,
+        &mut tyre.unmodified_contact_point,
+        &mut tyre.contact_point,
+        &mut tyre.contact_normal,
+        &mut tyre.road_right,
+        &mut tyre.road_heading,
+    ] {
+        *v = Vec3f::new(fw(next()), fw(next()), fw(next()));
+    }
+    let _has_surface_def = next();
+    tyre.abs_override = fw(next());
+    tyre.old_angular_velocity = fw(next());
+    tyre.total_slide_velocity = fw(next());
+    tyre.sliding_velocity_y = fw(next());
+    tyre.sliding_velocity_x = fw(next());
+    tyre.road_velocity_x = fw(next());
+    tyre.road_velocity_y = fw(next());
+    tyre.total_hub_velocity = fw(next());
+    tyre.r_sliding_velocity_x = fw(next());
+    tyre.r_sliding_velocity_y = fw(next());
+    tyre.tyre_blankets_on = next() != 0;
+    tyre.local_mx = fw(next());
+    for row in &mut tyre.local_wheel_rotation.m {
+        for value in row.iter_mut() {
+            *value = fw(next());
+        }
+    }
+    let t = &mut tyre.thermal_model;
+    t.phase = f64::from_bits(next());
+    t.core_temp = fw(next());
+    t.thermal_mult_d = fw(next());
+    t.practical_temp = fw(next());
+    t.core_t_input = fw(next());
+    for patch in &mut t.patches {
+        patch.t = fw(next());
+        patch.input_t = fw(next());
+    }
+}
+
 /// A [`VanillaTyre`] on the rig.
 pub struct Rig {
     pub tyre: VanillaTyre,

@@ -227,6 +227,34 @@ impl IniReader {
         Ok(parsed.value as f32)
     }
 
+    /// `INIReader::getFloat3` @ 0x1402357a0 (through `INIReader::getVector3` @ 0x140236540):
+    /// three numbers separated by commas (`wcstok_s`, so empty pieces are skipped), each
+    /// parsed like [`IniReader::get_float`]. An empty value (or a missing key) is (0, 0, 0),
+    /// and so is a value with fewer than three numbers (the game reports `NOT_3_ELEMENTS`).
+    pub fn get_float3(&self, section: &str, key: &str) -> Result<[f32; 3], String> {
+        let text = self.get_string(section, key);
+        let mut out = [0.0f32; 3];
+        // longer than 1256 characters: "STRING_LONGER_THAN_1256", nothing is read
+        if text.is_empty() || text.encode_utf16().count() > 0x4e7 {
+            return Ok(out);
+        }
+        let mut tokens = text.split(',').filter(|piece| !piece.is_empty());
+        for slot in &mut out {
+            let Some(token) = tokens.next() else {
+                return Ok([0.0; 3]);
+            };
+            let parsed = wcstod(token);
+            if parsed.consumed == 0 {
+                return Err(self.error(section, key, &text, "invalid stof argument"));
+            }
+            if parsed.out_of_range {
+                return Err(self.error(section, key, &text, "stof argument out of range"));
+            }
+            *slot = parsed.value as f32;
+        }
+        Ok(out)
+    }
+
     /// `INIReader::getInt` @ 0x140235c70: `wcstol(text, .., 10)`, 0 for an empty value.
     pub fn get_int(&self, section: &str, key: &str) -> Result<i32, String> {
         let text = self.get_string(section, key);
