@@ -1,0 +1,907 @@
+//! The test rig of the rolling chassis. Nothing in here is part of the physics.
+//!
+//! * [`Ground`]: the analytic road `tools/car_oracle` gives the game's tyres.
+//! * [`RecordedStep`] / [`RecordedFeed`]: a [`ChassisFeed`] filled from one step of a
+//!   recording of the game.
+//! * [`fields`] / [`snapshot`]: every value of a step that is compared with the game, under
+//!   the names the recordings use.
+//! * [`Golden`]: a small excerpt of a recording (start state, feed and the game's answers per
+//!   step) for `cargo test`.
+
+use std::path::Path;
+
+use rustyac_ode::{JointKind, Mass};
+
+use super::body::{kind, ForceSource, TapeCall};
+use super::chassis::{ChassisEnvironment, RollingChassis, StepTrace};
+use super::feed::{CarControls, ChassisFeed, EngineFeed};
+use crate::tyre::rig;
+use crate::tyre::{RayCastResult, RayTrackCollisionProvider, SurfaceDef};
+use crate::vecmath::Vec3f;
+
+/// AC's physics step, s.
+pub const DT: f32 = 0.003;
+/// Names of the wheels in the recordings, in `Car::suspensions` order.
+pub const WHEELS: [&str; 4] = ["lf", "rf", "lr", "rr"];
+/// Names of the rigid bodies in the recordings, in creation order.
+pub const BODIES: [&str; 6] = ["body", "fuel_tank", "hub_lf", "hub_rf", "hub_lr", "hub_rr"];
+/// Names of a double-wishbone corner's rods in the recordings, in creation order.
+pub const RODS: [&str; 5] = ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"];
+/// The harness's ray is 3 m long whatever length the tyre asks for.
+const RAY_LENGTH: f32 = 3.0;
+
+/// The road of the recordings: an endless plane at height 0, optionally with a raised strip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ground {
+    Flat,
+    /// `height` where `x_min <= x <= x_max` and `z_from <= z <= z_to`, else 0.
+    Step { x_min: f32, x_max: f32, z_from: f32, z_to: f32, height: f32 },
+}
+
+impl Ground {
+    /// The form stored in a recording's header (`ground=`).
+    pub fn parse(text: &str) -> Option<Ground> {
+        let mut words = text.split(' ');
+        match words.next()? {
+            "flat" => Some(Ground::Flat),
+            "step" => {
+                let mut number = || words.next()?.parse::<f32>().ok();
+                Some(Ground::Step { x_min: number()?, x_max: number()?, z_from: number()?, z_to: number()?, height: number()? })
+            }
+            _ => None,
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match *self {
+            Ground::Flat => "flat".to_string(),
+            Ground::Step { x_min, x_max, z_from, z_to, height } => {
+                format!("step {x_min:?} {x_max:?} {z_from:?} {z_to:?} {height:?}")
+            }
+        }
+    }
+
+    pub fn height(&self, x: f32, z: f32) -> f32 {
+        match *self {
+            Ground::Flat => 0.0,
+            Ground::Step { x_min, x_max, z_from, z_to, height } => {
+                if x >= x_min && x <= x_max && z >= z_from && z <= z_to {
+                    height
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+}
+
+impl RayTrackCollisionProvider for Ground {
+    /// `track_ray_cast` of `tools/car_oracle`: straight down from `org`, one surface with
+    /// full grip, the normal straight up.
+    fn ray_cast(&self, org: &Vec3f, _dir: &Vec3f, _length: f32) -> Option<RayCastResult> {
+        let height = self.height(org.x, org.z);
+        let hit = org.y >= height && org.y - height <= RAY_LENGTH;
+        hit.then(|| RayCastResult {
+            surface_def: SurfaceDef::default(),
+            pos: Vec3f::new(org.x, height, org.z),
+            normal: Vec3f::new(0.0, 1.0, 0.0),
+        })
+    }
+}
+
+/// What the systems that are not ported left in one tyre before its step.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RecordedWheel {
+    /// `Tyre::inputs.brakeTorque` (brakes, EDL)
+    pub brake_torque: f32,
+    /// `Tyre::inputs.handBrakeTorque` (brakes)
+    pub hand_brake_torque: f32,
+    /// `Tyre::inputs.electricTorque` (ERS)
+    pub electric_torque: f32,
+    /// `Tyre::absOverride` (ABS)
+    pub abs_override: f32,
+    /// `Tyre::aiMult` (AI driver)
+    pub ai_mult: f32,
+    /// `Tyre::driven` (drivetrain)
+    pub driven: bool,
+    /// Driven wheels only: `status.angularVelocity` as the drivetrain left it.
+    pub angular_velocity: f32,
+    /// Driven wheels only: `localWheelRotation` as the drivetrain left it, row-major.
+    pub local_wheel_rotation: [f32; 16],
+}
+
+/// One force call of a system that is not ported (the wings), from the game's force tape.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RecordedCall {
+    /// One of [`kind`].
+    pub kind: u32,
+    pub source: ForceSource,
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+}
+
+/// Everything one step of the chassis is fed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordedStep {
+    /// What the driver's device reported (`script.*`).
+    pub controls: CarControls,
+    /// `controls.clutch` after the automatic clutch.
+    pub clutch: f32,
+    /// `Drivetrain::currentGear` at the start of the step.
+    pub gear: i32,
+    /// The engine's values at the start of the step.
+    pub engine: EngineFeed,
+    pub wheels: [RecordedWheel; 4],
+    /// The wings' calls on the car body, in order.
+    pub aero: Vec<RecordedCall>,
+}
+
+impl RecordedStep {
+    /// The step as 32-bit words (the golden file's layout).
+    pub fn to_words(&self, out: &mut Vec<u32>) {
+        let c = &self.controls;
+        out.extend([c.gas, c.brake, c.steer, c.clutch, self.clutch].map(f32::to_bits));
+        out.push(self.gear as u32);
+        out.extend([self.engine.rpm, self.engine.gas_usage, self.engine.turbo_boost].map(f32::to_bits));
+        for w in &self.wheels {
+            out.extend([w.brake_torque, w.hand_brake_torque, w.electric_torque, w.abs_override, w.ai_mult].map(f32::to_bits));
+            out.push(w.driven as u32);
+            if w.driven {
+                out.push(w.angular_velocity.to_bits());
+                out.extend(w.local_wheel_rotation.map(f32::to_bits));
+            }
+        }
+        out.push(self.aero.len() as u32);
+        for call in &self.aero {
+            out.push(call.kind);
+            out.push(source_index(call.source));
+            out.extend(call.a.map(f32::to_bits));
+            out.extend(call.b.map(f32::to_bits));
+        }
+    }
+
+    pub fn from_words(words: &mut impl Iterator<Item = u32>) -> Option<RecordedStep> {
+        let f = |words: &mut dyn Iterator<Item = u32>| words.next().map(f32::from_bits);
+        let controls = CarControls { gas: f(words)?, brake: f(words)?, steer: f(words)?, clutch: f(words)? };
+        let clutch = f(words)?;
+        let gear = words.next()? as i32;
+        let engine = EngineFeed { rpm: f(words)?, gas_usage: f(words)?, turbo_boost: f(words)? };
+        let mut wheels = [RecordedWheel::default(); 4];
+        for w in &mut wheels {
+            w.brake_torque = f(words)?;
+            w.hand_brake_torque = f(words)?;
+            w.electric_torque = f(words)?;
+            w.abs_override = f(words)?;
+            w.ai_mult = f(words)?;
+            w.driven = words.next()? != 0;
+            if w.driven {
+                w.angular_velocity = f(words)?;
+                for value in &mut w.local_wheel_rotation {
+                    *value = f(words)?;
+                }
+            }
+        }
+        let count = words.next()? as usize;
+        let mut aero = Vec::with_capacity(count);
+        for _ in 0..count {
+            let kind = words.next()?;
+            let source = source_from_index(words.next()?)?;
+            let a = [f(words)?, f(words)?, f(words)?];
+            let b = [f(words)?, f(words)?, f(words)?];
+            aero.push(RecordedCall { kind, source, a, b });
+        }
+        Some(RecordedStep { controls, clutch, gear, engine, wheels, aero })
+    }
+}
+
+const SOURCES: [ForceSource; 18] = [
+    ForceSource::Tyre,
+    ForceSource::Surface,
+    ForceSource::Spring,
+    ForceSource::Damper,
+    ForceSource::Bumpstop,
+    ForceSource::HeaveSpring,
+    ForceSource::HeaveDamper,
+    ForceSource::HeaveBumpstop,
+    ForceSource::Arb,
+    ForceSource::AeroDrag,
+    ForceSource::AeroLift,
+    ForceSource::Drivetrain,
+    ForceSource::Brake,
+    ForceSource::Steering,
+    ForceSource::Stability,
+    ForceSource::Sleep,
+    ForceSource::Teleport,
+    ForceSource::Other,
+];
+
+fn source_index(source: ForceSource) -> u32 {
+    SOURCES.iter().position(|s| *s == source).unwrap() as u32
+}
+
+fn source_from_index(index: u32) -> Option<ForceSource> {
+    SOURCES.get(index as usize).copied()
+}
+
+/// A [`ChassisFeed`] that hands the chassis one recorded step.
+///
+/// The recordings hold the tyre's inputs as `Tyre::step` found them, so everything the
+/// brakes, the ABS, the ERS and the drivetrain write into a tyre is put there in the `brakes`
+/// hook (just before the suspensions and tyres run); the `drivetrain` and `aids` hooks have
+/// nothing left to do.
+pub struct RecordedFeed<'a> {
+    pub step: &'a RecordedStep,
+}
+
+impl ChassisFeed for RecordedFeed<'_> {
+    fn poll_controls(&mut self, chassis: &mut RollingChassis) {
+        chassis.controls = self.step.controls;
+    }
+
+    fn engine(&mut self, _chassis: &RollingChassis) -> EngineFeed {
+        self.step.engine
+    }
+
+    fn autoclutch(&mut self, chassis: &mut RollingChassis) {
+        chassis.controls.clutch = self.step.clutch;
+    }
+
+    fn current_gear(&mut self, _chassis: &RollingChassis) -> i32 {
+        self.step.gear
+    }
+
+    fn brakes(&mut self, chassis: &mut RollingChassis) {
+        for (tyre, wheel) in chassis.tyres.iter_mut().zip(&self.step.wheels) {
+            tyre.inputs.brake_torque = wheel.brake_torque;
+            tyre.inputs.hand_brake_torque = wheel.hand_brake_torque;
+            tyre.inputs.electric_torque = wheel.electric_torque;
+            tyre.abs_override = wheel.abs_override;
+            tyre.ai_mult = wheel.ai_mult;
+            tyre.driven = wheel.driven;
+            if wheel.driven {
+                tyre.status.angular_velocity = wheel.angular_velocity;
+                for (k, value) in wheel.local_wheel_rotation.iter().enumerate() {
+                    tyre.local_wheel_rotation.m[k / 4][k % 4] = *value;
+                }
+            }
+        }
+    }
+
+    fn aero(&mut self, chassis: &mut RollingChassis) {
+        let previous = chassis.core.source;
+        for call in &self.step.aero {
+            chassis.core.source = call.source;
+            let (a, b) = (Vec3f::new(call.a[0], call.a[1], call.a[2]), Vec3f::new(call.b[0], call.b[1], call.b[2]));
+            chassis.core.apply_call(chassis.body, call.kind, &a, &b).expect("a force call from the recording");
+        }
+        chassis.core.source = previous;
+    }
+
+    fn drivetrain(&mut self, _chassis: &mut RollingChassis) {}
+
+    fn aids(&mut self, _chassis: &mut RollingChassis) {}
+}
+
+/// A value compared with the game.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    /// The name in a `car_oracle` recording.
+    pub name: String,
+    /// `f` f32 bits, `i` integer, `d` f64 bits.
+    pub kind: char,
+}
+
+fn field(out: &mut Vec<Field>, kind: char, name: String) {
+    out.push(Field { name, kind });
+}
+
+fn vector(out: &mut Vec<Field>, name: &str, axes: &[&str]) {
+    for axis in axes {
+        field(out, 'f', format!("{name}.{axis}"));
+    }
+}
+
+const XYZ: [&str; 3] = ["x", "y", "z"];
+const WXYZ: [&str; 4] = ["w", "x", "y", "z"];
+const NINE: [&str; 9] = ["0", "1", "2", "3", "4", "5", "6", "7", "8"];
+
+/// The names of the joints in the recordings, in creation order.
+pub fn joint_names() -> Vec<String> {
+    let mut names = vec!["fuel_tank".to_string()];
+    for wheel in WHEELS {
+        for rod in RODS {
+            names.push(format!("{wheel}.{rod}"));
+        }
+    }
+    names
+}
+
+/// Every value [`snapshot`] returns, in its order.
+pub fn fields() -> Vec<Field> {
+    let mut out = Vec::new();
+    field(&mut out, 'f', "car.finalSteerAngleSignal".into());
+    for body in BODIES {
+        field(&mut out, 'f', format!("{body}.mass"));
+        vector(&mut out, &format!("{body}.inertia"), &XYZ);
+        for part in ["pre", "post"] {
+            vector(&mut out, &format!("{body}.{part}.pos"), &XYZ);
+            vector(&mut out, &format!("{body}.{part}.q"), &WXYZ);
+            vector(&mut out, &format!("{body}.{part}.R"), &NINE);
+            vector(&mut out, &format!("{body}.{part}.lvel"), &XYZ);
+            vector(&mut out, &format!("{body}.{part}.avel"), &XYZ);
+            if part == "pre" {
+                vector(&mut out, &format!("{body}.facc"), &XYZ);
+                vector(&mut out, &format!("{body}.tacc"), &XYZ);
+            }
+        }
+        field(&mut out, 'i', format!("{body}.tag"));
+    }
+    for (j, name) in joint_names().iter().enumerate() {
+        let n = format!("joint.{name}");
+        if j == 0 {
+            vector(&mut out, &format!("{n}.qrel"), &WXYZ);
+            vector(&mut out, &format!("{n}.offset"), &XYZ);
+        } else {
+            vector(&mut out, &format!("{n}.anchor1"), &XYZ);
+            vector(&mut out, &format!("{n}.anchor2"), &XYZ);
+        }
+        field(&mut out, 'f', format!("{n}.erp"));
+        field(&mut out, 'f', format!("{n}.cfm"));
+        if j != 0 {
+            field(&mut out, 'f', format!("{n}.distance"));
+        }
+        field(&mut out, 'i', format!("{n}.tag"));
+        for group in ["f1", "t1", "f2", "t2"] {
+            vector(&mut out, &format!("{n}.{group}"), &XYZ);
+        }
+    }
+    for wheel in WHEELS {
+        for name in rig::input_fields().into_iter().chain(rig::output_fields()) {
+            field(&mut out, rig::field_kind(&name), format!("tyre.{wheel}.{name}"));
+        }
+        for k in 0..16 {
+            field(&mut out, 'f', format!("tyre.{wheel}.in_localWheelRotation.M{}{}", k / 4 + 1, k % 4 + 1));
+        }
+    }
+    field(&mut out, 'f', "car.speed".into());
+    vector(&mut out, "car.accG", &XYZ);
+    field(&mut out, 'd', "car.fuel".into());
+    field(&mut out, 'f', "car.mass".into());
+    field(&mut out, 'f', "car.lastFF".into());
+    field(&mut out, 'f', "car.mzCurrent".into());
+    field(&mut out, 'i', "car.sleepingFrames".into());
+    for wheel in WHEELS {
+        for name in ["travel", "damperSpeedMS", "steerTorque", "bumpStopDn"] {
+            field(&mut out, 'f', format!("suspension.{wheel}.{name}"));
+        }
+    }
+    for axle in ["front", "rear"] {
+        field(&mut out, 'f', format!("heave.{axle}.travel"));
+        field(&mut out, 'f', format!("arb.{axle}.k"));
+    }
+    field(&mut out, 'f', "car.ballastKG".into());
+    field(&mut out, 'f', "car.steerLock".into());
+    field(&mut out, 'f', "car.steerRatio".into());
+    out
+}
+
+/// The values of [`fields`] after a step that ran with `chassis.trace` on. An `f` or `i`
+/// value sits in the low 32 bits.
+pub fn snapshot(chassis: &RollingChassis) -> Vec<u64> {
+    let trace: &StepTrace = chassis.trace.as_ref().expect("the step must run with a trace");
+    let f = |x: f32| x.to_bits() as u64;
+    let mut out = Vec::new();
+    out.push(f(chassis.final_steer_angle_signal));
+    for (body, pre) in chassis.core.bodies().zip(&trace.pre) {
+        let post = chassis.body_trace(body);
+        out.push(f(pre.mass));
+        out.extend(pre.inertia.map(f));
+        for (state, is_pre) in [(pre, true), (&post, false)] {
+            out.extend(state.pos.map(f));
+            out.extend(state.q.map(f));
+            out.extend(state.r.map(f));
+            out.extend(state.lvel.map(f));
+            out.extend(state.avel.map(f));
+            if is_pre {
+                out.extend(state.facc.map(f));
+                out.extend(state.tacc.map(f));
+            }
+        }
+        out.push(chassis.core.world.body(body.id).tag as u32 as u64);
+    }
+    let mut joints = vec![chassis.fuel_tank_joint.id];
+    for suspension in &chassis.suspensions {
+        joints.extend(suspension.joints().iter().map(|joint| joint.id));
+    }
+    for id in joints {
+        let joint = chassis.core.world.joint(id);
+        match &joint.kind {
+            JointKind::Fixed { qrel, offset, erp, cfm } => {
+                out.extend(qrel.map(f));
+                out.extend([offset[0], offset[1], offset[2], *erp, *cfm].map(f));
+            }
+            JointKind::DBall { anchor1, anchor2, erp, cfm, target_distance } => {
+                out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
+                out.extend([*erp, *cfm, *target_distance].map(f));
+            }
+            _ => unreachable!("the chassis has rods and one fixed joint"),
+        }
+        out.push(joint.tag as u32 as u64);
+        let fb = joint.feedback.unwrap_or_default();
+        for v in [fb.f1, fb.t1, fb.f2, fb.t2] {
+            out.extend([v[0], v[1], v[2]].map(f));
+        }
+    }
+    for tyre in &trace.tyres {
+        out.extend(tyre.input.to_words());
+        out.extend(tyre.output.iter().copied());
+        for row in &tyre.wheel_rotation_in.m {
+            out.extend(row.map(f));
+        }
+    }
+    out.push(f(chassis.speed));
+    out.extend([chassis.acc_g.x, chassis.acc_g.y, chassis.acc_g.z].map(f));
+    out.push(chassis.fuel.to_bits());
+    out.push(f(chassis.mass));
+    out.push(f(chassis.last_ff));
+    out.push(f(chassis.mz_current));
+    out.push(chassis.sleeping_frames as u32 as u64);
+    for suspension in &chassis.suspensions {
+        let status = suspension.get_status();
+        out.extend([status.travel, status.damper_speed_ms, suspension.get_steer_torque(), suspension.base().bump_stop_dn].map(f));
+    }
+    for axle in 0..2 {
+        out.push(f(chassis.heave_springs[axle].travel));
+        out.push(f(chassis.antiroll_bars[axle].k));
+    }
+    out.extend([chassis.ballast_kg, chassis.steer_lock, chassis.steer_ratio].map(f));
+    out
+}
+
+/// Are two values of a field the same? A NaN equals any NaN (its sign and payload depend on
+/// operand order the compiler may choose).
+pub fn same_value(kind: char, expected: u64, got: u64) -> bool {
+    rig::same_value(kind, expected, got)
+}
+
+/// A value as text, with its bits.
+pub fn describe(kind: char, word: u64) -> String {
+    match kind {
+        'd' => format!("{:?} ({word:#018x})", f64::from_bits(word)),
+        'i' => format!("{}", word as u32 as i32),
+        _ => format!("{:?} ({:#010x})", f32::from_bits(word as u32), word as u32),
+    }
+}
+
+fn fnv(hash: &mut u64, bytes: &[u8]) {
+    for &byte in bytes {
+        *hash = (*hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+/// One number for everything a step produced: an FNV-1a 64 hash over the [`snapshot`] words
+/// and the force tape. A NaN is hashed as one canonical NaN.
+pub fn step_hash(kinds: &[char], words: &[u64], tape: &[TapeCall]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let float = |x: f32| if x.is_nan() { f32::NAN.to_bits() } else { x.to_bits() };
+    for (&kind, &word) in kinds.iter().zip(words) {
+        match kind {
+            'd' => {
+                let value = f64::from_bits(word);
+                let bits = if value.is_nan() { f64::NAN.to_bits() } else { word };
+                fnv(&mut hash, &bits.to_le_bytes());
+            }
+            'i' => fnv(&mut hash, &(word as u32).to_le_bytes()),
+            _ => fnv(&mut hash, &float(f32::from_bits(word as u32)).to_le_bytes()),
+        }
+    }
+    for call in tape {
+        fnv(&mut hash, &call.body.to_le_bytes());
+        fnv(&mut hash, &call.kind.to_le_bytes());
+        fnv(&mut hash, &source_index(call.source).to_le_bytes());
+        for v in [call.a, call.b, call.facc, call.tacc] {
+            for x in v {
+                fnv(&mut hash, &float(x).to_le_bytes());
+            }
+        }
+    }
+    hash
+}
+
+/// How a run of the chassis is set up to match a recording.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunSetup {
+    /// The recording's scenario name.
+    pub scenario: String,
+    pub ground: Ground,
+    /// `srand` seed of the game's C runtime when the car was built.
+    pub seed: u32,
+    /// The physics clock before the first step, ms; step `n` runs at `clock + 3 * (n + 1)`.
+    pub clock_start_ms: f64,
+    pub env: ChassisEnvironment,
+}
+
+impl RunSetup {
+    /// Builds the F2004-style chassis of a recording the way the oracle built the game's car:
+    /// `Car::Car`, the spawn at the origin facing +z, then the session start.
+    pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
+        let mut chassis =
+            RollingChassis::new(data_path, self.env, Box::new(self.ground), self.seed, self.clock_start_ms)?;
+        chassis.core.joint_feedback = true;
+        // the joints exist already: ask for their constraint forces as the oracle did
+        let ids: Vec<_> = chassis.core.world.joint_ids().collect();
+        for id in ids {
+            chassis.core.world.joint_set_feedback(id, true);
+        }
+        chassis.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
+        chassis.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+        chassis.session_start()?;
+        chassis.core.tape = Some(Vec::new());
+        chassis.trace = Some(StepTrace::default());
+        Ok(chassis)
+    }
+
+    /// The physics clock of a step, ms.
+    pub fn time_of_step(&self, step: usize) -> f64 {
+        self.clock_start_ms + (step as f64 + 1.0) * 3.0
+    }
+}
+
+impl RollingChassis {
+    /// Everything that changes from step to step, as 32-bit words: the bodies, the joints,
+    /// the tyres and the car's own counters. What the car's files and the setup decide is not
+    /// in here, so a state only fits a chassis built and set up the same way.
+    pub fn save_state(&self) -> Vec<u32> {
+        let mut out = Vec::new();
+        let f = f32::to_bits;
+        for body in self.core.bodies() {
+            let b = self.core.world.body(body.id);
+            out.extend([b.pos[0], b.pos[1], b.pos[2]].map(f));
+            out.extend(b.q.map(f));
+            out.extend(b.r.map(f));
+            out.extend([b.lvel[0], b.lvel[1], b.lvel[2], b.avel[0], b.avel[1], b.avel[2]].map(f));
+            out.extend([b.mass.mass, b.mass.i[0], b.mass.i[5], b.mass.i[10]].map(f));
+        }
+        for id in self.core.world.joint_ids() {
+            match &self.core.world.joint(id).kind {
+                JointKind::Fixed { qrel, offset, erp, cfm } => {
+                    out.extend(qrel.map(f));
+                    out.extend([offset[0], offset[1], offset[2], *erp, *cfm].map(f));
+                }
+                JointKind::DBall { anchor1, anchor2, erp, cfm, target_distance } => {
+                    out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
+                    out.extend([*erp, *cfm, *target_distance].map(f));
+                }
+                _ => unreachable!("the chassis has rods and one fixed joint"),
+            }
+        }
+        for tyre in &self.tyres {
+            for word in rig::snapshot(tyre, &[]) {
+                out.push(word as u32);
+                out.push((word >> 32) as u32);
+            }
+        }
+        for suspension in &self.suspensions {
+            let status = suspension.get_status();
+            out.extend([status.travel, status.damper_speed_ms, suspension.get_steer_torque()].map(f));
+        }
+        out.extend([self.heave_springs[0].rod_length, self.heave_springs[0].travel].map(f));
+        out.extend([self.heave_springs[1].rod_length, self.heave_springs[1].travel].map(f));
+        let c = &self.controls;
+        out.extend([c.gas, c.brake, c.steer, c.clutch].map(f));
+        out.extend(
+            [
+                self.final_steer_angle_signal,
+                self.acc_g.x,
+                self.acc_g.y,
+                self.acc_g.z,
+                self.last_velocity.x,
+                self.last_velocity.y,
+                self.last_velocity.z,
+                self.mz_current,
+                self.last_ff,
+                self.last_pure_mz_ff,
+                self.last_gyro_ff,
+                self.last_steer_position,
+                self.flat_spot_phase,
+                self.speed,
+                self.fuel_pressure,
+            ]
+            .map(f),
+        );
+        out.push(self.sleeping_frames as u32);
+        out.push(self.frames_to_sleep as u32);
+        for value in [self.fuel.to_bits(), self.last_body_mass_update_time.to_bits(), self.physics_time.to_bits()] {
+            out.push(value as u32);
+            out.push((value >> 32) as u32);
+        }
+        out
+    }
+
+    /// The inverse of [`RollingChassis::save_state`].
+    pub fn load_state(&mut self, words: &[u32]) -> Result<(), String> {
+        let mut words = words.iter().copied();
+        let mut next = || words.next().ok_or("the saved state is too short".to_string());
+        macro_rules! f {
+            () => {
+                f32::from_bits(next()?)
+            };
+        }
+        let bodies: Vec<_> = self.core.bodies().collect();
+        for body in bodies {
+            let pos = [f!(), f!(), f!()];
+            let q = [f!(), f!(), f!(), f!()];
+            let mut r = [0.0f32; 12];
+            for value in &mut r {
+                *value = f!();
+            }
+            let velocity = [f!(), f!(), f!(), f!(), f!(), f!()];
+            let mut mass = Mass::zero();
+            mass.mass = f!();
+            mass.i[0] = f!();
+            mass.i[5] = f!();
+            mass.i[10] = f!();
+            self.core.world.body_set_mass(body.id, &mass);
+            let b = self.core.world.body_mut(body.id);
+            b.pos[..3].copy_from_slice(&pos);
+            b.q = q;
+            b.r = r;
+            b.lvel[..3].copy_from_slice(&velocity[..3]);
+            b.avel[..3].copy_from_slice(&velocity[3..]);
+            for k in 0..3 {
+                b.facc[k] = 0.0;
+                b.tacc[k] = 0.0;
+            }
+        }
+        let ids: Vec<_> = self.core.world.joint_ids().collect();
+        for id in ids {
+            let mut v = [0.0f32; 9];
+            for value in &mut v {
+                *value = f!();
+            }
+            match &mut self.core.world.joint_mut(id).kind {
+                JointKind::Fixed { qrel, offset, erp, cfm } => {
+                    qrel.copy_from_slice(&v[0..4]);
+                    offset[..3].copy_from_slice(&v[4..7]);
+                    *erp = v[7];
+                    *cfm = v[8];
+                }
+                JointKind::DBall { anchor1, anchor2, erp, cfm, target_distance } => {
+                    anchor1[..3].copy_from_slice(&v[0..3]);
+                    anchor2[..3].copy_from_slice(&v[3..6]);
+                    *erp = v[6];
+                    *cfm = v[7];
+                    *target_distance = v[8];
+                }
+                _ => unreachable!("the chassis has rods and one fixed joint"),
+            }
+        }
+        let count = rig::output_fields().len();
+        for tyre in &mut self.tyres {
+            let mut snapshot = Vec::with_capacity(count);
+            for _ in 0..count {
+                let low = next()? as u64;
+                let high = next()? as u64;
+                snapshot.push(low | high << 32);
+            }
+            rig::restore(tyre, &snapshot);
+        }
+        for suspension in &mut self.suspensions {
+            let status = super::suspension::SuspensionStatus { travel: f!(), damper_speed_ms: f!() };
+            suspension.restore_step_state(status, f!());
+        }
+        for heave in &mut self.heave_springs {
+            heave.rod_length = f!();
+            heave.travel = f!();
+        }
+        self.controls = CarControls { gas: f!(), brake: f!(), steer: f!(), clutch: f!() };
+        self.final_steer_angle_signal = f!();
+        self.acc_g = Vec3f::new(f!(), f!(), f!());
+        self.last_velocity = Vec3f::new(f!(), f!(), f!());
+        self.mz_current = f!();
+        self.last_ff = f!();
+        self.last_pure_mz_ff = f!();
+        self.last_gyro_ff = f!();
+        self.last_steer_position = f!();
+        self.flat_spot_phase = f!();
+        self.speed = f!();
+        self.fuel_pressure = f!();
+        self.sleeping_frames = next()? as i32;
+        self.frames_to_sleep = next()? as i32;
+        let mut double = || -> Result<f64, String> {
+            let low = next()? as u64;
+            let high = next()? as u64;
+            Ok(f64::from_bits(low | high << 32))
+        };
+        self.fuel = double()?;
+        self.last_body_mass_update_time = double()?;
+        self.physics_time = double()?;
+        Ok(())
+    }
+}
+
+/// What the game produced in one step of a golden excerpt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GoldenStep {
+    pub feed: RecordedStep,
+    /// [`step_hash`] of the game's values.
+    pub hash: u64,
+    /// Position, quaternion, linear and angular velocity of the six bodies after the step
+    /// (13 values each), so that a failure can say where the car is instead of only "hash".
+    pub bodies: Vec<u32>,
+}
+
+/// A small excerpt of a recording for `cargo test`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Golden {
+    pub setup: RunSetup,
+    /// Index of the first step in the recording.
+    pub first: usize,
+    /// [`RollingChassis::save_state`] before the first step (empty when `first` is 0).
+    pub state: Vec<u32>,
+    pub steps: Vec<GoldenStep>,
+}
+
+const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD01";
+
+/// The 13 values per body kept in a golden step.
+pub fn body_words(chassis: &RollingChassis) -> Vec<u32> {
+    let mut out = Vec::new();
+    for body in chassis.core.bodies() {
+        let b = chassis.core.world.body(body.id);
+        out.extend([b.pos[0], b.pos[1], b.pos[2]].map(f32::to_bits));
+        out.extend(b.q.map(f32::to_bits));
+        out.extend([b.lvel[0], b.lvel[1], b.lvel[2], b.avel[0], b.avel[1], b.avel[2]].map(f32::to_bits));
+    }
+    out
+}
+
+impl Golden {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let e = &self.setup.env;
+        let header = format!(
+            "scenario={}\nground={}\nseed={}\nclock_start_ms={:?}\nfirst={}\nsteps={}\nambient_temperature={:?}\n\
+             road_temperature={:?}\ndynamic_grip_level={:?}\ntyre_consumption_rate={:?}\nmechanical_damage_rate={:?}\n\
+             fuel_consumption_rate={:?}\nallow_tyre_blankets={}\n",
+            self.setup.scenario,
+            self.setup.ground.describe(),
+            self.setup.seed,
+            self.setup.clock_start_ms,
+            self.first,
+            self.steps.len(),
+            e.ambient_temperature,
+            e.road_temperature,
+            e.dynamic_grip_level,
+            e.tyre_consumption_rate,
+            e.mechanical_damage_rate,
+            e.fuel_consumption_rate,
+            e.allow_tyre_blankets as u8,
+        );
+        let mut words: Vec<u32> = Vec::new();
+        words.push(self.state.len() as u32);
+        words.extend(&self.state);
+        for step in &self.steps {
+            step.feed.to_words(&mut words);
+            words.push(step.hash as u32);
+            words.push((step.hash >> 32) as u32);
+            words.extend(&step.bodies);
+        }
+        let mut out = Vec::with_capacity(16 + header.len() + words.len() * 4);
+        out.extend_from_slice(GOLDEN_MAGIC);
+        out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        out.extend_from_slice(header.as_bytes());
+        for word in words {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn parse(bytes: &[u8]) -> Result<Golden, String> {
+        if bytes.len() < 12 || &bytes[..8] != GOLDEN_MAGIC {
+            return Err("not a chassis golden file".to_string());
+        }
+        let header_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        let header = std::str::from_utf8(bytes.get(12..12 + header_len).ok_or("truncated header")?)
+            .map_err(|e| e.to_string())?;
+        let get = |key: &str| -> Result<&str, String> {
+            header
+                .lines()
+                .find_map(|line| line.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))
+                .ok_or(format!("the golden file has no {key}"))
+        };
+        let number = |key: &str| -> Result<f32, String> { get(key)?.parse::<f32>().map_err(|e| format!("{key}: {e}")) };
+        let env = ChassisEnvironment {
+            ambient_temperature: number("ambient_temperature")?,
+            road_temperature: number("road_temperature")?,
+            dynamic_grip_level: number("dynamic_grip_level")?,
+            tyre_consumption_rate: number("tyre_consumption_rate")?,
+            mechanical_damage_rate: number("mechanical_damage_rate")?,
+            fuel_consumption_rate: number("fuel_consumption_rate")?,
+            allow_tyre_blankets: get("allow_tyre_blankets")? != "0",
+            ..ChassisEnvironment::default()
+        };
+        let setup = RunSetup {
+            scenario: get("scenario")?.to_string(),
+            ground: Ground::parse(get("ground")?).ok_or("bad ground")?,
+            seed: get("seed")?.parse().map_err(|e| format!("seed: {e}"))?,
+            clock_start_ms: get("clock_start_ms")?.parse().map_err(|e| format!("clock_start_ms: {e}"))?,
+            env,
+        };
+        let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
+        let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;
+        let mut words = bytes[12 + header_len..].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
+        let state_len = words.next().ok_or("truncated")? as usize;
+        let state: Vec<u32> = words.by_ref().take(state_len).collect();
+        if state.len() != state_len {
+            return Err("truncated state".to_string());
+        }
+        let mut steps = Vec::with_capacity(count);
+        for index in 0..count {
+            let feed = RecordedStep::from_words(&mut words).ok_or(format!("truncated at step {index}"))?;
+            let low = words.next().ok_or("truncated")? as u64;
+            let high = words.next().ok_or("truncated")? as u64;
+            let bodies: Vec<u32> = words.by_ref().take(BODIES.len() * 13).collect();
+            if bodies.len() != BODIES.len() * 13 {
+                return Err(format!("truncated at step {index}"));
+            }
+            steps.push(GoldenStep { feed, hash: low | high << 32, bodies });
+        }
+        Ok(Golden { setup, first, state, steps })
+    }
+
+    /// Builds the chassis from `data_path`, puts it into the excerpt's start state and runs
+    /// every step, comparing with what the game produced. `Err` names the first step that
+    /// differs.
+    pub fn check(&self, data_path: &Path) -> Result<(), String> {
+        let mut chassis = self.setup.build(data_path)?;
+        if !self.state.is_empty() {
+            // the setup values reached the car in the first step of the recording
+            let mut manager = std::mem::take(&mut chassis.setup_manager);
+            manager.step(&mut chassis);
+            chassis.setup_manager = manager;
+            chassis.load_state(&self.state)?;
+        }
+        let kinds: Vec<char> = fields().iter().map(|field| field.kind).collect();
+        for (index, step) in self.steps.iter().enumerate() {
+            let number = self.first + index;
+            chassis.step(DT, self.setup.time_of_step(number), &mut RecordedFeed { step: &step.feed });
+            let bodies = body_words(&chassis);
+            if bodies != step.bodies {
+                let at = bodies.iter().zip(&step.bodies).position(|(a, b)| a != b).unwrap();
+                let part = ["pos.x", "pos.y", "pos.z", "q.w", "q.x", "q.y", "q.z", "lvel.x", "lvel.y", "lvel.z", "avel.x", "avel.y", "avel.z"];
+                return Err(format!(
+                    "{} step {number}: {}.{} is {:?}, the game has {:?}",
+                    self.setup.scenario,
+                    BODIES[at / 13],
+                    part[at % 13],
+                    f32::from_bits(bodies[at]),
+                    f32::from_bits(step.bodies[at])
+                ));
+            }
+            let hash = step_hash(&kinds, &snapshot(&chassis), chassis.core.tape.as_deref().unwrap_or(&[]));
+            if hash != step.hash {
+                return Err(format!(
+                    "{} step {number}: the bodies agree with the game, but another value (suspension, tyre, joint, \
+                     force call, steering, force feedback) does not: hash {hash:#018x}, the game's {:#018x}",
+                    self.setup.scenario, step.hash
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A tape call's kind as text.
+pub fn kind_name(call_kind: u32) -> &'static str {
+    match call_kind {
+        kind::ADD_FORCE_AT_POS => "addForceAtPos",
+        kind::ADD_FORCE_AT_LOCAL_POS => "addForceAtLocalPos",
+        kind::ADD_LOCAL_FORCE => "addLocalForce",
+        kind::ADD_LOCAL_FORCE_AT_POS => "addLocalForceAtPos",
+        kind::ADD_LOCAL_FORCE_AT_LOCAL_POS => "addLocalForceAtLocalPos",
+        kind::ADD_TORQUE => "addTorque",
+        kind::ADD_LOCAL_TORQUE => "addLocalTorque",
+        kind::STOP => "stop",
+        _ => "?",
+    }
+}

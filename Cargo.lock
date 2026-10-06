@@ -18,4 +18,5 @@ name = "rustyac-physics"
 version = "0.1.0"
 dependencies = [
  "rustyac-math",
+ "rustyac-ode",
 ]

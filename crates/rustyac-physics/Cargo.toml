@@ -8,3 +8,4 @@ publish.workspace = true
 
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }
+rustyac-ode = { path = "../rustyac-ode" }
