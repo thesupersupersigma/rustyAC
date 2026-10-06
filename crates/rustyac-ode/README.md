@@ -36,11 +36,15 @@ world.step(0.003);                                 // dWorldStep
 
 ## Checks
 
-- `cargo test -p rustyac-ode`: replays 300 steps of the game's own F2004 dropping onto the road
-  (`settle`) and 300 steps of it in a slalom from checked-in excerpts of the whole-car oracle
-  recordings; every body value and every joint force must be bit-identical.
+- `cargo test -p rustyac-ode` needs no game. It replays 300 steps of the game's own F2004
+  dropping onto the road (`settle`) and 300 steps of it in a slalom from checked-in excerpts of
+  the whole-car oracle recordings (`tests/golden_car.rs`), 31 small synthetic worlds with every
+  joint type against hashes of the game's state after every step (`tests/golden_ops.rs`), and
+  the maths routines one by one against the game's answers (`tests/golden_functions.rs`).
+  Everything must be bit-identical.
 - `tools/ode_oracle micro`: runs the game's own ODE (inside the mapped `acs.exe`) and this crate
   side by side on synthetic worlds, bit for bit after every step.
+- `tools/ode_oracle matrix`: the same for single maths functions.
 - `tools/ode_oracle replay`: replays all whole-car recordings, per step and as a free run.
 
 ## Licence of the original
