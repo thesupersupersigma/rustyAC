@@ -5,6 +5,7 @@
 //!
 //! car_oracle list
 //! car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]
+//!                [--car <folder under cardata/>]
 //!     One scenario in this process. Prints `<name> steps=… bytes=… hash=…`. `--floor` adds a
 //!     collision mesh under the car (file `<name>_floor.carrec`).
 //! car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]
@@ -45,7 +46,7 @@ fn usage() -> String {
      car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]\n       \
      car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>] [--every <n>] \
      [--only <prefix,prefix>] [--csv-out <file>]\n       \
-     common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--verbose]"
+     common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--car <folder under cardata/>] [--verbose]"
         .to_string()
 }
 
@@ -225,7 +226,7 @@ fn run_child(args: &Args, name: &str, hash_only: bool) -> Result<String, String>
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = std::process::Command::new(exe);
     command.arg("run").arg("--scenario").arg(name).arg("--out").arg(&args.out);
-    command.arg("--acs").arg(&args.acs).arg("--root").arg(&args.root);
+    command.arg("--acs").arg(&args.acs).arg("--root").arg(&args.root).arg("--car").arg(&args.car);
     if let Some(steps) = args.steps {
         command.arg("--steps").arg(steps.to_string());
     }
