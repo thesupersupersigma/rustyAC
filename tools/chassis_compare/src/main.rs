@@ -1,22 +1,30 @@
 //! The Rust rolling chassis against the whole-car recordings of `tools/car_oracle`.
 //!
-//! chassis_compare run [<scenario> ...] [--verbose] [--stop-after <steps>]
-//!     Free run from step 0 of every `oracle/car/<scenario>.carrec` (default: all but
-//!     `settle_floor`, whose floor contacts are stage 2 of the rigid-body port): the Rust
+//! chassis_compare run [<scenario> ...] [--dir <folder>] [--verbose] [--stop-after <steps>]
+//!     Free run from step 0 of every `<folder>/<scenario>.carrec` (default folder `oracle/car`;
+//!     default: all but `settle_floor`, whose floor contacts are stage 2 of the rigid-body
+//!     port): the Rust
 //!     chassis (body, fuel tank, hubs, double-wishbone suspensions, heave springs, anti-roll
 //!     bars, steering, force feedback) with the Rust tyres on the Rust ODE, built from
 //!     `cardata/<car>` and fed only what the systems that are not ported yet hand to it
 //!     (controls, engine values for the fuel burn, brake torques, driven-wheel speeds, wing
 //!     forces). After every step every body state, joint value, suspension value, tyre value,
 //!     the steering signal, the force-feedback number and the whole force tape are compared
-//!     with the game, bit for bit. The full run writes `oracle/chassis/results.md`.
+//!     with the game, bit for bit. The full run writes `oracle/chassis/results.md`
+//!     (`results_<folder name>.md` for another folder).
+//! chassis_compare test-car
+//!     Writes `cardata/f2004_tight_stops`: the F2004 with its packers and bump stops (wheels
+//!     and heave springs) moved to where ordinary driving reaches them, so that recordings of
+//!     it (`car_oracle all --car f2004_tight_stops --out oracle/car_tight_stops`) exercise
+//!     the branches no recording of the real car does.
 //! chassis_compare excerpt
 //!     Writes the golden excerpts of `crates/rustyac-physics/tests/chassis_golden.rs`.
-//! chassis_compare faults [<scenario>]
+//! chassis_compare faults [<scenario>] [--dir <folder>]
 //!     A check of the check: the same free run (default scenario `slalom`) with one small
 //!     deliberate fault in the Rust chassis at a time (a damper rate, a bar rate, a spring rate
 //!     … changed in its last bit, the setup rounding left out, the joint softening left out),
-//!     and where the comparison first notices. Writes `oracle/chassis/faults.md`.
+//!     and where the comparison first notices. Writes `oracle/chassis/faults.md`
+//!     (`faults_<folder name>.md` for another folder).
 //!
 //! Needs no acs.exe.
 
@@ -216,7 +224,7 @@ fn detach(chassis: &mut RollingChassis, name: &str) {
     item.attached = false;
 }
 
-const FAULTS: [(&str, &str, Fault); 13] = [
+const FAULTS: [(&str, &str, Fault); 18] = [
     ("damper", "left front slow bump damping one bit up", |c| {
         detach(c, "DAMP_BUMP_LF");
         let d = c.suspensions[0].damper_mut();
@@ -236,6 +244,25 @@ const FAULTS: [(&str, &str, Fault); 13] = [
         detach(c, "BUMP_STOP_RATE_RF");
         let b = c.suspensions[1].base_mut();
         b.bump_stop_rate = nudge(b.bump_stop_rate);
+    }),
+    ("packer", "left front packer range one bit up", |c| {
+        detach(c, "PACKER_RANGE_LF");
+        let b = c.suspensions[0].base_mut();
+        b.packer_range = nudge(b.packer_range);
+    }),
+    ("bump_stop_up", "left rear upper bump stop one bit further", |c| {
+        let b = c.suspensions[2].base_mut();
+        b.bump_stop_up = nudge(b.bump_stop_up);
+    }),
+    ("bump_stop_dn", "right rear lower bump stop one bit further", |c| {
+        let b = c.suspensions[3].base_mut();
+        b.bump_stop_dn = nudge(b.bump_stop_dn);
+    }),
+    ("heave_packer", "front heave spring packer range one bit up", |c| {
+        c.heave_springs[0].packer_range = nudge(c.heave_springs[0].packer_range)
+    }),
+    ("heave_bump_stop", "rear heave spring lower bump stop one bit further", |c| {
+        c.heave_springs[1].bump_stop_dn = nudge(c.heave_springs[1].bump_stop_dn)
     }),
     ("arb", "front anti-roll bar rate one bit up", |c| {
         detach(c, "ARB_FRONT");
@@ -263,7 +290,25 @@ const FAULTS: [(&str, &str, Fault); 13] = [
     ("erp", "the low-speed softening of the joints left out", |c| c.env.is_first_car = false),
 ];
 
+/// How often the branches that ordinary driving of the F2004 never reaches were taken.
+#[derive(Clone, Copy, Default)]
+struct Coverage {
+    /// Wheel-steps with the packer engaged (travel above the packer range).
+    packer: usize,
+    /// Force calls of the wheels' bump stops on the game's tape.
+    bumpstop_calls: usize,
+    /// Axle-steps with a heave spring's packer engaged.
+    heave_packer: usize,
+    /// Force calls of the heave springs' bump stops on the game's tape.
+    heave_bumpstop_calls: usize,
+    /// Steps in which the sleeping rule froze the body.
+    frozen: usize,
+    /// Wheel-steps in which the spring did not push (travel not positive).
+    spring_idle: usize,
+}
+
 struct Outcome {
+    coverage: Coverage,
     scenario: String,
     steps: usize,
     exact: usize,
@@ -290,6 +335,7 @@ fn compare(
     }
     let started = std::time::Instant::now();
     let mut outcome = Outcome {
+        coverage: Coverage::default(),
         scenario: setup.scenario.clone(),
         steps: 0,
         exact: 0,
@@ -312,6 +358,23 @@ fn compare(
             }
         }
         let tape = compare_tape(recording, step, &chassis);
+        let coverage = &mut outcome.coverage;
+        for suspension in &chassis.suspensions {
+            let (travel, base) = (suspension.get_status().travel, suspension.base());
+            coverage.packer += (base.packer_range != 0.0 && travel > base.packer_range && base.k != 0.0) as usize;
+            coverage.spring_idle += (travel <= 0.0) as usize;
+        }
+        for heave in &chassis.heave_springs {
+            coverage.heave_packer += (heave.k != 0.0 && heave.packer_range != 0.0 && heave.travel > heave.packer_range) as usize;
+        }
+        for call in &recording.steps[step].calls {
+            match recording.system_of(call) {
+                "bumpstop" => coverage.bumpstop_calls += 1,
+                "heave_bumpstop" => coverage.heave_bumpstop_calls += 1,
+                "sleep" if call.body == 0 => coverage.frozen += 1,
+                _ => {}
+            }
+        }
         outcome.steps += 1;
         outcome.calls += recording.steps[step].calls.len();
         if differing.is_empty() && tape.is_ok() {
@@ -370,9 +433,13 @@ fn car_data(recording: &Recording) -> Result<PathBuf, String> {
     Ok(data)
 }
 
-fn run_command(names: &[String], verbose: bool, stop_after: Option<usize>) -> Result<(), String> {
+fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: Option<usize>) -> Result<(), String> {
     let repo = repo_root();
-    let folder = repo.join("oracle/car");
+    let folder = match dir {
+        Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+        Some(dir) => repo.join(dir),
+        None => repo.join("oracle/car"),
+    };
     let full = names.is_empty() && stop_after.is_none();
     let mut scenarios: Vec<String> = names.to_vec();
     if scenarios.is_empty() {
@@ -419,10 +486,44 @@ fn run_command(names: &[String], verbose: bool, stop_after: Option<usize>) -> Re
         calls += o.calls;
     }
     writeln!(table, "| **all** | **{steps}** | **{}** | | | **{calls}** |", percent(exact, steps)).unwrap();
+    writeln!(table).unwrap();
+    writeln!(
+        table,
+        "| Scenario | Wheel-steps on a packer | Bump-stop force calls | Axle-steps on a heave packer | Heave bump-stop force \
+         calls | Steps frozen by the sleeping rule | Wheel-steps with an idle spring |"
+    )
+    .unwrap();
+    writeln!(table, "|---|---|---|---|---|---|---|").unwrap();
+    let mut total = Coverage::default();
+    for o in &outcomes {
+        let c = o.coverage;
+        writeln!(
+            table,
+            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            o.scenario, c.packer, c.bumpstop_calls, c.heave_packer, c.heave_bumpstop_calls, c.frozen, c.spring_idle
+        )
+        .unwrap();
+        total.packer += c.packer;
+        total.bumpstop_calls += c.bumpstop_calls;
+        total.heave_packer += c.heave_packer;
+        total.heave_bumpstop_calls += c.heave_bumpstop_calls;
+        total.frozen += c.frozen;
+        total.spring_idle += c.spring_idle;
+    }
+    writeln!(
+        table,
+        "| **all** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** |",
+        total.packer, total.bumpstop_calls, total.heave_packer, total.heave_bumpstop_calls, total.frozen, total.spring_idle
+    )
+    .unwrap();
     println!("\n{table}");
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let file = out.join(if full { "results.md" } else { "partial.md" });
+    let suffix = match dir {
+        Some(dir) => format!("_{}", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+        None => String::new(),
+    };
+    let file = out.join(if full { format!("results{suffix}.md") } else { format!("partial{suffix}.md") });
     std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
     println!("{}", file.display());
     if outcomes.iter().any(|o| o.first.is_some()) {
@@ -522,13 +623,24 @@ fn excerpt_command() -> Result<(), String> {
 }
 
 /// Runs one scenario once per deliberate fault and reports where the comparison notices.
-fn faults_command(names: &[String]) -> Result<(), String> {
+fn faults_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
     let repo = repo_root();
     let scenario = names.first().map(String::as_str).unwrap_or("slalom");
-    let recording = Recording::read(&repo.join(format!("oracle/car/{scenario}.carrec")))?;
+    let folder = match dir {
+        Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+        Some(dir) => repo.join(dir),
+        None => repo.join("oracle/car"),
+    };
+    let recording = Recording::read(&folder.join(format!("{scenario}.carrec")))?;
     let data = car_data(&recording)?;
     let mut table = String::new();
-    writeln!(table, "Scenario `{scenario}`, {} steps. Without a fault: no difference.\n", recording.steps.len()).unwrap();
+    writeln!(
+        table,
+        "Scenario `{scenario}` of the car `{}`, {} steps. Without a fault: no difference.\n",
+        recording.get("car").unwrap_or("?"),
+        recording.steps.len()
+    )
+    .unwrap();
     writeln!(table, "| Fault | What is changed | Bit-exact steps | Noticed at | First value that differs |").unwrap();
     writeln!(table, "|---|---|---|---|---|").unwrap();
     let clean = compare(&recording, &data, false, None, None)?;
@@ -550,7 +662,10 @@ fn faults_command(names: &[String]) -> Result<(), String> {
     }
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let file = out.join("faults.md");
+    let file = out.join(match dir {
+        Some(dir) => format!("faults_{}.md", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+        None => "faults.md".to_string(),
+    });
     std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
     println!("\n{table}\n{}", file.display());
     if !missed.is_empty() {
@@ -559,9 +674,92 @@ fn faults_command(names: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// The test car of `test-car`: every change to the F2004's files, as (file, section, key, value).
+const TIGHT_STOPS: [(&str, &str, &str, &str); 18] = [
+    // wheels: bump stops compare the hub height (travel minus rod length), packers the travel;
+    // a negative BUMPSTOP_DN puts the lower stop above the design position
+    ("suspensions.ini", "FRONT", "BUMPSTOP_UP", "0.028"),
+    ("suspensions.ini", "FRONT", "BUMPSTOP_DN", "-0.016"),
+    ("suspensions.ini", "FRONT", "PACKER_RANGE", "0.020"),
+    ("suspensions.ini", "FRONT", "BUMP_STOP_PROGRESSIVE", "2000000"),
+    ("suspensions.ini", "REAR", "BUMPSTOP_UP", "0.068"),
+    ("suspensions.ini", "REAR", "BUMPSTOP_DN", "-0.052"),
+    ("suspensions.ini", "REAR", "PACKER_RANGE", "0.030"),
+    ("suspensions.ini", "REAR", "BUMP_STOP_PROGRESSIVE", "1000000"),
+    // heave springs
+    ("suspensions.ini", "HEAVE_FRONT", "BUMPSTOP_UP", "0.027"),
+    ("suspensions.ini", "HEAVE_FRONT", "BUMPSTOP_DN", "-0.017"),
+    ("suspensions.ini", "HEAVE_FRONT", "PACKER_RANGE", "0.012"),
+    ("suspensions.ini", "HEAVE_REAR", "BUMPSTOP_UP", "0.067"),
+    ("suspensions.ini", "HEAVE_REAR", "BUMPSTOP_DN", "-0.051"),
+    ("suspensions.ini", "HEAVE_REAR", "PACKER_RANGE", "0.025"),
+    // the setup screen would push the packers back into its own range
+    ("setup.ini", "PACKER_RANGE_LF", "MIN", "5"),
+    ("setup.ini", "PACKER_RANGE_RF", "MIN", "5"),
+    ("setup.ini", "PACKER_RANGE_LR", "MIN", "5"),
+    ("setup.ini", "PACKER_RANGE_RR", "MIN", "5"),
+];
+
+/// Sets `key=value` inside `[section]` of an ini text: an existing line keeps its comment, a
+/// missing key is added right after the section header.
+fn patch_ini(text: &str, section: &str, key: &str, value: &str) -> Result<String, String> {
+    let header = format!("[{section}]");
+    let mut out = Vec::new();
+    let mut inside = false;
+    let mut found_section = false;
+    let mut done = false;
+    let mut insert_at = 0;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            inside = trimmed == header;
+            if inside {
+                found_section = true;
+                insert_at = out.len() + 1;
+            }
+        } else if inside && !done && trimmed.split('=').next().map(str::trim) == Some(key) {
+            let comment = line.find(';').map(|at| format!("\t\t\t\t{}", &line[at..])).unwrap_or_default();
+            out.push(format!("{key}={value}{comment}"));
+            done = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !found_section {
+        return Err(format!("no section [{section}]"));
+    }
+    if !done {
+        out.insert(insert_at, format!("{key}={value}"));
+    }
+    Ok(out.join("\r\n") + "\r\n")
+}
+
+fn test_car_command() -> Result<(), String> {
+    let repo = repo_root();
+    let from = repo.join("cardata/ks_ferrari_f2004");
+    let to = repo.join("cardata/f2004_tight_stops");
+    std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
+        }
+    }
+    for (file, section, key, value) in TIGHT_STOPS {
+        let path = to.join(file);
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = String::from_utf8_lossy(&bytes);
+        let patched = patch_ini(&text, section, key, value).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, patched).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("{file} [{section}] {key}={value}");
+    }
+    println!("{}", to.display());
+    Ok(())
+}
+
 fn usage() -> String {
-    "usage: chassis_compare run [<scenario> ...] [--verbose] [--stop-after <steps>]\n       chassis_compare excerpt\n       \
-     chassis_compare faults [<scenario>]"
+    "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--verbose] [--stop-after <steps>]\n       \
+     chassis_compare excerpt\n       chassis_compare faults [<scenario>] [--dir <folder>]\n       chassis_compare test-car"
         .to_string()
 }
 
@@ -571,9 +769,11 @@ fn main() {
     let mut names = Vec::new();
     let mut verbose = false;
     let mut stop_after = None;
+    let mut dir: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verbose" => verbose = true,
+            "--dir" => dir = args.next().map(PathBuf::from),
             "--stop-after" => stop_after = args.next().and_then(|v| v.parse().ok()),
             other if other.starts_with("--") => {
                 eprintln!("unknown option {other}\n{}", usage());
@@ -583,9 +783,10 @@ fn main() {
         }
     }
     let result = match command.as_str() {
-        "run" => run_command(&names, verbose, stop_after),
+        "run" => run_command(&names, dir.as_deref(), verbose, stop_after),
+        "test-car" => test_car_command(),
         "excerpt" => excerpt_command(),
-        "faults" => faults_command(&names),
+        "faults" => faults_command(&names, dir.as_deref()),
         _ => Err(usage()),
     };
     if let Err(message) = result {

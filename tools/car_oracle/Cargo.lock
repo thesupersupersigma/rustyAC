@@ -10,5 +10,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyac-math"
+version = "0.1.0"
+
+[[package]]
+name = "rustyac-ode"
+version = "0.1.0"
+dependencies = [
+ "rustyac-math",
+]
+
+[[package]]
 name = "rustyac-physics"
 version = "0.1.0"
+dependencies = [
+ "rustyac-math",
+ "rustyac-ode",
+]
