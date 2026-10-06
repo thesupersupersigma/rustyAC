@@ -197,32 +197,47 @@ impl Joint {
         }
     }
 
-    /// `dxJoint::isEnabled` @ 0x14034dd80.
+    /// `dxJoint::isEnabled` @ 0x14034dd80: not disabled, and at least one body that is not
+    /// kinematic. The test is `comiss 0, invMass` + `jb`: a NaN inverse mass counts as positive.
     pub(crate) fn is_enabled(&self, bodies: &[Body]) -> bool {
         self.flags & JOINT_DISABLED == 0
-            && (self.node[0].body.is_some_and(|b| bodies[b.0 as usize].inv_mass > 0.0)
-                || self.node[1].body.is_some_and(|b| bodies[b.0 as usize].inv_mass > 0.0))
+            && (self.node[0].body.is_some_and(|b| !(0.0 >= bodies[b.0 as usize].inv_mass))
+                || self.node[1].body.is_some_and(|b| !(0.0 >= bodies[b.0 as usize].inv_mass)))
     }
 
     /// `getInfo1` (DBall @ 0x140342070, Ball @ 0x140340cf0, Slider @ 0x140341110, Fixed @
     /// 0x140341b90).
-    pub(crate) fn get_info1(&mut self) -> Info1 {
+    pub(crate) fn get_info1(&mut self, bodies: &[Body]) -> Info1 {
+        let flags = self.flags;
+        let body = |node: usize| self.node[node].body.map(|b| &bodies[b.0 as usize]);
+        let (b0, b1) = (body(0), body(1));
         match &mut self.kind {
             JointKind::Ball { .. } => Info1 { m: 3, nub: 3 },
             JointKind::Fixed { .. } => Info1 { m: 6, nub: 6 },
             JointKind::DBall { .. } => Info1 { m: 1, nub: 1 },
-            JointKind::Slider { limot, .. } => {
+            JointKind::Slider { axis1, offset, limot, .. } => {
                 let mut info = Info1 { m: 5, nub: 5 };
                 // `comiss 0, fmax` + `setb`: a NaN counts as powered
                 if !(0.0 >= limot.fmax) {
                     info.m = 6; // powered slider needs an extra constraint row
                 }
+                // see if we're at a joint limit.
                 limot.limit = 0;
                 if (limot.lostop > f32::NEG_INFINITY || limot.histop < f32::INFINITY) && !(limot.lostop > limot.histop)
                 {
-                    // a slider with stops: bounded rows, not part of stage 1
-                    unimplemented!("slider joint with limit stops (bounded constraint rows are stage 2)");
+                    // measure joint position
+                    let pos = slider_position(flags, b0.expect("an attached slider"), b1, axis1, offset);
+                    if !(pos > limot.lostop) {
+                        limot.limit = 1;
+                        limot.limit_err = pos - limot.lostop;
+                        info.m = 6;
+                    } else if pos >= limot.histop {
+                        limot.limit = 2;
+                        limot.limit_err = pos - limot.histop;
+                        info.m = 6;
+                    }
                 }
+                // a sixth row (motor or stop) is a bounded row: the stepper refuses it (stage 2)
                 info
             }
         }
@@ -279,6 +294,26 @@ impl Joint {
             }
         }
     }
+}
+
+/// `dJointGetSliderPosition` @ 0x1403417c0: how far body 1 has moved along the slider axis
+/// from where the joint was set up.
+fn slider_position(flags: u32, b0: &Body, b1: Option<&Body>, axis1: &Vector3, offset: &Vector3) -> f32 {
+    // get axis1 in global coordinates
+    let mut ax1 = multiply0_331(&b0.r, axis1);
+    let q;
+    if let Some(b1) = b1 {
+        // get body2 + offset point in global coordinates
+        let w = multiply0_331(&b1.r, offset);
+        q = [b0.pos[0] - w[0] - b1.pos[0], b0.pos[1] - w[1] - b1.pos[1], b0.pos[2] - w[2] - b1.pos[2]];
+    } else {
+        q = [b0.pos[0] - offset[0], b0.pos[1] - offset[1], b0.pos[2] - offset[2]];
+        if flags & JOINT_REVERSE != 0 {
+            // N.B. it could have been simplier to only inverse the sign of the dDot result
+            ax1 = [-ax1[0], -ax1[1], -ax1[2]];
+        }
+    }
+    crate::odemath::dot3(&ax1, &q)
 }
 
 /// `setBall` @ 0x14034e230: the three position rows of a ball joint.
@@ -898,6 +933,16 @@ impl World {
     /// (Not linked into `acs.exe`; the game never asks. It does not change the simulation.)
     pub fn joint_set_feedback(&mut self, j: JointId, on: bool) {
         self.joints[j.0 as usize].feedback = on.then(JointFeedback::default);
+    }
+
+    /// `dJointGetSliderPosition` @ 0x1403417c0 (0 for any other joint type).
+    pub fn joint_get_slider_position(&self, j: JointId) -> f32 {
+        let joint = &self.joints[j.0 as usize];
+        let (b0, b1) = self.joint_bodies(j);
+        match (&joint.kind, b0) {
+            (JointKind::Slider { axis1, offset, .. }, Some(b0)) => slider_position(joint.flags, b0, b1, axis1, offset),
+            _ => 0.0,
+        }
     }
 
     /// `dJointGetBody` @ 0x14033ff90: the body given as first (0) or second (1) at attach time.

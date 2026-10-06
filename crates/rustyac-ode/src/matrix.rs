@@ -25,7 +25,7 @@ pub fn dot(a: &[f32], b: &[f32], n: usize) -> f32 {
     sum
 }
 
-/// `dSolveL1_2` (static in `fastldlt.c`, inlined into `_dFactorLDLT`): solves `L * X = B`
+/// `dSolveL1_2` @ 0x140399190 (static in `fastldlt.c`, called by `_dFactorLDLT`): solves `L * X = B`
 /// for two right-hand sides at once. `L` is the top-left `n` x `n` unit lower triangle of
 /// `a`; the two right-hand sides are the rows of `a` starting at `b_off` and
 /// `b_off + lskip1`. `n` is even.
@@ -59,7 +59,7 @@ fn solve_l1_2(a: &mut [f32], b_off: usize, n: usize, lskip1: usize) {
     }
 }
 
-/// `dSolveL1_1` (static in `fastldlt.c`): as [`solve_l1_2`] for one right-hand side.
+/// `dSolveL1_1` @ 0x140398fc0 (static in `fastldlt.c`): as [`solve_l1_2`] for one right-hand side.
 fn solve_l1_1(a: &mut [f32], b_off: usize, n: usize, lskip1: usize) {
     let mut i = 0;
     while i < n {
@@ -189,6 +189,15 @@ pub fn solve_l1(l: &[f32], b: &mut [f32], n: usize, lskip1: usize) {
     }
 }
 
+/// How the compiled code folds two packed accumulators into one number:
+/// `(w2 + w0) + (w3 + w1)` with `w = v3 + v4` lane by lane (`addps`, `movhlps`, `addps`,
+/// `shufps`, `addss`).
+#[inline(always)]
+fn fold_lanes(v3: &[f32; 4], v4: &[f32; 4]) -> f32 {
+    let w = [v3[0] + v4[0], v3[1] + v4[1], v3[2] + v4[2], v3[3] + v4[3]];
+    (w[2] + w[0]) + (w[3] + w[1])
+}
+
 /// The single-row sum `sum(a[k] * b[k], k < n)` as the compiler built it for the last rows
 /// of `_dSolveL1` (0x140390db0 … 0x140390fb4). The source adds the products one by one in
 /// blocks of twelve; the compiled loop (fast floating-point model) splits each block of
@@ -201,15 +210,6 @@ pub fn solve_l1(l: &[f32], b: &mut [f32], n: usize, lskip1: usize) {
 /// and after the last whole block the lanes are folded as
 /// `scalar + (((x2 + x0)) + (x3 + x1))` with `x[k] = lane3[k] + lane4[k]`. What is left
 /// (fewer than twelve products) is added to the scalar sum one by one.
-/// How the compiled code folds two packed accumulators into one number:
-/// `(w2 + w0) + (w3 + w1)` with `w = v3 + v4` lane by lane (`addps`, `movhlps`, `addps`,
-/// `shufps`, `addss`).
-#[inline(always)]
-fn fold_lanes(v3: &[f32; 4], v4: &[f32; 4]) -> f32 {
-    let w = [v3[0] + v4[0], v3[1] + v4[1], v3[2] + v4[2], v3[3] + v4[3]];
-    (w[2] + w[0]) + (w[3] + w[1])
-}
-
 fn dot_blocks_of_12(a: &[f32], b: &[f32], n: usize) -> f32 {
     let mut sum = 0.0f32;
     let blocks = n / 12;

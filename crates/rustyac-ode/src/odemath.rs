@@ -51,7 +51,8 @@ pub fn multiply0_133(a: &[f32], b: &[f32]) -> [f32; 3] {
     multiply1_331(b, a)
 }
 
-/// `dMultiply0_333`: `A * B`. Only the nine 3x3 entries of the result are written.
+/// `dMultiply0_333` (the stepper calls an out-of-line copy @ 0x14034fcd0): `A * B`. Only the
+/// nine 3x3 entries of the result are written.
 #[inline(always)]
 pub fn multiply0_333(res: &mut [f32], a: &[f32], b: &[f32]) {
     for row in 0..3 {
@@ -62,7 +63,7 @@ pub fn multiply0_333(res: &mut [f32], a: &[f32], b: &[f32]) {
     }
 }
 
-/// `dMultiply2_333`: `A * B^T`.
+/// `dMultiply2_333` (out-of-line copy @ 0x14034fe60): `A * B^T`.
 #[inline(always)]
 pub fn multiply2_333(res: &mut [f32], a: &[f32], b: &[f32]) {
     for row in 0..3 {

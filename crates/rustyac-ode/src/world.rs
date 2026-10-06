@@ -74,6 +74,8 @@ pub struct Damping {
 /// `dxBody` (0x1b8 bytes in `acs.exe`).
 #[derive(Clone, Debug)]
 pub struct Body {
+    /// False once the body was destroyed ([`World::body_destroy`]); its slot stays, unused.
+    pub alive: bool,
     /// Next body in the world's list (`dObject::next`).
     pub next: Option<BodyId>,
     /// After a step: index of the body inside its island (-1: disabled, never stepped).
@@ -222,10 +224,12 @@ impl World {
     }
 
     pub fn body(&self, id: BodyId) -> &Body {
+        debug_assert!(self.bodies[id.0 as usize].alive, "use of a destroyed body");
         &self.bodies[id.0 as usize]
     }
 
     pub fn body_mut(&mut self, id: BodyId) -> &mut Body {
+        debug_assert!(self.bodies[id.0 as usize].alive, "use of a destroyed body");
         &mut self.bodies[id.0 as usize]
     }
 
@@ -237,12 +241,14 @@ impl World {
         &mut self.joints[id.0 as usize]
     }
 
-    /// Bodies in creation order.
-    pub fn body_ids(&self) -> impl Iterator<Item = BodyId> {
-        (0..self.bodies.len() as u32).map(BodyId)
+    /// The bodies that exist, in creation order (ODE's own list, `first_body` / `next`, runs
+    /// the other way: newest first).
+    pub fn body_ids(&self) -> impl Iterator<Item = BodyId> + '_ {
+        (0..self.bodies.len() as u32).map(BodyId).filter(|b| self.bodies[b.0 as usize].alive)
     }
 
-    /// Joints in creation order.
+    /// Every joint ever created, in creation order. A joint whose body was destroyed stays in
+    /// the world, attached to nothing.
     pub fn joint_ids(&self) -> impl Iterator<Item = JointId> {
         (0..self.joints.len() as u32).map(JointId)
     }
@@ -259,6 +265,7 @@ impl World {
         flags |= BODY_GYROSCOPIC;
         let samples = self.adis.average_samples as usize;
         let body = Body {
+            alive: true,
             next: self.first_body,
             tag: 0,
             first_joint: None,
@@ -322,7 +329,22 @@ impl World {
             }
         }
         self.bodies[b.0 as usize].next = None;
+        self.bodies[b.0 as usize].alive = false;
         self.nb -= 1;
+    }
+
+    /// `dBodySetAutoDisableAverageSamplesCount` @ 0x14033f910: how many velocity samples the
+    /// auto-disable test averages over (0: the body never falls asleep). Empties the sample
+    /// buffers.
+    pub fn body_set_auto_disable_average_samples_count(&mut self, b: BodyId, average_samples_count: u32) {
+        let body = self.body_mut(b);
+        body.adis.average_samples = average_samples_count;
+        let samples = average_samples_count as usize;
+        body.average_lvel_buffer = vec![[0.0; 3]; samples];
+        body.average_avel_buffer = vec![[0.0; 3]; samples];
+        // new buffer is empty
+        body.average_counter = 0;
+        body.average_ready = false;
     }
 
     /// `dBodySetPosition` @ 0x14033fbb0.

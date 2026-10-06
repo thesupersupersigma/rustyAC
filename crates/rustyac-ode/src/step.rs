@@ -2,8 +2,15 @@
 //! the per-body integrator `dxStepBody`.
 //!
 //! Stage 1 of the port: every constraint row is an equality (rods, ball joints, sliders,
-//! fixed joints), so the LCP solver is its "all unbounded" path, a plain `L*D*L^T`
-//! factorisation. Bounded rows (contacts, stops, motors) are stage 2.
+//! fixed joints), so the LCP solver comes down to a plain `L*D*L^T` factor and solve. The
+//! game reaches that in two ways. The stepper hands `dSolveLCP` the number of fully
+//! unbounded **joints** as `nub`; for an island of one-row joints that equals the row count
+//! and the solver's `nub >= n` shortcut runs, for any island with a multi-row joint (a car:
+//! 21 joints, 26 rows) it is smaller and the general constructor `dLCP::dLCP` @ 0x140391cf0
+//! runs, finds every remaining row unbounded, copies the lower triangle and makes the same
+//! two calls. Both give the same numbers; the second leaves `A` and the right-hand side
+//! untouched. Bounded rows (contacts, stops, motors) are stage 2 and have to copy the real
+//! thing.
 //!
 //! The game runs ODE's threading interface in its single-threaded form, so the stages below
 //! run one after the other in the order of the source's `allowedThreads == 1` path.
@@ -340,7 +347,8 @@ fn step_island(
 
         // Don't apply gyroscopic torques to bodies
         // if not flagged or the body is kinematic
-        if b.flags & BODY_GYROSCOPIC != 0 && b.inv_mass > 0.0 {
+        // (`comiss 0, invMass` + `jae skip`: a NaN inverse mass enters the block)
+        if b.flags & BODY_GYROSCOPIC != 0 && !(0.0 >= b.inv_mass) {
             gyroscopic_torque(b, stepsize);
         }
     }
@@ -364,7 +372,7 @@ fn step_island(
     let mut unb_start = nj_island;
     for k in 0..nj_island {
         let id = memory.joints[joint_start + k];
-        let info = world.joints[id.0 as usize].get_info1();
+        let info = world.joints[id.0 as usize].get_info1(&world.bodies);
         if info.m == 0 {
             world.joints[id.0 as usize].tag = -1;
             continue;
@@ -581,7 +589,8 @@ fn step_island(
 
         // --------------------------------------------------------------------------------
         // dxStepIsland_Stage3 (0x140352100): solve the LCP problem and get lambda.
-        // dSolveLCP @ 0x140392260 with every row unbounded: factor, solve, done.
+        // dSolveLCP @ 0x140392260 with only equality rows: factor and solve (through the
+        // `nub >= n` shortcut or through dLCP::dLCP, see the top of this file).
         memory.d.clear();
         memory.d.resize(m, 0.0);
         factor_ldlt(&mut memory.a, &mut memory.d, m, mskip);
