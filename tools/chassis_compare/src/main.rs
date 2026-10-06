@@ -1203,7 +1203,7 @@ const FALLBACKS: [(&str, &str, &str, &str); 16] = [
 /// the load-based electronic brake balance; an H-shifter gearbox (so no down-shift
 /// protection), gearbox wear, a spool differential, a clutch profile for up-shifts, and an
 /// automatic blip that is the driver's aid instead of the car's.
-const PT_STREET: [(&str, &str, &str, &str); 49] = [
+const PT_STREET: [(&str, &str, &str, &str); 50] = [
     ("engine.ini", "ENGINE_DATA", "LIMITER_HZ", "30"),
     ("engine.ini", "ENGINE_DATA", "MINIMUM", "3500"),
     ("engine.ini", "ENGINE_DATA", "DEFAULT_TURBO_ADJUSTMENT", "0.7"),
@@ -1246,6 +1246,7 @@ const PT_STREET: [(&str, &str, &str, &str); 49] = [
     ("brakes.ini", "TEMPS_REAR", "COOL_SPEED_FACTOR", "0.003"),
     ("brakes.ini", "EBB", "FRONT_SHARE_MULTIPLIER", "1.25"),
     ("drivetrain.ini", "GEARBOX", "SUPPORTS_SHIFTER", "1"),
+    ("drivetrain.ini", "DAMAGE", "RPM_WINDOW_K", "100"),
     ("drivetrain.ini", "DIFFERENTIAL", "POWER", "1.0"),
     ("drivetrain.ini", "DIFFERENTIAL", "COAST", "1.0"),
     ("drivetrain.ini", "AUTOCLUTCH", "UPSHIFT_PROFILE", "UPSHIFT_PROFILE"),
