@@ -1,0 +1,11 @@
+[package]
+name = "rustyac-ode"
+description = "rustyAC rigid-body core: a 1:1 single-precision port of the part of ODE 0.13.1 that Assetto Corsa's acs.exe uses (stage 1: bodies, joints, the equality-only dWorldStep)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "BSD-3-Clause"
+
+[dependencies]
+rustyac-math = { path = "../rustyac-math" }
