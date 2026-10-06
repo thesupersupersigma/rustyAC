@@ -1380,7 +1380,20 @@ pub fn run<A: Engine, R: Engine>(
         ac.step(scene.h);
         rust.step(scene.h);
         if rust.unsupported() {
-            outcome.bounded_at = Some(step);
+            // the Rust stepper refused a bounded row. The game must have found a slider at a
+            // stop (or powered) in this very step; if not, the refusal is a difference.
+            let game_bounded = (0..scene.joints).any(|j| {
+                let s = ac.joint_state(j);
+                s.tag != -1 && s.params.len() == 21 && (s.params[20] != 0.0 || !(0.0 >= s.params[11]))
+            });
+            if game_bounded {
+                outcome.bounded_at = Some(step);
+            } else {
+                outcome.steps += 1;
+                outcome.first.get_or_insert(format!(
+                    "step {step}: the Rust port asks for a bounded row, but no slider of the game is at a stop"
+                ));
+            }
             break;
         }
         outcome.max_rows = outcome.max_rows.max(rust.rows());

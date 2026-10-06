@@ -8,7 +8,7 @@
 //! * the small rotation and vector functions (`dQMultiply0` … `3`, `dRfromQ`, `dQfromR`,
 //!   `dDQfromW`, `_dSafeNormalize3`, `dPlaneSpace`, `dOrthogonalizeR`) on random input and on
 //!   the awkward kind: signed zeros, ties, tiny and huge lengths, half-turn rotations, the
-//!   threshold of `dPlaneSpace`, NaN and infinity.
+//!   threshold of `dPlaneSpace`, and one NaN or infinite component.
 //!
 //! A sample of the cases is written, with the game's answers, to
 //! `crates/rustyac-ode/tests/data/functions.odefunc` for the crate's own test.
@@ -138,6 +138,12 @@ fn quaternion(rng: &mut Rng, kind: usize) -> [f32; 4] {
     }
 }
 
+/// Replaces one of the values by NaN or an infinity.
+fn poison(rng: &mut Rng, values: &mut [f32]) {
+    let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][rng.below(3) as usize];
+    values[rng.below(values.len() as u32) as usize] = bad;
+}
+
 fn unit_quaternion(rng: &mut Rng) -> [f32; 4] {
     let mut q = quaternion(rng, 0);
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt().max(1e-3);
@@ -260,7 +266,11 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
     for (k, tally) in multiply.iter_mut().enumerate() {
         let game_fn: extern "C" fn(*mut f32, *const f32, *const f32) = unsafe { std::mem::transmute(acs.va(VA_Q_MULTIPLY[k])) };
         for case in 0..SMALL_CASES {
-            let (qb, qc) = (quaternion(&mut rng, case % 3), quaternion(&mut rng, (case / 3) % 3));
+            let (mut qb, mut qc) = (quaternion(&mut rng, case % 3), quaternion(&mut rng, (case / 3) % 3));
+            if case % 13 == 12 {
+                let first = rng.chance(0.5);
+                poison(&mut rng, if first { &mut qb } else { &mut qc });
+            }
             let mut game = [9.0f32; 4];
             game_fn(game.as_mut_ptr(), qb.as_ptr(), qc.as_ptr());
             let rust = match k {
@@ -351,6 +361,7 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
                     *x *= scale;
                 }
             }
+            6 => poison(&mut rng, &mut n[..3]),
             _ => {}
         }
         let (mut p_game, mut q_game) = ([4.0f32; 4], [4.0f32; 4]);
@@ -382,6 +393,8 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
             }
             // not unit length, awkward numbers
             3 => q = quaternion(&mut rng, 2),
+            // a NaN or an infinity (which also gives the way back a matrix full of them)
+            4 => poison(&mut rng, &mut q),
             _ => {}
         }
         let mut r_game = [6.0f32; 12];
@@ -401,6 +414,11 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
             for k in [0usize, 1, 2, 4, 5, 6, 8, 9, 10] {
                 r[k] += rng.range(-1e-3, 1e-3);
             }
+        }
+        if case % 20 == 5 {
+            // a single NaN or infinity in an otherwise good matrix
+            let k = [0usize, 1, 2, 4, 5, 6, 8, 9, 10][rng.below(9) as usize];
+            poison(&mut rng, &mut r[k..k + 1]);
         }
         let mut game = [6.0f32; 4];
         game_q_from_r(game.as_mut_ptr(), r.as_ptr());
@@ -443,7 +461,13 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
                     m[other..other + 3].copy_from_slice(&copy);
                 }
             }
-            _ => {}
+            // a NaN or an infinity somewhere
+            _ => {
+                if rng.chance(0.5) {
+                    let k = [0usize, 1, 2, 4, 5, 6, 8, 9, 10][rng.below(9) as usize];
+                    poison(&mut rng, &mut m[k..k + 1]);
+                }
+            }
         }
         let (mut game, mut rust) = (m, m);
         game_orthogonalize(game.as_mut_ptr());
@@ -457,12 +481,19 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
     let game_dq: extern "C" fn(*mut f32, *const f32, *const f32) = unsafe { std::mem::transmute(acs.va(VA_DQ_FROM_W)) };
     let mut dq = Tally::default();
     for case in 0..SMALL_CASES {
-        let q = quaternion(&mut rng, case % 3);
-        let w = if case % 4 == 3 {
+        let mut q = quaternion(&mut rng, case % 3);
+        let mut w = if case % 4 == 3 {
             [awkward(&mut rng), awkward(&mut rng), awkward(&mut rng), 0.0]
         } else {
             [rng.range(-30.0, 30.0), rng.range(-30.0, 30.0), rng.range(-30.0, 30.0), 0.0]
         };
+        if case % 16 == 5 {
+            if rng.chance(0.5) {
+                poison(&mut rng, &mut q);
+            } else {
+                poison(&mut rng, &mut w[..3]);
+            }
+        }
         let mut game = [8.0f32; 4];
         game_dq(game.as_mut_ptr(), w.as_ptr(), q.as_ptr());
         dq.case("quaternion rate", case % 3, &game, &rotation::dq_from_w(&w, &q));
@@ -481,20 +512,24 @@ pub fn matrix_command(acs: &Acs) -> Result<String, String> {
         (&inverse, "_dInvertPDMatrix", "the success flag and the inverse; n = 1 … 64"),
         (&definite, "_dIsPositiveDefinite", "the answer; n = 1 … 64"),
         (&dots, "_dDot", "the sum; n = 1 … 64"),
-        (&multiply[0], "dQMultiply0", "qb * qc; random and signed zeros / ones"),
+        (&multiply[0], "dQMultiply0", "qb * qc; random, signed zeros / ones, NaN, infinity"),
         (&multiply[1], "dQMultiply1", "inverse(qb) * qc"),
         (&multiply[2], "dQMultiply2", "qb * inverse(qc)"),
         (&multiply[3], "dQMultiply3", "inverse(qb) * inverse(qc)"),
-        (&r_from_q, "dRfromQ", "the 3x3 matrix; unit, half-turn and arbitrary quaternions"),
-        (&q_from_r, "dQfromR", "the quaternion; rotations incl. half turns, matrices a little off"),
-        (&dq, "dDQfromW", "the quaternion rate"),
+        (&r_from_q, "dRfromQ", "the 3x3 matrix; unit, half-turn and arbitrary quaternions, NaN, infinity"),
+        (&q_from_r, "dQfromR", "the quaternion; rotations incl. half turns, matrices a little off, NaN, infinity"),
+        (&dq, "dDQfromW", "the quaternion rate; also NaN, infinity"),
         (
             &normalize,
             "_dSafeNormalize3",
             "the flag and the vector; lengths 1e-30 … 1e30, ties, zeros, denormals, NaN, infinity",
         ),
-        (&plane, "dPlaneSpace", "both vectors; unit normals, the sqrt(1/2) threshold, axes, other lengths"),
-        (&orthogonalize, "dOrthogonalizeR", "the 3x3 matrix; near rotations, arbitrary matrices, zero and parallel rows"),
+        (&plane, "dPlaneSpace", "both vectors; unit normals, the sqrt(1/2) threshold, axes, other lengths, NaN, infinity"),
+        (
+            &orthogonalize,
+            "dOrthogonalizeR",
+            "the 3x3 matrix; near rotations, arbitrary matrices, zero and parallel rows, NaN, infinity",
+        ),
     ];
     let mut different = 0;
     for (tally, name, about) in tallies {

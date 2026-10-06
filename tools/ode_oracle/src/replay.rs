@@ -549,6 +549,9 @@ pub fn replay_command(files: &[PathBuf], verbose: bool) -> Result<(), String> {
     let path = out.join(if full { "replay_results.md" } else { "replay_partial.md" });
     std::fs::write(&path, &table).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote {}", path.display());
+    if total_steps == total_contact {
+        return Err("no step was compared".into());
+    }
     if failed {
         return Err("at least one step of at least one recording differs".into());
     }

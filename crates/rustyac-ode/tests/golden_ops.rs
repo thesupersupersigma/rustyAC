@@ -46,8 +46,9 @@
 //!
 //! The hash is FNV-1a 64 over these words: per live body pos[3], q[4], R (3x3), lvel, avel,
 //! facc, tacc, tag, flags and the six frame getters at a point that changes every step; then
-//! per joint tag, flags, the two bodies (index or -1), its parameters and the constraint force
-//! (f1, t1, f2, t2; zeros without a feedback buffer). Before every step the feedback values
+//! per joint tag, flags, the two bodies (index or -1), its parameters (for a slider also its
+//! position and whether it is at a stop) and the constraint force (f1, t1, f2, t2; zeros
+//! without a feedback buffer). Before every step the feedback values
 //! are set to -12345.678, so that a force the step does not write shows as such.
 
 use rustyac_ode::{BodyId, JointId, JointKind, Mass, World};
@@ -347,6 +348,7 @@ impl Replay {
                         limot.bounce,
                     ]);
                     p.push(w.joint_get_slider_position(id));
+                    p.push(limot.limit as f32);
                 }
             }
             words.extend(p.iter().map(|v| v.to_bits()));

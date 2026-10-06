@@ -177,7 +177,8 @@ fn take3(v: &[f32]) -> [f32; 3] {
 /// Ball: anchor1, anchor2, erp, cfm; DBall: anchor1, anchor2, erp, cfm, distance;
 /// Fixed: qrel (4), offset, erp, cfm; Slider: axis1, qrel (4), offset, then the limit-motor
 /// block (vel, fmax, lostop, histop, fudge factor, normal cfm, stop erp, stop cfm, bounce).
-/// The slider's position (`dJointGetSliderPosition`) is appended by `joint_state`.
+/// The slider's position (`dJointGetSliderPosition`) and its stop state (`limot.limit`: 0, or
+/// 1 / 2 at the low / high stop, set by `getInfo1` in every step) are appended by `joint_state`.
 pub fn joint_params(kind: &JointKind) -> Vec<f32> {
     let mut p = Vec::new();
     match kind {
@@ -438,8 +439,9 @@ impl Engine for RustEngine {
         feedback[6..9].copy_from_slice(&fb.f2[..3]);
         feedback[9..12].copy_from_slice(&fb.t2[..3]);
         let mut params = joint_params(&joint.kind);
-        if matches!(joint.kind, JointKind::Slider { .. }) {
+        if let JointKind::Slider { limot, .. } = &joint.kind {
             params.push(self.world.joint_get_slider_position(id));
+            params.push(limot.limit as f32);
         }
         let index = |body: Option<rustyac_ode::BodyId>| {
             body.and_then(|b| self.bodies.iter().position(|&x| x == b)).map_or(-1, |i| i as i32)
@@ -919,6 +921,8 @@ impl Engine for AcEngine<'_> {
                     // dJointGetSliderPosition dereferences body 1 without a test
                     let position: extern "C" fn(*mut u8) -> f32 = self.f(VA_JOINT_GET_SLIDER_POSITION);
                     params.push(if rd::<usize>(p, J_BODY1) != 0 { position(p) } else { 0.0 });
+                    // limot.limit, the int after the nine floats (+0xdc)
+                    params.push(rd::<i32>(p, J_OWN + 4 * 21) as f32);
                 }
             }
             let mut out = [0.0f32; 12];
