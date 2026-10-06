@@ -89,6 +89,39 @@ impl RayTrackCollisionProvider for Ground {
     }
 }
 
+/// One value of a ported system under the name `tools/car_oracle` records it with
+/// ([`BrakeModel::trace`](super::BrakeModel::trace),
+/// [`DrivetrainModel::trace`](super::DrivetrainModel::trace)).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraceValue {
+    pub name: String,
+    /// `f` f32 bits, `i` integer, `d` f64 bits.
+    pub kind: char,
+    /// The value; an `f` or `i` value sits in the low 32 bits.
+    pub word: u64,
+    /// Only the recordings of the powertrain scenarios hold it.
+    pub extra: bool,
+}
+
+impl TraceValue {
+    pub fn f(name: &str, value: f32) -> TraceValue {
+        TraceValue { name: name.to_string(), kind: 'f', word: value.to_bits() as u64, extra: false }
+    }
+
+    pub fn i(name: &str, value: i32) -> TraceValue {
+        TraceValue { name: name.to_string(), kind: 'i', word: value as u32 as u64, extra: false }
+    }
+
+    pub fn d(name: &str, value: f64) -> TraceValue {
+        TraceValue { name: name.to_string(), kind: 'd', word: value.to_bits(), extra: false }
+    }
+
+    pub fn extra(mut self) -> TraceValue {
+        self.extra = true;
+        self
+    }
+}
+
 /// What the systems that are not ported left in one tyre before its step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RecordedWheel {
@@ -120,17 +153,26 @@ pub struct RecordedCall {
     pub b: [f32; 3],
 }
 
-/// Everything one step of the chassis is fed.
+/// Everything one step of the chassis is fed. A chassis with its own brakes ignores the
+/// wheels' brake torques, one with its own drivetrain ignores `clutch`, `gear`, `engine` and
+/// the driven wheels' speed and spin matrix.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RecordedStep {
     /// What the driver's device reported (`script.*`).
     pub controls: CarControls,
+    /// Clicks of the cockpit brake-bias control asked for before this step.
+    pub bias_clicks: i32,
     /// `controls.clutch` after the automatic clutch.
     pub clutch: f32,
     /// `Drivetrain::currentGear` at the start of the step.
     pub gear: i32,
     /// The engine's values at the start of the step.
     pub engine: EngineFeed,
+    /// `Engine::electronicOverride` as traction control and the pit limiter left it at the
+    /// end of this step (it acts on the next step's engine).
+    pub engine_electronic_override: f32,
+    /// `BrakeSystem::electronicOverride` as the pit limiter left it at the end of this step.
+    pub brake_electronic_override: f32,
     pub wheels: [RecordedWheel; 4],
     /// The wings' calls on the car body, in order.
     pub aero: Vec<RecordedCall>,
@@ -140,9 +182,12 @@ impl RecordedStep {
     /// The step as 32-bit words (the golden file's layout).
     pub fn to_words(&self, out: &mut Vec<u32>) {
         let c = &self.controls;
-        out.extend([c.gas, c.brake, c.steer, c.clutch, self.clutch].map(f32::to_bits));
+        out.extend([c.gas, c.brake, c.steer, c.clutch, c.hand_brake].map(f32::to_bits));
+        out.extend([c.gear_up as u32, c.gear_dn as u32, c.kers as u32, c.requested_gear_index as u32, self.bias_clicks as u32]);
+        out.push(self.clutch.to_bits());
         out.push(self.gear as u32);
         out.extend([self.engine.rpm, self.engine.gas_usage, self.engine.turbo_boost].map(f32::to_bits));
+        out.extend([self.engine_electronic_override, self.brake_electronic_override].map(f32::to_bits));
         for w in &self.wheels {
             out.extend([w.brake_torque, w.hand_brake_torque, w.electric_torque, w.abs_override, w.ai_mult].map(f32::to_bits));
             out.push(w.driven as u32);
@@ -162,10 +207,24 @@ impl RecordedStep {
 
     pub fn from_words(words: &mut impl Iterator<Item = u32>) -> Option<RecordedStep> {
         let f = |words: &mut dyn Iterator<Item = u32>| words.next().map(f32::from_bits);
-        let controls = CarControls { gas: f(words)?, brake: f(words)?, steer: f(words)?, clutch: f(words)? };
+        let (gas, brake, steer, pedal, hand_brake) = (f(words)?, f(words)?, f(words)?, f(words)?, f(words)?);
+        let controls = CarControls {
+            gas,
+            brake,
+            steer,
+            clutch: pedal,
+            hand_brake,
+            gear_up: words.next()? != 0,
+            gear_dn: words.next()? != 0,
+            kers: words.next()? != 0,
+            requested_gear_index: words.next()? as i32,
+        };
+        let bias_clicks = words.next()? as i32;
         let clutch = f(words)?;
         let gear = words.next()? as i32;
         let engine = EngineFeed { rpm: f(words)?, gas_usage: f(words)?, turbo_boost: f(words)? };
+        let engine_electronic_override = f(words)?;
+        let brake_electronic_override = f(words)?;
         let mut wheels = [RecordedWheel::default(); 4];
         for w in &mut wheels {
             w.brake_torque = f(words)?;
@@ -190,7 +249,17 @@ impl RecordedStep {
             let b = [f(words)?, f(words)?, f(words)?];
             aero.push(RecordedCall { kind, source, a, b });
         }
-        Some(RecordedStep { controls, clutch, gear, engine, wheels, aero })
+        Some(RecordedStep {
+            controls,
+            bias_clicks,
+            clutch,
+            gear,
+            engine,
+            engine_electronic_override,
+            brake_electronic_override,
+            wheels,
+            aero,
+        })
     }
 }
 
@@ -225,16 +294,27 @@ fn source_from_index(index: u32) -> Option<ForceSource> {
 
 /// A [`ChassisFeed`] that hands the chassis one recorded step.
 ///
-/// The recordings hold the tyre's inputs as `Tyre::step` found them, so everything the
-/// brakes, the ABS, the ERS and the drivetrain write into a tyre is put there in the `brakes`
-/// hook (just before the suspensions and tyres run); the `drivetrain` and `aids` hooks have
-/// nothing left to do.
+/// The recordings hold the tyre's inputs as `Tyre::step` found them, so everything the ABS,
+/// the ERS, the AI and (for a chassis without its own) the drivetrain write into a tyre is
+/// put there in the `edl` hook, just before the suspensions and tyres run; the `drivetrain`
+/// hook has nothing left to do. What the aids leave for the next step's engine and brakes is
+/// written in the `aids` hook.
+///
+/// The recorded feed cannot supply an electronic differential lock to a chassis with its own
+/// brakes (the recordings hold only the sum of brake and lock torque); no car recorded so
+/// far has one.
 pub struct RecordedFeed<'a> {
     pub step: &'a RecordedStep,
 }
 
 impl ChassisFeed for RecordedFeed<'_> {
     fn poll_controls(&mut self, chassis: &mut RollingChassis) {
+        // a click of the cockpit brake bias: a queued command the game runs before the step
+        if self.step.bias_clicks != 0 {
+            if let Some(brakes) = &mut chassis.brake_system {
+                brakes.set_manual_front_bias(self.step.bias_clicks);
+            }
+        }
         chassis.controls = self.step.controls;
     }
 
@@ -254,14 +334,22 @@ impl ChassisFeed for RecordedFeed<'_> {
         for (tyre, wheel) in chassis.tyres.iter_mut().zip(&self.step.wheels) {
             tyre.inputs.brake_torque = wheel.brake_torque;
             tyre.inputs.hand_brake_torque = wheel.hand_brake_torque;
+        }
+    }
+
+    fn edl(&mut self, chassis: &mut RollingChassis) {
+        let fed_drivetrain = chassis.drivetrain.is_none();
+        for (tyre, wheel) in chassis.tyres.iter_mut().zip(&self.step.wheels) {
             tyre.inputs.electric_torque = wheel.electric_torque;
             tyre.abs_override = wheel.abs_override;
             tyre.ai_mult = wheel.ai_mult;
-            tyre.driven = wheel.driven;
-            if wheel.driven {
-                tyre.status.angular_velocity = wheel.angular_velocity;
-                for (k, value) in wheel.local_wheel_rotation.iter().enumerate() {
-                    tyre.local_wheel_rotation.m[k / 4][k % 4] = *value;
+            if fed_drivetrain {
+                tyre.driven = wheel.driven;
+                if wheel.driven {
+                    tyre.status.angular_velocity = wheel.angular_velocity;
+                    for (k, value) in wheel.local_wheel_rotation.iter().enumerate() {
+                        tyre.local_wheel_rotation.m[k / 4][k % 4] = *value;
+                    }
                 }
             }
         }
@@ -279,7 +367,14 @@ impl ChassisFeed for RecordedFeed<'_> {
 
     fn drivetrain(&mut self, _chassis: &mut RollingChassis) {}
 
-    fn aids(&mut self, _chassis: &mut RollingChassis) {}
+    fn aids(&mut self, chassis: &mut RollingChassis) {
+        if let Some(drivetrain) = &mut chassis.drivetrain {
+            drivetrain.engine_mut().base_mut().electronic_override = self.step.engine_electronic_override;
+        }
+        if let Some(brakes) = &mut chassis.brake_system {
+            brakes.base_mut().electronic_override = self.step.brake_electronic_override;
+        }
+    }
 
     fn stability(&mut self, _chassis: &mut RollingChassis) {}
 }
@@ -460,6 +555,40 @@ pub fn snapshot(chassis: &RollingChassis) -> Vec<u64> {
     out
 }
 
+/// The values of the ported brakes, engine, drivetrain and shift helpers after a step, under
+/// the names of the recordings; empty for a bare chassis. With a drivetrain the list starts
+/// with `Car::controls` as the helpers left them.
+pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    if let Some(drivetrain) = &chassis.drivetrain {
+        let c = &chassis.controls;
+        out.push(TraceValue::f("controls.steer", c.steer));
+        out.push(TraceValue::f("controls.gas", c.gas));
+        out.push(TraceValue::f("controls.brake", c.brake));
+        out.push(TraceValue::f("controls.clutch", c.clutch));
+        out.push(TraceValue::f("controls.handBrake", c.hand_brake));
+        out.push(TraceValue::i("controls.gearUp", c.gear_up as i32));
+        out.push(TraceValue::i("controls.gearDn", c.gear_dn as i32));
+        out.push(TraceValue::i("controls.requestedGearIndex", c.requested_gear_index));
+        drivetrain.trace(&mut out);
+        out.push(TraceValue::f("car.waterTemperature", chassis.water.t));
+        out.push(TraceValue::i("autoShift.isActive", chassis.auto_shifter.is_active as i32));
+        out.push(TraceValue::i("autoBlip.isActive", chassis.auto_blip.is_active as i32));
+        out.push(TraceValue::i("autoClutch.useAutoOnStart", chassis.autoclutch.use_auto_on_start as i32));
+        out.push(TraceValue::i("autoClutch.useAutoOnChange", chassis.autoclutch.use_auto_on_change as i32));
+        out.push(TraceValue::f("autoClutch.clutchValueSignal", chassis.autoclutch.clutch_value_signal));
+        out.push(TraceValue::d("autoBlip.blipStartTime", chassis.auto_blip.blip_start_time).extra());
+        out.push(TraceValue::f("autoShift.gasCutoff", chassis.auto_shifter.gas_cutoff).extra());
+        out.push(TraceValue::i("autoShift.changeUpRpm", chassis.auto_shifter.change_up_rpm).extra());
+        out.push(TraceValue::i("autoShift.changeDnRpm", chassis.auto_shifter.change_dn_rpm).extra());
+        out.push(TraceValue::i("autoClutch.isForced", chassis.autoclutch.is_forced as i32).extra());
+    }
+    if let Some(brakes) = &chassis.brake_system {
+        brakes.trace(&mut out);
+    }
+    out
+}
+
 /// Are two values of a field the same? A NaN equals any NaN (its sign and payload depend on
 /// operand order the compiler may choose).
 pub fn same_value(kind: char, expected: u64, got: u64) -> bool {
@@ -521,6 +650,15 @@ pub struct RunSetup {
     /// The physics clock before the first step, ms; step `n` runs at `clock + 3 * (n + 1)`.
     pub clock_start_ms: f64,
     pub env: ChassisEnvironment,
+    /// The chassis computes its brakes itself ([`RollingChassis::install_brakes`]).
+    pub rust_brakes: bool,
+    /// The chassis has its own engine, drivetrain and shift helpers
+    /// ([`RollingChassis::install_drivetrain`]).
+    pub rust_drivetrain: bool,
+    /// The "automatic clutch" driving aid, as the recording's scenario set it.
+    pub auto_clutch: bool,
+    /// The "automatic gearbox" driving aid.
+    pub auto_shifter: bool,
 }
 
 impl RunSetup {
@@ -529,6 +667,19 @@ impl RunSetup {
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
         let mut chassis =
             RollingChassis::new(data_path, self.env, Box::new(self.ground), self.seed, self.clock_start_ms)?;
+        if self.rust_brakes {
+            chassis.install_brakes()?;
+        }
+        if self.rust_drivetrain {
+            chassis.install_drivetrain()?;
+            // the driving aids as the oracle set them (`CarAvatar::setAutoClutchEnabled`: the
+            // aid switches the automatic clutch at the start, and with it the one on shifts)
+            chassis.autoclutch.use_auto_on_start = self.auto_clutch;
+            if self.auto_clutch {
+                chassis.autoclutch.use_auto_on_change = true;
+            }
+            chassis.auto_shifter.is_active = self.auto_shifter;
+        }
         chassis.core.joint_feedback = true;
         // the joints exist already: ask for their constraint forces as the oracle did
         let ids: Vec<_> = chassis.core.world.joint_ids().collect();
@@ -617,6 +768,28 @@ impl RollingChassis {
             out.push(value as u32);
             out.push((value >> 32) as u32);
         }
+        // the ported systems, when the chassis has them
+        if let Some(brakes) = &self.brake_system {
+            brakes.save_state(&mut out);
+        }
+        if let Some(drivetrain) = &self.drivetrain {
+            drivetrain.save_state(&mut out);
+            out.extend([c.hand_brake, self.water.t, self.water.heat_accumulator].map(f));
+            out.extend([c.gear_up as u32, c.gear_dn as u32, c.kers as u32, c.requested_gear_index as u32]);
+            let a = &self.autoclutch;
+            out.extend([a.clutch_value_signal, a.clutch_sequence.current_time].map(f));
+            out.extend([a.use_auto_on_start as u32, a.use_auto_on_change as u32, a.is_forced as u32, a.clutch_sequence.is_done as u32]);
+            let curve = &a.clutch_sequence.clutch_curve;
+            out.push(curve.get_count() as u32);
+            out.extend(curve.references().iter().map(|x| x.to_bits()));
+            out.extend(curve.values().iter().map(|x| x.to_bits()));
+            let blip = self.auto_blip.blip_start_time.to_bits();
+            out.extend([blip as u32, (blip >> 32) as u32, self.auto_blip.is_active as u32]);
+            let s = &self.auto_shifter;
+            out.extend([s.is_active as u32, s.change_up_rpm as u32, s.change_dn_rpm as u32, s.gas_cutoff.to_bits()]);
+            let g = &self.gear_changer;
+            out.extend([g.was_gear_up_triggered, g.was_gear_dn_triggered, g.last_gear_up, g.last_gear_dn].map(|b| b as u32));
+        }
         out
     }
 
@@ -696,7 +869,7 @@ impl RollingChassis {
             heave.rod_length = f!();
             heave.travel = f!();
         }
-        self.controls = CarControls { gas: f!(), brake: f!(), steer: f!(), clutch: f!() };
+        self.controls = CarControls { gas: f!(), brake: f!(), steer: f!(), clutch: f!(), ..CarControls::default() };
         self.final_steer_angle_signal = f!();
         self.acc_g = Vec3f::new(f!(), f!(), f!());
         self.last_velocity = Vec3f::new(f!(), f!(), f!());
@@ -718,6 +891,48 @@ impl RollingChassis {
         self.fuel = double()?;
         self.last_body_mass_update_time = double()?;
         self.physics_time = double()?;
+        if let Some(brakes) = &mut self.brake_system {
+            brakes.load_state(&mut words)?;
+        }
+        if let Some(drivetrain) = &mut self.drivetrain {
+            drivetrain.load_state(&mut words)?;
+            let mut next = || words.next().ok_or("the saved state is too short".to_string());
+            self.controls.hand_brake = f32::from_bits(next()?);
+            self.water.t = f32::from_bits(next()?);
+            self.water.heat_accumulator = f32::from_bits(next()?);
+            self.controls.gear_up = next()? != 0;
+            self.controls.gear_dn = next()? != 0;
+            self.controls.kers = next()? != 0;
+            self.controls.requested_gear_index = next()? as i32;
+            let a = &mut self.autoclutch;
+            a.clutch_value_signal = f32::from_bits(next()?);
+            a.clutch_sequence.current_time = f32::from_bits(next()?);
+            a.use_auto_on_start = next()? != 0;
+            a.use_auto_on_change = next()? != 0;
+            a.is_forced = next()? != 0;
+            a.clutch_sequence.is_done = next()? != 0;
+            let count = next()? as usize;
+            let mut numbers = Vec::with_capacity(2 * count);
+            for _ in 0..2 * count {
+                numbers.push(f32::from_bits(next()?));
+            }
+            let pairs: Vec<(f32, f32)> = (0..count).map(|k| (numbers[k], numbers[count + k])).collect();
+            a.clutch_sequence.clutch_curve = crate::curve::Curve::from_pairs(&pairs);
+            let low = next()? as u64;
+            let high = next()? as u64;
+            self.auto_blip.blip_start_time = f64::from_bits(low | high << 32);
+            self.auto_blip.is_active = next()? != 0;
+            let s = &mut self.auto_shifter;
+            s.is_active = next()? != 0;
+            s.change_up_rpm = next()? as i32;
+            s.change_dn_rpm = next()? as i32;
+            s.gas_cutoff = f32::from_bits(next()?);
+            let g = &mut self.gear_changer;
+            g.was_gear_up_triggered = next()? != 0;
+            g.was_gear_dn_triggered = next()? != 0;
+            g.last_gear_up = next()? != 0;
+            g.last_gear_dn = next()? != 0;
+        }
         Ok(())
     }
 }
@@ -744,7 +959,7 @@ pub struct Golden {
     pub steps: Vec<GoldenStep>,
 }
 
-const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD01";
+const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD02";
 
 /// The 13 values per body kept in a golden step.
 pub fn body_words(chassis: &RollingChassis) -> Vec<u32> {
@@ -766,7 +981,8 @@ impl Golden {
              road_temperature={:?}\ndynamic_grip_level={:?}\ntyre_consumption_rate={:?}\nmechanical_damage_rate={:?}\n\
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
-             use_fake_understeer_ff={}\nis_first_car={}\n",
+             use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
+             auto_shifter={}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -787,6 +1003,10 @@ impl Golden {
             e.ff_filter,
             e.use_fake_understeer_ff as u8,
             e.is_first_car as u8,
+            self.setup.rust_brakes as u8,
+            self.setup.rust_drivetrain as u8,
+            self.setup.auto_clutch as u8,
+            self.setup.auto_shifter as u8,
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -836,6 +1056,7 @@ impl Golden {
             ff_filter: number("ff_filter")?,
             use_fake_understeer_ff: get("use_fake_understeer_ff")? != "0",
             is_first_car: get("is_first_car")? != "0",
+            ..ChassisEnvironment::default()
         };
         let setup = RunSetup {
             scenario: get("scenario")?.to_string(),
@@ -843,6 +1064,10 @@ impl Golden {
             seed: get("seed")?.parse().map_err(|e| format!("seed: {e}"))?,
             clock_start_ms: get("clock_start_ms")?.parse().map_err(|e| format!("clock_start_ms: {e}"))?,
             env,
+            rust_brakes: get("rust_brakes")? != "0",
+            rust_drivetrain: get("rust_drivetrain")? != "0",
+            auto_clutch: get("auto_clutch")? != "0",
+            auto_shifter: get("auto_shifter")? != "0",
         };
         let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
         let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;
@@ -895,11 +1120,19 @@ impl Golden {
                     f32::from_bits(step.bodies[at])
                 ));
             }
-            let hash = step_hash(&kinds, &snapshot(&chassis), chassis.core.tape.as_deref().unwrap_or(&[]));
+            // the chassis values, then those of the ported systems every recording holds
+            let mut all_kinds = kinds.clone();
+            let mut words = snapshot(&chassis);
+            for value in powertrain_trace(&chassis).iter().filter(|value| !value.extra) {
+                all_kinds.push(value.kind);
+                words.push(value.word);
+            }
+            let hash = step_hash(&all_kinds, &words, chassis.core.tape.as_deref().unwrap_or(&[]));
             if hash != step.hash {
                 return Err(format!(
                     "{} step {number}: the bodies agree with the game, but another value (suspension, tyre, joint, \
-                     force call, steering, force feedback) does not: hash {hash:#018x}, the game's {:#018x}",
+                     force call, steering, force feedback, brakes, engine, drivetrain) does not: hash {hash:#018x}, \
+                     the game's {:#018x}",
                     self.setup.scenario, step.hash
                 ));
             }

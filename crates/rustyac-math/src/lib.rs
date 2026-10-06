@@ -1,7 +1,8 @@
 //! The C runtime functions the Vanilla physics calls, with AC's exact results.
 //!
-//! `acs.exe` imports `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `powf`, `sqrtf` and
-//! the number parsers `wcstod` / `wcstol` from `MSVCR120.dll` (the Visual C++ 2013 runtime).
+//! `acs.exe` imports `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `powf`, `sqrtf`, the
+//! double-precision `sin` (the engine's camshaft-overlap term) and the number parsers
+//! `wcstod` / `wcstol` from `MSVCR120.dll` (the Visual C++ 2013 runtime).
 //! Rust's own `f32::sin` etc. end up in a different runtime (the UCRT). Measured on this
 //! machine the two agree bit for bit (20 million random inputs per function, see the ignored
 //! `std_vs_msvcr120` test), but nothing guarantees that for every input, CPU or future
@@ -30,6 +31,7 @@ pub enum Backend {
 
 type F1 = unsafe extern "C" fn(f32) -> f32;
 type F2 = unsafe extern "C" fn(f32, f32) -> f32;
+type D1 = unsafe extern "C" fn(f64) -> f64;
 type Wcstod = unsafe extern "C" fn(*const u16, *mut *mut u16) -> f64;
 type Wcstol = unsafe extern "C" fn(*const u16, *mut *mut u16, i32) -> i32;
 type Errno = unsafe extern "C" fn() -> *mut i32;
@@ -46,6 +48,7 @@ struct Crt {
     acosf: F1,
     atanf: F1,
     powf: F2,
+    sin: D1,
     /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
     parse: Option<(Wcstod, Wcstol, Errno)>,
 }
@@ -71,6 +74,9 @@ unsafe extern "C" fn std_atanf(x: f32) -> f32 {
 unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
 }
+unsafe extern "C" fn std_sin(x: f64) -> f64 {
+    x.sin()
+}
 
 const STD: Crt = Crt {
     backend: Backend::Std,
@@ -81,6 +87,7 @@ const STD: Crt = Crt {
     acosf: std_acosf,
     atanf: std_atanf,
     powf: std_powf,
+    sin: std_sin,
     parse: None,
 };
 
@@ -116,6 +123,7 @@ mod msvcr120 {
                 acosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"acosf")?),
                 atanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"atanf")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
+                sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
                 parse: Some((
                     std::mem::transmute::<*mut c_void, super::Wcstod>(get(c"wcstod")?),
                     std::mem::transmute::<*mut c_void, super::Wcstol>(get(c"wcstol")?),
@@ -192,6 +200,13 @@ pub fn atanf(x: f32) -> f32 {
 pub fn powf(x: f32, y: f32) -> f32 {
     // SAFETY: as `sinf`.
     unsafe { (crt().powf)(x, y) }
+}
+
+/// `sin` (MSVCR120), double precision.
+#[inline]
+pub fn sin(x: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().sin)(x) }
 }
 
 /// `sqrtf`: correctly rounded on both sides, so std is used.

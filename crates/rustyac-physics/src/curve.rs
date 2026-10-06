@@ -35,6 +35,13 @@ pub struct Curve {
     c_spline: OnceLock<Vec<Element>>,
 }
 
+impl PartialEq for Curve {
+    /// Two curves are equal when their points are (the spline is derived from them).
+    fn eq(&self, other: &Curve) -> bool {
+        self.references == other.references && self.values == other.values
+    }
+}
+
 impl Curve {
     pub fn new() -> Curve {
         Curve::default()

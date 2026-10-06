@@ -999,7 +999,7 @@ impl VanillaTyre {
     }
 
     /// `Tyre::stepRotationMatrix` @ 0x140284b80: spins `localWheelRotation` about its x axis.
-    fn step_rotation_matrix(&mut self, dt: f32, car: Option<&dyn TyreCar>) {
+    pub fn step_rotation_matrix(&mut self, dt: f32, car: Option<&dyn TyreCar>) {
         let Some(car) = car else {
             return;
         };

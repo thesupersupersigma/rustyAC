@@ -1,6 +1,7 @@
 //! The rolling chassis: AC's `Car` reduced to the parts that are ported (rigid bodies and
 //! their masses, fuel, the four suspensions with their tyres, heave springs, anti-roll bars,
-//! steering, force feedback), wired together and stepped in the order of `Car::step` and
+//! steering, force feedback, and, when they are installed, brakes, engine and drivetrain
+//! with the shift helpers), wired together and stepped in the order of `Car::step` and
 //! `Car::stepComponents`. Everything else comes in through a [`ChassisFeed`].
 
 use std::cell::RefCell;
@@ -8,7 +9,11 @@ use std::path::{Path, PathBuf};
 
 use super::antiroll_bar::AntirollBar;
 use super::body::{FixedJoint, ForceSource, PhysicsCore, RigidBody};
-use super::feed::{CarControls, ChassisFeed};
+use super::brakes::{BrakeModel, VanillaBrakes};
+use super::drivetrain::{DrivetrainModel, OnGearRequestEvent, VanillaDrivetrain};
+use super::engine::{EngineModel, VanillaEngine};
+use super::feed::{CarControls, ChassisFeed, EngineFeed};
+use super::shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, VanillaDwb};
@@ -51,6 +56,13 @@ pub struct ChassisEnvironment {
     /// The car is the first one created (`Car::physicsGUID == 0`): only that car switches its
     /// joints' ERP with speed.
     pub is_first_car: bool,
+    /// `PhysicsEngine::sessionInfo.startTimeMS`: the physics clock at the session start. The
+    /// gearbox is held and the automatic gearbox waits until then.
+    pub session_start_time_ms: f64,
+    /// `PhysicsEngine::lockGearboxAtStartTimeMS`
+    pub lock_gearbox_at_start_time_ms: f64,
+    /// `PhysicsEngine::penaltyRules.jumpStartPenaltyMode` (0 = the gearbox is locked on the grid)
+    pub jump_start_penalty_mode: i32,
 }
 
 impl Default for ChassisEnvironment {
@@ -72,6 +84,50 @@ impl Default for ChassisEnvironment {
             ff_filter: 0.0,
             use_fake_understeer_ff: false,
             is_first_car: true,
+            session_start_time_ms: 0.0,
+            lock_gearbox_at_start_time_ms: 0.0,
+            jump_start_penalty_mode: 0,
+        }
+    }
+}
+
+/// AC's `ThermalObject` (0x20 bytes): `Car::water`, the water temperature. A display value;
+/// nothing reads it back into the physics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThermalObject {
+    /// `tmass`
+    pub tmass: f32,
+    /// `coolSpeedK`
+    pub cool_speed_k: f32,
+    /// `coolFactor`
+    pub cool_factor: f32,
+    /// `heatFactor`
+    pub heat_factor: f32,
+    /// `t`, deg C
+    pub t: f32,
+    /// `heatAccumulator`
+    pub heat_accumulator: f32,
+}
+
+impl Default for ThermalObject {
+    /// `ThermalObject::ThermalObject` @ 0x1402b2e80 with what `Car::initCarData` writes into
+    /// the water's (`tmass` 20, `coolSpeedK` 0.002).
+    fn default() -> ThermalObject {
+        ThermalObject { tmass: 20.0, cool_speed_k: 0.002, cool_factor: 0.2, heat_factor: 1.0, t: 0.0, heat_accumulator: 0.0 }
+    }
+}
+
+impl ThermalObject {
+    /// `ThermalObject::step` @ 0x1402b2f00. `speed` in m/s.
+    pub fn step(&mut self, dt: f32, ambient: f32, speed: f32) {
+        let k = self.cool_speed_k * speed;
+        let heat = self.heat_accumulator;
+        let inverse = 1.0 / self.tmass;
+        self.heat_accumulator = 0.0;
+        let cooled = ((((1.0 - k) * ambient - self.t) * inverse) * dt) * self.cool_factor + self.t;
+        self.t = cooled;
+        if heat < 0.0 || heat > 0.0 {
+            self.t = (((heat - cooled) * inverse) * dt) * self.heat_factor + cooled;
         }
     }
 }
@@ -145,6 +201,25 @@ pub struct RollingChassis {
     pub steering_system: SteeringSystem,
     /// `Car::setupManager`
     pub setup_manager: SetupManager,
+    /// `Car::brakeSystem`: the brake slot. `None`: the feed's `brakes` hook writes the brake
+    /// torques instead.
+    pub brake_system: Option<Box<dyn BrakeModel>>,
+    /// `Car::drivetrain` (clutch, gearbox, differential, with the engine slot inside): the
+    /// drivetrain slot. `None`: the feed supplies the driven wheels' speed, the gear and what
+    /// the fuel burn reads of the engine.
+    pub drivetrain: Option<Box<dyn DrivetrainModel>>,
+    /// `Car::autoClutch`, `Car::autoBlip`, `Car::autoShift`, `Car::gearChanger`: they run
+    /// only with a drivetrain.
+    pub autoclutch: Autoclutch,
+    pub auto_blip: AutoBlip,
+    pub auto_shifter: AutoShifter,
+    pub gear_changer: GearChanger,
+    /// `Car::water`: stepped only with a drivetrain (it is heated by the engine).
+    pub water: ThermalObject,
+    /// `Car::isGearboxLocked`
+    pub is_gearbox_locked: bool,
+    /// `Car::isControlsLocked` (the overrides of `Car::step` that go with it are not ported)
+    pub is_controls_locked: bool,
     /// `Car::controls`
     pub controls: CarControls,
     /// `Car::finalSteerAngleSignal`, degrees at the road wheels
@@ -492,6 +567,15 @@ impl RollingChassis {
             antiroll_bars: [AntirollBar::default(); 2],
             steering_system: SteeringSystem { linear_ratio: steer_linear_ratio },
             setup_manager: SetupManager::default(),
+            brake_system: None,
+            drivetrain: None,
+            autoclutch: Autoclutch::default(),
+            auto_blip: AutoBlip::default(),
+            auto_shifter: AutoShifter::default(),
+            gear_changer: GearChanger::default(),
+            water: ThermalObject::default(),
+            is_gearbox_locked: false,
+            is_controls_locked: false,
             controls: CarControls::default(),
             final_steer_angle_signal: 0.0,
             mass,
@@ -562,6 +646,77 @@ impl RollingChassis {
         chassis.update_body_mass();
         chassis.setup_manager = SetupManager::init(&chassis, data_path)?;
         Ok(chassis)
+    }
+
+    /// Gives the chassis its own brakes: AC's `BrakeSystem` built from the car's files
+    /// (`BrakeSystem::init` @ 0x14028d690). From now on the feed's `brakes` hook is not called.
+    pub fn install_brakes(&mut self) -> Result<(), String> {
+        let brakes = VanillaBrakes::new(&self.data_path)?;
+        self.set_brake_system(Box::new(brakes))
+    }
+
+    /// Puts a brake system into the brake slot (and registers its setup items).
+    pub fn set_brake_system(&mut self, brakes: Box<dyn BrakeModel>) -> Result<(), String> {
+        self.brake_system = Some(brakes);
+        self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
+        Ok(())
+    }
+
+    /// Gives the chassis its own engine and drivetrain, AC's `Engine` and `Drivetrain` built
+    /// from the car's files (`Drivetrain::init` @ 0x140266dc0), and the shift helpers
+    /// (`Autoclutch::init`, `AutoBlip::init`, `AutoShifter::init`, `GearChanger::init`). Call
+    /// it before the session start: the drivetrain copies the wheel inertias of the tyres as
+    /// they are right after `Car::Car`. From now on the feed's `engine`, `autoclutch`,
+    /// `current_gear` and `drivetrain` hooks are not called.
+    pub fn install_drivetrain(&mut self) -> Result<(), String> {
+        let engine = VanillaEngine::new(&self.data_path)?;
+        self.install_drivetrain_with_engine(Box::new(engine))
+    }
+
+    /// As [`RollingChassis::install_drivetrain`], with the given engine in the engine slot.
+    pub fn install_drivetrain_with_engine(&mut self, engine: Box<dyn EngineModel>) -> Result<(), String> {
+        let drivetrain = VanillaDrivetrain::new(self, engine)?;
+        self.set_drivetrain(Box::new(drivetrain))
+    }
+
+    /// Puts a drivetrain into the drivetrain slot, loads the shift helpers and registers the
+    /// setup items of drivetrain and engine.
+    pub fn set_drivetrain(&mut self, drivetrain: Box<dyn DrivetrainModel>) -> Result<(), String> {
+        self.drivetrain = Some(drivetrain);
+        self.autoclutch = Autoclutch::new(&self.data_path)?;
+        self.auto_blip = AutoBlip::new(&self.data_path)?;
+        self.auto_shifter = AutoShifter::new(&self.data_path)?;
+        self.gear_changer = GearChanger::default();
+        self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
+        Ok(())
+    }
+
+    /// The handlers of `Drivetrain::evOnGearRequest`, in the order `Car::Car` registers them:
+    /// the automatic clutch (`Autoclutch::onGearRequest` @ 0x1402b9350), then the automatic
+    /// throttle blip (lambda @ 0x1402b9880).
+    pub fn on_gear_request(&mut self, event: &OnGearRequestEvent) {
+        self.autoclutch.on_gear_request(event);
+        self.auto_blip.on_gear_request(event, self.controls.clutch, self.physics_time);
+    }
+
+    /// `Tyre::stepRotationMatrix` @ 0x140284b80 of one wheel, as the drivetrain calls it for
+    /// the driven wheels after it has written their speed.
+    pub fn step_wheel_rotation(&mut self, index: usize, dt: f32) {
+        let mut tyre = std::mem::take(&mut self.tyres[index]);
+        self.with_tyre_ports(index, None, |_hub, _ground, car| tyre.step_rotation_matrix(dt, Some(&*car)));
+        self.tyres[index] = tyre;
+    }
+
+    /// `Car::stepThermalObjects` @ 0x1402769f0: the water temperature.
+    fn step_thermal_objects(&mut self, dt: f32) {
+        let Some(drivetrain) = &self.drivetrain else { return };
+        let rpm = drivetrain.get_engine_rpm();
+        let engine = drivetrain.engine();
+        if rpm > engine.minimum() as f32 * 0.8 {
+            let heat = ((rpm / engine.get_limiter_rpm() as f32) * 20.0) * self.controls.gas + 85.0;
+            self.water.heat_accumulator = heat + self.water.heat_accumulator;
+        }
+        self.water.step(dt, self.env.ambient_temperature, self.speed);
     }
 
     /// Runs `f` with the three things a tyre function needs: its hub, the road and the car.
@@ -668,15 +823,15 @@ impl RollingChassis {
     }
 
     /// `Car::forcePosition` @ 0x14026fe10 (with `Car::reset` @ 0x1402758e0): puts the car on
-    /// the road at `pos` (a point on the ground). The parts of the original that belong to
-    /// systems not ported yet (`Drivetrain::reset`, `BrakeSystem::reset`, the gear) are the
-    /// feed's business.
+    /// the road at `pos` (a point on the ground), with `Drivetrain::reset`,
+    /// `BrakeSystem::reset` and neutral for a car that has those systems.
     pub fn force_position(&mut self, pos: &Vec3f) {
         let mut pos = *pos;
         pos.y += self.get_base_car_height() + 0.01;
         // Car::reset
         self.frames_to_sleep = 50;
         self.fuel = self.requested_fuel as f64;
+        self.water.t = 60.0;
         let previous = std::mem::replace(&mut self.core.source, ForceSource::Teleport);
         self.core.stop(self.body);
         self.core.set_position(self.body, &pos);
@@ -686,10 +841,20 @@ impl RollingChassis {
             suspension.stop(&mut self.core);
             suspension.attach(&mut self.core);
         }
+        if let Some(drivetrain) = &mut self.drivetrain {
+            drivetrain.reset();
+        }
+        if let Some(brakes) = &mut self.brake_system {
+            brakes.reset(self.env.ambient_temperature);
+        }
         for index in 0..self.tyres.len() {
             let mut tyre = std::mem::take(&mut self.tyres[index]);
             self.with_tyre_ports(index, None, |hub, _ground, car| tyre.reset(hub, Some(&*car)));
             self.tyres[index] = tyre;
+        }
+        if let Some(mut drivetrain) = self.drivetrain.take() {
+            drivetrain.set_current_gear(1, true, self);
+            self.drivetrain = Some(drivetrain);
         }
         self.core.stop(self.body);
         self.core.stop(self.fuel_tank_body);
@@ -774,8 +939,14 @@ impl RollingChassis {
 
         feed.poll_controls(self);
 
-        // fuel burn
-        let engine = feed.engine(self);
+        // fuel burn, from what the engine did in the step before
+        let engine = match &self.drivetrain {
+            Some(drivetrain) => {
+                let base = drivetrain.engine().base();
+                EngineFeed { rpm: drivetrain.get_engine_rpm(), gas_usage: base.gas_usage, turbo_boost: base.status.turbo_boost }
+            }
+            None => feed.engine(self),
+        };
         let boost = if engine.turbo_boost >= 0.0 { engine.turbo_boost as f64 } else { 0.0 };
         let burnt = engine.rpm.abs() * dt * engine.gas_usage;
         self.fuel -= burnt as f64 * (boost + 1.0) * self.fuel_consumption_k * 0.001 * self.env.fuel_consumption_rate as f64;
@@ -784,6 +955,9 @@ impl RollingChassis {
         } else {
             self.fuel = 0.0;
             self.fuel_pressure = 0.0;
+        }
+        if let Some(drivetrain) = &mut self.drivetrain {
+            drivetrain.engine_mut().base_mut().fuel_pressure = self.fuel_pressure;
         }
         self.update_body_mass();
 
@@ -801,7 +975,13 @@ impl RollingChassis {
                 break;
             }
         }
-        feed.autoclutch(self);
+        match &self.drivetrain {
+            Some(drivetrain) => {
+                let (engine_velocity, gear) = (drivetrain.base().engine.velocity, drivetrain.base().current_gear);
+                self.autoclutch.step(&mut self.controls, self.speed, engine_velocity, gear, dt);
+            }
+            None => feed.autoclutch(self),
+        }
 
         // the sleeping rule
         let mut asleep = false;
@@ -812,7 +992,13 @@ impl RollingChassis {
             if (w.x * w.x + w.y * w.y) + w.z * w.z >= 1.0 {
                 self.sleeping_frames = 0;
             } else {
-                let driving = !(0.01 >= self.controls.gas) && !(0.01 >= self.controls.clutch) && feed.current_gear(self) != 1;
+                let driving = !(0.01 >= self.controls.gas) && !(0.01 >= self.controls.clutch) && {
+                    let gear = match &self.drivetrain {
+                        Some(drivetrain) => drivetrain.base().current_gear,
+                        None => feed.current_gear(self),
+                    };
+                    gear != 1
+                };
                 if !driving && all_loaded {
                     self.sleeping_frames = self.sleeping_frames.wrapping_add(1);
                 } else {
@@ -839,9 +1025,20 @@ impl RollingChassis {
         self.last_velocity = v;
         self.acc_g = self.core.world_to_local_normal(self.body, &acc);
 
+        // Car::stepThermalObjects
+        self.step_thermal_objects(dt);
+
         // --- Car::stepComponents -----------------------------------------------------------
-        // 1, 2: brakes, EDL
-        feed.brakes(self);
+        // 1: brakes
+        match self.brake_system.take() {
+            Some(mut brakes) => {
+                brakes.step(self, dt);
+                self.brake_system = Some(brakes);
+            }
+            None => feed.brakes(self),
+        }
+        // 2: electronic differential lock
+        feed.edl(self);
         // 3: suspensions
         for suspension in &mut self.suspensions {
             suspension.step(&mut self.core, dt);
@@ -867,7 +1064,20 @@ impl RollingChassis {
         let offset = -(self.final_steer_angle_signal * self.steering_system.linear_ratio);
         self.suspensions[1].set_steer_length_offset(&mut self.core, offset);
         // 11 to 14: auto-blip, auto-shifter, gear changer, drivetrain
-        feed.drivetrain(self);
+        match self.drivetrain.take() {
+            Some(mut drivetrain) => {
+                self.auto_blip.step(&mut self.controls, self.is_controls_locked, self.speed, self.physics_time);
+                let mut shifter = self.auto_shifter;
+                shifter.step(self, drivetrain.as_ref(), dt);
+                self.auto_shifter = shifter;
+                let mut changer = self.gear_changer;
+                changer.step(self, drivetrain.as_mut());
+                self.gear_changer = changer;
+                drivetrain.step(self, dt);
+                self.drivetrain = Some(drivetrain);
+            }
+            None => feed.drivetrain(self),
+        }
         // 15: anti-roll bars
         for (axle, first) in [(0usize, 0usize), (1, 2)] {
             let (left, right) = self.suspensions[first..first + 2].split_at_mut(1);

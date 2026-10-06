@@ -1,5 +1,5 @@
-//! AC's `SetupManager` for the values that live in the chassis: every setup item is a name,
-//! a pointer to one float of the car and a multiplier; `SetupManager::step` (late in every
+//! AC's `SetupManager` for the values of the ported systems (chassis, brakes, drivetrain,
+//! engine): every setup item is a name, a pointer to one float of the car and a multiplier; `SetupManager::step` (late in every
 //! physics step) writes `multiplier * newValue` into the float whenever the two differ.
 //!
 //! Also here: what the game's setup screen does to the items when a session starts with the
@@ -59,6 +59,21 @@ pub enum SetupTarget {
     HeavePackerRange(usize),
     /// `Car::steerAssist`
     SteerAssist,
+    /// `drivetrain.diffPowerRamp`, `diffCoastRamp`, `diffPreLoad`
+    DiffPowerRamp,
+    DiffCoastRamp,
+    DiffPreLoad,
+    /// `brakeSystem.brakePowerMultiplier`, `brakeSystem.frontBias`
+    BrakePowerMultiplier,
+    FrontBias,
+    /// `SetupManager::gearSettings[i]`: a float copy of `drivetrain.gears[i].ratio`; a change
+    /// is handed on by the item's `onValueChanged` (`Drivetrain::setGearRatio`)
+    GearSetting(usize),
+    /// `drivetrain.finalRatio`
+    FinalRatio,
+    /// `drivetrain.acEngine.limiterMultiplier`, `coastTorqueMultiplier`
+    EngineLimiter,
+    CoastTorqueMult,
 }
 
 impl SetupTarget {
@@ -88,6 +103,15 @@ impl SetupTarget {
             HeaveRodLength(a) => chassis.heave_springs[a].rod_length,
             HeavePackerRange(a) => chassis.heave_springs[a].packer_range,
             SteerAssist => chassis.steer_assist,
+            DiffPowerRamp => drivetrain(chassis).base().diff_power_ramp,
+            DiffCoastRamp => drivetrain(chassis).base().diff_coast_ramp,
+            DiffPreLoad => drivetrain(chassis).base().diff_pre_load,
+            BrakePowerMultiplier => brakes(chassis).base().brake_power_multiplier,
+            FrontBias => brakes(chassis).base().front_bias,
+            GearSetting(_) => unreachable!("the gear items point into the setup manager"),
+            FinalRatio => drivetrain(chassis).base().final_ratio,
+            EngineLimiter => drivetrain(chassis).engine().base().limiter_multiplier,
+            CoastTorqueMult => drivetrain(chassis).engine().base().coast_torque_multiplier,
         }
     }
 
@@ -117,8 +141,31 @@ impl SetupTarget {
             HeaveRodLength(a) => chassis.heave_springs[a].rod_length = value,
             HeavePackerRange(a) => chassis.heave_springs[a].packer_range = value,
             SteerAssist => chassis.steer_assist = value,
+            DiffPowerRamp => drivetrain_mut(chassis).base_mut().diff_power_ramp = value,
+            DiffCoastRamp => drivetrain_mut(chassis).base_mut().diff_coast_ramp = value,
+            DiffPreLoad => drivetrain_mut(chassis).base_mut().diff_pre_load = value,
+            BrakePowerMultiplier => brakes_mut(chassis).base_mut().brake_power_multiplier = value,
+            FrontBias => brakes_mut(chassis).base_mut().front_bias = value,
+            GearSetting(_) => unreachable!("the gear items point into the setup manager"),
+            FinalRatio => drivetrain_mut(chassis).base_mut().final_ratio = value,
+            EngineLimiter => drivetrain_mut(chassis).engine_mut().base_mut().limiter_multiplier = value,
+            CoastTorqueMult => drivetrain_mut(chassis).engine_mut().base_mut().coast_torque_multiplier = value,
         }
     }
+}
+
+// the items of a system exist only in a car that has the system
+fn drivetrain(chassis: &RollingChassis) -> &dyn super::DrivetrainModel {
+    chassis.drivetrain.as_deref().expect("a drivetrain setup item without a drivetrain")
+}
+fn drivetrain_mut(chassis: &mut RollingChassis) -> &mut dyn super::DrivetrainModel {
+    chassis.drivetrain.as_deref_mut().expect("a drivetrain setup item without a drivetrain")
+}
+fn brakes(chassis: &RollingChassis) -> &dyn super::BrakeModel {
+    chassis.brake_system.as_deref().expect("a brake setup item without a brake system")
+}
+fn brakes_mut(chassis: &mut RollingChassis) -> &mut dyn super::BrakeModel {
+    chassis.brake_system.as_deref_mut().expect("a brake setup item without a brake system")
 }
 
 /// AC's `SetupItem` (0x88 bytes).
@@ -146,13 +193,16 @@ pub struct SetupChange {
     pub to: f32,
 }
 
-/// AC's `SetupManager` (0x50 bytes), the items connected to chassis values. Items of systems
-/// that are not ported (wings, differential, brakes, gears, engine) are left out; they come
-/// with their systems.
+/// AC's `SetupManager` (0x50 bytes), the items connected to values of the ported systems.
+/// Items of systems that are not ported (the wings, the four-wheel-drive differentials, the
+/// force-feedback gain) are left out; the items of brakes, drivetrain and engine exist in a
+/// car that has those systems.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SetupManager {
     /// `items`, in the order `SetupManager::initItems` registers them.
     pub items: Vec<SetupItem>,
+    /// `gearSettings`: the gear ratios as floats, the targets of the `INTERNAL_GEAR_n` items.
+    pub gear_settings: Vec<f32>,
     /// Every value written so far ("Setup change for Car … Changing: … from … to …").
     pub changes: Vec<SetupChange>,
 }
@@ -188,8 +238,22 @@ impl SetupManager {
         add("ARB_REAR".into(), ArbK(1), 1.0, 1.0);
         add("ARB_FRONT_NMM".into(), ArbK(0), 1000.0, 1.0);
         add("ARB_REAR_NMM".into(), ArbK(1), 1000.0, 1.0);
+        // (the wings' items are registered here)
+        if let Some(drivetrain) = &chassis.drivetrain {
+            // a car with a differential controller has no differential items
+            if !drivetrain.has_dynamic_controllers() {
+                add("DIFF_POWER".into(), DiffPowerRamp, 0.01, 1.0);
+                add("DIFF_COAST".into(), DiffCoastRamp, 0.01, 1.0);
+                add("DIFF_PRELOAD".into(), DiffPreLoad, 1.0, 1.0);
+            }
+        }
+        // (the items of the four-wheel-drive differentials are registered here)
         for (w, wheel) in WHEELS.iter().enumerate() {
             add(format!("PRESSURE_{wheel}"), TyrePressure(w), 1.0, 1.0);
+        }
+        if chassis.brake_system.is_some() {
+            add("BRAKE_POWER_MULT".into(), BrakePowerMultiplier, 0.01, 1.0);
+            add("FRONT_BIAS".into(), FrontBias, 0.01, 1.0);
         }
         for (w, wheel) in WHEELS.iter().enumerate() {
             add(format!("DAMP_FAST_BUMP_{wheel}"), DamperBumpFast(w), 1.0, 1.0);
@@ -219,7 +283,33 @@ impl SetupManager {
                 add(format!("PACKER_RANGE_{axle}"), HeavePackerRange(a), 0.001, 1.0);
             }
         }
-        add("STEER_ASSIST".into(), SteerAssist, 0.01, 1.0);
+        if let Some(drivetrain) = &chassis.drivetrain {
+            // one item per entry of `gears` (reverse and neutral included), attached from the
+            // start, as is the final ratio
+            let ratios: Vec<f32> = drivetrain.base().gears.iter().map(|gear| gear.ratio as f32).collect();
+            for (index, ratio) in ratios.iter().enumerate() {
+                manager.items.push(SetupItem {
+                    name: format!("INTERNAL_GEAR_{index}"),
+                    target: GearSetting(index),
+                    multiplier: 1.0,
+                    new_value: ratio / 1.0,
+                    attached: true,
+                    label_multiplier: 1.0,
+                });
+            }
+            manager.gear_settings = ratios;
+        }
+        let mut add = |name: String, target: SetupTarget, multiplier: f32, label_multiplier: f32, attached: bool| {
+            let new_value = target.get(chassis) / multiplier;
+            manager.items.push(SetupItem { name, target, multiplier, new_value, attached, label_multiplier });
+        };
+        if chassis.drivetrain.is_some() {
+            add("FINAL_RATIO".into(), FinalRatio, 1.0, 1.0, true);
+            add("ENGINE_LIMITER".into(), EngineLimiter, 0.01, 1.0, false);
+            add("COAST_TORQUE_MULT".into(), CoastTorqueMult, 0.01, 1.0, false);
+        }
+        // (`FF_GAIN` is registered here)
+        add("STEER_ASSIST".into(), SteerAssist, 0.01, 1.0, false);
         Ok(manager)
     }
 
@@ -261,11 +351,23 @@ impl SetupManager {
     /// `SetupManager::step` @ 0x14028d090: for every attached item, `multiplier * newValue`
     /// is written to the car when it differs from the value there. A changed rear toe also
     /// reseats that wheel's steering rod (the items' `onValueChanged`, 0x140288f00 and
-    /// 0x140288ee0).
+    /// 0x140288ee0); a changed gear item hands its `newValue` to `Drivetrain::setGearRatio`
+    /// (lambda 0x140288f20).
     pub fn step(&mut self, chassis: &mut RollingChassis) {
         for item in &self.items {
             let value = item.multiplier * item.new_value;
             if !item.attached {
+                continue;
+            }
+            if let SetupTarget::GearSetting(index) = item.target {
+                let current = self.gear_settings[index];
+                if value < current || value > current {
+                    self.changes.push(SetupChange { name: item.name.clone(), from: current, to: value });
+                    self.gear_settings[index] = value;
+                    if let Some(drivetrain) = &mut chassis.drivetrain {
+                        drivetrain.set_gear_ratio(index as i32, item.new_value);
+                    }
+                }
                 continue;
             }
             let current = item.target.get(chassis);
