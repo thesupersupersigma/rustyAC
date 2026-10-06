@@ -63,6 +63,8 @@ pub struct JointState {
 pub trait Engine {
     fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32);
     fn body_create(&mut self) -> usize;
+    /// `dBodyDestroy`; the body must not be used afterwards.
+    fn body_destroy(&mut self, b: usize);
     fn body_set_mass(&mut self, b: usize, mass: &MassSpec);
     fn body_set_position(&mut self, b: usize, p: [f32; 3]);
     fn body_set_rotation(&mut self, b: usize, r: &[f32; 12]);
@@ -72,6 +74,10 @@ pub trait Engine {
     fn body_set_damping(&mut self, b: usize, linear: f32, angular: f32);
     fn body_set_auto_disable(&mut self, b: usize, on: bool);
     fn body_set_enabled(&mut self, b: usize, on: bool);
+    /// Sets and clears bits of `dxBody::flags` directly, and the body's `max_angular_speed`.
+    /// No function linked into the game can set "no gravity" (8), "max angular speed" (0x80)
+    /// or clear "gyroscopic" (0x100); the stepper's code for them is still there.
+    fn body_poke(&mut self, b: usize, set: u32, clear: u32, max_angular_speed: f32);
     /// `kind`: 0 `dBodyAddForce`, 1 `dBodyAddTorque`, 2 `dBodyAddRelTorque`, 3
     /// `dBodyAddForceAtPos`, 4 `dBodyAddForceAtRelPos`, 5 `dBodyAddRelForceAtPos`, 6
     /// `dBodyAddRelForceAtRelPos`.
@@ -79,6 +85,10 @@ pub trait Engine {
     /// `dBodySetForce` / `dBodySetTorque`.
     fn body_set_accumulators(&mut self, b: usize, f: [f32; 3], t: [f32; 3]);
     fn body_get_rel_point_pos(&mut self, b: usize, p: [f32; 3]) -> [f32; 3];
+    /// The six frame-conversion getters for one point, in this order: `dBodyGetRelPointPos`,
+    /// `dBodyGetPosRelPoint`, `dBodyVectorToWorld`, `dBodyVectorFromWorld`,
+    /// `dBodyGetPointVel`, `dBodyGetRelPointVel`.
+    fn body_probe(&mut self, b: usize, p: [f32; 3]) -> [f32; 18];
     fn joint_create(&mut self, kind: Kind) -> usize;
     fn joint_attach(&mut self, j: usize, b1: Option<usize>, b2: Option<usize>);
     fn joint_set_ball_anchor(&mut self, j: usize, p: [f32; 3]);
@@ -164,6 +174,9 @@ impl Engine for RustEngine {
         self.bodies.push(self.world.body_create());
         self.bodies.len() - 1
     }
+    fn body_destroy(&mut self, b: usize) {
+        self.world.body_destroy(self.bodies[b]);
+    }
     fn body_set_mass(&mut self, b: usize, mass: &MassSpec) {
         let m = match *mass {
             MassSpec::Box { mass, lx, ly, lz } => Mass::box_total(mass, lx, ly, lz),
@@ -212,6 +225,11 @@ impl Engine for RustEngine {
             self.world.body_disable(self.bodies[b]);
         }
     }
+    fn body_poke(&mut self, b: usize, set: u32, clear: u32, max_angular_speed: f32) {
+        let body = self.world.body_mut(self.bodies[b]);
+        body.flags = (body.flags | set) & !clear;
+        body.max_angular_speed = max_angular_speed;
+    }
     fn body_add(&mut self, b: usize, kind: u32, a: [f32; 3], p: [f32; 3]) {
         let id = self.bodies[b];
         match kind {
@@ -230,6 +248,22 @@ impl Engine for RustEngine {
     }
     fn body_get_rel_point_pos(&mut self, b: usize, p: [f32; 3]) -> [f32; 3] {
         self.world.body_get_rel_point_pos(self.bodies[b], p)
+    }
+    fn body_probe(&mut self, b: usize, p: [f32; 3]) -> [f32; 18] {
+        let id = self.bodies[b];
+        let parts = [
+            self.world.body_get_rel_point_pos(id, p),
+            self.world.body_get_pos_rel_point(id, p),
+            self.world.body_vector_to_world(id, p),
+            self.world.body_vector_from_world(id, p),
+            self.world.body_get_point_vel(id, p),
+            self.world.body_get_rel_point_vel(id, p),
+        ];
+        let mut out = [0.0f32; 18];
+        for (k, part) in parts.iter().enumerate() {
+            out[3 * k..3 * k + 3].copy_from_slice(part);
+        }
+        out
     }
     fn joint_create(&mut self, kind: Kind) -> usize {
         let id = match kind {
@@ -358,6 +392,7 @@ const VA_WORLD_SET_CONTACT_SURFACE_LAYER: usize = 0x1_4034_0440;
 const VA_WORLD_SET_QUICK_STEP_NUM_ITERATIONS: usize = 0x1_4034_04b0;
 const VA_WORLD_STEP: usize = 0x1_4034_04c0;
 const VA_BODY_CREATE: usize = 0x1_4033_ef50;
+const VA_BODY_DESTROY: usize = 0x1_4033_f340;
 const VA_BODY_SET_POSITION: usize = 0x1_4033_fbb0;
 const VA_BODY_SET_ROTATION: usize = 0x1_4033_fc00;
 const VA_BODY_SET_LINEAR_VEL: usize = 0x1_4033_fb10;
@@ -382,6 +417,14 @@ const VA_BODY_ADD: [usize; 7] = [
     0x1_4033_ec70, // dBodyAddRelForceAtRelPos
 ];
 const VA_BODY_GET_REL_POINT_POS: usize = 0x1_4033_f6c0;
+const VA_BODY_PROBES: [usize; 6] = [
+    0x1_4033_f6c0, // dBodyGetRelPointPos
+    0x1_4033_f5e0, // dBodyGetPosRelPoint
+    0x1_4033_fd60, // dBodyVectorToWorld
+    0x1_4033_fcb0, // dBodyVectorFromWorld
+    0x1_4033_f520, // dBodyGetPointVel
+    0x1_4033_f780, // dBodyGetRelPointVel
+];
 const VA_MASS_SET_BOX_TOTAL: usize = 0x1_4034_6bc0;
 const VA_MASS_SET_PARAMETERS: usize = 0x1_4034_6c60;
 const VA_JOINT_CREATE: [usize; 4] = [
@@ -414,6 +457,7 @@ const B_LVEL: usize = 0x110;
 const B_AVEL: usize = 0x120;
 const B_FACC: usize = 0x130;
 const B_TACC: usize = 0x140;
+const B_MAX_ANGULAR_SPEED: usize = 0x1b0;
 // dxJoint
 const J_TAG: usize = 0x20;
 const J_FEEDBACK: usize = 0x68;
@@ -493,6 +537,11 @@ impl Engine for AcEngine<'_> {
         self.bodies.push(create(self.world));
         self.bodies.len() - 1
     }
+    fn body_destroy(&mut self, b: usize) {
+        let destroy: F0 = self.f(VA_BODY_DESTROY);
+        destroy(self.bodies[b]);
+        self.bodies[b] = std::ptr::null_mut();
+    }
     fn body_set_mass(&mut self, b: usize, mass: &MassSpec) {
         // dMass: float mass, c[4], I[12]
         let mut m = [0.0f32; 17];
@@ -553,6 +602,14 @@ impl Engine for AcEngine<'_> {
         let f: F0 = self.f(if on { VA_BODY_ENABLE } else { VA_BODY_DISABLE });
         f(self.bodies[b]);
     }
+    fn body_poke(&mut self, b: usize, set: u32, clear: u32, max_angular_speed: f32) {
+        let p = self.bodies[b];
+        unsafe {
+            let flags: u32 = rd(p, B_FLAGS);
+            wr(p, B_FLAGS, (flags | set) & !clear);
+            wr(p, B_MAX_ANGULAR_SPEED, max_angular_speed);
+        }
+    }
     fn body_add(&mut self, b: usize, kind: u32, a: [f32; 3], p: [f32; 3]) {
         let kind = (kind as usize).min(6);
         if kind < 3 {
@@ -574,6 +631,16 @@ impl Engine for AcEngine<'_> {
         let mut out = [0.0f32; 4];
         f(self.bodies[b], p[0], p[1], p[2], out.as_mut_ptr());
         [out[0], out[1], out[2]]
+    }
+    fn body_probe(&mut self, b: usize, p: [f32; 3]) -> [f32; 18] {
+        let mut out = [0.0f32; 18];
+        for (k, va) in VA_BODY_PROBES.iter().enumerate() {
+            let f: extern "C" fn(*mut u8, f32, f32, f32, *mut f32) = self.f(*va);
+            let mut part = [0.0f32; 4];
+            f(self.bodies[b], p[0], p[1], p[2], part.as_mut_ptr());
+            out[3 * k..3 * k + 3].copy_from_slice(&part[..3]);
+        }
+        out
     }
     fn joint_create(&mut self, kind: Kind) -> usize {
         let index = match kind {

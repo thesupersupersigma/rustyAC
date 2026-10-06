@@ -4,13 +4,17 @@
 //!                  [--record <dir>]
 //!     Synthetic worlds stepped in the game's own ODE (functions called inside the mapped
 //!     acs.exe; the game never starts) and in the Rust port, compared bit for bit after
-//!     every step. Types: free_body, ball, dball, fixed, slider, auto_disable, car, random. Writes
+//!     every step. Types: free_body, ball, dball, dball_zero, fixed, slider, auto_disable, car, strut_car, random.
+//!     Writes
 //!     `oracle/ode/micro_results.md`. `--record` also stores the reference states.
 //! ode_oracle replay [<recording> ...] [--verbose]
 //!     Replays car_oracle recordings (default: every `oracle/car/*.carrec`) through the Rust
 //!     port: per-step test and free run. Needs no acs.exe. Writes `oracle/ode/replay_results.md`.
 //! ode_oracle excerpt
 //!     Writes the small golden excerpts of `settle` and `slalom` used by `cargo test`.
+//! ode_oracle matrix
+//!     The game's `_dFactorLDLT`, `_dSolveLDLT`, `_dInvertPDMatrix` and `_dDot` against the Rust
+//!     versions on random matrices of 1 to 64 rows. Writes `oracle/ode/matrix_results.md`.
 //! ode_oracle bench [--steps <n>]
 //!     Step time of the car layout: the game's ODE against the Rust port.
 //!
@@ -20,6 +24,7 @@
 #[allow(dead_code)]
 mod acs;
 mod engine;
+mod matrix_check;
 mod micro;
 #[path = "../../car_oracle/src/record.rs"]
 #[allow(dead_code)]
@@ -40,6 +45,7 @@ fn usage() -> String {
     "usage: ode_oracle micro [--type <name,name>] [--worlds <n>] [--steps <n>] [--first-seed <n>] [--verbose] [--record <dir>]\n       \
      ode_oracle replay [<recording> ...] [--verbose]\n       \
      ode_oracle excerpt\n       \
+     ode_oracle matrix\n       \
      ode_oracle bench [--steps <n>]\n       \
      common: [--acs <path to acs.exe>]"
         .to_string()
@@ -98,6 +104,7 @@ fn main() {
         "replay" => replay::replay_command(&args.files, args.verbose),
         "excerpt" => replay::excerpt_command(),
         "bench" => bench_command(&args),
+        "matrix" => matrix_command(&args),
         _ => Err(usage()),
     });
     if let Err(message) = result {
@@ -107,14 +114,16 @@ fn main() {
 }
 
 /// (name, what it covers, default number of worlds, default steps)
-const TYPES: [(&str, &str, usize, usize); 8] = [
+const TYPES: [(&str, &str, usize, usize); 10] = [
     ("free_body", "one free body: gravity, forces, torques, gyroscopic term, rotation update", 200, 1000),
     ("ball", "one ball joint (two bodies, or one body and the world)", 100, 1000),
     ("dball", "one fixed-length rod (DBall)", 100, 1000),
+    ("dball_zero", "a rod of length zero: the fallback directions of the DBall row", 100, 1000),
     ("fixed", "one fixed joint", 100, 1000),
     ("slider", "one slider joint", 100, 1000),
     ("auto_disable", "damped chains with ODE's auto-disable on; bodies fall asleep, are woken and disabled", 100, 1000),
     ("car", "F2004 layout: body, fuel tank, 4 hubs, 20 rods, 1 fixed joint; springs, tyres, steering", 20, 5000),
+    ("strut_car", "strut car: body, tank, 4 hubs, 4 strut bodies; per corner a slider, a ball joint and 3 rods", 20, 5000),
     ("random", "1 to 8 bodies, random chains of all joint types, loops, several islands", 1000, 1000),
 ];
 
@@ -123,10 +132,12 @@ fn scene_of(kind: &str, seed: u64) -> Result<Scene, String> {
         "free_body" => Scene::free_body(seed),
         "ball" => Scene::single_joint(Kind::Ball, seed),
         "dball" => Scene::single_joint(Kind::DBall, seed),
+        "dball_zero" => Scene::dball_zero(seed),
         "fixed" => Scene::single_joint(Kind::Fixed, seed),
         "slider" => Scene::single_joint(Kind::Slider, seed),
         "auto_disable" => Scene::auto_disable(seed),
         "car" => Scene::car(seed),
+        "strut_car" => Scene::strut_car(seed),
         "random" => Scene::random(seed),
         other => return Err(format!("no world type {other:?}")),
     })
@@ -157,6 +168,7 @@ fn micro_command(args: &Args) -> Result<(), String> {
         let mut setup_exact_worlds = 0;
         let mut not_finite = 0;
         let mut asleep = 0;
+        let mut short_rods = 0;
         let mut first: Option<String> = None;
         for w in 0..worlds {
             let seed = args.first_seed + w as u64;
@@ -188,6 +200,7 @@ fn micro_command(args: &Args) -> Result<(), String> {
             setup_exact_worlds += outcome.setup_exact as usize;
             not_finite += outcome.not_finite as usize;
             asleep += outcome.asleep;
+            short_rods += outcome.short_rods;
             if let Some(text) = outcome.first {
                 if args.verbose {
                     println!("  {}: {text} ({} of {} steps exact)", scene.name, outcome.exact_steps, outcome.steps);
@@ -221,6 +234,9 @@ fn micro_command(args: &Args) -> Result<(), String> {
         for note in [
             (not_finite > 0).then(|| format!("{not_finite} of the {worlds} worlds reached a value that is not finite")),
             (asleep > 0).then(|| format!("bodies were disabled (asleep) in {asleep} body-steps")),
+            (short_rods > 0).then(|| {
+                format!("a rod's anchors were less than 1e-7 m apart in {short_rods} joint-steps (fallback direction)")
+            }),
         ]
         .into_iter()
         .flatten()
@@ -239,6 +255,18 @@ fn micro_command(args: &Args) -> Result<(), String> {
     if failed {
         return Err("at least one step of at least one world differs".into());
     }
+    Ok(())
+}
+
+/// The solver routines alone, on random matrices (see `matrix_check.rs`).
+fn matrix_command(args: &Args) -> Result<(), String> {
+    let acs = acs::Acs::load(&args.acs)?;
+    let table = matrix_check::matrix_command(&acs)?;
+    let out_dir = repo_root().join("oracle/ode");
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let path = out_dir.join("matrix_results.md");
+    std::fs::write(&path, table).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("wrote {}", path.display());
     Ok(())
 }
 

@@ -9,7 +9,7 @@ description = "Test oracle for rustyac-ode: runs Assetto Corsa's own ODE (mapped
 rustyac-ode = { path = "../../crates/rustyac-ode" }
 
 [profile.release]
-opt-level = 2
+opt-level = 3
 
 # standalone crate, not part of the parent workspace
 [workspace]

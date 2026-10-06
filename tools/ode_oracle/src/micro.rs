@@ -34,7 +34,7 @@ impl Rng {
     fn unit(&mut self) -> f32 {
         (self.next() >> 40) as f32 / (1u64 << 24) as f32
     }
-    fn range(&mut self, lo: f32, hi: f32) -> f32 {
+    pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * self.unit()
     }
     fn below(&mut self, n: u32) -> u32 {
@@ -63,6 +63,10 @@ pub enum Op {
     Add(usize, u32, [f32; 3], [f32; 3]),
     /// What `RigidBodyODE::stop` does: velocities and accumulators to zero.
     Stop(usize),
+    /// `dBodyDestroy`: the body's joints stay in the world, attached to nothing.
+    Destroy(usize),
+    /// Body flags set / cleared and `max_angular_speed`, written directly.
+    Poke(usize, u32, u32, f32),
     Joint(Kind),
     Attach(usize, Option<usize>, Option<usize>),
     BallAnchor(usize, [f32; 3]),
@@ -99,6 +103,8 @@ impl Driver {
             Op::AutoDisable(b, on) => e.body_set_auto_disable(b, on),
             Op::Enabled(b, on) => e.body_set_enabled(b, on),
             Op::Add(b, kind, a, p) => e.body_add(b, kind, a, p),
+            Op::Destroy(b) => e.body_destroy(b),
+            Op::Poke(b, set, clear, max_angular_speed) => e.body_poke(b, set, clear, max_angular_speed),
             Op::Stop(b) => {
                 e.body_set_linear_vel(b, [0.0; 3]);
                 e.body_set_angular_vel(b, [0.0; 3]);
@@ -149,6 +155,10 @@ pub struct Scene {
     /// bodies have ODE's auto-disable on: the script also wakes and disables bodies by hand
     sleepy: bool,
     car: Option<CarLayout>,
+    /// bodies that were destroyed on the way (random worlds only)
+    pub dead: Vec<bool>,
+    /// the step before which one body is destroyed, if any
+    destroy_at: Option<usize>,
 }
 
 struct CarLayout {
@@ -317,6 +327,8 @@ impl Scene {
             force_chance: 0.6,
             sleepy: false,
             car: None,
+            dead: Vec::new(),
+            destroy_at: None,
         }
     }
 
@@ -365,6 +377,53 @@ impl Scene {
             force_chance: 0.01,
             sleepy: true,
             car: None,
+            dead: Vec::new(),
+            destroy_at: None,
+        }
+    }
+
+    /// A rod of length zero: both anchors of a DBall at the same point, so the direction of
+    /// the constraint row cannot come from the anchors. ODE then takes the direction of the
+    /// anchors' relative velocity, and (1, 0, 0) if that is zero too (even seeds start at
+    /// rest in free fall, so the very first steps use that last resort).
+    pub fn dball_zero(seed: u64) -> Scene {
+        let mut rng = Rng::new(seed ^ 0xdba1_0000);
+        let mut setup = Vec::new();
+        let mut masses = Vec::new();
+        let mut joint_list = Vec::new();
+        let a = add_body(&mut setup, &mut rng, 0, 0.5, true, &mut masses);
+        let to_world = seed % 4 == 3;
+        let mut bodies = 1;
+        if !to_world {
+            add_body(&mut setup, &mut rng, 1, 0.5, true, &mut masses);
+            bodies = 2;
+        }
+        if seed % 2 == 0 {
+            for b in 0..bodies {
+                setup.push(Op::LinearVel(b, [0.0; 3]));
+                setup.push(Op::AngularVel(b, [0.0; 3]));
+                setup.push(Op::Mass(b, MassSpec::Box { mass: 10.0, lx: 0.5, ly: 0.5, lz: 0.5 }));
+            }
+        }
+        let point = [a.position[0] + 0.2, a.position[1], a.position[2] - 0.1];
+        setup.push(Op::Joint(Kind::DBall));
+        setup.push(Op::Attach(0, Some(0), if to_world { None } else { Some(1) }));
+        setup.push(Op::DBallAnchor(0, 0, point));
+        setup.push(Op::DBallAnchor(0, 1, point));
+        joint_list.push((0, Kind::DBall, Some(0), if to_world { None } else { Some(1) }));
+        Scene {
+            name: format!("dball_zero#{seed}"),
+            setup,
+            bodies,
+            joints: 1,
+            joint_list,
+            masses,
+            rng,
+            force_chance: if seed % 2 == 0 { 0.0 } else { 0.3 },
+            sleepy: false,
+            car: None,
+            dead: Vec::new(),
+            destroy_at: None,
         }
     }
 
@@ -389,7 +448,7 @@ impl Scene {
             add_joint(&mut setup, &mut rng, &mut joint_list, kind, Some(0), Some(1), a.position, b.position, ac_like);
         }
         let name = format!("{kind:?}#{seed}").to_lowercase();
-        Scene { name, setup, bodies, joints: 1, joint_list, masses, rng, force_chance: 0.6, sleepy: false, car: None }
+        Scene { name, setup, bodies, joints: 1, joint_list, masses, rng, force_chance: 0.6, sleepy: false, car: None, dead: Vec::new(), destroy_at: None }
     }
 
     /// 1 to 8 bodies joined by random chains of the four joint types, with extra rods that
@@ -443,6 +502,20 @@ impl Scene {
             let p = plans[b].position;
             add_joint(&mut setup, &mut rng, &mut joint_list, kind, b1, b2, p, anchor, ac_like);
         }
+        // body states no linked function can produce, but which the stepper has code for:
+        // no gravity, no gyroscopic term, a cap on the angular speed
+        if !ac_like {
+            for i in 0..nb {
+                let roll = rng.unit();
+                if roll < 0.06 {
+                    setup.push(Op::Poke(i, 8, 0, f32::INFINITY));
+                } else if roll < 0.12 {
+                    setup.push(Op::Poke(i, 0, 0x100, f32::INFINITY));
+                } else if roll < 0.18 {
+                    setup.push(Op::Poke(i, 0x80, 0, rng.range(0.5, 3.0)));
+                }
+            }
+        }
         // one world in eight has ODE's auto-disable on, with damping so that bodies can
         // come to rest; and a body may start disabled
         let sleepy = rng.chance(0.125);
@@ -467,7 +540,10 @@ impl Scene {
             force_chance: if sleepy { 0.02 } else { 0.4 },
             sleepy,
             car: None,
+            dead: Vec::new(),
+            destroy_at: None,
         }
+        .with_destruction(seed)
     }
 
     /// The layout of an F2004: car body (510 kg box), fuel tank bolted to it, four hubs, each
@@ -547,13 +623,121 @@ impl Scene {
         let joints = joint_list.len();
         let name = format!("car#{seed}");
         let car = CarLayout { hubs, body: 0, rest: [0.0; 4], steer };
-        Scene { name, setup, bodies: 6, joints, joint_list, masses, rng, force_chance: 0.0, sleepy: false, car: Some(car) }
+        Scene { name, setup, bodies: 6, joints, joint_list, masses, rng, force_chance: 0.0, sleepy: false, car: Some(car), dead: Vec::new(), destroy_at: None }
+    }
+
+    /// A strut (MacPherson) car as the game builds one: car body, fuel tank, and per corner a
+    /// hub and a strut body, a slider between strut and hub, a ball joint between car body and
+    /// strut top, and three rods (two for the lower wishbone, one for the steering).
+    /// 10 bodies, 21 joints, 50 constraint rows. Driven like [`Scene::car`].
+    pub fn strut_car(seed: u64) -> Scene {
+        let mut rng = Rng::new(seed ^ 0x5707_0000);
+        let mut setup = Vec::new();
+        let mut joint_list = Vec::new();
+        let jitter = |rng: &mut Rng, v: f32| if seed == 0 { v } else { v * rng.range(0.9, 1.1) };
+        let body_y = 0.4;
+        let mut masses = vec![jitter(&mut rng, 1100.0), 45.0];
+        for (i, &mass) in masses.iter().enumerate() {
+            setup.push(Op::Body);
+            setup.push(Op::FiniteRotation(i, true, [0.0; 3]));
+            setup.push(Op::Damping(i, 0.0, 0.0));
+            let spec = if i == 0 {
+                MassSpec::Box { mass, lx: 1.6, ly: 1.2, lz: 4.0 }
+            } else {
+                MassSpec::Box { mass, lx: 0.5, ly: 0.5, lz: 0.5 }
+            };
+            setup.push(Op::Mass(i, spec));
+        }
+        setup.push(Op::Position(0, [0.0, body_y, 0.0]));
+        setup.push(Op::Position(1, [0.0, body_y - 0.1, -1.2]));
+        setup.push(Op::Joint(Kind::Fixed));
+        setup.push(Op::Attach(0, Some(1), Some(0)));
+        setup.push(Op::Fixed(0));
+        joint_list.push((0, Kind::Fixed, Some(1), Some(0)));
+        let corners = [(0.76f32, 1.3f32, 0.31f32), (-0.76, 1.3, 0.31), (0.75, -1.35, 0.31), (-0.75, -1.35, 0.31)];
+        let mut hubs = [0usize; 4];
+        let mut steer = [([0.0f32; 3], [0.0f32; 3]); 2];
+        for (w, &(x, z, radius)) in corners.iter().enumerate() {
+            let hub = 2 + 2 * w;
+            let strut = hub + 1;
+            hubs[w] = hub;
+            let side = x.signum();
+            let hub_pos = [x, radius, z];
+            let strut_pos = [x - side * 0.06, radius + 0.33, z - 0.01];
+            for (body, mass, pos, size) in
+                [(hub, 30.0f32, hub_pos, [0.2f32, 0.5, 0.5]), (strut, jitter(&mut rng, 6.0), strut_pos, [0.1, 0.4, 0.1])]
+            {
+                setup.push(Op::Body);
+                setup.push(Op::FiniteRotation(body, true, [0.0; 3]));
+                setup.push(Op::Damping(body, 0.0, 0.0));
+                setup.push(Op::Mass(body, MassSpec::Box { mass, lx: size[0], ly: size[1], lz: size[2] }));
+                setup.push(Op::Position(body, pos));
+                masses.push(mass);
+            }
+            // the slider between strut and hub, along the strut
+            let j = joint_list.len();
+            setup.push(Op::Joint(Kind::Slider));
+            setup.push(Op::Attach(j, Some(strut), Some(hub)));
+            setup.push(Op::SliderAxis(j, [-side * 0.18, 1.0, -0.03]));
+            joint_list.push((j, Kind::Slider, Some(strut), Some(hub)));
+            // the ball joint at the strut top
+            let j = joint_list.len();
+            setup.push(Op::Joint(Kind::Ball));
+            setup.push(Op::Attach(j, Some(0), Some(strut)));
+            setup.push(Op::BallAnchor(j, [x - side * 0.1, radius + 0.56, z - 0.02]));
+            joint_list.push((j, Kind::Ball, Some(0), Some(strut)));
+            // lower wishbone (two rods) and the steering rod: car-side point, hub-side point
+            let inner = x - side * jitter(&mut rng, 0.42);
+            let rods = [
+                ([inner, radius - 0.12, z - 0.3], [x - side * 0.06, radius - 0.13, z]),
+                ([inner, radius - 0.12, z + 0.26], [x - side * 0.06, radius - 0.13, z]),
+                ([inner, radius + 0.02, z + 0.13], [x - side * 0.07, radius + 0.03, z + 0.12]),
+            ];
+            if w < 2 {
+                let (c, h) = rods[2];
+                steer[w] = ([c[0], c[1] - body_y, c[2]], [h[0] - hub_pos[0], h[1] - hub_pos[1], h[2] - hub_pos[2]]);
+            }
+            for (car_point, hub_point) in rods {
+                let j = joint_list.len();
+                setup.push(Op::Joint(Kind::DBall));
+                setup.push(Op::Attach(j, Some(0), Some(hub)));
+                setup.push(Op::DBallAnchor(j, 0, car_point));
+                setup.push(Op::DBallAnchor(j, 1, hub_point));
+                joint_list.push((j, Kind::DBall, Some(0), Some(hub)));
+            }
+        }
+        if seed != 0 {
+            setup.push(Op::LinearVel(0, [rng.range(-1.0, 1.0), 0.0, rng.range(0.0, 40.0)]));
+        }
+        let joints = joint_list.len();
+        let name = format!("strut_car#{seed}");
+        let car = CarLayout { hubs, body: 0, rest: [0.0; 4], steer };
+        Scene { name, setup, bodies: 10, joints, joint_list, masses, rng, force_chance: 0.0, sleepy: false, car: Some(car), dead: Vec::new(), destroy_at: None }
+    }
+
+    /// One random world in ten has a body destroyed after a few hundred steps (the game
+    /// destroys the bodies of a car that leaves).
+    fn with_destruction(mut self, seed: u64) -> Scene {
+        if seed % 10 == 3 && self.bodies >= 2 {
+            self.destroy_at = Some(50 + self.rng.below(400) as usize);
+        }
+        self
+    }
+
+    fn is_dead(&self, b: usize) -> bool {
+        self.dead.get(b).copied().unwrap_or(false)
     }
 
     /// What happens before step `step`, given the reference engine's state after the
     /// previous one.
     pub fn before_step(&mut self, step: usize, reference: &[BodyState]) -> Vec<Op> {
         let mut ops = Vec::new();
+        if self.destroy_at == Some(step) {
+            let b = self.rng.below(self.bodies as u32) as usize;
+            self.dead = vec![false; self.bodies];
+            self.dead[b] = true;
+            ops.push(Op::Destroy(b));
+        }
         if let Some(car) = &mut self.car {
             // springs and dampers between hub and body (the same world force with opposite
             // signs at the hub's position), a stiff "tyre" under each hub, steering
@@ -603,6 +787,9 @@ impl Scene {
             return ops;
         }
         for b in 0..self.bodies {
+            if self.is_dead(b) {
+                continue;
+            }
             if self.rng.chance(self.force_chance) {
                 let kind = self.rng.below(7);
                 let scale = self.masses[b] * if kind == 1 || kind == 2 { 6.0 } else { 25.0 };
@@ -626,10 +813,21 @@ impl Scene {
                 if self.rng.chance(0.001) {
                     ops.push(Op::Enabled(b, false));
                 }
+                // dBodySetAutoDisableFlag off (which also wakes the body) and on again
+                if self.rng.chance(0.001) {
+                    ops.push(Op::AutoDisable(b, false));
+                }
+                if self.rng.chance(0.002) {
+                    ops.push(Op::AutoDisable(b, true));
+                }
             }
         }
         for k in 0..self.joint_list.len() {
             let (j, kind, b1, b2) = self.joint_list[k];
+            // a joint that lost a body is attached to nothing: the game would not touch it
+            if b1.is_some_and(|b| self.is_dead(b)) || b2.is_some_and(|b| self.is_dead(b)) {
+                continue;
+            }
             if self.rng.chance(0.01) {
                 let erp = if self.rng.chance(0.5) { 0.9 } else { 0.3 };
                 ops.push(Op::Param(j, PARAM_ERP, erp));
@@ -664,6 +862,9 @@ pub struct Outcome {
     pub max_rows: u32,
     /// Body-steps in which a body was disabled (asleep) in the reference engine.
     pub asleep: usize,
+    /// Joint-steps in which a rod's two anchors were less than 1e-7 m apart in the reference
+    /// engine, so that the DBall row took one of its fallback directions.
+    pub short_rods: usize,
 }
 
 fn fnv(hash: &mut u64, words: &[u32]) {
@@ -776,6 +977,22 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
             drive_ac.apply(ac, &op);
             drive_rust.apply(rust, &op);
         }
+        for k in 0..scene.joint_list.len() {
+            let (j, kind, b1, b2) = scene.joint_list[k];
+            let (Kind::DBall, Some(b1)) = (kind, b1) else { continue };
+            if scene.is_dead(b1) || b2.is_some_and(|b| scene.is_dead(b)) {
+                continue;
+            }
+            let p = ac.joint_state(j).params;
+            let a1 = ac.body_get_rel_point_pos(b1, [p[0], p[1], p[2]]);
+            let a2 = match b2 {
+                Some(b2) => ac.body_get_rel_point_pos(b2, [p[3], p[4], p[5]]),
+                None => [p[3], p[4], p[5]],
+            };
+            let d = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            outcome.short_rods += (length < 1e-7) as usize;
+        }
         ac.step(H);
         rust.step(H);
         outcome.max_rows = outcome.max_rows.max(rust.rows());
@@ -783,6 +1000,9 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
         let mut exact = true;
         let mut words: Vec<u32> = Vec::new();
         for b in 0..scene.bodies {
+            if scene.is_dead(b) {
+                continue;
+            }
             let a = ac.body_state(b);
             exact &= compare_body(b, &a, &rust.body_state(b), &mut step_first);
             for v in a.pos.iter().chain(&a.q).chain(&a.r).chain(&a.lvel).chain(&a.avel) {
@@ -792,6 +1012,12 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
             words.push(a.tag as u32);
             outcome.asleep += (a.flags & 4 != 0) as usize;
             reference[b] = a;
+            // the frame-conversion getters, for a point that changes every step
+            let t = step as f32 * 0.37 + b as f32;
+            let point = [1.3 * t.sin(), 0.7 * (1.7 * t).cos() + a.pos[1], 0.9 * (0.3 * t).sin() - 0.2];
+            let (probe_a, probe_r) = (ac.body_probe(b, point), rust.body_probe(b, point));
+            exact &= compare_slices(&format!("body {b} getters"), &probe_a, &probe_r, &mut step_first);
+            words.extend(probe_a.iter().map(|v| v.to_bits()));
         }
         for j in 0..scene.joints {
             let a = ac.joint_state(j);
@@ -820,7 +1046,9 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
                 }
             }
             for b in 0..scene.bodies {
-                rust.body_write_state(b, &reference[b]);
+                if !scene.is_dead(b) {
+                    rust.body_write_state(b, &reference[b]);
+                }
             }
             for j in 0..scene.joints {
                 rust.joint_write_params(j, &ac.joint_state(j).params);
