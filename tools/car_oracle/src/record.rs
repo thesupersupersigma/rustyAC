@@ -136,6 +136,88 @@ impl Row {
     }
 }
 
+/// `SPageFilePhysics`, the shared-memory page `Local\\acpmf_physics` (0x250 bytes): name, kind
+/// (`f` f32 / `i` i32) and element count of every member, in struct order (from acs.pdb).
+pub const PAGE_FIELDS: [(&str, char, usize); 63] = [
+    ("packetId", 'i', 1),
+    ("gas", 'f', 1),
+    ("brake", 'f', 1),
+    ("fuel", 'f', 1),
+    ("gear", 'i', 1),
+    ("rpms", 'i', 1),
+    ("steerAngle", 'f', 1),
+    ("speedKmh", 'f', 1),
+    ("velocity", 'f', 3),
+    ("accG", 'f', 3),
+    ("wheelSlip", 'f', 4),
+    ("wheelLoad", 'f', 4),
+    ("wheelsPressure", 'f', 4),
+    ("wheelAngularSpeed", 'f', 4),
+    ("tyreWear", 'f', 4),
+    ("tyreDirtyLevel", 'f', 4),
+    ("tyreCoreTemperature", 'f', 4),
+    ("camberRAD", 'f', 4),
+    ("suspensionTravel", 'f', 4),
+    ("drs", 'f', 1),
+    ("tc", 'f', 1),
+    ("heading", 'f', 1),
+    ("pitch", 'f', 1),
+    ("roll", 'f', 1),
+    ("cgHeight", 'f', 1),
+    ("carDamage", 'f', 5),
+    ("numberOfTyresOut", 'i', 1),
+    ("pitLimiterOn", 'i', 1),
+    ("abs", 'f', 1),
+    ("kersCharge", 'f', 1),
+    ("kersInput", 'f', 1),
+    ("autoShifterOn", 'i', 1),
+    ("rideHeight", 'f', 2),
+    ("turboBoost", 'f', 1),
+    ("ballast", 'f', 1),
+    ("airDensity", 'f', 1),
+    ("airTemp", 'f', 1),
+    ("roadTemp", 'f', 1),
+    ("localAngularVel", 'f', 3),
+    ("finalFF", 'f', 1),
+    ("performanceMeter", 'f', 1),
+    ("engineBrake", 'i', 1),
+    ("ersRecoveryLevel", 'i', 1),
+    ("ersPowerLevel", 'i', 1),
+    ("ersHeatCharging", 'i', 1),
+    ("ersIsCharging", 'i', 1),
+    ("kersCurrentKJ", 'f', 1),
+    ("drsAvailable", 'i', 1),
+    ("drsEnabled", 'i', 1),
+    ("brakeTemp", 'f', 4),
+    ("clutch", 'f', 1),
+    ("tyreTempI", 'f', 4),
+    ("tyreTempM", 'f', 4),
+    ("tyreTempO", 'f', 4),
+    ("isAIControlled", 'i', 1),
+    ("tyreContactPoint", 'f', 12),
+    ("tyreContactNormal", 'f', 12),
+    ("tyreContactHeading", 'f', 12),
+    ("brakeBias", 'f', 1),
+    ("localVelocity", 'f', 3),
+    ("P2PActivations", 'i', 1),
+    ("P2PStatus", 'i', 1),
+    ("currentMaxRpm", 'i', 1),
+];
+pub const PAGE_SIZE: usize = 0x250;
+
+/// Column names of one page member as `ac_telemetry.py --to-csv` writes them.
+pub fn page_columns(name: &str, count: usize) -> Vec<String> {
+    const WHEELS: [&str; 4] = ["fl", "fr", "rl", "rr"];
+    const AXES: [&str; 3] = ["x", "y", "z"];
+    match count {
+        1 => vec![name.to_string()],
+        3 => AXES.iter().map(|a| format!("{name}_{a}")).collect(),
+        4 => WHEELS.iter().map(|w| format!("{name}_{w}")).collect(),
+        12 => WHEELS.iter().flat_map(|w| AXES.iter().map(move |a| format!("{name}_{w}_{a}"))).collect(),
+        n => (0..n).map(|i| format!("{name}_{i}")).collect(),
+    }
+}
+
 pub fn fnv1a(hash: &mut u64, bytes: &[u8]) {
     for &byte in bytes {
         *hash = (*hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
@@ -343,8 +425,11 @@ impl Recording {
         f64::from_bits(w[at] as u64 | (w[at + 1] as u64) << 32)
     }
 
+    /// The system a call is booked under: by where it came from, or, for a call made inside
+    /// one of the suspension's force entries, by who called that entry.
     pub fn system_of(&self, call: &Call) -> &str {
-        self.sites.get(&call.site).map(|s| s.system.as_str()).unwrap_or("unknown")
+        let site = if call.outer_site != 0 { call.outer_site } else { call.site };
+        self.sites.get(&site).map(|s| s.system.as_str()).unwrap_or("unknown")
     }
 
     /// Force and torque handed to each body by each system in one step: the sum of what each
@@ -378,25 +463,7 @@ fn format_value(kind: char, words: &[u32], at: usize) -> String {
     }
 }
 
-/// Systems a force call can be booked under (the order of the CSV's `sum.` columns).
-pub const SYSTEMS: [&str; 16] = [
-    "tyre",
-    "spring",
-    "bumpstop",
-    "damper",
-    "arb",
-    "heave",
-    "aero",
-    "drivetrain",
-    "brake",
-    "steering",
-    "stability",
-    "surface",
-    "collision",
-    "teleport",
-    "other",
-    "unknown",
-];
+pub use crate::sites::SYSTEMS;
 
 pub struct CsvOptions {
     pub table: String,
@@ -428,8 +495,24 @@ pub fn to_csv(recording: &Recording, options: &CsvOptions, out: &Path) -> Result
                     picked.push((*kind, *at));
                 }
             }
-            // derived: what each system handed to each body (see `Recording::sums`), and gravity
+            // derived: what each system handed to each body (see `Recording::sums`), and what
+            // dWorldStep itself adds before solving (gravity, gyroscopic torque)
             let mut sum_cols = Vec::new();
+            let mut ode_cols = Vec::new();
+            for body in &bodies {
+                for (name, a, b) in [("gravity", "solver.facc", "facc"), ("gyroscopic", "solver.tacc", "tacc")] {
+                    for axis in ["x", "y", "z"] {
+                        let column = format!("sum.{body}.{name}.{}{axis}", if name == "gravity" { "f" } else { "t" });
+                        if keep(&column) && recording.has(&format!("{body}.{a}.{axis}")) {
+                            names.push(column);
+                            ode_cols.push((
+                                recording.col(&format!("{body}.{a}.{axis}")),
+                                recording.col(&format!("{body}.{b}.{axis}")),
+                            ));
+                        }
+                    }
+                }
+            }
             for (b, body) in bodies.iter().enumerate() {
                 for (s, system) in systems.iter().enumerate() {
                     for (k, axis) in ["fx", "fy", "fz", "tx", "ty", "tz"].iter().enumerate() {
@@ -445,6 +528,10 @@ pub fn to_csv(recording: &Recording, options: &CsvOptions, out: &Path) -> Result
             for step in range {
                 let words = &recording.steps[step].words;
                 let mut cells: Vec<String> = picked.iter().map(|&(kind, at)| format_value(kind, words, at)).collect();
+                // (accumulator the solver used) - (accumulator the game handed over)
+                cells.extend(
+                    ode_cols.iter().map(|&(a, b)| format!("{:?}", f32::from_bits(words[a]) - f32::from_bits(words[b]))),
+                );
                 if !sum_cols.is_empty() {
                     let sums = recording.sums(step, &systems, bodies.len());
                     cells.extend(sum_cols.iter().map(|&(b, s, k)| format!("{:?}", sums[b][s][k] as f32)));
@@ -484,8 +571,86 @@ pub fn to_csv(recording: &Recording, options: &CsvOptions, out: &Path) -> Result
                 }
             }
         }
-        other => return Err(format!("unknown table {other} (steps, tape)")),
+        "telemetry" => {
+            // the shared-memory physics page of every step, in the columns of the logger's
+            // raw-recording converter (`ac_telemetry.py --to-csv`), so the two can be compared
+            let mut names = vec!["t".to_string(), "posX".to_string(), "posY".to_string(), "posZ".to_string()];
+            let mut picked = Vec::new();
+            for (name, kind, count) in PAGE_FIELDS {
+                for (i, column) in page_columns(name, count).into_iter().enumerate() {
+                    names.push(column);
+                    let field = if count == 1 { format!("page.{name}") } else { format!("page.{name}.{i}") };
+                    picked.push((kind, recording.col(&field)));
+                }
+            }
+            let position: Vec<usize> =
+                ["x", "y", "z"].iter().map(|a| recording.col(&format!("body.post.pos.{a}"))).collect();
+            writeln!(w, "{}", names.join(",")).map_err(io)?;
+            for step in range {
+                let words = &recording.steps[step].words;
+                let mut cells = vec![format!("{:?}", recording.d(step, "time_ms") / 1000.0)];
+                cells.extend(position.iter().map(|&at| format_value('f', words, at)));
+                cells.extend(picked.iter().map(|&(kind, at)| format_value(kind, words, at)));
+                writeln!(w, "{}", cells.join(",")).map_err(io)?;
+                rows += 1;
+            }
+        }
+        other => return Err(format!("unknown table {other} (steps, tape, telemetry)")),
     }
     w.flush().map_err(io)?;
     Ok(rows)
+}
+
+/// Value-by-value comparison of two recordings: which fields ever differ, where first, and the
+/// same for the force tape.
+pub fn diff(a: &Recording, b: &Recording, only: &[String], ignore: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    if a.steps.len() != b.steps.len() {
+        out.push(format!("step counts differ: {} / {}", a.steps.len(), b.steps.len()));
+    }
+    let steps = a.steps.len().min(b.steps.len());
+    let mut compared = 0;
+    let mut differing = Vec::new();
+    for (kind, name, at) in &a.fields {
+        if !only.is_empty() && !only.iter().any(|p| name.starts_with(p.as_str())) {
+            continue;
+        }
+        if ignore.iter().any(|part| name.contains(part.as_str())) {
+            continue;
+        }
+        if !b.has(name) {
+            out.push(format!("{name}: only in the first recording"));
+            continue;
+        }
+        let other = b.col(name);
+        let width = if *kind == 'd' { 2 } else { 1 };
+        compared += 1;
+        let mut count = 0;
+        let mut first = None;
+        for step in 0..steps {
+            let (wa, wb) = (&a.steps[step].words, &b.steps[step].words);
+            if wa[*at..*at + width] != wb[other..other + width] {
+                count += 1;
+                first.get_or_insert_with(|| {
+                    format!("step {step}: {} / {}", format_value(*kind, wa, *at), format_value(*kind, wb, other))
+                });
+            }
+        }
+        if count > 0 {
+            differing.push(format!("{name}: differs in {count} steps, first at {}", first.unwrap()));
+        }
+    }
+    let tape_steps = (0..steps).filter(|&s| a.steps[s].calls != b.steps[s].calls).count();
+    let first_tape = (0..steps).find(|&s| a.steps[s].calls != b.steps[s].calls);
+    out.push(format!(
+        "{compared} fields compared over {steps} steps: {} differ; force tape differs in {tape_steps} steps{}",
+        differing.len(),
+        first_tape.map(|s| format!(" (first at step {s})")).unwrap_or_default()
+    ));
+    let total = differing.len();
+    out.extend(differing.into_iter().take(40));
+    if total > 40 {
+        out.push(format!("... and {} more fields", total - 40));
+    }
+    out
 }

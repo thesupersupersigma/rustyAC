@@ -25,6 +25,7 @@ const VA_CAR_INIT_COLLIDER_MESH: usize = 0x1_4027_3b20; // Car::initColliderMesh
 const VA_CAR_FORCE_POSITION: usize = 0x1_4026_fe10; // Car::forcePosition(const vec3f&, bool)
 const VA_CAR_FORCE_ROTATION: usize = 0x1_4027_0040; // Car::forceRotation(const vec3f&)
 const VA_CAR_GET_PHYSICS_STATE: usize = 0x1_4027_0d70; // Car::getPhysicsState(CarPhysicsState*)
+const VA_SHARED_MEMORY_UPDATE_PHYSICS: usize = 0x1_4018_6ef0; // SharedMemoryWriter::updatePhysics(const double&)
 const VA_TYRE_STEP: usize = 0x1_4028_3800; // Tyre::step(float dt)
 const VA_DWORLDSTEP: usize = 0x1_4034_04c0; // dWorldStep(dWorldID, float)
 const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryRequirements
@@ -142,6 +143,7 @@ const TH_PATCHES: usize = 0x8;
 const PATCH_SIZE: usize = 0x28;
 
 // Suspension (double wishbone)
+const SUS_BUMP_STOP_UP: usize = 0x1c;
 const SUS_BUMP_STOP_DN: usize = 0x20;
 const SUS_HUB: usize = 0x40;
 const SUS_JOINTS: usize = 0x68;
@@ -151,6 +153,22 @@ const SUS_STEER_ANGLE: usize = 0x1ec;
 /// `Suspension::joints[0..5]` in creation order (`Suspension::attach`): each rod runs from a
 /// point on the car body (anchor 1) to a point on the hub (anchor 2).
 const SUS_JOINT_NAMES: [&str; 5] = ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"];
+
+// SharedMemoryWriter (0x220 bytes) and the CarAvatar (0x12a8 bytes) it reads a few values from
+const SMW_SIZE: usize = 0x220;
+const SMW_CAR: usize = 0x60;
+const SMW_AVATAR: usize = 0x68;
+const SMW_LAP_INVALIDATOR: usize = 0x70;
+/// `sharedMemories[2]`, the physics page: mapped pointer, packet id, warm-up counter.
+const SMW_PHYSICS_BUFFER: usize = 0x80 + 2 * 0x18 + 0x8;
+const SMW_PHYSICS_PACKET_ID: usize = 0x80 + 2 * 0x18 + 0x10;
+const SMW_PHYSICS_NULL_COUNTS: usize = 0x80 + 2 * 0x18 + 0x14;
+/// `physicsInfo.bumpStopsUp` / `bumpStopsDn` (CarPhysicsInfo is at +0xc8).
+const SMW_BUMP_STOPS_UP: usize = 0xc8 + 0x68;
+const SMW_BUMP_STOPS_DN: usize = 0xc8 + 0x78;
+const AVATAR_SIZE: usize = 0x12a8;
+const AVATAR_PHYSICS_STATE: usize = 0x268;
+const CAR_LAP_INVALIDATOR: usize = 0x3a18;
 
 // RigidBodyODE / IJoint wrappers
 const RB_ODE_BODY: usize = 0x8;
@@ -307,6 +325,9 @@ unsafe fn body_state(ode: *const u8) -> BodyState {
 #[derive(Clone, Default)]
 struct TyreCapture {
     input: Option<StepInput>,
+    /// `Tyre::localWheelRotation` on entry: the drivetrain turns the driven wheels' matrix
+    /// between two tyre steps, so for the tyre it is an input.
+    wheel_rotation_in: [f32; 16],
     calls: Vec<rig::Call>,
     output: Vec<u64>,
     /// How often the tyre asked its hub for each thing, and the ground for a hit.
@@ -721,7 +742,11 @@ extern "C" fn tyre_step_hook(tyre: *mut u8, dt: f32) {
             body_velocity: v3(body.ode, B_LVEL),
             body_mass: rd(body.ode, B_MASS),
         };
-        st.tyres[wheel] = TyreCapture { input: Some(input), ..TyreCapture::default() };
+        st.tyres[wheel] = TyreCapture {
+            input: Some(input),
+            wheel_rotation_in: rd(tyre, T_LOCAL_WHEEL_ROTATION),
+            ..TyreCapture::default()
+        };
     }
     st.tyre = Some(wheel);
     original(tyre, dt);
@@ -923,7 +948,10 @@ pub struct World<'a> {
     pub car: *mut u8,
     driver: Driver,
     pub step_index: usize,
-    physics_state: *mut u8,
+    /// A `SharedMemoryWriter` laid out by hand, its fake `CarAvatar`, and the page it fills.
+    telemetry_writer: *mut u8,
+    avatar: *mut u8,
+    page: *mut u8,
     pub joint_feedback: bool,
 }
 
@@ -1099,11 +1127,27 @@ impl<'a> World<'a> {
                 car,
                 driver: scenario.driver(),
                 step_index: 0,
-                physics_state: object(0xb70 + 0x100),
+                telemetry_writer: object(SMW_SIZE),
+                avatar: object(AVATAR_SIZE),
+                page: object(0x1000),
                 joint_feedback: options.joint_feedback,
             };
             world.find_bodies_and_joints(options);
             world.install_hooks();
+            // the game's telemetry writer, pointed at this car, a zeroed avatar (it supplies the
+            // cockpit settings: engine-brake and ERS levels, all 0 here) and our page; what
+            // CarAvatar::initPhysics would have copied into its physicsInfo is filled in
+            let writer = world.telemetry_writer;
+            wr(writer, SMW_CAR, car);
+            wr(writer, SMW_AVATAR, world.avatar);
+            wr(writer, SMW_LAP_INVALIDATOR, car.add(CAR_LAP_INVALIDATOR));
+            wr(writer, SMW_PHYSICS_BUFFER, world.page);
+            wr(writer, SMW_PHYSICS_NULL_COUNTS, 300i32); // the 300-packet warm-up is over
+            for i in 0..4 {
+                let suspension = state().suspensions[i];
+                wr(writer, SMW_BUMP_STOPS_UP + i * 4, rd::<f32>(suspension, SUS_BUMP_STOP_UP));
+                wr(writer, SMW_BUMP_STOPS_DN + i * 4, rd::<f32>(suspension, SUS_BUMP_STOP_DN));
+            }
 
             // on the road, facing +z (forceRotation takes the direction the car's tail points)
             let force_rotation: extern "C" fn(*mut u8, *const V3) = std::mem::transmute(acs.va(VA_CAR_FORCE_ROTATION));
@@ -1268,16 +1312,22 @@ impl<'a> World<'a> {
         unsafe {
             let car = self.car;
             let body = state().bodies[0].ode;
-            // yaw rate about the body's own up axis (second row of R), positive to the right
+            // yaw rate about the body's own up axis (second column of R); the car's x axis
+            // points to its left, so a turn to the right is a negative rotation about "up"
             let r: [f32; 12] = rd(body, B_R);
             let w = v3(body, B_AVEL);
             let up = [r[1], r[5], r[9]];
+            let speed: f32 = rd(car, CAR_VALUE_CACHE_SPEED);
+            // rear (driven) wheel radius: TyreStatus::effectiveRadius of the left rear tyre
+            let radius: f32 = rd(car, CAR_TYRES + 2 * TYRE_SIZE + T_STATUS + 0x54);
+            let ratio = rd::<f64>(car, CAR_DRIVETRAIN + 0xc0) as f32;
             CarView {
                 step: self.step_index,
-                speed: rd(car, CAR_VALUE_CACHE_SPEED),
+                speed,
                 rpm: (rd::<f64>(car, CAR_DRIVETRAIN + 0x8) * 9.549296585513721) as f32,
+                road_rpm: if radius > 0.0 { speed / radius * ratio.abs() * 9.549_296_6 } else { 0.0 },
                 gear: rd(car, CAR_DRIVETRAIN + 0x584),
-                yaw_rate: w[0] * up[0] + w[1] * up[1] + w[2] * up[2],
+                yaw_rate: -(w[0] * up[0] + w[1] * up[1] + w[2] * up[2]),
             }
         }
     }
@@ -1302,6 +1352,23 @@ impl<'a> World<'a> {
         let st = state();
         assert_eq!(st.world_steps, before_world_steps + 1, "dWorldStep did not run exactly once");
         assert_eq!(st.polled, 1, "the controls device was not polled exactly once");
+
+        // what the game does after the step: the state snapshot for the main thread (the
+        // telemetry writer reads ride heights and the limiter from the avatar's copy of it),
+        // then the shared-memory physics page
+        unsafe {
+            let get_physics_state: extern "C" fn(*mut u8, *mut u8) =
+                std::mem::transmute(self.acs.va(VA_CAR_GET_PHYSICS_STATE));
+            get_physics_state(self.car, self.avatar.add(AVATAR_PHYSICS_STATE));
+            let update_physics: extern "C" fn(*mut u8, *const f64) =
+                std::mem::transmute(self.acs.va(VA_SHARED_MEMORY_UPDATE_PHYSICS));
+            update_physics(self.telemetry_writer, &time_ms);
+            assert_eq!(
+                rd::<i32>(self.telemetry_writer, SMW_PHYSICS_PACKET_ID),
+                self.step_index as i32 + 1,
+                "the telemetry writer did not write a page"
+            );
+        }
 
         let mut row = Row::new(naming);
         row.i("step", self.step_index as i32);
@@ -1381,6 +1448,9 @@ impl<'a> World<'a> {
             }
             for (name, &word) in output_names.iter().zip(&capture.output) {
                 emit_rig_word(row, &format!("tyre.{wheel}.{name}"), name, word);
+            }
+            for (k, &value) in capture.wheel_rotation_in.iter().enumerate() {
+                row.f(&format!("tyre.{wheel}.in_localWheelRotation.M{}{}", k / 4 + 1, k % 4 + 1), value);
             }
             for (k, what) in ["hubMatrix", "pointVelocity", "hubAngularVelocity", "ray"].iter().enumerate() {
                 row.i(&format!("tyre.{wheel}.asked.{what}"), capture.asked[k] as i32);
@@ -1511,7 +1581,19 @@ impl<'a> World<'a> {
         row.f("car.ballastKG", rd(car, CAR_BALLAST_KG));
         row.f("car.steerLock", rd(car, CAR_STEER_LOCK));
         row.f("car.steerRatio", rd(car, CAR_STEER_RATIO));
-        let _ = (T_RAY_CASTER, T_CURRENT_COMPOUND_INDEX, VA_CAR_GET_PHYSICS_STATE, self.physics_state);
+        // the shared-memory physics page the game's own writer produced for this step
+        let mut at = 0;
+        for (name, kind, count) in crate::record::PAGE_FIELDS {
+            for i in 0..count {
+                let field = if count == 1 { format!("page.{name}") } else { format!("page.{name}.{i}") };
+                match kind {
+                    'i' => row.i(&field, rd(self.page, at)),
+                    _ => row.f(&field, rd(self.page, at)),
+                }
+                at += 4;
+            }
+        }
+        assert_eq!(at, crate::record::PAGE_SIZE);
     }
 
     /// Facts about the car that do not change during a run, for the recording's header.

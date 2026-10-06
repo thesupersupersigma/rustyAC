@@ -11,6 +11,8 @@
 //!     replays the tyres through the Rust port, and writes `<out>/results.md`.
 //! car_oracle check <recording>
 //!     Tyre cross-check and headline numbers of one recording.
+//! car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]
+//!     Value-by-value comparison of two recordings (fields and force tape).
 //! car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>]
 //!                [--every <n>] [--only <prefix,prefix>] [--csv-out <file>]
 //!     Full-precision CSV of a recording.
@@ -34,6 +36,7 @@ fn usage() -> String {
      car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--no-joint-forces] [--hash-only]\n       \
      car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]\n       \
      car_oracle check <recording>\n       \
+     car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]\n       \
      car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>] [--every <n>] \
      [--only <prefix,prefix>] [--csv-out <file>]\n       \
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--verbose]"
@@ -47,12 +50,14 @@ fn repo_root() -> PathBuf {
 struct Args {
     command: String,
     file: Option<PathBuf>,
+    file2: Option<PathBuf>,
     scenario: String,
     out: PathBuf,
     steps: Option<usize>,
     joint_forces: bool,
     hash_only: bool,
     only: Vec<String>,
+    ignore: Vec<String>,
     table: String,
     from: usize,
     to: usize,
@@ -69,12 +74,14 @@ fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         command: it.next().ok_or_else(usage)?,
         file: None,
+        file2: None,
         scenario: String::new(),
         out: repo.join("oracle/car"),
         steps: None,
         joint_forces: true,
         hash_only: false,
         only: Vec::new(),
+        ignore: Vec::new(),
         table: "steps".into(),
         from: 0,
         to: usize::MAX,
@@ -94,6 +101,7 @@ fn parse_args() -> Result<Args, String> {
             "--no-joint-forces" => a.joint_forces = false,
             "--hash-only" => a.hash_only = true,
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
+            "--ignore" => a.ignore = value()?.split(',').map(str::to_string).collect(),
             "--table" => a.table = value()?,
             "--from" => a.from = number(value()?)?,
             "--to" => a.to = number(value()?)?,
@@ -103,6 +111,7 @@ fn parse_args() -> Result<Args, String> {
             "--root" => a.root = PathBuf::from(value()?),
             "--verbose" => a.verbose = true,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
+            other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
             _ => return Err(format!("unknown argument {flag}\n{}", usage())),
         }
     }
@@ -120,6 +129,7 @@ fn main() {
         "run" => run(&args),
         "all" => all(&args),
         "check" => check_one(&args),
+        "diff" => diff(&args),
         "csv" => csv(&args),
         _ => Err(usage()),
     });
@@ -225,8 +235,8 @@ fn all(args: &Args) -> Result<(), String> {
     let repo = repo_root();
     let data = repo.join("cardata").join(game::CAR_NAME);
     let mut table = String::from(
-        "| scenario | steps | two runs identical | tyre forces match | all tyre values match | headline numbers |\n\
-         |---|---|---|---|---|---|\n",
+        "| scenario | steps | two runs identical | tyre forces = Rust tyre | all tyre values = Rust tyre | \
+         tape closes | tyre calls on tape | headline numbers |\n|---|---|---|---|---|---|---|---|\n",
     );
     let mut failed = false;
     for scenario in scenario::all() {
@@ -240,12 +250,14 @@ fn all(args: &Args) -> Result<(), String> {
         let report = check::check(&recording, &data)?;
         failed |= !identical || report.force_steps_matching != report.wheel_steps;
         let line = format!(
-            "| `{}` | {} | {} | {} | {} | {} |",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
             scenario.name,
             recording.steps.len(),
             if identical { format!("yes (`{first}`)") } else { format!("**NO** (`{first}` / `{second}`)") },
             check::percent(report.force_steps_matching, report.wheel_steps),
             check::percent(report.full_steps_matching, report.wheel_steps),
+            check::percent(report.tape_steps_closed, recording.steps.len()),
+            check::percent(report.tape_tyre_links, report.wheel_steps),
             report.headline.join("; "),
         );
         println!("{line}");
@@ -275,8 +287,27 @@ fn check_one(args: &Args) -> Result<(), String> {
         check::percent(report.force_steps_matching, report.wheel_steps),
         check::percent(report.full_steps_matching, report.wheel_steps),
     );
+    println!(
+        "  force tape: accumulators close in {} of steps; the tyre's hub calls are on the tape in {} of wheel-steps",
+        check::percent(report.tape_steps_closed, recording.steps.len()),
+        check::percent(report.tape_tyre_links, report.wheel_steps),
+    );
     for line in report.headline.iter().chain(&report.notes) {
         println!("  {line}");
+    }
+    Ok(())
+}
+
+/// Compares two recordings value by value (`--only` limits the fields by prefix; fields whose
+/// name contains one of `--ignore`'s parts are skipped).
+fn diff(args: &Args) -> Result<(), String> {
+    let (a, b) = match (&args.file, &args.file2) {
+        (Some(a), Some(b)) => (Recording::read(a)?, Recording::read(b)?),
+        _ => return Err(usage()),
+    };
+    let report = record::diff(&a, &b, &args.only, &args.ignore);
+    for line in &report {
+        println!("{line}");
     }
     Ok(())
 }

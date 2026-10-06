@@ -29,6 +29,9 @@ pub struct CarView {
     /// Body speed, m/s.
     pub speed: f32,
     pub rpm: f32,
+    /// The revs the engine would turn at this road speed in the current gear with no wheel
+    /// spin (0 in neutral and in the middle of a shift).
+    pub road_rpm: f32,
     /// The game's index: 0 reverse, 1 neutral, 2 first gear …
     pub gear: i32,
     /// Yaw rate, rad/s, positive when the car turns right.
@@ -137,8 +140,8 @@ pub fn all() -> Vec<Scenario> {
             about: "straight at 100 km/h over a 3 cm raised strip under the left wheels",
             steps: seconds(12.0) + 1,
             auto_clutch: true,
-            // the car starts at the origin facing +z; its left side is -x
-            ground: Ground::Step { x_min: -5.0, x_max: 0.0, z_from: 150.0, z_to: 170.0, height: 0.03 },
+            // the car starts at the origin facing +z; its left side is +x
+            ground: Ground::Step { x_min: 0.0, x_max: 5.0, z_from: 150.0, z_to: 170.0, height: 0.03 },
             seed: 1,
             kind: Kind::Kerb,
         },
@@ -166,6 +169,8 @@ pub struct Driver {
     /// Steps left of the current paddle press (positive) or of the pause after it (negative).
     paddle: i32,
     paddle_up: bool,
+    /// The standing start is over (after that, neutral only means "in the middle of a shift").
+    under_way: bool,
     speed_integral: f32,
     steer: f32,
     steer_integral: f32,
@@ -183,6 +188,7 @@ impl Scenario {
             auto_clutch: self.auto_clutch,
             paddle: 0,
             paddle_up: false,
+            under_way: false,
             speed_integral: 0.0,
             steer: 0.0,
             steer_integral: 0.0,
@@ -223,15 +229,20 @@ impl Driver {
         }
     }
 
-    /// Changes gear by the revs: up near the limiter (not beyond `top`), down when they drop.
+    /// Changes gear by the road speed (so that wheel spin does not trigger a shift): up when the
+    /// engine would be near its limiter (not beyond `top`), down when it would be far below it.
     fn shift_by_rpm(&mut self, car: &CarView, top: i32, c: &mut Controls) {
-        let up = car.gear >= FIRST && car.gear < top && car.rpm > SHIFT_UP_RPM;
-        let dn = car.gear > FIRST && car.rpm < SHIFT_DN_RPM;
+        let up = car.gear >= FIRST && car.gear < top && car.road_rpm > SHIFT_UP_RPM;
+        let dn = car.gear > FIRST && car.road_rpm > 0.0 && car.road_rpm < SHIFT_DN_RPM;
         self.paddles(up, dn, c);
     }
 
     /// Gets the car rolling: neutral -> first, revs, clutch. Returns true once it is under way.
     fn pull_away(&mut self, car: &CarView, t: f32, c: &mut Controls) -> bool {
+        if self.under_way {
+            c.gas = 1.0;
+            return true;
+        }
         if car.gear < FIRST {
             // in neutral: clutch pressed, ask for first
             c.clutch = 0.0;
@@ -244,7 +255,8 @@ impl Driver {
             // the aid works the clutch itself
             c.clutch = 1.0;
             c.gas = 1.0;
-            return dt > 0.5;
+            self.under_way = dt > 0.5;
+            return self.under_way;
         }
         // by hand: hold the revs for 0.4 s, then let the clutch up over 0.6 s
         let _ = t;
@@ -259,6 +271,7 @@ impl Driver {
         } else {
             c.clutch = 1.0;
             c.gas = 1.0;
+            self.under_way = true;
             true
         }
     }
@@ -299,7 +312,7 @@ impl Driver {
                     // phase 2: full brakes, down through the gears
                     c.gas = 0.0;
                     c.brake = 1.0;
-                    let dn = car.gear > FIRST && car.rpm < 12_000.0;
+                    let dn = car.gear > FIRST && car.road_rpm > 0.0 && car.road_rpm < 12_000.0;
                     self.paddles(false, dn, &mut c);
                 }
             }
