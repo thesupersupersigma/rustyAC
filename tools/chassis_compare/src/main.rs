@@ -13,10 +13,12 @@
 //!     with the game, bit for bit. The full run writes `oracle/chassis/results.md`
 //!     (`results_<folder name>.md` for another folder).
 //! chassis_compare test-car
-//!     Writes `cardata/f2004_tight_stops`: the F2004 with its packers and bump stops (wheels
-//!     and heave springs) moved to where ordinary driving reaches them, so that recordings of
-//!     it (`car_oracle all --car f2004_tight_stops --out oracle/car_tight_stops`) exercise
-//!     the branches no recording of the real car does.
+//!     Writes two copies of the F2004 with a few changed values, for branches no recording of
+//!     the real car reaches: `cardata/f2004_tight_stops` (packers and bump stops of wheels and
+//!     heave springs moved to where ordinary driving reaches them) and `cardata/f2004_fallbacks`
+//!     (keys set to zero or removed so that the loaders' defaults apply, a linear steer-assist
+//!     curve, a rear toe the setup screen rounds). Recordings of them are made by the game's
+//!     own code: `car_oracle all --car <name> --out oracle/car_<suffix>`.
 //! chassis_compare excerpt
 //!     Writes the golden excerpts of `crates/rustyac-physics/tests/chassis_golden.rs`.
 //! chassis_compare faults [<scenario>] [--dir <folder>]
@@ -726,7 +728,11 @@ fn patch_ini(text: &str, section: &str, key: &str, value: &str) -> Result<String
         out.push(line.to_string());
     }
     if !found_section {
-        return Err(format!("no section [{section}]"));
+        // a section the car does not have: appended
+        out.push(String::new());
+        out.push(header);
+        out.push(format!("{key}={value}"));
+        done = true;
     }
     if !done {
         out.insert(insert_at, format!("{key}={value}"));
@@ -734,10 +740,44 @@ fn patch_ini(text: &str, section: &str, key: &str, value: &str) -> Result<String
     Ok(out.join("\r\n") + "\r\n")
 }
 
+/// The second test car: values that make the loaders take their fall-backs, and two changes
+/// that reach branches of the steering and force-feedback code.
+const FALLBACKS: [(&str, &str, &str, &str); 16] = [
+    // no rim offset is applied below version 2
+    ("suspensions.ini", "HEADER", "VERSION", "1"),
+    // a hub mass of 0 becomes 20 kg
+    ("suspensions.ini", "FRONT", "HUB_MASS", "0"),
+    // a fast damper rate of 0 becomes the slow rate, a threshold of 0 becomes 0.2 m/s
+    ("suspensions.ini", "FRONT", "DAMP_FAST_REBOUND", "0"),
+    ("suspensions.ini", "FRONT", "DAMP_FAST_BUMPTHRESHOLD", "0"),
+    ("suspensions.ini", "REAR", "DAMP_FAST_BUMP", "0"),
+    ("suspensions.ini", "REAR", "DAMP_FAST_REBOUNDTHRESHOLD", "0"),
+    // a bump-stop rate of 0 becomes 500,000 N/m (and the setup screen then clamps it)
+    ("suspensions.ini", "REAR", "BUMP_STOP_RATE", "0"),
+    // a rear toe off the setup screen's grid: the setup change reseats the rear steering rods
+    ("suspensions.ini", "REAR", "TOE_OUT", "-0.00006"),
+    // the heave springs' fall-backs
+    ("suspensions.ini", "HEAVE_FRONT", "DAMP_FAST_BUMP", "0"),
+    ("suspensions.ini", "HEAVE_FRONT", "DAMP_FAST_BUMPTHRESHOLD", "0"),
+    ("suspensions.ini", "HEAVE_REAR", "DAMP_FAST_REBOUND", "0"),
+    ("suspensions.ini", "HEAVE_REAR", "BUMP_STOP_RATE", "0"),
+    // steer assist 1 takes the linear force-feedback path, a rod ratio of 0 becomes 0.003
+    ("car.ini", "CONTROLS", "STEER_ASSIST", "1"),
+    ("car.ini", "CONTROLS", "LINEAR_STEER_ROD_RATIO", "0"),
+    // a start fuel of 0 becomes 30 litres; a fuel density from [FUEL_EXT]
+    ("car.ini", "FUEL", "FUEL", "0"),
+    ("car.ini", "FUEL_EXT", "KG_PER_LITER", "0.76"),
+];
+
 fn test_car_command() -> Result<(), String> {
+    write_test_car("f2004_tight_stops", &TIGHT_STOPS)?;
+    write_test_car("f2004_fallbacks", &FALLBACKS)
+}
+
+fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)]) -> Result<(), String> {
     let repo = repo_root();
     let from = repo.join("cardata/ks_ferrari_f2004");
-    let to = repo.join("cardata/f2004_tight_stops");
+    let to = repo.join("cardata").join(name);
     std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -745,7 +785,7 @@ fn test_car_command() -> Result<(), String> {
             std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
         }
     }
-    for (file, section, key, value) in TIGHT_STOPS {
+    for &(file, section, key, value) in patches {
         let path = to.join(file);
         let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let text = String::from_utf8_lossy(&bytes);
