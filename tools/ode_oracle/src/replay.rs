@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::record::{Call, Recording};
+use crate::record::{Call, Recording, KIND_NAMES};
 use rustyac_ode::{BodyId, JointId, JointKind, Mass, World};
 
 const H: f32 = 0.003;
@@ -32,6 +32,9 @@ pub struct CarWorld {
     /// ODE type number of each joint (7 fixed, 15 DBall).
     pub joint_types: Vec<u32>,
     pub joint_bodies: Vec<(usize, usize)>,
+    /// Whether the game's joints had a feedback buffer when the recording was made (the
+    /// oracle gives them one to read the constraint forces; the game itself never does).
+    pub joint_forces: bool,
 }
 
 fn body_columns(recording: &Recording, body: &str, part: &str) -> [usize; 16] {
@@ -76,6 +79,7 @@ impl CarWorld {
     pub fn build(recording: &Recording) -> Result<(CarWorld, Columns), String> {
         let body_names = recording.list("bodies");
         let mut world = World::assetto_corsa();
+        let joint_forces = recording.get("joint_forces") != Some("0");
         let mut bodies = Vec::new();
         for _ in &body_names {
             // RigidBodyODE::RigidBodyODE: finite rotation on, axis (0,0,0), damping 0
@@ -106,7 +110,7 @@ impl CarWorld {
                 other => return Err(format!("joint {text}: ODE type {other} is not in the recordings' car")),
             };
             world.joint_attach(j, Some(bodies[b1]), Some(bodies[b2]));
-            world.joint_set_feedback(j, true);
+            world.joint_set_feedback(j, joint_forces);
             joints.push(j);
             joint_names.push(parts[0].to_string());
             joint_types.push(kind);
@@ -164,7 +168,7 @@ impl CarWorld {
             }
             columns.joint_force.push(force);
         }
-        Ok((CarWorld { world, bodies, joints, body_names, joint_names, joint_types, joint_bodies }, columns))
+        Ok((CarWorld { world, bodies, joints, body_names, joint_names, joint_types, joint_bodies, joint_forces }, columns))
     }
 
     /// Writes a recorded state (the 16 pose columns plus velocities) into a body.
@@ -306,7 +310,8 @@ impl CarWorld {
             ];
             for k in 0..12 {
                 let game = f(columns.joint_force[j][k]);
-                if differ(game, rust[k]) {
+                // without feedback buffers there is no force to compare (the columns hold NaN)
+                if self.joint_forces && differ(game, rust[k]) {
                     let part = ["f1", "t1", "f2", "t2"][k / 3];
                     return report(format!("joint {} {part}[{}]", self.joint_names[j], k % 3), game, rust[k]);
                 }
@@ -344,8 +349,14 @@ pub struct ReplayResult {
     pub per_step_exact: usize,
     pub per_step_first: Option<String>,
     pub free_run_first: Option<String>,
+    /// The free run left the recording at a step before the game's world held any contact
+    /// joint: a difference stage 1 has to answer for.
+    pub free_run_failed: bool,
     pub free_run_accumulators_exact: usize,
     pub free_run_end_error: f32,
+    pub joint_forces: bool,
+    /// Calls on the force tape by kind (`record::KIND_NAMES`).
+    pub calls: [usize; 13],
 }
 
 pub fn replay(recording: &Recording) -> Result<ReplayResult, String> {
@@ -387,6 +398,9 @@ pub fn replay(recording: &Recording) -> Result<ReplayResult, String> {
     // free run: the start state of step 0, then only what the car does from outside
     let (mut car, columns) = CarWorld::build(recording)?;
     let mut free_run_first = None;
+    let mut free_run_failed = false;
+    let mut seen_contacts = false;
+    let mut calls = [0usize; 13];
     let mut accumulators_exact = 0;
     let mut end_error = 0.0f32;
     if let Some(first) = recording.steps.first() {
@@ -399,7 +413,9 @@ pub fn replay(recording: &Recording) -> Result<ReplayResult, String> {
         car.load_parameters(words, &columns);
         for call in &step.calls {
             car.apply_call(call)?;
+            calls[(call.kind as usize).min(12)] += 1;
         }
+        seen_contacts |= has_contacts(words);
         // the accumulators the Rust add-force functions built must be the recorded ones
         let mut same = true;
         for b in 0..car.bodies.len() {
@@ -412,10 +428,12 @@ pub fn replay(recording: &Recording) -> Result<ReplayResult, String> {
         accumulators_exact += same as usize;
         if !same && free_run_first.is_none() {
             free_run_first = Some(format!("step {n}: the accumulators built from the force tape"));
+            free_run_failed = !seen_contacts;
         }
         car.world.step(H);
         if free_run_first.is_none() {
             if let Some(text) = car.compare(words, &columns, true) {
+                free_run_failed = !seen_contacts;
                 free_run_first = Some(if has_contacts(words) {
                     format!("step {n}, the first step with floor contact joints (stage 2): {text}")
                 } else {
@@ -434,8 +452,11 @@ pub fn replay(recording: &Recording) -> Result<ReplayResult, String> {
         per_step_exact,
         per_step_first,
         free_run_first,
+        free_run_failed,
         free_run_accumulators_exact: accumulators_exact,
         free_run_end_error: end_error,
+        joint_forces: car.joint_forces,
+        calls,
     })
 }
 
@@ -455,6 +476,7 @@ fn percent(part: usize, whole: usize) -> String {
 pub fn replay_command(files: &[PathBuf], verbose: bool) -> Result<(), String> {
     let repo = crate::repo_root();
     let mut files: Vec<PathBuf> = files.to_vec();
+    let full = files.is_empty();
     if files.is_empty() {
         let dir = repo.join("oracle/car");
         let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -472,19 +494,24 @@ pub fn replay_command(files: &[PathBuf], verbose: bool) -> Result<(), String> {
     );
     let mut failed = false;
     let (mut total_steps, mut total_exact, mut total_contact) = (0, 0, 0);
+    let mut calls = [0usize; 13];
     for file in &files {
         let recording = Recording::read(file)?;
         let result = replay(&recording)?;
         let stage1_steps = result.steps - result.contact_steps;
         failed |= result.per_step_exact != stage1_steps;
         // a free run may only leave the recording where the game had contacts
-        failed |= result.contact_steps == 0 && result.free_run_first.is_some();
+        failed |= result.free_run_failed;
+        for k in 0..13 {
+            calls[k] += result.calls[k];
+        }
         total_steps += result.steps;
         total_contact += result.contact_steps;
         total_exact += result.per_step_exact;
         let line = format!(
-            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            "| `{}`{} | {} | {} | {} | {} | {} | {} |",
             result.scenario,
+            if result.joint_forces { "" } else { " (recorded without joint force buffers, as the game runs)" },
             result.steps,
             result.contact_steps,
             percent(result.per_step_exact, stage1_steps),
@@ -505,9 +532,21 @@ pub fn replay_command(files: &[PathBuf], verbose: bool) -> Result<(), String> {
         "| **all** | **{total_steps}** | **{total_contact}** | **{}** | | | |\n",
         percent(total_exact, total_steps - total_contact)
     ));
+    let kinds: Vec<String> =
+        (0..13).filter(|&k| calls[k] > 0).map(|k| format!("`{}` {}", KIND_NAMES[k], calls[k])).collect();
+    let unused: Vec<String> = (1..13).filter(|&k| calls[k] == 0).map(|k| format!("`{}`", KIND_NAMES[k])).collect();
+    let tape = format!(
+        "\nCalls on the force tapes that the free runs fed through the Rust functions: {}. Never called in these \
+         recordings: {}.\n",
+        kinds.join(", "),
+        if unused.is_empty() { "none".to_string() } else { unused.join(", ") }
+    );
+    print!("{tape}");
+    table.push_str(&tape);
     let out = repo.join("oracle/ode");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let path = out.join("replay_results.md");
+    // only the run over every recording of oracle/car may replace the table the report is built from
+    let path = out.join(if full { "replay_results.md" } else { "replay_partial.md" });
     std::fs::write(&path, &table).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote {}", path.display());
     if failed {

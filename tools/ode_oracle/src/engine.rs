@@ -55,13 +55,26 @@ pub struct MassState {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct JointState {
     pub tag: i32,
+    pub flags: u32,
+    /// `dJointGetBody(j, 0)` and `(j, 1)` as body indices, -1 for none.
+    pub bodies: [i32; 2],
     pub params: Vec<f32>,
     /// f1, t1, f2, t2 (three values each)
     pub feedback: [f32; 12],
 }
 
+/// What the feedback values are set to before every step: a value neither engine computes,
+/// so that "not written" shows as such on both sides.
+pub const FEEDBACK_SENTINEL: f32 = -12345.678;
+
 pub trait Engine {
-    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32);
+    /// The calls of `PhysicsCore::PhysicsCore` that matter without collision, with the given
+    /// values (the game's: gravity (0, -9.806, 0), ERP 0.3, CFM 1e-7, damping 0).
+    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32, damping: [f32; 2]);
+    /// Whether joints created from now on get a feedback buffer (the game's never do).
+    fn set_feedback(&mut self, on: bool);
+    /// Overwrites every joint's feedback values with [`FEEDBACK_SENTINEL`].
+    fn feedback_sentinel(&mut self);
     fn body_create(&mut self) -> usize;
     /// `dBodyDestroy`; the body must not be used afterwards.
     fn body_destroy(&mut self, b: usize);
@@ -73,11 +86,18 @@ pub trait Engine {
     fn body_set_finite_rotation(&mut self, b: usize, mode: bool, axis: [f32; 3]);
     fn body_set_damping(&mut self, b: usize, linear: f32, angular: f32);
     fn body_set_auto_disable(&mut self, b: usize, on: bool);
+    /// `dBodySetAutoDisableAverageSamplesCount`.
+    fn body_set_samples(&mut self, b: usize, count: u32);
     fn body_set_enabled(&mut self, b: usize, on: bool);
     /// Sets and clears bits of `dxBody::flags` directly, and the body's `max_angular_speed`.
     /// No function linked into the game can set "no gravity" (8), "max angular speed" (0x80)
     /// or clear "gyroscopic" (0x100); the stepper's code for them is still there.
     fn body_poke(&mut self, b: usize, set: u32, clear: u32, max_angular_speed: f32);
+    /// Writes `invMass` directly (0 makes the body kinematic, which no linked setter can do).
+    fn body_poke_inv_mass(&mut self, b: usize, inv_mass: f32);
+    /// Writes the body's auto-disable idle time and idle step count directly (their setters
+    /// are not linked).
+    fn body_poke_idle(&mut self, b: usize, idle_time: f32, idle_steps: i32);
     /// `kind`: 0 `dBodyAddForce`, 1 `dBodyAddTorque`, 2 `dBodyAddRelTorque`, 3
     /// `dBodyAddForceAtPos`, 4 `dBodyAddForceAtRelPos`, 5 `dBodyAddRelForceAtPos`, 6
     /// `dBodyAddRelForceAtRelPos`.
@@ -98,6 +118,9 @@ pub trait Engine {
     fn joint_set_fixed(&mut self, j: usize);
     fn joint_set_slider_axis(&mut self, j: usize, axis: [f32; 3]);
     fn joint_set_param(&mut self, j: usize, parameter: i32, value: f32);
+    /// Sets and clears bits of `dxJoint::flags` directly (8 = disabled; `dJointDisable` is
+    /// not linked).
+    fn joint_poke_flags(&mut self, j: usize, set: u32, clear: u32);
     fn step(&mut self, h: f32);
     /// Constraint rows of the largest island in the last step (0 if the engine cannot tell).
     fn rows(&self) -> u32 {
@@ -120,11 +143,12 @@ pub struct RustEngine {
     bodies: Vec<rustyac_ode::BodyId>,
     joints: Vec<rustyac_ode::JointId>,
     rows: u32,
+    feedback: bool,
 }
 
 impl RustEngine {
     pub fn new() -> RustEngine {
-        RustEngine { world: World::new(), bodies: Vec::new(), joints: Vec::new(), rows: 0 }
+        RustEngine { world: World::new(), bodies: Vec::new(), joints: Vec::new(), rows: 0, feedback: true }
     }
 }
 
@@ -134,7 +158,9 @@ fn take3(v: &[f32]) -> [f32; 3] {
 
 /// The meaningful parameters of a joint, in one layout for both engines:
 /// Ball: anchor1, anchor2, erp, cfm; DBall: anchor1, anchor2, erp, cfm, distance;
-/// Fixed: qrel (4), offset, erp, cfm; Slider: axis1, qrel (4), offset.
+/// Fixed: qrel (4), offset, erp, cfm; Slider: axis1, qrel (4), offset, then the limit-motor
+/// block (vel, fmax, lostop, histop, fudge factor, normal cfm, stop erp, stop cfm, bounce).
+/// The slider's position (`dJointGetSliderPosition`) is appended by `joint_state`.
 pub fn joint_params(kind: &JointKind) -> Vec<f32> {
     let mut p = Vec::new();
     match kind {
@@ -153,22 +179,45 @@ pub fn joint_params(kind: &JointKind) -> Vec<f32> {
             p.extend_from_slice(&offset[..3]);
             p.extend_from_slice(&[*erp, *cfm]);
         }
-        JointKind::Slider { axis1, qrel, offset, .. } => {
+        JointKind::Slider { axis1, qrel, offset, limot } => {
             p.extend_from_slice(&axis1[..3]);
             p.extend_from_slice(qrel);
             p.extend_from_slice(&offset[..3]);
+            p.extend_from_slice(&[
+                limot.vel,
+                limot.fmax,
+                limot.lostop,
+                limot.histop,
+                limot.fudge_factor,
+                limot.normal_cfm,
+                limot.stop_erp,
+                limot.stop_cfm,
+                limot.bounce,
+            ]);
         }
     }
     p
 }
 
 impl Engine for RustEngine {
-    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32) {
-        // the calls of PhysicsCore::PhysicsCore that matter without collision
+    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32, damping: [f32; 2]) {
         self.world.set_gravity(gravity[0], gravity[1], gravity[2]);
         self.world.set_erp(erp);
         self.world.set_cfm(cfm);
-        self.world.set_damping(0.0, 0.0);
+        self.world.set_damping(damping[0], damping[1]);
+    }
+    fn set_feedback(&mut self, on: bool) {
+        self.feedback = on;
+    }
+    fn feedback_sentinel(&mut self) {
+        for &j in &self.joints {
+            if let Some(fb) = &mut self.world.joint_mut(j).feedback {
+                fb.f1 = [FEEDBACK_SENTINEL; 4];
+                fb.t1 = [FEEDBACK_SENTINEL; 4];
+                fb.f2 = [FEEDBACK_SENTINEL; 4];
+                fb.t2 = [FEEDBACK_SENTINEL; 4];
+            }
+        }
     }
     fn body_create(&mut self) -> usize {
         self.bodies.push(self.world.body_create());
@@ -218,6 +267,9 @@ impl Engine for RustEngine {
     fn body_set_auto_disable(&mut self, b: usize, on: bool) {
         self.world.body_set_auto_disable_flag(self.bodies[b], on);
     }
+    fn body_set_samples(&mut self, b: usize, count: u32) {
+        self.world.body_set_auto_disable_average_samples_count(self.bodies[b], count);
+    }
     fn body_set_enabled(&mut self, b: usize, on: bool) {
         if on {
             self.world.body_enable(self.bodies[b]);
@@ -229,6 +281,14 @@ impl Engine for RustEngine {
         let body = self.world.body_mut(self.bodies[b]);
         body.flags = (body.flags | set) & !clear;
         body.max_angular_speed = max_angular_speed;
+    }
+    fn body_poke_inv_mass(&mut self, b: usize, inv_mass: f32) {
+        self.world.body_mut(self.bodies[b]).inv_mass = inv_mass;
+    }
+    fn body_poke_idle(&mut self, b: usize, idle_time: f32, idle_steps: i32) {
+        let body = self.world.body_mut(self.bodies[b]);
+        body.adis.idle_time = idle_time;
+        body.adis.idle_steps = idle_steps;
     }
     fn body_add(&mut self, b: usize, kind: u32, a: [f32; 3], p: [f32; 3]) {
         let id = self.bodies[b];
@@ -272,7 +332,7 @@ impl Engine for RustEngine {
             Kind::Fixed => self.world.joint_create_fixed(),
             Kind::Slider => self.world.joint_create_slider(),
         };
-        self.world.joint_set_feedback(id, true);
+        self.world.joint_set_feedback(id, self.feedback);
         self.joints.push(id);
         self.joints.len() - 1
     }
@@ -304,6 +364,10 @@ impl Engine for RustEngine {
     fn joint_set_param(&mut self, j: usize, parameter: i32, value: f32) {
         self.world.joint_set_param(self.joints[j], parameter, value);
     }
+    fn joint_poke_flags(&mut self, j: usize, set: u32, clear: u32) {
+        let joint = self.world.joint_mut(self.joints[j]);
+        joint.flags = (joint.flags | set) & !clear;
+    }
     fn step(&mut self, h: f32) {
         self.rows = self.world.step(h).max_rows;
     }
@@ -329,14 +393,28 @@ impl Engine for RustEngine {
         MassState { mass: body.mass.mass, i: body.mass.i, inv_i: body.inv_i, inv_mass: body.inv_mass }
     }
     fn joint_state(&self, j: usize) -> JointState {
-        let joint = self.world.joint(self.joints[j]);
+        let id = self.joints[j];
+        let joint = self.world.joint(id);
         let fb = joint.feedback.unwrap_or_default();
         let mut feedback = [0.0f32; 12];
         feedback[0..3].copy_from_slice(&fb.f1[..3]);
         feedback[3..6].copy_from_slice(&fb.t1[..3]);
         feedback[6..9].copy_from_slice(&fb.f2[..3]);
         feedback[9..12].copy_from_slice(&fb.t2[..3]);
-        JointState { tag: joint.tag, params: joint_params(&joint.kind), feedback }
+        let mut params = joint_params(&joint.kind);
+        if matches!(joint.kind, JointKind::Slider { .. }) {
+            params.push(self.world.joint_get_slider_position(id));
+        }
+        let index = |body: Option<rustyac_ode::BodyId>| {
+            body.and_then(|b| self.bodies.iter().position(|&x| x == b)).map_or(-1, |i| i as i32)
+        };
+        JointState {
+            tag: joint.tag,
+            flags: joint.flags,
+            bodies: [index(self.world.joint_get_body(id, 0)), index(self.world.joint_get_body(id, 1))],
+            params,
+            feedback,
+        }
     }
     fn body_write_state(&mut self, b: usize, s: &BodyState) {
         let body = self.world.body_mut(self.bodies[b]);
@@ -405,6 +483,7 @@ const VA_BODY_SET_FINITE_ROTATION_AXIS: usize = 0x1_4033_fa40;
 const VA_BODY_SET_LINEAR_DAMPING: usize = 0x1_4033_faf0;
 const VA_BODY_SET_ANGULAR_DAMPING: usize = 0x1_4033_f8d0;
 const VA_BODY_SET_AUTO_DISABLE_FLAG: usize = 0x1_4033_fa00;
+const VA_BODY_SET_AUTO_DISABLE_AVERAGE_SAMPLES_COUNT: usize = 0x1_4033_f910;
 const VA_BODY_ENABLE: usize = 0x1_4033_f4b0;
 const VA_BODY_DISABLE: usize = 0x1_4033_f4a0;
 const VA_BODY_ADD: [usize; 7] = [
@@ -434,6 +513,7 @@ const VA_JOINT_CREATE: [usize; 4] = [
     0x1_4033_ff80, // dJointCreateSlider
 ];
 const VA_JOINT_ATTACH: usize = 0x1_4033_fe20;
+const VA_JOINT_GET_BODY: usize = 0x1_4033_ff90;
 const VA_JOINT_SET_BALL_ANCHOR: usize = 0x1_4034_0de0;
 const VA_JOINT_SET_DBALL_ANCHOR1: usize = 0x1_4034_26a0;
 const VA_JOINT_SET_DBALL_ANCHOR2: usize = 0x1_4034_2750;
@@ -441,6 +521,7 @@ const VA_JOINT_SET_DBALL_DISTANCE: usize = 0x1_4034_2800;
 const VA_JOINT_GET_DBALL_DISTANCE: usize = 0x1_4034_2690;
 const VA_JOINT_SET_FIXED: usize = 0x1_4034_1e30;
 const VA_JOINT_SET_SLIDER_AXIS: usize = 0x1_4034_19c0;
+const VA_JOINT_GET_SLIDER_POSITION: usize = 0x1_4034_17c0;
 const VA_JOINT_SET_BALL_PARAM: usize = 0x1_4034_0e10; // = DBall, Fixed
 const VA_JOINT_SET_SLIDER_PARAM: usize = 0x1_4034_1a00;
 
@@ -457,9 +538,13 @@ const B_LVEL: usize = 0x110;
 const B_AVEL: usize = 0x120;
 const B_FACC: usize = 0x130;
 const B_TACC: usize = 0x140;
+const B_ADIS_IDLE_TIME: usize = 0x160;
+const B_ADIS_IDLE_STEPS: usize = 0x164;
 const B_MAX_ANGULAR_SPEED: usize = 0x1b0;
 // dxJoint
 const J_TAG: usize = 0x20;
+const J_FLAGS: usize = 0x30;
+const J_BODY1: usize = 0x40;
 const J_FEEDBACK: usize = 0x68;
 const J_OWN: usize = 0x88;
 
@@ -471,7 +556,9 @@ pub struct AcEngine<'a> {
     acs: &'a Acs,
     world: *mut u8,
     bodies: Vec<*mut u8>,
+    /// joint, its kind, its feedback buffer (null when the world runs without feedback)
     joints: Vec<(*mut u8, Kind, *mut [f32; 16])>,
+    feedback: bool,
 }
 
 unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
@@ -496,7 +583,7 @@ impl<'a> AcEngine<'a> {
     /// A new world of the game's ODE. [`init_ode`] must have run.
     pub fn new(acs: &'a Acs) -> AcEngine<'a> {
         let create: extern "C" fn() -> *mut u8 = unsafe { std::mem::transmute(acs.va(VA_WORLD_CREATE)) };
-        AcEngine { acs, world: create(), bodies: Vec::new(), joints: Vec::new() }
+        AcEngine { acs, world: create(), bodies: Vec::new(), joints: Vec::new(), feedback: true }
     }
 
     fn f<T: Copy>(&self, va: usize) -> T {
@@ -511,11 +598,16 @@ impl Drop for AcEngine<'_> {
         // dWorldDestroy frees the bodies and joints with the world
         let destroy: F0 = self.f(VA_WORLD_DESTROY);
         destroy(self.world);
+        for &(_, _, feedback) in &self.joints {
+            if !feedback.is_null() {
+                drop(unsafe { Box::from_raw(feedback) });
+            }
+        }
     }
 }
 
 impl Engine for AcEngine<'_> {
-    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32) {
+    fn set_world(&mut self, gravity: [f32; 3], erp: f32, cfm: f32, damping: [f32; 2]) {
         // the ODE calls of PhysicsCore::PhysicsCore @ 0x1402cba80, in its order
         let set_gravity: F3 = self.f(VA_WORLD_SET_GRAVITY);
         set_gravity(self.world, gravity[0], gravity[1], gravity[2]);
@@ -528,9 +620,19 @@ impl Engine for AcEngine<'_> {
         let set1: extern "C" fn(*mut u8, f32) = self.f(VA_WORLD_SET_CONTACT_SURFACE_LAYER);
         set1(self.world, 0.0);
         let set2: extern "C" fn(*mut u8, f32, f32) = self.f(VA_WORLD_SET_DAMPING);
-        set2(self.world, 0.0, 0.0);
+        set2(self.world, damping[0], damping[1]);
         let seti: extern "C" fn(*mut u8, i32) = self.f(VA_WORLD_SET_QUICK_STEP_NUM_ITERATIONS);
         seti(self.world, 48);
+    }
+    fn set_feedback(&mut self, on: bool) {
+        self.feedback = on;
+    }
+    fn feedback_sentinel(&mut self) {
+        for &(_, _, feedback) in &self.joints {
+            if !feedback.is_null() {
+                unsafe { *feedback = [FEEDBACK_SENTINEL; 16] };
+            }
+        }
     }
     fn body_create(&mut self) -> usize {
         let create: extern "C" fn(*mut u8) -> *mut u8 = self.f(VA_BODY_CREATE);
@@ -598,6 +700,10 @@ impl Engine for AcEngine<'_> {
         let f: extern "C" fn(*mut u8, i32) = self.f(VA_BODY_SET_AUTO_DISABLE_FLAG);
         f(self.bodies[b], on as i32);
     }
+    fn body_set_samples(&mut self, b: usize, count: u32) {
+        let f: extern "C" fn(*mut u8, u32) = self.f(VA_BODY_SET_AUTO_DISABLE_AVERAGE_SAMPLES_COUNT);
+        f(self.bodies[b], count);
+    }
     fn body_set_enabled(&mut self, b: usize, on: bool) {
         let f: F0 = self.f(if on { VA_BODY_ENABLE } else { VA_BODY_DISABLE });
         f(self.bodies[b]);
@@ -608,6 +714,15 @@ impl Engine for AcEngine<'_> {
             let flags: u32 = rd(p, B_FLAGS);
             wr(p, B_FLAGS, (flags | set) & !clear);
             wr(p, B_MAX_ANGULAR_SPEED, max_angular_speed);
+        }
+    }
+    fn body_poke_inv_mass(&mut self, b: usize, inv_mass: f32) {
+        unsafe { wr(self.bodies[b], B_INV_MASS, inv_mass) };
+    }
+    fn body_poke_idle(&mut self, b: usize, idle_time: f32, idle_steps: i32) {
+        unsafe {
+            wr(self.bodies[b], B_ADIS_IDLE_TIME, idle_time);
+            wr(self.bodies[b], B_ADIS_IDLE_STEPS, idle_steps);
         }
     }
     fn body_add(&mut self, b: usize, kind: u32, a: [f32; 3], p: [f32; 3]) {
@@ -651,9 +766,13 @@ impl Engine for AcEngine<'_> {
         };
         let create: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = self.f(VA_JOINT_CREATE[index]);
         let joint = create(self.world, std::ptr::null_mut());
-        // dJointSetFeedback is not linked: the pointer is written directly
-        let feedback = Box::into_raw(Box::new([0.0f32; 16]));
-        unsafe { wr(joint, J_FEEDBACK, feedback) };
+        // dJointSetFeedback is not linked: the pointer is written directly. Without feedback
+        // the joint keeps the null pointer its constructor wrote, as every joint of the game.
+        let mut feedback = std::ptr::null_mut();
+        if self.feedback {
+            feedback = Box::into_raw(Box::new([0.0f32; 16]));
+            unsafe { wr(joint, J_FEEDBACK, feedback) };
+        }
         self.joints.push((joint, kind, feedback));
         self.joints.len() - 1
     }
@@ -692,6 +811,13 @@ impl Engine for AcEngine<'_> {
         let f: extern "C" fn(*mut u8, i32, f32) = self.f(va);
         f(joint, parameter, value);
     }
+    fn joint_poke_flags(&mut self, j: usize, set: u32, clear: u32) {
+        let p = self.joints[j].0;
+        unsafe {
+            let flags: u32 = rd(p, J_FLAGS);
+            wr(p, J_FLAGS, (flags | set) & !clear);
+        }
+    }
     fn step(&mut self, h: f32) {
         let f: extern "C" fn(*mut u8, f32) -> i32 = self.f(VA_WORLD_STEP);
         assert_eq!(f(self.world, h), 1, "dWorldStep failed");
@@ -726,36 +852,61 @@ impl Engine for AcEngine<'_> {
     fn joint_state(&self, j: usize) -> JointState {
         let (p, kind, feedback) = self.joints[j];
         unsafe {
-            let own: [f32; 12] = rd(p, J_OWN);
+            // the joint classes have different sizes: read only what each one owns
+            let own = |from: usize, count: usize| -> Vec<f32> {
+                (0..count).map(|k| rd::<f32>(p, J_OWN + 4 * (from + k))).collect()
+            };
             let mut params = Vec::new();
             match kind {
                 Kind::Ball => {
-                    params.extend_from_slice(&own[0..3]);
-                    params.extend_from_slice(&own[4..7]);
-                    params.extend_from_slice(&own[8..10]);
+                    params.extend(own(0, 3));
+                    params.extend(own(4, 3));
+                    params.extend(own(8, 2));
                 }
                 Kind::DBall => {
-                    params.extend_from_slice(&own[0..3]);
-                    params.extend_from_slice(&own[4..7]);
-                    params.extend_from_slice(&own[8..11]);
+                    params.extend(own(0, 3));
+                    params.extend(own(4, 3));
+                    params.extend(own(8, 3));
                 }
                 Kind::Fixed => {
-                    params.extend_from_slice(&own[0..4]);
-                    params.extend_from_slice(&own[4..7]);
-                    params.extend_from_slice(&own[8..10]);
+                    params.extend(own(0, 4));
+                    params.extend(own(4, 3));
+                    params.extend(own(8, 2));
                 }
                 Kind::Slider => {
-                    params.extend_from_slice(&own[0..3]);
-                    params.extend_from_slice(&own[4..8]);
-                    params.extend_from_slice(&own[8..11]);
+                    params.extend(own(0, 3));
+                    params.extend(own(4, 4));
+                    params.extend(own(8, 3));
+                    // the limit-motor block at +0xb8: vel, fmax, lostop, histop, fudge factor,
+                    // normal cfm, stop erp, stop cfm, bounce
+                    params.extend(own(12, 9));
+                    // dJointGetSliderPosition dereferences body 1 without a test
+                    let position: extern "C" fn(*mut u8) -> f32 = self.f(VA_JOINT_GET_SLIDER_POSITION);
+                    params.push(if rd::<usize>(p, J_BODY1) != 0 { position(p) } else { 0.0 });
                 }
             }
-            let fb = *feedback;
             let mut out = [0.0f32; 12];
-            for k in 0..4 {
-                out[3 * k..3 * k + 3].copy_from_slice(&fb[4 * k..4 * k + 3]);
+            if !feedback.is_null() {
+                let fb = *feedback;
+                for k in 0..4 {
+                    out[3 * k..3 * k + 3].copy_from_slice(&fb[4 * k..4 * k + 3]);
+                }
             }
-            JointState { tag: rd(p, J_TAG), params, feedback: out }
+            let get_body: extern "C" fn(*mut u8, i32) -> *mut u8 = self.f(VA_JOINT_GET_BODY);
+            let index = |body: *mut u8| {
+                if body.is_null() {
+                    -1
+                } else {
+                    self.bodies.iter().position(|&x| x == body).map_or(-2, |i| i as i32)
+                }
+            };
+            JointState {
+                tag: rd(p, J_TAG),
+                flags: rd(p, J_FLAGS),
+                bodies: [index(get_body(p, 0)), index(get_body(p, 1))],
+                params,
+                feedback: out,
+            }
         }
     }
     fn body_write_state(&mut self, b: usize, s: &BodyState) {

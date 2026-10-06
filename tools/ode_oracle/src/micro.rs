@@ -3,8 +3,13 @@
 //!
 //! A world is a list of operations made from a seed (bodies, masses, poses, joints) plus,
 //! for every step, another list (forces through all seven `dBodyAdd…` functions, now and
-//! then a softness change, a rod reseat or a "stop" as the game does them). Both engines
-//! get exactly the same operations.
+//! then a softness change, a rod reseat or a "stop" as the game does them, and in the
+//! "exotic" random worlds also things the game never does but the library has code for).
+//! Both engines get exactly the same operations.
+//!
+//! A world can also be written out as a golden file: its operations plus a hash of the
+//! game's state after every step, which `cargo test -p rustyac-ode` replays without the game
+//! (format: `crates/rustyac-ode/tests/golden_ops.rs`).
 
 use crate::engine::{BodyState, Engine, JointState, Kind, MassSpec, MassState};
 use rustyac_ode::{PARAM_CFM, PARAM_ERP};
@@ -23,7 +28,7 @@ impl Rng {
     pub fn new(seed: u64) -> Rng {
         Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x1234_5678_9abc_def0)
     }
-    fn next(&mut self) -> u64 {
+    pub fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -31,16 +36,16 @@ impl Rng {
         z ^ (z >> 31)
     }
     /// Uniform in [0, 1).
-    fn unit(&mut self) -> f32 {
+    pub fn unit(&mut self) -> f32 {
         (self.next() >> 40) as f32 / (1u64 << 24) as f32
     }
     pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * self.unit()
     }
-    fn below(&mut self, n: u32) -> u32 {
+    pub fn below(&mut self, n: u32) -> u32 {
         (self.next() % n as u64) as u32
     }
-    fn chance(&mut self, p: f32) -> bool {
+    pub fn chance(&mut self, p: f32) -> bool {
         self.unit() < p
     }
     fn vec(&mut self, size: f32) -> [f32; 3] {
@@ -67,6 +72,12 @@ pub enum Op {
     Destroy(usize),
     /// Body flags set / cleared and `max_angular_speed`, written directly.
     Poke(usize, u32, u32, f32),
+    /// `dBodySetAutoDisableAverageSamplesCount`.
+    Samples(usize, u32),
+    /// `invMass` written directly (0: a kinematic body).
+    PokeInvMass(usize, f32),
+    /// Auto-disable idle time and idle steps written directly.
+    PokeIdle(usize, f32, i32),
     Joint(Kind),
     Attach(usize, Option<usize>, Option<usize>),
     BallAnchor(usize, [f32; 3]),
@@ -75,10 +86,63 @@ pub enum Op {
     Fixed(usize),
     SliderAxis(usize, [f32; 3]),
     Param(usize, i32, f32),
+    /// Joint flags set / cleared directly (8 = disabled).
+    JointFlags(usize, u32, u32),
     /// What `PhysicsCore::reseatDistanceJointLocal` does: both anchors given in body
     /// coordinates, converted with `dBodyGetRelPointPos`, then the rod length measured when
     /// the joint was created is put back.
     Reseat { joint: usize, b1: usize, b2: usize, local1: [f32; 3], local2: [f32; 3] },
+}
+
+impl Op {
+    /// The operation as 32-bit words for a golden file (codes: see
+    /// `crates/rustyac-ode/tests/golden_ops.rs`).
+    fn encode(&self, out: &mut Vec<u32>) {
+        let f = |v: f32| v.to_bits();
+        let mut put = |code: u32, ints: &[u32], floats: &[f32]| {
+            out.push(code);
+            out.extend_from_slice(ints);
+            out.extend(floats.iter().map(|&v| f(v)));
+        };
+        let opt = |b: Option<usize>| b.map_or(0, |b| b as u32 + 1);
+        match *self {
+            Op::Body => put(1, &[], &[]),
+            Op::Mass(b, m) => match m {
+                MassSpec::Box { mass, lx, ly, lz } => put(2, &[b as u32, 0], &[mass, lx, ly, lz, 0.0, 0.0, 0.0]),
+                MassSpec::Parameters { mass, i } => put(2, &[b as u32, 1], &[mass, i[0], i[1], i[2], i[3], i[4], i[5]]),
+                MassSpec::ExplicitBug { mass, i } => put(2, &[b as u32, 2], &[mass, i[0], i[1], i[2], 0.0, 0.0, 0.0]),
+            },
+            Op::Position(b, p) => put(3, &[b as u32], &p),
+            Op::Rotation(b, r) => put(4, &[b as u32], &r),
+            Op::LinearVel(b, v) => put(5, &[b as u32], &v),
+            Op::AngularVel(b, v) => put(6, &[b as u32], &v),
+            Op::FiniteRotation(b, mode, axis) => put(7, &[b as u32, mode as u32], &axis),
+            Op::Damping(b, l, a) => put(8, &[b as u32], &[l, a]),
+            Op::AutoDisable(b, on) => put(9, &[b as u32, on as u32], &[]),
+            Op::Enabled(b, on) => put(10, &[b as u32, on as u32], &[]),
+            Op::Add(b, kind, a, p) => put(11, &[b as u32, kind], &[a[0], a[1], a[2], p[0], p[1], p[2]]),
+            Op::Stop(b) => put(12, &[b as u32], &[]),
+            Op::Destroy(b) => put(13, &[b as u32], &[]),
+            Op::Poke(b, set, clear, speed) => put(14, &[b as u32, set, clear], &[speed]),
+            Op::Samples(b, n) => put(15, &[b as u32, n], &[]),
+            Op::PokeInvMass(b, v) => put(16, &[b as u32], &[v]),
+            Op::PokeIdle(b, time, steps) => put(17, &[b as u32, steps as u32], &[time]),
+            Op::Joint(kind) => put(18, &[kind as u32], &[]),
+            Op::Attach(j, b1, b2) => put(19, &[j as u32, opt(b1), opt(b2)], &[]),
+            Op::BallAnchor(j, p) => put(20, &[j as u32], &p),
+            Op::DBallAnchor(j, which, p) => put(21, &[j as u32, which], &p),
+            Op::DBallDistance(j, d) => put(22, &[j as u32], &[d]),
+            Op::Fixed(j) => put(23, &[j as u32], &[]),
+            Op::SliderAxis(j, axis) => put(24, &[j as u32], &axis),
+            Op::Param(j, parameter, value) => put(25, &[j as u32, parameter as u32], &[value]),
+            Op::JointFlags(j, set, clear) => put(26, &[j as u32, set, clear], &[]),
+            Op::Reseat { joint, b1, b2, local1, local2 } => put(
+                27,
+                &[joint as u32, b1 as u32, b2 as u32],
+                &[local1[0], local1[1], local1[2], local2[0], local2[1], local2[2]],
+            ),
+        }
+    }
 }
 
 /// Rod lengths remembered at creation (the wrapper `DistanceJointODE` keeps them).
@@ -105,6 +169,9 @@ impl Driver {
             Op::Add(b, kind, a, p) => e.body_add(b, kind, a, p),
             Op::Destroy(b) => e.body_destroy(b),
             Op::Poke(b, set, clear, max_angular_speed) => e.body_poke(b, set, clear, max_angular_speed),
+            Op::Samples(b, count) => e.body_set_samples(b, count),
+            Op::PokeInvMass(b, inv_mass) => e.body_poke_inv_mass(b, inv_mass),
+            Op::PokeIdle(b, time, steps) => e.body_poke_idle(b, time, steps),
             Op::Stop(b) => {
                 e.body_set_linear_vel(b, [0.0; 3]);
                 e.body_set_angular_vel(b, [0.0; 3]);
@@ -127,6 +194,7 @@ impl Driver {
             Op::Fixed(j) => e.joint_set_fixed(j),
             Op::SliderAxis(j, axis) => e.joint_set_slider_axis(j, axis),
             Op::Param(j, parameter, value) => e.joint_set_param(j, parameter, value),
+            Op::JointFlags(j, set, clear) => e.joint_poke_flags(j, set, clear),
             Op::Reseat { joint, b1, b2, local1, local2 } => {
                 let p1 = e.body_get_rel_point_pos(b1, local1);
                 let p2 = e.body_get_rel_point_pos(b2, local2);
@@ -146,6 +214,15 @@ pub struct Scene {
     pub setup: Vec<Op>,
     pub bodies: usize,
     pub joints: usize,
+    pub gravity: [f32; 3],
+    pub erp: f32,
+    pub cfm: f32,
+    /// the world's damping (inherited by bodies created afterwards)
+    pub damping: [f32; 2],
+    /// step size
+    pub h: f32,
+    /// whether the joints get a feedback buffer (the game's joints never have one)
+    pub feedback: bool,
     /// (joint, kind, body 1, body 2) for the per-step generator
     joint_list: Vec<(usize, Kind, Option<usize>, Option<usize>)>,
     masses: Vec<f32>,
@@ -154,11 +231,17 @@ pub struct Scene {
     force_chance: f32,
     /// bodies have ODE's auto-disable on: the script also wakes and disables bodies by hand
     sleepy: bool,
+    /// the script also does what the game never does (re-attach, mode switches, disabled joints)
+    exotic: bool,
+    /// both anchors of joint 0 are put back on one point before every step
+    rezero: bool,
     car: Option<CarLayout>,
     /// bodies that were destroyed on the way (random worlds only)
-    pub dead: Vec<bool>,
+    dead: Vec<bool>,
     /// the step before which one body is destroyed, if any
     destroy_at: Option<usize>,
+    /// the step before which a body and a rod are added, if any
+    add_at: Option<usize>,
 }
 
 struct CarLayout {
@@ -167,6 +250,9 @@ struct CarLayout {
     rest: [f32; 4],
     /// the two ends of each front steering rod in the frames of the car body and the hub
     steer: [([f32; 3], [f32; 3]); 2],
+    /// index of each front wheel's steering rod
+    steer_joint: [usize; 2],
+    last_erp: Option<f32>,
 }
 
 fn random_rotation(rng: &mut Rng) -> [f32; 12] {
@@ -222,8 +308,17 @@ struct BodyPlan {
 }
 
 /// Adds one body with random properties to the set-up list; `ac_like` gives it exactly what
-/// `RigidBodyODE::RigidBodyODE` gives every body of the game.
-fn add_body(setup: &mut Vec<Op>, rng: &mut Rng, index: usize, spread: f32, ac_like: bool, masses: &mut Vec<f32>) -> BodyPlan {
+/// `RigidBodyODE::RigidBodyODE` gives every body of the game. Without `set_damping` the body
+/// keeps the damping it inherits from the world.
+fn add_body(
+    setup: &mut Vec<Op>,
+    rng: &mut Rng,
+    index: usize,
+    spread: f32,
+    ac_like: bool,
+    set_damping: bool,
+    masses: &mut Vec<f32>,
+) -> BodyPlan {
     setup.push(Op::Body);
     let roll = rng.unit();
     if ac_like || roll < 0.70 {
@@ -231,10 +326,9 @@ fn add_body(setup: &mut Vec<Op>, rng: &mut Rng, index: usize, spread: f32, ac_li
     } else if roll < 0.85 {
         setup.push(Op::FiniteRotation(index, true, rng.vec(1.0)));
     }
-    if ac_like || rng.chance(0.9) {
-        setup.push(Op::Damping(index, 0.0, 0.0));
-    } else {
-        setup.push(Op::Damping(index, rng.range(0.0, 0.05), rng.range(0.0, 0.05)));
+    let damping = if ac_like || rng.chance(0.9) { (0.0, 0.0) } else { (rng.range(0.0, 0.05), rng.range(0.0, 0.05)) };
+    if set_damping {
+        setup.push(Op::Damping(index, damping.0, damping.1));
     }
     let mass = if ac_like {
         MassSpec::Box { mass: rng.range(0.5, 600.0), lx: rng.range(0.1, 2.5), ly: rng.range(0.1, 2.5), lz: rng.range(0.1, 4.0) }
@@ -292,7 +386,35 @@ fn add_joint(
             if axis.iter().all(|v| v.abs() < 0.05) {
                 axis[1] = 1.0;
             }
+            if !plain && rng.chance(0.05) {
+                // a zero axis: ODE's normalise turns it into (1, 0, 0)
+                axis = [0.0; 3];
+            }
             setup.push(Op::SliderAxis(j, axis));
+            if !plain && rng.chance(0.6) {
+                // the slider's limit-motor block: every parameter it accepts, the ones it
+                // ignores (3, 4, 11, ERP = 13), and stops far away, which make ODE measure
+                // the slider's position every step without ever reaching a stop
+                for (parameter, value) in [
+                    (2, rng.range(-1.0, 1.0)),
+                    (6, rng.range(0.0, 1.0)),
+                    (6, 1.5),
+                    (7, rng.range(0.0, 0.5)),
+                    (9, rng.range(0.1, 0.9)),
+                    (10, rng.range(0.0, 1e-4)),
+                    (PARAM_CFM, rng.range(0.0, 1e-4)),
+                    (3, 77.0),
+                    (4, 78.0),
+                    (11, 79.0),
+                    (5, -1.0),
+                ] {
+                    setup.push(Op::Param(j, parameter, value));
+                }
+                if rng.chance(0.6) {
+                    setup.push(Op::Param(j, 0, -1.0e3));
+                    setup.push(Op::Param(j, 1, 1.0e3));
+                }
+            }
         }
     }
     if !plain {
@@ -305,36 +427,61 @@ fn add_joint(
             setup.push(Op::Param(j, PARAM_ERP, rng.range(0.05, 0.95)));
             setup.push(Op::Param(j, PARAM_CFM, 10f32.powf(rng.range(-9.0, -4.0))));
         }
+        if kind != Kind::Slider && rng.chance(0.1) {
+            // a parameter number these joints do not have: ignored
+            setup.push(Op::Param(j, 2, 5.0));
+        }
     }
     joints.push((j, kind, b1, b2));
 }
 
+/// The point at which the frame-conversion getters are compared after step `step` for body
+/// `b` (the golden test uses the same formula).
+pub fn probe_point(step: usize, b: usize) -> [f32; 3] {
+    let t = (step % 97) as f32 * 0.03 - 1.4 + b as f32 * 0.1;
+    [t, 0.5 - 0.3 * t, t * t - 0.7]
+}
+
 impl Scene {
+    fn new(name: String, setup: Vec<Op>, bodies: usize, joint_list: Vec<(usize, Kind, Option<usize>, Option<usize>)>, masses: Vec<f32>, rng: Rng, force_chance: f32) -> Scene {
+        Scene {
+            name,
+            setup,
+            bodies,
+            joints: joint_list.len(),
+            gravity: GRAVITY,
+            erp: ERP,
+            cfm: CFM,
+            damping: [0.0, 0.0],
+            h: H,
+            feedback: true,
+            joint_list,
+            masses,
+            rng,
+            force_chance,
+            sleepy: false,
+            exotic: false,
+            rezero: false,
+            car: None,
+            dead: Vec::new(),
+            destroy_at: None,
+            add_at: None,
+        }
+    }
+
     /// One free body: gravity, forces and torques, the gyroscopic term, the rotation update.
     pub fn free_body(seed: u64) -> Scene {
         let mut rng = Rng::new(seed ^ 0x0f00);
         let mut setup = Vec::new();
         let mut masses = Vec::new();
-        add_body(&mut setup, &mut rng, 0, 2.0, seed % 2 == 0, &mut masses);
-        Scene {
-            name: format!("free_body#{seed}"),
-            setup,
-            bodies: 1,
-            joints: 0,
-            joint_list: Vec::new(),
-            masses,
-            rng,
-            force_chance: 0.6,
-            sleepy: false,
-            car: None,
-            dead: Vec::new(),
-            destroy_at: None,
-        }
+        add_body(&mut setup, &mut rng, 0, 2.0, seed % 2 == 0, true, &mut masses);
+        Scene::new(format!("free_body#{seed}"), setup, 1, Vec::new(), masses, rng, 0.6)
     }
 
     /// Two to five bodies with ODE's auto-disable on (the game uses it for movable track
     /// objects): a damped chain hanging from the world comes to rest and falls asleep, the
-    /// script wakes and disables bodies by hand now and then.
+    /// script wakes and disables bodies by hand now and then. Odd seeds average the velocity
+    /// over several samples and wait for an idle time as well as a number of idle steps.
     pub fn auto_disable(seed: u64) -> Scene {
         let mut rng = Rng::new(seed ^ 0xa070_0000);
         let mut setup = Vec::new();
@@ -343,11 +490,15 @@ impl Scene {
         let nb = 2 + rng.below(4) as usize;
         let mut plans = Vec::new();
         for i in 0..nb {
-            plans.push(add_body(&mut setup, &mut rng, i, 1.0, true, &mut masses));
+            plans.push(add_body(&mut setup, &mut rng, i, 1.0, true, true, &mut masses));
             setup.push(Op::LinearVel(i, rng.vec(0.3)));
             setup.push(Op::AngularVel(i, rng.vec(0.3)));
             setup.push(Op::Damping(i, rng.range(0.02, 0.3), rng.range(0.02, 0.3)));
             setup.push(Op::AutoDisable(i, true));
+            if seed % 2 == 1 {
+                setup.push(Op::Samples(i, if rng.chance(0.08) { 0 } else { 1 + rng.below(5) }));
+                setup.push(Op::PokeIdle(i, rng.range(0.0, 0.05), 3 + rng.below(20) as i32));
+            }
         }
         // hung from the world, then a chain
         let anchor = plans[0].position;
@@ -365,37 +516,26 @@ impl Scene {
         if rng.chance(0.3) {
             setup.push(Op::Enabled(rng.below(nb as u32) as usize, false));
         }
-        let joints = joint_list.len();
-        Scene {
-            name: format!("auto_disable#{seed}"),
-            setup,
-            bodies: nb,
-            joints,
-            joint_list,
-            masses,
-            rng,
-            force_chance: 0.01,
-            sleepy: true,
-            car: None,
-            dead: Vec::new(),
-            destroy_at: None,
-        }
+        let mut scene = Scene::new(format!("auto_disable#{seed}"), setup, nb, joint_list, masses, rng, 0.01);
+        scene.sleepy = true;
+        scene
     }
 
-    /// A rod of length zero: both anchors of a DBall at the same point, so the direction of
-    /// the constraint row cannot come from the anchors. ODE then takes the direction of the
-    /// anchors' relative velocity, and (1, 0, 0) if that is zero too (even seeds start at
-    /// rest in free fall, so the very first steps use that last resort).
+    /// A rod of length zero: both anchors of a DBall are put on one point before every step,
+    /// so the direction of the constraint row cannot come from the anchors. ODE then takes
+    /// the direction of the anchors' relative velocity, and (1, 0, 0) if that is zero too.
+    /// Even seeds start at rest and get no forces, so that last resort is what they use;
+    /// odd seeds are pushed about and use the velocity direction.
     pub fn dball_zero(seed: u64) -> Scene {
         let mut rng = Rng::new(seed ^ 0xdba1_0000);
         let mut setup = Vec::new();
         let mut masses = Vec::new();
         let mut joint_list = Vec::new();
-        let a = add_body(&mut setup, &mut rng, 0, 0.5, true, &mut masses);
+        let a = add_body(&mut setup, &mut rng, 0, 0.5, true, true, &mut masses);
         let to_world = seed % 4 == 3;
         let mut bodies = 1;
         if !to_world {
-            add_body(&mut setup, &mut rng, 1, 0.5, true, &mut masses);
+            add_body(&mut setup, &mut rng, 1, 0.5, true, true, &mut masses);
             bodies = 2;
         }
         if seed % 2 == 0 {
@@ -411,20 +551,11 @@ impl Scene {
         setup.push(Op::DBallAnchor(0, 0, point));
         setup.push(Op::DBallAnchor(0, 1, point));
         joint_list.push((0, Kind::DBall, Some(0), if to_world { None } else { Some(1) }));
-        Scene {
-            name: format!("dball_zero#{seed}"),
-            setup,
-            bodies,
-            joints: 1,
-            joint_list,
-            masses,
-            rng,
-            force_chance: if seed % 2 == 0 { 0.0 } else { 0.3 },
-            sleepy: false,
-            car: None,
-            dead: Vec::new(),
-            destroy_at: None,
-        }
+        let force_chance = if seed % 2 == 0 { 0.0 } else { 0.3 };
+        let mut scene = Scene::new(format!("dball_zero#{seed}"), setup, bodies, joint_list, masses, rng, force_chance);
+        scene.rezero = true;
+        scene.feedback = seed % 4 < 2;
+        scene
     }
 
     /// One joint of one type: between two bodies, or (every third seed) between a body and
@@ -435,7 +566,7 @@ impl Scene {
         let mut masses = Vec::new();
         let mut joint_list = Vec::new();
         let ac_like = seed % 2 == 0;
-        let a = add_body(&mut setup, &mut rng, 0, 1.0, ac_like, &mut masses);
+        let a = add_body(&mut setup, &mut rng, 0, 1.0, ac_like, true, &mut masses);
         let to_world = seed % 3 == 2;
         let mut bodies = 1;
         if to_world {
@@ -443,16 +574,23 @@ impl Scene {
             let (b1, b2) = if seed % 2 == 0 { (Some(0), None) } else { (None, Some(0)) };
             add_joint(&mut setup, &mut rng, &mut joint_list, kind, b1, b2, a.position, anchor, ac_like);
         } else {
-            let b = add_body(&mut setup, &mut rng, 1, 1.0, ac_like, &mut masses);
+            let b = add_body(&mut setup, &mut rng, 1, 1.0, ac_like, true, &mut masses);
             bodies = 2;
             add_joint(&mut setup, &mut rng, &mut joint_list, kind, Some(0), Some(1), a.position, b.position, ac_like);
         }
         let name = format!("{kind:?}#{seed}").to_lowercase();
-        Scene { name, setup, bodies, joints: 1, joint_list, masses, rng, force_chance: 0.6, sleepy: false, car: None, dead: Vec::new(), destroy_at: None }
+        let mut scene = Scene::new(name, setup, bodies, joint_list, masses, rng, 0.6);
+        // half of the worlds run as the game does: no joint has a feedback buffer
+        scene.feedback = seed % 4 < 2;
+        scene
     }
 
     /// 1 to 8 bodies joined by random chains of the four joint types, with extra rods that
-    /// close loops, a few joints to the world, and usually more than one island.
+    /// close loops, a few joints to the world, and usually more than one island. Half of the
+    /// worlds are set up exactly as the game sets up its bodies and joints; the other half
+    /// ("exotic") also use what the library can do and the game never does: other gravity,
+    /// softness, damping and step size, general and broken inertias, kinematic bodies,
+    /// disabled joints, body flags written by hand, joints re-attached on the way.
     pub fn random(seed: u64) -> Scene {
         let mut rng = Rng::new(seed ^ 0x5eed_0000);
         let mut setup = Vec::new();
@@ -460,9 +598,22 @@ impl Scene {
         let mut joint_list = Vec::new();
         let nb = 1 + rng.below(8) as usize;
         let ac_like = rng.chance(0.5);
+        // other world settings in two of five exotic worlds
+        let mut world = (GRAVITY, ERP, CFM, [0.0f32, 0.0], H);
+        if !ac_like && rng.chance(0.4) {
+            let mut gravity = rng.vec(12.0);
+            if rng.chance(0.3) {
+                gravity[rng.below(3) as usize] = 0.0;
+            }
+            let h = [0.003f32, 0.001, 0.01, 0.0005][rng.below(4) as usize];
+            let damping = if rng.chance(0.5) { [rng.range(0.0, 0.05), rng.range(0.0, 0.05)] } else { [0.0, 0.0] };
+            world = (gravity, rng.range(0.1, 0.8), 10f32.powf(rng.range(-9.0, -5.0)), damping, h);
+        }
+        let inherit_damping = world.3 != [0.0, 0.0];
         let mut plans = Vec::new();
         for i in 0..nb {
-            plans.push(add_body(&mut setup, &mut rng, i, 2.0, ac_like, &mut masses));
+            let set_damping = !(inherit_damping && rng.chance(0.5));
+            plans.push(add_body(&mut setup, &mut rng, i, 2.0, ac_like, set_damping, &mut masses));
         }
         let pick_kind = |rng: &mut Rng| match rng.unit() {
             x if x < 0.5 => Kind::DBall,
@@ -502,9 +653,9 @@ impl Scene {
             let p = plans[b].position;
             add_joint(&mut setup, &mut rng, &mut joint_list, kind, b1, b2, p, anchor, ac_like);
         }
-        // body states no linked function can produce, but which the stepper has code for:
-        // no gravity, no gyroscopic term, a cap on the angular speed
         if !ac_like {
+            // body states no linked function can produce, but which the stepper has code
+            // for: no gravity, no gyroscopic term, a cap on the angular speed, a kinematic body
             for i in 0..nb {
                 let roll = rng.unit();
                 if roll < 0.06 {
@@ -513,6 +664,14 @@ impl Scene {
                     setup.push(Op::Poke(i, 0, 0x100, f32::INFINITY));
                 } else if roll < 0.18 {
                     setup.push(Op::Poke(i, 0x80, 0, rng.range(0.5, 3.0)));
+                } else if roll < 0.22 {
+                    setup.push(Op::PokeInvMass(i, 0.0));
+                }
+            }
+            // a disabled joint (dJointDisable is not linked; the flag is)
+            for j in 0..joint_list.len() {
+                if rng.chance(0.04) {
+                    setup.push(Op::JointFlags(j, 8, 0));
                 }
             }
         }
@@ -523,27 +682,30 @@ impl Scene {
             if sleepy {
                 setup.push(Op::Damping(i, rng.range(0.02, 0.3), rng.range(0.02, 0.3)));
                 setup.push(Op::AutoDisable(i, true));
+                if !ac_like && rng.chance(0.5) {
+                    setup.push(Op::Samples(i, 1 + rng.below(5)));
+                    setup.push(Op::PokeIdle(i, rng.range(0.0, 0.05), 3 + rng.below(20) as i32));
+                }
             }
             if rng.chance(0.04) {
                 setup.push(Op::Enabled(i, false));
             }
         }
-        let joints = joint_list.len();
-        Scene {
-            name: format!("random#{seed}"),
-            setup,
-            bodies: nb,
-            joints,
-            joint_list,
-            masses,
-            rng,
-            force_chance: if sleepy { 0.02 } else { 0.4 },
-            sleepy,
-            car: None,
-            dead: Vec::new(),
-            destroy_at: None,
+        let force_chance = if sleepy { 0.02 } else { 0.4 };
+        let mut scene = Scene::new(format!("random#{seed}"), setup, nb, joint_list, masses, rng, force_chance);
+        (scene.gravity, scene.erp, scene.cfm, scene.damping, scene.h) = world;
+        scene.sleepy = sleepy;
+        scene.exotic = !ac_like;
+        scene.feedback = seed % 2 == 0;
+        // one world in ten loses a body after a few hundred steps (the game destroys the
+        // bodies of a car that leaves), one in ten gets a new body and a rod on the way
+        if seed % 10 == 3 && nb >= 2 {
+            scene.destroy_at = Some(50 + scene.rng.below(400) as usize);
         }
-        .with_destruction(seed)
+        if seed % 10 == 7 {
+            scene.add_at = Some(20 + scene.rng.below(400) as usize);
+        }
+        scene
     }
 
     /// The layout of an F2004: car body (510 kg box), fuel tank bolted to it, four hubs, each
@@ -580,6 +742,7 @@ impl Scene {
         let corners = [(0.75f32, 1.65f32, 0.33f32), (-0.75, 1.65, 0.33), (0.7, -1.4, 0.34), (-0.7, -1.4, 0.34)];
         let mut hubs = [0usize; 4];
         let mut steer = [([0.0f32; 3], [0.0f32; 3]); 2];
+        let mut steer_joint = [0usize; 2];
         for (w, &(x, z, radius)) in corners.iter().enumerate() {
             let hub = 2 + w;
             hubs[w] = hub;
@@ -602,6 +765,7 @@ impl Scene {
             if w < 2 {
                 let (c, h) = rods[4];
                 steer[w] = ([c[0], c[1] - body_y, c[2]], [h[0] - hub_pos[0], h[1] - hub_pos[1], h[2] - hub_pos[2]]);
+                steer_joint[w] = joint_list.len() + 4;
             }
             for (car_point, hub_point) in rods {
                 let j = joint_list.len();
@@ -620,10 +784,11 @@ impl Scene {
         if seed != 0 {
             setup.push(Op::LinearVel(0, [rng.range(-1.0, 1.0), 0.0, rng.range(0.0, 40.0)]));
         }
-        let joints = joint_list.len();
-        let name = format!("car#{seed}");
-        let car = CarLayout { hubs, body: 0, rest: [0.0; 4], steer };
-        Scene { name, setup, bodies: 6, joints, joint_list, masses, rng, force_chance: 0.0, sleepy: false, car: Some(car), dead: Vec::new(), destroy_at: None }
+        let mut scene = Scene::new(format!("car#{seed}"), setup, 6, joint_list, masses, rng, 0.0);
+        scene.car = Some(CarLayout { hubs, body: 0, rest: [0.0; 4], steer, steer_joint, last_erp: None });
+        // odd seeds run as the game does: no joint has a feedback buffer
+        scene.feedback = seed % 2 == 0;
+        scene
     }
 
     /// A strut (MacPherson) car as the game builds one: car body, fuel tank, and per corner a
@@ -657,6 +822,7 @@ impl Scene {
         let corners = [(0.76f32, 1.3f32, 0.31f32), (-0.76, 1.3, 0.31), (0.75, -1.35, 0.31), (-0.75, -1.35, 0.31)];
         let mut hubs = [0usize; 4];
         let mut steer = [([0.0f32; 3], [0.0f32; 3]); 2];
+        let mut steer_joint = [0usize; 2];
         for (w, &(x, z, radius)) in corners.iter().enumerate() {
             let hub = 2 + 2 * w;
             let strut = hub + 1;
@@ -696,6 +862,7 @@ impl Scene {
             if w < 2 {
                 let (c, h) = rods[2];
                 steer[w] = ([c[0], c[1] - body_y, c[2]], [h[0] - hub_pos[0], h[1] - hub_pos[1], h[2] - hub_pos[2]]);
+                steer_joint[w] = joint_list.len() + 2;
             }
             for (car_point, hub_point) in rods {
                 let j = joint_list.len();
@@ -709,23 +876,18 @@ impl Scene {
         if seed != 0 {
             setup.push(Op::LinearVel(0, [rng.range(-1.0, 1.0), 0.0, rng.range(0.0, 40.0)]));
         }
-        let joints = joint_list.len();
-        let name = format!("strut_car#{seed}");
-        let car = CarLayout { hubs, body: 0, rest: [0.0; 4], steer };
-        Scene { name, setup, bodies: 10, joints, joint_list, masses, rng, force_chance: 0.0, sleepy: false, car: Some(car), dead: Vec::new(), destroy_at: None }
+        let mut scene = Scene::new(format!("strut_car#{seed}"), setup, 10, joint_list, masses, rng, 0.0);
+        scene.car = Some(CarLayout { hubs, body: 0, rest: [0.0; 4], steer, steer_joint, last_erp: None });
+        scene.feedback = seed % 2 == 0;
+        scene
     }
 
-    /// One random world in ten has a body destroyed after a few hundred steps (the game
-    /// destroys the bodies of a car that leaves).
-    fn with_destruction(mut self, seed: u64) -> Scene {
-        if seed % 10 == 3 && self.bodies >= 2 {
-            self.destroy_at = Some(50 + self.rng.below(400) as usize);
-        }
-        self
-    }
-
-    fn is_dead(&self, b: usize) -> bool {
+    pub fn is_dead(&self, b: usize) -> bool {
         self.dead.get(b).copied().unwrap_or(false)
+    }
+
+    fn live_bodies(&self) -> Vec<usize> {
+        (0..self.bodies).filter(|&b| !self.is_dead(b)).collect()
     }
 
     /// What happens before step `step`, given the reference engine's state after the
@@ -737,6 +899,33 @@ impl Scene {
             self.dead = vec![false; self.bodies];
             self.dead[b] = true;
             ops.push(Op::Destroy(b));
+        }
+        if self.add_at == Some(step) {
+            // a body and a rod created in the middle of a run
+            let live = self.live_bodies();
+            let to = live[self.rng.below(live.len() as u32) as usize];
+            let new = self.bodies;
+            let at = reference[to].pos;
+            let position = [at[0] + self.rng.range(-0.8, 0.8), at[1] + 0.5, at[2] + self.rng.range(-0.8, 0.8)];
+            let mass = self.rng.range(1.0, 80.0);
+            ops.push(Op::Body);
+            ops.push(Op::FiniteRotation(new, true, [0.0; 3]));
+            ops.push(Op::Damping(new, 0.0, 0.0));
+            ops.push(Op::Mass(new, MassSpec::Box { mass, lx: 0.3, ly: 0.4, lz: 0.5 }));
+            ops.push(Op::Position(new, position));
+            ops.push(Op::LinearVel(new, reference[to].lvel));
+            let j = self.joints;
+            ops.push(Op::Joint(Kind::DBall));
+            ops.push(Op::Attach(j, Some(to), Some(new)));
+            ops.push(Op::DBallAnchor(j, 0, at));
+            ops.push(Op::DBallAnchor(j, 1, position));
+            self.joint_list.push((j, Kind::DBall, Some(to), Some(new)));
+            self.masses.push(mass);
+            self.bodies += 1;
+            self.joints += 1;
+            if !self.dead.is_empty() {
+                self.dead.push(false);
+            }
         }
         if let Some(car) = &mut self.car {
             // springs and dampers between hub and body (the same world force with opposite
@@ -771,23 +960,33 @@ impl Scene {
             // the steering rods of the two front wheels move on the car side every step
             let steer = 0.01 * ((step as f32) * 0.01).sin();
             for w in 0..2 {
-                let joint = 1 + 5 * w + 4;
                 let (mut local1, local2) = car.steer[w];
                 local1[0] += steer;
-                ops.push(Op::Reseat { joint, b1: car.body, b2: car.hubs[w], local1, local2 });
+                ops.push(Op::Reseat { joint: car.steer_joint[w], b1: car.body, b2: car.hubs[w], local1, local2 });
             }
-            // the game's softness switch below 1 m/s (car 0 only)
+            // the game's softness switch below 1 m/s (car 0 only). The game sends it every
+            // step; here it is sent when the value changes.
             let speed2 = body.lvel[0] * body.lvel[0] + body.lvel[1] * body.lvel[1] + body.lvel[2] * body.lvel[2];
             let erp = if speed2 >= 1.0 { 0.3 } else { 0.9 };
-            for j in 1..self.joints {
-                ops.push(Op::Param(j, PARAM_ERP, erp));
-                ops.push(Op::Param(j, PARAM_CFM, 1e-7));
+            if car.last_erp != Some(erp) {
+                car.last_erp = Some(erp);
+                for j in 1..self.joints {
+                    ops.push(Op::Param(j, PARAM_ERP, erp));
+                    ops.push(Op::Param(j, PARAM_CFM, 1e-7));
+                }
+                ops.push(Op::Param(0, PARAM_ERP, erp));
             }
-            ops.push(Op::Param(0, PARAM_ERP, erp));
             return ops;
         }
+        if self.rezero {
+            // both anchors of the rod back on one point (which moves with body 0)
+            let at = reference[0].pos;
+            let point = [at[0] + 0.2, at[1], at[2] - 0.1];
+            ops.push(Op::DBallAnchor(0, 0, point));
+            ops.push(Op::DBallAnchor(0, 1, point));
+        }
         for b in 0..self.bodies {
-            if self.is_dead(b) {
+            if self.is_dead(b) || b >= reference.len() {
                 continue;
             }
             if self.rng.chance(self.force_chance) {
@@ -802,8 +1001,18 @@ impl Scene {
                 };
                 ops.push(Op::Add(b, kind, a, p));
             }
-            if self.rng.chance(0.002) {
+            if !self.rezero && self.rng.chance(0.002) {
                 ops.push(Op::Stop(b));
+            }
+            if self.exotic && self.rng.chance(0.002) {
+                // the rotation update switched: off, on, on with an axis; set again while an
+                // axis is already there
+                let roll = self.rng.unit();
+                let axis = if roll < 0.4 { self.rng.vec(1.0) } else { [0.0; 3] };
+                ops.push(Op::FiniteRotation(b, roll < 0.8, axis));
+                if roll < 0.2 {
+                    ops.push(Op::FiniteRotation(b, true, axis));
+                }
             }
             if self.sleepy {
                 if self.rng.chance(0.004) {
@@ -836,11 +1045,35 @@ impl Scene {
                     ops.push(Op::Param(j, PARAM_CFM, 1e-7));
                 }
             }
-            if kind == Kind::DBall && self.rng.chance(0.02) {
+            if kind == Kind::DBall && !self.rezero && self.rng.chance(0.02) {
                 if let (Some(b1), Some(b2)) = (b1, b2) {
                     let local1 = self.rng.vec(0.5);
                     let local2 = self.rng.vec(0.5);
                     ops.push(Op::Reseat { joint: j, b1, b2, local1, local2 });
+                }
+            }
+            if self.exotic {
+                if self.rng.chance(0.001) {
+                    // disable or enable the joint
+                    let disable = self.rng.chance(0.5);
+                    ops.push(Op::JointFlags(j, if disable { 8 } else { 0 }, if disable { 0 } else { 8 }));
+                }
+                if self.rng.chance(0.003) {
+                    // attach the joint to other bodies (or to the world, either way round);
+                    // nothing else is called, so what `setRelativeValues` computes is compared
+                    let live = self.live_bodies();
+                    let first = live[self.rng.below(live.len() as u32) as usize];
+                    let others: Vec<usize> = live.iter().copied().filter(|&b| b != first).collect();
+                    let roll = self.rng.unit();
+                    let (n1, n2) = if others.is_empty() || roll < 0.2 {
+                        (Some(first), None)
+                    } else if roll < 0.3 {
+                        (None, Some(first))
+                    } else {
+                        (Some(first), Some(others[self.rng.below(others.len() as u32) as usize]))
+                    };
+                    ops.push(Op::Attach(j, n1, n2));
+                    self.joint_list[k] = (j, kind, n1, n2);
                 }
             }
         }
@@ -855,6 +1088,9 @@ pub struct Outcome {
     pub exact_steps: usize,
     pub setup_exact: bool,
     pub first: Option<String>,
+    /// Steps in which the reference engine's state held a NaN (a NaN on both sides counts as
+    /// equal, so such a step proves little).
+    pub nan_steps: usize,
     /// A value that is not finite turned up in the reference engine.
     pub not_finite: bool,
     /// FNV-1a 64 of every value the reference engine produced (the recorded states).
@@ -863,8 +1099,57 @@ pub struct Outcome {
     /// Body-steps in which a body was disabled (asleep) in the reference engine.
     pub asleep: usize,
     /// Joint-steps in which a rod's two anchors were less than 1e-7 m apart in the reference
-    /// engine, so that the DBall row took one of its fallback directions.
+    /// engine, so that the DBall row took the direction of the anchors' relative velocity …
     pub short_rods: usize,
+    /// … and those in which that velocity was below 1e-7 too: the last resort, (1, 0, 0).
+    pub last_resort: usize,
+    /// Joint-steps in which a joint was disabled or held only kinematic bodies (tag -1).
+    pub idle_joints: usize,
+    /// How often each operation (by its golden-file code) was applied before the first step …
+    pub setup_ops: [usize; 28],
+    /// … and between steps.
+    pub step_ops: [usize; 28],
+}
+
+/// Names of the operations by code, for the notes under the results table.
+pub const OP_NAMES: [&str; 28] = [
+    "",
+    "body created",
+    "mass set",
+    "position set",
+    "rotation set",
+    "linear velocity set",
+    "angular velocity set",
+    "finite-rotation mode/axis set",
+    "damping set",
+    "auto-disable switched",
+    "body enabled/disabled",
+    "force/torque added",
+    "body stopped",
+    "body destroyed",
+    "body flags written",
+    "sample count set",
+    "inverse mass written",
+    "idle counters written",
+    "joint created",
+    "joint attached",
+    "ball anchor set",
+    "rod anchor set",
+    "rod length set",
+    "fixed joint set",
+    "slider axis set",
+    "joint parameter set",
+    "joint flags written",
+    "rod reseated",
+];
+
+fn count_ops(ops: &[Op], counts: &mut [usize; 28]) {
+    let mut words = Vec::new();
+    for op in ops {
+        words.clear();
+        op.encode(&mut words);
+        counts[words[0] as usize] += 1;
+    }
 }
 
 fn fnv(hash: &mut u64, words: &[u32]) {
@@ -882,6 +1167,9 @@ fn same(a: f32, b: f32) -> bool {
 
 fn compare_slices(what: &str, a: &[f32], b: &[f32], out: &mut Vec<String>) -> bool {
     let mut ok = a.len() == b.len();
+    if !ok {
+        out.push(format!("{what}: {} values in acs.exe, {} in Rust", a.len(), b.len()));
+    }
     for k in 0..a.len().min(b.len()) {
         if !same(a[k], b[k]) {
             ok = false;
@@ -897,12 +1185,15 @@ fn compare_slices(what: &str, a: &[f32], b: &[f32], out: &mut Vec<String>) -> bo
     ok
 }
 
+fn rows(r: &[f32; 12]) -> [f32; 9] {
+    [r[0], r[1], r[2], r[4], r[5], r[6], r[8], r[9], r[10]]
+}
+
 fn compare_body(index: usize, a: &BodyState, b: &BodyState, out: &mut Vec<String>) -> bool {
     let name = |field: &str| format!("body {index} {field}");
     let mut ok = true;
     ok &= compare_slices(&name("pos"), &a.pos, &b.pos, out);
     ok &= compare_slices(&name("q"), &a.q, &b.q, out);
-    let rows = |r: &[f32; 12]| [r[0], r[1], r[2], r[4], r[5], r[6], r[8], r[9], r[10]];
     ok &= compare_slices(&name("R"), &rows(&a.r), &rows(&b.r), out);
     ok &= compare_slices(&name("lvel"), &a.lvel, &b.lvel, out);
     ok &= compare_slices(&name("avel"), &a.avel, &b.avel, out);
@@ -919,16 +1210,22 @@ fn compare_body(index: usize, a: &BodyState, b: &BodyState, out: &mut Vec<String
 }
 
 fn compare_mass(index: usize, a: &MassState, b: &MassState, out: &mut Vec<String>) -> bool {
-    let rows = |r: &[f32; 12]| [r[0], r[1], r[2], r[4], r[5], r[6], r[8], r[9], r[10]];
     let mut ok = compare_slices(&format!("body {index} mass"), &[a.mass, a.inv_mass], &[b.mass, b.inv_mass], out);
     ok &= compare_slices(&format!("body {index} I"), &rows(&a.i), &rows(&b.i), out);
     ok &= compare_slices(&format!("body {index} invI"), &rows(&a.inv_i), &rows(&b.inv_i), out);
     ok
 }
 
-fn compare_joint(index: usize, a: &JointState, b: &JointState, with_feedback: bool, out: &mut Vec<String>) -> bool {
+fn compare_joint(index: usize, a: &JointState, b: &JointState, after_step: bool, out: &mut Vec<String>) -> bool {
     let mut ok = compare_slices(&format!("joint {index} parameters"), &a.params, &b.params, out);
-    if with_feedback {
+    if a.flags != b.flags || a.bodies != b.bodies {
+        ok = false;
+        out.push(format!(
+            "joint {index}: flags {:#x} / {:#x}, bodies {:?} / {:?} (acs.exe / Rust)",
+            a.flags, b.flags, a.bodies, b.bodies
+        ));
+    }
+    if after_step {
         ok &= compare_slices(&format!("joint {index} force"), &a.feedback, &b.feedback, out);
         if a.tag != b.tag {
             ok = false;
@@ -938,18 +1235,87 @@ fn compare_joint(index: usize, a: &JointState, b: &JointState, with_feedback: bo
     ok
 }
 
+/// The state words that go into the hash of one step, in the order the golden test rebuilds
+/// them: per live body pos, q, R (3x3), lvel, avel, facc, tacc, tag, flags and the six
+/// getters at [`probe_point`]; then per joint tag, flags, the two bodies, the parameters and
+/// the constraint force. `bodies` and `joints` are the reference engine's states as read
+/// after the step (live bodies only).
+fn state_words(bodies: &[(BodyState, [f32; 18])], joints: &[JointState], words: &mut Vec<u32>) {
+    for (s, probe) in bodies {
+        let r = rows(&s.r);
+        for v in s.pos.iter().chain(&s.q).chain(&r).chain(&s.lvel).chain(&s.avel).chain(&s.facc).chain(&s.tacc) {
+            words.push(v.to_bits());
+        }
+        words.push(s.tag as u32);
+        words.push(s.flags);
+        words.extend(probe.iter().map(|v| v.to_bits()));
+    }
+    for s in joints {
+        words.push(s.tag as u32);
+        words.push(s.flags);
+        words.push(s.bodies[0] as u32);
+        words.push(s.bodies[1] as u32);
+        words.extend(s.params.iter().map(|v| v.to_bits()));
+        words.extend(s.feedback.iter().map(|v| v.to_bits()));
+    }
+}
+
+/// A golden file in the making (see the module comment).
+pub struct Golden {
+    pub bytes: Vec<u8>,
+}
+
+impl Golden {
+    fn words(&mut self, words: &[u32]) {
+        for w in words {
+            self.bytes.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+}
+
 /// Builds the scene in both engines, steps both `steps` times and compares everything after
 /// every step. After a step that differs the Rust side is put back on the reference state,
 /// so every step is judged on its own.
-pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, steps: usize, record: Option<&mut Vec<u32>>) -> Outcome {
+pub fn run<A: Engine, R: Engine>(
+    scene: &mut Scene,
+    ac: &mut A,
+    rust: &mut R,
+    steps: usize,
+    mut record: Option<&mut Vec<u32>>,
+    mut golden: Option<&mut Golden>,
+) -> Outcome {
     let mut outcome = Outcome { hash: 0xcbf2_9ce4_8422_2325, setup_exact: true, ..Outcome::default() };
-    let mut record = record;
-    ac.set_world(GRAVITY, ERP, CFM);
-    rust.set_world(GRAVITY, ERP, CFM);
+    count_ops(&scene.setup, &mut outcome.setup_ops);
+    ac.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
+    rust.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
+    ac.set_feedback(scene.feedback);
+    rust.set_feedback(scene.feedback);
     let (mut drive_ac, mut drive_rust) = (Driver::default(), Driver::default());
-    for op in &scene.setup.clone() {
+    let setup = scene.setup.clone();
+    for op in &setup {
         drive_ac.apply(ac, op);
         drive_rust.apply(rust, op);
+    }
+    if let Some(golden) = golden.as_deref_mut() {
+        golden.bytes.extend_from_slice(b"ODEOPS01");
+        let floats = [
+            scene.gravity[0],
+            scene.gravity[1],
+            scene.gravity[2],
+            scene.erp,
+            scene.cfm,
+            scene.damping[0],
+            scene.damping[1],
+            scene.h,
+        ];
+        golden.words(&floats.map(f32::to_bits));
+        let mut words = Vec::new();
+        for op in &setup {
+            op.encode(&mut words);
+        }
+        golden.words(&[scene.feedback as u32, words.len() as u32]);
+        golden.words(&words);
+        golden.words(&[steps as u32]);
     }
     // after set-up: masses, poses and joint parameters must already agree
     let mut first = Vec::new();
@@ -973,11 +1339,20 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
 
     let mut reference: Vec<BodyState> = (0..scene.bodies).map(|b| ac.body_state(b)).collect();
     for step in 0..steps {
-        for op in scene.before_step(step, &reference) {
-            drive_ac.apply(ac, &op);
-            drive_rust.apply(rust, &op);
+        let ops = scene.before_step(step, &reference);
+        count_ops(&ops, &mut outcome.step_ops);
+        for op in &ops {
+            drive_ac.apply(ac, op);
+            drive_rust.apply(rust, op);
         }
-        for k in 0..scene.joint_list.len() {
+        reference.resize(scene.bodies, BodyState::default());
+        // a value neither engine computes in every feedback slot: what a step leaves alone
+        // must be left alone by both
+        ac.feedback_sentinel();
+        rust.feedback_sentinel();
+        // how often the DBall row has to fall back on another direction (looked at only in
+        // the worlds made for it: it costs a read of every rod before every step)
+        for k in 0..if scene.rezero { scene.joint_list.len() } else { 0 } {
             let (j, kind, b1, b2) = scene.joint_list[k];
             let (Kind::DBall, Some(b1)) = (kind, b1) else { continue };
             if scene.is_dead(b1) || b2.is_some_and(|b| scene.is_dead(b)) {
@@ -989,16 +1364,24 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
                 Some(b2) => ac.body_get_rel_point_pos(b2, [p[3], p[4], p[5]]),
                 None => [p[3], p[4], p[5]],
             };
-            let d = [a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]];
-            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            outcome.short_rods += (length < 1e-7) as usize;
+            let length = |d: [f32; 3]| (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if length([a1[0] - a2[0], a1[1] - a2[1], a1[2] - a2[2]]) < 1e-7 {
+                outcome.short_rods += 1;
+                let v1 = ac.body_probe(b1, a1);
+                let v2 = b2.map_or([0.0; 18], |b2| ac.body_probe(b2, a2));
+                if length([v1[12] - v2[12], v1[13] - v2[13], v1[14] - v2[14]]) < 1e-7 {
+                    outcome.last_resort += 1;
+                }
+            }
         }
-        ac.step(H);
-        rust.step(H);
+        ac.step(scene.h);
+        rust.step(scene.h);
         outcome.max_rows = outcome.max_rows.max(rust.rows());
         let mut step_first: Vec<String> = Vec::new();
         let mut exact = true;
-        let mut words: Vec<u32> = Vec::new();
+        let mut has_nan = false;
+        let mut body_states = Vec::with_capacity(scene.bodies);
+        let mut joint_states = Vec::with_capacity(scene.joints);
         for b in 0..scene.bodies {
             if scene.is_dead(b) {
                 continue;
@@ -1006,30 +1389,43 @@ pub fn run<A: Engine, R: Engine>(scene: &mut Scene, ac: &mut A, rust: &mut R, st
             let a = ac.body_state(b);
             exact &= compare_body(b, &a, &rust.body_state(b), &mut step_first);
             for v in a.pos.iter().chain(&a.q).chain(&a.r).chain(&a.lvel).chain(&a.avel) {
-                words.push(v.to_bits());
                 outcome.not_finite |= !v.is_finite();
+                has_nan |= v.is_nan();
             }
-            words.push(a.tag as u32);
             outcome.asleep += (a.flags & 4 != 0) as usize;
             reference[b] = a;
             // the frame-conversion getters, for a point that changes every step
-            let t = step as f32 * 0.37 + b as f32;
-            let point = [1.3 * t.sin(), 0.7 * (1.7 * t).cos() + a.pos[1], 0.9 * (0.3 * t).sin() - 0.2];
+            let point = probe_point(step, b);
             let (probe_a, probe_r) = (ac.body_probe(b, point), rust.body_probe(b, point));
             exact &= compare_slices(&format!("body {b} getters"), &probe_a, &probe_r, &mut step_first);
-            words.extend(probe_a.iter().map(|v| v.to_bits()));
+            body_states.push((a, probe_a));
         }
         for j in 0..scene.joints {
             let a = ac.joint_state(j);
             exact &= compare_joint(j, &a, &rust.joint_state(j), true, &mut step_first);
-            words.extend(a.feedback.iter().map(|v| v.to_bits()));
-            words.push(a.tag as u32);
+            has_nan |= a.feedback.iter().any(|v| v.is_nan());
+            outcome.idle_joints += (a.tag == -1) as usize;
+            joint_states.push(a);
         }
+        let mut words: Vec<u32> = Vec::new();
+        state_words(&body_states, &joint_states, &mut words);
+        let mut step_hash = 0xcbf2_9ce4_8422_2325u64;
+        fnv(&mut step_hash, &words);
         fnv(&mut outcome.hash, &words);
         if let Some(record) = record.as_deref_mut() {
             record.extend_from_slice(&words);
         }
+        if let Some(golden) = golden.as_deref_mut() {
+            let mut op_words = Vec::new();
+            for op in &ops {
+                op.encode(&mut op_words);
+            }
+            golden.words(&[op_words.len() as u32]);
+            golden.words(&op_words);
+            golden.bytes.extend_from_slice(&step_hash.to_le_bytes());
+        }
         outcome.steps += 1;
+        outcome.nan_steps += has_nan as usize;
         if exact {
             outcome.exact_steps += 1;
         } else {

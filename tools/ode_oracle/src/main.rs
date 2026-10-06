@@ -4,17 +4,25 @@
 //!                  [--record <dir>]
 //!     Synthetic worlds stepped in the game's own ODE (functions called inside the mapped
 //!     acs.exe; the game never starts) and in the Rust port, compared bit for bit after
-//!     every step. Types: free_body, ball, dball, dball_zero, fixed, slider, auto_disable, car, strut_car, random.
-//!     Writes
-//!     `oracle/ode/micro_results.md`. `--record` also stores the reference states.
+//!     every step. Types: free_body, ball, dball, dball_zero, fixed, slider, auto_disable, car,
+//!     strut_car, random. The full run (no option that narrows it) writes
+//!     `oracle/ode/micro_results.md`, any other run `oracle/ode/micro_partial.md`.
+//!     `--record` also stores the reference states.
+//! ode_oracle golden
+//!     Writes the op-stream golden files of `crates/rustyac-ode/tests/golden_ops.rs`: a few
+//!     small worlds of every type with a hash of the game's state after every step.
 //! ode_oracle replay [<recording> ...] [--verbose]
 //!     Replays car_oracle recordings (default: every `oracle/car/*.carrec`) through the Rust
-//!     port: per-step test and free run. Needs no acs.exe. Writes `oracle/ode/replay_results.md`.
+//!     port: per-step test and free run. Needs no acs.exe. Writes `oracle/ode/replay_results.md`
+//!     (`replay_partial.md` when recordings are named).
 //! ode_oracle excerpt
 //!     Writes the small golden excerpts of `settle` and `slalom` used by `cargo test`.
 //! ode_oracle matrix
-//!     The game's `_dFactorLDLT`, `_dSolveLDLT`, `_dInvertPDMatrix` and `_dDot` against the Rust
-//!     versions on random matrices of 1 to 64 rows. Writes `oracle/ode/matrix_results.md`.
+//!     The game's solver and maths routines one by one against the Rust versions: `_dFactorLDLT`,
+//!     `_dSolveLDLT`, `_dInvertPDMatrix`, `_dIsPositiveDefinite` and `_dDot` on random matrices of
+//!     1 to 64 rows, and the small rotation and vector functions on random and awkward input.
+//!     Writes `oracle/ode/matrix_results.md` and the vectors of
+//!     `crates/rustyac-ode/tests/golden_functions.rs`.
 //! ode_oracle bench [--steps <n>]
 //!     Step time of the car layout: the game's ODE against the Rust port.
 //!
@@ -43,6 +51,7 @@ const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assett
 
 fn usage() -> String {
     "usage: ode_oracle micro [--type <name,name>] [--worlds <n>] [--steps <n>] [--first-seed <n>] [--verbose] [--record <dir>]\n       \
+     ode_oracle golden\n       \
      ode_oracle replay [<recording> ...] [--verbose]\n       \
      ode_oracle excerpt\n       \
      ode_oracle matrix\n       \
@@ -61,7 +70,7 @@ struct Args {
     types: Vec<String>,
     worlds: Option<usize>,
     steps: Option<usize>,
-    first_seed: u64,
+    first_seed: Option<u64>,
     verbose: bool,
     record: Option<PathBuf>,
     acs: PathBuf,
@@ -75,7 +84,7 @@ fn parse_args() -> Result<Args, String> {
         types: Vec::new(),
         worlds: None,
         steps: None,
-        first_seed: 0,
+        first_seed: None,
         verbose: false,
         record: None,
         acs: PathBuf::from(DEFAULT_ACS),
@@ -87,7 +96,7 @@ fn parse_args() -> Result<Args, String> {
             "--type" => a.types = value()?.split(',').map(str::to_string).collect(),
             "--worlds" => a.worlds = Some(number(value()?)?),
             "--steps" => a.steps = Some(number(value()?)?),
-            "--first-seed" => a.first_seed = number(value()?)? as u64,
+            "--first-seed" => a.first_seed = Some(number(value()?)? as u64),
             "--verbose" => a.verbose = true,
             "--record" => a.record = Some(PathBuf::from(value()?)),
             "--acs" => a.acs = PathBuf::from(value()?),
@@ -101,6 +110,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().and_then(|args| match args.command.as_str() {
         "micro" => micro_command(&args),
+        "golden" => golden_command(&args),
         "replay" => replay::replay_command(&args.files, args.verbose),
         "excerpt" => replay::excerpt_command(),
         "bench" => bench_command(&args),
@@ -120,11 +130,17 @@ const TYPES: [(&str, &str, usize, usize); 10] = [
     ("dball", "one fixed-length rod (DBall)", 100, 1000),
     ("dball_zero", "a rod of length zero: the fallback directions of the DBall row", 100, 1000),
     ("fixed", "one fixed joint", 100, 1000),
-    ("slider", "one slider joint", 100, 1000),
+    ("slider", "one slider joint; some with every motor parameter set and with stops far away", 100, 1000),
     ("auto_disable", "damped chains with ODE's auto-disable on; bodies fall asleep, are woken and disabled", 100, 1000),
     ("car", "F2004 layout: body, fuel tank, 4 hubs, 20 rods, 1 fixed joint; springs, tyres, steering", 20, 5000),
     ("strut_car", "strut car: body, tank, 4 hubs, 4 strut bodies; per corner a slider, a ball joint and 3 rods", 20, 5000),
-    ("random", "1 to 8 bodies, random chains of all joint types, loops, several islands", 1000, 1000),
+    (
+        "random",
+        "1 to 8 bodies, random chains of all joint types, loops, several islands; half of them also use \
+         what the game never does (other world settings, kinematic bodies, disabled joints, re-attached joints)",
+        1000,
+        1000,
+    ),
 ];
 
 fn scene_of(kind: &str, seed: u64) -> Result<Scene, String> {
@@ -144,6 +160,12 @@ fn scene_of(kind: &str, seed: u64) -> Result<Scene, String> {
 }
 
 fn micro_command(args: &Args) -> Result<(), String> {
+    for wanted in &args.types {
+        if !TYPES.iter().any(|t| t.0 == wanted) {
+            let names: Vec<&str> = TYPES.iter().map(|t| t.0).collect();
+            return Err(format!("no world type {wanted:?} (types: {})", names.join(", ")));
+        }
+    }
     let acs = acs::Acs::load(&args.acs)?;
     engine::init_ode(&acs);
     let out_dir = repo_root().join("oracle/ode");
@@ -156,7 +178,9 @@ fn micro_command(args: &Args) -> Result<(), String> {
          | largest matrix | hash of the reference states | first difference |\n|---|---|---|---|---|---|---|---|---|---|\n",
     );
     let mut failed = false;
+    let mut compared = 0;
     let mut notes = String::new();
+    let mut operations = String::new();
     for (name, about, default_worlds, default_steps) in TYPES {
         if !args.types.is_empty() && !args.types.iter().any(|t| t == name) {
             continue;
@@ -167,16 +191,15 @@ fn micro_command(args: &Args) -> Result<(), String> {
         let mut exact_worlds = 0;
         let mut setup_exact_worlds = 0;
         let mut not_finite = 0;
-        let mut asleep = 0;
-        let mut short_rods = 0;
+        let mut no_feedback = 0;
         let mut first: Option<String> = None;
         for w in 0..worlds {
-            let seed = args.first_seed + w as u64;
+            let seed = args.first_seed.unwrap_or(0) + w as u64;
             let mut scene = scene_of(name, seed)?;
             let mut ac = AcEngine::new(&acs);
             let mut rust = RustEngine::new();
             let mut record = args.record.as_ref().map(|_| Vec::new());
-            let outcome = micro::run(&mut scene, &mut ac, &mut rust, steps, record.as_mut());
+            let outcome = micro::run(&mut scene, &mut ac, &mut rust, steps, record.as_mut(), None);
             total.max_rows = total.max_rows.max(outcome.max_rows);
             if let (Some(dir), Some(words)) = (&args.record, record) {
                 let mut bytes = Vec::with_capacity(words.len() * 4 + 64);
@@ -199,8 +222,16 @@ fn micro_command(args: &Args) -> Result<(), String> {
             exact_worlds += (outcome.exact_steps == outcome.steps && outcome.setup_exact) as usize;
             setup_exact_worlds += outcome.setup_exact as usize;
             not_finite += outcome.not_finite as usize;
-            asleep += outcome.asleep;
-            short_rods += outcome.short_rods;
+            no_feedback += !scene.feedback as usize;
+            total.nan_steps += outcome.nan_steps;
+            total.asleep += outcome.asleep;
+            total.short_rods += outcome.short_rods;
+            total.last_resort += outcome.last_resort;
+            total.idle_joints += outcome.idle_joints;
+            for k in 0..28 {
+                total.setup_ops[k] += outcome.setup_ops[k];
+                total.step_ops[k] += outcome.step_ops[k];
+            }
             if let Some(text) = outcome.first {
                 if args.verbose {
                     println!("  {}: {text} ({} of {} steps exact)", scene.name, outcome.exact_steps, outcome.steps);
@@ -211,6 +242,7 @@ fn micro_command(args: &Args) -> Result<(), String> {
             }
         }
         failed |= total.exact_steps != total.steps || setup_exact_worlds != worlds;
+        compared += total.steps;
         let percent = |part: usize, whole: usize| {
             if part == whole {
                 format!("100 % ({part}/{whole})")
@@ -232,10 +264,31 @@ fn micro_command(args: &Args) -> Result<(), String> {
         table.push_str(&line);
         table.push('\n');
         for note in [
-            (not_finite > 0).then(|| format!("{not_finite} of the {worlds} worlds reached a value that is not finite")),
-            (asleep > 0).then(|| format!("bodies were disabled (asleep) in {asleep} body-steps")),
-            (short_rods > 0).then(|| {
-                format!("a rod's anchors were less than 1e-7 m apart in {short_rods} joint-steps (fallback direction)")
+            (no_feedback > 0).then(|| {
+                format!("{no_feedback} of the {worlds} worlds ran as the game does, without joint feedback buffers")
+            }),
+            (not_finite > 0).then(|| {
+                format!(
+                    "{not_finite} of the {worlds} worlds reached a value that is not finite; {} steps had a NaN \
+                     in the reference state (NaN against NaN counts as equal)",
+                    total.nan_steps
+                )
+            }),
+            (total.asleep > 0).then(|| format!("bodies were disabled (asleep) in {} body-steps", total.asleep)),
+            (total.idle_joints > 0).then(|| {
+                format!(
+                    "joints were in no island (disabled, detached by a destroyed body, between sleeping bodies or \
+                     with no moving body) in {} joint-steps",
+                    total.idle_joints
+                )
+            }),
+            (total.short_rods > 0).then(|| {
+                format!(
+                    "the rod's anchors were less than 1e-7 m apart in {} joint-steps (the row takes the direction of \
+                     the anchors' relative velocity); in {} of them that velocity was below 1e-7 too (last resort: \
+                     the direction (1, 0, 0))",
+                    total.short_rods, total.last_resort
+                )
             }),
         ]
         .into_iter()
@@ -244,21 +297,139 @@ fn micro_command(args: &Args) -> Result<(), String> {
             println!("  note: {note}");
             notes.push_str(&format!("- `{name}`: {note}\n"));
         }
+        let list = |counts: &[usize; 28]| {
+            let parts: Vec<String> = (1..28)
+                .filter(|&k| counts[k] > 0)
+                .map(|k| format!("{} {}", micro::OP_NAMES[k], counts[k]))
+                .collect();
+            if parts.is_empty() { "nothing".to_string() } else { parts.join(", ") }
+        };
+        operations.push_str(&format!(
+            "- `{name}`: before the first step: {}. Between steps: {}.\n",
+            list(&total.setup_ops),
+            list(&total.step_ops)
+        ));
     }
     if !notes.is_empty() {
         table.push_str("\nNotes:\n\n");
         table.push_str(&notes);
     }
-    let path = out_dir.join("micro_results.md");
+    table.push_str("\nOperations applied to both engines (number of calls):\n\n");
+    table.push_str(&operations);
+    // only the full run may replace the table the report is built from
+    let full = args.types.is_empty() && args.worlds.is_none() && args.steps.is_none() && args.first_seed.is_none();
+    let path = out_dir.join(if full { "micro_results.md" } else { "micro_partial.md" });
     std::fs::write(&path, &table).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote {}", path.display());
+    if compared == 0 {
+        return Err("no step was compared".into());
+    }
     if failed {
         return Err("at least one step of at least one world differs".into());
     }
     Ok(())
 }
 
-/// The solver routines alone, on random matrices (see `matrix_check.rs`).
+/// (world type, seed, steps) of the golden files.
+const GOLDEN: [(&str, u64, usize); 31] = [
+    ("free_body", 1, 150),
+    ("free_body", 2, 150),
+    ("ball", 0, 150),
+    ("ball", 2, 150),
+    ("ball", 5, 150),
+    ("dball", 1, 150),
+    ("dball", 2, 150),
+    ("dball_zero", 0, 60),
+    ("dball_zero", 1, 60),
+    ("dball_zero", 3, 60),
+    ("fixed", 0, 150),
+    ("fixed", 5, 150),
+    ("slider", 1, 150),
+    ("slider", 3, 150),
+    ("slider", 5, 150),
+    ("auto_disable", 1, 500),
+    ("auto_disable", 2, 500),
+    ("car", 1, 80),
+    ("strut_car", 1, 80),
+    // plain worlds; 14 and 61 have the largest matrices
+    ("random", 1, 150),
+    ("random", 14, 200),
+    ("random", 61, 150),
+    // re-attached joints, disabled joints, body flags written by hand
+    ("random", 4, 300),
+    ("random", 9, 300),
+    // other gravity, damping and step sizes
+    ("random", 6, 300),
+    ("random", 21, 300),
+    ("random", 52, 200),
+    // a body and a rod added on the way; a body destroyed on the way
+    ("random", 7, 450),
+    ("random", 53, 480),
+    // auto-disable on; a single body that starts disabled
+    ("random", 20, 300),
+    ("random", 42, 150),
+];
+
+/// Small worlds of every type written as op streams with a hash of the game's state after
+/// every step, for the crate's own test (which then needs no game).
+fn golden_command(args: &Args) -> Result<(), String> {
+    let acs = acs::Acs::load(&args.acs)?;
+    engine::init_ode(&acs);
+    let dir = repo_root().join("crates/rustyac-ode/tests/data/ops");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut total = 0;
+    // `--worlds n` only looks at random worlds (to choose seeds for the list above)
+    let scan: Vec<(&str, u64, usize)> = (0..args.worlds.unwrap_or(0) as u64)
+        .map(|w| ("random", args.first_seed.unwrap_or(0) + w, args.steps.unwrap_or(480)))
+        .collect();
+    let list: &[(&str, u64, usize)] = if scan.is_empty() { &GOLDEN } else { &scan };
+    for &(name, seed, steps) in list {
+        let mut scene = scene_of(name, seed)?;
+        let mut ac = AcEngine::new(&acs);
+        let mut rust = RustEngine::new();
+        let mut golden = micro::Golden { bytes: Vec::new() };
+        let outcome = micro::run(&mut scene, &mut ac, &mut rust, steps, None, Some(&mut golden));
+        if outcome.exact_steps != outcome.steps || !outcome.setup_exact {
+            return Err(format!("{}: the Rust port differs ({})", scene.name, outcome.first.unwrap_or_default()));
+        }
+        if scan.is_empty() {
+            let path = dir.join(format!("{name}_{seed}.odeops"));
+            std::fs::write(&path, &golden.bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        total += golden.bytes.len();
+        println!(
+            "{:<16} {:>4} steps {:>7} bytes  bodies {} joints {} rows {} feedback {} asleep {} idle joints {} \
+             short rods {} (last resort {}) not finite {} h {} gravity {:?} damping {:?} destroyed {} re-attached {} \
+             flags {}/{} kinematic {}",
+            format!("{name}_{seed}"),
+            steps,
+            golden.bytes.len(),
+            scene.bodies,
+            scene.joints,
+            outcome.max_rows,
+            scene.feedback,
+            outcome.asleep,
+            outcome.idle_joints,
+            outcome.short_rods,
+            outcome.last_resort,
+            outcome.not_finite,
+            scene.h,
+            scene.gravity,
+            scene.damping,
+            outcome.step_ops[13],
+            outcome.step_ops[19],
+            outcome.setup_ops[14] + outcome.setup_ops[26],
+            outcome.step_ops[26],
+            outcome.setup_ops[16],
+        );
+    }
+    if scan.is_empty() {
+        println!("wrote {} files, {total} bytes, to {}", GOLDEN.len(), dir.display());
+    }
+    Ok(())
+}
+
+/// The solver and maths routines alone (see `matrix_check.rs`).
 fn matrix_command(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     let table = matrix_check::matrix_command(&acs)?;
@@ -270,7 +441,8 @@ fn matrix_command(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// Rough step time of the car layout in both engines (each stepped on its own, same forces).
+/// Rough step time of the car layout in both engines (each stepped on its own, same forces,
+/// no joint feedback buffers, as in the game).
 fn bench_command(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     engine::init_ode(&acs);
@@ -284,8 +456,10 @@ fn bench_command(args: &Args) -> Result<(), String> {
             // both are built (the scene script reads the reference state), one is timed
             let mut driver_ac = micro::Driver::default();
             let mut driver_rust = micro::Driver::default();
-            ac.set_world([0.0, -9.806, 0.0], 0.3, 1e-7);
-            rust.set_world([0.0, -9.806, 0.0], 0.3, 1e-7);
+            ac.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
+            rust.set_world(scene.gravity, scene.erp, scene.cfm, scene.damping);
+            ac.set_feedback(false);
+            rust.set_feedback(false);
             for op in &scene.setup.clone() {
                 driver_ac.apply(&mut ac, op);
                 driver_rust.apply(&mut rust, op);
