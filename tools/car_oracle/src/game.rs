@@ -1491,11 +1491,11 @@ impl<'a> World<'a> {
         row.i("car.blackFlagged", rd::<u8>(car, CAR_BLACK_FLAGGED) as i32);
         row.d("car.penaltyTime", rd(car, CAR_PENALTY_TIME));
         row.v("car.damageZoneLevel", &rd::<[f32; 5]>(car, CAR_DAMAGE_ZONE_LEVEL));
-        row.f("engine.ambientTemperature", rd(engine, PE_AMBIENT_TEMPERATURE));
-        row.f("engine.roadTemperature", rd(engine, PE_ROAD_TEMPERATURE));
-        row.v("engine.wind", &v3(engine, PE_WIND));
-        row.i("engine.stepCounter", rd(engine, PE_STEP_COUNTER));
-        row.d("engine.physicsTime", rd(engine, PE_PHYSICS_TIME));
+        row.f("physics.ambientTemperature", rd(engine, PE_AMBIENT_TEMPERATURE));
+        row.f("physics.roadTemperature", rd(engine, PE_ROAD_TEMPERATURE));
+        row.v("physics.wind", &v3(engine, PE_WIND));
+        row.i("physics.stepCounter", rd(engine, PE_STEP_COUNTER));
+        row.d("physics.physicsTime", rd(engine, PE_PHYSICS_TIME));
         row.f("track.dynamicGripLevel", rd(st.track, TRACK_DYNAMIC_GRIP_LEVEL));
         let core: *const u8 = rd(engine, PE_CORE);
         let world: *const u8 = rd(core, CORE_WORLD);
