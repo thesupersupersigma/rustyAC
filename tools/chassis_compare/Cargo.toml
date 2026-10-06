@@ -1,0 +1,16 @@
+[package]
+name = "chassis_compare"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Runs the Rust rolling chassis (rustyac-physics on rustyac-ode) against the whole-car recordings of tools/car_oracle, fed only the inputs of the systems that are not ported yet, and compares every step bit for bit. Needs no acs.exe."
+
+[dependencies]
+rustyac-physics = { path = "../../crates/rustyac-physics" }
+rustyac-ode = { path = "../../crates/rustyac-ode" }
+
+[profile.release]
+opt-level = 3
+
+# standalone crate, not part of the parent workspace
+[workspace]
