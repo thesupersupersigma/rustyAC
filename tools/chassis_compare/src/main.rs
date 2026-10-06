@@ -57,8 +57,31 @@ const OWN_SYSTEMS: [&str; 10] =
 /// Systems whose force calls are fed from the tape.
 const FED_SYSTEMS: [&str; 2] = ["aero_drag", "aero_lift"];
 
+/// Which systems the Rust car computes itself. What it does not, the recording feeds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Systems {
+    brakes: bool,
+    drivetrain: bool,
+}
+
+impl Systems {
+    /// Everything that is ported.
+    const ALL: Systems = Systems { brakes: true, drivetrain: true };
+    /// The rolling chassis alone, as in Task 08.
+    const CHASSIS: Systems = Systems { brakes: false, drivetrain: false };
+
+    fn describe(&self) -> &'static str {
+        match (self.brakes, self.drivetrain) {
+            (true, true) => "brakes, engine and drivetrain in Rust",
+            (true, false) => "brakes in Rust; engine and drivetrain fed",
+            (false, true) => "engine and drivetrain in Rust; brakes fed",
+            (false, false) => "brakes, engine and drivetrain fed",
+        }
+    }
+}
+
 /// How a recording was made, as far as the chassis needs to know.
-fn run_setup(recording: &Recording) -> Result<RunSetup, String> {
+fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String> {
     let get = |key: &str| recording.get(key).ok_or(format!("the recording's header has no {key}"));
     let first = |name: &str| recording.f(0, name);
     let env = ChassisEnvironment {
@@ -76,16 +99,38 @@ fn run_setup(recording: &Recording) -> Result<RunSetup, String> {
         seed: get("seed")?.parse().map_err(|e| format!("seed: {e}"))?,
         clock_start_ms: get("clock_start_ms")?.parse().map_err(|e| format!("clock_start_ms: {e}"))?,
         env,
+        rust_brakes: systems.brakes,
+        rust_drivetrain: systems.drivetrain,
+        auto_clutch: get("auto_clutch")? != "0",
+        // the key came with the powertrain scenarios; older recordings ran without the aid
+        auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
     })
 }
 
 /// What the chassis is fed in one step: only values that systems outside the chassis own.
 fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, String> {
     let f = |name: &str| recording.f(step, name);
+    // the powertrain scenarios record what the script did with handbrake, H-shifter and brake
+    // bias; in the older recordings the device left them alone
+    let script_i = |name: &str, or: &str| recording.i(step, if recording.has(name) { name } else { or });
     let mut out = RecordedStep {
-        controls: CarControls { gas: f("script.gas"), brake: f("script.brake"), steer: f("script.steer"), clutch: f("script.clutch") },
+        controls: CarControls {
+            gas: f("script.gas"),
+            brake: f("script.brake"),
+            steer: f("script.steer"),
+            clutch: f("script.clutch"),
+            gear_up: recording.i(step, "script.gearUp") != 0,
+            gear_dn: recording.i(step, "script.gearDn") != 0,
+            kers: false,
+            requested_gear_index: script_i("script.requestedGear", "controls.requestedGearIndex"),
+            hand_brake: if recording.has("script.handBrake") { f("script.handBrake") } else { f("controls.handBrake") },
+        },
+        bias_clicks: if recording.has("script.biasClicks") { recording.i(step, "script.biasClicks") } else { 0 },
         // only the automatic clutch rewrites the clutch pedal, before the sleeping rule reads it
         clutch: f("controls.clutch"),
+        // what traction control and the pit limiter left for the next step
+        engine_electronic_override: f("engine.electronicOverride"),
+        brake_electronic_override: f("brakes.electronicOverride"),
         ..RecordedStep::default()
     };
     // what the engine and the gearbox left at the end of the previous step; before the first
@@ -292,6 +337,257 @@ const FAULTS: [(&str, &str, Fault); 18] = [
     ("erp", "the low-speed softening of the joints left out", |c| c.env.is_first_car = false),
 ];
 
+/// The game's value of one traced powertrain value in a step, if the recording holds it.
+fn game_trace_word(recording: &Recording, step: usize, value: &replay::TraceValue) -> Option<u64> {
+    if !recording.has(&value.name) {
+        return None;
+    }
+    Some(match value.kind {
+        'd' => recording.d(step, &value.name).to_bits(),
+        'i' => recording.i(step, &value.name) as u32 as u64,
+        _ => recording.f(step, &value.name).to_bits() as u64,
+    })
+}
+
+/// The game's values of the powertrain trace, in trace order; `None` for a value the recording
+/// does not hold. A missing value that every recording should hold is an error.
+fn game_trace(recording: &Recording, step: usize, trace: &[replay::TraceValue]) -> Result<Vec<Option<u64>>, String> {
+    trace
+        .iter()
+        .map(|value| match game_trace_word(recording, step, value) {
+            None if !value.extra => Err(format!("the recording has no field {}", value.name)),
+            word => Ok(word),
+        })
+        .collect()
+}
+
+/// Deliberate faults in the ported brakes, engine and drivetrain ("one bit up" is the next
+/// representable number). A value a setup item is attached to is detached first.
+const POWERTRAIN_FAULTS: [(&str, &str, Fault); 12] = [
+    ("brake_power", "brake torque at full pedal one bit up", |c| {
+        let brakes = c.brake_system.as_mut().unwrap();
+        // the public face of the brake system has no setter for its power: the multiplier
+        detach_item(&mut c.setup_manager, "BRAKE_POWER_MULT");
+        let base = brakes.base_mut();
+        base.brake_power_multiplier = nudge(base.brake_power_multiplier);
+    }),
+    ("front_bias", "front brake bias one bit up", |c| {
+        detach_item(&mut c.setup_manager, "FRONT_BIAS");
+        let base = c.brake_system.as_mut().unwrap().base_mut();
+        base.front_bias = nudge(base.front_bias);
+    }),
+    ("engine_inertia", "engine inertia one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().engine_mut().base_mut();
+        base.inertia = nudge(base.inertia);
+    }),
+    ("limiter", "rev limiter one part in 8 million lower", |c| {
+        let base = c.drivetrain.as_mut().unwrap().engine_mut().base_mut();
+        base.limiter_multiplier = f32::from_bits(base.limiter_multiplier.to_bits() - 1);
+    }),
+    ("clutch_torque", "clutch capacity one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.clutch_max_torque = f64::from_bits(base.clutch_max_torque.to_bits() + 1);
+    }),
+    ("clutch_inertia", "gearbox inertia one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.clutch_inertia = nudge(base.clutch_inertia);
+    }),
+    ("first_gear", "first gear's ratio one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.gears[2].ratio = f64::from_bits(base.gears[2].ratio.to_bits() + 1);
+    }),
+    ("final_ratio", "final drive ratio one bit up", |c| {
+        detach_item(&mut c.setup_manager, "FINAL_RATIO");
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.final_ratio = nudge(base.final_ratio);
+    }),
+    ("shift_time", "up-shift time one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.gear_up_time = f64::from_bits(base.gear_up_time.to_bits() + 1);
+    }),
+    ("diff_power", "differential power ramp one bit up", |c| {
+        detach_item(&mut c.setup_manager, "DIFF_POWER");
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.diff_power_ramp = nudge(base.diff_power_ramp);
+    }),
+    ("diff_preload", "differential preload one bit up", |c| {
+        detach_item(&mut c.setup_manager, "DIFF_PRELOAD");
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.diff_pre_load = nudge(base.diff_pre_load);
+    }),
+    ("wheel_inertia", "left driven wheel's inertia one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.out_shaft_l.inertia = f64::from_bits(base.out_shaft_l.inertia.to_bits() + 1);
+    }),
+];
+
+fn detach_item(manager: &mut rustyac_physics::car::SetupManager, name: &str) {
+    let item = manager.items.iter_mut().find(|item| item.name == name).expect("a setup item");
+    item.attached = false;
+}
+
+/// How often the branches of brakes, engine and drivetrain were taken (counted on the Rust
+/// car, which is the game's as long as the run is bit-exact).
+#[derive(Clone, Copy, Default)]
+struct PowertrainCoverage {
+    /// Steps with the brake pedal down / with handbrake torque on the rear wheels.
+    braking: usize,
+    handbrake: usize,
+    /// Steps with a cockpit brake bias in force, with an electronic brake balance, with
+    /// steer-brake torque, with brake fade (disc temperatures on).
+    cockpit_bias: usize,
+    ebb: usize,
+    brake_temps: usize,
+    /// Steps the rev limiter cut, the engine ran below idle, the engine had no fuel pressure,
+    /// traction control (fed) cut the throttle.
+    limiter: usize,
+    below_idle: usize,
+    no_fuel: usize,
+    tc_cut: usize,
+    /// Steps with turbo boost.
+    boost: usize,
+    /// Steps by clutch state and gear.
+    locked_in_gear: usize,
+    locked_neutral: usize,
+    slipping_in_gear: usize,
+    slipping_neutral: usize,
+    /// Paddle shifts started (up, down), steps of the throttle cut after an up-shift.
+    shifts_up: usize,
+    shifts_down: usize,
+    cut_off: usize,
+    /// Steps in reverse, steps with the H-shifter grinding.
+    reverse: usize,
+    grinding: usize,
+    /// Steps the differential held both wheels to the carrier / let them differ.
+    diff_holding: usize,
+    diff_slipping: usize,
+    /// Steps the drivetrain held the driven wheels at zero (both flagged locked).
+    wheels_held: usize,
+    /// Steps a clutch profile of the automatic clutch was playing, steps the automatic blip
+    /// raised the throttle, paddle presses of the automatic gearbox.
+    clutch_sequence: usize,
+    blip: usize,
+    auto_shifts: usize,
+}
+
+impl PowertrainCoverage {
+    fn count(&mut self, chassis: &RollingChassis, feed: &RecordedStep, before_request: i32) {
+        if let Some(brakes) = &chassis.brake_system {
+            self.braking += (feed.controls.brake > 0.0) as usize;
+            self.handbrake += (chassis.tyres[2].inputs.hand_brake_torque > 0.0) as usize;
+            let mut trace = Vec::new();
+            brakes.trace(&mut trace);
+            let value = |name: &str| trace.iter().find(|v| v.name == name).map(|v| f32::from_bits(v.word as u32)).unwrap_or(0.0);
+            self.cockpit_bias += (value("brakes.biasOverride") != -1.0) as usize;
+            self.ebb += brakes.is_using_ebb() as usize;
+            self.brake_temps += (value("brakes.disc.lf.t") != chassis.env.ambient_temperature && value("brakes.disc.lf.t") != 0.0) as usize;
+        }
+        if let Some(drivetrain) = &chassis.drivetrain {
+            let b = drivetrain.base();
+            let e = drivetrain.engine().base();
+            self.limiter += e.status.is_limiter_on as usize;
+            self.below_idle += (e.last_input.rpm < drivetrain.engine().minimum() as f32) as usize;
+            self.no_fuel += (e.fuel_pressure < 1.0) as usize;
+            self.tc_cut += (feed.engine_electronic_override != 1.0) as usize;
+            self.boost += (e.status.turbo_boost > 0.0) as usize;
+            let in_gear = b.ratio != 0.0;
+            match (b.clutch_open_state, in_gear) {
+                (false, true) => self.locked_in_gear += 1,
+                (false, false) => self.locked_neutral += 1,
+                (true, true) => self.slipping_in_gear += 1,
+                (true, false) => self.slipping_neutral += 1,
+            }
+            let request = b.gear_request.request as i32;
+            if before_request == 0 && request == 1 {
+                self.shifts_up += 1;
+            }
+            if before_request == 0 && request == 2 {
+                self.shifts_down += 1;
+            }
+            self.cut_off += (b.cut_off > 0.0) as usize;
+            self.reverse += (b.current_gear == 0) as usize;
+            self.grinding += b.is_gear_grinding as usize;
+            let held = b.out_shaft_l.velocity == b.drive.velocity && b.out_shaft_r.velocity == b.drive.velocity;
+            if held {
+                self.diff_holding += 1;
+            } else {
+                self.diff_slipping += 1;
+            }
+            let (l, r) = (&chassis.tyres[b.tyre_left], &chassis.tyres[b.tyre_right]);
+            self.wheels_held += (l.status.is_locked && r.status.is_locked && b.clutch_open_state) as usize;
+            self.clutch_sequence += (!chassis.autoclutch.clutch_sequence.is_done) as usize;
+            self.blip += (chassis.controls.gas > feed.controls.gas) as usize;
+            self.auto_shifts += ((chassis.controls.gear_up && !feed.controls.gear_up) || (chassis.controls.gear_dn && !feed.controls.gear_dn)) as usize;
+        }
+    }
+
+    fn add(&mut self, other: &PowertrainCoverage) {
+        let pairs: [(&mut usize, usize); 25] = [
+            (&mut self.braking, other.braking),
+            (&mut self.handbrake, other.handbrake),
+            (&mut self.cockpit_bias, other.cockpit_bias),
+            (&mut self.ebb, other.ebb),
+            (&mut self.brake_temps, other.brake_temps),
+            (&mut self.limiter, other.limiter),
+            (&mut self.below_idle, other.below_idle),
+            (&mut self.no_fuel, other.no_fuel),
+            (&mut self.tc_cut, other.tc_cut),
+            (&mut self.boost, other.boost),
+            (&mut self.locked_in_gear, other.locked_in_gear),
+            (&mut self.locked_neutral, other.locked_neutral),
+            (&mut self.slipping_in_gear, other.slipping_in_gear),
+            (&mut self.slipping_neutral, other.slipping_neutral),
+            (&mut self.shifts_up, other.shifts_up),
+            (&mut self.shifts_down, other.shifts_down),
+            (&mut self.cut_off, other.cut_off),
+            (&mut self.reverse, other.reverse),
+            (&mut self.grinding, other.grinding),
+            (&mut self.diff_holding, other.diff_holding),
+            (&mut self.diff_slipping, other.diff_slipping),
+            (&mut self.wheels_held, other.wheels_held),
+            (&mut self.clutch_sequence, other.clutch_sequence),
+            (&mut self.blip, other.blip),
+            (&mut self.auto_shifts, other.auto_shifts),
+        ];
+        for (mine, theirs) in pairs {
+            *mine += theirs;
+        }
+    }
+
+    const HEAD: &'static str = "| Scenario | Brake pedal / handbrake / cockpit bias / EBB / disc temps | Limiter / below idle / no fuel / TC cut (fed) / boost | Clutch locked in gear / locked neutral / slipping in gear / slipping neutral | Paddle shifts up / down / cut-off steps | Reverse / grinding | Diff holds / slips / wheels held | Clutch profile / blip / auto-shifter presses |\n|---|---|---|---|---|---|---|---|";
+
+    fn row(&self, name: &str) -> String {
+        format!(
+            "| {name} | {} / {} / {} / {} / {} | {} / {} / {} / {} / {} | {} / {} / {} / {} | {} / {} / {} | {} / {} | {} / {} / {} | {} / {} / {} |",
+            self.braking,
+            self.handbrake,
+            self.cockpit_bias,
+            self.ebb,
+            self.brake_temps,
+            self.limiter,
+            self.below_idle,
+            self.no_fuel,
+            self.tc_cut,
+            self.boost,
+            self.locked_in_gear,
+            self.locked_neutral,
+            self.slipping_in_gear,
+            self.slipping_neutral,
+            self.shifts_up,
+            self.shifts_down,
+            self.cut_off,
+            self.reverse,
+            self.grinding,
+            self.diff_holding,
+            self.diff_slipping,
+            self.wheels_held,
+            self.clutch_sequence,
+            self.blip,
+            self.auto_shifts,
+        )
+    }
+}
+
 /// How often the branches that ordinary driving of the F2004 never reaches were taken.
 #[derive(Clone, Copy, Default)]
 struct Coverage {
@@ -311,6 +607,9 @@ struct Coverage {
 
 struct Outcome {
     coverage: Coverage,
+    powertrain: PowertrainCoverage,
+    /// Values of brakes, engine and drivetrain compared per step (those the recording holds).
+    powertrain_values: usize,
     scenario: String,
     steps: usize,
     exact: usize,
@@ -325,11 +624,12 @@ struct Outcome {
 fn compare(
     recording: &Recording,
     data: &Path,
+    systems: Systems,
     verbose: bool,
     stop_after: Option<usize>,
     fault: Option<Fault>,
 ) -> Result<Outcome, String> {
-    let setup = run_setup(recording)?;
+    let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
     let mut chassis = setup.build(data)?;
     if let Some(fault) = fault {
@@ -338,6 +638,8 @@ fn compare(
     let started = std::time::Instant::now();
     let mut outcome = Outcome {
         coverage: Coverage::default(),
+        powertrain: PowertrainCoverage::default(),
+        powertrain_values: 0,
         scenario: setup.scenario.clone(),
         steps: 0,
         exact: 0,
@@ -350,6 +652,7 @@ fn compare(
     let steps = recording.steps.len().min(stop_after.unwrap_or(usize::MAX));
     for step in 0..steps {
         let feed = recorded_step(recording, step)?;
+        let request_before = chassis.drivetrain.as_ref().map(|d| d.base().gear_request.request as i32).unwrap_or(0);
         chassis.step(DT, setup.time_of_step(step), &mut RecordedFeed { step: &feed });
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
@@ -359,6 +662,24 @@ fn compare(
                 differing.push(k);
             }
         }
+        // brakes, engine, drivetrain, shift helpers
+        let trace = replay::powertrain_trace(&chassis);
+        let game_values = game_trace(recording, step, &trace)?;
+        outcome.powertrain_values = game_values.iter().flatten().count();
+        let mut trace_differences = Vec::new();
+        for (value, game) in trace.iter().zip(&game_values) {
+            if let Some(game) = game {
+                if !replay::same_value(value.kind, *game, value.word) {
+                    trace_differences.push(format!(
+                        "{}: game {} / Rust {}",
+                        value.name,
+                        replay::describe(value.kind, *game),
+                        replay::describe(value.kind, value.word)
+                    ));
+                }
+            }
+        }
+        outcome.powertrain.count(&chassis, &feed, request_before);
         let tape = compare_tape(recording, step, &chassis);
         let coverage = &mut outcome.coverage;
         for suspension in &chassis.suspensions {
@@ -379,7 +700,7 @@ fn compare(
         }
         outcome.steps += 1;
         outcome.calls += recording.steps[step].calls.len();
-        if differing.is_empty() && tape.is_ok() {
+        if differing.is_empty() && trace_differences.is_empty() && tape.is_ok() {
             outcome.exact += 1;
             continue;
         }
@@ -393,16 +714,25 @@ fn compare(
                     replay::describe(field.kind, rust[k])
                 )
             };
-            // the tape is in execution order, so its first difference is the earliest cause
-            let text = match (&tape, differing.first()) {
-                (Err(tape), _) => tape.clone(),
-                (Ok(()), Some(&k)) => describe(k),
-                (Ok(()), None) => unreachable!(),
+            // a value of the powertrain names its system; the tape is in execution order, so
+            // its first difference is the earliest cause among the chassis values
+            let text = match (trace_differences.first(), &tape, differing.first()) {
+                (Some(text), _, _) => text.clone(),
+                (None, Err(tape), _) => tape.clone(),
+                (None, Ok(()), Some(&k)) => describe(k),
+                (None, Ok(()), None) => unreachable!(),
             };
             outcome.first = Some((step, text));
-            outcome.first_count = differing.len();
+            outcome.first_count = differing.len() + trace_differences.len();
             if verbose {
-                println!("  first difference at step {step}; {} of {} values differ:", differing.len(), columns.fields.len());
+                println!(
+                    "  first difference at step {step}; {} of {} values differ:",
+                    differing.len() + trace_differences.len(),
+                    columns.fields.len() + outcome.powertrain_values
+                );
+                for text in trace_differences.iter().take(60) {
+                    println!("    {text}");
+                }
                 for &k in differing.iter().take(40) {
                     println!("    {}", describe(k));
                 }
@@ -435,7 +765,7 @@ fn car_data(recording: &Recording) -> Result<PathBuf, String> {
     Ok(data)
 }
 
-fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: Option<usize>) -> Result<(), String> {
+fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: bool, stop_after: Option<usize>) -> Result<(), String> {
     let repo = repo_root();
     let folder = match dir {
         Some(dir) if dir.is_absolute() => dir.to_path_buf(),
@@ -463,7 +793,7 @@ fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: 
         let recording = Recording::read(&path)?;
         let data = car_data(&recording)?;
         println!("{name}: {} steps", recording.steps.len());
-        let outcome = compare(&recording, &data, verbose, stop_after, None)?;
+        let outcome = compare(&recording, &data, systems, verbose, stop_after, None)?;
         match &outcome.first {
             None => println!("  bit-exact: {} ({:.1} s)", percent(outcome.exact, outcome.steps), outcome.seconds),
             Some((step, text)) => {
@@ -473,22 +803,48 @@ fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: 
         outcomes.push(outcome);
     }
     let mut table = String::new();
-    writeln!(table, "| Scenario | Steps | Bit-exact steps | First divergence | Values compared per step | Force calls compared |").unwrap();
-    writeln!(table, "|---|---|---|---|---|---|").unwrap();
+    writeln!(table, "Free run, {}.\n", systems.describe()).unwrap();
+    writeln!(
+        table,
+        "| Scenario | Steps | Bit-exact steps | First divergence | Chassis values compared per step | Brake / engine / \
+         drivetrain values compared per step | Force calls compared |"
+    )
+    .unwrap();
+    writeln!(table, "|---|---|---|---|---|---|---|").unwrap();
     let (mut steps, mut exact, mut calls) = (0, 0, 0);
     for o in &outcomes {
         let first = match &o.first {
             None => "none".to_string(),
             Some((step, text)) => format!("step {step}: {text} ({} values differ in that step)", o.first_count),
         };
-        writeln!(table, "| `{}` | {} | {} | {} | {} | {} |", o.scenario, o.steps, percent(o.exact, o.steps), first, o.values, o.calls)
-            .unwrap();
+        writeln!(
+            table,
+            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            o.scenario,
+            o.steps,
+            percent(o.exact, o.steps),
+            first,
+            o.values,
+            o.powertrain_values,
+            o.calls
+        )
+        .unwrap();
         steps += o.steps;
         exact += o.exact;
         calls += o.calls;
     }
-    writeln!(table, "| **all** | **{steps}** | **{}** | | | **{calls}** |", percent(exact, steps)).unwrap();
+    writeln!(table, "| **all** | **{steps}** | **{}** | | | | **{calls}** |", percent(exact, steps)).unwrap();
     writeln!(table).unwrap();
+    if systems != Systems::CHASSIS {
+        writeln!(table, "{}", PowertrainCoverage::HEAD).unwrap();
+        let mut total = PowertrainCoverage::default();
+        for o in &outcomes {
+            writeln!(table, "{}", o.powertrain.row(&format!("`{}`", o.scenario))).unwrap();
+            total.add(&o.powertrain);
+        }
+        writeln!(table, "{}", total.row("**all**")).unwrap();
+        writeln!(table).unwrap();
+    }
     writeln!(
         table,
         "| Scenario | Wheel-steps on a packer | Bump-stop force calls | Axle-steps on a heave packer | Heave bump-stop force \
@@ -521,10 +877,17 @@ fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: 
     println!("\n{table}");
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let suffix = match dir {
+    let mut suffix = match dir {
         Some(dir) => format!("_{}", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
         None => String::new(),
     };
+    // the chassis-only results of Task 08 keep their file names
+    match (systems.brakes, systems.drivetrain) {
+        (true, true) => suffix.push_str("_powertrain"),
+        (true, false) => suffix.push_str("_brakes"),
+        (false, true) => suffix.push_str("_drivetrain"),
+        (false, false) => {}
+    }
     let file = out.join(if full { format!("results{suffix}.md") } else { format!("partial{suffix}.md") });
     std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
     println!("{}", file.display());
@@ -537,8 +900,15 @@ fn run_command(names: &[String], dir: Option<&Path>, verbose: bool, stop_after: 
 /// Writes one golden excerpt: `count` steps of a recording from `first` on. The Rust chassis
 /// runs freely up to `first` (and must agree with the game all the way), its state there is
 /// the excerpt's start state; the expected values are the game's.
-fn write_excerpt(recording: &Recording, data: &Path, first: usize, count: usize, path: &Path) -> Result<usize, String> {
-    let setup = run_setup(recording)?;
+fn write_excerpt(
+    recording: &Recording,
+    data: &Path,
+    systems: Systems,
+    first: usize,
+    count: usize,
+    path: &Path,
+) -> Result<usize, String> {
+    let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
     let mut chassis = setup.build(data)?;
     for step in 0..first {
@@ -549,8 +919,17 @@ fn write_excerpt(recording: &Recording, data: &Path, first: usize, count: usize,
         if let Some(k) = (0..rust.len()).find(|&k| !replay::same_value(columns.kinds[k], game[k], rust[k])) {
             return Err(format!("step {step}: {} differs from the game: no excerpt written", columns.fields[k].name));
         }
+        let trace = replay::powertrain_trace(&chassis);
+        for (value, game) in trace.iter().zip(game_trace(recording, step, &trace)?) {
+            if game.is_some_and(|game| !replay::same_value(value.kind, game, value.word)) {
+                return Err(format!("step {step}: {} differs from the game: no excerpt written", value.name));
+            }
+        }
         compare_tape(recording, step, &chassis)?;
     }
+    // the values of the ported systems that every recording holds join the hash, in the
+    // order of the trace (which the chassis fixes, not the step)
+    let trace_names: Vec<replay::TraceValue> = replay::powertrain_trace(&chassis).into_iter().filter(|v| !v.extra).collect();
     let state = if first == 0 { Vec::new() } else { chassis.save_state() };
     let mut steps = Vec::with_capacity(count);
     for step in first..first + count {
@@ -569,7 +948,13 @@ fn write_excerpt(recording: &Recording, data: &Path, first: usize, count: usize,
                 tacc: call.tacc,
             })
             .collect();
-        let hash = replay::step_hash(&columns.kinds, &columns.game(recording, step), &tape);
+        let mut kinds = columns.kinds.clone();
+        let mut words = columns.game(recording, step);
+        for value in &trace_names {
+            kinds.push(value.kind);
+            words.push(game_trace_word(recording, step, value).ok_or(format!("the recording has no field {}", value.name))?);
+        }
+        let hash = replay::step_hash(&kinds, &words, &tape);
         // the game's bodies after the step
         let mut bodies = Vec::new();
         for body in replay::BODIES {
@@ -603,6 +988,7 @@ fn write_excerpt(recording: &Recording, data: &Path, first: usize, count: usize,
 fn excerpt_command() -> Result<(), String> {
     let repo = repo_root();
     let out = repo.join("crates/rustyac-physics/tests/golden");
+    // the rolling chassis alone (Task 08): brakes, engine and drivetrain are fed
     for (scenario, count) in [("slalom", 300usize), ("kerb", 300)] {
         let recording = Recording::read(&repo.join(format!("oracle/car/{scenario}.carrec")))?;
         let data = car_data(&recording)?;
@@ -618,14 +1004,40 @@ fn excerpt_command() -> Result<(), String> {
             }
         };
         let path = out.join(format!("chassis_{scenario}_{first}_{count}.chgold"));
-        let bytes = write_excerpt(&recording, &data, first, count, &path)?;
+        let bytes = write_excerpt(&recording, &data, Systems::CHASSIS, first, count, &path)?;
+        println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    // brakes, engine and drivetrain computed in Rust (Task 09)
+    for (scenario, count) in [("launch_autoclutch_off", 460usize), ("brake", 400)] {
+        let recording = Recording::read(&repo.join(format!("oracle/car/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let first = match scenario {
+            // from a little before the clutch comes up: the standing start, first gear's
+            // wheelspin on the limiter and the traction control cutting in above 40 km/h
+            "launch_autoclutch_off" => {
+                let moving = (0..recording.steps.len())
+                    .find(|&step| recording.f(step, "script.clutch") > 0.0 && recording.i(step, "drivetrain.currentGear") == 2)
+                    .ok_or("the launch recording never lets the clutch up")?;
+                moving - 20
+            }
+            // from a little before the brake pedal goes down at 250 km/h: full braking and
+            // the first down-shifts with their clutch profile and throttle blips
+            _ => {
+                let braking = (0..recording.steps.len())
+                    .find(|&step| recording.f(step, "script.brake") > 0.0)
+                    .ok_or("the brake recording never brakes")?;
+                braking - 40
+            }
+        };
+        let path = out.join(format!("powertrain_{scenario}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
         println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
     }
     Ok(())
 }
 
 /// Runs one scenario once per deliberate fault and reports where the comparison notices.
-fn faults_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
+fn faults_command(names: &[String], dir: Option<&Path>, systems: Systems) -> Result<(), String> {
     let repo = repo_root();
     let scenario = names.first().map(String::as_str).unwrap_or("slalom");
     let folder = match dir {
@@ -645,13 +1057,15 @@ fn faults_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
     .unwrap();
     writeln!(table, "| Fault | What is changed | Bit-exact steps | Noticed at | First value that differs |").unwrap();
     writeln!(table, "|---|---|---|---|---|").unwrap();
-    let clean = compare(&recording, &data, false, None, None)?;
+    let clean = compare(&recording, &data, systems, false, None, None)?;
     if clean.first.is_some() {
         return Err("the run without a fault already differs".to_string());
     }
     let mut missed = Vec::new();
-    for (name, about, fault) in FAULTS {
-        let outcome = compare(&recording, &data, false, None, Some(fault))?;
+    let chassis_faults = FAULTS.iter().filter(|_| systems == Systems::CHASSIS);
+    let powertrain_faults = POWERTRAIN_FAULTS.iter().filter(|_| systems != Systems::CHASSIS);
+    for &(name, about, fault) in chassis_faults.chain(powertrain_faults) {
+        let outcome = compare(&recording, &data, systems, false, None, Some(fault))?;
         let (at, text) = match &outcome.first {
             Some((step, text)) => (format!("step {step}"), text.clone()),
             None => {
@@ -664,9 +1078,10 @@ fn faults_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
     }
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let tail = if systems == Systems::CHASSIS { "" } else { "_powertrain" };
     let file = out.join(match dir {
-        Some(dir) => format!("faults_{}.md", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
-        None => "faults.md".to_string(),
+        Some(dir) => format!("faults_{}{tail}.md", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+        None => format!("faults{tail}.md"),
     });
     std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
     println!("\n{table}\n{}", file.display());
@@ -798,8 +1213,10 @@ fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)]) -> Result<()
 }
 
 fn usage() -> String {
-    "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare faults [<scenario>] [--dir <folder>]\n       chassis_compare test-car"
+    "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
+     chassis_compare excerpt\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
+     chassis_compare test-car\n\
+     --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
         .to_string()
 }
 
@@ -810,10 +1227,23 @@ fn main() {
     let mut verbose = false;
     let mut stop_after = None;
     let mut dir: Option<PathBuf> = None;
+    let mut systems = Systems::ALL;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verbose" => verbose = true,
             "--dir" => dir = args.next().map(PathBuf::from),
+            "--feed" => {
+                for name in args.next().unwrap_or_default().split(',') {
+                    match name {
+                        "brakes" => systems.brakes = false,
+                        "drivetrain" | "engine" => systems.drivetrain = false,
+                        other => {
+                            eprintln!("--feed: unknown system {other:?}\n{}", usage());
+                            std::process::exit(2);
+                        }
+                    }
+                }
+            }
             "--stop-after" => stop_after = args.next().and_then(|v| v.parse().ok()),
             other if other.starts_with("--") => {
                 eprintln!("unknown option {other}\n{}", usage());
@@ -823,10 +1253,10 @@ fn main() {
         }
     }
     let result = match command.as_str() {
-        "run" => run_command(&names, dir.as_deref(), verbose, stop_after),
+        "run" => run_command(&names, dir.as_deref(), systems, verbose, stop_after),
         "test-car" => test_car_command(),
         "excerpt" => excerpt_command(),
-        "faults" => faults_command(&names, dir.as_deref()),
+        "faults" => faults_command(&names, dir.as_deref(), systems),
         _ => Err(usage()),
     };
     if let Err(message) = result {
