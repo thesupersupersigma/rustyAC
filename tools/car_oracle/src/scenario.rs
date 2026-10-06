@@ -176,11 +176,11 @@ pub fn all() -> Vec<Scenario> {
         ),
         Scenario {
             name: "kerb",
-            about: "straight at 100 km/h over a 3 cm raised strip under the left wheels",
+            about: "straight at 100 km/h over a 2 cm raised strip under the left wheels",
             steps: seconds(12.0) + 1,
             auto_clutch: true,
             // the car starts at the origin facing +z; its left side is +x
-            ground: Ground::Step { x_min: 0.0, x_max: 5.0, z_from: 150.0, z_to: 170.0, height: 0.03 },
+            ground: Ground::Step { x_min: 0.0, x_max: 5.0, z_from: 150.0, z_to: 170.0, height: 0.02 },
             floor: false,
             seed: 1,
             kind: Kind::Kerb,

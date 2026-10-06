@@ -583,7 +583,8 @@ pub fn to_csv(recording: &Recording, options: &CsvOptions, out: &Path) -> Result
             writeln!(w, "{}", names.join(",")).map_err(io)?;
             for step in range {
                 let words = &recording.steps[step].words;
-                let mut cells = vec![format!("{:?}", recording.d(step, "time_ms") / 1000.0)];
+                // seconds since the start of the scenario
+                let mut cells = vec![format!("{:?}", (recording.i(step, "step") + 1) as f64 * 0.003)];
                 cells.extend(position.iter().map(|&at| format_value('f', words, at)));
                 cells.extend(picked.iter().map(|&(kind, at)| format_value(kind, words, at)));
                 writeln!(w, "{}", cells.join(",")).map_err(io)?;

@@ -178,6 +178,7 @@ fn run(args: &Args) -> Result<(), String> {
         ("about".to_string(), scenario.about.to_string()),
         ("car".to_string(), game::CAR_NAME.to_string()),
         ("dt".to_string(), format!("{:?}", scenario::DT)),
+        ("clock_start_ms".to_string(), format!("{:?}", game::CLOCK_START_MS)),
         ("seed".to_string(), scenario.seed.to_string()),
         ("auto_clutch".to_string(), (scenario.auto_clutch as u8).to_string()),
         ("ground".to_string(), scenario.ground.describe()),

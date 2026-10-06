@@ -365,6 +365,8 @@ struct State {
     /// `dWorldStep` adds itself (gravity, gyroscopic torque).
     solver: Vec<(V3, V3)>,
     joint_params: Vec<[f32; JOINT_PARAM_WORDS]>,
+    /// `Car::controls` when `Car::step` had finished (read as `dWorldStep` starts).
+    applied_controls: [u8; 0x34],
     stage0_original: usize,
     world_steps: u32,
     image_base: usize,
@@ -677,18 +679,15 @@ extern "C" fn device_send_ff(_this: *mut u8, _force: f32, _damper: f32, _gain: f
 extern "C" fn device_get_ff_global_gain(_this: *mut u8) -> f32 {
     1.0
 }
-extern "C" fn device_true(_this: *mut u8) -> u8 {
-    1
+extern "C" fn device_get_name(_this: *mut u8) -> *const u8 {
+    c"car_oracle script".as_ptr().cast()
 }
+extern "C" fn device_on_auto_shifter_changed(_this: *mut u8, _on: u8) {}
 extern "C" fn device_false(_this: *mut u8) -> u8 {
     0
 }
 extern "C" fn device_set_vibrations(_this: *mut u8, _def: *const u8) {}
 extern "C" fn device_set_engine_rpm(_this: *mut u8, _rpm: f32, _limiter: f32) {}
-extern "C" fn device_unexpected<const SLOT: usize>() {
-    eprintln!("the game called controls-device slot +{:#x}, which the oracle does not provide", SLOT * 8);
-    std::process::exit(6);
-}
 
 // --- function wrappers -----------------------------------------------------------------------
 
@@ -760,6 +759,7 @@ extern "C" fn world_step_hook(world: *mut u8, step: f32) -> i32 {
     let original: extern "C" fn(*mut u8, f32) -> i32 = unsafe { std::mem::transmute(st.world_step_original) };
     unsafe {
         st.pre = st.bodies.iter().map(|b| body_state(b.ode)).collect();
+        st.applied_controls = rd(st.car, CAR_CONTROLS);
         st.joint_params = st
             .joints
             .iter()
@@ -931,6 +931,10 @@ fn tyre_member(name: &str) -> usize {
 pub const WHEELS: [&str; 4] = ["lf", "rf", "lr", "rr"];
 pub const CAR_NAME: &str = "ks_ferrari_f2004";
 /// Fixed weather: the same values the game's `PhysicsEngine` constructor starts with.
+/// The physics clock at the first step, ms. The game's clock counts from program start, so a
+/// session never begins at 0; members that start at time 0 (the auto-blip's "last blip") must
+/// lie in the past here too.
+pub const CLOCK_START_MS: f64 = 60_000.0;
 pub const AMBIENT_TEMPERATURE: f32 = 26.0;
 pub const ROAD_TEMPERATURE: f32 = 30.0;
 
@@ -1002,8 +1006,8 @@ impl<'a> World<'a> {
             ctor(engine);
             // the constructor stores the wall clock here; the car's once-a-second mass refresh
             // is timed from it
-            wr(engine, PE_PHYSICS_TIME, 0.0f64);
-            wr(engine, PE_GAME_TIME, 0.0f64);
+            wr(engine, PE_PHYSICS_TIME, CLOCK_START_MS);
+            wr(engine, PE_GAME_TIME, CLOCK_START_MS);
             wr(engine, PE_AMBIENT_TEMPERATURE, AMBIENT_TEMPERATURE);
             wr(engine, PE_ROAD_TEMPERATURE, ROAD_TEMPERATURE);
 
@@ -1063,6 +1067,7 @@ impl<'a> World<'a> {
                 post: Vec::new(),
                 solver: Vec::new(),
                 joint_params: Vec::new(),
+                applied_controls: [0; 0x34],
                 stage0_original: 0,
                 world_steps: 0,
                 image_base: acs.va(crate::acs::GHIDRA_BASE),
@@ -1110,14 +1115,14 @@ impl<'a> World<'a> {
                 device_acquire_controls as *const () as usize,        // +0x08
                 device_get_action as *const () as usize,              // +0x10
                 device_send_ff as *const () as usize,                 // +0x18
-                device_unexpected::<4> as *const () as usize,         // +0x20 getName
+                device_get_name as *const () as usize,                // +0x20
                 device_get_ff_global_gain as *const () as usize,      // +0x28
-                device_true as *const () as usize,                    // +0x30 isDeviceConnected
-                device_unexpected::<7> as *const () as usize,         // +0x38
+                device_false as *const () as usize,                   // +0x30 isDeviceConnected (0 in every real device)
+                device_on_auto_shifter_changed as *const () as usize, // +0x38
                 device_false as *const () as usize,                   // +0x40 IsKeyboardControl
                 device_set_vibrations as *const () as usize,          // +0x48
                 device_set_engine_rpm as *const () as usize,          // +0x50
-                device_false as *const () as usize,                   // +0x58
+                device_false as *const () as usize,                   // +0x58 shouldDelete
             ];
             let device = object(0x40);
             wr(device, 0, leak(table).add(1));
@@ -1353,7 +1358,7 @@ impl<'a> World<'a> {
             *capture = TyreCapture::default();
         }
         let before_world_steps = st.world_steps;
-        let time_ms = (self.step_index + 1) as f64 * 3.0;
+        let time_ms = CLOCK_START_MS + (self.step_index + 1) as f64 * 3.0;
         let step: extern "C" fn(*mut u8, f32, f64, f64) =
             unsafe { std::mem::transmute(self.acs.va(VA_PHYSICS_ENGINE_STEP)) };
         step(self.engine, DT, time_ms, time_ms);
@@ -1397,8 +1402,9 @@ impl<'a> World<'a> {
         row.f("script.clutch", script.clutch);
         row.i("script.gearUp", script.gear_up as i32);
         row.i("script.gearDn", script.gear_dn as i32);
-        // Car::controls at the end of the step: after the game's own overrides and helpers
-        let c = car.add(CAR_CONTROLS);
+        // Car::controls as Car::step left it (read when dWorldStep starts): after the game's
+        // own overrides and helpers (control lock, automatic clutch, automatic throttle blip)
+        let c = st.applied_controls.as_ptr();
         row.f("controls.steer", rd(c, CC_STEER));
         row.f("controls.gas", rd(c, CC_GAS));
         row.f("controls.brake", rd(c, CC_BRAKE));
@@ -1513,6 +1519,8 @@ impl<'a> World<'a> {
         row.f("drivetrain.currentClutchTorque", rd(d, 0x538));
         row.f("drivetrain.locClutch", rd(d, 0x644));
         row.i("drivetrain.isGearGrinding", rd::<u8>(d, 0x0) as i32);
+        row.i("drivetrain.gearRequest.request", rd(d, 0x5a0));
+        row.i("drivetrain.gearRequest.requestedGear", rd(d, 0x5a0 + 0x18));
         let e = d.add(0xe0);
         row.d("engine.status.outTorque", rd(e, 0x130));
         row.d("engine.status.externalCoastTorque", rd(e, 0x138));
@@ -1523,6 +1531,7 @@ impl<'a> World<'a> {
         row.f("engine.electronicOverride", rd(e, 0x1f8));
         row.d("engine.lifeLeft", rd(e, 0x320));
         row.f("engine.lastInput.gas", rd(e, 0x1dc));
+        row.f("engine.gasUsage", rd(e, 0x31c));
 
         let b = car.add(CAR_BRAKE_SYSTEM);
         row.f("brakes.frontBias", rd(b, 0x0));
@@ -1579,6 +1588,7 @@ impl<'a> World<'a> {
         row.f("abs.currentValue", rd(abs, 0xa4));
         row.f("edl.outLevel", rd(car, CAR_EDL + 0x1c));
         row.f("stability.gain", rd(car, CAR_STABILITY_CONTROL));
+        row.i("stability.useBeta", rd::<u8>(car, CAR_STABILITY_CONTROL + 4) as i32);
         row.i("speedLimiter.isLimiting", rd::<u8>(car, CAR_SPEED_LIMITER + 1) as i32);
         row.i("autoShift.isActive", rd::<u8>(car, CAR_AUTO_SHIFT) as i32);
         row.i("autoBlip.isActive", rd::<u8>(car, CAR_AUTO_BLIP) as i32);

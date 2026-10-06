@@ -267,6 +267,17 @@ fn headline(recording: &Recording, report: &mut Report) {
         loads[3]
     ));
     report.headline.push(format!("up to {max_calls} force calls per step"));
+    let flat_spot = (0..n)
+        .flat_map(|step| ["lf", "rf", "lr", "rr"].map(|w| recording.d(step, &format!("tyre.{w}.status.flatSpot"))))
+        .fold(0.0f64, f64::max);
+    report.headline.push(format!(
+        "engine life {:.0} -> {:.0}, largest tyre flat spot {:.3}, fuel {:.2} -> {:.2} l",
+        recording.d(0, "engine.lifeLeft"),
+        recording.d(last, "engine.lifeLeft"),
+        flat_spot,
+        recording.d(0, "car.fuel"),
+        recording.d(last, "car.fuel")
+    ));
     if contact_points != 0 || extra_joints != 0 {
         report.notes.push(format!(
             "ODE contacts: {contact_points} contact points in all, {extra_joints} steps with contact joints"
