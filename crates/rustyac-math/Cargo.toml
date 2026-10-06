@@ -1,0 +1,9 @@
+[package]
+name = "rustyac-math"
+description = "rustyAC: the C runtime maths functions Assetto Corsa calls (sinf, cosf, powf ... from MSVCR120.dll), shared by every crate that must give AC's exact bits"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]

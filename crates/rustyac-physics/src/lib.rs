@@ -6,6 +6,7 @@
 
 pub mod curve;
 pub mod data;
-pub mod math;
+/// The C runtime functions with AC's exact results (shared crate `rustyac-math`).
+pub use rustyac_math as math;
 pub mod tyre;
 pub mod vecmath;
