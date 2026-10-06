@@ -401,9 +401,10 @@ const POWERTRAIN_FAULTS: [(&str, &str, Fault); 12] = [
         let base = c.drivetrain.as_mut().unwrap().base_mut();
         base.final_ratio = nudge(base.final_ratio);
     }),
-    ("shift_time", "up-shift time one (double-precision) bit up", |c| {
+    // (one bit would not show: a shift ends at the first whole step after its time)
+    ("shift_time", "up-shift time one physics step (3 ms) longer", |c| {
         let base = c.drivetrain.as_mut().unwrap().base_mut();
-        base.gear_up_time = f64::from_bits(base.gear_up_time.to_bits() + 1);
+        base.gear_up_time += 0.003;
     }),
     ("diff_power", "differential power ramp one bit up", |c| {
         detach_item(&mut c.setup_manager, "DIFF_POWER");
@@ -451,10 +452,12 @@ struct PowertrainCoverage {
     locked_neutral: usize,
     slipping_in_gear: usize,
     slipping_neutral: usize,
-    /// Paddle shifts started (up, down), steps of the throttle cut after an up-shift.
+    /// Paddle shifts started (up, down), steps of the throttle cut after an up-shift, paddle
+    /// presses the gearbox refused (top gear, a shift in progress, down-shift protection).
     shifts_up: usize,
     shifts_down: usize,
     cut_off: usize,
+    refused: usize,
     /// Steps in reverse, steps with the H-shifter grinding.
     reverse: usize,
     grinding: usize,
@@ -471,7 +474,7 @@ struct PowertrainCoverage {
 }
 
 impl PowertrainCoverage {
-    fn count(&mut self, chassis: &RollingChassis, feed: &RecordedStep, before_request: i32) {
+    fn count(&mut self, chassis: &RollingChassis, feed: &RecordedStep, before_request: i32, paddles_before: (bool, bool)) {
         if let Some(brakes) = &chassis.brake_system {
             self.braking += (feed.controls.brake > 0.0) as usize;
             self.handbrake += (chassis.tyres[2].inputs.hand_brake_torque > 0.0) as usize;
@@ -480,7 +483,8 @@ impl PowertrainCoverage {
             let value = |name: &str| trace.iter().find(|v| v.name == name).map(|v| f32::from_bits(v.word as u32)).unwrap_or(0.0);
             self.cockpit_bias += (value("brakes.biasOverride") != -1.0) as usize;
             self.ebb += brakes.is_using_ebb() as usize;
-            self.brake_temps += (value("brakes.disc.lf.t") != chassis.env.ambient_temperature && value("brakes.disc.lf.t") != 0.0) as usize;
+            // the rear discs: a car with temperatures for the rear discs only has no front brakes
+            self.brake_temps += (value("brakes.disc.lr.t") != chassis.env.ambient_temperature && value("brakes.disc.lr.t") != 0.0) as usize;
         }
         if let Some(drivetrain) = &chassis.drivetrain {
             let b = drivetrain.base();
@@ -505,6 +509,11 @@ impl PowertrainCoverage {
                 self.shifts_down += 1;
             }
             self.cut_off += (b.cut_off > 0.0) as usize;
+            if chassis.controls.requested_gear_index == -1 {
+                let changer = &chassis.gear_changer;
+                self.refused += (chassis.controls.gear_up && !paddles_before.0 && !changer.was_gear_up_triggered) as usize;
+                self.refused += (chassis.controls.gear_dn && !paddles_before.1 && !changer.was_gear_dn_triggered) as usize;
+            }
             self.reverse += (b.current_gear == 0) as usize;
             self.grinding += b.is_gear_grinding as usize;
             let held = b.out_shaft_l.velocity == b.drive.velocity && b.out_shaft_r.velocity == b.drive.velocity;
@@ -522,7 +531,7 @@ impl PowertrainCoverage {
     }
 
     fn add(&mut self, other: &PowertrainCoverage) {
-        let pairs: [(&mut usize, usize); 25] = [
+        let pairs: [(&mut usize, usize); 26] = [
             (&mut self.braking, other.braking),
             (&mut self.handbrake, other.handbrake),
             (&mut self.cockpit_bias, other.cockpit_bias),
@@ -540,6 +549,7 @@ impl PowertrainCoverage {
             (&mut self.shifts_up, other.shifts_up),
             (&mut self.shifts_down, other.shifts_down),
             (&mut self.cut_off, other.cut_off),
+            (&mut self.refused, other.refused),
             (&mut self.reverse, other.reverse),
             (&mut self.grinding, other.grinding),
             (&mut self.diff_holding, other.diff_holding),
@@ -554,11 +564,11 @@ impl PowertrainCoverage {
         }
     }
 
-    const HEAD: &'static str = "| Scenario | Brake pedal / handbrake / cockpit bias / EBB / disc temps | Limiter / below idle / no fuel / TC cut (fed) / boost | Clutch locked in gear / locked neutral / slipping in gear / slipping neutral | Paddle shifts up / down / cut-off steps | Reverse / grinding | Diff holds / slips / wheels held | Clutch profile / blip / auto-shifter presses |\n|---|---|---|---|---|---|---|---|";
+    const HEAD: &'static str = "| Scenario | Brake pedal / handbrake / cockpit bias / EBB / disc temps | Limiter / below idle / no fuel / TC cut (fed) / boost | Clutch locked in gear / locked neutral / slipping in gear / slipping neutral | Paddle shifts up / down / cut-off steps / refused presses | Reverse / grinding | Diff holds / slips / wheels held | Clutch profile / blip / auto-shifter presses |\n|---|---|---|---|---|---|---|---|";
 
     fn row(&self, name: &str) -> String {
         format!(
-            "| {name} | {} / {} / {} / {} / {} | {} / {} / {} / {} / {} | {} / {} / {} / {} | {} / {} / {} | {} / {} | {} / {} / {} | {} / {} / {} |",
+            "| {name} | {} / {} / {} / {} / {} | {} / {} / {} / {} / {} | {} / {} / {} / {} | {} / {} / {} / {} | {} / {} | {} / {} / {} | {} / {} / {} |",
             self.braking,
             self.handbrake,
             self.cockpit_bias,
@@ -576,6 +586,7 @@ impl PowertrainCoverage {
             self.shifts_up,
             self.shifts_down,
             self.cut_off,
+            self.refused,
             self.reverse,
             self.grinding,
             self.diff_holding,
@@ -653,6 +664,7 @@ fn compare(
     for step in 0..steps {
         let feed = recorded_step(recording, step)?;
         let request_before = chassis.drivetrain.as_ref().map(|d| d.base().gear_request.request as i32).unwrap_or(0);
+        let paddles_before = (chassis.gear_changer.last_gear_up, chassis.gear_changer.last_gear_dn);
         chassis.step(DT, setup.time_of_step(step), &mut RecordedFeed { step: &feed });
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
@@ -679,7 +691,7 @@ fn compare(
                 }
             }
         }
-        outcome.powertrain.count(&chassis, &feed, request_before);
+        outcome.powertrain.count(&chassis, &feed, request_before, paddles_before);
         let tape = compare_tape(recording, step, &chassis);
         let coverage = &mut outcome.coverage;
         for suspension in &chassis.suspensions {
@@ -1184,12 +1196,201 @@ const FALLBACKS: [(&str, &str, &str, &str); 16] = [
     ("car.ini", "FUEL_EXT", "KG_PER_LITER", "0.76"),
 ];
 
+/// Third test car (Task 09), `f2004_pt_street`: the F2004 with what road cars have and it
+/// has not. Two turbos (one with a wastegate and a cockpit boost level below 1), a second
+/// throttle map, an engine-brake setting, a non-linear coast curve, camshaft overlap, a
+/// blow-off threshold, engine damage that accrues; a handbrake, disc temperatures with fade,
+/// the load-based electronic brake balance; an H-shifter gearbox (so no down-shift
+/// protection), gearbox wear, a spool differential, a clutch profile for up-shifts, and an
+/// automatic blip that is the driver's aid instead of the car's.
+const PT_STREET: [(&str, &str, &str, &str); 49] = [
+    ("engine.ini", "ENGINE_DATA", "LIMITER_HZ", "30"),
+    ("engine.ini", "ENGINE_DATA", "MINIMUM", "3500"),
+    ("engine.ini", "ENGINE_DATA", "DEFAULT_TURBO_ADJUSTMENT", "0.7"),
+    ("engine.ini", "COAST_REF", "NON_LINEARITY", "0.25"),
+    ("engine.ini", "TURBO_0", "LAG_DN", "0.985"),
+    ("engine.ini", "TURBO_0", "LAG_UP", "0.992"),
+    ("engine.ini", "TURBO_0", "MAX_BOOST", "0.5"),
+    ("engine.ini", "TURBO_0", "WASTEGATE", "0.42"),
+    ("engine.ini", "TURBO_0", "REFERENCE_RPM", "9000"),
+    ("engine.ini", "TURBO_0", "GAMMA", "2"),
+    ("engine.ini", "TURBO_0", "COCKPIT_ADJUSTABLE", "1"),
+    ("engine.ini", "TURBO_1", "LAG_DN", "0.97"),
+    ("engine.ini", "TURBO_1", "LAG_UP", "0.98"),
+    ("engine.ini", "TURBO_1", "MAX_BOOST", "0.3"),
+    ("engine.ini", "TURBO_1", "WASTEGATE", "0"),
+    ("engine.ini", "TURBO_1", "REFERENCE_RPM", "12000"),
+    ("engine.ini", "TURBO_1", "GAMMA", "0.8"),
+    ("engine.ini", "TURBO_1", "COCKPIT_ADJUSTABLE", "0"),
+    ("engine.ini", "DAMAGE", "TURBO_BOOST_THRESHOLD", "0.3"),
+    ("engine.ini", "DAMAGE", "TURBO_DAMAGE_K", "5"),
+    ("engine.ini", "DAMAGE", "RPM_THRESHOLD", "17500"),
+    ("engine.ini", "DAMAGE", "RPM_DAMAGE_K", "0.02"),
+    ("engine.ini", "BOV", "PRESSURE_THRESHOLD", "0.1"),
+    ("engine.ini", "OVERLAP", "FREQUENCY", "0.02"),
+    ("engine.ini", "OVERLAP", "GAIN", "0.004"),
+    ("engine.ini", "OVERLAP", "IDEAL_RPM", "9000"),
+    ("engine.ini", "THROTTLE_RESPONSE", "RPM_REFERENCE", "12000"),
+    ("engine.ini", "THROTTLE_RESPONSE", "LUT", "(|0=0|50=70|100=100|)"),
+    ("engine.ini", "COAST_SETTINGS", "LUT", "(|0=0|1=0.05|2=0.12|)"),
+    ("engine.ini", "COAST_SETTINGS", "DEFAULT", "2"),
+    ("engine.ini", "COAST_SETTINGS", "ACTIVATION_RPM", "3000"),
+    ("brakes.ini", "DATA", "HANDBRAKE_TORQUE", "1800"),
+    ("brakes.ini", "TEMPS_FRONT", "TORQUE_K", "0.3"),
+    ("brakes.ini", "TEMPS_FRONT", "PERF_CURVE", "(|0=0.7|300=0.95|500=1.0|800=0.8|)"),
+    ("brakes.ini", "TEMPS_FRONT", "COOL_TRANSFER", "0.02"),
+    ("brakes.ini", "TEMPS_FRONT", "COOL_SPEED_FACTOR", "0.004"),
+    ("brakes.ini", "TEMPS_REAR", "TORQUE_K", "0.2"),
+    ("brakes.ini", "TEMPS_REAR", "PERF_CURVE", "(|0=0.75|250=1.0|700=0.85|)"),
+    ("brakes.ini", "TEMPS_REAR", "COOL_TRANSFER", "0.015"),
+    ("brakes.ini", "TEMPS_REAR", "COOL_SPEED_FACTOR", "0.003"),
+    ("brakes.ini", "EBB", "FRONT_SHARE_MULTIPLIER", "1.25"),
+    ("drivetrain.ini", "GEARBOX", "SUPPORTS_SHIFTER", "1"),
+    ("drivetrain.ini", "DIFFERENTIAL", "POWER", "1.0"),
+    ("drivetrain.ini", "DIFFERENTIAL", "COAST", "1.0"),
+    ("drivetrain.ini", "AUTOCLUTCH", "UPSHIFT_PROFILE", "UPSHIFT_PROFILE"),
+    ("drivetrain.ini", "UPSHIFT_PROFILE", "POINT_0", "10"),
+    ("drivetrain.ini", "UPSHIFT_PROFILE", "POINT_1", "40"),
+    ("drivetrain.ini", "UPSHIFT_PROFILE", "POINT_2", "80"),
+    ("drivetrain.ini", "AUTOBLIP", "ELECTRONIC", "0"),
+];
+
+/// Fourth test car, `f2004_pt_ctrl`: every `DynamicController` the ported systems can have
+/// (brake balance, steer-brake, differential lock, turbo boost, wastegate, both anti-roll
+/// bars), with stages that
+/// between them use every input, both combinators, filters, limits, an unsorted table, an
+/// unknown input and an unknown combinator. Its engine wears fast and dies on the way.
+const PT_CTRL: [(&str, &str, &str, &str); 11] = [
+    ("engine.ini", "TURBO_0", "LAG_DN", "0.98"),
+    ("engine.ini", "TURBO_0", "LAG_UP", "0.99"),
+    ("engine.ini", "TURBO_0", "MAX_BOOST", "0.4"),
+    ("engine.ini", "TURBO_0", "WASTEGATE", "0.3"),
+    ("engine.ini", "TURBO_0", "REFERENCE_RPM", "8000"),
+    ("engine.ini", "TURBO_0", "GAMMA", "1"),
+    ("engine.ini", "TURBO_0", "COCKPIT_ADJUSTABLE", "0"),
+    ("engine.ini", "DAMAGE", "RPM_THRESHOLD", "17000"),
+    ("engine.ini", "DAMAGE", "RPM_DAMAGE_K", "0.25"),
+    ("drivetrain.ini", "DAMAGE", "RPM_WINDOW_K", "100"),
+    ("brakes.ini", "DATA", "HANDBRAKE_TORQUE", "900"),
+];
+
+const PT_CTRL_FILES: [(&str, &str); 7] = [
+    (
+        "ctrl_arb_front.ini",
+        "[CONTROLLER_0]
+INPUT=SPEED_KMH
+COMBINATOR=ADD
+LUT=(|0=30000|100=40000|300=60000|)
+FILTER=0.9
+UP_LIMIT=0
+DOWN_LIMIT=0
+",
+    ),
+    (
+        "ctrl_arb_rear.ini",
+        "[CONTROLLER_0]
+INPUT=LATG
+COMBINATOR=ADD
+LUT=(|-3=25000|0=15000|3=25000|)
+FILTER=0.5
+UP_LIMIT=24000
+DOWN_LIMIT=1000
+",
+    ),
+    (
+        "ctrl_turbo0.ini",
+        "[CONTROLLER_0]\r\nINPUT=RPMS\r\nCOMBINATOR=ADD\r\nLUT=(|0=0.1|8000=0.3|16000=0.45|)\r\nFILTER=0.9\r\nUP_LIMIT=0.5\r\nDOWN_LIMIT=0.05\r\n\r\n\
+         [CONTROLLER_1]\r\nINPUT=GEAR\r\nCOMBINATOR=MULT\r\nLUT=(|0=1.0|1=0.6|3=1.0|7=1.1|)\r\nFILTER=0\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n",
+    ),
+    (
+        "ctrl_wastegate0.ini",
+        "[CONTROLLER_0]\r\nINPUT=CONST\r\nCONST_VALUE=0.25\r\nCOMBINATOR=ADD\r\nFILTER=0\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_1]\r\nINPUT=GAS\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|1=0.1|)\r\nFILTER=0.5\r\nUP_LIMIT=0.4\r\nDOWN_LIMIT=0.1\r\n\r\n\
+         [CONTROLLER_2]\r\nINPUT=SPEED_KMH\r\nCOMBINATOR=MULT\r\nLUT=(|0=1|300=1.2|)\r\nFILTER=0.99\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n",
+    ),
+    (
+        "ctrl_ebb.ini",
+        "[CONTROLLER_0]\r\nINPUT=LOAD_SPREAD_LF\r\nCOMBINATOR=ADD\r\nLUT=(|0=0.62|0.3=0.58|0.1=0.56|0.5=0.55|0.1=0.56|0.3=0.58|1=0.62|)\r\nFILTER=0.95\r\nUP_LIMIT=1\r\nDOWN_LIMIT=0.0\r\n\r\n\
+         [CONTROLLER_1]\r\nINPUT=OVERSTEER_FACTOR\r\nCOMBINATOR=MULT\r\nLUT=(|0=1|0.2=1|0.4=1.1|)\r\nFILTER=0.95\r\nUP_LIMIT=0.75\r\nDOWN_LIMIT=0.0\r\n\r\n\
+         [CONTROLLER_2]\r\nINPUT=BRAKE\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|1=0.03|)\r\nFILTER=0.3\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_3]\r\nINPUT=LONG\r\nCOMBINATOR=ADD\r\nLUT=(|-4=0.02|0=0|)\r\nFILTER=0.8\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_4]\r\nINPUT=LOAD_SPREAD_RF\r\nCOMBINATOR=MULT\r\nLUT=(|0=0.98|1=1.02|)\r\nFILTER=0.9\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n",
+    ),
+    (
+        "steer_brake_controller.ini",
+        "[CONTROLLER_0]\r\nINPUT=STEER\r\nCOMBINATOR=ADD\r\nLUT=(|-1=-600|0=0|1=600|)\r\nFILTER=0.8\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_1]\r\nINPUT=SPEED_KMH\r\nCOMBINATOR=MULT\r\nLUT=(|0=0|40=1|300=1|)\r\nFILTER=0\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_2]\r\nINPUT=LATG\r\nCOMBINATOR=ADD\r\nLUT=(|-3=-50|3=50|)\r\nFILTER=0.9\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_3]\r\nINPUT=STEER_DEG\r\nCOMBINATOR=ADD\r\nLUT=(|-20=-20|20=20|)\r\nFILTER=0\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_4]\r\nINPUT=WHEEL_STEER_DEG\r\nCOMBINATOR=ADD\r\nLUT=(|-2=-10|2=10|)\r\nFILTER=0.5\r\nUP_LIMIT=400\r\nDOWN_LIMIT=-400\r\n",
+    ),
+    (
+        "ctrl_single_lock.ini",
+        "[CONTROLLER_0]\r\nINPUT=CONST\r\nCONST_VALUE=7\r\nCOMBINATOR=NOPE\r\nFILTER=0\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_1]\r\nINPUT=GAS\r\nCOMBINATOR=ADD\r\nLUT=(|0=20|1=120|)\r\nFILTER=0.9\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_2]\r\nINPUT=SLIPRATIO_MAX\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|0.3=60|)\r\nFILTER=0.7\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_3]\r\nINPUT=SLIPRATIO_AVG\r\nCOMBINATOR=ADD\r\nLUT=(|-0.3=20|0=0|0.3=10|)\r\nFILTER=0.7\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_4]\r\nINPUT=REAR_SPEED_RATIO\r\nCOMBINATOR=MULT\r\nLUT=(|0=1|1=1|1.2=1.5|)\r\nFILTER=0.5\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_5]\r\nINPUT=SLIPANGLE_FRONT_AVG\r\nCOMBINATOR=ADD\r\nLUT=(|-10=5|0=0|10=5|)\r\nFILTER=0.6\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_6]\r\nINPUT=SLIPANGLE_REAR_AVG\r\nCOMBINATOR=ADD\r\nLUT=(|-10=4|0=0|10=4|)\r\nFILTER=0.6\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_7]\r\nINPUT=SLIPANGLE_FRONT_MAX\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|10=3|)\r\nFILTER=0.6\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_8]\r\nINPUT=SLIPANGLE_REAR_MAX\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|10=6|)\r\nFILTER=0.6\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_9]\r\nINPUT=AVG_TRAVEL_REAR\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|60=2|)\r\nFILTER=0.4\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_10]\r\nINPUT=SUS_TRAVEL_LR\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|60=1|)\r\nFILTER=0.4\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_11]\r\nINPUT=SUS_TRAVEL_RR\r\nCOMBINATOR=ADD\r\nLUT=(|0=0|60=1.5|)\r\nFILTER=0.4\r\nUP_LIMIT=0\r\nDOWN_LIMIT=0\r\n\r\n\
+         [CONTROLLER_12]\r\nINPUT=NO_SUCH_INPUT\r\nCOMBINATOR=ADD\r\nLUT=(|0=3|1=40|)\r\nFILTER=0\r\nUP_LIMIT=300\r\nDOWN_LIMIT=5\r\n",
+    ),
+];
+
+/// Fifth test car, `f2004_pt_fwd`: front-wheel drive with an open differential, and values
+/// that make the loaders of drivetrain, engine and brakes take their fall-backs (shift times,
+/// clutch torque, shift window, idle speed, limiter rate, no coast reference,
+/// automatic-clutch speeds, automatic-gearbox shift points), a forced automatic clutch, no
+/// down-shift protection, disc temperatures for the rear discs only (which leaves the front
+/// brakes without torque), no cockpit brake bias, and a tank that runs dry.
+const PT_FWD: [(&str, &str, &str, &str); 29] = [
+    ("drivetrain.ini", "TRACTION", "TYPE", "FWD"),
+    ("drivetrain.ini", "DIFFERENTIAL", "POWER", "0"),
+    ("drivetrain.ini", "DIFFERENTIAL", "COAST", "0"),
+    ("drivetrain.ini", "DIFFERENTIAL", "PRELOAD", "0"),
+    ("drivetrain.ini", "GEARBOX", "CHANGE_UP_TIME", "0"),
+    ("drivetrain.ini", "GEARBOX", "CHANGE_DN_TIME", "0"),
+    ("drivetrain.ini", "GEARBOX", "AUTO_CUTOFF_TIME", "0"),
+    ("drivetrain.ini", "GEARBOX", "VALID_SHIFT_RPM_WINDOW", "0"),
+    ("drivetrain.ini", "CLUTCH", "MAX_TORQUE", "0"),
+    ("drivetrain.ini", "AUTOCLUTCH", "FORCED_ON", "1"),
+    ("drivetrain.ini", "AUTOCLUTCH", "MIN_RPM", "0"),
+    ("drivetrain.ini", "DOWNSHIFT_PROTECTION", "ACTIVE", "0"),
+    ("drivetrain.ini", "AUTO_SHIFTER", "UP", "0"),
+    ("drivetrain.ini", "AUTO_SHIFTER", "DOWN", "0"),
+    // the setup screen would push an open differential back into its own range
+    ("setup.ini", "DIFF_POWER", "MIN", "0"),
+    ("setup.ini", "DIFF_COAST", "MIN", "0"),
+    ("setup.ini", "DIFF_PRELOAD", "MIN", "0"),
+    ("engine.ini", "ENGINE_DATA", "MINIMUM", "0"),
+    ("engine.ini", "ENGINE_DATA", "LIMITER_HZ", "0"),
+    ("engine.ini", "HEADER", "COAST_CURVE", "NONE"),
+    ("engine.ini", "DAMAGE", "RPM_THRESHOLD", "0"),
+    ("brakes.ini", "DATA", "COCKPIT_ADJUSTABLE", "0"),
+    ("brakes.ini", "DATA", "FRONT_SHARE", "0.7"),
+    ("brakes.ini", "DATA", "HANDBRAKE_TORQUE", "600"),
+    ("brakes.ini", "TEMPS_REAR", "TORQUE_K", "0.25"),
+    ("brakes.ini", "TEMPS_REAR", "PERF_CURVE", "(|0=0.8|400=1.0|)"),
+    ("brakes.ini", "TEMPS_REAR", "COOL_TRANSFER", "0.01"),
+    ("brakes.ini", "TEMPS_REAR", "COOL_SPEED_FACTOR", "0.002"),
+    // enough for about five seconds of driving
+    ("car.ini", "FUEL", "FUEL", "0.13"),
+];
+
 fn test_car_command() -> Result<(), String> {
-    write_test_car("f2004_tight_stops", &TIGHT_STOPS)?;
-    write_test_car("f2004_fallbacks", &FALLBACKS)
+    write_test_car("f2004_tight_stops", &TIGHT_STOPS, &[])?;
+    write_test_car("f2004_fallbacks", &FALLBACKS, &[])?;
+    write_test_car("f2004_pt_street", &PT_STREET, &[])?;
+    write_test_car("f2004_pt_ctrl", &PT_CTRL, &PT_CTRL_FILES)?;
+    write_test_car("f2004_pt_fwd", &PT_FWD, &[])
 }
 
-fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)]) -> Result<(), String> {
+fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&str, &str)]) -> Result<(), String> {
     let repo = repo_root();
     let from = repo.join("cardata/ks_ferrari_f2004");
     let to = repo.join("cardata").join(name);
@@ -1207,6 +1408,10 @@ fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)]) -> Result<()
         let patched = patch_ini(&text, section, key, value).map_err(|e| format!("{}: {e}", path.display()))?;
         std::fs::write(&path, patched).map_err(|e| format!("{}: {e}", path.display()))?;
         println!("{file} [{section}] {key}={value}");
+    }
+    for &(file, text) in files {
+        std::fs::write(to.join(file), text).map_err(|e| format!("{}: {e}", to.join(file).display()))?;
+        println!("{file} (new file)");
     }
     println!("{}", to.display());
     Ok(())
