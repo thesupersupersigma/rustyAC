@@ -39,11 +39,11 @@ pub const PARAM_HI_STOP: i32 = 1;
 /// `dParamVel`
 pub const PARAM_VEL: i32 = 2;
 /// `dParamFMax`
-pub const PARAM_FMAX: i32 = 3;
+pub const PARAM_FMAX: i32 = 5;
 /// `dParamFudgeFactor`
-pub const PARAM_FUDGE_FACTOR: i32 = 4;
+pub const PARAM_FUDGE_FACTOR: i32 = 6;
 /// `dParamBounce`
-pub const PARAM_BOUNCE: i32 = 5;
+pub const PARAM_BOUNCE: i32 = 7;
 /// `dParamStopERP`
 pub const PARAM_STOP_ERP: i32 = 9;
 /// `dParamStopCFM`
@@ -102,7 +102,8 @@ impl LimitMotor {
         }
     }
 
-    /// `dxJointLimitMotor::set` @ 0x14034ddb0.
+    /// `dxJointLimitMotor::set` @ 0x14034ddb0. Parameters 3, 4 and everything above 10
+    /// (`PARAM_ERP` = 13 included) are ignored.
     fn set(&mut self, num: i32, value: f32) {
         match num {
             PARAM_LO_STOP => self.lostop = value,
@@ -212,11 +213,13 @@ impl Joint {
             JointKind::DBall { .. } => Info1 { m: 1, nub: 1 },
             JointKind::Slider { limot, .. } => {
                 let mut info = Info1 { m: 5, nub: 5 };
-                if limot.fmax > 0.0 {
+                // `comiss 0, fmax` + `setb`: a NaN counts as powered
+                if !(0.0 >= limot.fmax) {
                     info.m = 6; // powered slider needs an extra constraint row
                 }
                 limot.limit = 0;
-                if (limot.lostop > f32::NEG_INFINITY || limot.histop < f32::INFINITY) && limot.lostop <= limot.histop {
+                if (limot.lostop > f32::NEG_INFINITY || limot.histop < f32::INFINITY) && !(limot.lostop > limot.histop)
+                {
                     // a slider with stops: bounded rows, not part of stage 1
                     unimplemented!("slider joint with limit stops (bounded constraint rows are stage 2)");
                 }
@@ -357,7 +360,8 @@ fn set_fixed_orientation(
     } else {
         q_multiply3(&b0.q, qrel)
     };
-    if qerr[0] < 0.0 {
+    // `comiss qerr0, 0` + `jae`: negative or NaN (a -0.0 is left alone)
+    if !(qerr[0] >= 0.0) {
         qerr[1] = -qerr[1]; // adjust sign of qerr to make theta small
         qerr[2] = -qerr[2];
         qerr[3] = -qerr[3];
@@ -394,7 +398,8 @@ fn dball_get_info2(
 
     const MIN_LENGTH: f32 = 1e-7;
 
-    if length3(&q) < MIN_LENGTH {
+    // both length tests are `comiss` + `jae`: a NaN length takes the fallback too
+    if !(length3(&q) >= MIN_LENGTH) {
         // too small, let's choose an arbitrary direction
         // heuristic: difference in velocities at anchors
         let v1 = get_point_vel(b0, &global_a1);
@@ -404,7 +409,7 @@ fn dball_get_info2(
         };
         q = [v1[0] - v2[0], v1[1] - v2[1], v1[2] - v2[2]];
 
-        if length3(&q) < MIN_LENGTH {
+        if !(length3(&q) >= MIN_LENGTH) {
             // this direction is as good as any
             q = [1.0, 0.0, 0.0];
         }
@@ -546,7 +551,7 @@ fn slider_get_info2(
 
     // if the slider is powered, or has joint limits, add in the extra row
     // (dxJointLimitMotor::addLimot @ 0x14034d500 returns at once when neither is the case)
-    debug_assert!(!(limot.fmax > 0.0) && limot.limit == 0, "powered or limited slider: stage 2");
+    debug_assert!(0.0 >= limot.fmax && limot.limit == 0, "powered or limited slider: stage 2");
     let _ = ax1;
 }
 
@@ -609,7 +614,7 @@ impl World {
 
     /// `removeJointReferencesFromAttachedBodies`: unlinks the joint's two nodes from the
     /// joint lists of its bodies.
-    fn remove_joint_references_from_attached_bodies(&mut self, j: JointId) {
+    pub(crate) fn remove_joint_references_from_attached_bodies(&mut self, j: JointId) {
         for i in 0..2 {
             let body = self.joints[j.0 as usize].node[i].body;
             if let Some(body) = body {

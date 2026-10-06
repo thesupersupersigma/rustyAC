@@ -39,12 +39,16 @@ pub fn q_multiply2(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
 }
 
 /// `dQMultiply3` @ 0x140346310: `qa = inverse(qb) * inverse(qc)`.
+///
+/// The source says `-qb0*qc1 - qb1*qc0 + qb2*qc3 - qb3*qc2`; the compiled code groups the
+/// two negative products first (`addss` @ 0x140346364) and subtracts their sum, which gives
+/// the other sign on an exact zero.
 pub fn q_multiply3(qb: &Quaternion, qc: &Quaternion) -> Quaternion {
     [
         qb[0] * qc[0] - qb[1] * qc[1] - qb[2] * qc[2] - qb[3] * qc[3],
-        -qb[0] * qc[1] - qb[1] * qc[0] + qb[2] * qc[3] - qb[3] * qc[2],
-        -qb[0] * qc[2] - qb[2] * qc[0] + qb[3] * qc[1] - qb[1] * qc[3],
-        -qb[0] * qc[3] - qb[3] * qc[0] + qb[1] * qc[2] - qb[2] * qc[1],
+        (qb[2] * qc[3] - (qb[1] * qc[0] + qb[0] * qc[1])) - qb[3] * qc[2],
+        (qb[3] * qc[1] - (qb[2] * qc[0] + qb[0] * qc[2])) - qb[1] * qc[3],
+        (qb[1] * qc[2] - (qb[3] * qc[0] + qb[0] * qc[3])) - qb[2] * qc[1],
     ]
 }
 

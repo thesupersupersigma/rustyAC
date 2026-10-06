@@ -6,6 +6,12 @@
 //! The unrolling only repeats the same statement for consecutive columns, and every
 //! accumulator (`Z11`, `Z21` …) receives its products in ascending column order, so the
 //! loops below are written once per column and still add in exactly the same order.
+//!
+//! The exceptions are the loops with a single accumulator over unit-stride arrays: the
+//! library in `acs.exe` was built with the compiler's fast floating-point model, which
+//! turned those into packed sums (four lanes plus four lanes, folded at the end). They are
+//! the last `n % 4` rows of `_dSolveL1` ([`solve_l1`]) and, for 8 or more columns, the sums
+//! of the Cholesky routines; each is written out below as the machine code computes it.
 
 use crate::common::pad;
 use rustyac_math::sqrtf;
@@ -111,13 +117,11 @@ pub fn factor_ldlt(a: &mut [f32], d: &mut [f32], n: usize, nskip1: usize) {
         // factorize 2 x 2 block Z,dee
         // factorize row 1
         d[i] = 1.0f32 / z11;
-        // factorize row 2
-        let mut sum = 0.0f32;
+        // factorize row 2 (the source's `sum = 0; sum += q1*q2` is just `q1*q2` in the binary)
         let q1 = z21;
         let q2 = q1 * d[i];
         z21 = q2;
-        sum += q1 * q2;
-        d[i + 1] = 1.0f32 / (z22 - sum);
+        d[i + 1] = 1.0f32 / (z22 - q1 * q2);
         // done factorizing 2 x 2 block
         a[ell + nskip1] = z21;
         i += 2;
@@ -197,6 +201,15 @@ pub fn solve_l1(l: &[f32], b: &mut [f32], n: usize, lskip1: usize) {
 /// and after the last whole block the lanes are folded as
 /// `scalar + (((x2 + x0)) + (x3 + x1))` with `x[k] = lane3[k] + lane4[k]`. What is left
 /// (fewer than twelve products) is added to the scalar sum one by one.
+/// How the compiled code folds two packed accumulators into one number:
+/// `(w2 + w0) + (w3 + w1)` with `w = v3 + v4` lane by lane (`addps`, `movhlps`, `addps`,
+/// `shufps`, `addss`).
+#[inline(always)]
+fn fold_lanes(v3: &[f32; 4], v4: &[f32; 4]) -> f32 {
+    let w = [v3[0] + v4[0], v3[1] + v4[1], v3[2] + v4[2], v3[3] + v4[3]];
+    (w[2] + w[0]) + (w[3] + w[1])
+}
+
 fn dot_blocks_of_12(a: &[f32], b: &[f32], n: usize) -> f32 {
     let mut sum = 0.0f32;
     let blocks = n / 12;
@@ -213,8 +226,7 @@ fn dot_blocks_of_12(a: &[f32], b: &[f32], n: usize) -> f32 {
                 sum += a[base + k] * b[base + k];
             }
         }
-        let x = [lane3[0] + lane4[0], lane3[1] + lane4[1], lane3[2] + lane4[2], lane3[3] + lane4[3]];
-        sum += (x[2] + x[0]) + (x[3] + x[1]);
+        sum += fold_lanes(&lane3, &lane4);
     }
     for k in 12 * blocks..n {
         sum += a[k] * b[k];
@@ -293,6 +305,10 @@ pub fn solve_ldlt(l: &[f32], d: &[f32], b: &mut [f32], n: usize, nskip: usize) {
 /// `_dFactorCholesky` @ 0x14034b7f0: in-place Cholesky factorisation (lower triangle) of an
 /// `n` x `n` matrix with row skip `pad(n)`. Returns false if the matrix is not positive
 /// definite.
+///
+/// A sum over 8 or more columns starts with packed blocks of eight (two four-lane
+/// accumulators that start at zero and are folded into the sum afterwards); the game's only
+/// caller, `dBodySetMass`, passes n = 3, where everything is in source order.
 pub fn factor_cholesky(a: &mut [f32], n: usize) -> bool {
     let nskip = pad(n);
     let mut recip = vec![0.0f32; n];
@@ -301,13 +317,35 @@ pub fn factor_cholesky(a: &mut [f32], n: usize) -> bool {
         for j in 0..i {
             let bb = j * nskip;
             let mut sum = a[aa + j];
-            for k in 0..j {
+            let packed = (j / 8) * 8;
+            if packed > 0 {
+                let (mut v3, mut v4) = ([0.0f32; 4], [0.0f32; 4]);
+                for o in (0..packed).step_by(8) {
+                    for k in 0..4 {
+                        v3[k] -= a[bb + o + k] * a[aa + o + k];
+                        v4[k] -= a[bb + o + 4 + k] * a[aa + o + 4 + k];
+                    }
+                }
+                sum += fold_lanes(&v3, &v4);
+            }
+            for k in packed..j {
                 sum -= a[aa + k] * a[bb + k];
             }
             a[aa + j] = sum * recip[j];
         }
         let mut sum = a[aa + i];
-        for k in 0..i {
+        let packed = (i / 8) * 8;
+        if packed > 0 {
+            let (mut v3, mut v4) = ([0.0f32; 4], [0.0f32; 4]);
+            for o in (0..packed).step_by(8) {
+                for k in 0..4 {
+                    v3[k] -= a[aa + o + k] * a[aa + o + k];
+                    v4[k] -= a[aa + o + 4 + k] * a[aa + o + 4 + k];
+                }
+            }
+            sum += fold_lanes(&v3, &v4);
+        }
+        for k in packed..i {
             sum -= a[aa + k] * a[aa + k];
         }
         // `comiss sum, 0` + `jbe`: zero, negative or NaN
@@ -321,14 +359,27 @@ pub fn factor_cholesky(a: &mut [f32], n: usize) -> bool {
     true
 }
 
-/// `_dSolveCholesky` @ 0x14034ca70: solves `L * L^T * x = b` in place.
+/// `_dSolveCholesky` @ 0x14034ca70: solves `L * L^T * x = b` in place. The forward sums use
+/// packed blocks of eight for 8 or more columns (see [`factor_cholesky`]); here the folded
+/// lanes **are** the start of the sum.
 pub fn solve_cholesky(l: &[f32], b: &mut [f32], n: usize) {
     let nskip = pad(n);
     let mut y = vec![0.0f32; n];
     for i in 0..n {
         let ll = i * nskip;
         let mut sum = 0.0f32;
-        for k in 0..i {
+        let packed = (i / 8) * 8;
+        if packed > 0 {
+            let (mut v2, mut v3) = ([0.0f32; 4], [0.0f32; 4]);
+            for o in (0..packed).step_by(8) {
+                for k in 0..4 {
+                    v2[k] += l[ll + o + k] * y[o + k];
+                    v3[k] += l[ll + o + 4 + k] * y[o + 4 + k];
+                }
+            }
+            sum = fold_lanes(&v2, &v3);
+        }
+        for k in packed..i {
             sum += l[ll + k] * y[k];
         }
         y[i] = (b[i] - sum) / l[ll + i];

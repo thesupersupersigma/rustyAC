@@ -290,6 +290,41 @@ impl World {
         id
     }
 
+    /// `dBodyDestroy` @ 0x14033f340: detaches every joint of the body (the joints stay in the
+    /// world, attached to nothing, and are never visited again) and takes the body out of the
+    /// world's list. The handle must not be used afterwards.
+    pub fn body_destroy(&mut self, b: BodyId) {
+        // detach all neighbouring joints, then delete this body.
+        let mut n = self.bodies[b.0 as usize].first_joint;
+        while let Some(node) = n {
+            let joint = &mut self.joints[node.joint.0 as usize];
+            // the node in this body's list is the joint's other node; the reference to this
+            // body is cleared first so that only the other body's list has to be searched
+            joint.node[1 - node.node as usize].body = None;
+            let next = joint.node[node.node as usize].next;
+            joint.node[node.node as usize].next = None;
+            self.remove_joint_references_from_attached_bodies(node.joint);
+            n = next;
+        }
+        self.bodies[b.0 as usize].first_joint = None;
+        // removeObjectFromList
+        let next = self.bodies[b.0 as usize].next;
+        if self.first_body == Some(b) {
+            self.first_body = next;
+        } else {
+            let mut current = self.first_body;
+            while let Some(id) = current {
+                if self.bodies[id.0 as usize].next == Some(b) {
+                    self.bodies[id.0 as usize].next = next;
+                    break;
+                }
+                current = self.bodies[id.0 as usize].next;
+            }
+        }
+        self.bodies[b.0 as usize].next = None;
+        self.nb -= 1;
+    }
+
     /// `dBodySetPosition` @ 0x14033fbb0.
     pub fn body_set_position(&mut self, b: BodyId, x: f32, y: f32, z: f32) {
         let body = self.body_mut(b);
