@@ -257,3 +257,44 @@ normal and one `SurfaceDef`. Details:
     not run, so struct layouts were read from `acs.pdb` directly with the DIA SDK, and callers
     in the file headers were computed from `acs.exe`'s call instructions and unwind table.
     Indirect (vtable) callers therefore show up as "pointer slots" rather than as named callers.
+
+---
+
+## 8. Updates from the car map (Task 05)
+
+Later maps answered some of the questions above and corrected a few statements. Nothing above
+was rewritten; this list says where the newer answer is.
+
+- **Open question 1 (`ISuspension` slot names): resolved.** `docs/map/suspension.md` section 9:
+  +0x08 `getHubWorldMatrix`, +0x10 `getPointVelocity`, +0x18 `addForceAtPos`, +0x20 `addTorque`,
+  +0x38 `getHubAngularVelocity`, +0xc0 `addLocalForceAndTorque`. Static camber is not in the
+  suspension geometry: `getHubWorldMatrix` rotates the hub matrix by the static camber angle
+  before the tyre sees it.
+- **Open question 6 (driven wheels): resolved.** `docs/map/drivetrain.md` 5.3: the drivetrain
+  uses the sum of the driven wheels' `status.feedbackTorque` to accelerate the driven block and
+  their difference for the differential, then writes `status.angularVelocity` back and calls
+  `Tyre::stepRotationMatrix` itself.
+- **Open question 7 (who writes the tyre's inputs): resolved** for `inputs`, `absOverride` and
+  `aiMult`. `BrakeSystem::step` 0x14028e640, `EDL::step` 0x1402bb460 and `ERS::step` 0x1402930e0
+  write `Tyre::inputs` (`docs/map/brakes.md` section 6); `ABS::step` 0x14028f610 and
+  `AIDriver::stepSuperhuman` 0x1402a2a60 write `absOverride` (`docs/map/electronics.md`);
+  `AIDriver::stepGasBrake` 0x1402a08e0 writes `aiMult` (`docs/atlas/ai_drivers.md`).
+- **Section 4, step 8: one force does not go through the hub.** On a surface with
+  `SurfaceDef::damping > 0`, `Tyre::step` applies `−damping · bodyVelocity · bodyMass` to
+  `Car::body` at its origin (`IRigidBody` +0xf8), once per wheel on such a surface
+  (`docs/map/track_surface.md` 5.5).
+- **Sections 5 and 6: dead branches in this build.** `SurfaceDef::granularity` is set to 0 by the
+  surface loader and never written again, so the three-sine bump pattern and the loose-surface
+  special case of `addTyreForces` never run (`docs/map/track_surface.md`). `Car::torqueModeEx` is
+  only ever `original`, so `Tyre::addTyreForceToHub` (+0xc0) and the hub reaction-torque branches
+  never run either (`docs/map/steering.md`).
+- **Section 6: ray details.** The per-wheel ray caster created in `Tyre::init` has length 3.0 (the
+  provider fall-back uses 2.0); rays search only the static collision space, in first-contact
+  mode with back-face culling. `SIN_LENGTH` is used as a spatial frequency (rad/m), not a length
+  (`docs/map/track_surface.md`).
+- **Section 4, step 1: the tyres.ini key table is now in the repository** as
+  [`tyre_ini_keys.md`](tyre_ini_keys.md) (a copy of the Task 01 table that lived only in the
+  git-ignored `re/tyre/`). Two things it does not cover: the setup items `PRESSURE_LF/RF/LR/RR`
+  (psi) write `Tyre::status.pressureStatic` (`SetupManager::initItems` 0x140289570), and
+  `[COMPOUND_DEFAULT] INDEX` is not read by the tyre loader at all (only by `AIDriver::AIDriver`
+  0x140298c60 and the setup UI).
