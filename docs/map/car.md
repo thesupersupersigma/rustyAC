@@ -179,7 +179,7 @@ tasks. "Needs" lists what must exist in Rust first.
 
 | # | Work item | Effort | Needs | Why here |
 |---|---|---|---|---|
-| 0 | **Whole-car oracle** (`car_oracle`): the game's own `PhysicsEngine`, a flat `Track` and one `Car`, built and stepped in-process like the tyre oracle; also drives ODE directly for small scenes | M | `tools/tyre_oracle` | It is the measuring stick for every later item, and it proves or disproves section 4.2 before any porting is planned around it |
+| 0 | **Whole-car oracle** (`car_oracle`): the game's own `PhysicsEngine`, a flat `Track` and one `Car`, built and stepped in-process like the tyre oracle (**done in Task 06**, `docs/oracle/car_oracle.md`; driving ODE directly for small scenes is not part of it) | M | `tools/tyre_oracle` | It is the measuring stick for every later item, and it proves or disproves section 4.2 before any porting is planned around it |
 | 1 | **Rigid-body core, stage 1**: bodies, box mass, finite-rotation integrator, DBall / Ball / Slider / Fixed joints, islands, `A = J·M⁻¹·Jᵀ`, LDLᵀ solve (the equality-only path of ODE's `dWorldStep`) | L | Rust maths helpers | Everything that pushes on the car needs bodies; highest technical risk, so do it early |
 | 2 | **Body bookkeeping**: body/tank/hub masses, fuel burn and re-weighing, sleeping rule | S | 1 | Small, and the chassis cannot be dropped on its wheels without it |
 | 3 | **Suspension**: DWB and STRUT first (112 of 113 cars front, 108 rear), AXLE next (4 cars), ML last (no car uses it); dampers, bump stops, anti-roll bars, heave springs | M | 1, 2, tyre | With the tyres already ported this gives a chassis that sits and rolls |
@@ -427,6 +427,34 @@ See `telemetry.md` for the field-by-field mapping. What the recording can and ca
 
 Every map ends with its own list of open questions; the list above only repeats the ones that
 change the plan.
+
+### 5.2a Answered by the whole-car oracle (Task 06)
+
+The oracle of section 4.2 exists and works: [`docs/oracle/car_oracle.md`](../oracle/car_oracle.md).
+Its runs settle these questions of 5.2 (details and numbers in section 4.5 of that report):
+
+- **2**: yes, a whole AC `Car` runs in-process on a fake flat road; the recipe of 4.2 needed three
+  additions (`INIReaderDocuments::initialized`, the timer frequency, `physicsTime` after the
+  engine constructor).
+- **3**: island body order is hub RR, car body, fuel tank, hub LF, hub RF, hub LR; the joint
+  blocks are the fuel-tank joint, then the five rods of LF, RF, LR, RR in creation order.
+- **5**: by the unpatched code the page's `velocity`, angles and local velocities are one step
+  newer than its `speedKmh` and `accG`.
+- **11**: car axes are +x left, +y up, +z forward; positive steering input turns right; a right
+  turn has negative `localAngularVel.y` and negative `accG.x`; `Car::forceRotation` takes the
+  direction of the tail.
+- New: the F2004's engine, drivetrain and brakes make no call on any rigid body; asking ODE for
+  joint feedback does not change a bit of the simulation; the spawn places the car above its
+  rest height (body centre 0.320 m, 0.234 m at rest), so every session starts with a drop.
+- New, and needed by every later "new car" in Rust: a session start changes the car before the
+  first step. The setup screen selects the tyre compound `tyres.ini [COMPOUND_DEFAULT] INDEX`
+  (the constructor leaves compound 0) and sends every `setup.ini` item through its
+  whole-number spinners, which rounds them (F2004: 11 values, e.g. front camber 3.0° → 2.9°).
+  Section 2.6 of the report has the rule and the check against a real game log.
+- New: the game switches collision detection off for the first 250 steps of a session, so the
+  body's boxes passing through the road during the spawn drop is the game's behaviour too.
+
+Still open after Task 06: 1, 4 (the oracle's car is car 0 by construction), 6, 7, 8, 9, 10.
 
 ### 5.3 Not mapped yet
 
