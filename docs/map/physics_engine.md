@@ -361,6 +361,14 @@ golden numbers for every stage.
 
 ## 6. Open questions
 
+Answered by Task 07 (`docs/port/ode_stage1.md`, section 2.4), which read the dynamics core at
+instruction level and ported it: question 1 (the library was built with the fast
+floating-point model: `_dSolveL1` has a packed sum in its last rows, `_dSafeNormalize3` uses a
+reciprocal, `dMassSetBoxTotal` multiplies by 1/12; `_dDot`, `_dSolveL1T` and `dxStepBody` are in
+source order, `_dFactorLDLT` too except for the sign of one zero), question 2 (island and row order: read, ported, compared in
+every replayed step) and question 3 (single-threaded, islands in the order they are found).
+The text of the three questions is kept below as it was written.
+
 1. **Float mode of the ODE build.** Checked on one function only: `_dDot` @ `0x140390530` is
    plain scalar SSE (`mulss`/`addss`), not vectorised, and adds the products in exactly the order
    of ODE's `fastdot.c` (the compiler only unrolled the tail loop by four, keeping the order).

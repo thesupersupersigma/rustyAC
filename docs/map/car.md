@@ -180,7 +180,7 @@ tasks. "Needs" lists what must exist in Rust first.
 | # | Work item | Effort | Needs | Why here |
 |---|---|---|---|---|
 | 0 | **Whole-car oracle** (`car_oracle`): the game's own `PhysicsEngine`, a flat `Track` and one `Car`, built and stepped in-process like the tyre oracle (**done in Task 06**, `docs/oracle/car_oracle.md`; driving ODE directly for small scenes is not part of it) | M | `tools/tyre_oracle` | It is the measuring stick for every later item, and it proves or disproves section 4.2 before any porting is planned around it |
-| 1 | **Rigid-body core, stage 1**: bodies, box mass, finite-rotation integrator, DBall / Ball / Slider / Fixed joints, islands, `A = J·M⁻¹·Jᵀ`, LDLᵀ solve (the equality-only path of ODE's `dWorldStep`) | L | Rust maths helpers | Everything that pushes on the car needs bodies; highest technical risk, so do it early |
+| 1 | **Rigid-body core, stage 1**: bodies, box mass, finite-rotation integrator, DBall / Ball / Slider / Fixed joints, islands, `A = J·M⁻¹·Jᵀ`, LDLᵀ solve (the equality-only path of ODE's `dWorldStep`) (**done in Task 07**: `crates/rustyac-ode`, report `docs/port/ode_stage1.md`; bit-exact against the game's ODE and the whole-car recordings) | L | Rust maths helpers | Everything that pushes on the car needs bodies; highest technical risk, so do it early |
 | 2 | **Body bookkeeping**: body/tank/hub masses, fuel burn and re-weighing, sleeping rule | S | 1 | Small, and the chassis cannot be dropped on its wheels without it |
 | 3 | **Suspension**: DWB and STRUT first (112 of 113 cars front, 108 rear), AXLE next (4 cars), ML last (no car uses it); dampers, bump stops, anti-roll bars, heave springs | M | 1, 2, tyre | With the tyres already ported this gives a chassis that sits and rolls |
 | 4 | **Steering and the force-feedback number** | S | 3 | A few lines once the rod joints exist |
@@ -455,6 +455,9 @@ Its runs settle these questions of 5.2 (details and numbers in section 4.5 of th
   body's boxes passing through the road during the spawn drop is the game's behaviour too.
 
 Still open after Task 06: 1, 4 (the oracle's car is car 0 by construction), 6, 7, 8, 9, 10.
+
+Task 07 (`docs/port/ode_stage1.md`) closed the rigid-body side of question 3: the island and
+row order were read from the machine code, ported, and are compared in every replayed step.
 
 ### 5.3 Not mapped yet
 

@@ -12,9 +12,9 @@ Contacts with the pivoting LCP solver are stage 2, collision detection is stage 
 
 The goal is the same bits as the game, not just the same physics. Where the machine code in
 `acs.exe` differs from the ODE source (the library was built with fast floating-point
-semantics: a few reciprocals in place of divisions, one vectorised sum, NaN-blind comparisons)
-the machine code wins. Every function names its ODE original and its address in `acs.exe`
-1.16.4 in its doc comment. Report with the details and the measurements:
+semantics: a few reciprocals in place of divisions, a few vectorised sums, NaN-blind comparisons)
+the machine code wins. Every function that is a function of its own in `acs.exe` 1.16.4 names
+its ODE original and its address in its doc comment. Report with the details and the measurements:
 [`docs/port/ode_stage1.md`](../../docs/port/ode_stage1.md).
 
 ```rust
