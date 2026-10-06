@@ -352,7 +352,7 @@ fn floor_clearance(recording: &Recording, data: &Path, report: &mut Report) -> R
     ));
     if below[0] > 0 && !has_floor {
         report.notes.push(format!(
-            "in {} steps (first {} mm deep at step {}) a collision box of the body is below the road: in the game \
+            "in {} steps (deepest {:.1} mm, at step {}) a collision box of the body is below the road: in the game \
              the floor would touch the road there; this recording has no collision mesh, so it does not",
             below[0],
             -lowest[0] * 1000.0,
