@@ -218,8 +218,12 @@ pub struct RollingChassis {
     pub water: ThermalObject,
     /// `Car::isGearboxLocked`
     pub is_gearbox_locked: bool,
-    /// `Car::isControlsLocked` (the overrides of `Car::step` that go with it are not ported)
+    /// `Car::isControlsLocked`: the device is not asked and the car stands on its brakes
     pub is_controls_locked: bool,
+    /// `Car::lockControlsTime`: the same until the physics clock reaches it, ms
+    pub lock_controls_time: f64,
+    /// `Car::isGentleStopping`: no throttle, a fifth of the brake pedal
+    pub is_gentle_stopping: bool,
     /// `Car::controls`
     pub controls: CarControls,
     /// `Car::finalSteerAngleSignal`, degrees at the road wheels
@@ -564,7 +568,7 @@ impl RollingChassis {
             suspensions: Vec::new(),
             tyres: Vec::new(),
             heave_springs: [HeaveSpring::default(); 2],
-            antiroll_bars: [AntirollBar::default(); 2],
+            antiroll_bars: Default::default(),
             steering_system: SteeringSystem { linear_ratio: steer_linear_ratio },
             setup_manager: SetupManager::default(),
             brake_system: None,
@@ -576,6 +580,8 @@ impl RollingChassis {
             water: ThermalObject::default(),
             is_gearbox_locked: false,
             is_controls_locked: false,
+            lock_controls_time: 0.0,
+            is_gentle_stopping: false,
             controls: CarControls::default(),
             final_steer_angle_signal: 0.0,
             mass,
@@ -637,10 +643,14 @@ impl RollingChassis {
         // Car::buildARBS @ 0x14026f750
         chassis.antiroll_bars[0].k = suspensions_ini.get_float("ARB", "FRONT")?;
         chassis.antiroll_bars[1].k = suspensions_ini.get_float("ARB", "REAR")?;
-        for name in ["ctrl_arb_front.ini", "ctrl_arb_rear.ini", "ctrl_4ws.ini"] {
-            if data_path.join(name).is_file() {
-                return Err(format!("{}: controllers (DynamicController) are not ported", data_path.join(name).display()));
+        for (axle, name) in ["ctrl_arb_front.ini", "ctrl_arb_rear.ini"].into_iter().enumerate() {
+            let path = data_path.join(name);
+            if path.is_file() {
+                chassis.antiroll_bars[axle].ctrl = super::DynamicController::load(&path)?;
             }
+        }
+        if data_path.join("ctrl_4ws.ini").is_file() {
+            return Err(format!("{}: rear-wheel steering is not ported", data_path.join("ctrl_4ws.ini").display()));
         }
         chassis.sleeping_frames = 0;
         chassis.update_body_mass();
@@ -937,7 +947,22 @@ impl RollingChassis {
             self.core.joint_set_erp_cfm(self.fuel_tank_joint.id, erp, -1.0);
         }
 
-        feed.poll_controls(self);
+        // the lock is sampled before the controls are polled
+        let locked = self.is_controls_locked || self.lock_controls_time > physics_time;
+        // Car::pollControls @ 0x140274e70: a car with locked controls does not ask its device
+        // (a lock by time alone still does)
+        if self.is_controls_locked {
+            let c = &mut self.controls;
+            c.gas = 0.0;
+            c.brake = 0.0;
+            c.steer = 0.0;
+            c.clutch = 0.0;
+            c.gear_up = false;
+            c.gear_dn = false;
+            c.kers = false;
+        } else {
+            feed.poll_controls(self);
+        }
 
         // fuel burn, from what the engine did in the step before
         let engine = match &self.drivetrain {
@@ -960,6 +985,18 @@ impl RollingChassis {
             drivetrain.engine_mut().base_mut().fuel_pressure = self.fuel_pressure;
         }
         self.update_body_mass();
+
+        // the overrides of the driver's controls
+        if locked {
+            self.controls.gas = 0.0;
+            self.controls.brake = 1.0;
+            self.controls.steer = 0.0;
+            self.controls.clutch = 0.0;
+        }
+        if self.is_gentle_stopping {
+            self.controls.gas = 0.0;
+            self.controls.brake = 0.2;
+        }
 
         // the steering wheel as a road-wheel angle
         let mut signal = self.steer_lock * self.controls.steer / self.steer_ratio;
@@ -1078,8 +1115,13 @@ impl RollingChassis {
             }
             None => feed.drivetrain(self),
         }
-        // 15: anti-roll bars
+        // 15: anti-roll bars; a bar with a controller takes its rate from it
         for (axle, first) in [(0usize, 0usize), (1, 2)] {
+            if self.antiroll_bars[axle].ctrl.ready {
+                let mut ctrl = std::mem::take(&mut self.antiroll_bars[axle].ctrl);
+                self.antiroll_bars[axle].k = ctrl.eval(&super::CarSignals::of(self));
+                self.antiroll_bars[axle].ctrl = ctrl;
+            }
             let (left, right) = self.suspensions[first..first + 2].split_at_mut(1);
             self.antiroll_bars[axle].step(&mut self.core, self.body, left[0].as_mut(), right[0].as_mut(), dt);
         }

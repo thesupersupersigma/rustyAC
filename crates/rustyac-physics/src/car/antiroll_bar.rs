@@ -1,14 +1,18 @@
 //! AC's `AntirollBar`: pushes the left and right hub of an axle towards the same height.
 
 use super::body::{ForceSource, PhysicsCore, RigidBody};
+use super::dynamic_controller::DynamicController;
 use super::suspension::SuspensionModel;
 use crate::math::sqrtf;
 use crate::vecmath::Vec3f;
 
-/// AC's `AntirollBar` (0x48 bytes) without its optional `DynamicController` (`ctrl`, from
-/// `ctrl_arb_front.ini` / `ctrl_arb_rear.ini`: 2 of the 113 cars; not ported, a later task).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// AC's `AntirollBar` (0x48 bytes).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AntirollBar {
+    /// `ctrl`: the optional controller of `ctrl_arb_front.ini` / `ctrl_arb_rear.ini`. When its
+    /// file exists, its output replaces `k` at the top of every step (the caller evaluates it:
+    /// `RollingChassis::step` position 15).
+    pub ctrl: DynamicController,
     /// `k`: N per metre of height difference between the two hubs.
     pub k: f32,
 }
@@ -20,7 +24,8 @@ fn ordered_nonzero(x: f32) -> bool {
 }
 
 impl AntirollBar {
-    /// `AntirollBar::step` @ 0x1402bb640. `left` and `right` are `hubs[0]` and `hubs[1]`.
+    /// `AntirollBar::step` @ 0x1402bb640 after its first lines (`if ctrl.ready { k =
+    /// ctrl.eval() }`). `left` and `right` are `hubs[0]` and `hubs[1]`.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step(
         &mut self,

@@ -2,7 +2,8 @@
 //! list of stages, each "take one signal of the car, pass it through a look-up table, smooth
 //! it, add it to or multiply it into the running result, clamp". The brakes use it for the
 //! electronic brake balance and the steer-brake, the drivetrain for the differential lock,
-//! the engine for its turbos (and, not ported yet, anti-roll bars, rear steering, KERS, ERS).
+//! the engine for its turbos, the anti-roll bars for their rate (and, not ported yet, rear
+//! steering, KERS, ERS).
 
 use std::path::Path;
 
@@ -155,7 +156,8 @@ pub fn lag_to_lerp_delta_k(lag: f32, a: f32, b: f32) -> f32 {
 pub struct DynamicController {
     /// `stages`, in file order
     pub stages: Vec<DynamicControllerStage>,
-    /// `ready`: the file could be opened. Nothing in the game tests it.
+    /// `ready`: the file could be opened. Only the anti-roll bar tests it; every other user
+    /// evaluates its controller regardless (one without stages gives 0).
     pub ready: bool,
 }
 
