@@ -159,6 +159,19 @@ pub struct SetupManager {
 
 const WHEELS: [&str; 4] = ["LF", "RF", "LR", "RR"];
 
+/// `cvttsd2si` / `cvttss2si`, the C cast of the setup screen: toward zero; a NaN and anything
+/// outside the range of a 32-bit integer give `i32::MIN`. (`tools/car_oracle` uses Rust's
+/// saturating `as i32` at this place; the two agree for every value a car in `cardata`
+/// produces and differ only for a NaN or an overflow, e.g. `SHOW_CLICKS=1` with a `STEP`
+/// that reads as 0.)
+fn cvtt(x: f64) -> i32 {
+    if x.is_nan() || x >= 2_147_483_648.0 || x <= -2_147_483_649.0 {
+        i32::MIN
+    } else {
+        x as i32
+    }
+}
+
 impl SetupManager {
     /// `SetupManager::init` @ 0x140289290 with `SetupManager::initItems` @ 0x140289570 and
     /// `SetupItem::SetupItem` @ 0x1402cb170: every item starts detached, with
@@ -231,9 +244,9 @@ impl SetupManager {
             let value = item.new_value;
             // the spinner's range and position (C casts: toward zero)
             let (low, high, position) = match mode {
-                1 => ((min / step) as i32, (max / step) as i32, (value as f64 / step + 0.5) as i32),
-                2 => (0, ((max - min) / step) as i32, ((value - min as f32) / step as f32 + 0.5f32) as i32),
-                _ => (min as i32, max as i32, value as i32),
+                1 => (cvtt(min / step), cvtt(max / step), cvtt(value as f64 / step + 0.5)),
+                2 => (0, cvtt((max - min) / step), cvtt(((value - min as f32) / step as f32 + 0.5f32) as f64)),
+                _ => (cvtt(min), cvtt(max), cvtt(value as f64)),
             };
             let position = if position > high { high } else { position.max(low) };
             item.new_value = match mode {

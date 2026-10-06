@@ -435,6 +435,15 @@ impl RollingChassis {
         }
         let inertia = ini.get_float3("BASIC", "INERTIA")?;
         let body_inertia = Vec3f::new(inertia[0], inertia[1], inertia[2]);
+        // `Car::updateBodyMass` takes its "explicit inertia" path whenever the box is (0,0,0)
+        // (three `ucomiss` + `jne`: also for NaNs), with or without that section
+        if !ordered_nonzero(body_inertia.x) && !ordered_nonzero(body_inertia.y) && !ordered_nonzero(body_inertia.z) {
+            return Err(format!(
+                "{}: [BASIC] INERTIA is missing or all zero: the game then treats the car like one with \
+                 [EXPLICIT_INERTIA], which is not ported",
+                data_path.join("car.ini").display()
+            ));
+        }
         core.set_mass_box(body, mass, body_inertia.x, body_inertia.y, body_inertia.z);
         let mut fuel_kg = 0.74;
         if ini.has_section("FUEL_EXT") {
@@ -708,7 +717,9 @@ impl RollingChassis {
     pub fn session_start(&mut self) -> Result<(), String> {
         let tyres = IniReader::load(&self.data_path.join("tyres.ini"))?;
         let compound = tyres.get_int("COMPOUND_DEFAULT", "INDEX")?;
-        self.set_compound(compound)?;
+        // an index that does not exist changes nothing in the game (`setCompound` says no and
+        // nobody looks)
+        let _ = self.set_compound(compound);
         let setup = IniReader::load(&self.data_path.join("setup.ini"))?;
         if setup.ready {
             let mut manager = std::mem::take(&mut self.setup_manager);
@@ -803,7 +814,7 @@ impl RollingChassis {
             } else {
                 let driving = !(0.01 >= self.controls.gas) && !(0.01 >= self.controls.clutch) && feed.current_gear(self) != 1;
                 if !driving && all_loaded {
-                    self.sleeping_frames += 1;
+                    self.sleeping_frames = self.sleeping_frames.wrapping_add(1);
                 } else {
                     self.sleeping_frames = 0;
                 }
@@ -868,6 +879,8 @@ impl RollingChassis {
         let mut manager = std::mem::take(&mut self.setup_manager);
         manager.step(self);
         self.setup_manager = manager;
+        // 21 to 29: telemetry, lap timing, stability control
+        feed.stability(self);
 
         // --- PhysicsCore::step ---------------------------------------------------------------
         let pre: Vec<BodyTrace> = match self.trace {

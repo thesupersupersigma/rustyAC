@@ -280,6 +280,8 @@ impl ChassisFeed for RecordedFeed<'_> {
     fn drivetrain(&mut self, _chassis: &mut RollingChassis) {}
 
     fn aids(&mut self, _chassis: &mut RollingChassis) {}
+
+    fn stability(&mut self, _chassis: &mut RollingChassis) {}
 }
 
 /// A value compared with the game.
@@ -762,7 +764,9 @@ impl Golden {
         let header = format!(
             "scenario={}\nground={}\nseed={}\nclock_start_ms={:?}\nfirst={}\nsteps={}\nambient_temperature={:?}\n\
              road_temperature={:?}\ndynamic_grip_level={:?}\ntyre_consumption_rate={:?}\nmechanical_damage_rate={:?}\n\
-             fuel_consumption_rate={:?}\nallow_tyre_blankets={}\n",
+             fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
+             mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
+             use_fake_understeer_ff={}\nis_first_car={}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -776,6 +780,13 @@ impl Golden {
             e.mechanical_damage_rate,
             e.fuel_consumption_rate,
             e.allow_tyre_blankets as u8,
+            e.flat_spot_ff_gain,
+            e.gyro_wheel_gain,
+            e.mz_low_speed_reduction_speed_kmh,
+            e.mz_low_speed_reduction_min_value,
+            e.ff_filter,
+            e.use_fake_understeer_ff as u8,
+            e.is_first_car as u8,
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -818,7 +829,13 @@ impl Golden {
             mechanical_damage_rate: number("mechanical_damage_rate")?,
             fuel_consumption_rate: number("fuel_consumption_rate")?,
             allow_tyre_blankets: get("allow_tyre_blankets")? != "0",
-            ..ChassisEnvironment::default()
+            flat_spot_ff_gain: number("flat_spot_ff_gain")?,
+            gyro_wheel_gain: number("gyro_wheel_gain")?,
+            mz_low_speed_reduction_speed_kmh: number("mz_low_speed_reduction_speed_kmh")?,
+            mz_low_speed_reduction_min_value: number("mz_low_speed_reduction_min_value")?,
+            ff_filter: number("ff_filter")?,
+            use_fake_understeer_ff: get("use_fake_understeer_ff")? != "0",
+            is_first_car: get("is_first_car")? != "0",
         };
         let setup = RunSetup {
             scenario: get("scenario")?.to_string(),

@@ -70,7 +70,13 @@ pub trait ChassisFeed {
     /// Runs after the steering, before the anti-roll bars.
     fn drivetrain(&mut self, chassis: &mut RollingChassis);
 
-    /// Positions 16 to 29, `ABS::step`, `TractionControl::step`, `SpeedLimiter::step`, …,
-    /// `StabilityControl::step`: the aids. Runs after the anti-roll bars.
+    /// Positions 16 to 18, `ABS::step`, `TractionControl::step`, `SpeedLimiter::step`: the
+    /// aids that act on the next step's brakes and engine. Runs after the anti-roll bars,
+    /// before the setup items are written.
     fn aids(&mut self, chassis: &mut RollingChassis);
+
+    /// Positions 21 to 29, after `SetupManager::step`: telemetry, lap timing and
+    /// `StabilityControl::step` @ 0x1402bfa50, which puts a yaw torque on the car body. The
+    /// last hook before the rigid-body step.
+    fn stability(&mut self, chassis: &mut RollingChassis);
 }

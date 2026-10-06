@@ -228,9 +228,12 @@ impl IniReader {
     }
 
     /// `INIReader::getFloat3` @ 0x1402357a0 (through `INIReader::getVector3` @ 0x140236540):
-    /// three numbers separated by commas (`wcstok_s`, so empty pieces are skipped), each
-    /// parsed like [`IniReader::get_float`]. An empty value (or a missing key) is (0, 0, 0),
-    /// and so is a value with fewer than three numbers (the game reports `NOT_3_ELEMENTS`).
+    /// three numbers, each parsed like [`IniReader::get_float`]. The first two are `wcstok_s`
+    /// tokens ended by a comma (empty pieces in front of them are skipped); the third is
+    /// whatever follows the second one's comma (its `wcstok_s` call splits on line ends, not
+    /// on commas), so `1,2,3,4` is (1, 2, 3) and `1,2,,3` makes the game throw. An empty value
+    /// (or a missing key) is (0, 0, 0), and so is a value with fewer than three pieces (the
+    /// game reports `NOT_3_ELEMENTS`).
     pub fn get_float3(&self, section: &str, key: &str) -> Result<[f32; 3], String> {
         let text = self.get_string(section, key);
         let mut out = [0.0f32; 3];
@@ -238,9 +241,30 @@ impl IniReader {
         if text.is_empty() || text.encode_utf16().count() > 0x4e7 {
             return Ok(out);
         }
-        let mut tokens = text.split(',').filter(|piece| !piece.is_empty());
-        for slot in &mut out {
-            let Some(token) = tokens.next() else {
+        // wcstok_s: skip the delimiters in front, the token runs to the next delimiter
+        fn token<'a>(rest: &mut &'a str, delimiters: &[char]) -> Option<&'a str> {
+            let start = rest.trim_start_matches(delimiters);
+            if start.is_empty() {
+                *rest = start;
+                return None;
+            }
+            match start.find(delimiters) {
+                Some(end) => {
+                    let found = &start[..end];
+                    let skip = start[end..].chars().next().map_or(0, char::len_utf8);
+                    *rest = &start[end + skip..];
+                    Some(found)
+                }
+                None => {
+                    *rest = "";
+                    Some(start)
+                }
+            }
+        }
+        let mut rest = text.as_str();
+        for (index, slot) in out.iter_mut().enumerate() {
+            let delimiters: &[char] = if index < 2 { &[','] } else { &['\n', '\r'] };
+            let Some(token) = token(&mut rest, delimiters) else {
                 return Ok([0.0; 3]);
             };
             let parsed = wcstod(token);
@@ -390,6 +414,23 @@ mod tests {
         assert_eq!(c.get_value(5.0), 2.0);
         assert!(r.get_curve("A", "BAD").is_err());
         assert_eq!(r.get_curve("A", "NOFILE").unwrap().get_count(), 0);
+    }
+
+    #[test]
+    fn three_numbers() {
+        let r = ini("[A]\nP=0.6554, 0.08421, 0.04061\nFOUR=1,2,3,4\nGAP=,,1,2,3\nTWO=1,2\nEND=1,2,\nBAD=1,2,,3\nE=\n");
+        assert_eq!(r.get_float3("A", "P").unwrap(), [0.6554, 0.08421, 0.04061]);
+        // the third piece is the rest of the line: a fourth number is ignored by the parser
+        assert_eq!(r.get_float3("A", "FOUR").unwrap(), [1.0, 2.0, 3.0]);
+        // empty pieces in front of the first two numbers are skipped ...
+        assert_eq!(r.get_float3("A", "GAP").unwrap(), [1.0, 2.0, 3.0]);
+        // ... fewer than three pieces zero everything ...
+        assert_eq!(r.get_float3("A", "TWO").unwrap(), [0.0; 3]);
+        assert_eq!(r.get_float3("A", "END").unwrap(), [0.0; 3]);
+        // ... and the third piece is not split on commas: ",3" is not a number
+        assert!(r.get_float3("A", "BAD").is_err());
+        assert_eq!(r.get_float3("A", "E").unwrap(), [0.0; 3]);
+        assert_eq!(r.get_float3("A", "MISSING").unwrap(), [0.0; 3]);
     }
 
     #[test]
