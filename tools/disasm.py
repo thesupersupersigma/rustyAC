@@ -5,6 +5,8 @@ Usage:
                                           wildcard pattern (e.g. "INIReader::get*")
   disasm.py dis <addr|name> [...]     -> annotated listing: call/jump targets are named,
                                           rip-relative constants are shown as float/double/int
+  disasm.py range <lo> <hi>           -> listing of an address range (for local functions
+                                          that have no name in the PDB; bounds from pdata.py)
   disasm.py vtable <addr> [count]     -> names of the functions a vtable points at
   disasm.py who <addr> [...]          -> name of the symbol containing each address
 
@@ -198,6 +200,9 @@ if __name__ == "__main__":
             va, size = resolve(a, img, syms)
             dis(img, syms, va, size)
             print()
+    elif cmd == "range":
+        lo, hi = int(sys.argv[2], 16), int(sys.argv[3], 16)
+        dis(img, syms, lo, hi - lo)
     elif cmd == "vtable":
         va = int(sys.argv[2], 16)
         n = int(sys.argv[3]) if len(sys.argv) > 3 else 32
