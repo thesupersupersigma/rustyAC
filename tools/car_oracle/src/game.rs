@@ -35,6 +35,7 @@ const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(flo
 const VA_CAR_RESET_SUSPENSION_DAMAGE: usize = 0x1_4027_5970; // Car::resetSuspensionDamageLevel()
 const VA_TYRE_SET_COMPOUND: usize = 0x1_4028_34e0; // bool Tyre::setCompound(int index)
 const VA_SETUP_MANAGER_STEP: usize = 0x1_4028_d090; // SetupManager::step(float dt)
+const VA_BRAKE_SYSTEM_SET_MANUAL_FRONT_BIAS: usize = 0x1_4028_e5d0; // BrakeSystem::setManualFrontBias(int)
 // --- globals ---------------------------------------------------------------------------------
 const VA_INIREADERDOCUMENTS_INITIALIZED: usize = 0x1_4155_a588; // static bool INIReaderDocuments::initialized
 const VA_IS_USING_QPT: usize = 0x1_4151_d140; // bool isUsingQPT (ksTimer)
@@ -679,7 +680,9 @@ extern "C" fn device_acquire_controls(_this: *mut u8, controls: *mut u8, _dt: f3
     unsafe {
         wr(controls, CC_GEAR_UP, c.gear_up as u8);
         wr(controls, CC_GEAR_DN, c.gear_dn as u8);
-        wr(controls, CC_HAND_BRAKE, 0.0f32);
+        wr(controls, CC_HAND_BRAKE, c.hand_brake);
+        // -1 (no H-shifter) is also what the constructor left there
+        wr(controls, CC_REQUESTED_GEAR_INDEX, c.requested_gear);
         wr(controls, CC_GAS, c.gas);
         wr(controls, CC_BRAKE, c.brake);
         wr(controls, CC_STEER, c.steer);
@@ -986,6 +989,8 @@ pub struct World<'a> {
     page: *mut u8,
     /// `name:old->new` of every setup value the session start changes (applied in step 0).
     pub setup_changes: Vec<String>,
+    /// The scenario is one of the powertrain scenarios: more inputs and values are recorded.
+    powertrain: bool,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1233,6 +1238,10 @@ impl<'a> World<'a> {
             if scenario.auto_clutch {
                 wr(car, CAR_AUTOCLUTCH + 0xd, 1u8); // useAutoOnChange
             }
+            // the automatic gearbox aid (what ACPlugin::setAutoShift / the assist option write)
+            if scenario.auto_shifter {
+                wr(car, CAR_AUTO_SHIFT, 1u8); // AutoShifter::isActive
+            }
 
             let mut world = World {
                 acs,
@@ -1244,6 +1253,7 @@ impl<'a> World<'a> {
                 avatar: object(AVATAR_SIZE),
                 page: object(0x1000),
                 setup_changes: Vec::new(),
+                powertrain: scenario.powertrain,
             };
             if options.setup_check {
                 // no recording: just what the session start does to this car's setup, reported
@@ -1484,6 +1494,15 @@ impl<'a> World<'a> {
         let before_world_steps = st.world_steps;
         let before_islands = st.islands;
         let time_ms = CLOCK_START_MS + (self.step_index + 1) as f64 * 3.0;
+        if controls.bias_clicks != 0 {
+            // a click of the cockpit brake-bias control: in the game a command queued for the
+            // physics thread and run before the step (PhysicsAvatar::stepCommandQueue)
+            unsafe {
+                let set_manual_front_bias: extern "C" fn(*mut u8, i32) =
+                    std::mem::transmute(self.acs.va(VA_BRAKE_SYSTEM_SET_MANUAL_FRONT_BIAS));
+                set_manual_front_bias(self.car.add(CAR_BRAKE_SYSTEM), controls.bias_clicks);
+            }
+        }
         let step: extern "C" fn(*mut u8, f32, f64, f64) =
             unsafe { std::mem::transmute(self.acs.va(VA_PHYSICS_ENGINE_STEP)) };
         step(self.engine, DT, time_ms, time_ms);
@@ -1528,6 +1547,11 @@ impl<'a> World<'a> {
         row.f("script.clutch", script.clutch);
         row.i("script.gearUp", script.gear_up as i32);
         row.i("script.gearDn", script.gear_dn as i32);
+        if self.powertrain {
+            row.f("script.handBrake", script.hand_brake);
+            row.i("script.requestedGear", script.requested_gear);
+            row.i("script.biasClicks", script.bias_clicks);
+        }
         // Car::controls as Car::step left it (read when dWorldStep starts): after the game's
         // own overrides and helpers (control lock, automatic clutch, automatic throttle blip)
         let c = st.applied_controls.as_ptr();
@@ -1743,6 +1767,43 @@ impl<'a> World<'a> {
             }
         }
         assert_eq!(at, crate::record::PAGE_SIZE);
+        if self.powertrain {
+            // more of the brakes, the engine and the drivetrain (offsets from the PDB's types)
+            let d = car.add(CAR_DRIVETRAIN);
+            row.d("drivetrain.gearRequest.timeAccumulator", rd(d, 0x5a0 + 0x8));
+            row.d("drivetrain.gearRequest.timeout", rd(d, 0x5a0 + 0x10));
+            row.d("drivetrain.validShiftRPMWindow", rd(d, 0x5d8));
+            row.d("drivetrain.lastRatio", rd(d, 0x588));
+            row.d("drivetrain.outShaftL.oldVelocity", rd(d, 0x38 + 0x10));
+            row.d("drivetrain.outShaftR.oldVelocity", rd(d, 0x50 + 0x10));
+            let e = d.add(0xe0);
+            row.f("engine.bov", rd(e, 0x154));
+            row.f("engine.maxPowerW_Dynamic", rd(e, 0x1fc));
+            row.f("engine.gasCoastOffset", rd(e, 0x358));
+            row.f("engine.limiterMultiplier", rd(e, 0x14c));
+            // std::vector<Turbo> (0x24 bytes each): userSetting, rotation, maxBoost ... wastegate
+            let first: *const u8 = rd(e, 0x158);
+            let last: *const u8 = rd(e, 0x160);
+            let count = (last as usize - first as usize) / 0x24;
+            row.i("engine.turbos", count as i32);
+            for k in 0..2 {
+                let turbo = if k < count { first.add(k * 0x24) } else { std::ptr::null() };
+                let value = |offset: usize| if turbo.is_null() { 0.0f32 } else { rd(turbo, offset) };
+                row.f(&format!("engine.turbo{k}.userSetting"), value(0x0));
+                row.f(&format!("engine.turbo{k}.rotation"), value(0x4));
+                row.f(&format!("engine.turbo{k}.maxBoost"), value(0x8));
+                row.f(&format!("engine.turbo{k}.wastegate"), value(0x8 + 0x14));
+            }
+            let b = car.add(CAR_BRAKE_SYSTEM);
+            row.f("brakes.biasOverride", rd(b, 0x274));
+            row.f("brakes.ebbInstant", rd(b, 0x10));
+            row.f("brakes.rearCorrectionTorque", rd(b, 0x260));
+            row.d("autoBlip.blipStartTime", rd(car, CAR_AUTO_BLIP + 0x90));
+            row.f("autoShift.gasCutoff", rd(car, CAR_AUTO_SHIFT + 0x1c));
+            row.i("autoShift.changeUpRpm", rd(car, CAR_AUTO_SHIFT + 0x4));
+            row.i("autoShift.changeDnRpm", rd(car, CAR_AUTO_SHIFT + 0x8));
+            row.i("autoClutch.isForced", rd::<u8>(car, CAR_AUTOCLUTCH + 0xe) as i32);
+        }
     }
 
     /// Facts about the car that do not change during a run, for the recording's header.

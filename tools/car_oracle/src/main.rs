@@ -135,7 +135,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().and_then(|args| match args.command.as_str() {
         "list" => {
-            for s in scenario::all() {
+            for s in scenario::all().into_iter().chain(scenario::powertrain()) {
                 println!("{:24} {:6.1} s  {}", s.name, (s.steps - 1) as f32 * scenario::DT, s.about);
             }
             Ok(())
@@ -160,11 +160,9 @@ fn recording_path(out: &Path, name: &str) -> PathBuf {
 
 /// One scenario, in this process (the game's objects cannot be torn down and rebuilt).
 fn run(args: &Args) -> Result<(), String> {
-    let mut scenarios = scenario::all();
-    let scenario = scenarios
-        .iter_mut()
-        .find(|s| s.name == args.scenario)
-        .ok_or_else(|| format!("no scenario {:?} (see `car_oracle list`)", args.scenario))?;
+    let mut found =
+        scenario::find(&args.scenario).ok_or_else(|| format!("no scenario {:?} (see `car_oracle list`)", args.scenario))?;
+    let scenario = &mut found;
     let name = if args.floor && !scenario.floor { format!("{}_floor", scenario.name) } else { scenario.name.to_string() };
     scenario.floor |= args.floor;
     let scenario = &*scenario;
@@ -192,6 +190,7 @@ fn run(args: &Args) -> Result<(), String> {
         ("clock_start_ms".to_string(), format!("{:?}", game::CLOCK_START_MS)),
         ("seed".to_string(), scenario.seed.to_string()),
         ("auto_clutch".to_string(), (scenario.auto_clutch as u8).to_string()),
+        ("auto_shifter".to_string(), (scenario.auto_shifter as u8).to_string()),
         ("ground".to_string(), scenario.ground.describe()),
         ("floor_mesh".to_string(), (scenario.floor as u8).to_string()),
         ("joint_forces".to_string(), (args.joint_forces as u8).to_string()),
@@ -262,7 +261,11 @@ fn all(args: &Args) -> Result<(), String> {
     );
     let mut notes = String::new();
     let mut failed = false;
-    for scenario in scenario::all() {
+    // the powertrain scenarios only run when they are named
+    for scenario in scenario::all().into_iter().chain(scenario::powertrain()) {
+        if scenario.powertrain && args.only.is_empty() {
+            continue;
+        }
         if !args.only.is_empty() && !args.only.iter().any(|n| n == scenario.name) {
             continue;
         }

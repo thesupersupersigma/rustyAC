@@ -9,7 +9,7 @@ pub const DT: f32 = 0.003;
 pub const SETTLE_STEPS: usize = 400;
 
 /// What the fake controls device reports for one step.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Controls {
     /// -1 … +1 of full lock; positive turns the car to its right.
     pub steer: f32,
@@ -19,6 +19,31 @@ pub struct Controls {
     pub clutch: f32,
     pub gear_up: bool,
     pub gear_dn: bool,
+    /// 0 … 1
+    pub hand_brake: f32,
+    /// The H-shifter's gear in the game's index (0 reverse, 1 neutral, 2 first …); -1 = the
+    /// car is driven with the paddles (what the game's own devices report without a shifter).
+    pub requested_gear: i32,
+    /// Clicks of the cockpit brake-bias control asked for before this step (+1 / -1; 0 none).
+    /// Not a member of the game's controls: the harness calls
+    /// `BrakeSystem::setManualFrontBias` before the step, as the game's command queue does.
+    pub bias_clicks: i32,
+}
+
+impl Default for Controls {
+    fn default() -> Controls {
+        Controls {
+            steer: 0.0,
+            gas: 0.0,
+            brake: 0.0,
+            clutch: 0.0,
+            gear_up: false,
+            gear_dn: false,
+            hand_brake: 0.0,
+            requested_gear: -1,
+            bias_clicks: 0,
+        }
+    }
 }
 
 /// What a script may look at: the car as the previous step left it.
@@ -106,6 +131,13 @@ pub struct Scenario {
     /// tyres know about the road.
     pub floor: bool,
     pub seed: u32,
+    /// The "automatic gearbox" driving aid of the game (`AutoShifter::isActive`).
+    pub auto_shifter: bool,
+    /// A scenario written for the brakes / engine / drivetrain port (Task 09): its recording
+    /// also holds the handbrake, H-shifter and brake-bias inputs and a few more internal
+    /// values of those systems. The twelve scenarios of [`all`] are not; their recordings keep
+    /// the layout (and hashes) of Task 06.
+    pub powertrain: bool,
     kind: Kind,
 }
 
@@ -119,6 +151,11 @@ enum Kind {
     LiftOff,
     Kerb,
     Random,
+    Handbrake,
+    Shifter,
+    AutoShift,
+    Protect,
+    PtRandom,
 }
 
 const fn seconds(s: f32) -> usize {
@@ -134,6 +171,8 @@ pub fn all() -> Vec<Scenario> {
         ground: Ground::Flat,
         floor: false,
         seed: 1,
+        auto_shifter: false,
+        powertrain: false,
         kind,
     };
     vec![
@@ -183,6 +222,8 @@ pub fn all() -> Vec<Scenario> {
             ground: Ground::Step { x_min: 0.0, x_max: 5.0, z_from: 150.0, z_to: 170.0, height: 0.02 },
             floor: false,
             seed: 1,
+            auto_shifter: false,
+            powertrain: false,
             kind: Kind::Kerb,
         },
         Scenario {
@@ -193,9 +234,81 @@ pub fn all() -> Vec<Scenario> {
             ground: Ground::Flat,
             floor: false,
             seed: 20040314,
+            auto_shifter: false,
+            powertrain: false,
             kind: Kind::Random,
         },
     ]
+}
+
+/// The scenarios of the brakes / engine / drivetrain port. They are not part of
+/// `car_oracle all` unless named with `--only`, and are meant for the altered test cars as
+/// much as for the real one.
+pub fn powertrain() -> Vec<Scenario> {
+    let pt = |name, about, secs: f32, auto_clutch, auto_shifter, seed, kind| Scenario {
+        name,
+        about,
+        steps: seconds(secs) + 1,
+        auto_clutch,
+        ground: Ground::Flat,
+        floor: false,
+        seed,
+        auto_shifter,
+        powertrain: true,
+        kind,
+    };
+    vec![
+        pt(
+            "pt_handbrake",
+            "to 90 km/h, clutch in and handbrake on to a stop (with cockpit brake-bias clicks), down to reverse, backwards, brake",
+            11.0,
+            false,
+            false,
+            1,
+            Kind::Handbrake,
+        ),
+        pt(
+            "pt_shifter",
+            "H-shifter: revs to the limiter in neutral, start by hand, clutch-dip up-shifts, a shift without clutch (grinding), neutral coasting, re-engage, stop",
+            12.0,
+            false,
+            false,
+            1,
+            Kind::Shifter,
+        ),
+        pt(
+            "pt_autoshift",
+            "automatic gearbox and clutch aids: flat out from neutral, brake to a stop, flat out again",
+            12.0,
+            true,
+            true,
+            1,
+            Kind::AutoShift,
+        ),
+        pt(
+            "pt_protect",
+            "paddles: down-shift requests the gearbox must refuse (neutral at speed, over-rev), up-shift in top gear, then down through the box under braking",
+            10.0,
+            true,
+            false,
+            1,
+            Kind::Protect,
+        ),
+        pt(
+            "pt_random",
+            "random wheel, pedals, clutch dips, handbrake pulls, paddle presses at any revs and brake-bias clicks",
+            14.0,
+            true,
+            false,
+            20040921,
+            Kind::PtRandom,
+        ),
+    ]
+}
+
+/// Every scenario by name.
+pub fn find(name: &str) -> Option<Scenario> {
+    all().into_iter().chain(powertrain()).find(|s| s.name == name)
 }
 
 /// The limiter is at 19,000 rpm; shift a little before it.
@@ -220,6 +333,13 @@ pub struct Driver {
     rng: u32,
     noise: [f32; 6],
     target: [f32; 3],
+    /// Where a staged script is, and the step its current stage began at.
+    stage: u32,
+    mark: usize,
+    /// The H-shifter's lever (game index) and where a shift in progress is going.
+    lever: i32,
+    lever_target: i32,
+    extra: [f32; 3],
 }
 
 impl Scenario {
@@ -238,6 +358,11 @@ impl Scenario {
             rng: self.seed,
             noise: [0.0; 6],
             target: [0.0; 3],
+            stage: 0,
+            mark: 0,
+            lever: 1,
+            lever_target: 1,
+            extra: [0.0; 3],
         }
     }
 }
@@ -333,6 +458,10 @@ impl Driver {
     /// The controls for this step.
     pub fn controls(&mut self, car: &CarView) -> Controls {
         let mut c = Controls { clutch: 1.0, ..Controls::default() };
+        if matches!(self.kind, Kind::Shifter) {
+            // the lever is in neutral while the car settles
+            c.requested_gear = self.lever;
+        }
         if matches!(self.kind, Kind::Settle) || car.step < SETTLE_STEPS {
             return c;
         }
@@ -411,8 +540,289 @@ impl Driver {
                     }
                 }
             }
+            Kind::Handbrake => self.handbrake(car, t, &mut c),
+            Kind::Shifter => self.shifter(car, t, &mut c),
+            Kind::AutoShift => {
+                // the aids do the clutch and the gears; the car starts in neutral
+                if t < 5.5 {
+                    c.gas = 1.0;
+                } else if t < 9.0 {
+                    c.brake = 0.7;
+                } else {
+                    c.gas = 0.6;
+                }
+            }
+            Kind::Protect => self.protect(car, t, &mut c),
+            Kind::PtRandom => {
+                if self.pull_away(car, t, &mut c) {
+                    let n = car.step - SETTLE_STEPS;
+                    if n % 200 == 0 {
+                        let r = [self.random(), self.random(), self.random(), self.random(), self.random(), self.random()];
+                        self.target[0] = (r[0] * 2.0 - 1.0) * 0.2;
+                        if r[3] < 0.25 {
+                            self.target[1] = 0.0;
+                            self.target[2] = r[2] * 0.9;
+                        } else {
+                            self.target[1] = 0.2 + 0.8 * r[1];
+                            self.target[2] = 0.0;
+                        }
+                        // sometimes a dip of the clutch, sometimes a pull at the handbrake
+                        self.extra[0] = if r[4] < 0.25 { r[4] * 3.0 } else { 1.0 };
+                        self.extra[1] = if r[5] < 0.15 { 0.4 + r[5] * 4.0 } else { 0.0 };
+                    }
+                    for i in 0..3 {
+                        self.noise[i] += (self.target[i] - self.noise[i]) * 0.02;
+                        self.noise[i + 3] += (self.noise[i] - self.noise[i + 3]) * 0.02;
+                    }
+                    self.extra[2] += (self.extra[0] - self.extra[2]) * 0.05;
+                    c.steer = self.noise[3] / (1.0 + car.speed * 0.03);
+                    c.gas = self.noise[4].clamp(0.0, 1.0);
+                    c.brake = self.noise[5].clamp(0.0, 1.0);
+                    c.clutch = self.extra[2].clamp(0.0, 1.0);
+                    c.hand_brake = self.extra[1].min(1.0);
+                    // a paddle press every 0.75 s, whatever the revs; the gearbox decides
+                    if n % 250 == 40 {
+                        let r = self.random();
+                        self.paddles(r < 0.45, (0.45..0.8).contains(&r), &mut c);
+                    } else {
+                        self.paddles(false, false, &mut c);
+                    }
+                    if n % 333 == 100 {
+                        c.bias_clicks = if self.random() < 0.5 { 1 } else { -1 };
+                    }
+                    if car.speed < 6.0 {
+                        c.brake = 0.0;
+                        c.hand_brake = 0.0;
+                        c.gas = c.gas.max(0.4);
+                    }
+                }
+            }
         }
         c
+    }
+
+    fn since_mark(&self, car: &CarView) -> f32 {
+        (car.step - self.mark) as f32 * DT
+    }
+
+    fn next_stage(&mut self, car: &CarView) {
+        self.stage += 1;
+        self.mark = car.step;
+    }
+
+    /// `pt_handbrake`: paddles, no clutch aid.
+    fn handbrake(&mut self, car: &CarView, t: f32, c: &mut Controls) {
+        match self.stage {
+            0 => {
+                if self.pull_away(car, t, c) {
+                    self.shift_by_rpm(car, FIRST + 6, c);
+                }
+                if car.kmh() >= 90.0 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            1 => {
+                // lift, clutch in, handbrake on over 0.3 s; the foot brake joins later
+                let dt = self.since_mark(car);
+                c.gas = 0.0;
+                c.clutch = 0.0;
+                c.hand_brake = (dt / 0.3).min(1.0);
+                if dt > 0.8 {
+                    c.brake = 0.5;
+                }
+                // cockpit brake bias: three clicks forward, then five back
+                let n = car.step - self.mark;
+                if n == 280 || n == 300 || n == 320 {
+                    c.bias_clicks = 1;
+                }
+                if (400..500).contains(&n) && n % 20 == 0 {
+                    c.bias_clicks = -1;
+                }
+                if car.speed < 0.2 && dt > 1.6 {
+                    self.next_stage(car);
+                }
+            }
+            2 => {
+                // standing: down through the box to reverse, clutch held in
+                c.clutch = 0.0;
+                c.hand_brake = 1.0;
+                self.paddles(false, car.gear > 0, c);
+                if car.gear == 0 && self.paddle <= 0 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            3 => {
+                // backwards for 1.6 s, the clutch let up over half a second
+                let dt = self.since_mark(car);
+                c.gas = 0.45;
+                c.clutch = (dt / 0.5).min(1.0);
+                if dt > 1.6 {
+                    self.next_stage(car);
+                }
+            }
+            _ => {
+                // stop: foot brake first, then the handbrake with the clutch still closed
+                let dt = self.since_mark(car);
+                c.gas = 0.0;
+                c.brake = 0.4;
+                c.clutch = if dt < 0.4 { 1.0 } else { 0.0 };
+                c.hand_brake = if dt > 0.2 { 1.0 } else { 0.0 };
+            }
+        }
+    }
+
+    /// `pt_shifter`: the H-shifter and the clutch pedal.
+    fn shifter(&mut self, car: &CarView, t: f32, c: &mut Controls) {
+        match self.stage {
+            0 => {
+                // neutral, flat out: the limiter
+                c.gas = 1.0;
+                if t > 0.8 {
+                    self.next_stage(car);
+                }
+            }
+            1 => {
+                // clutch in, first
+                c.clutch = 0.0;
+                c.gas = 0.5;
+                self.lever = FIRST;
+                if self.since_mark(car) > 0.2 {
+                    self.next_stage(car);
+                }
+            }
+            2 => {
+                let dt = self.since_mark(car);
+                c.clutch = (dt / 0.6).min(1.0);
+                c.gas = 0.8;
+                if dt > 0.6 {
+                    self.next_stage(car);
+                }
+            }
+            3 => {
+                // driving; up-shifts with a dip of the clutch
+                c.gas = 1.0;
+                if t > 6.0 {
+                    self.lever_target = self.lever;
+                    self.stage = 5;
+                    self.mark = car.step;
+                } else if car.road_rpm > 17_000.0 && self.lever < FIRST + 4 {
+                    self.lever_target = self.lever + 1;
+                    self.next_stage(car);
+                }
+            }
+            4 => {
+                let dt = self.since_mark(car);
+                c.clutch = 0.0;
+                c.gas = 0.0;
+                if dt > 0.05 {
+                    self.lever = self.lever_target;
+                }
+                if dt > 0.15 {
+                    self.stage = 3;
+                    self.mark = car.step;
+                }
+            }
+            5 => {
+                // two gears down without the clutch, flat out: the box grinds and refuses
+                let dt = self.since_mark(car);
+                c.gas = 1.0;
+                self.lever = (self.lever_target - 2).max(FIRST);
+                if dt > 0.3 {
+                    self.lever = self.lever_target;
+                    self.next_stage(car);
+                }
+            }
+            6 => {
+                // a lever position that does not exist, then neutral with the clutch up
+                let dt = self.since_mark(car);
+                c.gas = 0.0;
+                self.lever = if dt < 0.05 { 12 } else { 1 };
+                if dt > 0.6 {
+                    self.next_stage(car);
+                }
+            }
+            7 => {
+                // clutch in, third, clutch out: engine braking
+                let dt = self.since_mark(car);
+                c.gas = 0.0;
+                self.lever = FIRST + 2;
+                c.clutch = if dt < 0.15 { 0.0 } else { ((dt - 0.15) / 0.3).min(1.0) };
+                if dt > 1.2 {
+                    self.next_stage(car);
+                }
+            }
+            _ => {
+                // brake to a stop in gear, clutch in near the end, then neutral
+                c.gas = 0.0;
+                c.brake = 0.6;
+                if car.speed < 6.0 {
+                    c.clutch = 0.0;
+                }
+                if car.speed < 0.5 {
+                    self.lever = 1;
+                }
+            }
+        }
+        c.requested_gear = self.lever;
+    }
+
+    /// `pt_protect`: paddle requests the gearbox should refuse.
+    fn protect(&mut self, car: &CarView, t: f32, c: &mut Controls) {
+        match self.stage {
+            0 => {
+                // away in first; at 12,000 rpm ask for a down-shift (neutral at speed)
+                if self.pull_away(car, t, c) && car.road_rpm > 12_000.0 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            1 => {
+                c.gas = 1.0;
+                let want = self.since_mark(car) < 0.1;
+                self.paddles(false, want, c);
+                if self.since_mark(car) > 0.4 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            2 => {
+                // up to fourth
+                c.gas = 1.0;
+                self.shift_by_rpm(car, FIRST + 3, c);
+                if car.gear == FIRST + 3 && car.road_rpm > 16_500.0 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            3 => {
+                // down-shifts that would over-rev the engine, for 0.7 s
+                c.gas = 1.0;
+                self.paddles(false, true, c);
+                if self.since_mark(car) > 0.7 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            4 => {
+                // on to top gear, and one more up-shift there
+                c.gas = 1.0;
+                let top = FIRST + 6;
+                let up = car.gear >= FIRST && (car.gear < top && car.road_rpm > SHIFT_UP_RPM || car.gear == top);
+                self.paddles(up, false, c);
+                if t > 6.5 {
+                    self.paddle = 0;
+                    self.next_stage(car);
+                }
+            }
+            _ => {
+                // full brakes; the down paddle is asked for all the time
+                c.gas = 0.0;
+                c.brake = 1.0;
+                self.paddles(false, car.gear > FIRST, c);
+            }
+        }
     }
 
     /// Straight up to `speed`, then a right-hand circle of 100 m radius; with `lift_at` the
