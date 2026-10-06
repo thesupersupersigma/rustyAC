@@ -18,22 +18,22 @@ The Rust car can now stand on its wheels and roll. It has a body, a fuel tank an
 carriers, each held by five rods as in the game, with springs, dampers, the third "heave" spring
 of each axle, anti-roll bars, the steering rods and the number the game sends to the steering
 wheel as force feedback, and the four Rust tyres from the earlier task sit on it. Everything is
-built from the F2004's own data files, placed on the road the way the game places a car, and
-given the same session start (medium tyres, setup values rounded the way the game's setup
-screen rounds them). What is not written yet (the driver, engine, gearbox, brakes and wings) is
-taken from the recordings of the game's own car: at each step the Rust car is told only what
-those parts did, never where the car is or what its suspension or tyres did. It then has to
-drive the whole recording on its own, from the first moment to the last, and every number is
-compared with the game after every step. In all eleven recorded drives, 70,006 steps and up to a
-full minute of driving, the Rust car matches the game in every digit: positions, speeds, the
-forces in every rod, every spring, damper and anti-roll-bar push, about 300 numbers per tyre,
-the steering and the force feedback. Because the real car never touches its bump stops in those
-drives, thirteen more drives were recorded with the game's code and two altered copies of the
-car: one with its bump stops and packers moved into reach, one with data-file values that make
-the game fall back to its built-in defaults. Those 74,008 steps match in every digit too. To show that the comparison can fail, eighteen deliberate faults (a single number changed
-in its last digit, or one rule left out) were put into the Rust car one at a time, and each was
-noticed. A short piece of two drives (a slalom and a kerb strike) is stored with the project's
-tests and runs without the game.
+built from the F2004's own data files, placed on the road the way the game places a car, and given
+the same session start (medium tyres, setup values rounded the way the game's setup screen rounds
+them). What is not written yet (the driver, engine, gearbox, brakes and wings) is taken from the
+recordings of the game's own car: at each step the Rust car is told only what those parts did,
+never where the car is or what its suspension or tyres did. It then has to drive the whole
+recording on its own, from the first moment to the last, and every number is compared with the
+game after every step. In all eleven recorded drives, 70,006 steps and up to a full minute of
+driving, the Rust car matches the game in every digit: positions, speeds, the forces in every rod,
+every spring, damper and anti-roll-bar push, about 300 numbers per tyre, the steering and the
+force feedback. Because the real car never touches its bump stops in those drives, thirteen more
+drives were recorded with the game's code and two altered copies of the car: one with its bump
+stops and packers moved into reach, one with data-file values that make the game fall back to its
+built-in defaults. Those 74,008 steps match in every digit too. To show that the comparison can
+fail, eighteen deliberate faults (a single number changed in its last digit, or one rule left out)
+were put into the Rust car one at a time, and each was noticed. A short piece of two drives (a
+slalom and a kerb strike) is stored with the project's tests and runs without the game.
 
 ---
 
@@ -427,13 +427,13 @@ seconds.)
 ### 6.1 Choices made while working unattended
 
 1. **A module, not a crate** (2.1).
-2. **The recordings were not changed.** Everything the feed needs was already in them, so
-   the code of `tools/car_oracle` was not touched (its `Cargo.lock` gained the physics crate's
-   new dependency) and the twelve recordings and their hashes are the ones of Task 06. Two values are taken from the step before (engine values, gear) because the game
-   reads them before the engine and gearbox run; for step 0 they are the constructor's
-   (zero throttle use, neutral). That only the automatic clutch rewrites the clutch pedal
-   between the device and the sleeping rule was checked in the decompiled writers of
-   `controls.clutch`.
+2. **The recordings were not changed.** Everything the feed needs was already in them, so the code
+   of `tools/car_oracle` was not touched (its `Cargo.lock` gained the physics crate's new
+   dependency) and the twelve recordings and their hashes are the ones of Task 06. Two values are
+   taken from the step before (engine values, gear) because the game reads them before the engine
+   and gearbox run; for step 0 they are the constructor's (zero throttle use, neutral). That only
+   the automatic clutch rewrites the clutch pedal between the device and the sleeping rule was
+   checked in the decompiled writers of `controls.clutch`.
 3. **Two altered cars** (3.2) instead of new scenarios for the real one: the F2004 on a flat
    road cannot reach its stops without leaving the ground (and its floor has no contact in the
    oracle), and no scenario can make a loader take a fall-back. The copies live in the
