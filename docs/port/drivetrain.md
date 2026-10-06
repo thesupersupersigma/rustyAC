@@ -203,7 +203,9 @@ a NaN):
   external coast torque, boost, limiter flag and counter, fuel pressure, the aids' throttle
   factor, engine life, throttle after the maps and aids, throttle used; brake bias, power
   multiplier, the aids' brake request, brake power, four disc temperatures; water temperature;
-  the automatic clutch's value and the helpers' switches;
+  the automatic clutch's value and the helpers' switches. (The differential's locking torque
+  and the clutch's torque capacity are not stored by the game, they are locals of one step;
+  they are compared through what they produce: the half-shaft, carrier and engine speeds.)
 - in the recordings of the new `pt_*` scenarios 27 more: the shift timer and time-out, the
   H-shifter's tolerance window (gearbox wear), last ratio, the half shafts' speeds of the step
   before, blow-off flag, dynamic power figure, engine-brake offset, limiter multiplier, per

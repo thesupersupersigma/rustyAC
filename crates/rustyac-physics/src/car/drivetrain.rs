@@ -1004,3 +1004,29 @@ impl DrivetrainModel for VanillaDrivetrain {
         self.ac_engine.load_state(words)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncation_like_the_machine() {
+        assert_eq!(cvttss2si(18_423.9), 18_423);
+        assert_eq!(cvttss2si(-0.9), 0);
+        assert_eq!(cvttss2si(f32::NAN), i32::MIN);
+        assert_eq!(cvttss2si(3.0e9), i32::MIN);
+        assert_eq!(cvttss2si(-2_147_483_648.0), i32::MIN);
+    }
+
+    #[test]
+    fn widened_float_constants() {
+        assert_eq!(F64C_0_1F, 0.1f32 as f64);
+        assert_eq!(F64C_0_15F, 0.15f32 as f64);
+        assert_eq!(F64C_0_01F, 0.01f32 as f64);
+        assert_eq!(F64C_0_003F, 0.003f32 as f64);
+        assert_eq!(INV_DT, 1.0 / (0.003f32 as f64));
+        // the gear logic's own literal is not the widened float of `getEngineRPM`
+        assert_ne!(K2PI, 0.159_155_07f32 as f64);
+        assert_eq!(K2PI as f32, 0.159_155_07f32);
+    }
+}

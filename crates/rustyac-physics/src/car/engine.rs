@@ -924,3 +924,55 @@ impl EngineModel for VanillaEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turbo() -> Turbo {
+        Turbo::new(TurboDef { max_boost: 0.5, lag_up: 4.0, lag_dn: 8.0, rpm_ref: 9000.0, gamma: 2.0, wastegate: 0.42, is_adjustable: true })
+    }
+
+    #[test]
+    fn turbo_spools_up_to_the_wastegate_and_down_again() {
+        let mut t = turbo();
+        t.set_turbo_boost_level(0.7);
+        for _ in 0..3000 {
+            t.step(1.0, 12_000.0, 0.003);
+        }
+        // the wastegate (0.42 at level 0.7) caps the boost below the turbo's 0.5
+        assert_eq!(t.get_boost().to_bits(), (0.5f32 * (0.42f32 * 0.7 / 0.5)).to_bits());
+        let spun = t.rotation;
+        t.step(0.0, 12_000.0, 0.003);
+        // closed throttle: the target is 0 and the faster lag applies
+        assert_eq!(t.rotation.to_bits(), ((0.0 - spun) * (0.003f32 * 8.0) + spun).to_bits());
+        // a turbo that cannot be adjusted ignores the cockpit level
+        let mut fixed = Turbo::new(TurboDef { is_adjustable: false, ..turbo().data });
+        fixed.set_turbo_boost_level(0.3);
+        assert_eq!(fixed.user_setting, 1.0);
+    }
+
+    #[test]
+    fn throttle_maps() {
+        let mut engine = VanillaEngine::default();
+        // no map: the pedal passes through
+        assert_eq!(engine.get_throttle_response_gas(0.37, 5000.0), 0.37);
+        engine.throttle_response_curve = Curve::from_pairs(&[(0.0, 0.0), (50.0, 20.0), (100.0, 120.0)]);
+        assert_eq!(engine.get_throttle_response_gas(0.5, 5000.0), 20.0f32 * 0.01);
+        // a table value above 100 % is clamped
+        assert_eq!(engine.get_throttle_response_gas(1.0, 5000.0), 1.0);
+        // with a second map the two are blended by engine speed over its reference
+        engine.throttle_response_curve_max = Curve::from_pairs(&[(0.0, 0.0), (100.0, 100.0)]);
+        engine.throttle_response_curve_max_ref = 10_000.0;
+        let (low, high) = (20.0f32 * 0.01, 50.0f32 * 0.01);
+        assert_eq!(engine.get_throttle_response_gas(0.5, 2500.0), (high - low) * 0.25 + low);
+        assert_eq!(engine.get_throttle_response_gas(0.5, 20_000.0), (high - low) * 1.0 + low);
+        assert_eq!(engine.get_throttle_response_gas(0.5, -100.0), (high - low) * 0.0 + low);
+    }
+
+    #[test]
+    fn air_density_is_one_at_twenty_degrees() {
+        let factor = get_air_density(20.0) * 0.826_309_74;
+        assert!((factor - 1.0).abs() < 1e-6, "{factor}");
+    }
+}
