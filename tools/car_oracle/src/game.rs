@@ -1423,7 +1423,7 @@ impl<'a> World<'a> {
             row.f(&format!("{n}.mass"), pre.mass);
             row.v(&format!("{n}.inertia"), &pre.inertia);
             row.v(&format!("{n}.pre.pos"), &pre.pos);
-            row.v(&format!("{n}.pre.q"), &pre.q);
+            emit_quaternion(row, &format!("{n}.pre.q"), &pre.q);
             row.v(&format!("{n}.pre.R"), &pre.r);
             row.v(&format!("{n}.pre.lvel"), &pre.lvel);
             row.v(&format!("{n}.pre.avel"), &pre.avel);
@@ -1433,7 +1433,7 @@ impl<'a> World<'a> {
             row.v(&format!("{n}.solver.tacc"), &st.solver[i].1);
             row.i(&format!("{n}.tag"), rd(body.ode, B_TAG));
             row.v(&format!("{n}.post.pos"), &post.pos);
-            row.v(&format!("{n}.post.q"), &post.q);
+            emit_quaternion(row, &format!("{n}.post.q"), &post.q);
             row.v(&format!("{n}.post.R"), &post.r);
             row.v(&format!("{n}.post.lvel"), &post.lvel);
             row.v(&format!("{n}.post.avel"), &post.avel);
@@ -1626,6 +1626,15 @@ impl<'a> World<'a> {
                 (0..4).filter(|i| rd::<usize>(tyre.add(i * TYRE_SIZE), T_RAY_CASTER) != 0).count().to_string(),
             ));
         }
+        unsafe {
+            // the wings in the order the game steps them (`wing0` … in the per-step fields)
+            let aero = self.car.add(CAR_AERO_MAP);
+            let wings: *const u8 = rd(aero, 0x38);
+            let end: *const u8 = rd(aero, 0x40);
+            let names: Vec<String> =
+                (0..(end as usize - wings as usize) / 0x310).map(|k| read_wstring(wings.add(k * 0x310))).collect();
+            out.push(("wings".to_string(), names.join(",")));
+        }
         out.push(("bodies".to_string(), self.bodies().join(",")));
         let joints: Vec<String> = st
             .joints
@@ -1638,6 +1647,21 @@ impl<'a> World<'a> {
         out.push(("joints".to_string(), joints.join(",")));
         out
     }
+}
+
+/// ODE's quaternion order is (w, x, y, z).
+fn emit_quaternion(row: &mut Row, name: &str, q: &[f32; 4]) {
+    for (axis, value) in ["w", "x", "y", "z"].iter().zip(q) {
+        row.f(&format!("{name}.{axis}"), *value);
+    }
+}
+
+/// A `std::wstring` of the game (VS2013 layout) as text.
+unsafe fn read_wstring(string: *const u8) -> String {
+    let len: usize = rd(string, 0x10);
+    let capacity: usize = rd(string, 0x18);
+    let data: *const u16 = if capacity < 8 { string.cast() } else { rd(string, 0) };
+    String::from_utf16_lossy(std::slice::from_raw_parts(data, len))
 }
 
 fn emit_rig_word(row: &mut Row, name: &str, rig_name: &str, word: u64) {
