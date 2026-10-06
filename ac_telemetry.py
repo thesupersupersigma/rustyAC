@@ -297,9 +297,15 @@ def read_raw_header(f):
 
 def to_csv(raw_path, out):
     out = out or os.path.splitext(raw_path)[0] + ".csv"
+    if os.path.abspath(out) == os.path.abspath(raw_path):
+        sys.exit(f"{raw_path}: the CSV would overwrite the input (is it a raw recording? "
+                 "use --out for another name)")
     count = 0
-    with open(raw_path, "rb") as f, open(out, "w", newline="") as o:
+    with open(raw_path, "rb") as f:
+        # the header is checked before the output is created: a wrong input must not leave
+        # an empty or truncated file behind
         static, record, start = read_raw_header(f)
+        o = open(out, "w", newline="")
         w = csv.writer(o)
         w.writerow(full_columns())
         while True:
@@ -311,6 +317,7 @@ def to_csv(raw_path, out):
             g = Graphics.from_buffer_copy(rec, RAW_RECORD_HEAD.size + PSIZE)
             w.writerow(full_row(p, g, t))
             count += 1
+        o.close()
     static_out = os.path.splitext(out)[0] + ".static.csv"
     with open(static_out, "w", newline="") as o:
         w = csv.writer(o)
@@ -358,14 +365,19 @@ def wait_for_ac():
         time.sleep(1)
 
 
+UNCONFIRMED = [0]   # pages that never read the same twice in a row (see page())
+
+
 def page(view, size):
-    """One page, read twice: the game copies it without a lock, so a single read can be torn."""
+    """One page, read until two reads in a row agree: the game copies it without a lock, so a
+    single read can be torn. After 20 tries the last read is used and counted."""
     a = ctypes.string_at(view, size)
-    for _ in range(4):
+    for _ in range(20):
         b = ctypes.string_at(view, size)
         if a == b:
-            break
+            return a
         a = b
+    UNCONFIRMED[0] += 1
     return a
 
 
@@ -392,7 +404,11 @@ def record(args):
 
     with open(out, "wb" if args.raw else "w", **({} if args.raw else {"newline": ""})) as f:
         if args.raw:
-            f.write(b"\0" * header_size)      # filled in once the session is live
+            # a valid header from the start (so a recording with no packet still converts);
+            # written again with the first packet, when the game has filled the static page
+            f.write(RAW_HEADER.pack(RAW_MAGIC, RAW_VERSION, header_size, PSIZE,
+                                    GSIZE, SSIZE, record_size, time.time()))
+            f.write(page(sv, SSIZE))
             header_done = False
         else:
             w = csv.writer(f)
@@ -461,6 +477,9 @@ def record(args):
 
     rate = count / live_time if live_time else 0
     print(f"\nDone ({reason}): {count} rows in {live_time:.1f}s live (~{rate:.0f} Hz) -> {out}")
+    if UNCONFIRMED[0]:
+        print(f"Note: {UNCONFIRMED[0]} page reads never came back the same twice in a row; "
+              "those pages may mix two physics steps.")
     if args.raw:
         print(f"Convert with: python ac_telemetry.py --to-csv {out}")
 

@@ -290,6 +290,10 @@ impl Driver {
             self.paddles(true, false, c);
             return false;
         }
+        if self.phase_start.is_none() {
+            // first gear is in: the press that asked for it is over, whatever was left of it
+            self.paddle = 0;
+        }
         let since = *self.phase_start.get_or_insert(car.step);
         let dt = (car.step - since) as f32 * DT;
         if self.auto_clutch {
@@ -366,7 +370,8 @@ impl Driver {
                 }
                 if t > 6.0 {
                     let phase = (t - 6.0) * 0.5 * std::f32::consts::TAU;
-                    c.steer = 0.12 * phase.sin();
+                    // the game's own C runtime sine, so the script is the same on every PC
+                    c.steer = 0.12 * rustyac_physics::math::sinf(phase);
                 }
             }
             Kind::Kerb => {

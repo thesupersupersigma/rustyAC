@@ -101,6 +101,10 @@ const SITES: &[(u64, &str)] = &[
 /// The system a call site belongs to. For a call made inside one of the suspension's force
 /// entries (`Suspension::addForceAtPos` …) ask about the outer site instead: that is where
 /// the tyre, the heave spring or the anti-roll bar called in.
+///
+/// Limits: only the sites a double-wishbone car with wings reaches were read one by one. A
+/// call made by a tail jump (`Suspension::stop`, the axle suspension's force entries) shows
+/// the return address of the caller one level up.
 pub fn system_of(site: u32) -> &'static str {
     let va = IMAGE_BASE + site as u64;
     if let Some(&(_, system)) = SITES.iter().find(|(address, _)| *address == va) {
@@ -118,6 +122,8 @@ pub fn system_of(site: u32) -> &'static str {
         "AntirollBar" => "arb",
         "Wing" if name == "Wing::addDrag" => "aero_drag",
         "Wing" if name == "Wing::addLift" => "aero_lift",
+        // cars without wings: the old one-body aero
+        "AeroMap" if name == "AeroMap::addLift" => "aero_lift",
         "Wing" | "AeroMap" | "DRS" => "aero_drag",
         "Drivetrain" | "Engine" | "Kers" | "ERS" => "drivetrain",
         "BrakeSystem" => "brake",

@@ -33,6 +33,8 @@ const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryReq
 const VA_STEP_STAGE0_JOINTS: usize = 0x1_4035_0b80; // dxStepIsland_Stage0_Joints (runs right after gravity and the gyroscopic torque were added)
 const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(float)
 const VA_CAR_RESET_SUSPENSION_DAMAGE: usize = 0x1_4027_5970; // Car::resetSuspensionDamageLevel()
+const VA_TYRE_SET_COMPOUND: usize = 0x1_4028_34e0; // bool Tyre::setCompound(int index)
+const VA_SETUP_MANAGER_STEP: usize = 0x1_4028_d090; // SetupManager::step(float dt)
 // --- globals ---------------------------------------------------------------------------------
 const VA_INIREADERDOCUMENTS_INITIALIZED: usize = 0x1_4155_a588; // static bool INIReaderDocuments::initialized
 const VA_IS_USING_QPT: usize = 0x1_4151_d140; // bool isUsingQPT (ksTimer)
@@ -92,6 +94,15 @@ const CAR_AUTOCLUTCH: usize = 0x3090;
 const CAR_PHYSICS_GUID: usize = 0x3238;
 const CAR_TELEMETRY_IS_ENABLED: usize = 0x3258;
 const CAR_PERFORMANCE_METER_IS_ENABLED: usize = 0x3560;
+const CAR_SETUP_MANAGER: usize = 0x35d0;
+// SetupItem (0x88 bytes): one adjustable value of the car
+const SETUP_ITEM_SIZE: usize = 0x88;
+const SI_NAME: usize = 0x8;
+const SI_CONNECTED_FLOAT: usize = 0x28;
+const SI_MULTIPLIER: usize = 0x50;
+const SI_NEW_VALUE: usize = 0x54;
+const SI_ATTACHED: usize = 0x58;
+const SI_LABEL_MULTIPLIER: usize = 0x80;
 const CAR_AUTO_BLIP: usize = 0x3340;
 const CAR_AUTO_SHIFT: usize = 0x33e8;
 const CAR_EDL: usize = 0x3428;
@@ -369,6 +380,8 @@ struct State {
     applied_controls: [u8; 0x34],
     stage0_original: usize,
     world_steps: u32,
+    /// How often ODE started on an island (one island holds the whole car).
+    islands: u32,
     image_base: usize,
 }
 
@@ -473,6 +486,8 @@ body_force_hook!(body_add_local_torque, body_add_local_torque_h, 0xe0, 7, one);
 body_force_hook!(body_set_velocity, body_set_velocity_h, 0x80, 9, one);
 body_force_hook!(body_set_angular_velocity, body_set_angular_velocity_h, 0x88, 10, one);
 body_force_hook!(body_set_position, body_set_position_h, 0x90, 11, one);
+// setRotation takes a matrix; its first row is what gets recorded as the vector
+body_force_hook!(body_set_rotation, body_set_rotation_h, 0x98, 12, one);
 
 extern "C" fn body_stop_h(this: *mut u8, amount: f32) {
     let from = unsafe { RETURN_ADDRESS };
@@ -489,8 +504,9 @@ fn suspension_index(st: &State, this: *mut u8) -> usize {
     st.suspensions.iter().position(|&s| s == this).expect("a hooked call on an unknown suspension")
 }
 
-fn note<T: PartialEq + Copy>(capture: &mut TyreCapture, which: usize, slot: &mut T, value: T) {
-    if capture.asked[which] > 0 && *slot != value {
+fn note<const N: usize>(capture: &mut TyreCapture, which: usize, slot: &mut [f32; N], value: [f32; N]) {
+    // bits, not values: +0.0 and -0.0 are different answers
+    if capture.asked[which] > 0 && slot.map(f32::to_bits) != value.map(f32::to_bits) {
         capture.ambiguous = true;
     }
     capture.asked[which] += 1;
@@ -702,6 +718,13 @@ extern "C" fn tyre_step_hook(tyre: *mut u8, dt: f32) {
     unsafe {
         let car = st.car;
         let body = &st.bodies[0];
+        // what the tyre itself would get from car->body->getVelocity() (+0x78) and getMass() (+0x28)
+        let get_velocity: extern "C" fn(*mut u8, *mut V3) -> *mut V3 =
+            std::mem::transmute(*st.body_vtable.add(0x78 / 8));
+        let get_mass: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(*st.body_vtable.add(0x28 / 8));
+        let mut body_velocity = [0f32; 3];
+        get_velocity(body.wrapper, &mut body_velocity);
+        let body_mass = get_mass(body.wrapper);
         let input = StepInput {
             hub_matrix: [0.0; 16],
             hub_velocity: [0.0; 3],
@@ -738,8 +761,8 @@ extern "C" fn tyre_step_hook(tyre: *mut u8, dt: f32) {
             ambient_temperature: rd(st.engine, PE_AMBIENT_TEMPERATURE),
             road_temperature: rd(st.engine, PE_ROAD_TEMPERATURE),
             allow_tyre_blankets: rd::<u8>(st.engine, PE_ALLOW_TYRE_BLANKETS) != 0,
-            body_velocity: v3(body.ode, B_LVEL),
-            body_mass: rd(body.ode, B_MASS),
+            body_velocity,
+            body_mass,
         };
         st.tyres[wheel] = TyreCapture {
             input: Some(input),
@@ -791,6 +814,7 @@ extern "C" fn stage0_joints_hook(a: usize, b: usize, c: usize, d: usize) -> usiz
     let original: extern "C" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(st.stage0_original) };
     st.solver = st.bodies.iter().map(|body| unsafe { (v3(body.ode, B_FACC), v3(body.ode, B_TACC)) }).collect();
+    st.islands += 1;
     original(a, b, c, d)
 }
 
@@ -929,7 +953,7 @@ fn tyre_member(name: &str) -> usize {
 // --- the world -------------------------------------------------------------------------------
 
 pub const WHEELS: [&str; 4] = ["lf", "rf", "lr", "rr"];
-pub const CAR_NAME: &str = "ks_ferrari_f2004";
+pub const DEFAULT_CAR: &str = "ks_ferrari_f2004";
 /// Fixed weather: the same values the game's `PhysicsEngine` constructor starts with.
 /// The physics clock at the first step, ms. The game's clock counts from program start, so a
 /// session never begins at 0; members that start at time 0 (the auto-blip's "last blip") must
@@ -942,6 +966,11 @@ pub struct Options {
     /// Ask ODE for the force each joint applies (`dJointSetFeedback`). The game never does;
     /// see the report for what it changes.
     pub joint_feedback: bool,
+    /// Folder name of the car under `cardata/`.
+    pub car: String,
+    /// Only build the car, apply the session-start setup and let the game's own
+    /// `SetupManager::step` report what changes (for comparing with a real game log).
+    pub setup_check: bool,
 }
 
 /// One car on the fake track, ready to be stepped.
@@ -955,32 +984,96 @@ pub struct World<'a> {
     telemetry_writer: *mut u8,
     avatar: *mut u8,
     page: *mut u8,
+    /// `name:old->new` of every setup value the session start changes (applied in step 0).
+    pub setup_changes: Vec<String>,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
-pub fn prepare_root(repo: &Path, root: &Path) -> Result<(), String> {
+pub fn prepare_root(repo: &Path, root: &Path, car: &str) -> Result<u64, String> {
     let io = |e: std::io::Error| e.to_string();
     std::fs::create_dir_all(root.join("system/cfg")).map_err(io)?;
     // THREADS=0: no thread pool, the whole step runs on the calling thread. The other keys
-    // only feed the force-feedback numbers.
+    // only feed the force-feedback numbers and have the values of the game's own file.
     std::fs::write(
         root.join("system/cfg/assetto_corsa.ini"),
-        "[PHYSICS_THREADING]\nTHREADS=0\n[FF_EXPERIMENTAL]\nENABLE_GYRO=0\nDAMPER_MIN_LEVEL=0\nDAMPER_GAIN=1\n",
+        "[PHYSICS_THREADING]\nTHREADS=0\n[FF_EXPERIMENTAL]\nENABLE_GYRO=0\nDAMPER_MIN_LEVEL=0\nDAMPER_GAIN=1\n\
+         [LOW_SPEED_FF]\nSPEED_KMH=3\nMIN_VALUE=0.01\n",
     )
     .map_err(io)?;
     // the track "flat" has no files at all: no AI line, no surfaces, no DRS zones
     let _ = std::fs::remove_dir_all(root.join("content/tracks"));
     let _ = std::fs::remove_file(root.join("system/cfg/tyre_smoke.ini"));
-    let from = repo.join("cardata").join(CAR_NAME);
-    let to = root.join("content/cars").join(CAR_NAME).join("data");
+    let from = repo.join("cardata").join(car);
+    let to = root.join("content/cars").join(car).join("data");
     std::fs::create_dir_all(&to).map_err(io)?;
+    let mut names = Vec::new();
     for entry in std::fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
         let entry = entry.map_err(io)?;
         if entry.file_type().map_err(io)?.is_file() {
-            std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(io)?;
+            names.push(entry.file_name());
         }
     }
-    Ok(())
+    // a hash of the car's data (names and contents, in name order) for the recording's header
+    names.sort();
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for name in names {
+        let bytes = std::fs::read(from.join(&name)).map_err(io)?;
+        crate::record::fnv1a(&mut hash, name.to_string_lossy().as_bytes());
+        crate::record::fnv1a(&mut hash, &bytes);
+        std::fs::write(to.join(&name), &bytes).map_err(io)?;
+    }
+    Ok(hash)
+}
+
+/// What the game's setup screen does to the car when a session starts with the default setup.
+///
+/// Every `SetupManager` item that has a section in the car's `setup.ini` is shown as a
+/// spinner holding an integer; on entry the screen sets every spinner to its default and
+/// writes the spinner's value back to the item. A value that is not on the spinner's grid
+/// (e.g. a camber of 3.0 degrees stored as radians and shown in tenths of a degree) comes
+/// back changed. Mirrors `SetupScreen::loadINI` 0x14017d950, `SetupTab::addItem` 0x140183850
+/// and the spinner job 0x140183620; the game's own `SetupManager::step` then applies the
+/// values in the first step. Returns `name:old->new` for every value that will change.
+unsafe fn apply_setup_screen_defaults(car: *mut u8, setup: &rustyac_physics::data::ini::IniReader) -> Vec<String> {
+    let manager = car.add(CAR_SETUP_MANAGER);
+    let mut item: *mut u8 = rd(manager, 0);
+    let end: *mut u8 = rd(manager, 8);
+    let clicks = setup.has_section("DISPLAY_METHOD");
+    let mut changes = Vec::new();
+    while item < end {
+        let name = read_wstring(item.add(SI_NAME));
+        if setup.has_section(&name) {
+            // a missing key reads as 0, as in the game's INIReader
+            let float = |key: &str| setup.get_float(&name, key).unwrap_or(0.0);
+            let label = rd::<f32>(item, SI_LABEL_MULTIPLIER).abs();
+            let min = (float("MIN") / label) as f64;
+            let max = (float("MAX") / label) as f64;
+            let step = setup.get_int(&name, "STEP").unwrap_or(0) as f64;
+            let mode = if clicks { setup.get_int(&name, "SHOW_CLICKS").unwrap_or(0) } else { 0 };
+            let value: f32 = rd(item, SI_NEW_VALUE);
+            // the spinner's range and position (C casts: toward zero)
+            let (low, high, position) = match mode {
+                1 => ((min / step) as i32, (max / step) as i32, (value as f64 / step + 0.5) as i32),
+                2 => (0, ((max - min) / step) as i32, ((value - min as f32) / step as f32 + 0.5f32) as i32),
+                _ => (min as i32, max as i32, value as i32),
+            };
+            let position = if position > high { high } else { position.max(low) };
+            let back: f32 = match mode {
+                1 => step as f32 * position as f32,
+                2 => step as f32 * position as f32 + min as f32,
+                _ => position as f32,
+            };
+            wr(item, SI_NEW_VALUE, back);
+            wr(item, SI_ATTACHED, 1u8);
+            let connected: *const f32 = rd(item, SI_CONNECTED_FLOAT);
+            let applied = rd::<f32>(item, SI_MULTIPLIER) * back;
+            if !connected.is_null() && applied.to_bits() != (*connected).to_bits() && applied != *connected {
+                changes.push(format!("{name}:{:?}->{:?}", *connected, applied));
+            }
+        }
+        item = item.add(SETUP_ITEM_SIZE);
+    }
+    changes
 }
 
 impl<'a> World<'a> {
@@ -1070,13 +1163,14 @@ impl<'a> World<'a> {
                 applied_controls: [0; 0x34],
                 stage0_original: 0,
                 world_steps: 0,
+                islands: 0,
                 image_base: acs.va(crate::acs::GHIDRA_BASE),
             });
 
             let car = acs.alloc(CAR_SIZE);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 =
                 std::mem::transmute(acs.va(VA_CAR_CTOR));
-            ctor(car, engine, wstring(acs, CAR_NAME), wstring(acs, ""));
+            ctor(car, engine, wstring(acs, &options.car), wstring(acs, ""));
             assert_eq!(rd::<u32>(car, CAR_PHYSICS_GUID), 0, "the car is not car 0");
             let st = state();
             st.car = car;
@@ -1140,7 +1234,7 @@ impl<'a> World<'a> {
                 wr(car, CAR_AUTOCLUTCH + 0xd, 1u8); // useAutoOnChange
             }
 
-            let world = World {
+            let mut world = World {
                 acs,
                 engine,
                 car,
@@ -1149,7 +1243,16 @@ impl<'a> World<'a> {
                 telemetry_writer: object(SMW_SIZE),
                 avatar: object(AVATAR_SIZE),
                 page: object(0x1000),
+                setup_changes: Vec::new(),
             };
+            if options.setup_check {
+                // no recording: just what the session start does to this car's setup, reported
+                // by the game's own SetupManager::step on its (visible) standard output
+                world.session_start_setup(&options.car);
+                let setup_step: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SETUP_MANAGER_STEP));
+                setup_step(car.add(CAR_SETUP_MANAGER), DT);
+                return world;
+            }
             world.find_bodies_and_joints(options);
             world.install_hooks();
             // the game's telemetry writer, pointed at this car, a zeroed avatar (it supplies the
@@ -1179,8 +1282,28 @@ impl<'a> World<'a> {
             let reset_suspension_damage: extern "C" fn(*mut u8) =
                 std::mem::transmute(acs.va(VA_CAR_RESET_SUSPENSION_DAMAGE));
             reset_suspension_damage(car);
+            world.session_start_setup(&options.car);
             state().tape.clear();
             world
+        }
+    }
+
+    /// The two things the game's setup screen does to the player's car when a session starts
+    /// with the default setup, in the game's order: the default tyre compound
+    /// (`tyres.ini [COMPOUND_DEFAULT] INDEX`) through the game's `Tyre::setCompound`, and the
+    /// setup items' round trip through the screen's spinners.
+    unsafe fn session_start_setup(&mut self, car_name: &str) {
+        use rustyac_physics::data::ini::IniReader;
+        let data = Path::new("content/cars").join(car_name).join("data");
+        let tyres = IniReader::load(&data.join("tyres.ini")).expect("the car's tyres.ini");
+        // the game's INIReader gives 0 for a missing key
+        let compound = tyres.get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
+        let set_compound: extern "C" fn(*mut u8, i32) -> u8 = std::mem::transmute(self.acs.va(VA_TYRE_SET_COMPOUND));
+        for wheel in 0..4 {
+            set_compound(self.car.add(CAR_TYRES + wheel * TYRE_SIZE), compound);
+        }
+        if let Ok(setup) = IniReader::load(&data.join("setup.ini")) {
+            self.setup_changes = apply_setup_screen_defaults(self.car, &setup);
         }
     }
 
@@ -1274,6 +1397,7 @@ impl<'a> World<'a> {
         set(0x80, body_set_velocity);
         set(0x88, body_set_angular_velocity);
         set(0x90, body_set_position);
+        set(0x98, body_set_rotation);
         let table = leak(table).add(1);
         for body in &st.bodies {
             wr(body.wrapper, 0, table);
@@ -1358,12 +1482,14 @@ impl<'a> World<'a> {
             *capture = TyreCapture::default();
         }
         let before_world_steps = st.world_steps;
+        let before_islands = st.islands;
         let time_ms = CLOCK_START_MS + (self.step_index + 1) as f64 * 3.0;
         let step: extern "C" fn(*mut u8, f32, f64, f64) =
             unsafe { std::mem::transmute(self.acs.va(VA_PHYSICS_ENGINE_STEP)) };
         step(self.engine, DT, time_ms, time_ms);
         let st = state();
         assert_eq!(st.world_steps, before_world_steps + 1, "dWorldStep did not run exactly once");
+        assert_eq!(st.islands, before_islands + 1, "ODE did not step exactly one island");
         assert_eq!(st.polled, 1, "the controls device was not polled exactly once");
 
         // what the game does after the step: the state snapshot for the main thread (the
@@ -1474,7 +1600,9 @@ impl<'a> World<'a> {
         self.emit_components(row);
     }
 
-    /// The main state values of the car's systems at the end of the step.
+    /// The main state values of the car's systems at the end of the step. Two are older by
+    /// the game's own design: `car.speed` (cached before the step from the body's velocity)
+    /// and `car.accG` (computed at the top of `Car::step`).
     unsafe fn emit_components(&self, row: &mut Row) {
         let st = state();
         let car = self.car;
@@ -1519,6 +1647,9 @@ impl<'a> World<'a> {
         row.f("drivetrain.currentClutchTorque", rd(d, 0x538));
         row.f("drivetrain.locClutch", rd(d, 0x644));
         row.i("drivetrain.isGearGrinding", rd::<u8>(d, 0x0) as i32);
+        row.f("drivetrain.diffPowerRamp", rd(d, 0xc8));
+        row.f("drivetrain.diffCoastRamp", rd(d, 0xcc));
+        row.f("drivetrain.diffPreLoad", rd(d, 0xd0));
         row.i("drivetrain.gearRequest.request", rd(d, 0x5a0));
         row.i("drivetrain.gearRequest.requestedGear", rd(d, 0x5a0 + 0x18));
         let e = d.add(0xe0);
@@ -1621,6 +1752,7 @@ impl<'a> World<'a> {
         unsafe {
             let tyre = self.car.add(CAR_TYRES);
             out.push(("compound".to_string(), rd::<i32>(tyre, T_CURRENT_COMPOUND_INDEX).to_string()));
+            out.push(("setup_changes".to_string(), self.setup_changes.join(",")));
             out.push((
                 "ray_casters".to_string(),
                 (0..4).filter(|i| rd::<usize>(tyre.add(i * TYRE_SIZE), T_RAY_CASTER) != 0).count().to_string(),

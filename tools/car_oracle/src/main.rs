@@ -12,6 +12,10 @@
 //!     replays the tyres through the Rust port, and writes `<out>/results.md`.
 //! car_oracle check <recording>
 //!     Tyre cross-check and headline numbers of one recording.
+//! car_oracle setup-check [--car <name>]
+//!     Builds the car, does what the game's setup screen does at a session start and lets the
+//!     game's own code print every value that changes ("Setup change for Car: …"), for
+//!     comparing with a real game's log.txt.
 //! car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]
 //!     Value-by-value comparison of two recordings (fields and force tape).
 //! car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>]
@@ -37,6 +41,7 @@ fn usage() -> String {
      car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]\n       \
      car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]\n       \
      car_oracle check <recording>\n       \
+     car_oracle setup-check [--car <name>]\n       \
      car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]\n       \
      car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>] [--every <n>] \
      [--only <prefix,prefix>] [--csv-out <file>]\n       \
@@ -68,6 +73,7 @@ struct Args {
     csv_out: Option<PathBuf>,
     acs: PathBuf,
     root: PathBuf,
+    car: String,
     verbose: bool,
 }
 
@@ -93,6 +99,7 @@ fn parse_args() -> Result<Args, String> {
         csv_out: None,
         acs: PathBuf::from(DEFAULT_ACS),
         root: repo.join("re/scratch/car_oracle/root"),
+        car: game::DEFAULT_CAR.to_string(),
         verbose: false,
     };
     while let Some(flag) = it.next() {
@@ -114,6 +121,7 @@ fn parse_args() -> Result<Args, String> {
             "--csv-out" => a.csv_out = Some(PathBuf::from(value()?)),
             "--acs" => a.acs = PathBuf::from(value()?),
             "--root" => a.root = PathBuf::from(value()?),
+            "--car" => a.car = value()?,
             "--verbose" => a.verbose = true,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
@@ -134,6 +142,7 @@ fn main() {
         "run" => run(&args),
         "all" => all(&args),
         "check" => check_one(&args),
+        "setup-check" => setup_check(&args),
         "diff" => diff(&args),
         "csv" => csv(&args),
         _ => Err(usage()),
@@ -161,7 +170,7 @@ fn run(args: &Args) -> Result<(), String> {
     let repo = repo_root();
     // relative paths are the caller's; the game needs its own working directory
     let out = std::path::absolute(&args.out).map_err(|e| e.to_string())?;
-    game::prepare_root(&repo, &args.root)?;
+    let data_hash = game::prepare_root(&repo, &args.root, &args.car)?;
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
 
     let acs = acs::Acs::load(&args.acs)?;
@@ -170,13 +179,14 @@ fn run(args: &Args) -> Result<(), String> {
     } else {
         acs.silence_game_stdout();
     }
-    let options = game::Options { joint_feedback: args.joint_forces };
+    let options = game::Options { joint_feedback: args.joint_forces, car: args.car.clone(), setup_check: false };
     let mut world = game::World::build(&acs, scenario, &options);
     let steps = args.steps.unwrap_or(scenario.steps);
     let mut meta = vec![
         ("scenario".to_string(), name.clone()),
         ("about".to_string(), scenario.about.to_string()),
-        ("car".to_string(), game::CAR_NAME.to_string()),
+        ("car".to_string(), args.car.clone()),
+        ("car_data_hash".to_string(), format!("{data_hash:016x}")),
         ("dt".to_string(), format!("{:?}", scenario::DT)),
         ("clock_start_ms".to_string(), format!("{:?}", game::CLOCK_START_MS)),
         ("seed".to_string(), scenario.seed.to_string()),
@@ -243,11 +253,13 @@ fn run_child(args: &Args, name: &str, hash_only: bool) -> Result<String, String>
 
 fn all(args: &Args) -> Result<(), String> {
     let repo = repo_root();
-    let data = repo.join("cardata").join(game::CAR_NAME);
+    let data = repo.join("cardata").join(&args.car);
     let mut table = String::from(
         "| scenario | steps | two runs identical | tyre forces = Rust tyre | all tyre values = Rust tyre | \
-         tape closes | tyre calls on tape | headline numbers |\n|---|---|---|---|---|---|---|---|\n",
+         tape closes | tape calls explained | tyre calls on tape | headline numbers |\n\
+         |---|---|---|---|---|---|---|---|---|\n",
     );
+    let mut notes = String::new();
     let mut failed = false;
     for scenario in scenario::all() {
         if !args.only.is_empty() && !args.only.iter().any(|n| n == scenario.name) {
@@ -258,30 +270,41 @@ fn all(args: &Args) -> Result<(), String> {
         let identical = first == second;
         let recording = Recording::read(&recording_path(&args.out, scenario.name))?;
         let report = check::check(&recording, &data)?;
-        failed |= !identical || report.force_steps_matching != report.wheel_steps;
+        failed |= !identical
+            || report.force_steps_matching != report.wheel_steps
+            || report.full_steps_matching != report.wheel_steps
+            || report.tape_steps_closed != recording.steps.len()
+            || report.tape_calls_explained != report.tape_calls
+            || report.tape_tyre_links != report.wheel_steps;
         let line = format!(
-            "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} |",
             scenario.name,
             recording.steps.len(),
             if identical { format!("yes (`{first}`)") } else { format!("**NO** (`{first}` / `{second}`)") },
             check::percent(report.force_steps_matching, report.wheel_steps),
             check::percent(report.full_steps_matching, report.wheel_steps),
             check::percent(report.tape_steps_closed, recording.steps.len()),
+            check::percent(report.tape_calls_explained, report.tape_calls),
             check::percent(report.tape_tyre_links, report.wheel_steps),
             report.headline.join("; "),
         );
         println!("{line}");
         for note in &report.notes {
             println!("    {note}");
+            notes.push_str(&format!("- `{}`: {note}\n", scenario.name));
         }
         table.push_str(&line);
         table.push('\n');
+    }
+    if !notes.is_empty() {
+        table.push_str("\nNotes:\n\n");
+        table.push_str(&notes);
     }
     let path = args.out.join("results.md");
     std::fs::write(&path, &table).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote {}", path.display());
     if failed {
-        return Err("at least one scenario is not deterministic or does not match the Rust tyre".into());
+        return Err("at least one check of at least one scenario is below 100 %".into());
     }
     Ok(())
 }
@@ -289,7 +312,8 @@ fn all(args: &Args) -> Result<(), String> {
 fn check_one(args: &Args) -> Result<(), String> {
     let file = args.file.as_ref().ok_or_else(usage)?;
     let recording = Recording::read(file)?;
-    let report = check::check(&recording, &repo_root().join("cardata").join(game::CAR_NAME))?;
+    let car = recording.get("car").unwrap_or(game::DEFAULT_CAR);
+    let report = check::check(&recording, &repo_root().join("cardata").join(car))?;
     println!(
         "{}: {} steps; tyre forces match in {} of wheel-steps, every tyre value in {}",
         recording.get("scenario").unwrap_or("?"),
@@ -298,13 +322,29 @@ fn check_one(args: &Args) -> Result<(), String> {
         check::percent(report.full_steps_matching, report.wheel_steps),
     );
     println!(
-        "  force tape: accumulators close in {} of steps; the tyre's hub calls are on the tape in {} of wheel-steps",
+        "  force tape: {} of calls explain the accumulators bit for bit; nothing after the last call in {} of \
+         steps; the tyre's hub calls equal the tape's in {} of wheel-steps",
+        check::percent(report.tape_calls_explained, report.tape_calls),
         check::percent(report.tape_steps_closed, recording.steps.len()),
         check::percent(report.tape_tyre_links, report.wheel_steps),
     );
     for line in report.headline.iter().chain(&report.notes) {
         println!("  {line}");
     }
+    Ok(())
+}
+
+/// What the session start does to a car's setup, printed by the game's own code.
+fn setup_check(args: &Args) -> Result<(), String> {
+    let repo = repo_root();
+    game::prepare_root(&repo, &args.root, &args.car)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.unbuffer_game_stdout();
+    let scenarios = scenario::all();
+    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true };
+    let world = game::World::build(&acs, &scenarios[0], &options);
+    println!("{} values change: {}", world.setup_changes.len(), world.setup_changes.join(", "));
     Ok(())
 }
 

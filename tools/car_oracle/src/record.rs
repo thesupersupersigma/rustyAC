@@ -25,7 +25,7 @@ const TRAILER_MARK: u32 = 0xffff_ffff;
 pub const CALL_WORDS: usize = 16;
 
 /// Kinds of force calls on the tape (`Call::kind`).
-pub const KIND_NAMES: [&str; 12] = [
+pub const KIND_NAMES: [&str; 13] = [
     "?",
     "addForceAtPos",           // a = force (world), b = position (world)
     "addForceAtLocalPos",      // a = force (world), b = position (body)
@@ -38,6 +38,7 @@ pub const KIND_NAMES: [&str; 12] = [
     "setVelocity",             // a = velocity (world)
     "setAngularVelocity",      // a = angular velocity (world)
     "setPosition",             // a = position (world)
+    "setRotation",             // a = first row of the matrix handed over
 ];
 
 /// One call that handed a force or torque to a rigid body (or changed its state by hand).
@@ -550,7 +551,7 @@ pub fn to_csv(recording: &Recording, options: &CsvOptions, out: &Path) -> Result
                         "{step},{seq},{},{},{},{:#x},{},{:#x},{}",
                         bodies.get(call.body as usize).map(String::as_str).unwrap_or("?"),
                         KIND_NAMES.get(call.kind as usize).copied().unwrap_or("?"),
-                        site.map(|s| s.system.as_str()).unwrap_or("unknown"),
+                        recording.system_of(call),
                         0x1_4000_0000u64 + call.site as u64,
                         site.map(|s| s.function.as_str()).unwrap_or(""),
                         if call.outer_site == 0 { 0 } else { 0x1_4000_0000u64 + call.outer_site as u64 },
@@ -636,8 +637,15 @@ pub fn diff(a: &Recording, b: &Recording, only: &[String], ignore: &[String]) ->
             differing.push(format!("{name}: differs in {count} steps, first at {}", first.unwrap()));
         }
     }
-    let tape_steps = (0..steps).filter(|&s| a.steps[s].calls != b.steps[s].calls).count();
-    let first_tape = (0..steps).find(|&s| a.steps[s].calls != b.steps[s].calls);
+    for (_, name, _) in &b.fields {
+        if !a.has(name) {
+            out.push(format!("{name}: only in the second recording"));
+        }
+    }
+    // bits, not values: -0.0 against +0.0 is a difference, NaN against the same NaN is not
+    let words = |r: &Recording, s: usize| -> Vec<[u32; CALL_WORDS]> { r.steps[s].calls.iter().map(Call::to_words).collect() };
+    let tape_steps = (0..steps).filter(|&s| words(a, s) != words(b, s)).count();
+    let first_tape = (0..steps).find(|&s| words(a, s) != words(b, s));
     out.push(format!(
         "{compared} fields compared over {steps} steps: {} differ; force tape differs in {tape_steps} steps{}",
         differing.len(),
