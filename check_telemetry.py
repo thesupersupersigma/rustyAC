@@ -9,6 +9,9 @@ r = csv.reader(f)
 head = next(r)
 ix = {n: i for i, n in enumerate(head)}
 num = lambda row, k: float(row[ix[k]])
+# text columns of a converted raw recording (ac_telemetry.py --to-csv)
+TEXT = {ix[n] for n in ("g_currentTime", "g_lastTime", "g_bestTime", "g_split", "g_tyreCompound")
+        if n in ix}
 
 rows = 0; bad = 0; pkt_gaps = 0; last_pkt = None
 vmax = 0; rpm_max = 0; gears = set(); laps_seen = {}
@@ -19,7 +22,7 @@ core_t = {w: [1e9, -1e9] for w in ("fl", "fr", "rl", "rr")}
 for row in r:
     rows += 1
     try:
-        vals = [float(x) for x in row]
+        vals = [float(x) for i, x in enumerate(row) if i not in TEXT]
     except ValueError:
         bad += 1; continue
     if any(math.isnan(v) or math.isinf(v) for v in vals):
