@@ -1,0 +1,15 @@
+[package]
+name = "ode_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test oracle for rustyac-ode: runs Assetto Corsa's own ODE (mapped from acs.exe, never executed as a program) and the Rust port side by side on synthetic worlds, and replays the car_oracle recordings through the Rust port"
+
+[dependencies]
+rustyac-ode = { path = "../../crates/rustyac-ode" }
+
+[profile.release]
+opt-level = 2
+
+# standalone crate, not part of the parent workspace
+[workspace]
