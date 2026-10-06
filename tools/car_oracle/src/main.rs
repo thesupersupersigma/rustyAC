@@ -4,8 +4,9 @@
 //! body and the full body / joint / tyre state recorded each step.
 //!
 //! car_oracle list
-//! car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--no-joint-forces] [--hash-only]
-//!     One scenario in this process. Prints `<name> steps=… bytes=… hash=…`.
+//! car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]
+//!     One scenario in this process. Prints `<name> steps=… bytes=… hash=…`. `--floor` adds a
+//!     collision mesh under the car (file `<name>_floor.carrec`).
 //! car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]
 //!     Every scenario twice (fresh process each time), compares the two runs byte for byte,
 //!     replays the tyres through the Rust port, and writes `<out>/results.md`.
@@ -33,7 +34,7 @@ const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assett
 
 fn usage() -> String {
     "usage: car_oracle list\n       \
-     car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--no-joint-forces] [--hash-only]\n       \
+     car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]\n       \
      car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]\n       \
      car_oracle check <recording>\n       \
      car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]\n       \
@@ -44,7 +45,8 @@ fn usage() -> String {
 }
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("the repository folder")
+    // tools/car_oracle -> the repository (no canonicalize: it would turn the path into a \\?\ one)
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
 }
 
 struct Args {
@@ -55,6 +57,7 @@ struct Args {
     out: PathBuf,
     steps: Option<usize>,
     joint_forces: bool,
+    floor: bool,
     hash_only: bool,
     only: Vec<String>,
     ignore: Vec<String>,
@@ -79,6 +82,7 @@ fn parse_args() -> Result<Args, String> {
         out: repo.join("oracle/car"),
         steps: None,
         joint_forces: true,
+        floor: false,
         hash_only: false,
         only: Vec::new(),
         ignore: Vec::new(),
@@ -99,6 +103,7 @@ fn parse_args() -> Result<Args, String> {
             "--out" => a.out = PathBuf::from(value()?),
             "--steps" => a.steps = Some(number(value()?)?),
             "--no-joint-forces" => a.joint_forces = false,
+            "--floor" => a.floor = true,
             "--hash-only" => a.hash_only = true,
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
             "--ignore" => a.ignore = value()?.split(',').map(str::to_string).collect(),
@@ -145,11 +150,14 @@ fn recording_path(out: &Path, name: &str) -> PathBuf {
 
 /// One scenario, in this process (the game's objects cannot be torn down and rebuilt).
 fn run(args: &Args) -> Result<(), String> {
-    let scenarios = scenario::all();
+    let mut scenarios = scenario::all();
     let scenario = scenarios
-        .iter()
+        .iter_mut()
         .find(|s| s.name == args.scenario)
         .ok_or_else(|| format!("no scenario {:?} (see `car_oracle list`)", args.scenario))?;
+    let name = if args.floor && !scenario.floor { format!("{}_floor", scenario.name) } else { scenario.name.to_string() };
+    scenario.floor |= args.floor;
+    let scenario = &*scenario;
     let repo = repo_root();
     // relative paths are the caller's; the game needs its own working directory
     let out = std::path::absolute(&args.out).map_err(|e| e.to_string())?;
@@ -166,18 +174,19 @@ fn run(args: &Args) -> Result<(), String> {
     let mut world = game::World::build(&acs, scenario, &options);
     let steps = args.steps.unwrap_or(scenario.steps);
     let mut meta = vec![
-        ("scenario".to_string(), scenario.name.to_string()),
+        ("scenario".to_string(), name.clone()),
         ("about".to_string(), scenario.about.to_string()),
         ("car".to_string(), game::CAR_NAME.to_string()),
         ("dt".to_string(), format!("{:?}", scenario::DT)),
         ("seed".to_string(), scenario.seed.to_string()),
         ("auto_clutch".to_string(), (scenario.auto_clutch as u8).to_string()),
-        ("ground".to_string(), format!("{:?}", scenario.ground).replace(' ', "")),
+        ("ground".to_string(), scenario.ground.describe()),
+        ("floor_mesh".to_string(), (scenario.floor as u8).to_string()),
         ("joint_forces".to_string(), (args.joint_forces as u8).to_string()),
         ("wheels".to_string(), game::WHEELS.join(",")),
     ];
     meta.extend(world.facts());
-    let path = recording_path(&out, scenario.name);
+    let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;
     let mut sites = BTreeSet::new();
     for i in 0..steps {
@@ -196,7 +205,7 @@ fn run(args: &Args) -> Result<(), String> {
         trailer.push('\n');
     }
     let (hash, bytes) = writer.finish(&trailer).map_err(|e| e.to_string())?;
-    println!("{} steps={steps} bytes={bytes} hash={hash:016x}", scenario.name);
+    println!("{name} steps={steps} bytes={bytes} hash={hash:016x}");
     Ok(())
 }
 

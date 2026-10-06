@@ -20,6 +20,7 @@ const VA_PHYSICS_ENGINE_CTOR: usize = 0x1_4026_2430; // PhysicsEngine::PhysicsEn
 const VA_PHYSICS_ENGINE_STEP: usize = 0x1_4026_4760; // PhysicsEngine::step(float dt, double physicsTime, double gameTime)
 const VA_TRACK_CTOR: usize = 0x1_4027_7100; // Track::Track(PhysicsEngine*, const wstring& name, const wstring& config)
 const VA_TRACK_INIT_AI_SPLINE: usize = 0x1_4027_82a0; // Track::initAISpline()
+const VA_TRACK_ADD_SURFACE: usize = 0x1_4027_7e50; // Track::addSurface(const wstring&, float* vertices, int, u16* indices, int, const SurfaceDef&, uint subSpace)
 const VA_CAR_CTOR: usize = 0x1_4026_bf00; // Car::Car(PhysicsEngine*, const wstring& unixName, const wstring& config)
 const VA_CAR_INIT_COLLIDER_MESH: usize = 0x1_4027_3b20; // Car::initColliderMesh(Mesh*, const mat44f&)
 const VA_CAR_FORCE_POSITION: usize = 0x1_4026_fe10; // Car::forcePosition(const vec3f&, bool)
@@ -56,7 +57,6 @@ const WORLD_BODY_COUNT: usize = 0x30;
 const WORLD_JOINT_COUNT: usize = 0x34;
 const WORLD_GRAVITY: usize = 0x38;
 const PE_ALLOW_TYRE_BLANKETS: usize = 0xb8;
-const PE_FUEL_CONSUMPTION_RATE: usize = 0xc8;
 const PE_TYRE_CONSUMPTION_RATE: usize = 0xcc;
 const PE_AMBIENT_TEMPERATURE: usize = 0x100;
 const PE_ROAD_TEMPERATURE: usize = 0x104;
@@ -944,7 +944,6 @@ pub struct Options {
 pub struct World<'a> {
     acs: &'a Acs,
     pub engine: *mut u8,
-    pub track: *mut u8,
     pub car: *mut u8,
     driver: Driver,
     pub step_index: usize,
@@ -952,7 +951,6 @@ pub struct World<'a> {
     telemetry_writer: *mut u8,
     avatar: *mut u8,
     page: *mut u8,
-    pub joint_feedback: bool,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1021,6 +1019,18 @@ impl<'a> World<'a> {
             wr(surface, SD_GRIP_MOD, 1.0f32);
             wr(surface, SD_COLLISION_CATEGORY, 1u32);
             wr(surface, SD_IS_VALID_TRACK, 1u8);
+
+            if scenario.floor {
+                // one big flat quad at y = 0 as a real ODE triangle mesh (two triangles, seen
+                // from above counter-clockwise), in static sub-space 1 like the game's tracks
+                const HALF: f32 = 3000.0;
+                let vertices: [f32; 12] =
+                    [-HALF, 0.0, -HALF, -HALF, 0.0, HALF, HALF, 0.0, HALF, HALF, 0.0, -HALF];
+                let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+                let add_surface: extern "C" fn(*mut u8, *mut u8, *const f32, i32, *const u16, i32, *const u8, u32) -> *mut u8 =
+                    std::mem::transmute(acs.va(VA_TRACK_ADD_SURFACE));
+                add_surface(track, wstring(acs, "road"), vertices.as_ptr(), 4, indices.as_ptr(), 6, surface, 1);
+            }
 
             // the track answers the tyres' rays itself: a copy of its vtable (with the RTTI
             // pointer in front) in which rayCast and createRayCaster are ours
@@ -1116,21 +1126,24 @@ impl<'a> World<'a> {
             // two bookkeeping helpers of the player's car that only fill buffers: off
             wr(car, CAR_PERFORMANCE_METER_IS_ENABLED, 0u8);
             wr(car, CAR_TELEMETRY_IS_ENABLED, 0u8);
-            // driving aids: the automatic clutch is the scenario's choice
+            // driving aids: the automatic clutch is the scenario's choice, set the way the game's
+            // assist option sets it (CarAvatar::setAutoClutchEnabled): "on start" follows the
+            // option, "on gear change" is forced on with it and otherwise stays what the car's
+            // own drivetrain.ini says
             wr(car, CAR_AUTOCLUTCH + 0xc, scenario.auto_clutch as u8); // useAutoOnStart
-            wr(car, CAR_AUTOCLUTCH + 0xd, scenario.auto_clutch as u8); // useAutoOnChange
+            if scenario.auto_clutch {
+                wr(car, CAR_AUTOCLUTCH + 0xd, 1u8); // useAutoOnChange
+            }
 
             let world = World {
                 acs,
                 engine,
-                track,
                 car,
                 driver: scenario.driver(),
                 step_index: 0,
                 telemetry_writer: object(SMW_SIZE),
                 avatar: object(AVATAR_SIZE),
                 page: object(0x1000),
-                joint_feedback: options.joint_feedback,
             };
             world.find_bodies_and_joints(options);
             world.install_hooks();
@@ -1304,10 +1317,6 @@ impl<'a> World<'a> {
         state().bodies.iter().map(|b| b.name.clone()).collect()
     }
 
-    pub fn joints(&self) -> Vec<JointRef> {
-        state().joints.clone()
-    }
-
     fn view(&self) -> CarView {
         unsafe {
             let car = self.car;
@@ -1324,7 +1333,6 @@ impl<'a> World<'a> {
             CarView {
                 step: self.step_index,
                 speed,
-                rpm: (rd::<f64>(car, CAR_DRIVETRAIN + 0x8) * 9.549296585513721) as f32,
                 road_rpm: if radius > 0.0 { speed / radius * ratio.abs() * 9.549_296_6 } else { 0.0 },
                 gear: rd(car, CAR_DRIVETRAIN + 0x584),
                 yaw_rate: -(w[0] * up[0] + w[1] * up[1] + w[2] * up[2]),

@@ -28,7 +28,6 @@ pub struct CarView {
     pub step: usize,
     /// Body speed, m/s.
     pub speed: f32,
-    pub rpm: f32,
     /// The revs the engine would turn at this road speed in the current gear with no wheel
     /// spin (0 in neutral and in the middle of a shift).
     pub road_rpm: f32,
@@ -39,9 +38,6 @@ pub struct CarView {
 }
 
 impl CarView {
-    pub fn time(&self) -> f32 {
-        self.step as f32 * DT
-    }
     pub fn kmh(&self) -> f32 {
         self.speed * 3.6
     }
@@ -56,6 +52,34 @@ pub enum Ground {
 }
 
 impl Ground {
+    /// The form stored in a recording's header.
+    pub fn describe(&self) -> String {
+        match *self {
+            Ground::Flat => "flat".to_string(),
+            Ground::Step { x_min, x_max, z_from, z_to, height } => {
+                format!("step {x_min:?} {x_max:?} {z_from:?} {z_to:?} {height:?}")
+            }
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Ground> {
+        let mut words = text.split(' ');
+        match words.next()? {
+            "flat" => Some(Ground::Flat),
+            "step" => {
+                let mut number = || words.next()?.parse::<f32>().ok();
+                Some(Ground::Step {
+                    x_min: number()?,
+                    x_max: number()?,
+                    z_from: number()?,
+                    z_to: number()?,
+                    height: number()?,
+                })
+            }
+            _ => None,
+        }
+    }
+
     pub fn height(&self, x: f32, z: f32) -> f32 {
         match *self {
             Ground::Flat => 0.0,
@@ -77,6 +101,10 @@ pub struct Scenario {
     /// The "automatic clutch" driving aid of the game.
     pub auto_clutch: bool,
     pub ground: Ground,
+    /// Also give the road a real collision mesh (one flat quad in ODE's static space), so that
+    /// the body's collision boxes can rest on it as they do in the game. Without it only the
+    /// tyres know about the road.
+    pub floor: bool,
     pub seed: u32,
     kind: Kind,
 }
@@ -104,11 +132,22 @@ pub fn all() -> Vec<Scenario> {
         steps: seconds(secs) + 1,
         auto_clutch,
         ground: Ground::Flat,
+        floor: false,
         seed: 1,
         kind,
     };
     vec![
         flat("settle", "dropped on the plane, no input, 2 s", 2.0, true, Kind::Settle),
+        Scenario {
+            floor: true,
+            ..flat(
+                "settle_floor",
+                "as settle, with a collision mesh under the car so that its floor can touch the road",
+                2.0,
+                true,
+                Kind::Settle,
+            )
+        },
         flat(
             "launch_autoclutch_off",
             "standing start by hand clutch, flat out from 1st to 6th",
@@ -130,7 +169,7 @@ pub fn all() -> Vec<Scenario> {
         flat("slalom", "sine steering at 0.5 Hz, 100 km/h", 16.0, true, Kind::Slalom),
         flat(
             "liftoff_oversteer",
-            "100 m radius at 150 km/h, then the throttle is dropped with the wheel held",
+            "100 m radius at 180 km/h, then the throttle is dropped with the wheel held",
             16.0,
             true,
             Kind::LiftOff,
@@ -142,6 +181,7 @@ pub fn all() -> Vec<Scenario> {
             auto_clutch: true,
             // the car starts at the origin facing +z; its left side is +x
             ground: Ground::Step { x_min: 0.0, x_max: 5.0, z_from: 150.0, z_to: 170.0, height: 0.03 },
+            floor: false,
             seed: 1,
             kind: Kind::Kerb,
         },
@@ -151,6 +191,7 @@ pub fn all() -> Vec<Scenario> {
             steps: seconds(60.0) + 1,
             auto_clutch: true,
             ground: Ground::Flat,
+            floor: false,
             seed: 20040314,
             kind: Kind::Random,
         },
@@ -317,7 +358,7 @@ impl Driver {
                 }
             }
             Kind::SteadyCorner { kmh } => self.corner(car, t, kmh / 3.6, None, &mut c),
-            Kind::LiftOff => self.corner(car, t, 150.0 / 3.6, Some(11.0), &mut c),
+            Kind::LiftOff => self.corner(car, t, 180.0 / 3.6, Some(11.0), &mut c),
             Kind::Slalom => {
                 if self.pull_away(car, t, &mut c) {
                     self.shift_by_rpm(car, FIRST + 6, &mut c);
@@ -341,12 +382,12 @@ impl Driver {
                     if (car.step - SETTLE_STEPS) % 200 == 0 {
                         let r = [self.random(), self.random(), self.random(), self.random()];
                         self.target[0] = (r[0] * 2.0 - 1.0) * 0.25; // steer
-                        // mostly throttle, sometimes brakes
-                        if r[3] < 0.25 {
+                        // mostly throttle (so that it gets through the gears), sometimes brakes
+                        if r[3] < 0.15 {
                             self.target[1] = 0.0;
-                            self.target[2] = r[2];
+                            self.target[2] = r[2] * 0.8;
                         } else {
-                            self.target[1] = r[1];
+                            self.target[1] = 0.25 + 0.75 * r[1];
                             self.target[2] = 0.0;
                         }
                     }
@@ -392,7 +433,7 @@ impl Driver {
             let ease = ((t - TURN_IN) / 1.0).min(1.0);
             let want = car.speed.max(5.0) / RADIUS * ease;
             let error = want - car.yaw_rate;
-            self.steer_integral = (self.steer_integral + error * DT * 0.6).clamp(-0.5, 0.5);
+            self.steer_integral = (self.steer_integral + error * DT * 2.0).clamp(-0.5, 0.5);
             self.steer = (error * 0.15 + self.steer_integral).clamp(-0.6, 0.6);
             c.steer = self.steer;
             if let Some(at) = lift_at {

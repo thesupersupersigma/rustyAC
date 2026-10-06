@@ -7,8 +7,9 @@ const FUNCTIONS: &str = include_str!("physics_functions.tsv");
 const IMAGE_BASE: u64 = 0x1_4000_0000;
 
 /// Every label [`system_of`] can give, in the order of the CSV's `sum.` columns.
-pub const SYSTEMS: [&str; 18] = [
+pub const SYSTEMS: [&str; 19] = [
     "tyre",
+    "surface",
     "spring",
     "damper",
     "bumpstop",
@@ -90,6 +91,8 @@ const SITES: &[(u64, &str)] = &[
     (0x1_402b_4072, "heave_damper"),
     (0x1_402b_40c8, "heave_damper"),
     (0x1_402b_4116, "heave_damper"),
+    // Tyre::step 0x140283800: drag on the car body from a surface with damping (sand, gravel)
+    (0x1_4028_4059, "surface"),
     // Car::step 0x140275da0: the sleeping rule stops the body and the fuel tank
     (0x1_4027_638e, "sleep"),
     (0x1_4027_639e, "sleep"),

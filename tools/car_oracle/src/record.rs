@@ -112,11 +112,6 @@ impl Row {
         self.words.push(value as u32);
     }
 
-    pub fn x(&mut self, name: &str, value: u32) {
-        self.name('x', name);
-        self.words.push(value);
-    }
-
     pub fn d(&mut self, name: &str, value: f64) {
         self.name('d', name);
         let bits = value.to_bits();

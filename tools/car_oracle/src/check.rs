@@ -7,7 +7,7 @@ use rustyac_physics::tyre::rig::{self, Rig, RigCar, RigHub, StepInput};
 use rustyac_physics::tyre::{TyreCar, VanillaTyre};
 
 use crate::record::Recording;
-use crate::scenario::SETTLE_STEPS;
+use crate::scenario::{Ground, SETTLE_STEPS};
 
 pub struct Report {
     /// Steps times four wheels.
@@ -150,6 +150,7 @@ pub fn check(recording: &Recording, data: &Path) -> Result<Report, String> {
     }
     tape_checks(recording, &wheels, &mut report);
     headline(recording, &mut report);
+    floor_clearance(recording, data, &mut report)?;
     Ok(report)
 }
 
@@ -268,7 +269,87 @@ fn headline(recording: &Recording, report: &mut Report) {
     report.headline.push(format!("up to {max_calls} force calls per step"));
     if contact_points != 0 || extra_joints != 0 {
         report.notes.push(format!(
-            "ODE contacts appeared: {contact_points} contact points, {extra_joints} steps with extra joints"
+            "ODE contacts: {contact_points} contact points in all, {extra_joints} steps with contact joints"
         ));
     }
+}
+
+/// The car's collision boxes (`colliders.ini`) never meet anything in the oracle, because the
+/// fake road only answers the tyres' rays. In the game they would rest on the road mesh, so a
+/// recording is only what the game would do while every box stays above the road: this
+/// reports the smallest gap (negative = a box corner went below the road).
+fn floor_clearance(recording: &Recording, data: &Path, report: &mut Report) -> Result<(), String> {
+    let path = data.join("colliders.ini");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let vector = |line: &str| -> Option<[f32; 3]> {
+        let value = line.split_once('=')?.1.split(';').next()?;
+        let mut parts = value.split(',').map(|x| x.trim().parse::<f32>());
+        Some([parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?])
+    };
+    let mut boxes: Vec<([f32; 3], [f32; 3])> = Vec::new();
+    let mut centre = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("CENTRE") {
+            centre = vector(line);
+        } else if line.starts_with("SIZE") {
+            if let (Some(c), Some(size)) = (centre.take(), vector(line)) {
+                boxes.push((c, size));
+            }
+        }
+    }
+    let ground = recording.get("ground").and_then(Ground::parse).ok_or("no ground in the header")?;
+    let pos: Vec<usize> = ["x", "y", "z"].iter().map(|a| recording.col(&format!("body.post.pos.{a}"))).collect();
+    let rot: Vec<usize> = (0..9).map(|k| recording.col(&format!("body.post.R.{k}"))).collect();
+    let has_floor = recording.get("floor_mesh") == Some("1");
+    // [whole run, after the spawn drop]: smallest gap, its step, steps with a box below the road
+    let mut lowest = [f32::INFINITY; 2];
+    let mut at = [0usize; 2];
+    let mut below = [0usize; 2];
+    for (step, record) in recording.steps.iter().enumerate() {
+        let f = |column: usize| f32::from_bits(record.words[column]);
+        let p = [f(pos[0]), f(pos[1]), f(pos[2])];
+        let r: Vec<f32> = rot.iter().map(|&c| f(c)).collect();
+        let mut step_gap = f32::INFINITY;
+        for (c, size) in &boxes {
+            for corner in 0..8 {
+                let local = [
+                    c[0] + if corner & 1 == 0 { -0.5 } else { 0.5 } * size[0],
+                    c[1] + if corner & 2 == 0 { -0.5 } else { 0.5 } * size[1],
+                    c[2] + if corner & 4 == 0 { -0.5 } else { 0.5 } * size[2],
+                ];
+                let world = |row: usize| p[row] + r[row * 3] * local[0] + r[row * 3 + 1] * local[1] + r[row * 3 + 2] * local[2];
+                step_gap = step_gap.min(world(1) - ground.height(world(0), world(2)));
+            }
+        }
+        for phase in 0..2 {
+            if phase == 1 && step < SETTLE_STEPS {
+                continue;
+            }
+            below[phase] += (step_gap < 0.0) as usize;
+            if step_gap < lowest[phase] {
+                lowest[phase] = step_gap;
+                at[phase] = step;
+            }
+        }
+    }
+    report.headline.push(format!(
+        "gap under the body's collision boxes: {:.1} mm at its smallest (step {}){}",
+        lowest[0] * 1000.0,
+        at[0],
+        if lowest[1].is_finite() { format!(", {:.1} mm after the spawn drop", lowest[1] * 1000.0) } else { String::new() }
+    ));
+    if below[0] > 0 && !has_floor {
+        report.notes.push(format!(
+            "in {} steps (first {} mm deep at step {}) a collision box of the body is below the road: in the game \
+             the floor would touch the road there; this recording has no collision mesh, so it does not",
+            below[0],
+            -lowest[0] * 1000.0,
+            at[0]
+        ));
+    }
+    if below[1] > 0 && !has_floor {
+        report.notes.push(format!("{} of those steps are after the spawn drop (step {} onwards)", below[1], SETTLE_STEPS));
+    }
+    Ok(())
 }

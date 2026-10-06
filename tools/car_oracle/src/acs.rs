@@ -429,11 +429,6 @@ impl Acs {
         self.base + (ghidra - GHIDRA_BASE)
     }
 
-    /// Ghidra address of an address in this process (for reports).
-    pub fn ghidra(&self, address: usize) -> usize {
-        address.wrapping_sub(self.base).wrapping_add(GHIDRA_BASE)
-    }
-
     /// Memory from the game's own allocator, zeroed.
     pub fn alloc(&self, size: usize) -> *mut u8 {
         let p = (self.operator_new)(size);
