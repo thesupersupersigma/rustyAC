@@ -181,9 +181,9 @@ tasks. "Needs" lists what must exist in Rust first.
 |---|---|---|---|---|
 | 0 | **Whole-car oracle** (`car_oracle`): the game's own `PhysicsEngine`, a flat `Track` and one `Car`, built and stepped in-process like the tyre oracle (**done in Task 06**, `docs/oracle/car_oracle.md`; driving ODE directly for small scenes is not part of it) | M | `tools/tyre_oracle` | It is the measuring stick for every later item, and it proves or disproves section 4.2 before any porting is planned around it |
 | 1 | **Rigid-body core, stage 1**: bodies, box mass, finite-rotation integrator, DBall / Ball / Slider / Fixed joints, islands, `A = J·M⁻¹·Jᵀ`, LDLᵀ solve (the equality-only path of ODE's `dWorldStep`) (**done in Task 07**: `crates/rustyac-ode`, report `docs/port/ode_stage1.md`; bit-exact against the game's ODE and the whole-car recordings) | L | Rust maths helpers | Everything that pushes on the car needs bodies; highest technical risk, so do it early |
-| 2 | **Body bookkeeping**: body/tank/hub masses, fuel burn and re-weighing, sleeping rule | S | 1 | Small, and the chassis cannot be dropped on its wheels without it |
-| 3 | **Suspension**: DWB and STRUT first (112 of 113 cars front, 108 rear), AXLE next (4 cars), ML last (no car uses it); dampers, bump stops, anti-roll bars, heave springs | M | 1, 2, tyre | With the tyres already ported this gives a chassis that sits and rolls |
-| 4 | **Steering and the force-feedback number** | S | 3 | A few lines once the rod joints exist |
+| 2 | **Body bookkeeping**: body/tank/hub masses, fuel burn and re-weighing, sleeping rule (**done in Task 08**, with items 3 and 4 as far as the F2004 needs them: `crates/rustyac-physics/src/car`, report `docs/port/rolling_chassis.md`; bit-exact against the whole-car recordings in a free run) | S | 1 | Small, and the chassis cannot be dropped on its wheels without it |
+| 3 | **Suspension**: DWB and STRUT first (112 of 113 cars front, 108 rear), AXLE next (4 cars), ML last (no car uses it); dampers, bump stops, anti-roll bars, heave springs (**DWB, dampers, bump stops, packers, anti-roll bars and heave springs done in Task 08**; STRUT, AXLE, ML and the controller files of two cars' bars are open) | M | 1, 2, tyre | With the tyres already ported this gives a chassis that sits and rolls |
+| 4 | **Steering and the force-feedback number** (**done in Task 08**; four-wheel steering, 2 cars, needs item 7) | S | 3 | A few lines once the rod joints exist |
 | 5 | **Brakes** | S | tyre | Independent of bodies; can be done any time |
 | 6 | **Engine and 2WD drivetrain**: power curve, limiter, coast, turbo, clutch, gears, LSD, shift timing, auto-clutch / blip / shifter | M | tyre, 5 | Independent of bodies for RWD/FWD cars; closes the loop on driven-wheel speed |
 | 7 | **`DynamicController`** (generic lookup controller) | S | `Curve` | Shared by brakes (EBB), differential, turbo, ERS, rear steer, anti-roll bars, active aero |
@@ -458,6 +458,14 @@ Still open after Task 06: 1, 4 (the oracle's car is car 0 by construction), 6, 7
 
 Task 07 (`docs/port/ode_stage1.md`) closed the rigid-body side of question 3: the island and
 row order were read from the machine code, ported, and are compared in every replayed step.
+
+Task 08 (`docs/port/rolling_chassis.md`) ported items 2 to 4 of the port order for a
+double-wishbone car and runs them, with the Rust tyres, on the Rust rigid-body core: a free run
+of the eleven contact-free recordings, fed only what the systems that are not ported yet hand to
+the chassis, is identical to the game in every compared value. The setup items that write
+chassis values and the session-start rounding of the setup screen went in with it (part of
+item 10). What the "feed" still supplies is the list of what items 5 to 9 have to take over
+(its section 4).
 
 ### 5.3 Not mapped yet
 
