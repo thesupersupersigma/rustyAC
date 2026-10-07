@@ -199,6 +199,16 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     let mut replay_at = 0;
     let mut drive_start = sim.steps;
     let mut flipped = 0;
+    // the heights between which the car is in the world: around the flat road, or around the
+    // track's meshes (Spa's road goes well below its start line)
+    let (floor, ceiling) = match &sim.track {
+        Some(track) if !track.world.meshes.is_empty() => {
+            let lowest = track.world.meshes.iter().map(|mesh| mesh.aabb[2]).fold(f32::MAX, f32::min);
+            let highest = track.world.meshes.iter().map(|mesh| mesh.aabb[3]).fold(f32::MIN, f32::max);
+            (lowest - 20.0, highest + 500.0)
+        }
+        _ => (-3.0, 500.0),
+    };
     let mut result = Ok(());
     {
         let view = CarView::capture(&sim, 0.0);
@@ -319,15 +329,16 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             n += 1;
         }
         if config.auto_reset && config.replay.is_none() {
-            // the flat road has no walls and the car body nothing to lie on: a car that is on
-            // its roof, has left the world or has broken numbers is put back
+            // there are no walls and the car body has nothing to lie on: a car that is on
+            // its roof, has left the world or has broken numbers is put back (on a track: on
+            // the road where it left it, as with Shift+R)
             let body = sim.car.car.core.get_world_matrix(sim.car.car.body).m;
             let broken = body.iter().flatten().any(|x| !x.is_finite());
             flipped = if body[1][1] < 0.2 { flipped + 1 } else { 0 };
             if broken {
                 sim.car.device.source.request(event::REBUILD);
-            } else if body[3][1] < -3.0 || body[3][1] > 500.0 || flipped > FLIPPED_STEPS {
-                sim.car.device.source.request(event::RESET);
+            } else if body[3][1] < floor || body[3][1] > ceiling || flipped > FLIPPED_STEPS {
+                sim.car.device.source.request(if sim.track.is_some() { event::TO_TRACK } else { event::RESET });
                 flipped = 0;
             }
         }

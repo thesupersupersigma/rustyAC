@@ -94,7 +94,7 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
 | Right Ctrl+G | automatic gearbox on / off |
 | C | next camera: chase, chase far, cockpit |
-| R | reset the car to the spawn point (Shift+R: a brand-new car, cold tyres and all) |
+| R | reset the car to the spawn point (N: a brand-new car, cold tyres and all; since Task 12 Shift+R is "back onto the track where the car is", see `docs/port/track.md`) |
 | P or Pause | pause |
 | Esc | quit |
 
@@ -444,7 +444,7 @@ crates/rustyac-game/
   window test ended with `steer 0.0057`). AC does the same with these settings; `STEER_DEADZONE=0.1` in
   `rustyac_controls.ini` would hide it. The triggers rest at 0 and have no dead zone, as in AC.
 - **Reset** keeps the tyres' temperatures and wear and the damage, as AC's teleport to the pits does through
-  `Car::forcePosition`; Shift+R builds a new car.
+  `Car::forcePosition`; N builds a new car (it was Shift+R until Task 12).
 
 ## 8. Open questions
 
