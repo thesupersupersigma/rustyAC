@@ -217,3 +217,78 @@ fn damper_branches() {
     assert_eq!(damper.get_force(-0.20), 0.14f32 * 3850.0 - (0.14f32 + -0.20) * 1460.0);
     assert_eq!(damper.get_force(0.0), -0.0);
 }
+
+// --- the car on a real track (Task 12) -------------------------------------------------------
+
+/// Two excerpts of `tools/car_oracle run --track spa` (the game's own car on the game's own
+/// Spa, the body a ghost, only the tyres' rays meeting the track), the whole car in Rust on
+/// the Rust track, nothing fed but the driver:
+///
+/// * `spa_kerbs`, steps 2417 to 2716: into the Bus Stop chicane over its kerbs and off the
+///   track with more than two tyres until the lap is cut (surfaces, the lap invalidator);
+/// * `spa_launch`, steps 5427 to 5626: over the start line at speed (the armed first crossing
+///   of a hot-lap start, which starts the lap timer anew).
+///
+/// On top of the whole car's values the hash holds every tyre's ray (hit, point, normal, mesh),
+/// the surface under every tyre, the lap timer, the lap invalidator and the place along the
+/// AI line. The track is not in the files: it is loaded from the game's folder.
+const TRACK_GOLDEN: [(&str, &[u8]); 2] = [
+    ("spa_kerbs", include_bytes!("golden/track_spa_kerbs_2417_300.chgold")),
+    ("spa_launch", include_bytes!("golden/track_spa_launch_5427_200.chgold")),
+];
+
+/// A track's folder in Assetto Corsa's own folder (`AC_ROOT`, else Steam's usual place), if
+/// it is there.
+fn track_folder(name: &str) -> Option<PathBuf> {
+    let root = match std::env::var_os("AC_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
+    };
+    let folder = root.join("content").join("tracks").join(name);
+    if folder.is_dir() {
+        Some(folder)
+    } else {
+        eprintln!(
+            "NOT TESTED: {} is missing (Assetto Corsa's own track folder; set AC_ROOT if the game is elsewhere); the golden replay on that track needs it",
+            folder.display()
+        );
+        None
+    }
+}
+
+#[test]
+fn track_golden_files_read_back() {
+    for (name, bytes) in TRACK_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        assert_eq!(golden.setup.scenario, name);
+        let track = golden.track.as_ref().expect("a track excerpt names its track");
+        assert_eq!((track.name.as_str(), track.allowed_tyres_out, track.armed), ("spa", 2, name == "spa_launch"));
+        assert_eq!(golden.setup.env.penalty_mode, 1, "{name}: leaving the track costs the lap");
+        assert!(golden.setup.is_whole() && !golden.state.is_empty());
+        assert_eq!(golden.to_bytes(), bytes, "{name}: parse and write do not round-trip");
+        // without its track an excerpt cannot run, and says so
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata/ks_ferrari_f2004");
+        assert!(golden.check(&data).unwrap_err().contains("needs its track"));
+    }
+}
+
+#[test]
+fn the_car_on_spa_matches_the_game() {
+    let Some(data) = car_data("ks_ferrari_f2004") else { return };
+    let Some(folder) = track_folder("spa") else { return };
+    let (track, _) = rustyac_physics::track::load_track(&folder, "").expect("Spa loads");
+    let track = std::sync::Arc::new(track);
+    for (name, bytes) in TRACK_GOLDEN {
+        let mut golden = Golden::parse(bytes).unwrap();
+        golden.attach_track(std::sync::Arc::clone(&track));
+        golden.check(&data).unwrap_or_else(|e| panic!("{name} ({}): {e}", backend()));
+    }
+    // the steering wheel one bit off in one step of the chicane is noticed in that step
+    let mut golden = Golden::parse(TRACK_GOLDEN[0].1).unwrap();
+    golden.attach_track(std::sync::Arc::clone(&track));
+    let step = golden.steps.iter().position(|step| step.feed.controls.steer != 0.0).expect("a step with the wheel turned");
+    let steer = &mut golden.steps[step].feed.controls.steer;
+    *steer = f32::from_bits(steer.to_bits() ^ 1);
+    let error = golden.check(&data).expect_err("a changed steering input went unnoticed");
+    assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+}

@@ -1638,7 +1638,9 @@ fn write_excerpt(
     }
     // the values of the ported systems that every recording holds join the hash, in the
     // order of the trace (which the chassis fixes, not the step)
-    let trace_names: Vec<replay::TraceValue> = replay::powertrain_trace(&chassis).into_iter().filter(|v| !v.extra).collect();
+    let mut trace_names: Vec<replay::TraceValue> = replay::powertrain_trace(&chassis).into_iter().filter(|v| !v.extra).collect();
+    // on a track: the rays, the lap timer, the place along the AI line
+    trace_names.extend(replay::track_trace(&chassis));
     let state = if first == 0 { Vec::new() } else { chassis.save_state() };
     let mut steps = Vec::with_capacity(count);
     for step in first..first + count {
@@ -1675,10 +1677,24 @@ fn write_excerpt(
         }
         steps.push(GoldenStep { feed, hash, bodies });
     }
-    let golden = Golden { car: recording.get("car").unwrap_or("?").to_string(), setup, first, state, steps };
+    // a track excerpt names its track; the spawn is not kept (the start state is)
+    let track = setup.track.as_ref().map(|run| replay::GoldenTrack {
+        name: recording.get("track").unwrap_or("?").to_string(),
+        armed: run.armed,
+        allowed_tyres_out: run.allowed_tyres_out,
+    });
+    let attached = setup.track.as_ref().map(|run| std::sync::Arc::clone(&run.track));
+    let mut golden = Golden { car: recording.get("car").unwrap_or("?").to_string(), setup, first, state, steps, track };
+    golden.setup.track = None;
+    if let Some(track) = &attached {
+        golden.attach_track(std::sync::Arc::clone(track));
+    }
     let bytes = golden.to_bytes();
     // the file must replay: parse it back and run it the way `cargo test` will
-    let parsed = Golden::parse(&bytes)?;
+    let mut parsed = Golden::parse(&bytes)?;
+    if let Some(track) = &attached {
+        parsed.attach_track(std::sync::Arc::clone(track));
+    }
     if parsed != golden {
         return Err("the golden file does not read back as written".to_string());
     }
@@ -1694,6 +1710,36 @@ fn write_excerpt(
     }
     std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(bytes.len())
+}
+
+/// `excerpt-track`: the golden files of the car on a real track, from the recordings in
+/// `oracle/track` (`car_oracle run --track spa --scenario ...`).
+fn excerpt_track_command() -> Result<(), String> {
+    let repo = repo_root();
+    let out = repo.join("crates/rustyac-physics/tests/golden");
+    for scenario in ["spa_kerbs", "spa_launch"] {
+        let recording = Recording::read(&repo.join(format!("oracle/track/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let steps = recording.steps.len();
+        let (first, count) = match scenario {
+            // the Bus Stop chicane: over its kerbs and off the track until the lap is cut
+            "spa_kerbs" => {
+                let cut = (0..steps).find(|&step| recording.i(step, "transponder.cuts") > 0).ok_or("the kerbs recording never cuts the track")?;
+                (cut - 180, 300)
+            }
+            // the start line at speed: the armed first crossing starts the lap timer anew
+            _ => {
+                let crossing = (0..steps)
+                    .find(|&step| recording.i(step, "transponder.status.0.isValid") != 0)
+                    .ok_or("the launch recording never crosses the start line")?;
+                (crossing - 120, 200)
+            }
+        };
+        let path = out.join(format!("track_{scenario}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    Ok(())
 }
 
 fn excerpt_command() -> Result<(), String> {
@@ -2240,7 +2286,7 @@ fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&s
 
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
+     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
      chassis_compare test-car\n       \
      chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
@@ -2293,6 +2339,7 @@ fn main() {
         "run" => run_command(&names, dir.as_deref(), systems, verbose, stop_after),
         "test-car" => test_car_command(),
         "excerpt" => excerpt_command(),
+        "excerpt-track" => excerpt_track_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
         "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref()),
         _ => Err(usage()),

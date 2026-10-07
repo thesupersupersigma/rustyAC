@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rustyac_physics::car::replay::Ground;
-use rustyac_physics::track::{load_track, Track, TrackGround};
+use rustyac_physics::track::{load_track, LapDb, Track, TrackGround};
 use rustyac_physics::tyre::RayTrackCollisionProvider;
 use rustyac_physics::car::{CarControls, CarControlsInput, ControlsProvider, VanillaCar, VibrationDef};
 use rustyac_physics::vecmath::Vec3f;
@@ -425,6 +425,9 @@ pub struct GameSim {
     pub spawn: SpawnPose,
     /// What loading the track said (for the console).
     pub track_summary: String,
+    /// The lap list (the game's `RaceTimingServices` for this one car): what the lap
+    /// displays and the shared memory show.
+    pub lap_db: LapDb,
 }
 
 /// Where the car is spawned: on the road at the origin, the nose towards +z (so the tail,
@@ -523,7 +526,8 @@ impl GameSim {
             track_folder = Some(folder);
         }
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
-        Ok(GameSim { setup, data_path, car, steps: 0, track, track_folder, spawn, track_summary })
+        let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
+        Ok(GameSim { setup, data_path, car, steps: 0, track, track_folder, spawn, track_summary, lap_db })
     }
 
     /// The physics clock after the last step, ms.
@@ -563,7 +567,10 @@ impl GameSim {
         let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
         let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
         std::mem::swap(&mut car.device, &mut self.car.device);
+        // the engine's step count goes on (lap times carry its remainder of three)
+        car.car.step_counter = self.car.car.step_counter;
         self.car = car;
+        self.lap_db = LapDb::new(self.lap_db.sector_count);
         Ok(())
     }
 
@@ -574,10 +581,18 @@ impl GameSim {
         if events & event::RESET != 0 {
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
+            let armed = self.track.is_some() && self.setup.spawn == "hotlap";
             self.car.car.queue(move |car| {
                 car.force_rotation(&spawn.tail);
                 car.force_position(&spawn.position);
+                // back at the spawn point the timer starts again, as at a session's start
+                // (CarAvatar::onNewSession queues TimeTransponder::reset); the lap list stays
+                car.transponder.reset();
+                if armed {
+                    car.transponder.arm_first_lap();
+                }
             });
+            self.lap_db.current_splits.clear();
         }
         if events & event::TO_TRACK != 0 {
             // the nearest point of the AI line, facing along it; without an AI line, the spawn
@@ -631,6 +646,16 @@ impl GameSim {
         self.car.device.polled = false;
         self.car.step(DT, self.setup.time_of_step(self.steps));
         self.steps += 1;
+        // Car::evOnSectorSplit / evOnLapCompleted -> the lap list
+        if self.track.is_some() {
+            let (laps, splits) = self.car.car.transponder.take_events();
+            for split in &splits {
+                self.lap_db.on_sector_split(split);
+            }
+            for lap in &laps {
+                self.lap_db.on_lap_completed(lap);
+            }
+        }
         let device = &self.car.device;
         Ok(StepInput {
             controls: device.reported,

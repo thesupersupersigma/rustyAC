@@ -66,6 +66,60 @@ pub struct CarView {
     pub fuel: f32,
     /// Which device drove (see `input_file::StepInput::device`).
     pub device: u32,
+    /// The lap, on a track.
+    pub lap: LapView,
+    /// The surface under each tyre (its `KEY` in `surfaces.ini`), where the car is on a track.
+    pub surfaces: [SurfaceName; 4],
+}
+
+/// A short text that can be copied about: a surface's key.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SurfaceName {
+    bytes: [u8; 16],
+}
+
+impl SurfaceName {
+    pub fn new(text: &str) -> SurfaceName {
+        let mut bytes = [0u8; 16];
+        for (slot, byte) in bytes.iter_mut().zip(text.bytes().filter(u8::is_ascii)) {
+            *slot = byte;
+        }
+        SurfaceName { bytes }
+    }
+
+    pub fn as_str(&self) -> &str {
+        let end = self.bytes.iter().position(|b| *b == 0).unwrap_or(self.bytes.len());
+        std::str::from_utf8(&self.bytes[..end]).unwrap_or("")
+    }
+}
+
+/// What the lap displays show.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LapView {
+    /// The car is on a track with timing lines.
+    pub on_track: bool,
+    /// The running lap's time, the last lap's and the best lap's, ms (0 = none). The best is
+    /// the best lap without a cut.
+    pub current_ms: u32,
+    pub last_ms: u32,
+    pub best_ms: u32,
+    /// The last lap had no cut.
+    pub last_valid: bool,
+    /// Laps in the list.
+    pub laps: u32,
+    /// The sector the car is in (0 = the first), the sectors of the track, and the sector
+    /// times of the running lap so far (0 = not yet).
+    pub sector: u32,
+    pub sector_count: u32,
+    pub sector_ms: [u32; 4],
+    /// The running lap is still clean (`transponder.cuts == 0`), and how often it was cut.
+    pub valid: bool,
+    pub cuts: i32,
+    /// Tyres on a surface that is not track, as the game counts them.
+    pub tyres_out: i32,
+    /// The place along the lap, 0..1 (`normalizedCarPosition`).
+    pub position: f32,
+    pub in_pit_lane: bool,
 }
 
 impl Default for CarView {
@@ -105,6 +159,8 @@ impl Default for CarView {
             ff: 0.0,
             fuel: 0.0,
             device: 0,
+            lap: LapView::default(),
+            surfaces: [SurfaceName::default(); 4],
         }
     }
 }
@@ -196,6 +252,36 @@ impl CarView {
             view.rpm = drivetrain.get_engine_rpm();
             view.gear = drivetrain.base().current_gear;
             view.rpm_limit = drivetrain.engine().get_limiter_rpm() as f32;
+        }
+        if let Some(track) = &sim.track {
+            for index in 0..4.min(car.tyres.len()) {
+                if let Some(surface) = &car.tyres[index].surface_def {
+                    view.surfaces[index] = SurfaceName::new(track.surface_key(surface));
+                }
+            }
+            let tp = &car.transponder;
+            let db = &sim.lap_db;
+            let mut sector_ms = [0u32; 4];
+            for (slot, split) in sector_ms.iter_mut().zip(&db.current_splits) {
+                *slot = *split;
+            }
+            let last = db.last_lap();
+            view.lap = LapView {
+                on_track: !track.time_lines.is_empty(),
+                current_ms: tp.t,
+                last_ms: last.time,
+                best_ms: db.best_lap.time,
+                last_valid: last.is_valid,
+                laps: db.laps.len() as u32,
+                sector: db.current_splits.len() as u32,
+                sector_count: db.sector_count as u32,
+                sector_ms,
+                valid: tp.cuts == 0,
+                cuts: tp.cuts,
+                tyres_out: car.lap_invalidator.current_tyres_out,
+                position: car.spline_locator_data.npos,
+                in_pit_lane: car.is_in_pit_lane(),
+            };
         }
         if let Some(aids) = &car.aids {
             let aids = aids.base();

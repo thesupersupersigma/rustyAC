@@ -360,11 +360,20 @@ impl ShmSink {
         // the car's folder name, however `--car` named it
         let model = sim.data_path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_else(|| sim.setup.car.clone());
         page.set_w("carModel", &model);
-        page.set_w("track", "rustyac_flat");
+        match &sim.track {
+            Some(track) => {
+                page.set_w("track", &track.name);
+                // `Spline::length` of the AI line
+                page.set_f("trackSPlineLength", track.length());
+                page.set_i("penaltiesEnabled", 1);
+            }
+            None => page.set_w("track", "rustyac_flat"),
+        }
         page.set_w("playerName", "Player");
         page.set_w("playerSurname", "");
         page.set_w("playerNick", "rustyAC");
-        page.set_i("sectorCount", 1);
+        // the track's lap / sector lines (`Track::sectorsNormalizedPositions`)
+        page.set_i("sectorCount", sim.track.as_ref().map(|t| t.sectors_normalized_positions.len() as i32).unwrap_or(1));
         if let Some(drivetrain) = &car.drivetrain {
             let engine = drivetrain.engine();
             // `Engine::maxTorqueNM`: the torque curve at the revs of its peak
@@ -411,14 +420,48 @@ impl ShmSink {
         g.set_i("packetId", self.graphics_packet);
         self.graphics_packet += 1;
         g.set_i("status", self.status);
-        g.set_i("session", 0);
-        let ms = ((sim.steps - self.drive_start_steps) as f64 * 3.0) as i32;
-        g.set_w("currentTime", &time_string(ms));
-        g.set_w("lastTime", "-:--:---");
-        g.set_w("bestTime", "-:--:---");
-        g.set_w("split", "");
+        if sim.track.is_some() {
+            // SharedMemoryWriter::update's lap fields: the strings and the lap count from the
+            // lap list (a lap with a cut is listed and is never the best), the integer times
+            // straight from the car's transponder (whose best lap does not look at cuts)
+            use rustyac_physics::track::timing::time_to_string;
+            let tp = &car.transponder;
+            let db = &sim.lap_db;
+            let last = db.last_lap();
+            // AC_PRACTICE 0, AC_HOTLAP 3
+            g.set_i("session", if sim.setup.spawn == "hotlap" { 3 } else { 0 });
+            g.set_w("currentTime", &time_to_string(tp.t as i32));
+            g.set_w("lastTime", &time_to_string(last.time as i32));
+            g.set_w("bestTime", &time_to_string(db.best_lap.time as i32));
+            match db.current_splits.last() {
+                // timeToSectorString: seconds and tenths
+                Some(split) => g.set_w("split", &format!("{}.{}", split / 1000, split % 1000 / 100)),
+                None => g.set_w("split", " "),
+            }
+            g.set_i("completedLaps", db.laps.len() as i32);
+            g.set_i("iCurrentTime", tp.t as i32);
+            g.set_i("iLastTime", tp.last_lap as i32);
+            g.set_i("iBestTime", tp.best_lap as i32);
+            g.set_i("currentSectorIndex", db.current_splits.len() as i32);
+            let last_sector = match db.current_splits.last() {
+                Some(split) => *split,
+                None if last.time == 0 => 0,
+                None => last.splits.last().copied().unwrap_or(0),
+            };
+            g.set_i("lastSectorTime", last_sector as i32);
+            g.set_f("normalizedCarPosition", car.spline_locator_data.npos);
+            g.set_i("isInPitLane", car.is_in_pit_lane() as i32);
+            g.set_i("isInPit", car.is_in_pits() as i32);
+        } else {
+            g.set_i("session", 0);
+            let ms = ((sim.steps - self.drive_start_steps) as f64 * 3.0) as i32;
+            g.set_w("currentTime", &time_string(ms));
+            g.set_w("lastTime", "-:--:---");
+            g.set_w("bestTime", "-:--:---");
+            g.set_w("split", "");
+            g.set_i("iCurrentTime", ms);
+        }
         g.set_i("position", 1);
-        g.set_i("iCurrentTime", ms);
         g.set_f("sessionTimeLeft", -1.0);
         let position = car.core.get_position(car.body);
         let position = [position.x, position.y, position.z];

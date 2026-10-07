@@ -114,6 +114,15 @@ pub fn clock(seconds: f64) -> String {
     format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
 }
 
+/// A lap time as `m:ss.mmm`, or dashes for none.
+pub fn lap_clock(ms: u32) -> String {
+    if ms == 0 {
+        "-:--.---".to_string()
+    } else {
+        format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
+    }
+}
+
 /// The gear as a driver reads it.
 pub fn gear_label(gear: i32) -> String {
     match gear {
@@ -226,7 +235,54 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         let color = if slip > 1.0 { [0.9, 0.25 + 0.2 * (2.0 - slip), 0.15, 1.0] } else { [0.15 + 0.3 * slip, 0.55, 0.25, 1.0] };
         let (x, y) = (tx + col * (tw + 10.0 * s), ty + row * (th + 10.0 * s));
         hud.rect(x, y, tw, th, color);
-        hud.text_centred(x + tw * 0.5, y + 8.0 * s, 0.7 * s, [0.02, 0.02, 0.02, 1.0], &format!("{:.0} N", view.wheel_load[wheel]));
+        let surface = view.surfaces[wheel].as_str();
+        if surface.is_empty() {
+            hud.text_centred(x + tw * 0.5, y + 8.0 * s, 0.7 * s, [0.02, 0.02, 0.02, 1.0], &format!("{:.0} N", view.wheel_load[wheel]));
+        } else {
+            // on a track: the load, and under it the surface the tyre stands on
+            hud.text_centred(x + tw * 0.5, y + 2.0 * s, 0.62 * s, [0.02, 0.02, 0.02, 1.0], &format!("{:.0} N", view.wheel_load[wheel]));
+            let short: String = surface.chars().take(9).collect();
+            hud.text_centred(x + tw * 0.5, y + 20.0 * s, 0.5 * s, [0.02, 0.02, 0.02, 1.0], &short);
+        }
+    }
+
+    // top centre, on a track: the lap
+    let lap = &view.lap;
+    if lap.on_track {
+        let (pw, ph) = (470.0 * s, 96.0 * s);
+        let px = (width - pw) * 0.5;
+        let py = 10.0 * s;
+        hud.rect(px, py, pw, ph, PANEL);
+        let lap_color = if lap.valid { WHITE } else { RED };
+        hud.text(px + 14.0 * s, py + 8.0 * s, 1.15 * s, lap_color, &lap_clock(lap.current_ms));
+        let state = if lap.valid { "VALID".to_string() } else { format!("INVALID ({} cut{})", lap.cuts, if lap.cuts == 1 { "" } else { "s" }) };
+        hud.text(px + 190.0 * s, py + 14.0 * s, 0.7 * s, if lap.valid { GREEN } else { RED }, &state);
+        hud.text_right(px + pw - 14.0 * s, py + 14.0 * s, 0.7 * s, DIM, &format!("lap {}   {:.1} %", lap.laps + 1, lap.position.clamp(0.0, 1.0) * 100.0));
+        let row = py + 44.0 * s;
+        hud.text(px + 14.0 * s, row, 0.7 * s, DIM, &format!("last {}{}", lap_clock(lap.last_ms), if lap.last_ms != 0 && !lap.last_valid { " cut" } else { "" }));
+        hud.text(px + 250.0 * s, row, 0.7 * s, DIM, &format!("best {}", lap_clock(lap.best_ms)));
+        // the sectors: done ones with their time, the running one marked
+        let row = py + 68.0 * s;
+        let mut sx = px + 14.0 * s;
+        for k in 0..lap.sector_count.min(4) {
+            let time = lap.sector_ms[k as usize];
+            let (text, color) = if k < lap.sector {
+                (format!("S{} {:.3}", k + 1, time as f64 / 1000.0), WHITE)
+            } else if k == lap.sector {
+                (format!("S{} ...", k + 1), YELLOW)
+            } else {
+                (format!("S{}", k + 1), DIM)
+            };
+            sx += hud.text(sx, row, 0.7 * s, color, &text) + 18.0 * s;
+        }
+        let mut notes = Vec::new();
+        if lap.tyres_out > 0 {
+            notes.push(format!("{} off", lap.tyres_out));
+        }
+        if lap.in_pit_lane {
+            notes.push("PIT LANE".to_string());
+        }
+        hud.text_right(px + pw - 14.0 * s, row, 0.7 * s, if lap.tyres_out > 2 { RED } else { DIM }, &notes.join("  "));
     }
 
     if info.replay {
@@ -237,7 +293,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.rect((width - w) * 0.5, height * 0.36, w, gh * 2.5 * s + 20.0 * s, PANEL);
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
-    hud.text(14.0 * s, height - 28.0 * s, 0.7 * s, DIM, "C camera   R reset   P pause   Esc quit");
+    let keys = if lap.on_track { "C camera   R to the start   Shift+R back on track   N new car   P pause   Esc quit" } else { "C camera   R reset   N new car   P pause   Esc quit" };
+    hud.text(14.0 * s, height - 28.0 * s, 0.7 * s, DIM, keys);
     hud.vertices
 }
 

@@ -1143,6 +1143,27 @@ impl RollingChassis {
             out.extend([writer.packet_id as u32, writer.null_counts as u32, writer.current_tyres_out as u32]);
             out.extend([writer.snapshot_speed, writer.ride_height[0], writer.ride_height[1]].map(f));
         }
+        if self.track.is_some() {
+            // a car on a track: its lap timer, lap invalidator and place along the AI line
+            out.push(self.step_counter);
+            let tp = &self.transponder;
+            out.extend([tp.t, tp.last_lap, tp.best_lap, tp.lap_count]);
+            out.push(tp.finish_line_passed as u32 | (tp.was_last_lap_valid as u32) << 1 | (tp.is_first_lap_armed as u32) << 2 | (tp.ext_invalid as u32) << 3);
+            out.extend([tp.cuts as u32, tp.open_track_state as u32]);
+            for k in 0..tp.status.len() {
+                let status = &tp.status[k];
+                out.extend([status.is_valid as u32, status.last_response as u32, status.last_time]);
+                out.extend([tp.last_lap_splits[k], tp.best_lap_splits[k], tp.current_splits[k]]);
+            }
+            let invalidator = &self.lap_invalidator;
+            out.extend([invalidator.current_tyres_out as u32, invalidator.is_in_penalty_zone as u32, invalidator.last_black_flag_time.to_bits()]);
+            let locator = &self.spline_locator;
+            out.extend([locator.current_index as u32, locator.normalized_pos.to_bits(), locator.offset.to_bits(), locator.is_outside_limits as u32]);
+            let data = &self.spline_locator_data;
+            out.extend([data.npos.to_bits(), data.current_index, data.lateral_offset.to_bits(), data.spline_length.to_bits()]);
+            out.extend([data.sides[0], data.sides[1], data.sides_from_il[0], data.sides_from_il[1], data.side_velocity].map(f32::to_bits));
+            out.push(data.is_outside_track_limits as u32);
+        }
         out
     }
 
@@ -1327,6 +1348,47 @@ impl RollingChassis {
             writer.snapshot_speed = f32::from_bits(next()?);
             writer.ride_height = [f32::from_bits(next()?), f32::from_bits(next()?)];
         }
+        if self.track.is_some() {
+            // a car on a track: its lap timer, lap invalidator and place along the AI line
+            self.step_counter = next()?;
+            let tp = &mut self.transponder;
+            tp.t = next()?;
+            tp.last_lap = next()?;
+            tp.best_lap = next()?;
+            tp.lap_count = next()?;
+            let flags = next()?;
+            tp.finish_line_passed = flags & 1 != 0;
+            tp.was_last_lap_valid = flags & 2 != 0;
+            tp.is_first_lap_armed = flags & 4 != 0;
+            tp.ext_invalid = flags & 8 != 0;
+            tp.cuts = next()? as i32;
+            tp.open_track_state = next()? as i32;
+            for k in 0..tp.status.len() {
+                tp.status[k].is_valid = next()? != 0;
+                tp.status[k].last_response = next()? as i32;
+                tp.status[k].last_time = next()?;
+                tp.last_lap_splits[k] = next()?;
+                tp.best_lap_splits[k] = next()?;
+                tp.current_splits[k] = next()?;
+            }
+            self.lap_invalidator.current_tyres_out = next()? as i32;
+            self.lap_invalidator.is_in_penalty_zone = next()? != 0;
+            self.lap_invalidator.last_black_flag_time = f32::from_bits(next()?);
+            let locator = &mut self.spline_locator;
+            locator.current_index = next()? as i32;
+            locator.normalized_pos = f32::from_bits(next()?);
+            locator.offset = f32::from_bits(next()?);
+            locator.is_outside_limits = next()? != 0;
+            let data = &mut self.spline_locator_data;
+            data.npos = f32::from_bits(next()?);
+            data.current_index = next()?;
+            data.lateral_offset = f32::from_bits(next()?);
+            data.spline_length = f32::from_bits(next()?);
+            data.sides = [f32::from_bits(next()?), f32::from_bits(next()?)];
+            data.sides_from_il = [f32::from_bits(next()?), f32::from_bits(next()?)];
+            data.side_velocity = f32::from_bits(next()?);
+            data.is_outside_track_limits = next()? != 0;
+        }
         Ok(())
     }
 }
@@ -1366,6 +1428,18 @@ pub struct Golden {
     /// [`RollingChassis::save_state`] before the first step (empty when `first` is 0).
     pub state: Vec<u32>,
     pub steps: Vec<GoldenStep>,
+    /// The excerpt is of a drive on a real track: the track's folder name under the game's
+    /// `content/tracks`. The track itself is not in the file: [`Golden::attach_track`] hands
+    /// it over before [`Golden::check`].
+    pub track: Option<GoldenTrack>,
+}
+
+/// The track part of a golden file's header.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GoldenTrack {
+    pub name: String,
+    pub armed: bool,
+    pub allowed_tyres_out: i32,
 }
 
 const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD03";
@@ -1427,6 +1501,13 @@ impl Golden {
             self.setup.wind_direction_deg,
             self.setup.damage.map(|d| format!("{d:?}")).join(","),
         );
+        let header = match &self.track {
+            Some(track) => format!(
+                "{header}track={}\narmed={}\nallowed_tyres_out={}\npenalty_mode={}\n",
+                track.name, track.armed as u8, track.allowed_tyres_out, e.penalty_mode
+            ),
+            None => header,
+        };
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
         words.extend(&self.state);
@@ -1497,6 +1578,18 @@ impl Golden {
             auto_shifter: get("auto_shifter")? != "0",
             track: None,
         };
+        let mut setup = setup;
+        let track = match get("track") {
+            Ok(name) => {
+                setup.env.penalty_mode = get("penalty_mode")?.parse().map_err(|e| format!("penalty_mode: {e}"))?;
+                Some(GoldenTrack {
+                    name: name.to_string(),
+                    armed: get("armed")? != "0",
+                    allowed_tyres_out: get("allowed_tyres_out")?.parse().map_err(|e| format!("allowed_tyres_out: {e}"))?,
+                })
+            }
+            Err(_) => None,
+        };
         let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
         let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;
         let mut words = bytes[12 + header_len..].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
@@ -1516,13 +1609,30 @@ impl Golden {
             }
             steps.push(GoldenStep { feed, hash: low | high << 32, bodies });
         }
-        Ok(Golden { car: get("car")?.to_string(), setup, first, state, steps })
+        Ok(Golden { car: get("car")?.to_string(), setup, first, state, steps, track })
+    }
+
+    /// Hands a track excerpt its track (loaded from the game's folder by the caller).
+    pub fn attach_track(&mut self, track: std::sync::Arc<crate::track::Track>) {
+        if let Some(header) = &self.track {
+            // the spawn does not matter: the car's state at the excerpt's start is in the file
+            self.setup.track = Some(TrackRun {
+                track,
+                position: Vec3f::new(0.0, 0.0, 0.0),
+                tail: Vec3f::new(0.0, 0.0, -1.0),
+                armed: header.armed,
+                allowed_tyres_out: header.allowed_tyres_out,
+            });
+        }
     }
 
     /// Builds the chassis from `data_path`, puts it into the excerpt's start state and runs
     /// every step, comparing with what the game produced. `Err` names the first step that
     /// differs.
     pub fn check(&self, data_path: &Path) -> Result<(), String> {
+        if self.track.is_some() && self.setup.track.is_none() {
+            return Err("an excerpt of a drive on a track needs its track (Golden::attach_track)".to_string());
+        }
         let mut chassis = self.setup.build_runner(data_path)?;
         if !self.state.is_empty() {
             // the setup values reached the car in the first step of the recording
@@ -1552,6 +1662,11 @@ impl Golden {
             let mut all_kinds = kinds.clone();
             let mut words = snapshot(&chassis);
             for value in powertrain_trace(&chassis).iter().filter(|value| !value.extra) {
+                all_kinds.push(value.kind);
+                words.push(value.word);
+            }
+            // on a track: the rays, the lap timer, the place along the AI line
+            for value in track_trace(&chassis) {
                 all_kinds.push(value.kind);
                 words.push(value.word);
             }
