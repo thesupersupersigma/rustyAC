@@ -3,12 +3,11 @@ assetto corsa rust rewrite
 
 very experimental, join the [very experimental discord](https://discord.gg/trvtVNWzaf) too (https://discord.gg/trvtVNWzaf)
 
-idk rust, if ur gonna hate on my using claude for this msg me on discord at thesuper2sigma 
+idk rust, if ur gonna hate on me using claude for this msg me on discord at thesuper2sigma 
 
 ## What it can do so far
 
-it renders like a very shitty blocky debug/test world thats just flat witha 3d block car (thats supposed to be the ferrari f2004) that looks like
-its made for one of those shitty js games that like sonnet 4.6 or something would make. BUT, tyre physics are from what ive tested 1:1.
+it renders like a very shitty f2004 car model and map model from assetto corsa installation now. tyre physics are improving from what ive tested.
 Doing a fat burnout (no audio or smoke bcus its still early on) pops both rear tyres, and it just about adds up with how the actual f2004 handles in the real game.
 
 ## What i want it to do once its done
@@ -28,7 +27,7 @@ idk make a pull request, claude is 100% gonna review it so idk if it works, it w
 
 ## License
 
-It depends on the part, and the code ported from Assetto Corsa has no license at all. See [LICENSING.md](LICENSING.md).
+Every file is licensed: GPL-3.0-or-later for the game and the physics, MIT OR Apache-2.0 for the small standalone libraries and tools, BSD-3-Clause for the ODE port. See [LICENSING.md](LICENSING.md).
 
 # Hi
 
