@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use super::aero::{AeroModel, SlipStream, VanillaAero};
+use super::aids::{AidsModel, VanillaAids};
 use super::antiroll_bar::AntirollBar;
 use super::body::{FixedJoint, ForceSource, PhysicsCore, RigidBody};
 use super::brakes::{BrakeModel, VanillaBrakes};
@@ -218,6 +219,10 @@ pub struct RollingChassis {
     /// `Car::aeroMap` with `Car::drs`: the aero slot. `None`: the feed's `aero` hook makes the
     /// wings' force calls instead.
     pub aero: Option<Box<dyn AeroModel>>,
+    /// `Car::tractionControl`, `Car::abs`, `Car::edl`, `Car::stabilityControl`,
+    /// `Car::speedLimiter`: the aids slot. `None`: the feed's `edl`, `aids` and `stability`
+    /// hooks stand in for them.
+    pub aids: Option<Box<dyn AidsModel>>,
     /// `AeroMap::airDensity` as `Car::updateAirPressure` left it (also kept here for a chassis
     /// without an aero model), kg/m^3
     pub air_density: f32,
@@ -593,6 +598,7 @@ impl RollingChassis {
             brake_system: None,
             drivetrain: None,
             aero: None,
+            aids: None,
             air_density: 1.221,
             damage_zone_level: [0.0; 5],
             slip_stream_effect_gain: 1.0,
@@ -741,6 +747,20 @@ impl RollingChassis {
     pub fn set_aero(&mut self, aero: Box<dyn AeroModel>) -> Result<(), String> {
         self.aero = Some(aero);
         self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
+        Ok(())
+    }
+
+    /// Gives the chassis its own driver aids, built from `electronics.ini` as `Car::Car` does
+    /// (`EDL::init`, `ABS::init`, `TractionControl::init`, `SpeedLimiter::init`,
+    /// `StabilityControl::init`). Call it after `install_drivetrain`: the differential lock
+    /// asks the drivetrain which wheels are driven. From now on the feed's `edl` (for a car
+    /// that also has its drivetrain), `aids` and `stability` hooks are not called.
+    pub fn install_aids(&mut self) -> Result<(), String> {
+        let traction_type = match &self.drivetrain {
+            Some(drivetrain) => drivetrain.base().traction_type,
+            None => super::TractionType::Rwd,
+        };
+        self.aids = Some(Box::new(VanillaAids::new(&self.data_path, traction_type)?));
         Ok(())
     }
 
@@ -1120,8 +1140,15 @@ impl RollingChassis {
             }
             None => feed.brakes(self),
         }
-        // 2: electronic differential lock
-        feed.edl(self);
+        // 2: electronic differential lock (the hook also carries what else an unported
+        // system leaves in a tyre before its step)
+        if self.aids.is_none() || self.drivetrain.is_none() {
+            feed.edl(self);
+        }
+        if let Some(mut aids) = self.aids.take() {
+            aids.step_edl(self, dt);
+            self.aids = Some(aids);
+        }
         // 3: suspensions
         for suspension in &mut self.suspensions {
             suspension.step(&mut self.core, dt);
@@ -1178,13 +1205,25 @@ impl RollingChassis {
             self.antiroll_bars[axle].step(&mut self.core, self.body, left[0].as_mut(), right[0].as_mut(), dt);
         }
         // 16 to 18: ABS, traction control, speed limiter
-        feed.aids(self);
+        match self.aids.take() {
+            Some(mut aids) => {
+                aids.step(self, dt);
+                self.aids = Some(aids);
+            }
+            None => feed.aids(self),
+        }
         // 20: setup values that changed reach the car here
         let mut manager = std::mem::take(&mut self.setup_manager);
         manager.step(self);
         self.setup_manager = manager;
         // 21 to 29: telemetry, lap timing, stability control
-        feed.stability(self);
+        match self.aids.take() {
+            Some(mut aids) => {
+                aids.step_stability(self, dt);
+                self.aids = Some(aids);
+            }
+            None => feed.stability(self),
+        }
 
         // --- PhysicsCore::step ---------------------------------------------------------------
         let pre: Vec<BodyTrace> = match self.trace {

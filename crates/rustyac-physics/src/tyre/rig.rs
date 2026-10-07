@@ -257,6 +257,7 @@ impl StepInput {
             sin_length: self.sin_length,
             damping: self.damping,
             granularity: self.granularity,
+            ..SurfaceDef::default()
         }
     }
 }

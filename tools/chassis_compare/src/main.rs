@@ -62,13 +62,14 @@ struct Systems {
     brakes: bool,
     drivetrain: bool,
     aero: bool,
+    aids: bool,
 }
 
 impl Systems {
     /// Everything that is ported.
-    const ALL: Systems = Systems { brakes: true, drivetrain: true, aero: true };
+    const ALL: Systems = Systems { brakes: true, drivetrain: true, aero: true, aids: true };
     /// The rolling chassis alone, as in Task 08.
-    const CHASSIS: Systems = Systems { brakes: false, drivetrain: false, aero: false };
+    const CHASSIS: Systems = Systems { brakes: false, drivetrain: false, aero: false, aids: false };
 
     fn describe(&self) -> &'static str {
         match (self.brakes, self.drivetrain) {
@@ -102,6 +103,7 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         rust_brakes: systems.brakes,
         rust_drivetrain: systems.drivetrain,
         rust_aero: systems.aero,
+        rust_aids: systems.aids,
         auto_clutch: get("auto_clutch")? != "0",
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
@@ -1446,6 +1448,7 @@ fn main() {
                         "brakes" => systems.brakes = false,
                         "drivetrain" | "engine" => systems.drivetrain = false,
                         "aero" => systems.aero = false,
+                        "aids" => systems.aids = false,
                         other => {
                             eprintln!("--feed: unknown system {other:?}\n{}", usage());
                             std::process::exit(2);

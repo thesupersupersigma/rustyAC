@@ -4,7 +4,14 @@
 
 (Kept up to date while the task runs, so that a cut-off loses nothing. Newest state first.)
 
-- **State**: aero is ported and committed (`car/aero.rs`: `AeroModel` slot, `VanillaAero` with
+- **State**: the aids are ported and committed too (`car/aids.rs`: `AidsModel` slot,
+  `VanillaAids` = traction control, ABS, electronic differential lock, stability control, pit
+  limiter, with `Tyre::getDX` and `RaceEngineer::getOptimalBrake`; `RollingChassis::install_aids`;
+  `SurfaceDef` has `is_pitlane` / `is_valid_track`). With wings and aids in Rust every existing
+  recording is bit-exact (the F2004's traction control cuts and the 488 GT3's ABS are now
+  computed, not fed). `--feed aids` puts the recorded aid outputs back. Next: the `Car::step`
+  shell (`spec_car_step.md` when the helper has written it; listings `cs_*.asm` are there).
+- **Earlier**: aero is ported and committed (`car/aero.rs`: `AeroModel` slot, `VanillaAero` with
   wings, fins, ride-height tables, damage factor, wing controllers, DRS, air density, slipstream
   hook, ground wind; `WING_n` setup items; `RollingChassis::install_aero`). With the wings in
   Rust every existing recording is still bit-exact (11 F2004 drives and the 8 folders of extra

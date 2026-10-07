@@ -39,6 +39,7 @@
 )]
 
 pub mod aero;
+pub mod aids;
 pub mod antiroll_bar;
 pub mod body;
 pub mod brakes;
@@ -54,6 +55,7 @@ pub mod shift_assists;
 pub mod suspension;
 
 pub use aero::{AeroBase, AeroModel, Drs, DynamicWingController, SlipStream, VanillaAero, Wing};
+pub use aids::{Abs, AidsBase, AidsModel, Edl, SpeedLimiter, StabilityControl, TractionControl, VanillaAids};
 pub use antiroll_bar::AntirollBar;
 pub use body::{DistanceJoint, FixedJoint, ForceSource, PhysicsCore, RigidBody, TapeCall};
 pub use brakes::{BrakeBase, BrakeModel, VanillaBrakes};

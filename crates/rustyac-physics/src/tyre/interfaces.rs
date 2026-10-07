@@ -70,6 +70,10 @@ pub struct SurfaceDef {
     pub damping: f32,
     /// Non-zero adds a fixed three-wave roughness to the ground height.
     pub granularity: f32,
+    /// `isValidTrack`: a tyre here counts as on the track
+    pub is_valid_track: bool,
+    /// `isPitlane`: the pit limiter works on this surface
+    pub is_pitlane: bool,
 }
 
 impl Default for SurfaceDef {
@@ -82,6 +86,8 @@ impl Default for SurfaceDef {
             sin_length: 0.0,
             damping: 0.0,
             granularity: 0.0,
+            is_valid_track: true,
+            is_pitlane: false,
         }
     }
 }

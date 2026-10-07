@@ -115,7 +115,7 @@ pub trait ChassisFeed {
     /// the driven wheels. Runs after the steering, before the anti-roll bars.
     fn drivetrain(&mut self, chassis: &mut RollingChassis);
 
-    /// Positions 16 to 18, `ABS::step`, `TractionControl::step`, `SpeedLimiter::step`: the
+    /// Only without an aids model: positions 16 to 18, `ABS::step`, `TractionControl::step`, `SpeedLimiter::step`: the
     /// aids that act on the next step's brakes and engine (`Tyre::absOverride`,
     /// `Engine::electronicOverride`, `BrakeSystem::electronicOverride`). Runs after the
     /// anti-roll bars, before the setup items are written.

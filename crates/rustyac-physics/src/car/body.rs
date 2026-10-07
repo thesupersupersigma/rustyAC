@@ -259,6 +259,19 @@ impl PhysicsCore {
         v3(self.world.body_get_rel_point_vel(body.id, [0.0; 3]))
     }
 
+    /// `RigidBodyODE::getLocalVelocity` @ 0x1402ce520: `worldToLocalNormal(getVelocity())`.
+    pub fn get_local_velocity(&self, body: RigidBody) -> Vec3f {
+        let v = self.get_velocity(body);
+        self.world_to_local_normal(body, &v)
+    }
+
+    /// `RigidBodyODE::getLocalAngularVelocity` @ 0x1402ce430:
+    /// `worldToLocalNormal(getAngularVelocity())`.
+    pub fn get_local_angular_velocity(&self, body: RigidBody) -> Vec3f {
+        let w = self.get_angular_velocity(body);
+        self.world_to_local_normal(body, &w)
+    }
+
     /// `RigidBodyODE::getAngularVelocity` @ 0x1402ce3f0: `dBodyGetAngularVel`.
     pub fn get_angular_velocity(&self, body: RigidBody) -> Vec3f {
         let b = self.world.body(body.id);

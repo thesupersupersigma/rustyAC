@@ -346,10 +346,13 @@ impl ChassisFeed for RecordedFeed<'_> {
 
     fn edl(&mut self, chassis: &mut RollingChassis) {
         let fed_drivetrain = chassis.drivetrain.is_none();
+        let fed_aids = chassis.aids.is_none();
         for (tyre, wheel) in chassis.tyres.iter_mut().zip(&self.step.wheels) {
-            tyre.inputs.electric_torque = wheel.electric_torque;
-            tyre.abs_override = wheel.abs_override;
-            tyre.ai_mult = wheel.ai_mult;
+            if fed_aids {
+                tyre.inputs.electric_torque = wheel.electric_torque;
+                tyre.abs_override = wheel.abs_override;
+                tyre.ai_mult = wheel.ai_mult;
+            }
             if fed_drivetrain {
                 tyre.driven = wheel.driven;
                 if wheel.driven {
@@ -596,6 +599,9 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     if let Some(aero) = &chassis.aero {
         aero.trace(&mut out);
     }
+    if let Some(aids) = &chassis.aids {
+        aids.trace(&mut out);
+    }
     out
 }
 
@@ -667,6 +673,8 @@ pub struct RunSetup {
     pub rust_drivetrain: bool,
     /// The chassis has its own wings and DRS ([`RollingChassis::install_aero`]).
     pub rust_aero: bool,
+    /// The chassis has its own driver aids ([`RollingChassis::install_aids`]).
+    pub rust_aids: bool,
     /// The "automatic clutch" driving aid, as the recording's scenario set it.
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
@@ -694,6 +702,9 @@ impl RunSetup {
                 chassis.autoclutch.use_auto_on_change = true;
             }
             chassis.auto_shifter.is_active = self.auto_shifter;
+        }
+        if self.rust_aids {
+            chassis.install_aids()?;
         }
         chassis.core.joint_feedback = true;
         // the joints exist already: ask for their constraint forces as the oracle did
@@ -812,6 +823,10 @@ impl RollingChassis {
         if let Some(aero) = &self.aero {
             aero.save_state(&mut out);
             out.extend([self.air_density.to_bits(), c.drs as u32]);
+        }
+        if let Some(aids) = &self.aids {
+            aids.save_state(&mut out);
+            out.extend(self.tyres.iter().map(|tyre| tyre.abs_override.to_bits()));
         }
         out
     }
@@ -967,6 +982,12 @@ impl RollingChassis {
             self.air_density = f32::from_bits(next()?);
             self.controls.drs = next()? != 0;
         }
+        if let Some(aids) = &mut self.aids {
+            aids.load_state(&mut words)?;
+            for tyre in &mut self.tyres {
+                tyre.abs_override = f32::from_bits(words.next().ok_or("the saved state is too short".to_string())?);
+            }
+        }
         Ok(())
     }
 }
@@ -1016,7 +1037,7 @@ impl Golden {
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
-             auto_shifter={}\nrust_aero={}\n",
+             auto_shifter={}\nrust_aero={}\nrust_aids={}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -1042,6 +1063,7 @@ impl Golden {
             self.setup.auto_clutch as u8,
             self.setup.auto_shifter as u8,
             self.setup.rust_aero as u8,
+            self.setup.rust_aids as u8,
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -1102,6 +1124,7 @@ impl Golden {
             rust_brakes: get("rust_brakes")? != "0",
             rust_drivetrain: get("rust_drivetrain")? != "0",
             rust_aero: get("rust_aero")? != "0",
+            rust_aids: get("rust_aids")? != "0",
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
         };
