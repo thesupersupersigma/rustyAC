@@ -59,11 +59,11 @@ pub use aids::{Abs, AidsBase, AidsModel, Edl, SpeedLimiter, StabilityControl, Tr
 pub use antiroll_bar::AntirollBar;
 pub use body::{DistanceJoint, FixedJoint, ForceSource, PhysicsCore, RigidBody, TapeCall};
 pub use brakes::{BrakeBase, BrakeModel, VanillaBrakes};
-pub use chassis::{ChassisEnvironment, RollingChassis, SteeringSystem, StepTrace, ThermalObject};
+pub use chassis::{ChassisEnvironment, PenaltyManager, RollingChassis, SteeringSystem, StepTrace, ThermalObject};
 pub use drivetrain::{DrivetrainBase, DrivetrainModel, TractionType, VanillaDrivetrain};
 pub use dynamic_controller::{CarSignals, DynamicController};
 pub use engine::{EngineBase, EngineModel, VanillaEngine};
-pub use feed::{CarControls, ChassisFeed, EngineFeed};
+pub use feed::{CarControls, ChassisFeed, EngineFeed, VibrationDef};
 pub use heave_spring::HeaveSpring;
 pub use setup::{SetupItem, SetupManager};
 pub use shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};

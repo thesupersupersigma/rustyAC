@@ -4,7 +4,18 @@
 
 (Kept up to date while the task runs, so that a cut-off loses nothing. Newest state first.)
 
-- **State**: the aids are ported and committed too (`car/aids.rs`: `AidsModel` slot,
+- **State**: the `Car::step` shell is ported and committed (in `car/chassis.rs`: the whole of
+  `Car::pollControls` with the device's rumble and rev marks, headlight switch, black-flag
+  teleport, penalty timers, `updateColliderStatus`, `stepJumpStart`, `postStep` with the wake;
+  `PhysicsEngine::stepWind`; `SlipStream::setPosition`; new provider hooks on `ChassisFeed`).
+  `tools/car_oracle` has six new scenarios (`wc_drs`, `wc_stops`, `wc_pit`, `wc_spirited`,
+  `wc_stability`, `wc_wind`; `scenario::whole()`), recorded for the F2004 (`oracle/car_wc`), the
+  488 GT3 (`oracle/car_wc_488`), the Lotus Exos 125 with DRS (`oracle/car_wc_exos`) and the
+  Giulia QV with a differential lock (`oracle/car_wc_giulia`): all bit-exact in a free run, with
+  the shell's values compared too. Next: the telemetry page (`car/telemetry.rs`), then a
+  `VanillaCar` type that owns car + device, the compare tool's "driver only" mode and tables,
+  faults, golden test, review, report.
+- **Before that**: the aids are ported and committed too (`car/aids.rs`: `AidsModel` slot,
   `VanillaAids` = traction control, ABS, electronic differential lock, stability control, pit
   limiter, with `Tyre::getDX` and `RaceEngineer::getOptimalBrake`; `RollingChassis::install_aids`;
   `SurfaceDef` has `is_pitlane` / `is_valid_track`). With wings and aids in Rust every existing

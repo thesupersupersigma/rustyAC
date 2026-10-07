@@ -89,6 +89,18 @@ impl RayTrackCollisionProvider for Ground {
     }
 }
 
+/// A road that is a pit lane all over (`SurfaceDef::isPitlane`): the pit limiter works on it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PitLane(pub Ground);
+
+impl RayTrackCollisionProvider for PitLane {
+    fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
+        let mut hit = self.0.ray_cast(org, dir, length)?;
+        hit.surface_def.is_pitlane = true;
+        Some(hit)
+    }
+}
+
 /// One value of a ported system under the name `tools/car_oracle` records it with
 /// ([`BrakeModel::trace`](super::BrakeModel::trace),
 /// [`DrivetrainModel::trace`](super::DrivetrainModel::trace)).
@@ -302,6 +314,8 @@ pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &Rec
             brakes.set_manual_front_bias(step.bias_clicks);
         }
     }
+    // PhysicsEngine::stepWind runs before the cars
+    chassis.env.step_wind(physics_time);
     chassis.step(DT, physics_time, &mut RecordedFeed { step });
 }
 
@@ -599,8 +613,32 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     if let Some(aero) = &chassis.aero {
         aero.trace(&mut out);
     }
+    if chassis.drivetrain.is_some() {
+        // the car-level glue of `Car::step` / `Car::postStep` (whole-car recordings hold them)
+        out.push(TraceValue::f("car.vibrationPhase", chassis.vibration_phase).extra());
+        out.push(TraceValue::f("car.slipVibrationPhase", chassis.slip_vibration_phase).extra());
+        out.push(TraceValue::i("car.lightsOn", chassis.lights_on as i32).extra());
+        out.push(TraceValue::i("car.isCollisionOffForPits", chassis.is_collision_off_for_pits as i32).extra());
+        out.push(TraceValue::i("car.hasGridPosition", chassis.has_grid_position as i32).extra());
+        let s = &chassis.slip_stream;
+        for (name, v) in [("car.gridPosition", chassis.grid_position), ("car.slipStream.tip", s.tip), ("car.slipStream.dir", s.dir)] {
+            for (axis, value) in ["x", "y", "z"].iter().zip([v.x, v.y, v.z]) {
+                out.push(TraceValue::f(&format!("{name}.{axis}"), value).extra());
+            }
+        }
+        out.push(TraceValue::f("car.slipStream.length", s.length).extra());
+        out.push(TraceValue::d("car.lockControlsTime", chassis.lock_controls_time).extra());
+        out.push(TraceValue::i("car.meshCollideMask", chassis.mesh_collide_mask as i32).extra());
+        out.push(TraceValue::i("car.isControlsLocked", chassis.is_controls_locked as i32));
+        out.push(TraceValue::i("car.blackFlagged", chassis.black_flagged as i32));
+        out.push(TraceValue::d("car.penaltyTime", chassis.penalty_time));
+    }
     if let Some(aids) = &chassis.aids {
         aids.trace(&mut out);
+        // `Tyre::absOverride` as ABS left it for the next step
+        for (tyre, wheel) in chassis.tyres.iter().zip(WHEELS) {
+            out.push(TraceValue::f(&format!("abs.override.{wheel}"), tyre.abs_override).extra());
+        }
     }
     out
 }
@@ -675,6 +713,13 @@ pub struct RunSetup {
     pub rust_aero: bool,
     /// The chassis has its own driver aids ([`RollingChassis::install_aids`]).
     pub rust_aids: bool,
+    /// The whole road is a pit lane.
+    pub pitlane: bool,
+    /// `StabilityControl::gain`: the game's stability aid (0 = off).
+    pub stability_gain: f32,
+    /// The wind handed to the session: speed in m/s (0 = none) and direction in degrees.
+    pub wind_speed: f32,
+    pub wind_direction_deg: f32,
     /// The "automatic clutch" driving aid, as the recording's scenario set it.
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
@@ -685,8 +730,13 @@ impl RunSetup {
     /// Builds the F2004-style chassis of a recording the way the oracle built the game's car:
     /// `Car::Car`, the spawn at the origin facing +z, then the session start.
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
-        let mut chassis =
-            RollingChassis::new(data_path, self.env, Box::new(self.ground), self.seed, self.clock_start_ms)?;
+        let ground: Box<dyn RayTrackCollisionProvider> =
+            if self.pitlane { Box::new(PitLane(self.ground)) } else { Box::new(self.ground) };
+        let mut env = self.env;
+        if self.wind_speed != 0.0 {
+            env.set_wind(self.wind_speed, self.wind_direction_deg);
+        }
+        let mut chassis = RollingChassis::new(data_path, env, ground, self.seed, self.clock_start_ms)?;
         if self.rust_aero {
             chassis.install_aero()?;
         }
@@ -705,6 +755,9 @@ impl RunSetup {
         }
         if self.rust_aids {
             chassis.install_aids()?;
+            if let Some(aids) = &mut chassis.aids {
+                aids.base_mut().stability_control.gain = self.stability_gain;
+            }
         }
         chassis.core.joint_feedback = true;
         // the joints exist already: ask for their constraint forces as the oracle did
@@ -828,6 +881,14 @@ impl RollingChassis {
             aids.save_state(&mut out);
             out.extend(self.tyres.iter().map(|tyre| tyre.abs_override.to_bits()));
         }
+        // the car-level glue
+        out.extend([self.vibration_phase, self.slip_vibration_phase].map(f));
+        out.extend([self.lights_on, self.last_ligth_switch_state, self.is_collision_off_for_pits, self.has_grid_position].map(|b| b as u32));
+        let s = &self.slip_stream;
+        for v in [self.grid_position, s.tip, s.dir, s.corners[0], s.corners[1]] {
+            out.extend([v.x, v.y, v.z].map(f));
+        }
+        out.extend([s.length.to_bits(), self.mesh_collide_mask]);
         out
     }
 
@@ -988,6 +1049,23 @@ impl RollingChassis {
                 tyre.abs_override = f32::from_bits(words.next().ok_or("the saved state is too short".to_string())?);
             }
         }
+        let mut next = || words.next().ok_or("the saved state is too short".to_string());
+        self.vibration_phase = f32::from_bits(next()?);
+        self.slip_vibration_phase = f32::from_bits(next()?);
+        self.lights_on = next()? != 0;
+        self.last_ligth_switch_state = next()? != 0;
+        self.is_collision_off_for_pits = next()? != 0;
+        self.has_grid_position = next()? != 0;
+        let mut vectors = [Vec3f::default(); 5];
+        for v in &mut vectors {
+            *v = Vec3f::new(f32::from_bits(next()?), f32::from_bits(next()?), f32::from_bits(next()?));
+        }
+        self.grid_position = vectors[0];
+        self.slip_stream.tip = vectors[1];
+        self.slip_stream.dir = vectors[2];
+        self.slip_stream.corners = [vectors[3], vectors[4]];
+        self.slip_stream.length = f32::from_bits(next()?);
+        self.mesh_collide_mask = next()?;
         Ok(())
     }
 }
@@ -1037,7 +1115,8 @@ impl Golden {
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
-             auto_shifter={}\nrust_aero={}\nrust_aids={}\n",
+             auto_shifter={}\nrust_aero={}\nrust_aids={}\npitlane={}\nstability_gain={:?}\nwind_speed={:?}\n\
+             wind_direction_deg={:?}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -1064,6 +1143,10 @@ impl Golden {
             self.setup.auto_shifter as u8,
             self.setup.rust_aero as u8,
             self.setup.rust_aids as u8,
+            self.setup.pitlane as u8,
+            self.setup.stability_gain,
+            self.setup.wind_speed,
+            self.setup.wind_direction_deg,
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -1125,6 +1208,10 @@ impl Golden {
             rust_drivetrain: get("rust_drivetrain")? != "0",
             rust_aero: get("rust_aero")? != "0",
             rust_aids: get("rust_aids")? != "0",
+            pitlane: get("pitlane")? != "0",
+            stability_gain: number("stability_gain")?,
+            wind_speed: number("wind_speed")?,
+            wind_direction_deg: number("wind_direction_deg")?,
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
         };

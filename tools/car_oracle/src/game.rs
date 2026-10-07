@@ -72,6 +72,7 @@ const SURFACE_SIZE: usize = 0xc8;
 const SD_GRIP_MOD: usize = 0x90;
 const SD_COLLISION_CATEGORY: usize = 0x9c;
 const SD_IS_VALID_TRACK: usize = 0xa0;
+const SD_IS_PITLANE: usize = 0xb0;
 
 pub const CAR_SIZE: usize = 0x3ea0;
 const CAR_FINAL_STEER_ANGLE_SIGNAL: usize = 0x8;
@@ -129,6 +130,7 @@ const CAR_VALUE_CACHE_SPEED: usize = 0x3e90;
 // CarControls
 const CC_GEAR_UP: usize = 0x0;
 const CC_GEAR_DN: usize = 0x1;
+const CC_DRS: usize = 0x2;
 const CC_REQUESTED_GEAR_INDEX: usize = 0x8;
 const CC_HAND_BRAKE: usize = 0x10;
 const CC_GAS: usize = 0x24;
@@ -366,6 +368,8 @@ struct State {
     controls: Controls,
     /// How many times the game polled the device this step.
     polled: u32,
+    /// A whole-car scenario: the device also reports the DRS button.
+    whole: bool,
     tape: Vec<Call>,
     outer_site: u32,
     /// The wheel whose `Tyre::step` is running.
@@ -680,6 +684,9 @@ extern "C" fn device_acquire_controls(_this: *mut u8, controls: *mut u8, _dt: f3
     unsafe {
         wr(controls, CC_GEAR_UP, c.gear_up as u8);
         wr(controls, CC_GEAR_DN, c.gear_dn as u8);
+        if st.whole {
+            wr(controls, CC_DRS, c.drs as u8);
+        }
         wr(controls, CC_HAND_BRAKE, c.hand_brake);
         // -1 (no H-shifter) is also what the constructor left there
         wr(controls, CC_REQUESTED_GEAR_INDEX, c.requested_gear);
@@ -991,6 +998,9 @@ pub struct World<'a> {
     pub setup_changes: Vec<String>,
     /// The scenario is one of the powertrain scenarios: more inputs and values are recorded.
     powertrain: bool,
+    /// The scenario is one of the whole-car scenarios: the DRS button and more values of the
+    /// wings and the aids are recorded.
+    whole: bool,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1121,6 +1131,19 @@ impl<'a> World<'a> {
             wr(surface, SD_GRIP_MOD, 1.0f32);
             wr(surface, SD_COLLISION_CATEGORY, 1u32);
             wr(surface, SD_IS_VALID_TRACK, 1u8);
+            if scenario.whole.pitlane {
+                wr(surface, SD_IS_PITLANE, 1u8);
+            }
+            if scenario.whole.wind_speed != 0.0 {
+                // what PhysicsEngine::setWind stores: the vector (0, 0, speed) turned about the
+                // world's up axis, the speed and the direction (the header holds the vector)
+                let angle = -(scenario.whole.wind_direction_deg * 0.017453f32);
+                let (sin, cos) = (rustyac_physics::math::sinf(angle), rustyac_physics::math::cosf(angle));
+                let speed = scenario.whole.wind_speed;
+                wr(engine, PE_WIND, [sin * speed, 0.0f32, cos * speed]);
+                wr(engine, PE_WIND + 0xc, speed);
+                wr(engine, PE_WIND + 0x10, scenario.whole.wind_direction_deg);
+            }
 
             if scenario.floor {
                 // one big flat quad at y = 0 as a real ODE triangle mesh (two triangles, seen
@@ -1157,6 +1180,7 @@ impl<'a> World<'a> {
                 world_step_original: 0,
                 controls: Controls { clutch: 1.0, ..Controls::default() },
                 polled: 0,
+                whole: scenario.whole.on,
                 tape: Vec::new(),
                 outer_site: 0,
                 tyre: None,
@@ -1242,6 +1266,10 @@ impl<'a> World<'a> {
             if scenario.auto_shifter {
                 wr(car, CAR_AUTO_SHIFT, 1u8); // AutoShifter::isActive
             }
+            // the stability aid of the game's options (DrivingAssistManager writes the gain)
+            if scenario.whole.stability_gain != 0.0 {
+                wr(car, CAR_STABILITY_CONTROL, scenario.whole.stability_gain);
+            }
 
             let mut world = World {
                 acs,
@@ -1254,6 +1282,7 @@ impl<'a> World<'a> {
                 page: object(0x1000),
                 setup_changes: Vec::new(),
                 powertrain: scenario.powertrain,
+                whole: scenario.whole.on,
             };
             if options.setup_check {
                 // no recording: just what the session start does to this car's setup, reported
@@ -1552,6 +1581,9 @@ impl<'a> World<'a> {
             row.i("script.requestedGear", script.requested_gear);
             row.i("script.biasClicks", script.bias_clicks);
         }
+        if self.whole {
+            row.i("script.drs", script.drs as i32);
+        }
         // Car::controls as Car::step left it (read when dWorldStep starts): after the game's
         // own overrides and helpers (control lock, automatic clutch, automatic throttle blip)
         let c = st.applied_controls.as_ptr();
@@ -1803,6 +1835,58 @@ impl<'a> World<'a> {
             row.i("autoShift.changeUpRpm", rd(car, CAR_AUTO_SHIFT + 0x4));
             row.i("autoShift.changeDnRpm", rd(car, CAR_AUTO_SHIFT + 0x8));
             row.i("autoClutch.isForced", rd::<u8>(car, CAR_AUTOCLUTCH + 0xe) as i32);
+        }
+        if self.whole {
+            // more of the aids and the wings (offsets from the PDB's types)
+            let tc = car.add(CAR_TRACTION_CONTROL);
+            row.f("tc.timeAccumulator", rd(tc, 0x1c));
+            row.i("tc.currentMode", rd(tc, 0x20));
+            let abs = car.add(CAR_ABS);
+            row.f("abs.timeAccumulator", rd(abs, 0x18));
+            row.f("abs.slipRatioLimit", rd(abs, 0x4));
+            row.i("abs.currentMode", rd(abs, 0xa0));
+            row.f("edl.outBrakeTorque", rd(car, CAR_EDL + 0x20));
+            row.f("edl.speedDiff", rd(car, CAR_EDL + 0x24));
+            row.i("speedLimiter.shoudLimit", rd::<u8>(car, CAR_SPEED_LIMITER) as i32);
+            row.i("drs.isPresent", rd::<u8>(car, CAR_DRS) as i32);
+            row.i("drs.isAvailable", rd::<u8>(car, CAR_DRS + 2) as i32);
+            row.i("drs.lastState", rd::<u8>(car, CAR_DRS + 0x28) as i32);
+            let a = car.add(CAR_AERO_MAP);
+            let wings: *const u8 = rd(a, 0x38);
+            let wings_end: *const u8 = rd(a, 0x40);
+            for k in 0..(wings_end as usize - wings as usize) / 0x310 {
+                let w = wings.add(k * 0x310);
+                row.f(&format!("wing{k}.inputAngle"), rd(w, 0x250 + 0x10));
+                row.f(&format!("wing{k}.angleMult"), rd(w, 0x250 + 0x24));
+                row.f(&format!("wing{k}.groundEffectLift"), rd(w, 0x250 + 0x28));
+                row.f(&format!("wing{k}.groundEffectDrag"), rd(w, 0x250 + 0x2c));
+                row.v(&format!("wing{k}.liftVector"), &v3(w, 0x250 + 0x38));
+                row.i(&format!("wing{k}.overrideActive"), rd::<u8>(w, 0x300) as i32);
+            }
+            row.f("physics.wind.speed", rd(self.engine, PE_WIND + 0xc));
+            // the car-level glue of Car::step / Car::postStep
+            row.f("car.vibrationPhase", rd(car, 0x3e18));
+            row.f("car.slipVibrationPhase", rd(car, 0x3e1c));
+            row.i("car.lightsOn", rd::<u8>(car, 0x3c7c) as i32);
+            row.i("car.isCollisionOffForPits", rd::<u8>(car, 0x3e68) as i32);
+            row.i("car.hasGridPosition", rd::<u8>(car, 0x3e8c) as i32);
+            row.v("car.gridPosition", &v3(car, 0x3e80));
+            row.v("car.slipStream.tip", &v3(car, 0x3ca8 + 0x8));
+            row.v("car.slipStream.dir", &v3(car, 0x3ca8 + 0x48));
+            row.f("car.slipStream.length", rd(car, 0x3ca8 + 0x60));
+            row.d("car.lockControlsTime", rd(car, 0x3d18));
+            {
+                // IRigidBody::getMeshCollideMask(0) (+0x140) of the car body
+                let body: *mut u8 = rd(car, 0x118);
+                let vtable: *const usize = rd(body, 0);
+                let get_mask: extern "C" fn(*mut u8, u32) -> u64 = std::mem::transmute(*vtable.add(0x140 / 8));
+                row.i("car.meshCollideMask", get_mask(body, 0) as i32);
+            }
+            for (i, wheel) in WHEELS.iter().enumerate() {
+                // Tyre::absOverride at the end of the step (after ABS::step); the tyre block
+                // above holds it as the tyre's own step found it
+                row.f(&format!("abs.override.{wheel}"), rd(car, CAR_TYRES + i * TYRE_SIZE + 0x41c));
+            }
         }
     }
 

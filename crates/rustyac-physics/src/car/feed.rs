@@ -61,6 +61,21 @@ impl Default for CarControls {
     }
 }
 
+/// AC's `VibrationDef`: what `Car::pollControls` hands to the driver's device every step.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VibrationDef {
+    /// `curbs`: kerb rumble
+    pub curbs: f32,
+    /// `gforce`
+    pub gforce: f32,
+    /// `slips`: tyre slip
+    pub slips: f32,
+    /// `engine`: revs over the limiter's revs, 0..1
+    pub engine: f32,
+    /// `abs`: the ABS pulsing
+    pub abs: f32,
+}
+
 /// What the fuel burn at the top of `Car::step` reads from the engine: values the engine
 /// left at the end of the previous step.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -82,6 +97,23 @@ pub trait ChassisFeed {
     /// `Car::pollControls` @ 0x140274e70: the driver's device (or the AI) fills
     /// `Car::controls`. Called once per step, before anything else reads the controls.
     fn poll_controls(&mut self, chassis: &mut RollingChassis);
+
+    /// `ICarControlsProvider::getAction` (+0x10): is a button of the device held? `Car::step`
+    /// asks for action 4, the headlight switch.
+    fn get_action(&mut self, _action: i32) -> bool {
+        false
+    }
+
+    /// `ICarControlsProvider::sendFF` (+0x18): the force-feedback number, the damper level and
+    /// the user's gain, from `Car::onTyresStepCompleted`.
+    fn send_ff(&mut self, _ff: f32, _damper: f32, _user_gain: f32) {}
+
+    /// `ICarControlsProvider::setVibrations` (+0x48), from `Car::pollControls`.
+    fn set_vibrations(&mut self, _def: &VibrationDef) {}
+
+    /// `ICarControlsProvider::setEngineRPM` (+0x50): the engine's revs and two marks at 75 %
+    /// and 95 % of the limiter (shift lights of a wheel), from `Car::pollControls`.
+    fn set_engine_rpm(&mut self, _rpm: f32, _low: f32, _high: f32) {}
 
     /// Only without a drivetrain: what the fuel burn reads from the engine (`Car::step`,
     /// right after `pollControls`).

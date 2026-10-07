@@ -14,13 +14,13 @@ use super::body::{FixedJoint, ForceSource, PhysicsCore, RigidBody};
 use super::brakes::{BrakeModel, VanillaBrakes};
 use super::drivetrain::{DrivetrainModel, OnGearRequestEvent, VanillaDrivetrain};
 use super::engine::{EngineModel, VanillaEngine};
-use super::feed::{CarControls, ChassisFeed, EngineFeed};
+use super::feed::{CarControls, ChassisFeed, EngineFeed, VibrationDef};
 use super::shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, VanillaDwb};
 use crate::data::ini::IniReader;
-use crate::math::{fdtest_inf_or_nan, powf, sqrtf};
+use crate::math::{fdtest_inf_or_nan, powf, sinf, sqrtf};
 use crate::tyre::rig;
 use crate::tyre::{RayCastResult, RayTrackCollisionProvider, Suspension, TorqueModeEx, TyreCar, VanillaTyre};
 use crate::vecmath::{Mat44f, Vec3f};
@@ -63,10 +63,22 @@ pub struct ChassisEnvironment {
     pub session_start_time_ms: f64,
     /// `PhysicsEngine::lockGearboxAtStartTimeMS`
     pub lock_gearbox_at_start_time_ms: f64,
-    /// `PhysicsEngine::penaltyRules.jumpStartPenaltyMode` (0 = the gearbox is locked on the grid)
+    /// `PhysicsEngine::penaltyRules.jumpStartPenaltyMode`: 0 the gearbox is locked on the
+    /// grid, 1 a jump start teleports the car to its pit box, 2 it costs a drive-through
     pub jump_start_penalty_mode: i32,
-    /// `PhysicsEngine::wind.vector`, m/s, world axes (`PhysicsEngine::stepWind` keeps it up to date)
+    /// `PhysicsEngine::penaltyRules.basePitPenaltyLaps`
+    pub base_pit_penalty_laps: i16,
+    /// `PhysicsEngine::penaltyMode`: 0 cut gas, 1 invalidate lap, 2 recover time, 3 nothing,
+    /// 4 cut detection
+    pub penalty_mode: i32,
+    /// `PhysicsEngine::damperMinValue`, `damperGain`: the force-feedback damper of the device
+    pub damper_min_value: f32,
+    pub damper_gain: f32,
+    /// `PhysicsEngine::wind.vector`, m/s, world axes ([`ChassisEnvironment::step_wind`] keeps
+    /// it up to date)
     pub wind: Vec3f,
+    /// `PhysicsEngine::wind.speed`, m/s: the mean strength the vector swings around
+    pub wind_speed: f32,
     /// `DRSManager::isDRSAvailable` of the track for this car: true on a track without DRS zones
     pub drs_zone_available: bool,
 }
@@ -92,10 +104,53 @@ impl Default for ChassisEnvironment {
             is_first_car: true,
             session_start_time_ms: 0.0,
             lock_gearbox_at_start_time_ms: 0.0,
-            jump_start_penalty_mode: 0,
+            jump_start_penalty_mode: 1,
+            base_pit_penalty_laps: 3,
+            penalty_mode: 3,
+            damper_min_value: 0.0,
+            damper_gain: 1.0,
             wind: Vec3f { x: 0.0, y: 0.0, z: 0.0 },
+            wind_speed: 0.0,
             drs_zone_available: true,
         }
+    }
+}
+
+impl ChassisEnvironment {
+    /// What `PhysicsEngine::setWind` @ 0x1402645a0 stores for a speed in m/s and a direction
+    /// in degrees: the vector (0, 0, speed) turned about the world's up axis. (Written as
+    /// `tools/car_oracle` writes it into the game's engine; the game's own function is called
+    /// by race code that is not ported.)
+    pub fn set_wind(&mut self, speed: f32, direction_deg: f32) {
+        let angle = -(direction_deg * 0.017453f32);
+        let (sin, cos) = (crate::math::sinf(angle), crate::math::cosf(angle));
+        self.wind = Vec3f::new(sin * speed, 0.0, cos * speed);
+        self.wind_speed = speed;
+    }
+
+    /// `PhysicsEngine::stepWind` @ 0x140265380: the wind's strength swings by a tenth with a
+    /// period of about a minute; its direction stays. Runs once per step before the cars.
+    /// `physics_time` is the clock of the step, ms.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn step_wind(&mut self, physics_time: f64) {
+        if 0.01 > self.wind_speed {
+            return;
+        }
+        let swing = crate::math::sin((physics_time - self.session_start_time_ms) * 0.0001);
+        let strength = (swing as f32 * 0.1 + 1.0) * self.wind_speed;
+        let (mut x, mut y, mut z) = (self.wind.x, self.wind.y, self.wind.z);
+        let length = sqrtf((x * x + y * y) + z * z);
+        if length < 0.0 || length > 0.0 {
+            let inverse = 1.0 / length;
+            x *= inverse;
+            y *= inverse;
+            z *= inverse;
+        }
+        let (x, y, z) = (strength * x, strength * y, strength * z);
+        if fdtest_inf_or_nan(x) || fdtest_inf_or_nan(y) || fdtest_inf_or_nan(z) {
+            return;
+        }
+        self.wind = Vec3f::new(x, y, z);
     }
 }
 
@@ -137,6 +192,38 @@ impl ThermalObject {
         if heat < 0.0 || heat > 0.0 {
             self.t = (((heat - cooled) * inverse) * dt) * self.heat_factor + cooled;
         }
+    }
+}
+
+/// AC's `PenaltyManager` as far as a jump start writes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PenaltyManager {
+    /// `pendingPenaltyType`: 5 = drive-through
+    pub pending_penalty_type: i32,
+    /// `pitPenaltyLaps`
+    pub pit_penalty_laps: i16,
+    /// How many `PenaltyRecord`s were pushed.
+    pub penalty_records: u32,
+}
+
+/// The three-way clamp of the machine code to 0..1: above 1: 1; at least 0: itself; else 0.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn clamp01(x: f32) -> f32 {
+    if x > 1.0 {
+        1.0
+    } else if x >= 0.0 {
+        x
+    } else {
+        0.0
+    }
+}
+
+/// `ksSquareWave` @ 0x14022d2d0.
+fn ks_square_wave(t: f32, period: f32) -> f32 {
+    if sinf(t / period) > 0.0 {
+        1.0
+    } else {
+        -1.0
     }
 }
 
@@ -232,6 +319,49 @@ pub struct RollingChassis {
     pub slip_stream_effect_gain: f32,
     /// `Car::slipStream`: this car's wake
     pub slip_stream: SlipStream,
+    /// `Car::unixName`: the car's folder name (a car called "spectator" collides with nothing
+    /// but walls)
+    pub unix_name: String,
+    /// `Car::userFFGain`
+    pub user_ff_gain: f32,
+    /// `Car::lightsOn`
+    pub lights_on: bool,
+    /// `Car::lastLigthSwitchState`: the headlight button in the step before
+    pub last_ligth_switch_state: bool,
+    /// `Car::blackFlagged`: the controls are dead and the car is put into its pit box
+    pub black_flagged: bool,
+    /// `Car::pitPosition`: the pit box (rows: side, up, tail direction, position)
+    pub pit_position: Mat44f,
+    /// `Car::penaltyTime`, s
+    pub penalty_time: f64,
+    /// `Car::penaltyTimeAccumulator`, s
+    pub penalty_time_accumulator: f64,
+    /// `Car::disableMinSpeedPenaltyClear`
+    pub disable_min_speed_penalty_clear: bool,
+    /// `Car::penaltyPerfTarget`
+    pub penalty_perf_target: f64,
+    /// `PerformanceMeter::getCurrentSplit().t` of the car: the lap-time difference the
+    /// "recover time" penalty reads. The performance meter needs the track's racing line and
+    /// is not ported; 0 as on a car that is not on a timed lap.
+    pub performance_split: f64,
+    /// `Car::penaltyManager`
+    pub penalty_manager: PenaltyManager,
+    /// `Car::vibrationPhase`, `Car::slipVibrationPhase`: only the device's rumble reads them
+    pub vibration_phase: f32,
+    pub slip_vibration_phase: f32,
+    /// `Car::isCollisionOffForPits`: the body mesh does not collide with other cars
+    pub is_collision_off_for_pits: bool,
+    /// The collide bits `Car::updateColliderStatus` gives the car body's mesh collider
+    /// (`IRigidBody::setMeshCollideMask(0, ...)`); the port has no contacts yet.
+    pub mesh_collide_mask: u32,
+    /// `Car::gridPosition`, `Car::hasGridPosition`: where the car stood before the start
+    pub grid_position: Vec3f,
+    pub has_grid_position: bool,
+    /// How often `Car::evOnJumpStartEvent` was raised.
+    pub jump_start_events: u32,
+    /// The other cars' body positions (`PhysicsEngine::cars`), for the pit-lane ghosting rule;
+    /// empty for a car alone.
+    pub other_car_positions: Vec<Vec3f>,
     /// `Car::autoClutch`, `Car::autoBlip`, `Car::autoShift`, `Car::gearChanger`: they run
     /// only with a drivetrain.
     pub autoclutch: Autoclutch,
@@ -603,6 +733,30 @@ impl RollingChassis {
             damage_zone_level: [0.0; 5],
             slip_stream_effect_gain: 1.0,
             slip_stream: SlipStream::default(),
+            unix_name: data_path
+                .parent()
+                .and_then(|folder| folder.file_name())
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            user_ff_gain: 1.0,
+            lights_on: false,
+            last_ligth_switch_state: false,
+            black_flagged: false,
+            pit_position: Mat44f { m: [[0.0; 4]; 4] },
+            penalty_time: 0.0,
+            penalty_time_accumulator: 0.0,
+            disable_min_speed_penalty_clear: false,
+            penalty_perf_target: 0.0,
+            performance_split: 0.0,
+            penalty_manager: PenaltyManager::default(),
+            vibration_phase: 0.0,
+            slip_vibration_phase: 0.0,
+            is_collision_off_for_pits: false,
+            mesh_collide_mask: 0x1e,
+            grid_position: Vec3f::default(),
+            has_grid_position: false,
+            jump_start_events: 0,
+            other_car_positions: Vec::new(),
             autoclutch: Autoclutch::default(),
             auto_blip: AutoBlip::default(),
             auto_shifter: AutoShifter::default(),
@@ -902,9 +1056,13 @@ impl RollingChassis {
         let mut pos = *pos;
         pos.y += self.get_base_car_height() + 0.01;
         // Car::reset
-        self.frames_to_sleep = 50;
-        self.fuel = self.requested_fuel as f64;
+        self.has_grid_position = false;
         self.water.t = 60.0;
+        self.frames_to_sleep = 50;
+        self.penalty_time = 0.0;
+        self.penalty_time_accumulator = 0.0;
+        self.fuel = self.requested_fuel as f64;
+        self.is_collision_off_for_pits = false;
         let previous = std::mem::replace(&mut self.core.source, ForceSource::Teleport);
         self.core.stop(self.body);
         self.core.set_position(self.body, &pos);
@@ -1012,19 +1170,20 @@ impl RollingChassis {
 
         // the lock is sampled before the controls are polled
         let locked = self.is_controls_locked || self.lock_controls_time > physics_time;
-        // Car::pollControls @ 0x140274e70: a car with locked controls does not ask its device
-        // (a lock by time alone still does)
-        if self.is_controls_locked {
-            let c = &mut self.controls;
-            c.gas = 0.0;
-            c.brake = 0.0;
-            c.steer = 0.0;
-            c.clutch = 0.0;
-            c.gear_up = false;
-            c.gear_dn = false;
-            c.kers = false;
-        } else {
-            feed.poll_controls(self);
+        self.poll_controls(dt, feed);
+
+        // the headlight switch: a press toggles
+        let action = feed.get_action(4);
+        if action && !self.last_ligth_switch_state {
+            self.lights_on = !self.lights_on;
+        }
+        self.last_ligth_switch_state = action;
+
+        // a black-flagged car is put into its pit box, every step until it is there
+        if self.black_flagged && !self.is_in_pits() {
+            let m = self.pit_position.m;
+            self.force_rotation(&Vec3f::new(-m[2][0], -m[2][1], -m[2][2]));
+            self.force_position(&Vec3f::new(m[3][0], m[3][1], m[3][2]));
         }
 
         // Car::updateAirPressure: a car alone has no wake to drive in
@@ -1063,6 +1222,7 @@ impl RollingChassis {
             self.controls.gas = 0.0;
             self.controls.brake = 0.2;
         }
+        self.step_penalty(dt);
 
         // the steering wheel as a road-wheel angle
         let mut signal = self.steer_lock * self.controls.steer / self.steer_ratio;
@@ -1158,6 +1318,12 @@ impl RollingChassis {
             self.step_tyre(index, dt);
         }
         self.on_tyres_step_completed();
+        if !self.is_controls_locked && !self.black_flagged {
+            // the damper of the device fades out by 10 km/h
+            let fade = clamp01(1.0 - (self.speed * 3.6) * 0.1);
+            let damper = ((1.0 - self.env.damper_min_value) * fade + self.env.damper_min_value) * self.env.damper_gain;
+            feed.send_ff(self.last_ff, damper, self.user_ff_gain);
+        }
         // 5: heave springs
         for (axle, first) in [(0usize, 0usize), (1, 2)] {
             if ordered_nonzero(self.heave_springs[axle].k) {
@@ -1225,6 +1391,12 @@ impl RollingChassis {
             None => feed.stability(self),
         }
 
+        // --- the end of Car::step ------------------------------------------------------------
+        self.update_collider_status();
+        if self.env.is_first_car {
+            self.step_jump_start();
+        }
+
         // --- PhysicsCore::step ---------------------------------------------------------------
         let pre: Vec<BodyTrace> = match self.trace {
             Some(_) => self.core.bodies().map(|body| self.body_trace(body)).collect(),
@@ -1234,6 +1406,290 @@ impl RollingChassis {
             trace.pre = pre;
         }
         self.core.step(dt);
+        self.post_step();
+    }
+
+    /// `Car::pollControls` @ 0x140274e70: the driver's device fills `Car::controls` and gets
+    /// its rumble and its rev marks. A car with locked controls or a black flag does not ask
+    /// its device (a lock by time alone still does).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn poll_controls(&mut self, dt: f32, feed: &mut dyn ChassisFeed) {
+        let limiter = self.drivetrain.as_ref().map(|drivetrain| drivetrain.engine().get_limiter_rpm());
+        if self.is_controls_locked || self.black_flagged {
+            let c = &mut self.controls;
+            c.gas = 0.0;
+            c.brake = 0.0;
+            c.steer = 0.0;
+            c.clutch = 0.0;
+            c.gear_up = false;
+            c.gear_dn = false;
+            c.kers = false;
+            feed.set_vibrations(&VibrationDef::default());
+            feed.send_ff(0.0, 0.0, self.user_ff_gain);
+            feed.set_engine_rpm(0.0, 1000.0, limiter.unwrap_or(0) as f32);
+            return;
+        }
+        feed.poll_controls(self);
+        if let (Some(limiter), Some(drivetrain)) = (limiter, &self.drivetrain) {
+            let limiter = limiter as f32;
+            let high = limiter * 0.95;
+            let low = limiter * 0.75;
+            feed.set_engine_rpm(drivetrain.get_engine_rpm(), low, high);
+        }
+
+        // the rumble for the device, from what the previous step left
+        let speed = self.speed;
+        let phase = speed * dt + self.vibration_phase;
+        self.vibration_phase = phase;
+        let mut def = VibrationDef::default();
+        let (mut gain, mut lengths, mut count, mut slip) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        for (index, tyre) in self.tyres.iter().enumerate() {
+            if let Some(surface) = &tyre.surface_def {
+                let g = surface.vibration_gain;
+                if g > gain {
+                    gain = g;
+                }
+                let length = surface.vibration_length;
+                if ordered_nonzero(length) && ordered_nonzero(g) {
+                    lengths += length;
+                    count += 1.0;
+                }
+            }
+            let x = tyre.status.nd_slip * 0.75;
+            if index == 0 {
+                if x >= 0.0 {
+                    slip = x;
+                }
+            } else if !(slip > x) {
+                slip = x;
+            }
+        }
+        if !(slip > 1.0) {
+            slip *= slip;
+        }
+        let length = lengths / count;
+        if ordered_nonzero(gain) && ordered_nonzero(length) {
+            let front_left = clamp01(self.tyres[0].status.load);
+            let front_right = clamp01(self.tyres[1].status.load);
+            def.curbs = (((ks_saw_tooth_wave(phase, length) * front_left) * front_right) * gain) * clamp01(speed);
+        }
+        let slip_phase = dt + self.slip_vibration_phase;
+        self.slip_vibration_phase = slip_phase;
+        def.gforce = sinf(self.vibration_phase * 30.0) * clamp01(self.acc_g.y.abs());
+        def.slips = sinf(slip_phase * 120.0) * clamp01(slip * 0.4);
+        if let (Some(limiter), Some(drivetrain)) = (limiter, &self.drivetrain) {
+            let rpm = ((drivetrain.base().engine.velocity as f32) * 0.159_155_07) * 60.0;
+            def.engine = clamp01(rpm / limiter as f32);
+        }
+        def.curbs *= clamp01(speed);
+        def.slips *= clamp01(speed);
+        let abs_present = self.aids.as_ref().is_some_and(|aids| aids.base().abs.is_present);
+        if abs_present && super::Abs::is_in_action(self) {
+            def.abs = ks_square_wave(self.physics_time as f32, 100.0) * clamp01(speed);
+        }
+        feed.set_vibrations(&def);
+    }
+
+    /// The penalty timers of `Car::step` (the block at 0x14027614a). Nothing here touches the
+    /// controls: "cut gas" names when the timer runs down, namely only while the driver
+    /// himself keeps the throttle under 10 %.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_penalty(&mut self, dt: f32) {
+        let penalty = self.penalty_time;
+        if !(penalty > 0.0) {
+            return;
+        }
+        match self.env.penalty_mode {
+            2 => {
+                // recover time
+                self.penalty_time = self.penalty_perf_target - self.performance_split;
+            }
+            0 => {
+                if 0.1 > self.controls.gas {
+                    let left = self.penalty_time_accumulator - dt as f64;
+                    self.penalty_time_accumulator = left;
+                    if !(left > 0.0) {
+                        self.penalty_time = 0.0;
+                        self.penalty_time_accumulator = 0.0;
+                        self.disable_min_speed_penalty_clear = false;
+                    }
+                } else {
+                    self.penalty_time_accumulator = penalty;
+                }
+                if self.disable_min_speed_penalty_clear {
+                    return;
+                }
+                // below 35 km/h the penalty is over
+                let v = self.core.get_velocity(self.body);
+                let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
+                if !ordered_nonzero(squared) || !(sqrtf(squared) >= 9.722_222) {
+                    self.penalty_time = 0.0;
+                    self.penalty_time_accumulator = 0.0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `Car::addPenalty` @ 0x14026f6a0.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn add_penalty(&mut self, seconds: f64) {
+        if !(0.0 >= self.penalty_time) {
+            self.disable_min_speed_penalty_clear = true;
+        }
+        self.penalty_time = seconds + self.penalty_time;
+        self.penalty_time_accumulator = seconds + self.penalty_time_accumulator;
+    }
+
+    /// `Car::clearPenalty` @ 0x14026fc50.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn clear_penalty(&mut self) {
+        if !(0.0 >= self.penalty_time) {
+            self.penalty_time = 0.0;
+            self.penalty_time_accumulator = 0.0;
+            self.disable_min_speed_penalty_clear = false;
+        }
+    }
+
+    /// `Car::getPenaltyTime` @ 0x140270d50: the time still to serve.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn get_penalty_time(&self) -> f64 {
+        if !(0.0 >= self.penalty_time) {
+            self.penalty_time_accumulator
+        } else {
+            0.0
+        }
+    }
+
+    /// `Car::lockControls` @ 0x1402745f0.
+    pub fn lock_controls(&mut self, locked: bool) {
+        self.is_controls_locked = locked;
+    }
+
+    /// `Car::lockControlsUntil` @ 0x140274600: `seconds_ms` from `now` (or on top of a lock
+    /// that is still running); 0 ends the lock.
+    pub fn lock_controls_until(&mut self, time_ms: f64, now: f64) {
+        if !(time_ms < 0.0 || time_ms > 0.0) {
+            self.lock_controls_time = 0.0;
+        } else if self.lock_controls_time > self.physics_time {
+            self.lock_controls_time += time_ms;
+        } else {
+            self.lock_controls_time = time_ms + now;
+        }
+    }
+
+    /// `Car::setBlackFlag` @ 0x1402759f0 (the flag event of the engine is not ported).
+    pub fn set_black_flag(&mut self, flag: bool) {
+        self.black_flagged = flag;
+    }
+
+    /// `Car::isInPits` @ 0x140274530: the body is within 3 m of the pit box.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn is_in_pits(&self) -> bool {
+        let p = self.core.get_position(self.body);
+        let m = &self.pit_position.m;
+        let (dx, dy, dz) = (p.x - m[3][0], p.y - m[3][1], p.z - m[3][2]);
+        // `comiss` + `setbe`: true for a NaN
+        !((dy * dy + dx * dx) + dz * dz > 9.0)
+    }
+
+    /// `Car::isInPitLane` @ 0x1402744e0: a tyre stands on a pit-lane surface.
+    pub fn is_in_pit_lane(&self) -> bool {
+        self.tyres.iter().any(|tyre| tyre.surface_def.as_ref().is_some_and(|surface| surface.is_pitlane))
+    }
+
+    /// `Car::updateColliderStatus` @ 0x140276df0: on the pit lane the body mesh stops
+    /// colliding with other cars, until the car has left it and no other car is within 6 m;
+    /// a car on its side or roof also collides with the road.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn update_collider_status(&mut self) {
+        if self.is_in_pit_lane() {
+            self.is_collision_off_for_pits = true;
+        } else if self.is_collision_off_for_pits {
+            let pos = self.core.get_position(self.body);
+            let near = self.other_car_positions.iter().any(|q| {
+                let (dx, dy, dz) = (q.x - pos.x, q.y - pos.y, q.z - pos.z);
+                !((dy * dy + dx * dx) + dz * dz >= 36.0)
+            });
+            if !near {
+                self.is_collision_off_for_pits = false;
+            }
+        }
+        let mut mask = if self.unix_name == "spectator" {
+            2
+        } else if self.is_collision_off_for_pits {
+            0x1a
+        } else {
+            0x1e
+        };
+        let up = self.core.get_world_matrix(self.body).m[1][1];
+        if 0.25 > up {
+            mask |= 1;
+        }
+        self.mesh_collide_mask = mask;
+    }
+
+    /// `PhysicsEngine::hasSessionStarted` @ 0x140263c70.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn has_session_started(&self, offset_ms: f64) -> bool {
+        !(offset_ms + self.env.session_start_time_ms >= self.physics_time)
+    }
+
+    /// `Car::stepJumpStart` @ 0x140276780 (the player's car only): before the start, inside
+    /// the window in which the gearbox would be locked, moving more than 10 cm off the grid
+    /// position is a jump start. There is no latch: it is punished again every step.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_jump_start(&mut self) {
+        if self.has_session_started(0.0) {
+            return;
+        }
+        let lock = self.env.lock_gearbox_at_start_time_ms;
+        if !(lock < 0.0 || lock > 0.0) {
+            return;
+        }
+        if !(0.0 >= self.lock_controls_time) {
+            return;
+        }
+        let pos = self.core.get_position(self.body);
+        if self.has_grid_position && !(self.env.session_start_time_ms - lock > self.physics_time) {
+            let dz = pos.z - self.grid_position.z;
+            let dx = pos.x - self.grid_position.x;
+            if dz * dz + dx * dx > 0.010_000_001 {
+                self.add_jump_start_penalty();
+                self.jump_start_events += 1;
+            }
+            return;
+        }
+        self.grid_position = pos;
+        self.has_grid_position = true;
+    }
+
+    /// `PenaltyManager::addJumpStartPenalty` @ 0x140265a90.
+    fn add_jump_start_penalty(&mut self) {
+        match self.env.jump_start_penalty_mode {
+            1 => {
+                // back to the pit box, controls dead for 20 s after the start
+                let m = self.pit_position.m;
+                self.force_position(&Vec3f::new(m[3][0], m[3][1], m[3][2]));
+                self.force_rotation(&Vec3f::new(-m[2][0], -m[2][1], -m[2][2]));
+                self.lock_controls_until(20000.0, self.env.session_start_time_ms);
+            }
+            2 => {
+                self.penalty_manager.pending_penalty_type = 5;
+                self.penalty_manager.pit_penalty_laps = self.env.base_pit_penalty_laps;
+                self.penalty_manager.penalty_records += 1;
+            }
+            _ => {}
+        }
+    }
+
+    /// `Car::postStep` @ 0x140275430, after the rigid-body step: the car's wake moves to where
+    /// the car is now. (Its other half copies the racing-line locator's results, which need a
+    /// track.)
+    fn post_step(&mut self) {
+        let velocity = self.core.get_velocity(self.body);
+        let position = self.core.get_position(self.body);
+        self.slip_stream.set_position(&position, &velocity);
     }
 
     /// The state of a body as the comparison with the recordings wants it.

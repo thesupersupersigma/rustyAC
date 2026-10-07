@@ -28,6 +28,8 @@ pub struct Controls {
     /// Not a member of the game's controls: the harness calls
     /// `BrakeSystem::setManualFrontBias` before the step, as the game's command queue does.
     pub bias_clicks: i32,
+    /// The DRS button (`CarControls::drs`).
+    pub drs: bool,
 }
 
 impl Default for Controls {
@@ -42,8 +44,26 @@ impl Default for Controls {
             hand_brake: 0.0,
             requested_gear: -1,
             bias_clicks: 0,
+            drs: false,
         }
     }
+}
+
+/// What a whole-car scenario (Task 10: aero, aids, the `Car::step` shell) sets up besides the
+/// driver's controls. All of it is session or track environment, stored in the recording's
+/// header.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Whole {
+    /// The scenario is one of [`whole`]: its recording also holds the DRS button and more
+    /// internal values of the wings and the aids.
+    pub on: bool,
+    /// The road is marked as pit lane (`SurfaceDef::isPitlane`): the pit limiter works.
+    pub pitlane: bool,
+    /// `StabilityControl::gain`: the game's stability aid, 0 (off) to 1.
+    pub stability_gain: f32,
+    /// Wind speed, m/s (0: none), and the direction it is handed to the game with, degrees.
+    pub wind_speed: f32,
+    pub wind_direction_deg: f32,
 }
 
 /// What a script may look at: the car as the previous step left it.
@@ -138,6 +158,8 @@ pub struct Scenario {
     /// values of those systems. The twelve scenarios of [`all`] are not; their recordings keep
     /// the layout (and hashes) of Task 06.
     pub powertrain: bool,
+    /// Task 10's additions (all off for the older scenarios).
+    pub whole: Whole,
     kind: Kind,
 }
 
@@ -156,6 +178,10 @@ enum Kind {
     AutoShift,
     Protect,
     PtRandom,
+    WcDrs,
+    WcStops,
+    WcPit,
+    WcSpirited,
 }
 
 const fn seconds(s: f32) -> usize {
@@ -173,6 +199,7 @@ pub fn all() -> Vec<Scenario> {
         seed: 1,
         auto_shifter: false,
         powertrain: false,
+        whole: Whole::default(),
         kind,
     };
     vec![
@@ -224,6 +251,7 @@ pub fn all() -> Vec<Scenario> {
             seed: 1,
             auto_shifter: false,
             powertrain: false,
+            whole: Whole::default(),
             kind: Kind::Kerb,
         },
         Scenario {
@@ -236,6 +264,7 @@ pub fn all() -> Vec<Scenario> {
             seed: 20040314,
             auto_shifter: false,
             powertrain: false,
+            whole: Whole::default(),
             kind: Kind::Random,
         },
     ]
@@ -255,6 +284,7 @@ pub fn powertrain() -> Vec<Scenario> {
         seed,
         auto_shifter,
         powertrain: true,
+        whole: Whole::default(),
         kind,
     };
     vec![
@@ -306,9 +336,73 @@ pub fn powertrain() -> Vec<Scenario> {
     ]
 }
 
+/// The scenarios of the whole-car port (aero, aids, the `Car::step` shell). Like the powertrain
+/// ones they only run when named, record the powertrain extras too, and are driven with the
+/// game's automatic clutch and gearbox so that they work on any car.
+pub fn whole() -> Vec<Scenario> {
+    let wc = |name, about, secs: f32, whole: Whole, kind| Scenario {
+        name,
+        about,
+        steps: seconds(secs) + 1,
+        auto_clutch: true,
+        ground: Ground::Flat,
+        floor: false,
+        seed: 1,
+        auto_shifter: true,
+        powertrain: true,
+        whole: Whole { on: true, ..whole },
+        kind,
+    };
+    let none = Whole::default();
+    vec![
+        wc(
+            "wc_drs",
+            "flat out; the DRS button opens the wing, a second press closes it, braking closes it, a press while braking does nothing, open again in a fast bend",
+            12.0,
+            none,
+            Kind::WcDrs,
+        ),
+        wc(
+            "wc_stops",
+            "two full-throttle runs each ended by a full-pedal stop, the second while steering: traction control and ABS at work",
+            13.0,
+            none,
+            Kind::WcStops,
+        ),
+        wc(
+            "wc_pit",
+            "the road is a pit lane: flat out into the pit limiter (80 km/h), lift, flat out again, brake to a stop",
+            10.0,
+            Whole { pitlane: true, ..none },
+            Kind::WcPit,
+        ),
+        wc(
+            "wc_spirited",
+            "throttle on and off through a growing slalom (one wheel of the driven pair spins: differential lock on cars that have one)",
+            12.0,
+            none,
+            Kind::WcSpirited,
+        ),
+        wc(
+            "wc_stability",
+            "as wc_spirited with the stability aid at 100 %",
+            12.0,
+            Whole { stability_gain: 1.0, ..none },
+            Kind::WcSpirited,
+        ),
+        wc(
+            "wc_wind",
+            "as wc_spirited in a 12 m/s wind from the front left",
+            12.0,
+            Whole { wind_speed: 12.0, wind_direction_deg: 60.0, ..none },
+            Kind::WcSpirited,
+        ),
+    ]
+}
+
 /// Every scenario by name.
 pub fn find(name: &str) -> Option<Scenario> {
-    all().into_iter().chain(powertrain()).find(|s| s.name == name)
+    all().into_iter().chain(powertrain()).chain(whole()).find(|s| s.name == name)
 }
 
 /// The limiter is at 19,000 rpm; shift a little before it.
@@ -553,6 +647,53 @@ impl Driver {
                 }
             }
             Kind::Protect => self.protect(car, t, &mut c),
+            Kind::WcDrs => {
+                // a press lasts 30 ms
+                let pressed = |at: f32| t >= at && t < at + 0.03;
+                c.gas = 1.0;
+                c.drs = pressed(3.0) || pressed(4.5) || pressed(5.5) || pressed(7.2) || pressed(8.6);
+                if (6.8..7.6).contains(&t) {
+                    // braking closes the wing; the press at 7.2 s must not open it
+                    c.gas = 0.0;
+                    c.brake = 0.6;
+                }
+                if t > 9.2 {
+                    // a fast bend: lateral load (some cars close the wing above a limit)
+                    c.steer = (0.04 * (t - 9.2)).min(0.08);
+                }
+            }
+            Kind::WcStops => {
+                if t < 4.5 {
+                    c.gas = 1.0;
+                } else if t < 7.5 {
+                    c.brake = 1.0;
+                } else if t < 10.0 {
+                    c.gas = 1.0;
+                    c.steer = 0.03;
+                } else {
+                    c.brake = 1.0;
+                    c.steer = 0.06;
+                }
+            }
+            Kind::WcPit => {
+                if t < 4.0 {
+                    c.gas = 1.0;
+                } else if t < 5.0 {
+                    // lifted
+                } else if t < 7.5 {
+                    c.gas = 1.0;
+                } else {
+                    c.brake = 0.5;
+                }
+            }
+            Kind::WcSpirited => {
+                let phase = t * 0.4 * std::f32::consts::TAU;
+                let amplitude = (0.02 * t).min(0.16);
+                c.steer = amplitude * rustyac_physics::math::sinf(phase);
+                // throttle in bursts: 1.6 s on, 0.5 s off
+                let cycle = t % 2.1;
+                c.gas = if cycle < 1.6 { 1.0 } else { 0.0 };
+            }
             Kind::PtRandom => {
                 if self.pull_away(car, t, &mut c) {
                     let n = car.step - SETTLE_STEPS;

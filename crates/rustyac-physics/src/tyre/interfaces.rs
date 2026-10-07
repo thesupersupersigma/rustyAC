@@ -74,6 +74,10 @@ pub struct SurfaceDef {
     pub is_valid_track: bool,
     /// `isPitlane`: the pit limiter works on this surface
     pub is_pitlane: bool,
+    /// `vibrationGain`: strength of the kerb rumble sent to the driver's device (0 = none)
+    pub vibration_gain: f32,
+    /// `vibrationLength`: length of one rumble wave, m
+    pub vibration_length: f32,
 }
 
 impl Default for SurfaceDef {
@@ -88,6 +92,8 @@ impl Default for SurfaceDef {
             granularity: 0.0,
             is_valid_track: true,
             is_pitlane: false,
+            vibration_gain: 0.0,
+            vibration_length: 0.0,
         }
     }
 }

@@ -911,6 +911,9 @@ pub struct SlipStream {
     pub effect_gain_mult: f32,
     /// `speedFactorMult`
     pub speed_factor_mult: f32,
+    /// `triangle.points[1]`, `[2]`: the far corners of the cone's outline (nothing in the
+    /// physics reads them)
+    pub corners: [Vec3f; 2],
 }
 
 impl Default for SlipStream {
@@ -923,27 +926,66 @@ impl Default for SlipStream {
             speed_factor: 0.5,
             effect_gain_mult: 1.0,
             speed_factor_mult: 1.0,
+            corners: [Vec3f::default(); 2],
         }
     }
 }
 
 impl SlipStream {
+    /// `SlipStream::setPosition` @ 0x1402aae80: the wake of a car at `pos` moving with `vel`
+    /// (world axes). Called from `Car::postStep`, after the rigid-body step.
+    pub fn set_position(&mut self, pos: &Vec3f, vel: &Vec3f) {
+        self.tip = *pos;
+        let (mut hx, mut hz, mut hy) = (vel.x, vel.z, 0.0f32);
+        let flat = sqrtf(vel.z * vel.z + vel.x * vel.x);
+        if flat < 0.0 || flat > 0.0 {
+            let inverse = 1.0 / flat;
+            hx = vel.x * inverse;
+            hz = vel.z * inverse;
+            hy = inverse * 0.0;
+        }
+        let squared = (vel.y * vel.y + vel.x * vel.x) + vel.z * vel.z;
+        let speed = if squared < 0.0 || squared > 0.0 { sqrtf(squared) } else { 0.0 };
+        let length = (speed * self.speed_factor) * self.speed_factor_mult;
+        self.length = length;
+        // to the side: the heading crossed with "up", a quarter of the length
+        let sx = ((hy * 0.0 - hz) * length) * 0.25;
+        let sy = ((hz * 0.0 - hx * 0.0) * length) * 0.25;
+        let sz = ((hx - hy * 0.0) * length) * 0.25;
+        // against the direction of travel
+        let (mut rx, mut ry, mut rz) = (vel.x * -1.0, vel.y * -1.0, vel.z * -1.0);
+        let back = sqrtf((ry * ry + rx * rx) + rz * rz);
+        if back < 0.0 || back > 0.0 {
+            let inverse = 1.0 / back;
+            rx = inverse * rx;
+            ry *= inverse;
+            rz *= inverse;
+        }
+        self.dir = Vec3f::new(rx, ry, rz);
+        let nl = -length;
+        self.corners[0] = Vec3f::new((nl * hx + pos.x) + sx, (hy * nl + pos.y) + sy, (hz * nl + pos.z) + sz);
+        self.corners[1] = Vec3f::new((nl * hx + pos.x) - sx, (hy * nl + pos.y) - sy, (hz * nl + pos.z) - sz);
+    }
+
     /// `SlipStream::getSlipEffect` @ 0x1402aac60: how much of the air this wake takes away at
     /// the world point `p` (0 outside the cone).
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn get_slip_effect(&self, p: &Vec3f) -> f32 {
         let (mut dx, mut dy, mut dz) = (p.x - self.tip.x, p.y - self.tip.y, p.z - self.tip.z);
-        let distance = sqrtf((dx * dx + dy * dy) + dz * dz);
-        if !(distance < self.length) {
+        let squared = (dy * dy + dx * dx) + dz * dz;
+        let distance = if squared < 0.0 || squared > 0.0 { sqrtf(squared) } else { 0.0 };
+        // `comiss` + `jae`: a NaN distance goes on
+        if distance >= self.length {
             return 0.0;
         }
-        if distance < 0.0 || distance > 0.0 {
-            let inverse = 1.0 / distance;
+        let length = sqrtf((dy * dy + dx * dx) + dz * dz);
+        if length < 0.0 || length > 0.0 {
+            let inverse = 1.0 / length;
             dx *= inverse;
             dy *= inverse;
             dz *= inverse;
         }
-        let cosine = (dx * self.dir.x + dy * self.dir.y) + dz * self.dir.z;
+        let cosine = (dy * self.dir.y + dx * self.dir.x) + dz * self.dir.z;
         if !(cosine > 0.7) {
             return 0.0;
         }

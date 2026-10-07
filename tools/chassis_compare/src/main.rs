@@ -51,8 +51,21 @@ fn repo_root() -> PathBuf {
 }
 
 /// Systems whose force calls the chassis makes itself.
-const OWN_SYSTEMS: [&str; 10] =
-    ["tyre", "surface", "spring", "damper", "bumpstop", "heave_spring", "heave_damper", "heave_bumpstop", "arb", "sleep"];
+const OWN_SYSTEMS: [&str; 11] = [
+    "tyre",
+    "surface",
+    "spring",
+    "damper",
+    "bumpstop",
+    "heave_spring",
+    "heave_damper",
+    "heave_bumpstop",
+    "arb",
+    "sleep",
+    // the stability aid's yaw torque: made by the aids model (a chassis without one does not
+    // make it, and the tape comparison says so)
+    "stability",
+];
 /// Systems whose force calls are fed from the tape.
 const FED_SYSTEMS: [&str; 2] = ["aero_drag", "aero_lift"];
 
@@ -85,6 +98,12 @@ impl Systems {
 fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String> {
     let get = |key: &str| recording.get(key).ok_or(format!("the recording's header has no {key}"));
     let first = |name: &str| recording.f(0, name);
+    let number = |key: &str| -> Result<f32, String> {
+        match recording.get(key) {
+            Some(text) => text.parse::<f32>().map_err(|e| format!("{key}: {e}")),
+            None => Ok(0.0),
+        }
+    };
     let env = ChassisEnvironment {
         ambient_temperature: first("physics.ambientTemperature"),
         road_temperature: first("physics.roadTemperature"),
@@ -104,6 +123,11 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         rust_drivetrain: systems.drivetrain,
         rust_aero: systems.aero,
         rust_aids: systems.aids,
+        // the whole-car scenarios' session settings; older recordings have none of them
+        pitlane: recording.get("pitlane").is_some_and(|v| v != "0"),
+        stability_gain: number("stability_gain")?,
+        wind_speed: number("wind_speed")?,
+        wind_direction_deg: number("wind_direction_deg")?,
         auto_clutch: get("auto_clutch")? != "0",
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),

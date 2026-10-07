@@ -135,7 +135,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().and_then(|args| match args.command.as_str() {
         "list" => {
-            for s in scenario::all().into_iter().chain(scenario::powertrain()) {
+            for s in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()) {
                 println!("{:24} {:6.1} s  {}", s.name, (s.steps - 1) as f32 * scenario::DT, s.about);
             }
             Ok(())
@@ -197,6 +197,14 @@ fn run(args: &Args) -> Result<(), String> {
         ("wheels".to_string(), game::WHEELS.join(",")),
     ];
     meta.extend(world.facts());
+    if scenario.whole.on {
+        // only the whole-car scenarios: the older recordings keep their header (and hashes)
+        meta.push(("whole".to_string(), "1".to_string()));
+        meta.push(("pitlane".to_string(), (scenario.whole.pitlane as u8).to_string()));
+        meta.push(("stability_gain".to_string(), format!("{:?}", scenario.whole.stability_gain)));
+        meta.push(("wind_speed".to_string(), format!("{:?}", scenario.whole.wind_speed)));
+        meta.push(("wind_direction_deg".to_string(), format!("{:?}", scenario.whole.wind_direction_deg)));
+    }
     let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;
     let mut sites = BTreeSet::new();
@@ -262,7 +270,7 @@ fn all(args: &Args) -> Result<(), String> {
     let mut notes = String::new();
     let mut failed = false;
     // the powertrain scenarios only run when they are named
-    for scenario in scenario::all().into_iter().chain(scenario::powertrain()) {
+    for scenario in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()) {
         if scenario.powertrain && args.only.is_empty() {
             continue;
         }
