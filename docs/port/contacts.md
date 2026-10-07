@@ -16,7 +16,7 @@ State after the last commit (kept up to date with every commit):
   - `crates/rustyac-physics/src/car/body.rs`: the game's `PhysicsCore` side (sub-spaces, `addBoxCollider`,
     `addMeshCollider`, `collisionStep`, `nearCallback`, `onCollision` with its two materials).
 - **Checked against the game (bit-exact):** the contact joint, the stepper with bounded rows and the LCP solver.
-  `tools\car_oracle	argetelease\car_oracle.exe collide-worlds --hybrid --steps 3000` steps eight small worlds in
+  `car_oracle collide-worlds --hybrid --steps 3000` steps eight small worlds in
   the game's own `PhysicsCore` and gives the port the game's contact joints before each `dWorldStep`: 24,000 world
   steps, 640,560 rows with limits, 712,280 pivots, 9 solver give-ups, **no difference** (`oracle/collide/worlds_hybrid.md`).
 - Written, not yet checked: the car's side (`car/colliders.rs`: floor boxes and `collider.kn5`; in `car/chassis.rs`
