@@ -1,34 +1,39 @@
-//! The Rust car against Assetto Corsa's own: four excerpts of the whole-car recordings of
-//! `tools/car_oracle` (the game's F2004 on a flat road).
+//! The Rust car against Assetto Corsa's own: five excerpts of the whole-car recordings of
+//! `tools/car_oracle` (the game's own code driving a car on a flat road).
 //!
-//! The rolling chassis alone, with brakes, engine and drivetrain fed from the recording
-//! (300 steps each):
+//! The rolling chassis alone, with brakes, engine, drivetrain, wings and aids fed from the
+//! recording (the F2004, 300 steps each):
 //!
 //! * `slalom`, steps 3000 to 3299: 100 km/h with the steering swinging at 0.5 Hz;
 //! * `kerb`, steps 2684 to 2983: 100 km/h straight, the left wheels climb a 2 cm strip.
 //!
-//! With brakes, engine, clutch, gearbox, differential and the shift helpers computed in Rust
-//! (460 and 400 steps); only the driver's controls, the wings and the traction control's cut are
-//! fed:
+//! The **whole car** ([`VanillaCar`](rustyac_physics::car::VanillaCar) with a scripted
+//! device): nothing is fed but what the driver did (pedals, wheel, paddles, handbrake,
+//! cockpit brake-bias clicks) and the session's settings. Brakes, engine, clutch, gearbox,
+//! differential, shift helpers, wings with their controllers, traction control, ABS and the
+//! telemetry page are all computed:
 //!
-//! * `launch_autoclutch_off`, steps 522 to 981: a standing start by hand clutch (the clutch
-//!   comes up, wheelspin in first gear on the rev limiter, traction control cuts in);
-//! * `brake`, steps 2807 to 3206: full braking from 250 km/h with the first down-shifts
-//!   (clutch profile, throttle blip, down-shift protection).
+//! * the F2004, `launch_autoclutch_off`, steps 522 to 981: a standing start by hand clutch
+//!   (the clutch comes up, wheelspin in first gear on the rev limiter, traction control cuts
+//!   in above 40 km/h);
+//! * the F2004, `brake`, steps 2807 to 3206: full braking from 250 km/h with the first
+//!   down-shifts (clutch profile, throttle blip, down-shift protection);
+//! * the 488 GT3, `wc_stops`, steps 1845 to 2244: flat out, then the full brake pedal with
+//!   the ABS releasing and re-applying the front brakes (automatic gearbox and clutch).
 //!
 //! Each file (`golden/*.chgold`, written by `tools/chassis_compare excerpt`) holds the car's
-//! state at the start, per step what the systems that are not ported hand to it, and per step
-//! the game's answer: position, rotation and velocities of the six bodies in full, and one
-//! hash over all compared values (2,009 of the chassis: body and joint states, joint forces,
-//! suspension travel and damper speeds, steer torques, every tyre value, the steering signal,
-//! the force-feedback number; and, in the two powertrain excerpts, 51 more: the applied
-//! controls, brake bias and power, gear, engine and shaft speeds, clutch state and torque,
-//! shift request, differential settings, engine torque, limiter, fuel use, water temperature)
+//! state at the start, per step what the car is given, and per step the game's answer:
+//! position, rotation and velocities of the six bodies in full, and one hash over all compared
+//! values (2,009 of the chassis: body and joint states, joint forces, suspension travel and
+//! damper speeds, steer torques, every tyre value, the steering signal, the force-feedback
+//! number; in the whole-car excerpts about 270 more: the applied controls, brakes, engine and
+//! drivetrain, air density and every wing's angle of attack, coefficients, height and forces,
+//! the aids' switches and outputs, and the 148 values of the `acpmf_physics` telemetry page)
 //! and the whole force tape.
 //!
-//! The car's parameters are not in the files: they are loaded from `cardata/ks_ferrari_f2004`
-//! (extracted game data, not in git) by the ported loaders. Without that folder the replay
-//! tests print a notice and pass without testing anything.
+//! The cars' parameters are not in the files: they are loaded from `cardata/<car>` (extracted
+//! game data, not in git) by the ported loaders. Without a car's folder its replay tests print
+//! a notice and pass without testing anything.
 
 use std::path::PathBuf;
 
@@ -36,20 +41,22 @@ use rustyac_physics::car::replay::{Golden, Ground};
 use rustyac_physics::car::suspension::Damper;
 use rustyac_physics::math::{self, Backend};
 
-const GOLDEN: [(&str, &[u8]); 4] = [
+const GOLDEN: [(&str, &[u8]); 5] = [
     ("slalom", include_bytes!("golden/chassis_slalom_3000_300.chgold")),
     ("kerb", include_bytes!("golden/chassis_kerb_2684_300.chgold")),
-    ("launch_autoclutch_off", include_bytes!("golden/powertrain_launch_autoclutch_off_522_460.chgold")),
-    ("brake", include_bytes!("golden/powertrain_brake_2807_400.chgold")),
+    ("launch_autoclutch_off", include_bytes!("golden/whole_launch_autoclutch_off_522_460.chgold")),
+    ("brake", include_bytes!("golden/whole_brake_2807_400.chgold")),
+    ("wc_stops", include_bytes!("golden/whole_488_gt3_wc_stops_1845_400.chgold")),
 ];
 
-fn car_data() -> Option<PathBuf> {
-    let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata/ks_ferrari_f2004");
+/// The data folder of a golden file's car, if it is there.
+fn car_data(car: &str) -> Option<PathBuf> {
+    let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata").join(car);
     if data.join("suspensions.ini").is_file() {
         Some(data)
     } else {
         eprintln!(
-            "NOT TESTED: {} is missing (the F2004's extracted data files); the chassis golden replay needs them",
+            "NOT TESTED: {} is missing (the car's extracted data files); the golden replay of that car needs them",
             data.display()
         );
         None
@@ -68,15 +75,17 @@ fn golden_files_read_back() {
     for (name, bytes) in GOLDEN {
         let golden = Golden::parse(bytes).unwrap();
         assert_eq!(golden.setup.scenario, name);
-        // the first two are the chassis alone, the last two have the powertrain in Rust
-        let powertrain = name == "launch_autoclutch_off" || name == "brake";
+        // the first two are the chassis alone, the others whole cars
+        let whole = !matches!(name, "slalom" | "kerb");
         let steps = match name {
             "launch_autoclutch_off" => 460,
-            "brake" => 400,
+            "brake" | "wc_stops" => 400,
             _ => 300,
         };
         assert_eq!(golden.steps.len(), steps, "{name}");
-        assert_eq!((golden.setup.rust_brakes, golden.setup.rust_drivetrain), (powertrain, powertrain), "{name}");
+        assert_eq!(golden.setup.is_whole(), whole, "{name}");
+        assert_eq!(golden.setup.telemetry, whole, "{name}");
+        assert_eq!(golden.car, if name == "wc_stops" { "ks_ferrari_488_gt3" } else { "ks_ferrari_f2004" });
         assert!(!golden.state.is_empty(), "{name}: the excerpt starts in the middle of a run");
         assert_eq!(golden.to_bytes(), bytes, "{name}: parse and write do not round-trip");
     }
@@ -84,11 +93,25 @@ fn golden_files_read_back() {
     assert!(matches!(kerb.setup.ground, Ground::Step { .. }));
 }
 
+/// A whole car's file holds nothing but the driver: every other field of every step is empty.
+#[test]
+fn whole_car_files_hold_only_the_driver() {
+    for (name, bytes) in &GOLDEN[2..] {
+        let golden = Golden::parse(bytes).unwrap();
+        for (index, step) in golden.steps.iter().enumerate() {
+            assert_eq!(step.feed, step.feed.driver_only(), "{name} step {index}");
+            assert!(step.feed.aero.is_empty(), "{name} step {index}: wing forces in the file");
+        }
+        // and the drive is not trivial
+        assert!(golden.steps.iter().any(|step| step.feed.controls.gas > 0.0 || step.feed.controls.brake > 0.0), "{name}");
+    }
+}
+
 #[test]
 fn golden_steps_are_ac_s() {
-    let Some(data) = car_data() else { return };
     for (name, bytes) in GOLDEN {
         let golden = Golden::parse(bytes).unwrap();
+        let Some(data) = car_data(&golden.car) else { continue };
         if let Err(e) = golden.check(&data) {
             panic!("{name}: {e} (maths and number parsing: {})", backend());
         }
@@ -98,14 +121,14 @@ fn golden_steps_are_ac_s() {
 /// The replay must be able to fail: one input changed in its last bit has to show.
 #[test]
 fn a_changed_input_is_noticed() {
-    let Some(data) = car_data() else { return };
+    let Some(data) = car_data("ks_ferrari_f2004") else { return };
     // the steering input of one step, one bit up
     let mut golden = Golden::parse(GOLDEN[0].1).unwrap();
     let steer = &mut golden.steps[10].feed.controls.steer;
     *steer = f32::from_bits(steer.to_bits() + 1);
     let error = golden.check(&data).expect_err("a changed steering input went unnoticed");
     assert!(error.contains("step 3010"), "{error}");
-    // a wing force of one step, one bit up
+    // a wing force of one step, one bit up (this chassis is fed the wings)
     let mut golden = Golden::parse(GOLDEN[1].1).unwrap();
     let force = &mut golden.steps[20].feed.aero[3].a[1];
     *force = f32::from_bits(force.to_bits() + 1);
@@ -120,11 +143,11 @@ fn a_changed_input_is_noticed() {
     assert!(error.contains("step 2684"), "{error}");
 }
 
-/// The same for the excerpts with brakes, engine and drivetrain in Rust: a pedal, a paddle or
-/// the traction control's cut changed in one step has to show.
+/// The same for the whole car: a pedal or a paddle changed in one step has to show, and
+/// nothing but the driver's controls may be read.
 #[test]
-fn a_changed_powertrain_input_is_noticed() {
-    let Some(data) = car_data() else { return };
+fn a_changed_driver_input_is_noticed() {
+    let Some(data) = car_data("ks_ferrari_f2004") else { return };
     // the throttle pedal of one step of the launch, one bit down
     let mut golden = Golden::parse(GOLDEN[2].1).unwrap();
     let step = golden.steps.iter().position(|step| step.feed.controls.gas == 1.0).expect("a step at full throttle");
@@ -132,16 +155,20 @@ fn a_changed_powertrain_input_is_noticed() {
     *gas = f32::from_bits(gas.to_bits() - 1);
     let error = golden.check(&data).expect_err("a changed throttle went unnoticed");
     assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
-    // traction control's cut is no longer an input: the car works it out itself, so the
-    // recorded value may say anything
+    // what used to be fed (traction control's cut, wing forces, brake torques) is not read:
+    // nonsense in those fields changes nothing
     let mut golden = Golden::parse(GOLDEN[2].1).unwrap();
-    let step = golden
-        .steps
-        .iter()
-        .position(|step| step.feed.engine_electronic_override == 0.0)
-        .expect("a step in which traction control cuts the throttle");
-    golden.steps[step].feed.engine_electronic_override = 1.0;
-    golden.check(&data).expect("the recorded traction control cut was read although the car computes it");
+    for step in &mut golden.steps {
+        step.feed.engine_electronic_override = 0.5;
+        step.feed.brake_electronic_override = 0.25;
+        step.feed.clutch = 0.3;
+        step.feed.gear = 4;
+        for wheel in &mut step.feed.wheels {
+            wheel.brake_torque = 123.0;
+            wheel.abs_override = 0.0;
+        }
+    }
+    golden.check(&data).expect("a whole car read something that is not the driver's");
     // the brake pedal of one step, one bit down
     let mut golden = Golden::parse(GOLDEN[3].1).unwrap();
     let step = golden.steps.iter().position(|step| step.feed.controls.brake == 1.0).expect("a step at full brake");
@@ -156,6 +183,18 @@ fn a_changed_powertrain_input_is_noticed() {
         feed.feed.controls.gear_dn = false;
     }
     let error = golden.check(&data).expect_err("a missing down-shift went unnoticed");
+    assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+}
+
+/// The 488 GT3's excerpt has the ABS at work; easing the brake pedal by one bit shows at once.
+#[test]
+fn a_changed_brake_pedal_is_noticed_on_the_488() {
+    let Some(data) = car_data("ks_ferrari_488_gt3") else { return };
+    let mut golden = Golden::parse(GOLDEN[4].1).unwrap();
+    let step = golden.steps.iter().position(|step| step.feed.controls.brake == 1.0).expect("a step at full brake");
+    let brake = &mut golden.steps[step].feed.controls.brake;
+    *brake = f32::from_bits(brake.to_bits() - 1);
+    let error = golden.check(&data).expect_err("a changed brake pedal went unnoticed");
     assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
 }
 

@@ -84,12 +84,36 @@ impl Systems {
     /// The rolling chassis alone, as in Task 08.
     const CHASSIS: Systems = Systems { brakes: false, drivetrain: false, aero: false, aids: false };
 
-    fn describe(&self) -> &'static str {
-        match (self.brakes, self.drivetrain) {
-            (true, true) => "brakes, engine and drivetrain in Rust",
-            (true, false) => "brakes in Rust; engine and drivetrain fed",
-            (false, true) => "engine and drivetrain in Rust; brakes fed",
-            (false, false) => "brakes, engine and drivetrain fed",
+    fn describe(&self) -> String {
+        if *self == Systems::ALL {
+            return "the whole car in Rust: the only inputs are the driver's controls (device and cockpit brake-bias \
+                    clicks) and the session's and track's settings"
+                .to_string();
+        }
+        let fed = self.fed();
+        format!("fed from the recording: {}; everything else in Rust", fed.join(", "))
+    }
+
+    /// The names of the systems taken from the recording.
+    fn fed(&self) -> Vec<&'static str> {
+        let mut fed = Vec::new();
+        for (rust, name) in [(self.brakes, "brakes"), (self.drivetrain, "drivetrain"), (self.aero, "aero"), (self.aids, "aids")] {
+            if !rust {
+                fed.push(name);
+            }
+        }
+        fed
+    }
+
+    /// The tail of the result files' names. The modes of the earlier tasks keep theirs.
+    fn suffix(&self) -> String {
+        match (self.brakes, self.drivetrain, self.aero, self.aids) {
+            (true, true, true, true) => "_whole".to_string(),
+            (false, false, false, false) => String::new(),
+            (true, true, false, false) => "_powertrain".to_string(),
+            (true, false, false, false) => "_brakes".to_string(),
+            (false, true, false, false) => "_drivetrain".to_string(),
+            _ => format!("_feed_{}", self.fed().join("_")),
         }
     }
 }
@@ -452,6 +476,59 @@ const POWERTRAIN_FAULTS: [(&str, &str, Fault); 12] = [
     }),
 ];
 
+/// Deliberate faults in the systems of Task 10 (wings, aids, the car-level glue, the telemetry
+/// page), for a whole car.
+const WHOLE_FAULTS: [(&str, &str, Fault); 12] = [
+    ("wing_area", "the rear wing's area one bit up", |c| {
+        let wing = &mut c.aero.as_mut().unwrap().base_mut().wings[2];
+        wing.data.area = nudge(wing.data.area);
+    }),
+    ("wing_cl_gain", "the front wing's lift gain one bit up", |c| {
+        let wing = &mut c.aero.as_mut().unwrap().base_mut().wings[1];
+        wing.data.cl_gain = nudge(wing.data.cl_gain);
+    }),
+    ("wing_position", "the body's aero point one bit further forward", |c| {
+        let wing = &mut c.aero.as_mut().unwrap().base_mut().wings[0];
+        wing.data.position.z = nudge(wing.data.position.z);
+    }),
+    ("wing_controller", "the smoothing rate of the first wing controller the car has one bit up", |c| {
+        for wing in &mut c.aero.as_mut().unwrap().base_mut().wings {
+            if let Some(controller) = wing.dynamic_controllers.first_mut() {
+                controller.filter = nudge(controller.filter);
+                return;
+            }
+        }
+        // a car without active aero: the last wing's angle instead
+        let wing = c.aero.as_mut().unwrap().base_mut().wings.last_mut().unwrap();
+        wing.status.angle = nudge(wing.status.angle);
+    }),
+    ("wing_damage", "a dented nose (front damage level 60)", |c| c.damage_zone_level[0] = 60.0),
+    ("wind", "a 3 m/s wind along the road instead of none", |c| c.env.set_wind(3.0, 0.0)),
+    ("tc_rate", "traction control checks one step more often", |c| {
+        let tc = &mut c.aids.as_mut().unwrap().base_mut().traction_control;
+        tc.frequency -= 0.003;
+    }),
+    ("abs_on", "ABS forced on (a car without it) or switched off (a car with it)", |c| {
+        let abs = &mut c.aids.as_mut().unwrap().base_mut().abs;
+        let has = abs.is_present && abs.is_active;
+        abs.is_present = !has;
+        abs.is_active = !has;
+    }),
+    ("stability", "the stability aid at 50 % instead of off", |c| {
+        c.aids.as_mut().unwrap().base_mut().stability_control.gain = 0.5;
+    }),
+    ("ff_gain", "the user's force-feedback gain one bit up (only the telemetry page shows it)", |c| {
+        c.user_ff_gain = nudge(c.user_ff_gain);
+    }),
+    ("ride_pickup", "the front ride-height pickup point one bit higher (only the telemetry page shows it)", |c| {
+        let writer = c.telemetry.as_mut().unwrap();
+        writer.ride_pickup_point[0].y = nudge(writer.ride_pickup_point[0].y);
+    }),
+    ("black_flag", "the car is black-flagged at the start (controls dead, put into a pit box at the origin)", |c| {
+        c.black_flagged = true;
+    }),
+];
+
 fn detach_item(manager: &mut rustyac_physics::car::SetupManager, name: &str) {
     let item = manager.items.iter_mut().find(|item| item.name == name).expect("a setup item");
     item.attached = false;
@@ -522,7 +599,8 @@ impl PowertrainCoverage {
             self.limiter += e.status.is_limiter_on as usize;
             self.below_idle += (e.last_input.rpm < drivetrain.engine().minimum() as f32) as usize;
             self.no_fuel += (e.fuel_pressure < 1.0) as usize;
-            self.tc_cut += (feed.engine_electronic_override != 1.0) as usize;
+            // what is left for the next step's engine (the car's own value)
+            self.tc_cut += (e.electronic_override != 1.0) as usize;
             self.boost += (e.status.turbo_boost > 0.0) as usize;
             let in_gear = b.ratio != 0.0;
             match (b.clutch_open_state, in_gear) {
@@ -594,7 +672,7 @@ impl PowertrainCoverage {
         }
     }
 
-    const HEAD: &'static str = "| Scenario | Brake pedal / handbrake / cockpit bias / EBB / disc temps | Limiter / below idle / no fuel / TC cut (fed) / boost | Clutch locked in gear / locked neutral / slipping in gear / slipping neutral | Paddle shifts up / down / cut-off steps / refused presses | Reverse / grinding | Diff holds / slips / wheels held | Clutch profile / blip / auto-shifter presses |\n|---|---|---|---|---|---|---|---|";
+    const HEAD: &'static str = "| Scenario | Brake pedal / handbrake / cockpit bias / EBB / disc temps | Limiter / below idle / no fuel / throttle cut by an aid / boost | Clutch locked in gear / locked neutral / slipping in gear / slipping neutral | Paddle shifts up / down / cut-off steps / refused presses | Reverse / grinding | Diff holds / slips / wheels held | Clutch profile / blip / auto-shifter presses |\n|---|---|---|---|---|---|---|---|";
 
     fn row(&self, name: &str) -> String {
         format!(
@@ -629,6 +707,118 @@ impl PowertrainCoverage {
     }
 }
 
+/// How often the branches of the wings, the aids, the car-level glue and the telemetry page
+/// were taken (Task 10).
+#[derive(Clone, Copy, Default)]
+struct WholeCoverage {
+    /// Force calls of the wings on the game's tape.
+    wing_calls: usize,
+    /// Wing-steps in which a wing's controllers held its angle away from the set-up angle.
+    active_aero: usize,
+    /// Steps with the DRS open; presses of its button.
+    drs_open: usize,
+    drs_presses: usize,
+    last_drs: bool,
+    /// Steps with a wing under an angle override or an effect factor of the DRS.
+    drs_wing_steps: usize,
+    /// Steps traction control held the engine cut; wheel-steps with the brake released by
+    /// the ABS; steps the differential lock braked a wheel; torque calls of the stability aid.
+    tc_in_action: usize,
+    abs_released: usize,
+    edl: usize,
+    stability_calls: usize,
+    /// Steps the pit limiter cut the engine / asked for the brakes; steps the body mesh was
+    /// a ghost for other cars.
+    limiter: usize,
+    limiter_brake: usize,
+    pit_ghost: usize,
+    /// Steps with wind.
+    wind: usize,
+    /// Steps the page's ride heights were the standing-car estimate.
+    ride_estimate: usize,
+    /// Steps a wing produced no force because the air came from behind or stood still.
+    no_lift: usize,
+}
+
+impl WholeCoverage {
+    const HEAD: &'static str = "| Scenario | Wing force calls / wing-steps moved by a controller | DRS open steps / button presses / wing-steps under DRS | TC cutting / wheel-steps released by ABS / EDL braking / stability torque calls | Pit limiter cutting / braking / ghost for cars | Wind steps | Ride height estimated | Wing-steps without lift |\n|---|---|---|---|---|---|---|---|";
+
+    fn count(&mut self, chassis: &RollingChassis, recording: &Recording, step: usize, feed: &RecordedStep) {
+        for call in &recording.steps[step].calls {
+            match recording.system_of(call) {
+                "aero_drag" | "aero_lift" => self.wing_calls += 1,
+                "stability" => self.stability_calls += 1,
+                _ => {}
+            }
+        }
+        if let Some(aero) = &chassis.aero {
+            let base = aero.base();
+            for wing in &base.wings {
+                self.active_aero += (!wing.dynamic_controllers.is_empty() && wing.status.angle != wing.status.input_angle) as usize;
+                self.drs_wing_steps += (wing.override_status.is_active || wing.status.angle_mult != 1.0) as usize;
+                self.no_lift += (wing.status.cl == 0.0 && wing.data.cl_gain != 0.0) as usize;
+            }
+            self.drs_open += base.drs.is_active as usize;
+        }
+        self.drs_presses += (feed.controls.drs && !self.last_drs) as usize;
+        self.last_drs = feed.controls.drs;
+        if let Some(aids) = &chassis.aids {
+            let base = aids.base();
+            self.tc_in_action += base.traction_control.is_in_action as usize;
+            self.abs_released += chassis.tyres.iter().filter(|tyre| tyre.abs_override == 0.0).count();
+            self.edl += (base.edl.is_present && base.edl.is_active && base.edl.out_level > 0.0) as usize;
+            self.limiter += base.speed_limiter.is_limiting as usize;
+        }
+        if let Some(brakes) = &chassis.brake_system {
+            self.limiter_brake += (brakes.base().electronic_override > 0.0) as usize;
+        }
+        self.pit_ghost += chassis.is_collision_off_for_pits as usize;
+        self.wind += (chassis.env.wind_speed >= 0.01) as usize;
+        if let Some(writer) = &chassis.telemetry {
+            self.ride_estimate += (writer.minimum_height > 0.0 && step > 0 && recording.f(step - 1, "car.speed") < 2.0) as usize;
+        }
+    }
+
+    fn add(&mut self, o: &WholeCoverage) {
+        self.wing_calls += o.wing_calls;
+        self.active_aero += o.active_aero;
+        self.drs_open += o.drs_open;
+        self.drs_presses += o.drs_presses;
+        self.drs_wing_steps += o.drs_wing_steps;
+        self.tc_in_action += o.tc_in_action;
+        self.abs_released += o.abs_released;
+        self.edl += o.edl;
+        self.stability_calls += o.stability_calls;
+        self.limiter += o.limiter;
+        self.limiter_brake += o.limiter_brake;
+        self.pit_ghost += o.pit_ghost;
+        self.wind += o.wind;
+        self.ride_estimate += o.ride_estimate;
+        self.no_lift += o.no_lift;
+    }
+
+    fn row(&self, name: &str) -> String {
+        format!(
+            "| {name} | {} / {} | {} / {} / {} | {} / {} / {} / {} | {} / {} / {} | {} | {} | {} |",
+            self.wing_calls,
+            self.active_aero,
+            self.drs_open,
+            self.drs_presses,
+            self.drs_wing_steps,
+            self.tc_in_action,
+            self.abs_released,
+            self.edl,
+            self.stability_calls,
+            self.limiter,
+            self.limiter_brake,
+            self.pit_ghost,
+            self.wind,
+            self.ride_estimate,
+            self.no_lift,
+        )
+    }
+}
+
 /// How often the branches that ordinary driving of the F2004 never reaches were taken.
 #[derive(Clone, Copy, Default)]
 struct Coverage {
@@ -649,6 +839,7 @@ struct Coverage {
 struct Outcome {
     coverage: Coverage,
     powertrain: PowertrainCoverage,
+    whole: WholeCoverage,
     /// Values of brakes, engine and drivetrain compared per step (those the recording holds).
     powertrain_values: usize,
     scenario: String,
@@ -672,7 +863,7 @@ fn compare(
 ) -> Result<Outcome, String> {
     let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
-    let mut chassis = setup.build(data)?;
+    let mut chassis = setup.build_runner(data)?;
     if let Some(fault) = fault {
         fault(&mut chassis);
     }
@@ -680,6 +871,7 @@ fn compare(
     let mut outcome = Outcome {
         coverage: Coverage::default(),
         powertrain: PowertrainCoverage::default(),
+        whole: WholeCoverage::default(),
         powertrain_values: 0,
         scenario: setup.scenario.clone(),
         steps: 0,
@@ -693,9 +885,10 @@ fn compare(
     let steps = recording.steps.len().min(stop_after.unwrap_or(usize::MAX));
     for step in 0..steps {
         let feed = recorded_step(recording, step)?;
+        let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
         let request_before = chassis.drivetrain.as_ref().map(|d| d.base().gear_request.request as i32).unwrap_or(0);
         let paddles_before = (chassis.gear_changer.last_gear_up, chassis.gear_changer.last_gear_dn);
-        replay::step_recorded(&mut chassis, setup.time_of_step(step), &feed);
+        chassis.step_recorded(setup.time_of_step(step), &feed);
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
         let mut differing = Vec::new();
@@ -722,6 +915,7 @@ fn compare(
             }
         }
         outcome.powertrain.count(&chassis, &feed, request_before, paddles_before);
+        outcome.whole.count(&chassis, recording, step, &feed);
         let tape = compare_tape(recording, step, &chassis);
         let coverage = &mut outcome.coverage;
         for suspension in &chassis.suspensions {
@@ -848,8 +1042,8 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
     writeln!(table, "Free run, {}.\n", systems.describe()).unwrap();
     writeln!(
         table,
-        "| Scenario | Steps | Bit-exact steps | First divergence | Chassis values compared per step | Brake / engine / \
-         drivetrain values compared per step | Force calls compared |"
+        "| Scenario | Steps | Bit-exact steps | First divergence | Chassis values compared per step | Values of the other \
+         systems compared per step (brakes, engine, drivetrain; wings, aids, car glue, telemetry page) | Force calls compared |"
     )
     .unwrap();
     writeln!(table, "|---|---|---|---|---|---|---|").unwrap();
@@ -883,6 +1077,16 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
         for o in &outcomes {
             writeln!(table, "{}", o.powertrain.row(&format!("`{}`", o.scenario))).unwrap();
             total.add(&o.powertrain);
+        }
+        writeln!(table, "{}", total.row("**all**")).unwrap();
+        writeln!(table).unwrap();
+    }
+    if systems == Systems::ALL {
+        writeln!(table, "{}", WholeCoverage::HEAD).unwrap();
+        let mut total = WholeCoverage::default();
+        for o in &outcomes {
+            writeln!(table, "{}", o.whole.row(&format!("`{}`", o.scenario))).unwrap();
+            total.add(&o.whole);
         }
         writeln!(table, "{}", total.row("**all**")).unwrap();
         writeln!(table).unwrap();
@@ -923,13 +1127,7 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
         Some(dir) => format!("_{}", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
         None => String::new(),
     };
-    // the chassis-only results of Task 08 keep their file names
-    match (systems.brakes, systems.drivetrain) {
-        (true, true) => suffix.push_str("_powertrain"),
-        (true, false) => suffix.push_str("_brakes"),
-        (false, true) => suffix.push_str("_drivetrain"),
-        (false, false) => {}
-    }
+    suffix.push_str(&systems.suffix());
     let file = out.join(if full { format!("results{suffix}.md") } else { format!("partial{suffix}.md") });
     std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
     println!("{}", file.display());
@@ -952,10 +1150,11 @@ fn write_excerpt(
 ) -> Result<usize, String> {
     let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
-    let mut chassis = setup.build(data)?;
+    let mut chassis = setup.build_runner(data)?;
     for step in 0..first {
         let feed = recorded_step(recording, step)?;
-        replay::step_recorded(&mut chassis, setup.time_of_step(step), &feed);
+        let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
+        chassis.step_recorded(setup.time_of_step(step), &feed);
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
         if let Some(k) = (0..rust.len()).find(|&k| !replay::same_value(columns.kinds[k], game[k], rust[k])) {
@@ -976,6 +1175,7 @@ fn write_excerpt(
     let mut steps = Vec::with_capacity(count);
     for step in first..first + count {
         let feed = recorded_step(recording, step)?;
+        let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
         // the game's tape, in the form the hash takes it
         let tape: Vec<rustyac_physics::car::TapeCall> = recording.steps[step]
             .calls
@@ -1007,7 +1207,7 @@ fn write_excerpt(
         }
         steps.push(GoldenStep { feed, hash, bodies });
     }
-    let golden = Golden { setup, first, state, steps };
+    let golden = Golden { car: recording.get("car").unwrap_or("?").to_string(), setup, first, state, steps };
     let bytes = golden.to_bytes();
     // the file must replay: parse it back and run it the way `cargo test` will
     let parsed = Golden::parse(&bytes)?;
@@ -1018,7 +1218,8 @@ fn write_excerpt(
     // and the free run itself must still agree at the end of the excerpt
     for step in first..first + count {
         let feed = recorded_step(recording, step)?;
-        replay::step_recorded(&mut chassis, golden.setup.time_of_step(step), &feed);
+        let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
+        chassis.step_recorded(golden.setup.time_of_step(step), &feed);
         if body_words(&chassis) != golden.steps[step - first].bodies {
             return Err(format!("step {step}: the free run left the game"));
         }
@@ -1071,7 +1272,20 @@ fn excerpt_command() -> Result<(), String> {
                 braking - 40
             }
         };
-        let path = out.join(format!("powertrain_{scenario}_{first}_{count}.chgold"));
+        let path = out.join(format!("whole_{scenario}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    // a second car, the 488 GT3: full braking with the ABS at work (Task 10); the whole car,
+    // driver's controls only
+    {
+        let recording = Recording::read(&repo.join("oracle/car_wc_488/wc_stops.carrec"))?;
+        let data = car_data(&recording)?;
+        let releasing = (0..recording.steps.len())
+            .find(|&step| recording.f(step, "abs.override.lf") == 0.0)
+            .ok_or("the 488's recording never has the ABS release a brake")?;
+        let (first, count) = (releasing - 60, 400);
+        let path = out.join(format!("whole_488_gt3_wc_stops_{first}_{count}.chgold"));
         let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
         println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
     }
@@ -1105,8 +1319,9 @@ fn faults_command(names: &[String], dir: Option<&Path>, systems: Systems) -> Res
     }
     let mut missed = Vec::new();
     let chassis_faults = FAULTS.iter().filter(|_| systems == Systems::CHASSIS);
-    let powertrain_faults = POWERTRAIN_FAULTS.iter().filter(|_| systems != Systems::CHASSIS);
-    for &(name, about, fault) in chassis_faults.chain(powertrain_faults) {
+    let powertrain_faults = POWERTRAIN_FAULTS.iter().filter(|_| systems.brakes && systems.drivetrain);
+    let whole_faults = WHOLE_FAULTS.iter().filter(|_| systems == Systems::ALL);
+    for &(name, about, fault) in chassis_faults.chain(powertrain_faults).chain(whole_faults) {
         let outcome = compare(&recording, &data, systems, false, None, Some(fault))?;
         let (at, text) = match &outcome.first {
             Some((step, text)) => (format!("step {step}"), text.clone()),
@@ -1120,7 +1335,7 @@ fn faults_command(names: &[String], dir: Option<&Path>, systems: Systems) -> Res
     }
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-    let tail = if systems == Systems::CHASSIS { "" } else { "_powertrain" };
+    let tail = systems.suffix();
     let file = out.join(match dir {
         Some(dir) => format!("faults_{}{tail}.md", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
         None => format!("faults{tail}.md"),

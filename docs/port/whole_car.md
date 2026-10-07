@@ -4,7 +4,30 @@
 
 (Kept up to date while the task runs, so that a cut-off loses nothing. Newest state first.)
 
-- **State**: the telemetry page is ported and committed (`car/telemetry.rs`:
+- **State (cut off here by a usage limit; everything below is committed)**: `VanillaCar`
+  (`car/vanilla_car.rs`: car + `ControlsProvider` device, `ScriptedDevice`), the compare tool's
+  whole-car mode (default of `chassis_compare run`: the only inputs are the driver's controls
+  and the session / track settings; `--feed brakes|drivetrain|aero|aids` puts one system
+  back; result files `oracle/chassis/results[_<folder>]_whole.md`, new coverage table),
+  twelve new deliberate faults (`chassis_compare faults random`: all 24 noticed,
+  `oracle/chassis/faults_whole.md`), golden files `CHGOLD03` with three whole-car excerpts
+  (F2004 launch and brake, 488 GT3 `wc_stops` with ABS; driver inputs only) and
+  `tests/chassis_golden.rs` rewritten (7 tests pass).
+  **Not done yet**: (1) the full results tables: run `chassis_compare run` and
+  `chassis_compare run --dir oracle/<folder>` for `car_488_gt3 car_f40 car_pt car_pt_ctrl
+  car_pt_fwd car_pt_street car_tight_stops car_fallbacks car_wc car_wc_488 car_wc_exos
+  car_wc_giulia` (all were 100 % bit-exact at the last run, before the mode was renamed) and
+  paste the tables into this report; (2) the report itself (sections 1 to 6 of the task: only
+  this "Resume here" exists); (3) a read of `aero.rs` / `aids.rs` against
+  `re/scratch/task10/spec_aero.md` and `spec_aids.md` (the ports were written from the
+  listings and the maps; guessed, not yet confirmed: `Wing::SPEED_DAMAGE_COEFF` /
+  `SURFACE_DAMAGE_COEFF` = 300, the loaders' handling of a missing `electronics.ini` section,
+  `DRS::init` details, the old one-coefficient `[DATA]` aero format is refused) and a review
+  of the untested branches; (4) `wc_wind` / `wc_stability` / `wc_pit` for more cars, an
+  active-aero car other than the F2004 if wanted; (5) notes in `docs/map/car.md` and the
+  tooling memory. `spec_telemetry.md` may not exist (its helper was stopped); the page was
+  ported from `docs/map/telemetry.md` and the listings and matches the game on every recording.
+- **Before that**: the telemetry page is ported and committed (`car/telemetry.rs`:
   `PhysicsPageWriter`, `PhysicsPage`, the 148 values of `SPageFilePhysics` after every step,
   with `Car::computeRideHeight`, the standing-car estimate `RaceEngineer::evalFront/RearRideHeight`,
   `Car::getCGHeight`, heading / pitch / roll; `atan2f` added to `rustyac-math`;

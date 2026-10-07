@@ -54,6 +54,7 @@ pub mod setup;
 pub mod shift_assists;
 pub mod suspension;
 pub mod telemetry;
+pub mod vanilla_car;
 
 pub use aero::{AeroBase, AeroModel, Drs, DynamicWingController, SlipStream, VanillaAero, Wing};
 pub use aids::{Abs, AidsBase, AidsModel, Edl, SpeedLimiter, StabilityControl, TractionControl, VanillaAids};
@@ -69,4 +70,5 @@ pub use heave_spring::HeaveSpring;
 pub use setup::{SetupItem, SetupManager};
 pub use shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 pub use telemetry::{PhysicsPage, PhysicsPageWriter};
+pub use vanilla_car::{CarControlsInput, ControlsProvider, ScriptedDevice, VanillaCar};
 pub use suspension::{Damper, SuspensionBase, SuspensionModel, SuspensionStatus, VanillaDwb};

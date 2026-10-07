@@ -15,6 +15,7 @@ use rustyac_ode::{JointKind, Mass};
 use super::body::{kind, ForceSource, TapeCall};
 use super::chassis::{ChassisEnvironment, RollingChassis, StepTrace};
 use super::feed::{CarControls, ChassisFeed, EngineFeed};
+use super::vanilla_car::{ScriptedDevice, VanillaCar};
 use crate::tyre::rig;
 use crate::tyre::{RayCastResult, RayTrackCollisionProvider, SurfaceDef};
 use crate::vecmath::Vec3f;
@@ -191,6 +192,12 @@ pub struct RecordedStep {
 }
 
 impl RecordedStep {
+    /// The same step with nothing in it but what the driver did: the controls of the device
+    /// and the clicks of the cockpit brake bias. This is all a whole car is given.
+    pub fn driver_only(&self) -> RecordedStep {
+        RecordedStep { controls: self.controls, bias_clicks: self.bias_clicks, ..RecordedStep::default() }
+    }
+
     /// The step as 32-bit words (the golden file's layout).
     pub fn to_words(&self, out: &mut Vec<u32>) {
         let c = &self.controls;
@@ -317,6 +324,59 @@ pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &Rec
     // PhysicsEngine::stepWind runs before the cars
     chassis.env.step_wind(physics_time);
     chassis.step(DT, physics_time, &mut RecordedFeed { step });
+}
+
+/// A car under test: either a chassis that is still fed some systems from a recording, or a
+/// whole [`VanillaCar`] with a scripted device, which is given the driver's controls and
+/// nothing else. Reads like the chassis inside.
+pub enum Runner {
+    Fed(RollingChassis),
+    Whole(VanillaCar<ScriptedDevice>),
+}
+
+impl std::ops::Deref for Runner {
+    type Target = RollingChassis;
+
+    fn deref(&self) -> &RollingChassis {
+        match self {
+            Runner::Fed(chassis) => chassis,
+            Runner::Whole(car) => &car.car,
+        }
+    }
+}
+
+impl std::ops::DerefMut for Runner {
+    fn deref_mut(&mut self) -> &mut RollingChassis {
+        match self {
+            Runner::Fed(chassis) => chassis,
+            Runner::Whole(car) => &mut car.car,
+        }
+    }
+}
+
+impl Runner {
+    /// Is this a whole car (driver's controls only)?
+    pub fn is_whole(&self) -> bool {
+        matches!(self, Runner::Whole(_))
+    }
+
+    /// One step with what `step` holds. A whole car reads only `step.controls` and
+    /// `step.bias_clicks`.
+    pub fn step_recorded(&mut self, physics_time: f64, step: &RecordedStep) {
+        match self {
+            Runner::Fed(chassis) => step_recorded(chassis, physics_time, step),
+            Runner::Whole(car) => {
+                // what the game's command queue runs before the step
+                if step.bias_clicks != 0 {
+                    if let Some(brakes) = &mut car.car.brake_system {
+                        brakes.set_manual_front_bias(step.bias_clicks);
+                    }
+                }
+                car.device.controls = step.controls;
+                car.step(DT, physics_time);
+            }
+        }
+    }
 }
 
 /// A [`ChassisFeed`] that hands the chassis one recorded step.
@@ -784,6 +844,22 @@ impl RunSetup {
         Ok(chassis)
     }
 
+    /// Every system is computed in Rust: the car is a whole car.
+    pub fn is_whole(&self) -> bool {
+        self.rust_brakes && self.rust_drivetrain && self.rust_aero && self.rust_aids
+    }
+
+    /// As [`RunSetup::build`]; a whole car comes back as a [`VanillaCar`] with a scripted
+    /// device, which takes nothing but the driver's controls.
+    pub fn build_runner(&self, data_path: &Path) -> Result<Runner, String> {
+        let chassis = self.build(data_path)?;
+        if self.is_whole() {
+            Ok(Runner::Whole(VanillaCar::from_chassis(chassis, ScriptedDevice::default())?))
+        } else {
+            Ok(Runner::Fed(chassis))
+        }
+    }
+
     /// The physics clock of a step, ms.
     pub fn time_of_step(&self, step: usize) -> f64 {
         self.clock_start_ms + (step as f64 + 1.0) * 3.0
@@ -1106,6 +1182,8 @@ pub struct GoldenStep {
 /// A small excerpt of a recording for `cargo test`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Golden {
+    /// The car's folder name in `cardata/`.
+    pub car: String,
     pub setup: RunSetup,
     /// Index of the first step in the recording.
     pub first: usize,
@@ -1132,13 +1210,14 @@ impl Golden {
     pub fn to_bytes(&self) -> Vec<u8> {
         let e = &self.setup.env;
         let header = format!(
-            "scenario={}\nground={}\nseed={}\nclock_start_ms={:?}\nfirst={}\nsteps={}\nambient_temperature={:?}\n\
+            "car={}\nscenario={}\nground={}\nseed={}\nclock_start_ms={:?}\nfirst={}\nsteps={}\nambient_temperature={:?}\n\
              road_temperature={:?}\ndynamic_grip_level={:?}\ntyre_consumption_rate={:?}\nmechanical_damage_rate={:?}\n\
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
              auto_shifter={}\nrust_aero={}\nrust_aids={}\ntelemetry={}\npitlane={}\nstability_gain={:?}\nwind_speed={:?}\n\
              wind_direction_deg={:?}\n",
+            self.car,
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -1258,14 +1337,14 @@ impl Golden {
             }
             steps.push(GoldenStep { feed, hash: low | high << 32, bodies });
         }
-        Ok(Golden { setup, first, state, steps })
+        Ok(Golden { car: get("car")?.to_string(), setup, first, state, steps })
     }
 
     /// Builds the chassis from `data_path`, puts it into the excerpt's start state and runs
     /// every step, comparing with what the game produced. `Err` names the first step that
     /// differs.
     pub fn check(&self, data_path: &Path) -> Result<(), String> {
-        let mut chassis = self.setup.build(data_path)?;
+        let mut chassis = self.setup.build_runner(data_path)?;
         if !self.state.is_empty() {
             // the setup values reached the car in the first step of the recording
             let mut manager = std::mem::take(&mut chassis.setup_manager);
@@ -1276,7 +1355,7 @@ impl Golden {
         let kinds: Vec<char> = fields().iter().map(|field| field.kind).collect();
         for (index, step) in self.steps.iter().enumerate() {
             let number = self.first + index;
-            step_recorded(&mut chassis, self.setup.time_of_step(number), &step.feed);
+            chassis.step_recorded(self.setup.time_of_step(number), &step.feed);
             let bodies = body_words(&chassis);
             if bodies != step.bodies {
                 let at = bodies.iter().zip(&step.bodies).position(|(a, b)| a != b).unwrap();
