@@ -11,7 +11,11 @@
 pub mod cli;
 pub mod dump;
 pub mod input_file;
+pub mod physics_thread;
+pub mod shm;
 pub mod sim;
+pub mod timer;
+pub mod view;
 
 use std::path::Path;
 

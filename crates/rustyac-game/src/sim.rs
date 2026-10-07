@@ -44,7 +44,24 @@ pub trait DriverSource: Send {
     fn device_id(&self) -> u32 {
         0
     }
+
+    /// The next step belongs to the spawn sequence (the rest after the drop, the shift into
+    /// first gear): nobody is driving yet, so the physics thread runs it without waiting for
+    /// the clock.
+    fn in_spawn_sequence(&self) -> bool {
+        false
+    }
+
+    /// The game itself asks for a command before the next step (a car that fell over is put
+    /// back). A recorded drive has its own commands and ignores this.
+    fn request(&mut self, _events: u32) {}
+
+    /// Called now and then while the simulation is paused (devices can be looked after).
+    fn idle(&mut self) {}
 }
+
+/// `StepInput::device` of a step of the spawn sequence.
+pub const DEVICE_SPAWN: u32 = 4;
 
 /// A recorded drive: every step it reports what the file says.
 #[derive(Clone, Copy, Debug, Default)]
@@ -73,6 +90,113 @@ impl DriverSource for ReplaySource {
 
     fn device_id(&self) -> u32 {
         self.step.device
+    }
+
+    fn in_spawn_sequence(&self) -> bool {
+        self.step.device == DEVICE_SPAWN
+    }
+}
+
+/// Nobody at the controls: pedals up, wheel straight. With the spawn sequence around it
+/// ([`SpawnSequence`]) this is the driver of the unattended checks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NobodySource;
+
+impl DriverSource for NobodySource {
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        *controls = CarControls { clutch: 1.0, ..CarControls::default() };
+    }
+}
+
+/// Steps of rest after a spawn, as the oracle's scenarios wait (1.2 s): the car drops onto
+/// its wheels and comes to rest.
+pub const SPAWN_REST_STEPS: u32 = 400;
+/// Then the up-shift paddle is held this long: first gear.
+pub const SPAWN_SHIFT_STEPS: u32 = 10;
+/// And a moment for the gearbox to finish the change before the driver gets the car.
+pub const SPAWN_SETTLE_STEPS: u32 = 60;
+
+/// Wraps the live devices: after every spawn (the start, a reset, a new car) the car is left
+/// alone to drop and rest, then put into first gear with the up-shift paddle, the way a
+/// driver would; only then do the devices drive. Everything it does goes through
+/// `Car::controls` like any driver's input, and is recorded as such.
+pub struct SpawnSequence<S: DriverSource> {
+    pub inner: S,
+    /// Steps of the sequence done; past the end the devices drive.
+    pub at: u32,
+    /// Commands asked for by the game itself ([`DriverSource::request`]).
+    requested: u32,
+    /// Shift into first gear at the end of the sequence.
+    pub first_gear: bool,
+    /// The last `acquire` was a step of the sequence.
+    last_was_sequence: bool,
+}
+
+impl<S: DriverSource> SpawnSequence<S> {
+    pub fn new(inner: S, first_gear: bool) -> SpawnSequence<S> {
+        SpawnSequence { inner, at: 0, requested: 0, first_gear, last_was_sequence: false }
+    }
+
+    fn length(&self) -> u32 {
+        SPAWN_REST_STEPS + if self.first_gear { SPAWN_SHIFT_STEPS + SPAWN_SETTLE_STEPS } else { 0 }
+    }
+}
+
+impl<S: DriverSource> DriverSource for SpawnSequence<S> {
+    fn take_events(&mut self) -> (u32, i32) {
+        let (mut events, bias_clicks) = self.inner.take_events();
+        events |= std::mem::take(&mut self.requested);
+        if events & (event::RESET | event::REBUILD) != 0 {
+            self.at = 0;
+        }
+        (events, bias_clicks)
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
+        self.last_was_sequence = self.at < self.length();
+        if !self.last_was_sequence {
+            self.inner.acquire(controls, dt, input);
+            return;
+        }
+        *controls = CarControls { clutch: 1.0, ..CarControls::default() };
+        controls.gear_up = self.first_gear && (SPAWN_REST_STEPS..SPAWN_REST_STEPS + SPAWN_SHIFT_STEPS).contains(&self.at);
+        self.at += 1;
+    }
+
+    fn headlights(&mut self) -> bool {
+        self.at >= self.length() && self.inner.headlights()
+    }
+
+    fn send_ff(&mut self, ff: f32, damper: f32, user_gain: f32) {
+        self.inner.send_ff(ff, damper, user_gain);
+    }
+
+    fn set_vibrations(&mut self, def: &VibrationDef) {
+        self.inner.set_vibrations(def);
+    }
+
+    fn set_engine_rpm(&mut self, rpm: f32, low: f32, high: f32) {
+        self.inner.set_engine_rpm(rpm, low, high);
+    }
+
+    fn device_id(&self) -> u32 {
+        if self.last_was_sequence {
+            DEVICE_SPAWN
+        } else {
+            self.inner.device_id()
+        }
+    }
+
+    fn in_spawn_sequence(&self) -> bool {
+        self.at < self.length()
+    }
+
+    fn request(&mut self, events: u32) {
+        self.requested |= events;
+    }
+
+    fn idle(&mut self) {
+        self.inner.idle();
     }
 }
 

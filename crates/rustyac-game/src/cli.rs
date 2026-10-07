@@ -20,9 +20,11 @@ pub struct Options {
     pub ffb: bool,
     /// `--no-rumble`: no rumble on the Xbox pad.
     pub no_rumble: bool,
-    /// `--headless`: no window. With `--replay` the file is run as fast as possible; without,
-    /// the car runs in real time (for `--duration` seconds) with nobody driving.
+    /// `--headless`: no window. With `--replay` the file is run as fast as possible (in real
+    /// time with `--realtime`); without, the car runs in real time with nobody driving.
     pub headless: bool,
+    /// `--realtime`: with `--replay --headless`, keep to the clock (and publish shared memory).
+    pub realtime: bool,
     /// `--duration <s>`: stop by itself after this many seconds.
     pub duration: Option<f64>,
     /// `--dump-states <file>`: with `--replay --headless`, write the car's state after every step.
@@ -65,6 +67,7 @@ impl Default for Options {
             ffb: false,
             no_rumble: false,
             headless: false,
+            realtime: false,
             duration: None,
             dump_states: None,
             screenshot: None,
@@ -107,6 +110,7 @@ usage: rustyac [options]
 for checks, without anybody at the controls:
   --headless            no window: with --replay run the file as fast as possible,
                         otherwise run in real time with nobody driving
+  --realtime            with --replay --headless: keep to the clock, publish shared memory
   --duration <s>        stop by itself after this many seconds
   --dump-states <file>  with --replay --headless: write the car's state after every step
   --screenshot <png>    draw one frame off screen into a PNG and stop
@@ -132,6 +136,7 @@ impl Options {
                 "--ffb" => o.ffb = true,
                 "--no-rumble" => o.no_rumble = true,
                 "--headless" => o.headless = true,
+                "--realtime" => o.realtime = true,
                 "--duration" => o.duration = Some(value("--duration")?.parse().map_err(|e| format!("--duration: {e}"))?),
                 "--dump-states" => o.dump_states = Some(PathBuf::from(value("--dump-states")?)),
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
