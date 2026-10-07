@@ -1402,6 +1402,9 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
 /// Does the recording's script ask anything of the car besides the device's controls (locks,
 /// a gentle stop, penalties)? An input file of the game has no such commands.
 fn has_jobs(recording: &Recording) -> bool {
+    if recording.has("script.teleport") && (0..recording.steps.len()).any(|step| recording.i(step, "script.teleport") != 0) {
+        return true;
+    }
     recording.has("script.lockMs")
         && (0..recording.steps.len()).any(|step| {
             recording.f(step, "script.lockMs") != 0.0
@@ -1490,6 +1493,13 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
                 wind_speed: run.wind_speed,
                 wind_direction_deg: run.wind_direction_deg,
                 damage: run.damage,
+                track: run.track.as_ref().map(|track| input_file::OracleTrack {
+                    folder: recording.get("track_folder").unwrap_or("").to_string(),
+                    position: [track.position.x, track.position.y, track.position.z],
+                    tail: [track.tail.x, track.tail.y, track.tail.z],
+                    armed: track.armed,
+                    allowed_tyres_out: track.allowed_tyres_out,
+                }),
             }),
         };
         let mut steps = Vec::with_capacity(count);

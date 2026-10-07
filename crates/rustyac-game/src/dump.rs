@@ -39,7 +39,12 @@ impl StepDump {
     pub fn capture(chassis: &RollingChassis) -> StepDump {
         StepDump {
             state: chassis.save_state(),
-            trace: replay::powertrain_trace(chassis),
+            trace: {
+                let mut trace = replay::powertrain_trace(chassis);
+                // on a track: the rays, the lap timer, the place along the AI line
+                trace.extend(replay::track_trace(chassis));
+                trace
+            },
             snapshot: if chassis.trace.is_some() { replay::snapshot(chassis) } else { Vec::new() },
             tape: chassis.core.tape.clone().unwrap_or_default(),
         }

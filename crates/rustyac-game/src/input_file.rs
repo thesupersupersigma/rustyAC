@@ -128,6 +128,31 @@ pub struct OracleSetup {
     pub wind_speed: f32,
     pub wind_direction_deg: f32,
     pub damage: [f32; 5],
+    /// The recording was made on a real track (`car_oracle run --track`).
+    pub track: Option<OracleTrack>,
+}
+
+/// The track of an oracle recording and where its car was put.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OracleTrack {
+    /// The track's folder.
+    pub folder: String,
+    /// The spawn: a point on the road and the direction of the car's tail.
+    pub position: [f32; 3],
+    pub tail: [f32; 3],
+    /// The first lap is armed (a hot-lap start).
+    pub armed: bool,
+    /// `PhysicsEngine::allowedTyresOut`
+    pub allowed_tyres_out: i32,
+}
+
+fn hex3(values: &[f32; 3]) -> String {
+    values.map(|v| format!("{:08x}", v.to_bits())).join(",")
+}
+
+fn parse_hex3(text: &str) -> Result<[f32; 3], String> {
+    let words: Vec<f32> = text.split(',').filter_map(|w| u32::from_str_radix(w, 16).ok()).map(f32::from_bits).collect();
+    <[f32; 3]>::try_from(words).map_err(|_| format!("three hexadecimal words expected, got {text:?}"))
 }
 
 /// Everything that decides what car is built and how its session starts.
@@ -245,6 +270,13 @@ impl SimSetup {
             put("oracle_wind_speed", format!("{:?}", o.wind_speed));
             put("oracle_wind_direction_deg", format!("{:?}", o.wind_direction_deg));
             put("oracle_damage", o.damage.map(|d| format!("{d:?}")).join(","));
+            if let Some(track) = &o.track {
+                put("oracle_track_folder", track.folder.clone());
+                put("oracle_spawn_position", hex3(&track.position));
+                put("oracle_spawn_tail", hex3(&track.tail));
+                put("oracle_armed", (track.armed as u32).to_string());
+                put("oracle_allowed_tyres_out", track.allowed_tyres_out.to_string());
+            }
         }
         out.push_str("end\n");
         out
@@ -283,7 +315,9 @@ impl SimSetup {
                 wind_speed: 0.0,
                 wind_direction_deg: 0.0,
                 damage: [0.0; 5],
+                track: None,
             };
+            let blank_track = || OracleTrack { folder: String::new(), position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1 };
             match key {
                 "car" => setup.car = value.to_string(),
                 "dt" => {
@@ -328,6 +362,14 @@ impl SimSetup {
                         *d = part.parse().map_err(|e| format!("oracle_damage: {e}"))?;
                     }
                     oracle.get_or_insert_with(blank).damage = damage;
+                }
+                "oracle_track_folder" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).folder = value.to_string(),
+                "oracle_spawn_position" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).position = parse_hex3(value)?,
+                "oracle_spawn_tail" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).tail = parse_hex3(value)?,
+                "oracle_armed" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).armed = flag(),
+                "oracle_allowed_tyres_out" => {
+                    oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).allowed_tyres_out =
+                        value.parse().map_err(|e| format!("oracle_allowed_tyres_out: {e}"))?
                 }
                 // a newer writer's key: an input file must never be half understood
                 other => return Err(format!("unknown header key {other:?}")),

@@ -465,6 +465,15 @@ fn build_car(
         // exactly the car `tools/chassis_compare` holds against a recording of the game
         let mut run = run;
         run.clock_start_ms = physics_time;
+        if let (Some(track), Some(oracle)) = (track, setup.oracle.as_ref().and_then(|o| o.track.as_ref())) {
+            run.track = Some(rustyac_physics::car::replay::TrackRun {
+                track: Arc::clone(track),
+                position: spawn.position,
+                tail: spawn.tail,
+                armed: oracle.armed,
+                allowed_tyres_out: oracle.allowed_tyres_out,
+            });
+        }
         return VanillaCar::from_chassis(run.build(data_path)?, driver);
     }
     // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start
@@ -521,6 +530,16 @@ impl GameSim {
             };
             rustyac_physics::track::init_respawn_position_set(&mut loaded, set);
             spawn = spawn_on(&loaded, &setup.spawn)?;
+            track_summary = report.summary(&loaded);
+            track = Some(Arc::new(loaded));
+            track_folder = Some(folder);
+        }
+        if let Some(oracle) = setup.oracle.as_ref().and_then(|o| o.track.as_ref()) {
+            // a recording of the game on a track: the same track, the recording's spawn
+            let folder = find_track(&oracle.folder)?;
+            let (loaded, report) = load_track(&folder, "")?;
+            let v = |a: &[f32; 3]| Vec3f::new(a[0], a[1], a[2]);
+            spawn = SpawnPose { position: v(&oracle.position), tail: v(&oracle.tail) };
             track_summary = report.summary(&loaded);
             track = Some(Arc::new(loaded));
             track_folder = Some(folder);

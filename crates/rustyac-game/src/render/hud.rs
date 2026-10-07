@@ -241,8 +241,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         } else {
             // on a track: the load, and under it the surface the tyre stands on
             hud.text_centred(x + tw * 0.5, y + 2.0 * s, 0.62 * s, [0.02, 0.02, 0.02, 1.0], &format!("{:.0} N", view.wheel_load[wheel]));
-            let short: String = surface.chars().take(9).collect();
-            hud.text_centred(x + tw * 0.5, y + 20.0 * s, 0.5 * s, [0.02, 0.02, 0.02, 1.0], &short);
+            let short: String = surface.chars().take(14).collect();
+            hud.text_centred(x + tw * 0.5, y + 21.0 * s, 0.4 * s, [0.02, 0.02, 0.02, 1.0], &short);
         }
     }
 
@@ -250,7 +250,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     let lap = &view.lap;
     if lap.on_track {
         let (pw, ph) = (470.0 * s, 96.0 * s);
-        let px = (width - pw) * 0.5;
+        // beside the top left panel where the picture is too narrow for the middle
+        let px = ((width - pw) * 0.5).max(450.0 * s);
         let py = 10.0 * s;
         hud.rect(px, py, pw, ph, PANEL);
         let lap_color = if lap.valid { WHITE } else { RED };
@@ -286,7 +287,9 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     }
 
     if info.replay {
-        hud.text_centred(width * 0.5, 14.0 * s, 1.0 * s, YELLOW, "REPLAY");
+        // under the lap panel where there is one
+        let y = if view.lap.on_track { 114.0 * s } else { 14.0 * s };
+        hud.text_centred(width * 0.5, y, 1.0 * s, YELLOW, "REPLAY");
     }
     if info.paused {
         let w = hud.width("PAUSED", 2.5 * s) + 40.0 * s;
