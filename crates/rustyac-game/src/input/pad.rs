@@ -515,6 +515,7 @@ impl JoypadCarControl {
         // not AC's: the clutch button presses the pedal to the floor
         if self.clutch.button != button::NONE && self.clutch.is_pressed(mask, key_down) {
             controls.clutch = 0.0;
+            extra.clutch_pressed = true;
         }
     }
 

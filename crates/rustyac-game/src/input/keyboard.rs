@@ -317,7 +317,8 @@ impl KeyboardCarControl {
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn compute_gas_coefficient(&mut self, probe: &CarProbe, speed: f32, dt: f32) -> f32 {
         let step = dt * self.gas_pedal_speed;
-        let slip = if probe.driven_left_slip < probe.driven_right_slip { probe.driven_right_slip } else { probe.driven_left_slip };
+        // `comiss L, R` + `cmovb`: the right tyre's unless the left one's is at least as large (a NaN: the right)
+        let slip = if !(probe.driven_left_slip >= probe.driven_right_slip) { probe.driven_right_slip } else { probe.driven_left_slip };
         let kmh = speed * 3.6;
         let slipping = if !(kmh >= 100.0) { slip as f64 > 0.99 } else { slip > 2.0 };
         if slipping {
@@ -378,7 +379,8 @@ impl KeyboardCarControl {
         extra.tc_up = key(|k| k.tc_up);
         // AC's keyboard never writes the clutch. With a clutch key (not AC's) it is the pedal.
         if k1.clutch > 0 || k2.clutch > 0 {
-            controls.clutch = if key(|k| k.clutch) { 0.0 } else { 1.0 };
+            extra.clutch_pressed = key(|k| k.clutch);
+            controls.clutch = if extra.clutch_pressed { 0.0 } else { 1.0 };
         }
     }
 
@@ -387,9 +389,19 @@ impl KeyboardCarControl {
         action == 4 && (key_down(self.keys.headlights) || key_down(self.keys2.headlights))
     }
 
-    /// Is a driving key held (for the choice of the driving device)?
+    /// Is a driving key held (for the choice of the driving device)? Shift, Ctrl and Alt do
+    /// not count even where they are bound (AC's own files put gear-down on Left Ctrl): a
+    /// modifier pressed for a command must not take the car away from the pad.
     pub fn in_use(&self, key_down: &dyn Fn(i32) -> bool) -> bool {
-        [self.keys, self.keys2].iter().any(|k| [k.gas, k.brake, k.left, k.right, k.gear_up, k.gear_down].into_iter().any(key_down))
+        let modifier = |key: i32| (0x10..=0x12).contains(&key) || (0xa0..=0xa5).contains(&key);
+        [self.keys, self.keys2]
+            .iter()
+            .any(|k| [k.gas, k.brake, k.left, k.right, k.gear_up, k.gear_down].into_iter().any(|key| !modifier(key) && key_down(key)))
+    }
+
+    /// Is this key one the keyboard drives with (steering, pedals, gears, clutch)?
+    pub fn drives_with(&self, key: i32) -> bool {
+        key > 0 && [self.keys, self.keys2].iter().any(|k| [k.gas, k.brake, k.left, k.right, k.gear_up, k.gear_down, k.clutch, k.handbrake].contains(&key))
     }
 }
 
@@ -438,6 +450,20 @@ mod tests {
         assert_eq!((d.steer_speed, d.steer_opposite_direction_factor, d.steer_reset_factor, d.gas_pedal_speed), (1.1, 2.0, 1.5, 4.0));
         // a file without the numbers: zero, the car cannot be steered
         assert_eq!(KeyboardCarControl::from_ini(&ControlsIni::parse("[KEYBOARD]\n")).steer_speed, 0.0);
+    }
+
+    #[test]
+    fn a_modifier_key_alone_does_not_take_the_car() {
+        // the user's file: gear down is Left Ctrl, which is also what Ctrl+T is typed with
+        let k = user();
+        assert!(k.drives_with(0xa2) && k.drives_with(0x26) && !k.drives_with(0xa3) && !k.drives_with(0x54));
+        assert!(!k.in_use(&|key| key == 0xa2), "Left Ctrl alone");
+        assert!(k.in_use(&|key| key == 0x26) && k.in_use(&|key| key == 0x20), "the throttle key, the gear-up key");
+        // the tyres' slip: the right one's unless the left one's is at least as large
+        let mut k = user();
+        k.int_gas = 1.0;
+        let nan_left = CarProbe { driven_left_slip: f32::NAN, driven_right_slip: 1.5, optimal_brake: 0.0 };
+        assert!(k.compute_gas_coefficient(&nan_left, 10.0, DT) < 1.0, "a NaN on the left: the right tyre's slip counts");
     }
 
     #[test]

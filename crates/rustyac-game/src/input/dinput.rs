@@ -37,9 +37,10 @@ pub fn axis_value(raw: i32) -> f32 {
     raw as f32 * 0.0001
 }
 
-/// Force feedback is never stronger than this share of the wheel's own maximum
-/// (`DIPROP_FFGAIN`, out of 10000).
-pub const FF_DEVICE_GAIN: u32 = 3000;
+/// Force feedback is never stronger than this share of the wheel's own maximum: every force
+/// is scaled by it before it is sent (the device's own gain setting is left alone: whether
+/// a driver honours it cannot be seen from here).
+pub const FF_CAP: f32 = 0.3;
 
 pub struct DiDevice {
     /// AC's `JOY` number: the place in the enumeration.
@@ -221,8 +222,8 @@ impl DirectInput {
     }
 
     /// Prepares force feedback on a device: exclusive access (DirectInput insists), the
-    /// wheel's own centring spring off, the strength capped, one constant force as AC makes
-    /// it. Returns why not, if it cannot be done.
+    /// wheel's own centring spring off, one constant force as AC makes it. Returns why not,
+    /// if it cannot be done.
     pub fn enable_ff(&mut self, joy: i32) -> Result<(), String> {
         let window = self.window;
         let entry = usize::try_from(joy).ok().and_then(|k| self.devices.get_mut(k)).ok_or("no such device")?;
@@ -239,8 +240,6 @@ impl DirectInput {
             let header = DIPROPHEADER { dwSize: std::mem::size_of::<DIPROPDWORD>() as u32, dwHeaderSize: 16, dwObj: 0, dwHow: DIPH_DEVICE };
             let mut autocentre = DIPROPDWORD { diph: header, dwData: 0 };
             let _ = device.SetProperty(prop(9), &mut autocentre.diph);
-            let mut gain = DIPROPDWORD { diph: header, dwData: FF_DEVICE_GAIN };
-            device.SetProperty(prop(7), &mut gain.diph).map_err(|e| format!("the strength cap was refused, no force feedback: {e}"))?;
             device.Acquire().map_err(|e| format!("acquiring {}: {e}", entry.name))?;
             let mut axes = [0u32];
             let mut direction = [0i32, 0];
@@ -267,12 +266,12 @@ impl DirectInput {
         Ok(())
     }
 
-    /// `InputDevice::sendFF` (the constant force only): -1..1 of the capped strength. A
-    /// number that is not one sends no force (AC would send full force one way).
+    /// `InputDevice::sendFF` (the constant force only): -1..1, scaled to the capped strength.
+    /// A number that is not one sends no force (AC would send full force one way).
     pub fn send_ff(&mut self, joy: i32, ff: f32) {
         let Some(entry) = usize::try_from(joy).ok().and_then(|k| self.devices.get_mut(k)) else { return };
         let Some(effect) = &entry.effect else { return };
-        let magnitude = magnitude(ff);
+        let magnitude = magnitude(ff.clamp(-1.0, 1.0) * FF_CAP);
         if entry.ff_started && magnitude == entry.last_magnitude {
             return;
         }

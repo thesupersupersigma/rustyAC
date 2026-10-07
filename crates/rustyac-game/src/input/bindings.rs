@@ -47,6 +47,9 @@ pub struct Bindings {
     /// rustyAC's own pad buttons.
     pub pad_reset: PadButton,
     pub pad_pause: PadButton,
+    /// These bindings may be written to `rustyac_controls.ini` (they are AC's or the built-in
+    /// ones found the normal way, not a file or layout asked for on the command line).
+    pub keep: bool,
     /// Keys of AC's commands, pressed with Ctrl (Shift for "down"): ABS, traction control,
     /// automatic gearbox.
     pub key_abs: i32,
@@ -89,6 +92,17 @@ pub fn default_ini() -> ControlsIni {
     for action in PAD_ACTIONS {
         ini.set(action, "XBOXBUTTON", "-1");
         ini.set(action, "KEY", "-1");
+        // no DirectInput button (a missing key would mean button 0 of device 0)
+        ini.set(action, "JOY", "-1");
+        ini.set(action, "BUTTON", "-1");
+    }
+    // no DirectInput axis either
+    for section in ["STEER", "THROTTLE", "BRAKES", "CLUTCH", "HANDBRAKE"] {
+        ini.set(section, "JOY", "-1");
+        ini.set(section, "AXLE", "-1");
+    }
+    for (key, value) in [("LOCK", "900"), ("SCALE", "1"), ("STEER_GAMMA", "1"), ("FF_GAIN", "1"), ("DEBOUNCING_MS", "50")] {
+        ini.set("STEER", key, value);
     }
     for (action, pad, key) in [
         ("GEARUP", "Y", "0x20"),
@@ -199,6 +213,7 @@ impl Bindings {
             use_legacy_gamepad_code: ini.get_int("RUSTYAC", "USE_LEGACY_GAMEPAD_CODE") != 0,
             pad_reset: button("RUSTYAC_RESET"),
             pad_pause: button("RUSTYAC_PAUSE"),
+            keep: true,
             key_abs: ini.get_hex("ABS", "KEY"),
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
@@ -223,23 +238,24 @@ impl Bindings {
         };
         if let Some(path) = &options.controls {
             if let Some(ini) = try_file(path, notes) {
-                return Bindings::from_ini(&ini, format!("{} (--controls)", path.display()));
+                return Bindings { keep: false, ..Bindings::from_ini(&ini, format!("{} (--controls)", path.display())) };
             }
+        }
+        if options.default_controls {
+            return Bindings { keep: false, ..Bindings::from_ini(&default_ini(), "the built-in layout (--default-controls)".to_string()) };
         }
         if let Some(path) = own_controls_path().filter(|p| p.is_file()) {
             if let Some(ini) = try_file(&path, notes) {
                 return Bindings::from_ini(&ini, format!("{} (yours to edit; delete it to read AC's bindings again)", path.display()));
             }
         }
-        if !options.default_controls {
-            if let Some(path) = ac_controls_path() {
-                if path.is_file() {
-                    if let Some(ini) = try_file(&path, notes) {
-                        return Bindings::from_ini(&ini, format!("{} (AC's own, read only)", path.display()));
-                    }
-                } else {
-                    notes.push(format!("{}: not there", path.display()));
+        if let Some(path) = ac_controls_path() {
+            if path.is_file() {
+                if let Some(ini) = try_file(&path, notes) {
+                    return Bindings::from_ini(&ini, format!("{} (AC's own, read only)", path.display()));
                 }
+            } else {
+                notes.push(format!("{}: not there", path.display()));
             }
         }
         Bindings::from_ini(&default_ini(), "the built-in layout".to_string())
@@ -258,10 +274,11 @@ impl Bindings {
         )
     }
 
-    /// Writes `rustyac_controls.ini` next to the program unless it is there already.
+    /// Writes `rustyac_controls.ini` next to the program unless it is there already (or the
+    /// bindings were only asked for on the command line).
     pub fn write_if_missing(&self) -> Result<Option<PathBuf>, String> {
         let Some(path) = own_controls_path() else { return Ok(None) };
-        if path.exists() {
+        if path.exists() || !self.keep {
             return Ok(None);
         }
         std::fs::write(&path, self.file_text()).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -292,19 +309,27 @@ impl Bindings {
         row("brake", "LT", key_pair("BRAKE"));
         row("gear up", pad("GEARUP"), key_pair("GEARUP"));
         row("gear down", pad("GEARDN"), key_pair("GEARDN"));
-        row("clutch", pad("__EXT_KEYBOARD_CLUTCH"), key_pair("CLUTCH"));
+        row("clutch (to the floor)", pad("__EXT_KEYBOARD_CLUTCH"), key_pair("CLUTCH"));
         row("handbrake", pad("HANDBRAKE"), key_pair("HANDBRAKE"));
         row("DRS", pad("DRS"), key_pair("DRS"));
         row("KERS / ERS (no-op)", pad("KERS"), key_pair("KERS"));
         row("headlights", pad("ACTION_HEADLIGHTS"), key_pair("ACTION_HEADLIGHTS"));
         row("brake bias + / -", &format!("{} / {}", pad("BALANCEUP"), pad("BALANCEDN")), format!("{} / {}", key_pair("BALANCEUP"), key_pair("BALANCEDN")));
+        // a Ctrl key that is bound as a driving key does not make a command
+        let drives = |key: i32| [&keys, &keys2].iter().any(|k| k.named().iter().any(|(_, code)| *code == key));
+        let ctrl = match (drives(0xa2) || drives(0x11), drives(0xa3) || drives(0x11)) {
+            (false, false) => "Ctrl",
+            (true, false) => "Right Ctrl",
+            (false, true) => "Left Ctrl",
+            (true, true) => "(no Ctrl key is free)",
+        };
         row(
             "traction control + / -",
             &format!("{} / {}", pad("TCUP"), pad("TCDN")),
-            format!("Ctrl+{} (Ctrl+Shift: down)", key_name(self.key_traction_control)),
+            format!("{ctrl}+{} (with Shift: down)", key_name(self.key_traction_control)),
         );
-        row("ABS + / -", &format!("{} / {}", pad("ABSUP"), pad("ABSDN")), format!("Ctrl+{} (Ctrl+Shift: down)", key_name(self.key_abs)));
-        row("automatic gearbox", "-", format!("Ctrl+{}", key_name(self.key_auto_shifter)));
+        row("ABS + / -", &format!("{} / {}", pad("ABSUP"), pad("ABSDN")), format!("{ctrl}+{} (with Shift: down)", key_name(self.key_abs)));
+        row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         row("camera", pad("ACTION_CHANGE_CAMERA"), "C".to_string());
         row("reset to spawn", button_label(self.pad_reset.button), "R (Shift+R: a new car)".to_string());
         row("pause", button_label(self.pad_pause.button), "P".to_string());
@@ -382,6 +407,11 @@ mod tests {
         assert_eq!(keyboard.steer_speed, 1.75);
         let text = b.describe();
         assert!(text.contains("gear up") && text.contains("Space or E"), "{text}");
+        // the built-in layout binds no DirectInput device: no axis, no button
+        let wheel = crate::input::wheel::DiCarControl::from_ini(&b.ini);
+        assert_eq!((wheel.steer.joy, wheel.steer.index, wheel.gas.joy, wheel.brake.index), (-1, -1, -1, -1));
+        assert_eq!((wheel.gear_up.joy, wheel.gear_up.index, wheel.drs.index, wheel.hand_brake.index), (-1, -1, -1, -1));
+        assert!(b.keep);
     }
 
     #[test]

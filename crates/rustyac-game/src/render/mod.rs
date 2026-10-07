@@ -689,5 +689,7 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Best);
     let mut writer = encoder.write_header().map_err(|e| format!("{}: {e}", path.display()))?;
-    writer.write_image_data(rgba).map_err(|e| format!("{}: {e}", path.display()))
+    writer.write_image_data(rgba).map_err(|e| format!("{}: {e}", path.display()))?;
+    // the end of the file is written here, not when the writer is dropped (which could not say that it failed)
+    writer.finish().map_err(|e| format!("{}: {e}", path.display()))
 }

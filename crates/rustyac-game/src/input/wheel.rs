@@ -314,6 +314,8 @@ impl DiCarControl {
             v = 0.0;
         }
         controls.clutch = sat(1.0 - v);
+        // not AC's: a pressed pedal tells the automatic clutch aid to stand back
+        extra.clutch_pressed = v > 0.0;
         let b = self.hand_brake.pressed(di, key_down) as i32 as f32;
         controls.hand_brake = sat(self.hand_brake_axis.get_value(di(self.hand_brake_axis.joy).as_ref(), true) + b);
         // gears: the paddles, each press held for the debouncing time
@@ -445,8 +447,8 @@ impl WheelDevice {
                     Ok(()) => {
                         device.ffb = true;
                         device.notes.push(format!(
-                            "force feedback ON, capped at {} % of the wheel's strength",
-                            super::dinput::FF_DEVICE_GAIN / 100
+                            "force feedback ON, capped at {:.0} % of the wheel's strength",
+                            super::dinput::FF_CAP * 100.0
                         ));
                     }
                     Err(message) => device.notes.push(format!("no force feedback: {message}")),

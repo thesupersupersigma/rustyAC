@@ -349,3 +349,69 @@ fn a_recorded_live_drive_replays_to_the_same_car() {
     rustyac_game::run_replay_headless(&input, Some(&states)).unwrap();
     assert_same(&dumps, &dump::read(&states).unwrap(), "replay of the written file");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The clutch button with the automatic clutch aid on.
+
+use rustyac_game::input::pad::{JoypadCarControl, PadState};
+
+/// AC's pad class with a scripted pad; like the live driver it tells the game when the
+/// driver holds the clutch himself.
+struct ScriptedPad {
+    pad: JoypadCarControl,
+    step: u32,
+    pending: u32,
+}
+
+impl DriverSource for ScriptedPad {
+    fn take_events(&mut self) -> (u32, i32) {
+        (std::mem::take(&mut self.pending), 0)
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, input: &CarControlsInput) {
+        let n = self.step;
+        self.step += 1;
+        // full throttle from the start; A (the clutch) held for the first 600 steps
+        let state = PadState { right_trigger: 255, buttons: if n < 600 { 0x1000 } else { 0 }, ..PadState::default() };
+        let mut extra = Extra::default();
+        self.pad.acquire_controls(&state, controls, &mut extra, input, &|_| false);
+        if extra.clutch_pressed {
+            self.pending |= event::MANUAL_CLUTCH;
+        }
+    }
+}
+
+#[test]
+fn the_clutch_button_holds_the_car_although_the_automatic_clutch_is_on() {
+    if car_data().is_none() {
+        return;
+    }
+    let ini = rustyac_game::input::bindings::effective(&rustyac_game::input::bindings::default_ini());
+    let pad = JoypadCarControl::from_ini(&ini, false);
+    let source = SpawnSequence::new(ScriptedPad { pad, step: 0, pending: 0 }, true);
+    let mut sim = GameSim::new(SimSetup::default(), Box::new(source)).unwrap();
+    let mut records = Vec::new();
+    let mut dumps = Vec::new();
+    for _ in 0..470 + 1500 {
+        records.push(sim.step().unwrap());
+        dumps.push(StepDump::capture(&sim.car.car));
+    }
+    let speed = |dump: &StepDump| f32::from_bits(dump.trace.iter().find(|v| v.name == "page.speedKmh").unwrap().word as u32);
+    let rpm = |dump: &StepDump| dump.trace.iter().find(|v| v.name == "page.rpms").unwrap().word as i32;
+    // first gear, flat out, the clutch held: the engine revs, the car stands
+    // (the very first step of the button is still the aid's: it hears of it one step later)
+    assert!(records[472..470 + 600].iter().all(|r| r.events & event::MANUAL_CLUTCH != 0));
+    assert!(speed(&dumps[470 + 590]) < 2.0, "{} km/h with the clutch held", speed(&dumps[470 + 590]));
+    assert!(rpm(&dumps[470 + 590]) > 10_000, "{} rpm", rpm(&dumps[470 + 590]));
+    // let go: the aid has the clutch again and the car drives off
+    assert!(records[470 + 602..].iter().all(|r| r.events & event::MANUAL_CLUTCH == 0));
+    assert!(speed(&dumps[470 + 1490]) > 40.0, "{} km/h after the clutch was let go", speed(&dumps[470 + 1490]));
+    // and all of it replays
+    let mut replay = GameSim::new(SimSetup::default(), Box::new(ReplaySource::default())).unwrap();
+    let mut replayed = Vec::new();
+    for record in &records {
+        replay.step_recorded(record).unwrap();
+        replayed.push(StepDump::capture(&replay.car.car));
+    }
+    assert_same(&dumps, &replayed, "replay of the clutch drive");
+}

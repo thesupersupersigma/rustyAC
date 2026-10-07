@@ -355,7 +355,9 @@ impl ShmSink {
         page.set_w("acVersion", "rustyAC 0.1");
         page.set_i("numberOfSessions", 1);
         page.set_i("numCars", 1);
-        page.set_w("carModel", &sim.setup.car);
+        // the car's folder name, however `--car` named it
+        let model = sim.data_path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_else(|| sim.setup.car.clone());
+        page.set_w("carModel", &model);
         page.set_w("track", "rustyac_flat");
         page.set_w("playerName", "Player");
         page.set_w("playerSurname", "");

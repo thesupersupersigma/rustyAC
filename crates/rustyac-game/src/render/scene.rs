@@ -131,6 +131,9 @@ pub struct CarShape {
     pub eye_pitch: f32,
     /// The cockpit view's vertical field of view, degrees.
     pub onboard_fov: f32,
+    /// `car.ini [BASIC] GRAPHICS_PITCH_ROTATION`, radians: the 3D model's pitch against the
+    /// physics body. AC's cameras ride on the model.
+    pub graphics_pitch: f32,
 }
 
 fn three(text: &str) -> Option<[f32; 3]> {
@@ -147,6 +150,7 @@ impl CarShape {
             eye: [0.0, 0.6, 0.0],
             eye_pitch: 0.0,
             onboard_fov: 54.0,
+            graphics_pitch: 0.0,
         }
     }
 
@@ -204,6 +208,7 @@ impl CarShape {
             // `CarAvatar::makeBodyMatrix`: a point of the 3D model is at q . Rx(pitch) + offset
             let offset = three(ini.get_string("BASIC", "GRAPHICS_OFFSET")).unwrap_or([0.0; 3]);
             let pitch = ini.get_float("BASIC", "GRAPHICS_PITCH_ROTATION") * 0.017_453;
+            shape.graphics_pitch = pitch;
             if let Some(q) = three(ini.get_string("GRAPHICS", "DRIVEREYES")) {
                 let (s, c) = pitch.sin_cos();
                 shape.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];
@@ -275,12 +280,13 @@ impl DrivingCamera {
     /// The camera for a car as it is drawn now; `dt` is the time since the last frame, `acc_g`
     /// the car's acceleration in g (body axes).
     pub fn update(&mut self, view: &CarView, shape: &CarShape, acc_g: [f32; 3], dt: f32) -> CameraFrame {
-        let body = &view.body;
+        // `CarAvatar::makeBodyMatrix`: the axes of the car's 3D model, which the cameras use
+        let body = &rotate_pitch(&view.body, shape.graphics_pitch);
         if self.mode == CameraMode::Cockpit {
             // rolls and pitches with the car (`IS_WORLD_ALIGNED=0`)
             let heading = normalized(row(body, 2));
             let up = normalized(row(body, 1));
-            let eye = point(body, shape.eye);
+            let eye = point(&view.body, shape.eye);
             let matrix = rotate_pitch(&set_from_heading_up(heading, up, eye), shape.eye_pitch);
             self.started = false;
             return CameraFrame { matrix, fov: shape.onboard_fov, near: 0.05 };

@@ -2,6 +2,7 @@
 //! `--windowed`) whose messages become a short list of events for the main loop.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows::core::w;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
@@ -15,13 +16,19 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub enum Event {
     /// The user closed it.
     Close,
-    /// A key went down (not a repeat): its virtual-key code, and whether Ctrl / Shift are held.
-    Key { key: u32, ctrl: bool, shift: bool },
+    /// A key went down (not a repeat): its virtual-key code, and whether the left Ctrl, the
+    /// right Ctrl and a Shift key are held.
+    Key { key: u32, left_ctrl: bool, right_ctrl: bool, shift: bool },
     /// The window got or lost the keyboard.
     Focus(bool),
     /// The client area's new size, pixels.
     Resize(u32, u32),
 }
+
+/// Windows is running a loop of its own inside the window's messages (the title bar is being
+/// dragged, the window resized, a menu is open): no frame is drawn and no event read until
+/// it ends. The physics thread pauses while this is set.
+pub static MODAL_LOOP: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
@@ -41,8 +48,8 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             // bit 30: the key was down already (auto-repeat)
             if lparam.0 & (1 << 30) == 0 {
                 // SAFETY: plain queries of the keyboard state of this thread's message.
-                let (ctrl, shift) = unsafe { (GetKeyState(0x11) < 0, GetKeyState(0x10) < 0) };
-                push(Event::Key { key: wparam.0 as u32, ctrl, shift });
+                let (left_ctrl, right_ctrl, shift) = unsafe { (GetKeyState(0xa2) < 0, GetKeyState(0xa3) < 0, GetKeyState(0x10) < 0) };
+                push(Event::Key { key: wparam.0 as u32, left_ctrl, right_ctrl, shift });
             }
             // Alt+F4 and the like still reach the default handler
             if message == WM_SYSKEYDOWN {
@@ -50,6 +57,18 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
                 return unsafe { DefWindowProcW(window, message, wparam, lparam) };
             }
             LRESULT(0)
+        }
+        // a tap on Alt or F10 would open the window's menu, whose loop stops the frames
+        WM_SYSCOMMAND if (wparam.0 & 0xfff0) == SC_KEYMENU as usize => LRESULT(0),
+        WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => {
+            MODAL_LOOP.store(true, Ordering::Relaxed);
+            // SAFETY: the default handler with the message's own arguments.
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
+        }
+        WM_EXITSIZEMOVE | WM_EXITMENULOOP => {
+            MODAL_LOOP.store(false, Ordering::Relaxed);
+            // SAFETY: as above.
+            unsafe { DefWindowProcW(window, message, wparam, lparam) }
         }
         WM_SETFOCUS => {
             push(Event::Focus(true));
@@ -117,6 +136,9 @@ impl Window {
             } else {
                 let _ = ShowWindow(handle, SW_SHOW);
                 let _ = SetForegroundWindow(handle);
+                // Windows may refuse to bring the window to the front (then no focus message
+                // comes either): say what is, so that keys typed elsewhere do not drive
+                push(Event::Focus(GetForegroundWindow() == handle));
             }
             Ok(Window { handle })
         }

@@ -166,6 +166,14 @@ impl Options {
         if o.dump_states.is_some() && !(o.replay.is_some() && o.headless) {
             return Err("--dump-states needs --replay and --headless".to_string());
         }
+        if o.dump_states.is_some() && o.realtime {
+            return Err("--dump-states cannot be used with --realtime".to_string());
+        }
+        for (name, value) in [("--duration", o.duration), ("--at", o.at)] {
+            if value.is_some_and(|seconds| !(0.0..=1.0e9).contains(&seconds)) {
+                return Err(format!("{name}: a number of seconds from 0 up is expected"));
+            }
+        }
         Ok(o)
     }
 }

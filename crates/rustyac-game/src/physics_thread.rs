@@ -69,11 +69,11 @@ impl Timing {
         self.late_sum_us / self.paced_steps.max(1) as f64
     }
 
-    /// Simulated minus wall time over the paced steps, ms. The wall time is taken at the end
-    /// of the last step, which was due one step before its simulated time is over: with the
-    /// schedule held this is a little under +3 ms, and it does not grow.
+    /// Simulated minus wall time over the paced steps, ms: 0 while the schedule is held (n
+    /// steps in n periods), negative by as much as the thread is behind at the end.
     pub fn drift_ms(&self) -> f64 {
-        (self.paced_steps as f64 * DT as f64 - self.wall_seconds) * 1000.0
+        // a step is 3 ms exactly (the f32 0.003 the car is stepped with is a hair more)
+        (self.paced_steps as f64 * 0.003 - self.wall_seconds) * 1000.0
     }
 
     /// Steps per second of wall time.
@@ -203,11 +203,11 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now() };
         *shared.car_info.lock().unwrap() = Some(sim.car_info());
     }
-    // closes the current stretch of paced steps: its wall time runs from its first step's due
-    // time to now (the end of its last step)
+    // closes the current stretch of paced steps: n steps own n periods of wall time from the
+    // first step's due time on, or more if the last step ended later than that
     let close = |timing: &mut Timing, n: u32, origin: Instant| {
         if n > 0 {
-            timing.wall_seconds += origin.elapsed().as_secs_f64();
+            timing.wall_seconds += origin.elapsed().max(STEP * n).as_secs_f64();
         }
     };
     loop {
@@ -221,6 +221,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         let replay_done = config.replay.as_ref().is_some_and(|steps| replay_at >= steps.len());
         let paused = shared.paused.load(Ordering::Relaxed)
             || (config.pause_unfocused && !shared.focused.load(Ordering::Relaxed))
+            || crate::window::MODAL_LOOP.load(Ordering::Relaxed)
             || replay_done;
         if paused {
             if !was_paused {

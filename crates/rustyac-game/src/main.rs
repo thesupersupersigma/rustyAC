@@ -1,12 +1,13 @@
 //! `rustyac.exe`: see `docs/game/first_drive.md`.
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustyac_game::cli::Options;
 use rustyac_game::input::bindings::Bindings;
+use rustyac_game::input::keyboard::KeyboardCarControl;
 use rustyac_game::input::pad::XInput;
 use rustyac_game::input::wheel::WheelDevice;
 use rustyac_game::input::LiveSource;
@@ -19,6 +20,28 @@ use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
 use rustyac_game::view::CarView;
 use rustyac_game::window::{Event, Window};
+use windows::Win32::System::Console::SetConsoleCtrlHandler;
+use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED};
+
+/// Ctrl+C was pressed or the console is being closed: every loop ends, so that the force
+/// feedback is taken off, the recording is finished and the shared memory says "off".
+static STOP: AtomicBool = AtomicBool::new(false);
+/// The program has finished its work (the console handler waits for this before it lets
+/// Windows end the process).
+static DONE: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
+    STOP.store(true, Ordering::Relaxed);
+    // when the console is closed the process dies as soon as this returns: give the loops
+    // a moment to end tidily
+    for _ in 0..300 {
+        if DONE.load(Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true.into()
+}
 
 /// The car and session of a live drive, from the command line.
 fn live_setup(options: &Options) -> SimSetup {
@@ -135,7 +158,15 @@ fn run_headless(options: &Options) -> Result<(), String> {
     let mut frame_max = Duration::ZERO;
     let started = Instant::now();
     if options.bench_render {
-        let mut renderer = DebugRenderer::new(options.width, options.height)?;
+        let mut renderer = match DebugRenderer::new(options.width, options.height) {
+            Ok(renderer) => renderer,
+            Err(message) => {
+                // the physics thread runs already: end it tidily first
+                shared.quit.store(true, Ordering::Relaxed);
+                let _ = thread.join();
+                return Err(message);
+            }
+        };
         println!(
             "drawing {} x {} off screen with {} samples per pixel on {}{}",
             options.width,
@@ -147,7 +178,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         let mut camera = DrivingCamera::new(CameraMode::Chase);
         let mut shape = None;
         let mut last = Instant::now();
-        while !shared.finished.load(Ordering::Relaxed) {
+        while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
             if shape.is_none() {
                 shape = shared.car_info.lock().unwrap().as_ref().map(CarShape::of);
             }
@@ -169,7 +200,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         }
     } else {
         // a replay ends by itself; so does a run with a duration
-        while !shared.finished.load(Ordering::Relaxed) {
+        while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -220,6 +251,13 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     let window = Window::create("rustyAC", options.width, options.height, options.windowed, options.no_focus)?;
     let window_handle = window.handle.0 as isize;
+    // a pad does not count as "somebody is at the PC": keep the display on while the window is open
+    // SAFETY: a plain request to the power manager, taken back at the end of this function.
+    unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED) };
+    // a Ctrl key that is itself a driving key (AC's files put gear-down on Left Ctrl) does not
+    // make a Ctrl+letter command: the other Ctrl key does
+    let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
+    let ctrl_drives = [keyboard.drives_with(0xa2) || keyboard.drives_with(0x11), keyboard.drives_with(0xa3) || keyboard.drives_with(0x11)];
     if replay.is_none() {
         print!("{}", bindings.describe());
         match bindings.write_if_missing() {
@@ -230,7 +268,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     let sinks = sinks(options, &setup)?;
     let shared = Shared::new();
-    shared.focused.store(!options.no_focus, Ordering::Relaxed);
+    // the window says when it has the keyboard (and Windows may not have given it)
+    shared.focused.store(false, Ordering::Relaxed);
     let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
@@ -257,8 +296,19 @@ fn run_window(options: &Options) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(2));
     };
     let (width, height) = window.client_size();
-    let mut renderer = DebugRenderer::new(width, height)?;
-    let chain = renderer.swap_chain(window.handle)?;
+    let graphics = DebugRenderer::new(width, height).and_then(|renderer| {
+        let chain = renderer.swap_chain(window.handle)?;
+        Ok((renderer, chain))
+    });
+    let (mut renderer, chain) = match graphics {
+        Ok(graphics) => graphics,
+        Err(message) => {
+            // the physics thread runs already: end it tidily first (devices, recording, shared memory)
+            shared.quit.store(true, Ordering::Relaxed);
+            let _ = thread.join();
+            return Err(message);
+        }
+    };
     println!(
         "window {width} x {height}, {} samples per pixel, {}{}",
         renderer.samples(),
@@ -283,7 +333,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                         break 'frames;
                     }
                 }
-                Event::Key { key, ctrl, shift } => {
+                Event::Key { key, left_ctrl, right_ctrl, shift } => {
+                    let ctrl = (left_ctrl && !ctrl_drives[0]) || (right_ctrl && !ctrl_drives[1]);
                     let request = |bits: u32| {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
@@ -313,7 +364,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             camera_toggles = toggles;
             camera.mode = camera.mode.next();
         }
-        if thread.is_finished() || options.duration.is_some_and(|d| started.elapsed().as_secs_f64() >= d) {
+        if thread.is_finished() || STOP.load(Ordering::Relaxed) || options.duration.is_some_and(|d| started.elapsed().as_secs_f64() >= d) {
             break;
         }
         let now = Instant::now();
@@ -362,6 +413,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     let outcome = thread.join().map_err(|_| "the physics thread panicked".to_string())?;
     drop(chain);
     drop(window);
+    // SAFETY: as above; the display may sleep again.
+    unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
     let (view, timing) = outcome?;
     report(&view, &timing);
     println!(
@@ -465,7 +518,13 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(message) = run(&options) {
+    // SAFETY: the handler only touches two atomics.
+    unsafe {
+        let _ = SetConsoleCtrlHandler(Some(console_handler), true);
+    }
+    let result = run(&options);
+    DONE.store(true, Ordering::Relaxed);
+    if let Err(message) = result {
         eprintln!("rustyac: {message}");
         std::process::exit(1);
     }

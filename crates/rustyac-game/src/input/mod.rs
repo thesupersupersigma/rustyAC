@@ -53,6 +53,9 @@ pub struct Extra {
     pub abs_dn: bool,
     pub tc_up: bool,
     pub tc_dn: bool,
+    /// Not AC's: the driver presses the clutch himself (a button, a key, a pedal), so the
+    /// automatic clutch aid must stand back for this step.
+    pub clutch_pressed: bool,
 }
 
 /// `StepInput::device` values.
@@ -187,9 +190,16 @@ impl LiveSource {
         if self.active == DEVICE_WHEEL && self.wheel.as_ref().is_none_or(|w| !w.connected()) {
             self.active = DEVICE_KEYBOARD;
         }
-        if self.active != before && self.active == DEVICE_KEYBOARD {
-            // the keyboard's steering goes on from where the wheels point
+        if self.active != before {
+            // a class that was not asked for a while starts afresh: the keyboard's steering
+            // goes on from where the wheels point and its throttle ramps up from nothing,
+            // a paddle's debouncing window is closed
             self.keyboard.int_steer = controls.steer;
+            self.keyboard.int_gas = 0.0;
+            if let Some(wheel) = &mut self.wheel {
+                wheel.control.shift_up_trigger.accumulator = 0.0;
+                wheel.control.shift_dn_trigger.accumulator = 0.0;
+            }
         }
     }
 }
@@ -248,6 +258,10 @@ impl DriverSource for LiveSource {
         }
         if extra.brake_balance_dn && !last.brake_balance_dn {
             self.pending_bias -= 1;
+        }
+        if extra.clutch_pressed {
+            // for the next step, and every step the clutch stays pressed
+            self.pending_events |= event::MANUAL_CLUTCH;
         }
         self.extra = extra;
     }

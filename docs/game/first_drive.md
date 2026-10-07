@@ -6,7 +6,8 @@ State after the last commit (kept up to date with every commit):
 
 - **Everything of Task 11 is built and checked**; this report is complete. Nothing is half done.
 - The crate is `crates/rustyac-game` (`target/release/rustyac.exe`). Its checks: `cargo test --release -p
-  rustyac-game` and `tools/chassis_compare/target/release/chassis_compare game-replay [--dir <folder>]`.
+  rustyac-game` (33 unit tests, 5 replay tests) and `tools/chassis_compare/target/release/chassis_compare
+  game-replay [--dir <folder>]`. The review's 22 points are all dealt with (section 4.6).
 - Scratch of this task (git-ignored): `re/scratch/task11/` (`spec_*.md` are the three briefs read from the
   disassembly, `timing_*.log` / `shm_*.csv` the check outputs, `patch_cc.py` the patch that added `game-replay`).
 - If work continues: the open questions of section 8 are the list; the next tasks named by the task text
@@ -63,7 +64,7 @@ running**. The window must have the keyboard focus to drive; clicking another wi
 | Left stick | steer (AC's shaping: dead zone 0.05, gamma 1.4, speed 0.95, no filter, no speed sensitivity) |
 | RT / LT | throttle / brake (linear, as in AC) |
 | Y / X | gear up / gear down |
-| A | clutch (pedal to the floor while held; a Custom Shaders Patch binding, the original AC pad has no clutch) |
+| A | clutch: pedal to the floor while held, and the automatic clutch stands back for as long (a Custom Shaders Patch binding; the original AC pad has no clutch at all) |
 | LB | DRS |
 | B | KERS / ERS (nothing happens until ERS is ported) and handbrake (the F2004 has none) |
 | D-pad right / left | brake bias forward / back one click |
@@ -84,18 +85,22 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | Down, or S | brake |
 | Space, or E | gear up |
 | Left Ctrl, or Q | gear down |
-| Left Shift | clutch |
+| Left Shift | clutch (as the pad's A) |
 | F | DRS |
 | F9, or B | handbrake |
 | K | KERS / ERS (nothing yet) |
 | L | headlights |
-| Ctrl+T (Ctrl+Shift+T) | traction control level up (down) |
-| Ctrl+A (Ctrl+Shift+A) | ABS level up (down); the F2004 has no ABS |
-| Ctrl+G | automatic gearbox on / off |
+| Right Ctrl+T (with Shift: down) | traction control level up |
+| Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
+| Right Ctrl+G | automatic gearbox on / off |
 | C | next camera: chase, chase far, cockpit |
 | R | reset the car to the spawn point (Shift+R: a brand-new car, cold tyres and all) |
 | P or Pause | pause |
 | Esc | quit |
+
+The three commands are AC's own (Ctrl+T, Ctrl+A, Ctrl+G). With your bindings the **right** Ctrl key must be
+used for them: Left Ctrl is your gear-down key, and a Ctrl key that drives does not make a command (otherwise a
+downshift while steering left with A would switch the ABS).
 
 Whichever device you touch last drives: with the pad lying untouched the keyboard takes over at the first key,
 and the pad takes back at the first button or stick movement. With no pad at all the keyboard simply drives. A
@@ -112,7 +117,7 @@ Options:
 | `--auto-shifter`, `--no-auto-clutch` | the automatic gearbox aid on at start; the automatic clutch aid off (it is on, as AC forces it for pad and keyboard) |
 | `--camera chase\|cockpit`, `--vsync 0\|1` | camera at start; wait for the display (default 1) |
 | `--no-rumble`, `--ffb` | no pad rumble; force feedback to a DirectInput wheel (see 5.4) |
-| `--controls <ini>`, `--default-controls` | another bindings file; the built-in layout instead of AC's |
+| `--controls <ini>`, `--default-controls` | another bindings file; the built-in layout (neither is written to `rustyac_controls.ini`) |
 | `--list-devices` | print the devices found and the active bindings, then stop |
 | `--headless`, `--realtime`, `--duration <s>`, `--dump-states <file>`, `--screenshot <png>`, `--at <s>`, `--bench-render`, `--no-focus` | the unattended modes used by the checks (section 4) |
 
@@ -146,7 +151,7 @@ right / back.
 
 ![the debug view](first_drive.png)
 
-`docs/game/first_drive.png` was drawn off screen (no window) by `rustyac --screenshot`, 9.4 s into the replay of
+`docs/game/first_drive.png` was drawn off screen (no window) by `rustyac --screenshot`, 9.1 s into the replay of
 the oracle's slalom scenario; `first_drive_cockpit.png` is the same moment from the driver's eyes.
 
 ## 4. Check results
@@ -161,6 +166,7 @@ All run on this PC (AMD Radeon Pro 5500M, Windows 10), release build, without an
 |---|---|
 | `a_replay_by_the_game_is_the_car_stepped_directly` | A 5,200-step drive (rest, start, shifts, steering, hard braking, DRS, handbrake, headlights, TC / ABS keys, brake-bias clicks, the automatic gearbox, a reset, a new car) is written as an input file and replayed by `rustyac.exe --replay --headless --dump-states`. The same drive is stepped on a `VanillaCar<ScriptedDevice>` with the physics crate alone. After every step the bodies, joints, tyres, counters, brakes, engine, drivetrain, wings, aids and the telemetry page are compared: **5,200 steps, 14,491,000 values, all bit-identical** (through the library and through the exe) |
 | `a_recorded_live_drive_replays_to_the_same_car` | A "live" drive: the spawn sequence, then AC's keyboard class with keys pressed by a script (it reads tyre slip and the optimal brake off the car before every step, as the real one does), a reset asked for by the game. What the recorder wrote replays to the same states, **2,600 steps bit-identical**; the car is in first gear with the engine running when the driver gets it |
+| `the_clutch_button_holds_the_car_although_the_automatic_clutch_is_on` | AC's pad class with a scripted pad: first gear, flat out, A held: the engine revs past 10,000 rpm and the car stands; let go, it drives off. 1,970 steps, replayed bit-identically |
 | `a_changed_input_is_noticed` | One step's steering changed by 0.01: the states differ from that step on (the comparison can fail) |
 | `an_unsupported_car_is_refused_with_the_physics_message` | `--car` with a strut-suspension car: the exe stops with the physics crate's own message |
 
@@ -187,46 +193,49 @@ file has no command for. Result tables: `oracle/chassis/results[_<folder>]_game_
 
 ### 4.2 Timing
 
-`rustyac --headless --duration 60` twice: once idle, once replaying the oracle's 60 s `random` drive in real time
-while drawing 1280 x 720 frames off screen as fast as the card goes (a far heavier load than a 60 Hz window).
-Both published shared memory.
+`rustyac --headless --duration 60` twice with the final build: once idle, once replaying the oracle's 60 s
+`random` drive in real time while drawing 1280 x 720 frames off screen as fast as the card goes (a far heavier
+load than a 60 Hz window). Both published shared memory.
 
 | | Idle car | `random` drive + off-screen drawing |
 |---|---|---|
-| Steps in wall time | 19,996 in 59.985 s | 20,001 in 60.000 s |
-| Rate (AC: 333.33 Hz) | 333.35 Hz | 333.35 Hz |
-| Simulated minus wall time at the end | +2.9 ms | +2.8 ms |
-| Step time min / avg / max | 0.021 / 0.050 / 0.589 ms | 0.051 / 0.111 / 4.054 ms |
-| Start after due time, avg / max | 0.196 / 5.372 ms | 0.271 / 2.774 ms |
-| Steps more than 1 ms late / more than a whole step late | 17 / 2 | 30 / 0 |
+| Steps in wall time | 19,996 in 59.988 s | 20,001 in 60.003 s |
+| Rate (AC: 333.33 Hz) | 333.33 Hz | 333.33 Hz |
+| Simulated minus wall time at the end | 0.00 ms | 0.00 ms |
+| Step time min / avg / max | 0.020 / 0.043 / 0.555 ms | 0.026 / 0.079 / 4.318 ms |
+| Start after due time, avg / max | 0.154 / 7.681 ms | 0.226 / 7.030 ms |
+| Steps more than 1 ms late / more than a whole step late | 18 / 3 | 10 / 2 |
 | Schedule restarts (over 100 ms behind) | 0 | 0 |
-| Render | - | 91,314 frames = 1,521 FPS off screen, slowest frame 10.7 ms |
+| Render | - | 95,074 frames = 1,584 FPS off screen, slowest frame 17.1 ms |
 
-"Simulated minus wall" is measured at the end of the last step, which was due one step before its simulated time
-ends: a little under +3 ms means the schedule was held exactly; it does not grow with time, because every step's
-due time is counted from the start, not from the step before. A step takes 2 to 4 % of its 3 ms. The late steps
-are the operating system holding the thread back (the PC was in use); the next steps follow at once, so none of
-it accumulates.
+Every step has its due time counted from the start of the run (not from the step before), so a late step is
+followed by the next ones at once and nothing accumulates: after 60 s the car has simulated exactly the wall time
+that has passed. A step takes 1.5 to 3 % of its 3 ms. The late steps (at most 7.7 ms, 18 of 20,000) are the
+operating system holding the thread back while the PC was in use. (The logs print +0.001 ms for the difference:
+that was the rounding of the f32 0.003 in the print, since corrected.)
 
 With a real window (`--windowed --no-focus --duration 5`, 960 x 540, opened for five seconds without taking the
-keyboard, then closed by the program; done twice during the work): **60.6 FPS** with the display's sync, slowest
-frame 17.1 ms, physics 333.53 Hz over those 5 s (step avg 0.044 ms, no step more than 1 ms late), the pad driving
-(the car stood still in first gear at 4,000 rpm: nobody touched it).
+keyboard, then closed by the program; done three times during the work, the last time with the final build):
+**60.6 FPS** with the display's sync, slowest frame 19.2 ms, physics 333.33 Hz (step avg 0.058 ms, 2 of 1,706
+steps more than 1 ms late, none a whole step), the pad driving (the car stood still in first gear at 4,000 rpm:
+nobody touched it).
 
 ### 4.3 Shared memory
 
 `rustyac --headless --duration 10`, read by `python ac_telemetry.py --duration 5 --print --out
-re/scratch/task11/shm_idle.csv` (unchanged script):
+re/scratch/task11/shm_idle.csv` (unchanged script), final build:
 
 ```
     1.0s  lap 1     0.0 km/h  gear  1   4000 rpm  gas 0.00  brake 0.00  rows 330
     4.0s  lap 1     0.0 km/h  gear  1   4002 rpm  gas 0.00  brake 0.00  rows 1320
-rows: 1668 (unreadable/NaN rows: 0)   duration: 5.0 s -> 333.7 rows/s   missed packets: 0
+rows: 1668 (unreadable/NaN rows: 0)   duration: 5.0 s -> 333.6 rows/s   missed packets: 0
 ```
 
 The idle F2004 stands in first gear at 4,000 rpm. The same with a moving car (`rustyac --headless --realtime
---replay oracle/game/car_slalom.ryin`): 1,666 rows in 5.0 s, 1 missed packet, speed 43 -> 104 km/h, up to
-15,347 rpm, wheel-load sum 6,379 .. 8,203 N, tyre cores 79-80 °C.
+--replay oracle/game/car_slalom.ryin`): 1,667 rows in 5.0 s (333.5 rows/s), no missed packet, 42 -> 104 km/h, up
+to 15,347 rpm, wheel-load sum 6,379 .. 8,203 N, tyre cores 79-80 °C. A second `rustyac` started meanwhile says
+`WARNING: no shared memory: another rustyac.exe is running ...` and runs without publishing; the same message
+names Assetto Corsa when `acs.exe` is in the process list.
 
 The pages read back directly:
 
@@ -257,7 +266,7 @@ bindings from C:\Users\thesupersupersigma\Documents\Assetto Corsa\cfg\controls.i
 followed by the table of section 2. With no pad the keyboard drives (the recorded-live-drive test drives with the
 keyboard class alone; the live driver falls back to it whenever XInput reports no pad).
 
-Unit tests against AC's numbers (`cargo test --release -p rustyac-game --lib`, 32 tests): every test vector of the
+Unit tests against AC's numbers (`cargo test --release -p rustyac-game --lib`, 33 tests): every test vector of the
 briefs that the ported code covers, as f32 bit patterns: stick / trigger / motor-word scaling, the button mask,
 the ini conversions, dead zone + gamma, both speed laws, eleven steering steps from lock to lock, the filter,
 rumble; keyboard steering limit, the four movement cases at 0 / 20 / 30 m/s, the throttle ramp and its slip
@@ -269,6 +278,33 @@ the first run.
 
 `docs/game/first_drive.png` and `first_drive_cockpit.png` (section 3), drawn off screen at 1280 x 720 with 4
 samples per pixel on the Radeon; no window was opened for them.
+
+### 4.6 Review
+
+Three read-only reviewers went through the finished crate, each with one question: is the input code what the
+disassembly says; can a recorded drive fail to replay, and are loop, timing and shared memory right; is the
+Windows / Direct3D / DirectInput code sound. They reported 22 points, none of them a wrong physics result or a
+broken replay (the three channels through which the game reaches the car, and the probe the keyboard class reads,
+were checked and found complete and free of side effects). All were dealt with:
+
+- **Driving**: a Ctrl key pressed for a command took the car from the pad and shifted down (Left Ctrl is the
+  gear-down key of AC's file): modifiers no longer switch the device, and commands want a Ctrl key that does not
+  drive. The clutch button did nothing while the automatic clutch was on (the aid overwrites the pedal): the aid
+  now stands back while it is held. A device that takes over starts afresh. The built-in layout bound DirectInput
+  device 0 by leaving `JOY` out. `--default-controls` and `--controls` are no longer written to
+  `rustyac_controls.ini`. One NaN branch of the keyboard's slip test followed the wrong tyre.
+- **Window**: Alt or F10 opened the window menu and froze the picture while the car drove on; a window that was
+  refused the foreground still counted as focused, so keys typed elsewhere would have driven; dragging the title
+  bar did not pause. Ctrl+C and early errors skipped the tidy end (force off, recording, shared-memory status).
+  The display could go to sleep during a pad-only drive.
+- **Checks' own tools**: a panic on the physics thread would have hung a headless run for ever; the timing
+  summary counted one period too few per stretch (it showed +2.9 ms where 0 was meant); `--dump-states` with
+  `--realtime` and a negative `--duration` were accepted.
+- **Smaller**: the force-feedback cap relied on the wheel's driver (now every force is scaled); the cameras used
+  the physics body's axes instead of the 3D model's (half a degree on the F2004); `carModel` took a `--car` path
+  as typed; the PNG writer did not report a failed last write.
+
+After the fixes every check of this section was run again; the numbers above are the final build's.
 
 ## 5. AC's input handling: what is exact and what is approximated
 
@@ -306,7 +342,9 @@ in the machine code's operation order, and held to the bit patterns of
 | `expf` in the keyboard steering | MSVCR120's | MSVCR120's when the DLL is on the machine (it is here), else Rust's (can differ in the last bit) |
 | Keyboard look-ahead on the AI line (`stepSteer`) | raises the steering limit towards a point on the AI line (through a frozen index: it follows the line's first points only; on a track without a line it uses the world origin) | 0: the limit is the speed rule alone. There is no track. **The one piece of the keyboard feel that is not AC's** |
 | Mouse steering | yes | not ported |
-| Pad clutch | none (always pedal up) | the button of `[__EXT_KEYBOARD_CLUTCH]` (Custom Shaders Patch's name; A in your file) presses it fully |
+| Clutch on the pad and the keyboard | none (always pedal up; the automatic clutch, which both classes force on, overwrites the pedal anyway) | the button of `[__EXT_KEYBOARD_CLUTCH]` (Custom Shaders Patch's name; A in your file) or the clutch key presses it fully; while it is held the automatic clutch aid is switched off step by step (recorded as a command, so it replays) and comes back when it is let go |
+| Ctrl+T / Ctrl+A / Ctrl+G | either Ctrl key | not a Ctrl key that is bound as a driving key |
+| Switching device | - | the class that takes over starts afresh: the keyboard's steering from the car's current steering, its throttle ramp from zero, a paddle's debouncing window closed. Shift, Ctrl and Alt alone never take the car away from the pad |
 | Pad index | XInput pad 0 only | the first connected of the four |
 | Rumble strength above 1 | wraps the 16-bit motor word | kept within 0..1 |
 | TC / ABS / brake-bias buttons | flags in `CarControls`, acted on by the game's main thread | acted on at the press, before the next physics step (one level / one click per press) |
@@ -319,7 +357,9 @@ in the machine code's operation order, and held to the bit patterns of
 
 Both AC classes switch the automatic clutch on in their constructor (start and shifts), whatever the assists
 menu says. rustyAC does the same by default (`auto_clutch=1` in the set-up; `--no-auto-clutch` turns it off,
-which then needs the clutch button).
+which then needs the clutch button). The aid's last act in every step is to overwrite the clutch pedal, so in AC
+a pedal means nothing while it is on; in rustyAC the aid stands back for as long as the driver holds the clutch
+himself, and takes over again (from where it was) when he lets go.
 
 ### 5.4 DirectInput devices and force feedback: written, not tried
 
@@ -331,11 +371,14 @@ was never run on hardware: reading a real wheel, and force feedback.
   `JOY` is AC's number, the place in the device list (`--list-devices` prints it). For a steering wheel without
   bindings a common layout is guessed (wheel X, throttle Y, brake Rz) and said so in the console.
 - Devices are opened non-exclusive (AC takes every controller exclusively and switches its centring spring off).
-- `--ffb` asks for exclusive access to the steering device, switches its centring spring off, **caps the
-  device's force at 30 %** (`DIPROP_FFGAIN` 3000 of 10000; if the cap is refused there is no force), and sends
-  AC's constant force every step. No force when paused, when another device drives, or at exit; not-a-number is
-  no force (AC would send full force one way). The damper effect, the soft lock (full force past the lock) and
-  the post-processing curve are not ported.
+- `--ffb` asks for exclusive access to the steering device, switches its centring spring off and sends AC's
+  constant force every step, **scaled to 30 % of the wheel's strength** (every force is multiplied by 0.3 before
+  it is sent; the device's own gain setting is not relied on). No force when paused, when another device drives,
+  on Ctrl+C, or at exit; not-a-number is no force (AC would send full force one way). The damper effect, the soft
+  lock (full force past the lock) and the post-processing curve are not ported.
+- With `INPUT_METHOD=WHEEL` the three wheel settings the physics reads (`[STEER] FF_GAIN`, `FILTER_FF`,
+  `[FF_ENHANCEMENT_2] UNDERSTEER`) go into the session's set-up as in AC. `cfg/user_ff.ini` (the per-car gain) is
+  not read: the gain is 1. A wheel's clutch pedal makes the automatic clutch stand back like the pad's button.
 - The H-pattern shifter is not ported (the Rust car's controls do not say whether the car supports one).
 
 ## 6. How it is put together
@@ -359,8 +402,8 @@ crates/rustyac-game/
 
 - **The only way the game touches the car** is `GameSim::step`: commands that run before the step (reset = AC's
   own `Car::forceRotation` + `Car::forcePosition` queued like the game's main thread queues a teleport; a new
-  car; a level of TC / ABS; a click of the brake bias; the automatic gearbox aid), then `VanillaCar::step` with
-  the driver's device. Live driving, `--replay` and the tests all go through it.
+  car; a level of TC / ABS; a click of the brake bias; the automatic gearbox aid; the automatic clutch aid off
+  while the driver holds the clutch), then `VanillaCar::step` with the driver's device. Live driving, `--replay` and the tests all go through it.
 - **The spawn** is the oracle's: `Car::Car`, `forceRotation`, `forcePosition`, the session start with the default
   setup; then 400 steps of rest as the oracle's scenarios wait (1.2 s), 10 steps of the up-shift paddle (first
   gear), 60 steps for the gearbox. These 470 steps go through `Car::controls` like any driver's input, are
@@ -388,7 +431,14 @@ crates/rustyac-game/
   `acVersion` says `rustyAC 0.1` (AC's layout version `smVersion` 1.7 is kept).
 - **The physics thread** waits with a high-resolution timer and spins for the last quarter millisecond; it does
   not burn a whole core as AC's does (`Sleep(0)` loop). When it falls more than 100 ms behind (a debugger, a
-  sleeping laptop) it starts its schedule again from "now" and counts that.
+  sleeping laptop) it starts its schedule again from "now" and counts that. It pauses while the window does not
+  have the keyboard, while its title bar is being dragged, and on P / Start.
+- **The window**: if Windows does not give it the keyboard at start (it then only flashes in the taskbar), the
+  drive waits, paused, for a click. Alt and F10 do not open the window menu. Ctrl+C in the console, or closing
+  the console, ends the drive tidily (force off, recording finished, shared memory "off"). The display is kept
+  awake while the window is open (a pad does not count as activity for Windows).
+- **The cameras ride on the car's 3D model axes** as in AC (`GRAPHICS_PITCH_ROTATION`, -0.5 degrees on the F2004),
+  not on the physics body's.
 - **Your pad's left stick does not rest at the centre**: it reads 2413 of 32767 (0.074), which is outside the
   dead zone of 0.05 in your `controls.ini`, so the car steers 0.006 to the right with the stick let go (the last
   window test ended with `steer 0.0057`). AC does the same with these settings; `STEER_DEADZONE=0.1` in

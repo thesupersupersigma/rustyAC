@@ -464,6 +464,9 @@ impl GameSim {
         if events & event::AUTO_SHIFTER != 0 {
             self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
         }
+        // the automatic clutch aid is the session's setting, except while the driver holds
+        // the clutch himself (the aid's last act in a step is to overwrite the pedal)
+        self.car.car.autoclutch.use_auto_on_start = self.setup.auto_clutch && events & event::MANUAL_CLUTCH == 0;
         Ok(())
     }
 

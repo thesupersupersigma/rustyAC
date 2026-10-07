@@ -33,8 +33,12 @@ pub mod event {
     pub const ABS_DN: u32 = 1 << 5;
     /// The automatic gearbox aid on / off.
     pub const AUTO_SHIFTER: u32 = 1 << 6;
+    /// The driver holds the clutch himself in this step: the automatic clutch aid stands
+    /// back (it would overwrite the pedal), and takes over again in the first step without
+    /// this bit.
+    pub const MANUAL_CLUTCH: u32 = 1 << 7;
 
-    pub const NAMES: [(u32, &str); 7] = [
+    pub const NAMES: [(u32, &str); 8] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -42,6 +46,7 @@ pub mod event {
         (ABS_UP, "abs+"),
         (ABS_DN, "abs-"),
         (AUTO_SHIFTER, "auto-shifter"),
+        (MANUAL_CLUTCH, "manual clutch"),
     ];
 }
 
