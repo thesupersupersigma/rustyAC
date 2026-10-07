@@ -132,7 +132,8 @@ fn a_changed_powertrain_input_is_noticed() {
     *gas = f32::from_bits(gas.to_bits() - 1);
     let error = golden.check(&data).expect_err("a changed throttle went unnoticed");
     assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
-    // traction control's cut left out in one step
+    // traction control's cut is no longer an input: the car works it out itself, so the
+    // recorded value may say anything
     let mut golden = Golden::parse(GOLDEN[2].1).unwrap();
     let step = golden
         .steps
@@ -140,9 +141,7 @@ fn a_changed_powertrain_input_is_noticed() {
         .position(|step| step.feed.engine_electronic_override == 0.0)
         .expect("a step in which traction control cuts the throttle");
     golden.steps[step].feed.engine_electronic_override = 1.0;
-    let error = golden.check(&data).expect_err("a missing traction control cut went unnoticed");
-    // the cut itself is one of the compared values (it acts on the engine of the next step)
-    assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+    golden.check(&data).expect("the recorded traction control cut was read although the car computes it");
     // the brake pedal of one step, one bit down
     let mut golden = Golden::parse(GOLDEN[3].1).unwrap();
     let step = golden.steps.iter().position(|step| step.feed.controls.brake == 1.0).expect("a step at full brake");
