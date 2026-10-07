@@ -1321,6 +1321,10 @@ impl<'a> World<'a> {
             let reset_suspension_damage: extern "C" fn(*mut u8) =
                 std::mem::transmute(acs.va(VA_CAR_RESET_SUSPENSION_DAMAGE));
             reset_suspension_damage(car);
+            if scenario.whole.damage != [0.0; 5] {
+                // what collisions leave in Car::damageZoneLevel (only the wings read it here)
+                wr(car, CAR_DAMAGE_ZONE_LEVEL, scenario.whole.damage);
+            }
             world.session_start_setup(&options.car);
             state().tape.clear();
             world

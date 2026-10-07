@@ -64,6 +64,9 @@ pub struct Whole {
     /// Wind speed, m/s (0: none), and the direction it is handed to the game with, degrees.
     pub wind_speed: f32,
     pub wind_direction_deg: f32,
+    /// `Car::damageZoneLevel` (front, rear, left, right, centre) written after the spawn: the
+    /// wings of a dented car.
+    pub damage: [f32; 5],
 }
 
 /// What a script may look at: the car as the previous step left it.
@@ -388,6 +391,13 @@ pub fn whole() -> Vec<Scenario> {
             "as wc_spirited with the stability aid at 100 %",
             12.0,
             Whole { stability_gain: 1.0, ..none },
+            Kind::WcSpirited,
+        ),
+        wc(
+            "wc_damage",
+            "as wc_spirited with dented bodywork (damage levels 45 front, 20 rear, 70 left, 10 right)",
+            12.0,
+            Whole { damage: [45.0, 20.0, 70.0, 10.0, 70.0], ..none },
             Kind::WcSpirited,
         ),
         wc(

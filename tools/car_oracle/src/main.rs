@@ -204,6 +204,7 @@ fn run(args: &Args) -> Result<(), String> {
         meta.push(("stability_gain".to_string(), format!("{:?}", scenario.whole.stability_gain)));
         meta.push(("wind_speed".to_string(), format!("{:?}", scenario.whole.wind_speed)));
         meta.push(("wind_direction_deg".to_string(), format!("{:?}", scenario.whole.wind_direction_deg)));
+        meta.push(("damage".to_string(), scenario.whole.damage.map(|d| format!("{d:?}")).join(",")));
     }
     let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;

@@ -154,6 +154,10 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         stability_gain: number("stability_gain")?,
         wind_speed: number("wind_speed")?,
         wind_direction_deg: number("wind_direction_deg")?,
+        damage: match recording.get("damage") {
+            Some(text) => replay::parse_damage(text)?,
+            None => [0.0; 5],
+        },
         auto_clutch: get("auto_clutch")? != "0",
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
@@ -1639,7 +1643,104 @@ const PT_FWD: [(&str, &str, &str, &str); 29] = [
     ("car.ini", "FUEL", "FUEL", "0.13"),
 ];
 
+/// The test car of the whole-car port (Task 10): the F2004 with the aids and aero options no
+/// drive of a shipped car reaches. Two-channel ABS (`[ABS_V2]`), an electronic differential
+/// lock, traction control that checks every step, a DRS that opens the front wing by a factor
+/// and the rear wing by a fixed angle and closes above 0.4 g sideways, and wing controllers on
+/// the inputs the F2004's own do not use (brake, lateral and longitudinal g, rear suspension
+/// travel), one naming a wing that does not exist and one with an unknown input and combinator.
+const WC_AIDS: [(&str, &str, &str, &str); 62] = [
+    ("electronics.ini", "ABS_V2", "SLIP_RATIO_LIMIT", "0.12"),
+    ("electronics.ini", "ABS_V2", "PRESENT", "1"),
+    ("electronics.ini", "ABS_V2", "ACTIVE", "1"),
+    ("electronics.ini", "ABS_V2", "RATE_HZ", "200"),
+    ("electronics.ini", "ABS_V2", "CHANNELS", "2"),
+    ("electronics.ini", "EDL", "PRESENT", "1"),
+    ("electronics.ini", "EDL", "ACTIVE", "1"),
+    ("electronics.ini", "EDL", "BRAKE_TORQUE_POWER", "1500"),
+    ("electronics.ini", "EDL", "BRAKE_TORQUE_COAST", "700"),
+    ("electronics.ini", "EDL", "DEAD_ZONE_POWER", "0.02"),
+    ("electronics.ini", "EDL", "DEAD_ZONE_COAST", "0.04"),
+    ("electronics.ini", "EDL", "MAX_SPIN_POWER", "0.25"),
+    ("electronics.ini", "EDL", "MAX_SPIN_COAST", "0.5"),
+    ("electronics.ini", "TRACTION_CONTROL", "RATE_HZ", "500"),
+    ("electronics.ini", "TRACTION_CONTROL", "MIN_SPEED_KMH", "20"),
+    // an open differential lets one wheel spin, so that the lock has something to do
+    ("drivetrain.ini", "DIFFERENTIAL", "POWER", "0.02"),
+    ("drivetrain.ini", "DIFFERENTIAL", "COAST", "0.02"),
+    ("drivetrain.ini", "DIFFERENTIAL", "PRELOAD", "2"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "WING", "1"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "COMBINATOR", "ADD"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "INPUT", "BRAKE"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "LUT", "wc_brake.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "FILTER", "0.5"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "UP_LIMIT", "30"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_6", "DOWN_LIMIT", "0"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "WING", "1"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "COMBINATOR", "MULT"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "INPUT", "LATG"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "LUT", "wc_latg.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "FILTER", "0.9"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "UP_LIMIT", "30"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_7", "DOWN_LIMIT", "2"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "WING", "0"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "COMBINATOR", "ADD"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "INPUT", "LONG"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "LUT", "wc_long.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "FILTER", "0"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "UP_LIMIT", "3"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_8", "DOWN_LIMIT", "-3"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "WING", "6"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "COMBINATOR", "ADD"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "INPUT", "SUS_TRAVEL_LR"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "LUT", "wc_travel.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "FILTER", "0.3"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "UP_LIMIT", "8"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_9", "DOWN_LIMIT", "-8"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "WING", "6"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "COMBINATOR", "MULT"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "INPUT", "SUS_TRAVEL_RR"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "LUT", "wc_travel_mult.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "FILTER", "0.3"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "UP_LIMIT", "8"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_10", "DOWN_LIMIT", "-8"),
+    // a wing that does not exist
+    ("aero.ini", "DYNAMIC_CONTROLLER_11", "WING", "12"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_11", "COMBINATOR", "ADD"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_11", "INPUT", "GAS"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_11", "LUT", "wc_brake.lut"),
+    // an input and a combinator the game does not know: the stage's limits still act
+    ("aero.ini", "DYNAMIC_CONTROLLER_12", "WING", "3"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_12", "COMBINATOR", "AVERAGE"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_12", "INPUT", "SCRIPT_12"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_12", "LUT", "wc_brake.lut"),
+    ("aero.ini", "DYNAMIC_CONTROLLER_12", "UP_LIMIT", "1.2"),
+];
+const WC_AIDS_FILES: [(&str, &str); 6] = [
+    (
+        "drs.ini",
+        "[HEADER]\r\nVERSION=2\r\n\r\n[DRS_ZONES]\r\nIGNORE_ZONES=1\r\n\r\n[DEACTIVATION]\r\nLIMIT_G=0.4\r\n\r\n\
+         [WING_1]\r\nEFFECT=0.6\r\nMODE=EFFECT\r\n\r\n[WING_2]\r\nEFFECT=0\r\nMODE=ANGLE\r\nANGLE=6\r\n",
+    ),
+    ("wc_brake.lut", "0|0\r\n1|4\r\n"),
+    ("wc_latg.lut", "-3|0.8\r\n0|1\r\n3|0.8\r\n"),
+    ("wc_long.lut", "-4|-2\r\n0|0\r\n2|2\r\n"),
+    ("wc_travel.lut", "0|-1\r\n20|0\r\n60|3\r\n"),
+    ("wc_travel_mult.lut", "0|0.5\r\n30|1\r\n80|1.5\r\n"),
+];
+
+/// The same ABS with one channel: all four wheels are released together.
+const WC_ABS1: [(&str, &str, &str, &str); 5] = [
+    ("electronics.ini", "ABS_V2", "SLIP_RATIO_LIMIT", "0.12"),
+    ("electronics.ini", "ABS_V2", "PRESENT", "1"),
+    ("electronics.ini", "ABS_V2", "ACTIVE", "1"),
+    ("electronics.ini", "ABS_V2", "RATE_HZ", "120"),
+    ("electronics.ini", "ABS_V2", "CHANNELS", "1"),
+];
+
 fn test_car_command() -> Result<(), String> {
+    write_test_car("f2004_wc_aids", &WC_AIDS, &WC_AIDS_FILES)?;
+    write_test_car("f2004_wc_abs1", &WC_ABS1, &[])?;
     write_test_car("f2004_tight_stops", &TIGHT_STOPS, &[])?;
     write_test_car("f2004_fallbacks", &FALLBACKS, &[])?;
     write_test_car("f2004_pt_street", &PT_STREET, &[])?;

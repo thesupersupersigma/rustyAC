@@ -818,6 +818,8 @@ pub struct RunSetup {
     /// The wind handed to the session: speed in m/s (0 = none) and direction in degrees.
     pub wind_speed: f32,
     pub wind_direction_deg: f32,
+    /// `Car::damageZoneLevel` the car starts with (front, rear, left, right, centre).
+    pub damage: [f32; 5],
     /// The "automatic clutch" driving aid, as the recording's scenario set it.
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
@@ -868,6 +870,7 @@ impl RunSetup {
         }
         chassis.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
         chassis.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+        chassis.damage_zone_level = self.damage;
         chassis.session_start()?;
         chassis.core.tape = Some(Vec::new());
         chassis.trace = Some(StepTrace::default());
@@ -1198,6 +1201,19 @@ impl RollingChassis {
     }
 }
 
+/// Five damage levels as text, `front,rear,left,right,centre`.
+pub fn parse_damage(text: &str) -> Result<[f32; 5], String> {
+    let mut out = [0.0f32; 5];
+    let parts: Vec<&str> = text.split(',').collect();
+    if parts.len() != 5 {
+        return Err(format!("damage: five numbers expected, got {text:?}"));
+    }
+    for (value, part) in out.iter_mut().zip(parts) {
+        *value = part.trim().parse::<f32>().map_err(|e| format!("damage: {e}"))?;
+    }
+    Ok(out)
+}
+
 /// What the game produced in one step of a golden excerpt.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GoldenStep {
@@ -1246,7 +1262,7 @@ impl Golden {
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
              auto_shifter={}\nrust_aero={}\nrust_aids={}\ntelemetry={}\npitlane={}\nstability_gain={:?}\nwind_speed={:?}\n\
-             wind_direction_deg={:?}\n",
+             wind_direction_deg={:?}\ndamage={}\n",
             self.car,
             self.setup.scenario,
             self.setup.ground.describe(),
@@ -1279,6 +1295,7 @@ impl Golden {
             self.setup.stability_gain,
             self.setup.wind_speed,
             self.setup.wind_direction_deg,
+            self.setup.damage.map(|d| format!("{d:?}")).join(","),
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -1345,6 +1362,7 @@ impl Golden {
             stability_gain: number("stability_gain")?,
             wind_speed: number("wind_speed")?,
             wind_direction_deg: number("wind_direction_deg")?,
+            damage: parse_damage(get("damage")?)?,
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
         };
