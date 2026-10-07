@@ -1,0 +1,303 @@
+//! The simulation the game runs: one [`VanillaCar`], built and spawned the way the oracle
+//! builds and spawns the game's car, and stepped with nothing but what a driver's device
+//! reports. Live driving, `--replay` and the tests all go through [`GameSim::step`]; there is
+//! no other way the game touches the car.
+
+use std::path::{Path, PathBuf};
+
+use rustyac_physics::car::replay::Ground;
+use rustyac_physics::car::{CarControls, CarControlsInput, ControlsProvider, VanillaCar, VibrationDef};
+use rustyac_physics::vecmath::Vec3f;
+
+use crate::input_file::{event, SimSetup, StepInput};
+
+/// AC's physics step, s (333.33 Hz).
+pub const DT: f32 = 0.003;
+/// The same in milliseconds, as the physics clock counts.
+pub const DT_MS: f64 = 3.0;
+
+/// Whoever drives: the live devices, or a recorded drive.
+pub trait DriverSource: Send {
+    /// A recorded step is about to run (replay only).
+    fn load(&mut self, _step: &StepInput) {}
+
+    /// Commands the driver gave since the last step ([`event`] bits, brake-bias clicks).
+    fn take_events(&mut self) -> (u32, i32) {
+        (0, 0)
+    }
+
+    /// AC's `acquireControls`: writes the device's fields of `Car::controls`.
+    fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput);
+
+    /// The headlight switch (`getAction(4)`).
+    fn headlights(&mut self) -> bool {
+        false
+    }
+
+    fn send_ff(&mut self, _ff: f32, _damper: f32, _user_gain: f32) {}
+
+    fn set_vibrations(&mut self, _def: &VibrationDef) {}
+
+    fn set_engine_rpm(&mut self, _rpm: f32, _low: f32, _high: f32) {}
+
+    /// Which device drove in the last `acquire` (a note in the input file).
+    fn device_id(&self) -> u32 {
+        0
+    }
+}
+
+/// A recorded drive: every step it reports what the file says.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReplaySource {
+    pub step: StepInput,
+}
+
+impl DriverSource for ReplaySource {
+    fn load(&mut self, step: &StepInput) {
+        self.step = *step;
+    }
+
+    fn take_events(&mut self) -> (u32, i32) {
+        (self.step.events, self.step.bias_clicks)
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        // the whole of `Car::controls` as the recorded device left it: whatever that device
+        // did not write had the same value before, because the car is in the same state
+        *controls = self.step.controls;
+    }
+
+    fn headlights(&mut self) -> bool {
+        self.step.headlights
+    }
+
+    fn device_id(&self) -> u32 {
+        self.step.device
+    }
+}
+
+/// The car's `ICarControlsProvider`: hands the car's calls to the [`DriverSource`] and keeps
+/// what the device reported, for the input file and the display.
+pub struct Driver {
+    pub source: Box<dyn DriverSource>,
+    /// `getFFGlobalGain`
+    pub ff_gain: f32,
+    /// `Car::controls` as the device left it in this step's `acquireControls`.
+    pub reported: CarControls,
+    /// What `getAction(4)` answered in this step.
+    pub headlights: bool,
+    /// The car asked for the controls in this step (it does not while they are locked).
+    pub polled: bool,
+    /// What the car sent back in the last step.
+    pub last_ff: f32,
+    pub last_damper: f32,
+    pub last_vibrations: VibrationDef,
+}
+
+impl Driver {
+    pub fn new(source: Box<dyn DriverSource>, ff_gain: f32) -> Driver {
+        Driver {
+            source,
+            ff_gain,
+            reported: CarControls::default(),
+            headlights: false,
+            polled: false,
+            last_ff: 0.0,
+            last_damper: 0.0,
+            last_vibrations: VibrationDef::default(),
+        }
+    }
+}
+
+impl ControlsProvider for Driver {
+    fn acquire_controls(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
+        self.source.acquire(controls, dt, input);
+        self.reported = *controls;
+        self.polled = true;
+    }
+
+    fn get_action(&mut self, action: i32) -> bool {
+        if action == 4 {
+            self.headlights = self.source.headlights();
+            self.headlights
+        } else {
+            false
+        }
+    }
+
+    fn send_ff(&mut self, ff: f32, damper: f32, user_gain: f32) {
+        self.last_ff = ff;
+        self.last_damper = damper;
+        self.source.send_ff(ff, damper, user_gain);
+    }
+
+    fn get_ff_global_gain(&mut self) -> f32 {
+        self.ff_gain
+    }
+
+    fn set_vibrations(&mut self, def: &VibrationDef) {
+        self.last_vibrations = *def;
+        self.source.set_vibrations(def);
+    }
+
+    fn set_engine_rpm(&mut self, rpm: f32, low: f32, high: f32) {
+        self.source.set_engine_rpm(rpm, low, high);
+    }
+}
+
+/// Finds a car's data folder: a path to it, or its name under a `cardata` folder next to the
+/// working directory or above the program.
+pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
+    let mut tried = Vec::new();
+    let direct = PathBuf::from(car);
+    if direct.join("car.ini").is_file() {
+        return Ok(direct);
+    }
+    tried.push(direct);
+    let mut roots = vec![PathBuf::from(".")];
+    if let Ok(exe) = std::env::current_exe() {
+        roots.extend(exe.ancestors().skip(1).map(Path::to_path_buf));
+    }
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    for root in roots {
+        let folder = root.join("cardata").join(car);
+        if folder.join("car.ini").is_file() {
+            return Ok(folder);
+        }
+        tried.push(folder);
+    }
+    Err(format!(
+        "the car {car:?} was not found: no car.ini in {} (extracted car data goes into cardata/<car>)",
+        tried.iter().take(3).map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+    ))
+}
+
+/// One car on the endless flat road, and the count of its steps.
+pub struct GameSim {
+    pub setup: SimSetup,
+    pub data_path: PathBuf,
+    pub car: VanillaCar<Driver>,
+    /// Steps run so far; the next one runs at `setup.time_of_step(steps)`.
+    pub steps: u64,
+}
+
+/// Where the car is spawned: on the road at the origin, the nose towards +z (so the tail,
+/// which is what `Car::forceRotation` takes, towards -z). The oracle's spawn.
+const SPAWN_POSITION: Vec3f = Vec3f { x: 0.0, y: 0.0, z: 0.0 };
+const SPAWN_TAIL: Vec3f = Vec3f { x: 0.0, y: 0.0, z: -1.0 };
+
+fn build_car(setup: &SimSetup, data_path: &Path, physics_time: f64, driver: Driver) -> Result<VanillaCar<Driver>, String> {
+    if let Some(run) = setup.run_setup() {
+        // exactly the car `tools/chassis_compare` holds against a recording of the game
+        let mut run = run;
+        run.clock_start_ms = physics_time;
+        return VanillaCar::from_chassis(run.build(data_path)?, driver);
+    }
+    // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start
+    let mut car = VanillaCar::new(data_path, setup.env, Box::new(Ground::Flat), setup.seed, physics_time, driver)?;
+    // `CarAvatar::setAutoClutchEnabled`: the aid switches the automatic clutch at the start,
+    // and with it the one on shifts
+    car.car.autoclutch.use_auto_on_start = setup.auto_clutch;
+    if setup.auto_clutch {
+        car.car.autoclutch.use_auto_on_change = true;
+    }
+    car.car.auto_shifter.is_active = setup.auto_shifter;
+    car.car.force_rotation(&SPAWN_TAIL);
+    car.car.force_position(&SPAWN_POSITION);
+    car.car.session_start()?;
+    Ok(car)
+}
+
+impl GameSim {
+    pub fn new(setup: SimSetup, source: Box<dyn DriverSource>) -> Result<GameSim, String> {
+        let data_path = find_car_data(&setup.car)?;
+        let driver = Driver::new(source, setup.ff_gain);
+        let car = build_car(&setup, &data_path, setup.clock_start_ms, driver)?;
+        Ok(GameSim { setup, data_path, car, steps: 0 })
+    }
+
+    /// The physics clock after the last step, ms.
+    pub fn clock_ms(&self) -> f64 {
+        if self.steps == 0 {
+            self.setup.clock_start_ms
+        } else {
+            self.setup.time_of_step(self.steps - 1)
+        }
+    }
+
+    /// Seconds simulated so far.
+    pub fn sim_seconds(&self) -> f64 {
+        self.steps as f64 * DT as f64
+    }
+
+    /// A new car at the spawn point, built at the current clock. The driver stays.
+    fn rebuild(&mut self) -> Result<(), String> {
+        if self.setup.oracle.is_some() {
+            return Err("an oracle set-up cannot be rebuilt mid-run".to_string());
+        }
+        let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
+        let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder)?;
+        std::mem::swap(&mut car.device, &mut self.car.device);
+        self.car = car;
+        Ok(())
+    }
+
+    fn apply(&mut self, events: u32, bias_clicks: i32) -> Result<(), String> {
+        if events & event::REBUILD != 0 {
+            self.rebuild()?;
+        }
+        if events & event::RESET != 0 {
+            // a teleport is a job of the game's main thread: it runs at the start of the step
+            self.car.car.queue(|car| {
+                car.force_rotation(&SPAWN_TAIL);
+                car.force_position(&SPAWN_POSITION);
+            });
+        }
+        if bias_clicks != 0 {
+            if let Some(brakes) = &mut self.car.car.brake_system {
+                brakes.set_manual_front_bias(bias_clicks);
+            }
+        }
+        if let Some(aids) = &mut self.car.car.aids {
+            let aids = aids.base_mut();
+            for (bit, direction) in [(event::TC_UP, 1), (event::TC_DN, -1)] {
+                if events & bit != 0 {
+                    aids.traction_control.cycle_mode(direction);
+                }
+            }
+            for (bit, direction) in [(event::ABS_UP, 1), (event::ABS_DN, -1)] {
+                if events & bit != 0 {
+                    aids.abs.cycle_mode(direction);
+                }
+            }
+        }
+        if events & event::AUTO_SHIFTER != 0 {
+            self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
+        }
+        Ok(())
+    }
+
+    /// One physics step with whatever the driver's source says; returns what it said (the
+    /// step's line in an input file).
+    pub fn step(&mut self) -> Result<StepInput, String> {
+        let (events, bias_clicks) = self.car.device.source.take_events();
+        self.apply(events, bias_clicks)?;
+        self.car.device.polled = false;
+        self.car.step(DT, self.setup.time_of_step(self.steps));
+        self.steps += 1;
+        let device = &self.car.device;
+        Ok(StepInput {
+            controls: device.reported,
+            headlights: device.headlights,
+            events,
+            bias_clicks,
+            device: device.source.device_id(),
+        })
+    }
+
+    /// One step of a recorded drive.
+    pub fn step_recorded(&mut self, step: &StepInput) -> Result<(), String> {
+        self.car.device.source.load(step);
+        self.step().map(|_| ())
+    }
+}

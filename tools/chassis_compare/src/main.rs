@@ -33,6 +33,13 @@
 #[path = "../../car_oracle/src/record.rs"]
 #[allow(dead_code, clippy::wrong_self_convention)]
 mod record;
+// the game's input file and state dump (Task 11): `game-replay` writes the one and reads the other
+#[path = "../../../crates/rustyac-game/src/dump.rs"]
+#[allow(dead_code)]
+mod dump;
+#[path = "../../../crates/rustyac-game/src/input_file.rs"]
+#[allow(dead_code)]
+mod input_file;
 #[path = "../../car_oracle/src/sites.rs"]
 #[allow(dead_code)]
 mod sites;
@@ -44,7 +51,7 @@ use record::Recording;
 use rustyac_physics::car::replay::{
     self, body_words, Field, Golden, GoldenStep, Ground, RecordedCall, RecordedStep, RecordedWheel, RunSetup, WHEELS,
 };
-use rustyac_physics::car::{CarControls, ChassisEnvironment, EngineFeed, ForceSource, RollingChassis};
+use rustyac_physics::car::{CarControls, ChassisEnvironment, EngineFeed, ForceSource, RollingChassis, TapeCall};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
@@ -312,8 +319,12 @@ fn same_float(a: f32, b: f32) -> bool {
 
 /// Compares the Rust force tape of a step with the game's. `Err` describes the first difference.
 fn compare_tape(recording: &Recording, step: usize, chassis: &RollingChassis) -> Result<(), String> {
+    compare_tape_calls(recording, step, chassis.core.tape.as_deref().unwrap_or(&[]))
+}
+
+/// The same for a tape that is already off the chassis (`game-replay` reads it from the game's dump).
+fn compare_tape_calls(recording: &Recording, step: usize, rust: &[TapeCall]) -> Result<(), String> {
     let game = &recording.steps[step].calls;
-    let rust = chassis.core.tape.as_deref().unwrap_or(&[]);
     for (seq, (g, r)) in game.iter().zip(rust).enumerate() {
         let system = recording.system_of(g);
         let head = format!("force call {seq} ({} on {}, {system})", replay::kind_name(g.kind), replay::BODIES[g.body as usize]);
@@ -1185,6 +1196,210 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
     Ok(())
 }
 
+/// Does the recording's script ask anything of the car besides the device's controls (locks,
+/// a gentle stop, penalties)? An input file of the game has no such commands.
+fn has_jobs(recording: &Recording) -> bool {
+    recording.has("script.lockMs")
+        && (0..recording.steps.len()).any(|step| {
+            recording.f(step, "script.lockMs") != 0.0
+                || recording.i(step, "script.setLocked") != 0
+                || recording.i(step, "script.gentleStop") != 0
+                || recording.f(step, "script.addPenalty") != 0.0
+        })
+}
+
+/// `game-replay`: the game itself against the recordings (Task 11, check 1). The recorded
+/// controls of a scenario become an input file of `rustyac.exe`; the game replays it
+/// (`--replay --headless --dump-states -`) and its car is compared with the recording after
+/// every step exactly as `run` compares: the 2,009 chassis values, the values of the other
+/// systems with the telemetry page, and the force tape.
+fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let repo = repo_root();
+    let folder = match dir {
+        Some(dir) if dir.is_absolute() => dir.to_path_buf(),
+        Some(dir) => repo.join(dir),
+        None => repo.join("oracle/car"),
+    };
+    let folder_name = folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let exe = exe.map(Path::to_path_buf).unwrap_or_else(|| repo.join("target/release/rustyac.exe"));
+    if !exe.is_file() {
+        return Err(format!("{}: build the game first (cargo build --release -p rustyac-game)", exe.display()));
+    }
+    let full = names.is_empty();
+    let mut scenarios: Vec<String> = names.to_vec();
+    if scenarios.is_empty() {
+        for entry in std::fs::read_dir(&folder).map_err(|e| format!("{}: {e}", folder.display()))? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.extension().is_some_and(|e| e == "carrec") {
+                let name = path.file_stem().unwrap().to_string_lossy().to_string();
+                if name != "settle_floor" {
+                    scenarios.push(name);
+                }
+            }
+        }
+        scenarios.sort();
+    }
+    let inputs = repo.join("oracle/game");
+    std::fs::create_dir_all(&inputs).map_err(|e| e.to_string())?;
+    let mut table = String::new();
+    writeln!(
+        table,
+        "The game against the recordings: `rustyac.exe --replay <input file> --headless --dump-states -`, the input \
+         file holding nothing but the recording's driver controls (and its session values in the header).\n"
+    )
+    .unwrap();
+    writeln!(
+        table,
+        "| Scenario | Steps | Bit-exact steps | First divergence | Chassis values compared per step | Values of the other \
+         systems compared per step | Force calls compared |"
+    )
+    .unwrap();
+    writeln!(table, "|---|---|---|---|---|---|---|").unwrap();
+    let (mut all_steps, mut all_exact, mut all_calls) = (0, 0, 0);
+    let mut failed = false;
+    for name in &scenarios {
+        let path = folder.join(format!("{name}.carrec"));
+        let recording = Recording::read(&path)?;
+        let count = recording.steps.len();
+        println!("{name}: {count} steps");
+        if has_jobs(&recording) {
+            println!("  skipped: its script locks the controls / adds penalties, which an input file cannot ask for");
+            writeln!(table, "| `{name}` | {count} | skipped (the script calls the car's lock / penalty functions) | | | | |").unwrap();
+            continue;
+        }
+        let run = run_setup(&recording, Systems::ALL)?;
+        let setup = input_file::SimSetup {
+            car: recording.get("car").ok_or("the recording's header has no car")?.to_string(),
+            seed: run.seed,
+            clock_start_ms: run.clock_start_ms,
+            env: run.env,
+            auto_clutch: run.auto_clutch,
+            auto_shifter: run.auto_shifter,
+            ff_gain: 1.0,
+            oracle: Some(input_file::OracleSetup {
+                scenario: run.scenario.clone(),
+                ground: run.ground,
+                pitlane: run.pitlane,
+                stability_gain: run.stability_gain,
+                wind_speed: run.wind_speed,
+                wind_direction_deg: run.wind_direction_deg,
+                damage: run.damage,
+            }),
+        };
+        let mut steps = Vec::with_capacity(count);
+        for step in 0..count {
+            let feed = recorded_step(&recording, step)?.driver_only();
+            steps.push(input_file::StepInput {
+                controls: feed.controls,
+                headlights: feed.headlights,
+                events: 0,
+                bias_clicks: feed.bias_clicks,
+                device: 0,
+            });
+        }
+        let input = inputs.join(format!("{folder_name}_{name}.ryin"));
+        input_file::InputFile { setup, steps }.write(&input)?;
+        let started = std::time::Instant::now();
+        let mut child = Command::new(&exe)
+            .args(["--replay", &input.to_string_lossy(), "--headless", "--no-shm", "--dump-states", "-"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("{}: {e}", exe.display()))?;
+        let stdout = child.stdout.take().expect("the game's standard output");
+        let mut reader = dump::DumpReader::new(std::io::BufReader::with_capacity(1 << 20, stdout))?;
+        let columns = Columns::new(&recording)?;
+        let (mut exact, mut calls, mut other_values) = (0, 0, 0);
+        let mut first: Option<(usize, String, usize)> = None;
+        for step in 0..count {
+            let Some(rust) = reader.next_step()? else {
+                return Err(format!("{name}: the game stopped after {step} of {count} steps"));
+            };
+            let game = columns.game(&recording, step);
+            if rust.snapshot.len() != game.len() {
+                return Err(format!("{name}: the game's dump has {} chassis values, the recording {}", rust.snapshot.len(), game.len()));
+            }
+            let differing: Vec<usize> =
+                (0..game.len()).filter(|&k| !replay::same_value(columns.fields[k].kind, game[k], rust.snapshot[k])).collect();
+            let game_values = game_trace(&recording, step, &rust.trace)?;
+            other_values = game_values.iter().flatten().count();
+            let mut trace_differences = Vec::new();
+            for (value, game) in rust.trace.iter().zip(&game_values) {
+                if let Some(game) = game {
+                    if !replay::same_value(value.kind, *game, value.word) {
+                        trace_differences.push(format!(
+                            "{}: game {} / rustyac.exe {}",
+                            value.name,
+                            replay::describe(value.kind, *game),
+                            replay::describe(value.kind, value.word)
+                        ));
+                    }
+                }
+            }
+            let tape = compare_tape_calls(&recording, step, &rust.tape);
+            calls += recording.steps[step].calls.len();
+            if differing.is_empty() && trace_differences.is_empty() && tape.is_ok() {
+                exact += 1;
+            } else if first.is_none() {
+                let text = match (trace_differences.first(), &tape, differing.first()) {
+                    (Some(text), _, _) => text.clone(),
+                    (None, Err(tape), _) => tape.clone(),
+                    (None, Ok(()), Some(&k)) => format!(
+                        "{}: game {} / rustyac.exe {}",
+                        columns.fields[k].name,
+                        replay::describe(columns.fields[k].kind, game[k]),
+                        replay::describe(columns.fields[k].kind, rust.snapshot[k])
+                    ),
+                    (None, Ok(()), None) => unreachable!(),
+                };
+                first = Some((step, text, differing.len() + trace_differences.len()));
+            }
+        }
+        if reader.next_step()?.is_some() {
+            return Err(format!("{name}: the game ran more than {count} steps"));
+        }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("{name}: rustyac.exe ended with {status}"));
+        }
+        match &first {
+            None => println!("  bit-exact: {} ({:.1} s)", percent(exact, count), started.elapsed().as_secs_f64()),
+            Some((step, text, _)) => println!("  bit-exact: {}; first difference at step {step}: {text}", percent(exact, count)),
+        }
+        failed |= first.is_some();
+        writeln!(
+            table,
+            "| `{name}` | {count} | {} | {} | {} | {other_values} | {calls} |",
+            percent(exact, count),
+            match &first {
+                None => "none".to_string(),
+                Some((step, text, differing)) => format!("step {step}: {text} ({differing} values differ in that step)"),
+            },
+            columns.fields.len()
+        )
+        .unwrap();
+        all_steps += count;
+        all_exact += exact;
+        all_calls += calls;
+    }
+    writeln!(table, "| **all** | **{all_steps}** | **{}** | | | | **{all_calls}** |", percent(all_exact, all_steps)).unwrap();
+    println!("\n{table}");
+    let out = repo.join("oracle/chassis");
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let suffix = match dir {
+        Some(_) => format!("_{folder_name}"),
+        None => String::new(),
+    };
+    let file = out.join(if full { format!("results{suffix}_game_replay.md") } else { format!("partial{suffix}_game_replay.md") });
+    std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
+    println!("{}", file.display());
+    if failed {
+        return Err("rustyac.exe and the game differ".to_string());
+    }
+    Ok(())
+}
+
 /// Writes one golden excerpt: `count` steps of a recording from `first` on. The Rust chassis
 /// runs freely up to `first` (and must agree with the game all the way), its state there is
 /// the excerpt's start state; the expected values are the game's.
@@ -1821,7 +2036,8 @@ fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&s
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
      chassis_compare excerpt\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
-     chassis_compare test-car\n\
+     chassis_compare test-car\n       \
+     chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
         .to_string()
 }
@@ -1834,9 +2050,11 @@ fn main() {
     let mut stop_after = None;
     let mut dir: Option<PathBuf> = None;
     let mut systems = Systems::ALL;
+    let mut exe: Option<PathBuf> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--verbose" => verbose = true,
+            "--exe" => exe = args.next().map(PathBuf::from),
             "--dir" => dir = args.next().map(PathBuf::from),
             "--feed" => {
                 for name in args.next().unwrap_or_default().split(',') {
@@ -1871,6 +2089,7 @@ fn main() {
         "test-car" => test_car_command(),
         "excerpt" => excerpt_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
+        "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref()),
         _ => Err(usage()),
     };
     if let Err(message) = result {

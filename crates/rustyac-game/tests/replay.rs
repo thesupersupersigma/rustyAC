@@ -1,0 +1,244 @@
+//! Check 1 of Task 11: the game loop does not change the physics.
+//!
+//! A drive is written as an input file and replayed by `rustyac.exe --replay --headless
+//! --dump-states`. The same drive is stepped here on a `VanillaCar` with the physics crate
+//! alone (its scripted device, its own functions for every command). Every value of the car
+//! (bodies, joints, tyres, counters, brakes, engine, drivetrain, wings, aids, the telemetry
+//! page) must be the same bit pattern after every step.
+//!
+//! Needs `cardata/ks_ferrari_f2004` (extracted game data, not in git); without it the tests
+//! print a notice and pass without testing anything.
+
+use std::path::PathBuf;
+use std::process::Command;
+
+use rustyac_game::dump::{self, StepDump};
+use rustyac_game::input_file::{event, InputFile, SimSetup, StepInput};
+use rustyac_physics::car::replay::Ground;
+use rustyac_physics::car::{CarControls, ChassisEnvironment, ScriptedDevice, VanillaCar};
+use rustyac_physics::vecmath::Vec3f;
+
+fn car_data() -> Option<PathBuf> {
+    let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata/ks_ferrari_f2004");
+    if data.join("suspensions.ini").is_file() {
+        Some(data)
+    } else {
+        eprintln!("NOT TESTED: {} is missing (the F2004's extracted data files)", data.display());
+        None
+    }
+}
+
+/// A drive with everything in it: the rest after the spawn, a start, shifts, steering, hard
+/// braking, the headlight switch, aid keys, brake-bias clicks, a reset and a new car.
+fn drive() -> Vec<StepInput> {
+    let mut steps = Vec::new();
+    let mut gear_timer = 0;
+    for n in 0..5200u32 {
+        let t = n as f32 * 0.003;
+        let mut c = CarControls { clutch: 1.0, ..CarControls::default() };
+        let mut s = StepInput::default();
+        // phase time: the drive starts again after the reset (step 2600) and the new car (step 3900)
+        let (phase, local) = match n {
+            0..=2599 => (0, n),
+            2600..=3899 => (1, n - 2600),
+            _ => (2, n - 3900),
+        };
+        if n == 2600 {
+            s.events |= event::RESET;
+        }
+        if n == 3900 {
+            s.events |= event::REBUILD;
+        }
+        if local >= 400 {
+            // first gear, then flat out with up-shifts every 0.9 s
+            if local < 410 {
+                c.gear_up = true;
+            } else {
+                let since = local - 410;
+                c.gas = (since as f32 * 0.004).min(1.0) * if phase == 1 { 0.6 } else { 1.0 };
+                if since > 500 && since % 300 < 12 {
+                    c.gear_up = true;
+                    gear_timer += 1;
+                }
+                c.steer = 0.12 * (t * 3.1).sin() * ((since as f32) * 0.002).min(1.0);
+                // the last 1.2 s of a phase: off the throttle, on the brakes, down a gear
+                if local >= 1300 - 400 + 410 + 300 {
+                    c.gas = 0.0;
+                    c.brake = ((local - 1610) as f32 * 0.01).min(0.9);
+                    c.gear_dn = (local / 60) % 2 == 0;
+                }
+            }
+        }
+        c.drs = phase == 0 && (1500..1700).contains(&n);
+        c.hand_brake = if (2400..2500).contains(&n) { 0.7 } else { 0.0 };
+        s.headlights = (700..720).contains(&n) || (3000..3003).contains(&n);
+        match n {
+            900 | 4100 => s.events |= event::TC_UP,
+            950 => s.events |= event::TC_DN,
+            1000 => s.events |= event::ABS_DN,
+            1050 => s.events |= event::ABS_UP,
+            1100 => s.bias_clicks = 2,
+            1200 => s.bias_clicks = -1,
+            4300 => s.events |= event::AUTO_SHIFTER,
+            _ => {}
+        }
+        s.controls = c;
+        steps.push(s);
+    }
+    assert!(gear_timer > 0);
+    steps
+}
+
+fn spawn(setup: &SimSetup, data: &std::path::Path, clock: f64) -> VanillaCar<ScriptedDevice> {
+    let mut car =
+        VanillaCar::new(data, ChassisEnvironment::default(), Box::new(Ground::Flat), setup.seed, clock, ScriptedDevice::default()).unwrap();
+    car.car.autoclutch.use_auto_on_start = true;
+    car.car.autoclutch.use_auto_on_change = true;
+    car.car.auto_shifter.is_active = false;
+    car.car.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
+    car.car.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+    car.car.session_start().unwrap();
+    car
+}
+
+/// The drive on a `VanillaCar` stepped directly, with the physics crate's own scripted device.
+fn stepped_directly(setup: &SimSetup, steps: &[StepInput], data: &std::path::Path) -> Vec<StepDump> {
+    let clock = |n: usize| setup.clock_start_ms + (n as f64 + 1.0) * 3.0;
+    let mut car = spawn(setup, data, setup.clock_start_ms);
+    let mut out = Vec::new();
+    for (n, step) in steps.iter().enumerate() {
+        if step.events & event::REBUILD != 0 {
+            car = spawn(setup, data, clock(n - 1));
+        }
+        if step.events & event::RESET != 0 {
+            car.car.queue(|c| {
+                c.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
+                c.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+            });
+        }
+        if step.bias_clicks != 0 {
+            car.car.brake_system.as_mut().unwrap().set_manual_front_bias(step.bias_clicks);
+        }
+        let aids = car.car.aids.as_mut().unwrap().base_mut();
+        if step.events & event::TC_UP != 0 {
+            aids.traction_control.cycle_mode(1);
+        }
+        if step.events & event::TC_DN != 0 {
+            aids.traction_control.cycle_mode(-1);
+        }
+        if step.events & event::ABS_UP != 0 {
+            aids.abs.cycle_mode(1);
+        }
+        if step.events & event::ABS_DN != 0 {
+            aids.abs.cycle_mode(-1);
+        }
+        if step.events & event::AUTO_SHIFTER != 0 {
+            car.car.auto_shifter.is_active = !car.car.auto_shifter.is_active;
+        }
+        car.device.controls = step.controls;
+        car.device.headlights = step.headlights;
+        car.step(0.003, clock(n));
+        out.push(StepDump::capture(&car.car));
+    }
+    out
+}
+
+fn assert_same(direct: &[StepDump], game: &[StepDump], what: &str) {
+    assert_eq!(direct.len(), game.len(), "{what}: number of steps");
+    for (n, (d, g)) in direct.iter().zip(game).enumerate() {
+        if d == g {
+            continue;
+        }
+        // name the first value that differs
+        for (k, (a, b)) in d.state.iter().zip(&g.state).enumerate() {
+            assert_eq!(a, b, "{what}: step {n}, state word {k}");
+        }
+        for (a, b) in d.trace.iter().zip(&g.trace) {
+            assert_eq!(a, b, "{what}: step {n}, {}", a.name);
+        }
+        panic!("{what}: step {n} differs in size ({} / {} state words, {} / {} traced values)", d.state.len(), g.state.len(), d.trace.len(), g.trace.len());
+    }
+}
+
+#[test]
+fn a_replay_by_the_game_is_the_car_stepped_directly() {
+    let Some(data) = car_data() else { return };
+    let setup = SimSetup::default();
+    let steps = drive();
+    let direct = stepped_directly(&setup, &steps, &data);
+
+    // the drive really drives: the car gets going, shifts up, the aids' keys and the reset work
+    let speed = |dump: &StepDump| f32::from_bits(dump.trace.iter().find(|v| v.name == "page.speedKmh").unwrap().word as u32);
+    let gear = |dump: &StepDump| dump.trace.iter().find(|v| v.name == "page.gear").unwrap().word as i32;
+    assert!(speed(&direct[1600]) > 60.0, "{} km/h after 3.6 s of throttle", speed(&direct[1600]));
+    assert!(gear(&direct[1600]) >= 3, "gear {}", gear(&direct[1600]));
+    assert!(speed(&direct[2100]) < speed(&direct[1600]) - 30.0, "the brakes work: {} km/h", speed(&direct[2100]));
+    assert!(speed(&direct[2999]) < 1.0, "after the reset the car stands: {} km/h", speed(&direct[2999]));
+    assert!(speed(&direct[5000]) > 30.0, "the new car drives too: {} km/h", speed(&direct[5000]));
+
+    let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let input = folder.join("replay_test.ryin");
+    let states = folder.join("replay_test.rystate");
+    InputFile { setup: setup.clone(), steps: steps.clone() }.write(&input).unwrap();
+    assert_eq!(InputFile::read(&input).unwrap().steps, steps, "the input file reads back as written");
+
+    // through the library
+    let count = rustyac_game::run_replay_headless(&input, Some(&states)).unwrap();
+    assert_eq!(count as usize, steps.len());
+    assert_same(&direct, &dump::read(&states).unwrap(), "run_replay_headless");
+    std::fs::remove_file(&states).unwrap();
+
+    // through the program itself
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyac"))
+        .args(["--replay", input.to_str().unwrap(), "--headless", "--no-shm", "--dump-states", states.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "rustyac failed: {}", String::from_utf8_lossy(&output.stderr));
+    let game = dump::read(&states).unwrap();
+    assert_same(&direct, &game, "rustyac.exe --replay");
+    let values: usize = game.iter().map(|g| g.words().len()).sum();
+    println!("{} steps, {values} values compared, all bit-identical", game.len());
+}
+
+#[test]
+fn a_changed_input_is_noticed() {
+    // the comparison can fail: one step's steering a little different, and the cars part ways
+    let Some(data) = car_data() else { return };
+    let setup = SimSetup::default();
+    let steps: Vec<StepInput> = drive().into_iter().take(1200).collect();
+    let direct = stepped_directly(&setup, &steps, &data);
+    let mut changed = steps.clone();
+    changed[800].controls.steer += 0.01;
+    let other = stepped_directly(&setup, &changed, &data);
+    assert_eq!(direct[799], other[799]);
+    assert_ne!(direct[800].words(), other[800].words());
+    assert_ne!(direct[1199].words(), other[1199].words());
+}
+
+#[test]
+fn an_unsupported_car_is_refused_with_the_physics_message() {
+    // a car with a system that is not ported: the program repeats the physics crate's message
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata");
+    let Some(car) = ["ks_audi_r8_lms", "ks_porsche_919_hybrid_2016", "ks_audi_sport_quattro"].into_iter().find(|c| root.join(c).join("car.ini").is_file())
+    else {
+        eprintln!("NOT TESTED: no four-wheel-drive / hybrid car in cardata/");
+        return;
+    };
+    let setup = SimSetup { car: car.to_string(), ..SimSetup::default() };
+    let direct = match VanillaCar::new(&root.join(car), ChassisEnvironment::default(), Box::new(Ground::Flat), 1, 60_000.0, ScriptedDevice::default()) {
+        Err(message) => message,
+        Ok(_) => {
+            eprintln!("NOT TESTED: {car} is supported by now");
+            return;
+        }
+    };
+    let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let input = folder.join("refused.ryin");
+    InputFile { setup, steps: vec![StepInput::default()] }.write(&input).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_rustyac")).args(["--replay", input.to_str().unwrap(), "--headless", "--no-shm"]).output().unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // the same message, whatever way the folder was written
+    let message = direct.rsplit_once("cardata").unwrap().1;
+    assert!(stderr.contains(message), "stderr {stderr:?} does not hold {message:?}");
+}
