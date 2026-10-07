@@ -96,6 +96,15 @@ pub trait EngineModel {
     /// `Engine::getMaxPowerW` @ 0x140285a80: the largest power seen so far, or, before the
     /// engine has run, the curve's peak times one plus the turbos' full boost.
     fn get_max_power_w(&self) -> f32;
+    /// `Engine::p2p`: the push-to-pass state, for the telemetry (`None`: an engine without).
+    fn push_to_pass(&self) -> Option<&PushToPass> {
+        None
+    }
+    /// `Engine::coastSettingsDefaultIndex` (`engine.ini [COAST_SETTINGS] DEFAULT`): where the
+    /// cockpit's engine-brake setting starts.
+    fn coast_settings_default_index(&self) -> i32 {
+        0
+    }
     /// `Engine::setTurboBoostLevel` @ 0x140288090: the cockpit boost control.
     fn set_turbo_boost_level(&mut self, level: f32);
     /// `Engine::setCoastSettings` @ 0x140288010: the cockpit engine-brake control.
@@ -810,6 +819,14 @@ impl EngineModel for VanillaEngine {
 
     fn get_max_torque_rpm(&self) -> f32 {
         self.max_torque_rpm
+    }
+
+    fn push_to_pass(&self) -> Option<&PushToPass> {
+        Some(&self.p2p)
+    }
+
+    fn coast_settings_default_index(&self) -> i32 {
+        self.coast_settings_default_index
     }
 
     fn get_max_power_w(&self) -> f32 {

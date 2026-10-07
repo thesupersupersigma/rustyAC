@@ -4,9 +4,21 @@
 //! read the game's page (`ac_telemetry.py`, `check_telemetry.py`, `car_oracle csv --table
 //! telemetry`) read this one too.
 //!
-//! Two values reach the game's page through the state snapshot of the car
-//! (`Car::getPhysicsState` @ 0x140270d70, the ride heights and the limiter's revs); the
-//! [`PhysicsPageWriter`] keeps what that needs between two steps.
+//! A few values reach the game's page through the state snapshot of the car
+//! (`Car::getPhysicsState` @ 0x140270d70: the ride heights, the limiter's revs, the
+//! push-to-pass state); the [`PhysicsPageWriter`] keeps what that needs between two steps.
+//! In the running game the writer reads the main thread's copy of that snapshot, which is
+//! refreshed once per drawn frame, so there those values can be up to a frame old; here (as in
+//! `tools/car_oracle`) they are the snapshot of the same step.
+//!
+//! Only the physics page exists. The graphics page (`SharedMemoryWriter::update`, per frame)
+//! and the static page (`writeStatic`, once) belong to the game's main thread.
+//!
+//! Fields of systems the port does not have are written as the game writes them for a car
+//! without those systems: `kersCharge`, `kersInput`, `kersCurrentKJ` (0 unless the car has
+//! `ers.ini` or `kers.ini`), `ersRecoveryLevel`, `ersPowerLevel`, `ersHeatCharging`,
+//! `ersIsCharging` (0 unless `ers.ini`), `isAIControlled` (the device is not an AI driver),
+//! `performanceMeter` (the lap-time meter; 0 off a timed lap).
 
 use std::path::Path;
 
@@ -137,14 +149,21 @@ pub struct PhysicsPageWriter {
     /// `sharedMemories[2].packetId`: the number the next page gets.
     pub packet_id: i32,
     /// `sharedMemories[2].nullCounts`: the game writes no page during its first 300 calls
-    /// (0.9 s); 300 here means "warmed up", as `tools/car_oracle` sets it.
+    /// with a car (0.9 s); it starts at 0. Set it to 300 for a writer that is warmed up (as
+    /// `tools/car_oracle` does).
     pub null_counts: i32,
     /// `Car::ridePickupPoint`: front and rear, body axes (`car.ini [RIDE]`, z from the
     /// suspensions' base positions).
     pub ride_pickup_point: [Vec3f; 2],
     /// `physicsInfo.bumpStopsDn`: the lower bump stop of each wheel, taken when the car is
-    /// attached.
+    /// attached. (`CarAvatar::initPhysics` stores it for double-wishbone wheels only and 0 for
+    /// every other suspension class, whose page value is then the raw travel; the port has
+    /// only double wishbones.)
     pub bump_stops_dn: [f32; 4],
+    /// `CarAvatar::currentEngineBrakeSetting`: the cockpit's engine-brake setting, which
+    /// starts at the engine's default index. (`tools/car_oracle` hands the game's writer a
+    /// zeroed avatar, so its recordings show 0 here.)
+    pub engine_brake_setting: i32,
     /// `SetupManager::minimumHeight_m` (`car.ini [RULES] MIN_HEIGHT`; -1 without the section).
     pub minimum_height: f32,
     /// `CarPhysicsState::speed` of the previous snapshot, m/s.
@@ -168,13 +187,22 @@ impl PhysicsPageWriter {
         }
         Ok(PhysicsPageWriter {
             packet_id: 0,
-            null_counts: 300,
+            null_counts: 0,
             ride_pickup_point: [
                 Vec3f::new(0.0, front, car.suspensions[0].get_base_position().z),
                 Vec3f::new(0.0, rear, car.suspensions[2].get_base_position().z),
             ],
             bump_stops_dn,
-            minimum_height: if ini.has_section("RULES") { ini.get_float("RULES", "MIN_HEIGHT")? } else { -1.0 },
+            engine_brake_setting: car.drivetrain.as_ref().map(|d| d.engine().coast_settings_default_index()).unwrap_or(0),
+            // `SetupManager::init`: kept only when it is above 0
+            minimum_height: {
+                let height = if ini.has_section("RULES") { ini.get_float("RULES", "MIN_HEIGHT")? } else { -1.0 };
+                if height > 0.0 {
+                    height
+                } else {
+                    -1.0
+                }
+            },
             snapshot_speed: 0.0,
             ride_height: [0.0; 2],
             current_tyres_out: -1,
@@ -261,9 +289,18 @@ impl PhysicsPageWriter {
     }
 
     /// The part of `LapInvalidator::step` @ 0x1402c0580 the page shows: how many tyres stand
-    /// on a surface that is not track. Runs inside the car's step in the game; call it after
-    /// the step.
+    /// on a surface that is not track; 0 for five seconds after a contact with another car.
+    /// Only the player's car has a lap invalidator that runs (the count stays -1 otherwise).
+    /// Runs inside the car's step in the game; call it after the step.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step_tyres_out(&mut self, car: &RollingChassis) {
+        if !car.env.is_first_car {
+            return;
+        }
+        if !(car.physics_time - car.last_collision_with_car_time >= 5000.0) {
+            self.current_tyres_out = 0;
+            return;
+        }
         let mut out = 0;
         for tyre in &car.tyres {
             if let Some(surface) = &tyre.surface_def {
@@ -377,9 +414,10 @@ impl PhysicsPageWriter {
         w.push(f(car.ff_global_gain * (car.last_ff * car.user_ff_gain)));
         // performanceMeter: the lap-time meter needs the track's racing line
         w.push(f(car.performance_split as f32));
-        // engineBrake, ersRecoveryLevel, ersPowerLevel, ersHeatCharging, ersIsCharging: cockpit
-        // settings of the game's car avatar and the hybrid system
-        w.extend([0u32; 5]);
+        // engineBrake: the cockpit setting; ersRecoveryLevel, ersPowerLevel, ersHeatCharging,
+        // ersIsCharging: only for a car with ERS
+        w.push(self.engine_brake_setting as u32);
+        w.extend([0u32; 4]);
         // kersCurrentKJ
         w.push(f(0.0));
         w.push(b(drs.is_some_and(|d| d.is_present && d.is_available)));
@@ -406,8 +444,22 @@ impl PhysicsPageWriter {
         w.push(f(car.brake_system.as_deref().map(|brakes| brakes.get_front_bias()).unwrap_or(0.0)));
         let local = car.core.get_local_velocity(car.body);
         w.extend([local.x, local.y, local.z].map(f));
-        // P2PActivations, P2PStatus: only for a car with push-to-pass
-        w.extend([0u32; 2]);
+        // P2PActivations, P2PStatus: only for a car with push-to-pass (the snapshot's bytes:
+        // 3 while a push is on, 2 when one is available, 1 otherwise)
+        match engine.and_then(|e| e.push_to_pass()).filter(|p2p| p2p.enabled) {
+            Some(p2p) => {
+                #[allow(clippy::neg_cmp_op_on_partial_ord)]
+                let status = if p2p.active {
+                    3
+                } else if p2p.activations > 0 && !(p2p.cool_down_s >= p2p.time_accum) {
+                    2
+                } else {
+                    1
+                };
+                w.extend([p2p.activations as u8 as u32, status]);
+            }
+            None => w.extend([0u32; 2]),
+        }
         w.push(engine.map(|e| e.get_limiter_rpm()).unwrap_or(0) as u32);
         debug_assert_eq!(w.len() * 4, PAGE_SIZE);
         Some(PhysicsPage { words: w })

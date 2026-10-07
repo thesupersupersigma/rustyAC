@@ -879,6 +879,12 @@ impl RunSetup {
         }
         if self.telemetry {
             chassis.install_telemetry()?;
+            // as `tools/car_oracle` sets the game's writer up: warmed up, and with a zeroed
+            // car avatar behind it (so the cockpit's engine-brake setting reads 0)
+            if let Some(writer) = &mut chassis.telemetry {
+                writer.null_counts = 300;
+                writer.engine_brake_setting = 0;
+            }
         }
         chassis.core.joint_feedback = true;
         // the joints exist already: ask for their constraint forces as the oracle did

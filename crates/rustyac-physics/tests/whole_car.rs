@@ -61,6 +61,24 @@ fn the_page_has_the_game_s_size() {
 }
 
 #[test]
+fn the_page_warms_up_like_the_game_s() {
+    let Some(mut car) = car(ChassisEnvironment::default()) else { return };
+    // the game's writer lets 300 steps pass before its first page; that one has packetId 0
+    let next = run(&mut car, 0, 300);
+    assert!(car.physics_page().is_none());
+    run(&mut car, next, 2);
+    let page = car.physics_page().unwrap();
+    assert_eq!(page.get("packetId"), Some(1));
+    assert_eq!(page.to_bytes().len(), PAGE_SIZE);
+    // a standing F2004: neutral, engine idling, on its wheels
+    assert_eq!(page.get("gear"), Some(1));
+    assert!(page.get("rpms").unwrap() as i32 > 1000);
+    assert!(f32::from_bits(page.get("wheelLoad.0").unwrap()) > 500.0);
+    assert_eq!(page.get("numberOfTyresOut"), Some(0));
+    assert_eq!(f32::from_bits(page.get("airTemp").unwrap()), 26.0);
+}
+
+#[test]
 fn level_keys_of_traction_control_and_abs() {
     // with a table of three levels: up goes 1, 2, 3, off; the limit follows the table
     let mut tc = TractionControl {
