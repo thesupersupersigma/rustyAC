@@ -208,9 +208,10 @@ due time is counted from the start, not from the step before. A step takes 2 to 
 are the operating system holding the thread back (the PC was in use); the next steps follow at once, so none of
 it accumulates.
 
-With a real window (`--windowed --no-focus --duration 6`, 960 x 540, opened once for six seconds without taking
-the keyboard, then closed by the program): **60.5 FPS** with the display's sync, slowest frame 18.6 ms, physics
-333.49 Hz over those 6 s (step avg 0.057 ms, 5 of 2,028 steps more than 1 ms late, none a whole step).
+With a real window (`--windowed --no-focus --duration 5`, 960 x 540, opened for five seconds without taking the
+keyboard, then closed by the program; done twice during the work): **60.6 FPS** with the display's sync, slowest
+frame 17.1 ms, physics 333.53 Hz over those 5 s (step avg 0.044 ms, no step more than 1 ms late), the pad driving
+(the car stood still in first gear at 4,000 rpm: nobody touched it).
 
 ### 4.3 Shared memory
 
@@ -388,9 +389,10 @@ crates/rustyac-game/
 - **The physics thread** waits with a high-resolution timer and spins for the last quarter millisecond; it does
   not burn a whole core as AC's does (`Sleep(0)` loop). When it falls more than 100 ms behind (a debugger, a
   sleeping laptop) it starts its schedule again from "now" and counts that.
-- **A pad at rest that is not quite at rest** moves the car: AC has no dead zone on the triggers, and neither has
-  the port. In the 6 s window test the car crept to 4 km/h with nobody at the controls; the keyboard-less run with
-  no device stood still.
+- **Your pad's left stick does not rest at the centre**: it reads 2413 of 32767 (0.074), which is outside the
+  dead zone of 0.05 in your `controls.ini`, so the car steers 0.006 to the right with the stick let go (the last
+  window test ended with `steer 0.0057`). AC does the same with these settings; `STEER_DEADZONE=0.1` in
+  `rustyac_controls.ini` would hide it. The triggers rest at 0 and have no dead zone, as in AC.
 - **Reset** keeps the tyres' temperatures and wear and the damage, as AC's teleport to the pits does through
   `Car::forcePosition`; Shift+R builds a new car.
 

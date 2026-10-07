@@ -666,13 +666,17 @@ impl DebugRenderer {
         self.resize(width, height)
     }
 
-    /// Shows the last picture in the window.
-    pub fn present(&self, chain: &IDXGISwapChain1, vsync: bool) -> Result<(), String> {
+    /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised
+    /// and nothing was shown (the caller should not spin).
+    pub fn present(&self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
         // SAFETY: the back buffer and the picture have the same size and format.
         unsafe {
             let back: ID3D11Texture2D = chain.GetBuffer(0).map_err(err("back buffer"))?;
             self.context.CopyResource(&back, &self.targets.resolved);
-            chain.Present(vsync as u32, DXGI_PRESENT(0)).ok().map_err(err("present"))
+            let status = chain.Present(vsync as u32, DXGI_PRESENT(0));
+            status.ok().map_err(err("present"))?;
+            // DXGI_STATUS_OCCLUDED
+            Ok(status.0 != 0x087A_0001)
         }
     }
 }

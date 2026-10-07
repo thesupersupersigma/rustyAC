@@ -95,6 +95,14 @@ fn report(view: &CarView, timing: &Timing) {
         view.body[3][1],
         view.body[3][2]
     );
+    println!(
+        "its controls at the end: gas {:.3}, brake {:.3}, steer {:.4}, clutch {:.2} (driver: {})",
+        view.gas,
+        view.brake,
+        view.steer,
+        view.clutch,
+        rustyac_game::input::device_name(view.device)
+    );
 }
 
 /// `--headless` without a window: the car runs in real time, with a recorded drive or with
@@ -329,9 +337,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             info.notes.push("click the window to drive".to_string());
         }
         renderer.draw(&view, &shape, &frame, &info);
-        if let Err(message) = renderer.present(&chain, options.vsync) {
-            result = Err(message);
-            break;
+        match renderer.present(&chain, options.vsync) {
+            // nothing is seen: no need to draw as fast as the card can
+            Ok(false) => std::thread::sleep(Duration::from_millis(15)),
+            Ok(true) => {}
+            Err(message) => {
+                result = Err(message);
+                break;
+            }
         }
         frames += 1;
         fps_frames += 1;
