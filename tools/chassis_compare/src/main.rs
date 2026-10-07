@@ -134,6 +134,11 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         dynamic_grip_level: first("track.dynamicGripLevel"),
         tyre_consumption_rate: first("tyre.lf.in_tyre_consumption_rate"),
         mechanical_damage_rate: first("tyre.lf.in_mechanical_damage_rate"),
+        // the session's penalty rule (the engine's default is 3, "nothing")
+        penalty_mode: match recording.get("penalty_mode") {
+            Some(text) => text.parse().map_err(|e| format!("penalty_mode: {e}"))?,
+            None => 3,
+        },
         allow_tyre_blankets: recording.i(0, "tyre.lf.in_allow_tyre_blankets") != 0,
         ..ChassisEnvironment::default()
     };
@@ -184,6 +189,7 @@ fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, Str
             hand_brake: if recording.has("script.handBrake") { f("script.handBrake") } else { f("controls.handBrake") },
         },
         bias_clicks: if recording.has("script.biasClicks") { recording.i(step, "script.biasClicks") } else { 0 },
+        headlights: recording.has("script.headlights") && recording.i(step, "script.headlights") != 0,
         // only the automatic clutch rewrites the clutch pedal, before the sleeping rule reads it
         clutch: f("controls.clutch"),
         // what traction control and the pit limiter left for the next step
@@ -271,6 +277,32 @@ impl Columns {
             .zip(&self.kinds)
             .map(|(&c, &kind)| if kind == 'd' { words[c] as u64 | (words[c + 1] as u64) << 32 } else { words[c] as u64 })
             .collect()
+    }
+}
+
+/// What the recording's script asked of the car besides the device's controls, applied the
+/// way the oracle applied it: the car's own functions, called before the step (the clock
+/// still shows the last step). Only the whole-car recordings have such jobs.
+fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) {
+    if !recording.has("script.lockMs") {
+        return;
+    }
+    let lock_ms = recording.f(step, "script.lockMs");
+    if lock_ms != 0.0 {
+        let now = chassis.physics_time;
+        chassis.lock_controls_until(lock_ms as f64, now);
+    }
+    match recording.i(step, "script.setLocked") {
+        0 => {}
+        value => chassis.lock_controls(value > 0),
+    }
+    match recording.i(step, "script.gentleStop") {
+        0 => {}
+        value => chassis.is_gentle_stopping = value > 0,
+    }
+    let penalty = recording.f(step, "script.addPenalty");
+    if penalty != 0.0 {
+        chassis.add_penalty(penalty as f64);
     }
 }
 
@@ -901,6 +933,7 @@ fn compare(
     for step in 0..steps {
         let feed = recorded_step(recording, step)?;
         let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
+        apply_jobs(&mut chassis, recording, step);
         let request_before = chassis.drivetrain.as_ref().map(|d| d.base().gear_request.request as i32).unwrap_or(0);
         let paddles_before = (chassis.gear_changer.last_gear_up, chassis.gear_changer.last_gear_dn);
         chassis.step_recorded(setup.time_of_step(step), &feed);

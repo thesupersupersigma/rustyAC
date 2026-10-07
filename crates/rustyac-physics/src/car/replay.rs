@@ -175,6 +175,8 @@ pub struct RecordedStep {
     pub controls: CarControls,
     /// Clicks of the cockpit brake-bias control asked for before this step.
     pub bias_clicks: i32,
+    /// The device's headlight switch is held (`getAction(4)`).
+    pub headlights: bool,
     /// `controls.clutch` after the automatic clutch.
     pub clutch: f32,
     /// `Drivetrain::currentGear` at the start of the step.
@@ -201,7 +203,12 @@ impl RecordedStep {
     /// The same step with nothing in it but what the driver did: the controls of the device
     /// and the clicks of the cockpit brake bias. This is all a whole car is given.
     pub fn driver_only(&self) -> RecordedStep {
-        RecordedStep { controls: self.controls, bias_clicks: self.bias_clicks, ..RecordedStep::default() }
+        RecordedStep {
+            controls: self.controls,
+            bias_clicks: self.bias_clicks,
+            headlights: self.headlights,
+            ..RecordedStep::default()
+        }
     }
 
     /// The step as 32-bit words (the golden file's layout).
@@ -231,6 +238,7 @@ impl RecordedStep {
             }
         }
         out.push(self.edl_active as u32);
+        out.push(self.headlights as u32);
     }
 
     pub fn from_words(words: &mut impl Iterator<Item = u32>) -> Option<RecordedStep> {
@@ -282,6 +290,7 @@ impl RecordedStep {
         }
         let [aero, stability] = lists;
         let edl_active = words.next()? != 0;
+        let headlights = words.next()? != 0;
         Some(RecordedStep {
             controls,
             bias_clicks,
@@ -294,6 +303,7 @@ impl RecordedStep {
             aero,
             stability,
             edl_active,
+            headlights,
         })
     }
 }
@@ -388,6 +398,7 @@ impl Runner {
                     }
                 }
                 car.device.controls = step.controls;
+                car.device.headlights = step.headlights;
                 car.step(DT, physics_time);
             }
         }
@@ -412,6 +423,10 @@ pub struct RecordedFeed<'a> {
 impl ChassisFeed for RecordedFeed<'_> {
     fn poll_controls(&mut self, chassis: &mut RollingChassis) {
         chassis.controls = self.step.controls;
+    }
+
+    fn get_action(&mut self, action: i32) -> bool {
+        action == 4 && self.step.headlights
     }
 
     fn engine(&mut self, _chassis: &RollingChassis) -> EngineFeed {
@@ -718,6 +733,9 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         }
         out.push(TraceValue::f("car.slipStream.length", s.length).extra());
         out.push(TraceValue::d("car.lockControlsTime", chassis.lock_controls_time).extra());
+        out.push(TraceValue::d("car.penaltyTimeAccumulator", chassis.penalty_time_accumulator).extra());
+        out.push(TraceValue::i("car.disableMinSpeedPenaltyClear", chassis.disable_min_speed_penalty_clear as i32).extra());
+        out.push(TraceValue::i("car.isGentleStopping", chassis.is_gentle_stopping as i32).extra());
         out.push(TraceValue::i("car.meshCollideMask", chassis.mesh_collide_mask as i32).extra());
         out.push(TraceValue::i("car.isControlsLocked", chassis.is_controls_locked as i32));
         out.push(TraceValue::i("car.blackFlagged", chassis.black_flagged as i32));

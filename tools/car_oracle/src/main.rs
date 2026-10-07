@@ -205,6 +205,7 @@ fn run(args: &Args) -> Result<(), String> {
         meta.push(("wind_speed".to_string(), format!("{:?}", scenario.whole.wind_speed)));
         meta.push(("wind_direction_deg".to_string(), format!("{:?}", scenario.whole.wind_direction_deg)));
         meta.push(("damage".to_string(), scenario.whole.damage.map(|d| format!("{d:?}")).join(",")));
+        meta.push(("penalty_mode".to_string(), if scenario.whole.penalty_cut_gas { "0" } else { "3" }.to_string()));
     }
     let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;

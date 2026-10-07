@@ -33,6 +33,11 @@ const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryReq
 const VA_STEP_STAGE0_JOINTS: usize = 0x1_4035_0b80; // dxStepIsland_Stage0_Joints (runs right after gravity and the gyroscopic torque were added)
 const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(float)
 const VA_PHYSICS_ENGINE_SET_WIND: usize = 0x1_4026_45a0; // PhysicsEngine::setWind(Speed, float)
+const VA_CAR_LOCK_CONTROLS: usize = 0x1_4027_45f0; // Car::lockControls(bool)
+const VA_CAR_LOCK_CONTROLS_UNTIL: usize = 0x1_4027_4600; // Car::lockControlsUntil(double, double)
+const VA_CAR_ADD_PENALTY: usize = 0x1_4026_f6a0; // Car::addPenalty(double)
+const CAR_IS_GENTLE_STOPPING: usize = 0x3a81;
+const PE_PENALTY_MODE: usize = 0xd4;
 const VA_CAR_RESET_SUSPENSION_DAMAGE: usize = 0x1_4027_5970; // Car::resetSuspensionDamageLevel()
 const VA_TYRE_SET_COMPOUND: usize = 0x1_4028_34e0; // bool Tyre::setCompound(int index)
 const VA_SETUP_MANAGER_STEP: usize = 0x1_4028_d090; // SetupManager::step(float dt)
@@ -698,9 +703,10 @@ extern "C" fn device_acquire_controls(_this: *mut u8, controls: *mut u8, _dt: f3
     }
 }
 
-/// `getAction(action)`: no button is ever pressed.
-extern "C" fn device_get_action(_this: *mut u8, _action: i32) -> u8 {
-    0
+/// `getAction(action)`: only the headlight switch (4) of a whole-car script is ever pressed.
+extern "C" fn device_get_action(_this: *mut u8, action: i32) -> u8 {
+    let st = state();
+    (st.whole && action == 4 && st.controls.headlights) as u8
 }
 extern "C" fn device_send_ff(_this: *mut u8, _force: f32, _damper: f32, _gain: f32) {}
 extern "C" fn device_get_ff_global_gain(_this: *mut u8) -> f32 {
@@ -1135,6 +1141,9 @@ impl<'a> World<'a> {
             if scenario.whole.pitlane {
                 wr(surface, SD_IS_PITLANE, 1u8);
             }
+            if scenario.whole.penalty_cut_gas {
+                wr(engine, PE_PENALTY_MODE, 0i32);
+            }
             if scenario.whole.wind_speed != 0.0 {
                 // the game's own PhysicsEngine::setWind(Speed, float): the speed is a one-float
                 // struct passed by value (in edx), the direction is the third argument
@@ -1533,13 +1542,34 @@ impl<'a> World<'a> {
                 set_manual_front_bias(self.car.add(CAR_BRAKE_SYSTEM), controls.bias_clicks);
             }
         }
+        // what the game's main thread would queue for the physics thread: the game's own
+        // functions, called before the step (the engine's clock still shows the last step)
+        unsafe {
+            if controls.lock_ms != 0.0 {
+                let lock_until: extern "C" fn(*mut u8, f64, f64) = std::mem::transmute(self.acs.va(VA_CAR_LOCK_CONTROLS_UNTIL));
+                lock_until(self.car, controls.lock_ms as f64, rd::<f64>(self.engine, PE_PHYSICS_TIME));
+            }
+            if controls.set_locked != 0 {
+                let lock: extern "C" fn(*mut u8, u8) = std::mem::transmute(self.acs.va(VA_CAR_LOCK_CONTROLS));
+                lock(self.car, (controls.set_locked > 0) as u8);
+            }
+            if controls.gentle_stop != 0 {
+                wr(self.car, CAR_IS_GENTLE_STOPPING, (controls.gentle_stop > 0) as u8);
+            }
+            if controls.add_penalty != 0.0 {
+                let add_penalty: extern "C" fn(*mut u8, f64) = std::mem::transmute(self.acs.va(VA_CAR_ADD_PENALTY));
+                add_penalty(self.car, controls.add_penalty as f64);
+            }
+        }
         let step: extern "C" fn(*mut u8, f32, f64, f64) =
             unsafe { std::mem::transmute(self.acs.va(VA_PHYSICS_ENGINE_STEP)) };
         step(self.engine, DT, time_ms, time_ms);
         let st = state();
         assert_eq!(st.world_steps, before_world_steps + 1, "dWorldStep did not run exactly once");
         assert_eq!(st.islands, before_islands + 1, "ODE did not step exactly one island");
-        assert_eq!(st.polled, 1, "the controls device was not polled exactly once");
+        // a car whose controls are locked outright (or that is black-flagged) does not ask
+        let locked = unsafe { rd::<u8>(self.car, CAR_IS_CONTROLS_LOCKED) != 0 || rd::<u8>(self.car, CAR_BLACK_FLAGGED) != 0 };
+        assert_eq!(st.polled, if locked { 0 } else { 1 }, "the controls device was not polled as expected");
 
         // what the game does after the step: the state snapshot for the main thread (the
         // telemetry writer reads ride heights and the limiter from the avatar's copy of it),
@@ -1584,6 +1614,11 @@ impl<'a> World<'a> {
         }
         if self.whole {
             row.i("script.drs", script.drs as i32);
+            row.i("script.headlights", script.headlights as i32);
+            row.f("script.lockMs", script.lock_ms);
+            row.i("script.setLocked", script.set_locked);
+            row.i("script.gentleStop", script.gentle_stop);
+            row.f("script.addPenalty", script.add_penalty);
         }
         // Car::controls as Car::step left it (read when dWorldStep starts): after the game's
         // own overrides and helpers (control lock, automatic clutch, automatic throttle blip)
@@ -1876,6 +1911,9 @@ impl<'a> World<'a> {
             row.v("car.slipStream.dir", &v3(car, 0x3ca8 + 0x48));
             row.f("car.slipStream.length", rd(car, 0x3ca8 + 0x60));
             row.d("car.lockControlsTime", rd(car, 0x3d18));
+            row.d("car.penaltyTimeAccumulator", rd(car, 0x3d28));
+            row.i("car.disableMinSpeedPenaltyClear", rd::<u8>(car, 0x3e2c) as i32);
+            row.i("car.isGentleStopping", rd::<u8>(car, CAR_IS_GENTLE_STOPPING) as i32);
             {
                 // IRigidBody::getMeshCollideMask(0) (+0x140) of the car body
                 let body: *mut u8 = rd(car, 0x118);

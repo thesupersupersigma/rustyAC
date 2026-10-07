@@ -30,6 +30,16 @@ pub struct Controls {
     pub bias_clicks: i32,
     /// The DRS button (`CarControls::drs`).
     pub drs: bool,
+    /// The headlight switch (the device's `getAction(4)`).
+    pub headlights: bool,
+    /// Jobs the game's main thread would queue for the physics thread; the harness calls the
+    /// game's own functions before the step. `lock_ms` != 0: `Car::lockControlsUntil(lock_ms,
+    /// physicsTime)`; `set_locked` 1 / -1: `Car::lockControls(true / false)`; `gentle_stop`
+    /// 1 / -1: `Car::isGentleStopping` on / off; `add_penalty` != 0: `Car::addPenalty(seconds)`.
+    pub lock_ms: f32,
+    pub set_locked: i32,
+    pub gentle_stop: i32,
+    pub add_penalty: f32,
 }
 
 impl Default for Controls {
@@ -45,6 +55,11 @@ impl Default for Controls {
             requested_gear: -1,
             bias_clicks: 0,
             drs: false,
+            headlights: false,
+            lock_ms: 0.0,
+            set_locked: 0,
+            gentle_stop: 0,
+            add_penalty: 0.0,
         }
     }
 }
@@ -67,6 +82,9 @@ pub struct Whole {
     /// `Car::damageZoneLevel` (front, rear, left, right, centre) written after the spawn: the
     /// wings of a dented car.
     pub damage: [f32; 5],
+    /// The session's penalty rule is "cut gas" (`PhysicsEngine::penaltyMode` 0) instead of the
+    /// engine's default "nothing" (3).
+    pub penalty_cut_gas: bool,
 }
 
 /// What a script may look at: the car as the previous step left it.
@@ -185,6 +203,7 @@ enum Kind {
     WcStops,
     WcPit,
     WcSpirited,
+    WcShell,
 }
 
 const fn seconds(s: f32) -> usize {
@@ -392,6 +411,13 @@ pub fn whole() -> Vec<Scenario> {
             12.0,
             Whole { stability_gain: 1.0, ..none },
             Kind::WcSpirited,
+        ),
+        wc(
+            "wc_shell",
+            "the car-level rules: a penalty forgiven at low speed, controls locked for 0.6 s, headlight switch, a gentle stop, a penalty that waits on the throttle and runs down off it, a second penalty on top, controls locked outright",
+            11.0,
+            Whole { penalty_cut_gas: true, ..none },
+            Kind::WcShell,
         ),
         wc(
             "wc_damage",
@@ -694,6 +720,44 @@ impl Driver {
                     c.gas = 1.0;
                 } else {
                     c.brake = 0.5;
+                }
+            }
+            Kind::WcShell => {
+                // one job per moment: exactly one step
+                let n = car.step - SETTLE_STEPS;
+                let at = |mark: f32| n == (mark / DT) as usize;
+                c.gas = 1.0;
+                // still slow: a penalty given here is forgiven at once (below 35 km/h)
+                if at(0.3) {
+                    c.add_penalty = 4.0;
+                }
+                if at(1.5) {
+                    c.lock_ms = 600.0;
+                }
+                c.headlights = (3.0..3.02).contains(&t) || (3.5..3.52).contains(&t);
+                if at(4.0) {
+                    c.gentle_stop = 1;
+                }
+                if at(4.5) {
+                    c.gentle_stop = -1;
+                }
+                // a penalty at speed: it waits while the throttle is down ...
+                if at(5.5) {
+                    c.add_penalty = 3.0;
+                }
+                // ... and runs down while the driver lifts; a second one on top of it
+                if (6.5..8.0).contains(&t) {
+                    c.gas = 0.0;
+                }
+                if at(7.2) {
+                    c.add_penalty = 2.0;
+                }
+                // controls locked outright (the device is not asked), then free again
+                if at(8.6) {
+                    c.set_locked = 1;
+                }
+                if at(9.3) {
+                    c.set_locked = -1;
                 }
             }
             Kind::WcSpirited => {
