@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! What the debug view draws and from where: the car's shape as boxes, AC's chase and
 //! cockpit cameras, and the little matrix arithmetic the picture needs. No Direct3D in here.

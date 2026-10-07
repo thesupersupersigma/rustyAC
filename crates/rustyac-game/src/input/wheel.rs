@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! Wheels and other DirectInput controllers: AC's `DICarControl` (DICarControl.obj) with its
 //! axis and button bindings, ported from the disassembly

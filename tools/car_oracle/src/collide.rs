@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The collision micro-oracle: the game's own ODE, OPCODE and `PhysicsCore` (run in this
 //! process, from `acs.exe`) against `rustyac-ode` and the port's `PhysicsCore`, bit for bit.

@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! AC's `SetupManager` for the values of the ported systems (chassis, brakes, drivetrain,
 //! engine): every setup item is a name, a pointer to one float of the car and a multiplier; `SetupManager::step` (late in every

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The input file of `--record` / `--replay`: how the car was set up, then what the driver's
 //! device reported in every physics step. Replaying it steps the same car through the same

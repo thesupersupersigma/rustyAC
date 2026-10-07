@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Maps acs.exe into this process as a plain image and prepares it so that the game's own
 //! physics code can be called. The game's entry point is never run and nothing in the file on

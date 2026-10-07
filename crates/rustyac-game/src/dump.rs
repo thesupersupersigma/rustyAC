@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The state dump of `--dump-states`: what the car looked like after every step of a replay,
 //! bit for bit, so that a test or `tools/chassis_compare` can hold it against a car stepped

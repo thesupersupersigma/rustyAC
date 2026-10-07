@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The rolling chassis: AC's `Car` reduced to the parts that are ported (rigid bodies and
 //! their masses, fuel, the four suspensions with their tyres, heave springs, anti-roll bars,

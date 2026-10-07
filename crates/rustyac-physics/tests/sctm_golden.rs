@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! `VanillaSctm` against rows of AC's own `SCTM::solve` output (sampled from the oracle CSVs
 //! by `tools/make_sctm_golden.py`). Every output field of every row must match bit for bit.

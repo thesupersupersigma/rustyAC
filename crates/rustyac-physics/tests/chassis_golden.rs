@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The Rust car against Assetto Corsa's own: five excerpts of the whole-car recordings of
 //! `tools/car_oracle` (the game's own code driving a car on a flat road).

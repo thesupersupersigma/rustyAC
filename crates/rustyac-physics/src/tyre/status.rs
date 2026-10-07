@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The tyre's per-step inputs and its live state: AC's `TyreInputs`, `TyreExternalInputs`
 //! and `TyreStatus`. Fields are the PDB member names in snake_case (AC's spelling kept).

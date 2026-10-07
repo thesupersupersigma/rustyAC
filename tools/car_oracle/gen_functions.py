@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT OR Apache-2.0
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 """Writes src/physics_functions.tsv: address range and short name of every hand-written function
 of the game's physics libraries, taken from the local index (re/index/functions.tsv, built by

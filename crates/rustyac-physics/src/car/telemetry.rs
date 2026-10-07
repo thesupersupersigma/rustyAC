@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The telemetry link: the `acpmf_physics` shared-memory page (`SPageFilePhysics`, 592 bytes)
 //! as AC's `SharedMemoryWriter::updatePhysics` @ 0x140186ef0 fills it after every physics

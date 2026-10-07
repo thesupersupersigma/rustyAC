@@ -1,52 +1,31 @@
 # Licensing
 
-rustyAC is a personal Rust rewrite of Assetto Corsa (2014). It is not one work under one
-license: the code I wrote myself is licensed, and the code ported from the game is not mine to
-license, so it has no license at all.
+rustyAC is a Rust rewrite of Assetto Corsa (2014). Every source file says its license on its
+first line (`SPDX-License-Identifier`). Files translated 1:1 from the game also say so on their
+second line: `Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).`
 
-Copyright (c) 2026 thesupersupersigma, for the licensed parts.
+Copyright (c) 2026 thesupersupersigma.
 
 ## Which part is under which license
 
 | Part | Paths | License |
 |---|---|---|
-| The game, my original files | `crates/rustyac-game/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
-| Small libraries and tools I wrote | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>the Rust tools `tools/car_oracle/`, `tools/chassis_compare/`, `tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/tyre_oracle/`<br>the Python scripts `tools/*.py`, `tools/car_oracle/gen_functions.py`, `ac_telemetry.py`, `check_telemetry.py` | `MIT OR Apache-2.0`, whichever you prefer: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| The game and the car physics | `crates/rustyac-game/`<br>`crates/rustyac-physics/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
+| Tools built on the car physics | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/` | `GPL-3.0-or-later` |
+| Notes and reports | `docs/` | `GPL-3.0-or-later` |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py` | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
-| The car physics | `crates/rustyac-physics/` | **None.** Derived from Assetto Corsa; no rights are granted |
-| Single files ported from Assetto Corsa | listed in the next section | **None.** No rights are granted |
-| Notes about the game's internals | `docs/` | None |
 
-Everything that is not in this table has no license either.
+**What the licenses mean in short:**
+- **GPL-3.0-or-later:** use, change and share it freely, even for money, but anything you
+  distribute that is built on it must also be GPL with its source available.
+- **MIT OR Apache-2.0:** you pick one of the two. Both let you do almost anything, including
+  using it in closed-source work, as long as the copyright notice stays. Apache-2.0 adds an
+  explicit patent licence.
+- **BSD-3-Clause:** ODE's own license, kept as it is.
 
-The first line of every `.rs` file, and of every Python script named above, says which case it
-is: either an `SPDX-License-Identifier` line, or the line `Ported from Assetto Corsa (acs.exe,
-Kunos Simulazioni). Not covered by rustyAC's licenses`.
-
-Two files of the game are `MIT OR Apache-2.0` instead of GPL: `crates/rustyac-game/src/dump.rs`
-and `crates/rustyac-game/src/input_file.rs`. `tools/chassis_compare` compiles them in by path,
-so they carry the license of the tools.
-
-"No license" means just that: nothing in this repository gives anyone the right to copy, change
-or pass on those files.
-
-## Ported from Assetto Corsa: not covered
-
-These are 1:1 translations of code in Kunos Simulazioni's `acs.exe`, or data that comes out of
-the game. They are not mine to license, and none of rustyAC's licenses applies to them.
-
-- `crates/rustyac-physics/`: the whole crate. The car physics, its test rigs, its tests and the
-  recordings of the game in `tests/golden/`.
-- `crates/rustyac-game/src/input/pad.rs`: the game's Xbox pad code.
-- `crates/rustyac-game/src/input/keyboard.rs`: the game's keyboard driving code.
-- `crates/rustyac-game/src/input/wheel.rs`: the game's wheel and force feedback code.
-- `crates/rustyac-game/src/render/scene.rs`: the game's chase and cockpit cameras and its matrix
-  routines. The car's box shapes in the same file are mine, but the file is marked as a whole.
-- `tools/acd_extract.py`: the game's reader for `data.acd`.
-- `tools/car_oracle/src/physics_functions.tsv`: the names and addresses of the game's physics
-  functions, taken from its `acs.pdb`.
-- `crates/rustyac-ode/tests/data/settle_0_300.odegold` and `slalom_3000_300.odegold`: recordings
-  of the game's own car, used as test data.
+GPL code may use the MIT / Apache / BSD parts; the reverse is not allowed, which is why
+everything that links the car physics is GPL.
 
 ## Third-party code
 
@@ -61,10 +40,10 @@ the game. They are not mine to license, and none of rustyAC's licenses applies t
 
 ## No Assetto Corsa files
 
-No file of Assetto Corsa is in this repository, and none ever will be: not the executable, not
-its content, cars or tracks, and not the data extracted from `.acd` archives. To use rustyAC you
-point it at your own install. The oracle tools work the same way: they load `acs.exe` from your
-install when they run and contain none of it.
+No file of Assetto Corsa is in this repository: not the executable, not its content, cars or
+tracks, and not the data extracted from `.acd` archives. To use rustyAC you point it at your own
+install. The oracle tools work the same way: they load `acs.exe` from your install when they run
+and contain none of it.
 
 ## Trademark
 

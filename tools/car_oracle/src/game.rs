@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The game side: AC's own `PhysicsEngine`, `Track` and `Car` built in this process, the
 //! fakes they talk to (ground, controls device) and the hooks that record what they do.

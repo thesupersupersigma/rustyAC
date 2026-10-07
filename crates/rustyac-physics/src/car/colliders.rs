@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! What a car collides with: the floor boxes of `data/colliders.ini`
 //! (`CarColliderManager::loadINI` @ 0x1402a37a0) and the collider mesh of

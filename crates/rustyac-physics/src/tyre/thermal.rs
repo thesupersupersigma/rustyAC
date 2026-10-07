@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! `VanillaTyreThermalModel`: 1:1 port of AC's `TyreThermalModel` (acs.exe build
 //! 0x5a55e7a8): 3 stripes x 12 elements of surface patches around the tyre plus one core

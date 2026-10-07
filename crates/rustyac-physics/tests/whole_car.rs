@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The whole car's branches that no recording of the game reaches: they were ported from the
 //! disassembly and read again by reviewers (`docs/port/whole_car.md` section 6.3). These tests

@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The brake slot ([`BrakeModel`]) and AC's `BrakeSystem` as its Vanilla implementation
 //! ([`VanillaBrakes`]): pedal to brake torque per wheel, front / rear bias (the setup's, the

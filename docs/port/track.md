@@ -135,7 +135,7 @@ Addresses are of `acs.exe` 1.16.4, as in the comments of the code (a few only in
 | `src/opcode.rs` | The OPCODE tree over a mesh as the game builds it: one triangle per leaf, cut along the axis on which the triangles' centres vary most, at the mean; stored without leaves and not quantized | `Opcode::Model::Build` 0x1403903b0, `AABBTree::Build` 0x140395ff0, `AABBTreeNode::Subdivide` 0x140396250, `::Split` 0x1403961a0, `AABBTreeOfTrianglesBuilder::ComputeGlobalBox` 0x1403982d0, `::GetSplittingValues` 0x140398800, `AABBNoLeafTree::Build` 0x140396c30, `MeshInterface::IsValid` 0x14038ffe0 |
 | `src/collision.rs` | Static meshes in ODE's simple spaces and a ray against them: the boxes, the walk through the spaces from the newest mesh, the ray against one mesh (first front-facing triangle found), the nearest answer over all meshes | `dGeomTriMeshDataBuildSingle` 0x14034b170, `dxTriMeshData::Build` 0x14034a780, `dxTriMesh::computeAABB` 0x14034ae10, `dxSpace::computeAABB` 0x140342d40, `dxRay::computeAABB` 0x140344a60, `collideAABBs` 0x140342c60, `dGeomRaySet` 0x140345e50, `dSpaceCollide2` 0x1403430a0, `dxSimpleSpace::collide2` 0x140342a60, `dCollide` 0x140344120, `dCollideRTL` 0x14038aa90, `RayCollider::InitQuery` 0x1403670b0, `::_SegmentStab` 0x14036aef0, `PhysicsCore::rayCast` 0x1402cd070, `rayNearCallback` 0x1402cd210, `PhysicsCore::getStaticSubSpace` 0x1402ccac0, `CollisionMeshODE::CollisionMeshODE` 0x1402cebb0 |
 
-**`crates/rustyac-physics/src/track/` (new; ported, not covered by the licenses)**
+**`crates/rustyac-physics/src/track/` (new; ported from acs.exe)**
 
 | File | What | From |
 |---|---|---|

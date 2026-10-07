@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! AC's `DynamicController`: a small programmable formula loaded from a `ctrl_*.ini` file. A
 //! list of stages, each "take one signal of the car, pass it through a look-up table, smooth

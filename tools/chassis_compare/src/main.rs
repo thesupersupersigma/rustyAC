@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The Rust rolling chassis against the whole-car recordings of `tools/car_oracle`.
 //!

@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The Xbox pad: AC's XInput wrapper (`X360Joypad`, JoypadManager.obj) and its gamepad
 //! driver `JoypadCarControl` (X360CarControl.obj), ported from the disassembly

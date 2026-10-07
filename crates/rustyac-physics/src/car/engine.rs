@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The engine slot ([`EngineModel`]) and AC's `Engine` as its Vanilla implementation
 //! ([`VanillaEngine`]): throttle maps, rev limiter, full-throttle torque from `power.lut`,

@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! `VanillaTyre` against AC's own `Tyre::step`, on a made-up tyre (`golden/synthetic_car`,
 //! not car data): two scenarios of a few hundred 0.003 s steps each, recorded by

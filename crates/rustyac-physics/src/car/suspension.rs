@@ -1,4 +1,5 @@
-// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
 //! The suspension slot ([`SuspensionModel`], AC's `ISuspension`) and its double-wishbone
 //! implementation [`VanillaDwb`] (AC's `Suspension`, "DWB" in suspensions.ini), with the

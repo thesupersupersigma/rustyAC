@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Checks on a finished recording: the tyres replayed through the Rust port, and a few
 //! headline numbers for a plausibility look.
