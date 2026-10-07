@@ -285,8 +285,8 @@ impl Bindings {
         let pad = |section: &str| button_label(button_from_name(ini.get_string(section, "XBOXBUTTON")));
         let thumb = if ini.get_string("X360", "STEER_THUMB") == "LEFT" { "left stick" } else { "right stick" };
         let mut out = format!("bindings from {}\n", self.origin);
-        out.push_str(&format!("  {:<22} {:<20} {}\n", "", "Xbox pad", "keyboard"));
-        let mut row = |what: &str, pad: &str, keys: String| out.push_str(&format!("  {what:<22} {pad:<20} {keys}\n"));
+        out.push_str(&format!("  {:<24} {:<28} {}\n", "", "Xbox pad", "keyboard"));
+        let mut row = |what: &str, pad: &str, keys: String| out.push_str(&format!("  {what:<24} {pad:<28} {keys}\n"));
         row("steer", thumb, format!("{} / {}", key_pair("LEFT"), key_pair("RIGHT")));
         row("gas", "RT", key_pair("GAS"));
         row("brake", "LT", key_pair("BRAKE"));

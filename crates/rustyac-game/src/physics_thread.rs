@@ -124,6 +124,8 @@ pub struct Shared {
     pub driver_text: Mutex<String>,
     /// Presses of a device's camera button (the display counts them).
     pub camera_toggles: AtomicU32,
+    /// The car's unchanging facts, once it is built.
+    pub car_info: Mutex<Option<crate::sim::CarInfo>>,
 }
 
 impl Shared {
@@ -140,6 +142,7 @@ impl Shared {
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
             camera_toggles: AtomicU32::new(0),
+            car_info: Mutex::new(None),
         })
     }
 
@@ -198,6 +201,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     {
         let view = CarView::capture(&sim, 0.0);
         *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now() };
+        *shared.car_info.lock().unwrap() = Some(sim.car_info());
     }
     // closes the current stretch of paced steps: its wall time runs from its first step's due
     // time to now (the end of its last step)

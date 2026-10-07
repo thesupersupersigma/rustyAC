@@ -57,6 +57,8 @@ pub struct CarView {
     pub drs: bool,
     pub lights: bool,
     pub auto_shifter: bool,
+    /// The car's acceleration in g, body axes (the chase camera leans with it).
+    pub acc_g: [f32; 3],
     /// The steering force sent to the device, -1..1.
     pub ff: f32,
     pub fuel: f32,
@@ -97,6 +99,7 @@ impl Default for CarView {
             drs: false,
             lights: false,
             auto_shifter: false,
+            acc_g: [0.0; 3],
             ff: 0.0,
             fuel: 0.0,
             device: 0,
@@ -170,6 +173,7 @@ impl CarView {
             drs: car.controls.drs,
             lights: car.lights_on,
             auto_shifter: car.auto_shifter.is_active,
+            acc_g: [car.acc_g.x, car.acc_g.y, car.acc_g.z],
             ff: car.last_ff,
             fuel: car.fuel as f32,
             device: sim.car.device.source.device_id(),

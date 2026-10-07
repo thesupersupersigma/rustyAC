@@ -337,6 +337,17 @@ pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// The car's unchanging facts, for the display.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CarInfo {
+    pub data_path: PathBuf,
+    pub name: String,
+    /// The wheels' design positions in body axes (LF, RF, LR, RR).
+    pub wheel_positions: [[f32; 3]; 4],
+    pub tyre_width: [f32; 4],
+    pub tyre_radius: [f32; 4],
+}
+
 /// One car on the endless flat road, and the count of its steps.
 pub struct GameSim {
     pub setup: SimSetup,
@@ -388,6 +399,20 @@ impl GameSim {
         } else {
             self.setup.time_of_step(self.steps - 1)
         }
+    }
+
+    /// What the display needs to know of the car once: where its data is and where its
+    /// wheels sit.
+    pub fn car_info(&self) -> CarInfo {
+        let car = &self.car.car;
+        let mut info = CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), ..CarInfo::default() };
+        for index in 0..4.min(car.tyres.len()) {
+            let p = car.suspensions[index].get_base_position();
+            info.wheel_positions[index] = [p.x, p.y, p.z];
+            info.tyre_width[index] = car.tyres[index].data.width;
+            info.tyre_radius[index] = car.tyres[index].data.radius;
+        }
+        info
     }
 
     /// Seconds simulated so far.

@@ -14,10 +14,12 @@ pub mod dump;
 pub mod input;
 pub mod input_file;
 pub mod physics_thread;
+pub mod render;
 pub mod shm;
 pub mod sim;
 pub mod timer;
 pub mod view;
+pub mod window;
 
 use std::path::Path;
 
