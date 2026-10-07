@@ -183,7 +183,7 @@ impl RecordedStep {
     pub fn to_words(&self, out: &mut Vec<u32>) {
         let c = &self.controls;
         out.extend([c.gas, c.brake, c.steer, c.clutch, c.hand_brake].map(f32::to_bits));
-        out.extend([c.gear_up as u32, c.gear_dn as u32, c.kers as u32, c.requested_gear_index as u32, self.bias_clicks as u32]);
+        out.extend([c.gear_up as u32, c.gear_dn as u32, c.drs as u32, c.kers as u32, c.requested_gear_index as u32, self.bias_clicks as u32]);
         out.push(self.clutch.to_bits());
         out.push(self.gear as u32);
         out.extend([self.engine.rpm, self.engine.gas_usage, self.engine.turbo_boost].map(f32::to_bits));
@@ -216,6 +216,7 @@ impl RecordedStep {
             hand_brake,
             gear_up: words.next()? != 0,
             gear_dn: words.next()? != 0,
+            drs: words.next()? != 0,
             kers: words.next()? != 0,
             requested_gear_index: words.next()? as i32,
         };
@@ -592,6 +593,9 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     if let Some(brakes) = &chassis.brake_system {
         brakes.trace(&mut out);
     }
+    if let Some(aero) = &chassis.aero {
+        aero.trace(&mut out);
+    }
     out
 }
 
@@ -661,6 +665,8 @@ pub struct RunSetup {
     /// The chassis has its own engine, drivetrain and shift helpers
     /// ([`RollingChassis::install_drivetrain`]).
     pub rust_drivetrain: bool,
+    /// The chassis has its own wings and DRS ([`RollingChassis::install_aero`]).
+    pub rust_aero: bool,
     /// The "automatic clutch" driving aid, as the recording's scenario set it.
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
@@ -673,6 +679,9 @@ impl RunSetup {
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
         let mut chassis =
             RollingChassis::new(data_path, self.env, Box::new(self.ground), self.seed, self.clock_start_ms)?;
+        if self.rust_aero {
+            chassis.install_aero()?;
+        }
         if self.rust_brakes {
             chassis.install_brakes()?;
         }
@@ -799,6 +808,10 @@ impl RollingChassis {
             out.extend([s.is_active as u32, s.change_up_rpm as u32, s.change_dn_rpm as u32, s.gas_cutoff.to_bits()]);
             let g = &self.gear_changer;
             out.extend([g.was_gear_up_triggered, g.was_gear_dn_triggered, g.last_gear_up, g.last_gear_dn].map(|b| b as u32));
+        }
+        if let Some(aero) = &self.aero {
+            aero.save_state(&mut out);
+            out.extend([self.air_density.to_bits(), c.drs as u32]);
         }
         out
     }
@@ -948,6 +961,12 @@ impl RollingChassis {
             g.last_gear_up = next()? != 0;
             g.last_gear_dn = next()? != 0;
         }
+        if let Some(aero) = &mut self.aero {
+            aero.load_state(&mut words)?;
+            let mut next = || words.next().ok_or("the saved state is too short".to_string());
+            self.air_density = f32::from_bits(next()?);
+            self.controls.drs = next()? != 0;
+        }
         Ok(())
     }
 }
@@ -974,7 +993,7 @@ pub struct Golden {
     pub steps: Vec<GoldenStep>,
 }
 
-const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD02";
+const GOLDEN_MAGIC: &[u8; 8] = b"CHGOLD03";
 
 /// The 13 values per body kept in a golden step.
 pub fn body_words(chassis: &RollingChassis) -> Vec<u32> {
@@ -997,7 +1016,7 @@ impl Golden {
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
-             auto_shifter={}\n",
+             auto_shifter={}\nrust_aero={}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
             self.setup.seed,
@@ -1022,6 +1041,7 @@ impl Golden {
             self.setup.rust_drivetrain as u8,
             self.setup.auto_clutch as u8,
             self.setup.auto_shifter as u8,
+            self.setup.rust_aero as u8,
         );
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -1081,6 +1101,7 @@ impl Golden {
             env,
             rust_brakes: get("rust_brakes")? != "0",
             rust_drivetrain: get("rust_drivetrain")? != "0",
+            rust_aero: get("rust_aero")? != "0",
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
         };

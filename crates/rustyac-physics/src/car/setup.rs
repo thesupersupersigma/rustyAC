@@ -57,6 +57,8 @@ pub enum SetupTarget {
     HeaveRodLength(usize),
     /// `heaveSprings[axle].packerRange`
     HeavePackerRange(usize),
+    /// `aeroMap.wings[i].status.inputAngle` for a wing with controllers, else `status.angle`
+    WingAngle(usize),
     /// `Car::steerAssist`
     SteerAssist,
     /// `drivetrain.diffPowerRamp`, `diffCoastRamp`, `diffPreLoad`
@@ -102,6 +104,14 @@ impl SetupTarget {
             HeaveProgressiveSpringRate(a) => chassis.heave_springs[a].progressive_k,
             HeaveRodLength(a) => chassis.heave_springs[a].rod_length,
             HeavePackerRange(a) => chassis.heave_springs[a].packer_range,
+            WingAngle(i) => {
+                let wing = &aero(chassis).base().wings[i];
+                if wing.data.has_controller {
+                    wing.status.input_angle
+                } else {
+                    wing.status.angle
+                }
+            }
             SteerAssist => chassis.steer_assist,
             DiffPowerRamp => drivetrain(chassis).base().diff_power_ramp,
             DiffCoastRamp => drivetrain(chassis).base().diff_coast_ramp,
@@ -140,6 +150,14 @@ impl SetupTarget {
             HeaveProgressiveSpringRate(a) => chassis.heave_springs[a].progressive_k = value,
             HeaveRodLength(a) => chassis.heave_springs[a].rod_length = value,
             HeavePackerRange(a) => chassis.heave_springs[a].packer_range = value,
+            WingAngle(i) => {
+                let wing = &mut aero_mut(chassis).base_mut().wings[i];
+                if wing.data.has_controller {
+                    wing.status.input_angle = value;
+                } else {
+                    wing.status.angle = value;
+                }
+            }
             SteerAssist => chassis.steer_assist = value,
             DiffPowerRamp => drivetrain_mut(chassis).base_mut().diff_power_ramp = value,
             DiffCoastRamp => drivetrain_mut(chassis).base_mut().diff_coast_ramp = value,
@@ -160,6 +178,12 @@ fn drivetrain(chassis: &RollingChassis) -> &dyn super::DrivetrainModel {
 }
 fn drivetrain_mut(chassis: &mut RollingChassis) -> &mut dyn super::DrivetrainModel {
     chassis.drivetrain.as_deref_mut().expect("a drivetrain setup item without a drivetrain")
+}
+fn aero(chassis: &RollingChassis) -> &dyn super::AeroModel {
+    chassis.aero.as_deref().expect("a wing setup item without an aero model")
+}
+fn aero_mut(chassis: &mut RollingChassis) -> &mut dyn super::AeroModel {
+    chassis.aero.as_deref_mut().expect("a wing setup item without an aero model")
 }
 fn brakes(chassis: &RollingChassis) -> &dyn super::BrakeModel {
     chassis.brake_system.as_deref().expect("a brake setup item without a brake system")
@@ -238,7 +262,11 @@ impl SetupManager {
         add("ARB_REAR".into(), ArbK(1), 1.0, 1.0);
         add("ARB_FRONT_NMM".into(), ArbK(0), 1000.0, 1.0);
         add("ARB_REAR_NMM".into(), ArbK(1), 1000.0, 1.0);
-        // (the wings' items are registered here)
+        if let Some(aero) = &chassis.aero {
+            for index in 0..aero.base().wings.len() {
+                add(format!("WING_{index}"), WingAngle(index), 1.0, 1.0);
+            }
+        }
         if let Some(drivetrain) = &chassis.drivetrain {
             // a car with a differential controller has no differential items
             if !drivetrain.has_dynamic_controllers() {

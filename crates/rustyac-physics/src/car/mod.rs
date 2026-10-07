@@ -38,6 +38,7 @@
     clippy::too_many_arguments
 )]
 
+pub mod aero;
 pub mod antiroll_bar;
 pub mod body;
 pub mod brakes;
@@ -52,6 +53,7 @@ pub mod setup;
 pub mod shift_assists;
 pub mod suspension;
 
+pub use aero::{AeroBase, AeroModel, Drs, DynamicWingController, SlipStream, VanillaAero, Wing};
 pub use antiroll_bar::AntirollBar;
 pub use body::{DistanceJoint, FixedJoint, ForceSource, PhysicsCore, RigidBody, TapeCall};
 pub use brakes::{BrakeBase, BrakeModel, VanillaBrakes};

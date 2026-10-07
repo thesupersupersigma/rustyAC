@@ -24,6 +24,8 @@ pub struct CarControls {
     pub gear_up: bool,
     /// `gearDn` (+0x01)
     pub gear_dn: bool,
+    /// `drs` (+0x02): the DRS button
+    pub drs: bool,
     /// `kers` (+0x03): the hybrid / push-to-pass button
     pub kers: bool,
     /// `requestedGearIndex` (+0x08): the H-shifter's gear (0 reverse, 1 neutral, 2 first ...),
@@ -47,6 +49,7 @@ impl Default for CarControls {
         CarControls {
             gear_up: false,
             gear_dn: false,
+            drs: false,
             kers: false,
             requested_gear_index: -1,
             hand_brake: 0.0,
@@ -103,8 +106,8 @@ pub trait ChassisFeed {
     /// unported system leaves in a tyre (`absOverride`, `aiMult`, `inputs.electricTorque`).
     fn edl(&mut self, chassis: &mut RollingChassis);
 
-    /// Positions 6 to 9, `DRS::step`, `AeroMap::step`, `Kers::step`, `ERS::step`: the wings
-    /// push on the car body. Runs after the heave springs.
+    /// Only without an aero model: positions 6 to 9, `DRS::step`, `AeroMap::step`,
+    /// `Kers::step`, `ERS::step`: the wings push on the car body. Runs after the heave springs.
     fn aero(&mut self, chassis: &mut RollingChassis);
 
     /// Only without a drivetrain: positions 11 to 14, `AutoBlip::step`, `AutoShifter::step`,

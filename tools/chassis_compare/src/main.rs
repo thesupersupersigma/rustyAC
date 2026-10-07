@@ -61,13 +61,14 @@ const FED_SYSTEMS: [&str; 2] = ["aero_drag", "aero_lift"];
 struct Systems {
     brakes: bool,
     drivetrain: bool,
+    aero: bool,
 }
 
 impl Systems {
     /// Everything that is ported.
-    const ALL: Systems = Systems { brakes: true, drivetrain: true };
+    const ALL: Systems = Systems { brakes: true, drivetrain: true, aero: true };
     /// The rolling chassis alone, as in Task 08.
-    const CHASSIS: Systems = Systems { brakes: false, drivetrain: false };
+    const CHASSIS: Systems = Systems { brakes: false, drivetrain: false, aero: false };
 
     fn describe(&self) -> &'static str {
         match (self.brakes, self.drivetrain) {
@@ -100,6 +101,7 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         env,
         rust_brakes: systems.brakes,
         rust_drivetrain: systems.drivetrain,
+        rust_aero: systems.aero,
         auto_clutch: get("auto_clutch")? != "0",
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
@@ -120,6 +122,7 @@ fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, Str
             clutch: f("script.clutch"),
             gear_up: recording.i(step, "script.gearUp") != 0,
             gear_dn: recording.i(step, "script.gearDn") != 0,
+            drs: recording.has("script.drs") && recording.i(step, "script.drs") != 0,
             kers: false,
             requested_gear_index: script_i("script.requestedGear", "controls.requestedGearIndex"),
             hand_brake: if recording.has("script.handBrake") { f("script.handBrake") } else { f("controls.handBrake") },
@@ -1442,6 +1445,7 @@ fn main() {
                     match name {
                         "brakes" => systems.brakes = false,
                         "drivetrain" | "engine" => systems.drivetrain = false,
+                        "aero" => systems.aero = false,
                         other => {
                             eprintln!("--feed: unknown system {other:?}\n{}", usage());
                             std::process::exit(2);

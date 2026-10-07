@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
+use super::aero::{AeroModel, SlipStream, VanillaAero};
 use super::antiroll_bar::AntirollBar;
 use super::body::{FixedJoint, ForceSource, PhysicsCore, RigidBody};
 use super::brakes::{BrakeModel, VanillaBrakes};
@@ -63,6 +64,10 @@ pub struct ChassisEnvironment {
     pub lock_gearbox_at_start_time_ms: f64,
     /// `PhysicsEngine::penaltyRules.jumpStartPenaltyMode` (0 = the gearbox is locked on the grid)
     pub jump_start_penalty_mode: i32,
+    /// `PhysicsEngine::wind.vector`, m/s, world axes (`PhysicsEngine::stepWind` keeps it up to date)
+    pub wind: Vec3f,
+    /// `DRSManager::isDRSAvailable` of the track for this car: true on a track without DRS zones
+    pub drs_zone_available: bool,
 }
 
 impl Default for ChassisEnvironment {
@@ -87,6 +92,8 @@ impl Default for ChassisEnvironment {
             session_start_time_ms: 0.0,
             lock_gearbox_at_start_time_ms: 0.0,
             jump_start_penalty_mode: 0,
+            wind: Vec3f { x: 0.0, y: 0.0, z: 0.0 },
+            drs_zone_available: true,
         }
     }
 }
@@ -208,6 +215,18 @@ pub struct RollingChassis {
     /// drivetrain slot. `None`: the feed supplies the driven wheels' speed, the gear and what
     /// the fuel burn reads of the engine.
     pub drivetrain: Option<Box<dyn DrivetrainModel>>,
+    /// `Car::aeroMap` with `Car::drs`: the aero slot. `None`: the feed's `aero` hook makes the
+    /// wings' force calls instead.
+    pub aero: Option<Box<dyn AeroModel>>,
+    /// `AeroMap::airDensity` as `Car::updateAirPressure` left it (also kept here for a chassis
+    /// without an aero model), kg/m^3
+    pub air_density: f32,
+    /// `Car::damageZoneLevel`: front, rear, left, right, centre
+    pub damage_zone_level: [f32; 5],
+    /// `Car::slipStreamEffectGain`
+    pub slip_stream_effect_gain: f32,
+    /// `Car::slipStream`: this car's wake
+    pub slip_stream: SlipStream,
     /// `Car::autoClutch`, `Car::autoBlip`, `Car::autoShift`, `Car::gearChanger`: they run
     /// only with a drivetrain.
     pub autoclutch: Autoclutch,
@@ -573,6 +592,11 @@ impl RollingChassis {
             setup_manager: SetupManager::default(),
             brake_system: None,
             drivetrain: None,
+            aero: None,
+            air_density: 1.221,
+            damage_zone_level: [0.0; 5],
+            slip_stream_effect_gain: 1.0,
+            slip_stream: SlipStream::default(),
             autoclutch: Autoclutch::default(),
             auto_blip: AutoBlip::default(),
             auto_shifter: AutoShifter::default(),
@@ -697,6 +721,25 @@ impl RollingChassis {
         self.auto_blip = AutoBlip::new(&self.data_path)?;
         self.auto_shifter = AutoShifter::new(&self.data_path)?;
         self.gear_changer = GearChanger::default();
+        self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
+        Ok(())
+    }
+
+    /// Gives the chassis its own aerodynamics: AC's `AeroMap` and `DRS` built from the car's
+    /// files (`Car::initAeroMap` @ 0x140272a80). From now on the feed's `aero` hook is not
+    /// called.
+    pub fn install_aero(&mut self) -> Result<(), String> {
+        let (aero, slipstream) = VanillaAero::new(&self.data_path)?;
+        if let Some((effect_gain_mult, speed_factor_mult)) = slipstream {
+            self.slip_stream.effect_gain_mult = effect_gain_mult;
+            self.slip_stream.speed_factor_mult = speed_factor_mult;
+        }
+        self.set_aero(Box::new(aero))
+    }
+
+    /// Puts an aero model into the aero slot (and registers the wings' setup items).
+    pub fn set_aero(&mut self, aero: Box<dyn AeroModel>) -> Result<(), String> {
+        self.aero = Some(aero);
         self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
         Ok(())
     }
@@ -964,6 +1007,9 @@ impl RollingChassis {
             feed.poll_controls(self);
         }
 
+        // Car::updateAirPressure: a car alone has no wake to drive in
+        self.update_air_pressure(&[]);
+
         // fuel burn, from what the engine did in the step before
         let engine = match &self.drivetrain {
             Some(drivetrain) => {
@@ -1093,7 +1139,13 @@ impl RollingChassis {
             }
         }
         // 6 to 9: DRS, aero, KERS, ERS
-        feed.aero(self);
+        match self.aero.take() {
+            Some(mut aero) => {
+                aero.step(self, dt);
+                self.aero = Some(aero);
+            }
+            None => feed.aero(self),
+        }
         // 10: steering: the rods move now, the solver turns the wheels at the end of this
         // step, the tyres see it in the next
         let offset = -(self.final_steer_angle_signal * self.steering_system.linear_ratio);
