@@ -664,6 +664,7 @@ pub fn collide(
     mesh_poses: usize,
     seed: u64,
     only_kind: Option<usize>,
+    boxes_only: bool,
 ) -> Result<(String, bool), String> {
     let track = &game_track.rust;
     let mut twin = Twin::new(acs, engine, Some((track, &game_track.objects)));
@@ -735,7 +736,8 @@ pub fn collide(
                 ([point[0], point[1] + rng.range(0.2, 1.2), point[2]], rotation(yaw, rng.range(-20.0, 20.0) * degrees, (side + rng.range(-25.0, 25.0)) * degrees), 0x1f)
             }
         };
-        twin.set_mesh_mask(body, 0, mask);
+        // (`boxes_only`: the mesh collides with nothing, for a look at the boxes alone)
+        twin.set_mesh_mask(body, 0, if boxes_only { 0 } else { mask });
         twin.set_pose(body, position, &rot);
         let entry = &mut tally[kind];
         entry.poses += 1;

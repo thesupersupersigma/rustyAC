@@ -102,6 +102,7 @@ struct Args {
     mesh_count: usize,
     kind: Option<usize>,
     hybrid: bool,
+    boxes_only: bool,
     seed: u64,
 }
 
@@ -135,6 +136,7 @@ fn parse_args() -> Result<Args, String> {
         mesh_count: 50_000,
         kind: None,
         hybrid: false,
+        boxes_only: false,
         seed: 12,
     };
     while let Some(flag) = it.next() {
@@ -166,6 +168,7 @@ fn parse_args() -> Result<Args, String> {
             "--mesh-count" => a.mesh_count = number(value()?)?,
             "--kind" => a.kind = Some(number(value()?)?),
             "--hybrid" => a.hybrid = true,
+            "--boxes-only" => a.boxes_only = true,
             "--seed" => a.seed = number(value()?)? as u64,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
@@ -272,8 +275,8 @@ fn collide_poses(args: &Args) -> Result<(), String> {
     let engine = game::new_engine(&acs, 1);
     let game_track = track::GameTrack::build(&acs, engine, &folder, false)?;
     let count = if args.count_given { args.count } else { 200_000 };
-    let (report, ok) = collide::collide(&acs, engine, &game_track, &colliders, count, args.mesh_count, args.seed, args.kind)?;
-    let suffix = if args.kind.is_some() || args.count_given { "poses_partial.md" } else { "poses_results.md" };
+    let (report, ok) = collide::collide(&acs, engine, &game_track, &colliders, count, args.mesh_count, args.seed, args.kind, args.boxes_only)?;
+    let suffix = if args.kind.is_some() || args.count_given || args.boxes_only { "poses_partial.md" } else { "poses_results.md" };
     write_results(
         suffix,
         "Collision micro-oracle: the game's ODE / OPCODE / PhysicsCore against the port, poses over a track",

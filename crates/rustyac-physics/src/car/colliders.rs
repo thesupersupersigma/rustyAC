@@ -86,7 +86,8 @@ pub fn make_body_matrix(graphics_offset: &Vec3f, graphics_pitch_rotation: f32) -
     m.m[3][0] = ((y * s[1][0] + x * s[0][0]) + z * s[2][0]) + s[3][0];
     m.m[3][1] = ((x * s[0][1] + y * s[1][1]) + z * s[2][1]) + s[3][1];
     m.m[3][2] = ((x * s[0][2] + y * s[1][2]) + z * s[2][2]) + s[3][2];
-    if graphics_pitch_rotation != 0.0 {
+    // ucomiss + je: a pitch of zero (or a NaN) leaves the matrix alone
+    if !(graphics_pitch_rotation == 0.0 || graphics_pitch_rotation.is_nan()) {
         let rotation = Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), graphics_pitch_rotation);
         m = xm_matrix_multiply(&rotation, &m);
     }
@@ -126,7 +127,8 @@ pub fn bounds(mesh: &ColliderMesh) -> CarBounds {
             if v[k] <= min[k] {
                 min[k] = v[k];
             }
-            if max[k] <= v[k] {
+            // comiss max, v / ja skip
+            if !(max[k] > v[k]) {
                 max[k] = v[k];
             }
         }
@@ -155,10 +157,11 @@ pub fn load(data_folder: &Path, game_root: Option<&Path>, car_name: &str) -> Res
         if path.is_file() {
             let car = IniReader::load(&append_path(data_folder, "car.ini"))?;
             let offset = car.get_float3("BASIC", "GRAPHICS_OFFSET")?;
-            let pitch = if car.has_key("BASIC", "GRAPHICS_PITCH_ROTATION") { car.get_float("BASIC", "GRAPHICS_PITCH_ROTATION")? } else { 0.0 };
+            let pitch = car.get_float("BASIC", "GRAPHICS_PITCH_ROTATION")?;
             let (vertices, indices) = load_collider_kn5(&path)?;
-            // CarAvatar keeps the pitch in radians (`GRAPHICS_PITCH_ROTATION` is in degrees)
-            let matrix = make_body_matrix(&Vec3f::new(offset[0], offset[1], offset[2]), pitch * 0.017_453_3);
+            // CarAvatar::initCommon @ 0x1400d56e0 keeps the pitch in radians: the degrees of
+            // `GRAPHICS_PITCH_ROTATION` times the literal 0.017453 (not pi / 180)
+            let matrix = make_body_matrix(&Vec3f::new(offset[0], offset[1], offset[2]), pitch * f32::from_bits(0x3c8e_f998));
             mesh = Some(ColliderMesh { vertices, indices, matrix });
         }
     }

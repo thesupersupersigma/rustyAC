@@ -964,8 +964,9 @@ impl RollingChassis {
         }
         chassis.sleeping_frames = 0;
         chassis.update_body_mass();
-        chassis.setup_manager = SetupManager::init(&chassis, data_path)?;
+        // CarColliderManager::init: after the first mass refresh, before the setup items
         chassis.install_box_colliders()?;
+        chassis.setup_manager = SetupManager::init(&chassis, data_path)?;
         Ok(chassis)
     }
 

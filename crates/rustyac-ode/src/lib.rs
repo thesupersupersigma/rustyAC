@@ -46,6 +46,7 @@ pub mod mass;
 pub mod matrix;
 pub mod odemath;
 pub mod opcode;
+pub mod opcode_obb;
 pub mod rotation;
 pub mod step;
 pub mod world;
