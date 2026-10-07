@@ -231,6 +231,7 @@ fn dynamic_buffer(device: &ID3D11Device, bytes: usize, bind: D3D11_BIND_FLAG) ->
     buffer.ok_or("no buffer".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn texture(device: &ID3D11Device, width: u32, height: u32, format: DXGI_FORMAT, samples: u32, usage: D3D11_USAGE, bind: u32, cpu: u32) -> Result<ID3D11Texture2D, String> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
@@ -499,7 +500,7 @@ impl DebugRenderer {
             c.OMSetRenderTargets(Some(&[Some(self.targets.color_view.clone())]), &self.targets.depth_view);
             c.RSSetViewports(Some(&[viewport]));
             c.ClearRenderTargetView(&self.targets.color_view, &HORIZON);
-            c.ClearDepthStencilView(&self.targets.depth_view, D3D11_CLEAR_DEPTH.0 as u32, 1.0, 0);
+            c.ClearDepthStencilView(&self.targets.depth_view, D3D11_CLEAR_DEPTH.0, 1.0, 0);
             c.RSSetState(&self.raster);
             c.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             c.IASetInputLayout(&self.mesh_layout);

@@ -330,7 +330,7 @@ impl InputFile {
     pub fn parse(bytes: &[u8]) -> Result<InputFile, String> {
         let (setup, at) = SimSetup::parse_header(bytes)?;
         let body = &bytes[at..];
-        if body.len() % RECORD_SIZE != 0 {
+        if !body.len().is_multiple_of(RECORD_SIZE) {
             return Err(format!("{} bytes after the header are not a whole number of {RECORD_SIZE}-byte steps", body.len()));
         }
         Ok(InputFile { setup, steps: body.chunks_exact(RECORD_SIZE).map(StepInput::from_bytes).collect() })

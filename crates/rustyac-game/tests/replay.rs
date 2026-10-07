@@ -242,3 +242,110 @@ fn an_unsupported_car_is_refused_with_the_physics_message() {
     let message = direct.rsplit_once("cardata").unwrap().1;
     assert!(stderr.contains(message), "stderr {stderr:?} does not hold {message:?}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A live drive, written down by the recorder, replays to the same car.
+
+use rustyac_game::input::keyboard::KeyboardCarControl;
+use rustyac_game::input::{CarProbe, Extra, DEVICE_KEYBOARD};
+use rustyac_game::sim::{DriverSource, GameSim, ReplaySource, SpawnSequence, DEVICE_SPAWN};
+use rustyac_physics::car::CarControlsInput;
+
+/// AC's keyboard class with keys pressed by a script: a live device as far as the game loop
+/// can tell. Like the real keyboard it looks at the car before every step (tyre slip, the
+/// brake pedal the tyres can take).
+struct ScriptedKeyboard {
+    keyboard: KeyboardCarControl,
+    probe: CarProbe,
+    step: u32,
+}
+
+impl DriverSource for ScriptedKeyboard {
+    fn wants_probe(&self) -> bool {
+        true
+    }
+
+    fn set_probe(&mut self, probe: &CarProbe) {
+        self.probe = *probe;
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
+        let n = self.step;
+        self.step += 1;
+        // Up = gas, Down = brake, Left / Right, Space = gear up, L = headlights
+        let key_down = move |key: i32| match key {
+            0x26 => (30..1300).contains(&n),
+            0x28 => (1300..1700).contains(&n),
+            0x27 => (500..700).contains(&n),
+            0x25 => (800..950).contains(&n),
+            0x20 => (400..410).contains(&n) || (700..710).contains(&n),
+            _ => false,
+        };
+        let mut extra = Extra::default();
+        self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, &key_down);
+    }
+
+    fn headlights(&mut self) -> bool {
+        (200..220).contains(&self.step)
+    }
+
+    fn device_id(&self) -> u32 {
+        DEVICE_KEYBOARD
+    }
+}
+
+#[test]
+fn a_recorded_live_drive_replays_to_the_same_car() {
+    if car_data().is_none() {
+        return;
+    }
+    let ini = rustyac_game::input::bindings::default_ini();
+    let keyboard = KeyboardCarControl::from_ini(&rustyac_game::input::bindings::effective(&ini));
+    let source = SpawnSequence::new(ScriptedKeyboard { keyboard, probe: CarProbe::default(), step: 0 }, true);
+    let setup = SimSetup::default();
+    let mut live = GameSim::new(setup.clone(), Box::new(source)).unwrap();
+    let mut records = Vec::new();
+    let mut dumps = Vec::new();
+    for n in 0..2600 {
+        if n == 2300 {
+            // the game itself puts a car back (as when it has fallen over)
+            live.car.device.source.request(event::RESET);
+        }
+        records.push(live.step().unwrap());
+        dumps.push(StepDump::capture(&live.car.car));
+    }
+    // the spawn sequence: 400 steps of rest, the paddle, a moment for the gearbox: first gear
+    assert!(records[..470].iter().all(|r| r.device == DEVICE_SPAWN));
+    assert!(records[400..410].iter().all(|r| r.controls.gear_up) && !records[399].controls.gear_up && !records[410].controls.gear_up);
+    assert!(records[470..2300].iter().all(|r| r.device == DEVICE_KEYBOARD));
+    let gear = |dump: &StepDump| dump.trace.iter().find(|v| v.name == "drivetrain.currentGear").unwrap().word as i32;
+    let speed = |dump: &StepDump| f32::from_bits(dump.trace.iter().find(|v| v.name == "page.speedKmh").unwrap().word as u32);
+    let rpm = |dump: &StepDump| dump.trace.iter().find(|v| v.name == "page.rpms").unwrap().word as i32;
+    assert_eq!(gear(&dumps[469]), 2, "first gear when the driver gets the car");
+    assert!(speed(&dumps[469]) < 1.0 && rpm(&dumps[469]) > 1000, "standing, engine running: {} km/h, {} rpm", speed(&dumps[469]), rpm(&dumps[469]));
+    // the keyboard drives: throttle ramp, steering, the brake straight to the optimal pedal
+    assert!(records[470 + 100].controls.gas > 0.5 && records[470 + 600].controls.steer > 0.05 && records[470 + 900].controls.steer < -0.05);
+    assert!(speed(&dumps[470 + 1290]) > 80.0, "{} km/h", speed(&dumps[470 + 1290]));
+    let braking = records[470 + 1400].controls.brake;
+    assert!(braking > 0.2 && braking <= 1.0, "brake {braking}");
+    assert!(records[470 + 210].headlights && records[2300].events & event::RESET != 0);
+    // after the game's reset the sequence runs again
+    assert!(records[2301..2600].iter().all(|r| r.device == DEVICE_SPAWN));
+    assert!(speed(&dumps[2599]) < 1.0);
+
+    // the same drive from the records alone
+    let mut replay = GameSim::new(setup.clone(), Box::new(ReplaySource::default())).unwrap();
+    let mut replayed = Vec::new();
+    for record in &records {
+        replay.step_recorded(record).unwrap();
+        replayed.push(StepDump::capture(&replay.car.car));
+    }
+    assert_same(&dumps, &replayed, "replay of a recorded live drive");
+
+    // and through the file
+    let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let (input, states) = (folder.join("live_drive.ryin"), folder.join("live_drive.rystate"));
+    InputFile { setup, steps: records }.write(&input).unwrap();
+    rustyac_game::run_replay_headless(&input, Some(&states)).unwrap();
+    assert_same(&dumps, &dump::read(&states).unwrap(), "replay of the written file");
+}

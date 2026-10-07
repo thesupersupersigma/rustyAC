@@ -340,7 +340,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         }
         shared.steps.store(sim.steps, Ordering::Relaxed);
-        if sim.steps % 32 == 0 {
+        if sim.steps.is_multiple_of(32) {
             let mut live = timing;
             close(&mut live, n, origin);
             *shared.timing.lock().unwrap() = live;

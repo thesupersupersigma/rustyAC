@@ -196,11 +196,19 @@ fn list_devices(bindings: &Bindings, wheel: &Option<WheelDevice>) -> String {
 
 /// The normal way to run: a window, the live devices (or a recorded drive to watch).
 fn run_window(options: &Options) -> Result<(), String> {
-    let (setup, replay) = drive(options)?;
+    let (mut setup, replay) = drive(options)?;
     let mut notes = Vec::new();
     let bindings = Bindings::load(options, &mut notes);
     for note in &notes {
         println!("bindings: {note}");
+    }
+    if replay.is_none() && bindings.input_method == "WHEEL" {
+        // what the physics reads off AC's wheel class: the force's filter, the understeer
+        // effect and the device's gain (the pad's and the keyboard's classes have 0, off, 1)
+        let wheel = rustyac_game::input::wheel::DiCarControl::from_ini(&bindings.ini);
+        setup.env.ff_filter = wheel.ff_filter;
+        setup.env.use_fake_understeer_ff = wheel.use_fake_understeer_ff;
+        setup.ff_gain = wheel.ff_gain;
     }
     let window = Window::create("rustyAC", options.width, options.height, options.windowed, options.no_focus)?;
     let window_handle = window.handle.0 as isize;

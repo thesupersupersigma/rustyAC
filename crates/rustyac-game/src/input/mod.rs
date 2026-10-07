@@ -7,6 +7,20 @@
 //! pad can be picked up at any time. Whichever drives, it is AC's class for that device
 //! that fills `Car::controls`.
 
+// The device classes are transcriptions of machine code: sums and comparisons are written
+// in its order and with its tests (they decide what a NaN does), constants with its digits.
+#![allow(
+    clippy::double_comparisons,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::approx_constant,
+    clippy::excessive_precision,
+    clippy::neg_multiply,
+    clippy::if_same_then_else,
+    clippy::manual_clamp,
+    clippy::nonminimal_bool,
+    clippy::too_many_arguments
+)]
+
 pub mod bindings;
 pub mod dinput;
 pub mod ini;

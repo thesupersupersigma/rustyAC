@@ -299,8 +299,8 @@ impl DrivingCamera {
             self.started = true;
         } else {
             let f = (dt * 3.0).clamp(0.0, 1.0);
-            for axis in 0..3 {
-                self.current_offset[axis] += (target[axis] - self.current_offset[axis]) * f;
+            for (offset, target) in self.current_offset.iter_mut().zip(target) {
+                *offset += (target - *offset) * f;
             }
         }
         // the middle of the rear axle

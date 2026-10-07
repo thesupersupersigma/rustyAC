@@ -88,6 +88,7 @@ impl<'a> Hud<'a> {
     }
 
     /// A vertical bar filled from the bottom by `value` (0..1), with a label under it.
+    #[allow(clippy::too_many_arguments)]
     fn bar(&mut self, x: f32, bottom: f32, w: f32, h: f32, value: f32, color: Color, label: &str, s: f32) {
         self.rect(x, bottom - h, w, h, [0.10, 0.11, 0.12, 0.85]);
         let filled = h * value.clamp(0.0, 1.0);
@@ -96,6 +97,7 @@ impl<'a> Hud<'a> {
     }
 
     /// A lamp: a labelled box that is lit or not.
+    #[allow(clippy::too_many_arguments)]
     fn lamp(&mut self, x: f32, y: f32, w: f32, h: f32, lit: bool, color: Color, label: &str, s: f32) {
         self.rect(x, y, w, h, if lit { color } else { OFF });
         let text_color = if lit { [0.02, 0.02, 0.02, 1.0] } else { DIM };

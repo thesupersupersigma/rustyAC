@@ -608,9 +608,8 @@ mod tests {
     #[test]
     fn pedals() {
         let mut w = wheel("");
-        let mut s = DiState::default();
         // throttle half way, brake half way (gamma 2), clutch pedal up
-        s.axes = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0];
+        let mut s = DiState { axes: [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0], ..DiState::default() };
         // the brake axis has not moved yet: it reads 0, not a half
         let c = drive(&mut w, s, 0.0, 0.0);
         assert_eq!((c.gas, c.brake, c.clutch), (0.75, 0.0, 1.0));
