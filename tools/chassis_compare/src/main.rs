@@ -219,6 +219,7 @@ fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, Str
         }
         out.wheels[index] = w;
     }
+    out.edl_active = recording.has("edl.outLevel") && f("edl.outLevel") > 0.0;
     for call in &recording.steps[step].calls {
         let system = recording.system_of(call);
         if FED_SYSTEMS.contains(&system) {
@@ -227,6 +228,9 @@ fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, Str
             }
             let source = ForceSource::from_name(system).unwrap();
             out.aero.push(RecordedCall { kind: call.kind, source, a: call.a, b: call.b });
+        } else if system == "stability" {
+            // only a chassis that is fed its aids takes these from the recording
+            out.stability.push(RecordedCall { kind: call.kind, source: ForceSource::Stability, a: call.a, b: call.b });
         } else if !OWN_SYSTEMS.contains(&system) {
             return Err(format!("step {step}: a force call of the system '{system}', which is neither ported nor fed"));
         }
@@ -861,6 +865,13 @@ fn compare(
     stop_after: Option<usize>,
     fault: Option<Fault>,
 ) -> Result<Outcome, String> {
+    let mut systems = systems;
+    if !systems.brakes && systems.aids && (0..recording.steps.len()).any(|step| recording.f(step, "edl.outLevel") > 0.0) {
+        // the recorded brake torques already contain the differential lock's part, so the
+        // lock cannot be computed on top of them
+        println!("  (the aids are fed too: this car's differential lock acts, and the fed brake torques include it)");
+        systems.aids = false;
+    }
     let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
     let mut chassis = setup.build_runner(data)?;
@@ -1704,6 +1715,12 @@ fn main() {
             }
             name => names.push(name.to_string()),
         }
+    }
+    if !systems.drivetrain && systems.aids {
+        // traction control and the pit limiter act on the engine: without an engine of its own
+        // the car cannot have its own aids
+        println!("(the aids are fed too: they act on the engine, which comes from the recording)");
+        systems.aids = false;
     }
     let result = match command.as_str() {
         "run" => run_command(&names, dir.as_deref(), systems, verbose, stop_after),

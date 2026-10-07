@@ -260,7 +260,7 @@ impl Default for Abs {
 }
 
 impl Abs {
-    /// `ABS::init` @ 0x14028ecc0: `electronics.ini [ABS_V2]` if it exists, else `[ABS]`.
+    /// `ABS::init` @ 0x14028ec50: `electronics.ini [ABS_V2]` if it exists, else `[ABS]`.
     pub fn new(data_path: &Path) -> Result<Abs, String> {
         let mut abs = Abs::default();
         let path = data_path.join("electronics.ini");
@@ -298,17 +298,17 @@ impl Abs {
         Ok(abs)
     }
 
-    /// `ABS::cycleMode` @ 0x14028ea10.
+    /// `ABS::cycleMode` @ 0x14028eae0.
     pub fn cycle_mode(&mut self, dir: i32) {
         cycle_mode(self.is_present, &mut self.is_active, &mut self.current_mode, &mut self.slip_ratio_limit, &self.value_curve, dir);
     }
 
-    /// `ABS::getCurrentMode`.
+    /// `ABS::getCurrentMode` @ 0x14028ebc0.
     pub fn get_current_mode(&self) -> (u32, u32) {
         mode_pair(self.is_active, self.current_mode, &self.value_curve)
     }
 
-    /// `ABS::isInAction` @ 0x14028f5c0: any wheel's brake is released.
+    /// `ABS::isInAction` @ 0x14028f5d0: any wheel's brake is released.
     pub fn is_in_action(car: &RollingChassis) -> bool {
         car.tyres.iter().any(|tyre| tyre.abs_override < 1.0 || tyre.abs_override > 1.0)
     }
@@ -412,7 +412,7 @@ impl Default for Edl {
 }
 
 impl Edl {
-    /// `EDL::init` @ 0x1402bb600: `electronics.ini [EDL]`; the driven pair from the
+    /// `EDL::init` @ 0x1402babf0: `electronics.ini [EDL]`; the driven pair from the
     /// drivetrain's layout.
     pub fn new(data_path: &Path, traction_type: TractionType) -> Result<Edl, String> {
         let mut edl = Edl::default();

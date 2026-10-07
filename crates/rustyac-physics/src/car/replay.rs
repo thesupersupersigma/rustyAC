@@ -189,6 +189,12 @@ pub struct RecordedStep {
     pub wheels: [RecordedWheel; 4],
     /// The wings' calls on the car body, in order.
     pub aero: Vec<RecordedCall>,
+    /// The stability aid's torque calls on the car body (for a chassis that is fed its aids).
+    pub stability: Vec<RecordedCall>,
+    /// The electronic differential lock braked a wheel in this step: a chassis that is fed
+    /// its aids but has its own brakes then takes the wheels' brake torques (`brake_torque`,
+    /// which holds brakes plus lock) from the recording.
+    pub edl_active: bool,
 }
 
 impl RecordedStep {
@@ -215,13 +221,16 @@ impl RecordedStep {
                 out.extend(w.local_wheel_rotation.map(f32::to_bits));
             }
         }
-        out.push(self.aero.len() as u32);
-        for call in &self.aero {
-            out.push(call.kind);
-            out.push(source_index(call.source));
-            out.extend(call.a.map(f32::to_bits));
-            out.extend(call.b.map(f32::to_bits));
+        for calls in [&self.aero, &self.stability] {
+            out.push(calls.len() as u32);
+            for call in calls {
+                out.push(call.kind);
+                out.push(source_index(call.source));
+                out.extend(call.a.map(f32::to_bits));
+                out.extend(call.b.map(f32::to_bits));
+            }
         }
+        out.push(self.edl_active as u32);
     }
 
     pub fn from_words(words: &mut impl Iterator<Item = u32>) -> Option<RecordedStep> {
@@ -260,15 +269,19 @@ impl RecordedStep {
                 }
             }
         }
-        let count = words.next()? as usize;
-        let mut aero = Vec::with_capacity(count);
-        for _ in 0..count {
-            let kind = words.next()?;
-            let source = source_from_index(words.next()?)?;
-            let a = [f(words)?, f(words)?, f(words)?];
-            let b = [f(words)?, f(words)?, f(words)?];
-            aero.push(RecordedCall { kind, source, a, b });
+        let mut lists = [Vec::new(), Vec::new()];
+        for list in &mut lists {
+            let count = words.next()? as usize;
+            for _ in 0..count {
+                let kind = words.next()?;
+                let source = source_from_index(words.next()?)?;
+                let a = [f(words)?, f(words)?, f(words)?];
+                let b = [f(words)?, f(words)?, f(words)?];
+                list.push(RecordedCall { kind, source, a, b });
+            }
         }
+        let [aero, stability] = lists;
+        let edl_active = words.next()? != 0;
         Some(RecordedStep {
             controls,
             bias_clicks,
@@ -279,6 +292,8 @@ impl RecordedStep {
             brake_electronic_override,
             wheels,
             aero,
+            stability,
+            edl_active,
         })
     }
 }
@@ -437,6 +452,13 @@ impl ChassisFeed for RecordedFeed<'_> {
                 }
             }
         }
+        // the differential lock's brake torque, for a chassis with its own brakes: the
+        // recording holds only the sum the tyres saw
+        if fed_aids && chassis.brake_system.is_some() && self.step.edl_active {
+            for (tyre, wheel) in chassis.tyres.iter_mut().zip(&self.step.wheels) {
+                tyre.inputs.brake_torque = wheel.brake_torque;
+            }
+        }
     }
 
     fn aero(&mut self, chassis: &mut RollingChassis) {
@@ -460,7 +482,15 @@ impl ChassisFeed for RecordedFeed<'_> {
         }
     }
 
-    fn stability(&mut self, _chassis: &mut RollingChassis) {}
+    fn stability(&mut self, chassis: &mut RollingChassis) {
+        let previous = chassis.core.source;
+        for call in &self.step.stability {
+            chassis.core.source = call.source;
+            let (a, b) = (Vec3f::new(call.a[0], call.a[1], call.a[2]), Vec3f::new(call.b[0], call.b[1], call.b[2]));
+            chassis.core.apply_call(chassis.body, call.kind, &a, &b).expect("a torque call from the recording");
+        }
+        chassis.core.source = previous;
+    }
 }
 
 /// A value compared with the game.
