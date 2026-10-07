@@ -17,3 +17,6 @@ ac_telemetry_20261007_030103.csv
 target/
 __pycache__/
 tools/rea/
+
+# Notes
+brainstorm.md
