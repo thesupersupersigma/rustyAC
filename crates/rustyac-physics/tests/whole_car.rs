@@ -148,9 +148,8 @@ fn wind_setter_and_gusts() {
         assert!(env.wind.x * before.x > 0.0 && (env.wind.z / env.wind.x - before.z / before.x).abs() < 1e-4);
     }
     // below 1 cm/s the wind stands still
-    let mut calm = ChassisEnvironment::default();
-    calm.wind = Vec3f::new(0.001, 0.0, 0.002);
-    calm.wind_speed = 0.005;
+    let mut calm =
+        ChassisEnvironment { wind: Vec3f::new(0.001, 0.0, 0.002), wind_speed: 0.005, ..ChassisEnvironment::default() };
     calm.step_wind(CLOCK);
     assert_eq!((calm.wind.x, calm.wind.z), (0.001, 0.002));
 }

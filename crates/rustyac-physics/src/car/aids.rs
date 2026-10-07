@@ -510,8 +510,7 @@ impl StabilityControl {
         if !(gain > 0.0) {
             return;
         }
-        let torque;
-        if self.use_beta {
+        let torque = if self.use_beta {
             let v = car.core.get_local_velocity(car.body);
             if !(v.z > 5.0) {
                 return;
@@ -525,7 +524,7 @@ impl StabilityControl {
                 beta
             };
             let mass = car.core.get_mass(car.body);
-            torque = mass * ((beta * gain) * 10.0);
+            mass * ((beta * gain) * 10.0)
         } else {
             let angle = |wheel: usize| car.tyres[wheel].status.slip_angle_rad;
             let front = (angle(1) + angle(0)).abs();
@@ -543,8 +542,8 @@ impl StabilityControl {
                 -1.0
             };
             let mass = car.core.get_mass(car.body);
-            torque = -((((mass * difference) * gain) * self.max_gain) * sign);
-        }
+            -((((mass * difference) * gain) * self.max_gain) * sign)
+        };
         let previous = std::mem::replace(&mut car.core.source, ForceSource::Stability);
         car.core.add_local_torque(car.body, &Vec3f::new(0.0, torque, 0.0));
         car.core.source = previous;

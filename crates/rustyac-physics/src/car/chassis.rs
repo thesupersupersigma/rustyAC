@@ -201,6 +201,9 @@ impl ThermalObject {
     }
 }
 
+/// A change the game's main thread has queued for the physics thread.
+pub type PreStepJob = Box<dyn FnOnce(&mut RollingChassis)>;
+
 /// AC's `PenaltyManager` as far as a jump start writes it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PenaltyManager {
@@ -341,7 +344,7 @@ pub struct RollingChassis {
     pub last_collision_with_car_time: f64,
     /// What the game's main thread has queued for the physics thread
     /// (`PhysicsAvatar::stepCommandQueue`): run at the start of the next step.
-    pub pre_step_jobs: Vec<Box<dyn FnOnce(&mut RollingChassis)>>,
+    pub pre_step_jobs: Vec<PreStepJob>,
     /// `Car::unixName`: the car's folder name (a car called "spectator" collides with nothing
     /// but walls)
     pub unix_name: String,
