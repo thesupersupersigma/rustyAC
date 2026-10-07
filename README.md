@@ -1,7 +1,7 @@
 # rustyAC
 assetto corsa rust rewrite
 
-very experimental
+very experimental, join the [very experimental discord](https://discord.gg/trvtVNWzaf) too (https://discord.gg/trvtVNWzaf)
 
 idk rust, if ur gonna hate on my using claude for this msg me on discord at thesuper2sigma 
 
@@ -22,20 +22,14 @@ ill prob have like 2 versions where 1 is just pure vanilla ac and another versio
 
 no. i have SAT's and shit to stufy for, plus i need some tokens to study, and sometimes claude deciudes to spawn like 30 subagents at once draining my tokens so idk.
 
-## hi
-
-hi
-
-## bye
-
-bye
-
 ## Contributing
 
 idk make a pull request, claude is 100% gonna review it so idk if it works, it works.
 
-ok bye now :)
-
 ## License
 
 It depends on the part, and the code ported from Assetto Corsa has no license at all. See [LICENSING.md](LICENSING.md).
+
+# Hi
+
+hi
