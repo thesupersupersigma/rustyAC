@@ -9,6 +9,16 @@ in the git-ignored `re/scratch/car_oracle/`. Nothing in the game folder, the sdk
 project was changed, no game process was touched, and no car system was ported. Recordings go
 to the git-ignored `oracle/car/` (0.97 GB for the full set; about three minutes to regenerate).
 
+Later additions to the harness are described in the reports of the tasks that made them, not
+here: the `pt_*` scenarios with handbrake, H-shifter, brake-bias clicks and the automatic
+gearbox (Task 09, `docs/port/drivetrain.md`); the `wc_*` scenarios with the DRS and headlight
+buttons, jobs called through the game's own functions (control locks, gentle stop, penalties),
+a pit-lane road, the stability aid, wind through the game's `setWind`, damage levels, and more
+recorded values of wings, aids and car-level state (Task 10, `docs/port/whole_car.md` 3.3).
+The scenarios of this report still record the same step data, byte for byte (checked by
+recording `settle` and `kerb` again after Task 10); only the text header is one line longer
+(`auto_shifter=0`, since Task 09).
+
 ---
 
 ## 1. Plain-English summary
