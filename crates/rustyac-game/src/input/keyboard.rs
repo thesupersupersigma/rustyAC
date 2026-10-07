@@ -464,7 +464,7 @@ mod tests {
         // the tyres' slip: the right one's unless the left one's is at least as large
         let mut k = user();
         k.int_gas = 1.0;
-        let nan_left = CarProbe { driven_left_slip: f32::NAN, driven_right_slip: 1.5, optimal_brake: 0.0 };
+        let nan_left = CarProbe { driven_left_slip: f32::NAN, driven_right_slip: 1.5, optimal_brake: 0.0, ..CarProbe::default() };
         assert!(k.compute_gas_coefficient(&nan_left, 10.0, DT) < 1.0, "a NaN on the left: the right tyre's slip counts");
     }
 
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn the_throttle_ramps_and_backs_off() {
-        let grip = CarProbe { driven_left_slip: 0.5, driven_right_slip: 0.6, optimal_brake: 0.7 };
+        let grip = CarProbe { driven_left_slip: 0.5, driven_right_slip: 0.6, optimal_brake: 0.7, ..CarProbe::default() };
         // spec H.34
         let mut k = user();
         assert_eq!(bits(DT * k.gas_pedal_speed), 0x3c449ba6);
@@ -549,7 +549,7 @@ mod tests {
         }
         assert_eq!(steps, 84);
         // H.35: slipping
-        let spin = CarProbe { driven_left_slip: 1.3, driven_right_slip: 0.2, optimal_brake: 0.7 };
+        let spin = CarProbe { driven_left_slip: 1.3, driven_right_slip: 0.2, optimal_brake: 0.7, ..CarProbe::default() };
         let down: Vec<u32> = (0..3).map(|_| bits(k.compute_gas_coefficient(&spin, 10.0, DT))).collect();
         assert_eq!(down, [0x3f7ced91, 0x3f79db22, 0x3f76c8b3]);
         for _ in 0..200 {
@@ -562,7 +562,7 @@ mod tests {
         let slipping = |slip: f32, kmh: f32| {
             let mut k = user();
             k.int_gas = 1.0;
-            k.compute_gas_coefficient(&CarProbe { driven_left_slip: slip, driven_right_slip: 0.0, optimal_brake: 0.0 }, kmh / 3.6, DT) < 1.0
+            k.compute_gas_coefficient(&CarProbe { driven_left_slip: slip, driven_right_slip: 0.0, optimal_brake: 0.0, ..CarProbe::default() }, kmh / 3.6, DT) < 1.0
         };
         assert!(slipping(0.99, 50.0), "0.99f is above the double 0.99");
         assert!(!slipping(0.98, 50.0));
@@ -574,7 +574,7 @@ mod tests {
         let mut k = user();
         let mut controls = CarControls { clutch: 0.37, ..CarControls::default() };
         let mut extra = Extra::default();
-        let probe = CarProbe { driven_left_slip: 0.0, driven_right_slip: 0.0, optimal_brake: 0.675 };
+        let probe = CarProbe { driven_left_slip: 0.0, driven_right_slip: 0.0, optimal_brake: 0.675, ..CarProbe::default() };
         // gas (Up), brake (Down), gear up (Space), headlights (L)
         let held = [0x26, 0x28, 0x20, 0x4c];
         let key_down: &dyn Fn(i32) -> bool = &|key| held.contains(&key);

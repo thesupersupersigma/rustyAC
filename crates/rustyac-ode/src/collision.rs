@@ -22,7 +22,15 @@
 //! its head).
 //!
 //! Not here yet: the car body's boxes and collision mesh against the track (stage 3, part 2
-//! with stage 2's contacts).
+//! with stage 2's contacts). Three things the game does that this port does not, none of
+//! which a track or a tyre reaches: a ray whose length is exactly `f32::MAX` (the game then
+//! walks the tree with OPCODE's `_RayStab`, an unbounded ray, instead of the segment walk);
+//! a mesh in sub-space 0, which in the game is a direct member of the static space and here
+//! gets a sub-space of its own (a track's physical meshes never have id 0); and meshes added
+//! after the first ray (ODE would leave their sub-space's box stale; here
+//! [`StaticWorld::clean`] has to be called again and recomputes every box). A triangle that
+//! names a vertex the mesh does not have makes the game read past its array; here the caller
+//! has to refuse such a mesh ([`TriMeshData::indices_in_range`]).
 
 use crate::odemath::safe_normalize3;
 use crate::opcode::{Child, MeshInterface, Model};
@@ -42,6 +50,12 @@ pub struct TriMeshData {
 }
 
 impl TriMeshData {
+    /// Does every triangle name vertices the mesh has? The game does not check (it reads past
+    /// its copy of the vertices); a port cannot follow it there.
+    pub fn indices_in_range(vertex_count: usize, indices: &[u16]) -> bool {
+        indices.iter().all(|&i| (i as usize) < vertex_count)
+    }
+
     /// `dGeomTriMeshDataBuildSingle` @ 0x14034b170 -> `dxTriMeshData::Build` @ 0x14034a780.
     pub fn build(vertices: Vec<[f32; 3]>, indices: Vec<u16>) -> TriMeshData {
         let mesh = MeshInterface::new(vertices, indices);
@@ -393,6 +407,7 @@ impl StaticWorld {
     /// is normalised first) against every mesh; the nearest contact, or none.
     pub fn ray_cast(&self, org: &[f32; 3], dir: &[f32; 3], length: f32) -> Option<RayContact> {
         assert!(!self.dirty, "StaticWorld::clean has to run after the last mesh was added");
+        debug_assert!(length.to_bits() != 0x7f7f_ffff, "a ray of length f32::MAX is OPCODE's unbounded ray, which is not ported");
         // dGeomRaySet @ 0x140345e50
         let mut n = *dir;
         safe_normalize3(&mut n);

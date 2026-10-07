@@ -63,16 +63,49 @@ pub struct TrackLoadReport {
     pub seconds_total: f64,
 }
 
-/// The game's folder a track folder sits in (`<game>/content/tracks/<track>`).
+/// The game's folder a track folder sits in (`<game>/content/tracks/<track>`); for a track
+/// kept elsewhere, the game's folder itself (`AC_ROOT`, else Steam's usual place), which has
+/// the surfaces every track starts from.
 pub fn game_root(track_folder: &Path) -> Option<PathBuf> {
-    let root = track_folder.parent()?.parent()?.parent()?;
-    root.join("system").is_dir().then(|| root.to_path_buf())
+    let beside = track_folder.parent().and_then(Path::parent).and_then(Path::parent).filter(|root| root.join("system").is_dir());
+    if let Some(root) = beside {
+        return Some(root.to_path_buf());
+    }
+    let root = match std::env::var_os("AC_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
+    };
+    root.join("system").is_dir().then_some(root)
+}
+
+/// The `[MODEL_n]` list of a models file as the game's own ini reader gives it
+/// (`TrackAvatar::init3D` @ 0x1401c8740): n = 0, 1, 2 ... up to the first missing section.
+fn models_of(ini: &Path, folder: &Path) -> Result<Vec<rustyac_content::ModelEntry>, String> {
+    let reader = crate::data::ini::IniReader::load(ini)?;
+    let mut models = Vec::new();
+    for n in 0.. {
+        let section = format!("MODEL_{n}");
+        if !reader.has_section(&section) {
+            break;
+        }
+        models.push(rustyac_content::ModelEntry {
+            file: crate::data::ini::append_path(folder, &reader.get_string(&section, "FILE")),
+            position: reader.get_float3(&section, "POSITION")?,
+            rotation: reader.get_float3(&section, "ROTATION")?,
+        });
+    }
+    Ok(models)
 }
 
 /// Loads a track from `folder` (`content/tracks/<track>`), layout `config` ("" for none).
 pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport), String> {
     let start = Instant::now();
-    let files = TrackFiles::find(folder, config)?;
+    let mut files = TrackFiles::find(folder, config)?;
+    // which models, in which order and where: by the game's own ini rules
+    let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
+    if ini.is_file() {
+        files.models = models_of(&ini, folder)?;
+    }
     let mut report = TrackLoadReport { files: files.models.iter().map(|m| m.file.clone()).collect(), ..TrackLoadReport::default() };
     let mut track = Track { name: files.name.clone(), config: config.to_string(), data_folder: files.data.parent().unwrap_or(folder).to_path_buf(), ..Track::default() };
 
@@ -92,8 +125,11 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
     let mut seconds_trees = 0.0;
     for model in &files.models {
         if model.rotation != [0.0; 3] {
-            return Err(format!(
-                "{}: a model with a ROTATION in models.ini is not ported (mat44f::createFromEuler has not been read)",
+            // the game turns the model's top node (init3D); the vertices of the physical
+            // meshes and the helper nodes' own matrices, which are all the physics reads,
+            // stay as they are unless a helper is that top node itself
+            report.messages.push(format!(
+                "{}: its ROTATION in models.ini is not applied (it only turns the model's top node, which the physics does not read)",
                 model.file.display()
             ));
         }
@@ -132,6 +168,14 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
                         let space = if found.surface.def.collision_category == 2 { (id as u32).wrapping_add(10_000) } else { id as u32 };
                         let vertices = reader.positions(mesh).map_err(|e| e.to_string())?;
                         let indices = reader.indices(mesh).map_err(|e| e.to_string())?;
+                        if !rustyac_ode::collision::TriMeshData::indices_in_range(vertices.len(), &indices) {
+                            return Err(format!(
+                                "{}: the physical mesh {:?} has a triangle with a vertex number past its {} vertices (the game would read past the mesh)",
+                                model.file.display(),
+                                node.name,
+                                vertices.len()
+                            ));
+                        }
                         report.vertices += vertices.len() as u64;
                         let key = found.key.clone().unwrap_or_default();
                         *report.per_key.entry(key.clone()).or_insert(0) += 1;

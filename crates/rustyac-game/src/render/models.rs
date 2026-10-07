@@ -197,6 +197,10 @@ impl GpuModel {
                 at = kn5.nodes[i].parent;
             }
             let Some(mesh) = kn5.nodes[node].mesh.as_ref() else { return false };
+            if kn5.materials.is_empty() {
+                // nothing to draw it with
+                return false;
+            }
             // a car's cracked glass is only shown after a crash
             let hidden = kn5.materials.get(mesh.material_id as usize).is_some_and(|m| m.shader == "ksBrokenGlass");
             !hidden && mesh.is_renderable && mesh.is_visible && mesh.index_count >= 3 && mesh.vertex_count > 0

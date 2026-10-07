@@ -65,6 +65,8 @@ pub struct Options {
     pub texture_size: u32,
     /// `--no-textures`: flat colours instead of textures.
     pub no_textures: bool,
+    /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
+    pub autodrive: bool,
 }
 
 impl Default for Options {
@@ -99,6 +101,7 @@ impl Default for Options {
             boxes: false,
             texture_size: 1024,
             no_textures: false,
+            autodrive: false,
         }
     }
 }
@@ -116,6 +119,8 @@ usage: rustyac [options]
   --boxes               draw the car as boxes, not with its 3D model
   --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
   --no-textures         flat colours instead of textures
+  --autodrive           on a track: nobody at the controls, a simple driver follows the
+                        track's AI line (automatic gearbox on); for checks and for watching
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's
   --height <px>         client area, otherwise the off-screen picture of --screenshot)
   --windowed            a window instead of borderless full screen
@@ -181,6 +186,7 @@ impl Options {
                 "--boxes" => o.boxes = true,
                 "--texture-size" => o.texture_size = value("--texture-size")?.parse().map_err(|e| format!("--texture-size: {e}"))?,
                 "--no-textures" => o.no_textures = true,
+                "--autodrive" => o.autodrive = true,
                 "--help" | "-h" | "/?" => return Err(USAGE.to_string()),
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }
@@ -191,11 +197,20 @@ impl Options {
         if o.camera != "chase" && o.camera != "cockpit" {
             return Err(format!("--camera: {:?} is neither chase nor cockpit", o.camera));
         }
+        if o.autodrive && o.track.is_none() {
+            return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());
+        }
+        if o.autodrive && o.replay.is_some() {
+            return Err("--autodrive and --replay cannot be used together".to_string());
+        }
         if !["hotlap", "pit", "start"].contains(&o.spawn.as_str()) {
             return Err(format!("--spawn: {:?} is not one of hotlap, pit, start", o.spawn));
         }
         if o.record.is_some() && o.replay.is_some() {
             return Err("--record and --replay cannot be used together".to_string());
+        }
+        if o.record.is_some() && o.screenshot.is_some() && !o.autodrive {
+            return Err("--record with --screenshot needs --autodrive (otherwise nobody drives)".to_string());
         }
         if o.dump_states.is_some() && !(o.replay.is_some() && o.headless) {
             return Err("--dump-states needs --replay and --headless".to_string());

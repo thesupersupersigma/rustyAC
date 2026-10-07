@@ -114,7 +114,8 @@ pub fn plan_dds(head: &[u8], file_len: usize, max_size: u32) -> Result<Plan, Str
     }
     let height = u32_at(bytes, 12);
     let width = u32_at(bytes, 16);
-    let mip_count = u32_at(bytes, 28).max(1);
+    // a level per halving of the longest side at most, whatever the header claims
+    let mip_count = u32_at(bytes, 28).clamp(1, 15);
     let pf_flags = u32_at(bytes, 80);
     let four_cc = &bytes[84..88];
     let bit_count = u32_at(bytes, 88);

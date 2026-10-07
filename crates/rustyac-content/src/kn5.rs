@@ -15,7 +15,7 @@
 //!   name, shader     string, string
 //!   alpha blend mode u8
 //!   alpha tested     u8
-//!   depth mode       i32            only above version 4
+//!   depth mode       i32            from version 5
 //!   property count   i32            name string, value f32, then 36 bytes (vec2, vec3, vec4)
 //!   texture count    i32            slot name string (txDiffuse ...), slot i32, texture name string
 //! node (recursive)
@@ -27,12 +27,12 @@
 //!   class 1:  matrix 16 f32         rows; the translation is the fourth row
 //!   class 2:  cast shadows, visible, transparent (u8 each); vertex count u32; vertices of
 //!             44 bytes (position 3 f32, normal 3 f32, uv 2 f32, tangent 3 f32); index count
-//!             u32; indices u16; material u32; layer u32; lod in f32; lod out f32; bounding
-//!             sphere centre 3 f32 and radius f32; renderable u8
+//!             u32; indices u16; material u32; from version 3: layer u32, lod in f32, lod out
+//!             f32; from version 4: bounding sphere centre 3 f32 and radius f32, renderable u8
 //!   class 3:  cast shadows, visible, transparent; bone count u32 (name string, matrix 16
 //!             f32); vertex count u32; vertices of 76 bytes (as above, then 4 weights f32 and
-//!             4 bone indices f32); index count u32; indices u16; material u32; layer u32;
-//!             8 bytes
+//!             4 bone indices f32); index count u32; indices u16; material u32; from
+//!             version 3: layer u32, lod in f32, lod out f32
 //!   then the children, in order
 //! ```
 //!
@@ -226,7 +226,14 @@ impl Scanner {
         let mut b = vec![0u8; n];
         self.file.read_exact(&mut b)?;
         self.position += n as u64;
-        Ok(String::from_utf8_lossy(&b).into_owned())
+        // the game's decoder stops at the first byte sequence that is not UTF-8
+        Ok(match String::from_utf8(b) {
+            Ok(text) => text,
+            Err(e) => {
+                let valid = e.utf8_error().valid_up_to();
+                String::from_utf8_lossy(&e.as_bytes()[..valid]).into_owned()
+            }
+        })
     }
 
     fn matrix(&mut self) -> io::Result<Matrix> {
@@ -355,10 +362,10 @@ impl Kn5 {
                     let index_offset = s.position;
                     s.skip(index_count as u64 * 2)?;
                     let material_id = s.u32()?;
-                    let layer = s.u32()?;
-                    let lod_in = s.f32()?;
-                    let lod_out = s.f32()?;
-                    let (bounding_centre, bounding_radius, is_renderable) = if skinned {
+                    // layer and LOD range came with version 3, the bounding sphere and the
+                    // "renderable" flag (plain meshes only) with version 4
+                    let (layer, lod_in, lod_out) = if version >= 3 { (s.u32()?, s.f32()?, s.f32()?) } else { (0, 0.0, 0.0) };
+                    let (bounding_centre, bounding_radius, is_renderable) = if skinned || version < 4 {
                         ([0.0; 3], 0.0, true)
                     } else {
                         ([s.f32()?, s.f32()?, s.f32()?], s.f32()?, s.u8()? != 0)
@@ -384,15 +391,13 @@ impl Kn5 {
                 }
             }
             let index = nodes.len();
-            nodes.push(Node { class, name, active, parent, children: Vec::with_capacity(child_count), matrix, mesh });
+            nodes.push(Node { class, name, active, parent, children: Vec::new(), matrix, mesh });
             if let Some(parent) = parent {
                 nodes[parent].children.push(index);
             }
             pending.push((Some(index), child_count));
         }
-        if s.position != length {
-            return Err(bad(format!("{}: {} bytes left after the last node", path.display(), length - s.position)));
-        }
+        // the game reads one top node with everything below it and never looks at what follows
         Ok(Kn5 { path: path.to_path_buf(), version, textures, materials, nodes })
     }
 
@@ -401,7 +406,9 @@ impl Kn5 {
         Ok(Kn5Reader { file: File::open(&self.path)?, scratch: Vec::new() })
     }
 
-    /// The node's matrix in the model: its own and those of all its parents.
+    /// The node's matrix in the model: its own and those of all its parents. For drawing:
+    /// the sums are not in the order of the game's own matrix product (what has to match
+    /// the game takes its matrices through `rustyac-physics`).
     pub fn world_matrix(&self, node: usize) -> Matrix {
         let mut m = self.nodes[node].matrix;
         let mut at = self.nodes[node].parent;

@@ -101,6 +101,8 @@ pub struct LiveSource {
     pad_state: Option<PadState>,
     /// The pad's own buttons (reset, pause, camera) as they were in the last look.
     meta_down: [bool; 3],
+    /// When the reset button went down, and whether its hold has already acted.
+    reset_down: Option<(std::time::Instant, bool)>,
     rumbling: bool,
 }
 
@@ -131,6 +133,7 @@ impl LiveSource {
             rumble,
             pad_state: None,
             meta_down: [false; 3],
+            reset_down: None,
             rumbling: false,
         }
     }
@@ -156,10 +159,28 @@ impl LiveSource {
         if pressed(1) {
             self.shared.paused.fetch_xor(true, Ordering::Relaxed);
         }
-        if !paused {
-            if pressed(0) {
-                self.pending_events |= event::RESET;
+        // the reset button: a tap puts the car back at its spawn point (on release), holding
+        // it for 0.6 s puts it back on the track where it is
+        const HOLD: std::time::Duration = std::time::Duration::from_millis(600);
+        if pressed(0) {
+            self.reset_down = Some((std::time::Instant::now(), false));
+        }
+        match (down[0], self.reset_down) {
+            (true, Some((since, false))) if since.elapsed() >= HOLD => {
+                if !paused {
+                    self.pending_events |= event::TO_TRACK;
+                }
+                self.reset_down = Some((since, true));
             }
+            (false, Some((_, held))) => {
+                if !held && !paused {
+                    self.pending_events |= event::RESET;
+                }
+                self.reset_down = None;
+            }
+            _ => {}
+        }
+        if !paused {
             if pressed(2) {
                 self.shared.camera_toggles.fetch_add(1, Ordering::Relaxed);
             }

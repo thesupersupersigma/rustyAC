@@ -71,6 +71,9 @@ pub trait DriverSource: Send {
 
     /// What the device may know of the car before the step, if it [wants](Self::wants_probe) it.
     fn set_probe(&mut self, _probe: &CarProbe) {}
+
+    /// The track the car is on, once it is loaded (a driver that follows its line wants it).
+    fn set_track(&mut self, _track: &Arc<Track>) {}
 }
 
 /// What AC's keyboard class reads off its car: values the last step left behind.
@@ -81,6 +84,16 @@ pub struct CarProbe {
     pub driven_right_slip: f32,
     /// `RaceEngineer::getOptimalBrake`: the pedal at which the first axle reaches its grip.
     pub optimal_brake: f32,
+    /// Where the car is and how it points (the body's position, forward and left axes), its
+    /// place along the track's AI line after the last step (-1: not known) and beside it, the
+    /// front wheels' angle at full lock (rad) and the wheelbase (m): what a driver sees.
+    pub position: [f32; 3],
+    pub forward: [f32; 3],
+    pub left: [f32; 3],
+    pub npos: f32,
+    pub offset: f32,
+    pub max_wheel_angle: f32,
+    pub wheelbase: f32,
 }
 
 impl CarProbe {
@@ -90,10 +103,19 @@ impl CarProbe {
         // front-wheel-drive car, else the rear pair
         let front = car.drivetrain.as_ref().is_some_and(|d| d.base().traction_type == rustyac_physics::car::TractionType::Fwd);
         let (left, right) = if front { (0, 1) } else { (2, 3) };
+        let m = car.core.get_world_matrix(car.body).m;
+        let wheelbase = (car.suspensions[0].get_base_position().z - car.suspensions[2].get_base_position().z).abs();
         CarProbe {
             driven_left_slip: car.tyres[left].status.nd_slip,
             driven_right_slip: car.tyres[right].status.nd_slip,
             optimal_brake: rustyac_physics::car::aids::get_optimal_brake(car),
+            position: [m[3][0], m[3][1], m[3][2]],
+            forward: [m[2][0], m[2][1], m[2][2]],
+            left: [m[0][0], m[0][1], m[0][2]],
+            npos: if car.spline_locator.normalized_pos >= 0.0 { car.spline_locator_data.npos } else { -1.0 },
+            offset: car.spline_locator.offset,
+            max_wheel_angle: if car.steer_ratio != 0.0 { (car.steer_lock / car.steer_ratio).to_radians() } else { 0.3 },
+            wheelbase,
         }
     }
 }
@@ -243,6 +265,10 @@ impl<S: DriverSource> DriverSource for SpawnSequence<S> {
 
     fn set_probe(&mut self, probe: &CarProbe) {
         self.inner.set_probe(probe);
+    }
+
+    fn set_track(&mut self, track: &Arc<Track>) {
+        self.inner.set_track(track);
     }
 }
 
@@ -491,6 +517,10 @@ fn build_car(
     }
     let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
     if let Some(track) = track {
+        // CarAvatar::setSpawnPositionIndex("PIT", 0): the car's pit box
+        if let Some(&node) = track.spawn_positions.get("PIT").and_then(|slots| slots.first()) {
+            car.car.pit_position = track.helper_nodes[node].local;
+        }
         car.car.set_track(Arc::clone(track));
         // RaceManager::initOffline -> CarAvatar::armFirstLap in a hot-lap session
         if setup.spawn == "hotlap" {
@@ -543,6 +573,10 @@ impl GameSim {
             track_summary = report.summary(&loaded);
             track = Some(Arc::new(loaded));
             track_folder = Some(folder);
+        }
+        let mut driver = driver;
+        if let Some(track) = &track {
+            driver.source.set_track(track);
         }
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));

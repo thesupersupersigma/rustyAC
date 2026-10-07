@@ -10,6 +10,7 @@
 //! The physics is `rustyac-physics` and nothing else: this crate feeds it the driver's controls
 //! and the session's values and reads its state.
 
+pub mod autodrive;
 pub mod cli;
 pub mod crt;
 pub mod dump;

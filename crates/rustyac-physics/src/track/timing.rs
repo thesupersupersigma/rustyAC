@@ -518,9 +518,9 @@ impl LapDb {
             return;
         }
         let mut lap = Lap { time: ev.lap_time, cuts: ev.cuts, is_valid: ev.cuts == 0, splits: Vec::new() };
-        if self.sector_count > 1 {
+        if self.sector_count >= 1 {
             // the last sector is what is left of the lap
-            let sum: u32 = self.current_splits.iter().take(self.sector_count - 1).sum();
+            let sum = self.current_splits.iter().take(self.sector_count - 1).fold(0u32, |a, &b| a.wrapping_add(b));
             self.current_splits.resize(self.sector_count - 1, 0);
             self.current_splits.push(ev.lap_time.wrapping_sub(sum));
             lap.splits = self.current_splits.clone();
@@ -599,11 +599,10 @@ impl Track {
             self.is_open = true;
         } else {
             let mid = [(p1.x + p0.x) * 0.5, (p1.y + p0.y) * 0.5, (p1.z + p0.z) * 0.5];
-            // the game reads the AI line unconditionally; a track without one has no sectors here
-            if let Some(spline) = &self.ai_spline {
-                let n = spline.spline.world_to_spline(&mid, -1);
-                self.sectors_normalized_positions.push(n);
-            }
+            // the game asks the AI line whether the track has one or not (an empty line answers 0)
+            let empty = super::AiSpline::default();
+            let spline = self.ai_spline.as_ref().unwrap_or(&empty);
+            self.sectors_normalized_positions.push(spline.spline.world_to_spline(&mid, -1));
         }
     }
 

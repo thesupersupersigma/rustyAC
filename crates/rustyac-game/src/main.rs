@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use rustyac_game::autodrive::AutoDriver;
 use rustyac_game::cli::Options;
 use rustyac_game::input::bindings::Bindings;
 use rustyac_game::input::keyboard::KeyboardCarControl;
@@ -51,7 +52,8 @@ fn live_setup(options: &Options) -> SimSetup {
     SimSetup {
         car: options.car.clone(),
         auto_clutch: !options.no_auto_clutch,
-        auto_shifter: options.auto_shifter,
+        // the line follower does not shift
+        auto_shifter: options.auto_shifter || options.autodrive,
         track: options.track.clone().unwrap_or_default(),
         spawn: options.spawn.clone(),
         ..SimSetup::default()
@@ -175,7 +177,28 @@ fn start_physics(
         .map_err(|e| e.to_string())
 }
 
+/// The lap timer's numbers at the end of a run on a track.
+fn lap_report(view: &CarView) {
+    let lap = &view.lap;
+    if lap.on_track {
+        use rustyac_game::render::hud::lap_clock;
+        println!(
+            "laps: {} listed, last {}{}, best {}; the running lap {} ({}), {:.1} % round, sector {} of {}",
+            lap.laps,
+            lap_clock(lap.last_ms),
+            if lap.last_ms != 0 && !lap.last_valid { " (cut)" } else { "" },
+            lap_clock(lap.best_ms),
+            lap_clock(lap.current_ms),
+            if lap.valid { "valid".to_string() } else { format!("{} cuts", lap.cuts) },
+            lap.position.clamp(0.0, 1.0) * 100.0,
+            lap.sector + 1,
+            lap.sector_count
+        );
+    }
+}
+
 fn report(view: &CarView, timing: &Timing) {
+    lap_report(view);
     println!("{}", timing.report());
     println!(
         "the car after {} steps: {:.1} km/h, gear {}, {:.0} rpm, at x {:.2} y {:.3} z {:.2}",
@@ -215,9 +238,12 @@ fn run_headless(options: &Options) -> Result<(), String> {
         println!("no --duration: running until Ctrl+C");
     }
     let replaying = replay.is_some();
+    let autodrive = options.autodrive;
     let source = move || -> Box<dyn DriverSource> {
         if replaying {
             Box::new(ReplaySource::default())
+        } else if autodrive {
+            Box::new(SpawnSequence::new(AutoDriver::new(), true))
         } else {
             Box::new(SpawnSequence::new(NobodySource, true))
         }
@@ -346,9 +372,13 @@ fn run_window(options: &Options) -> Result<(), String> {
     let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
+        let autodrive = options.autodrive;
         move || -> Box<dyn DriverSource> {
             if !live {
                 return Box::new(ReplaySource::default());
+            }
+            if autodrive {
+                return Box::new(SpawnSequence::new(AutoDriver::new(), true));
             }
             let wheel = WheelDevice::open(&bindings, window_handle, ffb);
             print!("{}", list_devices(&bindings, &wheel));
@@ -507,8 +537,22 @@ fn run_window(options: &Options) -> Result<(), String> {
 /// then draws one frame off screen and writes it as a PNG. No window is opened.
 fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let (setup, steps) = drive(options)?;
-    let source: Box<dyn DriverSource> = if steps.is_some() { Box::new(ReplaySource::default()) } else { Box::new(SpawnSequence::new(NobodySource, true)) };
+    let source: Box<dyn DriverSource> = if steps.is_some() {
+        Box::new(ReplaySource::default())
+    } else if options.autodrive {
+        Box::new(SpawnSequence::new(AutoDriver::new(), true))
+    } else {
+        Box::new(SpawnSequence::new(NobodySource, true))
+    };
+    // with the line follower the drive can be kept: it runs without a clock, so a lap takes seconds
+    let mut writer = match (&options.record, steps.is_none()) {
+        (Some(path), true) => Some(InputWriter::create(path, &setup)?),
+        _ => None,
+    };
     let mut sim = GameSim::new(setup, source)?;
+    if !sim.track_summary.is_empty() {
+        println!("{}", sim.track_summary);
+    }
     let wanted = options.at.map(|seconds| (seconds / 0.003).round() as usize);
     let mut drive_start = 0;
     let mut previous = CarView::capture(&sim, 0.0);
@@ -524,7 +568,14 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
                 if sim.car.device.source.in_spawn_sequence() {
                     drive_start = sim.steps + 1;
                 }
-                sim.step()?;
+                previous = CarView::capture(&sim, 0.0);
+                let input = sim.step()?;
+                if let Some(writer) = &mut writer {
+                    writer.push(&input)?;
+                }
+            }
+            if let Some(writer) = writer.take() {
+                println!("{} steps of the drive written to {}", writer.finish()?, options.record.as_ref().unwrap().display());
             }
         }
     }
@@ -552,6 +603,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         view.speed_kmh,
         view.gear - 1
     );
+    lap_report(&view);
     Ok(())
 }
 

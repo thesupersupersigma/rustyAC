@@ -360,8 +360,12 @@ impl InterpolatingSpline {
         }
         let target = self.length() * n;
         let mut idx = truncate_i64(((count as u64 - 1) as f32) * n) as u32;
+        // the game's loop has no end for two neighbouring points of the same length at the
+        // target; a line like that is cut short here instead of hanging the physics
+        let mut turns = 0usize;
         loop {
-            if idx as u64 >= count as u64 - 1 {
+            turns += 1;
+            if idx as u64 >= count as u64 - 1 || turns > 2 * count + 8 {
                 break;
             }
             let a = self.points[idx as usize].point_length;
@@ -682,8 +686,15 @@ impl AiSpline {
             let sampling_density = r.f32(10.0);
             ai.spline.grid_data = Some(GridData { max_extreme, min_extreme, sampling_density, neighbors_considered_number });
             let nx = r.i32(0).max(0);
+            let left = |r: &Reader| bytes.len().saturating_sub(r.at);
+            if nx as usize > left(&r) / 4 {
+                return Err("the AI line's grid has more columns than the file holds".to_string());
+            }
             for _ in 0..nx {
                 let nz = r.i32(0).max(0) as u32;
+                if nz as usize > left(&r) / 4 {
+                    return Err("the AI line's grid has more rows than the file holds".to_string());
+                }
                 ai.spline.grid_columns.push((ai.spline.grid_cells.len() as u32, nz));
                 for _ in 0..nz {
                     let n = r.i32(0).max(0) as u32;
@@ -885,14 +896,19 @@ impl SplineLocator {
 pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut Vec<String>) -> Result<(), String> {
     let fast_lane = ai.join("fast_lane.ai");
     if fast_lane.is_file() {
-        let spline = AiSpline::load(&fast_lane)?;
-        if spline.grid_missing {
-            messages.push(format!(
-                "{}: no lookup grid is stored; the game would build one (not ported), the port searches all points instead",
-                fast_lane.display()
-            ));
+        match AiSpline::load(&fast_lane) {
+            Ok(spline) => {
+                if spline.grid_missing {
+                    messages.push(format!(
+                        "{}: no lookup grid is stored; the game would build one (not ported), the port searches all points instead",
+                        fast_lane.display()
+                    ));
+                }
+                track.ai_spline = Some(spline);
+            }
+            // the track still drives: without its line there is no position along the lap
+            Err(e) => messages.push(format!("the AI line was not read ({e}): no position along the lap")),
         }
-        track.ai_spline = Some(spline);
     } else {
         messages.push(format!("the track has no AI line ({}): no position along the lap", fast_lane.display()));
     }
