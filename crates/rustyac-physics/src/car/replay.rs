@@ -633,6 +633,12 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         out.push(TraceValue::i("car.blackFlagged", chassis.black_flagged as i32));
         out.push(TraceValue::d("car.penaltyTime", chassis.penalty_time));
     }
+    if let Some(page) = &chassis.physics_page {
+        // the telemetry page of this step, value by value
+        for (name, kind, word) in page.named() {
+            out.push(TraceValue { name: format!("page.{name}"), kind, word: word as u64, extra: false });
+        }
+    }
     if let Some(aids) = &chassis.aids {
         aids.trace(&mut out);
         // `Tyre::absOverride` as ABS left it for the next step
@@ -713,6 +719,8 @@ pub struct RunSetup {
     pub rust_aero: bool,
     /// The chassis has its own driver aids ([`RollingChassis::install_aids`]).
     pub rust_aids: bool,
+    /// The car writes the telemetry page ([`RollingChassis::install_telemetry`]).
+    pub telemetry: bool,
     /// The whole road is a pit lane.
     pub pitlane: bool,
     /// `StabilityControl::gain`: the game's stability aid (0 = off).
@@ -758,6 +766,9 @@ impl RunSetup {
             if let Some(aids) = &mut chassis.aids {
                 aids.base_mut().stability_control.gain = self.stability_gain;
             }
+        }
+        if self.telemetry {
+            chassis.install_telemetry()?;
         }
         chassis.core.joint_feedback = true;
         // the joints exist already: ask for their constraint forces as the oracle did
@@ -889,6 +900,10 @@ impl RollingChassis {
             out.extend([v.x, v.y, v.z].map(f));
         }
         out.extend([s.length.to_bits(), self.mesh_collide_mask]);
+        if let Some(writer) = &self.telemetry {
+            out.extend([writer.packet_id as u32, writer.null_counts as u32, writer.current_tyres_out as u32]);
+            out.extend([writer.snapshot_speed, writer.ride_height[0], writer.ride_height[1]].map(f));
+        }
         out
     }
 
@@ -1066,6 +1081,13 @@ impl RollingChassis {
         self.slip_stream.corners = [vectors[3], vectors[4]];
         self.slip_stream.length = f32::from_bits(next()?);
         self.mesh_collide_mask = next()?;
+        if let Some(writer) = &mut self.telemetry {
+            writer.packet_id = next()? as i32;
+            writer.null_counts = next()? as i32;
+            writer.current_tyres_out = next()? as i32;
+            writer.snapshot_speed = f32::from_bits(next()?);
+            writer.ride_height = [f32::from_bits(next()?), f32::from_bits(next()?)];
+        }
         Ok(())
     }
 }
@@ -1115,7 +1137,7 @@ impl Golden {
              fuel_consumption_rate={:?}\nallow_tyre_blankets={}\nflat_spot_ff_gain={:?}\ngyro_wheel_gain={:?}\n\
              mz_low_speed_reduction_speed_kmh={:?}\nmz_low_speed_reduction_min_value={:?}\nff_filter={:?}\n\
              use_fake_understeer_ff={}\nis_first_car={}\nrust_brakes={}\nrust_drivetrain={}\nauto_clutch={}\n\
-             auto_shifter={}\nrust_aero={}\nrust_aids={}\npitlane={}\nstability_gain={:?}\nwind_speed={:?}\n\
+             auto_shifter={}\nrust_aero={}\nrust_aids={}\ntelemetry={}\npitlane={}\nstability_gain={:?}\nwind_speed={:?}\n\
              wind_direction_deg={:?}\n",
             self.setup.scenario,
             self.setup.ground.describe(),
@@ -1143,6 +1165,7 @@ impl Golden {
             self.setup.auto_shifter as u8,
             self.setup.rust_aero as u8,
             self.setup.rust_aids as u8,
+            self.setup.telemetry as u8,
             self.setup.pitlane as u8,
             self.setup.stability_gain,
             self.setup.wind_speed,
@@ -1208,6 +1231,7 @@ impl Golden {
             rust_drivetrain: get("rust_drivetrain")? != "0",
             rust_aero: get("rust_aero")? != "0",
             rust_aids: get("rust_aids")? != "0",
+            telemetry: get("telemetry")? != "0",
             pitlane: get("pitlane")? != "0",
             stability_gain: number("stability_gain")?,
             wind_speed: number("wind_speed")?,

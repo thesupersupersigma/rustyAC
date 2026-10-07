@@ -19,6 +19,7 @@ use super::shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, VanillaDwb};
+use super::telemetry::{PhysicsPage, PhysicsPageWriter};
 use crate::data::ini::IniReader;
 use crate::math::{fdtest_inf_or_nan, powf, sinf, sqrtf};
 use crate::tyre::rig;
@@ -319,6 +320,11 @@ pub struct RollingChassis {
     pub slip_stream_effect_gain: f32,
     /// `Car::slipStream`: this car's wake
     pub slip_stream: SlipStream,
+    /// The writer of the `acpmf_physics` telemetry page, when the car has one
+    /// ([`RollingChassis::install_telemetry`]).
+    pub telemetry: Option<PhysicsPageWriter>,
+    /// The page of the step that just ran.
+    pub physics_page: Option<PhysicsPage>,
     /// `Car::unixName`: the car's folder name (a car called "spectator" collides with nothing
     /// but walls)
     pub unix_name: String,
@@ -733,6 +739,8 @@ impl RollingChassis {
             damage_zone_level: [0.0; 5],
             slip_stream_effect_gain: 1.0,
             slip_stream: SlipStream::default(),
+            telemetry: None,
+            physics_page: None,
             unix_name: data_path
                 .parent()
                 .and_then(|folder| folder.file_name())
@@ -915,6 +923,13 @@ impl RollingChassis {
             None => super::TractionType::Rwd,
         };
         self.aids = Some(Box::new(VanillaAids::new(&self.data_path, traction_type)?));
+        Ok(())
+    }
+
+    /// Attaches a telemetry writer: from now on every step leaves the `acpmf_physics` page of
+    /// that step in `physics_page` (the game's `SharedMemoryWriter` on its physics thread).
+    pub fn install_telemetry(&mut self) -> Result<(), String> {
+        self.telemetry = Some(PhysicsPageWriter::new(self, &self.data_path.clone())?);
         Ok(())
     }
 
@@ -1407,6 +1422,15 @@ impl RollingChassis {
         }
         self.core.step(dt);
         self.post_step();
+
+        // what the game's physics thread does after each step: the state snapshot, then the
+        // shared-memory page
+        if let Some(mut writer) = self.telemetry.take() {
+            writer.step_tyres_out(self);
+            writer.snapshot(self);
+            self.physics_page = writer.update_physics(self);
+            self.telemetry = Some(writer);
+        }
     }
 
     /// `Car::pollControls` @ 0x140274e70: the driver's device fills `Car::controls` and gets

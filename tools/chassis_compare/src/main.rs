@@ -123,6 +123,8 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         rust_drivetrain: systems.drivetrain,
         rust_aero: systems.aero,
         rust_aids: systems.aids,
+        // the page is the whole car's: it needs every system
+        telemetry: systems == Systems::ALL,
         // the whole-car scenarios' session settings; older recordings have none of them
         pitlane: recording.get("pitlane").is_some_and(|v| v != "0"),
         stability_gain: number("stability_gain")?,

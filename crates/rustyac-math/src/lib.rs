@@ -47,6 +47,7 @@ struct Crt {
     asinf: F1,
     acosf: F1,
     atanf: F1,
+    atan2f: F2,
     powf: F2,
     sin: D1,
     /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
@@ -71,6 +72,9 @@ unsafe extern "C" fn std_acosf(x: f32) -> f32 {
 unsafe extern "C" fn std_atanf(x: f32) -> f32 {
     x.atan()
 }
+unsafe extern "C" fn std_atan2f(y: f32, x: f32) -> f32 {
+    y.atan2(x)
+}
 unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
 }
@@ -86,6 +90,7 @@ const STD: Crt = Crt {
     asinf: std_asinf,
     acosf: std_acosf,
     atanf: std_atanf,
+    atan2f: std_atan2f,
     powf: std_powf,
     sin: std_sin,
     parse: None,
@@ -122,6 +127,7 @@ mod msvcr120 {
                 asinf: std::mem::transmute::<*mut c_void, super::F1>(get(c"asinf")?),
                 acosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"acosf")?),
                 atanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"atanf")?),
+                atan2f: std::mem::transmute::<*mut c_void, super::F2>(get(c"atan2f")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
                 sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
                 parse: Some((
@@ -193,6 +199,13 @@ pub fn acosf(x: f32) -> f32 {
 pub fn atanf(x: f32) -> f32 {
     // SAFETY: as `sinf`.
     unsafe { (crt().atanf)(x) }
+}
+
+/// `atan2f` (MSVCR120).
+#[inline]
+pub fn atan2f(y: f32, x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().atan2f)(y, x) }
 }
 
 /// `powf` (MSVCR120).

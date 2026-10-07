@@ -205,7 +205,7 @@ pub struct Wing {
 
 /// `plane4f::plane4f(p0, p1, p2)` @ 0x140117ed0: the plane through three points as unit
 /// normal and offset; all zero for points on one line.
-fn plane4f(p0: &Vec3f, p1: &Vec3f, p2: &Vec3f) -> [f32; 4] {
+pub(crate) fn plane4f(p0: &Vec3f, p1: &Vec3f, p2: &Vec3f) -> [f32; 4] {
     let (ax, ay, az) = (p2.x - p0.x, p2.y - p0.y, p2.z - p0.z);
     let (bx, by, bz) = (p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
     let nx = az * by - ay * bz;

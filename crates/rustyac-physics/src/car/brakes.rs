@@ -47,6 +47,8 @@ pub trait BrakeModel {
     fn is_using_ebb(&self) -> bool;
     /// `BrakeSystem::setManualFrontBias` @ 0x14028e5d0: `clicks` steps of the cockpit control.
     fn set_manual_front_bias(&mut self, clicks: i32);
+    /// `discs[i].t`: the disc temperatures in tyre order, deg C (the telemetry shows them).
+    fn disc_temperatures(&self) -> [f32; 4];
     fn base(&self) -> &BrakeBase;
     fn base_mut(&mut self) -> &mut BrakeBase;
     /// The values `tools/car_oracle` records of the brakes, under its names.
@@ -349,6 +351,10 @@ impl BrakeModel for VanillaBrakes {
         } else {
             self.limit_down
         };
+    }
+
+    fn disc_temperatures(&self) -> [f32; 4] {
+        [self.discs[0].t, self.discs[1].t, self.discs[2].t, self.discs[3].t]
     }
 
     fn base(&self) -> &BrakeBase {
