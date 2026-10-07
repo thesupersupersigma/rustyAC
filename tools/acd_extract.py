@@ -1,3 +1,5 @@
+# Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 """Read-only: unpack an Assetto Corsa car's data.acd into plain files.
 
 Reimplements acs.exe's own reader:

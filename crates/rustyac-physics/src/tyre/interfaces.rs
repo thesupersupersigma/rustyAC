@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! What the tyre talks to: the suspension/hub, the ground ray cast and the car it sits on.
 //!
 //! Method names are AC's virtual function names from `acs.pdb` in snake_case, parameter

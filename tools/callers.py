@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: find callers of functions by scanning acs.exe for direct CALL/JMP rel32 and
 for 8-byte pointers (vtables / function-pointer tables). Caller entry points are resolved
 through the x64 unwind table (.pdata), following chained unwind info to the function start.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Map tyres.ini keys read in Tyre::initCompounds to TyreCompoundDef fields.
 
 The decompiler leaves the function's local TyreCompoundDef untyped, so key values land in

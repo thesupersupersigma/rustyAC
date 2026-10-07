@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The Xbox pad: AC's XInput wrapper (`X360Joypad`, JoypadManager.obj) and its gamepad
 //! driver `JoypadCarControl` (X360CarControl.obj), ported from the disassembly
 //! (`re/scratch/task11/spec_pad_keyboard.md`). Sums and comparisons are in the machine code's

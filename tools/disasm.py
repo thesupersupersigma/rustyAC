@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: disassemble functions of acs.exe with names from acs.pdb (DIA SDK + capstone).
 
 Usage:

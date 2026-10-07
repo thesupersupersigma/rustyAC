@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Compares what the game's own `Tyre::init` loaded from a tyres.ini with what the Rust
 //! loader (`data::tyres_ini::init_compounds`) produced, member by member, bit by bit.
 

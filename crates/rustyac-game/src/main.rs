@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `rustyac.exe`: see `docs/game/first_drive.md`.
 
 use std::path::Path;

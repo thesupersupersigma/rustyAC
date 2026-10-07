@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The test rig of the rolling chassis. Nothing in here is part of the physics.
 //!
 //! * [`Ground`]: the analytic road `tools/car_oracle` gives the game's tyres.

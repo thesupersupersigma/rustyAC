@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The engine slot ([`EngineModel`]) and AC's `Engine` as its Vanilla implementation
 //! ([`VanillaEngine`]): throttle maps, rev limiter, full-throttle torque from `power.lut`,
 //! turbos, engine braking, damage, and the blend of the two by the throttle.

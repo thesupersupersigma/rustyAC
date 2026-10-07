@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The HUD's letters: the printable ASCII characters of a fixed-width system font, drawn
 //! once into a bitmap with GDI (which needs no window) and used as a texture.
 

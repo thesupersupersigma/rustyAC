@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Whole-car test oracle: Assetto Corsa's own `PhysicsEngine` and one `Car` (constructed,
 //! loaded and stepped by the game's code, mapped from acs.exe; the game itself never starts)
 //! on a fake flat track, driven by scripted controls, with every force handed to a rigid

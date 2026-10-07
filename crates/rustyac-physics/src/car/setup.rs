@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! AC's `SetupManager` for the values of the ported systems (chassis, brakes, drivetrain,
 //! engine): every setup item is a name, a pointer to one float of the car and a multiplier; `SetupManager::step` (late in every
 //! physics step) writes `multiplier * newValue` into the float whenever the two differ.

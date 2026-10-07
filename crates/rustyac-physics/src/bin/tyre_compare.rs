@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Replays recordings of AC's own `Tyre::step` (made by `tools/tyre_oracle run`) through
 //! `VanillaTyre` and compares every recorded value of every step bit for bit.
 //!

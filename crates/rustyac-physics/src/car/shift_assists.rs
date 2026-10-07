@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The small helpers around clutch and gearbox, members of AC's `Car`:
 //!
 //! * [`Autoclutch`]: works the clutch for the driver when pulling away and during paddle

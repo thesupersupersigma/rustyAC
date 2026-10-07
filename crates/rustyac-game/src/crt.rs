@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `expf` of the game's C runtime (MSVCR120.dll), which `rustyac-math` does not carry: the
 //! keyboard steering uses it. Taken from the DLL when the machine has it (it does wherever
 //! AC is installed); otherwise Rust's `exp`, which can differ in the last bit.

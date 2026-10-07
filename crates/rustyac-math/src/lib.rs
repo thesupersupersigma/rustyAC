@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The C runtime functions the Vanilla physics calls, with AC's exact results.
 //!
 //! `acs.exe` imports `sinf`, `cosf`, `tanf`, `asinf`, `acosf`, `atanf`, `powf`, `sqrtf`, the

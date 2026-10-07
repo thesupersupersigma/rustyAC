@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! [`VanillaCar`]: the whole car. A [`RollingChassis`] with every slot filled (aero, brakes,
 //! engine and drivetrain, aids, telemetry writer) and the driver's device, stepped exactly as
 //! AC's `PhysicsEngine::step` steps one `Car`. Nothing is fed any more: what goes in is what

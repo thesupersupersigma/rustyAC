@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Mass parameters: `ode/src/mass.cpp`.
 
 use crate::common::{Matrix3, Vector3};

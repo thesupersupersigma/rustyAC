@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Maps acs.exe into this process as a plain image and exposes the functions the oracle
 //! calls. The game's entry point is never run and nothing in the file on disk is touched; the
 //! only memory written is the import table of our private mapping (C/C++ runtime and

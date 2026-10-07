@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Golden test: small synthetic worlds of every kind the micro-oracle makes (`tools/ode_oracle`,
 //! report `docs/port/ode_stage1.md`), replayed without the game.
 //!

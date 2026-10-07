@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The state dump of `--dump-states`: what the car looked like after every step of a replay,
 //! bit for bit, so that a test or `tools/chassis_compare` can hold it against a car stepped
 //! some other way (directly, or by the game itself in an oracle recording).

@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! What the debug view draws and from where: the car's shape as boxes, AC's chase and
 //! cockpit cameras, and the little matrix arithmetic the picture needs. No Direct3D in here.
 

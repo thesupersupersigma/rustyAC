@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! `VanillaSctm`: 1:1 port of AC's `SCTM` tyre force model (acs.exe build 0x5a55e7a8).
 //!
 //! Transcribed from the disassembly of each function, because the pseudo-C regroups some

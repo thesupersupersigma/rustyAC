@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! AC's own `Tyre` on the rig: fake `ISuspension`, `IRayTrackCollisionProvider`, `Car`,
 //! `PhysicsEngine`, `Track` and `IRigidBody` objects for it to talk to, and readers for the
 //! members that get recorded. Offsets are from acs.pdb (see re/tyre/types/*.txt).

@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! AC's `AntirollBar`: pushes the left and right hub of an axle towards the same height.
 
 use super::body::{ForceSource, PhysicsCore, RigidBody};

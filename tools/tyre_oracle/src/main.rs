@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Tyre test oracle: Assetto Corsa's own `Tyre` (constructed, loaded and stepped by the
 //! game's code, mapped from acs.exe) on a single-wheel rig.
 //!

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: list function start addresses from acs.exe's .pdata (x64 unwind table).
 
 Usage:

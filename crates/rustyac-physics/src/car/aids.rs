@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The driver aids: the aids slot [`AidsModel`] and [`VanillaAids`], AC's `TractionControl`,
 //! `ABS`, `EDL` (electronic differential lock), `StabilityControl` and `SpeedLimiter` (the pit
 //! limiter).

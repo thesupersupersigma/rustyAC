@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The text HUD of the debug view: speed, gear, revs, pedals, aids, timer, frame rate.
 
 use super::font::{FontBitmap, SOLID};

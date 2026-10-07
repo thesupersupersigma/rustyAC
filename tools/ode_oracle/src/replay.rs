@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Replay of the car_oracle recordings (`oracle/car/*.carrec`) through the Rust port.
 //!
 //! The recordings hold, for every step of the game's own car: the state of the six bodies

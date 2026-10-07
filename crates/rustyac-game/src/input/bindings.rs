@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Which button does what. The file format is AC's `controls.ini`, read with AC's rules
 //! ([`super::ini`]); a few sections that start with `RUSTYAC` hold what AC has no name for.
 //!

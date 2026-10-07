@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Small vector / matrix helpers: ODE's `include/ode/odemath.h` inline functions and
 //! `ode/src/odemath.cpp`.
 //!

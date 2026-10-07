@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The game's shared memory, published by rustyAC: `Local\acpmf_physics`, `acpmf_graphics`
 //! and `acpmf_static` with AC's own layouts (`docs/map/telemetry.md`), so `ac_telemetry.py`
 //! and dashboard apps read rustyAC the way they read AC.

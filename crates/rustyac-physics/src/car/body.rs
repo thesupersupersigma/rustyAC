@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! AC's thin layer over the rigid-body library: `PhysicsCore` (the `IPhysicsCore`
 //! implementation) and `RigidBodyODE` (`IRigidBody`), on top of `rustyac-ode`.
 //!

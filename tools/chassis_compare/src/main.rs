@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The Rust rolling chassis against the whole-car recordings of `tools/car_oracle`.
 //!
 //! chassis_compare run [<scenario> ...] [--dir <folder>] [--verbose] [--stop-after <steps>]

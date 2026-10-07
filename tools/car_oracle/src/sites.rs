@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Which of the car's systems a recorded force call belongs to, from where in the game's code
 //! the call was made. The function table is generated from acs.pdb (`gen_functions.py`); the
 //! per-call-site labels inside `Suspension::step` and `HeaveSpring::step` come from reading

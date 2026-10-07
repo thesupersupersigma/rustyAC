@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only lookups over the acs.exe index (re/index, re/decomp, re/types). No Ghidra needed.
 
 Build the index first: tools/pdb_index.py, tools/xref_index.py, tools/bulk_decomp.py.

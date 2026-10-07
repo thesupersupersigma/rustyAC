@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The brake slot ([`BrakeModel`]) and AC's `BrakeSystem` as its Vanilla implementation
 //! ([`VanillaBrakes`]): pedal to brake torque per wheel, front / rear bias (the setup's, the
 //! cockpit's, or an electronic one), handbrake, steer-brake and disc temperatures with fade.

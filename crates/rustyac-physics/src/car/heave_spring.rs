@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! AC's `HeaveSpring`: the third spring of an axle (Formula cars). It acts on the average
 //! height of the left and right hub, pushes each hub with the **full** force and the body
 //! twice, and may pull as well as push.

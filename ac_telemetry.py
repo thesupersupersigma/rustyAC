@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """
 ac_telemetry.py - log Assetto Corsa physics telemetry.  (v4)
 

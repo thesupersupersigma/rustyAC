@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: survey an .ini file across every extracted car in cardata/.
 
 Usage:

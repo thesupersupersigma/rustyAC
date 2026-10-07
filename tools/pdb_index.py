@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: build a grep-able index of acs.exe / acs.pdb in re/index/ (git-ignored).
 
 Usage: pdb_index.py [out_dir]          (default: re/index)

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Test oracle for `rustyac-ode`, the Rust port of the rigid-body library inside Assetto Corsa.
 //!
 //! ode_oracle micro [--type <name,name>] [--worlds <n>] [--steps <n>] [--first-seed <n>] [--verbose]

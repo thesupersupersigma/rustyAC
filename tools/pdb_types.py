@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: dump struct/class layouts straight from acs.pdb via the DIA SDK (msdia140.dll).
 
 Usage: pdb_types.py <out_dir> <TypeName> [<TypeName> ...]

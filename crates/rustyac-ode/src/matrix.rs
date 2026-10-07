@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Dense matrix routines: `ode/src/matrix.cpp`, `fastdot.c`, `fastldlt.c`, `fastlsolve.c`,
 //! `fastltsolve.c`.
 //!

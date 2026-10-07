@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! `VanillaTyre` against AC's own `Tyre::step`, on a made-up tyre (`golden/synthetic_car`,
 //! not car data): two scenarios of a few hundred 0.003 s steps each, recorded by
 //! `tools/tyre_oracle run --golden`. After every step the whole recorded state (forces and

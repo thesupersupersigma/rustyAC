@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The driver's devices: keyboard, Xbox pad (XInput), DirectInput wheels and pads, with AC's
 //! own input classes behind them ([`pad`], [`keyboard`], [`wheel`]) and AC's `controls.ini`
 //! as the bindings file ([`bindings`]).

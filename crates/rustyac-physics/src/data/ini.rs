@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! 1:1 port of AC's `INIReader` for plain (extracted) ini files: the parser with all its
 //! quirks, `hasSection` / `hasKey` / `getString`, the number readers and `getCurve`.
 //!

@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Aerodynamics: the aero slot [`AeroModel`] and [`VanillaAero`], AC's `AeroMap` with its
 //! `Wing`s (angle-of-attack and ride-height tables, damage factor, yaw sensitivity), the wing
 //! controllers of active aero (`DynamicWingController`), `DRS`, and the car-level helpers the

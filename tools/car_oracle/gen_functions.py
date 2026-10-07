@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Writes src/physics_functions.tsv: address range and short name of every hand-written function
 of the game's physics libraries, taken from the local index (re/index/functions.tsv, built by
 tools/pdb_index.py). The oracle embeds the table to say which function a recorded force call

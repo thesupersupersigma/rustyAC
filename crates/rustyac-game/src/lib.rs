@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! rustyAC, the game: everything around the physics car that makes it drivable.
 //!
 //! * [`sim`]: one [`VanillaCar`](rustyac_physics::car::VanillaCar) on the endless flat road,

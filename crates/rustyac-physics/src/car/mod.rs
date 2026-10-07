@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The car, as far as it is ported: a **rolling chassis**.
 //!
 //! * [`body`]: AC's layer over the rigid-body library (`PhysicsCore`, `RigidBodyODE`) on

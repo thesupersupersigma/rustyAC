@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Sample the SCTM oracle CSVs into the small checked-in golden file for `cargo test`.
 
 Usage (from the repository root, after generating the oracle data, see docs/port/sctm.md):

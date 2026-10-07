@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! rustyAC rigid-body core, stage 1.
 //!
 //! A 1:1 port of the part of **ODE 0.13.1** (Open Dynamics Engine, single precision) that

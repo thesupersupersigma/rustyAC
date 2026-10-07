@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! `dWorldStep`: islands (`ode/src/util.cpp`), the island stepper (`ode/src/step.cpp`) and
 //! the per-body integrator `dxStepBody`.
 //!

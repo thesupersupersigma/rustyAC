@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Waiting for a point in time to within a fraction of a millisecond: a high-resolution
 //! waitable timer for most of the wait, a short spin for the rest. (Plain `Sleep` wakes up
 //! to 15 ms late; a 3 ms physics step needs better.)

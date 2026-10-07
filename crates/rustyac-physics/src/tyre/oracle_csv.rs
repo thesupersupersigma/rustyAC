@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Reader for the CSV files `tools/sctm_oracle` writes (AC's own `SCTM::solve` inputs and
 //! outputs), plus the bit-level comparison used by `sctm_compare` and the golden test.
 //!

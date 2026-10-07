@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The suspension slot ([`SuspensionModel`], AC's `ISuspension`) and its double-wishbone
 //! implementation [`VanillaDwb`] (AC's `Suspension`, "DWB" in suspensions.ini), with the
 //! [`Damper`] every suspension type uses.

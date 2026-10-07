@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The whole car's branches that no recording of the game reaches: they were ported from the
 //! disassembly and read again by reviewers (`docs/port/whole_car.md` section 6.3). These tests
 //! pin what that reading says. They are not comparisons with the game; those are in

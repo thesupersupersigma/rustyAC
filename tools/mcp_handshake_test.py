@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Spawn kawaiidra like Claude Code does and run an MCP handshake (debug helper)."""
 import json, os, subprocess, sys, threading, time
 

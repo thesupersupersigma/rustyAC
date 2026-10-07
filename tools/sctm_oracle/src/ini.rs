@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Minimal reader for an extracted tyres.ini: sections, KEY=VALUE, ';' comments.
 
 use std::collections::HashMap;

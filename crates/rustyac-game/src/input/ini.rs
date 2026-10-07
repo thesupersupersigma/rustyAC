@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `controls.ini` as the game's input classes read it: sections of `KEY=value` lines, and
 //! getters with the game's answers for a missing key (`INIReader::getString` "" / `getFloat`
 //! 0 / `getInt` 0 / `getHex` -1).

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Scripted drivers. A script sees a few numbers of the car as they were at the end of the
 //! previous step (speed, revs, gear, yaw rate) and hands the pedals, the wheel and the shift
 //! paddles to the game through the fake controls provider. Nothing here depends on wall-clock

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! What the display needs of the car after a step: where its parts are and what the HUD
 //! shows. Read out of the physics car, never written back.
 

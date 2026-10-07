@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only: cross-reference index of acs.exe, built by disassembling every function once.
 
 Needs re/index/functions.tsv + publics.tsv (run tools/pdb_index.py first).

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read-only bulk decompiler: Ghidra pseudo-C for many acs.exe functions at once.
 
 Works on a COPY of the Ghidra project (the real one stays untouched and may be open in the

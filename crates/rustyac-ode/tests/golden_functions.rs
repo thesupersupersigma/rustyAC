@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Golden test of the maths routines one by one: inputs and the answers Assetto Corsa's own
 //! code gave for them, compared bit for bit (a NaN in the same place counts as equal).
 //!

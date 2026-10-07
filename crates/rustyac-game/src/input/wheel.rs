@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Wheels and other DirectInput controllers: AC's `DICarControl` (DICarControl.obj) with its
 //! axis and button bindings, ported from the disassembly
 //! (`re/scratch/task11/spec_wheel_ffb.md` sections 3 and 4), on top of [`super::dinput`].

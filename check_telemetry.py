@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """check_telemetry.py - sanity-check a CSV from ac_telemetry.py.
 Usage: python check_telemetry.py f2004_spa_ai.csv
 """

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The game's SCTM object and its solve() argument structs.
 //! Layouts: re/tyre/types/{SCTM,TyreModelInput,TyreModelOutput}.txt (from acs.pdb).
 

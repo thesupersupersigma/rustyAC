@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The input file of `--record` / `--replay`: how the car was set up, then what the driver's
 //! device reported in every physics step. Replaying it steps the same car through the same
 //! steps, with no window, no clock and no hardware.

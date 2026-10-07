@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The simulation the game runs: one [`VanillaCar`], built and spawned the way the oracle
 //! builds and spawns the game's car, and stepped with nothing but what a driver's device
 //! reports. Live driving, `--replay` and the tests all go through [`GameSim::step`]; there is

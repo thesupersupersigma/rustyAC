@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! rustyAC physics.
 //!
 //! Every physics system is a slot behind a trait with a **Vanilla** implementation (a 1:1

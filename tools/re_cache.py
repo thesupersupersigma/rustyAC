@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Read decompiler output that the kawaiidra MCP cached (~/.kawaiidra/cache).
 
 Usage:

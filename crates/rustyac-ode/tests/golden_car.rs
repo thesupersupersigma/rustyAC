@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Golden test: the game's own F2004, replayed from small excerpts of the whole-car oracle
 //! recordings (`tools/car_oracle`, report `docs/oracle/car_oracle.md`).
 //!

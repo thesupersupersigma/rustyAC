@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The keyboard: AC's `KeyboardCarControl` (KeyboardCarControl.obj), ported from the
 //! disassembly (`re/scratch/task11/spec_pad_keyboard.md` section 5): the steering that moves
 //! towards a speed-dependent limit, the throttle that ramps and backs off when the driven

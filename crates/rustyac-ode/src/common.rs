@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Basic types of the single-precision ODE build (`include/ode/common.h`).
 
 /// `dVector3`: three values plus one of padding.

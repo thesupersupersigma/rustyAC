@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The window: a plain Win32 window (borderless over the whole screen, or a normal one with
 //! `--windowed`) whose messages become a short list of events for the main loop.
 

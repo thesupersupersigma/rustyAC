@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! `VanillaTyre`: 1:1 port of AC's `Tyre` for tyres.ini `VERSION >= 10` (acs.exe build
 //! 0x5a55e7a8): everything `Tyre::step` does, in the original order.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Checks on a finished recording: the tyres replayed through the Rust port, and a few
 //! headline numbers for a plausibility look.
 

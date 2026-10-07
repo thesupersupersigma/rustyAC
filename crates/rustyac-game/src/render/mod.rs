@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The debug view: a throw-away Direct3D 11 renderer that draws an endless flat ground with
 //! a grid, the car as boxes and cylinders, and a text HUD. It is not AC's renderer and shares
 //! nothing with it but the API; when AC's renderer is ported this module goes away.

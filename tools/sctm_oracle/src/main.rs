@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! SCTM test oracle: runs Assetto Corsa's own `SCTM::solve` over slip sweeps and writes CSVs.
 //!
 //! sctm_oracle --car <extracted car data dir> [--compound <name>] [--axle front|rear]

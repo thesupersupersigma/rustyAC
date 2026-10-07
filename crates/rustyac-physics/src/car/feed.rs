@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The "feed": everything that crosses into the car from the systems that are not ported yet
 //! (the driver, aero, the aids, hybrid systems) and, for a chassis that runs without its own
 //! brakes or drivetrain, from those too.

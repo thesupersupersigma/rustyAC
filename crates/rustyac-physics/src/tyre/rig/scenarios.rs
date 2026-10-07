@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Scripted single-wheel scenarios for the rig: thousands of 0.003 s steps each.
 //!
 //! The scripts only need to be *plausible* and to visit the branches of `Tyre::step`; they

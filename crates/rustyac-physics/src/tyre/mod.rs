@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The tyre.
 //!
 //! [`VanillaTyre`] is AC's `Tyre` for tyres.ini `VERSION >= 10`: ground contact, slip, forces

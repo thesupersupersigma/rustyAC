@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The tyre's loaded data: AC's `TyreData`, `TyreModelData`, `TyrePatchData` and
 //! `TyreCompoundDef`, with the constructors' default values. Fields are the PDB member names
 //! in snake_case; the ini key each one comes from is in [`crate::data::tyres_ini`].

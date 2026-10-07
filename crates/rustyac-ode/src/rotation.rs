@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Quaternion and rotation-matrix helpers: `ode/src/rotation.cpp`.
 
 use crate::common::{Matrix3, Quaternion};

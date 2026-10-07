@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The physics thread: steps the car at AC's fixed 333 Hz (3 ms), on its own clock, whatever
 //! the display does. The display reads the last two steps ([`Frames`]) and blends them.
 //!

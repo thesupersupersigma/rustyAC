@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Plain physics sanity checks of the public API. These do not prove anything about bits
 //! (the golden test and `tools/ode_oracle` do that); they show that the world behaves like a
 //! world and that the README's example runs.

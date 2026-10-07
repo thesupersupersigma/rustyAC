@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The ODE micro-oracle: synthetic worlds built and stepped in Assetto Corsa's own ODE and in
 //! the Rust port, compared bit for bit after every step.
 //!

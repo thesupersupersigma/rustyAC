@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The recording format, its reader and the CSV converter.
 //!
 //! File layout (little endian):

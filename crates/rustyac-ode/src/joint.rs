@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! Joints: `ode/src/joints/{joint,ball,dball,fixed,slider}.cpp` and the joint part of
 //! `ode/src/ode.cpp`.
 //!

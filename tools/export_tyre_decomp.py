@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Write re/tyre/decomp/<Class>__<method>.c from the kawaiidra decompile cache.
 
 The pseudo-C body is Ghidra's output byte-for-byte (line endings normalised to LF). The header

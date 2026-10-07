@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! AC's `vec3f` / `mat44f` and the handful of vector functions the tyre calls, in the
 //! original operation order. The two DirectXMath functions (`XMMatrixMultiply`,
 //! `XMMatrixInverse`) are four-lane SSE code in the game; here every lane is computed

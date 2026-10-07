@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! A single-wheel test rig: scripted inputs for one tyre, a fake hub, a flat (or not so
 //! flat) road and a stand-in car, plus the file format `tools/tyre_oracle` records AC's own
 //! `Tyre::step` in. The same [`StepInput`]s drive the game's tyre (in the oracle) and

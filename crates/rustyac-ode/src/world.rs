@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: BSD-3-Clause
+
 //! World, bodies and the body API: `ode/src/ode.cpp`, `objects.h`.
 //!
 //! ODE keeps its objects in intrusive linked lists and the order of those lists decides the

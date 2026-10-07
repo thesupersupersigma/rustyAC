@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! The telemetry link: the `acpmf_physics` shared-memory page (`SPageFilePhysics`, 592 bytes)
 //! as AC's `SharedMemoryWriter::updatePhysics` @ 0x140186ef0 fills it after every physics
 //! step, produced from a Rust car. The layout and the bits are the game's, so the tools that

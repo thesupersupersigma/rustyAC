@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! 1:1 port of the parts of AC's `Curve` (a lookup table) that the tyre model evaluates:
 //! `getCount`, `addValue`, `getValue` (linear) and `getCubicSplineValue`
 //! (`CubicSpline<float,float>`).

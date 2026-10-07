@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Check 1 of Task 11: the game loop does not change the physics.
 //!
 //! A drive is written as an input file and replayed by `rustyac.exe --replay --headless

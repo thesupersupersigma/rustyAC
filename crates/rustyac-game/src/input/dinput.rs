@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! DirectInput 8: the game controllers Windows lists (wheels, pedals, other pads), read the
 //! way AC's `DirectInput` / `InputDevice` read them (`re/scratch/task11/spec_wheel_ffb.md`
 //! sections 1 and 2), and one constant-force effect for force feedback.

@@ -1,3 +1,5 @@
+// Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
+
 //! Runs `VanillaSctm` over the inputs of an oracle CSV (AC's own `SCTM::solve` output) and
 //! reports, per output field, how closely the port matches.
 //!

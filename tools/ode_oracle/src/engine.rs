@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! One interface, two rigid-body engines: Assetto Corsa's own ODE (functions called by
 //! address inside the mapped `acs.exe`) and the Rust port `rustyac-ode`. A synthetic world is
 //! described once and built in both through this interface.
