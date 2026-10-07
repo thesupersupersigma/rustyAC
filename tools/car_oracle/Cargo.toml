@@ -3,6 +3,7 @@ name = "car_oracle"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT OR Apache-2.0"
 description = "Test oracle: Assetto Corsa's own PhysicsEngine and one Car (loaded from acs.exe, never executed as a program) on a fake flat track, with every force and the full body / joint state recorded"
 
 [dependencies]

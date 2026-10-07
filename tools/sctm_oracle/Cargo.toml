@@ -3,6 +3,7 @@ name = "sctm_oracle"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT OR Apache-2.0"
 description = "Test oracle: sweeps Assetto Corsa's own SCTM::solve (loaded from acs.exe, never executed as a program)"
 
 [dependencies]

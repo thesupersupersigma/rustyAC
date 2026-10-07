@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 publish.workspace = true
+# No `license` on purpose: this crate is a 1:1 port of Assetto Corsa's car physics (acs.exe) with
+# test data recorded from the game. It is not covered by rustyAC's licenses: see LICENSING.md.
 
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }

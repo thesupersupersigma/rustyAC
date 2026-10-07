@@ -3,6 +3,7 @@ name = "tyre_oracle"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT OR Apache-2.0"
 description = "Test oracle: drives Assetto Corsa's own Tyre::step (loaded from acs.exe, never executed as a program) on a single-wheel rig"
 
 [dependencies]

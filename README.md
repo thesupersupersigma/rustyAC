@@ -35,3 +35,7 @@ bye
 idk make a pull request, claude is 100% gonna review it so idk if it works, it works.
 
 ok bye now :)
+
+## License
+
+It depends on the part, and the code ported from Assetto Corsa has no license at all. See [LICENSING.md](LICENSING.md).

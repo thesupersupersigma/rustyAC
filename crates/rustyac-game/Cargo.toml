@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 publish.workspace = true
+# The crate's original files. A few files are ported from Assetto Corsa and carry no license, and
+# two are shared with tools/chassis_compare under MIT OR Apache-2.0: see LICENSING.md.
+license = "GPL-3.0-or-later"
 
 [lib]
 name = "rustyac_game"
