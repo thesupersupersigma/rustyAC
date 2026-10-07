@@ -39,8 +39,10 @@ pub mod event {
     /// back (it would overwrite the pedal), and takes over again in the first step without
     /// this bit.
     pub const MANUAL_CLUTCH: u32 = 1 << 7;
+    /// Back onto the track: the car is put on the nearest point of the AI line, facing along it.
+    pub const TO_TRACK: u32 = 1 << 8;
 
-    pub const NAMES: [(u32, &str); 8] = [
+    pub const NAMES: [(u32, &str); 9] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -49,6 +51,7 @@ pub mod event {
         (ABS_DN, "abs-"),
         (AUTO_SHIFTER, "auto-shifter"),
         (MANUAL_CLUTCH, "manual clutch"),
+        (TO_TRACK, "to track"),
     ];
 }
 
@@ -145,6 +148,11 @@ pub struct SimSetup {
     /// `getFFGlobalGain` of the driver's device (a wheel's force-feedback gain; else 1).
     pub ff_gain: f32,
     pub oracle: Option<OracleSetup>,
+    /// The track: a folder, or a name under the game's `content/tracks`. Empty: the endless
+    /// flat road.
+    pub track: String,
+    /// Where on the track the car starts: `hotlap`, `pit` or `start`.
+    pub spawn: String,
 }
 
 impl Default for SimSetup {
@@ -160,6 +168,8 @@ impl Default for SimSetup {
             auto_shifter: false,
             ff_gain: 1.0,
             oracle: None,
+            track: String::new(),
+            spawn: "hotlap".to_string(),
         }
     }
 }
@@ -222,6 +232,10 @@ impl SimSetup {
         put("auto_clutch", (self.auto_clutch as u32).to_string());
         put("auto_shifter", (self.auto_shifter as u32).to_string());
         put("ff_gain", format!("{:?}", self.ff_gain));
+        if !self.track.is_empty() {
+            put("track", self.track.clone());
+            put("spawn", self.spawn.clone());
+        }
         if let Some(o) = &self.oracle {
             put("oracle_scenario", o.scenario.clone());
             put("oracle_ground", o.ground.describe());
@@ -293,6 +307,8 @@ impl SimSetup {
                 "auto_clutch" => setup.auto_clutch = flag(),
                 "auto_shifter" => setup.auto_shifter = flag(),
                 "ff_gain" => setup.ff_gain = float()?,
+                "track" => setup.track = value.to_string(),
+                "spawn" => setup.spawn = value.to_string(),
                 "oracle_scenario" => oracle.get_or_insert_with(blank).scenario = value.to_string(),
                 "oracle_ground" => {
                     oracle.get_or_insert_with(blank).ground = Ground::parse(value).ok_or(format!("oracle_ground: {value:?}"))?

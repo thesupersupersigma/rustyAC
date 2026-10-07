@@ -6,8 +6,11 @@
 //! no other way the game touches the car.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use rustyac_physics::car::replay::Ground;
+use rustyac_physics::track::{load_track, Track, TrackGround};
+use rustyac_physics::tyre::RayTrackCollisionProvider;
 use rustyac_physics::car::{CarControls, CarControlsInput, ControlsProvider, VanillaCar, VibrationDef};
 use rustyac_physics::vecmath::Vec3f;
 
@@ -339,6 +342,62 @@ pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// Assetto Corsa's own folder: `AC_ROOT` if that is set, else Steam's usual place. Read only.
+pub fn ac_root() -> Option<PathBuf> {
+    let root = match std::env::var_os("AC_ROOT") {
+        Some(root) => PathBuf::from(root),
+        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
+    };
+    root.join("content").is_dir().then_some(root)
+}
+
+/// Finds a track's folder: a path to it, or its name under the game's `content/tracks`.
+pub fn find_track(track: &str) -> Result<PathBuf, String> {
+    let direct = PathBuf::from(track);
+    if direct.is_dir() {
+        return Ok(direct);
+    }
+    if let Some(root) = ac_root() {
+        let folder = root.join("content").join("tracks").join(track);
+        if folder.is_dir() {
+            return Ok(folder);
+        }
+    }
+    Err(format!(
+        "the track {track:?} was not found: it is neither a folder nor a name under Assetto Corsa's content/tracks (set AC_ROOT if the game is not in Steam's usual place)"
+    ))
+}
+
+/// The car's 3D model in the game's folder: `content/cars/<car>/<LOD_0 of data/lods.ini>`.
+pub fn find_car_model(car: &str, data_path: &Path) -> Option<PathBuf> {
+    let name = Path::new(car).file_name()?.to_string_lossy().into_owned();
+    let folder = ac_root()?.join("content").join("cars").join(&name);
+    let lods = std::fs::read_to_string(data_path.join("lods.ini")).unwrap_or_default();
+    let mut in_first = false;
+    for line in lods.lines() {
+        let line = line.split(';').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            in_first = line == "[LOD_0]";
+        } else if let (true, Some(("FILE", file))) = (in_first, line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))) {
+            let path = folder.join(file);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    // no lods.ini: the model named like the folder
+    let path = folder.join(format!("{name}.kn5"));
+    path.is_file().then_some(path)
+}
+
+/// Where a car is put down: a point on the road and the direction its tail points
+/// (`Car::forceRotation` takes the tail).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpawnPose {
+    pub position: Vec3f,
+    pub tail: Vec3f,
+}
+
 /// The car's unchanging facts, for the display.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CarInfo {
@@ -348,23 +407,57 @@ pub struct CarInfo {
     pub wheel_positions: [[f32; 3]; 4],
     pub tyre_width: [f32; 4],
     pub tyre_radius: [f32; 4],
+    /// The track's folder, when the car is on one.
+    pub track_folder: Option<PathBuf>,
 }
 
-/// One car on the endless flat road, and the count of its steps.
+/// One car on the endless flat road or on a track, and the count of its steps.
 pub struct GameSim {
     pub setup: SimSetup,
     pub data_path: PathBuf,
     pub car: VanillaCar<Driver>,
     /// Steps run so far; the next one runs at `setup.time_of_step(steps)`.
     pub steps: u64,
+    /// The track, and its folder.
+    pub track: Option<Arc<Track>>,
+    pub track_folder: Option<PathBuf>,
+    /// Where the car starts and where a reset puts it.
+    pub spawn: SpawnPose,
+    /// What loading the track said (for the console).
+    pub track_summary: String,
 }
 
 /// Where the car is spawned: on the road at the origin, the nose towards +z (so the tail,
 /// which is what `Car::forceRotation` takes, towards -z). The oracle's spawn.
 const SPAWN_POSITION: Vec3f = Vec3f { x: 0.0, y: 0.0, z: 0.0 };
 const SPAWN_TAIL: Vec3f = Vec3f { x: 0.0, y: 0.0, z: -1.0 };
+const FLAT_SPAWN: SpawnPose = SpawnPose { position: SPAWN_POSITION, tail: SPAWN_TAIL };
 
-fn build_car(setup: &SimSetup, data_path: &Path, physics_time: f64, driver: Driver) -> Result<VanillaCar<Driver>, String> {
+/// The spawn point a set-up asks for on a track: `hotlap` (the track's hot-lap start, or the
+/// first grid slot where it has none), `pit` (the first pit box) or `start` (the first grid slot).
+fn spawn_on(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
+    let sets: &[&str] = match spawn {
+        "hotlap" => &["HOTLAP_START", "START", "PIT"],
+        "pit" => &["PIT"],
+        "start" => &["START"],
+        other => return Err(format!("the spawn point {other:?} is not one of hotlap, pit, start")),
+    };
+    for set in sets {
+        if let Some((position, tail)) = track.spawn_pose(set, 0) {
+            return Ok(SpawnPose { position, tail });
+        }
+    }
+    Err(format!("the track {} has no spawn point for {spawn:?} (no AC_{}_0 node)", track.name, sets[0]))
+}
+
+fn build_car(
+    setup: &SimSetup,
+    data_path: &Path,
+    physics_time: f64,
+    driver: Driver,
+    track: Option<&Arc<Track>>,
+    spawn: &SpawnPose,
+) -> Result<VanillaCar<Driver>, String> {
     if let Some(run) = setup.run_setup() {
         // exactly the car `tools/chassis_compare` holds against a recording of the game
         let mut run = run;
@@ -372,7 +465,11 @@ fn build_car(setup: &SimSetup, data_path: &Path, physics_time: f64, driver: Driv
         return VanillaCar::from_chassis(run.build(data_path)?, driver);
     }
     // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start
-    let mut car = VanillaCar::new(data_path, setup.env, Box::new(Ground::Flat), setup.seed, physics_time, driver)?;
+    let ground: Box<dyn RayTrackCollisionProvider> = match track {
+        Some(track) => Box::new(TrackGround(Arc::clone(track))),
+        None => Box::new(Ground::Flat),
+    };
+    let mut car = VanillaCar::new(data_path, setup.env, ground, setup.seed, physics_time, driver)?;
     // `CarAvatar::setAutoClutchEnabled`: the aid switches the automatic clutch at the start,
     // and with it the one on shifts
     car.car.autoclutch.use_auto_on_start = setup.auto_clutch;
@@ -380,8 +477,8 @@ fn build_car(setup: &SimSetup, data_path: &Path, physics_time: f64, driver: Driv
         car.car.autoclutch.use_auto_on_change = true;
     }
     car.car.auto_shifter.is_active = setup.auto_shifter;
-    car.car.force_rotation(&SPAWN_TAIL);
-    car.car.force_position(&SPAWN_POSITION);
+    car.car.force_rotation(&spawn.tail);
+    car.car.force_position(&spawn.position);
     car.car.session_start()?;
     Ok(car)
 }
@@ -390,8 +487,20 @@ impl GameSim {
     pub fn new(setup: SimSetup, source: Box<dyn DriverSource>) -> Result<GameSim, String> {
         let data_path = find_car_data(&setup.car)?;
         let driver = Driver::new(source, setup.ff_gain);
-        let car = build_car(&setup, &data_path, setup.clock_start_ms, driver)?;
-        Ok(GameSim { setup, data_path, car, steps: 0 })
+        let (mut track, mut track_folder, mut spawn, mut track_summary) = (None, None, FLAT_SPAWN, String::new());
+        if !setup.track.is_empty() {
+            if setup.oracle.is_some() {
+                return Err("an oracle set-up runs on the oracle's own road, not on a track".to_string());
+            }
+            let folder = find_track(&setup.track)?;
+            let (loaded, report) = load_track(&folder, "")?;
+            spawn = spawn_on(&loaded, &setup.spawn)?;
+            track_summary = report.summary(&loaded);
+            track = Some(Arc::new(loaded));
+            track_folder = Some(folder);
+        }
+        let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
+        Ok(GameSim { setup, data_path, car, steps: 0, track, track_folder, spawn, track_summary })
     }
 
     /// The physics clock after the last step, ms.
@@ -407,7 +516,8 @@ impl GameSim {
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
         let car = &self.car.car;
-        let mut info = CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), ..CarInfo::default() };
+        let mut info =
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), track_folder: self.track_folder.clone(), ..CarInfo::default() };
         for index in 0..4.min(car.tyres.len()) {
             let p = car.suspensions[index].get_base_position();
             info.wheel_positions[index] = [p.x, p.y, p.z];
@@ -428,7 +538,7 @@ impl GameSim {
             return Err("an oracle set-up cannot be rebuilt mid-run".to_string());
         }
         let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
-        let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder)?;
+        let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
         std::mem::swap(&mut car.device, &mut self.car.device);
         self.car = car;
         Ok(())
@@ -440,9 +550,23 @@ impl GameSim {
         }
         if events & event::RESET != 0 {
             // a teleport is a job of the game's main thread: it runs at the start of the step
-            self.car.car.queue(|car| {
-                car.force_rotation(&SPAWN_TAIL);
-                car.force_position(&SPAWN_POSITION);
+            let spawn = self.spawn;
+            self.car.car.queue(move |car| {
+                car.force_rotation(&spawn.tail);
+                car.force_position(&spawn.position);
+            });
+        }
+        if events & event::TO_TRACK != 0 {
+            // the nearest point of the AI line, facing along it; without an AI line, the spawn
+            let body = self.car.car.core.get_world_matrix(self.car.car.body).m[3];
+            let here = Vec3f::new(body[0], body[1], body[2]);
+            let pose = match self.track.as_ref().and_then(|track| track.pose_on_ai_line(&here)) {
+                Some((position, tail)) => SpawnPose { position, tail },
+                None => self.spawn,
+            };
+            self.car.car.queue(move |car| {
+                car.force_rotation(&pose.tail);
+                car.force_position(&pose.position);
             });
         }
         if bias_clicks != 0 {

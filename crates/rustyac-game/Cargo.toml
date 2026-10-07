@@ -21,6 +21,8 @@ path = "src/main.rs"
 rustyac-physics = { path = "../rustyac-physics" }
 # AC's own powf / sinf (MSVCR120): the ported input shaping must give AC's numbers
 rustyac-math = { path = "../rustyac-math" }
+# kn5 models: the track and the car of the debug view
+rustyac-content = { path = "../rustyac-content" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 

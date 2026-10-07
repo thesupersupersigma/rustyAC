@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The debug view: a throw-away Direct3D 11 renderer that draws an endless flat ground with
-//! a grid, the car as boxes and cylinders, and a text HUD. It is not AC's renderer and shares
-//! nothing with it but the API; when AC's renderer is ported this module goes away.
+//! The debug view: a throw-away Direct3D 11 renderer that draws the ground (an endless flat
+//! grid, or a track's kn5 models with their diffuse textures), the car (boxes and cylinders,
+//! or its own kn5 model) and a text HUD, lit by one sun and an ambient term. It is not AC's
+//! renderer and shares nothing with it but the API and the model files; when AC's renderer is
+//! ported this module goes away.
 //!
 //! Everything is drawn into an off-screen target (4x multisampled where the card can), which
 //! is then copied to the window or read back for `--screenshot`: the window is optional.
 
+pub mod dds;
 pub mod font;
 pub mod hud;
+pub mod models;
 pub mod scene;
 
 use windows::core::{Interface, PCSTR};
@@ -31,7 +35,8 @@ use windows::Win32::Graphics::Dxgi::{
 use crate::view::{CarView, Mat};
 use font::FontBitmap;
 use hud::{HudInfo, HudVertex};
-use scene::{cube, cylinder, mul, perspective, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};
+use models::{frustum, sphere_visible, GpuModel, ModelOptions, ModelStats};
+use scene::{cube, cylinder, mul, perspective, point, rotate_pitch, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};
 
 const SHADERS: &str = r#"
 cbuffer PerDraw : register(b0) {
@@ -41,6 +46,8 @@ cbuffer PerDraw : register(b0) {
     float4 Light;       // xyz: the direction the light travels, w: ambient share
     float4 Camera;      // xyz: the camera's position, w: fog density per metre
     float4 Fog;         // rgb: the colour of the horizon
+    float4 Params;      // x: pixels with less alpha are not drawn, y: 1 = lit from both sides,
+                        // z: repeats of the detail texture (0 = none)
 };
 struct VSIn { float3 pos : POSITION; float3 normal : NORMAL; };
 struct VSOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world : TEXCOORD0; };
@@ -64,6 +71,37 @@ float4 ps_mesh(VSOut i) : SV_TARGET {
     float lit = saturate(dot(n, -Light.xyz));
     float3 c = Color.rgb * (Light.w + (1.0 - Light.w) * lit);
     return float4(fogged(c, i.world), Color.a);
+}
+
+Texture2D Diffuse : register(t0);
+Texture2D Detail : register(t1);
+SamplerState DiffuseSampler : register(s0);
+struct ModelIn { float3 pos : POSITION; float3 normal : NORMAL; float2 uv : TEXCOORD0; };
+struct ModelOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world : TEXCOORD0; float2 uv : TEXCOORD1; };
+
+ModelOut vs_model(ModelIn i) {
+    ModelOut o;
+    float4 w = mul(float4(i.pos, 1.0), World);
+    o.pos = mul(w, ViewProj);
+    o.normal = mul(float4(i.normal, 0.0), World).xyz;
+    o.world = w.xyz;
+    o.uv = i.uv;
+    return o;
+}
+
+// a kn5 mesh: its diffuse texture, one sun, ambient light
+float4 ps_model(ModelOut i) : SV_TARGET {
+    float4 t = Diffuse.Sample(DiffuseSampler, i.uv) * Color;
+    if (Params.z > 0.0) {
+        // AC's detail texture: the colour where the diffuse texture's alpha is 0
+        t.rgb *= lerp(Detail.Sample(DiffuseSampler, i.uv * Params.z).rgb, float3(1.0, 1.0, 1.0), t.a);
+        t.a = 1.0;
+    }
+    clip(t.a - Params.x);
+    float d = dot(normalize(i.normal), -Light.xyz);
+    float lit = lerp(saturate(d), abs(d) * 0.5 + 0.5, Params.y);
+    float3 c = t.rgb * (Light.w + (1.0 - Light.w) * lit);
+    return float4(fogged(c, i.world), t.a);
 }
 
 // lines of a grid with cells of `size` metres, about one pixel wide at any distance
@@ -119,6 +157,24 @@ struct DrawConstants {
     light: [f32; 4],
     camera: [f32; 4],
     fog: [f32; 4],
+    params: [f32; 4],
+}
+
+/// A car's kn5 model and the nodes the physics moves.
+struct CarModel {
+    model: GpuModel,
+    /// `WHEEL_LF` ... (turn with the wheel) and `SUSP_LF` ... (follow the hub)
+    wheels: [Option<usize>; 4],
+    hubs: [Option<usize>; 4],
+    /// `STEER_HR`, the steering wheel, and its matrix at rest
+    steer: Option<(usize, Mat)>,
+}
+
+/// What the last frame drew of the models.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawStats {
+    pub meshes: u32,
+    pub triangles: u64,
 }
 
 /// The colour of the sky at the horizon; the ground fades into it.
@@ -183,6 +239,17 @@ pub struct DebugRenderer {
     mesh_ps: ID3D11PixelShader,
     ground_ps: ID3D11PixelShader,
     mesh_layout: ID3D11InputLayout,
+    model_vs: ID3D11VertexShader,
+    model_ps: ID3D11PixelShader,
+    model_layout: ID3D11InputLayout,
+    model_sampler: ID3D11SamplerState,
+    white: ID3D11ShaderResourceView,
+    track: Option<GpuModel>,
+    car_model: Option<CarModel>,
+    /// Draw the car as boxes even when its model is loaded (`--boxes`).
+    pub boxes: bool,
+    /// What the last frame drew of the track and the car model.
+    pub drawn: DrawStats,
     hud_vs: ID3D11VertexShader,
     hud_ps: ID3D11PixelShader,
     hud_layout: ID3D11InputLayout,
@@ -315,6 +382,8 @@ impl DebugRenderer {
         let mesh_vs_code = compile("vs_mesh", "vs_4_0")?;
         let mesh_ps_code = compile("ps_mesh", "ps_4_0")?;
         let ground_ps_code = compile("ps_ground", "ps_4_0")?;
+        let model_vs_code = compile("vs_model", "vs_4_0")?;
+        let model_ps_code = compile("ps_model", "ps_4_0")?;
         let hud_vs_code = compile("vs_hud", "vs_4_0")?;
         let hud_ps_code = compile("ps_hud", "ps_4_0")?;
         let element = |name: &'static [u8], format: DXGI_FORMAT, offset: u32| D3D11_INPUT_ELEMENT_DESC {
@@ -327,6 +396,11 @@ impl DebugRenderer {
             InstanceDataStepRate: 0,
         };
         let mesh_elements = [element(b"POSITION\0", DXGI_FORMAT_R32G32B32_FLOAT, 0), element(b"NORMAL\0", DXGI_FORMAT_R32G32B32_FLOAT, 12)];
+        let model_elements = [
+            element(b"POSITION\0", DXGI_FORMAT_R32G32B32_FLOAT, 0),
+            element(b"NORMAL\0", DXGI_FORMAT_R32G32B32_FLOAT, 12),
+            element(b"TEXCOORD\0", DXGI_FORMAT_R32G32_FLOAT, 24),
+        ];
         let hud_elements = [
             element(b"POSITION\0", DXGI_FORMAT_R32G32_FLOAT, 0),
             element(b"TEXCOORD\0", DXGI_FORMAT_R32G32_FLOAT, 8),
@@ -342,6 +416,10 @@ impl DebugRenderer {
             device.CreatePixelShader(&ground_ps_code, None, Some(&mut ground_ps)).map_err(err("pixel shader"))?;
             device.CreateVertexShader(&hud_vs_code, None, Some(&mut hud_vs)).map_err(err("vertex shader"))?;
             device.CreatePixelShader(&hud_ps_code, None, Some(&mut hud_ps)).map_err(err("pixel shader"))?;
+            let (mut model_vs, mut model_ps, mut model_layout) = (None, None, None);
+            device.CreateVertexShader(&model_vs_code, None, Some(&mut model_vs)).map_err(err("vertex shader"))?;
+            device.CreatePixelShader(&model_ps_code, None, Some(&mut model_ps)).map_err(err("pixel shader"))?;
+            device.CreateInputLayout(&model_elements, &model_vs_code, Some(&mut model_layout)).map_err(err("input layout"))?;
             let (mut mesh_layout, mut hud_layout) = (None, None);
             device.CreateInputLayout(&mesh_elements, &mesh_vs_code, Some(&mut mesh_layout)).map_err(err("input layout"))?;
             device.CreateInputLayout(&hud_elements, &hud_vs_code, Some(&mut hud_layout)).map_err(err("input layout"))?;
@@ -391,6 +469,36 @@ impl DebugRenderer {
             let mut sampler = None;
             device.CreateSamplerState(&sampler_desc, Some(&mut sampler)).map_err(err("sampler"))?;
 
+            // the models' textures repeat and are seen at flat angles
+            let model_sampler_desc = D3D11_SAMPLER_DESC {
+                Filter: D3D11_FILTER_ANISOTROPIC,
+                AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
+                AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
+                AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
+                MaxAnisotropy: 8,
+                MaxLOD: f32::MAX,
+                ..Default::default()
+            };
+            let mut model_sampler = None;
+            device.CreateSamplerState(&model_sampler_desc, Some(&mut model_sampler)).map_err(err("sampler"))?;
+            // a white pixel for materials without a picture
+            let white_desc = D3D11_TEXTURE2D_DESC {
+                Width: 1,
+                Height: 1,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_IMMUTABLE,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+                ..Default::default()
+            };
+            let white_pixel = [255u8; 4];
+            let white_data = D3D11_SUBRESOURCE_DATA { pSysMem: white_pixel.as_ptr() as *const _, SysMemPitch: 4, SysMemSlicePitch: 0 };
+            let (mut white_texture, mut white) = (None, None);
+            device.CreateTexture2D(&white_desc, Some(&white_data), Some(&mut white_texture)).map_err(err("white texture"))?;
+            device.CreateShaderResourceView(white_texture.as_ref().ok_or("no white texture")?, None, Some(&mut white)).map_err(err("white view"))?;
+
             // the font
             let font_desc = D3D11_TEXTURE2D_DESC {
                 Width: font.width as u32,
@@ -419,6 +527,15 @@ impl DebugRenderer {
                 mesh_ps: mesh_ps.ok_or("no shader")?,
                 ground_ps: ground_ps.ok_or("no shader")?,
                 mesh_layout: mesh_layout.ok_or("no layout")?,
+                model_vs: model_vs.ok_or("no shader")?,
+                model_ps: model_ps.ok_or("no shader")?,
+                model_layout: model_layout.ok_or("no layout")?,
+                model_sampler: model_sampler.ok_or("no sampler")?,
+                white: white.ok_or("no white view")?,
+                track: None,
+                car_model: None,
+                boxes: false,
+                drawn: DrawStats::default(),
                 hud_vs: hud_vs.ok_or("no shader")?,
                 hud_ps: hud_ps.ok_or("no shader")?,
                 hud_layout: hud_layout.ok_or("no layout")?,
@@ -442,6 +559,104 @@ impl DebugRenderer {
                 context,
             })
         }
+    }
+
+    /// Puts a track's kn5 models on the card; from then on they are drawn instead of the grid.
+    pub fn load_track(&mut self, files: &[std::path::PathBuf], placements: &[Mat], options: &ModelOptions) -> Result<ModelStats, String> {
+        let model = GpuModel::load(&self.device, &self.context, files, placements, options)?;
+        let stats = model.stats.clone();
+        self.track = Some(model);
+        Ok(stats)
+    }
+
+    /// Puts a car's kn5 model on the card; it is drawn instead of the boxes unless
+    /// [`DebugRenderer::boxes`] is set.
+    pub fn load_car(&mut self, file: &std::path::Path, options: &ModelOptions) -> Result<ModelStats, String> {
+        let model = GpuModel::load(&self.device, &self.context, &[file.to_path_buf()], &[], options)?;
+        let stats = model.stats.clone();
+        let names = ["LF", "RF", "LR", "RR"];
+        let wheels = names.map(|n| model.find_node(&format!("WHEEL_{n}")));
+        let hubs = names.map(|n| model.find_node(&format!("SUSP_{n}")));
+        let steer = model.find_node("STEER_HR").map(|node| (node, model.nodes[node].local));
+        self.car_model = Some(CarModel { model, wheels, hubs, steer });
+        Ok(stats)
+    }
+
+    pub fn has_track(&self) -> bool {
+        self.track.is_some()
+    }
+
+    pub fn has_car_model(&self) -> bool {
+        self.car_model.is_some()
+    }
+
+    /// Draws a kn5 model. `planes` and the LOD ranges are only used with `cull`.
+    fn draw_model(&self, model: &GpuModel, base: &DrawConstants, planes: &[[f32; 4]; 6], eye: [f32; 3], cull: bool) -> DrawStats {
+        let mut stats = DrawStats::default();
+        let stride = std::mem::size_of::<rustyac_content::Vertex>() as u32;
+        let mut blended: Vec<(f32, usize)> = Vec::new();
+        // SAFETY: state objects, buffers and views are owned by `self` / `model` and alive.
+        unsafe {
+            let c = &self.context;
+            c.IASetInputLayout(&self.model_layout);
+            c.VSSetShader(&self.model_vs, None);
+            c.PSSetShader(&self.model_ps, None);
+            c.PSSetSamplers(0, Some(&[Some(self.model_sampler.clone())]));
+            let mut draw = |index: usize| {
+                let mesh = &model.meshes[index];
+                let material = &model.materials[mesh.material];
+                let constants = DrawConstants {
+                    world: model.world[mesh.node],
+                    color: material.color,
+                    params: [material.alpha_ref, if material.foliage { 1.0 } else { 0.0 }, material.detail.as_ref().map(|d| d.1).unwrap_or(0.0), 0.0],
+                    ..*base
+                };
+                self.write(&self.draw_constants, std::slice::from_ref(&constants));
+                let texture = material.texture.clone().unwrap_or_else(|| self.white.clone());
+                let detail = material.detail.as_ref().map(|d| d.0.clone()).unwrap_or_else(|| self.white.clone());
+                c.PSSetShaderResources(0, Some(&[Some(texture), Some(detail)]));
+                c.IASetVertexBuffers(0, 1, Some(&Some(mesh.vertices.clone())), Some(&stride), Some(&0));
+                c.IASetIndexBuffer(&mesh.indices, models::INDEX_FORMAT, 0);
+                c.DrawIndexed(mesh.index_count, 0, 0);
+                stats.meshes += 1;
+                stats.triangles += mesh.index_count as u64 / 3;
+            };
+            for (index, mesh) in model.meshes.iter().enumerate() {
+                let centre = point(&model.world[mesh.node], mesh.centre);
+                let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
+                let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                if cull && mesh.radius > 0.0 {
+                    // outside the picture, outside its own LOD range, or a speck
+                    if !sphere_visible(planes, centre, mesh.radius) {
+                        continue;
+                    }
+                    if distance < mesh.lod_in || (mesh.lod_out > 0.0 && distance >= mesh.lod_out) {
+                        continue;
+                    }
+                    if mesh.radius < distance * 0.002 {
+                        continue;
+                    }
+                }
+                if mesh.blended {
+                    blended.push((distance, index));
+                } else {
+                    draw(index);
+                }
+            }
+            // see-through meshes last, the farthest first, without writing depth
+            blended.sort_by(|a, b| b.0.total_cmp(&a.0));
+            c.OMSetBlendState(&self.blend, None, 0xffff_ffff);
+            c.OMSetDepthStencilState(&self.depth_read, 0);
+            for &(_, index) in &blended {
+                draw(index);
+            }
+            c.OMSetBlendState(None, None, 0xffff_ffff);
+            c.OMSetDepthStencilState(&self.depth_on, 0);
+            c.IASetInputLayout(&self.mesh_layout);
+            c.VSSetShader(&self.mesh_vs, None);
+            c.PSSetShader(&self.mesh_ps, None);
+        }
+        stats
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -492,9 +707,38 @@ impl DebugRenderer {
             color: [1.0; 4],
             // the sun: from the left front, high
             light: [-0.35, -0.80, -0.48, 0.42],
-            camera: [eye[0], eye[1], eye[2], 0.0011],
+            // on a track the view is long: thinner haze
+            camera: [eye[0], eye[1], eye[2], if self.track.is_some() { 0.00022 } else { 0.0011 }],
             fog: HORIZON,
+            params: [0.0; 4],
         };
+        let planes = frustum(&view_proj);
+        let eye3 = [eye[0], eye[1], eye[2]];
+        // the car's model follows the physics: the body with the model's offset, the wheels
+        // and hubs where the physics has them, the steering wheel turned
+        let use_car_model = self.car_model.is_some() && !self.boxes;
+        if use_car_model {
+            if let Some(car) = self.car_model.as_mut() {
+                let o = shape.graphics_offset;
+                let root = rotate_pitch(&mul(&translation(o[0], o[1], o[2]), &view.body), shape.graphics_pitch);
+                let mut fixed: Vec<(usize, Mat)> = Vec::with_capacity(9);
+                for k in 0..4 {
+                    if let Some(node) = car.hubs[k] {
+                        fixed.push((node, view.hubs[k]));
+                    }
+                    if let Some(node) = car.wheels[k] {
+                        fixed.push((node, view.wheels[k]));
+                    }
+                }
+                if let Some((node, rest)) = car.steer {
+                    let (sin, cos) = (view.steer_deg * 0.017_453_292).sin_cos();
+                    let turn: Mat = [[cos, sin, 0.0, 0.0], [-sin, cos, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+                    car.model.nodes[node].local = mul(&turn, &rest);
+                }
+                car.model.update(&root, &fixed);
+            }
+        }
+        let mut drawn = DrawStats::default();
         let viewport = D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: width as f32, Height: height as f32, MinDepth: 0.0, MaxDepth: 1.0 };
         // SAFETY: state objects and views owned by `self`; slices and pointers are to locals.
         unsafe {
@@ -512,23 +756,37 @@ impl DebugRenderer {
             c.OMSetBlendState(None, None, 0xffff_ffff);
             c.OMSetDepthStencilState(&self.depth_on, 0);
 
-            // the ground: one big square that moves with the camera in whole 100 m steps
-            c.PSSetShader(&self.ground_ps, None);
-            let snap = |x: f32| (x / 100.0).round() * 100.0;
-            let ground = scale_then(FAR, 1.0, FAR, &translation(snap(eye[0]), 0.0, snap(eye[2])));
-            self.solid(&self.ground, &DrawConstants { world: ground, ..base });
+            let body = &view.body;
+            let flat: Mat = if let Some(track) = &self.track {
+                // the track's models
+                let stats = self.draw_model(track, &base, &planes, eye3, true);
+                drawn.meshes += stats.meshes;
+                drawn.triangles += stats.triangles;
+                // the shadow lies in the plane the four tyres stand on
+                let mut drop = 0.0;
+                for k in 0..4 {
+                    let w = view.wheels[k][3];
+                    drop += (w[0] - body[3][0]) * body[1][0] + (w[1] - body[3][1]) * body[1][1] + (w[2] - body[3][2]) * body[1][2] - view.tyre_radius[k];
+                }
+                mul(&translation(0.0, drop * 0.25 + 0.012, 0.0), body)
+            } else {
+                // the ground: one big square that moves with the camera in whole 100 m steps
+                c.PSSetShader(&self.ground_ps, None);
+                let snap = |x: f32| (x / 100.0).round() * 100.0;
+                let ground = scale_then(FAR, 1.0, FAR, &translation(snap(eye[0]), 0.0, snap(eye[2])));
+                self.solid(&self.ground, &DrawConstants { world: ground, ..base });
+                let heading = {
+                    let (x, z) = (body[2][0], body[2][2]);
+                    let length = (x * x + z * z).sqrt().max(1e-6);
+                    [x / length, z / length]
+                };
+                [[heading[1], 0.0, -heading[0], 0.0], [0.0, 1.0, 0.0, 0.0], [heading[0], 0.0, heading[1], 0.0], [body[3][0], 0.012, body[3][2], 1.0]]
+            };
 
             // the car's shadow: a dark patch on the road under the body
             c.PSSetShader(&self.mesh_ps, None);
             c.OMSetBlendState(&self.blend, None, 0xffff_ffff);
             c.OMSetDepthStencilState(&self.depth_read, 0);
-            let body = &view.body;
-            let heading = {
-                let (x, z) = (body[2][0], body[2][2]);
-                let length = (x * x + z * z).sqrt().max(1e-6);
-                [x / length, z / length]
-            };
-            let flat: Mat = [[heading[1], 0.0, -heading[0], 0.0], [0.0, 1.0, 0.0, 0.0], [heading[0], 0.0, heading[1], 0.0], [body[3][0], 0.012, body[3][2], 1.0]];
             let (mut x_max, mut z_min, mut z_max) = (0.5f32, -1.0f32, 1.0f32);
             for b in &shape.boxes {
                 x_max = x_max.max(b.centre[0].abs() + b.size[0] * 0.5);
@@ -540,13 +798,20 @@ impl DebugRenderer {
             c.OMSetBlendState(None, None, 0xffff_ffff);
             c.OMSetDepthStencilState(&self.depth_on, 0);
 
+            if use_car_model {
+                if let Some(car) = &self.car_model {
+                    let stats = self.draw_model(&car.model, &base, &planes, eye3, false);
+                    drawn.meshes += stats.meshes;
+                    drawn.triangles += stats.triangles;
+                }
+            }
             // the body
-            for b in &shape.boxes {
+            for b in shape.boxes.iter().filter(|_| !use_car_model) {
                 let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), body);
                 self.solid(&self.cube, &DrawConstants { world, color: [b.color[0], b.color[1], b.color[2], 1.0], ..base });
             }
             // the wheels: tyre, rim, and a bar across the rim that shows the spin
-            for wheel in 0..4 {
+            for wheel in (0..4).filter(|_| !use_car_model) {
                 let m = &view.wheels[wheel];
                 let (radius, width, rim) = (view.tyre_radius[wheel], view.tyre_width[wheel], view.rim_radius[wheel]);
                 // a tyre past its peak slip reddens
@@ -581,6 +846,7 @@ impl DebugRenderer {
                 c.CopyResource(&self.targets.resolved, &self.targets.color);
             }
         }
+        self.drawn = drawn;
     }
 
     /// The last picture as RGBA bytes, rows from the top.

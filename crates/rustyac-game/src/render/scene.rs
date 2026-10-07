@@ -136,6 +136,8 @@ pub struct CarShape {
     /// `car.ini [BASIC] GRAPHICS_PITCH_ROTATION`, radians: the 3D model's pitch against the
     /// physics body. AC's cameras ride on the model.
     pub graphics_pitch: f32,
+    /// `car.ini [BASIC] GRAPHICS_OFFSET`: where the 3D model's origin is in body axes.
+    pub graphics_offset: [f32; 3],
 }
 
 fn three(text: &str) -> Option<[f32; 3]> {
@@ -153,6 +155,7 @@ impl CarShape {
             eye_pitch: 0.0,
             onboard_fov: 54.0,
             graphics_pitch: 0.0,
+            graphics_offset: [0.0; 3],
         }
     }
 
@@ -211,6 +214,7 @@ impl CarShape {
             let offset = three(ini.get_string("BASIC", "GRAPHICS_OFFSET")).unwrap_or([0.0; 3]);
             let pitch = ini.get_float("BASIC", "GRAPHICS_PITCH_ROTATION") * 0.017_453;
             shape.graphics_pitch = pitch;
+            shape.graphics_offset = offset;
             if let Some(q) = three(ini.get_string("GRAPHICS", "DRIVEREYES")) {
                 let (s, c) = pitch.sin_cos();
                 shape.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];

@@ -16,6 +16,7 @@ use rustyac_game::input::LiveSource;
 use rustyac_game::input_file::{event, InputFile, InputWriter, SimSetup, StepInput};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
+use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::scene::{CameraMode, CarShape, DrivingCamera};
 use rustyac_game::render::{write_png, DebugRenderer};
 use rustyac_game::shm::{SharedMemory, ShmSink};
@@ -47,7 +48,73 @@ unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
 
 /// The car and session of a live drive, from the command line.
 fn live_setup(options: &Options) -> SimSetup {
-    SimSetup { car: options.car.clone(), auto_clutch: !options.no_auto_clutch, auto_shifter: options.auto_shifter, ..SimSetup::default() }
+    SimSetup {
+        car: options.car.clone(),
+        auto_clutch: !options.no_auto_clutch,
+        auto_shifter: options.auto_shifter,
+        track: options.track.clone().unwrap_or_default(),
+        spawn: options.spawn.clone(),
+        ..SimSetup::default()
+    }
+}
+
+/// Puts the track's and the car's 3D models on the graphics card, where there are any. A
+/// model that cannot be loaded is a line on the console, not an end: the grid and the boxes
+/// are still there.
+fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_game::sim::CarInfo) {
+    let model_options = ModelOptions { texture_size: options.texture_size, flat: options.no_textures, ..ModelOptions::default() };
+    let megabytes = |bytes: u64| bytes as f64 / 1_048_576.0;
+    if let Some(folder) = &info.track_folder {
+        let loaded = rustyac_content::TrackFiles::find(folder, "").and_then(|files| {
+            let paths: Vec<_> = files.models.iter().map(|m| m.file.clone()).collect();
+            let placements: Vec<_> = files.models.iter().map(|m| rustyac_game::render::scene::translation(m.position[0], m.position[1], m.position[2])).collect();
+            renderer.load_track(&paths, &placements, &model_options)
+        });
+        match loaded {
+            Ok(stats) => {
+                println!(
+                    "track models: {} files, {} meshes, {} triangles ({:.0} MB), {} textures ({:.0} MB, longest side {}), {} materials in flat colour, loaded in {:.2} s",
+                    stats.files,
+                    stats.meshes,
+                    stats.triangles,
+                    megabytes(stats.geometry_bytes),
+                    stats.textures,
+                    megabytes(stats.texture_bytes),
+                    if stats.texture_size == 0 { "as stored".to_string() } else { format!("{} px", stats.texture_size) },
+                    stats.flat_materials,
+                    stats.load_seconds
+                );
+                for note in &stats.notes {
+                    println!("  {note}");
+                }
+            }
+            Err(message) => eprintln!("WARNING: the track's models were not loaded ({message}): the grid is drawn instead"),
+        }
+    }
+    renderer.boxes = options.boxes;
+    if !options.boxes {
+        match rustyac_game::sim::find_car_model(&info.name, &info.data_path) {
+            Some(file) => match renderer.load_car(&file, &model_options) {
+                Ok(stats) => {
+                    println!(
+                        "car model {}: {} meshes, {} triangles, {} textures ({:.0} MB), {} materials in flat colour, loaded in {:.2} s",
+                        file.display(),
+                        stats.meshes,
+                        stats.triangles,
+                        stats.textures,
+                        megabytes(stats.texture_bytes),
+                        stats.flat_materials,
+                        stats.load_seconds
+                    );
+                    for note in &stats.notes {
+                        println!("  {note}");
+                    }
+                }
+                Err(message) => eprintln!("WARNING: the car's model was not loaded ({message}): boxes are drawn instead"),
+            },
+            None => println!("no 3D model of {} in Assetto Corsa's folder: the car is drawn as boxes", info.name),
+        }
+    }
 }
 
 /// The recorder and the shared memory, as asked for.
@@ -182,7 +249,11 @@ fn run_headless(options: &Options) -> Result<(), String> {
         let mut last = Instant::now();
         while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
             if shape.is_none() {
-                shape = shared.car_info.lock().unwrap().as_ref().map(CarShape::of);
+                let info = shared.car_info.lock().unwrap().clone();
+                if let Some(info) = info {
+                    load_models(&mut renderer, options, &info);
+                    shape = Some(CarShape::of(&info));
+                }
             }
             let Some(shape) = &shape else {
                 std::thread::sleep(Duration::from_millis(2));
@@ -287,9 +358,9 @@ fn run_window(options: &Options) -> Result<(), String> {
     let thread = start_physics(setup, source, &shared, sinks, config)?;
 
     // the car is built on the physics thread: wait for it (or for its refusal)
-    let shape = loop {
+    let car_info = loop {
         if let Some(info) = shared.car_info.lock().unwrap().as_ref() {
-            break CarShape::of(info);
+            break info.clone();
         }
         if thread.is_finished() {
             drop(window);
@@ -297,6 +368,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(2));
     };
+    let shape = CarShape::of(&car_info);
     let (width, height) = window.client_size();
     let graphics = DebugRenderer::new(width, height).and_then(|renderer| {
         let chain = renderer.swap_chain(window.handle)?;
@@ -317,6 +389,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         renderer.adapter,
         if renderer.software { " (software rasteriser)" } else { "" }
     );
+    load_models(&mut renderer, options, &car_info);
     let mut camera = DrivingCamera::new(if options.camera == "cockpit" { CameraMode::Cockpit } else { CameraMode::Chase });
     let mut camera_toggles = 0;
     let started = Instant::now();
@@ -349,12 +422,14 @@ fn run_window(options: &Options) -> Result<(), String> {
                         request(event::AUTO_SHIFTER);
                     } else if !ctrl {
                         match key {
-                            // C: camera, P or Pause: pause, R: reset (Shift+R: a new car)
+                            // C: camera, P or Pause: pause, R: back to the spawn point,
+                            // Shift+R: back onto the track where the car is, N: a new car
                             0x43 => camera.mode = camera.mode.next(),
                             0x50 | 0x13 => {
                                 shared.paused.fetch_xor(true, Ordering::Relaxed);
                             }
-                            0x52 => request(if shift { event::REBUILD } else { event::RESET }),
+                            0x52 => request(if shift { event::TO_TRACK } else { event::RESET }),
+                            0x4e => request(event::REBUILD),
                             _ => {}
                         }
                     }
@@ -456,6 +531,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let view = CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003);
     let shape = CarShape::of(&sim.car_info());
     let mut renderer = DebugRenderer::new(options.width, options.height)?;
+    load_models(&mut renderer, options, &sim.car_info());
     let mode = if options.camera == "cockpit" { CameraMode::Cockpit } else { CameraMode::Chase };
     let mut camera = DrivingCamera::new(mode);
     // two frames, so that the chase camera has leaned into the car's acceleration

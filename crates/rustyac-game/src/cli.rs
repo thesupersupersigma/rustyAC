@@ -54,6 +54,17 @@ pub struct Options {
     pub vsync: bool,
     /// `--list-devices`: print the detected devices and bindings and stop.
     pub list_devices: bool,
+    /// `--track <folder>`: a track folder, or a name under Assetto Corsa's `content/tracks`.
+    /// Without it (or with `--flat`) the car drives on the endless flat road.
+    pub track: Option<String>,
+    /// `--spawn hotlap|pit|start`: where on the track the car starts.
+    pub spawn: String,
+    /// `--boxes`: draw the car as boxes even when its 3D model is found.
+    pub boxes: bool,
+    /// `--texture-size <px>`: the longest side of a texture that is put on the card (0: as stored).
+    pub texture_size: u32,
+    /// `--no-textures`: flat colours instead of textures.
+    pub no_textures: bool,
 }
 
 impl Default for Options {
@@ -83,16 +94,28 @@ impl Default for Options {
             no_focus: false,
             vsync: true,
             list_devices: false,
+            track: None,
+            spawn: "hotlap".to_string(),
+            boxes: false,
+            texture_size: 1024,
+            no_textures: false,
         }
     }
 }
 
 pub const USAGE: &str = "\
-rustyac: drive the Rust port of Assetto Corsa's car on an endless flat road (debug view)
+rustyac: drive the Rust port of Assetto Corsa's car on a track or on an endless flat road (debug view)
 
 usage: rustyac [options]
 
   --car <folder>        car data folder under cardata/, or a path (default ks_ferrari_f2004)
+  --track <folder>      a track: a folder, or a name under Assetto Corsa's content/tracks
+                        (for example --track spa); default: the endless flat road
+  --flat                the endless flat road (the default)
+  --spawn <where>       on a track: hotlap (default), pit or start
+  --boxes               draw the car as boxes, not with its 3D model
+  --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
+  --no-textures         flat colours instead of textures
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's
   --height <px>         client area, otherwise the off-screen picture of --screenshot)
   --windowed            a window instead of borderless full screen
@@ -152,6 +175,12 @@ impl Options {
                 "--no-focus" => o.no_focus = true,
                 "--vsync" => o.vsync = value("--vsync")? != "0",
                 "--list-devices" => o.list_devices = true,
+                "--track" => o.track = Some(value("--track")?),
+                "--flat" => o.track = None,
+                "--spawn" => o.spawn = value("--spawn")?,
+                "--boxes" => o.boxes = true,
+                "--texture-size" => o.texture_size = value("--texture-size")?.parse().map_err(|e| format!("--texture-size: {e}"))?,
+                "--no-textures" => o.no_textures = true,
                 "--help" | "-h" | "/?" => return Err(USAGE.to_string()),
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }
@@ -161,6 +190,9 @@ impl Options {
         }
         if o.camera != "chase" && o.camera != "cockpit" {
             return Err(format!("--camera: {:?} is neither chase nor cockpit", o.camera));
+        }
+        if !["hotlap", "pit", "start"].contains(&o.spawn.as_str()) {
+            return Err(format!("--spawn: {:?} is not one of hotlap, pit, start", o.spawn));
         }
         if o.record.is_some() && o.replay.is_some() {
             return Err("--record and --replay cannot be used together".to_string());
