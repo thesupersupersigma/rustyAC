@@ -11,6 +11,7 @@ f2004ButBetter
 # CSV's
 e30_magione_ai.csv
 f2004_spa_ai.csv
+ac_telemetry_20261007_030103.csv
 
 # Build output
 target/
