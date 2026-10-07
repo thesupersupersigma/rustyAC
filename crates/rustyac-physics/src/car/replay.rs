@@ -348,6 +348,15 @@ pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &Rec
     }
     // PhysicsEngine::stepWind runs before the cars
     chassis.env.step_wind(physics_time);
+    // The game's drivetrain left the driven wheels' speed at the end of the step before; a
+    // chassis with its own brakes reads it for the disc temperatures, ahead of the `edl` hook.
+    if chassis.drivetrain.is_none() {
+        for (tyre, wheel) in chassis.tyres.iter_mut().zip(&step.wheels) {
+            if wheel.driven {
+                tyre.status.angular_velocity = wheel.angular_velocity;
+            }
+        }
+    }
     chassis.step(DT, physics_time, &mut RecordedFeed { step });
 }
 
@@ -413,9 +422,9 @@ impl Runner {
 /// hook has nothing left to do. What the aids leave for the next step's engine and brakes is
 /// written in the `aids` hook.
 ///
-/// The recorded feed cannot supply an electronic differential lock to a chassis with its own
-/// brakes (the recordings hold only the sum of brake and lock torque); no car recorded so
-/// far has one.
+/// The recordings hold only the sum of brake and differential-lock torque, so for a chassis
+/// with its own brakes and fed aids the `edl` hook writes that sum over the brakes' own torque
+/// in the steps where the lock acts.
 pub struct RecordedFeed<'a> {
     pub step: &'a RecordedStep,
 }
