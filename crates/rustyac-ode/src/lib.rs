@@ -34,15 +34,18 @@
     clippy::nonminimal_bool
 )]
 
+pub mod collision;
 pub mod common;
 pub mod joint;
 pub mod mass;
 pub mod matrix;
 pub mod odemath;
+pub mod opcode;
 pub mod rotation;
 pub mod step;
 pub mod world;
 
+pub use collision::{RayContact, StaticWorld};
 pub use common::{Matrix3, Quaternion, Vector3};
 pub use joint::{Joint, JointFeedback, JointKind, PARAM_CFM, PARAM_ERP};
 pub use mass::Mass;
