@@ -647,6 +647,10 @@ struct GroundPort<'a> {
 }
 
 impl RayTrackCollisionProvider for GroundPort<'_> {
+    fn has_ray_caster(&self) -> bool {
+        self.ground.has_ray_caster()
+    }
+
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
         let hit = self.ground.ray_cast(org, dir, length);
         if let Some(trace) = self.trace {

@@ -1100,33 +1100,42 @@ unsafe fn apply_setup_screen_defaults(car: *mut u8, setup: &rustyac_physics::dat
     changes
 }
 
+/// The game's `PhysicsEngine`, built the way every scenario builds it. The current directory
+/// must be the folder made by [`prepare_root`].
+pub fn new_engine(acs: &Acs, seed: u32) -> *mut u8 {
+    unsafe {
+        // the game's rand() and the oracle's clock start from the same point every run
+        let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
+        srand(seed);
+        crate::acs::reset_clock();
+
+        // globals the game's start-up would have set (see the report for each)
+        assert_eq!(acs.global::<u8>(VA_IS_USING_QPT), 1, "ksTimer is not in QueryPerformanceCounter mode");
+        assert_eq!(acs.global::<u8>(VA_IS_TEST_MODE), 0, "PhysicsEngine::isTestMode is set");
+        acs.set_global(VA_TIMER_START, 0i64);
+        acs.set_global(VA_TIMER_FREQUENCY, crate::acs::CLOCK_FREQUENCY as i64);
+        // "already initialised" with an empty base path: cfg/race.ini is then looked for in
+        // the working directory (where there is none) instead of the user's Documents folder
+        acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+
+        let engine = acs.alloc(PE_SIZE);
+        let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PHYSICS_ENGINE_CTOR));
+        ctor(engine);
+        // the constructor stores the wall clock here; the car's once-a-second mass refresh
+        // is timed from it
+        wr(engine, PE_PHYSICS_TIME, CLOCK_START_MS);
+        wr(engine, PE_GAME_TIME, CLOCK_START_MS);
+        wr(engine, PE_AMBIENT_TEMPERATURE, AMBIENT_TEMPERATURE);
+        wr(engine, PE_ROAD_TEMPERATURE, ROAD_TEMPERATURE);
+        engine
+    }
+}
+
 impl<'a> World<'a> {
     /// The current directory must be the folder made by [`prepare_root`].
     pub fn build(acs: &'a Acs, scenario: &Scenario, options: &Options) -> World<'a> {
         unsafe {
-            // the game's rand() and the oracle's clock start from the same point every run
-            let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
-            srand(scenario.seed);
-            crate::acs::reset_clock();
-
-            // globals the game's start-up would have set (see the report for each)
-            assert_eq!(acs.global::<u8>(VA_IS_USING_QPT), 1, "ksTimer is not in QueryPerformanceCounter mode");
-            assert_eq!(acs.global::<u8>(VA_IS_TEST_MODE), 0, "PhysicsEngine::isTestMode is set");
-            acs.set_global(VA_TIMER_START, 0i64);
-            acs.set_global(VA_TIMER_FREQUENCY, crate::acs::CLOCK_FREQUENCY as i64);
-            // "already initialised" with an empty base path: cfg/race.ini is then looked for in
-            // the working directory (where there is none) instead of the user's Documents folder
-            acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
-
-            let engine = acs.alloc(PE_SIZE);
-            let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PHYSICS_ENGINE_CTOR));
-            ctor(engine);
-            // the constructor stores the wall clock here; the car's once-a-second mass refresh
-            // is timed from it
-            wr(engine, PE_PHYSICS_TIME, CLOCK_START_MS);
-            wr(engine, PE_GAME_TIME, CLOCK_START_MS);
-            wr(engine, PE_AMBIENT_TEMPERATURE, AMBIENT_TEMPERATURE);
-            wr(engine, PE_ROAD_TEMPERATURE, ROAD_TEMPERATURE);
+            let engine = new_engine(acs, scenario.seed);
 
             let track = acs.alloc(TRACK_SIZE);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 =

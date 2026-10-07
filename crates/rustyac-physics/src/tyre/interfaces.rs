@@ -80,6 +80,18 @@ pub struct SurfaceDef {
     pub vibration_gain: f32,
     /// `vibrationLength`: length of one rumble wave, m
     pub vibration_length: f32,
+    /// `wavPitchSpeed` (sound only)
+    pub wav_pitch_speed: f32,
+    /// `blackFlagTime`: the penalty for leaving the track here, s
+    pub black_flag_time: f32,
+    /// `collisionCategory`: 1 for a surface of a `surfaces.ini`, 2 for the built-in wall, 0
+    /// for a mesh no surface matched
+    pub collision_category: u32,
+    /// `sectorID`: the number the mesh's name starts with
+    pub sector_id: i32,
+    /// `userPointer`: in the game the mesh that is drawn; here the index of the physics mesh
+    /// in the track's list (`u32::MAX`: none)
+    pub user_pointer: u32,
 }
 
 impl Default for SurfaceDef {
@@ -96,6 +108,11 @@ impl Default for SurfaceDef {
             is_pitlane: false,
             vibration_gain: 0.0,
             vibration_length: 0.0,
+            wav_pitch_speed: 0.0,
+            black_flag_time: 0.0,
+            collision_category: 0,
+            sector_id: 0,
+            user_pointer: u32::MAX,
         }
     }
 }
@@ -129,6 +146,14 @@ pub trait RayTrackCollisionProvider {
     /// The tyre always casts from 2 m above the wheel centre straight down (`dir` is
     /// `(0, -1, 0)`) with `length` 2.
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult>;
+
+    /// Slot 3 (+0x18) `createRayCaster`: does the provider make ray casters? A real track
+    /// does, and the tyre then casts with its own caster, whose ray `Tyre::init` @
+    /// 0x140280650 makes 3 m long; the test benches (and the analytic roads of the oracle)
+    /// do not, and the tyre calls `rayCast` with a length of 2.
+    fn has_ray_caster(&self) -> bool {
+        false
+    }
 }
 
 /// AC's `TorqueModeEX` (`Car::torqueModeEx`): how the tyre hands its forces to the hub.

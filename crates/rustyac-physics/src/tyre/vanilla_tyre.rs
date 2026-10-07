@@ -403,7 +403,8 @@ impl VanillaTyre {
             self.world_position.y + 2.0,
             self.world_position.z,
         );
-        let hit = rcp.and_then(|rcp| rcp.ray_cast(&org, &Vec3f::new(0.0, -1.0, 0.0), 2.0));
+        // through its own ray caster (3 m, set in `Tyre::init`) where the track makes one
+        let hit = rcp.and_then(|rcp| rcp.ray_cast(&org, &Vec3f::new(0.0, -1.0, 0.0), if rcp.has_ray_caster() { 3.0 } else { 2.0 }));
         match hit {
             // the wheel has to be reasonably upright to touch the ground at all
             Some(hit) if !(0.35 >= self.world_rotation.m[1][1]) => {

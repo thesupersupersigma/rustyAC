@@ -109,6 +109,7 @@ name = "rustyac-game"
 version = "0.1.0"
 dependencies = [
  "png",
+ "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
  "windows",
@@ -129,6 +130,7 @@ dependencies = [
 name = "rustyac-physics"
 version = "0.1.0"
 dependencies = [
+ "rustyac-content",
  "rustyac-math",
  "rustyac-ode",
 ]

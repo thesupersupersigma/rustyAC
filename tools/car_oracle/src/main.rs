@@ -24,6 +24,10 @@
 //! car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>]
 //!                [--every <n>] [--only <prefix,prefix>] [--csv-out <file>]
 //!     Full-precision CSV of a recording.
+//! car_oracle rays --track <track folder> [--count <n>] [--seed <n>]
+//!     The ray micro-oracle: the track's meshes in the game's own ODE and in the Rust port,
+//!     `count` rays (default 1,000,000) through both, every answer compared bit for bit.
+//!     Writes `oracle/track/rays_results.md`.
 
 mod acs;
 mod check;
@@ -31,6 +35,7 @@ mod game;
 mod record;
 mod scenario;
 mod sites;
+mod track;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -78,6 +83,9 @@ struct Args {
     root: PathBuf,
     car: String,
     verbose: bool,
+    track: Option<PathBuf>,
+    count: usize,
+    seed: u64,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -104,6 +112,9 @@ fn parse_args() -> Result<Args, String> {
         root: repo.join("re/scratch/car_oracle/root"),
         car: game::DEFAULT_CAR.to_string(),
         verbose: false,
+        track: None,
+        count: 1_000_000,
+        seed: 12,
     };
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value\n{}", usage()));
@@ -126,6 +137,9 @@ fn parse_args() -> Result<Args, String> {
             "--root" => a.root = PathBuf::from(value()?),
             "--car" => a.car = value()?,
             "--verbose" => a.verbose = true,
+            "--track" => a.track = Some(PathBuf::from(value()?)),
+            "--count" => a.count = number(value()?)?,
+            "--seed" => a.seed = number(value()?)? as u64,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
             _ => return Err(format!("unknown argument {flag}\n{}", usage())),
@@ -148,11 +162,50 @@ fn main() {
         "setup-check" => setup_check(&args),
         "diff" => diff(&args),
         "csv" => csv(&args),
+        "rays" => rays(&args),
         _ => Err(usage()),
     });
     if let Err(message) = result {
         eprintln!("{message}");
         std::process::exit(1);
+    }
+}
+
+/// A track's folder: a path, or a name under the game's `content/tracks`.
+fn track_folder(args: &Args, track: &Path) -> PathBuf {
+    if track.is_dir() {
+        return std::path::absolute(track).unwrap_or_else(|_| track.to_path_buf());
+    }
+    let game = args.acs.parent().unwrap_or(Path::new("."));
+    game.join("content").join("tracks").join(track)
+}
+
+/// The ray micro-oracle.
+fn rays(args: &Args) -> Result<(), String> {
+    let track = args.track.as_ref().ok_or("rays needs --track <track folder>")?;
+    let folder = track_folder(args, track);
+    let repo = repo_root();
+    game::prepare_root(&repo, &args.root, &args.car)?;
+    track::prepare_root(&args.root, &folder)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let engine = game::new_engine(&acs, 1);
+    let (report, ok) = track::rays(&acs, engine, &folder, args.count, args.seed)?;
+    let path = track::results_path(&repo);
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("# Ray micro-oracle: the game's ODE / OPCODE against rustyac-ode\n\n`car_oracle rays --track {} --count {} --seed {}`\n\n{report}", track.display(), args.count, args.seed))
+        .map_err(|e| e.to_string())?;
+    println!("{report}");
+    println!("written to {}", path.display());
+    if ok {
+        Ok(())
+    } else {
+        Err("the game and the port do not agree".to_string())
     }
 }
 

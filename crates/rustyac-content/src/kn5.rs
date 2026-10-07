@@ -8,7 +8,7 @@
 //! "sc6969"                          6 bytes
 //! version            u32            5 or 6 in shipped content; above 5 one more u32 follows
 //! texture count      i32
-//!   active           i32
+//!   active           i32            0: the record ends here (no name, no image)
 //!   name             string
 //!   size             u32            then `size` bytes: the image file (DDS, PNG ...) as it is
 //! material count     i32
@@ -19,10 +19,11 @@
 //!   property count   i32            name string, value f32, then 36 bytes (vec2, vec3, vec4)
 //!   texture count    i32            slot name string (txDiffuse ...), slot i32, texture name string
 //! node (recursive)
-//!   class            i32            1 plain node, 2 mesh, 3 skinned mesh
+//!   class            i32            0 and 1 plain node, 2 mesh, 3 skinned mesh
 //!   name             string
 //!   child count      i32
 //!   active           u8
+//!   class 0:  nothing more
 //!   class 1:  matrix 16 f32         rows; the translation is the fourth row
 //!   class 2:  cast shadows, visible, transparent (u8 each); vertex count u32; vertices of
 //!             44 bytes (position 3 f32, normal 3 f32, uv 2 f32, tangent 3 f32); index count
@@ -36,7 +37,8 @@
 //! ```
 //!
 //! A node's world matrix is `own * parent` with row vectors (a point is `p * M`). Mesh nodes
-//! have no matrix of their own.
+//! have no matrix of their own. The game reads the format with `KN5IO::load` @ 0x1402151a0; it
+//! never checks the magic, and version 1 files (32-bit indices) are not read here.
 
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
@@ -261,13 +263,20 @@ impl Kn5 {
             return Err(bad(format!("{} is not a kn5 file", path.display())));
         }
         let version = s.u32()?;
+        if version == 1 {
+            return Err(bad(format!("{} is a version 1 kn5 (32-bit indices), which is not read", path.display())));
+        }
         if version > 5 {
+            // a key: 0 in ordinary content
             s.u32()?;
         }
 
         let mut textures = Vec::new();
         for _ in 0..s.count("texture")? {
             let active = s.i32()?;
+            if active == 0 {
+                continue;
+            }
             let name = s.string()?;
             let size = s.u32()?;
             textures.push(TextureEntry { name, active, offset: s.position, size });
@@ -308,8 +317,9 @@ impl Kn5 {
                 continue;
             }
             pending.push((parent, left - 1));
-            let class = match s.i32()? {
-                1 => NodeClass::Base,
+            let class_number = s.i32()?;
+            let class = match class_number {
+                0 | 1 => NodeClass::Base,
                 2 => NodeClass::Mesh,
                 3 => NodeClass::SkinnedMesh,
                 other => return Err(bad(format!("node class {other} at byte {}", s.position - 4))),
@@ -320,7 +330,11 @@ impl Kn5 {
             let mut matrix = IDENTITY;
             let mut mesh = None;
             match class {
-                NodeClass::Base => matrix = s.matrix()?,
+                NodeClass::Base => {
+                    if class_number == 1 {
+                        matrix = s.matrix()?;
+                    }
+                }
                 NodeClass::Mesh | NodeClass::SkinnedMesh => {
                     let cast_shadows = s.u8()? != 0;
                     let is_visible = s.u8()? != 0;
@@ -425,6 +439,11 @@ impl Kn5Reader {
     /// The image file of a texture, as stored (usually DDS).
     pub fn texture(&mut self, texture: &TextureEntry) -> io::Result<Vec<u8>> {
         Ok(self.block(texture.offset, texture.size as usize)?.to_vec())
+    }
+
+    /// The first `size` bytes of a texture's image file (its header), or all of a shorter one.
+    pub fn texture_head(&mut self, texture: &TextureEntry, size: usize) -> io::Result<Vec<u8>> {
+        Ok(self.block(texture.offset, size.min(texture.size as usize))?.to_vec())
     }
 
     /// The positions of a mesh's vertices: exactly the floats of the file.

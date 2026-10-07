@@ -11,3 +11,5 @@ publish.workspace = true
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }
 rustyac-ode = { path = "../rustyac-ode" }
+# kn5 models: a track's physics meshes and helper nodes
+rustyac-content = { path = "../rustyac-content" }
