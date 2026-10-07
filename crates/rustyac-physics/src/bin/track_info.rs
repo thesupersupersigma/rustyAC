@@ -1,7 +1,8 @@
 // Ported from Assetto Corsa (acs.exe, Kunos Simulazioni). Not covered by rustyAC's licenses — see LICENSING.md.
 
 //! `track_info <track folder> [layout]`: loads a track the way the game does and says what
-//! it found (meshes, surfaces, sub-spaces, timing lines, spawn points, load time).
+//! it found (meshes, surfaces, sub-spaces, timing lines, spawn points, load time). The folder
+//! may also be a name under the game's `content/tracks` (`track_info spa`).
 //!
 //! `track_info <track folder> [layout] --telemetry <csv>` also lays a recording of the real
 //! game on that track (a CSV of `ac_telemetry.py`) over the port's track: is the road where
@@ -9,7 +10,7 @@
 //! where the game's lap clock restarts. It checks what the oracle cannot (the oracle hands
 //! the game the meshes this port read from the files).
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use rustyac_physics::track::{load_track, Track};
 use rustyac_physics::tyre::RayTrackCollisionProvider;
@@ -30,7 +31,19 @@ fn main() {
         eprintln!("usage: track_info <track folder> [layout] [--telemetry <csv of ac_telemetry.py>]");
         std::process::exit(2);
     };
-    let (track, report) = match load_track(Path::new(folder), args.get(1).map(String::as_str).unwrap_or("")) {
+    // a name instead of a folder: under the game's content/tracks (AC_ROOT, else Steam's usual place)
+    let mut folder = PathBuf::from(folder);
+    if !folder.is_dir() {
+        let root = match std::env::var_os("AC_ROOT") {
+            Some(root) => PathBuf::from(root),
+            None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
+        };
+        let named = root.join("content").join("tracks").join(&folder);
+        if named.is_dir() {
+            folder = named;
+        }
+    }
+    let (track, report) = match load_track(&folder, args.get(1).map(String::as_str).unwrap_or("")) {
         Ok(loaded) => loaded,
         Err(message) => {
             eprintln!("{message}");

@@ -658,6 +658,10 @@ impl GameSim {
             self.car.car.queue(move |car| {
                 car.force_rotation(&pose.tail);
                 car.force_position(&pose.position);
+                // the game's teleport only forgets the timing lines crossed so far (a lap past
+                // its first sector line then no longer counts); being lifted back onto the road
+                // is help the game does not have, so the lap in progress is also marked as cut
+                car.transponder.add_cut();
             });
         }
         if bias_clicks != 0 {

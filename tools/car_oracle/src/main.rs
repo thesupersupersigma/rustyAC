@@ -47,13 +47,14 @@ const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assett
 
 fn usage() -> String {
     "usage: car_oracle list\n       \
-     car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]\n       \
+     car_oracle run --scenario <name> [--track <track folder or name>] [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]\n       \
      car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]\n       \
      car_oracle check <recording>\n       \
      car_oracle setup-check [--car <name>]\n       \
      car_oracle diff <recording> <recording> [--only <prefix,prefix>] [--ignore <part,part>]\n       \
      car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>] [--every <n>] \
      [--only <prefix,prefix>] [--csv-out <file>]\n       \
+     car_oracle rays --track <track folder or name> [--count <n>] [--seed <n>]\n       \
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--car <folder under cardata/>] [--verbose]"
         .to_string()
 }

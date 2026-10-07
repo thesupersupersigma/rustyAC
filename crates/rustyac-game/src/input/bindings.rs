@@ -333,7 +333,8 @@ impl Bindings {
         row("ABS + / -", &format!("{} / {}", pad("ABSUP"), pad("ABSDN")), format!("{ctrl}+{} (with Shift: down)", key_name(self.key_abs)));
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         row("camera", pad("ACTION_CHANGE_CAMERA"), "C".to_string());
-        row("reset to spawn", button_label(self.pad_reset.button), "R (Shift+R: a new car)".to_string());
+        row("reset to spawn", button_label(self.pad_reset.button), "R (N: a new car)".to_string());
+        row("back on track", &format!("{} held", button_label(self.pad_reset.button)), "Shift+R".to_string());
         row("pause", button_label(self.pad_pause.button), "P".to_string());
         row("quit", "-", "Esc".to_string());
         out.push_str(&format!(
