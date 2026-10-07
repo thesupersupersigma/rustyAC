@@ -101,6 +101,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyac-content"
+version = "0.1.0"
+
+[[package]]
 name = "rustyac-game"
 version = "0.1.0"
 dependencies = [

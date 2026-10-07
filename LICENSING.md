@@ -11,7 +11,7 @@ Copyright (c) 2026 thesupersupersigma, for the licensed parts.
 | Part | Paths | License |
 |---|---|---|
 | The game, my original files | `crates/rustyac-game/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
-| Small libraries and tools I wrote | `crates/rustyac-math/`<br>the Rust tools `tools/car_oracle/`, `tools/chassis_compare/`, `tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/tyre_oracle/`<br>the Python scripts `tools/*.py`, `tools/car_oracle/gen_functions.py`, `ac_telemetry.py`, `check_telemetry.py` | `MIT OR Apache-2.0`, whichever you prefer: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small libraries and tools I wrote | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>the Rust tools `tools/car_oracle/`, `tools/chassis_compare/`, `tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/tyre_oracle/`<br>the Python scripts `tools/*.py`, `tools/car_oracle/gen_functions.py`, `ac_telemetry.py`, `check_telemetry.py` | `MIT OR Apache-2.0`, whichever you prefer: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 | The car physics | `crates/rustyac-physics/` | **None.** Derived from Assetto Corsa; no rights are granted |
 | Single files ported from Assetto Corsa | listed in the next section | **None.** No rights are granted |

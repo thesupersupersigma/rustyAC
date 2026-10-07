@@ -1,0 +1,10 @@
+[package]
+name = "rustyac-content"
+description = "rustyAC: readers for Assetto Corsa's content files (kn5 models with their nodes, meshes, materials and textures; a track's models.ini), written for large files: nothing big is read until it is asked for"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[dependencies]
