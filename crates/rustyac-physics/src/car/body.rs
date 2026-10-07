@@ -707,6 +707,17 @@ impl PhysicsCore {
         self.no_collision_counter = n;
     }
 
+    /// For the oracles: throws away every contact joint and makes these instead, in this
+    /// order (the oldest first), each attached to its two bodies as given. A step that
+    /// follows with [`PhysicsCore::world_step`] then solves somebody else's contacts.
+    pub fn set_contacts(&mut self, contacts: &[(Contact, Option<BodyId>, Option<BodyId>)]) {
+        self.reset_collisions();
+        for (contact, body1, body2) in contacts {
+            let joint = self.world.joint_create_contact(Some(self.contact_group), contact);
+            self.world.joint_attach(joint, *body1, *body2);
+        }
+    }
+
     /// The contact joints that exist now, newest first (the order of the world's joint list).
     pub fn contact_joints(&self) -> Vec<JointId> {
         let mut out = Vec::new();

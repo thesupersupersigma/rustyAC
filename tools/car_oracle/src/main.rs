@@ -28,9 +28,18 @@
 //!     The ray micro-oracle: the track's meshes in the game's own ODE and in the Rust port,
 //!     `count` rays (default 1,000,000) through both, every answer compared bit for bit.
 //!     Writes `oracle/track/rays_results.md`.
+//! car_oracle collide --track <track folder> [--count <n>] [--mesh-count <n>] [--seed <n>] [--kind <n>]
+//!     The collision micro-oracle: the car's floor boxes (`count` poses, default 200,000) and
+//!     its collider mesh (`mesh-count` poses, default 50,000) over the track, in the game's
+//!     own ODE / OPCODE / PhysicsCore and in the Rust port; every contact compared bit for
+//!     bit. Writes `oracle/collide/poses_results.md`.
+//! car_oracle collide-worlds [--steps <n>] [--seed <n>] [--only <world,world>] [--hybrid]
+//!     Small worlds with contacts, stepped on both sides (default 1,500 steps). Writes
+//!     `oracle/collide/worlds_results.md`.
 
 mod acs;
 mod check;
+mod collide;
 mod game;
 mod record;
 mod scenario;
@@ -55,6 +64,8 @@ fn usage() -> String {
      car_oracle csv <recording> [--table steps|tape|telemetry] [--from <step>] [--to <step>] [--every <n>] \
      [--only <prefix,prefix>] [--csv-out <file>]\n       \
      car_oracle rays --track <track folder or name> [--count <n>] [--seed <n>]\n       \
+     car_oracle collide --track <track folder or name> [--count <n>] [--mesh-count <n>] [--seed <n>] [--kind <n>]\n       \
+     car_oracle collide-worlds [--steps <n>] [--seed <n>] [--only <world,world>]\n       \
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--car <folder under cardata/>] [--verbose]"
         .to_string()
 }
@@ -87,6 +98,10 @@ struct Args {
     verbose: bool,
     track: Option<PathBuf>,
     count: usize,
+    count_given: bool,
+    mesh_count: usize,
+    kind: Option<usize>,
+    hybrid: bool,
     seed: u64,
 }
 
@@ -116,6 +131,10 @@ fn parse_args() -> Result<Args, String> {
         verbose: false,
         track: None,
         count: 1_000_000,
+        count_given: false,
+        mesh_count: 50_000,
+        kind: None,
+        hybrid: false,
         seed: 12,
     };
     while let Some(flag) = it.next() {
@@ -140,7 +159,13 @@ fn parse_args() -> Result<Args, String> {
             "--car" => a.car = value()?,
             "--verbose" => a.verbose = true,
             "--track" => a.track = Some(PathBuf::from(value()?)),
-            "--count" => a.count = number(value()?)?,
+            "--count" => {
+                a.count = number(value()?)?;
+                a.count_given = true;
+            }
+            "--mesh-count" => a.mesh_count = number(value()?)?,
+            "--kind" => a.kind = Some(number(value()?)?),
+            "--hybrid" => a.hybrid = true,
             "--seed" => a.seed = number(value()?)? as u64,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
@@ -165,6 +190,8 @@ fn main() {
         "diff" => diff(&args),
         "csv" => csv(&args),
         "rays" => rays(&args),
+        "collide" => collide_poses(&args),
+        "collide-worlds" => collide_worlds(&args),
         _ => Err(usage()),
     });
     if let Err(message) = result {
@@ -204,6 +231,89 @@ fn rays(args: &Args) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     println!("{report}");
     println!("written to {}", path.display());
+    if ok {
+        Ok(())
+    } else {
+        Err("the game and the port do not agree".to_string())
+    }
+}
+
+/// The car's colliders as the port loads them: the boxes of `cardata/<car>/colliders.ini`
+/// and the mesh of the game's `content/cars/<car>/collider.kn5`.
+fn car_colliders(args: &Args) -> Result<rustyac_physics::car::colliders::CarColliders, String> {
+    let data = repo_root().join("cardata").join(&args.car);
+    rustyac_physics::car::colliders::load(&data, args.acs.parent(), &args.car)
+}
+
+fn write_results(name: &str, title: &str, command: &str, report: &str) -> Result<(), String> {
+    let path = repo_root().join("oracle/collide").join(name);
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("# {title}\n\n`{command}`\n\n{report}")).map_err(|e| e.to_string())?;
+    println!("{report}");
+    println!("written to {}", path.display());
+    Ok(())
+}
+
+/// The collision micro-oracle over a track.
+fn collide_poses(args: &Args) -> Result<(), String> {
+    let track = args.track.as_ref().ok_or("collide needs --track <track folder>")?;
+    let folder = track_folder(args, track);
+    let repo = repo_root();
+    let colliders = car_colliders(args)?;
+    game::prepare_root(&repo, &args.root, &args.car)?;
+    track::prepare_root(&args.root, &folder)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let engine = game::new_engine(&acs, 1);
+    let game_track = track::GameTrack::build(&acs, engine, &folder, false)?;
+    let count = if args.count_given { args.count } else { 200_000 };
+    let (report, ok) = collide::collide(&acs, engine, &game_track, &colliders, count, args.mesh_count, args.seed, args.kind)?;
+    let suffix = if args.kind.is_some() || args.count_given { "poses_partial.md" } else { "poses_results.md" };
+    write_results(
+        suffix,
+        "Collision micro-oracle: the game's ODE / OPCODE / PhysicsCore against the port, poses over a track",
+        &format!("car_oracle collide --track {} --count {count} --mesh-count {} --seed {}", track.display(), args.mesh_count, args.seed),
+        &report,
+    )?;
+    if ok {
+        Ok(())
+    } else {
+        Err("the game and the port do not agree".to_string())
+    }
+}
+
+/// The collision micro-oracle: small worlds that are stepped.
+fn collide_worlds(args: &Args) -> Result<(), String> {
+    let repo = repo_root();
+    let colliders = car_colliders(args)?;
+    game::prepare_root(&repo, &args.root, &args.car)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let engine = game::new_engine(&acs, 1);
+    let steps = args.steps.unwrap_or(1500);
+    let (report, ok) = collide::worlds(&acs, engine, &colliders, steps, args.seed, &args.only, args.hybrid)?;
+    write_results(
+        if args.hybrid {
+            "worlds_hybrid.md"
+        } else if args.only.is_empty() && args.steps.is_none() {
+            "worlds_results.md"
+        } else {
+            "worlds_partial.md"
+        },
+        "Collision micro-oracle: small worlds with contacts, stepped in the game's PhysicsCore and in the port",
+        &format!("car_oracle collide-worlds --steps {steps} --seed {}{}", args.seed, if args.hybrid { " --hybrid" } else { "" }),
+        &report,
+    )?;
     if ok {
         Ok(())
     } else {

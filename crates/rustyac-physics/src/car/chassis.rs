@@ -13,7 +13,8 @@ use std::sync::Arc;
 use super::aero::{AeroModel, SlipStream, VanillaAero};
 use super::aids::{AidsModel, VanillaAids};
 use super::antiroll_bar::AntirollBar;
-use super::body::{FixedJoint, ForceSource, PhysicsCore, RigidBody};
+use super::body::{CollisionEvent, FixedJoint, ForceSource, PhysicsCore, RigidBody, Shape};
+use super::colliders::{CarBounds, CarColliders, ColliderMesh};
 use super::brakes::{BrakeModel, VanillaBrakes};
 use super::drivetrain::{DrivetrainModel, OnGearRequestEvent, VanillaDrivetrain};
 use super::engine::{EngineModel, VanillaEngine};
@@ -424,8 +425,27 @@ pub struct RollingChassis {
     /// `Car::isCollisionOffForPits`: the body mesh does not collide with other cars
     pub is_collision_off_for_pits: bool,
     /// The collide bits `Car::updateColliderStatus` gives the car body's mesh collider
-    /// (`IRigidBody::setMeshCollideMask(0, ...)`); the port has no contacts yet.
+    /// (`IRigidBody::setMeshCollideMask(0, ...)`).
     pub mesh_collide_mask: u32,
+    /// The floor boxes (`CarColliderManager`) and the collider mesh (`Car::initColliderMesh`)
+    /// on the car's body.
+    pub colliders: CarColliders,
+    /// `Car::bounds`
+    pub bounds: CarBounds,
+    /// False: the body is a ghost, as in every recording made before Task 13 (no collision
+    /// pass at all; the tyres' rays still see the track).
+    pub collisions_enabled: bool,
+    /// `Car::lastCollisionTime`, ms
+    pub last_collision_time: f64,
+    /// The `ACPhysicsEvent`s the collision callback pushed during the last step (the game's
+    /// queue is emptied by its sound code every frame).
+    pub physics_events: Vec<PhysicsEvent>,
+    /// The `Car::evOnCollisionEvent` calls of the last step.
+    pub collision_events: Vec<OnCollisionEvent>,
+    /// How often the collision callback ran in the last step (= new contact joints).
+    pub contact_callbacks: u32,
+    /// What the last `dWorldStep` looked like (islands, rows, the solver's work).
+    pub step_stats: rustyac_ode::StepStats,
     /// `Car::gridPosition`, `Car::hasGridPosition`: where the car stood before the start
     pub grid_position: Vec3f,
     pub has_grid_position: bool,
@@ -850,6 +870,14 @@ impl RollingChassis {
             slip_vibration_phase: 0.0,
             is_collision_off_for_pits: false,
             mesh_collide_mask: 0x1e,
+            colliders: CarColliders::default(),
+            bounds: CarBounds::default(),
+            collisions_enabled: true,
+            last_collision_time: 0.0,
+            physics_events: Vec::new(),
+            collision_events: Vec::new(),
+            contact_callbacks: 0,
+            step_stats: rustyac_ode::StepStats::default(),
             grid_position: Vec3f::default(),
             has_grid_position: false,
             jump_start_events: 0,
@@ -937,6 +965,7 @@ impl RollingChassis {
         chassis.sleeping_frames = 0;
         chassis.update_body_mass();
         chassis.setup_manager = SetupManager::init(&chassis, data_path)?;
+        chassis.install_box_colliders()?;
         Ok(chassis)
     }
 
@@ -1602,7 +1631,7 @@ impl RollingChassis {
         if let Some(trace) = &mut self.trace {
             trace.pre = pre;
         }
-        self.core.step(dt);
+        self.step_core(dt);
         self.post_step(dt);
 
         // what the game's physics thread does after each step: the state snapshot, then the
@@ -1848,6 +1877,8 @@ impl RollingChassis {
             mask |= 1;
         }
         self.mesh_collide_mask = mask;
+        // (the game writes the mask of mesh 0 unchecked; a car without a mesh has none)
+        self.core.set_mesh_collide_mask(self.body, 0, mask);
     }
 
     /// `PhysicsEngine::hasSessionStarted` @ 0x140263c70.
@@ -2108,6 +2139,212 @@ impl RollingChassis {
             }
             let min_value = self.env.mz_low_speed_reduction_min_value;
             self.last_ff = ((1.0 - min_value) * k + min_value) * self.last_ff;
+        }
+    }
+}
+
+// --- the car body touches things -----------------------------------------------------------
+
+/// The game's `ACPhysicsEvent` of type 0 (a collision), as `Car::onCollisionCallBack` pushes
+/// it on the physics engine's event queue (the game's sounds read it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhysicsEvent {
+    /// `type`: 0 = collision
+    pub kind: i32,
+    /// `param1`: the car's `physicsGUID`
+    pub param1: f32,
+    /// `param2`: the contact's depth, m
+    pub param2: f32,
+    /// `param3`: -1
+    pub param3: f32,
+    /// `param4`: the closing speed along the contact normal, km/h (negative when parting)
+    pub param4: f32,
+    /// `vParam1`: the contact point
+    pub v_param1: Vec3f,
+    /// `vParam2`: the contact normal
+    pub v_param2: Vec3f,
+    /// `ulParam0`: the group (category) of the second shape
+    pub ul_param0: u32,
+}
+
+/// What `Car::evOnCollisionEvent` hands its listeners: a contact that damages.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OnCollisionEvent {
+    /// The other body (`None`: the track).
+    pub body: Option<RigidBody>,
+    /// Closing speed, km/h.
+    pub rel_speed: f32,
+    pub world_pos: Vec3f,
+    /// The contact point in the car body's frame.
+    pub rel_pos: Vec3f,
+    /// The group of the second shape.
+    pub collider_group: u32,
+}
+
+/// `Car::physicsGUID`: the number of cars the engine had when this one was built. The port
+/// has one car.
+const PHYSICS_GUID: u32 = 0;
+
+impl RollingChassis {
+    /// `CarColliderManager::init` -> `loadINI` @ 0x1402a37a0: the floor boxes of
+    /// `colliders.ini` on the car's body, category 4, colliding with category 1 (track
+    /// surfaces) only, in the car's own sub-space.
+    fn install_box_colliders(&mut self) -> Result<(), String> {
+        let boxes = super::colliders::load_boxes(&self.data_path)?;
+        for def in &boxes {
+            self.core.add_box_collider(self.body, &def.centre, &def.size, super::body::category::CAR, super::body::category::SURFACE, PHYSICS_GUID + 1);
+        }
+        self.colliders.boxes = boxes;
+        Ok(())
+    }
+
+    /// `Car::initColliderMesh` @ 0x140273b20 (called by the game's `CarAvatar::initPhysics`
+    /// when the car has a `collider.kn5`): the car's bounds, and the mesh on the body with
+    /// category 4 and the collide bits 0x1e (walls, cars, loose objects).
+    pub fn init_collider_mesh(&mut self, mesh: ColliderMesh) {
+        self.bounds = super::colliders::bounds(&mesh);
+        self.core.add_mesh_collider(self.body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, PHYSICS_GUID + 1);
+        self.colliders.mesh = Some(mesh);
+    }
+
+    /// The collider mesh from the game's folder (`content/cars/<name>/collider.kn5`), when
+    /// there is one. `Ok(false)`: the car has none (it then has only its floor boxes).
+    pub fn load_collider_mesh(&mut self, game_root: &Path) -> Result<bool, String> {
+        let name = self.unix_name.clone();
+        let loaded = super::colliders::load(&self.data_path, Some(game_root), &name)?;
+        match loaded.mesh {
+            Some(mesh) => {
+                self.init_collider_mesh(mesh);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// `PhysicsEngine::setSessionInfo` @ 0x140264560, the part about collisions: at the start
+    /// of a session the contacts are thrown away and no new ones are looked for during 250
+    /// steps (0.75 s).
+    pub fn reset_collisions_for_new_session(&mut self) {
+        self.core.reset_collisions();
+        self.core.set_no_collision_steps(250);
+    }
+
+    /// `PhysicsCore::step` @ 0x1402cd690 for the car's core: the collision pass with the
+    /// game's callback (`PhysicsEngine::onCollisionCallBack` -> `Car::onCollisionCallBack`)
+    /// after every new contact joint, then `dWorldStep`.
+    fn step_core(&mut self, dt: f32) {
+        self.physics_events.clear();
+        self.collision_events.clear();
+        if self.collisions_enabled {
+            let track = self.track.clone();
+            let own = self.core.statics.clone();
+            let statics = match &track {
+                Some(track) => Some(&track.world),
+                None => own.as_deref(),
+            };
+            let events = self.core.collision_step(statics);
+            self.contact_callbacks = events.len() as u32;
+            for event in &events {
+                self.on_collision_callback(event);
+            }
+        }
+        self.step_stats = self.core.world_step(dt);
+    }
+
+    /// `PhysicsEngine::onCollisionCallBack` @ 0x140264020 (the pair is turned round when only
+    /// the second body is a car's) and `Car::onCollisionCallBack` @ 0x140274650: the closing
+    /// speed at the contact point, in km/h, is the damage; a zone keeps the largest it saw.
+    /// Contacts with the ground (a track surface, a loose object) do not damage.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn on_collision_callback(&mut self, event: &CollisionEvent) {
+        let (mut body_a, mut shape_a, mut body_b, mut shape_b) = (event.body_a, event.shape_a, event.body_b, event.shape_b);
+        if body_a != Some(self.body) && body_b == Some(self.body) {
+            std::mem::swap(&mut body_a, &mut body_b);
+            std::mem::swap(&mut shape_a, &mut shape_b);
+        }
+        // not this car's body: nothing (hubs and the fuel tank have no shapes)
+        if body_a != Some(self.body) {
+            return;
+        }
+        let other = body_b;
+        let is_ground = |shape: Option<Shape>| shape.is_some_and(|s| s.group == 1 || s.group == 0x10);
+        let ground_a = is_ground(shape_a);
+        let ground_b = is_ground(shape_b);
+        self.last_collision_time = self.physics_time;
+        let local = self.core.world_to_local(self.body, &event.pos);
+        let v_other = match other {
+            Some(other) => self.core.get_point_velocity(other, &event.pos),
+            None => Vec3f::new(0.0, 0.0, 0.0),
+        };
+        let v_mine = self.core.get_point_velocity(self.body, &event.pos);
+        let n = &event.normal;
+        let rel_speed = -((((v_mine.y - v_other.y) * n.y + (v_mine.x - v_other.x) * n.x) + (v_mine.z - v_other.z) * n.z) * 3.6);
+        if body_a.is_some() && body_b.is_some() && !ground_a && !ground_b {
+            self.last_collision_with_car_time = self.physics_time;
+        }
+        let damaging = rel_speed > 0.0 && !ground_a && !ground_b;
+        if damaging {
+            let d = rel_speed * self.env.mechanical_damage_rate;
+            if d > 150.0 {
+                if let Some(drivetrain) = &mut self.drivetrain {
+                    drivetrain.engine_mut().blow_up();
+                }
+            }
+            let mut dir = Vec3f::new(local.x, 0.0, local.z);
+            dir.normalize();
+            let zone = if dir.z.abs() > 0.707 {
+                if local.z > 0.0 {
+                    0
+                } else {
+                    1
+                }
+            } else if local.x >= 0.0 {
+                2
+            } else {
+                3
+            };
+            if d > self.damage_zone_level[zone] {
+                self.damage_zone_level[zone] = d;
+            }
+            if d > self.damage_zone_level[4] {
+                self.damage_zone_level[4] = d;
+            }
+        }
+        // every call, even for ground contacts: the suspension of a corner is bent by the mean
+        // of its two zones
+        let dz = self.damage_zone_level;
+        for (wheel, (a, b)) in [(0usize, 2usize), (0, 3), (1, 2), (1, 3)].into_iter().enumerate() {
+            if dz[a] > 0.0 && dz[b] > 0.0 {
+                self.suspensions[wheel].set_damage((dz[a] + dz[b]) * 0.5);
+            }
+        }
+        // (the game reads the second shape's group without a null test; a box, the only shape
+        // without an object, is always on the car's side)
+        let group = shape_b.map_or(0, |s| s.group);
+        self.physics_events.push(PhysicsEvent {
+            kind: 0,
+            param1: PHYSICS_GUID as f32,
+            param2: event.depth,
+            param3: -1.0,
+            param4: rel_speed,
+            v_param1: event.pos,
+            v_param2: event.normal,
+            ul_param0: group,
+        });
+        if damaging {
+            self.collision_events.push(OnCollisionEvent { body: other, rel_speed, world_pos: event.pos, rel_pos: local, collider_group: group });
+        }
+    }
+
+    /// `Car::setDamageLevel` @ 0x140275b20: all five zones.
+    pub fn set_damage_level(&mut self, level: f32) {
+        self.damage_zone_level = [level; 5];
+    }
+
+    /// `Car::resetSuspensionDamageLevel` @ 0x140275970.
+    pub fn reset_suspension_damage_level(&mut self) {
+        for suspension in self.suspensions.iter_mut() {
+            suspension.reset_damage();
         }
     }
 }
