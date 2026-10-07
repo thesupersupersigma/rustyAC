@@ -18,8 +18,13 @@ State after the last commit (update this section with every commit):
 - **Checks 2 and 3 work** (numbers still to be taken for the report): `rustyac --headless --duration 60`, and
   `rustyac --headless --realtime --replay oracle/game/car_slalom.ryin` read by
   `python ac_telemetry.py --duration 5 --print --out re/scratch/task11/shm_test.csv`.
-- **Next:** input devices and bindings (`re/scratch/task11/spec_pad_keyboard.md`, `spec_wheel_ffb.md`), the
-  Direct3D 11 debug view and `--screenshot` (`spec_shm_loop_camera.md`), then this report.
+- **Input, first part:** `input/` has AC's `controls.ini` reader (`ini.rs`), the bindings with their sources and
+  `rustyac_controls.ini` (`bindings.rs`), the 1:1 ports of `JoypadCarControl` with the XInput wrapper (`pad.rs`) and
+  `KeyboardCarControl` (`keyboard.rs`), and the live driver that lets the last-touched device drive (`mod.rs`).
+  `cargo test --release -p rustyac-game --lib` holds them against the numbers of
+  `re/scratch/task11/spec_pad_keyboard.md` section 10 (bit patterns). `wheel.rs` / `dinput.rs` are still stubs.
+- **Next:** the window and the Direct3D 11 debug view with `--screenshot` (`spec_shm_loop_camera.md` has cameras
+  and conventions), wiring the live driver into `main.rs`, then DirectInput (`spec_wheel_ffb.md`), then this report.
 - Specs written by the read-only helpers are in git-ignored `re/scratch/task11/spec_*.md`.
 
 (The report proper follows once the pieces exist.)

@@ -58,6 +58,39 @@ pub trait DriverSource: Send {
 
     /// Called now and then while the simulation is paused (devices can be looked after).
     fn idle(&mut self) {}
+
+    /// Does the device look at the car (AC's keyboard class does)?
+    fn wants_probe(&self) -> bool {
+        false
+    }
+
+    /// What the device may know of the car before the step, if it [wants](Self::wants_probe) it.
+    fn set_probe(&mut self, _probe: &CarProbe) {}
+}
+
+/// What AC's keyboard class reads off its car: values the last step left behind.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CarProbe {
+    /// `status.ndSlip` of the left and right driven tyre (slip over the slip at peak grip).
+    pub driven_left_slip: f32,
+    pub driven_right_slip: f32,
+    /// `RaceEngineer::getOptimalBrake`: the pedal at which the first axle reaches its grip.
+    pub optimal_brake: f32,
+}
+
+impl CarProbe {
+    /// Reads the car; changes nothing in it.
+    pub fn capture(car: &mut rustyac_physics::car::RollingChassis) -> CarProbe {
+        // `RaceEngineer::getLeftDrivenTyre` / `getRightDrivenTyre`: the front pair of a
+        // front-wheel-drive car, else the rear pair
+        let front = car.drivetrain.as_ref().is_some_and(|d| d.base().traction_type == rustyac_physics::car::TractionType::Fwd);
+        let (left, right) = if front { (0, 1) } else { (2, 3) };
+        CarProbe {
+            driven_left_slip: car.tyres[left].status.nd_slip,
+            driven_right_slip: car.tyres[right].status.nd_slip,
+            optimal_brake: rustyac_physics::car::aids::get_optimal_brake(car),
+        }
+    }
 }
 
 /// `StepInput::device` of a step of the spawn sequence.
@@ -197,6 +230,14 @@ impl<S: DriverSource> DriverSource for SpawnSequence<S> {
 
     fn idle(&mut self) {
         self.inner.idle();
+    }
+
+    fn wants_probe(&self) -> bool {
+        self.inner.wants_probe()
+    }
+
+    fn set_probe(&mut self, probe: &CarProbe) {
+        self.inner.set_probe(probe);
     }
 }
 
@@ -406,6 +447,10 @@ impl GameSim {
     pub fn step(&mut self) -> Result<StepInput, String> {
         let (events, bias_clicks) = self.car.device.source.take_events();
         self.apply(events, bias_clicks)?;
+        if self.car.device.source.wants_probe() {
+            let probe = CarProbe::capture(&mut self.car.car);
+            self.car.device.source.set_probe(&probe);
+        }
         self.car.device.polled = false;
         self.car.step(DT, self.setup.time_of_step(self.steps));
         self.steps += 1;

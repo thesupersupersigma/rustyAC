@@ -122,6 +122,8 @@ pub struct Shared {
     pub steps: AtomicU64,
     /// One line about who is driving, for the HUD.
     pub driver_text: Mutex<String>,
+    /// Presses of a device's camera button (the display counts them).
+    pub camera_toggles: AtomicU32,
 }
 
 impl Shared {
@@ -137,6 +139,7 @@ impl Shared {
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
+            camera_toggles: AtomicU32::new(0),
         })
     }
 

@@ -9,7 +9,9 @@
 //! and the session's values and reads its state.
 
 pub mod cli;
+pub mod crt;
 pub mod dump;
+pub mod input;
 pub mod input_file;
 pub mod physics_thread;
 pub mod shm;
