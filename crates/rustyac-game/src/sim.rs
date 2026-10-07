@@ -469,7 +469,22 @@ fn build_car(
         Some(track) => Box::new(TrackGround(Arc::clone(track))),
         None => Box::new(Ground::Flat),
     };
-    let mut car = VanillaCar::new(data_path, setup.env, ground, setup.seed, physics_time, driver)?;
+    let mut env = setup.env;
+    if track.is_some() {
+        // RaceManager::setCurrentSession for a session that is not a race: leaving the track
+        // costs the lap (penalty mode 1); `[RACE] PENALTIES` on: two tyres may be off
+        env.penalty_mode = 1;
+        env.allowed_tyres_out = 2;
+        env.session_type = if setup.spawn == "hotlap" { 4 } else { 1 };
+    }
+    let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
+    if let Some(track) = track {
+        car.car.set_track(Arc::clone(track));
+        // RaceManager::initOffline -> CarAvatar::armFirstLap in a hot-lap session
+        if setup.spawn == "hotlap" {
+            car.car.transponder.arm_first_lap();
+        }
+    }
     // `CarAvatar::setAutoClutchEnabled`: the aid switches the automatic clutch at the start,
     // and with it the one on shifts
     car.car.autoclutch.use_auto_on_start = setup.auto_clutch;
@@ -493,7 +508,15 @@ impl GameSim {
                 return Err("an oracle set-up runs on the oracle's own road, not on a track".to_string());
             }
             let folder = find_track(&setup.track)?;
-            let (loaded, report) = load_track(&folder, "")?;
+            let (mut loaded, report) = load_track(&folder, "")?;
+            // RaceManager::initOffline: the spawn set of the session (a hot-lap session has
+            // `HOTLAP_START`, practice `PIT`, a race `START`; the last two are then cast twice)
+            let set = match setup.spawn.as_str() {
+                "pit" => "PIT",
+                "start" => "START",
+                _ => "HOTLAP_START",
+            };
+            rustyac_physics::track::init_respawn_position_set(&mut loaded, set);
             spawn = spawn_on(&loaded, &setup.spawn)?;
             track_summary = report.summary(&loaded);
             track = Some(Arc::new(loaded));

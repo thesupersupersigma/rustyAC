@@ -27,10 +27,15 @@ fn main() {
     for message in &report.messages {
         println!("{message}");
     }
+    let mut track = track;
+    rustyac_physics::track::init_respawn_position_set(&mut track, "HOTLAP_START");
     for (name, slots) in &track.spawn_positions {
-        if let Some(first) = slots.first() {
-            println!("spawn {name}_0 at {:?}", first.m[3]);
+        if let Some((position, tail)) = track.spawn_pose(name, 0) {
+            println!("spawn {name}_0 ({} slots) at {position:?}, tail towards {tail:?}", slots.len());
         }
+    }
+    for (line, position) in track.time_lines.iter().zip(&track.sectors_normalized_positions) {
+        println!("timing line {}: {:?} to {:?}, at {position:.6} of the lap", line.id, line.points[0], line.points[1]);
     }
     // the ground under every helper node, as a first look at the rays
     let mut kinds: std::collections::BTreeMap<String, (u32, u32, f32)> = std::collections::BTreeMap::new();

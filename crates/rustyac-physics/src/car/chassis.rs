@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::aero::{AeroModel, SlipStream, VanillaAero};
 use super::aids::{AidsModel, VanillaAids};
@@ -22,6 +23,9 @@ use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, VanillaDwb};
 use super::telemetry::{PhysicsPage, PhysicsPageWriter};
+use crate::track::timing::{FinishContext, InvalidatorAction, InvalidatorInput};
+use crate::track::{LapInvalidator, SplineLocator, TimeTransponder, Track};
+use crate::track::spline::SplineLocatorData;
 use crate::data::ini::IniReader;
 use crate::math::{fdtest_inf_or_nan, powf, sinf, sqrtf};
 use crate::tyre::rig;
@@ -86,6 +90,12 @@ pub struct ChassisEnvironment {
     pub wind_direction_deg: f32,
     /// `DRSManager::isDRSAvailable` of the track for this car: true on a track without DRS zones
     pub drs_zone_available: bool,
+    /// `PhysicsEngine::allowedTyresOut`: more tyres than this off the track is a cut or a
+    /// penalty (by `penalty_mode`); -1 = no limit (the engine's own default).
+    pub allowed_tyres_out: i32,
+    /// `PhysicsEngine::sessionInfo.type`: 1 practice, 2 qualifying, 3 race, 4 hot-lap. A
+    /// race's lap timer stands still until the start.
+    pub session_type: i32,
 }
 
 impl Default for ChassisEnvironment {
@@ -118,6 +128,8 @@ impl Default for ChassisEnvironment {
             wind_speed: 0.0,
             wind_direction_deg: 0.0,
             drs_zone_available: true,
+            allowed_tyres_out: -1,
+            session_type: 1,
         }
     }
 }
@@ -333,6 +345,20 @@ pub struct RollingChassis {
     /// The writer of the `acpmf_physics` telemetry page, when the car has one
     /// ([`RollingChassis::install_telemetry`]).
     pub telemetry: Option<PhysicsPageWriter>,
+    /// The track the car is on (its timing lines and AI line); `None` on the endless road
+    /// of the test rigs. Set with [`RollingChassis::set_track`].
+    pub track: Option<Arc<Track>>,
+    /// `Car::transponder`: the lap timer
+    pub transponder: TimeTransponder,
+    /// `Car::splineLocator`, `Car::splineLocatorData`: the place along the AI line
+    pub spline_locator: SplineLocator,
+    pub spline_locator_data: SplineLocatorData,
+    /// `Car::lapInvalidator` (it runs for the player's car only)
+    pub lap_invalidator: LapInvalidator,
+    /// `Car::carHalfWidth`: half the wider axle's track plus 0.3 m
+    pub car_half_width: f32,
+    /// `PhysicsEngine::stepCounter`: steps so far, this one included
+    pub step_counter: u32,
     /// The page of the step that just ran.
     pub physics_page: Option<PhysicsPage>,
     /// `Car::powerClassIndex`: the engine's peak power over the car's mass, W/kg (the AI and
@@ -769,6 +795,13 @@ impl RollingChassis {
             slip_stream_effect_gain: 1.0,
             slip_stream: SlipStream::default(),
             telemetry: None,
+            track: None,
+            transponder: TimeTransponder::default(),
+            spline_locator: SplineLocator::default(),
+            spline_locator_data: SplineLocatorData::default(),
+            lap_invalidator: LapInvalidator::default(),
+            car_half_width: 0.0,
+            step_counter: 0,
             physics_page: None,
             power_class_index: 0.0,
             is_retired: false,
@@ -964,6 +997,20 @@ impl RollingChassis {
         Ok(())
     }
 
+    /// Puts the car on a track: what `Car::Car` @ 0x14026bf00 does with `ksPhysics->track`
+    /// (`TimeTransponder::init`, `SplineLocator::init`, `carHalfWidth`). The road under the
+    /// wheels is the chassis' `ground`, which has to be the same track.
+    pub fn set_track(&mut self, track: Arc<Track>) {
+        self.transponder = TimeTransponder::new(&track, 0);
+        self.spline_locator = SplineLocator::default();
+        self.spline_locator_data = SplineLocatorData::default();
+        // RaceEngineer::getFrontTrack @ 0x14027c010 / getRearTrack @ 0x14027c9e0
+        let front = (self.suspensions[0].get_base_position().x * 2.0).abs();
+        let rear = (self.suspensions[2].get_base_position().x * 2.0).abs();
+        self.car_half_width = (if front > rear { front } else { rear }) * 0.5 + 0.3;
+        self.track = Some(track);
+    }
+
     /// Attaches a telemetry writer: from now on every step leaves the `acpmf_physics` page of
     /// that step in `physics_page` (the game's `SharedMemoryWriter` on its physics thread).
     pub fn install_telemetry(&mut self) -> Result<(), String> {
@@ -1140,10 +1187,13 @@ impl RollingChassis {
             drivetrain.set_current_gear(1, true, self);
             self.drivetrain = Some(drivetrain);
         }
+        // the lap in progress does not count (the game's callers all pass `invalidateLap`)
+        self.transponder.invalidate();
         self.core.stop(self.body);
         self.core.stop(self.fuel_tank_body);
         self.core.source = previous;
         self.frames_to_sleep = 50;
+        self.spline_locator.reset();
     }
 
     /// `Tyre::setCompound` @ 0x1402834e0 on the four tyres: what the game's setup screen does
@@ -1187,6 +1237,8 @@ impl RollingChassis {
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
         self.physics_time = physics_time;
+        // PhysicsEngine::step counts its steps first of all
+        self.step_counter = self.step_counter.wrapping_add(1);
         // PhysicsEngine::evOnPreStep: the queued jobs see the new step's clock
         for job in std::mem::take(&mut self.pre_step_jobs) {
             job(self);
@@ -1450,12 +1502,59 @@ impl RollingChassis {
         manager.step(self);
         self.setup_manager = manager;
         // 21 to 29: telemetry, lap timing, stability control
+        // 24: LapInvalidator::step, the player's car only
+        if self.env.is_first_car && self.track.is_some() {
+            let surfaces = [0, 1, 2, 3].map(|k| self.tyres.get(k).and_then(|t| t.surface_def.as_ref()));
+            let input = InvalidatorInput {
+                physics_time,
+                last_collision_with_car_time: self.last_collision_with_car_time,
+                surfaces,
+                penalty_mode: self.env.penalty_mode,
+                allowed_tyres_out: self.env.allowed_tyres_out,
+                penalty_time: self.get_penalty_time(),
+                speed: self.speed,
+                has_controls_provider: true,
+            };
+            let mut invalidator = self.lap_invalidator;
+            let action = invalidator.step(&input);
+            self.lap_invalidator = invalidator;
+            match action {
+                Some(InvalidatorAction::AddPenalty(seconds)) => self.add_penalty(seconds),
+                Some(InvalidatorAction::AddCut) => self.transponder.add_cut(),
+                Some(InvalidatorAction::ClearPenalty) => self.clear_penalty(),
+                None => {}
+            }
+        }
+        // 26: SplineLocator::step, from where the body is before this step moves it
+        if let Some(track) = self.track.clone() {
+            if let Some(spline) = &track.ai_spline {
+                let position = self.core.get_position(self.body);
+                self.spline_locator.step(spline, &track.starting_bounds, &position, self.car_half_width);
+            }
+        }
+        // 27: StabilityControl::step
         match self.aids.take() {
             Some(mut aids) => {
                 aids.step_stability(self, dt);
                 self.aids = Some(aids);
             }
             None => feed.stability(self),
+        }
+        // 28: TimeTransponder::step, with the hub of wheel 0 as this step's tyre step saw it
+        if let Some(track) = self.track.clone() {
+            let probe = self.tyres[0].world_position;
+            let finish = FinishContext {
+                penalty_time: self.get_penalty_time(),
+                check_black_flag: self.penalty_manager.pending_penalty_type == 5 && self.penalty_manager.pit_penalty_laps == 1,
+            };
+            let not_started = self.env.session_type == 3 && (self.env.session_start_time_ms - physics_time) > 0.0;
+            let actions = self.transponder.step(&track, &probe, self.step_counter, physics_time, not_started, &finish);
+            if actions.black_flag.is_some() {
+                self.set_black_flag(true);
+            }
+            if actions.decrease_pit_penalty_laps == Some(true) && self.penalty_manager.pit_penalty_laps > 0 {
+                self.penalty_manager.pit_penalty_laps -= 1;
+            }
         }
 
         // --- the end of Car::step ------------------------------------------------------------
@@ -1473,7 +1572,7 @@ impl RollingChassis {
             trace.pre = pre;
         }
         self.core.step(dt);
-        self.post_step();
+        self.post_step(dt);
 
         // what the game's physics thread does after each step: the state snapshot, then the
         // shared-memory page
@@ -1777,10 +1876,16 @@ impl RollingChassis {
     /// `Car::postStep` @ 0x140275430, after the rigid-body step: the car's wake moves to where
     /// the car is now. (Its other half copies the racing-line locator's results, which need a
     /// track.)
-    fn post_step(&mut self) {
+    fn post_step(&mut self, dt: f32) {
         let velocity = self.core.get_velocity(self.body);
         let position = self.core.get_position(self.body);
         self.slip_stream.set_position(&position, &velocity);
+        if let Some(track) = &self.track {
+            if let Some(spline) = &track.ai_spline {
+                let locator = self.spline_locator;
+                locator.post_step(&mut self.spline_locator_data, spline, &position, dt);
+            }
+        }
     }
 
     /// The state of a body as the comparison with the recordings wants it.

@@ -26,11 +26,15 @@ use super::timing;
 use super::Track;
 use crate::vecmath::{xm_matrix_multiply, Mat44f};
 
-/// A helper node of the track's models: a plain node whose name starts with `AC_`.
+/// A helper node of the track's models: a node whose name starts with `AC_`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HelperNode {
     pub name: String,
-    /// `Node::getWorldMatrix` @ 0x14020e190
+    /// `Node::matrix`: the node's own matrix. This, not the world matrix, is where the game
+    /// takes spawn points and timing gates from (and what it changes when it drops a spawn
+    /// point onto the road).
+    pub local: Mat44f,
+    /// `Node::getWorldMatrix` @ 0x14020e190, as loaded.
     pub world: Mat44f,
 }
 
@@ -137,8 +141,10 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
                         report.tree_nodes += track.world.meshes[made].data.model.nodes.len() as u64;
                     }
                 }
-            } else if node.class == NodeClass::Base && node.name.starts_with("AC_") {
-                report.helpers.push(HelperNode { name: node.name.clone(), world: world[index] });
+            }
+            // the game finds helpers by name among all nodes, meshes too, the first in the tree
+            if node.name.starts_with("AC_") {
+                report.helpers.push(HelperNode { name: node.name.clone(), local, world: world[index] });
             }
         }
     }
@@ -150,11 +156,13 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
 
     // TrackAvatar::initPhysics: Track::initAISpline once the meshes are there
     spline::init_ai_spline(&mut track, &files.ai, &files.data, &mut report.messages)?;
-    // the spawn sets the game makes at load, and the hot-lap one a session asks for
-    for set in ["PIT", "START", "TIME_ATTACK", "HOTLAP_START"] {
-        timing::init_respawn_position_set(&mut track, &report.helpers, set);
+    // TrackAvatar::TrackAvatar: three spawn sets, then the timing lines. (The set of a
+    // session, `HOTLAP_START` for one, is made when the session is: init_respawn_position_set.)
+    track.helper_nodes = report.helpers.clone();
+    for set in ["PIT", "START", "TIME_ATTACK"] {
+        timing::init_respawn_position_set(&mut track, set);
     }
-    timing::init_time_lines(&mut track, &report.helpers, &mut report.messages);
+    timing::init_time_lines(&mut track, &mut report.messages);
     report.seconds_total = start.elapsed().as_secs_f64();
     Ok((track, report))
 }

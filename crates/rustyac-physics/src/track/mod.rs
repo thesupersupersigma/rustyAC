@@ -26,12 +26,12 @@ use std::sync::Arc;
 use rustyac_ode::collision::{RayContact, StaticWorld};
 
 use crate::tyre::{RayCastResult, RayTrackCollisionProvider, SurfaceDef};
-use crate::vecmath::{Mat44f, Vec3f};
+use crate::vecmath::Vec3f;
 
-pub use loader::{load_track, TrackLoadReport};
-pub use spline::{AiSpline, SplineLocator};
+pub use loader::{load_track, HelperNode, TrackLoadReport};
+pub use spline::{AiSpline, SplineLocator, SplineLocatorData};
 pub use surfaces::{SurfaceType, SurfacesManager};
-pub use timing::{LapInvalidator, TimeLine, TimeTransponder};
+pub use timing::{init_respawn_position_set, LapDb, LapInvalidator, TimeLine, TimeTransponder};
 
 /// The collide bits every track mesh gets (`Track::addSurface` @ 0x140277e50).
 pub const TRACK_MESH_COLLIDE_BITS: u32 = 0x14;
@@ -78,11 +78,14 @@ pub struct Track {
     pub ai_spline: Option<AiSpline>,
     /// `aiSplineRecorder->pitLaneSpline`
     pub pit_lane_spline: Option<AiSpline>,
-    /// `startingBounds` (`data/starting_bounds.ini`)
-    pub starting_bounds: Vec<(f32, f32)>,
+    /// `startingBounds` (`data/starting_bounds.ini`): ranges of AI-line point indices
+    pub starting_bounds: Vec<(u32, u32)>,
+    /// The helper nodes of the track's models (every node whose name starts with `AC_`), in
+    /// the order of the game's node tree: spawn points, timing gates, pit crew places.
+    pub helper_nodes: Vec<HelperNode>,
     /// `TrackAvatar::spawnPositions`: set name (`PIT`, `START`, `HOTLAP_START` ...) -> the
-    /// slots' matrices, already put on the ground.
-    pub spawn_positions: BTreeMap<String, Vec<Mat44f>>,
+    /// slots, as indices into [`Track::helper_nodes`] (nodes that were put on the ground).
+    pub spawn_positions: BTreeMap<String, Vec<usize>>,
 }
 
 impl Track {
