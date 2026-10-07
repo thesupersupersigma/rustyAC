@@ -80,6 +80,8 @@ pub struct ChassisEnvironment {
     pub wind: Vec3f,
     /// `PhysicsEngine::wind.speed`, m/s: the mean strength the vector swings around
     pub wind_speed: f32,
+    /// `PhysicsEngine::wind.directionDeg` (kept, nothing in the physics reads it)
+    pub wind_direction_deg: f32,
     /// `DRSManager::isDRSAvailable` of the track for this car: true on a track without DRS zones
     pub drs_zone_available: bool,
 }
@@ -112,20 +114,23 @@ impl Default for ChassisEnvironment {
             damper_gain: 1.0,
             wind: Vec3f { x: 0.0, y: 0.0, z: 0.0 },
             wind_speed: 0.0,
+            wind_direction_deg: 0.0,
             drs_zone_available: true,
         }
     }
 }
 
 impl ChassisEnvironment {
-    /// What `PhysicsEngine::setWind` @ 0x1402645a0 stores for a speed in m/s and a direction
-    /// in degrees: the vector (0, 0, speed) turned about the world's up axis. (Written as
-    /// `tools/car_oracle` writes it into the game's engine; the game's own function is called
-    /// by race code that is not ported.)
+    /// `PhysicsEngine::setWind` @ 0x1402645a0 for a speed in m/s and a direction in degrees:
+    /// the vector (0, 0, speed) turned about the world's up axis by minus the direction, as
+    /// the product with the rotation matrix the game builds (its additions of zero included).
     pub fn set_wind(&mut self, speed: f32, direction_deg: f32) {
-        let angle = -(direction_deg * 0.017453f32);
-        let (sin, cos) = (crate::math::sinf(angle), crate::math::cosf(angle));
-        self.wind = Vec3f::new(sin * speed, 0.0, cos * speed);
+        let m = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), -(direction_deg * 0.017453)).m;
+        let x = (m[1][0] * 0.0 + m[0][0] * 0.0) + m[2][0] * speed;
+        let y = (m[1][1] * 0.0 + m[0][1] * 0.0) + m[2][1] * speed;
+        let z = (m[1][2] * 0.0 + m[0][2] * 0.0) + m[2][2] * speed;
+        self.wind_direction_deg = direction_deg;
+        self.wind = Vec3f::new(x, y, z);
         self.wind_speed = speed;
     }
 
@@ -368,6 +373,9 @@ pub struct RollingChassis {
     /// The other cars' body positions (`PhysicsEngine::cars`), for the pit-lane ghosting rule;
     /// empty for a car alone.
     pub other_car_positions: Vec<Vec3f>,
+    /// The other cars' wakes (`PhysicsEngine::slipStreams` without this car's own) as their
+    /// last step left them: they thin the air this car drives in. Empty for a car alone.
+    pub other_wakes: Vec<SlipStream>,
     /// `Car::autoClutch`, `Car::autoBlip`, `Car::autoShift`, `Car::gearChanger`: they run
     /// only with a drivetrain.
     pub autoclutch: Autoclutch,
@@ -765,6 +773,7 @@ impl RollingChassis {
             has_grid_position: false,
             jump_start_events: 0,
             other_car_positions: Vec::new(),
+            other_wakes: Vec::new(),
             autoclutch: Autoclutch::default(),
             auto_blip: AutoBlip::default(),
             auto_shifter: AutoShifter::default(),
@@ -897,7 +906,10 @@ impl RollingChassis {
     /// files (`Car::initAeroMap` @ 0x140272a80). From now on the feed's `aero` hook is not
     /// called.
     pub fn install_aero(&mut self) -> Result<(), String> {
-        let (aero, slipstream) = VanillaAero::new(&self.data_path)?;
+        let (mut aero, slipstream) = VanillaAero::new(&self.data_path)?;
+        for wing in &mut aero.base.wings {
+            wing.status.front_share = super::aero::get_point_front_share(self, &wing.data.position);
+        }
         if let Some((effect_gain_mult, speed_factor_mult)) = slipstream {
             self.slip_stream.effect_gain_mult = effect_gain_mult;
             self.slip_stream.speed_factor_mult = speed_factor_mult;
@@ -1201,8 +1213,10 @@ impl RollingChassis {
             self.force_position(&Vec3f::new(m[3][0], m[3][1], m[3][2]));
         }
 
-        // Car::updateAirPressure: a car alone has no wake to drive in
-        self.update_air_pressure(&[]);
+        // Car::updateAirPressure: the other cars' wakes thin the air (a car alone has none)
+        let wakes = std::mem::take(&mut self.other_wakes);
+        self.update_air_pressure(&wakes);
+        self.other_wakes = wakes;
 
         // fuel burn, from what the engine did in the step before
         let engine = match &self.drivetrain {

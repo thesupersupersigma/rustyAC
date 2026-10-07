@@ -218,9 +218,9 @@ pub struct SetupChange {
 }
 
 /// AC's `SetupManager` (0x50 bytes), the items connected to values of the ported systems.
-/// Items of systems that are not ported (the wings, the four-wheel-drive differentials, the
-/// force-feedback gain) are left out; the items of brakes, drivetrain and engine exist in a
-/// car that has those systems.
+/// Items of systems that are not ported (the four-wheel-drive differentials, the
+/// force-feedback gain) are left out; the items of wings, brakes, drivetrain and engine exist
+/// in a car that has those systems.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SetupManager {
     /// `items`, in the order `SetupManager::initItems` registers them.

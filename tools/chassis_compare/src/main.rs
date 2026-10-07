@@ -1738,7 +1738,17 @@ const WC_ABS1: [(&str, &str, &str, &str); 5] = [
     ("electronics.ini", "ABS_V2", "CHANNELS", "1"),
 ];
 
+/// The F2004 with the old one-body aero (`aero.ini [DATA]`, no wings), which no shipped car
+/// uses: body drag with its sideways and vertical factors, the torque against the body's
+/// rotation, lift split front / rear.
+const WC_OLDAERO_FILES: [(&str, &str); 1] = [(
+    "aero.ini",
+    "[HEADER]\r\nVERSION=1\r\n\r\n[DATA]\r\nREFERENCE_AREA=1.4\r\nCD=0.95\r\nCL=1.8\r\nFRONT_SHARE=0.42\r\nCDX=0.3\r\n\
+     CDY=2.0\r\n",
+)];
+
 fn test_car_command() -> Result<(), String> {
+    write_test_car("f2004_wc_oldaero", &[], &WC_OLDAERO_FILES)?;
     write_test_car("f2004_wc_aids", &WC_AIDS, &WC_AIDS_FILES)?;
     write_test_car("f2004_wc_abs1", &WC_ABS1, &[])?;
     write_test_car("f2004_tight_stops", &TIGHT_STOPS, &[])?;

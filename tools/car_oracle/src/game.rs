@@ -32,6 +32,7 @@ const VA_DWORLDSTEP: usize = 0x1_4034_04c0; // dWorldStep(dWorldID, float)
 const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryRequirements
 const VA_STEP_STAGE0_JOINTS: usize = 0x1_4035_0b80; // dxStepIsland_Stage0_Joints (runs right after gravity and the gyroscopic torque were added)
 const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(float)
+const VA_PHYSICS_ENGINE_SET_WIND: usize = 0x1_4026_45a0; // PhysicsEngine::setWind(Speed, float)
 const VA_CAR_RESET_SUSPENSION_DAMAGE: usize = 0x1_4027_5970; // Car::resetSuspensionDamageLevel()
 const VA_TYRE_SET_COMPOUND: usize = 0x1_4028_34e0; // bool Tyre::setCompound(int index)
 const VA_SETUP_MANAGER_STEP: usize = 0x1_4028_d090; // SetupManager::step(float dt)
@@ -1135,14 +1136,10 @@ impl<'a> World<'a> {
                 wr(surface, SD_IS_PITLANE, 1u8);
             }
             if scenario.whole.wind_speed != 0.0 {
-                // what PhysicsEngine::setWind stores: the vector (0, 0, speed) turned about the
-                // world's up axis, the speed and the direction (the header holds the vector)
-                let angle = -(scenario.whole.wind_direction_deg * 0.017453f32);
-                let (sin, cos) = (rustyac_physics::math::sinf(angle), rustyac_physics::math::cosf(angle));
-                let speed = scenario.whole.wind_speed;
-                wr(engine, PE_WIND, [sin * speed, 0.0f32, cos * speed]);
-                wr(engine, PE_WIND + 0xc, speed);
-                wr(engine, PE_WIND + 0x10, scenario.whole.wind_direction_deg);
+                // the game's own PhysicsEngine::setWind(Speed, float): the speed is a one-float
+                // struct passed by value (in edx), the direction is the third argument
+                let set_wind: extern "C" fn(*mut u8, u32, f32) = std::mem::transmute(acs.va(VA_PHYSICS_ENGINE_SET_WIND));
+                set_wind(engine, scenario.whole.wind_speed.to_bits(), scenario.whole.wind_direction_deg);
             }
 
             if scenario.floor {

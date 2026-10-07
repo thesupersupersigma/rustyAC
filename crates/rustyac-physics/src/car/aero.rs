@@ -554,6 +554,12 @@ impl Drs {
         if ini.has_section("HEADER") {
             version = ini.get_int("HEADER", "VERSION")?;
         }
+        if ini.has_section("DRS_ZONES") {
+            drs.ignore_zones = ini.get_int("DRS_ZONES", "IGNORE_ZONES")? != 0;
+        }
+        if ini.has_section("DEACTIVATION") {
+            drs.limit_g = ini.get_float("DEACTIVATION", "LIMIT_G")?;
+        }
         for index in 0..wing_count {
             let section = format!("WING_{index}");
             if !ini.has_section(&section) {
@@ -573,12 +579,6 @@ impl Drs {
             }
             drs.wings.push(connection);
             drs.is_present = true;
-        }
-        if ini.has_section("DRS_ZONES") {
-            drs.ignore_zones = ini.get_int("DRS_ZONES", "IGNORE_ZONES")? != 0;
-        }
-        if ini.has_section("DEACTIVATION") {
-            drs.limit_g = ini.get_float("DEACTIVATION", "LIMIT_G")?;
         }
         Ok(drs)
     }
@@ -621,7 +621,16 @@ impl Drs {
 /// telemetry reads the wings' states and the DRS flags.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AeroBase {
-    /// `AeroMap::dynamicCD`: written by the old one-coefficient format only
+    /// `AeroMap::referenceArea`, `CD`, `CL`, `frontShare`, `CDX`, `CDY`, `CDA`: the old
+    /// one-body format (`aero.ini [DATA]`, a car without `[WING_n]`); unused with wings
+    pub reference_area: f32,
+    pub cd: f32,
+    pub cl: f32,
+    pub front_share: f32,
+    pub cdx: f32,
+    pub cdy: f32,
+    pub cda: f32,
+    /// `AeroMap::dynamicCD`: written by the old one-body format only
     pub dynamic_cd: f32,
     /// `AeroMap::dynamicCL`
     pub dynamic_cl: f32,
@@ -631,6 +640,74 @@ pub struct AeroBase {
     pub wings: Vec<Wing>,
     /// `Car::drs`
     pub drs: Drs,
+}
+
+impl AeroBase {
+    /// `AeroMap::addDrag` @ 0x1402b5860 (the old one-body format): drag along the air speed,
+    /// more of it when the car moves sideways or vertically, and a torque against the body's
+    /// rotation. `v` is the body's velocity in its own axes (no wind here).
+    fn add_drag(&mut self, car: &mut RollingChassis, v: &Vec3f) {
+        let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
+        if !(squared < 0.0 || squared > 0.0) {
+            return;
+        }
+        let (mut nx, mut ny, mut nz) = (v.x, v.y, v.z);
+        let length = sqrtf((ny * ny + nx * nx) + nz * nz);
+        if length < 0.0 || length > 0.0 {
+            let inverse = 1.0 / length;
+            nx *= inverse;
+            ny *= inverse;
+            nz *= inverse;
+        }
+        let cd = self.cd;
+        let sideways = (nx.abs() * cd) * self.cdx;
+        let vertical = (ny.abs() * cd) * self.cdy;
+        self.dynamic_cd = (sideways + cd) + vertical;
+        let force = -((((self.dynamic_cd * squared) * self.air_density) * self.reference_area) * 0.5);
+        let previous = std::mem::replace(&mut car.core.source, ForceSource::AeroDrag);
+        car.core.add_local_force(car.body, &Vec3f::new(force * nx, force * ny, nz * force));
+        // the game hands the world-axes spin to a body-axes torque call as it is
+        let w = car.core.get_angular_velocity(car.body);
+        let spin = (w.x * w.x + w.y * w.y) + w.z * w.z;
+        if spin < 0.0 || spin > 0.0 {
+            let (mut wx, mut wy, mut wz) = (w.x, w.y, w.z);
+            let length = sqrtf(spin);
+            if length < 0.0 || length > 0.0 {
+                let inverse = 1.0 / length;
+                wx *= inverse;
+                wy *= inverse;
+                wz *= inverse;
+            }
+            let against = -spin;
+            let torque = Vec3f::new((wx * against) * self.cda, (wy * against) * self.cda, (wz * against) * self.cda);
+            car.core.add_local_torque(car.body, &torque);
+        }
+        car.core.source = previous;
+    }
+
+    /// `AeroMap::addLift` @ 0x1402b5a90 (the old one-body format): downforce from the forward
+    /// speed, split front / rear (both parts act at the body's origin: the two application
+    /// points are never set).
+    fn add_lift(&mut self, car: &mut RollingChassis, v: &Vec3f) {
+        let squared = v.z * v.z;
+        let lift = (((squared * self.cl) * self.air_density) * self.reference_area) * 0.5;
+        if !(squared < 0.0 || squared > 0.0) {
+            return;
+        }
+        let origin = Vec3f::new(0.0, 0.0, 0.0);
+        let previous = std::mem::replace(&mut car.core.source, ForceSource::AeroLift);
+        car.core.add_local_force_at_local_pos(car.body, &Vec3f::new(0.0, -(lift * self.front_share), 0.0), &origin);
+        car.core.add_local_force_at_local_pos(car.body, &Vec3f::new(0.0, -((1.0 - self.front_share) * lift), 0.0), &origin);
+        car.core.source = previous;
+    }
+}
+
+/// `RaceEngineer::getPointFrontShare` @ 0x14027c4d0: where a point of the body lies between
+/// the axles, 1 at the front axle and 0 at the rear (a display value of each wing).
+pub fn get_point_front_share(car: &RollingChassis, p: &Vec3f) -> f32 {
+    let front = car.suspensions[0].get_base_position().z;
+    let rear = car.suspensions[2].get_base_position().z;
+    1.0 - (p.z - front) / (rear - front)
 }
 
 /// The aero slot: everything between "the air and the car's motion" and "forces on the car
@@ -665,7 +742,9 @@ impl VanillaAero {
     pub fn new(data_path: &Path) -> Result<(VanillaAero, Option<(f32, f32)>), String> {
         let path = data_path.join("aero.ini");
         let ini = IniReader::load(&path)?;
-        let mut base = AeroBase { air_density: 1.221, ..AeroBase::default() };
+        // AeroMap::init's values
+        let mut base =
+            AeroBase { reference_area: 1.0, front_share: 0.5, cda: 0.1, air_density: 1.221, ..AeroBase::default() };
         let mut slipstream = None;
         if ini.has_section("SLIPSTREAM") {
             slipstream = Some((
@@ -673,7 +752,6 @@ impl VanillaAero {
                 ini.get_float("SLIPSTREAM", "SPEED_FACTOR_MULT")?,
             ));
         }
-        let version = ini.get_int("HEADER", "VERSION")?;
         for (prefix, vertical) in [("WING", false), ("FIN", true)] {
             let mut index = 0;
             loop {
@@ -681,17 +759,22 @@ impl VanillaAero {
                 if !ini.has_section(&section) {
                     break;
                 }
-                base.wings.push(load_wing(&ini, data_path, &section, version, vertical)?);
+                base.wings.push(load_wing(&ini, data_path, &section, vertical)?);
                 index += 1;
             }
         }
         if base.wings.is_empty() {
-            return Err(format!(
-                "{}: no [WING_n]: the old one-coefficient format ([DATA]) is not ported (no car in cardata uses it)",
-                path.display()
-            ));
-        }
-        if ini.has_section("DATA") {
+            // the old one-body format: six numbers, a missing one reads 0
+            if !ini.has_section("DATA") {
+                return Err(format!("{}: aero.ini does not contain WINGS nor DATA", path.display()));
+            }
+            base.reference_area = ini.get_float("DATA", "REFERENCE_AREA")?;
+            base.cd = ini.get_float("DATA", "CD")?;
+            base.cl = ini.get_float("DATA", "CL")?;
+            base.front_share = ini.get_float("DATA", "FRONT_SHARE")?;
+            base.cdx = ini.get_float("DATA", "CDX")?;
+            base.cdy = ini.get_float("DATA", "CDY")?;
+        } else if ini.has_section("DATA") {
             return Err(format!("{}: aero.ini contains DATA with WINGS, which is redundant", path.display()));
         }
         let mut index = 0;
@@ -717,13 +800,14 @@ impl VanillaAero {
 }
 
 /// `Wing::Wing(Car*, INIReader&, int, bool)` @ 0x1402b1340.
-fn load_wing(ini: &IniReader, data_path: &Path, section: &str, version: i32, vertical: bool) -> Result<Wing, String> {
+fn load_wing(ini: &IniReader, data_path: &Path, section: &str, vertical: bool) -> Result<Wing, String> {
     let mut wing = Wing::default();
     wing.speed_damage_coeff = 300.0;
     wing.surface_damage_coeff = 300.0;
     wing.status.angle_mult = 1.0;
+    // `status.isVertical` stays false in the wing itself: only the copy `AeroMap::getWingStatus`
+    // hands out gets `data.isVertical`
     wing.data.is_vertical = vertical;
-    wing.status.is_vertical = vertical;
     wing.data.name = ini.get_string(section, "NAME");
     wing.data.chord = ini.get_float(section, "CHORD")?;
     wing.data.span = ini.get_float(section, "SPAN")?;
@@ -740,14 +824,16 @@ fn load_wing(ini: &IniReader, data_path: &Path, section: &str, version: i32, ver
     if gh_cd.is_file() {
         wing.data.lut_gh_cd.load(&gh_cd)?;
     }
-    wing.data.cl_gain = ini.get_float(section, "CL_GAIN")?;
     wing.data.cd_gain = ini.get_float(section, "CD_GAIN")?;
+    wing.data.cl_gain = ini.get_float(section, "CL_GAIN")?;
     wing.status.angle = ini.get_float(section, "ANGLE")?;
     wing.status.input_angle = wing.status.angle;
+    // the file's version is read here, once per wing
+    let version = ini.get_int("HEADER", "VERSION")?;
     if version >= 2 {
         for (zone, name) in ["FRONT", "REAR", "LEFT", "RIGHT"].iter().enumerate() {
-            wing.damage_cl[zone] = ini.get_float(section, &format!("ZONE_{name}_CL"))?;
             wing.damage_cd[zone] = ini.get_float(section, &format!("ZONE_{name}_CD"))?;
+            wing.damage_cl[zone] = ini.get_float(section, &format!("ZONE_{name}_CL"))?;
         }
         wing.has_damage = true;
     }
@@ -791,7 +877,12 @@ impl AeroModel for VanillaAero {
         // 6: DRS
         let zone_available = car.env.drs_zone_available;
         base.drs.step(car, &mut base.wings, zone_available);
-        // 7: AeroMap::step
+        // 7: AeroMap::step. A car without wings has the old one-body aero.
+        if base.wings.is_empty() {
+            let v = car.core.get_local_velocity(car.body);
+            base.add_drag(car, &v);
+            base.add_lift(car, &v);
+        }
         let air_density = base.air_density;
         for wing in &mut base.wings {
             wing.step(car, air_density);

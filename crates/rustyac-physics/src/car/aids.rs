@@ -28,8 +28,10 @@ use crate::vecmath::Vec3f;
 /// The level table shared by traction control and ABS: `valueCurve` with `currentMode`.
 fn find_mode(curve: &Curve, slip_ratio_limit: f32) -> u32 {
     // the first level whose table value is exactly the car file's limit; 0 when none is
+    // (`ucomiss` + `je`: a table value that is not a number also counts as a match)
     for index in 0..curve.get_count() {
-        if curve.get_value(index as f32) == slip_ratio_limit {
+        let value = curve.get_value(index as f32);
+        if !(value < slip_ratio_limit || value > slip_ratio_limit) {
             return index as u32;
         }
     }
@@ -432,8 +434,8 @@ impl Edl {
         edl.is_active = ini.get_int("EDL", "ACTIVE")? != 0;
         edl.brake_torque_power = ini.get_float("EDL", "BRAKE_TORQUE_POWER")?;
         edl.brake_torque_coast = ini.get_float("EDL", "BRAKE_TORQUE_COAST")?;
-        edl.dead_zone_power = ini.get_float("EDL", "DEAD_ZONE_POWER")?;
         edl.dead_zone_coast = ini.get_float("EDL", "DEAD_ZONE_COAST")?;
+        edl.dead_zone_power = ini.get_float("EDL", "DEAD_ZONE_POWER")?;
         edl.wheel_speed_gain_power = 1.0 / (ini.get_float("EDL", "MAX_SPIN_POWER")? - edl.dead_zone_power);
         edl.wheel_speed_gain_coast = 1.0 / (ini.get_float("EDL", "MAX_SPIN_COAST")? - edl.dead_zone_coast);
         if !edl.wheel_speed_gain_power.is_finite() || !edl.wheel_speed_gain_coast.is_finite() {
@@ -658,6 +660,30 @@ pub struct AidsBase {
     pub stability_control: StabilityControl,
     /// `Car::speedLimiter`
     pub speed_limiter: SpeedLimiter,
+}
+
+impl AidsBase {
+    /// What the game's options (`cfg/assists.ini [ASSISTS]`, applied to the player's car by
+    /// `DrivingAssistManager::DrivingAssistManager` @ 0x1400fbd90 through three jobs for the
+    /// physics thread) do to the aids when a session starts. `abs` and `traction_control`:
+    /// 0 = off (not active, not present), 1 = factory (active; present as the car's file
+    /// says), 2 = on (active and present, also on a car that does not have the aid).
+    /// `stability_percent`: 0 to 100. Read from the listing, not run: the recordings are made
+    /// without that manager, so there the car's file decides alone.
+    pub fn apply_driving_assists(&mut self, abs: i32, traction_control: i32, stability_percent: f32) {
+        let on = abs != 0;
+        self.abs.is_active = on;
+        if abs == 0 || abs == 2 {
+            self.abs.is_present = on;
+        }
+        let on = traction_control != 0;
+        self.traction_control.is_active = on;
+        if traction_control == 0 || traction_control == 2 {
+            self.traction_control.is_present = on;
+        }
+        let gain = stability_percent * 0.01;
+        self.stability_control.gain = if 0.0 < gain { gain } else { 0.0 };
+    }
 }
 
 /// The aids slot.
