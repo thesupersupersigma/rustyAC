@@ -40,6 +40,11 @@ const VA_CAR_LOCK_CONTROLS_UNTIL: usize = 0x1_4027_4600; // Car::lockControlsUnt
 const VA_CAR_ADD_PENALTY: usize = 0x1_4026_f6a0; // Car::addPenalty(double)
 const CAR_IS_GENTLE_STOPPING: usize = 0x3a81;
 const PE_PENALTY_MODE: usize = 0xd4;
+const PE_ALLOWED_TYRES_OUT: usize = 0xd0;
+const VA_TRACK_ADD_TIME_LINE: usize = 0x1_4027_8040; // Track::addTimeLine(const vec3f& p0, const vec3f& p1, int type)
+const CAR_TRANSPONDER: usize = 0x1f8;
+const CAR_SPLINE_LOCATOR_DATA: usize = 0x3ad0;
+const CAR_SPLINE_LOCATOR: usize = 0x3e38;
 const VA_CAR_RESET_SUSPENSION_DAMAGE: usize = 0x1_4027_5970; // Car::resetSuspensionDamageLevel()
 const VA_TYRE_SET_COMPOUND: usize = 0x1_4028_34e0; // bool Tyre::setCompound(int index)
 const VA_SETUP_MANAGER_STEP: usize = 0x1_4028_d090; // SetupManager::step(float dt)
@@ -396,6 +401,86 @@ struct State {
     /// How often ODE started on an island (one island holds the whole car).
     islands: u32,
     image_base: usize,
+    /// The real track of a track scenario, and what each tyre's ray found in this step.
+    game_track: Option<&'static crate::track::GameTrack>,
+    ray_hits: [RayRecord; 4],
+}
+
+/// What a tyre's own ray caster answered in a step.
+#[derive(Clone, Copy, Default)]
+struct RayRecord {
+    hit: bool,
+    pos: V3,
+    normal: V3,
+    /// Index of the mesh that was hit, -1 for none.
+    mesh: i32,
+}
+
+/// The game's `RayCastHit` (0x28 bytes).
+#[repr(C)]
+struct RayCastHit {
+    pos: V3,
+    normal: V3,
+    collision_object: *mut u8,
+    has_contact: u8,
+}
+
+/// `Track::createRayCaster` of the game, kept when the track's vtable entry is replaced.
+static mut CREATE_RAY_CASTER_ORIGINAL: usize = 0;
+
+/// `IRayTrackCollisionProvider::createRayCaster` of a real track: the game's own ray caster
+/// behind a wrapper that notes what every ray finds.
+extern "C" fn wrapped_create_ray_caster(this: *mut u8, length: f32) -> *mut u8 {
+    unsafe {
+        let original: extern "C" fn(*mut u8, f32) -> *mut u8 = std::mem::transmute(CREATE_RAY_CASTER_ORIGINAL);
+        let real = original(this, length);
+        // IRayCaster: +0x00 destructor, +0x08 rayCast, +0x10 release
+        let table: Vec<usize> =
+            vec![device_destructor as *const () as usize, wrapped_ray_cast as *const () as usize, wrapped_release as *const () as usize];
+        let wrapper = object(0x18);
+        wr(wrapper, 0, leak(table));
+        wr(wrapper, 8, real);
+        wrapper
+    }
+}
+
+extern "C" fn wrapped_release(_this: *mut u8) {}
+
+/// `IRayCaster::rayCast`: the game's `RayCaster::rayCast` (its ODE ray against the track's
+/// meshes), with the answer noted for the tyre that asked.
+extern "C" fn wrapped_ray_cast(this: *mut u8, out: *mut RayCastHit, org: *const V3, dir: *const V3) -> *mut RayCastHit {
+    unsafe {
+        let real: *mut u8 = rd(this, 8);
+        let table: *const usize = rd(real, 0);
+        let ray_cast: extern "C" fn(*mut u8, *mut RayCastHit, *const V3, *const V3) -> *mut RayCastHit = std::mem::transmute(*table.add(1));
+        let result = ray_cast(real, out, org, dir);
+        let st = state();
+        if let (Some(wheel), Some(track)) = (st.tyre, st.game_track) {
+            let hit = (*out).has_contact != 0;
+            let mut record = RayRecord { hit, mesh: -1, ..RayRecord::default() };
+            let capture = &mut st.tyres[wheel];
+            capture.asked[3] += 1;
+            let input = capture.input.as_mut().unwrap();
+            input.has_hit = hit;
+            if hit {
+                record.pos = (*out).pos;
+                record.normal = (*out).normal;
+                record.mesh = track.index_of.get(&((*out).collision_object as usize)).map(|i| *i as i32).unwrap_or(-2);
+                input.ground_y = (*out).pos[1];
+                input.ground_normal = (*out).normal;
+                // the surface the tyre will read through the hit object's user pointer
+                let surface = crate::track::read_surface_def(track.surface_of((*out).collision_object));
+                input.grip_mod = surface.grip_mod;
+                input.dirt_additive_k = surface.dirt_additive_k;
+                input.sin_height = surface.sin_height;
+                input.sin_length = surface.sin_length;
+                input.damping = surface.damping;
+                input.granularity = surface.granularity;
+            }
+            st.ray_hits[wheel] = record;
+        }
+        result
+    }
 }
 
 struct Global(UnsafeCell<Option<State>>);
@@ -990,6 +1075,8 @@ pub struct Options {
     /// Only build the car, apply the session-start setup and let the game's own
     /// `SetupManager::step` report what changes (for comparing with a real game log).
     pub setup_check: bool,
+    /// A track folder: the game's own track with its collision meshes instead of the flat road.
+    pub track: Option<std::path::PathBuf>,
 }
 
 /// One car on the fake track, ready to be stepped.
@@ -1010,6 +1097,8 @@ pub struct World<'a> {
     /// The scenario is one of the whole-car scenarios: the DRS button and more values of the
     /// wings and the aids are recorded.
     whole: bool,
+    /// Header lines of a track scenario (the track, the spawn).
+    pub track_meta: Vec<(String, String)>,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1137,6 +1226,64 @@ impl<'a> World<'a> {
         unsafe {
             let engine = new_engine(acs, scenario.seed);
 
+            let mut game_track: Option<&'static crate::track::GameTrack> = None;
+            let mut spawn: (V3, V3) = ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+            let mut armed = false;
+            let mut track_meta: Vec<(String, String)> = Vec::new();
+            let mut driver = scenario.driver();
+            let (track, surface) = if let Some(folder) = &options.track {
+                let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
+                // the game's own Track, surfaces, collision meshes and AI line; every mesh a
+                // ghost to the car's body
+                let mut built = crate::track::GameTrack::build(acs, engine, folder, true).expect("the track");
+                assert!(built.surface_mismatches.is_empty(), "the game's surfaces differ from the port's: {:?}", built.surface_mismatches);
+                // TrackAvatar::initTimeLines: the gates between the nodes AC_TIME_n_L / _R, from
+                // the nodes' own matrices
+                let place = |name: &str| -> Option<V3> {
+                    let m = built.rust.helper_nodes.iter().find(|h| h.name == name)?.local.m;
+                    Some([m[3][0], m[3][1], m[3][2]])
+                };
+                let add_time_line: extern "C" fn(*mut u8, *const V3, *const V3, i32) = std::mem::transmute(acs.va(VA_TRACK_ADD_TIME_LINE));
+                let mut lines = 0;
+                while let (Some(left), Some(right)) = (place(&format!("AC_TIME_{lines}_L")), place(&format!("AC_TIME_{lines}_R"))) {
+                    add_time_line(built.track, &left, &right, 0);
+                    lines += 1;
+                }
+                assert_eq!(lines, built.rust.time_lines.len(), "the port found other timing lines");
+                // a session that is not a race, with penalties on: leaving the track with more
+                // than two tyres costs the lap (RaceManager::setCurrentSession / initOffline)
+                wr(engine, PE_PENALTY_MODE, 1i32);
+                wr(engine, PE_ALLOWED_TYRES_OUT, 2i32);
+                let (position, tail, is_armed, note) = crate::track_driver::spawn(kind, &mut built.rust).expect("the scenario's spawn point");
+                spawn = ([position.x, position.y, position.z], [tail.x, tail.y, tail.z]);
+                armed = is_armed;
+                // every tyre's ray caster is the game's, behind a wrapper that notes the hits
+                let original: *const usize = rd(built.track, 0);
+                CREATE_RAY_CASTER_ORIGINAL = *original.add(3);
+                let mut table: Vec<usize> = (0..5).map(|i| *original.offset(i as isize - 1)).collect();
+                table[1 + 3] = wrapped_create_ray_caster as *const () as usize;
+                wr(built.track, 0, leak(table).add(1));
+                let hex = |v: &V3| v.map(|x| format!("{:08x}", x.to_bits())).join(",");
+                track_meta = vec![
+                    ("track".to_string(), built.rust.name.clone()),
+                    ("track_folder".to_string(), folder.display().to_string()),
+                    ("spawn".to_string(), note),
+                    ("spawn_position".to_string(), hex(&spawn.0)),
+                    ("spawn_tail".to_string(), hex(&spawn.1)),
+                    ("armed".to_string(), (armed as u8).to_string()),
+                    ("allowed_tyres_out".to_string(), "2".to_string()),
+                    ("track_meshes".to_string(), built.rust.surfaces.len().to_string()),
+                    ("track_ai_length".to_string(), format!("{:08x}", built.rust.length().to_bits())),
+                ];
+                driver.track = Some(std::sync::Arc::new(built.rust.clone()));
+                // what a tyre's capture starts from in a step without a hit
+                let surface = object(SURFACE_SIZE);
+                wr(surface, SD_GRIP_MOD, 1.0f32);
+                wr(surface, SD_IS_VALID_TRACK, 1u8);
+                let built: &'static crate::track::GameTrack = Box::leak(Box::new(built));
+                game_track = Some(built);
+                (built.track, surface)
+            } else {
             let track = acs.alloc(TRACK_SIZE);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 =
                 std::mem::transmute(acs.va(VA_TRACK_CTOR));
@@ -1181,6 +1328,8 @@ impl<'a> World<'a> {
             table[1 + 1] = track_ray_cast as *const () as usize;
             table[1 + 3] = track_create_ray_caster as *const () as usize;
             wr(track, 0, leak(table).add(1));
+            (track, surface)
+            };
 
             *STATE.0.get() = Some(State {
                 car: std::ptr::null_mut(),
@@ -1211,6 +1360,8 @@ impl<'a> World<'a> {
                 world_steps: 0,
                 islands: 0,
                 image_base: acs.va(crate::acs::GHIDRA_BASE),
+                game_track,
+                ray_hits: [RayRecord::default(); 4],
             });
 
             let car = acs.alloc(CAR_SIZE);
@@ -1292,7 +1443,7 @@ impl<'a> World<'a> {
                 acs,
                 engine,
                 car,
-                driver: scenario.driver(),
+                driver,
                 step_index: 0,
                 telemetry_writer: object(SMW_SIZE),
                 avatar: object(AVATAR_SIZE),
@@ -1300,7 +1451,12 @@ impl<'a> World<'a> {
                 setup_changes: Vec::new(),
                 powertrain: scenario.powertrain,
                 whole: scenario.whole.on,
+                track_meta,
             };
+            if armed {
+                // RaceManager::initOffline -> CarAvatar::armFirstLap in a hot-lap session
+                wr(car, CAR_TRANSPONDER + 0x80, 1u8);
+            }
             if options.setup_check {
                 // no recording: just what the session start does to this car's setup, reported
                 // by the game's own SetupManager::step on its (visible) standard output
@@ -1331,8 +1487,8 @@ impl<'a> World<'a> {
             let force_position: extern "C" fn(*mut u8, *const V3, u8) =
                 std::mem::transmute(acs.va(VA_CAR_FORCE_POSITION));
             // spawned the way the game spawns a car
-            force_rotation(car, &[0.0, 0.0, -1.0]);
-            force_position(car, &[0.0, 0.0, 0.0], 1);
+            force_rotation(car, &spawn.1);
+            force_position(car, &spawn.0, 1);
             let set_damage_level: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_SET_DAMAGE_LEVEL));
             set_damage_level(car, 0.0);
             let reset_suspension_damage: extern "C" fn(*mut u8) =
@@ -1506,6 +1662,64 @@ impl<'a> World<'a> {
         state().bodies.iter().map(|b| b.name.clone()).collect()
     }
 
+    /// The scripted driver gave up: the car left the track for good.
+    pub fn ended(&self) -> bool {
+        self.driver.follower.ended
+    }
+
+    /// What a track scenario records on top: every tyre's ray, the lap timer, the lap
+    /// invalidator, the place along the AI line.
+    unsafe fn emit_track(&self, row: &mut Row, track: &crate::track::GameTrack) {
+        let st = state();
+        let car = self.car;
+        for (w, wheel) in WHEELS.iter().enumerate() {
+            let ray = st.ray_hits[w];
+            row.i(&format!("ray.{wheel}.hit"), ray.hit as i32);
+            row.v(&format!("ray.{wheel}.pos"), &ray.pos);
+            row.v(&format!("ray.{wheel}.normal"), &ray.normal);
+            row.i(&format!("ray.{wheel}.mesh"), ray.mesh);
+            // the surface the tyre stands on after its step, as the mesh it belongs to
+            let surface: *const u8 = rd(car, CAR_TYRES + w * TYRE_SIZE + T_SURFACE_DEF);
+            let mesh = if surface.is_null() { -1 } else { track.surface_index_of.get(&(surface as usize)).map(|i| *i as i32).unwrap_or(-2) };
+            row.i(&format!("tyre.{wheel}.surfaceMesh"), mesh);
+        }
+        let tp = car.add(CAR_TRANSPONDER);
+        row.i("transponder.t", rd(tp, 0x00));
+        row.i("transponder.lastLap", rd(tp, 0x04));
+        row.i("transponder.bestLap", rd(tp, 0x08));
+        row.i("transponder.lapCount", rd(tp, 0x0c));
+        row.i("transponder.finishLinePassed", rd::<u8>(tp, 0x10) as i32);
+        row.i("transponder.wasLastLapValid", rd::<u8>(tp, 0x11) as i32);
+        row.i("transponder.cuts", rd(tp, 0x84));
+        let status: *const u8 = rd(tp, 0x18);
+        let current: *const u32 = rd(tp, 0x60);
+        let last: *const u32 = rd(tp, 0x30);
+        for k in 0..track.rust.time_lines.len() {
+            row.i(&format!("transponder.status.{k}.isValid"), rd::<u8>(status, 12 * k) as i32);
+            row.i(&format!("transponder.status.{k}.lastResponse"), rd(status, 12 * k + 4));
+            row.i(&format!("transponder.status.{k}.lastTime"), rd(status, 12 * k + 8));
+            row.i(&format!("transponder.currentSplits.{k}"), *current.add(k) as i32);
+            row.i(&format!("transponder.lastLapSplits.{k}"), *last.add(k) as i32);
+        }
+        let invalidator = car.add(CAR_LAP_INVALIDATOR);
+        row.i("lapInvalidator.currentTyresOut", rd(invalidator, 0x10));
+        row.i("lapInvalidator.isInPenaltyZone", rd::<u8>(invalidator, 0x14) as i32);
+        let locator = car.add(CAR_SPLINE_LOCATOR);
+        row.i("splineLocator.currentIndex", rd(locator, 0x10));
+        row.f("splineLocator.normalizedPos", rd(locator, 0x20));
+        row.f("splineLocator.offset", rd(locator, 0x24));
+        row.i("splineLocator.isOutsideLimits", rd::<u8>(locator, 0x28) as i32);
+        let data = car.add(CAR_SPLINE_LOCATOR_DATA);
+        row.f("splineData.npos", rd(data, 0x00));
+        row.f("splineData.lateralOffset", rd(data, 0x08));
+        row.f("splineData.splineLength", rd(data, 0x0c));
+        row.f("splineData.sides.0", rd(data, 0x10));
+        row.f("splineData.sides.1", rd(data, 0x14));
+        row.f("splineData.sidesFromIL.0", rd(data, 0x18));
+        row.f("splineData.sidesFromIL.1", rd(data, 0x1c));
+        row.f("splineData.sideVelocity", rd(data, 0x20));
+    }
+
     fn view(&self) -> CarView {
         unsafe {
             let car = self.car;
@@ -1519,7 +1733,16 @@ impl<'a> World<'a> {
             // rear (driven) wheel radius: TyreStatus::effectiveRadius of the left rear tyre
             let radius: f32 = rd(car, CAR_TYRES + 2 * TYRE_SIZE + T_STATUS + 0x54);
             let ratio = rd::<f64>(car, CAR_DRIVETRAIN + 0xc0) as f32;
+            let pos = v3(body, B_POS);
+            let lock: f32 = rd(car, CAR_STEER_LOCK);
+            let steer_ratio: f32 = rd(car, CAR_STEER_RATIO);
             CarView {
+                position: pos,
+                forward: [r[2], r[6], r[10]],
+                left: [r[0], r[4], r[8]],
+                npos: if self.step_index == 0 { -1.0 } else { rd(car, CAR_SPLINE_LOCATOR_DATA) },
+                offset: rd(car, CAR_SPLINE_LOCATOR + 0x24),
+                max_wheel_angle: if steer_ratio != 0.0 { (lock / steer_ratio).to_radians() } else { 0.3 },
                 step: self.step_index,
                 speed,
                 road_rpm: if radius > 0.0 { speed / radius * ratio.abs() * 9.549_296_6 } else { 0.0 },
@@ -1537,7 +1760,18 @@ impl<'a> World<'a> {
         let st = state();
         st.controls = controls;
         st.polled = 0;
+        if controls.teleport != 0 {
+            // what the game's main thread queues for a teleport (CarAvatar::forcePosition),
+            // with or without spoiling the lap; its body calls are not part of the step's tape
+            unsafe {
+                let force_rotation: extern "C" fn(*mut u8, *const V3) = std::mem::transmute(self.acs.va(VA_CAR_FORCE_ROTATION));
+                let force_position: extern "C" fn(*mut u8, *const V3, u8) = std::mem::transmute(self.acs.va(VA_CAR_FORCE_POSITION));
+                force_rotation(self.car, &controls.teleport_tail);
+                force_position(self.car, &controls.teleport_position, (controls.teleport == 2) as u8);
+            }
+        }
         st.tape.clear();
+        st.ray_hits = [RayRecord::default(); 4];
         for capture in &mut st.tyres {
             *capture = TyreCapture::default();
         }
@@ -1602,7 +1836,15 @@ impl<'a> World<'a> {
         let mut row = Row::new(naming);
         row.i("step", self.step_index as i32);
         row.d("time_ms", time_ms);
-        unsafe { self.emit(&mut row, &controls) };
+        unsafe {
+            self.emit(&mut row, &controls);
+            if let Some(track) = state().game_track {
+                row.i("script.teleport", controls.teleport);
+                row.v("script.teleportPosition", &controls.teleport_position);
+                row.v("script.teleportTail", &controls.teleport_tail);
+                self.emit_track(&mut row, track);
+            }
+        }
         let calls = std::mem::take(&mut state().tape);
         self.step_index += 1;
         (row, calls)

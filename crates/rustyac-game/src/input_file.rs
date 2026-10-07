@@ -201,6 +201,7 @@ impl SimSetup {
             damage: oracle.damage,
             auto_clutch: self.auto_clutch,
             auto_shifter: self.auto_shifter,
+            track: None,
         })
     }
 

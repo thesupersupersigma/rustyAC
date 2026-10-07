@@ -5,6 +5,8 @@
 //! paddles to the game through the fake controls provider. Nothing here depends on wall-clock
 //! time; the only randomness is a seeded generator.
 
+pub use crate::track_driver::{Follower, TrackKind};
+
 /// Physics step, s.
 pub const DT: f32 = 0.003;
 /// Every scenario but `settle` first lets the car sit for this long with no input.
@@ -42,6 +44,12 @@ pub struct Controls {
     pub set_locked: i32,
     pub gentle_stop: i32,
     pub add_penalty: f32,
+    /// A teleport before this step, through the game's own `Car::forceRotation` and
+    /// `Car::forcePosition`: 1 = without spoiling the lap, 2 = with (0 = none), to this point
+    /// on the road and with the tail in this direction. Track scenarios only.
+    pub teleport: i32,
+    pub teleport_position: [f32; 3],
+    pub teleport_tail: [f32; 3],
 }
 
 impl Default for Controls {
@@ -62,6 +70,9 @@ impl Default for Controls {
             set_locked: 0,
             gentle_stop: 0,
             add_penalty: 0.0,
+            teleport: 0,
+            teleport_position: [0.0; 3],
+            teleport_tail: [0.0; 3],
         }
     }
 }
@@ -103,6 +114,16 @@ pub struct CarView {
     pub gear: i32,
     /// Yaw rate, rad/s, positive when the car turns right.
     pub yaw_rate: f32,
+    /// The body's position, and its forward and left axes in the world (track scenarios).
+    pub position: [f32; 3],
+    pub forward: [f32; 3],
+    pub left: [f32; 3],
+    /// The game's own place along the AI line after the last step (`splineLocatorData.npos`;
+    /// -1 before the first) and the car's offset beside it.
+    pub npos: f32,
+    pub offset: f32,
+    /// The front wheels' angle at full lock, rad.
+    pub max_wheel_angle: f32,
 }
 
 impl CarView {
@@ -206,6 +227,8 @@ enum Kind {
     WcPit,
     WcSpirited,
     WcShell,
+    /// On a real track (`--track`), following its AI line.
+    Track(TrackKind),
 }
 
 const fn seconds(s: f32) -> usize {
@@ -438,9 +461,42 @@ pub fn whole() -> Vec<Scenario> {
     ]
 }
 
+/// The scenarios on a real track (Task 12): the game's own track and collision meshes with the
+/// game's car on them, its body a ghost (only the tyres' rays meet the track). They need
+/// `--track <folder>` and are written for Spa; each ends early if the car leaves the track
+/// for good (where its body would be in a wall).
+pub fn track() -> Vec<Scenario> {
+    let on_track = |name, about, secs: f32, kind| Scenario {
+        name,
+        about,
+        steps: seconds(secs) + 1,
+        auto_clutch: true,
+        ground: Ground::Flat,
+        floor: false,
+        seed: 1,
+        auto_shifter: true,
+        powertrain: true,
+        whole: Whole { on: true, ..Whole::default() },
+        kind: Kind::Track(kind),
+    };
+    vec![
+        on_track("spa_launch", "from the hot-lap start flat out down the pit straight, then on the brakes for La Source and round it", 24.0, TrackKind::Launch),
+        on_track("spa_eau_rouge", "from 300 m before the bottom of Eau Rouge flat out through it and up Raidillon: compression, then the crest", 16.0, TrackKind::EauRouge),
+        on_track("spa_kerbs", "through the Bus Stop chicane with the inner wheels over its kerbs", 20.0, TrackKind::Kerbs),
+        on_track("spa_lap", "a lap along the AI line from the hot-lap start, as far as a minute goes", 60.0, TrackKind::Lap),
+        on_track("spa_grass", "up the Kemmel straight, the two right wheels on the grass for four seconds, then back", 16.0, TrackKind::Grass),
+        on_track(
+            "spa_timing",
+            "lap timing without driving whole laps: over the start line, then teleported (the game's own Car::forcePosition) from 60 m before one timing line to 60 m before the next, twice round all three, and a last crossing of the start line after a teleport that spoils the lap",
+            60.0,
+            TrackKind::Timing,
+        ),
+    ]
+}
+
 /// Every scenario by name.
 pub fn find(name: &str) -> Option<Scenario> {
-    all().into_iter().chain(powertrain()).chain(whole()).find(|s| s.name == name)
+    all().into_iter().chain(powertrain()).chain(whole()).chain(track()).find(|s| s.name == name)
 }
 
 /// The limiter is at 19,000 rpm; shift a little before it.
@@ -472,11 +528,24 @@ pub struct Driver {
     lever: i32,
     lever_target: i32,
     extra: [f32; 3],
+    /// The track a track scenario drives on (the Rust port of it: only its AI line is read).
+    pub track: Option<std::sync::Arc<rustyac_physics::track::Track>>,
+    pub follower: Follower,
 }
 
 impl Scenario {
+    /// Which track scenario this is, if it is one.
+    pub fn track_kind(&self) -> Option<TrackKind> {
+        match self.kind {
+            Kind::Track(kind) => Some(kind),
+            _ => None,
+        }
+    }
+
     pub fn driver(&self) -> Driver {
         Driver {
+            track: None,
+            follower: Follower::default(),
             kind: self.kind,
             auto_clutch: self.auto_clutch,
             paddle: 0,
@@ -760,6 +829,11 @@ impl Driver {
                 }
                 if at(9.3) {
                     c.set_locked = -1;
+                }
+            }
+            Kind::Track(kind) => {
+                if let Some(track) = self.track.clone() {
+                    self.follower.controls(kind, &track, car, t, &mut c);
                 }
             }
             Kind::WcSpirited => {

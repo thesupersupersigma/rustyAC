@@ -768,6 +768,61 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     out
 }
 
+/// What a car on a real track adds to the comparison, under the names of a `car_oracle run
+/// --track` recording: every tyre's ray, the surface under every tyre, the lap timer, the lap
+/// invalidator and the place along the AI line. Empty for a car on the analytic road.
+pub fn track_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    let Some(track) = &chassis.track else { return out };
+    let trace = chassis.trace.as_ref();
+    for (w, wheel) in WHEELS.iter().enumerate() {
+        let ray = trace.and_then(|t| t.tyres.get(w)).map(|t| t.ray).unwrap_or_default();
+        out.push(TraceValue::i(&format!("ray.{wheel}.hit"), ray.hit as i32));
+        for (axis, value) in ["x", "y", "z"].iter().zip(ray.pos) {
+            out.push(TraceValue::f(&format!("ray.{wheel}.pos.{axis}"), value));
+        }
+        for (axis, value) in ["x", "y", "z"].iter().zip(ray.normal) {
+            out.push(TraceValue::f(&format!("ray.{wheel}.normal.{axis}"), value));
+        }
+        out.push(TraceValue::i(&format!("ray.{wheel}.mesh"), ray.mesh));
+        let surface = chassis.tyres[w].surface_def.as_ref().map(|s| s.user_pointer as i32).unwrap_or(-1);
+        out.push(TraceValue::i(&format!("tyre.{wheel}.surfaceMesh"), surface));
+    }
+    let tp = &chassis.transponder;
+    out.push(TraceValue::i("transponder.t", tp.t as i32));
+    out.push(TraceValue::i("transponder.lastLap", tp.last_lap as i32));
+    out.push(TraceValue::i("transponder.bestLap", tp.best_lap as i32));
+    out.push(TraceValue::i("transponder.lapCount", tp.lap_count as i32));
+    out.push(TraceValue::i("transponder.finishLinePassed", tp.finish_line_passed as i32));
+    out.push(TraceValue::i("transponder.wasLastLapValid", tp.was_last_lap_valid as i32));
+    out.push(TraceValue::i("transponder.cuts", tp.cuts));
+    for k in 0..track.time_lines.len() {
+        let status = tp.status.get(k).copied().unwrap_or_default();
+        out.push(TraceValue::i(&format!("transponder.status.{k}.isValid"), status.is_valid as i32));
+        out.push(TraceValue::i(&format!("transponder.status.{k}.lastResponse"), status.last_response));
+        out.push(TraceValue::i(&format!("transponder.status.{k}.lastTime"), status.last_time as i32));
+        out.push(TraceValue::i(&format!("transponder.currentSplits.{k}"), tp.current_splits.get(k).copied().unwrap_or(0) as i32));
+        out.push(TraceValue::i(&format!("transponder.lastLapSplits.{k}"), tp.last_lap_splits.get(k).copied().unwrap_or(0) as i32));
+    }
+    out.push(TraceValue::i("lapInvalidator.currentTyresOut", chassis.lap_invalidator.current_tyres_out));
+    out.push(TraceValue::i("lapInvalidator.isInPenaltyZone", chassis.lap_invalidator.is_in_penalty_zone as i32));
+    let locator = &chassis.spline_locator;
+    out.push(TraceValue::i("splineLocator.currentIndex", locator.current_index));
+    out.push(TraceValue::f("splineLocator.normalizedPos", locator.normalized_pos));
+    out.push(TraceValue::f("splineLocator.offset", locator.offset));
+    out.push(TraceValue::i("splineLocator.isOutsideLimits", locator.is_outside_limits as i32));
+    let data = &chassis.spline_locator_data;
+    out.push(TraceValue::f("splineData.npos", data.npos));
+    out.push(TraceValue::f("splineData.lateralOffset", data.lateral_offset));
+    out.push(TraceValue::f("splineData.splineLength", data.spline_length));
+    out.push(TraceValue::f("splineData.sides.0", data.sides[0]));
+    out.push(TraceValue::f("splineData.sides.1", data.sides[1]));
+    out.push(TraceValue::f("splineData.sidesFromIL.0", data.sides_from_il[0]));
+    out.push(TraceValue::f("splineData.sidesFromIL.1", data.sides_from_il[1]));
+    out.push(TraceValue::f("splineData.sideVelocity", data.side_velocity));
+    out
+}
+
 /// Are two values of a field the same? A NaN equals any NaN (its sign and payload depend on
 /// operand order the compiler may choose).
 pub fn same_value(kind: char, expected: u64, got: u64) -> bool {
@@ -853,15 +908,43 @@ pub struct RunSetup {
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
     pub auto_shifter: bool,
+    /// The recording was made on a real track: the track, and where the car was put.
+    pub track: Option<TrackRun>,
+}
+
+/// The track of a recording made with `car_oracle run --track`.
+#[derive(Clone, Debug)]
+pub struct TrackRun {
+    pub track: std::sync::Arc<crate::track::Track>,
+    /// The spawn: a point on the road and the direction of the car's tail.
+    pub position: Vec3f,
+    pub tail: Vec3f,
+    /// The first lap is armed (a hot-lap start).
+    pub armed: bool,
+    /// `PhysicsEngine::allowedTyresOut`
+    pub allowed_tyres_out: i32,
+}
+
+impl PartialEq for TrackRun {
+    fn eq(&self, other: &TrackRun) -> bool {
+        std::sync::Arc::ptr_eq(&self.track, &other.track)
+            && (self.position, self.tail, self.armed, self.allowed_tyres_out) == (other.position, other.tail, other.armed, other.allowed_tyres_out)
+    }
 }
 
 impl RunSetup {
     /// Builds the F2004-style chassis of a recording the way the oracle built the game's car:
     /// `Car::Car`, the spawn at the origin facing +z, then the session start.
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
-        let ground: Box<dyn RayTrackCollisionProvider> =
-            if self.pitlane { Box::new(PitLane(self.ground)) } else { Box::new(self.ground) };
+        let ground: Box<dyn RayTrackCollisionProvider> = match &self.track {
+            Some(run) => Box::new(crate::track::TrackGround(std::sync::Arc::clone(&run.track))),
+            None if self.pitlane => Box::new(PitLane(self.ground)),
+            None => Box::new(self.ground),
+        };
         let mut env = self.env;
+        if let Some(run) = &self.track {
+            env.allowed_tyres_out = run.allowed_tyres_out;
+        }
         if self.wind_speed != 0.0 {
             env.set_wind(self.wind_speed, self.wind_direction_deg);
         }
@@ -903,8 +986,20 @@ impl RunSetup {
         for id in ids {
             chassis.core.world.joint_set_feedback(id, true);
         }
-        chassis.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
-        chassis.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+        match &self.track {
+            Some(run) => {
+                chassis.set_track(std::sync::Arc::clone(&run.track));
+                if run.armed {
+                    chassis.transponder.arm_first_lap();
+                }
+                chassis.force_rotation(&run.tail);
+                chassis.force_position(&run.position);
+            }
+            None => {
+                chassis.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
+                chassis.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+            }
+        }
         chassis.damage_zone_level = self.damage;
         chassis.session_start()?;
         chassis.core.tape = Some(Vec::new());
@@ -1400,6 +1495,7 @@ impl Golden {
             damage: parse_damage(get("damage")?)?,
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
+            track: None,
         };
         let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
         let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;

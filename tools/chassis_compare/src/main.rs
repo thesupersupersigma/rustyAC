@@ -54,6 +54,7 @@ use rustyac_physics::car::replay::{
     self, body_words, Field, Golden, GoldenStep, Ground, RecordedCall, RecordedStep, RecordedWheel, RunSetup, WHEELS,
 };
 use rustyac_physics::car::{CarControls, ChassisEnvironment, EngineFeed, ForceSource, RollingChassis, TapeCall};
+use rustyac_physics::vecmath::Vec3f;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("the repository folder").to_path_buf()
@@ -175,7 +176,62 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         auto_clutch: get("auto_clutch")? != "0",
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
+        track: track_run(recording)?,
     })
+}
+
+/// Three floats written as hexadecimal bit patterns.
+fn hex3(text: &str) -> Result<Vec3f, String> {
+    let words: Vec<f32> = text.split(',').filter_map(|w| u32::from_str_radix(w, 16).ok()).map(f32::from_bits).collect();
+    match words.as_slice() {
+        [x, y, z] => Ok(Vec3f::new(*x, *y, *z)),
+        _ => Err(format!("three hexadecimal words expected, got {text:?}")),
+    }
+}
+
+thread_local! {
+    /// The tracks loaded so far, by folder (loading Spa takes half a second).
+    static TRACKS: std::cell::RefCell<Vec<(String, std::sync::Arc<rustyac_physics::track::Track>)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The track of a recording made with `car_oracle run --track`, loaded by the Rust port from
+/// the game's folder, and the spawn the recording's header gives. A hot-lap spawn is worked
+/// out again by the port and has to be the header's, bit for bit.
+fn track_run(recording: &Recording) -> Result<Option<replay::TrackRun>, String> {
+    let Some(folder) = recording.get("track_folder") else { return Ok(None) };
+    let get = |key: &str| recording.get(key).ok_or(format!("the recording's header has no {key}"));
+    let position = hex3(get("spawn_position")?)?;
+    let tail = hex3(get("spawn_tail")?)?;
+    let track = TRACKS.with(|tracks| -> Result<_, String> {
+        if let Some((_, track)) = tracks.borrow().iter().find(|(f, _)| f == folder) {
+            return Ok(std::sync::Arc::clone(track));
+        }
+        let (mut track, _) = rustyac_physics::track::load_track(Path::new(folder), "")?;
+        rustyac_physics::track::init_respawn_position_set(&mut track, "HOTLAP_START");
+        let track = std::sync::Arc::new(track);
+        tracks.borrow_mut().push((folder.to_string(), std::sync::Arc::clone(&track)));
+        Ok(track)
+    })?;
+    if get("spawn")? == "AC_HOTLAP_START_0" {
+        let ours = track.spawn_pose("HOTLAP_START", 0).ok_or("the port finds no hot-lap spawn on this track")?;
+        let bits = |v: &Vec3f| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()];
+        if (bits(&ours.0), bits(&ours.1)) != (bits(&position), bits(&tail)) {
+            return Err(format!("the port's hot-lap spawn {ours:?} is not the recording's {:?}", (position, tail)));
+        }
+    }
+    if let Some(length) = recording.get("track_ai_length") {
+        let ours = format!("{:08x}", track.length().to_bits());
+        if ours != length {
+            return Err(format!("the AI line is {ours} long in the port and {length} in the game"));
+        }
+    }
+    Ok(Some(replay::TrackRun {
+        track,
+        position,
+        tail,
+        armed: get("armed")? != "0",
+        allowed_tyres_out: get("allowed_tyres_out")?.parse().map_err(|e| format!("allowed_tyres_out: {e}"))?,
+    }))
 }
 
 /// What the chassis is fed in one step: only values that systems outside the chassis own.
@@ -293,6 +349,16 @@ impl Columns {
 /// way the oracle applied it: the car's own functions, called before the step (the clock
 /// still shows the last step). Only the whole-car recordings have such jobs.
 fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) {
+    if recording.has("script.teleport") {
+        // a teleport of a track scenario, as the oracle made it through the game's own
+        // Car::forceRotation and Car::forcePosition before the step
+        let kind = recording.i(step, "script.teleport");
+        if kind != 0 {
+            let vector = |name: &str| Vec3f::new(recording.f(step, &format!("{name}.x")), recording.f(step, &format!("{name}.y")), recording.f(step, &format!("{name}.z")));
+            chassis.force_rotation(&vector("script.teleportTail"));
+            chassis.force_position_with(&vector("script.teleportPosition"), kind == 2);
+        }
+    }
     if !recording.has("script.lockMs") {
         return;
     }
@@ -893,6 +959,8 @@ struct Outcome {
     coverage: Coverage,
     powertrain: PowertrainCoverage,
     whole: WholeCoverage,
+    track: TrackCoverage,
+    track_name: String,
     /// Values of brakes, engine and drivetrain compared per step (those the recording holds).
     powertrain_values: usize,
     scenario: String,
@@ -904,6 +972,115 @@ struct Outcome {
     values: usize,
     calls: usize,
     seconds: f64,
+}
+
+/// What a run on a real track went through, counted on the Rust car.
+#[derive(Clone, Debug, Default)]
+struct TrackCoverage {
+    on_track: bool,
+    /// Tyre rays cast, and those that found nothing.
+    rays: usize,
+    ray_misses: usize,
+    /// Different meshes the rays hit.
+    meshes: std::collections::BTreeSet<i32>,
+    /// Tyre-steps per surface key.
+    surfaces: std::collections::BTreeMap<String, usize>,
+    /// Metres driven and the fastest moment, km/h.
+    distance: f64,
+    max_kmh: f32,
+    /// The place along the AI line at the start and at the end (0..1).
+    npos: (f32, f32),
+    /// The ground's height under the car's left front wheel: lowest and highest.
+    height: (f32, f32),
+    /// The heaviest and the lightest tyre load of a step with all four tyres' loads summed, N.
+    load: (f32, f32),
+    /// Tyre-steps without load (off the ground).
+    airborne: usize,
+    /// Steps with more than two tyres off the track; cuts counted.
+    steps_out: usize,
+    cuts: usize,
+    /// Timing lines crossed, laps counted, the first lap's time, ms.
+    crossings: usize,
+    laps: u32,
+    last_lap: u32,
+    last_pos: Option<[f32; 3]>,
+    last_cuts: i32,
+}
+
+impl TrackCoverage {
+    fn count(&mut self, chassis: &RollingChassis, step: usize) {
+        let Some(track) = &chassis.track else { return };
+        self.on_track = true;
+        let Some(trace) = &chassis.trace else { return };
+        let mut load = 0.0;
+        for (w, tyre) in trace.tyres.iter().enumerate() {
+            self.rays += 1;
+            if tyre.ray.hit {
+                self.meshes.insert(tyre.ray.mesh);
+            } else {
+                self.ray_misses += 1;
+            }
+            if let Some(surface) = &chassis.tyres[w].surface_def {
+                *self.surfaces.entry(track.surface_key(surface).to_string()).or_insert(0) += 1;
+            }
+            let tyre_load = chassis.tyres[w].status.load;
+            load += tyre_load;
+            self.airborne += (step > 400 && tyre_load <= 0.0) as usize;
+        }
+        if step > 400 {
+            self.load = if self.load == (0.0, 0.0) { (load, load) } else { (self.load.0.max(load), self.load.1.min(load)) };
+        }
+        let p = chassis.core.get_position(chassis.body);
+        let p = [p.x, p.y, p.z];
+        if let Some(last) = self.last_pos {
+            self.distance += ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2) + (p[2] - last[2]).powi(2)).sqrt() as f64;
+        }
+        self.last_pos = Some(p);
+        self.max_kmh = self.max_kmh.max(chassis.speed * 3.6);
+        let n = chassis.spline_locator.normalized_pos;
+        if step == 0 {
+            self.npos.0 = n;
+        }
+        self.npos.1 = n;
+        if let Some(ray) = trace.tyres.first().filter(|t| t.ray.hit) {
+            let y = ray.ray.pos[1];
+            self.height = if self.height == (0.0, 0.0) { (y, y) } else { (self.height.0.min(y), self.height.1.max(y)) };
+        }
+        self.steps_out += (chassis.lap_invalidator.current_tyres_out > 2) as usize;
+        let cuts = chassis.transponder.cuts;
+        self.cuts += (cuts > self.last_cuts) as usize;
+        self.last_cuts = cuts;
+        let crossed = chassis.transponder.status.iter().zip(&track.time_lines).filter(|(s, line)| s.last_response == 2 && line.check(&chassis.tyres[0].world_position) == 2).count();
+        let _ = crossed;
+        self.crossings += chassis.transponder.finish_line_passed as usize + chassis.transponder.split_events.len();
+        self.laps = chassis.transponder.lap_count;
+        self.last_lap = chassis.transponder.last_lap;
+    }
+
+    fn row(&self, name: &str, track: &str) -> String {
+        let surfaces: Vec<String> = self.surfaces.iter().map(|(key, n)| format!("{key} {n}")).collect();
+        format!(
+            "| `{name}` | {track} | {:.0} m, up to {:.0} km/h | {:.4} to {:.4} | {:.1} to {:.1} m | {} ({} without a hit), {} meshes | {} | {:.0} to {:.0} N; {} | {} / {} | {} / {} / {} |",
+            self.distance,
+            self.max_kmh,
+            self.npos.0,
+            self.npos.1,
+            self.height.0,
+            self.height.1,
+            self.rays,
+            self.ray_misses,
+            self.meshes.len(),
+            surfaces.join(", "),
+            self.load.1,
+            self.load.0,
+            self.airborne,
+            self.steps_out,
+            self.cuts,
+            self.crossings,
+            self.laps,
+            if self.last_lap == 0 { "-".to_string() } else { format!("{} ms", self.last_lap) }
+        )
+    }
 }
 
 fn compare(
@@ -932,6 +1109,8 @@ fn compare(
         coverage: Coverage::default(),
         powertrain: PowertrainCoverage::default(),
         whole: WholeCoverage::default(),
+        track: TrackCoverage::default(),
+        track_name: recording.get("track").unwrap_or("").to_string(),
         powertrain_values: 0,
         scenario: setup.scenario.clone(),
         steps: 0,
@@ -959,7 +1138,9 @@ fn compare(
             }
         }
         // brakes, engine, drivetrain, shift helpers
-        let trace = replay::powertrain_trace(&chassis);
+        let mut trace = replay::powertrain_trace(&chassis);
+        // on a real track: the rays, the lap timer, the place along the AI line
+        trace.extend(replay::track_trace(&chassis));
         let game_values = game_trace(recording, step, &trace)?;
         outcome.powertrain_values = game_values.iter().flatten().count();
         let mut trace_differences = Vec::new();
@@ -977,6 +1158,9 @@ fn compare(
         }
         outcome.powertrain.count(&chassis, &feed, request_before, paddles_before);
         outcome.whole.count(&chassis, recording, step, &feed);
+        outcome.track.count(&chassis, step);
+        // the lap and split events were counted: the list does not grow over a long run
+        chassis.transponder.take_events();
         let tape = compare_tape(recording, step, &chassis);
         let coverage = &mut outcome.coverage;
         for suspension in &chassis.suspensions {
@@ -1181,6 +1365,23 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
         total.packer, total.bumpstop_calls, total.heave_packer, total.heave_bumpstop_calls, total.frozen, total.spring_idle
     )
     .unwrap();
+    if outcomes.iter().any(|o| o.track.on_track) {
+        writeln!(
+            table,
+            "\nOn a real track (the car's body is a ghost in the game and in the port; only the tyres' rays meet the track's meshes). \
+             Counted on the Rust car, which the table above shows to be the game's car.\n"
+        )
+        .unwrap();
+        writeln!(
+            table,
+            "| Scenario | Track | Driven | Along the AI line (0..1), start to end | Ground height under the left front wheel | Tyre rays, meshes hit | Tyre-steps per surface | Sum of the four tyre loads, lowest to highest; tyre-steps without load | Steps with more than two tyres off the track / cuts | Timing lines crossed / laps counted / last lap |"
+        )
+        .unwrap();
+        writeln!(table, "|---|---|---|---|---|---|---|---|---|---|").unwrap();
+        for o in outcomes.iter().filter(|o| o.track.on_track) {
+            writeln!(table, "{}", o.track.row(&o.scenario, &o.track_name)).unwrap();
+        }
+    }
     println!("\n{table}");
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -1279,6 +1480,8 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
             auto_clutch: run.auto_clutch,
             auto_shifter: run.auto_shifter,
             ff_gain: 1.0,
+            track: String::new(),
+            spawn: "hotlap".to_string(),
             oracle: Some(input_file::OracleSetup {
                 scenario: run.scenario.clone(),
                 ground: run.ground,

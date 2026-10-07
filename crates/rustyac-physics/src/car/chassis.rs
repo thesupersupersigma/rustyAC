@@ -270,6 +270,24 @@ pub struct TyreTrace {
     pub calls: Vec<rig::Call>,
     /// [`rig::snapshot`] right after the step.
     pub output: Vec<u64>,
+    /// What the tyre's ray found.
+    pub ray: RayTrace,
+}
+
+/// A tyre's ground ray in a step, for the comparison with the game on a track.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RayTrace {
+    pub hit: bool,
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    /// The mesh that was hit (`SurfaceDef::user_pointer`), -1 for none.
+    pub mesh: i32,
+}
+
+impl Default for RayTrace {
+    fn default() -> RayTrace {
+        RayTrace { hit: false, pos: [0.0; 3], normal: [0.0; 3], mesh: -1 }
+    }
 }
 
 /// One body as `dWorldStep` finds it.
@@ -680,7 +698,11 @@ impl RayTrackCollisionProvider for GroundPort<'_> {
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
         let hit = self.ground.ray_cast(org, dir, length);
         if let Some(trace) = self.trace {
-            let input = &mut trace.borrow_mut().input;
+            let mut trace = trace.borrow_mut();
+            if let Some(hit) = &hit {
+                trace.ray = RayTrace { hit: true, pos: arr(&hit.pos), normal: arr(&hit.normal), mesh: hit.surface_def.user_pointer as i32 };
+            }
+            let input = &mut trace.input;
             input.has_hit = hit.is_some();
             if let Some(hit) = &hit {
                 input.ground_y = hit.pos.y;
@@ -1153,6 +1175,12 @@ impl RollingChassis {
     /// the road at `pos` (a point on the ground), with `Drivetrain::reset`,
     /// `BrakeSystem::reset` and neutral for a car that has those systems.
     pub fn force_position(&mut self, pos: &Vec3f) {
+        self.force_position_with(pos, true);
+    }
+
+    /// `Car::forcePosition(pos, invalidateLap)`: with `invalidate_lap` off the lap in
+    /// progress stays as it is (no caller in the game leaves it off; the oracle does).
+    pub fn force_position_with(&mut self, pos: &Vec3f, invalidate_lap: bool) {
         let mut pos = *pos;
         pos.y += self.get_base_car_height() + 0.01;
         // Car::reset
@@ -1188,7 +1216,9 @@ impl RollingChassis {
             self.drivetrain = Some(drivetrain);
         }
         // the lap in progress does not count (the game's callers all pass `invalidateLap`)
-        self.transponder.invalidate();
+        if invalidate_lap {
+            self.transponder.invalidate();
+        }
         self.core.stop(self.body);
         self.core.stop(self.fuel_tank_body);
         self.core.source = previous;
@@ -1883,7 +1913,11 @@ impl RollingChassis {
         if let Some(track) = &self.track {
             if let Some(spline) = &track.ai_spline {
                 let locator = self.spline_locator;
-                locator.post_step(&mut self.spline_locator_data, spline, &position, dt);
+                // the game's step-completed handler calls Car::postStep with a time step of
+                // zero (lambda @ 0x14026ef00: `xorps xmm1, xmm1`), so the "side velocity" it
+                // divides by that is an infinity or a NaN, never a velocity
+                let _ = dt;
+                locator.post_step(&mut self.spline_locator_data, spline, &position, 0.0);
             }
         }
     }
@@ -1962,6 +1996,7 @@ impl RollingChassis {
                 wheel_rotation_in: tyre.local_wheel_rotation,
                 calls: Vec::new(),
                 output: Vec::new(),
+                ray: RayTrace::default(),
             })
         });
         let previous = std::mem::replace(&mut self.core.source, ForceSource::Tyre);

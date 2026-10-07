@@ -935,12 +935,21 @@ impl Track {
     /// (`worldToSpline`, `splineToWorld`, the payload's forward vector); the game itself has
     /// no such command.
     pub fn pose_on_ai_line(&self, position: &Vec3f) -> Option<(Vec3f, Vec3f)> {
+        let spline = self.ai_spline.as_ref()?;
+        if spline.spline.points.len() < 4 {
+            return None;
+        }
+        self.pose_on_ai_line_at(spline.spline.world_to_spline(&[position.x, position.y, position.z], -1))
+    }
+
+    /// The point of the AI line at the normalised position `n`, put on the road, and the tail
+    /// direction of a car that drives along the line there.
+    pub fn pose_on_ai_line_at(&self, n: f32) -> Option<(Vec3f, Vec3f)> {
         use crate::tyre::RayTrackCollisionProvider;
         let spline = self.ai_spline.as_ref()?;
         if spline.spline.points.len() < 4 {
             return None;
         }
-        let n = spline.spline.world_to_spline(&[position.x, position.y, position.z], -1);
         let p = spline.spline.spline_to_world(n);
         let forward = spline.payload_at_position(n).forward_vector;
         // the line is recorded at the height of a car's body: down to the road

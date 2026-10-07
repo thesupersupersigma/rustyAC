@@ -150,6 +150,8 @@ pub struct GameTrack {
     /// The game's collision objects in creation order (`CollisionMeshODE*`), and back.
     pub objects: Vec<*mut u8>,
     pub index_of: HashMap<usize, usize>,
+    /// The game's own copy of each mesh's `SurfaceDef` -> the mesh's index.
+    pub surface_index_of: HashMap<usize, usize>,
     /// The Rust port of the same track.
     pub rust: Track,
     pub report: TrackLoadReport,
@@ -194,6 +196,7 @@ impl GameTrack {
                 std::mem::transmute(acs.va(VA_TRACK_ADD_SURFACE));
             let mut objects = Vec::with_capacity(rust.surfaces.len());
             let mut index_of = HashMap::new();
+            let mut surface_index_of = HashMap::new();
             let mut surface_mismatches = Vec::new();
             let surface = acs.alloc(SURFACE_SIZE);
             for (index, (mesh, ours)) in rust.world.meshes.iter().zip(&rust.surfaces).enumerate() {
@@ -227,11 +230,12 @@ impl GameTrack {
                     space,
                 );
                 index_of.insert(object as usize, index);
+                surface_index_of.insert(rd::<usize>(object, CM_USER_POINTER), index);
                 objects.push(object);
             }
             let init_ai_spline: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_TRACK_INIT_AI_SPLINE));
             init_ai_spline(track);
-            Ok(GameTrack { track, objects, index_of, rust, report, surface_mismatches, seconds_game: started.elapsed().as_secs_f64() })
+            Ok(GameTrack { track, objects, index_of, surface_index_of, rust, report, surface_mismatches, seconds_game: started.elapsed().as_secs_f64() })
         }
     }
 

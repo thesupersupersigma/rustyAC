@@ -482,8 +482,8 @@ pub struct Lap {
 }
 
 /// One car's part of the game's `RaceTimingServices` (the lap list the displays and the
-/// shared memory read), written after the pseudo-C of `onLapCompleted` @ 0x140145300 and
-/// `onSectorSplit` @ 0x140145940.
+/// shared memory read), after `onLapCompleted` @ 0x140145300 and `onSectorSplit` @ 0x140145940
+/// (its best-sector and session-best bookkeeping left out).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LapDb {
     pub laps: Vec<Lap>,
@@ -514,7 +514,7 @@ impl LapDb {
     /// cuts is listed and never the best.
     pub fn on_lap_completed(&mut self, ev: &OnLapCompletedEvent) {
         if !ev.is_valid {
-            self.current_splits.clear();
+            // the sector times of the spoilt lap stay until the next listed lap
             return;
         }
         let mut lap = Lap { time: ev.lap_time, cuts: ev.cuts, is_valid: ev.cuts == 0, splits: Vec::new() };

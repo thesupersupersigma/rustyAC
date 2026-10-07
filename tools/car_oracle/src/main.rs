@@ -36,6 +36,7 @@ mod record;
 mod scenario;
 mod sites;
 mod track;
+mod track_driver;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -151,7 +152,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().and_then(|args| match args.command.as_str() {
         "list" => {
-            for s in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()) {
+            for s in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()).chain(scenario::track()) {
                 println!("{:24} {:6.1} s  {}", s.name, (s.steps - 1) as f32 * scenario::DT, s.about);
             }
             Ok(())
@@ -225,6 +226,16 @@ fn run(args: &Args) -> Result<(), String> {
     // relative paths are the caller's; the game needs its own working directory
     let out = std::path::absolute(&args.out).map_err(|e| e.to_string())?;
     let data_hash = game::prepare_root(&repo, &args.root, &args.car)?;
+    let track_folder = match (&args.track, scenario.track_kind()) {
+        (Some(track), Some(_)) => {
+            let folder = track_folder(args, track);
+            track::prepare_root(&args.root, &folder)?;
+            Some(folder)
+        }
+        (None, Some(_)) => return Err(format!("the scenario {} runs on a track: add --track <folder> (for example --track spa)", scenario.name)),
+        (Some(_), None) => return Err(format!("the scenario {} runs on the flat road; the track scenarios are spa_...", scenario.name)),
+        (None, None) => None,
+    };
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
 
     let acs = acs::Acs::load(&args.acs)?;
@@ -233,7 +244,7 @@ fn run(args: &Args) -> Result<(), String> {
     } else {
         acs.silence_game_stdout();
     }
-    let options = game::Options { joint_feedback: args.joint_forces, car: args.car.clone(), setup_check: false };
+    let options = game::Options { joint_feedback: args.joint_forces, car: args.car.clone(), setup_check: false, track: track_folder };
     let mut world = game::World::build(&acs, scenario, &options);
     let steps = args.steps.unwrap_or(scenario.steps);
     let mut meta = vec![
@@ -260,12 +271,26 @@ fn run(args: &Args) -> Result<(), String> {
         meta.push(("wind_speed".to_string(), format!("{:?}", scenario.whole.wind_speed)));
         meta.push(("wind_direction_deg".to_string(), format!("{:?}", scenario.whole.wind_direction_deg)));
         meta.push(("damage".to_string(), scenario.whole.damage.map(|d| format!("{d:?}")).join(",")));
-        meta.push(("penalty_mode".to_string(), if scenario.whole.penalty_cut_gas { "0" } else { "3" }.to_string()));
+        let penalty_mode = if scenario.track_kind().is_some() {
+            "1"
+        } else if scenario.whole.penalty_cut_gas {
+            "0"
+        } else {
+            "3"
+        };
+        meta.push(("penalty_mode".to_string(), penalty_mode.to_string()));
     }
+    meta.extend(world.track_meta.clone());
     let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;
     let mut sites = BTreeSet::new();
+    let mut steps = steps;
     for i in 0..steps {
+        if world.ended() {
+            // the car left the track for good: its body would be in a wall
+            steps = i;
+            break;
+        }
         let (row, calls) = world.step(i == 0);
         for call in &calls {
             sites.insert(call.site);
@@ -411,7 +436,7 @@ fn setup_check(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     acs.unbuffer_game_stdout();
     let scenarios = scenario::all();
-    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true };
+    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None };
     let world = game::World::build(&acs, &scenarios[0], &options);
     println!("{} values change: {}", world.setup_changes.len(), world.setup_changes.join(", "));
     Ok(())
