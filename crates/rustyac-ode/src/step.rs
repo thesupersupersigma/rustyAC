@@ -18,7 +18,8 @@
 //! run one after the other in the order of the source's `allowedThreads == 1` path.
 
 use crate::common::pad;
-use crate::joint::{Info1, Info2, JointFeedback};
+use crate::joint::{ContactParameters, Info1, Info2, JointFeedback};
+use crate::lcp::{solve_lcp, LcpMemory, LcpStats};
 use crate::matrix::{factor_ldlt, solve_ldlt};
 use crate::odemath::{
     dot3, invert_matrix3, multiply0_133, multiply0_331, multiply0_333, multiply2_333, safe_normalize4,
@@ -49,6 +50,11 @@ pub(crate) struct StepMemory {
     cfm_or_rhs_tmp: Vec<f32>,
     d: Vec<f32>,
     cforce: Vec<f32>,
+    lo: Vec<f32>,
+    hi: Vec<f32>,
+    findex: Vec<i32>,
+    lambda: Vec<f32>,
+    lcp: LcpMemory,
 }
 
 /// What the last step looked like from the outside: for tests and tools.
@@ -58,6 +64,12 @@ pub struct StepStats {
     pub islands: u32,
     /// Constraint rows of the largest island.
     pub max_rows: u32,
+    /// Rows with limits (contacts) over all islands.
+    pub bounded_rows: u32,
+    /// Passes of the LCP solver's inner loop over all islands.
+    pub lcp_pivots: u32,
+    /// Islands in which the LCP solver gave up ("s <= 0").
+    pub lcp_errors: u32,
 }
 
 impl World {
@@ -71,7 +83,7 @@ impl World {
         // dxProcessIslands @ 0x1403534f0: one island after the other, in the order found
         for island in 0..memory.island_sizes.len() {
             let (bcount, jcount) = memory.island_sizes[island];
-            let rows = step_island(
+            let (rows, lcp) = step_island(
                 self,
                 &mut memory,
                 body_start,
@@ -82,6 +94,9 @@ impl World {
             );
             stats.islands += 1;
             stats.max_rows = stats.max_rows.max(rows);
+            stats.bounded_rows += lcp.bounded_rows;
+            stats.lcp_pivots += lcp.pivots;
+            stats.lcp_errors += lcp.s_error as u32;
             body_start += bcount as usize;
             joint_start += jcount as usize;
         }
@@ -306,7 +321,8 @@ fn step_island(
     joint_start: usize,
     nj_island: usize,
     stepsize: f32,
-) -> u32 {
+) -> (u32, LcpStats) {
+    let mut lcp_stats = LcpStats::default();
     // ------------------------------------------------------------------------------------
     // dxStepIsland_Stage0_Bodies (0x140350360)
 
@@ -366,12 +382,15 @@ fn step_island(
     // (set their tag values). inactive joints receive a tag value of -1.
     //
     // The array is twice the island's joint count and is filled from the middle: unbounded
-    // joints grow towards the front (so they end up in REVERSE island order), bounded ones
-    // towards the back. Stage 1 has no bounded or mixed rows.
+    // joints grow towards the front (so they end up in REVERSE island order), joints with
+    // only bounded rows (contacts) towards the back, in island order. A joint with both
+    // kinds of rows would sit between them; the game has none (a contact with an infinite
+    // friction coefficient, a slider with a stop or a motor).
     let mut m: u32 = 0;
     memory.joint_infos.clear();
     memory.joint_infos.resize(2 * nj_island, (JointId(0), Info1::default()));
     let mut unb_start = nj_island;
+    let mut lcp_end = nj_island;
     for k in 0..nj_island {
         let id = memory.joints[joint_start + k];
         let info = world.joints[id.0 as usize].get_info1(&world.bodies);
@@ -379,16 +398,24 @@ fn step_island(
             world.joints[id.0 as usize].tag = -1;
             continue;
         }
-        if info.nub != info.m {
-            unimplemented!("a joint with bounded constraint rows (stage 2 of the port)");
-        }
         m += info.m as u32;
-        unb_start -= 1;
-        memory.joint_infos[unb_start] = (id, info);
+        if info.nub == info.m {
+            unb_start -= 1;
+            memory.joint_infos[unb_start] = (id, info);
+        } else if info.nub == 0 {
+            memory.joint_infos[lcp_end] = (id, info);
+            lcp_end += 1;
+        } else {
+            unimplemented!("a joint with unbounded and bounded constraint rows");
+        }
     }
     let ji_start = unb_start;
-    let ji_end = nj_island;
+    let ji_end = lcp_end;
     let nj = ji_end - ji_start;
+    // what the stepper hands the LCP solver as "the first nub rows are unbounded": the number
+    // of unbounded JOINTS (not of their rows)
+    let nub = nj_island - unb_start;
+    let any_bounded = lcp_end > nj_island;
     for (i, k) in (ji_start..ji_end).enumerate() {
         let id = memory.joint_infos[k].0;
         world.joints[id.0 as usize].tag = i as i32;
@@ -433,7 +460,14 @@ fn step_island(
         let cfm_len = m.max(nb * 8);
         memory.cfm_or_rhs_tmp.clear();
         memory.cfm_or_rhs_tmp.resize(cfm_len, 0.0);
+        memory.lo.clear();
+        memory.lo.resize(m, f32::NEG_INFINITY);
+        memory.hi.clear();
+        memory.hi.resize(m, f32::INFINITY);
+        memory.findex.clear();
+        memory.findex.resize(m, -1);
         let world_erp = world.global_erp;
+        let contactp = ContactParameters { max_vel: world.contact_max_vel, min_depth: world.contact_min_depth };
         for ji in 0..nj {
             let ofsi = memory.mindex[ji] as usize;
             let infom = memory.mindex[ji + 1] as usize - ofsi;
@@ -443,11 +477,20 @@ fn step_island(
             for v in cfm.iter_mut() {
                 *v = world.global_cfm;
             }
+            let lo = &mut memory.lo[ofsi..ofsi + infom];
+            let hi = &mut memory.hi[ofsi..ofsi + infom];
+            let findex = &mut memory.findex[ofsi..ofsi + infom];
             let joint = &world.joints[memory.joint_infos[ji_start + ji].0 .0 as usize];
-            let mut info = Info2 { j1, j2, c, cfm };
-            joint.get_info2(&world.bodies, stepsize_recip, world_erp, &mut info);
+            let mut info = Info2 { j1, j2, c, cfm, lo, hi, findex };
+            joint.get_info2(&world.bodies, stepsize_recip, world_erp, contactp, &mut info);
             for v in info.c.iter_mut() {
                 *v *= stepsize_recip;
+            }
+            // adjust returned findex values for global index numbering
+            for v in info.findex.iter_mut() {
+                if *v != -1 {
+                    *v += ofsi as i32;
+                }
             }
         }
 
@@ -593,10 +636,28 @@ fn step_island(
         // dxStepIsland_Stage3 (0x140352100): solve the LCP problem and get lambda.
         // dSolveLCP @ 0x140392260 with only equality rows: factor and solve (through the
         // `nub >= n` shortcut or through dLCP::dLCP, see the top of this file).
-        memory.d.clear();
-        memory.d.resize(m, 0.0);
-        factor_ldlt(&mut memory.a, &mut memory.d, m, mskip);
-        solve_ldlt(&memory.a, &memory.d, &mut memory.rhs, m, mskip);
+        if !any_bounded {
+            memory.d.clear();
+            memory.d.resize(m, 0.0);
+            factor_ldlt(&mut memory.a, &mut memory.d, m, mskip);
+            solve_ldlt(&memory.a, &memory.d, &mut memory.rhs, m, mskip);
+        } else {
+            // the real thing: rows with limits and friction rows
+            memory.lambda.clear();
+            memory.lambda.resize(m, 0.0);
+            lcp_stats = solve_lcp(
+                &mut memory.lcp,
+                m,
+                &mut memory.a,
+                &mut memory.lambda,
+                &mut memory.rhs,
+                nub,
+                &mut memory.lo,
+                &mut memory.hi,
+                Some(&mut memory.findex),
+            );
+            memory.rhs[..m].copy_from_slice(&memory.lambda[..m]);
+        }
     }
     // lambda is now in memory.rhs
 
@@ -689,6 +750,9 @@ fn step_island(
     for bi in 0..nb {
         let b = &mut world.bodies[memory.bodies[body_start + bi].0 as usize];
         step_body(b, stepsize);
+        // notify all attached geoms that this body has moved
+        let first_geom = b.first_geom;
+        world.collision.body_moved(first_geom);
     }
 
     // zero all force accumulators
@@ -698,7 +762,7 @@ fn step_island(
         b.tacc = [0.0; 4];
     }
 
-    m as u32
+    (m as u32, lcp_stats)
 }
 
 /// The gyroscopic block of `dxStepIsland_Stage0_Bodies` (0x1403505b8 … 0x140350aa8): ODE
@@ -857,7 +921,7 @@ pub(crate) fn step_body(b: &mut Body, mut h: f32) {
     safe_normalize4(&mut b.q);
     r_from_q(&mut b.r, &b.q);
 
-    // (geoms attached to the body are told that it moved here: collision is stage 2/3)
+    // (the caller tells the geoms attached to the body that it moved)
 
     // damping
     if b.flags & BODY_LINEAR_DAMPING != 0 {

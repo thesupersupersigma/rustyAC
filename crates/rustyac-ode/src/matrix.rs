@@ -427,3 +427,220 @@ pub fn is_positive_definite(a: &[f32], n: usize) -> bool {
     let mut copy = a[..nskip * n].to_vec();
     factor_cholesky(&mut copy, n)
 }
+
+/// `_dLDLTAddTL` @ 0x14034bda0: given the `L*D*L^T` factors of an `n` x `n` matrix `A`
+/// (`L` at `l[l_off..]`, row skip `nskip`; `d` the reciprocal diagonal), returns the factors
+/// of the matrix `A` with its top row and left column replaced by `a` plus the old ones:
+/// `A + [a e_0^T + e_0 a^T]`-style rank-two update ("add to top left").
+/// `w` is scratch of `2 * nskip` values.
+pub fn ldlt_add_tl(l: &mut [f32], l_off: usize, d: &mut [f32], a: &[f32], n: usize, nskip: usize, w: &mut [f32]) {
+    if n < 2 {
+        return;
+    }
+    let (w1, w2) = w.split_at_mut(nskip);
+
+    w1[0] = 0.0;
+    w2[0] = 0.0;
+    for j in 1..n {
+        let v = (a[j] as f64 * std::f64::consts::FRAC_1_SQRT_2) as f32;
+        w1[j] = v;
+        w2[j] = v;
+    }
+    let w11 = ((0.5f32 * a[0] + 1.0) as f64 * std::f64::consts::FRAC_1_SQRT_2) as f32;
+    let w21 = ((0.5f32 * a[0] - 1.0) as f64 * std::f64::consts::FRAC_1_SQRT_2) as f32;
+
+    let mut alpha1 = 1.0f32;
+    let mut alpha2 = 1.0f32;
+
+    {
+        let mut dee = d[0];
+        let mut alphanew = alpha1 + (w11 * w11) * dee;
+        dee /= alphanew;
+        let gamma1 = w11 * dee;
+        dee *= alpha1;
+        alpha1 = alphanew;
+        alphanew = alpha2 - (w21 * w21) * dee;
+        // (the source divides dee by alphanew once more; the value is not used)
+        alpha2 = alphanew;
+        let k1 = 1.0f32 - w21 * gamma1;
+        let k2 = w21 * gamma1 * w11 - w21;
+        let mut ll = l_off + nskip;
+        for p in 1..n {
+            let wp = w1[p];
+            let ell = l[ll];
+            w1[p] = wp - w11 * ell;
+            w2[p] = k1 * wp + k2 * ell;
+            ll += nskip;
+        }
+    }
+
+    let mut ll = l_off + (nskip + 1);
+    for j in 1..n {
+        let k1 = w1[j];
+        let k2 = w2[j];
+
+        let mut dee = d[j];
+        let mut alphanew = alpha1 + (k1 * k1) * dee;
+        dee /= alphanew;
+        let gamma1 = k1 * dee;
+        dee *= alpha1;
+        alpha1 = alphanew;
+        alphanew = alpha2 - (k2 * k2) * dee;
+        dee /= alphanew;
+        let gamma2 = k2 * dee;
+        dee *= alpha2;
+        d[j] = dee;
+        alpha2 = alphanew;
+
+        let mut lp = ll + nskip;
+        for p in j + 1..n {
+            let mut ell = l[lp];
+            let mut wp = w1[p] - k1 * ell;
+            ell += gamma1 * wp;
+            w1[p] = wp;
+            wp = w2[p] - k2 * ell;
+            ell -= gamma2 * wp;
+            w2[p] = wp;
+            l[lp] = ell;
+            lp += nskip;
+        }
+        ll += nskip + 1;
+    }
+}
+
+/// `_dRemoveRowCol` @ 0x14034c910: removes row and column `r` of the `n` x `n` matrix `a`
+/// (row skip `nskip`) by moving the rest up and left.
+pub fn remove_row_col(a: &mut [f32], n: usize, nskip: usize, r: usize) {
+    if r >= n - 1 {
+        return;
+    }
+    if r > 0 {
+        {
+            let move_size = n - r - 1;
+            let mut adst = r;
+            for _ in 0..r {
+                a.copy_within(adst + 1..adst + 1 + move_size, adst);
+                adst += nskip;
+            }
+        }
+        {
+            let cpy_size = r;
+            let mut adst = r * nskip;
+            for _ in r..n - 1 {
+                let asrc = adst + nskip;
+                a.copy_within(asrc..asrc + cpy_size, adst);
+                adst = asrc;
+            }
+        }
+    }
+    {
+        let cpy_size = n - r - 1;
+        let mut adst = r * (nskip + 1);
+        for _ in r..n - 1 {
+            let asrc = adst + (nskip + 1);
+            a.copy_within(asrc..asrc + cpy_size, adst);
+            adst = asrc - 1;
+        }
+    }
+}
+
+/// `_dLDLTRemove` @ 0x14034c420: `L*D*L^T` are the factors of the `n2` x `n2` matrix made of
+/// the rows and columns `p[0..n2]` of `A` (given through its row table `arows`, lower
+/// triangle); removes row and column `r` from the factorisation.
+#[allow(clippy::too_many_arguments)]
+pub fn ldlt_remove(
+    a: &[f32],
+    arows: &[usize],
+    p: &[i32],
+    l: &mut [f32],
+    d: &mut [f32],
+    _n1: usize,
+    n2: usize,
+    r: usize,
+    nskip: usize,
+    tmpbuf: &mut Vec<f32>,
+) {
+    if r == n2 - 1 {
+        return; // deleting last row/col is easy
+    }
+    // GETA(i,j): the lower triangle of the symmetric matrix behind the row pointers
+    let geta = |i: usize, j: usize| -> f32 {
+        if i > j {
+            a[arows[i] * nskip + j]
+        } else {
+            a[arows[j] * nskip + i]
+        }
+    };
+    tmpbuf.clear();
+    tmpbuf.resize(2 * nskip + n2, 0.0);
+    let (w, rest) = tmpbuf.split_at_mut(2 * nskip);
+    if r == 0 {
+        let aa = rest;
+        let p_0 = p[0] as usize;
+        for i in 0..n2 {
+            aa[i] = -geta(p[i] as usize, p_0);
+        }
+        aa[0] += 1.0;
+        ldlt_add_tl(l, 0, d, aa, n2, nskip, w);
+    } else {
+        let (t, aa) = rest.split_at_mut(r);
+        {
+            // t[i] = L[r][i] / d[i]. The compiler (fast floating-point model) turned the
+            // division into a packed approximate reciprocal with one Newton step for whole
+            // blocks of eight when there are at least eight; the rest are real divisions.
+            let lcurr = r * nskip;
+            let r8 = if r >= 8 { r - (r % 8) } else { 0 };
+            let mut i = 0;
+            while i < r8 {
+                let x0 = rcpps(&[d[i], d[i + 1], d[i + 2], d[i + 3]]);
+                for k in 0..4 {
+                    let y = (x0[k] + x0[k]) - ((x0[k] * x0[k]) * d[i + k]);
+                    t[i + k] = y * l[lcurr + i + k];
+                }
+                i += 4;
+            }
+            for i in r8..r {
+                t[i] = l[lcurr + i] / d[i];
+            }
+        }
+        {
+            let p_r = p[r] as usize;
+            let n2_minus_r = n2 - r;
+            let mut lcurr = r * nskip;
+            for i in 0..n2_minus_r {
+                aa[i] = dot(&l[lcurr..], t, r) - geta(p[r + i] as usize, p_r);
+                lcurr += nskip;
+            }
+        }
+        aa[0] += 1.0;
+        ldlt_add_tl(l, r * nskip + r, &mut d[r..], aa, n2 - r, nskip, w);
+    }
+
+    // snip out row/column r from L and d
+    remove_row_col(l, n2, nskip, r);
+    if r < n2 - 1 {
+        d.copy_within(r + 1..n2, r);
+    }
+}
+
+/// The `rcpps` instruction: the processor's own approximate reciprocal of four values
+/// (12 bits; **not** an IEEE operation, and not the same on every processor family). The
+/// game executes it in `_dLDLTRemove`, so the port has to execute it too to get the game's
+/// bits on the same machine.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn rcpps(v: &[f32; 4]) -> [f32; 4] {
+    use core::arch::x86_64::{_mm_loadu_ps, _mm_rcp_ps, _mm_storeu_ps};
+    let mut out = [0.0f32; 4];
+    // SAFETY: SSE is part of x86_64; the pointers are to four f32 each
+    unsafe { _mm_storeu_ps(out.as_mut_ptr(), _mm_rcp_ps(_mm_loadu_ps(v.as_ptr()))) };
+    out
+}
+
+/// Where there is no `rcpps` the exact reciprocal has to do (the last bits then differ from
+/// the game's).
+#[cfg(not(target_arch = "x86_64"))]
+#[inline]
+pub fn rcpps(v: &[f32; 4]) -> [f32; 4] {
+    [1.0 / v[0], 1.0 / v[1], 1.0 / v[2], 1.0 / v[3]]
+}

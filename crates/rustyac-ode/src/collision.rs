@@ -105,15 +105,20 @@ pub struct TriMeshGeom {
 impl TriMeshGeom {
     /// `dxTriMesh::computeAABB` @ 0x14034ae10
     fn compute_aabb(&mut self) {
-        let (c, e, r, p) = (&self.data.aabb_center, &self.data.aabb_extents, &self.r, &self.pos);
-        let xc = (c[0] * r[0] + r[1] * c[1]) + r[2] * c[2];
-        let yc = (c[1] * r[5] + c[0] * r[4]) + c[2] * r[6];
-        let zc = (c[1] * r[9] + c[0] * r[8]) + c[2] * r[10];
-        let xr = ((e[0] * r[0]).abs() + (e[1] * r[1]).abs()) + (e[2] * r[2]).abs();
-        let yr = ((e[1] * r[5]).abs() + (e[0] * r[4]).abs()) + (e[2] * r[6]).abs();
-        let zr = ((e[1] * r[9]).abs() + (e[0] * r[8]).abs()) + (e[2] * r[10]).abs();
-        self.aabb = [(xc + p[0]) - xr, (xc + p[0]) + xr, (yc + p[1]) - yr, (yc + p[1]) + yr, (zc + p[2]) - zr, (zc + p[2]) + zr];
+        self.aabb = tri_mesh_aabb(&self.data, &self.pos, &self.r);
     }
+}
+
+/// `dxTriMesh::computeAABB` @ 0x14034ae10: the box of a mesh at `pos`, turned by `r`.
+pub(crate) fn tri_mesh_aabb(data: &TriMeshData, p: &[f32; 3], r: &Matrix3) -> [f32; 6] {
+    let (c, e) = (&data.aabb_center, &data.aabb_extents);
+    let xc = (c[0] * r[0] + r[1] * c[1]) + r[2] * c[2];
+    let yc = (c[1] * r[5] + c[0] * r[4]) + c[2] * r[6];
+    let zc = (c[1] * r[9] + c[0] * r[8]) + c[2] * r[10];
+    let xr = ((e[0] * r[0]).abs() + (e[1] * r[1]).abs()) + (e[2] * r[2]).abs();
+    let yr = ((e[1] * r[5]).abs() + (e[0] * r[4]).abs()) + (e[2] * r[6]).abs();
+    let zr = ((e[1] * r[9]).abs() + (e[0] * r[8]).abs()) + (e[2] * r[10]).abs();
+    [(xc + p[0]) - xr, (xc + p[0]) + xr, (yc + p[1]) - yr, (yc + p[1]) + yr, (zc + p[2]) - zr, (zc + p[2]) + zr]
 }
 
 /// One of the numbered `dxSimpleSpace`s inside the static space.
@@ -155,7 +160,7 @@ pub struct StaticWorld {
 
 /// `collideAABBs` @ 0x140342c60, the six comparisons: does a member's box `b1` meet the ray's `b2`?
 #[inline]
-fn boxes_meet(b1: &[f32; 6], b2: &[f32; 6]) -> bool {
+pub(crate) fn boxes_meet(b1: &[f32; 6], b2: &[f32; 6]) -> bool {
     // comiss ; jb rejects on "less or unordered", comiss ; ja on "greater"
     b2[1] >= b1[0] && !(b2[0] > b1[1]) && b2[3] >= b1[2] && !(b2[2] > b1[3]) && b2[5] >= b1[4] && !(b2[4] > b1[5])
 }

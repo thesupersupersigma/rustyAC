@@ -34,9 +34,14 @@
     clippy::nonminimal_bool
 )]
 
+pub mod collide_btl;
+pub mod collide_ttl;
 pub mod collision;
 pub mod common;
+pub mod contact;
+pub mod geom;
 pub mod joint;
+pub mod lcp;
 pub mod mass;
 pub mod matrix;
 pub mod odemath;
@@ -47,7 +52,9 @@ pub mod world;
 
 pub use collision::{RayContact, StaticWorld};
 pub use common::{Matrix3, Quaternion, Vector3};
-pub use joint::{Joint, JointFeedback, JointKind, PARAM_CFM, PARAM_ERP};
+pub use contact::{Contact, ContactGeom, SurfaceParameters};
+pub use geom::{Collision, GeomId, GeomRef};
+pub use joint::{Joint, JointFeedback, JointGroupId, JointKind, PARAM_CFM, PARAM_ERP};
 pub use mass::Mass;
 pub use step::StepStats;
 pub use world::{Body, BodyId, JointId, World};

@@ -84,6 +84,8 @@ pub struct Body {
     pub tag: i32,
     /// First of the joint nodes that point at this body (`firstjoint`).
     pub first_joint: Option<NodeRef>,
+    /// First of the geoms attached to this body (`geom`): the newest.
+    pub first_geom: Option<crate::geom::GeomId>,
     pub flags: u32,
     pub mass: Mass,
     /// Inverse of `mass.i` in the body frame.
@@ -123,6 +125,10 @@ impl Body {
 pub struct World {
     pub(crate) bodies: Vec<Body>,
     pub(crate) joints: Vec<Joint>,
+    /// Slots of destroyed joints, to be used again.
+    pub(crate) free_joints: Vec<u32>,
+    /// The joint groups: their joints in creation order.
+    pub(crate) joint_groups: Vec<Vec<JointId>>,
     /// Head of the body list (newest body).
     pub first_body: Option<BodyId>,
     /// Head of the joint list (newest joint).
@@ -139,6 +145,14 @@ pub struct World {
     pub body_flags: u32,
     pub dampingp: Damping,
     pub max_angular_speed: f32,
+    /// `contactp.max_vel` (`dWorldSetContactMaxCorrectingVel`): the fastest a contact may push
+    /// two bodies apart.
+    pub contact_max_vel: f32,
+    /// `contactp.min_depth` (`dWorldSetContactSurfaceLayer`).
+    pub contact_min_depth: f32,
+    /// The geoms attached to this world's bodies and their spaces (ODE keeps them apart from
+    /// the world; a body's geoms have to hear of every move of the body, so they live here).
+    pub collision: crate::geom::Collision,
     pub(crate) step_memory: crate::step::StepMemory,
 }
 
@@ -155,6 +169,8 @@ impl World {
         World {
             bodies: Vec::new(),
             joints: Vec::new(),
+            free_joints: Vec::new(),
+            joint_groups: Vec::new(),
             first_body: None,
             first_joint: None,
             nb: 0,
@@ -177,6 +193,9 @@ impl World {
                 angular_threshold: 0.01 * 0.01,
             },
             max_angular_speed: f32::INFINITY,
+            contact_max_vel: f32::INFINITY,
+            contact_min_depth: 0.0,
+            collision: crate::geom::Collision::default(),
             step_memory: crate::step::StepMemory::default(),
         }
     }
@@ -189,6 +208,9 @@ impl World {
         world.set_erp(0.3);
         world.set_cfm(1e-7);
         world.set_damping(0.0, 0.0);
+        // dWorldSetContactMaxCorrectingVel(3), dWorldSetContactSurfaceLayer(0)
+        world.contact_max_vel = 3.0;
+        world.contact_min_depth = 0.0;
         world
     }
 
@@ -251,8 +273,10 @@ impl World {
 
     /// Every joint ever created, in creation order. A joint whose body was destroyed stays in
     /// the world, attached to nothing.
-    pub fn joint_ids(&self) -> impl Iterator<Item = JointId> {
-        (0..self.joints.len() as u32).map(JointId)
+    pub fn joint_ids(&self) -> impl Iterator<Item = JointId> + '_ {
+        (0..self.joints.len() as u32)
+            .map(JointId)
+            .filter(|j| self.joints[j.0 as usize].alive && !matches!(self.joints[j.0 as usize].kind, crate::joint::JointKind::Contact { .. }))
     }
 
     /// `dBodyCreate` @ 0x14033ef50: mass 1, identity inertia, at the origin, at rest, gravity
@@ -271,6 +295,7 @@ impl World {
             next: self.first_body,
             tag: 0,
             first_joint: None,
+            first_geom: None,
             flags,
             mass: Mass::parameters(1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0),
             inv_i: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
@@ -355,6 +380,9 @@ impl World {
         body.pos[0] = x;
         body.pos[1] = y;
         body.pos[2] = z;
+        // notify all attached geoms that this body has moved
+        let first_geom = body.first_geom;
+        self.collision.body_moved(first_geom);
     }
 
     /// `dBodySetRotation` @ 0x14033fc00: copies the matrix and orthogonalises the copy; the
@@ -366,6 +394,9 @@ impl World {
         orthogonalize_r(&mut body.r);
         body.q = q_from_r(r);
         safe_normalize4(&mut body.q);
+        // notify all attached geoms that this body has moved
+        let first_geom = body.first_geom;
+        self.collision.body_moved(first_geom);
     }
 
     /// `dBodySetLinearVel` @ 0x14033fb10.

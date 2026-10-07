@@ -16,6 +16,7 @@
 //! columns 4..7 (the fourth of each is padding), one block per attached body.
 
 use crate::common::{Quaternion, Vector3};
+use crate::contact::Contact;
 use crate::odemath::{
     cross3, length3, multiply0_331, multiply1_331, plane_space, safe_normalize3, set_cross_matrix_minus,
     set_cross_matrix_plus,
@@ -141,6 +142,9 @@ pub enum JointKind {
     Fixed { qrel: Quaternion, offset: Vector3, erp: f32, cfm: f32 },
     /// `dxJointDBall` (type 15): two anchors kept `target_distance` apart.
     DBall { anchor1: Vector3, anchor2: Vector3, erp: f32, cfm: f32, target_distance: f32 },
+    /// `dxJointContact` (type 4): one contact point. `the_m` is the row count `getInfo1`
+    /// found (it also clamps the coefficients inside `contact`).
+    Contact { contact: Contact, the_m: i32 },
 }
 
 /// `dxJoint`.
@@ -155,7 +159,15 @@ pub struct Joint {
     /// `Some` when the caller asked for the constraint forces (`dJointSetFeedback`).
     pub feedback: Option<JointFeedback>,
     pub kind: JointKind,
+    /// False once the joint was destroyed (`dJointGroupEmpty`); the slot is used again.
+    pub alive: bool,
+    /// The joint group the joint was created in.
+    pub group: Option<JointGroupId>,
 }
+
+/// Handle of a joint group (`dJointGroupID`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct JointGroupId(pub u32);
 
 /// `dxJoint::Info1`: number of constraint rows and how many of them are unbounded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -171,6 +183,18 @@ pub struct Info2<'a> {
     pub j2: &'a mut [f32],
     pub c: &'a mut [f32],
     pub cfm: &'a mut [f32],
+    /// Limits of each row's force (preset to -inf and +inf).
+    pub lo: &'a mut [f32],
+    pub hi: &'a mut [f32],
+    /// For a friction row the joint's row whose force scales its limits (preset to -1).
+    pub findex: &'a mut [i32],
+}
+
+/// The world settings a contact joint reads (`dxWorld::contactp`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ContactParameters {
+    pub max_vel: f32,
+    pub min_depth: f32,
 }
 
 /// Row skip of the Jacobian blocks (`Info2Descr::rowskip`).
@@ -186,6 +210,7 @@ impl Joint {
             JointKind::Slider { .. } => 3,
             JointKind::Fixed { .. } => 7,
             JointKind::DBall { .. } => 15,
+            JointKind::Contact { .. } => 4,
         }
     }
 
@@ -196,6 +221,7 @@ impl Joint {
             JointKind::Slider { .. } => 6,
             JointKind::Fixed { .. } => 6,
             JointKind::DBall { .. } => 1,
+            JointKind::Contact { ref contact, .. } => crate::contact::sure_max_m(contact),
         }
     }
 
@@ -217,6 +243,7 @@ impl Joint {
             JointKind::Ball { .. } => Info1 { m: 3, nub: 3 },
             JointKind::Fixed { .. } => Info1 { m: 6, nub: 6 },
             JointKind::DBall { .. } => Info1 { m: 1, nub: 1 },
+            JointKind::Contact { contact, the_m } => crate::contact::get_info1(contact, the_m),
             JointKind::Slider { axis1, offset, limot, .. } => {
                 let mut info = Info1 { m: 5, nub: 5 };
                 // `comiss 0, fmax` + `setb`: a NaN counts as powered
@@ -247,7 +274,14 @@ impl Joint {
 
     /// `getInfo2`: fills the Jacobian, the right-hand side `c` (position error correction,
     /// before the division by the step size) and the row softness `cfm`.
-    pub(crate) fn get_info2(&self, bodies: &[Body], world_fps: f32, world_erp: f32, info: &mut Info2) {
+    pub(crate) fn get_info2(
+        &self,
+        bodies: &[Body],
+        world_fps: f32,
+        world_erp: f32,
+        contactp: ContactParameters,
+        info: &mut Info2,
+    ) {
         let b0 = &bodies[self.node[0].body.expect("an attached joint has a first body").0 as usize];
         let b1 = self.node[1].body.map(|b| &bodies[b.0 as usize]);
         match &self.kind {
@@ -293,6 +327,20 @@ impl Joint {
             }
             JointKind::Slider { axis1, qrel, offset, limot } => {
                 slider_get_info2(self.flags, b0, b1, world_fps, world_erp, axis1, qrel, offset, limot, info);
+            }
+            JointKind::Contact { contact, the_m } => {
+                crate::contact::get_info2(
+                    contact,
+                    *the_m,
+                    self.flags,
+                    b0,
+                    b1,
+                    world_fps,
+                    world_erp,
+                    contactp.max_vel,
+                    contactp.min_depth,
+                    info,
+                );
             }
         }
     }
@@ -595,18 +643,86 @@ fn slider_get_info2(
 impl World {
     /// `createJoint<T>` (0x14033e3f0 …) + `dxJoint::dxJoint` @ 0x14034d3f0.
     fn joint_create(&mut self, kind: JointKind) -> JointId {
-        let id = JointId(self.joints.len() as u32);
-        self.joints.push(Joint {
+        let joint = Joint {
             next: self.first_joint,
             tag: 0,
             flags: 0,
             node: [JointNode::default(); 2],
             feedback: None,
             kind,
-        });
+            alive: true,
+            group: None,
+        };
+        let id = match self.free_joints.pop() {
+            Some(slot) => {
+                self.joints[slot as usize] = joint;
+                JointId(slot)
+            }
+            None => {
+                self.joints.push(joint);
+                JointId(self.joints.len() as u32 - 1)
+            }
+        };
         self.first_joint = Some(id);
         self.nj += 1;
         id
+    }
+
+    /// `dJointGroupCreate` @ 0x14033ffc0.
+    pub fn joint_group_create(&mut self) -> JointGroupId {
+        self.joint_groups.push(Vec::new());
+        JointGroupId(self.joint_groups.len() as u32 - 1)
+    }
+
+    /// The joints of a group in the order they were created.
+    pub fn joint_group(&self, group: JointGroupId) -> &[JointId] {
+        &self.joint_groups[group.0 as usize]
+    }
+
+    /// `dJointCreateContact` @ 0x14033fee0: a contact joint, in `group` if one is given, with
+    /// a copy of the whole `contact` (the fields its mode does not use included).
+    pub fn joint_create_contact(&mut self, group: Option<JointGroupId>, contact: &Contact) -> JointId {
+        // (the game never reads `the_m` before `getInfo1` has written it)
+        let id = self.joint_create(JointKind::Contact { contact: *contact, the_m: 0 });
+        if let Some(group) = group {
+            let joint = &mut self.joints[id.0 as usize];
+            joint.flags |= JOINT_INGROUP;
+            joint.group = Some(group);
+            self.joint_groups[group.0 as usize].push(id);
+        }
+        id
+    }
+
+    /// `dJointGroupEmpty` @ 0x140340040: destroys the group's joints, the last created first.
+    /// Every other joint keeps its place in the world's list and in its bodies' lists.
+    pub fn joint_group_empty(&mut self, group: JointGroupId) {
+        let joints = std::mem::take(&mut self.joint_groups[group.0 as usize]);
+        for &j in joints.iter().rev() {
+            self.remove_joint_references_from_attached_bodies(j);
+            // removeObjectFromList
+            let next = self.joints[j.0 as usize].next;
+            if self.first_joint == Some(j) {
+                self.first_joint = next;
+            } else {
+                let mut current = self.first_joint;
+                while let Some(c) = current {
+                    if self.joints[c.0 as usize].next == Some(j) {
+                        self.joints[c.0 as usize].next = next;
+                        break;
+                    }
+                    current = self.joints[c.0 as usize].next;
+                }
+            }
+            let joint = &mut self.joints[j.0 as usize];
+            joint.next = None;
+            joint.alive = false;
+            self.nj -= 1;
+            self.free_joints.push(j.0);
+        }
+        // keep the allocation
+        let mut joints = joints;
+        joints.clear();
+        self.joint_groups[group.0 as usize] = joints;
     }
 
     /// `dJointCreateBall` @ 0x14033fed0.
@@ -746,6 +862,8 @@ impl World {
                 self.set_anchors(j, anchor[0], anchor[1], anchor[2]);
             }
             JointKind::Fixed { .. } => {}
+            // dxJoint::setRelativeValues: the empty function 0x1403968c0
+            JointKind::Contact { .. } => {}
             JointKind::Slider { .. } => {
                 self.slider_compute_offset(j);
                 self.compute_initial_relative_rotation(j);
@@ -928,6 +1046,8 @@ impl World {
                 }
             }
             JointKind::Slider { limot, .. } => limot.set(parameter, value),
+            // (a contact joint has no parameters)
+            JointKind::Contact { .. } => {}
         }
     }
 

@@ -8,7 +8,15 @@
 //! (or stops it) can be written to a "force tape" in call order, with the system it came
 //! from, so that a run can be compared with the tape `tools/car_oracle` records.
 
-use rustyac_ode::{BodyId, JointId, Mass, World, PARAM_CFM, PARAM_ERP};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use rustyac_ode::collision::TriMeshData;
+use rustyac_ode::geom::{BroadPhase, GeomInfo, NearCallback, CLASS_BOX, CLASS_TRIMESH};
+use rustyac_ode::{
+    BodyId, Contact, ContactGeom, GeomId, GeomRef, JointGroupId, JointId, JointKind, Mass, StaticWorld, SurfaceParameters,
+    World, PARAM_CFM, PARAM_ERP,
+};
 
 use crate::vecmath::{Mat44f, Vec3f};
 
@@ -140,11 +148,46 @@ fn a3(v: &Vec3f) -> [f32; 3] {
     [v.x, v.y, v.z]
 }
 
-/// AC's `PhysicsCore` @ ctor 0x1402cba80, without collisions (stage 2 and 3 of the
-/// rigid-body port).
+/// AC's `PhysicsCore` @ ctor 0x1402cba80: one ODE world, the dynamic collision space with
+/// its numbered sub-spaces (one per car), the two groups of contact joints, and what the
+/// game does with every contact. The static space (the track's meshes) belongs to the track
+/// and is handed in when a step looks for contacts.
 pub struct PhysicsCore {
     pub world: World,
     bodies: Vec<BodyId>,
+    /// `spaceDynamic`: everything that moves.
+    pub space_dynamic: GeomId,
+    /// `dynamicSubSpaces`
+    dynamic_sub_spaces: BTreeMap<u32, GeomId>,
+    /// `contactGroup`: the contacts of the even frames (dynamic against dynamic).
+    contact_group: JointGroupId,
+    /// `contactGroupDynamic`: the contacts of the odd frames (dynamic against static).
+    contact_group_dynamic: JointGroupId,
+    /// `currentContactGroup`
+    current_contact_group: JointGroupId,
+    /// `noCollisionCounter`: steps left without a collision pass.
+    pub no_collision_counter: i32,
+    /// `currentFrame`: counts the collision passes; its parity picks the pass.
+    pub current_frame: u32,
+    colliders: Vec<BodyColliders>,
+    /// A static world for cores that have no track (a test floor). A car on a track hands the
+    /// track's own world to [`PhysicsCore::collision_step`].
+    pub statics: Option<Arc<StaticWorld>>,
+    /// `dSurfaceParameters::bounce_vel` of a mesh contact. The game never writes the field:
+    /// its contact joints get the 32 bits the stack held, which are the upper half of the
+    /// address of the first mesh's geom (a small positive number of the heap's, read as a
+    /// float: +0 or a denormal below 1e-40). The oracle hands over what its run had; the
+    /// game itself can only be met with +0, which differs only for a closing speed that is
+    /// itself a denormal.
+    pub mesh_bounce_vel: f32,
+    /// The same field for a box contact: the upper half of register r12, which is zero when
+    /// the game's `PhysicsEngine::step` runs. Such a contact has no bounce, so the value
+    /// never reaches a result.
+    pub box_bounce_vel: f32,
+    /// When set, every contact `dCollide` returns is noted here (for the oracles).
+    pub contact_log: Option<Vec<ContactRecord>>,
+    /// The collision callbacks of the last [`PhysicsCore::step`].
+    pub events: Vec<CollisionEvent>,
     /// The force tape of the current step, when recording is on.
     pub tape: Option<Vec<TapeCall>>,
     /// The system the next force calls are booked under.
@@ -163,9 +206,27 @@ impl PhysicsCore {
     /// `PhysicsCore::PhysicsCore` @ 0x1402cba80: gravity (0, -9.806, 0), ERP 0.3, CFM 1e-7,
     /// no damping.
     pub fn new() -> PhysicsCore {
+        let mut world = World::assetto_corsa();
+        // contactGroup, contactGroupDynamic; spaceStatic is the track's; spaceDynamic
+        let contact_group = world.joint_group_create();
+        let contact_group_dynamic = world.joint_group_create();
+        let space_dynamic = world.collision.simple_space_create(None);
         PhysicsCore {
-            world: World::assetto_corsa(),
+            world,
             bodies: Vec::new(),
+            space_dynamic,
+            dynamic_sub_spaces: BTreeMap::new(),
+            contact_group,
+            contact_group_dynamic,
+            current_contact_group: contact_group,
+            no_collision_counter: 0,
+            current_frame: 0,
+            colliders: Vec::new(),
+            statics: None,
+            mesh_bounce_vel: 0.0,
+            box_bounce_vel: 0.0,
+            contact_log: None,
+            events: Vec::new(),
             tape: None,
             source: ForceSource::Other,
             joint_feedback: false,
@@ -206,9 +267,19 @@ impl PhysicsCore {
         RigidBody { id, index: self.bodies.len() as u32 - 1 }
     }
 
-    /// `PhysicsCore::step` @ 0x1402cd690 without the collision step: `dWorldStep`.
+    /// `PhysicsCore::step` @ 0x1402cd690: the collision pass (against the core's own static
+    /// world, if it has one), then `dWorldStep`. The collision callbacks of the pass are left
+    /// in [`PhysicsCore::events`]; a car that has to hear of them before the world moves
+    /// calls [`PhysicsCore::collision_step`] and [`PhysicsCore::world_step`] itself.
     pub fn step(&mut self, dt: f32) {
-        self.world.step(dt);
+        let statics = self.statics.clone();
+        self.events = self.collision_step(statics.as_deref());
+        self.world_step(dt);
+    }
+
+    /// The second half of `PhysicsCore::step`: `dWorldStep`.
+    pub fn world_step(&mut self, dt: f32) -> rustyac_ode::StepStats {
+        self.world.step(dt)
     }
 
     // --- RigidBodyODE: state ---------------------------------------------------------------
@@ -445,3 +516,351 @@ impl PhysicsCore {
         }
     }
 }
+
+// --- collisions --------------------------------------------------------------------------
+
+/// The category bits the game gives its shapes (`docs/map/body.md` 5.5).
+pub mod category {
+    /// A track surface listed in `surfaces.ini`.
+    pub const SURFACE: u32 = 1;
+    /// A track mesh of the built-in `WALL` surface.
+    pub const WALL: u32 = 2;
+    /// A car of this machine: its floor boxes and its collider mesh.
+    pub const CAR: u32 = 4;
+    /// A car of another machine.
+    pub const REMOTE_CAR: u32 = 8;
+    /// A loose object of the track.
+    pub const OBJECT: u32 = 0x10;
+}
+
+/// What the game's `ICollisionObject` of a shape answers: `getGroup()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shape {
+    pub geom: GeomRef,
+    /// `RBCollisionMesh::group` (the category the mesh was made with) or, for a mesh of the
+    /// track, its geom's category bits.
+    pub group: u32,
+}
+
+/// One call of the game's collision callback (`ICollisionCallback::onCollisionCallBack`):
+/// a contact point that became a contact joint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollisionEvent {
+    /// The body of the first geom (`None`: the static world).
+    pub body_a: Option<RigidBody>,
+    /// The first geom's shape object (`None` for a box: boxes have no user data).
+    pub shape_a: Option<Shape>,
+    pub body_b: Option<RigidBody>,
+    pub shape_b: Option<Shape>,
+    pub normal: Vec3f,
+    pub pos: Vec3f,
+    pub depth: f32,
+}
+
+/// One contact as `dCollide` returned it, with what `PhysicsCore::onCollision` did with it
+/// (for the oracles).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactRecord {
+    /// The pair as it was handed to the near callback.
+    pub o1: GeomRef,
+    pub o2: GeomRef,
+    pub geom: ContactGeom,
+    /// False: a box contact whose normal does not point up enough in the body's frame; no
+    /// joint was made.
+    pub kept: bool,
+}
+
+/// The boxes and meshes of one body (`RigidBodyODE::geoms`, `::collisionMeshes`).
+#[derive(Clone, Debug, Default)]
+struct BodyColliders {
+    boxes: Vec<GeomId>,
+    meshes: Vec<GeomId>,
+}
+
+/// Collects the pairs the broad phase finds, in the order the game's `nearCallback`
+/// @ 0x1402ccc70 would be called with two geoms that are not spaces. (The narrow phase does
+/// not change anything the broad phase reads, so it can run afterwards.)
+#[derive(Default)]
+struct PairCollector {
+    pairs: Vec<(GeomRef, GeomRef)>,
+    /// `broadTestCount`
+    broad_tests: u32,
+}
+
+impl NearCallback for PairCollector {
+    fn near(&mut self, broad: &mut BroadPhase, o1: GeomRef, o2: GeomRef) {
+        if broad.is_space(o1) || broad.is_space(o2) {
+            self.broad_tests += 1;
+            broad.space_collide2(o1, o2, self);
+            return;
+        }
+        self.pairs.push((o1, o2));
+    }
+}
+
+impl PhysicsCore {
+    /// `PhysicsCore::getDynamicSubSpace` @ 0x1402cc920: the numbered space inside the dynamic
+    /// space (made on first use); number 0 is the dynamic space itself.
+    pub fn get_dynamic_sub_space(&mut self, index: u32) -> GeomId {
+        if index == 0 {
+            return self.space_dynamic;
+        }
+        if let Some(&space) = self.dynamic_sub_spaces.get(&index) {
+            return space;
+        }
+        let space = self.world.collision.simple_space_create(Some(self.space_dynamic));
+        self.dynamic_sub_spaces.insert(index, space);
+        space
+    }
+
+    fn colliders_mut(&mut self, body: RigidBody) -> &mut BodyColliders {
+        if self.colliders.len() <= body.index as usize {
+            self.colliders.resize(body.index as usize + 1, BodyColliders::default());
+        }
+        &mut self.colliders[body.index as usize]
+    }
+
+    /// `RigidBodyODE::addBoxCollider` @ 0x1402cddb0: a box of `size` with its middle at
+    /// `centre` in the body's frame.
+    pub fn add_box_collider(&mut self, body: RigidBody, centre: &Vec3f, size: &Vec3f, category: u32, mask: u32, space: u32) -> GeomId {
+        let sub = self.get_dynamic_sub_space(space);
+        let geom = self.world.collision.create_box(Some(sub), size.x, size.y, size.z);
+        self.world.geom_set_body(geom, body.id);
+        self.world.collision.geom_set_offset_position(geom, centre.x, centre.y, centre.z);
+        // dGeomSetRotation(geom, dBodyGetRotation(body)): for a geom with an offset this
+        // re-seats the BODY (rotation through its quaternion, position from the geom's)
+        let r = self.world.body(body.id).r;
+        self.world.geom_set_rotation(geom, &r);
+        self.colliders_mut(body).boxes.push(geom);
+        self.world.collision.set_collide_bits(geom, mask);
+        self.world.collision.set_category_bits(geom, category);
+        geom
+    }
+
+    /// `RigidBodyODE::addMeshCollider` @ 0x1402ce080: a triangle mesh on the body, placed by
+    /// `matrix` (rotation and translation) in the body's frame.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_mesh_collider(
+        &mut self,
+        body: RigidBody,
+        vertices: Vec<[f32; 3]>,
+        indices: Vec<u16>,
+        matrix: &Mat44f,
+        category: u32,
+        mask: u32,
+        space: u32,
+    ) -> GeomId {
+        let data = Arc::new(TriMeshData::build(vertices, indices));
+        let geom = self.world.collision.create_tri_mesh(None, data);
+        let sub = self.get_dynamic_sub_space(space);
+        self.world.collision.space_add(sub, geom);
+        self.world.geom_set_body(geom, body.id);
+        // the user data: an RBCollisionMesh { group = category, mask }
+        self.world.collision.geom_mut(geom).data = MESH_DATA | category as u64;
+        let m = &matrix.m;
+        let r = [
+            m[0][0], m[1][0], m[2][0], 0.0, //
+            m[0][1], m[1][1], m[2][1], 0.0, //
+            m[0][2], m[1][2], m[2][2], 0.0,
+        ];
+        self.world.collision.geom_set_offset_rotation(geom, &r);
+        self.world.collision.geom_set_offset_position(geom, m[3][0], m[3][1], m[3][2]);
+        self.world.collision.set_collide_bits(geom, mask);
+        self.world.collision.set_category_bits(geom, category);
+        self.colliders_mut(body).meshes.push(geom);
+        geom
+    }
+
+    /// The body's boxes in the order they were added.
+    pub fn box_colliders(&self, body: RigidBody) -> &[GeomId] {
+        self.colliders.get(body.index as usize).map_or(&[], |c| &c.boxes)
+    }
+
+    /// The body's meshes in the order they were added.
+    pub fn mesh_colliders(&self, body: RigidBody) -> &[GeomId] {
+        self.colliders.get(body.index as usize).map_or(&[], |c| &c.meshes)
+    }
+
+    /// `RigidBodyODE::setMeshCollideMask` @ 0x1402ce9c0. (The game reads the mesh unchecked;
+    /// a body without that mesh is left alone here.)
+    pub fn set_mesh_collide_mask(&mut self, body: RigidBody, index: usize, mask: u32) {
+        if let Some(&geom) = self.colliders.get(body.index as usize).and_then(|c| c.meshes.get(index)) {
+            self.world.collision.set_collide_bits(geom, mask);
+        }
+    }
+
+    /// `RigidBodyODE::getMeshCollideMask` @ 0x1402ce5d0.
+    pub fn get_mesh_collide_mask(&self, body: RigidBody, index: usize) -> Option<u32> {
+        let geom = *self.colliders.get(body.index as usize)?.meshes.get(index)?;
+        Some(self.world.collision.geom(geom).collide_bits)
+    }
+
+    /// `PhysicsCore::resetCollisions` @ 0x1402cd570: both contact groups are emptied.
+    pub fn reset_collisions(&mut self) {
+        self.world.joint_group_empty(self.contact_group_dynamic);
+        self.world.joint_group_empty(self.contact_group);
+    }
+
+    /// `PhysicsCore::setNoCollisionSteps` @ 0x1402cd660: the next `n` steps look for no
+    /// contacts (the contacts that exist stay).
+    pub fn set_no_collision_steps(&mut self, n: i32) {
+        self.no_collision_counter = n;
+    }
+
+    /// The contact joints that exist now, newest first (the order of the world's joint list).
+    pub fn contact_joints(&self) -> Vec<JointId> {
+        let mut out = Vec::new();
+        let mut j = self.world.first_joint;
+        while let Some(id) = j {
+            let joint = self.world.joint(id);
+            if matches!(joint.kind, JointKind::Contact { .. }) {
+                out.push(id);
+            }
+            j = joint.next;
+        }
+        out
+    }
+
+    fn rigid_body_of(&self, body: Option<BodyId>) -> Option<RigidBody> {
+        let id = body?;
+        let index = self.bodies.iter().position(|&b| b == id)?;
+        Some(RigidBody { id, index: index as u32 })
+    }
+
+    fn shape_of(&self, g: GeomRef, statics: Option<&StaticWorld>) -> Option<Shape> {
+        match g {
+            GeomRef::Dyn(id) => {
+                let data = self.world.collision.geom(id).data;
+                (data & MESH_DATA != 0).then_some(Shape { geom: g, group: data as u32 })
+            }
+            // CollisionMeshODE::getGroup @ 0x1402ced70: dGeomGetCategoryBits
+            GeomRef::StaticMesh(i) => Some(Shape { geom: g, group: statics?.meshes[i as usize].category_bits }),
+            _ => None,
+        }
+    }
+
+    /// The first half of `PhysicsCore::step` @ 0x1402cd690: `collisionStep` @ 0x1402cbf90
+    /// unless collisions are switched off for some more steps. Returns the calls of the
+    /// game's collision callback in order (they happen before `dWorldStep`).
+    ///
+    /// Even frames test the dynamic space against itself (car against car), odd frames the
+    /// dynamic space against the static one (car against track); each frame empties and
+    /// refills its own group of contact joints, so a contact lives for two steps.
+    pub fn collision_step(&mut self, statics: Option<&StaticWorld>) -> Vec<CollisionEvent> {
+        let mut events = Vec::new();
+        if self.no_collision_counter != 0 {
+            self.no_collision_counter -= 1;
+            return events;
+        }
+        let mut collector = PairCollector::default();
+        if self.current_frame & 1 != 0 {
+            self.world.joint_group_empty(self.contact_group_dynamic);
+            self.current_contact_group = self.contact_group_dynamic;
+            if statics.is_some() {
+                self.world.space_collide2(GeomRef::Dyn(self.space_dynamic), GeomRef::StaticSpace, statics, &mut collector);
+            }
+        } else {
+            self.world.joint_group_empty(self.contact_group);
+            self.current_contact_group = self.contact_group;
+            self.world.space_collide(GeomRef::Dyn(self.space_dynamic), statics, &mut collector);
+        }
+        self.current_frame = self.current_frame.wrapping_add(1);
+
+        // nearCallback @ 0x1402ccc70 for each pair of geoms
+        let mut contacts: Vec<ContactGeom> = Vec::new();
+        for (o1, o2) in collector.pairs {
+            let i1 = self.world.geom_info(o1, statics);
+            let i2 = self.world.geom_info(o2, statics);
+            // both directions must match
+            if i1.category_bits & i2.collide_bits == 0 {
+                continue;
+            }
+            if i2.category_bits & i1.collide_bits == 0 {
+                continue;
+            }
+            // room for 4 contacts between two bodies, for 32 against the static world
+            let flags = if i1.body.is_some() && i2.body.is_some() { 4 } else { 0x20 };
+            contacts.clear();
+            let n = self.world.collide(o1, o2, statics, flags, &mut contacts);
+            if n != 0 {
+                self.on_collision(statics, &contacts, o1, o2, &i1, &i2, &mut events);
+            }
+        }
+        events
+    }
+
+    /// `PhysicsCore::onCollision` @ 0x1402ccda0: every contact of one pair of geoms becomes
+    /// a contact joint with the game's material, except a box contact that does not come
+    /// from below.
+    #[allow(clippy::too_many_arguments)]
+    fn on_collision(
+        &mut self,
+        statics: Option<&StaticWorld>,
+        contacts: &[ContactGeom],
+        o1: GeomRef,
+        o2: GeomRef,
+        i1: &GeomInfo,
+        i2: &GeomInfo,
+        events: &mut Vec<CollisionEvent>,
+    ) {
+        let box_mesh = (i2.class == CLASS_TRIMESH && i1.class == CLASS_BOX) || (i1.class == CLASS_TRIMESH && i2.class == CLASS_BOX);
+        for c in contacts {
+            let mut keep = true;
+            // the default material: dContactApprox1 | dContactSoftCFM | dContactBounce
+            let mut surface = SurfaceParameters {
+                mode: 0x7014,
+                mu: f32::from_bits(0x3e80_0000),       // 0.25
+                bounce: f32::from_bits(0x3c23_d70a),   // 0.01
+                soft_cfm: f32::from_bits(0x38d1_b717), // 1e-4
+                // never written by the game: whatever the stack held (see the field)
+                bounce_vel: self.mesh_bounce_vel,
+                ..SurfaceParameters::default()
+            };
+            if box_mesh {
+                // the body of the first geom, or of the second
+                match i1.body.or(i2.body) {
+                    None => {
+                        // "Warning, box collision with no body attached": the contact stays
+                    }
+                    Some(body) => {
+                        let r = self.world.body_vector_from_world(body, [c.normal[0], c.normal[1], c.normal[2]]);
+                        // comiss y, 0.9 / jae keep: a NaN drops the contact
+                        if !(r[1] >= f32::from_bits(0x3f66_6666)) {
+                            keep = false;
+                        }
+                    }
+                }
+                // a floor box on the road: adds dContactSoftERP; a spring of 250,000 N/m with
+                // a damper of 300 N s/m at this step size, no bounce
+                surface.mode = 0x701c;
+                surface.soft_cfm = f32::from_bits(0x3a79_a934); // 1 / 1050
+                surface.soft_erp = f32::from_bits(0x3f36_db6e); // 5 / 7
+                surface.mu = f32::from_bits(0x3dcc_cccd); // 0.1
+                surface.bounce = 0.0;
+                surface.bounce_vel = self.box_bounce_vel;
+            }
+            if let Some(log) = &mut self.contact_log {
+                log.push(ContactRecord { o1, o2, geom: *c, kept: keep });
+            }
+            if !keep {
+                // no joint, no callback
+                continue;
+            }
+            let contact = Contact { surface, geom: *c, fdir1: [0.0; 3] };
+            let joint = self.world.joint_create_contact(Some(self.current_contact_group), &contact);
+            self.world.joint_attach(joint, i1.body, i2.body);
+            events.push(CollisionEvent {
+                body_a: self.rigid_body_of(i1.body),
+                shape_a: self.shape_of(o1, statics),
+                body_b: self.rigid_body_of(i2.body),
+                shape_b: self.shape_of(o2, statics),
+                normal: Vec3f::new(c.normal[0], c.normal[1], c.normal[2]),
+                pos: Vec3f::new(c.pos[0], c.pos[1], c.pos[2]),
+                depth: c.depth,
+            });
+        }
+    }
+}
+
+/// Marks the user data of a mesh geom (the low 32 bits are its `RBCollisionMesh::group`).
+const MESH_DATA: u64 = 1 << 32;

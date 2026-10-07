@@ -334,6 +334,8 @@ impl Replay {
                     p.extend_from_slice(&offset[..3]);
                     p.extend_from_slice(&[*erp, *cfm]);
                 }
+                // (the recorded worlds have no contact joints)
+                JointKind::Contact { .. } => {}
                 JointKind::Slider { axis1, qrel, offset, limot } => {
                     p.extend_from_slice(&axis1[..3]);
                     p.extend_from_slice(qrel);
