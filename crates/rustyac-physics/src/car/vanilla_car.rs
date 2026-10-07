@@ -42,6 +42,12 @@ pub trait ControlsProvider {
     /// `sendFF` (+0x18): the steering force, the damper level, the user's gain.
     fn send_ff(&mut self, _ff: f32, _damper: f32, _user_gain: f32) {}
 
+    /// `getFFGlobalGain` (+0x28): the device's own force-feedback gain; 1 for everything but
+    /// a wheel.
+    fn get_ff_global_gain(&mut self) -> f32 {
+        1.0
+    }
+
     /// `setVibrations` (+0x48)
     fn set_vibrations(&mut self, _def: &VibrationDef) {}
 
@@ -119,6 +125,10 @@ impl ChassisFeed for DeviceFeed<'_> {
 
     fn send_ff(&mut self, ff: f32, damper: f32, user_gain: f32) {
         self.device.send_ff(ff, damper, user_gain);
+    }
+
+    fn get_ff_global_gain(&mut self) -> f32 {
+        self.device.get_ff_global_gain()
     }
 
     fn set_vibrations(&mut self, def: &VibrationDef) {
@@ -222,8 +232,10 @@ impl<P: ControlsProvider> VanillaCar<P> {
     /// page). `physics_time` is the clock of this step, ms; it advances by `dt * 1000`.
     ///
     /// What the game's main thread queues for the physics thread (a click of the cockpit
-    /// brake bias, a setup change, a lock of the controls) runs before the step: change the
-    /// car directly between two calls.
+    /// brake bias, a setup change, a lock of the controls, a black flag) runs at the start of
+    /// the step, when the clock already shows the new step's time: hand such a change to
+    /// [`RollingChassis::queue`] between two calls. (A change that does not read the clock can
+    /// as well be made directly.)
     pub fn step(&mut self, dt: f32, physics_time: f64) {
         self.car.env.step_wind(physics_time);
         let mut feed = DeviceFeed { device: &mut self.device, dt };

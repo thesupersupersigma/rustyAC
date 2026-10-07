@@ -334,7 +334,9 @@ impl VanillaTyre {
         self.r_sliding_velocity_x = 0.0;
         self.r_sliding_velocity_y = 0.0;
         self.read_hub_matrix(hub);
-        if self.status.virtual_km > 0.001f32 as f64 {
+        // `comisd 0.001, virtualKM` + `jae`: also for a distance that is not a number
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !(0.001f32 as f64 >= self.status.virtual_km) {
             self.status.last_temp_imo = self.thermal_model.get_imo();
         }
         self.status.virtual_km = 0.0;

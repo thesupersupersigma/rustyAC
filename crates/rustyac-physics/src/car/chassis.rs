@@ -330,6 +330,18 @@ pub struct RollingChassis {
     pub telemetry: Option<PhysicsPageWriter>,
     /// The page of the step that just ran.
     pub physics_page: Option<PhysicsPage>,
+    /// `Car::powerClassIndex`: the engine's peak power over the car's mass, W/kg (the AI and
+    /// the session set-up read it, the physics does not)
+    pub power_class_index: f32,
+    /// `Car::isRetired` (nothing in the step reads it)
+    pub is_retired: bool,
+    /// `ICarControlsProvider::getFFGlobalGain` of the device as of the last step
+    pub ff_global_gain: f32,
+    /// `Car::lastCollisionWithCarTime`, ms (the collision callback writes it; no contacts yet)
+    pub last_collision_with_car_time: f64,
+    /// What the game's main thread has queued for the physics thread
+    /// (`PhysicsAvatar::stepCommandQueue`): run at the start of the next step.
+    pub pre_step_jobs: Vec<Box<dyn FnOnce(&mut RollingChassis)>>,
     /// `Car::unixName`: the car's folder name (a car called "spectator" collides with nothing
     /// but walls)
     pub unix_name: String,
@@ -341,7 +353,7 @@ pub struct RollingChassis {
     pub last_ligth_switch_state: bool,
     /// `Car::blackFlagged`: the controls are dead and the car is put into its pit box
     pub black_flagged: bool,
-    /// `Car::pitPosition`: the pit box (rows: side, up, tail direction, position)
+    /// `Car::pitPosition`: the pit box (rows: side, up, the direction the car faces, position)
     pub pit_position: Mat44f,
     /// `Car::penaltyTime`, s
     pub penalty_time: f64,
@@ -749,11 +761,16 @@ impl RollingChassis {
             slip_stream: SlipStream::default(),
             telemetry: None,
             physics_page: None,
-            unix_name: data_path
-                .parent()
-                .and_then(|folder| folder.file_name())
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            power_class_index: 0.0,
+            is_retired: false,
+            ff_global_gain: 1.0,
+            last_collision_with_car_time: 0.0,
+            pre_step_jobs: Vec::new(),
+            // `content/cars/<name>/data` in the game; the extracted cars are `cardata/<name>`
+            unix_name: {
+                let folder = if data_path.file_name().is_some_and(|name| name == "data") { data_path.parent() } else { Some(data_path) };
+                folder.and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().to_string()).unwrap_or_default()
+            },
             user_ff_gain: 1.0,
             lights_on: false,
             last_ligth_switch_state: false,
@@ -1161,6 +1178,10 @@ impl RollingChassis {
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
         self.physics_time = physics_time;
+        // PhysicsEngine::evOnPreStep: the queued jobs see the new step's clock
+        for job in std::mem::take(&mut self.pre_step_jobs) {
+            job(self);
+        }
         if let Some(tape) = &mut self.core.tape {
             tape.clear();
         }
@@ -1173,6 +1194,14 @@ impl RollingChassis {
         let v = self.core.get_velocity(self.body);
         let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
         self.speed = if ordered_nonzero(squared) { sqrtf(squared) } else { 0.0 };
+        if let Some(drivetrain) = &self.drivetrain {
+            let mut mass = self.suspensions[0].get_mass(&self.core);
+            mass += self.core.get_mass(self.body);
+            mass = self.suspensions[1].get_mass(&self.core) + mass;
+            mass = self.suspensions[2].get_mass(&self.core) + mass;
+            mass = self.suspensions[3].get_mass(&self.core) + mass;
+            self.power_class_index = drivetrain.engine().get_max_power_w() / mass;
+        }
 
         // --- Car::step ---------------------------------------------------------------------
         // the first car softens its joints' error correction below 1 m/s
@@ -1439,6 +1468,7 @@ impl RollingChassis {
 
         // what the game's physics thread does after each step: the state snapshot, then the
         // shared-memory page
+        self.ff_global_gain = feed.get_ff_global_gain();
         if let Some(mut writer) = self.telemetry.take() {
             writer.step_tyres_out(self);
             writer.snapshot(self);
@@ -1597,6 +1627,20 @@ impl RollingChassis {
         } else {
             0.0
         }
+    }
+
+    /// Queues a change for the start of the next step, as the game's main thread does with
+    /// everything it asks of the physics thread (locks, a gentle stop, a black flag, cockpit
+    /// clicks, teleports). The job runs when the clock already shows that step's time.
+    pub fn queue(&mut self, job: impl FnOnce(&mut RollingChassis) + 'static) {
+        self.pre_step_jobs.push(Box::new(job));
+    }
+
+    /// `Car::onNewSession` @ 0x140274c30: a new session lifts a black flag and un-retires the
+    /// car (the lap-time meter it also resets is not ported).
+    pub fn on_new_session(&mut self) {
+        self.is_retired = false;
+        self.black_flagged = false;
     }
 
     /// `Car::lockControls` @ 0x1402745f0.
@@ -1898,7 +1942,7 @@ impl RollingChassis {
     }
 
     /// `Car::onTyresStepCompleted` @ 0x140274cd0: runs at the end of the fourth tyre's step.
-    /// The call to the device (`sendFF`) is not ported; `last_ff` is what it would be sent.
+    /// The call to the device (`sendFF`) follows in [`RollingChassis::step`], which has the device.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn on_tyres_step_completed(&mut self) {
         self.last_ff = self.get_steer_ff();

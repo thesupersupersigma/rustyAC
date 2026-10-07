@@ -93,6 +93,9 @@ pub trait EngineModel {
     fn get_max_power_rpm(&self) -> f32;
     /// `Engine::getMaxTorqueRPM` @ 0x140285ae0
     fn get_max_torque_rpm(&self) -> f32;
+    /// `Engine::getMaxPowerW` @ 0x140285a80: the largest power seen so far, or, before the
+    /// engine has run, the curve's peak times one plus the turbos' full boost.
+    fn get_max_power_w(&self) -> f32;
     /// `Engine::setTurboBoostLevel` @ 0x140288090: the cockpit boost control.
     fn set_turbo_boost_level(&mut self, level: f32);
     /// `Engine::setCoastSettings` @ 0x140288010: the cockpit engine-brake control.
@@ -807,6 +810,17 @@ impl EngineModel for VanillaEngine {
 
     fn get_max_torque_rpm(&self) -> f32 {
         self.max_torque_rpm
+    }
+
+    fn get_max_power_w(&self) -> f32 {
+        if self.base.max_power_w_dynamic > 0.0 {
+            return self.base.max_power_w_dynamic;
+        }
+        let mut boost = 0.0f32;
+        for turbo in &self.turbos {
+            boost += turbo.data.max_boost;
+        }
+        (boost + 1.0) * self.max_power_w
     }
 
     fn set_turbo_boost_level(&mut self, level: f32) {

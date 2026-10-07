@@ -108,6 +108,13 @@ pub trait ChassisFeed {
     /// the user's gain, from `Car::onTyresStepCompleted`.
     fn send_ff(&mut self, _ff: f32, _damper: f32, _user_gain: f32) {}
 
+    /// `ICarControlsProvider::getFFGlobalGain` (+0x28): the device's own force-feedback gain
+    /// (a wheel's setting; 1 for a keyboard, a pad or an AI driver). `Car::getFinalFF` reads it
+    /// for the telemetry.
+    fn get_ff_global_gain(&mut self) -> f32 {
+        1.0
+    }
+
     /// `ICarControlsProvider::setVibrations` (+0x48), from `Car::pollControls`.
     fn set_vibrations(&mut self, _def: &VibrationDef) {}
 

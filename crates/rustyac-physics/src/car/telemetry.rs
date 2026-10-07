@@ -372,9 +372,9 @@ impl PhysicsPageWriter {
         w.push(f(car.env.road_temperature));
         let spin = car.core.get_local_angular_velocity(car.body);
         w.extend([spin.x, spin.y, spin.z].map(f));
-        // Car::getFinalFF @ 0x140270960: the device's global gain (1 for a plain device)
-        // times (lastFF * userFFGain)
-        w.push(f(1.0 * (car.last_ff * car.user_ff_gain)));
+        // Car::getFinalFF @ 0x140270960: the device's global gain (1 for everything but a
+        // wheel) times (lastFF * userFFGain)
+        w.push(f(car.ff_global_gain * (car.last_ff * car.user_ff_gain)));
         // performanceMeter: the lap-time meter needs the track's racing line
         w.push(f(car.performance_split as f32));
         // engineBrake, ersRecoveryLevel, ersPowerLevel, ersHeatCharging, ersIsCharging: cockpit
