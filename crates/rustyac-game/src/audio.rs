@@ -345,7 +345,8 @@ impl GameAudio {
         let files = EngineFiles { content_root: ac.clone(), audio_engine_ini: ac.join("system/cfg/audio_engine.ini"), audio_ini: audio_ini.clone() };
         let mut engine = AudioEngine::new(files)?;
         if engine.version != rustyac_audio::fmod::types::FMOD_VERSION {
-            println!("audio: FMOD {:#x} found, Assetto Corsa was made for 0x10812 (it carries on, and so does rustyAC)", engine.version);
+            // the game only complains and carries on; rustyAC's binding is written for 1.08.12
+            return Err(format!("the FMOD DLLs in {} are version {:#x}; Assetto Corsa's own, 1.08.12 (0x10812), are needed", ac.display(), engine.version));
         }
         // Game::Game: the master level
         let levels = IniReader::load(&audio_ini)?;
