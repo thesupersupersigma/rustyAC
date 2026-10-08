@@ -10,8 +10,8 @@ State after the last commit:
   Golden tests for one AWD and one ERS excerpt.
 - **Step 3 (leftovers): done.** assists.ini shift aids, first-lap arming by session type, two screenshots.
 - **Review: done**, findings fixed (section 9).
-- **Versioning:** the last step of the task: `0.16.0`, lock files, `chore(release): v0.16.0`, tag `v0.16.0`.
-  If `git tag` does not list `v0.16.0`, that step is still to do (`docs/release.md`).
+- **Versioning: done.** `0.16.0` in `Cargo.toml` and the lock files, commit `chore(release): v0.16.0`, tag
+  `v0.16.0` (annotated, not pushed). Nothing of the task is left to do.
 
 Where things are:
 
