@@ -9,18 +9,18 @@ State after the last commit:
 
 | Piece | State |
 |---|---|
-| `SuspensionStrut` port (`crates/rustyac-physics/src/car/suspension_strut.rs`) | written, builds, the 29 strut cars load and run 300 steps; **not yet compared with the game** |
-| Recorded field lists for any car layout (`replay::CarLayout`) | done on the Rust side; `tools/car_oracle` still records double-wishbone cars only |
-| `SuspensionAxle`, `SuspensionML` | not started |
+| `SuspensionStrut` (`car/suspension_strut.rs`) | ported; `bmw_m3_e30` bit-exact on `wc_stops` (600 steps) and `wc_spirited` (4001 steps) |
+| `SuspensionAxle` (`car/suspension_axle.rs`) + the drivetrain's axle torque reaction | ported; `ks_ferrari_250_gto` bit-exact on `wc_stops` and `wc_spirited` |
+| `tools/car_oracle`, `tools/chassis_compare` | record and compare any of the four suspension classes (`replay::CarLayout`) |
+| `SuspensionML` | not started |
 | Rear-wheel steering | not started |
 | Old tyre model (`VERSION < 10`) | not started |
-| Oracles, recordings, golden tests, report | not started |
+| Micro-oracles, the full scenario sets, golden tests, rustyac.exe replays, report | not started |
 
-Next steps, in order:
-1. `tools/car_oracle/src/game.rs`: `find_bodies_and_joints` must accept the other three
-   suspension classes (per-class offsets of hub / joints / status / steer torque, the strut
-   body, the rigid axle, ball and slider joint parameters).
-2. Record `bmw_m3_e30` and hold the strut port against it (`chassis_compare run`).
-3. Axle, ML, rear steer, old tyre, in the order of the brief.
+Next steps, in order: ML, rear steer, old tyre (briefs `spec_ml.md`, `spec_rearsteer.md`,
+`spec_oldtyre.md`), then step 2 of the task brief.
+
+Recordings so far (git-ignored, re-record with `car_oracle run --car <car> --scenario <s> --out <dir>`):
+`oracle/t17_e30`, `oracle/t17_gto`.
 
 Briefs read from the machine code (git-ignored): `re/scratch/task17/spec_*.md`.

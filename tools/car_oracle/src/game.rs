@@ -1736,9 +1736,12 @@ impl<'a> World<'a> {
             wr(writer, SMW_PHYSICS_BUFFER, world.page);
             wr(writer, SMW_PHYSICS_NULL_COUNTS, 300i32); // the 300-packet warm-up is over
             for i in 0..4 {
+                // `CarAvatar::initPhysics` @ 0x1400d7660: `dynamic_cast<Suspension*>`, so the
+                // bump stops of a wheel that is not on a double wishbone stay 0
                 let suspension = state().suspensions[i];
-                wr(writer, SMW_BUMP_STOPS_UP + i * 4, rd::<f32>(suspension, SUS_BUMP_STOP_UP));
-                wr(writer, SMW_BUMP_STOPS_DN + i * 4, rd::<f32>(suspension, SUS_BUMP_STOP_DN));
+                let dwb = SUS_CLASSES[state().suspension_classes[i]].name == "DWB";
+                wr(writer, SMW_BUMP_STOPS_UP + i * 4, if dwb { rd::<f32>(suspension, SUS_BUMP_STOP_UP) } else { 0.0 });
+                wr(writer, SMW_BUMP_STOPS_DN + i * 4, if dwb { rd::<f32>(suspension, SUS_BUMP_STOP_DN) } else { 0.0 });
             }
 
             // on the road, facing +z (forceRotation takes the direction the car's tail points)

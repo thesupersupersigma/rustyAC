@@ -186,7 +186,10 @@ impl PhysicsPageWriter {
         let rear = ini.get_float("RIDE", "PICKUP_REAR_HEIGHT")?;
         let mut bump_stops_dn = [0.0f32; 4];
         for (wheel, value) in bump_stops_dn.iter_mut().enumerate() {
-            *value = car.suspensions[wheel].base().bump_stop_dn;
+            // `dynamic_cast<Suspension*>`: 0 for a strut, an axle or a multilink
+            if car.suspensions[wheel].kind() == super::SuspensionType::DoubleWishbone {
+                *value = car.suspensions[wheel].base().bump_stop_dn;
+            }
         }
         Ok(PhysicsPageWriter {
             packet_id: 0,

@@ -293,8 +293,7 @@ pub fn is_gearbox_locked(car: &RollingChassis) -> bool {
     car.env.jump_start_penalty_mode == 0
 }
 
-/// AC's `Drivetrain` with its engine slot. The body reaction torque of a rigid rear axle is
-/// not ported (the chassis has no such axle).
+/// AC's `Drivetrain` with its engine slot.
 pub struct VanillaDrivetrain {
     pub base: DrivetrainBase,
     /// `acEngine` (+0x0e0)
@@ -892,8 +891,19 @@ impl VanillaDrivetrain {
         } else {
             ((torque as f32) * b.loc_clutch).abs()
         };
-        // (the reaction torque on the body exists only for a rigid rear axle, which the
-        // chassis does not have, and for `torqueModeEx == reactionTorques`, which nothing sets)
+        // the torque reaction of a rigid rear axle (`Car::suspensionTypeR == Axle`, whatever
+        // wheels are driven): the gearbox torque, without the final ratio, twists the body one
+        // way about its roll axis and the axle the other way. Made every step, also with 0.
+        // (The `torqueModeEx == reactionTorques` branches are dead: nothing sets that mode.)
+        if let Some(axle) = car.rigid_axle {
+            let gear = b.gears[b.current_gear as usize].ratio;
+            let t = ((b.loc_clutch as f64 * self.ac_engine.base().status.out_torque) * gear) as f32;
+            let previous = car.core.source;
+            car.core.source = super::body::ForceSource::Drivetrain;
+            car.core.add_local_torque(car.body, &crate::vecmath::Vec3f::new(0.0, 0.0, t * car.axle_torque_reaction));
+            car.core.add_local_torque(axle, &crate::vecmath::Vec3f::new(0.0, 0.0, -(t * car.axle_torque_reaction)));
+            car.core.source = previous;
+        }
     }
 
     /// The narrowed speeds of the four shafts go to the tyres, each tyre done completely (speed,

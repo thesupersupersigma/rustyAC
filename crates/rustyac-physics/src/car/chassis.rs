@@ -24,6 +24,7 @@ use super::shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, SuspensionType, VanillaDwb};
+use super::suspension_axle::VanillaAxle;
 use super::suspension_strut::VanillaStrut;
 use super::telemetry::{PhysicsPage, PhysicsPageWriter};
 use crate::track::timing::{FinishContext, InvalidatorAction, InvalidatorInput};
@@ -999,6 +1000,11 @@ impl RollingChassis {
         let suspensions_ini = IniReader::load(&data_path.join("suspensions.ini"))?;
         // the C runtime's `rand()`: `Suspension::Suspension` draws one number each
         let mut rand = crate::session::MsvcRand(rand_seed);
+        // a rigid rear axle is one body for both wheels, created before any hub
+        if suspensions_ini.get_string("REAR", "TYPE") == "AXLE" {
+            chassis.rigid_axle = Some(chassis.core.create_rigid_body());
+            chassis.axle_torque_reaction = suspensions_ini.get_float("AXLE", "TORQUE_REACTION")?;
+        }
         for index in 0..4 {
             let section = if index < 2 { "FRONT" } else { "REAR" };
             let kind = suspensions_ini.get_string(section, "TYPE");
@@ -1006,6 +1012,11 @@ impl RollingChassis {
             let suspension: Box<dyn SuspensionModel> = match kind.as_str() {
                 "STRUT" => Box::new(VanillaStrut::new(&mut chassis.core, body, data_path, index, rand.next())?),
                 "DWB" => Box::new(VanillaDwb::new(&mut chassis.core, body, data_path, index, rand.next())?),
+                // Left for wheel 2, Right for wheel 3; on a front wheel it is the error below
+                "AXLE" if index >= 2 => {
+                    let axle = chassis.rigid_axle.expect("created above for [REAR] TYPE=AXLE");
+                    Box::new(VanillaAxle::new(&mut chassis.core, body, axle, data_path, index == 2)?)
+                }
                 _ => {
                     // the game prints this and calls exit(1)
                     return Err(format!(

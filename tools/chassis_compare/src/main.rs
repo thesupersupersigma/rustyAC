@@ -61,7 +61,9 @@ fn repo_root() -> PathBuf {
 }
 
 /// Systems whose force calls the chassis makes itself.
-const OWN_SYSTEMS: [&str; 11] = [
+const OWN_SYSTEMS: [&str; 12] = [
+    // the torque reaction of a rigid rear axle (a chassis that is fed its drivetrain has none)
+    "drivetrain",
     "tyre",
     "surface",
     "spring",
