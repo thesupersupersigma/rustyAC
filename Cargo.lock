@@ -101,6 +101,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyac-audio"
+version = "0.18.0"
+dependencies = [
+ "rustyac-math",
+]
+
+[[package]]
 name = "rustyac-content"
 version = "0.18.0"
 

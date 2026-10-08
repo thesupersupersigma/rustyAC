@@ -1,0 +1,12 @@
+[package]
+name = "rustyac-audio"
+description = "rustyAC: Assetto Corsa's sound. Loads the player's own FMOD Studio 1.08.12 DLLs from the AC folder at run time and drives AC's own sound banks the way acs.exe does (AudioEngine, CarAudioFMOD, TrackAudio and the two DSP plug-ins, ported 1:1). Ships no FMOD file."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# AC's own powf / sinf / log10f (MSVCR120): the DSP plug-ins must give AC's numbers
+rustyac-math = { path = "../rustyac-math" }
