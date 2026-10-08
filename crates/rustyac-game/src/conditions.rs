@@ -52,6 +52,26 @@ pub fn find_setup(name: &str, car: &str, track: &str) -> Result<PathBuf, String>
     }
 }
 
+/// The wind of the game's own last session: the last line "Setting wind <km/h> kmh direction:
+/// <deg> deg" (`PhysicsEngine::setWind` prints it) of `Documents\Assetto Corsa\logs\log.txt`,
+/// as (km/h, degrees). The log has six decimals, so the wind is the game's to about a
+/// millionth of a km/h. A session without wind writes no such line: then there is none.
+pub fn wind_of_last_session() -> Result<(f32, f32), String> {
+    let path = documents_folder().ok_or("--wind-from-log: the Documents folder is not known")?.join("logs").join("log.txt");
+    let bytes = std::fs::read(&path).map_err(|e| format!("--wind-from-log: {}: {e}", path.display()))?;
+    Ok(wind_in_log(&String::from_utf8_lossy(&bytes)).unwrap_or((0.0, 0.0)))
+}
+
+/// The last "Setting wind" line of a log's text.
+pub fn wind_in_log(log: &str) -> Option<(f32, f32)> {
+    log.lines().rev().find_map(|line| {
+        let rest = line.trim().strip_prefix("Setting wind ")?;
+        let (kmh, rest) = rest.split_once(" kmh direction: ")?;
+        let direction = rest.trim().strip_suffix(" deg")?;
+        Some((kmh.trim().parse().ok()?, direction.trim().parse().ok()?))
+    })
+}
+
 /// The last folder name of a path or name (`spa`, `ks_ferrari_f2004`).
 fn last_name(text: &str) -> String {
     Path::new(text).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
@@ -178,7 +198,12 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
         setup.env.dynamic_grip_level = level;
         overrides.push(format!("grip {:.1} % (fixed)", level * 100.0));
     }
-    if let Some(kmh) = options.wind {
+    if options.wind_from_log {
+        let (kmh, direction) = wind_of_last_session()?;
+        setup.session.wind_speed = if kmh > 0.0 { wind_from_kmh(kmh) } else { 0.0 };
+        setup.session.wind_direction_deg = direction;
+        overrides.push(format!("wind {kmh} km/h from {direction} deg (what Assetto Corsa drew in its last session, from its log)"));
+    } else if let Some(kmh) = options.wind {
         if kmh > 0.0 {
             setup.session.wind_speed = wind_from_kmh(kmh);
             setup.session.wind_direction_deg = options.wind_dir.unwrap_or(wind_base_direction);
@@ -210,4 +235,27 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
         setup.session.setup_file = Some(file);
     }
     Ok(notes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wind_line_of_the_game_s_log() {
+        let log = "Loading engine\nGenerating wind, base 10.000000 0.000000 -> 9.1 3.0\nSetting wind 9.100000 kmh direction: 3.000000 deg\nwind vector: (0 , 0 , 1)\n\
+                   later\nGenerating wind, base 10.000000 0.000000 -> 8.005005 2.543413\r\nSetting wind 8.005005 kmh direction: 2.543413 deg\r\nwind vector: (-0.1 , 0.0 , -2.2)\n";
+        assert_eq!(wind_in_log(log), Some((8.005005, 2.543413)));
+        assert_eq!(wind_in_log("no wind today\n"), None);
+        assert_eq!(wind_in_log("Setting wind fast kmh direction: north deg\n"), None);
+    }
+
+    #[test]
+    fn a_setup_is_found_by_file_or_refused_with_the_places_looked_in() {
+        let message = find_setup("no such setup of task 15", "no_such_car", "spa").unwrap_err();
+        assert!(message.contains("no such setup of task 15") && message.contains("generic"), "{message}");
+        // a file is taken as it is
+        let file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert_eq!(find_setup(file.to_str().unwrap(), "any", "").unwrap().file_name(), file.file_name());
+    }
 }
