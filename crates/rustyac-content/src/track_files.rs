@@ -57,7 +57,8 @@ fn read_models(ini: &Path, folder: &Path) -> Result<Vec<ModelEntry>, String> {
     // the file is read as bytes: sections, keys and values are never decoded
     let text = std::fs::read(ini).map_err(|e| format!("{}: {e}", ini.display()))?;
     let text = text.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&text);
-    let mut sections: Vec<(&[u8], Vec<(&[u8], &[u8])>)> = Vec::new();
+    type Section<'a> = (&'a [u8], Vec<(&'a [u8], &'a [u8])>);
+    let mut sections: Vec<Section> = Vec::new();
     for line in text.split(|b| *b == b'\n') {
         let line = line.split(|b| *b == b';').next().unwrap_or(&[]).trim_ascii();
         if let Some(name) = line.strip_prefix(b"[").and_then(|l| l.strip_suffix(b"]")) {

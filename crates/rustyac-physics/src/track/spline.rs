@@ -19,6 +19,10 @@
 //! stores no grid (the search then goes through all points, which finds the same nearest
 //! point except where the game's grid would not hold it).
 
+// the comparisons, their operand order and the tests for a number outside a range are the
+// game's machine code (a NaN takes the same branch as there); clippy's rewrites would change that
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_range_contains, clippy::assign_op_pattern)]
+
 use std::path::Path;
 
 use super::Track;

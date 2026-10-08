@@ -71,10 +71,9 @@ jobs:
       - name: Test
         run: cargo test --release --workspace --locked
 
-      # not clean yet (about 40 warnings): the step shows them and never fails the run.
-      # Take continue-on-error away once they are gone.
-      - name: Clippy (does not fail the run)
-        continue-on-error: true
+      # a warning fails the run. Where clippy's rewrite would change what bit-exact code computes,
+      # the code has an #[allow] with its reason instead.
+      - name: Clippy
         run: cargo clippy --workspace --locked -- -D warnings
 
       # build only: they need acs.exe to run

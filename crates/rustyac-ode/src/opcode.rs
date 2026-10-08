@@ -209,7 +209,8 @@ impl Model {
         let mut prims: Vec<u16> = (0..n).map(|i| i as u16).collect();
         model.nodes.reserve_exact(n - 1);
         // (first triangle, one past the last, the node and side this run hangs on)
-        let mut pending: Vec<(usize, usize, Option<(u32, bool)>)> = vec![(0, n, None)];
+        type Run = (usize, usize, Option<(u32, bool)>);
+        let mut pending: Vec<Run> = vec![(0, n, None)];
         while let Some((lo, hi, parent)) = pending.pop() {
             let id = model.nodes.len() as u32;
             if let Some((parent, negative)) = parent {

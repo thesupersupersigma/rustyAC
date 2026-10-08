@@ -16,6 +16,9 @@
 //! Gates and spawn points take their place from the helper node's **own** matrix, not from
 //! its place in the world: the game does too.
 
+// the comparisons are the game's machine code (a NaN takes the same branch as there)
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons)]
+
 use super::Track;
 use crate::math::sqrtf;
 use crate::tyre::{RayTrackCollisionProvider, SurfaceDef};

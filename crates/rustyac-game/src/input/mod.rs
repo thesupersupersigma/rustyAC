@@ -180,10 +180,8 @@ impl LiveSource {
             }
             _ => {}
         }
-        if !paused {
-            if pressed(2) {
-                self.shared.camera_toggles.fetch_add(1, Ordering::Relaxed);
-            }
+        if !paused && pressed(2) {
+            self.shared.camera_toggles.fetch_add(1, Ordering::Relaxed);
         }
         self.meta_down = down;
     }

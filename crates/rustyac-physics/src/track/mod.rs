@@ -92,6 +92,7 @@ pub struct Track {
 impl Track {
     /// `Track::addSurface` @ 0x140277e50: a collision mesh with its own copy of the surface,
     /// in the sub-space `sub_space_id`. Returns the mesh's index.
+    #[allow(clippy::too_many_arguments)] // the game's `Track::addSurface` takes them all
     pub fn add_surface(&mut self, name: &str, key: &str, wav: &str, vertices: Vec<[f32; 3]>, indices: Vec<u16>, surface_def: &SurfaceDef, sub_space_id: u32) -> usize {
         let index = self.world.create_tri_mesh(vertices, indices, surface_def.collision_category, TRACK_MESH_COLLIDE_BITS, sub_space_id);
         let mut surface_def = *surface_def;
@@ -189,6 +190,7 @@ impl Default for DynamicTrack {
 }
 
 /// `(float)rand() * 3.0518509e-05 * 2 - 1`: the game's random number in -1..1.
+#[allow(clippy::excessive_precision)] // the constant's digits as the game's code is read
 fn random_unit(rand: i32) -> f32 {
     rand as f32 * 3.051_850_9e-5 * 2.0 - 1.0
 }
@@ -226,9 +228,12 @@ impl DynamicTrack {
     pub fn step(&mut self, laps: i32) {
         if self.enabled {
             let v = laps as f32 * self.grip_per_lap + self.base_grip;
+            // the game's comparison: a NaN becomes 0.85
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            let low = !(v >= 0.85);
             self.dynamic_grip_level = if v > 1.0 {
                 1.0
-            } else if !(v >= 0.85) {
+            } else if low {
                 0.85
             } else {
                 v

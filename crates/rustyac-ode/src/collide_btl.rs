@@ -333,14 +333,13 @@ fn clip(input: &[[f32; 3]], out: &mut Vec<[f32; 3]>, pl: &[f32; 4]) {
         let (a, b) = (&input[i0], &input[i1]);
         let d0 = ((pl[0] * a[0] + pl[1] * a[1]) + pl[2] * a[2]) + pl[3];
         let d1 = ((pl[0] * b[0] + pl[1] * b[1]) + pl[2] * b[2]) + pl[3];
-        let cross_over;
-        if d0 >= 0.0 {
+        let cross_over = if d0 >= 0.0 {
             // emit point
             out.push(*a);
-            cross_over = d0 > 0.0 && !(d1 >= 0.0);
+            d0 > 0.0 && !(d1 >= 0.0)
         } else {
-            cross_over = d1 > 0.0;
-        }
+            d1 > 0.0
+        };
         // if points are on different sides: the intersection point of edge and plane
         if cross_over {
             let inv = 1.0f32 / (d0 - d1);

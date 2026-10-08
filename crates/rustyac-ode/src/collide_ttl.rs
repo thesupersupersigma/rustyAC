@@ -15,6 +15,9 @@
 //! two bodies, 32 against the track) and whose position a merged contact keeps, so the
 //! pairs are consumed exactly in the query's order.
 
+// `x * -1.0` is ODE's source and the game's machine code (a multiply, not a sign flip)
+#![allow(clippy::neg_multiply)]
+
 use crate::collide_btl::fetch_triangle;
 use crate::contact::ContactGeom;
 use crate::geom::{GeomRef, MeshPose, NUMC_MASK};
