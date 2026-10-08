@@ -2807,12 +2807,29 @@ const ERS_LIMITS: [(&str, &str, &str, &str); 6] = [
 ];
 
 /// Task 16, front motors with torque vectoring (the two cars that have front motors say 0),
-/// the button, a reachable lap allowance and a rear brake correction.
+/// the button, a reachable lap allowance and a rear brake correction; with
+/// [`ERS_FRONT_MAPS`] the front motors also deliver without the button.
 const ERS_FRONT: [(&str, &str, &str, &str); 4] = [
     ("ers.ini", "FRONT_MOTORS", "FRONT_TORQUE_VECTORING_BIAS", "0.6"),
     ("ers.ini", "KINETIC", "HAS_BUTTON_OVERRIDE", "1"),
     ("ers.ini", "KINETIC", "MAX_KJ_PER_LAP", "300"),
     ("ers.ini", "KINETIC", "BRAKE_REAR_CORRECTION", "25"),
+];
+
+/// The front motors' map of the Lithium's default profile ("High": throttle x revs x speed):
+/// the mod's own tables are all zero, so its front motors never deliver by the map. These
+/// do: with the throttle, less above 100 km/h.
+const ERS_FRONT_MAPS: [(&str, &str); 3] = [
+    ("High_FRONT_GAS.lut", "0|0
+1|0.8
+"),
+    ("High_FRONT_RPMS.lut", "0|1
+21000|1
+"),
+    ("High_FRONT_SPEED_KMH.lut", "0|1
+100|1
+320|0.2
+"),
 ];
 
 fn test_car_command() -> Result<(), String> {
@@ -2826,7 +2843,7 @@ fn test_car_command() -> Result<(), String> {
     write_test_car_from("ks_ferrari_sf15t", "sf15t_ers_limits", &ERS_LIMITS, &[], &[])?;
     // (a mod car: only where it is installed and unpacked into cardata/)
     if repo_root().join("cardata/vrc_formula_lithium_2023/ers.ini").is_file() {
-        write_test_car_from("vrc_formula_lithium_2023", "lithium_ers_front", &ERS_FRONT, &[], &[])?;
+        write_test_car_from("vrc_formula_lithium_2023", "lithium_ers_front", &ERS_FRONT, &ERS_FRONT_MAPS, &[])?;
     }
     write_test_car("f2004_wc_oldaero", &[], &WC_OLDAERO_FILES)?;
     write_test_car("f2004_wc_aids", &WC_AIDS, &WC_AIDS_FILES)?;
