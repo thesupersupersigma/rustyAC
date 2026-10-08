@@ -190,24 +190,17 @@ fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfac
     cache_surface_sounds(&mut engine, surfaces);
     let info = CarInfo { unix_name: drive.car.clone(), guid: 0, data_folder: root.join("content/cars").join(&drive.car).join("data"), car_cameras_external_sound: Vec::new() };
     let car = CarSound::new(&mut engine, info)?;
-    let mut world = AudioWorld { engine, track, cars: vec![car] };
+    let mut world = AudioWorld::new(engine, track, vec![car]);
     let sim = SimView { focused_car_index: 0, camera: Some(drive.camera.view()) };
+    // the session's camera is set up: ACCameraManager::setAudioDistanceScale
+    world.set_audio_distance_scale(&sim, 1.0);
     for (i, frame) in drive.frames.iter().enumerate() {
         log::mark(&format!("frame {i}"));
         let events: Vec<PhysicsEvent> = frame.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect();
         world.frame(&FrameInput { cars: std::slice::from_ref(&frame.car), events: &events, sim, listener: Some(frame.listener), dt: DT });
     }
     log::mark("teardown");
-    let AudioWorld { mut engine, track, cars } = world;
-    for car in cars {
-        if let Some(audio) = car.audio {
-            audio.destroy(&mut engine);
-        }
-    }
-    if let Some(track) = track {
-        track.destroy(&mut engine);
-    }
-    drop(engine);
+    world.destroy();
     Ok(())
 }
 

@@ -25,6 +25,7 @@ const VA_AUDIO_ENGINE_PARSE_GUIDS: usize = 0x1_401f_a8c0; // AudioEngine::parseG
 const VA_AUDIO_ENGINE_ADD_CACHE: usize = 0x1_401f_8730; // AudioEngine::addCache(const wstring&)
 const VA_AUDIO_ENGINE_LISTENER_DISTANCE: usize = 0x1_401f_a610; // float AudioEngine::listenerDistance(const vec3f&)
 const VA_AUDIO_ENGINE_SET_LISTENER: usize = 0x1_401f_bb30; // AudioEngine::setListener(const mat44f&, const vec3f&)
+const VA_AUDIO_ENGINE_SET_DISTANCE_SCALE: usize = 0x1_401f_b790; // AudioEngine::setDistanceScale(float)
 const VA_AUDIO_ENGINE_UPDATE: usize = 0x1_401f_c080; // AudioEngine::update(float)
 const VA_CAR_AUDIO_CTOR: usize = 0x1_4006_2830; // CarAudioFMOD::CarAudioFMOD(CarAvatar*)
 const VA_CAR_AUDIO_DELETING_DTOR: usize = 0x1_4006_5820; // CarAudioFMOD::`scalar deleting destructor'(unsigned int)
@@ -229,6 +230,23 @@ impl<'a> Harness<'a> {
         }
         // the gear trigger watches physicsState.gear
         wr(car, 0x78, car.add(0x4d4));
+        // the body stands where the first state has it
+        if let Some(first) = drive.frames.first() {
+            wr::<[f32; 3]>(car, 0x254, first.car.body_position);
+        }
+        // ACCameraManager::setAudioDistanceScale for the session's camera: the multipliers of
+        // the car's MixVolumes (tyresMult +0x134, engineMult +0x138), then the roll-off scale
+        let boost = match view.mode {
+            2 => (view.drivable_mode as u32) <= 3,
+            _ => false,
+        };
+        if !car_audio.is_null() {
+            let k: f32 = if boost { 1.5 } else { 1.0 };
+            wr(car_audio, 0x134, k);
+            wr(car_audio, 0x138, k);
+        }
+        let set_distance_scale: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_DISTANCE_SCALE));
+        set_distance_scale(engine, 1.0);
         Harness { acs, engine, sim, car, physics_car, car_audio, backfire, track_audio }
     }
 
@@ -236,13 +254,7 @@ impl<'a> Harness<'a> {
     pub unsafe fn frame(&mut self, frame: &crate::drive::Frame) {
         let acs = self.acs;
         let car = self.car;
-        // the main thread's copy of the physics state
-        std::ptr::copy_nonoverlapping(frame.state.as_ptr(), car.add(0x268), frame.state.len());
-        wr::<u8>(self.physics_car, 0xa08, frame.car.tc_in_action as u8);
-        // the drawn body's matrix: its position is all the sound reads
-        wr::<[f32; 3]>(car, 0x254, frame.car.body_position);
-
-        // Sim::stepPhysicsEvent
+        // Sim::update, before the cars take their new state: Sim::stepPhysicsEvent ...
         if !self.car_audio.is_null() {
             let on_car_hit: extern "C" fn(*mut u8, f32, *const f32, *const f32, f32, f32, u32) = std::mem::transmute(acs.va(VA_CAR_AUDIO_ON_CAR_HIT));
             for raw in &frame.events {
@@ -256,7 +268,19 @@ impl<'a> Harness<'a> {
                 on_car_hit(self.car_audio, rd(p, 0x08), p.add(0x14).cast(), p.add(0x20).cast(), rd(p, 0x0c), rd(p, 0x10), rd(p, 0x40));
             }
         }
-        // CarAvatar::update: the backfire test, then the event triggers
+        // ... and the cars ranked by distance to the listener (one car: rank 0), from the body
+        // matrix and the listener of the frame before
+        let distance: extern "C" fn(*mut u8, *const f32) -> f32 = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_LISTENER_DISTANCE));
+        let d = distance(self.engine, car.add(0x254).cast());
+        if !self.car_audio.is_null() {
+            wr::<i32>(self.car_audio, 0x4a8, 0);
+            wr::<f32>(self.car_audio, 0x4ac, d - 0.0);
+        }
+        // PhysicsAvatar::update: the main thread's copy of the newest physics state
+        std::ptr::copy_nonoverlapping(frame.state.as_ptr(), car.add(0x268), frame.state.len());
+        wr::<u8>(self.physics_car, 0xa08, frame.car.tc_in_action as u8);
+        // CarAvatar::update: the backfire test, the drawn body's matrix (its position is all the
+        // sound reads), then the event triggers
         let engine_life: f32 = rd(car, 0xa10);
         #[allow(clippy::neg_cmp_op_on_partial_ord)]
         if !(0.0 >= engine_life) {
@@ -266,18 +290,9 @@ impl<'a> Harness<'a> {
                 self.fire(car.add(0xd0), &arg as *const u8);
             }
         }
+        wr::<[f32; 3]>(car, 0x254, frame.car.body_position);
         let trigger: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_EVENT_TRIGGER_UPDATE));
         trigger(car.add(0x58));
-        // Sim::update: the cars ranked by distance to the listener (one car: rank 0)
-        if !self.car_audio.is_null() {
-            let distance: extern "C" fn(*mut u8, *const f32) -> f32 = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_LISTENER_DISTANCE));
-            let d = distance(self.engine, car.add(0x254).cast());
-            wr::<i32>(self.car_audio, 0x4a8, 0);
-            wr::<f32>(self.car_audio, 0x4ac, d - 0.0);
-        } else {
-            let distance: extern "C" fn(*mut u8, *const f32) -> f32 = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_LISTENER_DISTANCE));
-            distance(self.engine, car.add(0x254).cast());
-        }
         // the camera
         let set_listener: extern "C" fn(*mut u8, *const f32, *const f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_LISTENER));
         set_listener(self.engine, frame.listener.0.as_ptr(), frame.listener.1.as_ptr());

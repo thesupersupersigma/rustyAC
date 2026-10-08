@@ -446,7 +446,11 @@ impl AudioEngine {
     /// `AudioEvent::~AudioEvent` @ 0x1401f7b30
     pub fn destroy_event(&mut self, e: EventId) {
         let Some(event) = self.events[e].take() else { return };
-        if !event.instance.is_null() {
+        if event.instance.is_null() {
+            // an event FMOD never made (its bank did not load): the game leaves its address in
+            // the list, to be read after it is freed; here it just leaves the list
+            self.registered.retain(|&id| id != e);
+        } else {
             // SAFETY: the event's own FMOD objects.
             unsafe {
                 let r = f::event_stop(Handle(event.instance), STOP_ALLOWFADEOUT);

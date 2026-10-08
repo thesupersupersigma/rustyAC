@@ -170,11 +170,13 @@ pub struct AudioWorld {
     pub engine: AudioEngine,
     pub track: Option<TrackAudio>,
     pub cars: Vec<CarSound>,
+    /// The cars' states of the frame before (what `Sim::update` still sees when it ranks them).
+    previous: Vec<CarFrame>,
 }
 
 /// What one frame of the sound is given.
 pub struct FrameInput<'a> {
-    /// One per car, in the cars' order.
+    /// One per car, in the cars' order: the newest finished physics step, unblended.
     pub cars: &'a [CarFrame],
     /// The physics events since the last frame, in the order the physics queued them.
     pub events: &'a [PhysicsEvent],
@@ -185,7 +187,22 @@ pub struct FrameInput<'a> {
     pub dt: f32,
 }
 
+/// `GameTime::update` @ 0x14044c250: the frame time the game hands to everything, at most 0.2 s.
+pub fn frame_dt(seconds: f64) -> f32 {
+    let d = if seconds >= 0.0 { seconds } else { 0.0 };
+    let raw = d as f32;
+    if raw > 0.2 {
+        0.2
+    } else {
+        raw
+    }
+}
+
 impl AudioWorld {
+    pub fn new(engine: AudioEngine, track: Option<TrackAudio>, cars: Vec<CarSound>) -> AudioWorld {
+        AudioWorld { engine, track, cars, previous: Vec::new() }
+    }
+
     /// `Sim::stepPhysicsEvent` @ 0x14019ebd0: collision events go to the car they name.
     fn step_physics_events(&mut self, events: &[PhysicsEvent]) {
         for e in events {
@@ -203,10 +220,11 @@ impl AudioWorld {
     }
 
     /// The part of `Sim::update` @ 0x14019ef90 that ranks the connected cars by their distance
-    /// to the listener: each gets its rank and the gap to the car before it.
-    fn listener_priorities(&mut self, frames: &[CarFrame]) {
+    /// to the listener: each gets its rank and the gap to the car before it. It runs before the
+    /// cars take their new state and before the camera moves the listener: on the frame before.
+    fn listener_priorities(&mut self) {
         let mut items: Vec<(usize, f32)> = Vec::new();
-        for (i, frame) in frames.iter().enumerate() {
+        for (i, frame) in self.previous.iter().enumerate() {
             if i < self.cars.len() && frame.node_active {
                 let dist = self.engine.listener_distance(&frame.body_position);
                 items.push((i, dist));
@@ -222,21 +240,63 @@ impl AudioWorld {
                 audio.listener_distance = dist - prev;
             }
             prev = dist;
-            if !CarAudio::is_in_pit(&frames[i]) {
+            if !CarAudio::is_in_pit(&self.previous[i]) {
                 prio += 1;
             }
         }
     }
 
-    /// One picture frame, in the order of `Game::onIdle`: the update of the simulation
-    /// (collision events, the cars' own updates, the ranking by distance), the camera's
-    /// listener, the track's render, the cars' `renderAudio`, and the engine's update.
+    /// `ACCameraManager::setAudioDistanceScale` @ 0x140033e20, which the game calls whenever
+    /// the camera mode changes (and once when the session's camera is set up): the exterior
+    /// views of the focused car get its tyres and engine 1.5 times louder, and FMOD's roll-off
+    /// scale is set. `other_scale` is the roll-off scale of the track or free camera.
+    pub fn set_audio_distance_scale(&mut self, sim: &SimView, other_scale: f32) {
+        let Some(camera) = sim.camera else { return };
+        for car in self.cars.iter_mut() {
+            if let Some(audio) = car.audio.as_mut() {
+                audio.mix_volumes.tyres_mult = 1.0;
+                audio.mix_volumes.engine_mult = 1.0;
+            }
+        }
+        let focused = sim.focused_car_index as usize;
+        let mut boost = false;
+        match camera.mode {
+            1 => {
+                if let Some(audio) = self.cars.get(focused).and_then(|c| c.audio.as_ref()) {
+                    boost = audio.info().car_cameras_external_sound.get(camera.car_camera_index as usize).copied().unwrap_or(false);
+                }
+            }
+            2 => boost = (camera.drivable_mode as u32) <= 3,
+            3 | 6 => {
+                self.engine.set_distance_scale(other_scale);
+                return;
+            }
+            _ => {}
+        }
+        if boost {
+            if let Some(audio) = self.cars.get_mut(focused).and_then(|c| c.audio.as_mut()) {
+                audio.mix_volumes.tyres_mult = 1.5;
+                audio.mix_volumes.engine_mult = 1.5;
+            }
+        }
+        self.engine.set_distance_scale(1.0);
+    }
+
+    /// One picture frame, in the order of `Game::onIdle` @ 0x140242730: `Sim::update` (the
+    /// collision events, then the ranking by distance, both still on the last frame's state),
+    /// the cars take the newest physics state and do their own update (backfire, gear change),
+    /// the camera sets the listener, the track's render, the cars' `renderAudio`, and the
+    /// engine's update.
     pub fn frame(&mut self, input: &FrameInput) {
+        if self.previous.is_empty() {
+            // before the first frame the cars stand where the session put them
+            self.previous = input.cars.to_vec();
+        }
         self.step_physics_events(input.events);
+        self.listener_priorities();
         for (car, frame) in self.cars.iter_mut().zip(input.cars) {
             car.avatar_update(&self.engine, frame, &input.sim, input.dt);
         }
-        self.listener_priorities(input.cars);
         if let Some((matrix, velocity)) = &input.listener {
             self.engine.set_listener(matrix, velocity);
         }
@@ -249,5 +309,21 @@ impl AudioWorld {
             }
         }
         self.engine.update(input.dt);
+        self.previous.clear();
+        self.previous.extend_from_slice(input.cars);
+    }
+
+    /// The destructors, cars first (each car's sound, then the track's, then the engine's).
+    pub fn destroy(self) {
+        let AudioWorld { mut engine, track, cars, .. } = self;
+        for car in cars {
+            if let Some(audio) = car.audio {
+                audio.destroy(&mut engine);
+            }
+        }
+        if let Some(track) = track {
+            track.destroy(&mut engine);
+        }
+        drop(engine);
     }
 }
