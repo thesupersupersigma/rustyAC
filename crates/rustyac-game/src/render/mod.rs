@@ -36,18 +36,24 @@ use crate::view::{CarView, Mat};
 use font::FontBitmap;
 use hud::{HudInfo, HudVertex};
 use models::{frustum, sphere_visible, GpuModel, ModelOptions, ModelStats};
-use scene::{cube, cylinder, mul, perspective, point, rotate_pitch, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};
+use scene::{cube, cylinder, mul, mul_precise, perspective_reversed, point, rotate_pitch, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};
 
 const SHADERS: &str = r#"
 cbuffer PerDraw : register(b0) {
     row_major float4x4 World;
-    row_major float4x4 ViewProj;
+    row_major float4x4 WorldView;   // World x the camera's view matrix, worked out in double precision
+    row_major float4x4 Proj;
     float4 Color;
     float4 Light;       // xyz: the direction the light travels, w: ambient share
     float4 Camera;      // xyz: the camera's position, w: fog density per metre
     float4 Fog;         // rgb: the colour of the horizon
     float4 Params;      // x: pixels with less alpha are not drawn, y: 1 = lit from both sides,
                         // z: repeats of the detail texture (0 = none)
+    float4 MultRG;      // the repeats of the detail textures R (xy) and G (zw)
+    float4 MultBA;      // ... B (xy) and A (zw)
+    float4 Layer;       // x: 0 plain, 1 multilayer by world position, 2 multilayer by uv, 3 grass;
+                        // y: magicMult (grass: gain); z, w: ksAmbient, ksDiffuse (z < 0: none)
+    float4 Layer2;      // x: the diffuse texture's uv factor, y: alpha factor
 };
 struct VSIn { float3 pos : POSITION; float3 normal : NORMAL; };
 struct VSOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world : TEXCOORD0; };
@@ -55,7 +61,7 @@ struct VSOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world : 
 VSOut vs_mesh(VSIn i) {
     VSOut o;
     float4 w = mul(float4(i.pos, 1.0), World);
-    o.pos = mul(w, ViewProj);
+    o.pos = mul(mul(float4(i.pos, 1.0), WorldView), Proj);
     o.normal = mul(float4(i.normal, 0.0), World).xyz;
     o.world = w.xyz;
     return o;
@@ -75,6 +81,11 @@ float4 ps_mesh(VSOut i) : SV_TARGET {
 
 Texture2D Diffuse : register(t0);
 Texture2D Detail : register(t1);
+Texture2D Mask : register(t2);      // txMask (grass: txVariation)
+Texture2D DetailR : register(t3);
+Texture2D DetailG : register(t4);
+Texture2D DetailB : register(t5);
+Texture2D DetailA : register(t6);
 SamplerState DiffuseSampler : register(s0);
 struct ModelIn { float3 pos : POSITION; float3 normal : NORMAL; float2 uv : TEXCOORD0; };
 struct ModelOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world : TEXCOORD0; float2 uv : TEXCOORD1; };
@@ -82,25 +93,48 @@ struct ModelOut { float4 pos : SV_POSITION; float3 normal : NORMAL; float3 world
 ModelOut vs_model(ModelIn i) {
     ModelOut o;
     float4 w = mul(float4(i.pos, 1.0), World);
-    o.pos = mul(w, ViewProj);
+    o.pos = mul(mul(float4(i.pos, 1.0), WorldView), Proj);
     o.normal = mul(float4(i.normal, 0.0), World).xyz;
     o.world = w.xyz;
     o.uv = i.uv;
     return o;
 }
 
-// a kn5 mesh: its diffuse texture, one sun, ambient light
+// a kn5 mesh: its colour as AC's pixel shader of that material mixes it, one sun, ambient light
 float4 ps_model(ModelOut i) : SV_TARGET {
-    float4 t = Diffuse.Sample(DiffuseSampler, i.uv) * Color;
+    float4 t = Diffuse.Sample(DiffuseSampler, i.uv * Layer2.x) * Color;
+    if (Layer.x == 1.0 || Layer.x == 2.0) {
+        // ksMultilayer*: the diffuse texture only shades; the colour is four tiled detail
+        // textures weighted by the mask's channels (the weights are not normalised)
+        float2 p = (Layer.x == 1.0) ? i.world.xz : i.uv;
+        float4 m = Mask.Sample(DiffuseSampler, i.uv);
+        float3 d = DetailG.Sample(DiffuseSampler, p * MultRG.zw).rgb * m.g + DetailR.Sample(DiffuseSampler, p * MultRG.xy).rgb * m.r
+                 + DetailB.Sample(DiffuseSampler, p * MultBA.xy).rgb * m.b + DetailA.Sample(DiffuseSampler, p * MultBA.zw).rgb * m.a;
+        t.rgb = t.rgb * d * Layer.y;
+        t.a = 1.0;
+    } else if (Layer.x == 3.0) {
+        // ksGrass: the blades' colour varied over the ground
+        t.rgb += t.rgb * (Mask.Sample(DiffuseSampler, i.world.xz * MultRG.xy).rgb - 0.5) * Layer.y;
+    }
     if (Params.z > 0.0) {
         // AC's detail texture: the colour where the diffuse texture's alpha is 0
         t.rgb *= lerp(Detail.Sample(DiffuseSampler, i.uv * Params.z).rgb, float3(1.0, 1.0, 1.0), t.a);
         t.a = 1.0;
     }
+    t.a *= Layer2.y;
     clip(t.a - Params.x);
-    float d = dot(normalize(i.normal), -Light.xyz);
+    float3 n = normalize(i.normal);
+    float d = dot(n, -Light.xyz);
     float lit = lerp(saturate(d), abs(d) * 0.5 + 0.5, Params.y);
-    float3 c = t.rgb * (Light.w + (1.0 - Light.w) * lit);
+    float3 c;
+    if (Layer.z >= 0.0) {
+        // the shape of AC's light: the sky's share by how far the surface faces up
+        // (ksAmbient), the sun's by the angle (ksDiffuse); the two strengths stand in for
+        // the weather's colours
+        c = saturate(t.rgb * (1.2 * Layer.z * saturate(0.75 + 0.25 * n.y) + 2.0 * Layer.w * lit));
+    } else {
+        c = t.rgb * (Light.w + (1.0 - Light.w) * lit);
+    }
     return float4(fogged(c, i.world), t.a);
 }
 
@@ -152,12 +186,18 @@ float4 ps_hud(HudOut i) : SV_TARGET {
 #[derive(Clone, Copy)]
 struct DrawConstants {
     world: Mat,
-    view_proj: Mat,
+    /// The camera's view matrix; what goes to the card in its place is `world` x `view`.
+    view: Mat,
+    proj: Mat,
     color: [f32; 4],
     light: [f32; 4],
     camera: [f32; 4],
     fog: [f32; 4],
     params: [f32; 4],
+    mult_rg: [f32; 4],
+    mult_ba: [f32; 4],
+    layer: [f32; 4],
+    layer2: [f32; 4],
 }
 
 /// A car's kn5 model and the nodes the physics moves.
@@ -260,6 +300,12 @@ pub struct DebugRenderer {
     draw_constants: ID3D11Buffer,
     hud_constants: ID3D11Buffer,
     raster: ID3D11RasterizerState,
+    /// AC's state for every mesh of a model (`cullStates[0]`, "eCullFront"): one side only.
+    raster_model: ID3D11RasterizerState,
+    /// AC's `eDepthNormal`: written, and the first thing drawn at a depth stays.
+    depth_model: ID3D11DepthStencilState,
+    /// AC's `eAlphaToCoverage` blend state (the "alpha tested" materials).
+    blend_coverage: ID3D11BlendState,
     depth_on: ID3D11DepthStencilState,
     depth_read: ID3D11DepthStencilState,
     depth_off: ID3D11DepthStencilState,
@@ -434,17 +480,41 @@ impl DebugRenderer {
             };
             let mut raster = None;
             device.CreateRasterizerState(&raster_desc, Some(&mut raster)).map_err(err("rasterizer state"))?;
-            let depth_state = |enable: bool, write: bool| -> Result<ID3D11DepthStencilState, String> {
+            // kn5 meshes are one-sided in the game (`initCullStates` @ 0x14001b0a0, state 0:
+            // CullMode FRONT, FrontCounterClockwise FALSE); a board is modelled as two faces
+            // back to back, which fight for the same pixels when both sides of each are drawn
+            let raster_model_desc = D3D11_RASTERIZER_DESC { CullMode: D3D11_CULL_FRONT, FrontCounterClockwise: false.into(), ..raster_desc };
+            let mut raster_model = None;
+            device.CreateRasterizerState(&raster_model_desc, Some(&mut raster_model)).map_err(err("rasterizer state"))?;
+            // the depth runs from 1 (near) to 0 (far), see `perspective_reversed`: "nearer" is
+            // "greater". `strict`: what is drawn first at a depth stays (AC's eDepthNormal is LESS)
+            let depth_state_of = |enable: bool, write: bool, strict: bool| -> Result<ID3D11DepthStencilState, String> {
                 let desc = D3D11_DEPTH_STENCIL_DESC {
                     DepthEnable: enable.into(),
                     DepthWriteMask: if write { D3D11_DEPTH_WRITE_MASK_ALL } else { D3D11_DEPTH_WRITE_MASK_ZERO },
-                    DepthFunc: D3D11_COMPARISON_LESS_EQUAL,
+                    DepthFunc: if strict { D3D11_COMPARISON_GREATER } else { D3D11_COMPARISON_GREATER_EQUAL },
                     ..Default::default()
                 };
                 let mut state = None;
                 device.CreateDepthStencilState(&desc, Some(&mut state)).map_err(err("depth state"))?;
                 state.ok_or("no depth state".to_string())
             };
+            let depth_state = |enable: bool, write: bool| depth_state_of(enable, write, false);
+            // AC's blend state 2 (`initBlendStates` @ 0x14001aeb0): no blending, the pixel's
+            // alpha decides how many of its samples are covered
+            let mut coverage_desc = D3D11_BLEND_DESC { AlphaToCoverageEnable: true.into(), ..Default::default() };
+            coverage_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
+                BlendEnable: false.into(),
+                SrcBlend: D3D11_BLEND_SRC_ALPHA,
+                DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOp: D3D11_BLEND_OP_ADD,
+                SrcBlendAlpha: D3D11_BLEND_ONE,
+                DestBlendAlpha: D3D11_BLEND_ONE,
+                BlendOpAlpha: D3D11_BLEND_OP_MAX,
+                RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+            };
+            let mut blend_coverage = None;
+            device.CreateBlendState(&coverage_desc, Some(&mut blend_coverage)).map_err(err("blend state"))?;
             let mut blend_desc = D3D11_BLEND_DESC::default();
             blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: true.into(),
@@ -546,6 +616,9 @@ impl DebugRenderer {
                 draw_constants: dynamic_buffer(&device, std::mem::size_of::<DrawConstants>(), D3D11_BIND_CONSTANT_BUFFER)?,
                 hud_constants: dynamic_buffer(&device, 16, D3D11_BIND_CONSTANT_BUFFER)?,
                 raster: raster.ok_or("no rasterizer state")?,
+                raster_model: raster_model.ok_or("no rasterizer state")?,
+                depth_model: depth_state_of(true, true, true)?,
+                blend_coverage: blend_coverage.ok_or("no blend state")?,
                 depth_on: depth_state(true, true)?,
                 depth_read: depth_state(true, false)?,
                 depth_off: depth_state(false, false)?,
@@ -594,27 +667,53 @@ impl DebugRenderer {
     fn draw_model(&self, model: &GpuModel, base: &DrawConstants, planes: &[[f32; 4]; 6], eye: [f32; 3], cull: bool) -> DrawStats {
         let mut stats = DrawStats::default();
         let stride = std::mem::size_of::<rustyac_content::Vertex>() as u32;
-        let mut blended: Vec<(f32, usize)> = Vec::new();
+        let mut transparent: Vec<(f32, usize)> = Vec::new();
+        // with one sample per pixel there is no coverage to dither: a plain alpha test then
+        let coverage = self.samples > 1;
         // SAFETY: state objects, buffers and views are owned by `self` / `model` and alive.
         unsafe {
             let c = &self.context;
+            c.RSSetState(&self.raster_model);
             c.IASetInputLayout(&self.model_layout);
             c.VSSetShader(&self.model_vs, None);
             c.PSSetShader(&self.model_ps, None);
             c.PSSetSamplers(0, Some(&[Some(self.model_sampler.clone())]));
-            let mut draw = |index: usize| {
+            let mut draw = |index: usize, transparent_pass: bool| {
                 let mesh = &model.meshes[index];
                 let material = &model.materials[mesh.material];
+                // `Material::apply` @ 0x14020a6e0: the blend state is the material's; the depth
+                // state is the material's in the opaque pass and "no write" in the other
+                match material.blend_mode {
+                    1 => c.OMSetBlendState(&self.blend, None, 0xffff_ffff),
+                    2 if coverage => c.OMSetBlendState(&self.blend_coverage, None, 0xffff_ffff),
+                    _ => c.OMSetBlendState(None, None, 0xffff_ffff),
+                }
+                let depth = match material.depth_mode {
+                    _ if transparent_pass => &self.depth_read,
+                    1 => &self.depth_read,
+                    2 => &self.depth_off,
+                    _ => &self.depth_model,
+                };
+                c.OMSetDepthStencilState(depth, 0);
+                let alpha_ref = if material.blend_mode == 2 && !coverage { 0.5 } else { 0.0 };
+                let [r, g, b, a] = material.mult;
+                let ks = material.ks.unwrap_or([-1.0, -1.0]);
                 let constants = DrawConstants {
                     world: model.world[mesh.node],
                     color: material.color,
-                    params: [material.alpha_ref, if material.foliage { 1.0 } else { 0.0 }, material.detail.as_ref().map(|d| d.1).unwrap_or(0.0), 0.0],
+                    params: [alpha_ref, if material.foliage { 1.0 } else { 0.0 }, material.detail.as_ref().map(|d| d.1).unwrap_or(0.0), 0.0],
+                    mult_rg: [r[0], r[1], g[0], g[1]],
+                    mult_ba: [b[0], b[1], a[0], a[1]],
+                    layer: [material.kind as f32, material.magic, ks[0], ks[1]],
+                    layer2: [material.uv_mult, material.alpha_scale, 0.0, 0.0],
                     ..*base
                 };
-                self.write(&self.draw_constants, std::slice::from_ref(&constants));
-                let texture = material.texture.clone().unwrap_or_else(|| self.white.clone());
-                let detail = material.detail.as_ref().map(|d| d.0.clone()).unwrap_or_else(|| self.white.clone());
-                c.PSSetShaderResources(0, Some(&[Some(texture), Some(detail)]));
+                self.upload(&constants);
+                let white = || Some(self.white.clone());
+                let texture = material.texture.clone().or_else(white);
+                let detail = material.detail.as_ref().map(|d| d.0.clone()).or_else(white);
+                let layer = |k: usize| material.layers[k].clone().or_else(white);
+                c.PSSetShaderResources(0, Some(&[texture, detail, layer(0), layer(1), layer(2), layer(3), layer(4)]));
                 c.IASetVertexBuffers(0, 1, Some(&Some(mesh.vertices.clone())), Some(&stride), Some(&0));
                 c.IASetIndexBuffer(&mesh.indices, models::INDEX_FORMAT, 0);
                 c.DrawIndexed(mesh.index_count, 0, 0);
@@ -637,21 +736,23 @@ impl DebugRenderer {
                         continue;
                     }
                 }
-                if mesh.blended {
-                    blended.push((distance, index));
+                // the game's two passes (`CameraShadowMapped::renderPass` @ 0x14020cf20): the
+                // meshes that are not `isTransparent`, in the file's order; then the others
+                if mesh.transparent {
+                    transparent.push((distance, index));
                 } else {
-                    draw(index);
+                    draw(index, false);
                 }
             }
-            // see-through meshes last, the farthest first, without writing depth
-            blended.sort_by(|a, b| b.0.total_cmp(&a.0));
-            c.OMSetBlendState(&self.blend, None, 0xffff_ffff);
-            c.OMSetDepthStencilState(&self.depth_read, 0);
-            for &(_, index) in &blended {
-                draw(index);
+            // (the game draws these in the file's order too; farthest first is kinder to
+            // panes of glass behind each other)
+            transparent.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for &(_, index) in &transparent {
+                draw(index, true);
             }
             c.OMSetBlendState(None, None, 0xffff_ffff);
             c.OMSetDepthStencilState(&self.depth_on, 0);
+            c.RSSetState(&self.raster);
             c.IASetInputLayout(&self.mesh_layout);
             c.VSSetShader(&self.mesh_vs, None);
             c.PSSetShader(&self.mesh_ps, None);
@@ -685,8 +786,14 @@ impl DebugRenderer {
         }
     }
 
+    /// Hands a draw's constants to the card, `view` replaced by `world` x `view`.
+    fn upload(&self, constants: &DrawConstants) {
+        let on_card = DrawConstants { view: mul_precise(&constants.world, &constants.view), ..*constants };
+        self.write(&self.draw_constants, std::slice::from_ref(&on_card));
+    }
+
     fn solid(&self, mesh: &(ID3D11Buffer, u32), constants: &DrawConstants) {
-        self.write(&self.draw_constants, std::slice::from_ref(constants));
+        self.upload(constants);
         let stride = std::mem::size_of::<Vertex>() as u32;
         // SAFETY: the buffers are alive; the pointers are to locals that outlive the calls.
         unsafe {
@@ -698,12 +805,14 @@ impl DebugRenderer {
     /// Draws one frame into the off-screen picture.
     pub fn draw(&mut self, view: &CarView, shape: &CarShape, camera: &CameraFrame, info: &HudInfo) {
         let (width, height) = self.size();
-        let projection = perspective(camera.fov, width as f32 / height as f32, camera.near.max(0.02), FAR);
-        let view_proj = mul(&view_matrix(&camera.matrix), &projection);
+        let projection = perspective_reversed(camera.fov, width as f32 / height as f32, camera.near.max(0.02), FAR);
+        let view_matrix = view_matrix(&camera.matrix);
+        let view_proj = mul(&view_matrix, &projection);
         let eye = camera.matrix[3];
         let base = DrawConstants {
             world: crate::view::IDENTITY,
-            view_proj,
+            view: view_matrix,
+            proj: projection,
             color: [1.0; 4],
             // the sun: from the left front, high
             light: [-0.35, -0.80, -0.48, 0.42],
@@ -711,6 +820,10 @@ impl DebugRenderer {
             camera: [eye[0], eye[1], eye[2], if self.track.is_some() { 0.00022 } else { 0.0011 }],
             fog: HORIZON,
             params: [0.0; 4],
+            mult_rg: [0.0; 4],
+            mult_ba: [0.0; 4],
+            layer: [0.0, 1.0, -1.0, -1.0],
+            layer2: [1.0, 1.0, 0.0, 0.0],
         };
         let planes = frustum(&view_proj);
         let eye3 = [eye[0], eye[1], eye[2]];
@@ -746,7 +859,8 @@ impl DebugRenderer {
             c.OMSetRenderTargets(Some(&[Some(self.targets.color_view.clone())]), &self.targets.depth_view);
             c.RSSetViewports(Some(&[viewport]));
             c.ClearRenderTargetView(&self.targets.color_view, &HORIZON);
-            c.ClearDepthStencilView(&self.targets.depth_view, D3D11_CLEAR_DEPTH.0, 1.0, 0);
+            // (the depth runs from 1 at the near plane to 0 at the far one)
+            c.ClearDepthStencilView(&self.targets.depth_view, D3D11_CLEAR_DEPTH.0, 0.0, 0);
             c.RSSetState(&self.raster);
             c.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             c.IASetInputLayout(&self.mesh_layout);

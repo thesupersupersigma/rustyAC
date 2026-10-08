@@ -116,6 +116,28 @@ pub fn perspective(fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Mat {
     [[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, q * far, -1.0], [0.0, 0.0, (near * far) * q, 0.0]]
 }
 
+/// [`perspective`] with the depth turned round: 1 at `near`, 0 at `far`. Not the game's (its
+/// depth runs 0..1): a float depth buffer is far finer this way round, which is what keeps a
+/// sign painted a few millimetres in front of a wall from flickering at a distance.
+pub fn perspective_reversed(fov_degrees: f32, aspect: f32, near: f32, far: f32) -> Mat {
+    let f = 1.0 / ((fov_degrees * 0.017_453) * 0.5).tan();
+    let q = 1.0 / (far - near);
+    [[f / aspect, 0.0, 0.0, 0.0], [0.0, f, 0.0, 0.0], [0.0, 0.0, q * near, -1.0], [0.0, 0.0, (near * far) * q, 0.0]]
+}
+
+/// `a` x `b` worked out in double precision: a model's world matrix times the camera's view
+/// matrix. On a track both hold coordinates of a kilometre and their product a few metres;
+/// in single precision the picture's depth would wobble by millimetres.
+pub fn mul_precise(a: &Mat, b: &Mat) -> Mat {
+    let mut out = [[0.0f32; 4]; 4];
+    for (i, row) in out.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
+            *cell = (0..4).map(|k| a[i][k] as f64 * b[k][j] as f64).sum::<f64>() as f32;
+        }
+    }
+    out
+}
+
 /// A box of the car in body axes: centre and full edge lengths.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxShape {
@@ -466,6 +488,15 @@ mod tests {
         let left = point(&view, [2.0, 2.0, 13.0]);
         assert!(clip(left).0 < 0.0);
         assert!((clip([0.0, 0.0, -1.0]).2).abs() < 1e-6 && (clip([0.0, 0.0, -3000.0]).2 - 1.0).abs() < 1e-4);
+        // the same picture with the depth turned round: 1 at the near plane, 0 at the far one
+        let reversed = perspective_reversed(60.0, 16.0 / 9.0, 1.0, 3000.0);
+        let depth = |z: f32| (z * reversed[2][2] + reversed[3][2]) / (z * reversed[2][3]);
+        assert!((depth(-1.0) - 1.0).abs() < 1e-6 && depth(-3000.0).abs() < 1e-6 && depth(-10.0) > depth(-20.0));
+        assert_eq!((reversed[0][0], reversed[1][1], reversed[2][3]), (projection[0][0], projection[1][1], projection[2][3]));
+        // a product of two matrices with large numbers that nearly cancel
+        let far_away = translation(1200.0, 30.0, -900.0);
+        let back = translation(-1200.0, -30.0, 900.0);
+        assert_eq!(mul_precise(&far_away, &back), crate::view::IDENTITY);
         // meshes
         assert_eq!(cube().len(), 36);
         assert_eq!(cylinder(24).len(), 24 * 12);

@@ -53,8 +53,8 @@ pub struct GpuMesh {
     pub radius: f32,
     pub lod_in: f32,
     pub lod_out: f32,
-    /// Drawn after the opaque meshes, blended.
-    pub blended: bool,
+    /// The kn5 mesh's `isTransparent`: drawn in the second pass, without writing depth.
+    pub transparent: bool,
 }
 
 pub struct GpuMaterial {
@@ -62,11 +62,47 @@ pub struct GpuMaterial {
     /// The detail texture and how often it repeats over the diffuse one (`useDetail`).
     pub detail: Option<(ID3D11ShaderResourceView, f32)>,
     pub color: [f32; 4],
-    /// Pixels with less alpha are not drawn (0 = all are).
-    pub alpha_ref: f32,
-    pub blend: bool,
+    /// AC's `Material::blendMode` (`KN5IO::loadMaterialsBinary` @ 0x140216240): 0 opaque,
+    /// 1 alpha blend (any `alphaBlendMode` but 0), 2 alpha to coverage (`alphaTested`, which
+    /// wins over 1).
+    pub blend_mode: u8,
+    /// AC's `Material::depthMode`: 0 normal, 1 no depth write, 2 no depth test.
+    pub depth_mode: i32,
     /// Lit from both sides the same (leaves, fences).
     pub foliage: bool,
+    /// How the colour is put together (the albedo of AC's pixel shaders):
+    /// 0 the diffuse texture (`ksPerPixel` and most others);
+    /// 1 `ksMultilayer`, `ksMultilayer_fresnel_nm`: the diffuse texture is only a shading map,
+    ///   the colour is four tiled detail textures weighted by the mask's four channels, laid
+    ///   out by world position;
+    /// 2 `ksMultilayer_objsp`: the same with the detail textures laid out by the mesh's uv;
+    /// 3 `ksGrass`: the diffuse texture varied by a second texture laid out by world position.
+    pub kind: u8,
+    /// `txMask` (kind 3: `txVariation`), `txDetailR`, `txDetailG`, `txDetailB`, `txDetailA`.
+    pub layers: [Option<ID3D11ShaderResourceView>; 5],
+    /// The repeats of the four detail textures (`multR`, `multG`, `multB`, `multA`; kind 3:
+    /// `scale` in the first).
+    pub mult: [[f32; 2]; 4],
+    /// `magicMult` (kind 3: `gain`).
+    pub magic: f32,
+    /// The diffuse texture's uv factor (`ksPerPixelNM_UVMult`: 1 + `diffuseMult`).
+    pub uv_mult: f32,
+    /// `ksPerPixelAlpha`'s `alpha`.
+    pub alpha_scale: f32,
+    /// `ksAmbient`, `ksDiffuse`: how much of the sky's and of the sun's light the material
+    /// takes. `None`: the material does not say (the old fixed light).
+    pub ks: Option<[f32; 2]>,
+}
+
+/// The texture slots a shader mixes its colour from besides `txDiffuse`, and the kind of mix
+/// (see [`GpuMaterial::kind`]).
+fn layer_slots(shader: &str) -> (u8, &'static [&'static str]) {
+    match shader {
+        "ksMultilayer" | "ksMultilayer_fresnel_nm" => (1, &["txMask", "txDetailR", "txDetailG", "txDetailB", "txDetailA"]),
+        "ksMultilayer_objsp" => (2, &["txMask", "txDetailR", "txDetailG", "txDetailB", "txDetailA"]),
+        "ksGrass" => (3, &["txVariation"]),
+        _ => (0, &[]),
+    }
 }
 
 pub struct GpuNode {
@@ -230,8 +266,10 @@ impl GpuModel {
                 }
                 let material = kn5.nodes[node].mesh.as_ref().map(|m| m.material_id as usize).unwrap_or(0);
                 let Some(material) = kn5.materials.get(material) else { continue };
+                let (_, slots) = layer_slots(&material.shader.display());
+                let layers = slots.iter().filter_map(|slot| material.textures.iter().find(|t| t.name == *slot).map(|t| t.texture.clone()));
                 let names = [material.diffuse().cloned(), detail_of(material).map(|d| d.0)];
-                for name in names.into_iter().flatten() {
+                for name in names.into_iter().flatten().chain(layers) {
                     if let Some(found) = locate(file, &name) {
                         if !wanted.contains(&found) {
                             wanted.push(found);
@@ -299,13 +337,45 @@ impl GpuModel {
                     }
                 }
                 let detail = detail_of(material).and_then(|(name, repeat)| Some((locate(file, &name).and_then(|key| views.get(&key).cloned())?, repeat)));
+                // the layers of a multilayer or grass shader; without its mask (or with no
+                // textures at all) the material is drawn the plain way
+                let (mut kind, slots) = layer_slots(shader);
+                let mut layers: [Option<ID3D11ShaderResourceView>; 5] = Default::default();
+                for (slot, layer) in slots.iter().zip(layers.iter_mut()) {
+                    *layer = material.textures.iter().find(|t| t.name == *slot).and_then(|t| locate(file, &t.texture)).and_then(|key| views.get(&key).cloned());
+                }
+                if layers[0].is_none() || texture.is_none() {
+                    kind = 0;
+                }
+                // a shader takes the member of a property that has its variable's type
+                // (KN5IO::loadMaterialsBinary): a float2 for multA, and for all four in _objsp
+                let scalar = |name: &str, default: f32| material.property(name).map_or(default, |p| p.value);
+                let pair = |name: &str| material.property(name).map_or([0.0; 2], |p| p.value2);
+                let both = |name: &str| [scalar(name, 0.0); 2];
+                let (mult, magic) = match kind {
+                    1 => ([both("multR"), both("multG"), both("multB"), pair("multA")], scalar("magicMult", 1.0)),
+                    2 => ([pair("multR"), pair("multG"), pair("multB"), pair("multA")], scalar("magicMult", 1.0)),
+                    3 => ([pair("scale"), [0.0; 2], [0.0; 2], [0.0; 2]], scalar("gain", 0.0)),
+                    _ => ([[0.0; 2]; 4], 1.0),
+                };
+                let ks = match (material.property("ksAmbient"), material.property("ksDiffuse")) {
+                    (Some(ambient), Some(diffuse)) if texture.is_some() => Some([ambient.value, diffuse.value]),
+                    _ => None,
+                };
                 model.materials.push(GpuMaterial {
                     texture,
                     detail,
                     color,
-                    alpha_ref: if material.alpha_tested { 0.5 } else { 0.0 },
-                    blend: material.alpha_blend_mode == 1,
+                    blend_mode: if material.alpha_tested { 2 } else if material.alpha_blend_mode != 0 { 1 } else { 0 },
+                    depth_mode: material.depth_mode,
                     foliage,
+                    kind,
+                    layers,
+                    mult,
+                    magic,
+                    uv_mult: if shader == "ksPerPixelNM_UVMult" { 1.0 + scalar("diffuseMult", 0.0) } else { 1.0 },
+                    alpha_scale: if shader == "ksPerPixelAlpha" { scalar("alpha", 1.0) } else { 1.0 },
+                    ks,
                 });
             }
             for (index, node) in kn5.nodes.iter().enumerate() {
@@ -339,7 +409,7 @@ impl GpuModel {
                     radius: mesh.bounding_radius,
                     lod_in: mesh.lod_in,
                     lod_out: mesh.lod_out,
-                    blended: mesh.is_transparent || model.materials.get(material).is_some_and(|m| m.blend),
+                    transparent: mesh.is_transparent,
                 });
             }
         }
