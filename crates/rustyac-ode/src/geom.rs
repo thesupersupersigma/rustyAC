@@ -863,3 +863,19 @@ pub struct BoxPose {
     pub pos: [f32; 3],
     pub r: Matrix3,
 }
+
+impl World {
+    /// For a world whose bodies were just given a saved state (and whose geoms are as they
+    /// were made): puts the geoms of `space` in the order a running simulation has them.
+    /// There every collision pass leaves the lists clean and every step then moves each
+    /// body's geoms to the front of their spaces, in the order of the body's own list; so
+    /// from the second step on the order is always the same. A world that is stepped from
+    /// its very start gets there by itself.
+    pub fn settle_geoms(&mut self, space: GeomId) {
+        self.collision.clean_geoms(&self.bodies, space);
+        for index in 0..self.bodies.len() {
+            let first = self.bodies[index].first_geom;
+            self.collision.body_moved(first);
+        }
+    }
+}

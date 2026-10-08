@@ -293,3 +293,99 @@ fn the_car_on_spa_matches_the_game() {
     let error = golden.check(&data).expect_err("a changed steering input went unnoticed");
     assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
 }
+
+// --- Task 13: the car's body touches things ------------------------------------------------
+//
+// Three excerpts of recordings made with collisions on (`car_oracle run --track spa --collide`),
+// each starting at a moment without a contact joint, a little before the car's collider mesh
+// first touches something:
+//
+// * `spa_wall_low`, steps 3993 to 4192: straight on at La Source, into the barrier at 60 km/h
+//   (170 steps with contact joints: floor boxes on the kerb, then the mesh against the wall);
+// * `spa_wall_high`, steps 4213 to 4412: off the road before Blanchimont and into the barrier
+//   at 283 km/h (the engine is blown up, the damage zones fill);
+// * `spa_rollover`, steps 745 to 1084: put down upside down, the car lands on its roof,
+//   bounces twice and comes to rest there.
+//
+// On top of what the other excerpts hash, each step's hash here holds the contact joints (how
+// many, a hash over all of them, the first six in full: position, normal, depth, the two
+// geoms, triangle numbers, the material), the collision pass's counter and parity, the
+// collision clocks, the five damage zones and the four suspensions' damage. The track and the
+// car's collider mesh are read from the game's own folder; without it the tests print a notice
+// and pass without testing anything.
+
+const COLLIDE_GOLDEN: [(&str, &[u8]); 3] = [
+    ("spa_wall_low", include_bytes!("golden/collide_spa_wall_low_3993_200.chgold")),
+    ("spa_wall_high", include_bytes!("golden/collide_spa_wall_high_4213_200.chgold")),
+    ("spa_rollover", include_bytes!("golden/collide_spa_rollover_745_340.chgold")),
+];
+
+/// The car's collider mesh out of the game's folder, if it is there.
+fn collider_mesh(car: &str, data: &std::path::Path, track_folder: &std::path::Path) -> Option<rustyac_physics::car::colliders::ColliderMesh> {
+    let root = rustyac_physics::track::loader::game_root(track_folder)?;
+    match rustyac_physics::car::colliders::load(data, Some(&root), car) {
+        Ok(colliders) if colliders.mesh.is_some() => colliders.mesh,
+        other => {
+            eprintln!(
+                "NOT TESTED: no collider mesh for {car} in {} ({}); the golden replay of a crash needs it",
+                root.display(),
+                other.err().unwrap_or_else(|| "content/cars/<car>/collider.kn5 is missing".to_string())
+            );
+            None
+        }
+    }
+}
+
+#[test]
+fn collision_golden_files_read_back() {
+    for (name, bytes) in COLLIDE_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        assert_eq!(golden.setup.scenario, name);
+        assert_eq!(golden.track.as_ref().map(|track| track.name.as_str()), Some("spa"));
+        assert!(golden.setup.collide.on && golden.collider_mesh && !golden.setup.collide.floor, "{name}: collisions with the car's own mesh");
+        assert!(golden.setup.collide.mesh.is_none(), "{name}: the mesh is not in the file");
+        assert!(golden.setup.is_whole() && !golden.state.is_empty());
+        assert_eq!(golden.to_bytes(), bytes, "{name}: parse and write do not round-trip");
+        // the oldest files have no collision keys and read as "no collisions"
+        assert!(!Golden::parse(GOLDEN[0].1).unwrap().setup.collide.on);
+    }
+}
+
+#[test]
+fn the_car_hits_spa_s_walls_and_lands_on_its_roof_like_the_game() {
+    let Some(data) = car_data("ks_ferrari_f2004") else { return };
+    let Some(folder) = track_folder("spa") else { return };
+    let Some(mesh) = collider_mesh("ks_ferrari_f2004", &data, &folder) else { return };
+    let (track, _) = rustyac_physics::track::load_track(&folder, "").expect("Spa loads");
+    let track = std::sync::Arc::new(track);
+    let attach = |golden: &mut Golden| {
+        golden.attach_track(std::sync::Arc::clone(&track));
+        golden.attach_collider_mesh(mesh.clone());
+    };
+    for (name, bytes) in COLLIDE_GOLDEN {
+        let mut golden = Golden::parse(bytes).unwrap();
+        // without the mesh an excerpt cannot run, and says so
+        golden.attach_track(std::sync::Arc::clone(&track));
+        assert!(golden.check(&data).unwrap_err().contains("collider mesh"));
+        attach(&mut golden);
+        golden.check(&data).unwrap_or_else(|e| panic!("{name} ({}): {e}", backend()));
+    }
+
+    // a wall that is not there is noticed: the same excerpt with the body a ghost again
+    let mut golden = Golden::parse(COLLIDE_GOLDEN[0].1).unwrap();
+    attach(&mut golden);
+    let mut ghost = golden.clone();
+    ghost.setup.collide.on = false;
+    assert!(ghost.check(&data).is_err(), "a car that passes through the barrier went unnoticed");
+
+    // and so is a mesh that is a millimetre longer at the nose (one bit would be lost: Spa's
+    // coordinates are hundreds of metres, where a float's step is 0.03 mm)
+    let mut moved = golden.clone();
+    if let Some(mesh) = &mut moved.setup.collide.mesh {
+        for vertex in &mut mesh.vertices {
+            vertex[2] += 0.001;
+        }
+    }
+    let error = moved.check(&data).expect_err("a changed collider mesh went unnoticed");
+    assert!(error.contains("spa_wall_low step"), "{error}");
+}

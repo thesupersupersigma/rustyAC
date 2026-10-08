@@ -1789,9 +1789,23 @@ fn write_excerpt(
     let setup = run_setup(recording, systems)?;
     let columns = Columns::new(recording)?;
     let mut chassis = setup.build_runner(data)?;
+    // a golden step holds the driver's controls only: the script's own commands (a car put
+    // down somewhere, locked controls) can come before the excerpt, not inside it
+    let job_in = |step: usize| {
+        (recording.has("script.teleport") && recording.i(step, "script.teleport") != 0)
+            || (recording.has("script.lockMs")
+                && (recording.f(step, "script.lockMs") != 0.0
+                    || recording.i(step, "script.setLocked") != 0
+                    || recording.i(step, "script.gentleStop") != 0
+                    || recording.f(step, "script.addPenalty") != 0.0))
+    };
+    if let Some(step) = (first..first + count).find(|&step| job_in(step)) {
+        return Err(format!("step {step}: the script commands the car there; an excerpt cannot hold that"));
+    }
     for step in 0..first {
         let feed = recorded_step(recording, step)?;
         let feed = if systems == Systems::ALL { feed.driver_only() } else { feed };
+        apply_jobs(&mut chassis, recording, step);
         chassis.step_recorded(setup.time_of_step(step), &feed);
         let rust = replay::snapshot(&chassis);
         let game = columns.game(recording, step);
@@ -1811,6 +1825,13 @@ fn write_excerpt(
     let mut trace_names: Vec<replay::TraceValue> = replay::powertrain_trace(&chassis).into_iter().filter(|v| !v.extra).collect();
     // on a track: the rays, the lap timer, the place along the AI line
     trace_names.extend(replay::track_trace(&chassis));
+    // with collisions: the contact joints, the damage, the collision clocks
+    if chassis.collisions_enabled {
+        if first != 0 && !chassis.core.contact_joints().is_empty() {
+            return Err(format!("step {first}: contact joints are alive; an excerpt has to start at a moment without any"));
+        }
+        trace_names.extend(replay::collision_trace(&chassis));
+    }
     let state = if first == 0 { Vec::new() } else { chassis.save_state() };
     let mut steps = Vec::with_capacity(count);
     for step in first..first + count {
@@ -1854,16 +1875,26 @@ fn write_excerpt(
         allowed_tyres_out: run.allowed_tyres_out,
     });
     let attached = setup.track.as_ref().map(|run| std::sync::Arc::clone(&run.track));
-    let mut golden = Golden { car: recording.get("car").unwrap_or("?").to_string(), setup, first, state, steps, track };
+    // nor is the car's collider mesh (it is the game's file)
+    let mesh = setup.collide.mesh.clone();
+    let mut golden =
+        Golden { car: recording.get("car").unwrap_or("?").to_string(), setup, first, state, steps, track, collider_mesh: mesh.is_some() };
     golden.setup.track = None;
+    golden.setup.collide.mesh = None;
     if let Some(track) = &attached {
         golden.attach_track(std::sync::Arc::clone(track));
+    }
+    if let Some(mesh) = &mesh {
+        golden.attach_collider_mesh(mesh.clone());
     }
     let bytes = golden.to_bytes();
     // the file must replay: parse it back and run it the way `cargo test` will
     let mut parsed = Golden::parse(&bytes)?;
     if let Some(track) = &attached {
         parsed.attach_track(std::sync::Arc::clone(track));
+    }
+    if let Some(mesh) = &mesh {
+        parsed.attach_collider_mesh(mesh.clone());
     }
     if parsed != golden {
         return Err("the golden file does not read back as written".to_string());
@@ -1908,6 +1939,33 @@ fn excerpt_track_command() -> Result<(), String> {
         let path = out.join(format!("track_{scenario}_{first}_{count}.chgold"));
         let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
         println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    Ok(())
+}
+
+/// `excerpt-collide`: the golden files of the car touching things, from the recordings in
+/// `oracle/collide` (`car_oracle run --track spa --collide --scenario ...`).
+fn excerpt_collide_command() -> Result<(), String> {
+    let repo = repo_root();
+    let out = repo.join("crates/rustyac-physics/tests/golden");
+    // (scenario, steps before the collider mesh first touches something, steps)
+    for (scenario, before, count) in [("spa_wall_low", 30usize, 200usize), ("spa_wall_high", 30, 200), ("spa_rollover", 20, 340)] {
+        let recording = Recording::read(&repo.join(format!("oracle/collide/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let steps = recording.steps.len();
+        // the car's collider mesh is geom 2000 among the contact joints a recording lists
+        let mesh_contact =
+            |step: usize| (0..6).any(|k| recording.i(step, &format!("collide.c{k}.g1")) >= 2000 || recording.i(step, &format!("collide.c{k}.g2")) >= 2000);
+        let hit = (0..steps).find(|&step| mesh_contact(step)).ok_or(format!("{scenario}: the collider mesh never touches anything"))?;
+        // a little before that, at a moment no contact joint lives into
+        let mut first = hit.saturating_sub(before).max(1);
+        while first > 1 && recording.i(first - 1, "collide.contactJoints") != 0 {
+            first -= 1;
+        }
+        let path = out.join(format!("collide_{scenario}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        let with_joints = (first..first + count).filter(|&step| recording.i(step, "collide.contactJoints") != 0).count();
+        println!("{} ({bytes} bytes, steps {first}..{}, first mesh contact at {hit}, {with_joints} steps with contact joints)", path.display(), first + count);
     }
     Ok(())
 }
@@ -2456,7 +2514,7 @@ fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&s
 
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
+     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
      chassis_compare test-car\n       \
      chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
@@ -2510,6 +2568,7 @@ fn main() {
         "test-car" => test_car_command(),
         "excerpt" => excerpt_command(),
         "excerpt-track" => excerpt_track_command(),
+        "excerpt-collide" => excerpt_collide_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
         "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref()),
         _ => Err(usage()),

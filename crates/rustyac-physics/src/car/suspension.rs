@@ -199,6 +199,9 @@ pub trait SuspensionModel {
     fn reset_damage(&mut self);
     /// +0x88 `getDamage`
     fn get_damage(&self) -> f32;
+    /// `damageData.damageAmount` itself, metres of steering-rod shift (for saving a car's state).
+    fn damage_amount(&self) -> f32;
+    fn set_damage_amount(&mut self, amount: f32);
     /// +0x90 `getMass`: the mass of the hub body.
     fn get_mass(&self, core: &PhysicsCore) -> f32;
     /// +0x98 `stop`
@@ -597,6 +600,14 @@ impl SuspensionModel for VanillaDwb {
     /// `Suspension::resetDamage` @ 0x1402c31d0.
     fn reset_damage(&mut self) {
         self.damage_data.damage_amount = 0.0;
+    }
+
+    fn damage_amount(&self) -> f32 {
+        self.damage_data.damage_amount
+    }
+
+    fn set_damage_amount(&mut self, amount: f32) {
+        self.damage_data.damage_amount = amount;
     }
 
     /// `Suspension::getDamage` @ 0x1402c1500.

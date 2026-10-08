@@ -1180,6 +1180,19 @@ impl RollingChassis {
             out.extend([data.sides[0], data.sides[1], data.sides_from_il[0], data.sides_from_il[1], data.side_velocity].map(f32::to_bits));
             out.push(data.is_outside_track_limits as u32);
         }
+        if self.collisions_enabled {
+            // a car that touches things: the collision pass's clock and parity, the collision
+            // times, the damage. Contact joints are not kept: a state can only be taken at a
+            // moment without any (the count is written so that loading can refuse).
+            out.push(self.core.contact_joints().len() as u32);
+            out.extend([self.core.current_frame, self.core.no_collision_counter as u32]);
+            for value in [self.last_collision_time.to_bits(), self.last_collision_with_car_time.to_bits()] {
+                out.push(value as u32);
+                out.push((value >> 32) as u32);
+            }
+            out.extend(self.damage_zone_level.map(f32::to_bits));
+            out.extend(self.suspensions.iter().map(|suspension| suspension.damage_amount().to_bits()));
+        }
         out
     }
 
@@ -1405,6 +1418,27 @@ impl RollingChassis {
             data.side_velocity = f32::from_bits(next()?);
             data.is_outside_track_limits = next()? != 0;
         }
+        if self.collisions_enabled {
+            if next()? != 0 {
+                return Err("the saved state was taken with contact joints alive; it cannot be loaded".to_string());
+            }
+            self.core.reset_collisions();
+            self.core.current_frame = next()?;
+            self.core.no_collision_counter = next()? as i32;
+            let mut double = || -> Result<f64, String> { Ok(f64::from_bits(next()? as u64 | (next()? as u64) << 32)) };
+            self.last_collision_time = double()?;
+            self.last_collision_with_car_time = double()?;
+            for level in &mut self.damage_zone_level {
+                *level = f32::from_bits(next()?);
+            }
+            for index in 0..self.suspensions.len() {
+                let amount = f32::from_bits(next()?);
+                self.suspensions[index].set_damage_amount(amount);
+            }
+            // the geoms as a running game has them: in the order the last step left them
+            let space = self.core.space_dynamic;
+            self.core.world.settle_geoms(space);
+        }
         Ok(())
     }
 }
@@ -1448,6 +1482,10 @@ pub struct Golden {
     /// `content/tracks`. The track itself is not in the file: [`Golden::attach_track`] hands
     /// it over before [`Golden::check`].
     pub track: Option<GoldenTrack>,
+    /// The excerpt was made with the car's own collider mesh (`collider.kn5` in the game's
+    /// folder). The mesh is not in the file: [`Golden::attach_collider_mesh`] hands it over
+    /// before [`Golden::check`].
+    pub collider_mesh: bool,
 }
 
 /// The track part of a golden file's header.
@@ -1523,6 +1561,19 @@ impl Golden {
                 track.name, track.armed as u8, track.allowed_tyres_out, e.penalty_mode
             ),
             None => header,
+        };
+        // an excerpt with collisions (Task 13); older files have none of these keys
+        let c = &self.setup.collide;
+        let header = if c.on {
+            format!(
+                "{header}collide=1\ncollider_mesh={}\nmesh_bounce_vel={:08x}\nno_collision_steps={}\nfloor={}\n",
+                self.collider_mesh as u8,
+                c.mesh_bounce_vel.to_bits(),
+                c.no_collision_steps,
+                c.floor as u8
+            )
+        } else {
+            header
         };
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
@@ -1607,6 +1658,17 @@ impl Golden {
             }
             Err(_) => None,
         };
+        let mut collider_mesh = false;
+        if get("collide").is_ok_and(|v| v != "0") {
+            collider_mesh = get("collider_mesh")? != "0";
+            setup.collide = CollideRun {
+                on: true,
+                mesh: None,
+                mesh_bounce_vel: f32::from_bits(u32::from_str_radix(get("mesh_bounce_vel")?, 16).map_err(|e| format!("mesh_bounce_vel: {e}"))?),
+                no_collision_steps: get("no_collision_steps")?.parse().map_err(|e| format!("no_collision_steps: {e}"))?,
+                floor: get("floor")? != "0",
+            };
+        }
         let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
         let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;
         let mut words = bytes[12 + header_len..].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
@@ -1626,7 +1688,15 @@ impl Golden {
             }
             steps.push(GoldenStep { feed, hash: low | high << 32, bodies });
         }
-        Ok(Golden { car: get("car")?.to_string(), setup, first, state, steps, track })
+        Ok(Golden { car: get("car")?.to_string(), setup, first, state, steps, track, collider_mesh })
+    }
+
+    /// Hands an excerpt with collisions the car's collider mesh (read from the game's folder
+    /// by the caller: [`colliders::load`](super::colliders::load)).
+    pub fn attach_collider_mesh(&mut self, mesh: super::colliders::ColliderMesh) {
+        if self.collider_mesh {
+            self.setup.collide.mesh = Some(mesh);
+        }
     }
 
     /// Hands a track excerpt its track (loaded from the game's folder by the caller).
@@ -1649,6 +1719,9 @@ impl Golden {
     pub fn check(&self, data_path: &Path) -> Result<(), String> {
         if self.track.is_some() && self.setup.track.is_none() {
             return Err("an excerpt of a drive on a track needs its track (Golden::attach_track)".to_string());
+        }
+        if self.collider_mesh && self.setup.collide.mesh.is_none() {
+            return Err("an excerpt with collisions needs the car's collider mesh (Golden::attach_collider_mesh)".to_string());
         }
         let mut chassis = self.setup.build_runner(data_path)?;
         if !self.state.is_empty() {
@@ -1687,11 +1760,18 @@ impl Golden {
                 all_kinds.push(value.kind);
                 words.push(value.word);
             }
+            // with collisions: the contact joints, the damage, the collision clocks
+            if chassis.collisions_enabled {
+                for value in collision_trace(&chassis) {
+                    all_kinds.push(value.kind);
+                    words.push(value.word);
+                }
+            }
             let hash = step_hash(&all_kinds, &words, chassis.core.tape.as_deref().unwrap_or(&[]));
             if hash != step.hash {
                 return Err(format!(
                     "{} step {number}: the bodies agree with the game, but another value (suspension, tyre, joint, \
-                     force call, steering, force feedback, brakes, engine, drivetrain) does not: hash {hash:#018x}, \
+                     force call, steering, force feedback, brakes, engine, drivetrain, contact, damage) does not: hash {hash:#018x}, \
                      the game's {:#018x}",
                     self.setup.scenario, step.hash
                 ));
