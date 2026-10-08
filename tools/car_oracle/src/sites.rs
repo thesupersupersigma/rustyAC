@@ -76,6 +76,32 @@ const SITES: &[(u64, &str)] = &[
     (0x1_402c_37e5, "bumpstop"), // upper bump stop: body
     (0x1_402c_3865, "bumpstop"), // lower bump stop: hub
     (0x1_402c_3892, "bumpstop"), // lower bump stop: body
+    // SuspensionStrut::step 0x1402c6600: spring along the strut, the two bump stops, damper
+    (0x1_402c_67cf, "spring"),
+    (0x1_402c_6817, "spring"),
+    (0x1_402c_68f9, "bumpstop"),
+    (0x1_402c_6926, "bumpstop"),
+    (0x1_402c_69a3, "bumpstop"),
+    (0x1_402c_69d1, "bumpstop"),
+    (0x1_402c_6a89, "damper"),
+    (0x1_402c_6ad8, "damper"),
+    // SuspensionAxle::step 0x1402c8770: spring, the sideways leaf spring (booked as spring),
+    // the two bump stops, damper
+    (0x1_402c_89f8, "spring"),
+    (0x1_402c_8a3c, "spring"),
+    (0x1_402c_8ada, "spring"),
+    (0x1_402c_8aff, "spring"),
+    (0x1_402c_8ba0, "bumpstop"),
+    (0x1_402c_8bcc, "bumpstop"),
+    (0x1_402c_8c5c, "bumpstop"),
+    (0x1_402c_8c89, "bumpstop"),
+    (0x1_402c_8d30, "damper"),
+    (0x1_402c_8d76, "damper"),
+    // SuspensionML::step 0x1402cab00: spring (with the packer), damper
+    (0x1_402c_ac36, "spring"),
+    (0x1_402c_ac64, "spring"),
+    (0x1_402c_ad16, "damper"),
+    (0x1_402c_ad5b, "damper"),
     // HeaveSpring::step 0x1402b3960: left hub, right hub, body twice, for each force
     (0x1_402b_3b70, "heave_spring"), // F = spring plus packer
     (0x1_402b_3bce, "heave_spring"),

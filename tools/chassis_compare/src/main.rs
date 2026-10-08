@@ -387,9 +387,39 @@ struct Columns {
     columns: Vec<usize>,
 }
 
+/// The bodies and joints of the recorded car, from the names of the recording's fields (a
+/// strut car has two more bodies than a double-wishbone car, an axle car one fewer).
+fn recorded_layout(recording: &Recording) -> replay::CarLayout {
+    let mut layout = replay::CarLayout { bodies: Vec::new(), joints: Vec::new() };
+    for (_, name, _) in &recording.fields {
+        if let Some(body) = name.strip_suffix(".pre.pos.x") {
+            layout.bodies.push(body.to_string());
+        }
+        if let Some(joint) = name.strip_prefix("joint.").and_then(|rest| rest.strip_suffix(".tag")) {
+            let has = |part: &str| recording.has(&format!("joint.{joint}.{part}"));
+            let shape = if has("distance") {
+                replay::JointShape::Rod
+            } else if has("axis1.x") {
+                replay::JointShape::Slider
+            } else if has("qrel.w") {
+                replay::JointShape::Fixed
+            } else {
+                replay::JointShape::Ball
+            };
+            layout.joints.push((joint.to_string(), shape));
+        }
+    }
+    layout
+}
+
+/// The recorded name of a body of the force tape.
+fn body_name(recording: &Recording, body: u32) -> String {
+    recorded_layout(recording).bodies.get(body as usize).cloned().unwrap_or_else(|| format!("body {body}"))
+}
+
 impl Columns {
     fn new(recording: &Recording) -> Result<Columns, String> {
-        let fields = replay::fields();
+        let fields = replay::fields_of(&recorded_layout(recording));
         let mut columns = Vec::with_capacity(fields.len());
         for field in &fields {
             if !recording.has(&field.name) {
@@ -469,12 +499,18 @@ fn compare_tape_calls(recording: &Recording, step: usize, rust: &[TapeCall]) -> 
     let game = &recording.steps[step].calls;
     for (seq, (g, r)) in game.iter().zip(rust).enumerate() {
         let system = recording.system_of(g);
-        let head = format!("force call {seq} ({} on {}, {system})", replay::kind_name(g.kind), replay::BODIES[g.body as usize]);
         if g.body != r.body || g.kind != r.kind {
-            return Err(format!("{head}: Rust made {} on {}", replay::kind_name(r.kind), replay::BODIES[r.body as usize]));
+            return Err(format!(
+                "force call {seq} ({} on {}, {system}): Rust made {} on {}",
+                replay::kind_name(g.kind),
+                body_name(recording, g.body),
+                replay::kind_name(r.kind),
+                body_name(recording, r.body)
+            ));
         }
+        let head = || format!("force call {seq} ({} on {}, {system})", replay::kind_name(g.kind), body_name(recording, g.body));
         if system != r.source.name() {
-            return Err(format!("{head}: Rust books it under {}", r.source.name()));
+            return Err(format!("{}: Rust books it under {}", head(), r.source.name()));
         }
         // a `stop` has no vectors (the recording keeps the wrapper's unused argument there)
         let vectors: &[(&str, [f32; 3], [f32; 3])] = &[
@@ -487,7 +523,8 @@ fn compare_tape_calls(recording: &Recording, step: usize, rust: &[TapeCall]) -> 
             for k in 0..3 {
                 if !same_float(gv[k], rv[k]) {
                     return Err(format!(
-                        "{head}: {name}[{k}]: game {:?} ({:#010x}) / Rust {:?} ({:#010x})",
+                        "{}: {name}[{k}]: game {:?} ({:#010x}) / Rust {:?} ({:#010x})",
+                        head(),
                         gv[k],
                         gv[k].to_bits(),
                         rv[k],
@@ -1929,7 +1966,7 @@ fn write_excerpt(
         let hash = replay::step_hash(&kinds, &words, &tape);
         // the game's bodies after the step
         let mut bodies = Vec::new();
-        for body in replay::BODIES {
+        for body in &recorded_layout(recording).bodies {
             let col = |name: &str| recording.steps[step].words[recording.col(&format!("{body}.post.{name}"))];
             for name in ["pos.x", "pos.y", "pos.z", "q.w", "q.x", "q.y", "q.z", "lvel.x", "lvel.y", "lvel.z", "avel.x", "avel.y", "avel.z"] {
                 bodies.push(col(name));

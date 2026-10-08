@@ -73,7 +73,6 @@ const VA_TIMER_FREQUENCY: usize = 0x1_4155_a598; // LARGE_INTEGER frequency (ksT
 const VA_IS_TEST_MODE: usize = 0x1_4155_a770; // static bool PhysicsEngine::isTestMode
 // --- vtables ---------------------------------------------------------------------------------
 const VA_KEYBOARD_CONTROL_VTABLE: usize = 0x1_404c_5d50; // KeyboardCarControl (a real ICarControlsProvider)
-const VA_SUSPENSION_VTABLE: usize = 0x1_404f_f870; // Suspension (double wishbone)
 const VA_RIGID_BODY_VTABLE: usize = 0x1_4050_09c0; // RigidBodyODE
 const RIGID_BODY_SLOTS: usize = 0x158 / 8;
 const SUSPENSION_SLOTS: usize = 0xc8 / 8;
@@ -194,17 +193,79 @@ const S_ANGULAR_VELOCITY: usize = 0x14;
 const TH_PATCHES: usize = 0x8;
 const PATCH_SIZE: usize = 0x28;
 
-// Suspension (double wishbone)
+// ISuspension (the members every suspension class shares)
 const SUS_BUMP_STOP_UP: usize = 0x1c;
 const SUS_BUMP_STOP_DN: usize = 0x20;
-const SUS_HUB: usize = 0x40;
-const SUS_JOINTS: usize = 0x68;
-const SUS_STATUS: usize = 0x1c0;
-const SUS_STEER_TORQUE: usize = 0x1dc;
-const SUS_STEER_ANGLE: usize = 0x1ec;
-/// `Suspension::joints[0..5]` in creation order (`Suspension::attach`): each rod runs from a
-/// point on the car body (anchor 1) to a point on the hub (anchor 2).
-const SUS_JOINT_NAMES: [&str; 5] = ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"];
+/// `Car::rigidAxle`: the one body of a rigid rear axle (null without one).
+const CAR_RIGID_AXLE: usize = 0x128;
+
+/// Where one of the game's four suspension classes keeps what the recorder reads.
+struct SusClass {
+    name: &'static str,
+    vtable: usize,
+    /// `hub` (the axle class has none: its body is `Car::rigidAxle`)
+    hub: Option<usize>,
+    /// `strutBody`
+    strut_body: Option<usize>,
+    /// `status` (travel, damperSpeedMS)
+    status: usize,
+    steer_torque: Option<usize>,
+    steer_angle: Option<usize>,
+    joints: SusJoints,
+}
+
+enum SusJoints {
+    /// `IJoint* joints[5]` at this offset, with these names in creation order.
+    Array(usize, [&'static str; 5]),
+    /// `std::vector` of records at this offset: record size, offset of the `IJoint*` in a
+    /// record, name prefix. (For the axle only the Left instance creates the links.)
+    Vector(usize, usize, usize, &'static str),
+}
+
+/// `Suspension` (double wishbone), `SuspensionStrut`, `SuspensionAxle`, `SuspensionML`.
+const SUS_CLASSES: [SusClass; 4] = [
+    SusClass {
+        name: "DWB",
+        vtable: 0x1_404f_f870,
+        hub: Some(0x40),
+        strut_body: None,
+        status: 0x1c0,
+        steer_torque: Some(0x1dc),
+        steer_angle: Some(0x1ec),
+        // each rod runs from a point on the car body (anchor 1) to a point on the hub (anchor 2)
+        joints: SusJoints::Array(0x68, ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"]),
+    },
+    SusClass {
+        name: "STRUT",
+        vtable: 0x1_404f_fc80,
+        hub: Some(0x40),
+        strut_body: Some(0x1b8),
+        status: 0x180,
+        steer_torque: Some(0x19c),
+        steer_angle: Some(0x1ac),
+        joints: SusJoints::Array(0x58, ["bottom_rear", "bottom_front", "steer_rod", "slider", "ball"]),
+    },
+    SusClass {
+        name: "AXLE",
+        vtable: 0x1_404f_fe90,
+        hub: None,
+        strut_body: None,
+        status: 0x68,
+        steer_torque: None,
+        steer_angle: None,
+        joints: SusJoints::Vector(0x88, 0x40, 0x38, "link"),
+    },
+    SusClass {
+        name: "ML",
+        vtable: 0x1_4050_01a0,
+        hub: Some(0x38),
+        strut_body: None,
+        status: 0x40,
+        steer_torque: Some(0x98),
+        steer_angle: None,
+        joints: SusJoints::Vector(0x70, 0x38, 0x30, "joint"),
+    },
+];
 
 // SharedMemoryWriter (0x220 bytes) and the CarAvatar (0x12a8 bytes) it reads a few values from
 const SMW_SIZE: usize = 0x220;
@@ -246,6 +307,34 @@ const J_FEEDBACK: usize = 0x68;
 const J_PARAMS: usize = 0x88;
 const JOINT_DBALL: u32 = 15;
 const JOINT_FIXED: u32 = 7;
+const JOINT_BALL: u32 = 1;
+const JOINT_SLIDER: u32 = 3;
+/// `dxJointBall`: the two anchors, erp, cfm.
+const BALL_PARAMS: [(&str, usize); 8] = [
+    ("anchor1.x", 0x00),
+    ("anchor1.y", 0x04),
+    ("anchor1.z", 0x08),
+    ("anchor2.x", 0x10),
+    ("anchor2.y", 0x14),
+    ("anchor2.z", 0x18),
+    ("erp", 0x20),
+    ("cfm", 0x24),
+];
+/// `dxJointSlider`: axis1, qrel, offset, then the limit-motor block at +0x30 (its
+/// `normal_cfm` is what `SliderJointODE::setERPCFM` writes).
+const SLIDER_PARAMS: [(&str, usize); 11] = [
+    ("axis1.x", 0x00),
+    ("axis1.y", 0x04),
+    ("axis1.z", 0x08),
+    ("qrel.w", 0x10),
+    ("qrel.x", 0x14),
+    ("qrel.y", 0x18),
+    ("qrel.z", 0x1c),
+    ("offset.x", 0x20),
+    ("offset.y", 0x24),
+    ("offset.z", 0x28),
+    ("cfm", 0x30 + 0x14),
+];
 /// Type-specific joint members recorded each step, as `(name, offset from the joint's own
 /// data at +0x88)`; all f32.
 const DBALL_PARAMS: [(&str, usize); 9] = [
@@ -270,12 +359,12 @@ const FIXED_PARAMS: [(&str, usize); 9] = [
     ("erp", 0x20),
     ("cfm", 0x24),
 ];
-const JOINT_PARAM_WORDS: usize = 9;
-
-fn joint_params(kind: u32) -> &'static [(&'static str, usize); JOINT_PARAM_WORDS] {
+fn joint_params(kind: u32) -> &'static [(&'static str, usize)] {
     match kind {
         JOINT_DBALL => &DBALL_PARAMS,
         JOINT_FIXED => &FIXED_PARAMS,
+        JOINT_BALL => &BALL_PARAMS,
+        JOINT_SLIDER => &SLIDER_PARAMS,
         other => panic!("the car has a joint of ODE type {other}, which the oracle does not know"),
     }
 }
@@ -399,6 +488,8 @@ struct State {
     joints: Vec<JointRef>,
     body_vtable: *const usize,
     suspensions: [*mut u8; 4],
+    /// Index into `SUS_CLASSES` of each wheel's suspension.
+    suspension_classes: [usize; 4],
     suspension_vtables: [*const usize; 4],
     tyre_step_original: usize,
     world_step_original: usize,
@@ -418,7 +509,7 @@ struct State {
     /// Force and torque accumulators as the solver used them: the game's forces plus what
     /// `dWorldStep` adds itself (gravity, gyroscopic torque).
     solver: Vec<(V3, V3)>,
-    joint_params: Vec<[f32; JOINT_PARAM_WORDS]>,
+    joint_params: Vec<Vec<f32>>,
     /// `Car::controls` when `Car::step` had finished (read as `dWorldStep` starts).
     applied_controls: [u8; 0x34],
     stage0_original: usize,
@@ -917,11 +1008,7 @@ extern "C" fn world_step_hook(world: *mut u8, step: f32) -> i32 {
             .joints
             .iter()
             .map(|j| {
-                let mut out = [0f32; JOINT_PARAM_WORDS];
-                for (slot, (_, offset)) in out.iter_mut().zip(joint_params(j.kind)) {
-                    *slot = rd(j.ode, J_PARAMS + offset);
-                }
-                out
+                joint_params(j.kind).iter().map(|(_, offset)| rd::<f32>(j.ode, J_PARAMS + offset)).collect()
             })
             .collect();
         for joint in &st.joints {
@@ -1421,6 +1508,7 @@ impl<'a> World<'a> {
                 joints: Vec::new(),
                 body_vtable: acs.va(VA_RIGID_BODY_VTABLE) as *const usize,
                 suspensions: [std::ptr::null_mut(); 4],
+                suspension_classes: [0; 4],
                 suspension_vtables: [std::ptr::null(); 4],
                 tyre_step_original: 0,
                 world_step_original: 0,
@@ -1800,49 +1888,78 @@ impl<'a> World<'a> {
         let begin: *const *mut u8 = rd(car, CAR_SUSPENSIONS);
         let end: *const *mut u8 = rd(car, CAR_SUSPENSIONS + 8);
         assert_eq!(end.offset_from(begin), 4, "the car does not have four suspensions");
+        // `Car::Car` creates the rigid axle before the wheels
+        let axle: *mut u8 = rd(car, CAR_RIGID_AXLE);
+        if !axle.is_null() {
+            st.bodies.push(body_ref("axle", axle));
+        }
         for (i, wheel) in WHEELS.iter().enumerate() {
             let suspension = *begin.add(i);
-            assert_eq!(
-                rd::<usize>(suspension, 0),
-                self.acs.va(VA_SUSPENSION_VTABLE),
-                "wheel {wheel} is not a double-wishbone suspension (the only type the oracle knows)"
-            );
+            let vtable = rd::<usize>(suspension, 0);
+            let class = SUS_CLASSES
+                .iter()
+                .position(|class| self.acs.va(class.vtable) == vtable)
+                .unwrap_or_else(|| panic!("wheel {wheel}: not one of the four suspension classes"));
             st.suspensions[i] = suspension;
-            st.bodies.push(body_ref(&format!("hub_{wheel}"), rd(suspension, SUS_HUB)));
+            st.suspension_classes[i] = class;
+            let class = &SUS_CLASSES[class];
+            if let Some(hub) = class.hub {
+                st.bodies.push(body_ref(&format!("hub_{wheel}"), rd(suspension, hub)));
+            }
+            if let Some(strut) = class.strut_body {
+                st.bodies.push(body_ref(&format!("strut_{wheel}"), rd(suspension, strut)));
+            }
         }
+        println!(
+            "suspensions: {}",
+            st.suspension_classes.iter().map(|&class| SUS_CLASSES[class].name).collect::<Vec<_>>().join(" ")
+        );
         for body in &st.bodies {
             assert_eq!(rd::<usize>(body.wrapper, 0), st.body_vtable as usize, "{} is not a RigidBodyODE", body.name);
         }
 
-        // every joint of the car hangs on the car body: walk ODE's list (newest first)
-        let mut found = Vec::new();
-        let mut node: *const u8 = rd(st.bodies[0].ode, B_FIRST_JOINT);
-        while !node.is_null() {
-            found.push(rd::<*mut u8>(node, 0));
-            node = rd(node, 0x10);
-        }
-        found.reverse();
-        let mut names: Vec<(usize, String)> = Vec::new();
-        for (i, wheel) in WHEELS.iter().enumerate() {
-            for (k, rod) in SUS_JOINT_NAMES.iter().enumerate() {
-                let wrapper: *const u8 = rd(st.suspensions[i], SUS_JOINTS + k * 8);
-                names.push((rd(wrapper, JOINT_WRAPPER_ODE_JOINT), format!("{wheel}.{rod}")));
-            }
-        }
+        // the joints in creation order: the fuel tank's, then each wheel's as its class keeps
+        // them (a strut's slider joins the strut body and the hub, so walking the car body's
+        // own list would miss it)
+        let mut names: Vec<(*mut u8, String)> = Vec::new();
         let tank: *const u8 = rd(car, CAR_FUEL_TANK_JOINT);
         names.push((rd(tank, JOINT_WRAPPER_ODE_JOINT), "fuel_tank".to_string()));
-        for ode in found {
+        for (i, wheel) in WHEELS.iter().enumerate() {
+            let s = st.suspensions[i];
+            match SUS_CLASSES[st.suspension_classes[i]].joints {
+                SusJoints::Array(offset, rods) => {
+                    for (k, rod) in rods.iter().enumerate() {
+                        let wrapper: *const u8 = rd(s, offset + k * 8);
+                        names.push((rd(wrapper, JOINT_WRAPPER_ODE_JOINT), format!("{wheel}.{rod}")));
+                    }
+                }
+                SusJoints::Vector(offset, size, joint, prefix) => {
+                    let begin: *const u8 = rd(s, offset);
+                    let end: *const u8 = rd(s, offset + 8);
+                    let count = (end as usize - begin as usize) / size;
+                    for k in 0..count {
+                        let wrapper: *const u8 = rd(begin, k * size + joint);
+                        names.push((rd(wrapper, JOINT_WRAPPER_ODE_JOINT), format!("{wheel}.{prefix}{k}")));
+                    }
+                }
+            }
+        }
+        // every one of them hangs on a body of the car, and no body has a joint that is not listed
+        for body in &st.bodies {
+            let mut node: *const u8 = rd(body.ode, B_FIRST_JOINT);
+            while !node.is_null() {
+                let joint = rd::<*mut u8>(node, 0);
+                assert!(names.iter().any(|(ode, _)| *ode == joint), "{} has a joint the oracle does not know", body.name);
+                node = rd(node, 0x10);
+            }
+        }
+        for (ode, name) in names {
             let vtable: *const usize = rd(ode, 0);
             let type_of: extern "C" fn(*mut u8) -> u32 = std::mem::transmute(*vtable.add(4));
             let body_of = |offset: usize| {
                 let body: *mut u8 = rd(ode, offset);
                 st.bodies.iter().position(|b| b.ode == body).unwrap_or(usize::MAX)
             };
-            let name = names
-                .iter()
-                .find(|(joint, _)| *joint == ode as usize)
-                .map(|(_, name)| name.clone())
-                .unwrap_or_else(|| format!("joint{}", st.joints.len()));
             let feedback = if options.joint_feedback {
                 let block = object(64).cast::<[f32; 16]>();
                 wr(ode, J_FEEDBACK, block);
@@ -2447,10 +2564,12 @@ impl<'a> World<'a> {
 
         for (i, wheel) in WHEELS.iter().enumerate() {
             let s = st.suspensions[i];
-            row.f(&format!("suspension.{wheel}.travel"), rd(s, SUS_STATUS));
-            row.f(&format!("suspension.{wheel}.damperSpeedMS"), rd(s, SUS_STATUS + 4));
-            row.f(&format!("suspension.{wheel}.steerTorque"), rd(s, SUS_STEER_TORQUE));
-            row.f(&format!("suspension.{wheel}.steerAngle"), rd(s, SUS_STEER_ANGLE));
+            let class = &SUS_CLASSES[st.suspension_classes[i]];
+            row.f(&format!("suspension.{wheel}.travel"), rd(s, class.status));
+            row.f(&format!("suspension.{wheel}.damperSpeedMS"), rd(s, class.status + 4));
+            // (a rigid axle keeps no steer torque: its `getSteerTorque` returns 0)
+            row.f(&format!("suspension.{wheel}.steerTorque"), class.steer_torque.map_or(0.0, |offset| rd(s, offset)));
+            row.f(&format!("suspension.{wheel}.steerAngle"), class.steer_angle.map_or(0.0, |offset| rd(s, offset)));
             row.f(&format!("suspension.{wheel}.bumpStopDn"), rd(s, SUS_BUMP_STOP_DN));
         }
         for (i, axle) in ["front", "rear"].iter().enumerate() {
