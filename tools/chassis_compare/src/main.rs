@@ -2872,6 +2872,8 @@ const ERS_FRONT_MAPS: [(&str, &str); 3] = [
 ];
 
 fn test_car_command() -> Result<(), String> {
+    // Task 17: a multilink car made from a double-wishbone one
+    write_ml_car("ks_ferrari_488_gt3", "gt3_multilink")?;
     write_test_car_from("ks_lamborghini_sesto_elemento", "sesto_awd_ctrl", &AWD_CTRL, &AWD_CTRL_FILES, &[])?;
     write_test_car_from("ks_audi_r8_plus", "r8_awd2_plain", &AWD2_PLAIN, &[], &["ctrl_awd2.ini"])?;
     write_test_car_from("ks_audi_r8_plus", "r8_awd2_spool", &AWD2_SPOOL, &[], &[])?;
@@ -2894,6 +2896,49 @@ fn test_car_command() -> Result<(), String> {
     write_test_car("f2004_pt_fwd", &PT_FWD, &[])?;
     // a wheel KERS on a front-wheel-drive car: the front tyres get the torque
     write_test_car_from("f2004_pt_fwd", "f2004_fwd_kers", &[], &[KERS_WHEELS_INI, KERS_WHEELS_LUT], &[])
+}
+
+/// A made-up multilink car: `base` (double wishbones all round) with every corner turned
+/// into `TYPE=ML`. The five rods are the wishbone arms and the steering rod, in the double
+/// wishbone's own joint order (so rods 0 and 2 give the same steering axis), with the rim
+/// offset, which the multilink loader does not read, worked into the points.
+fn write_ml_car(base: &str, name: &str) -> Result<(), String> {
+    write_test_car_from(base, name, &[], &[], &[])?;
+    let path = repo_root().join("cardata").join(name).join("suspensions.ini");
+    let ini = rustyac_physics::data::ini::IniReader::load(&path)?;
+    let version = ini.get_int("HEADER", "VERSION")?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = String::new();
+    let mut section = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            section = trimmed.trim_matches(|c| c == '[' || c == ']').to_string();
+        }
+        if (section == "FRONT" || section == "REAR") && trimmed.starts_with("TYPE=") {
+            out.push_str("TYPE=ML\r\n");
+            let rim = if version > 1 { ini.get_float(&section, "RIM_OFFSET")? } else { 0.0 };
+            let rods = [
+                ("WBCAR_TOP_REAR", "WBTYRE_TOP"),
+                ("WBCAR_TOP_FRONT", "WBTYRE_TOP"),
+                ("WBCAR_BOTTOM_REAR", "WBTYRE_BOTTOM"),
+                ("WBCAR_BOTTOM_FRONT", "WBTYRE_BOTTOM"),
+                ("WBCAR_STEER", "WBTYRE_STEER"),
+            ];
+            for (i, (car, tyre)) in rods.iter().enumerate() {
+                for (end, key) in [("CAR", car), ("TYRE", tyre)] {
+                    let p = ini.get_float3(&section, key)?;
+                    out.push_str(&format!("JOINT{i}_{end}={:?}, {:?}, {:?}\r\n", -rim + p[0], p[1], p[2]));
+                }
+            }
+        } else {
+            out.push_str(line);
+            out.push_str("\r\n");
+        }
+    }
+    std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("suspensions.ini: [FRONT] and [REAR] TYPE=ML with JOINT0..4 from the wishbone points");
+    Ok(())
 }
 
 fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&str, &str)]) -> Result<(), String> {

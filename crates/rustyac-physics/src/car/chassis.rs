@@ -25,6 +25,7 @@ use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
 use super::suspension::{SuspensionModel, SuspensionType, VanillaDwb};
 use super::suspension_axle::VanillaAxle;
+use super::suspension_ml::VanillaMultilink;
 use super::suspension_strut::VanillaStrut;
 use super::telemetry::{PhysicsPage, PhysicsPageWriter};
 use crate::track::timing::{FinishContext, InvalidatorAction, InvalidatorInput};
@@ -1016,6 +1017,7 @@ impl RollingChassis {
             let suspension: Box<dyn SuspensionModel> = match kind.as_str() {
                 "STRUT" => Box::new(VanillaStrut::new(&mut chassis.core, body, data_path, index, rand.next())?),
                 "DWB" => Box::new(VanillaDwb::new(&mut chassis.core, body, data_path, index, rand.next())?),
+                "ML" => Box::new(VanillaMultilink::new(&mut chassis.core, body, data_path, index, rand.next())?),
                 // Left for wheel 2, Right for wheel 3; on a front wheel it is the error below
                 "AXLE" if index >= 2 => {
                     let axle = chassis.rigid_axle.expect("created above for [REAR] TYPE=AXLE");

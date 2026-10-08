@@ -1906,6 +1906,14 @@ impl<'a> World<'a> {
             st.suspensions[i] = suspension;
             st.suspension_classes[i] = class;
             let class = &SUS_CLASSES[class];
+            if class.name == "ML" {
+                // `SuspensionML` never writes bumpStopRate, bumpStopUp, bumpStopDn and
+                // packerRange (its step reads the first and the last): the game runs on
+                // whatever the heap block held. The oracle gives them the port's value, 0.
+                for offset in [0x10, SUS_BUMP_STOP_UP, SUS_BUMP_STOP_DN, 0x2c] {
+                    wr(suspension, offset, 0.0f32);
+                }
+            }
             if let Some(hub) = class.hub {
                 st.bodies.push(body_ref(&format!("hub_{wheel}"), rd(suspension, hub)));
             }
