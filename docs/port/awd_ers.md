@@ -17,8 +17,9 @@ Where things are:
 
 - Briefs (git-ignored): `re/scratch/task16/spec_awd.md`, `spec_kers.md`, `spec_ers.md`, `spec_shm_controls.md`,
   `spec_leftovers.md`, `csp_survey.md`, `oracle_vs_session.md`, `alpha2026_csp.md`, `review_task16.md`.
-- Logs of the comparisons: `re/scratch/task16/final_compare.txt` (every scenario against the final code),
-  `acd_before.txt` / `acd_final.txt` (refused cars), `coverage_hyt.txt`.
+- Logs, all in `re/scratch/task16/` and all written by `final_checks.sh` against the final code:
+  `final_compare.txt` (every scenario), `final_game_replay.txt`, `final_faults.txt`, `coverage_hyt.txt` and
+  `coverage_spa.txt` (what the recordings exercise); `acd_before.txt` / `acd_final.txt` (refused cars).
 - The recordings (`oracle/awd*`, `oracle/hy*`) were deleted at the end; section 4.9 says how to make them again.
 
 ## 1. In plain English
@@ -33,14 +34,16 @@ Where things are:
   on the flat road and on Spa, and every compared value of every step has the same bits. That includes
   launches, wheelspin, full braking with recovery, cornering with all differentials working, using the
   battery until it is empty and until the lap's allowance is used, the reset at the start line, every ERS
-  mode, and seven made-up cars for the cases no installed car has (a KERS on the wheels, a KERS on a
-  four-wheel-drive car, front motors that push).
-- **The buttons work like AC's.** Hold B on the pad (or K) for the KERS / ERS boost. The MGU-K and engine-brake
-  settings are on Insert / Delete, Home / End, PageUp / PageDown and M, and on AC's own Ctrl+1..4 (here Alt or
+  mode, and ten made-up cars for the cases no installed car has (three four-wheel-drive ones: controllers on
+  the three-differential car, the coupling without its controller, a locked rear differential; seven hybrids:
+  a KERS on the wheels, a KERS on a four-wheel-drive car, front motors that push).
+- **The buttons work like AC's.** Hold B on the pad (or K) for the KERS / ERS boost. The MGU-K, MGU-H and
+  engine-brake settings are on Insert / Delete, Home / End, PageUp / PageDown and M, and on AC's own Ctrl+1..4 (here Alt or
   Right Ctrl + 1..4). The HUD shows battery, deployment, the lap's energy and the cockpit settings; the shared
   memory has the same fields AC fills.
-- **Side find: DRS zones.** The first Spa runs of the F138 and the SF15-T differed from the game in one value:
-  the game only allows DRS inside the track's zones (`data/drs_zones.ini`), rustyAC allowed it everywhere.
+- **Side find: DRS zones.** The first Spa runs of the F138 and the SF15-T differed from the game in one value,
+  the telemetry page's `drsAvailable` (the log of those first runs was not kept): the game only allows DRS
+  inside the track's zones (`data/drs_zones.ini`), rustyAC allowed it everywhere.
   That is ported and checked with the wing opening in a zone and shutting when the car leaves it.
 - **The grip question** (Step 0) has its own report. In short: nothing wrong was found in rustyAC's physics;
   your AC is not plain `acs.exe` because of Custom Shaders Patch; no physics fix was made (section 2).
@@ -66,8 +69,8 @@ The whole of it is in `docs/port/grip_investigation.md`. The findings:
 - **Fix:** none to the physics. Three differences that do not touch grip were fixed in Step 3 (session start
   time, `AUTO_BLIP`, first-lap arming). Your `target\release\rustyac_controls.ini` is an old copy
   (`STEER_DEADZONE=0.1`, AC has 0.05): reported, not touched; delete it and it is written again.
-- **Added for you to test by feel:** `--pressure-law 10.97,0.084`, `--air-density 1.165`,
-  `tools/corner_numbers.py`, the `grip_probe` example, and a list of eight telemetry runs.
+- **To test by feel:** `--pressure-law 10.97,0.084` (new), `--air-density 1.165` (from Task 15),
+  `tools/corner_numbers.py` and the `grip_probe` example (new), and a list of eight telemetry runs.
 
 ## 3. What is ported
 
@@ -80,11 +83,11 @@ the game's operand order, its compare forms for NaN.
 | AC | Address | Rust | What |
 |---|---|---|---|
 | `Drivetrain::step4WD` | 0x14026a220 | `step_4wd` | `TYPE=AWD`: front, rear and centre differential, a fixed front torque share |
-| `Drivetrain::step4WD_new` | 0x14026ad80 | `step_4wd_new` | `TYPE=AWD2`: the rear axle driven as in `step2WD`, a coupling sends torque to the front by the speed difference of the axles (`CENTRE_RAMP_TORQUE`, `CENTRE_MAX_TORQUE`) |
-| `Drivetrain::stepControllers` | 0x14026b200 | `step_controllers` | `ctrl_single_lock.ini` (rear-drive cars: the SF15-T has one), `ctrl_awd_front_share.ini`, `ctrl_awd_center_lock.ini`, `ctrl_awd2.ini` |
-| `Drivetrain::initControllers` | 0x140267070 | the loader arms | which controller files a traction type looks for |
+| `Drivetrain::step4WD_new` | 0x14026ad80 | `step_4wd_new` | `TYPE=AWD2`: the rear axle driven as in `step2WD`, a coupling sends torque to the front by the speed difference of the axles (`CENTRE_RAMP_TORQUE`, `CENTRE_MAX_TORQUE`). The car's `ctrl_awd2.ini` controller (opened by `Drivetrain::loadINI`) is evaluated inside this step, after the rear axle's, and sets the coupling's maximum torque |
+| `Drivetrain::stepControllers` | 0x14026b200 | `step_controllers` | `ctrl_awd_front_share.ini`, `ctrl_awd_center_lock.ini` (`AWD`), `ctrl_single_lock.ini` (rear-drive cars: the SF15-T has one), in this order |
+| `Drivetrain::initControllers` | 0x140267070 | the loader arms | which of those three files a traction type looks for |
 | `Drivetrain::accelerateDrivetrainBlock` | 0x1402664c0 | `accelerate_drivetrain_block` | the locked block with four shafts |
-| `SetupManager::init` | 0x140289290 | `SetupTarget::AwdDiff`, `AwdFrontShare` | ten setup items: `FRONT_` / `REAR_` / `CENTER_DIFF_POWER`, `_COAST`, `_PRELOAD`, `AWD_FRONT_TORQUE_DISTRIBUTION` |
+| `SetupManager::initItems` | 0x140289570 | `SetupTarget::AwdDiff`, `AwdFrontShare` (in `SetupManager::init`) | ten setup items: `FRONT_` / `REAR_` / `CENTER_DIFF_POWER`, `_COAST`, `_PRELOAD`, `AWD_FRONT_TORQUE_DISTRIBUTION` |
 
 Also: the front shafts (`outShaftLF` / `RF`), the inertia sums of both layouts, the saved state and the
 trace rows of the 4WD members (only for 4WD cars: the saved states of the others keep their form).
@@ -93,9 +96,9 @@ trace rows of the 4WD members (only for 4WD cars: the saved states of the others
 
 | AC | Address | Rust |
 |---|---|---|
-| `Kers::init` | 0x1402b7360 | `Kers::load`: kers.ini (`ATTACH=ENGINE` or `WHEELS`, `BRAKE_LEVEL`, `CHARGE_K`, `DISCHARGE_TIME`, `TORQUE_CURVE`, from version 2 `NEGATIVE_INPUT_CHARGE_K` and `CONTROLLER`, from version 3 `HAS_BUTTON_OVERRIDE` and `MAX_KJ_PER_LAP`) |
+| `Kers::init` | 0x1402b7360 | `Kers::load`: kers.ini (`ATTACH=ENGINE` or `WHEELS`, `BRAKE_LEVEL`, `CHARGE_K`, `DISCHARGE_TIME`, `TORQUE_CURVE`, `CONTROLLER`, from version 2 `NEGATIVE_INPUT_CHARGE_K`, from version 3 `HAS_BUTTON_OVERRIDE` and `MAX_KJ_PER_LAP`) |
 | `Kers::step` | 0x1402b7e10 | `Kers::step`: filling under braking, the input (controller or button), what forbids delivery, the discharge, the rev limiter and gear rule, the lap's energy |
-| `Kers::getOutputTorque` | 0x1402b72b0 | `get_output_torque`: by engine revs or by the driven wheels' revs (the two conversions differ in width, as in the game) |
+| `Kers::getOutputTorque` | 0x1402b72b0 | `get_output_torque`: by engine revs or by the driven wheels' revs (converted in double precision here, in single precision in `Kers::step`'s energy count, as in the game) |
 | `Kers::reset` | 0x1402b7e00 | `reset`, called from the car's reset and at the armed first crossing of the line |
 
 The torque reaches the car as the game does it: an engine KERS is a torque generator of the engine
@@ -112,8 +115,9 @@ two-wheel-drive car, a quarter in `step4WD`).
 | `ERS::setPowerController` | 0x140292fc0 | `set_power_controller`: a delivery profile is a fresh copy of its map (the filters start again) |
 | `ERS::reset` | 0x140292fa0 | `reset` |
 | `CarAvatar::cycleERSPower`, `cycleERSRecovery`, `cycleERSHeatCharging`, `cycleEngineBrake` | 0x1400d2a80, 0x1400d2bc0, 0x1400d29e0, 0x1400d2c90 | `RollingChassis::cycle_ers_power`, `cycle_ers_recovery`, `cycle_ers_heat_charging`, `cycle_engine_brake` and the four `set_` jobs (the cockpit's state is `CockpitState`) |
-| `Engine::setCoastSettings` | 0x140288010 | the engine-brake settings of `engine.ini [COAST_SETTINGS]` |
-| `TimeTransponder::lap` | 0x140290a50 | the lap's energy count starts again with every counted lap; battery and count are reset at the armed first crossing |
+| `Engine::setCoastSettings` | 0x140288010 | ported before this task; now called by the cockpit job `RollingChassis::set_engine_brake`. New: `coast_settings_count` (how many settings `engine.ini [COAST_SETTINGS]` has) |
+| `TimeTransponder::lap` | 0x140290a50 | raises the car's lap event: the lap's energy count starts again with every lap that is reported |
+| `TimeTransponder::onTimeLinePassed` | 0x140290c20 | battery and count are reset (`Kers::reset` / `ERS::reset`) at the armed first crossing of the line |
 
 A car with a readable ers.ini has no KERS (as in the game). The rear brake correction (`BRAKE_REAR_CORRECTION`
 x recovery level) goes to the brake system as in the game.
@@ -126,7 +130,8 @@ x recovery level) goes to the brake system as in the game.
   `engineBrakeSettingsCount`, `maxTurboBoost`. `maxPower` and `maxTurboBoost` are taken when the car is built,
   as `CarAvatar::initPhysics` (0x1400d7660) does: from the first step on a turbo's controller has rewritten the
   number they come from (the SF15-T would read 0 instead of 3.5).
-- Graphics page: `session` is race.ini's session type minus one for 1..7, else -1.
+- Graphics page, on a track: `session` is the session type minus one for 1..7, else -1 (the type is race.ini's
+  `[SESSION_0] TYPE`; without a race.ini 4 for the hot-lap spawn, else 1). On the flat road it stays 0.
 - HUD: one line with battery, deployment and the lap's energy (against the allowance where the car has one),
   one with the MGU-K profile's number and name, the recovery level and the MGU-H mode, one with the
   engine-brake setting. `docs/port/ers_sf15t_spa.png` shows them.
@@ -148,8 +153,8 @@ prints, with your bindings:
 
 - The digit commands are AC's fixed Ctrl+1..4 (`Sim::onKeyDown` 0x14019a940); rustyAC takes Alt or Right Ctrl,
   as for its other Ctrl commands.
-- B is your `[KERS]` and your `[HANDBRAKE]` button, in AC too: on the F138, SF15-T and P1 the handbrake button
-  also deploys.
+- B is your `[KERS]` and your `[HANDBRAKE]` button, in AC too: on the F138, SF15-T, SF70H, P1 and Formula
+  Alpha 2026 the handbrake button also deploys.
 - A press acts before the next physics step. "Down" is tested first and swallows an "up" of the same step.
   The cyclers go round their ends (recovery 0..10, i.e. 0 to 100 %).
 - A recorded drive carries the presses as events (bits 9 to 15 of the step's events), so it replays.
@@ -183,9 +188,11 @@ free everywhere: the zones apply to input files that carry `drs_zones=1` (every 
 How a comparison works: `tools/car_oracle` runs the game's own code in process and records every value of
 every step (`.carrec`); `tools/chassis_compare run` builds the whole car in Rust, feeds it nothing but what
 the driver did (and, for the hybrids, the cockpit jobs), and compares by field name: 2,009 chassis values and
-about 330 to 370 of the other systems per step, and every force call. "Bit-exact steps" are steps in which
-every compared value has the game's bits. All numbers below are from one run of everything against the final
-code (`re/scratch/task16/final_compare.txt`): **83 scenarios, 569,095 steps, no difference.**
+278 to 480 of the other systems per step (by car and scenario), and every force call. "Bit-exact steps" are steps in which
+every compared value has the game's bits. All numbers below are from one batch against the final code
+(`re/scratch/task16/final_checks.sh`: the comparisons in `final_compare.txt`, the game replays in
+`final_game_replay.txt`, the fault runs in `final_faults.txt`, what the recordings exercise in
+`coverage_hyt.txt` and `coverage_spa.txt`): **83 scenarios, 569,095 steps, no difference.**
 
 Scenarios: `pt_autoshift` (standing start through the gears with the automatic gearbox), `wc_stops` (flat
 out, full stops), `wc_spirited` (bends at the limit, on and off the throttle: all differentials at work),
@@ -244,10 +251,15 @@ track scenario the body is a ghost and only the tyres meet the road. The step co
 | `ks_ferrari_f138` | 2,128 | 13,884 | 2,162 | 13,908 | 32,082 / 32,082 |
 | `ks_ferrari_sf15t` | 17,711 | 14,134 | 1,992 | 14,161 | 47,998 / 47,998 |
 
+Counted in the recordings (`coverage_spa.txt`):
+
 - `spa_hybrid_timing`: two laps counted, the lap's energy count starts again eleven times (lines and
   teleports) in both cars' drives.
+- `spa_hybrid_lap`, SF15-T: the battery goes down to 0.8 % and the lap's energy reaches the car's own
+  allowance of 4,000 kJ (the count stops at 4,000,044 J).
 - `spa_drs_timing`, SF15-T: 35 presses, 8 of them outside a zone (nothing happens), the wing opens 15 times and
-  shuts 14 times (brakes, leaving a zone); F138: 34 presses, 8 outside, 13 opens, 13 shuts.
+  shuts 14 times (brakes, leaving a zone), open for 5,313 steps; F138: 34 presses, 8 outside, 13 opens,
+  13 shuts, open for 4,839 steps.
 - These cars have no traction control and the oracle's simple driver holds the button: the "laps" are mostly
   wheelspin and spins near the start. That is a hard test of the hybrid code, not a lap time.
 
@@ -263,14 +275,22 @@ installed cars, for what no installed car has.
 | `sesto_awd_kers` | a wheel KERS on the three-differential car (a quarter per tyre) | 20,002 / 20,002 |
 | `r8_awd2_kers` | a wheel KERS on the coupling car | 20,002 / 20,002 |
 | `f2004_fwd_kers` | a wheel KERS on a front-wheel-drive car | 20,002 / 20,002 |
-| `sf15t_ers_limits` | an ERS whose lap allowance (150 kJ) is used up, a default profile that does not exist, a quicker MGU-H, cockpit controls switched off | 20,002 / 20,002 |
+| `sf15t_ers_limits` | an ERS whose lap allowance (150 kJ) is used up, a default profile that does not exist, a quicker MGU-H, the MGU-H cockpit control switched off (recovery and delivery stay on) | 20,002 / 20,002 |
 | `lithium_ers_front` | front motors that deliver by their own map and by the button, torque vectoring 0.6, a lap allowance, a rear brake correction; on an AWD2 car | 20,002 / 20,002 |
 | `vrc_formula_lithium_2023` (mod, as installed) | AWD2 with ERS and front motors (its own front maps are all zero) | 20,002 / 20,002 |
 | `vrc_formula_alpha_2025` (mod, as installed) | ERS with MGU-H, 5 profiles | 20,002 / 20,002 |
 
-What the recordings exercise was counted (`re/scratch/task16/coverage16.py`): in every `hy_deploy` the
-battery is used and filled and the lap's energy reaches the allowance where there is one; in
-`lithium_ers_front` the front map's three stages and both front torques are non-zero.
+What the recordings exercise was counted (`re/scratch/task16/coverage16.py`, output `coverage_hyt.txt`):
+
+- In every `hy_deploy` the battery is used and filled again.
+- The lap's energy reaches the allowance in the made-up cars that were given a low one: 120,042 J of 120 kJ
+  (`f138_kers_wheels`), 150,056 J of 150 kJ (`laferrari_kers_button`), 200,098 / 200,135 / 200,034 J of 200 kJ
+  (`sesto_awd_kers`, `r8_awd2_kers`, `f2004_fwd_kers`), 150,112 J of 150 kJ (`sf15t_ers_limits`), 300,042 J of
+  300 kJ (`lithium_ers_front`). The two mod cars stay far below theirs (`vrc_formula_alpha_2025`: 347 kJ of
+  4,000 kJ; `vrc_formula_lithium_2023`: 4,565 kJ of 599,582 kJ); the SF15-T reaches its own on Spa (4.4).
+- In `lithium_ers_front` the front map's three stages and both front wheels' motor torques are non-zero in
+  both scenarios (18 of the 21 recorded ERS values are; the other three are the MGU-H recovery, which the car
+  does not have, and the fourth stage of the rear and of the front map, which its maps do not have).
 
 ### 4.6 The game itself
 
@@ -293,8 +313,8 @@ fault was noticed:
 | Sesto, `wc_spirited` | front share, rear coast lock, front power lock, centre preload, a front shaft's inertia (one bit each) | 5 of 5, at step 0 |
 | R8, `wc_spirited` | the coupling's ramp, a front shaft's inertia (one bit each) | 2 of 2, at step 0 |
 | F138, `hy_deploy` | discharge rate, filling rate, brake level for full filling (0.01 % each) | 3 of 3 (steps 734, 4400, 4400) |
-| `f138_kers_wheels`, `hy_deploy` | the same | 3 of 3 |
-| SF15-T, `hy_modes` and `hy_deploy` | discharge rate, recovery rate (one part in a million), MGU-H torque share, rear brake correction, start recovery level (one bit) | 5 of 5 |
+| `f138_kers_wheels`, `hy_deploy` | the same | 3 of 3 (steps 734, 4400, 4400) |
+| SF15-T, `hy_modes` and `hy_deploy` | discharge rate, recovery rate (one part in a million), MGU-H torque share, rear brake correction, start recovery level (one bit) | 5 of 5 in each (`hy_modes`: steps 3400, 3800, 3402, 0, 0; `hy_deploy`: 734, 895, 737, 0, 0) |
 | `lithium_ers_front`, `hy_deploy` and `hy_modes` | the same five, the two AWD2 ones, the front motors' discharge rate | 8 of 8 (the front one at step 400) |
 
 The battery rates are changed by a small part and not by one bit: one bit of a rate is lost when the step's
@@ -362,7 +382,8 @@ The batches used: `re/scratch/task16/record_awd.sh`, `record_hybrid.sh`, `record
   `vrc_formula_beta_2024_csp` (the three `_csp` cars: `TYPE=COSMIC`, a CSP suspension).
 - Rear-wheel steering (2): `ks_ferrari_812_superfast`, `ks_porsche_panamera`.
 
-The three Sport Quattros and the 155 V6 are four-wheel-drive cars that wait for the strut suspension only.
+The three Sport Quattros, the Audi S1 (`ks_audi_a1s1`) and the 155 V6 are four-wheel-drive cars that wait for
+the strut suspension only.
 
 ## 6. VRC Formula Alpha 2026
 
@@ -374,7 +395,7 @@ the mod and were left so.
 
 - It loads in rustyAC and matches `acs.exe` on all 24,336 compared steps.
 - Double wishbones with heave springs, `tyres.ini` version 10, a stock ERS: an MGU-K of 500 Nm up to
-  4,800 rpm and a constant 260.6 kW above; four delivery profiles (LOW, MEDIUM, HIGH, NODEPLOY: at most
+  4,800 rpm (251 kW there) and a constant 260.6 kW from 5,000 rpm up; four delivery profiles (LOW, MEDIUM, HIGH, NODEPLOY: at most
   149 / 186 / 174 / 0 kW by throttle and speed); the KERS button gives everything until the battery is empty;
   the MGU-H does nothing; only the delivery profile can be changed in the cockpit; no real lap allowance
   (99,999 kJ).
@@ -393,8 +414,10 @@ the mod and were left so.
   - the suspension: COSMIC bodies and joints, torsion bars, coil-overs, damper and bump-stop tables;
   - the floor's downforce and the body's drag (`aero.ini [MAP_0]`);
   - the tyres' thermal model and falloff tables;
-  - the power unit, the ERS (350 kW, 13 MJ, strategy maps), brake-by-wire, the differential, the gearbox and
-    the DRS / straight-mode logic: all in an encrypted 345 kB Lua script with 2,271 script setup items.
+  - the power unit, the ERS (350 kW and 13 MJ in `script_params.ini`, strategy maps), brake-by-wire, the
+    differential, the gearbox and the DRS / straight-mode logic: by its module names and the plain files around
+    it, all in an encrypted 345 kB Lua script with 2,271 script setup items. The script was not decrypted, so
+    what it does to the car was not read.
 - Even with a suspension that loads, what is left for plain AC would be another, broken car: no electric
   power (all twelve maps read `INPUT=SCRIPT_5`, which plain AC reads as 0), all brake torque on the rear axle
   (`ctrl_ebb.ini` reads `INPUT=SCRIPT_11`), no DRS, no floor downforce, no idle and no engine braking.
@@ -421,7 +444,7 @@ target\release\rustyac.exe --car vrc_formula_alpha_2026 --track spa --windowed  
 - **DRS:** **LB** or **F**; on Spa only in the two zones (start straight, Kemmel).
 - **ERS cars:** MGU-K delivery profile **PageUp / PageDown**; recovery **Home / End**; MGU-H mode **M**;
   engine brake **Insert / Delete**. Or AC's commands: **Alt (or Right Ctrl) + 1** recovery, **+ 2** delivery,
-  **+ 3** MGU-H, **+ 4** engine brake, with **Shift** for down. A car only has the controls its
+  **+ 3** MGU-H, **+ 4** engine brake, with **Shift** for down (not for the MGU-H, which is a toggle). A car only has the controls its
   `[COCKPIT_CONTROLS]` gives it (the Formula Alpha 2026: the delivery profile only).
 - The HUD's lines under the conditions show what the presses did; the console prints each change.
 - The SF15-T and the F138 have no traction control: `--autodrive` (the simple test driver) spins them.
@@ -440,7 +463,7 @@ Measured on this PC while it was in use; `rustyac.exe --headless --autodrive --t
 | `ks_ferrari_sf15t` (ERS) | 0.024 / 0.089 / 0.531 ms | 4 | 0 |
 
 The new systems cost nothing that can be measured. A whole-car comparison runs at about 3,000 steps a second
-(10,001 steps in 2.8 to 4.3 s, comparing included).
+(10,001 steps in 2.4 to 3.7 s, comparing included).
 
 ## 9. Review
 
@@ -470,11 +493,11 @@ The review also confirmed by reading, instruction by instruction: the wheel KERS
 | `crates/rustyac-physics/src/car/engine.rs`, `dynamic_controller.rs`, `setup.rs`, `telemetry.rs`, `replay.rs`, `aero.rs` | generators, signals, setup items and setup files, pages, state and golden files, DRS zones |
 | `crates/rustyac-physics/src/track/mod.rs`, `loader.rs`, `timing.rs`, `src/session.rs` | DRS zones, lap events, race.ini's session |
 | `crates/rustyac-physics/src/bin/acd_check.rs` | `--refused` |
-| `crates/rustyac-game/src/` | `input/*`, `main.rs`, `sim.rs`, `shm.rs`, `view.rs`, `render/hud.rs`, `conditions.rs`, `cli.rs`, `input_file.rs` |
+| `crates/rustyac-game/src/` | `input/bindings.rs`, `input/mod.rs`, `input/pad.rs`, `input/wheel.rs`, `main.rs`, `sim.rs`, `shm.rs`, `view.rs`, `render/hud.rs`, `conditions.rs`, `cli.rs`, `input_file.rs` |
 | `crates/rustyac-game/examples/grip_probe.rs`, `tools/corner_numbers.py` | Step 0 |
 | `tools/car_oracle/src/` | records the 4WD, KERS and ERS members, does the cockpit jobs, the `hy_*` and `spa_hybrid_*` / `spa_drs_timing` scenarios |
 | `tools/chassis_compare/src/main.rs` | the made-up cars, `faults16`, `excerpt16`, hybrid jobs |
-| `crates/rustyac-physics/tests/chassis_golden.rs`, `tests/golden/*.chgold`, `crates/rustyac-game/tests/replay.rs` | tests |
+| `crates/rustyac-physics/tests/chassis_golden.rs`, `tests/golden/awd_sesto_wc_spirited_2400_300.chgold`, `tests/golden/ers_sf15t_hy_modes_7700_400.chgold`, `crates/rustyac-game/tests/replay.rs` | tests |
 | `docs/port/grip_investigation.md`, this file, the two screenshots | reports |
 
 ## 11. Open questions (decided without asking)
@@ -494,17 +517,27 @@ The review also confirmed by reading, instruction by instruction: the wheel KERS
    `_csp` car, may carry keys only CSP reads. Its plain twin is bit-exact.
 6. **Front motors that push by their own map exist only in a made-up car.** The two installed cars with front
    motors have all-zero front maps and a vectoring bias of 0.
-7. **`--autodrive` cannot lap Spa in a car without traction control.** The two screenshots are on the straight
-   before the Bus Stop for that reason. The test driver is a line follower, not a racing driver.
+7. **`--autodrive` cannot lap Spa in a car without traction control.** Both screenshots are taken a few seconds
+   after the hot-lap start, on the straight before the Bus Stop (the SF15-T's for that reason; the Sesto has
+   traction control but the line follower's pace is the F2004's and it leaves the road at the chicane). The
+   test driver is a line follower, not a racing driver.
 8. **A new car (N) has the cockpit settings of the car's files again**, and the cockpit buttons act while the
    controls are locked. In AC the settings live as long as the car object; rustyAC's "new car" is a new object.
 9. **A race.ini that is a race (`TYPE=3`)** is taken as its type, but there are no start lights and the
    penalties stay those of a practice session.
 10. **The AI's use of KERS** (`AIDriver`, `AIKersArea`) is not ported: player car only.
 11. **`car_oracle`'s own per-wheel tyre check** reports another start pressure for cars whose setup changes
-    the pressure (R8, LaFerrari). It is older than this task; the whole-car comparison, which is the proof,
+    the pressure (R8, LaFerrari, P1). It is older than this task; the whole-car comparison, which is the proof,
     is exact.
 12. **Files recorded between the first leftovers commit and its fix** with `auto_blip=0` on an H-pattern car
     replay differently now. No released version wrote such a file.
-13. **The oracle folders were deleted** to keep the disk small; the two golden excerpts and the result
+13. **The oracle folders were deleted** to keep the disk small (12 GB); the two golden excerpts and the result
     numbers in this file stay.
+14. **AC's Ctrl+digit also sets the turbo boost** of a car whose turbo can be adjusted in the cockpit
+    (`CarAvatar::setTurboBoost` 0x1400da9e0, the digits 1 to 9 and 0). rustyAC has no cockpit turbo control, so
+    its digit commands do the hybrid job only. None of the hybrid cars here has an adjustable turbo.
+15. **Small review notes left as they are:** in a `chassis_compare --feed` mode that feeds the aids, the
+    recording's front motor torque is written into the tyres also when the Rust car has its own ERS (the
+    whole-car runs, which are the proof, feed nothing); a golden file's cockpit-job word has four 8-bit
+    fields (a profile or engine-brake index above 254 would not fit; no car comes near); `Ers::load` does not
+    read ers.ini's `[HEADER] VERSION` (the game only prints it).

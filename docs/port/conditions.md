@@ -440,8 +440,8 @@ row 333 times a second), so only the first row of each new position is used; a l
    when race.ini has a hot-lap session (or there is no race.ini and the spawn is `hotlap`).
 7. **A setup is loaded before the first step**, as if "Load" were pressed before the car moves. In AC it is
    pressed in the pits some frames later; the final values are the same.
-8. **Not ported in the setup loader**: gear sets (`USE_GEARSET` cars), the ABS / turbo / ERS / engine-brake
-   spinners, pit-stop presets (`.sp`), and the gear tab's rule for a default ratio that is not in its `.rto`
+8. **Not ported in the setup loader**: gear sets (`USE_GEARSET` cars), the ABS / turbo / engine-brake
+   spinners (the three ERS knobs are applied since Task 16, `docs/port/awd_ers.md` 9), pit-stop presets (`.sp`), and the gear tab's rule for a default ratio that is not in its `.rto`
    table. The F2004 needs none.
 9. **`--car` prefers the install over `cardata\`** for a name that is in both (proven identical). A car folder
    renamed after packing cannot be decrypted (the key is the folder's name; AC reads garbage from it). rustyAC
