@@ -291,7 +291,9 @@ For Task 13 and later:
 - AC's real renderer: shadows, sky, reflections, track lights, animated objects, cameras, the cockpit's
   instruments. The debug view has one sun and an ambient term.
 
-Smaller gaps, each named where it is in the code:
+Smaller gaps, each named where it is in the code. (Task 18 closed several of them: the other tracks and
+layouts, `ROTATION`, the ray's other mode, sub-space 0, late meshes, old AI lines and the lookup grid, a
+missing `MODEL_n` file. See `docs/port/tracks.md`.)
 
 - **Only Spa was tested**, and only its base layout. Tracks with several layouts (`models_<layout>.ini`,
   `data` per layout) are read by the code but none was run, and `rustyac.exe` has no option to pick a layout

@@ -295,6 +295,7 @@ A step has 3 ms. A crash costs about 0.1 ms per step on average and no step came
   (`physicsGUID`: its sub-space and the event's first field), the game's rule for which side of a contact a car is
   (decided once for all cars), and the pit-lane rule that reads the other cars' places.
 - **Loose objects** (category `0x10`, cones and the like) and **remote cars** (category 8): they do not exist.
+  (Loose objects exist since Task 18: `docs/port/tracks.md`.)
 - **Deformation.** The game's physics has none; what looks dented in AC is drawn from the damage zones. The port
   has the zones and nothing draws them. No crash sounds either (the events are produced and compared, nothing
   listens).

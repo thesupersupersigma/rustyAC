@@ -1267,7 +1267,7 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
     if let (Some(left), Some(right), Some(line)) = (modified(&data.join("side_l.csv")), modified(&data.join("side_r.csv")), modified(&fast_lane)) {
         if left > line || right > line {
             messages.push(format!(
-                "{}: side_l.csv / side_r.csv are newer than the AI line: the game would recompute the track limits from them at load (not ported); the limits stored in the line are used, so \"off the track\" can differ from the game here",
+                "{}: side_l.csv / side_r.csv are newer than the AI line: the game recomputes the track limits from them at load and saves the line again (not ported). The limits the line stores are used; they are the game's unless the side files were edited after the game last saved the line",
                 data.display()
             ));
         }

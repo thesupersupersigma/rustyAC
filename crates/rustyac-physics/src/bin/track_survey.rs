@@ -93,7 +93,7 @@ fn row(entry: &TrackEntry) -> String {
     let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
     if let (Some(left), Some(right), Some(line)) = (modified(&data.join("side_l.csv")), modified(&data.join("side_r.csv")), modified(&layout_base.join("ai").join("fast_lane.ai"))) {
         if left > line || right > line {
-            unusual.push("`side_l/r.csv` newer than the AI line: the game recomputes the track limits at load (not ported)".to_string());
+            unusual.push("`side_l/r.csv` newer than the AI line: the game recomputes the track limits at load (not ported; here it gives the stored ones again)".to_string());
         } else {
             unusual.push("has `side_l/r.csv` (older than the AI line: not used)".to_string());
         }
