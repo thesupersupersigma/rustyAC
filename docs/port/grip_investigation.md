@@ -4,8 +4,41 @@ Desk work only: nobody drove. Everything here is from files, the disassembly, th
 rustyAC can do alone. The briefs behind it are in the git-ignored `re/scratch/task16/`
 (`csp_survey.md`, `oracle_vs_session.md`).
 
+## Result of the telemetry runs (2026-10-08)
+
+The runs of section 7 were driven. Formula Alpha 2026 (the plain, non-CSP car) at Spa, the user
+driving, CSP **off** in AC, the same `race.ini` / `assists.ini` in both programs, traction control 0
+in both, air density 1.2348 in both.
+
+| | AC lap 1 | AC lap 2 | rustyAC lap 1 | rustyAC lap 2 |
+|---|---|---|---|---|
+| Lap time | 1:53.086 | 1:56.474 | 1:56.598 | 2:00.658 |
+| Bus Stop minimum speed (km/h) | 65.8 | 68.9 | 59.8 | 72.7 |
+| Bus Stop peak lateral g | 2.42 | 2.84 | 2.87 | 3.99 |
+| Bus Stop tyre core temps (°C, FL FR RL RR) | 90 93 85 83 | 83 90 85 83 | 82 89 85 82 | 86 87 87 85 |
+| Bus Stop pressures (psi) | 30.3 30.6 27.6 27.4 | 29.4 30.2 27.6 27.4 | 29.2 30.1 27.6 27.3 | 29.7 29.9 27.8 27.6 |
+
+What it says:
+
+- **In plain AC the Bus Stop numbers fall in the same range as rustyAC's.** The driver's own
+  lap-to-lap spread (65.8 against 68.9 km/h in AC, 59.8 against 72.7 km/h in rustyAC) is bigger than
+  the gap between the two programs. Tyre temperatures and pressures match too.
+- The user reported that turning CSP off made the Bus Stop "a lot different".
+- So **the extra difficulty is CSP, not a rustyAC fault.** Tyre temperature is ruled out (suspect 5
+  of section 2).
+- What is left is finding *which* CSP option causes it: run 6 of section 7 (one option changed at a
+  time, starting with `ENABLE_MESH_COLLIDER_SOONER`). Whatever it turns out to be goes into the CSP
+  layer later as opt-in "CSP-compat" behaviour; plain rustyAC stays the car of plain `acs.exe`.
+- The files are in the git-ignored `re/scratch/laps/`: `fa_ac_off.csv`, `fa_rusty.csv`,
+  `fa_off_vs_rusty.html`.
+
+The rest of this document is the desk work from before these runs and is kept as written.
+
 ## 1. In plain English
 
+- **Settled on 2026-10-08 (see the section above): with CSP switched off, AC and rustyAC agree at
+  the Bus Stop within the driver's own lap-to-lap spread. The extra difficulty the user feels in
+  their normal AC comes from CSP. Which CSP option it is, is still open.**
 - **rustyAC is the car of plain `acs.exe`. Your Assetto Corsa is not plain `acs.exe`.** Custom Shaders
   Patch (yours is 0.3.0-preview649, build 4184) changes physics for a stock Kunos car even with
   "extended physics" off, and none of that can be switched off except by switching CSP off.
