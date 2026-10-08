@@ -135,6 +135,12 @@ pub struct TransponderActions {
     pub black_flag: Option<i32>,
     /// `PenaltyManager::decreasePitPenaltyLaps(lastLap != 0)` is due, with this argument.
     pub decrease_pit_penalty_laps: Option<bool>,
+    /// The line was crossed for the first time in a hot-lap session: `Kers::reset` and
+    /// `ERS::reset` of a car that has them (0x140290dcd).
+    pub reset_hybrid: bool,
+    /// `Car::evOnLapCompleted` fired in this step (the handlers of a KERS and of an ERS zero
+    /// the energy used in the lap).
+    pub lap_completed: bool,
 }
 
 /// AC's `TimeTransponder` (0x98 bytes, `Car::transponder`).
@@ -281,16 +287,17 @@ impl TimeTransponder {
             if self.lap_count == 0 && self.is_first_lap_armed {
                 self.t = 0;
                 self.cuts = 0;
+                actions.reset_hybrid = true;
             }
         }
         self.ext_invalid = false;
         actions.decrease_pit_penalty_laps = Some(self.last_lap != 0);
     }
 
-    /// `TimeTransponder::lap` @ 0x140290a50
-    fn lap(&mut self, valid: bool, physics_time: f64) {
+    /// `TimeTransponder::lap` @ 0x140290a50. True: the lap event was raised.
+    fn lap(&mut self, valid: bool, physics_time: f64) -> bool {
         if self.last_lap == 0 {
-            return;
+            return false;
         }
         self.lap_events.push(OnLapCompletedEvent {
             car_index: self.car_index,
@@ -305,6 +312,7 @@ impl TimeTransponder {
             *s = TimeLineStatus::default();
         }
         self.cuts = 0;
+        true
     }
 
     /// `TimeTransponder::split` @ 0x140291150
@@ -334,7 +342,7 @@ impl TimeTransponder {
                         self.on_time_line_passed(i, i == 0, step_counter, finish, &mut actions);
                         let valid = self.was_last_lap_valid && self.is_valid();
                         if i == 0 {
-                            self.lap(valid, physics_time);
+                            actions.lap_completed |= self.lap(valid, physics_time);
                         } else {
                             self.split(i - 1);
                         }
@@ -346,7 +354,7 @@ impl TimeTransponder {
                     self.ext_invalid = false;
                 } else if line.line_type == 2 {
                     self.on_time_line_passed(i, true, step_counter, finish, &mut actions);
-                    self.lap(true, physics_time);
+                    actions.lap_completed |= self.lap(true, physics_time);
                     self.open_track_state = 0;
                 }
             }

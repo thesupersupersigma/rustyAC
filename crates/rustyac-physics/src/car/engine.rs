@@ -108,6 +108,16 @@ pub trait EngineModel {
     fn coast_settings_default_index(&self) -> i32 {
         0
     }
+    /// `Engine::getMaxTurboBoost(false)` @ 0x140285af0: the turbos' `maxBoost` added up in
+    /// their order (as the turbo controllers left them in the last step).
+    fn get_max_turbo_boost(&self) -> f32 {
+        0.0
+    }
+    /// `Curve::getCount(gasCoastOffsetCurve)`: how many engine-brake settings the cockpit has
+    /// (`engine.ini [COAST_SETTINGS] LUT`); the control exists with more than one.
+    fn coast_settings_count(&self) -> i32 {
+        0
+    }
     /// `Engine::setTurboBoostLevel` @ 0x140288090: the cockpit boost control.
     fn set_turbo_boost_level(&mut self, level: f32);
     /// `Engine::setCoastSettings` @ 0x140288010: the cockpit engine-brake control.
@@ -394,7 +404,7 @@ fn ordered_nonzero(x: f32) -> bool {
 /// The three-way clamp to 0..1 of the machine code: above 1 gives 1, anything that is not
 /// at least 0 (a NaN too) gives 0.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn saturate(x: f32) -> f32 {
+pub(crate) fn saturate(x: f32) -> f32 {
     if x > 1.0 {
         1.0
     } else if !(x >= 0.0) {
@@ -728,7 +738,13 @@ impl EngineModel for VanillaEngine {
             };
             coast -= ((above * above) * self.data.coast2) * sign;
         }
-        // (the hybrid system's coast generators would add to `coast` here)
+        // the coast generators (an ERS harvesting on the overrun): their sum replaces
+        // `externalCoastTorque` and joins the engine's own drag
+        if let Some(generator) = car.coast_generator {
+            self.base.status.external_coast_torque = 0.0;
+            self.base.status.external_coast_torque = generator as f64 + self.base.status.external_coast_torque;
+            coast = (coast as f64 + self.base.status.external_coast_torque) as f32;
+        }
         if !(rpm > minimum) {
             coast = 0.0;
             self.base.status.external_coast_torque = 0.0;
@@ -787,7 +803,11 @@ impl EngineModel for VanillaEngine {
             let drag = rpm as f64 * -0.01;
             self.base.status.out_torque = (self.base.status.out_torque - drag) * fuel_pressure as f64 + drag;
         }
-        // (the hybrid system's torque generators would add to `outTorque` here)
+        // the torque generators (a KERS on the crankshaft, an ERS): added after everything
+        // else, so neither the throttle nor an aid nor the fuel pressure scales it
+        if let Some(generator) = car.torque_generator {
+            self.base.status.out_torque = generator as f64 + self.base.status.out_torque;
+        }
         self.base.status.is_limiter_on = self.base.limiter_on != 0;
         self.base.electronic_override = 1.0;
         // 0.1047f widened: 0x3fbacd9e80000000
@@ -847,6 +867,18 @@ impl EngineModel for VanillaEngine {
         for turbo in &mut self.turbos {
             turbo.set_turbo_boost_level(level);
         }
+    }
+
+    fn coast_settings_count(&self) -> i32 {
+        self.gas_coast_offset_curve.get_count()
+    }
+
+    fn get_max_turbo_boost(&self) -> f32 {
+        let mut sum = 0.0f32;
+        for turbo in &self.turbos {
+            sum += turbo.data.max_boost;
+        }
+        sum
     }
 
     fn set_coast_settings(&mut self, index: i32) {

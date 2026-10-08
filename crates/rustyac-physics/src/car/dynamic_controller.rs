@@ -128,6 +128,10 @@ pub struct CarSignals<'a> {
     pub current_gear: i32,
     /// `Drivetrain::getEngineRPM()`
     pub engine_rpm: f32,
+    /// For `Engine::step` only: what the engine's torque generators (a KERS on the crankshaft,
+    /// an ERS) and coast generators (an ERS) answer in this step, Nm; `None`: the car has none.
+    pub torque_generator: Option<f32>,
+    pub coast_generator: Option<f32>,
 }
 
 impl<'a> CarSignals<'a> {
@@ -140,8 +144,10 @@ impl<'a> CarSignals<'a> {
                 traction_type: drivetrain.base().traction_type,
                 current_gear: drivetrain.base().current_gear,
                 engine_rpm: drivetrain.get_engine_rpm(),
+                torque_generator: None,
+                coast_generator: None,
             },
-            None => CarSignals { chassis, traction_type: TractionType::Rwd, current_gear: 1, engine_rpm: 0.0 },
+            None => CarSignals { chassis, traction_type: TractionType::Rwd, current_gear: 1, engine_rpm: 0.0, torque_generator: None, coast_generator: None },
         }
     }
 }

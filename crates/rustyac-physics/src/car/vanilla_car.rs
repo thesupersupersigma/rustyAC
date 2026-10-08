@@ -82,6 +82,7 @@ impl ControlsProvider for ScriptedDevice {
         controls.gear_up = c.gear_up;
         controls.gear_dn = c.gear_dn;
         controls.drs = c.drs;
+        controls.kers = c.kers;
         controls.hand_brake = c.hand_brake;
         controls.requested_gear_index = c.requested_gear_index;
         controls.gas = c.gas;

@@ -56,6 +56,19 @@ pub struct Controls {
     pub teleport_position: [f32; 3],
     pub teleport_tail: [f32; 3],
     pub teleport_rows: [[f32; 3]; 3],
+    /// Task 16. The KERS / ERS button (`CarControls::kers`).
+    pub kers: bool,
+    /// The cockpit settings of a hybrid car. In the game they are jobs the main thread queues
+    /// for the physics thread (`CarAvatar::cycleERSPower`, `cycleERSRecovery`,
+    /// `cycleERSHeatCharging`, `cycleEngineBrake`); the harness does them before the step.
+    /// `ers_power` >= 0: `ERS::setPowerController` with this index (taken modulo the number
+    /// the car has). `ers_recovery` 0..10: `kineticRecovery = level * 0.1f`. `ers_heat` 1 /
+    /// -1: the MGU-H charges the battery / helps the engine. `engine_brake` >= 0:
+    /// `Engine::setCoastSettings` (limited to the settings the car has).
+    pub ers_power: i32,
+    pub ers_recovery: i32,
+    pub ers_heat: i32,
+    pub engine_brake: i32,
 }
 
 impl Default for Controls {
@@ -80,6 +93,11 @@ impl Default for Controls {
             teleport_position: [0.0; 3],
             teleport_tail: [0.0; 3],
             teleport_rows: [[0.0; 3]; 3],
+            kers: false,
+            ers_power: -1,
+            ers_recovery: -1,
+            ers_heat: 0,
+            engine_brake: -1,
         }
     }
 }
@@ -107,6 +125,8 @@ pub struct Whole {
     pub penalty_cut_gas: bool,
     /// Task 15: the session's conditions as `cfg/race.ini` has them.
     pub conditions: Conditions,
+    /// Task 16: the KERS / ERS button is held whenever the throttle is above a half.
+    pub kers_held: bool,
 }
 
 /// The session of a Task 15 scenario: what the game reads from `cfg/race.ini` (and a saved
@@ -254,6 +274,11 @@ enum Kind {
     WcPit,
     WcSpirited,
     WcShell,
+    /// Task 16, a hybrid car: the button held until the battery is empty, a stop that fills
+    /// it again, the button until the lap's allowance is used.
+    HyDeploy,
+    /// Task 16, an ERS car: every cockpit setting once.
+    HyModes,
     /// On a real track (`--track`), following its AI line.
     Track(TrackKind),
 }
@@ -553,6 +578,19 @@ pub fn track() -> Vec<Scenario> {
             Conditions { dynamic_track: Some([86.0, 2.0, 0.8, 0.0]), ..Conditions::default() },
         ),
     ];
+    let with_button = |name, about, secs: f32, kind| Scenario {
+        whole: Whole { on: true, kers_held: true, ..Whole::default() },
+        ..on_track(name, about, secs, kind)
+    };
+    scenarios.extend(vec![
+        with_button(
+            "spa_hybrid_timing",
+            "spa_timing with the KERS / ERS button held on the throttle: the battery and the lap's energy count over line crossings (the count starts again with every lap) and over teleports (both are reset)",
+            60.0,
+            TrackKind::Timing,
+        ),
+        with_button("spa_hybrid_lap", "spa_lap with the KERS / ERS button held on the throttle", 60.0, TrackKind::Lap),
+    ]);
     scenarios.extend(vec![
         on_track("spa_launch", "from the hot-lap start flat out down the pit straight, then on the brakes for La Source and round it", 24.0, TrackKind::Launch),
         on_track("spa_eau_rouge", "from 300 m before the bottom of Eau Rouge flat out through it and up Raidillon: compression, then the crest", 16.0, TrackKind::EauRouge),
@@ -577,9 +615,41 @@ pub fn track() -> Vec<Scenario> {
     scenarios
 }
 
+/// The scenarios of the hybrid systems (Task 16: KERS, ERS). Like the whole-car ones: only
+/// when named, driven with the automatic clutch and gearbox.
+pub fn hybrid() -> Vec<Scenario> {
+    let hy = |name, about, secs: f32, kind| Scenario {
+        name,
+        about,
+        steps: seconds(secs) + 1,
+        auto_clutch: true,
+        ground: Ground::Flat,
+        floor: false,
+        seed: 1,
+        auto_shifter: true,
+        powertrain: true,
+        whole: Whole { on: true, ..Whole::default() },
+        kind,
+    };
+    vec![
+        hy(
+            "hy_deploy",
+            "flat out with the KERS / ERS button held until the battery is empty and a second more, a full stop (recovery), the button again until the lap's allowance is used, lift, the button on the brakes, half throttle with short presses",
+            30.0,
+            Kind::HyDeploy,
+        ),
+        hy(
+            "hy_modes",
+            "an ERS car's cockpit settings one after the other while it drives and brakes: recovery 100 %, 0 %, 70 %, every delivery profile, MGU-H to the motor and back to the battery, three engine-brake settings, the button now and then",
+            30.0,
+            Kind::HyModes,
+        ),
+    ]
+}
+
 /// Every scenario by name.
 pub fn find(name: &str) -> Option<Scenario> {
-    all().into_iter().chain(powertrain()).chain(whole()).chain(track()).find(|s| s.name == name)
+    all().into_iter().chain(powertrain()).chain(whole()).chain(hybrid()).chain(track()).find(|s| s.name == name)
 }
 
 /// The limiter is at 19,000 rpm; shift a little before it.
@@ -611,6 +681,8 @@ pub struct Driver {
     lever: i32,
     lever_target: i32,
     extra: [f32; 3],
+    /// `Whole::kers_held` of the scenario.
+    kers_held: bool,
     /// The track a track scenario drives on (the Rust port of it: only its AI line is read).
     pub track: Option<std::sync::Arc<rustyac_physics::track::Track>>,
     pub follower: Follower,
@@ -630,6 +702,7 @@ impl Scenario {
             track: None,
             follower: Follower::default(),
             kind: self.kind,
+            kers_held: self.whole.kers_held,
             auto_clutch: self.auto_clutch,
             paddle: 0,
             paddle_up: false,
@@ -750,6 +823,14 @@ impl Driver {
             return c;
         }
         let t = (car.step - SETTLE_STEPS) as f32 * DT;
+        let mut c = self.controls_of(car, t, c);
+        if self.kers_held && c.gas > 0.5 {
+            c.kers = true;
+        }
+        c
+    }
+
+    fn controls_of(&mut self, car: &CarView, t: f32, mut c: Controls) -> Controls {
         match self.kind {
             Kind::Settle => {}
             Kind::Launch => {
@@ -917,6 +998,59 @@ impl Driver {
             Kind::Track(kind) => {
                 if let Some(track) = self.track.clone() {
                     self.follower.controls(kind, &track, car, t, &mut c);
+                }
+            }
+            Kind::HyDeploy => {
+                if t < 12.0 {
+                    c.gas = 1.0;
+                    c.kers = t >= 1.0;
+                } else if t < 15.5 {
+                    c.brake = 1.0;
+                } else if t < 24.0 {
+                    c.gas = 1.0;
+                    c.kers = true;
+                } else if t < 25.0 {
+                    // lifted
+                } else if t < 26.0 {
+                    // the button on the brakes
+                    c.brake = 0.3;
+                    c.kers = true;
+                } else {
+                    c.gas = 0.5;
+                    c.kers = (t * 2.0) as i32 % 2 == 0;
+                }
+            }
+            Kind::HyModes => {
+                // one job per moment: exactly one step
+                let n = car.step - SETTLE_STEPS;
+                let at = |mark: f32| n == (mark / DT) as usize;
+                // 4.2 s of throttle, 1.8 s of brakes, again and again
+                if t % 6.0 < 4.2 {
+                    c.gas = if t % 6.0 < 3.2 { 1.0 } else { 0.4 };
+                } else {
+                    c.brake = 0.7;
+                }
+                c.kers = (9.0..9.6).contains(&t) || (20.0..21.0).contains(&t);
+                for (mark, level) in [(1.0, 10), (3.0, 0), (5.0, 7), (17.0, 3), (26.0, 9)] {
+                    if at(mark) {
+                        c.ers_recovery = level;
+                    }
+                }
+                for k in 0..8 {
+                    if at(6.0 + 1.5 * k as f32) {
+                        c.ers_power = k;
+                    }
+                }
+                if at(18.5) {
+                    c.ers_heat = -1;
+                }
+                if at(23.0) {
+                    c.ers_heat = 1;
+                }
+                for (mark, index) in [(2.0, 0), (11.0, 100), (22.0, 3)] {
+                    if at(mark) {
+                        c.engine_brake = index;
+                    }
                 }
             }
             Kind::WcSpirited => {

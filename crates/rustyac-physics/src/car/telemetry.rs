@@ -163,10 +163,10 @@ pub struct PhysicsPageWriter {
     /// every other suspension class, whose page value is then the raw travel; the port has
     /// only double wishbones.)
     pub bump_stops_dn: [f32; 4],
-    /// `CarAvatar::currentEngineBrakeSetting`: the cockpit's engine-brake setting, which
-    /// starts at the engine's default index. (`tools/car_oracle` hands the game's writer a
-    /// zeroed avatar, so its recordings show 0 here.)
-    pub engine_brake_setting: i32,
+    /// The cockpit's settings on the page (`engineBrake`, `ersRecoveryLevel`, `ersPowerLevel`,
+    /// `ersHeatCharging`) are numbers of the car's avatar. `tools/car_oracle` hands the game's
+    /// writer a zeroed avatar, so its recordings show 0 for all four: true here does the same.
+    pub zero_cockpit: bool,
     /// `SetupManager::minimumHeight_m` (`car.ini [RULES] MIN_HEIGHT`; -1 without the section).
     pub minimum_height: f32,
     /// `CarPhysicsState::speed` of the previous snapshot, m/s.
@@ -196,7 +196,7 @@ impl PhysicsPageWriter {
                 Vec3f::new(0.0, rear, car.suspensions[2].get_base_position().z),
             ],
             bump_stops_dn,
-            engine_brake_setting: car.drivetrain.as_ref().map(|d| d.engine().coast_settings_default_index()).unwrap_or(0),
+            zero_cockpit: false,
             // `SetupManager::init`: kept only when it is above 0
             minimum_height: {
                 let height = if ini.has_section("RULES") { ini.get_float("RULES", "MIN_HEIGHT")? } else { -1.0 };
@@ -398,8 +398,14 @@ impl PhysicsPageWriter {
             Some(abs) if abs.is_present && abs.is_active => abs.slip_ratio_limit,
             _ => 0.0,
         }));
-        // kersCharge, kersInput: a car without KERS or ERS
-        w.extend([0.0f32, 0.0].map(f));
+        // kersCharge, kersInput: zero for a car without KERS or ERS
+        let (kers_charge, kers_input, kers_kj) = match (&car.ers, &car.kers) {
+            // an ERS first (its charge is a double)
+            (Some(ers), _) => (ers.charge as f32, ers.input, ers.current_j * 0.001),
+            (None, Some(kers)) => (kers.charge, kers.input, kers.current_j * 0.001),
+            (None, None) => (0.0, 0.0, 0.0),
+        };
+        w.extend([kers_charge, kers_input].map(f));
         w.push(b(car.auto_shifter.is_active));
         w.extend(self.ride_height.map(f));
         w.push(f(engine.map(|e| e.base().status.turbo_boost).unwrap_or(0.0)));
@@ -418,11 +424,20 @@ impl PhysicsPageWriter {
         // performanceMeter: the lap-time meter needs the track's racing line
         w.push(f(car.performance_split as f32));
         // engineBrake: the cockpit setting; ersRecoveryLevel, ersPowerLevel, ersHeatCharging,
-        // ersIsCharging: only for a car with ERS
-        w.push(self.engine_brake_setting as u32);
-        w.extend([0u32; 4]);
+        // ersIsCharging: only for a car with ERS. The first three are numbers of the game's
+        // main thread (the car's avatar), `cockpit` here; the last is the car's own
+        let cockpit = if self.zero_cockpit {
+            super::chassis::CockpitState { engine_brake: 0, ers_power_index: 0, ers_recovery: 0, ers_heat_charging: false }
+        } else {
+            car.cockpit
+        };
+        w.push(cockpit.engine_brake as u32);
+        match &car.ers {
+            Some(ers) => w.extend([cockpit.ers_recovery as u32, cockpit.ers_power_index as u32, cockpit.ers_heat_charging as u32, ers.is_charging as u32]),
+            None => w.extend([0u32; 4]),
+        }
         // kersCurrentKJ
-        w.push(f(0.0));
+        w.push(f(kers_kj));
         w.push(b(drs.is_some_and(|d| d.is_present && d.is_available)));
         w.push(b(drs.is_some_and(|d| d.is_present && d.is_active)));
         let discs = car.brake_system.as_deref().map(|brakes| brakes.disc_temperatures()).unwrap_or([0.0; 4]);

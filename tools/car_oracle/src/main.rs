@@ -188,7 +188,7 @@ fn parse_args() -> Result<Args, String> {
 fn main() {
     let result = parse_args().and_then(|args| match args.command.as_str() {
         "list" => {
-            for s in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()).chain(scenario::track()) {
+            for s in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()).chain(scenario::hybrid()).chain(scenario::track()) {
                 println!("{:24} {:6.1} s  {}", s.name, (s.steps - 1) as f32 * scenario::DT, s.about);
             }
             Ok(())
@@ -484,7 +484,7 @@ fn all(args: &Args) -> Result<(), String> {
     let mut notes = String::new();
     let mut failed = false;
     // the powertrain scenarios only run when they are named
-    for scenario in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()) {
+    for scenario in scenario::all().into_iter().chain(scenario::powertrain()).chain(scenario::whole()).chain(scenario::hybrid()) {
         if scenario.powertrain && args.only.is_empty() {
             continue;
         }

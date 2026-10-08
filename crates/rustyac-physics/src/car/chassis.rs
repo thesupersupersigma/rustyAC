@@ -115,6 +115,30 @@ pub struct ChassisEnvironment {
     pub experiment_tyre_pressure_law: Option<(f32, f32)>,
 }
 
+/// The cockpit's engine-brake and hybrid settings as the game's main thread keeps them
+/// (`CarAvatar::currentEngineBrakeSetting`, `currentERSPowerIndex`, `currentERSRecovery`,
+/// `isHeatChargingBatteries`): what the displays and the shared memory show. The physics car
+/// itself holds only their effect (`Engine::gasCoastOffset`, the ERS's active map,
+/// `kineticRecovery`, `isHeatCharginBattery`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CockpitState {
+    /// Index into `engine.ini [COAST_SETTINGS] LUT`
+    pub engine_brake: i32,
+    /// Index of the MGU-K delivery profile (`ctrl_ers_N.ini`)
+    pub ers_power_index: i32,
+    /// MGU-K recovery level, 0..10 (tenths)
+    pub ers_recovery: i32,
+    /// MGU-H mode: the battery (true) or the motor
+    pub ers_heat_charging: bool,
+}
+
+impl Default for CockpitState {
+    /// `CarAvatar::CarAvatar` @ 0x1400cd1a0.
+    fn default() -> CockpitState {
+        CockpitState { engine_brake: 0, ers_power_index: 0, ers_recovery: 5, ers_heat_charging: true }
+    }
+}
+
 impl Default for ChassisEnvironment {
     /// The `PhysicsEngine` constructor's values with the game's shipped `assetto_corsa.ini`
     /// (26 deg C air, 30 deg C road as in `tools/car_oracle`), a plain device, the player's car.
@@ -372,6 +396,12 @@ pub struct RollingChassis {
     /// drivetrain slot. `None`: the feed supplies the driven wheels' speed, the gear and what
     /// the fuel burn reads of the engine.
     pub drivetrain: Option<Box<dyn DrivetrainModel>>,
+    /// `Car::kers`: `None` for a car without a readable kers.ini (or with an ERS).
+    pub kers: Option<super::kers::Kers>,
+    /// `Car::ers`: `None` for a car without a readable ers.ini.
+    pub ers: Option<super::ers::Ers>,
+    /// The cockpit's settings (the game's main-thread side of them).
+    pub cockpit: CockpitState,
     /// `Car::aeroMap` with `Car::drs`: the aero slot. `None`: the feed's `aero` hook makes the
     /// wings' force calls instead.
     pub aero: Option<Box<dyn AeroModel>>,
@@ -853,6 +883,9 @@ impl RollingChassis {
             setup_manager: SetupManager::default(),
             brake_system: None,
             drivetrain: None,
+            kers: None,
+            ers: None,
+            cockpit: CockpitState::default(),
             aero: None,
             aids: None,
             air_density: 1.221,
@@ -1023,6 +1056,10 @@ impl RollingChassis {
 
     /// As [`RollingChassis::install_drivetrain`], with the given engine in the engine slot.
     pub fn install_drivetrain_with_engine(&mut self, engine: Box<dyn EngineModel>) -> Result<(), String> {
+        // Car::Car: ERS::init, then Kers::init unless the car has an ERS, then Drivetrain::init
+        // (which hands the hybrid system to the engine or to the wheels)
+        self.ers = super::ers::Ers::load(&self.data_path.clone())?;
+        self.kers = if self.ers.is_none() { super::kers::Kers::load(self, &self.data_path.clone())? } else { None };
         let drivetrain = VanillaDrivetrain::new(self, engine)?;
         self.set_drivetrain(Box::new(drivetrain))
     }
@@ -1030,6 +1067,12 @@ impl RollingChassis {
     /// Puts a drivetrain into the drivetrain slot, loads the shift helpers and registers the
     /// setup items of drivetrain and engine.
     pub fn set_drivetrain(&mut self, drivetrain: Box<dyn DrivetrainModel>) -> Result<(), String> {
+        // CarAvatar::initPhysics: the cockpit starts on the car's defaults
+        self.cockpit = CockpitState {
+            engine_brake: drivetrain.engine().coast_settings_default_index(),
+            ers_power_index: self.ers.as_ref().map_or(0, |ers| ers.default_power_controller_index),
+            ..CockpitState::default()
+        };
         self.drivetrain = Some(drivetrain);
         self.autoclutch = Autoclutch::new(&self.data_path)?;
         self.auto_blip = AutoBlip::new(&self.data_path)?;
@@ -1037,6 +1080,98 @@ impl RollingChassis {
         self.gear_changer = GearChanger::default();
         self.setup_manager = SetupManager::init(self, &self.data_path.clone())?;
         Ok(())
+    }
+
+    /// How many engine-brake settings the cockpit has (`physicsInfo.engineBrakeSettingsCount`).
+    pub fn engine_brake_settings(&self) -> i32 {
+        self.drivetrain.as_deref().map_or(0, |drivetrain| drivetrain.engine().coast_settings_count())
+    }
+
+    /// The job of `CarAvatar::cycleEngineBrake` (lambda 0x1400d0720): `Engine::setCoastSettings`.
+    pub fn set_engine_brake(&mut self, index: i32) {
+        if let Some(drivetrain) = &mut self.drivetrain {
+            drivetrain.engine_mut().set_coast_settings(index);
+            self.cockpit.engine_brake = index;
+        }
+    }
+
+    /// The job of `CarAvatar::cycleERSPower` (lambda 0x1400d08e0): `ERS::setPowerController`.
+    pub fn set_ers_power(&mut self, index: i32) {
+        if let Some(ers) = &mut self.ers {
+            ers.set_power_controller(index);
+            self.cockpit.ers_power_index = index;
+        }
+    }
+
+    /// The job of `CarAvatar::cycleERSRecovery` (lambda 0x1400d0570): `kineticRecovery =
+    /// (float)level * 0.1f` (level 9 is not 0.9f).
+    pub fn set_ers_recovery(&mut self, level: i32) {
+        if let Some(ers) = &mut self.ers {
+            ers.kinetic_recovery = level as f32 * 0.1;
+            self.cockpit.ers_recovery = level;
+        }
+    }
+
+    /// The job of `CarAvatar::cycleERSHeatCharging` (lambda 0x1400d0ad0).
+    pub fn set_ers_heat_charging(&mut self, battery: bool) {
+        if let Some(ers) = &mut self.ers {
+            ers.is_heat_charging_battery = battery;
+            self.cockpit.ers_heat_charging = battery;
+        }
+    }
+
+    /// `CarAvatar::cycleEngineBrake` @ 0x1400d2c90: one setting up (`dir` > 0) or down, round
+    /// the ends. `None`: the car has no such control (fewer than two settings).
+    pub fn cycle_engine_brake(&mut self, dir: i32) -> Option<i32> {
+        let count = self.engine_brake_settings();
+        if count <= 1 {
+            return None;
+        }
+        let mut value = self.cockpit.engine_brake + if dir > 0 { 1 } else { -1 };
+        if value >= count {
+            value = 0;
+        } else if value < 0 {
+            value = count - 1;
+        }
+        self.set_engine_brake(value);
+        Some(value)
+    }
+
+    /// `CarAvatar::cycleERSPower` @ 0x1400d2a80: the next or the previous delivery profile.
+    /// `None`: the car's cockpit has no such control.
+    pub fn cycle_ers_power(&mut self, dir: i32) -> Option<i32> {
+        let ers = self.ers.as_ref().filter(|ers| ers.cockpit_delivery_profile)?;
+        let count = ers.power_controllers.len() as i32;
+        let mut value = self.cockpit.ers_power_index + if dir > 0 { 1 } else { -1 };
+        if value >= count {
+            value = 0;
+        } else if value < 0 {
+            value = count - 1;
+        }
+        self.set_ers_power(value);
+        Some(value)
+    }
+
+    /// `CarAvatar::cycleERSRecovery` @ 0x1400d2bc0: 0..10, round the ends.
+    pub fn cycle_ers_recovery(&mut self, dir: i32) -> Option<i32> {
+        self.ers.as_ref().filter(|ers| ers.cockpit_recovery)?;
+        let mut value = self.cockpit.ers_recovery + if dir > 0 { 1 } else { -1 };
+        if value > 10 {
+            value = 0;
+        } else if value < 0 {
+            value = 10;
+        }
+        self.set_ers_recovery(value);
+        Some(value)
+    }
+
+    /// `CarAvatar::cycleERSHeatCharging` @ 0x1400d29e0: battery <-> motor. Returns the new
+    /// mode (true: the battery).
+    pub fn cycle_ers_heat_charging(&mut self) -> Option<bool> {
+        self.ers.as_ref().filter(|ers| ers.cockpit_mgu_h_mode)?;
+        let value = !self.cockpit.ers_heat_charging;
+        self.set_ers_heat_charging(value);
+        Some(value)
     }
 
     /// Gives the chassis its own aerodynamics: AC's `AeroMap` and `DRS` built from the car's
@@ -1247,6 +1382,12 @@ impl RollingChassis {
         self.penalty_time = 0.0;
         self.penalty_time_accumulator = 0.0;
         self.fuel = self.requested_fuel as f64;
+        if let Some(kers) = &mut self.kers {
+            kers.reset();
+        }
+        if let Some(ers) = &mut self.ers {
+            ers.reset();
+        }
         self.is_collision_off_for_pits = false;
         let previous = std::mem::replace(&mut self.core.source, ForceSource::Teleport);
         self.core.stop(self.body);
@@ -1588,6 +1729,16 @@ impl RollingChassis {
             }
             None => feed.aero(self),
         }
+        // 8: KERS (its battery and its input for this step's drivetrain)
+        if let Some(mut kers) = self.kers.take() {
+            kers.step(self, dt);
+            self.kers = Some(kers);
+        }
+        // 9: ERS (also: the rear brakes' correction and the front motors of the next step)
+        if let Some(mut ers) = self.ers.take() {
+            ers.step(self, dt);
+            self.ers = Some(ers);
+        }
         // 10: steering: the rods move now, the solver turns the wheels at the end of this
         // step, the tyres see it in the next
         let offset = -(self.final_steer_angle_signal * self.steering_system.linear_ratio);
@@ -1685,6 +1836,24 @@ impl RollingChassis {
             }
             if actions.decrease_pit_penalty_laps == Some(true) && self.penalty_manager.pit_penalty_laps > 0 {
                 self.penalty_manager.pit_penalty_laps -= 1;
+            }
+            // the hybrid system: a full battery at the first line of a hot lap; the lap's
+            // energy count starts again with every lap that is reported
+            if let Some(kers) = &mut self.kers {
+                if actions.reset_hybrid {
+                    kers.reset();
+                }
+                if actions.lap_completed {
+                    kers.on_lap_completed();
+                }
+            }
+            if let Some(ers) = &mut self.ers {
+                if actions.reset_hybrid {
+                    ers.reset();
+                }
+                if actions.lap_completed {
+                    ers.on_lap_completed();
+                }
             }
         }
 

@@ -306,11 +306,21 @@ fn recorded_step(recording: &Recording, step: usize) -> Result<RecordedStep, Str
             gear_up: recording.i(step, "script.gearUp") != 0,
             gear_dn: recording.i(step, "script.gearDn") != 0,
             drs: recording.has("script.drs") && recording.i(step, "script.drs") != 0,
-            kers: false,
+            kers: recording.has("script.kers") && recording.i(step, "script.kers") != 0,
             requested_gear_index: script_i("script.requestedGear", "controls.requestedGearIndex"),
             hand_brake: if recording.has("script.handBrake") { f("script.handBrake") } else { f("controls.handBrake") },
         },
         bias_clicks: if recording.has("script.biasClicks") { recording.i(step, "script.biasClicks") } else { 0 },
+        hybrid: if recording.has("script.ersPower") {
+            rustyac_physics::car::replay::HybridJobs {
+                ers_power: recording.i(step, "script.ersPower"),
+                ers_recovery: recording.i(step, "script.ersRecovery"),
+                ers_heat: recording.i(step, "script.ersHeat"),
+                engine_brake: recording.i(step, "script.engineBrake"),
+            }
+        } else {
+            Default::default()
+        },
         headlights: recording.has("script.headlights") && recording.i(step, "script.headlights") != 0,
         // only the automatic clutch rewrites the clutch pedal, before the sleeping rule reads it
         clutch: f("controls.clutch"),
@@ -1673,6 +1683,8 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             env: run.env,
             auto_clutch: run.auto_clutch,
             auto_shifter: run.auto_shifter,
+            auto_blip: None,
+            session_starts_at_spawn: false,
             ff_gain: 1.0,
             track: String::new(),
             spawn: "hotlap".to_string(),

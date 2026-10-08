@@ -169,6 +169,56 @@ pub struct RecordedCall {
     pub b: [f32; 3],
 }
 
+/// The cockpit jobs of a hybrid car in one step, as `tools/car_oracle` does them before the
+/// game's step (in the game they come from the main thread's queue): the delivery profile
+/// (`ers_power` >= 0), the recovery level (`ers_recovery` 0..10), the MGU-H mode (`ers_heat` 1
+/// battery, -1 motor) and the engine-brake setting (`engine_brake` >= 0). The default: none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HybridJobs {
+    pub ers_power: i32,
+    pub ers_recovery: i32,
+    pub ers_heat: i32,
+    pub engine_brake: i32,
+}
+
+impl Default for HybridJobs {
+    fn default() -> HybridJobs {
+        HybridJobs { ers_power: -1, ers_recovery: -1, ers_heat: 0, engine_brake: -1 }
+    }
+}
+
+impl HybridJobs {
+    pub fn is_none(&self) -> bool {
+        *self == HybridJobs::default()
+    }
+
+    /// One word of a golden file.
+    pub fn to_word(&self) -> u32 {
+        ((self.ers_power + 1) as u32 & 0xff) | ((self.ers_recovery + 1) as u32 & 0xff) << 8 | ((self.ers_heat + 1) as u32 & 0xff) << 16 | ((self.engine_brake + 1) as u32 & 0xff) << 24
+    }
+
+    pub fn from_word(word: u32) -> HybridJobs {
+        let part = |shift: u32| ((word >> shift) & 0xff) as i32 - 1;
+        HybridJobs { ers_power: part(0), ers_recovery: part(8), ers_heat: part(16), engine_brake: part(24) }
+    }
+
+    /// Does the jobs on a car, in the oracle's order.
+    pub fn apply(&self, chassis: &mut RollingChassis) {
+        if self.ers_power >= 0 {
+            chassis.set_ers_power(self.ers_power);
+        }
+        if self.ers_recovery >= 0 {
+            chassis.set_ers_recovery(self.ers_recovery);
+        }
+        if self.ers_heat != 0 {
+            chassis.set_ers_heat_charging(self.ers_heat > 0);
+        }
+        if self.engine_brake >= 0 {
+            chassis.set_engine_brake(self.engine_brake);
+        }
+    }
+}
+
 /// Everything one step of the chassis is fed. A chassis with its own brakes ignores the
 /// wheels' brake torques, one with its own drivetrain ignores `clutch`, `gear`, `engine` and
 /// the driven wheels' speed and spin matrix.
@@ -178,6 +228,8 @@ pub struct RecordedStep {
     pub controls: CarControls,
     /// Clicks of the cockpit brake-bias control asked for before this step.
     pub bias_clicks: i32,
+    /// The cockpit jobs of a hybrid car done before this step.
+    pub hybrid: HybridJobs,
     /// The device's headlight switch is held (`getAction(4)`).
     pub headlights: bool,
     /// `controls.clutch` after the automatic clutch.
@@ -209,6 +261,7 @@ impl RecordedStep {
         RecordedStep {
             controls: self.controls,
             bias_clicks: self.bias_clicks,
+            hybrid: self.hybrid,
             headlights: self.headlights,
             ..RecordedStep::default()
         }
@@ -297,6 +350,8 @@ impl RecordedStep {
         Some(RecordedStep {
             controls,
             bias_clicks,
+            // (a golden file of a hybrid car has them in a word of their own)
+            hybrid: HybridJobs::default(),
             clutch,
             gear,
             engine,
@@ -349,6 +404,7 @@ pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &Rec
             brakes.set_manual_front_bias(step.bias_clicks);
         }
     }
+    step.hybrid.apply(chassis);
     // Track::step and PhysicsEngine::stepWind run before the cars
     chassis.step_session(physics_time);
     // The game's drivetrain left the driven wheels' speed at the end of the step before; a
@@ -409,6 +465,7 @@ impl Runner {
                         brakes.set_manual_front_bias(step.bias_clicks);
                     }
                 }
+                step.hybrid.apply(&mut car.car);
                 car.device.controls = step.controls;
                 car.device.headlights = step.headlights;
                 car.step(DT, physics_time);
@@ -712,6 +769,16 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         out.push(TraceValue::i("controls.gearDn", c.gear_dn as i32));
         out.push(TraceValue::i("controls.requestedGearIndex", c.requested_gear_index));
         drivetrain.trace(&mut out);
+        if let Some(kers) = &chassis.kers {
+            out.push(TraceValue::i("controls.kers", c.kers as i32).extra());
+            kers.trace(&mut out);
+        }
+        if let Some(ers) = &chassis.ers {
+            out.push(TraceValue::i("controls.kers", c.kers as i32).extra());
+            ers.trace(&mut out);
+            out.push(TraceValue::f("ers.electricTorque.lf", chassis.tyres[0].inputs.electric_torque).extra());
+            out.push(TraceValue::f("ers.electricTorque.rf", chassis.tyres[1].inputs.electric_torque).extra());
+        }
         out.push(TraceValue::f("car.waterTemperature", chassis.water.t));
         out.push(TraceValue::i("autoShift.isActive", chassis.auto_shifter.is_active as i32));
         out.push(TraceValue::i("autoBlip.isActive", chassis.auto_blip.is_active as i32));
@@ -1088,7 +1155,7 @@ impl RunSetup {
             // car avatar behind it (so the cockpit's engine-brake setting reads 0)
             if let Some(writer) = &mut chassis.telemetry {
                 writer.null_counts = 300;
-                writer.engine_brake_setting = 0;
+                writer.zero_cockpit = true;
             }
         }
         chassis.core.joint_feedback = true;
@@ -1239,6 +1306,16 @@ impl RollingChassis {
             out.extend([s.is_active as u32, s.change_up_rpm as u32, s.change_dn_rpm as u32, s.gas_cutoff.to_bits()]);
             let g = &self.gear_changer;
             out.extend([g.was_gear_up_triggered, g.was_gear_dn_triggered, g.last_gear_up, g.last_gear_dn].map(|b| b as u32));
+            // the hybrid system of a car that has one (the saved states of the others keep their form)
+            if let Some(kers) = &self.kers {
+                kers.save_state(&mut out);
+            }
+            if let Some(ers) = &self.ers {
+                ers.save_state(&mut out);
+                let cockpit = &self.cockpit;
+                out.extend([cockpit.engine_brake as u32, cockpit.ers_power_index as u32, cockpit.ers_recovery as u32, cockpit.ers_heat_charging as u32]);
+                out.extend([self.tyres[0].inputs.electric_torque, self.tyres[1].inputs.electric_torque].map(f32::to_bits));
+            }
         }
         if let Some(aero) = &self.aero {
             aero.save_state(&mut out);
@@ -1441,6 +1518,19 @@ impl RollingChassis {
             g.was_gear_dn_triggered = next()? != 0;
             g.last_gear_up = next()? != 0;
             g.last_gear_dn = next()? != 0;
+            if let Some(kers) = &mut self.kers {
+                kers.load_state(&mut words)?;
+            }
+            if let Some(ers) = &mut self.ers {
+                ers.load_state(&mut words)?;
+                let mut next = || words.next().ok_or("the saved state is too short".to_string());
+                self.cockpit.engine_brake = next()? as i32;
+                self.cockpit.ers_power_index = next()? as i32;
+                self.cockpit.ers_recovery = next()? as i32;
+                self.cockpit.ers_heat_charging = next()? != 0;
+                self.tyres[0].inputs.electric_torque = f32::from_bits(next()?);
+                self.tyres[1].inputs.electric_torque = f32::from_bits(next()?);
+            }
         }
         if let Some(aero) = &mut self.aero {
             aero.load_state(&mut words)?;
@@ -1676,11 +1766,16 @@ impl Golden {
         } else {
             header
         };
+        let hybrid_jobs = self.steps.iter().any(|step| !step.feed.hybrid.is_none());
+        let header = if hybrid_jobs { format!("{header}hybrid_jobs=1\n") } else { header };
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
         words.extend(&self.state);
         for step in &self.steps {
             step.feed.to_words(&mut words);
+            if hybrid_jobs {
+                words.push(step.feed.hybrid.to_word());
+            }
             words.push(step.hash as u32);
             words.push((step.hash >> 32) as u32);
             words.extend(&step.bodies);
@@ -1773,6 +1868,8 @@ impl Golden {
         }
         let first: usize = get("first")?.parse().map_err(|e| format!("first: {e}"))?;
         let count: usize = get("steps")?.parse().map_err(|e| format!("steps: {e}"))?;
+        // one more word per step in an excerpt of a hybrid car's cockpit jobs (Task 16)
+        let hybrid_jobs = get("hybrid_jobs").is_ok_and(|v| v != "0");
         let mut words = bytes[12 + header_len..].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
         let state_len = words.next().ok_or("truncated")? as usize;
         let state: Vec<u32> = words.by_ref().take(state_len).collect();
@@ -1781,7 +1878,10 @@ impl Golden {
         }
         let mut steps = Vec::with_capacity(count);
         for index in 0..count {
-            let feed = RecordedStep::from_words(&mut words).ok_or(format!("truncated at step {index}"))?;
+            let mut feed = RecordedStep::from_words(&mut words).ok_or(format!("truncated at step {index}"))?;
+            if hybrid_jobs {
+                feed.hybrid = HybridJobs::from_word(words.next().ok_or("truncated")?);
+            }
             let low = words.next().ok_or("truncated")? as u64;
             let high = words.next().ok_or("truncated")? as u64;
             let bodies: Vec<u32> = words.by_ref().take(BODIES.len() * 13).collect();

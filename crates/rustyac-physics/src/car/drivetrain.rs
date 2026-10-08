@@ -319,11 +319,6 @@ impl VanillaDrivetrain {
     /// `engine` is the already initialised engine (`Engine::init`).
     pub fn new(car: &mut RollingChassis, engine: Box<dyn EngineModel>) -> Result<VanillaDrivetrain, String> {
         let data_path = car.data_path.clone();
-        for name in ["kers.ini", "ers.ini"] {
-            if crate::data::exists(&data_path.join(name)) {
-                return Err(format!("{}: hybrid systems (KERS, ERS) are not ported", data_path.join(name).display()));
-            }
-        }
         let base = DrivetrainBase {
             is_gear_grinding: false,
             final_ratio: 4.0,
@@ -563,7 +558,33 @@ impl VanillaDrivetrain {
             traction_type: self.base.traction_type,
             current_gear: self.base.current_gear,
             engine_rpm: self.get_engine_rpm(),
+            torque_generator: None,
+            coast_generator: None,
         }
+    }
+
+    /// The signals for `Engine::step`: with what the engine's torque generators
+    /// (`Engine::torqueGenerators`: a KERS on the crankshaft, an ERS) and coast generators
+    /// (an ERS) answer at this moment. They read nothing the engine's step changes, so asking
+    /// before the step is asking inside it.
+    fn engine_signals<'a>(&self, car: &'a RollingChassis) -> CarSignals<'a> {
+        let mut signals = self.signals(car);
+        if let Some(kers) = car.kers.as_ref().filter(|kers| kers.attachment == super::kers::KersAttachment::Engine) {
+            signals.torque_generator = Some(kers.get_output_torque(&self.base));
+        }
+        // an ERS is a torque generator and a coast generator (never together with a KERS).
+        // Its drag is asked for on every step, also when it answers 0
+        if let Some(ers) = &car.ers {
+            signals.torque_generator = Some(ers.get_output_torque(&self.base));
+            signals.coast_generator = Some(ers.get_coast_torque(&self.base, car.controls.clutch));
+        }
+        signals
+    }
+
+    /// `Drivetrain::wheelTorqueGenerators` (a KERS on the wheels): its torque at this moment.
+    fn wheel_generator_torque(&self, car: &RollingChassis) -> Option<f32> {
+        let kers = car.kers.as_ref().filter(|kers| kers.attachment == super::kers::KersAttachment::Wheels)?;
+        Some(kers.get_output_torque(&self.base))
     }
 
     /// `Drivetrain::stepControllers` @ 0x14026b200: front share, centre lock, single lock, in
@@ -699,7 +720,13 @@ impl VanillaDrivetrain {
             b.ratio = b.final_ratio as f64 * b.gears[b.current_gear as usize].ratio;
             b.engine.inertia = self.ac_engine.base().inertia as f64;
         }
-        // (a KERS on the wheels would add its torque to the tyres' feedback torque here)
+        // a KERS on the wheels: half its torque into each driven tyre's feedback torque, the
+        // right one first
+        if let Some(torque) = self.wheel_generator_torque(car) {
+            let half = torque * 0.5;
+            car.tyres[tyre_right].status.feedback_torque = half + car.tyres[tyre_right].status.feedback_torque;
+            car.tyres[tyre_left].status.feedback_torque = half + car.tyres[tyre_left].status.feedback_torque;
+        }
         if self.base.last_ratio < self.base.ratio || self.base.last_ratio > self.base.ratio {
             self.reallign_speeds();
             self.base.last_ratio = self.base.ratio;
@@ -714,7 +741,7 @@ impl VanillaDrivetrain {
             input.gas_input = car.controls.gas;
         }
         input.rpm = ((self.base.engine.velocity as f32) * 0.159_155_07) * 60.0;
-        let signals = self.signals(car);
+        let signals = self.engine_signals(car);
         self.ac_engine.step(&input, dt, &signals);
         let torque = self.ac_engine.base().status.out_torque;
 
@@ -913,8 +940,13 @@ impl VanillaDrivetrain {
             b.ratio = b.final_ratio as f64 * b.gears[b.current_gear as usize].ratio;
             b.engine.inertia = self.ac_engine.base().inertia as f64;
         }
-        // (a KERS on the wheels would add a quarter of its torque to each tyre's feedback
-        // torque here)
+        // a KERS on the wheels: a quarter of its torque into each tyre's feedback torque
+        if let Some(torque) = self.wheel_generator_torque(car) {
+            let quarter = torque * 0.25;
+            for tyre in car.tyres.iter_mut().take(4) {
+                tyre.status.feedback_torque = quarter + tyre.status.feedback_torque;
+            }
+        }
         if self.base.last_ratio < self.base.ratio || self.base.last_ratio > self.base.ratio {
             self.reallign_speeds();
             self.base.last_ratio = self.base.ratio;
@@ -929,7 +961,7 @@ impl VanillaDrivetrain {
             input.gas_input = car.controls.gas;
         }
         input.rpm = ((self.base.engine.velocity as f32) * 0.159_155_07) * 60.0;
-        let signals = self.signals(car);
+        let signals = self.engine_signals(car);
         self.ac_engine.step(&input, dt, &signals);
         let torque = self.ac_engine.base().status.out_torque;
 

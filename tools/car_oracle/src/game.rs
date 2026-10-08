@@ -162,6 +162,13 @@ const CAR_VALUE_CACHE_SPEED: usize = 0x3e90;
 const CC_GEAR_UP: usize = 0x0;
 const CC_GEAR_DN: usize = 0x1;
 const CC_DRS: usize = 0x2;
+const CC_KERS: usize = 0x3;
+/// `Car::kers` (0xf8 bytes) and `Car::ers` (0x2b0 bytes)
+const CAR_KERS: usize = 0x3670;
+const CAR_ERS: usize = 0x3768;
+/// `ERS::setPowerController(int)`, `Engine::setCoastSettings(int)`
+const VA_ERS_SET_POWER_CONTROLLER: usize = 0x140292fc0;
+const VA_ENGINE_SET_COAST_SETTINGS: usize = 0x140288010;
 const CC_REQUESTED_GEAR_INDEX: usize = 0x8;
 const CC_HAND_BRAKE: usize = 0x10;
 const CC_GAS: usize = 0x24;
@@ -797,6 +804,7 @@ extern "C" fn device_acquire_controls(_this: *mut u8, controls: *mut u8, _dt: f3
         wr(controls, CC_GEAR_DN, c.gear_dn as u8);
         if st.whole {
             wr(controls, CC_DRS, c.drs as u8);
+            wr(controls, CC_KERS, c.kers as u8);
         }
         wr(controls, CC_HAND_BRAKE, c.hand_brake);
         // -1 (no H-shifter) is also what the constructor left there
@@ -2150,6 +2158,45 @@ impl<'a> World<'a> {
                 set_manual_front_bias(self.car.add(CAR_BRAKE_SYSTEM), controls.bias_clicks);
             }
         }
+        // Task 16, the cockpit settings of a hybrid car: the jobs `CarAvatar::cycleERSPower`,
+        // `cycleERSRecovery`, `cycleERSHeatCharging` and `cycleEngineBrake` queue
+        let mut controls = controls;
+        unsafe {
+            let ers = self.car.add(CAR_ERS);
+            let ers_present = rd::<u8>(ers, 0x10) != 0;
+            // std::vector<ERSPowerController> (0x48 bytes each)
+            let count = (rd::<usize>(ers, 0x30) - rd::<usize>(ers, 0x28)) / 0x48;
+            if controls.ers_power >= 0 && ers_present && count > 0 {
+                controls.ers_power %= count as i32;
+                let set_power_controller: extern "C" fn(*mut u8, i32) = std::mem::transmute(self.acs.va(VA_ERS_SET_POWER_CONTROLLER));
+                set_power_controller(ers, controls.ers_power);
+            } else {
+                controls.ers_power = -1;
+            }
+            if controls.ers_recovery >= 0 && ers_present {
+                // lambda 0x1400d0570: `cvtdq2ps` ; `mulss 0.1f`
+                wr(ers, 0x14, controls.ers_recovery as f32 * 0.1f32);
+            } else {
+                controls.ers_recovery = -1;
+            }
+            if controls.ers_heat != 0 && ers_present {
+                wr(ers, 0x20, (controls.ers_heat > 0) as u8);
+            } else {
+                controls.ers_heat = 0;
+            }
+            // Engine::gasCoastOffsetCurve (Engine + 0x360; a Curve's `references` vector is at
+            // +0x8): its points are the settings
+            let engine = self.car.add(CAR_DRIVETRAIN + 0xe0);
+            let settings = (rd::<usize>(engine, 0x360 + 0x10) - rd::<usize>(engine, 0x360 + 0x8)) / 4;
+            if controls.engine_brake >= 0 && settings > 1 {
+                controls.engine_brake = controls.engine_brake.min(settings as i32 - 1);
+                let set_coast_settings: extern "C" fn(*mut u8, i32) = std::mem::transmute(self.acs.va(VA_ENGINE_SET_COAST_SETTINGS));
+                set_coast_settings(engine, controls.engine_brake);
+            } else {
+                controls.engine_brake = -1;
+            }
+        }
+        let controls = controls;
         // what the game's main thread would queue for the physics thread: the game's own
         // functions, called before the step (the engine's clock still shows the last step)
         unsafe {
@@ -2235,6 +2282,15 @@ impl<'a> World<'a> {
             row.f("script.handBrake", script.hand_brake);
             row.i("script.requestedGear", script.requested_gear);
             row.i("script.biasClicks", script.bias_clicks);
+        }
+        // Task 16: a hybrid car's button and cockpit jobs (as they were done: see `step`)
+        let (kers_present, ers_present) = unsafe { (rd::<u8>(car, CAR_KERS + 0x18) != 0, rd::<u8>(car, CAR_ERS + 0x10) != 0) };
+        if self.whole && (kers_present || ers_present) {
+            row.i("script.kers", script.kers as i32);
+            row.i("script.ersPower", script.ers_power);
+            row.i("script.ersRecovery", script.ers_recovery);
+            row.i("script.ersHeat", script.ers_heat);
+            row.i("script.engineBrake", script.engine_brake);
         }
         if self.whole {
             row.i("script.drs", script.drs as i32);
@@ -2549,6 +2605,48 @@ impl<'a> World<'a> {
                 // Tyre::absOverride at the end of the step (after ABS::step); the tyre block
                 // above holds it as the tyre's own step found it
                 row.f(&format!("abs.override.{wheel}"), rd(car, CAR_TYRES + i * TYRE_SIZE + 0x41c));
+            }
+        }
+        // Task 16: the hybrid systems of a car that has one
+        if rd::<u8>(car, CAR_KERS + 0x18) != 0 {
+            let k = car.add(CAR_KERS);
+            row.i("controls.kers", rd::<u8>(car, 0x143) as i32);
+            row.f("kers.input", rd(k, 0x1c));
+            row.f("kers.charge", rd(k, 0x24));
+            row.f("kers.currentJ", rd(k, 0x3c));
+            let first: *const u8 = rd(k, 0xd0);
+            let last: *const u8 = rd(k, 0xd8);
+            for n in 0..(last as usize - first as usize) / 0xa0 {
+                row.f(&format!("kers.controller.{n}.currentValue"), rd(first.add(n * 0xa0), 0x94));
+            }
+        }
+        if rd::<u8>(car, CAR_ERS + 0x10) != 0 {
+            let e = car.add(CAR_ERS);
+            row.i("controls.kers", rd::<u8>(car, 0x143) as i32);
+            row.f("ers.kineticRecovery", rd(e, 0x14));
+            row.f("ers.status.kineticRecovery", rd(e, 0x18));
+            row.f("ers.status.heatRecovery", rd(e, 0x1c));
+            row.i("ers.isHeatCharginBattery", rd::<u8>(e, 0x20) as i32);
+            row.i("ers.isCharging", rd::<u8>(e, 0x5c) as i32);
+            row.d("ers.charge", rd(e, 0x1d8));
+            row.f("ers.currentJ", rd(e, 0x1e4));
+            row.f("ers.input", rd(e, 0x1e8));
+            // the delivery profile in use: the stages of `controller` (+0x188) and
+            // `controllerFront` (+0x1b0), which `setPowerController` copies in
+            for (name, offset) in [("controller", 0x188usize), ("controllerFront", 0x1b0)] {
+                let first: *const u8 = rd(e, offset + 0x8);
+                let last: *const u8 = rd(e, offset + 0x10);
+                row.i(&format!("ers.{name}.stages"), ((last as usize - first as usize) / 0xa0) as i32);
+                for n in 0..4 {
+                    let value = if n < (last as usize - first as usize) / 0xa0 { rd(first.add(n * 0xa0), 0x94) } else { 0.0f32 };
+                    row.f(&format!("ers.{name}.{n}.currentValue"), value);
+                }
+            }
+            let b = car.add(CAR_BRAKE_SYSTEM);
+            row.f("ers.rearCorrectionTorque", rd(b, 0x260));
+            for (i, wheel) in WHEELS.iter().enumerate().take(2) {
+                // Tyre::inputs.electricTorque (the front motors)
+                row.f(&format!("ers.electricTorque.{wheel}"), rd(car, CAR_TYRES + i * TYRE_SIZE + 0x8));
             }
         }
         // Task 16: a four-wheel-drive car (TractionType AWD 2, AWD_NEW 3) also has its front
