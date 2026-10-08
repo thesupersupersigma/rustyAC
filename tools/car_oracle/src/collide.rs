@@ -415,13 +415,16 @@ impl<'a> Twin<'a> {
 
     /// One collision pass of the given parity on both sides (`PhysicsCore::collisionStep`
     /// with `currentFrame` set), without a world step. `odd`: dynamic against static.
-    pub fn collision_pass(&mut self, odd: bool) {
+    /// Returns the seconds the game's pass and the port's took.
+    pub fn collision_pass(&mut self, odd: bool) -> (f64, f64) {
+        let t0 = std::time::Instant::now();
         unsafe {
             wr(self.game_core, CORE_CURRENT_FRAME, odd as u32);
             wr(self.game_core, CORE_NO_COLLISION_COUNTER, 0i32);
             let f: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_CORE_COLLISION_STEP));
             f(self.game_core, 0.003);
         }
+        let t1 = std::time::Instant::now();
         self.core.current_frame = odd as u32;
         self.core.no_collision_counter = 0;
         let statics = match self.track {
@@ -429,6 +432,7 @@ impl<'a> Twin<'a> {
             None => &self.statics,
         };
         self.core.collision_step(Some(statics));
+        ((t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64())
     }
 
     /// `PhysicsCore::step` on both sides.
@@ -756,9 +760,7 @@ pub fn collide(
             }
             for &geom in &car_geoms {
                 let (o1, o2) = (GeomRef::Dyn(geom), GeomRef::StaticMesh(index as u32));
-                let t0 = std::time::Instant::now();
                 let (theirs, ours) = twin.collide(o1, o2, 0x20);
-                let _ = t0;
                 entry.pairs += 1;
                 if !theirs.is_empty() {
                     entry.touching += 1;
@@ -783,14 +785,12 @@ pub fn collide(
         }
 
         // (b) the game's collision pass against the port's: the contact joints
-        let t0 = std::time::Instant::now();
         twin.core.contact_log = Some(Vec::new());
-        twin.collision_pass(true);
-        let t1 = std::time::Instant::now();
+        let (game_seconds, port_seconds) = twin.collision_pass(true);
         let theirs = twin.game_joints();
         let ours = twin.port_joints();
-        seconds_game += (t1 - t0).as_secs_f64();
-        seconds_port += t1.elapsed().as_secs_f64();
+        seconds_game += game_seconds;
+        seconds_port += port_seconds;
         entry.joints += theirs.len() as u64;
         entry.dropped += twin.core.contact_log.as_ref().map_or(0, |log| log.iter().filter(|c| !c.kept).count()) as u64;
         if theirs == ours {

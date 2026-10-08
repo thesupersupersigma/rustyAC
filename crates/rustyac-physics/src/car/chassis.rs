@@ -2292,9 +2292,21 @@ impl RollingChassis {
                     drivetrain.engine_mut().blow_up();
                 }
             }
-            let mut dir = Vec3f::new(local.x, 0.0, local.z);
-            dir.normalize();
-            let zone = if dir.z.abs() > 0.707 {
+            // normalize(local.x, 0, local.z), the copy the compiler inlined here: one
+            // reciprocal of the length (the out-of-line `vec3f::normalize` divides three times)
+            let len = sqrtf(local.z * local.z + local.x * local.x);
+            let (dx, dy, dz);
+            if len == 0.0 || len.is_nan() {
+                (dx, dy, dz) = (local.x, 0.0, local.z);
+            } else {
+                let inv = 1.0f32 / len;
+                dz = local.z * inv;
+                dx = inv * local.x;
+                dy = 0.0 * inv;
+            }
+            // |dir . (0, 0, 1)| against 0.707
+            let along = ((dx * 0.0 + dy * 0.0) + dz).abs();
+            let zone = if along > f32::from_bits(0x3f34_fdf4) {
                 if local.z > 0.0 {
                     0
                 } else {
