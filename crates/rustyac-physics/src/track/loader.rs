@@ -151,10 +151,13 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
             };
             world.push(xm_matrix_multiply(&local, &parent_world));
 
+            // the file's name is bytes; the game reads surfaces and helpers out of its own
+            // decoded text of it
+            let name = node.name.game_text();
             if node.class == NodeClass::Mesh {
                 // processPhysicsNode: a Mesh (never a skinned one) whose name starts with a
                 // number other than 0, whatever its flags say
-                let id = get_sector_id(&node.name);
+                let id = get_sector_id(name);
                 let mesh = node.mesh.as_ref().expect("a mesh node has a mesh");
                 if id != 0 {
                     report.objects += 1;
@@ -162,7 +165,7 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
                     report.tris += mesh.index_count as u64 / 3;
                     // addPhysicsMesh: a mesh without vertices is left out
                     if mesh.vertex_count != 0 {
-                        let found = manager.get_surface_desc_from_mesh_name(&node.name);
+                        let found = manager.get_surface_desc_from_mesh_name(name);
                         if let Some(message) = &found.error {
                             report.messages.push(message.clone());
                         }
@@ -181,15 +184,15 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
                         let key = found.key.clone().unwrap_or_default();
                         *report.per_key.entry(key.clone()).or_insert(0) += 1;
                         let before = Instant::now();
-                        let made = track.add_surface(&node.name, &key, &found.surface.wav, vertices, indices, &found.surface.def, space);
+                        let made = track.add_surface(name, &key, &found.surface.wav, vertices, indices, &found.surface.def, space);
                         seconds_trees += before.elapsed().as_secs_f64();
                         report.tree_nodes += track.world.meshes[made].data.model.nodes.len() as u64;
                     }
                 }
             }
             // the game finds helpers by name among all nodes, meshes too, the first in the tree
-            if node.name.starts_with("AC_") {
-                report.helpers.push(HelperNode { name: node.name.clone(), local, world: world[index] });
+            if name.starts_with("AC_") {
+                report.helpers.push(HelperNode { name: name.to_string(), local, world: world[index] });
             }
         }
     }

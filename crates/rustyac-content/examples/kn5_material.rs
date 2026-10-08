@@ -7,7 +7,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let kn5 = rustyac_content::Kn5::open(std::path::Path::new(&args[0])).expect("a kn5 file");
     let mut reader = kn5.reader().expect("the file again");
-    for material in kn5.materials.iter().filter(|m| args.get(1).is_some_and(|name| &m.name == name)) {
+    for material in kn5.materials.iter().filter(|m| args.get(1).is_some_and(|name| m.name == name.as_str())) {
         println!("{} ({})", material.name, material.shader);
         for p in &material.properties {
             println!("  {} = {} {:?} {:?}", p.name, p.value, p.value3, p.value4);

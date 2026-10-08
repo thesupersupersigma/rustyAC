@@ -15,5 +15,5 @@
 pub mod kn5;
 pub mod track_files;
 
-pub use kn5::{Kn5, Kn5Reader, Material, MeshInfo, Node, NodeClass, TextureEntry, Vertex};
+pub use kn5::{Kn5, Kn5Reader, Material, MeshInfo, Name, Node, NodeClass, TextureEntry, Vertex};
 pub use track_files::{ModelEntry, TrackFiles};

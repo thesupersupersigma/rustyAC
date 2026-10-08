@@ -65,10 +65,87 @@ pub fn mul(a: &Matrix, b: &Matrix) -> Matrix {
     out
 }
 
+/// A name as the file has it: the bytes, untouched. They need not be UTF-8 (a model made on
+/// a machine with another code page can have anything in them), so names are compared and
+/// looked up as bytes and are only made into text to be shown.
+#[derive(Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Name(Vec<u8>);
+
+impl Name {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.0.starts_with(prefix.as_bytes())
+    }
+
+    /// The name as text, for showing it: what is not UTF-8 becomes the replacement character.
+    pub fn display(&self) -> std::borrow::Cow<'_, str> {
+        String::from_utf8_lossy(&self.0)
+    }
+
+    /// The text the game's own decoder makes of the bytes: it stops at the first sequence
+    /// that is not UTF-8. Only for code that has to treat a name as the game does (the
+    /// track's surface and helper names).
+    pub fn game_text(&self) -> &str {
+        match std::str::from_utf8(&self.0) {
+            Ok(text) => text,
+            Err(e) => std::str::from_utf8(&self.0[..e.valid_up_to()]).unwrap_or(""),
+        }
+    }
+}
+
+impl From<&str> for Name {
+    fn from(text: &str) -> Name {
+        Name(text.as_bytes().to_vec())
+    }
+}
+
+impl From<Vec<u8>> for Name {
+    fn from(bytes: Vec<u8>) -> Name {
+        Name(bytes)
+    }
+}
+
+impl AsRef<[u8]> for Name {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other.as_bytes()
+    }
+}
+
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == other.as_bytes()
+    }
+}
+
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(&self.display())
+    }
+}
+
+impl std::fmt::Debug for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.display(), f)
+    }
+}
+
 /// One image stored in the file. The bytes stay on disk until [`Kn5Reader::texture`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureEntry {
-    pub name: String,
+    pub name: Name,
     pub active: i32,
     /// Where the image file starts in the kn5.
     pub offset: u64,
@@ -77,7 +154,7 @@ pub struct TextureEntry {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShaderProperty {
-    pub name: String,
+    pub name: Name,
     pub value: f32,
     pub value2: [f32; 2],
     pub value3: [f32; 3],
@@ -87,16 +164,16 @@ pub struct ShaderProperty {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextureMapping {
     /// The shader's slot name: `txDiffuse`, `txNormal`, `txDetail` ...
-    pub name: String,
+    pub name: Name,
     pub slot: i32,
     /// Name of a [`TextureEntry`] (of this file, or of another model of the same track).
-    pub texture: String,
+    pub texture: Name,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
-    pub name: String,
-    pub shader: String,
+    pub name: Name,
+    pub shader: Name,
     /// 0 opaque, 1 alpha blend, 2 alpha to coverage
     pub alpha_blend_mode: u8,
     pub alpha_tested: bool,
@@ -108,8 +185,8 @@ pub struct Material {
 
 impl Material {
     /// The texture in the slot named `txDiffuse`.
-    pub fn diffuse(&self) -> Option<&str> {
-        self.textures.iter().find(|t| t.name == "txDiffuse").map(|t| t.texture.as_str())
+    pub fn diffuse(&self) -> Option<&Name> {
+        self.textures.iter().find(|t| t.name == "txDiffuse").map(|t| &t.texture)
     }
 
     pub fn property(&self, name: &str) -> Option<&ShaderProperty> {
@@ -147,13 +224,13 @@ pub struct MeshInfo {
     pub bounding_radius: f32,
     pub is_renderable: bool,
     /// Skinned meshes only: the bones (name, matrix).
-    pub bones: Vec<(String, Matrix)>,
+    pub bones: Vec<(Name, Matrix)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub class: NodeClass,
-    pub name: String,
+    pub name: Name,
     pub active: bool,
     pub parent: Option<usize>,
     /// Indices into [`Kn5::nodes`], in file order.
@@ -221,19 +298,12 @@ impl Scanner {
         Ok(n as usize)
     }
 
-    fn string(&mut self) -> io::Result<String> {
+    fn string(&mut self) -> io::Result<Name> {
         let n = self.count("string byte")?;
         let mut b = vec![0u8; n];
         self.file.read_exact(&mut b)?;
         self.position += n as u64;
-        // the game's decoder stops at the first byte sequence that is not UTF-8
-        Ok(match String::from_utf8(b) {
-            Ok(text) => text,
-            Err(e) => {
-                let valid = e.utf8_error().valid_up_to();
-                String::from_utf8_lossy(&e.as_bytes()[..valid]).into_owned()
-            }
-        })
+        Ok(Name(b))
     }
 
     fn matrix(&mut self) -> io::Result<Matrix> {
@@ -420,12 +490,12 @@ impl Kn5 {
     }
 
     /// First node with this name, in file order.
-    pub fn find_node(&self, name: &str) -> Option<usize> {
-        self.nodes.iter().position(|n| n.name == name)
+    pub fn find_node(&self, name: impl AsRef<[u8]>) -> Option<usize> {
+        self.nodes.iter().position(|n| n.name.as_bytes() == name.as_ref())
     }
 
-    pub fn texture(&self, name: &str) -> Option<&TextureEntry> {
-        self.textures.iter().find(|t| t.name == name)
+    pub fn texture(&self, name: impl AsRef<[u8]>) -> Option<&TextureEntry> {
+        self.textures.iter().find(|t| t.name.as_bytes() == name.as_ref())
     }
 }
 
@@ -482,4 +552,23 @@ impl Kn5Reader {
 
 fn f32_at(bytes: &[u8], at: usize) -> f32 {
     f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Name;
+
+    #[test]
+    fn a_name_keeps_bytes_that_are_not_utf8() {
+        // "café_a" and "café_b" written in Latin-1: 0xe9 alone is not UTF-8
+        let a = Name::from(b"caf\xe9_a".to_vec());
+        let b = Name::from(b"caf\xe9_b".to_vec());
+        assert_eq!(a.as_bytes(), b"caf\xe9_a");
+        assert_ne!(a, b, "names that differ after the odd byte stay different");
+        assert_eq!(a.display(), "caf\u{fffd}_a");
+        assert_eq!(a.game_text(), "caf");
+        assert!(a.starts_with("caf"));
+        assert_eq!(Name::from("WHEEL_LF"), "WHEEL_LF");
+        assert_eq!(format!("{:10}|", Name::from("AC_PIT_0")), "AC_PIT_0  |");
+    }
 }

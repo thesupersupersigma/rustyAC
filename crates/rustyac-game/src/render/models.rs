@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use rustyac_content::kn5::{Kn5, Kn5Reader, NodeClass};
+use rustyac_content::kn5::{Kn5, Kn5Reader, Name, NodeClass};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R16_UINT, DXGI_SAMPLE_DESC};
 
@@ -70,7 +70,7 @@ pub struct GpuMaterial {
 }
 
 pub struct GpuNode {
-    pub name: String,
+    pub name: Name,
     pub parent: Option<usize>,
     pub local: Mat,
     pub active: bool,
@@ -207,17 +207,17 @@ impl GpuModel {
         };
         // a texture is looked for in its own file first, then in the others (a track's models
         // share them)
-        let mut where_is: HashMap<&str, (usize, usize)> = HashMap::new();
+        let mut where_is: HashMap<&[u8], (usize, usize)> = HashMap::new();
         for (file, kn5) in kn5s.iter().enumerate() {
             for (index, texture) in kn5.textures.iter().enumerate() {
-                where_is.entry(texture.name.as_str()).or_insert((file, index));
+                where_is.entry(texture.name.as_bytes()).or_insert((file, index));
             }
         }
-        let locate = |file: usize, name: &str| -> Option<(usize, usize)> {
-            kn5s[file].textures.iter().position(|t| t.name == name).map(|i| (file, i)).or_else(|| where_is.get(name).copied())
+        let locate = |file: usize, name: &Name| -> Option<(usize, usize)> {
+            kn5s[file].textures.iter().position(|t| t.name == *name).map(|i| (file, i)).or_else(|| where_is.get(name.as_bytes()).copied())
         };
         // the detail texture of a material that multiplies one in
-        let detail_of = |material: &rustyac_content::Material| -> Option<(String, f32)> {
+        let detail_of = |material: &rustyac_content::Material| -> Option<(Name, f32)> {
             let on = material.property("useDetail").is_some_and(|p| p.value >= 1.0) && material.shader.starts_with("ksPerPixel");
             let texture = material.textures.iter().find(|t| t.name == "txDetail")?;
             on.then(|| (texture.texture.clone(), material.property("detailUVMultiplier").map(|p| p.value).filter(|v| *v > 0.0).unwrap_or(1.0)))
@@ -230,7 +230,7 @@ impl GpuModel {
                 }
                 let material = kn5.nodes[node].mesh.as_ref().map(|m| m.material_id as usize).unwrap_or(0);
                 let Some(material) = kn5.materials.get(material) else { continue };
-                let names = [material.diffuse().map(str::to_string), detail_of(material).map(|d| d.0)];
+                let names = [material.diffuse().cloned(), detail_of(material).map(|d| d.0)];
                 for name in names.into_iter().flatten() {
                     if let Some(found) = locate(file, &name) {
                         if !wanted.contains(&found) {
@@ -280,16 +280,18 @@ impl GpuModel {
         stats.texture_size = cap;
 
         let mut model = GpuModel { nodes: Vec::new(), world: Vec::new(), meshes: Vec::new(), materials: Vec::new(), stats: ModelStats::default() };
-        model.nodes.push(GpuNode { name: String::new(), parent: None, local: IDENTITY, active: true });
+        model.nodes.push(GpuNode { name: Name::default(), parent: None, local: IDENTITY, active: true });
         for (file, kn5) in kn5s.iter().enumerate() {
             let node_base = model.nodes.len();
             let material_base = model.materials.len();
             for material in &kn5.materials {
-                let diffuse = material.diffuse().unwrap_or("");
-                let texture = locate(file, diffuse).and_then(|key| views.get(&key).cloned());
-                let shader = material.shader.as_str();
+                let diffuse = material.diffuse();
+                let texture = diffuse.and_then(|name| locate(file, name)).and_then(|key| views.get(&key).cloned());
+                // (as text only to guess a colour from the words in the names)
+                let (shader, diffuse) = (material.shader.display(), diffuse.map(|name| name.display()).unwrap_or_default());
+                let (shader, diffuse) = (&*shader, &*diffuse);
                 let foliage = shader.contains("Tree") || shader.contains("Grass") || material.alpha_tested;
-                let mut color = if texture.is_some() { [1.0; 4] } else { flat_color(&material.name, shader, diffuse) };
+                let mut color = if texture.is_some() { [1.0; 4] } else { flat_color(&material.name.display(), shader, diffuse) };
                 if texture.is_none() {
                     stats.flat_materials += 1;
                     if material.alpha_blend_mode != 0 && color[3] == 1.0 {
