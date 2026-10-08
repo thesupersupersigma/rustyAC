@@ -2043,6 +2043,26 @@ fn excerpt16_command() -> Result<(), String> {
     Ok(())
 }
 
+/// Task 17: a strut car, a car on a rigid rear axle, a rear-steering car and a car on old
+/// tyres, each a stretch of its slalom on the flat road.
+fn excerpt17_command() -> Result<(), String> {
+    let repo = repo_root();
+    let out = repo.join("crates/rustyac-physics/tests/golden");
+    for (folder, scenario, name, first, count) in [
+        ("oracle/t17_bmw_m3_e30", "wc_spirited", "strut_e30_wc_spirited", 2400usize, 300usize),
+        ("oracle/t17_ks_ferrari_250_gto", "wc_spirited", "axle_250gto_wc_spirited", 2400, 300),
+        ("oracle/t17_ks_ferrari_812_superfast", "wc_spirited", "rearsteer_812_wc_spirited", 2400, 300),
+        ("oracle/t17_formula_k", "wc_spirited", "oldtyre_formula_k_wc_spirited", 2400, 300),
+    ] {
+        let recording = Recording::read(&repo.join(format!("{folder}/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let path = out.join(format!("{name}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    Ok(())
+}
+
 fn excerpt_track_command() -> Result<(), String> {
     let repo = repo_root();
     let out = repo.join("crates/rustyac-physics/tests/golden");
@@ -3042,6 +3062,7 @@ fn main() {
         "faults" => faults_command(&names, dir.as_deref(), systems),
         "faults16" => faults16_command(&names, dir.as_deref()),
         "excerpt16" => excerpt16_command(),
+        "excerpt17" => excerpt17_command(),
         "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), verbose),
         _ => Err(usage()),
     };

@@ -1903,6 +1903,10 @@ impl Golden {
         };
         let hybrid_jobs = self.steps.iter().any(|step| !step.feed.hybrid.is_none());
         let header = if hybrid_jobs { format!("{header}hybrid_jobs=1\n") } else { header };
+        // a car that does not have the six bodies of four double wishbones (Task 17: a strut
+        // adds one per corner, a rigid axle is one for two wheels); older files have no such key
+        let bodies = self.steps.first().map_or(BODIES.len(), |step| step.bodies.len() / 13);
+        let header = if bodies != BODIES.len() { format!("{header}bodies={bodies}\n") } else { header };
         let mut words: Vec<u32> = Vec::new();
         words.push(self.state.len() as u32);
         words.extend(&self.state);
@@ -2011,6 +2015,10 @@ impl Golden {
         if state.len() != state_len {
             return Err("truncated state".to_string());
         }
+        let body_count: usize = match get("bodies") {
+            Ok(text) => text.parse().map_err(|e| format!("bodies: {e}"))?,
+            Err(_) => BODIES.len(),
+        };
         let mut steps = Vec::with_capacity(count);
         for index in 0..count {
             let mut feed = RecordedStep::from_words(&mut words).ok_or(format!("truncated at step {index}"))?;
@@ -2019,8 +2027,8 @@ impl Golden {
             }
             let low = words.next().ok_or("truncated")? as u64;
             let high = words.next().ok_or("truncated")? as u64;
-            let bodies: Vec<u32> = words.by_ref().take(BODIES.len() * 13).collect();
-            if bodies.len() != BODIES.len() * 13 {
+            let bodies: Vec<u32> = words.by_ref().take(body_count * 13).collect();
+            if bodies.len() != body_count * 13 {
                 return Err(format!("truncated at step {index}"));
             }
             steps.push(GoldenStep { feed, hash: low | high << 32, bodies });
@@ -2068,7 +2076,8 @@ impl Golden {
             chassis.setup_manager = manager;
             chassis.load_state(&self.state)?;
         }
-        let kinds: Vec<char> = fields().iter().map(|field| field.kind).collect();
+        let layout = CarLayout::of(&chassis);
+        let kinds: Vec<char> = fields_of(&layout).iter().map(|field| field.kind).collect();
         for (index, step) in self.steps.iter().enumerate() {
             let number = self.first + index;
             chassis.step_recorded(self.setup.time_of_step(number), &step.feed);
@@ -2079,7 +2088,7 @@ impl Golden {
                 return Err(format!(
                     "{} step {number}: {}.{} is {:?}, the game has {:?}",
                     self.setup.scenario,
-                    BODIES[at / 13],
+                    layout.bodies.get(at / 13).map_or("?", |name| name.as_str()),
                     part[at % 13],
                     f32::from_bits(bodies[at]),
                     f32::from_bits(step.bodies[at])

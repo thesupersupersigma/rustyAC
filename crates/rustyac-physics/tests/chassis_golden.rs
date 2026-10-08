@@ -471,3 +471,60 @@ fn a_changed_pedal_or_cockpit_job_is_noticed() {
         assert!(error.contains(&format!("step {}", golden.first)), "{error}");
     }
 }
+
+// Task 17: the other suspension classes, rear-wheel steering and the old tyre path. Four
+// stretches of 300 steps (0.9 s) out of the slalom on the flat road (`wc_spirited`), whole
+// car, driver's controls only:
+// - `bmw_m3_e30`: struts at the front (two bodies a corner, a slider and a ball joint);
+// - `ks_ferrari_250_gto`: a rigid rear axle (one body for both rear wheels, four links, the
+//   drivetrain's torque reaction on body and axle);
+// - `ks_ferrari_812_superfast`: rear-wheel steering (`ctrl_4ws.ini`);
+// - `formula_k` (the kart of the game's sdk, tyres.ini VERSION=7): the old tyre path.
+//
+// A file of a car that does not have six rigid bodies says so in its header (`bodies=`).
+const TASK17_GOLDEN: [(&str, usize, &[u8]); 4] = [
+    ("bmw_m3_e30", 8, include_bytes!("golden/strut_e30_wc_spirited_2400_300.chgold")),
+    ("ks_ferrari_250_gto", 5, include_bytes!("golden/axle_250gto_wc_spirited_2400_300.chgold")),
+    ("ks_ferrari_812_superfast", 6, include_bytes!("golden/rearsteer_812_wc_spirited_2400_300.chgold")),
+    ("formula_k", 6, include_bytes!("golden/oldtyre_formula_k_wc_spirited_2400_300.chgold")),
+];
+
+#[test]
+fn strut_axle_rear_steer_and_old_tyre_files_read_back() {
+    for (car, bodies, bytes) in TASK17_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        assert_eq!((golden.setup.scenario.as_str(), golden.car.as_str(), golden.steps.len()), ("wc_spirited", car, 300));
+        assert!(golden.setup.is_whole() && golden.setup.telemetry && !golden.state.is_empty(), "{car}");
+        assert_eq!(golden.to_bytes(), bytes, "{car}: parse and write do not round-trip");
+        for (index, step) in golden.steps.iter().enumerate() {
+            assert_eq!(step.feed, step.feed.driver_only(), "{car} step {index}");
+            assert_eq!(step.bodies.len(), bodies * 13, "{car} step {index}");
+        }
+        // the stretch steers both ways
+        assert!(golden.steps.iter().any(|step| step.feed.controls.steer > 0.0) && golden.steps.iter().any(|step| step.feed.controls.steer < 0.0), "{car}");
+    }
+}
+
+#[test]
+fn strut_axle_rear_steer_and_old_tyre_match_the_game() {
+    for (car, _, bytes) in TASK17_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        let Some(data) = car_data(car) else { continue };
+        golden.check(&data).unwrap_or_else(|e| panic!("wc_spirited of {car} ({}): {e}", backend()));
+    }
+}
+
+/// Each of the four excerpts can fail: a steering input one bit off is noticed in the step
+/// it is made.
+#[test]
+fn a_changed_steering_input_is_noticed_on_every_task17_car() {
+    for (car, _, bytes) in TASK17_GOLDEN {
+        let Some(data) = car_data(car) else { continue };
+        let mut golden = Golden::parse(bytes).unwrap();
+        let step = golden.steps.iter().position(|step| step.feed.controls.steer != 0.0).expect("a step with steering");
+        let steer = &mut golden.steps[step].feed.controls.steer;
+        *steer = f32::from_bits(steer.to_bits() ^ 1);
+        let error = golden.check(&data).expect_err("a changed steering input went unnoticed");
+        assert!(error.contains(&format!("step {}", golden.first + step)), "{car}: {error}");
+    }
+}
