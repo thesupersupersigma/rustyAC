@@ -47,9 +47,10 @@ unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
     true.into()
 }
 
-/// The car and session of a live drive, from the command line.
-fn live_setup(options: &Options) -> SimSetup {
-    SimSetup {
+/// The car and session of a live drive: from the command line, and the conditions of the
+/// game's own last session (race.ini) unless that is switched off.
+fn live_setup(options: &Options) -> Result<SimSetup, String> {
+    let mut setup = SimSetup {
         car: options.car.clone(),
         auto_clutch: !options.no_auto_clutch,
         // the line follower does not shift
@@ -57,7 +58,11 @@ fn live_setup(options: &Options) -> SimSetup {
         track: options.track.clone().unwrap_or_default(),
         spawn: options.spawn.clone(),
         ..SimSetup::default()
+    };
+    for note in rustyac_game::conditions::apply(options, &mut setup)? {
+        println!("{note}");
     }
+    Ok(setup)
 }
 
 /// Puts the track's and the car's 3D models on the graphics card, where there are any. A
@@ -150,7 +155,7 @@ fn drive(options: &Options) -> Result<(SimSetup, Option<Vec<StepInput>>), String
             println!("replaying {} ({} steps, {:.1} s)", path.display(), file.steps.len(), file.steps.len() as f64 * 0.003);
             Ok((file.setup, Some(file.steps)))
         }
-        None => Ok((live_setup(options), None)),
+        None => Ok((live_setup(options)?, None)),
     }
 }
 

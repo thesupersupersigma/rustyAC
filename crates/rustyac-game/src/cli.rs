@@ -65,6 +65,21 @@ pub struct Options {
     pub texture_size: u32,
     /// `--no-textures`: flat colours instead of textures.
     pub no_textures: bool,
+    /// `--race-ini` (true) / `--no-race-ini` (false): read the game's last session file or not;
+    /// not given: read it when it exists.
+    pub race_ini: Option<bool>,
+    /// `--race-ini <file>`: that file instead of `Documents\Assetto Corsa\cfg\race.ini`.
+    pub race_ini_file: Option<PathBuf>,
+    /// `--air`, `--road`: temperatures, deg C.
+    pub air: Option<f32>,
+    pub road: Option<f32>,
+    /// `--grip`: the track's grip, fixed (percent, or 0..1).
+    pub grip: Option<f32>,
+    /// `--wind`: km/h, exactly (0: none); `--wind-dir`: degrees.
+    pub wind: Option<f32>,
+    pub wind_dir: Option<f32>,
+    /// `--setup`: a saved setup, by name or file.
+    pub setup: Option<String>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
 }
@@ -72,6 +87,14 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Options {
         Options {
+            race_ini: None,
+            race_ini_file: None,
+            air: None,
+            road: None,
+            grip: None,
+            wind: None,
+            wind_dir: None,
+            setup: None,
             car: "ks_ferrari_f2004".to_string(),
             width: 1280,
             height: 720,
@@ -121,6 +144,18 @@ usage: rustyac [options]
   --boxes               draw the car as boxes, not with its 3D model
   --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
   --no-textures         flat colours instead of textures
+  --race-ini [file]     the session's conditions from Assetto Corsa's last session file
+                        (Documents\\Assetto Corsa\\cfg\\race.ini, with assists.ini beside it):
+                        air and road temperature, track grip, wind, ballast, aids. This is
+                        the default when the file exists.
+  --no-race-ini         the built-in conditions: 26 C air, 30 C road, grip 100 %, no wind
+  --air <C>             air temperature (over race.ini's)
+  --road <C>            road temperature
+  --grip <percent>      the track's grip, fixed (for example 97)
+  --wind <km/h>         the wind, exactly this (not drawn like the game's); 0: none
+  --wind-dir <deg>      the direction the wind is handed to the game with
+  --setup <name|file>   a saved setup: a file, or a name in Documents\\Assetto Corsa\\setups\\
+                        <car>\\<track> (then ...\\generic), loaded as the game's setup screen does
   --autodrive           on a track: nobody at the controls, a simple driver follows the
                         track's AI line (automatic gearbox on); for checks and for watching
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's
@@ -154,8 +189,16 @@ for checks, without anybody at the controls:
 impl Options {
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         let mut o = Options::default();
-        let mut args = args;
+        let mut args = args.peekable();
         while let Some(arg) = args.next() {
+            if arg == "--race-ini" {
+                // the file is optional
+                o.race_ini = Some(true);
+                if args.peek().is_some_and(|next| !next.starts_with("--")) {
+                    o.race_ini_file = args.next().map(PathBuf::from);
+                }
+                continue;
+            }
             let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
             match arg.as_str() {
                 "--car" => o.car = value("--car")?,
@@ -189,6 +232,13 @@ impl Options {
                 "--texture-size" => o.texture_size = value("--texture-size")?.parse().map_err(|e| format!("--texture-size: {e}"))?,
                 "--no-textures" => o.no_textures = true,
                 "--autodrive" => o.autodrive = true,
+                "--no-race-ini" => o.race_ini = Some(false),
+                "--air" => o.air = Some(value("--air")?.parse().map_err(|e| format!("--air: {e}"))?),
+                "--road" => o.road = Some(value("--road")?.parse().map_err(|e| format!("--road: {e}"))?),
+                "--grip" => o.grip = Some(value("--grip")?.parse().map_err(|e| format!("--grip: {e}"))?),
+                "--wind" => o.wind = Some(value("--wind")?.parse().map_err(|e| format!("--wind: {e}"))?),
+                "--wind-dir" => o.wind_dir = Some(value("--wind-dir")?.parse().map_err(|e| format!("--wind-dir: {e}"))?),
+                "--setup" => o.setup = Some(value("--setup")?),
                 "--help" | "-h" | "/?" => return Err(USAGE.to_string()),
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }
@@ -198,6 +248,16 @@ impl Options {
         }
         if o.camera != "chase" && o.camera != "cockpit" {
             return Err(format!("--camera: {:?} is neither chase nor cockpit", o.camera));
+        }
+        if o.grip.is_some_and(|grip| !(grip > 0.0 && grip <= 150.0)) {
+            return Err("--grip: a percentage is expected, for example 97 (or 0.97)".to_string());
+        }
+        if o.wind.is_some_and(|wind| !(0.0..=200.0).contains(&wind)) {
+            return Err("--wind: km/h from 0 up is expected".to_string());
+        }
+        let session_options = o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
+        if session_options && o.replay.is_some() {
+            return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir and --setup cannot be used with it".to_string());
         }
         if o.autodrive && o.track.is_none() {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());

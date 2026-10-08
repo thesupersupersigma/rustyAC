@@ -78,6 +78,16 @@ pub struct CarView {
     pub contacts: u32,
     /// The surface under each tyre (its `KEY` in `surfaces.ini`), where the car is on a track.
     pub surfaces: [SurfaceName; 4],
+    /// The session's conditions: air and road temperature (deg C), the track's grip (1 =
+    /// 100 %), the wind's mean speed (km/h) and the direction it was set with (degrees).
+    pub air: f32,
+    pub road: f32,
+    pub grip: f32,
+    pub wind_kmh: f32,
+    pub wind_deg: f32,
+    /// The tyre compound's name and the loaded setup's (empty: the default setup).
+    pub compound: SurfaceName,
+    pub setup: SurfaceName,
 }
 
 /// A short text that can be copied about: a surface's key.
@@ -173,6 +183,13 @@ impl Default for CarView {
             engine_life: 1000.0,
             contacts: 0,
             surfaces: [SurfaceName::default(); 4],
+            air: 26.0,
+            road: 30.0,
+            grip: 1.0,
+            wind_kmh: 0.0,
+            wind_deg: 0.0,
+            compound: SurfaceName::default(),
+            setup: SurfaceName::default(),
         }
     }
 }
@@ -250,6 +267,13 @@ impl CarView {
             damage: car.damage_zone_level,
             contacts: car.core.contact_joints().len() as u32,
             engine_life: 1000.0,
+            air: car.env.ambient_temperature,
+            road: car.env.road_temperature,
+            grip: car.env.dynamic_grip_level,
+            wind_kmh: car.env.wind_speed * 3.6,
+            wind_deg: car.env.wind_direction_deg,
+            compound: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.name.as_str())),
+            setup: SurfaceName::new(&car.setup_name),
             ..CarView::default()
         };
         for index in 0..4.min(car.tyres.len()) {

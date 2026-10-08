@@ -1676,6 +1676,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             ff_gain: 1.0,
             track: String::new(),
             spawn: "hotlap".to_string(),
+            session: Default::default(),
             oracle: Some(input_file::OracleSetup {
                 scenario: run.scenario.clone(),
                 ground: run.ground,

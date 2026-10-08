@@ -427,3 +427,33 @@ fn the_clutch_button_holds_the_car_although_the_automatic_clutch_is_on() {
     }
     assert_same(&dumps, &replayed, "replay of the clutch drive");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Task 15: the session's conditions are part of a recorded drive.
+
+#[test]
+fn the_session_travels_in_the_file() {
+    use rustyac_game::input_file::Session;
+    use rustyac_physics::track::DynamicTrack;
+    let session = Session {
+        wind_speed: 3.25,
+        wind_direction_deg: -12.5,
+        dynamic_track: Some(DynamicTrack::from_race_ini(96.0, 2.0, 5.0, 80.0, 12345)),
+        ballast_kg: 20.0,
+        restrictor: 35.0,
+        penalties: false,
+        assists: Some((1, 2, 35.0)),
+        setup_file: Some(PathBuf::from(r"C:\some folder\setups\car\spa\a name, with = signs.ini")),
+    };
+    let setup = SimSetup { session: session.clone(), ..SimSetup::default() };
+    let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session.ryin");
+    InputFile { setup: setup.clone(), steps: vec![StepInput::default()] }.write(&file).unwrap();
+    let back = InputFile::read(&file).unwrap();
+    assert_eq!(back.setup, setup);
+    assert_eq!(back.setup.session, session);
+    // a drive without any of it writes none of the new lines: older programs read it
+    let plain = SimSetup::default().header();
+    for key in ["wind=", "dynamic_track=", "ballast_kg=", "restrictor=", "penalties=", "assists=", "setup_file="] {
+        assert!(!plain.contains(key), "{key} in a plain header");
+    }
+}

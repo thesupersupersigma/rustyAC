@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 
 use rustyac_physics::car::replay::{Ground, RunSetup};
+use rustyac_physics::track::DynamicTrack;
 use rustyac_physics::car::{CarControls, ChassisEnvironment};
 
 pub const MAGIC: &str = "RUSTYAC-INPUT 1";
@@ -173,6 +174,40 @@ fn parse_hex3(text: &str) -> Result<[f32; 3], String> {
     <[f32; 3]>::try_from(words).map_err(|_| format!("three hexadecimal words expected, got {text:?}"))
 }
 
+/// What the game's session files (`cfg/race.ini`, `cfg/assists.ini`), a saved setup and the
+/// command line add to a live drive (Task 15). The default is the drive of before: no wind, a
+/// fixed grip (`env.dynamic_grip_level`), the car's own aids, the default setup.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Session {
+    /// The wind handed to `PhysicsEngine::setWind`: m/s (0: none) and degrees.
+    pub wind_speed: f32,
+    pub wind_direction_deg: f32,
+    /// The track's grip of the session (`[DYNAMIC_TRACK]` of race.ini, already drawn); `None`:
+    /// the grip is the fixed number in `env`.
+    pub dynamic_track: Option<DynamicTrack>,
+    /// `[CAR_0] BALLAST` (kg), `RESTRICTOR`; 0: none.
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    /// `[RACE] PENALTIES`: on a track, two tyres may leave it; off: any number.
+    pub penalties: bool,
+    /// assists.ini `ABS`, `TRACTION_CONTROL` (0 off, 1 as the car has it, 2 on) and
+    /// `STABILITY_CONTROL` (percent); `None`: the car's own files decide.
+    pub assists: Option<(i32, i32, f32)>,
+    /// A saved setup, loaded after the default one.
+    pub setup_file: Option<std::path::PathBuf>,
+}
+
+impl Default for Session {
+    fn default() -> Session {
+        Session { wind_speed: 0.0, wind_direction_deg: 0.0, dynamic_track: None, ballast_kg: 0.0, restrictor: 0.0, penalties: true, assists: None, setup_file: None }
+    }
+}
+
+/// Numbers of a header line written as bit patterns (`41200000,43020000`).
+fn hex_floats(key: &str, text: &str) -> Result<Vec<f32>, String> {
+    rustyac_physics::car::replay::Conditions::parse_hex(text).map_err(|e| format!("{key}: {e}"))
+}
+
 /// Everything that decides what car is built and how its session starts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimSetup {
@@ -196,6 +231,8 @@ pub struct SimSetup {
     pub track: String,
     /// Where on the track the car starts: `hotlap`, `pit` or `start`.
     pub spawn: String,
+    /// The session's wind, track grip, ballast, aids and saved setup.
+    pub session: Session,
 }
 
 impl Default for SimSetup {
@@ -213,6 +250,7 @@ impl Default for SimSetup {
             oracle: None,
             track: String::new(),
             spawn: "hotlap".to_string(),
+            session: Session::default(),
         }
     }
 }
@@ -288,6 +326,33 @@ impl SimSetup {
         put("auto_clutch", (self.auto_clutch as u32).to_string());
         put("auto_shifter", (self.auto_shifter as u32).to_string());
         put("ff_gain", format!("{:?}", self.ff_gain));
+        // the session's additions, each only when it is not the default (older files have none)
+        let s = &self.session;
+        let hex = |values: &[f32]| values.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(",");
+        if s.wind_speed != 0.0 {
+            put("wind", hex(&[s.wind_speed, s.wind_direction_deg]));
+        }
+        if let Some(t) = &s.dynamic_track {
+            put(
+                "dynamic_track",
+                format!("{},{},{}", t.is_external as u32, t.enabled as u32, hex(&[t.session_start_grip, t.base_grip, t.random_grip, t.grip_per_lap, t.session_transfer, t.dynamic_grip_level])),
+            );
+        }
+        if s.ballast_kg != 0.0 {
+            put("ballast_kg", hex(&[s.ballast_kg]));
+        }
+        if s.restrictor != 0.0 {
+            put("restrictor", hex(&[s.restrictor]));
+        }
+        if !s.penalties {
+            put("penalties", "0".to_string());
+        }
+        if let Some((abs, traction_control, stability)) = s.assists {
+            put("assists", format!("{abs},{traction_control},{}", hex(&[stability])));
+        }
+        if let Some(file) = &s.setup_file {
+            put("setup_file", file.display().to_string());
+        }
         if !self.track.is_empty() {
             put("track", self.track.clone());
             put("spawn", self.spawn.clone());
@@ -387,6 +452,38 @@ impl SimSetup {
                 "ff_gain" => setup.ff_gain = float()?,
                 "track" => setup.track = value.to_string(),
                 "spawn" => setup.spawn = value.to_string(),
+                "wind" => {
+                    let [speed, direction] = hex_floats(key, value)?[..] else { return Err(format!("wind: two numbers expected, got {value:?}")) };
+                    setup.session.wind_speed = speed;
+                    setup.session.wind_direction_deg = direction;
+                }
+                "dynamic_track" => {
+                    let parts: Vec<&str> = value.splitn(3, ',').collect();
+                    let [external, enabled, numbers] = parts[..] else { return Err(format!("dynamic_track: {value:?}")) };
+                    let [session_start_grip, base_grip, random_grip, grip_per_lap, session_transfer, dynamic_grip_level] = hex_floats(key, numbers)?[..] else {
+                        return Err(format!("dynamic_track: six numbers expected, got {numbers:?}"));
+                    };
+                    setup.session.dynamic_track = Some(DynamicTrack {
+                        is_external: external != "0",
+                        enabled: enabled != "0",
+                        session_start_grip,
+                        base_grip,
+                        random_grip,
+                        grip_per_lap,
+                        session_transfer,
+                        dynamic_grip_level,
+                    });
+                }
+                "ballast_kg" => setup.session.ballast_kg = hex_floats(key, value)?.first().copied().unwrap_or(0.0),
+                "restrictor" => setup.session.restrictor = hex_floats(key, value)?.first().copied().unwrap_or(0.0),
+                "penalties" => setup.session.penalties = flag(),
+                "assists" => {
+                    let parts: Vec<&str> = value.split(',').collect();
+                    let [abs, traction_control, stability] = parts[..] else { return Err(format!("assists: {value:?}")) };
+                    let int = |text: &str| text.parse::<i32>().map_err(|e| format!("assists: {e}"));
+                    setup.session.assists = Some((int(abs)?, int(traction_control)?, hex_floats(key, stability)?.first().copied().unwrap_or(0.0)));
+                }
+                "setup_file" => setup.session.setup_file = Some(std::path::PathBuf::from(value)),
                 "oracle_scenario" => oracle.get_or_insert_with(blank).scenario = value.to_string(),
                 "oracle_collide" => {
                     oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide);

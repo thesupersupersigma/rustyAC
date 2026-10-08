@@ -541,14 +541,32 @@ fn build_car(
         None => Box::new(Ground::Flat),
     };
     let mut env = setup.env;
+    let session = &setup.session;
+    if session.wind_speed != 0.0 {
+        // RaceManager::generateWind's job: PhysicsEngine::setWind
+        env.set_wind(session.wind_speed, session.wind_direction_deg);
+    }
     if track.is_some() {
         // RaceManager::setCurrentSession for a session that is not a race: leaving the track
-        // costs the lap (penalty mode 1); `[RACE] PENALTIES` on: two tyres may be off
+        // costs the lap (penalty mode 1); `[RACE] PENALTIES` on: two tyres may be off, off:
+        // any number (-1)
         env.penalty_mode = 1;
-        env.allowed_tyres_out = 2;
+        env.allowed_tyres_out = if session.penalties { 2 } else { -1 };
         env.session_type = if setup.spawn == "hotlap" { 4 } else { 1 };
     }
     let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
+    // the session of race.ini and assists.ini: the track's grip, ballast and restrictor
+    // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
+    car.car.dynamic_track = session.dynamic_track;
+    if session.ballast_kg > 0.0 {
+        car.car.ballast_kg = session.ballast_kg;
+    }
+    if session.restrictor > 0.0 {
+        car.car.set_restrictor(session.restrictor);
+    }
+    if let (Some((abs, traction_control, stability)), Some(aids)) = (session.assists, &mut car.car.aids) {
+        aids.base_mut().apply_driving_assists(abs, traction_control, stability);
+    }
     // CarAvatar::initPhysics: the car's collider mesh, when the game's folder has one for it
     // (without it the car has only its floor boxes: walls do not stop it)
     if let Some(root) = ac_root() {
@@ -577,6 +595,12 @@ fn build_car(
     car.car.force_rotation(&spawn.tail);
     car.car.force_position(&spawn.position);
     car.car.session_start()?;
+    // a saved setup, loaded as the setup screen's "Load" does it, before the first step
+    if let Some(file) = &session.setup_file {
+        let saved = rustyac_physics::data::ini::IniReader::load(file)?;
+        let name = file.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        car.car.load_setup(&saved, &name).map_err(|e| format!("{}: {e}", file.display()))?;
+    }
     // PhysicsEngine::setSessionInfo: no contacts are looked for during the first 0.75 s
     car.car.reset_collisions_for_new_session();
     Ok(car)

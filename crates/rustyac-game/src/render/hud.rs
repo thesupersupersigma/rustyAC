@@ -140,7 +140,7 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     let line = gh * 0.75 * s + 3.0 * s;
 
     // top left: timer, rates, who drives
-    let rows = 5 + info.notes.len();
+    let rows = 8 + info.notes.len();
     hud.rect(10.0 * s, 10.0 * s, 430.0 * s, line * rows as f32 + 16.0 * s, PANEL);
     let x = 20.0 * s;
     let mut y = 16.0 * s;
@@ -153,6 +153,9 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         format!("late max {:.2} ms  over 1 ms: {}", t.late_max_us / 1000.0, t.late_over_1ms),
         format!("driver: {}", device_name(view.device)),
         format!("camera: {}  (C)", info.camera),
+        format!("air {:.0} C  road {:.0} C  grip {:.1} %", view.air, view.road, view.grip * 100.0),
+        if view.wind_kmh > 0.0 { format!("wind {:.1} km/h from {:.0} deg", view.wind_kmh, view.wind_deg) } else { "no wind".to_string() },
+        format!("tyres {}  setup {}", view.compound.as_str(), if view.setup.as_str().is_empty() { "default" } else { view.setup.as_str() }),
     ] {
         hud.text(x, y, 0.75 * s, DIM, &text);
         y += line;

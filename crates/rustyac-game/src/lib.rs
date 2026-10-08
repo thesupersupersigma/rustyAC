@@ -6,12 +6,14 @@
 //!   built, spawned and stepped. The only place the game touches the car.
 //! * [`input_file`], [`dump`]: the files of `--record` / `--replay` / `--dump-states`.
 //! * [`cli`]: the command line.
+//! * [`conditions`]: the session of a live drive from the game's own race.ini and assists.ini.
 //!
 //! The physics is `rustyac-physics` and nothing else: this crate feeds it the driver's controls
 //! and the session's values and reads its state.
 
 pub mod autodrive;
 pub mod cli;
+pub mod conditions;
 pub mod crt;
 pub mod dump;
 pub mod input;
