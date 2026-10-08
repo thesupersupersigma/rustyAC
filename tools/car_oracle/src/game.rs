@@ -2109,6 +2109,12 @@ impl<'a> World<'a> {
         unsafe { std::slice::from_raw_parts(self.avatar.add(AVATAR_PHYSICS_STATE), 0xb70) }
     }
 
+    /// Task 19: `tractionControl.isInAction` of the physics car, which the main thread's
+    /// `CarAvatar::isTcInAction` reads directly for the sound.
+    pub fn tc_in_action(&self) -> u8 {
+        unsafe { rd::<u8>(self.car, CAR_TRACTION_CONTROL + 8) }
+    }
+
     /// Task 19: empties the engine's event queue into the audio tape's list when the
     /// recording itself does not (a recording without collisions never looks at it).
     pub fn pop_audio_events(&self) {

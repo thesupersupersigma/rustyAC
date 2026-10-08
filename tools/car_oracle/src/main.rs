@@ -520,7 +520,8 @@ fn run(args: &Args) -> Result<(), String> {
     let mut steps = steps;
     // Task 19: the audio tape. A header of `key=value` lines and an empty line, then records:
     // 1 + 0x48 bytes = a physics event (in the order the engine queued them), 2 + u32 step
-    // count + 0xb70 bytes = a picture frame with the car's state after that many steps.
+    // count + 0xb70 bytes + 1 byte = a picture frame with the car's state after that many steps
+    // and whether its traction control is acting.
     // Frame n comes after floor(n * 50 / 9) steps: 60 frames a second of 3 ms steps.
     let mut tape = if args.audio_tape {
         use std::io::Write as _;
@@ -564,6 +565,7 @@ fn run(args: &Args) -> Result<(), String> {
                 file.write_all(&[2])
                     .and_then(|_| file.write_all(&(i as u32 + 1).to_le_bytes()))
                     .and_then(|_| file.write_all(world.physics_state()))
+                    .and_then(|_| file.write_all(&[world.tc_in_action()]))
                     .map_err(|e| e.to_string())?;
             }
         }
