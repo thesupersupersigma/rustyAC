@@ -310,7 +310,9 @@ fn the_car_on_spa_matches_the_game() {
 // On top of what the other excerpts hash, each step's hash here holds the contact joints (how
 // many, a hash over all of them, the first six in full: position, normal, depth, the two
 // geoms, triangle numbers, the material), the collision pass's counter and parity, the
-// collision clocks, the five damage zones and the four suspensions' damage. The track and the
+// collision clocks, the five damage zones, the four suspensions' damage and the collision
+// events the car pushed on the engine's queue (how many, a hash over all their fields, the
+// closing speed and the other shape's group of the first and the last). The track and the
 // car's collider mesh are read from the game's own folder; without it the tests print a notice
 // and pass without testing anything.
 

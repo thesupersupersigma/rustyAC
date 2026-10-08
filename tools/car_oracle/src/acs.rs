@@ -445,6 +445,15 @@ impl Acs {
         f as usize
     }
 
+    /// A function of the C++ runtime the game imports (`msvcp120.dll`).
+    pub fn msvcp_function(&self, name: &std::ffi::CStr) -> usize {
+        let module = unsafe { LoadLibraryA(c"msvcp120.dll".as_ptr().cast()) };
+        assert!(!module.is_null(), "msvcp120.dll not found");
+        let f = unsafe { GetProcAddress(module, name.as_ptr().cast()) };
+        assert!(!f.is_null(), "msvcp120.dll has no {name:?}");
+        f as usize
+    }
+
     /// Makes the game's own `printf` output appear at once (it is fully buffered when piped).
     pub fn unbuffer_game_stdout(&self) {
         unsafe {

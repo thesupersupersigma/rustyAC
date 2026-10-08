@@ -1779,6 +1779,42 @@ impl<'a> World<'a> {
                 _ => row.i(&value.name, value.word as i32),
             }
         }
+        // the collision events of this step: `PhysicsEngine::eventQueue` (a
+        // `concurrent_queue<ACPhysicsEvent>` at +0x30) is emptied with the queue's own pop, as
+        // the game's main thread does for its sounds (`Sim::stepPhysicsEvent`)
+        {
+            use rustyac_physics::car::chassis::PhysicsEvent;
+            use rustyac_physics::vecmath::Vec3f;
+            let pop: unsafe extern "system" fn(*mut u8, *mut u8) -> bool = std::mem::transmute(self.acs.msvcp_function(
+                c"?_Internal_pop_if_present@_Concurrent_queue_base_v4@details@Concurrency@@IEAA_NPEAX@Z",
+            ));
+            let queue = (self.engine as *mut u8).add(0x30);
+            let mut events = Vec::new();
+            let mut raw = [0u8; 0x48];
+            while pop(queue, raw.as_mut_ptr()) {
+                let p = raw.as_ptr();
+                let vector = |at: usize| -> Vec3f {
+                    let v: [f32; 3] = rd(p, at);
+                    Vec3f::new(v[0], v[1], v[2])
+                };
+                events.push(PhysicsEvent {
+                    kind: rd(p, 0x00),
+                    param1: rd(p, 0x04),
+                    param2: rd(p, 0x08),
+                    param3: rd(p, 0x0c),
+                    param4: rd(p, 0x10),
+                    v_param1: vector(0x14),
+                    v_param2: vector(0x20),
+                    ul_param0: rd(p, 0x40),
+                });
+            }
+            for value in rustyac_physics::car::replay::event_trace_values(&events) {
+                match value.kind {
+                    'f' => row.f(&value.name, f32::from_bits(value.word as u32)),
+                    _ => row.i(&value.name, value.word as i32),
+                }
+            }
+        }
         row.i("collide.noCollisionCounter", rd(core, 0x60));
         row.i("collide.currentFrame", rd(core, 0xa0));
         row.d("car.lastCollisionTime", rd(car, 0x3508));

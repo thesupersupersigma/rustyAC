@@ -1956,6 +1956,45 @@ pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     for (wheel, suspension) in ["lf", "rf", "lr", "rr"].iter().zip(&chassis.suspensions) {
         out.push(TraceValue::f(&format!("sus.{wheel}.damage"), suspension.get_damage()).extra());
     }
+    out.extend(event_trace_values(&chassis.physics_events));
+    out
+}
+
+/// The collision events of a step (the `ACPhysicsEvent`s `Car::onCollisionCallBack` pushed on
+/// the engine's queue, in order) as the recordings hold them: how many, a hash over every
+/// field of every event, and the closing speed and the other shape's group of the first and
+/// of the last one.
+pub fn event_trace_values(events: &[super::chassis::PhysicsEvent]) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    out.push(TraceValue::i("events.count", events.len() as i32).extra());
+    // FNV-1a over the words of every event
+    let mut hash: u32 = 0x811c_9dc5;
+    for e in events {
+        let words = [
+            e.kind as u32,
+            e.param1.to_bits(),
+            e.param2.to_bits(),
+            e.param3.to_bits(),
+            e.param4.to_bits(),
+            e.v_param1.x.to_bits(),
+            e.v_param1.y.to_bits(),
+            e.v_param1.z.to_bits(),
+            e.v_param2.x.to_bits(),
+            e.v_param2.y.to_bits(),
+            e.v_param2.z.to_bits(),
+            e.ul_param0,
+        ];
+        for word in words {
+            for byte in word.to_le_bytes() {
+                hash = (hash ^ byte as u32).wrapping_mul(0x0100_0193);
+            }
+        }
+    }
+    out.push(TraceValue::i("events.hash", hash as i32).extra());
+    for (name, event) in [("first", events.first()), ("last", events.last())] {
+        out.push(TraceValue::f(&format!("events.{name}.relSpeed"), event.map_or(0.0, |e| e.param4)).extra());
+        out.push(TraceValue::i(&format!("events.{name}.group"), event.map_or(0, |e| e.ul_param0 as i32)).extra());
+    }
     out
 }
 
