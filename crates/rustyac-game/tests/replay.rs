@@ -97,9 +97,15 @@ fn spawn(setup: &SimSetup, data: &std::path::Path, clock: f64) -> VanillaCar<Scr
     car.car.autoclutch.use_auto_on_start = true;
     car.car.autoclutch.use_auto_on_change = true;
     car.car.auto_shifter.is_active = false;
+    // as the game does: the collider mesh when the game's folder has one, and no contacts
+    // during the first 250 steps of a session
+    if let Some(root) = rustyac_game::sim::ac_root() {
+        let _ = car.car.load_collider_mesh(&root);
+    }
     car.car.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
     car.car.force_position(&Vec3f::new(0.0, 0.0, 0.0));
     car.car.session_start().unwrap();
+    car.car.reset_collisions_for_new_session();
     car
 }
 
@@ -116,6 +122,9 @@ fn stepped_directly(setup: &SimSetup, steps: &[StepInput], data: &std::path::Pat
             car.car.queue(|c| {
                 c.force_rotation(&Vec3f::new(0.0, 0.0, -1.0));
                 c.force_position(&Vec3f::new(0.0, 0.0, 0.0));
+                // the teleport repairs the car
+                c.set_damage_level(0.0);
+                c.reset_suspension_damage_level();
             });
         }
         if step.bias_clicks != 0 {
