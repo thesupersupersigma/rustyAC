@@ -2,18 +2,25 @@
 
 # A pushed tag vX.Y.Z becomes a release: built and tested from scratch on GitHub's own Windows
 # machine, zipped, and published in the repo's Releases section. See docs/release.md.
+# It can also be started by hand for a tag that exists already (Actions -> Release -> Run workflow).
 # No Assetto Corsa file is here, is fetched or goes into the zip.
 name: Release
 
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag to release, e.g. v0.15.0"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -22,7 +29,7 @@ env:
   RUST_TOOLCHAIN: "1.97.0"
   GH_TOKEN: ${{ github.token }}
   GH_REPO: ${{ github.repository }}
-  TAG: ${{ github.ref_name }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -33,8 +40,19 @@ jobs:
       run:
         shell: bash
     steps:
+      # started by hand, the tag is somebody's typing: it must look like a version before it is used
+      - name: Check the tag's form
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$TAG' is not a tag of the form vX.Y.Z"
+            exit 1
+          fi
+
+      # the tag itself is checked out (a run started by hand would otherwise build the branch);
+      # a tag that does not exist stops the run here
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
       - name: Check the tag against Cargo.toml
