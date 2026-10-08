@@ -179,18 +179,23 @@ addTyreForcesV10(...)`. `modelData.version` is `[HEADER] VERSION` of the car's t
 (read in `initCompounds`, stored at `TyreModelData+0x0`). The same test is used later in
 `Tyre::step` to pick the wheel-torque formula.
 
+The old path does not go through `ITyreModel`. `Tyre::tyreModel` points at the SCTM for every
+version, but `addTyreForces` works out the force itself and takes only the slip curve from
+`Tyre::slipProvider` (`BrushSlipProvider::getSlipForce`, the one virtual of that class, vtable
+0x1404f8258). Its single `tyreModel->solve` call has no effect (section 7, item 3).
+
 | | `addTyreForces` (VERSION < 10) | `addTyreForcesV10` (VERSION ≥ 10) |
 |---|---|---|
-| Force formula | `BrushSlipProvider::getSlipForce` → `BrushTyreModel::solve` (`slipProvider.version < 5`) or `solveV5`; gives a friction factor and normalised slip, then `F = load · factor · D` split along the sliding direction | `ITyreModel::solve` → `SCTM::solve`; returns Fx, Fy, Mz, trail, ndSlip, Dx, Dy directly |
-| Slip measure | Sliding **velocities** (`rSlidingVelocityX/Y`), combined as a vector | Slip **ratio** and slip **angle**, combined with a square-root sum or the `COMBINED_FACTOR` power norm |
-| Relaxation (lag) | `stepRelaxationLength` low-pass filters the sliding velocities | The same lag formula is applied inline to `status.slipRatio` and `status.slipAngleRAD`; below 1 m/s a clamped low-speed substitute is used |
+| Force formula | `BrushSlipProvider::getSlipForce` → `BrushTyreModel::solve` (`slipProvider.version < 5`) or `solveV5`; gives a share of the peak force and the normalised slip, then `F = load · share · D` split along the sliding direction. `getSlipForce` reads only the slip and the load of its `TyreSlipInput`. Below `VERSION` 5 it calls `solve` with a fall-off level of 1.0, so the force never falls after the peak. From 5 on it passes `asy` (`FALLOFF_LEVEL`) to `solveV5`, or 1.0 when `1.0 >= aiMult` is false | `ITyreModel::solve` → `SCTM::solve`; returns Fx, Fy, Mz, trail, ndSlip, Dx, Dy directly |
+| Slip measure | Sliding **velocities** (`rSlidingVelocityX/Y`), combined as a vector: slip = slide speed ÷ hub speed (the slide speed itself when the hub speed is not above 1 m/s). The slip ratio does not enter the grip force; `status.slipRatio` is `−(slidingVelocityX / roadVelocityX)`, divided by the signed road speed (V10 divides by its absolute value) and not relaxed. Here `slidingVelocityX = ω·effectiveRadius + roadVelocityX`: `roadVelocityX` has the opposite sign to the V10 path and the hub's own angular velocity is not added. `status.slipAngleRAD` is the raw `ksCalcSlipAngleRAD` value | Slip **ratio** and slip **angle**, combined with a square-root sum or the `COMBINED_FACTOR` power norm |
+| Relaxation (lag) | `stepRelaxationLength` low-pass filters the sliding velocities. Its speed argument (PDB name `hubVelocity`) is the wheel's surface speed `|ω|·effectiveRadius`, not the hub speed, and its load term divides by `TyreModelData::Fz0`, which is always 2000 | The same lag formula is applied inline to `status.slipRatio` and `status.slipAngleRAD`; below 1 m/s a clamped low-speed substitute is used |
 | Peak grip D | `Tyre::getDY/getDX` (linear `Dy0+Dy1·load`, exponent, or curve), camber via `getCamberedDy`, then `getCorrectedD`, then `÷ (1 + speedSensitivity·slideSpeed)` | `SCTM::getStaticDY/DX` (exponent or curve), camber D-loss, `÷ (1 + speedSensitivity·slideSpeed)`, all inside `solve`; `getCorrectedD` enters as input `u` |
 | Camber thrust | `camberGain · sin(camber) · roadVelocityX` added to the lateral sliding velocity | `camberGain · sin(camber)` added to the slip angle |
 | Extra V10-only effects | — | `brakeDXMod` (less longitudinal grip under braking), `cfXmult` (separate longitudinal stiffness), pressure → cornering stiffness (`pressureCfGain`), load-dependent peak slip (`maxSlip0/1`), blister reduces D, grain softens stiffness, `radiusRaiseK` tyre growth read from ini |
 | Aligning torque | Not applied as a torque: the force is applied at `contact point + trail · roadHeading`; `status.Mz = −trail·Fy` is only recorded | `Mz` from the model is applied to the hub as a real torque about the ground normal |
 | Force into hub | Always `hub vtable+0x18` (force at point) | `torqueModeEx == original`: same call at the contact point; otherwise `addTyreForceToHub` (splits into hub-local force and torque) |
 | Wheel torque from tyre | `loadedRadius · Fx` | `−localMX` (set in the V10 path; equals `loadedRadius·Fx` in the original torque mode) |
-| Loose surfaces | Special case when `SurfaceDef::granularity != 0` (`1 − exp(−14·slip)`, D = 0.65) | No special case in this function |
+| Loose surfaces | Special case when `SurfaceDef::granularity != 0` (`1 − exp(−14·slip)`, D = 0.65); it also writes `gripMod = 1.0` into the `SurfaceDef` itself, where it stays for every later step and tyre | No special case in this function |
 | Wear distance | `totalSlideVelocity · dt · tyreConsumptionRate` | slide speed `· dt · tyreConsumptionRate`, optionally `× load/Fz0` (`[VIRTUALKM] USE_LOAD`) |
 | `status.D` | corrected D used for the force | `SCTM::getStaticDY(load)` |
 
@@ -199,7 +204,12 @@ block (`rr0`, `rr1`, pressure gain, `rr_slip` or `rr_sa/rr_sr` for version 1), N
 
 Separate, older switch inside the loader: `VERSION < 5` reads `DY0/DY1/DX0/DX1` (linear load
 sensitivity) and uses `BrushTyreModel::solve`; `VERSION ≥ 5` reads `FZ0/LS_EXP*/D*_REF` and sets
-`slipProvider.version = 5` (`solveV5`).
+`slipProvider.version = 5` (`solveV5`). `XMU` is used below 5 only. The provider's constructor
+`BrushSlipProvider(maxAngle, xu, flex)` 0x1402b2f80 does not store its `xu` argument; the loader
+writes `brushModel.data.xu` afterwards, in the `VERSION < 5` branch. The fall-off level `asy` is
+0.85 below 5 and 0.92 from 5 on. From `VERSION` 7 on `FALLOFF_LEVEL` and `FALLOFF_SPEED` replace
+it, after `maximum` / `maxSlip` were computed. The only stock data below `VERSION` 10 is in the
+game's sdk: the kart `formula_k` and 100 tyre sets with `VERSION` 7, 30 tyre sets with `VERSION` 3.
 
 ---
 
@@ -235,13 +245,17 @@ normal and one `SurfaceDef`. Details:
 2. **`TyreModelData::Fz0`** is never written from tyres.ini in the code read (ini `FZ0` goes to
    `slipProvider.brushModel.data.Fz0` and `scTM.Fz0`); it appears to stay at the constructor
    default `2000.0`, and that value is what the relaxation-length and `USE_LOAD` wear formulas
-   use. Worth confirming against a live run.
+   use. Confirmed in Task 17: nothing writes it from the ini, and `stepRelaxationLength` divides by
+   2000.0 for every version. The port does the same and matches the game bit for bit.
 3. **Old path calls `tyreModel->solve` too** (`addTyreForces`, after computing Fx/Fy from the
-   brush provider) but the decompiled code never reads the returned struct. Either dead code or
-   an output the decompiler lost.
-4. **`BrushSlipProvider::getSlipForce` arguments** are garbled in the pseudo-C (struct passed in
-   registers). Field use was inferred from `TyreSlipInput`'s layout
-   (slip, friction, load, normalizedSlipX, normalizedSlipY, D); needs a disassembly check.
+   brush provider). Resolved in Task 17: it is dead code. The `TyreModelInput` is only partly
+   filled (`tyreIndex`, `cpLength`, `grain`, `blister`, `pressureRatio` and `useSimpleModel` are
+   uninitialised stack), the returned struct is never read and `SCTM::solve` changes no state. The
+   port leaves the call out.
+4. **`BrushSlipProvider::getSlipForce` arguments**: resolved in Task 17 from the disassembly. The
+   function reads only `slip` (+0) and `load` (+8) of `TyreSlipInput`. The caller also fills
+   `friction`, `normalizedSlipX`, `normalizedSlipY` and `D`, and nothing reads them. The bool picks
+   `asy` or 1.0 for `solveV5` and is ignored below `VERSION` 5 (section 5).
 5. **`TyreThermalModel::buildTyre` / `getIMO` / `getPatchAt`** are saved but only skimmed: the
    patch neighbour wiring and the inner/middle/outer averaging were not worked through.
 6. **Driven wheels:** `Tyre::step` skips `updateAngularSpeed` when `driven` is true; how

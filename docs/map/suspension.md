@@ -50,14 +50,14 @@ steering wheel force feedback is built from.
 | `Suspension` | 0x210 | Double wishbone ("DWB"). Owns the hub body, 5 distance joints, a `Damper`, an `ActiveActuator`, damage data. |
 | `SuspensionStrut` | 0x1e8 | Strut suspension ("STRUT"). Hub body + small strut body, 3 distance joints, 1 slider joint, 1 ball joint. |
 | `SuspensionAxle` | 0xb0 | One side of a rigid rear axle ("AXLE"). Two instances (Left, Right) share one body, `Car::rigidAxle`. |
-| `SuspensionML` | 0xc8 | Multilink ("ML"): hub + 5 free distance joints read as `JOINT0..4`. Fully implemented but used by 0 of the 113 cars. |
+| `SuspensionML` | 0xc8 | Multilink ("ML"): hub + 5 free distance joints read as `JOINT0..4`. Fully implemented but used by 0 of the 113 cars. Four base members (`bumpStopRate`, `bumpStopUp`, `bumpStopDn`, `packerRange`) are never initialised, and its step reads two of them (section 5.5). |
 | `SDWSuspensionData` | 0x7c | DWB pick-up points (`carTopWB_F/R`, `carBottomWB_F/R`, `tyreTopWB`, `tyreBottomWB`, `carSteer`, `tyreSteer`, `refPoint`), `hubMass`, `hubInertiaBox`. Held twice: `dataRelToWheel` (as in the ini) and `dataRelToBody`. |
 | `SStrutSuspensionData` | 0x70 | Same for the strut (`carStrut`, `tyreStrut`, `carBottomWB_F/R`, `tyreBottomWB`, `carSteer`, `tyreSteer`, `refPoint`, `hubMass`, `hubInertiaBox`). |
 | `AxleJoint` (0x40) / `AxleBall` (0x20) | | One axle link: two ends, each with `relToAxle`, `relToCar`, `joint`. |
 | `MLJoint` (0x38) / `MLBall` (0x18) | | One multilink rod: `ballCar`, `ballTyre` (`relToTyre`, `relToCar`), `joint`. |
 | `SuspensionStatus` | 0x8 | Output: `travel` (m), `damperSpeedMS` (m/s). |
 | `Damper` | 0x18 | `reboundSlow`, `reboundFast`, `bumpSlow`, `bumpFast`, `fastThresholdBump`, `fastThresholdRebound`. One method, `getForce`. |
-| `SusDamageDef` / `SusStrutDamageDef` | 0x1c | `damageAmount`, `damageDirection` (+1 or -1, random: `rand()·3.051851e-05·100 ≥ 50 → +1`, else −1, drawn once in the constructor), `minVelocity`, `damageGain`, `maxDamage`, `isDebug`, `lastAmount`. |
+| `SusDamageDef` / `SusStrutDamageDef` | 0x1c | `damageAmount`, `damageDirection` (+1 or -1, random: `rand()·3.051851e-05·100 ≥ 50 → +1`, else −1, drawn once in the constructor of a DWB, a STRUT and an ML wheel, before `loadINI`; `SuspensionAxle` draws none, so a car with DWB front and AXLE rear draws 2 numbers, not 4), `minVelocity`, `damageGain`, `maxDamage`, `isDebug`, `lastAmount`. |
 | `HeaveSpring` | 0x58 | Third spring of one axle: `k`, `progressiveK`, `rodLength`, `packerRange`, `bumpStopRate`, `bumpStopUp/Dn`, a `Damper`, two `Suspension*`. `Car::heaveSprings[2]`. Only initialised when all four wheels are DWB (section 5.6). |
 | `HeaveSpringStatus` | 0x4 | `travel`. |
 | `AntirollBar` | 0x48 | `carBody`, `hubs[2]`, stiffness `k`, optional `DynamicController ctrl`. `Car::antirollBars[2]`. |
@@ -215,7 +215,9 @@ constructors): the inlined `ISuspension` constructor only writes `bumpStopProgre
 `baseCFM = 1e-7`. DWB and STRUT add `k = 90000`, `staticCamber = 0`, `rodLength = 0`,
 `toeOUT_Linear = 0` and their `loadINI` writes every other base member, so nothing is left open
 there. AXLE never writes `staticCamber` (+0x18) or `packerRange` (+0x2c): both are heap garbage,
-and neither is read by the axle code (its `getPackerRange` is the `return 0` stub). ML never writes
+and neither is read by the axle code (its `getPackerRange` is the `return 0` stub). The setup items
+`CAMBER_LR/RR` and `PACKER_RANGE_LR/RR` point at them, so only the setup screen shows the garbage.
+The port has 0 for both and does not compare these two values with the game. ML never writes
 `bumpStopRate`, `bumpStopUp`, `bumpStopDn`, `packerRange`; two of them are read by its step
 (section 5.5).
 
@@ -399,7 +401,7 @@ details that are easy to miss: the damper speed is measured at the wheel end of 
 (`s·attachRelativePos`); and `getBasePosition()` is called a second time inside the leaf-spring
 branch (same value).
 
-### 5.5 SuspensionML::step 0x1402cab00 (spring, packer and damper speed confirmed from disassembly; the last two calls from pseudo-C)
+### 5.5 SuspensionML::step 0x1402cab00 (confirmed from disassembly, the whole function)
 
 ```
 steerTorque = 0
@@ -417,8 +419,11 @@ No bump stops. `packerRange` (+0x2c) and `bumpStopRate` (+0x10) are never loaded
 they are not initialised either** (reviewer, disassembly of `SuspensionML::SuspensionML`
 0x1402c8e20: the only base-member stores are +0x14 = 0, +0x30 = 1e-7, +0x18 = 0, +0x24 = 0; the
 object comes from a plain `operator new(200)` in `Car::Car`). So the packer test in this step reads
-whatever was in the heap block until a setup item writes `PACKER_RANGE` / `BUMP_STOP_RATE`. A port
-has to pick a value (0 is the only sane one); it cannot be bit-compared with the game here.
+whatever was in the heap block until a setup item writes `PACKER_RANGE` / `BUMP_STOP_RATE`. The port
+starts both at 0 (no packer). It can only be bit-compared with the game when the game's
+uninitialised members are set first: for the whole-car recordings the oracle writes 0 into the four
+of them right after the car is built, and the suspension micro-oracle sets both numbers to the same
+random values on both sides, so the packer branch is compared too.
 `bumpStopUp` / `bumpStopDn` are uninitialised too but never read by ML.
 
 ### 5.6 HeaveSpring::step 0x1402b3960 (from pseudo-C; base offsets from disassembly)
@@ -497,8 +502,16 @@ with `dJointSetDBallDistance(joint, stored length)`. The stored length is the an
 back when `PhysicsCore::createDistanceJoint` made the joint. So the rod never changes length: its
 body end is moved and the solver pulls the hub end after it over the following steps.
 `SteeringSystem::step` 0x1402b81b0 calls it every step for wheels 0 and 1 with
-`offset = −(car.finalSteerAngleSignal · linearRatio)`, and for wheels 2 and 3 with the output of the
-four-wheel-steer controller when `has4ws` is set.
+`offset = −(car.finalSteerAngleSignal · linearRatio)`, and for wheels 2 and 3 when `has4ws` is set.
+Rear-wheel steering (confirmed, both functions read whole): `SteeringSystem::init` 0x1402b80d0 sets
+`has4ws` when the file `ctrl_4ws.ini` exists in the car's data (there is no other switch) and loads
+it into the `DynamicController` `ctrl4ws`. The step evaluates the controller once
+(`DynamicController::eval` 0x1402b0c00) and passes the same value to wheel 2 and to wheel 3. The
+value is the rod shift in metres: it is not negated and not multiplied by `linearRatio`. The step
+has no speed term of its own; the two stock files (`ks_ferrari_812_superfast`,
+`ks_porsche_panamera`) multiply a `STEER_DEG` table by a `GAS`, a `SLIPANGLE_REAR_MAX` and a
+`SPEED_KMH` table, each with its own filter. On a rear axle the slot is the empty function: the
+controller is still evaluated and its result is dropped.
 
 Damage: `setDamage(x)` (DWB 0x1402c31e0, STRUT 0x1402c6160, ML 0x1402ca980):
 `if x > minVelocity: damageAmount = min((x − minVelocity)·damageGain, maxDamage)`. The function
@@ -522,7 +535,8 @@ The value only takes effect through the next `setSteerLengthOffset` call (a bent
 `suspensions[2]->setSteerLengthOffset(0)`, 0x140288ee0 on `TOE_OUT_RR` does the same for
 `suspensions[3]`. So on a car without four-wheel steering, rear toe and rear damage reach the
 geometry only when the rear toe setup item changes (and at construction); between those moments rear
-damage is recorded but not applied. The front toe items have no such lambda because the front rods
+damage is recorded but not applied. On a car with `ctrl_4ws.ini` the rear rods are reseated every
+step, so rear toe and rear damage reach the geometry every step, like the fronts. The front toe items have no such lambda because the front rods
 are reseated every step anyway.
 
 ### 5.9 Static toe, camber, caster in one place
@@ -546,7 +560,15 @@ Exact form, the same in all three (confirmed): with `a` = the upper point (DWB
 `H.localToWorld(tyreTopWB)`, STRUT `B.localToWorld(dataRelToBody.carStrut)`, ML joint 0) and `b` =
 the lower one (DWB `H.localToWorld(tyreBottomWB)`, STRUT `H.localToWorld(tyreStrut)`, ML joint 2):
 `axis = (a − b) · (1.0/|a − b|)` (length summed y², x², z²; left unnormalised if the length is 0),
-`centre = (a + b) · 0.5`. So `axis` points upward.
+`centre = (a + b) · 0.5`. So `axis` points upward. Read in the disassembly for STRUT 0x1402c4d70
+and ML 0x1402c97e0 in Task 17: the inverse length multiplies x from the left and y, z from the
+right (`inv·d.x`, `d.y·inv`, `d.z·inv`).
+
+The axle has no steering axis. `SuspensionAxle::getSteerBasis` 0x1402c8510 prints
+`Kunos Simulazioni: CRITICAL ERROR` and `SuspensionAxle::getSteerBasis not implemented`, then
+raises an exception on purpose (`ksGenerateCrash` 0x140239a10: `RaiseException(0x29a, ...)`). It
+writes neither output. Nothing calls it for an axle: the other three classes call their own
+`getSteerBasis` from their own `addForceAtPos` / `addTorque`. The port panics with the same text.
 
 ```
 addForceAtPos(F, P, driven, addToSteerTorque):
@@ -603,9 +625,9 @@ ini)` at creation, with the hub placed at `B.localToWorld(refPoint)` with the bo
 | Type | Bodies | Joints |
 |---|---|---|
 | DWB (`Suspension::attach`) | hub: `hubMass`, box (0.2, 0.6, 0.6) | 5 distance joints body↔hub: `[0]` carTopWB_R–tyreTopWB, `[1]` carTopWB_F–tyreTopWB, `[2]` carBottomWB_R–tyreBottomWB, `[3]` carBottomWB_F–tyreBottomWB, `[4]` carSteer–tyreSteer (steering rod). ERP 0.3, CFM `baseCFM` set in the constructor. |
-| STRUT (`SuspensionStrut::attach`) | hub: `0.8·hubMass`, box (0.2, 0.6, 0.6); strut body: `0.2·hubMass`, box (0.05, 0.5, 0.2), placed 0.1 m down the strut from the top mount | `[0]` distance carBottomWB_R–tyreBottomWB, `[1]` distance carBottomWB_F–tyreBottomWB, `[2]` distance carSteer–tyreSteer (steering rod), `[3]` slider strut body↔hub along the strut axis, `[4]` ball joint body↔strut body at the top mount. No ERP/CFM call in the constructor. |
-| AXLE (`SuspensionAxle::SuspensionAxle`, Left instance only) | `Car::rigidAxle`: `[REAR] HUB_MASS`, box (`2·track`, 0.2, 0.5), placed at `axleBasePos` | `LINK_COUNT` distance joints body↔axle, ends `J<i>_CAR` and `J<i>_AXLE`. ERP 0.3, CFM `baseCFM`. The Right instance creates nothing. |
-| ML (`SuspensionML::loadINI`) | hub: `hubMass`, box (0.2, 0.6, 0.6) | 5 distance joints body↔hub, ends `JOINT<i>_CAR` and `JOINT<i>_TYRE`; `[4]` is the steering rod |
+| STRUT (`SuspensionStrut::attach`) | hub: `0.8·hubMass`, box (0.2, 0.6, 0.6); strut body: `0.2·hubMass`, box (0.05, 0.5, 0.2), placed 0.1 m down the strut from the top mount | `[0]` distance carBottomWB_R–tyreBottomWB, `[1]` distance carBottomWB_F–tyreBottomWB, `[2]` distance carSteer–tyreSteer (steering rod), `[3]` slider strut body↔hub along the strut axis, `[4]` ball joint body↔strut body at the top mount. No ERP/CFM call in the constructor (confirmed): the joints keep the values ODE gave them at creation until `Car::step` calls `setERPCFM`, and the slider drops the ERP it is given. The hub body is created first, then the strut body, so a strut wheel adds two bodies to the car. `attach` re-poses both bodies; `stop()` stops the hub only, so the strut body keeps its velocity and its accumulated force. |
+| AXLE (`SuspensionAxle::SuspensionAxle`, Left instance only) | `Car::rigidAxle`: `[REAR] HUB_MASS`, box (`2·track`, 0.2, 0.5), placed at `axleBasePos` | `LINK_COUNT` distance joints body↔axle, ends `J<i>_CAR` and `J<i>_AXLE`. ERP 0.3, CFM `baseCFM`. The Right instance creates nothing. `Car::Car` creates `Car::rigidAxle` before any hub, so it is the third body of the car: body, fuel tank, axle, hub LF, hub RF (five bodies). The links are created inside the Left constructor, after both front corners, with the car body as body 1 and the axle as body 2. The axle mass has no `≤ 0 → 20` fall-back. |
+| ML (`SuspensionML::loadINI`) | hub: `hubMass`, box (0.2, 0.6, 0.6) | 5 distance joints body↔hub, ends `JOINT<i>_CAR` and `JOINT<i>_TYRE`; `[4]` is the steering rod, `[0]` and `[2]` give the steering axis (the hub end of `[0]` must be the upper ball). Hub and joints are made in `loadINI`; `attach` only places the hub. No ERP/CFM call in the constructor and `setERPCFM` is the empty function, so the joints keep the values ODE gave them at creation for the whole session |
 
 `bumpStopJoint` (DWB, STRUT) is the result of `IPhysicsCore` slot +0x30 (`createBumpJoint`), which in
 this build is a stub that returns null (`xor eax,eax; ret`). Bump stops are the force code in
@@ -707,7 +729,8 @@ Bit-exact test with an oracle (same idea as the tyre oracle):
   to every other type, so its bump and rebound coefficients are swapped (section 5.3); STRUT bump
   stops ignore `BUMP_STOP_RATE` and have no zero test; the heave spring force is applied in full
   to each hub and may pull. One thing it cannot copy: ML reads two uninitialised floats
-  (section 5.5).
+  (section 5.5); the port starts them at 0. One more thing to copy: on an axle `getSteerBasis`
+  raises an exception on purpose (section 5.10).
 - Not covered above because they hold no physics: the destructors (only DWB 0x1402c0b70 releases
   its hub body, through `IRigidBody::release` +0x30; STRUT 0x1402c3d00 releases nothing, not even
   the strut body; AXLE 0x1402c7d70 and ML 0x1402c8fc0 only free the joint vector; no destructor
@@ -722,8 +745,11 @@ Bit-exact test with an oracle (same idea as the tyre oracle):
    refers to it or to `activeActuator` (only the constructor and `Suspension::step`). Treated as a
    dead feature. Not checked by raw offset search for writes to `+0x60`.
 2. **ERP/CFM gate.** `Car::step` switches suspension ERP/CFM only when `Car::physicsGUID == 0`. Other
-   cars keep whatever the constructors set (DWB and AXLE 0.3 / 1e-7; no call was seen in the STRUT
-   and ML constructors, so the world defaults would apply there). `physicsGUID` is set in `Car::Car`
+   cars keep whatever the constructors set (DWB and AXLE 0.3 / 1e-7; the STRUT and ML constructors
+   make no call, confirmed in the disassembly in Task 17, so their joints keep the values ODE gave
+   them at creation). On the first car a STRUT forwards `setERPCFM` to all five joints, but its
+   slider drops the ERP (`dJointSetSliderParam`; the CFM goes to a member that an unpowered slider
+   without stops never reads). An ML wheel never changes its joints at all. `physicsGUID` is set in `Car::Car`
    to the number of cars already in `ksPhysics->cars`, so 0 is the first car created (confirmed);
    that this is always the player's car is an assumption. `SuspensionML::setERPCFM` is the shared
    empty function. The joint `setERPCFM` (0x1402cd5a0) only writes a value that is > 0.
@@ -790,8 +816,10 @@ Bit-exact test with an oracle (same idea as the tyre oracle):
     the first uses `[BASIC] WHEELBASE`, `CG_LOCATION` and `[FRONT]/[REAR] BASEY`, `TRACK` (wheel
     positions of remote cars); the second shows no suspension key names next to the file name.
     Their code was not read.
-15. **Choice made:** `ML` is documented from code only; no car in `cardata/` exercises it, so
-    nothing about it could be cross-checked against data.
+15. **`ML` has no stock car.** Task 17 read the whole class in the disassembly and checked it with
+    a made-up car, `gt3_multilink` (the Ferrari 488 GT3 with every corner turned into `TYPE=ML`):
+    the game's own objects and the port agree bit for bit (`docs/port/suspensions.md` sections 3.1
+    and 3.3, and section 7 point 4).
 16. **`status.damperSpeedMS` has no reader that could be found.** It is written by all four
     `step`s; `Car::getPhysicsState`, `SharedMemoryWriter::updatePhysics`, `Telemetry::step` and the
     two dynamic controllers read only `travel` from `getStatus()`. The search was by member name and
@@ -799,19 +827,22 @@ Bit-exact test with an oracle (same idea as the tyre oracle):
     `SuspensionStatus*` cannot be excluded. `HeaveSpring` stores no damper speed at all.
 17. **Evaluation order of sums** in section 5 (dot products, squared lengths). Read in the
     disassembly: `Suspension::step`, `SuspensionStrut::step`, `SuspensionAxle::step`,
-    `SuspensionML::step` (up to the damper call), `HeaveSpring::step` (up to the first bump stop)
-    and `Suspension::setSteerLengthOffset`; all match the text. Still from pseudo-C only: the
-    heave damper-speed sum, `AntirollBar::step`, the three `getSteerBasis`, the `addForceAtPos` /
-    `addTorque` / `addLocalForceAndTorque` steer-torque sums, and the STRUT / ML copies of
-    `setSteerLengthOffset`. Check those `addss` orders before a bit-exact port.
+    `SuspensionML::step` (whole), `HeaveSpring::step` (up to the first bump stop)
+    and `Suspension::setSteerLengthOffset`; all match the text. Task 17 read the rest for STRUT and
+    ML in the disassembly: `getSteerBasis`, the `addForceAtPos` / `addTorque` /
+    `addLocalForceAndTorque` steer-torque sums and `setSteerLengthOffset`, and also
+    `AntirollBar::step`. All match the text, and the briefs found the STRUT and ML code equal to
+    the DWB's except where section 5.10 says otherwise. The heave damper-speed sum was not re-read
+    in Task 17.
 18. **Uninitialised members.** `SuspensionML` reads `packerRange` and `bumpStopRate` that nothing
     initialises (section 5.5); `SuspensionAxle` leaves `staticCamber` and `packerRange`
     uninitialised but does not read them (section 4). Whether anything outside these classes reads
     the base floats directly (other than the setup items, which hold pointers to them) was not
     searched.
-19. **STRUT damper sign** (section 5.3): confirmed as code, intent unknown. Worth an in-game check
-    on a strut car (compare bump-heavy and rebound-heavy damper settings) before anyone "fixes" it
-    in the port.
+19. **STRUT damper sign** (section 5.3): confirmed as code, intent unknown. The port copies it as
+    written and matches the game bit for bit on three strut cars (`bmw_m3_e30`, `ks_toyota_gt86`,
+    `ks_audi_sport_quattro`; `docs/port/suspensions.md` sections 3.1 and 3.3), so it must stay as
+    it is.
 
 ---
 
