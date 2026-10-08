@@ -202,6 +202,7 @@ fn main() {
         "rays" => rays(&args),
         "collide" => collide_poses(&args),
         "collide-worlds" => collide_worlds(&args),
+        "sus-micro" => sus_micro(&args),
         _ => Err(usage()),
     });
     if let Err(message) = result {
@@ -333,6 +334,50 @@ fn collide_worlds(args: &Args) -> Result<(), String> {
 
 fn recording_path(out: &Path, name: &str) -> PathBuf {
     out.join(format!("{name}.carrec"))
+}
+
+/// The suspension micro-oracle on one car: the game's own suspension objects against the
+/// port's on random states (see `game/sus_micro.rs`). One car per process.
+fn sus_micro(args: &Args) -> Result<(), String> {
+    let scenario = scenario::find("wc_stops").expect("the scenario exists");
+    let repo = repo_root();
+    game::prepare_root(&repo, &args.root, &args.car)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let options = game::Options {
+        joint_feedback: false,
+        car: args.car.clone(),
+        setup_check: false,
+        track: None,
+        collide: false,
+        colliders: None,
+        collider_kn5: None,
+        setup: None,
+    };
+    let mut world = game::World::build(&acs, &scenario, &options);
+    let count = if args.count == 1_000_000 { 20_000 } else { args.count };
+    let data = repo.join("cardata").join(&args.car);
+    let report = world.sus_micro(&data, scenario.seed, count, args.seed)?;
+    let text = format!(
+        "# Suspension micro-oracle: `{}`
+
+`car_oracle sus-micro --car {} --count {count} --seed {}`
+
+{}",
+        args.car, args.car, args.seed, report.text
+    );
+    println!("{}", report.text);
+    let dir = repo.join("oracle/sus_micro");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{}_results.md", args.car));
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("{}", path.display());
+    if report.ok {
+        Ok(())
+    } else {
+        Err("the game and the port do not agree".to_string())
+    }
 }
 
 /// One scenario, in this process (the game's objects cannot be torn down and rebuilt).
