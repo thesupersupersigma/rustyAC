@@ -1983,6 +1983,26 @@ fn write_excerpt(
 
 /// `excerpt-track`: the golden files of the car on a real track, from the recordings in
 /// `oracle/track` (`car_oracle run --track spa --scenario ...`).
+/// `excerpt16`: the golden excerpts of Task 16, one four-wheel-drive car and one ERS car, from
+/// the recordings `oracle/awd_sesto/wc_spirited.carrec` (the Sesto Elemento in the slalom: all
+/// three differentials at work) and `oracle/hy_ks_ferrari_sf15t/hy_modes.carrec` (the SF15-T
+/// from throttle onto the brakes, with an engine-brake setting and the MGU-H mode changed on
+/// the way).
+fn excerpt16_command() -> Result<(), String> {
+    let repo = repo_root();
+    let out = repo.join("crates/rustyac-physics/tests/golden");
+    for (folder, scenario, name, first, count) in
+        [("oracle/awd_sesto", "wc_spirited", "awd_sesto_wc_spirited", 2400usize, 300usize), ("oracle/hy_ks_ferrari_sf15t", "hy_modes", "ers_sf15t_hy_modes", 7700, 400)]
+    {
+        let recording = Recording::read(&repo.join(format!("{folder}/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let path = out.join(format!("{name}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    Ok(())
+}
+
 fn excerpt_track_command() -> Result<(), String> {
     let repo = repo_root();
     let out = repo.join("crates/rustyac-physics/tests/golden");
@@ -2103,6 +2123,129 @@ fn excerpt_command() -> Result<(), String> {
 }
 
 /// Runs one scenario once per deliberate fault and reports where the comparison notices.
+/// Deliberate faults in the systems of Task 16, each with the kind of car it is for: `awd`
+/// (three differentials), `awd2` (the coupling), `kers`, `ers`, `front` (an ERS with front
+/// motors). The battery's rates are changed by a small part, not by one bit: one bit of a
+/// rate is lost when the step's share is added to a charge near 1.
+const TASK16_FAULTS: [(&str, &str, &str, Fault); 16] = [
+    ("awd", "awd_front_share", "the front axle's torque share one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.awd_front_share = nudge(base.awd_front_share);
+    }),
+    ("awd", "awd_rear_coast", "the rear differential's coast lock one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.awd_rear_diff.coast = nudge(base.awd_rear_diff.coast);
+    }),
+    ("awd", "awd_front_power", "the front differential's power lock one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.awd_front_diff.power = nudge(base.awd_front_diff.power);
+    }),
+    ("awd", "awd_centre_preload", "the centre differential's preload one bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.awd_center_diff.preload = nudge(base.awd_center_diff.preload);
+    }),
+    ("awd", "awd_front_inertia", "the left front shaft's inertia one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.out_shaft_lf.inertia = f64::from_bits(base.out_shaft_lf.inertia.to_bits() + 1);
+    }),
+    ("awd2", "awd2_ramp", "the coupling's ramp one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.awd2.ramp = f64::from_bits(base.awd2.ramp.to_bits() + 1);
+    }),
+    ("awd2", "awd2_front_inertia", "the right front shaft's inertia one (double-precision) bit up", |c| {
+        let base = c.drivetrain.as_mut().unwrap().base_mut();
+        base.out_shaft_rf.inertia = f64::from_bits(base.out_shaft_rf.inertia.to_bits() + 1);
+    }),
+    ("kers", "kers_discharge", "the battery's discharge rate 0.01 % up", |c| {
+        let kers = c.kers.as_mut().unwrap();
+        kers.discharge_k *= 1.0001;
+    }),
+    ("kers", "kers_charge", "the battery's filling rate 0.01 % up", |c| {
+        let kers = c.kers.as_mut().unwrap();
+        kers.charge_k *= 1.0001;
+    }),
+    ("kers", "kers_brake_level", "the brake torque for the full filling rate 0.01 % up", |c| {
+        let kers = c.kers.as_mut().unwrap();
+        kers.brake_for_max_charge *= 1.0001;
+    }),
+    ("ers", "ers_discharge", "the battery's discharge rate one part in a million up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.discharge_k *= 1.000001;
+    }),
+    ("ers", "ers_charge", "the kinetic recovery's rate one part in a million up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.charge_k *= 1.000001;
+    }),
+    ("ers", "ers_heat_torque", "the MGU-H's share of the torque one bit up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.heat_torque = nudge(ers.heat_torque);
+    }),
+    ("ers", "ers_rear_correction", "the rear brake correction one bit up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.rear_correction_torque = nudge(ers.rear_correction_torque);
+    }),
+    ("ers", "ers_start_recovery", "the recovery level at the start one bit up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.kinetic_recovery = nudge(ers.kinetic_recovery);
+    }),
+    ("front", "ers_front_discharge", "the front motors' discharge rate one part in a million up", |c| {
+        let ers = c.ers.as_mut().unwrap();
+        ers.discharge_k_front *= 1.000001;
+    }),
+];
+
+/// `faults16 <scenario> --dir <folder>`: the faults of [`TASK16_FAULTS`] that fit the
+/// recording's car, each of which the comparison must notice.
+fn faults16_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
+    let repo = repo_root();
+    let scenario = names.first().map(String::as_str).ok_or("faults16 <scenario> --dir <folder>")?;
+    let dir = dir.ok_or("faults16 needs --dir <folder of recordings>")?;
+    let folder = if dir.is_absolute() { dir.to_path_buf() } else { repo.join(dir) };
+    let recording = Recording::read(&folder.join(format!("{scenario}.carrec")))?;
+    let data = car_data(&recording)?;
+    let traction = if recording.has("drivetrain.tractionType") { recording.i(0, "drivetrain.tractionType") } else { 0 };
+    let fits = |kind: &str| match kind {
+        "awd" => traction == 2,
+        "awd2" => traction == 3,
+        "kers" => recording.has("kers.charge"),
+        "ers" => recording.has("ers.charge"),
+        // the front motors' map has stages
+        "front" => recording.has("ers.controllerFront.stages") && recording.i(0, "ers.controllerFront.stages") > 0,
+        _ => false,
+    };
+    let clean = compare(&recording, &data, Systems::ALL, false, None, None)?;
+    if clean.first.is_some() {
+        return Err("the run without a fault already differs".to_string());
+    }
+    let mut table = String::new();
+    writeln!(table, "Scenario `{scenario}` of the car `{}`, {} steps. Without a fault: no difference.\n", recording.get("car").unwrap_or("?"), recording.steps.len()).unwrap();
+    writeln!(table, "| Fault | What is changed | Bit-exact steps | Noticed at | First value that differs |").unwrap();
+    writeln!(table, "|---|---|---|---|---|").unwrap();
+    let mut missed = Vec::new();
+    for &(kind, name, about, fault) in TASK16_FAULTS.iter().filter(|(kind, ..)| fits(kind)) {
+        let _ = kind;
+        let outcome = compare(&recording, &data, Systems::ALL, false, None, Some(fault))?;
+        let (at, text) = match &outcome.first {
+            Some((step, text)) => (format!("step {step}"), text.clone()),
+            None => {
+                missed.push(name);
+                ("never".to_string(), "-".to_string())
+            }
+        };
+        println!("{name}: {at}: {text}");
+        writeln!(table, "| `{name}` | {about} | {} | {at} | {text} |", percent(outcome.exact, outcome.steps)).unwrap();
+    }
+    let out = repo.join("oracle/chassis");
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let file = out.join(format!("faults16_{}_{scenario}.md", dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+    std::fs::write(&file, &table).map_err(|e| format!("{}: {e}", file.display()))?;
+    println!("\n{table}\n{}", file.display());
+    if !missed.is_empty() {
+        return Err(format!("faults the comparison did not notice: {}", missed.join(", ")));
+    }
+    Ok(())
+}
+
 fn faults_command(names: &[String], dir: Option<&Path>, systems: Systems) -> Result<(), String> {
     let repo = repo_root();
     let scenario = names.first().map(String::as_str).unwrap_or("slalom");
@@ -2627,10 +2770,63 @@ const AWD2_PLAIN: [(&str, &str, &str, &str); 20] = [
 /// made on that section, though the values of the rear differential then come from `[AWD2]`).
 const AWD2_SPOOL: [(&str, &str, &str, &str); 2] = [("drivetrain.ini", "DIFFERENTIAL", "POWER", "1"), ("drivetrain.ini", "DIFFERENTIAL", "COAST", "1")];
 
+/// Task 16, a KERS on the driven wheels (no installed car has `ATTACH=WHEELS`): a torque table
+/// that slopes over wheel speeds, a quick battery and a lap allowance low enough to be used up.
+const KERS_WHEELS: [(&str, &str, &str, &str); 4] = [
+    ("kers.ini", "KERS", "ATTACH", "WHEELS"),
+    ("kers.ini", "KERS", "MAX_KJ_PER_LAP", "120"),
+    ("kers.ini", "KERS", "CHARGE_K", "0.01"),
+    ("kers.ini", "KERS", "DISCHARGE_TIME", "5000"),
+];
+
+const KERS_WHEELS_LUT: (&str, &str) = ("kers_torque.lut", "0|600\r\n1000|500\r\n2000|300\r\n3000|150\r\n3001|0\r\n");
+
+/// A whole kers.ini for a car that has none: on the wheels, the button, a lap allowance.
+const KERS_WHEELS_INI: (&str, &str) = (
+    "kers.ini",
+    "[HEADER]\r\nVERSION=3\r\n\r\n[KERS]\r\nBRAKE_LEVEL=0.5\r\nCHARGE_K=0.004\r\nTORQUE_CURVE=kers_torque.lut\r\nDISCHARGE_TIME=8000\r\n\
+     NEGATIVE_INPUT_CHARGE_K=1\r\nCONTROLLER=\r\nATTACH=WHEELS\r\nHAS_BUTTON_OVERRIDE=1\r\nMAX_KJ_PER_LAP=200\r\n",
+);
+
+/// Task 16, a controller-driven KERS that also has the button and a lap allowance (the
+/// LaFerrari's file is version 2, which reads neither).
+const KERS_BUTTON: [(&str, &str, &str, &str); 3] =
+    [("kers.ini", "HEADER", "VERSION", "3"), ("kers.ini", "KERS", "HAS_BUTTON_OVERRIDE", "1"), ("kers.ini", "KERS", "MAX_KJ_PER_LAP", "150")];
+
+/// Task 16, an ERS whose lap allowance is used up quickly, whose default delivery profile does
+/// not exist (the map of ers.ini itself, which has no stages, stays: no delivery without the
+/// button) and whose turbo fills the battery faster.
+const ERS_LIMITS: [(&str, &str, &str, &str); 6] = [
+    ("ers.ini", "KINETIC", "MAX_KJ_PER_LAP", "150"),
+    ("ers.ini", "KINETIC", "DEFAULT_CONTROLLER", "9"),
+    ("ers.ini", "HEAT", "CHARGE_K", "0.02"),
+    ("ers.ini", "COCKPIT_CONTROLS", "RECOVERY", "1"),
+    ("ers.ini", "COCKPIT_CONTROLS", "DELIVERY_PROFILE", "1"),
+    ("ers.ini", "COCKPIT_CONTROLS", "MGU_H_MODE", "0"),
+];
+
+/// Task 16, front motors with torque vectoring (the two cars that have front motors say 0),
+/// the button, a reachable lap allowance and a rear brake correction.
+const ERS_FRONT: [(&str, &str, &str, &str); 4] = [
+    ("ers.ini", "FRONT_MOTORS", "FRONT_TORQUE_VECTORING_BIAS", "0.6"),
+    ("ers.ini", "KINETIC", "HAS_BUTTON_OVERRIDE", "1"),
+    ("ers.ini", "KINETIC", "MAX_KJ_PER_LAP", "300"),
+    ("ers.ini", "KINETIC", "BRAKE_REAR_CORRECTION", "25"),
+];
+
 fn test_car_command() -> Result<(), String> {
     write_test_car_from("ks_lamborghini_sesto_elemento", "sesto_awd_ctrl", &AWD_CTRL, &AWD_CTRL_FILES, &[])?;
     write_test_car_from("ks_audi_r8_plus", "r8_awd2_plain", &AWD2_PLAIN, &[], &["ctrl_awd2.ini"])?;
     write_test_car_from("ks_audi_r8_plus", "r8_awd2_spool", &AWD2_SPOOL, &[], &[])?;
+    write_test_car_from("ks_ferrari_f138", "f138_kers_wheels", &KERS_WHEELS, &[KERS_WHEELS_LUT], &[])?;
+    write_test_car_from("ferrari_laferrari", "laferrari_kers_button", &KERS_BUTTON, &[], &[])?;
+    write_test_car_from("ks_lamborghini_sesto_elemento", "sesto_awd_kers", &[], &[KERS_WHEELS_INI, KERS_WHEELS_LUT], &[])?;
+    write_test_car_from("ks_audi_r8_plus", "r8_awd2_kers", &[], &[KERS_WHEELS_INI, KERS_WHEELS_LUT], &[])?;
+    write_test_car_from("ks_ferrari_sf15t", "sf15t_ers_limits", &ERS_LIMITS, &[], &[])?;
+    // (a mod car: only where it is installed and unpacked into cardata/)
+    if repo_root().join("cardata/vrc_formula_lithium_2023/ers.ini").is_file() {
+        write_test_car_from("vrc_formula_lithium_2023", "lithium_ers_front", &ERS_FRONT, &[], &[])?;
+    }
     write_test_car("f2004_wc_oldaero", &[], &WC_OLDAERO_FILES)?;
     write_test_car("f2004_wc_aids", &WC_AIDS, &WC_AIDS_FILES)?;
     write_test_car("f2004_wc_abs1", &WC_ABS1, &[])?;
@@ -2638,7 +2834,9 @@ fn test_car_command() -> Result<(), String> {
     write_test_car("f2004_fallbacks", &FALLBACKS, &[])?;
     write_test_car("f2004_pt_street", &PT_STREET, &[])?;
     write_test_car("f2004_pt_ctrl", &PT_CTRL, &PT_CTRL_FILES)?;
-    write_test_car("f2004_pt_fwd", &PT_FWD, &[])
+    write_test_car("f2004_pt_fwd", &PT_FWD, &[])?;
+    // a wheel KERS on a front-wheel-drive car: the front tyres get the torque
+    write_test_car_from("f2004_pt_fwd", "f2004_fwd_kers", &[], &[KERS_WHEELS_INI, KERS_WHEELS_LUT], &[])
 }
 
 fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&str, &str)]) -> Result<(), String> {
@@ -2682,7 +2880,7 @@ fn write_test_car_from(base: &str, name: &str, patches: &[(&str, &str, &str, &st
 
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       \
+     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
      chassis_compare test-car\n       \
      chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
@@ -2738,6 +2936,8 @@ fn main() {
         "excerpt-track" => excerpt_track_command(),
         "excerpt-collide" => excerpt_collide_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
+        "faults16" => faults16_command(&names, dir.as_deref()),
+        "excerpt16" => excerpt16_command(),
         "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), verbose),
         _ => Err(usage()),
     };

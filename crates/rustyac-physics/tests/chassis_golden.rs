@@ -388,3 +388,86 @@ fn the_car_hits_spa_s_walls_and_lands_on_its_roof_like_the_game() {
     let error = moved.check(&data).expect_err("a changed collider mesh went unnoticed");
     assert!(error.contains("spa_wall_low step"), "{error}");
 }
+
+// --- Task 16: four-wheel drive and hybrids -------------------------------------------------
+//
+// Two excerpts of whole-car recordings on the flat road (`tools/chassis_compare excerpt16`),
+// nothing fed but the driver and, for the hybrid, the cockpit's jobs:
+//
+// * the Sesto Elemento (three differentials, `Drivetrain::step4WD`), `wc_spirited`, steps
+//   2400 to 2699: 124 km/h at 1 g in a bend off the throttle, then flat out while the steering
+//   goes through the centre into a bend the other way (coast side and power side of the front,
+//   rear and centre differential);
+// * the SF15-T (ERS), `hy_modes`, steps 7700 to 8099: part throttle with the MGU-K delivering
+//   by its map and the MGU-H driving the motor, an engine-brake setting chosen, then the
+//   brakes with the battery filling, and the MGU-H switched back to the battery.
+//
+// The hybrid's file holds one more word per step: the cockpit jobs done before the game's step.
+const TASK16_GOLDEN: [(&str, &str, usize, &[u8]); 2] = [
+    ("wc_spirited", "ks_lamborghini_sesto_elemento", 300, include_bytes!("golden/awd_sesto_wc_spirited_2400_300.chgold")),
+    ("hy_modes", "ks_ferrari_sf15t", 400, include_bytes!("golden/ers_sf15t_hy_modes_7700_400.chgold")),
+];
+
+#[test]
+fn awd_and_ers_files_read_back() {
+    for (name, car, steps, bytes) in TASK16_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        assert_eq!((golden.setup.scenario.as_str(), golden.car.as_str(), golden.steps.len()), (name, car, steps));
+        assert!(golden.setup.is_whole() && golden.setup.telemetry && !golden.state.is_empty(), "{name}");
+        assert_eq!(golden.to_bytes(), bytes, "{name}: parse and write do not round-trip");
+        for (index, step) in golden.steps.iter().enumerate() {
+            assert_eq!(step.feed, step.feed.driver_only(), "{name} step {index}");
+        }
+    }
+    // the four-wheel-drive car has no cockpit jobs; the hybrid has the two of its stretch
+    let awd = Golden::parse(TASK16_GOLDEN[0].3).unwrap();
+    assert!(awd.steps.iter().all(|step| step.feed.hybrid.is_none()));
+    assert!(awd.steps.iter().any(|step| step.feed.controls.gas == 0.0) && awd.steps.iter().any(|step| step.feed.controls.gas == 1.0));
+    let ers = Golden::parse(TASK16_GOLDEN[1].3).unwrap();
+    let jobs: Vec<_> = ers.steps.iter().filter(|step| !step.feed.hybrid.is_none()).map(|step| step.feed.hybrid).collect();
+    assert_eq!(jobs.len(), 2);
+    assert_eq!((jobs[0].engine_brake, jobs[1].ers_heat), (3, 1));
+    assert!(ers.steps.iter().any(|step| step.feed.controls.brake > 0.0));
+}
+
+#[test]
+fn the_awd_car_and_the_ers_car_match_the_game() {
+    for (name, car, _, bytes) in TASK16_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        let Some(data) = car_data(car) else { continue };
+        golden.check(&data).unwrap_or_else(|e| panic!("{name} of {car} ({}): {e}", backend()));
+    }
+}
+
+/// Both excerpts can fail: the throttle one bit off shows on the four-wheel-drive car, and
+/// a cockpit job that is left out or done differently shows on the hybrid.
+#[test]
+fn a_changed_pedal_or_cockpit_job_is_noticed() {
+    if let Some(data) = car_data(TASK16_GOLDEN[0].1) {
+        let mut golden = Golden::parse(TASK16_GOLDEN[0].3).unwrap();
+        let step = golden.steps.iter().position(|step| step.feed.controls.gas == 1.0).expect("a step at full throttle");
+        let gas = &mut golden.steps[step].feed.controls.gas;
+        *gas = f32::from_bits(gas.to_bits() - 1);
+        let error = golden.check(&data).expect_err("a changed throttle went unnoticed");
+        assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+    }
+    if let Some(data) = car_data(TASK16_GOLDEN[1].1) {
+        // the engine-brake setting is not chosen
+        let mut golden = Golden::parse(TASK16_GOLDEN[1].3).unwrap();
+        let step = golden.steps.iter().position(|step| step.feed.hybrid.engine_brake >= 0).expect("an engine-brake job");
+        golden.steps[step].feed.hybrid.engine_brake = -1;
+        let error = golden.check(&data).expect_err("a missing engine-brake job went unnoticed");
+        assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+        // the MGU-H stays on the motor
+        let mut golden = Golden::parse(TASK16_GOLDEN[1].3).unwrap();
+        let step = golden.steps.iter().position(|step| step.feed.hybrid.ers_heat != 0).expect("an MGU-H job");
+        golden.steps[step].feed.hybrid.ers_heat = 0;
+        let error = golden.check(&data).expect_err("a missing MGU-H job went unnoticed");
+        assert!(error.contains(&format!("step {}", golden.first + step)), "{error}");
+        // another recovery level from the first step on
+        let mut golden = Golden::parse(TASK16_GOLDEN[1].3).unwrap();
+        golden.steps[0].feed.hybrid.ers_recovery = 10;
+        let error = golden.check(&data).expect_err("a changed recovery level went unnoticed");
+        assert!(error.contains(&format!("step {}", golden.first)), "{error}");
+    }
+}
