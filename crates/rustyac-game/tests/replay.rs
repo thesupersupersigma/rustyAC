@@ -228,11 +228,11 @@ fn a_changed_input_is_noticed() {
 
 #[test]
 fn an_unsupported_car_is_refused_with_the_physics_message() {
-    // a car with a system that is not ported: the program repeats the physics crate's message
+    // a car the plain game cannot load either (its suspension type is Custom Shaders Patch's
+    // own): the program repeats the physics crate's message
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata");
-    let Some(car) = ["ks_audi_r8_lms", "ks_porsche_919_hybrid_2016", "ks_audi_sport_quattro"].into_iter().find(|c| root.join(c).join("car.ini").is_file())
-    else {
-        eprintln!("NOT TESTED: no four-wheel-drive / hybrid car in cardata/");
+    let Some(car) = ["vrc_formula_alpha_2026_csp"].into_iter().find(|c| root.join(c).join("car.ini").is_file()) else {
+        eprintln!("NOT TESTED: no car in cardata/ that is still refused (vrc_formula_alpha_2026_csp)");
         return;
     };
     let setup = SimSetup { car: car.to_string(), ..SimSetup::default() };

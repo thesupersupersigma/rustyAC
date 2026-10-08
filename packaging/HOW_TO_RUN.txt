@@ -33,9 +33,9 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
 
       rustyac.exe --car "D:\my cars\my_car\data"
 
-  Not every car drives yet: only cars with double-wishbone suspension all
-  round, rear- or front-wheel drive and no hybrid system. Any other car is
-  refused with a message that says which system is missing.
+  Every car the plain game can load drives. A car made for Custom Shaders
+  Patch only (suspension TYPE=COSMIC, or data files encrypted for it) is
+  refused with a message that says so.
 
 - Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
   it, so you most likely have it. With it rustyAC computes with exactly the

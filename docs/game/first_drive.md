@@ -197,7 +197,7 @@ All run on this PC (AMD Radeon Pro 5500M, Windows 10), release build, without an
 | `a_recorded_live_drive_replays_to_the_same_car` | A "live" drive: the spawn sequence, then AC's keyboard class with keys pressed by a script (it reads tyre slip and the optimal brake off the car before every step, as the real one does), a reset asked for by the game. What the recorder wrote replays to the same states, **2,600 steps bit-identical**; the car is in first gear with the engine running when the driver gets it |
 | `the_clutch_button_holds_the_car_although_the_automatic_clutch_is_on` | AC's pad class with a scripted pad: first gear, flat out, A held: the engine revs past 10,000 rpm and the car stands; let go, it drives off. 1,970 steps, replayed bit-identically |
 | `a_changed_input_is_noticed` | One step's steering changed by 0.01: the states differ from that step on (the comparison can fail) |
-| `an_unsupported_car_is_refused_with_the_physics_message` | `--car` with a strut-suspension car: the exe stops with the physics crate's own message |
+| `an_unsupported_car_is_refused_with_the_physics_message` | `--car` with a car the port refuses (since Task 17 only cars made for Custom Shaders Patch): the exe stops with the physics crate's own message |
 
 **b) The program against the game's recordings** (`tools/chassis_compare/target/release/chassis_compare
 game-replay [--dir <folder>]`, new in this task): the recorded driver controls of a scenario are written as an
