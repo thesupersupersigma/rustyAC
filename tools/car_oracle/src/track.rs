@@ -55,6 +55,72 @@ const CM_USER_POINTER: usize = 0x28;
 
 type V3 = [f32; 3];
 
+const VA_PHYSICS_OBJECT_CTOR: usize = 0x1_402a_c8a0; // PhysicsObject::PhysicsObject(PhysicsEngine&, const PhysicsObjectDesc&, BufferedChannel<mat44f>&)
+const VA_MATRIX_QUEUE_VFTABLE: usize = 0x1_404d_f0f8; // Concurrency::concurrent_queue<mat44f>::`vftable'
+
+/// One of the game's `PhysicsObject`s (a loose track object) and the queue it pushes its
+/// matrix on after every step.
+#[derive(Clone, Copy)]
+pub struct GameObject {
+    /// `PhysicsObject` (0x20 bytes): +0x10 is its `RigidBodyODE`.
+    pub object: *mut u8,
+    pub queue: *mut u8,
+}
+
+impl GameObject {
+    /// The game's `RigidBodyODE` of the object.
+    pub unsafe fn wrapper(&self) -> *mut u8 {
+        rd(self.object, 0x10)
+    }
+
+    /// ODE's `dxBody`.
+    pub unsafe fn body(&self) -> *mut u8 {
+        rd(self.wrapper(), 0x8)
+    }
+
+    /// ODE's geom of the object's mesh (`collisionMeshes[0]->geomID`).
+    pub unsafe fn geom(&self) -> *mut u8 {
+        let meshes: *const *const u8 = rd(self.wrapper(), 0x30);
+        rd(*meshes, 0x10)
+    }
+}
+
+/// Makes the track's loose objects with the game's own `PhysicsObject::PhysicsObject`, in the
+/// order of the port's loader (the game's order: models in file order, nodes in tree order),
+/// each from a `PhysicsObjectDesc` as `TrackObject::TrackObject` fills it: the node's own
+/// matrix, the first child mesh's positions and indices, mass 1. Must run before the car is
+/// made, as the game loads its track before its cars.
+pub unsafe fn create_objects(acs: &Acs, engine: *mut u8, track: &Track) -> Vec<GameObject> {
+    let queue_ctor: unsafe extern "system" fn(*mut u8, usize) -> *mut u8 =
+        std::mem::transmute(acs.msvcp_function(c"??0_Concurrent_queue_base_v4@details@Concurrency@@IEAA@_K@Z"));
+    let ctor: extern "C" fn(*mut u8, *mut u8, *const u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PHYSICS_OBJECT_CTOR));
+    let mut out = Vec::with_capacity(track.objects.len());
+    for def in &track.objects {
+        // BufferedChannel<mat44f>: a concurrent_queue of 0x40-byte items (TrackObject::chIn)
+        let queue = acs.alloc(0x28);
+        queue_ctor(queue, 0x40);
+        wr(queue, 0, acs.va(VA_MATRIX_QUEUE_VFTABLE));
+        // PhysicsObjectDesc (0x80 bytes)
+        let desc = acs.alloc(0x80);
+        desc.write_bytes(0, 0x80);
+        wstring_at(acs, desc, &def.name);
+        let vertices = acs.alloc(def.vertices.len().max(1) * 12);
+        std::ptr::copy_nonoverlapping(def.vertices.as_ptr().cast::<u8>(), vertices, def.vertices.len() * 12);
+        let indices = acs.alloc(def.indices.len().max(1) * 2);
+        std::ptr::copy_nonoverlapping(def.indices.as_ptr().cast::<u8>(), indices, def.indices.len() * 2);
+        wr(desc, 0x20, vertices);
+        wr(desc, 0x28, def.vertices.len() as i32);
+        wr(desc, 0x30, indices);
+        wr(desc, 0x38, def.indices.len() as i32);
+        wr(desc, 0x3c, def.matrix.m);
+        wr(desc, 0x7c, 1.0f32);
+        let object = acs.alloc(0x20);
+        ctor(object, engine, desc, queue);
+        out.push(GameObject { object, queue });
+    }
+    out
+}
+
 /// The game's `RayCastResult` (0x30 bytes).
 #[repr(C)]
 struct RayCastResult {
@@ -151,6 +217,47 @@ fn same_bits(a: &SurfaceDef, b: &SurfaceDef) -> bool {
         && a.sector_id == b.sector_id
 }
 
+/// Two ways of building a track that no real track uses, for the ray micro-oracle: both
+/// sides are built the same odd way.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BuildPlan {
+    /// Every n-th mesh goes into sub-space id 0, the static space itself (0: none).
+    pub space0_every: usize,
+    /// The meshes from this index on are added after a first ray was cast.
+    pub late_from: Option<usize>,
+}
+
+impl BuildPlan {
+    pub fn active(&self) -> bool {
+        self.space0_every != 0 || self.late_from.is_some()
+    }
+
+    fn space(&self, index: usize, space: u32) -> u32 {
+        if self.space0_every != 0 && index % self.space0_every == self.space0_every / 2 {
+            0
+        } else {
+            space
+        }
+    }
+
+    /// The Rust track built again mesh by mesh under this plan.
+    fn rebuild(&self, track: &Track) -> Track {
+        let mut out = track.clone();
+        out.world = Default::default();
+        out.surfaces.clear();
+        for (index, (mesh, surface)) in track.world.meshes.iter().zip(&track.surfaces).enumerate() {
+            if Some(index) == self.late_from {
+                // the first ray: what exists is cleaned
+                out.world.clean();
+            }
+            let data = &mesh.data.mesh;
+            out.add_surface(&surface.name, &surface.key, &surface.wav, data.vertices.clone(), data.indices.clone(), &surface.surface_def, self.space(index, mesh.space_id));
+        }
+        out.world.clean();
+        out
+    }
+}
+
 /// The game's track with Spa (or any track) in it, and the Rust track next to it.
 pub struct GameTrack {
     pub track: *mut u8,
@@ -184,7 +291,15 @@ impl GameTrack {
     /// car's body passes through the track (and the walls) as it does in the Rust port so
     /// far; the sub-space of a mesh is still chosen from its real category.
     pub fn build(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, ghost: bool) -> Result<GameTrack, String> {
-        let (rust, report) = load_track(folder, layout)?;
+        GameTrack::build_with(acs, engine, folder, layout, ghost, &BuildPlan::default())
+    }
+
+    /// [`GameTrack::build`] under a [`BuildPlan`].
+    pub fn build_with(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, ghost: bool, plan: &BuildPlan) -> Result<GameTrack, String> {
+        let (mut rust, report) = load_track(folder, layout)?;
+        if plan.active() {
+            rust = plan.rebuild(&rust);
+        }
         let started = std::time::Instant::now();
         unsafe {
             let track = acs.alloc(TRACK_SIZE);
@@ -215,9 +330,20 @@ impl GameTrack {
                 if !same_bits(&theirs, &ours.surface_def) {
                     surface_mismatches.push(format!("{}: game {theirs:?}, port {:?}", ours.name, ours.surface_def));
                 }
+                if Some(index) == plan.late_from {
+                    // a first ray before the rest of the meshes exist: the static space is
+                    // cleaned, and what comes later meets ODE's rule for late geoms
+                    let ray_cast: extern "C" fn(*mut u8, *const V3, *const V3, *mut RayCastResult, f32) -> u8 = std::mem::transmute(acs.va(VA_TRACK_RAY_CAST));
+                    let mut result = RayCastResult { surface_def: std::ptr::null_mut(), pos: [0.0; 3], normal: [0.0; 3], has_hit: 0, collision_object: std::ptr::null_mut() };
+                    ray_cast(track, &[0.0, 5000.0, 0.0], &[0.0, -1.0, 0.0], &mut result, 3.0);
+                }
                 // TrackAvatar::addPhysicsMesh: walls live in their own sub-spaces
                 let id = theirs.sector_id as u32;
-                let space = if theirs.collision_category == 2 { id.wrapping_add(10_000) } else { id };
+                let mut space = if theirs.collision_category == 2 { id.wrapping_add(10_000) } else { id };
+                if plan.active() {
+                    // (the plan's own sub-space, the same on both sides)
+                    space = mesh.space_id;
+                }
                 if space != mesh.space_id {
                     surface_mismatches.push(format!("{}: sub-space {space} in the game, {} in the port", ours.name, mesh.space_id));
                 }
@@ -292,7 +418,7 @@ impl Rng {
 }
 
 /// The kinds of rays of the micro-oracle.
-const KINDS: [&str; 8] = [
+const KINDS: [&str; 10] = [
     "tyre ray (3 m straight down from above a random triangle)",
     "tyre ray aimed exactly at a mesh vertex",
     "tyre ray aimed exactly at the middle of a triangle's edge",
@@ -301,6 +427,8 @@ const KINDS: [&str; 8] = [
     "nearly flat ray along the road, 5 to 200 m long",
     "ray from below (the back of the road)",
     "tyre ray anywhere inside the track's bounding box",
+    "ray without an end (length f32::MAX), straight down from up to 500 m above",
+    "ray without an end (length f32::MAX), in a random direction",
 ];
 
 /// One ray: origin, direction (not normalised: the game does that), length.
@@ -349,6 +477,18 @@ fn make_ray(rng: &mut Rng, track: &Track, kind: usize, bounds: &[f32; 6]) -> (V3
             ([point[0] - dir[0] * back, point[1] + rng.range(0.05, 1.5), point[2] - dir[2] * back], dir, length)
         }
         6 => ([point[0], point[1] - rng.range(0.2, 2.9), point[2]], [0.0, 1.0, 0.0], 3.0),
+        8 => ([point[0], point[1] + rng.range(0.2, 500.0), point[2]], down, f32::MAX),
+        9 => {
+            let dir = loop {
+                let d = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
+                let l = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+                if l > 0.01 && l <= 1.0 {
+                    break d;
+                }
+            };
+            let back = rng.range(0.0, 300.0);
+            ([point[0] - dir[0] * back, point[1] - dir[1] * back + rng.range(0.0, 1.0), point[2] - dir[2] * back], dir, f32::MAX)
+        }
         _ => ([rng.range(bounds[0], bounds[1]), rng.range(bounds[2], bounds[3]), rng.range(bounds[4], bounds[5])], down, 3.0),
     }
 }
@@ -356,8 +496,8 @@ fn make_ray(rng: &mut Rng, track: &Track, kind: usize, bounds: &[f32; 6]) -> (V3
 /// `car_oracle rays`: `count` random rays through the game's ODE / OPCODE and through the
 /// Rust port; every answer compared bit for bit. Returns the report (markdown) and whether
 /// everything was identical.
-pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usize, seed: u64) -> Result<(String, bool), String> {
-    let game = GameTrack::build(acs, engine, folder, layout, false)?;
+pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usize, seed: u64, plan: &BuildPlan) -> Result<(String, bool), String> {
+    let game = GameTrack::build_with(acs, engine, folder, layout, false, plan)?;
     let track = &game.rust;
     let mut bounds = [f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY];
     for mesh in &track.world.meshes {
@@ -373,7 +513,7 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usiz
     let mut meshes_hit = vec![false; track.surfaces.len()];
     let (mut seconds_game, mut seconds_rust) = (0.0f64, 0.0f64);
     for i in 0..count {
-        let kind = match i % 16 {
+        let kind = match i % 20 {
             0..=5 => 0,
             6 => 1,
             7 => 2,
@@ -381,7 +521,9 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usiz
             9..=11 => 4,
             12 | 13 => 5,
             14 => 6,
-            _ => 7,
+            15 => 7,
+            16 | 17 => 8,
+            _ => 9,
         };
         let (org, dir, length) = make_ray(&mut rng, track, kind, &bounds);
         let t0 = std::time::Instant::now();
@@ -421,6 +563,17 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usiz
         if layout.is_empty() { String::new() } else { format!(" layout `{layout}`") },
         game.report.objects, game.report.tris, game.report.spaces.len(), game.seconds_game, game.report.seconds_trees
     ));
+    if plan.active() {
+        out.push_str(&format!(
+            "Built in a way no real track is, the same on both sides: {}{}. Meshes that are direct members of the static space: {}.\n\n",
+            if plan.space0_every != 0 { format!("every {}th mesh in sub-space id 0 (the static space itself)", plan.space0_every) } else { String::new() },
+            match plan.late_from {
+                Some(from) => format!("{}the meshes from number {from} on added after a first ray was cast", if plan.space0_every != 0 { "; " } else { "" }),
+                None => String::new(),
+            },
+            track.world.direct_meshes(),
+        ));
+    }
     out.push_str(&format!(
         "Surfaces: the game's own `SurfaceDef` for each of the {} mesh names against the port's: **{} differ**.\n\n",
         track.surfaces.len(),
@@ -449,11 +602,8 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usiz
 }
 
 /// Where the results of `car_oracle rays` go.
-pub fn results_path(repo: &Path, track: &str, layout: &str) -> PathBuf {
-    // Spa without a layout keeps the name of Task 12
-    if track == "spa" && layout.is_empty() {
-        return repo.join("oracle/track/rays_results.md");
-    }
+pub fn results_path(repo: &Path, track: &str, layout: &str, plan: &BuildPlan) -> PathBuf {
     let layout = if layout.is_empty() { String::new() } else { format!("_{layout}") };
-    repo.join(format!("oracle/track/rays_{track}{layout}.md"))
+    let plan = format!("{}{}", if plan.space0_every != 0 { "_space0" } else { "" }, if plan.late_from.is_some() { "_late" } else { "" });
+    repo.join(format!("oracle/track/rays_{track}{layout}{plan}.md"))
 }

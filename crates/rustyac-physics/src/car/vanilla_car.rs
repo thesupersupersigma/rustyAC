@@ -206,7 +206,20 @@ impl<P: ControlsProvider> VanillaCar<P> {
         physics_time: f64,
         device: P,
     ) -> Result<VanillaCar<P>, String> {
-        let mut car = RollingChassis::new(data_path, env, ground, rand_seed, physics_time)?;
+        VanillaCar::new_with_objects(data_path, env, ground, rand_seed, physics_time, device, &[])
+    }
+
+    /// [`VanillaCar::new`] in a world that already holds the track's loose objects.
+    pub fn new_with_objects(
+        data_path: &Path,
+        env: ChassisEnvironment,
+        ground: Box<dyn RayTrackCollisionProvider>,
+        rand_seed: u32,
+        physics_time: f64,
+        device: P,
+        objects: &[crate::track::TrackObjectDef],
+    ) -> Result<VanillaCar<P>, String> {
+        let mut car = RollingChassis::new_with_objects(data_path, env, ground, rand_seed, physics_time, objects)?;
         car.install_aero()?;
         car.install_brakes()?;
         car.install_drivetrain()?;

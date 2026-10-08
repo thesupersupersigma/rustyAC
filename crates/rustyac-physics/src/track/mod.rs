@@ -31,6 +31,7 @@ use crate::tyre::{RayCastResult, RayTrackCollisionProvider, SurfaceDef};
 use crate::vecmath::Vec3f;
 
 pub use loader::{load_track, HelperNode, TrackLoadReport};
+pub use crate::track::catalog::TrackEntry;
 pub use spline::{AiSpline, SplineLocator, SplineLocatorData};
 pub use surfaces::{SurfaceType, SurfacesManager};
 pub use timing::{init_respawn_position_set, LapDb, LapInvalidator, TimeLine, TimeTransponder};
@@ -91,6 +92,25 @@ pub struct Track {
     /// `drsMamanger.zones` (`data/drs_zones.ini`): where along the lap a car may open its
     /// DRS. Empty: anywhere.
     pub drs_zones: Vec<DrsZone>,
+    /// The loose objects (`TrackAvatar::trackObjects` that have a `PhysicsObject`), in the
+    /// order the game creates their bodies: the models in the order of the models file, the
+    /// nodes of each in tree order.
+    pub objects: Vec<TrackObjectDef>,
+}
+
+/// A loose object of the track (a cone, a marker board): what AC's `TrackObject::TrackObject`
+/// @ 0x1401cf1a0 hands to `PhysicsObject::PhysicsObject` @ 0x1402ac8a0 in a
+/// `PhysicsObjectDesc`. A node whose name starts with `AC_POBJECT` and whose first child is a
+/// mesh; the body it becomes lives in a car's [`crate::car::body::PhysicsCore`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackObjectDef {
+    /// The node's name.
+    pub name: String,
+    /// `worldMatrix`: the node's OWN matrix (not its world matrix), scale and all.
+    pub matrix: crate::vecmath::Mat44f,
+    /// The first child mesh as it is in the file: positions in the mesh's own frame.
+    pub vertices: Vec<[f32; 3]>,
+    pub indices: Vec<u16>,
 }
 
 /// AC's `DRSZone` (0xc bytes): places along the lap, 0..1.

@@ -171,6 +171,9 @@ pub struct PhysicsCore {
     /// `currentFrame`: counts the collision passes; its parity picks the pass.
     pub current_frame: u32,
     colliders: Vec<BodyColliders>,
+    /// The track's loose objects (AC's `PhysicsObject`s), in creation order. Their bodies are
+    /// not in the list of [`PhysicsCore::bodies`]: that one is the car's.
+    pub track_objects: Vec<TrackObjectBody>,
     /// A static world for cores that have no track (a test floor). A car on a track hands the
     /// track's own world to [`PhysicsCore::collision_step`].
     pub statics: Option<Arc<StaticWorld>>,
@@ -223,6 +226,7 @@ impl PhysicsCore {
             no_collision_counter: 0,
             current_frame: 0,
             colliders: Vec::new(),
+            track_objects: Vec::new(),
             statics: None,
             mesh_bounce_vel: 0.0,
             box_bounce_vel: 0.0,
@@ -684,6 +688,14 @@ impl PhysicsCore {
         mask: u32,
         space: u32,
     ) -> GeomId {
+        let geom = self.make_mesh_geom(body, vertices, indices, matrix, category, mask, space);
+        self.colliders_mut(body).meshes.push(geom);
+        geom
+    }
+
+    /// The ODE side of `addMeshCollider`.
+    #[allow(clippy::too_many_arguments)]
+    fn make_mesh_geom(&mut self, body: RigidBody, vertices: Vec<[f32; 3]>, indices: Vec<u16>, matrix: &Mat44f, category: u32, mask: u32, space: u32) -> GeomId {
         let data = Arc::new(TriMeshData::build(vertices, indices));
         let geom = self.world.collision.create_tri_mesh(None, data);
         let sub = self.get_dynamic_sub_space(space);
@@ -701,7 +713,6 @@ impl PhysicsCore {
         self.world.collision.geom_set_offset_position(geom, m[3][0], m[3][1], m[3][2]);
         self.world.collision.set_collide_bits(geom, mask);
         self.world.collision.set_category_bits(geom, category);
-        self.colliders_mut(body).meshes.push(geom);
         geom
     }
 
@@ -768,8 +779,10 @@ impl PhysicsCore {
 
     fn rigid_body_of(&self, body: Option<BodyId>) -> Option<RigidBody> {
         let id = body?;
-        let index = self.bodies.iter().position(|&b| b == id)?;
-        Some(RigidBody { id, index: index as u32 })
+        if let Some(index) = self.bodies.iter().position(|&b| b == id) {
+            return Some(RigidBody { id, index: index as u32 });
+        }
+        self.track_objects.iter().find(|o| o.body.id == id).map(|o| o.body)
     }
 
     fn shape_of(&self, g: GeomRef, statics: Option<&StaticWorld>) -> Option<Shape> {
@@ -909,3 +922,97 @@ impl PhysicsCore {
 
 /// Marks the user data of a mesh geom (the low 32 bits are its `RBCollisionMesh::group`).
 const MESH_DATA: u64 = 1 << 32;
+
+/// The `index` of the first loose object's [`RigidBody`]: far above any car body's, so that
+/// nothing that lists the car's bodies by index meets one.
+pub const OBJECT_BODY_INDEX: u32 = 0x4000_0000;
+
+/// AC's `PhysicsObject` (0x20 bytes) of one loose track object: a body of 1 kg with one
+/// triangle mesh, asleep until something hits it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrackObjectBody {
+    pub body: RigidBody,
+    /// Its one collider (the mesh).
+    pub geom: GeomId,
+    /// `TrackObject::orgMatrix`: where a new session puts it back.
+    pub org_matrix: Mat44f,
+}
+
+impl PhysicsCore {
+    /// `RigidBodyODE::setAutoDisable` @ 0x1402ce840: `dBodySetAutoDisableFlag`.
+    pub fn set_auto_disable(&mut self, body: RigidBody, on: bool) {
+        self.world.body_set_auto_disable_flag(body.id, on);
+    }
+
+    /// `RigidBodyODE::setEnabled` @ 0x1402ce870: `dBodyEnable` / `dBodyDisable`.
+    pub fn set_enabled(&mut self, body: RigidBody, on: bool) {
+        if on {
+            self.world.body_enable(body.id);
+        } else {
+            self.world.body_disable(body.id);
+        }
+    }
+
+    /// `RigidBodyODE::isEnabled`: `dBodyIsEnabled`.
+    pub fn is_enabled(&self, body: RigidBody) -> bool {
+        self.world.body(body.id).flags & rustyac_ode::world::BODY_DISABLED == 0
+    }
+
+    /// `PhysicsObject::PhysicsObject` @ 0x1402ac8a0 for one loose object of the track, in the
+    /// constructor's order: a body at the node's place, the mass of 1 kg and the inertia of a
+    /// 1 m cube whatever the object's size, its mesh as the one collider (category 0x10, mask
+    /// 0x1f, directly in the dynamic space), auto-disable on, and asleep.
+    ///
+    /// The game makes every object before the first car (the track is loaded first), and the
+    /// order of the world's bodies decides the order of the solver's rows: call this before
+    /// the car's bodies are made. Returns the object's number.
+    pub fn create_track_object(&mut self, matrix: &Mat44f, vertices: Vec<[f32; 3]>, indices: Vec<u16>) -> usize {
+        // createRigidBody, without a place in the car's own list
+        let id = self.world.body_create();
+        self.world.body_set_finite_rotation_mode(id, true);
+        self.world.body_set_finite_rotation_axis(id, 0.0, 0.0, 0.0);
+        self.world.body_set_linear_damping(id, 0.0);
+        self.world.body_set_angular_damping(id, 0.0);
+        let number = self.track_objects.len();
+        let body = RigidBody { id, index: OBJECT_BODY_INDEX + number as u32 };
+        self.set_position(body, &Vec3f::new(matrix.m[3][0], matrix.m[3][1], matrix.m[3][2]));
+        // a matrix with a scale goes in as it is: dBodySetRotation makes it orthonormal
+        self.set_rotation(body, matrix);
+        self.set_mass_box(body, 1.0, 1.0, 1.0, 1.0);
+        let geom = self.make_mesh_geom(body, vertices, indices, &Mat44f::IDENTITY, category::OBJECT, 0x1f, 0);
+        self.set_auto_disable(body, true);
+        self.set_enabled(body, false);
+        self.track_objects.push(TrackObjectBody { body, geom, org_matrix: *matrix });
+        number
+    }
+
+    /// The handler every `PhysicsObject` hangs on `PhysicsEngine::evOnStepCompleted` (lambda @
+    /// 0x1402acb00), for all objects in creation order: an object that is awake collides
+    /// with everything (mask 0x1f), one that sleeps only with cars (0x0c). Call it after
+    /// every world step, also while no contacts are looked for.
+    pub fn step_track_objects(&mut self) {
+        for i in 0..self.track_objects.len() {
+            let object = self.track_objects[i];
+            let mask = if self.is_enabled(object.body) { 0x1f } else { 0x0c };
+            self.world.collision.set_collide_bits(object.geom, mask);
+        }
+    }
+
+    /// What a new session does to the objects (`TrackObject::resetOrgMatrix` @ 0x1401cf6d0 ->
+    /// `PhysicsObject::setWorldMatrix` @ 0x1402acb90, queued for the start of the next step):
+    /// position and rotation back to where the track has them. Nothing else: an object that
+    /// is still flying keeps its speed, one that sleeps stays asleep, the mask stays.
+    pub fn reset_track_objects(&mut self) {
+        for i in 0..self.track_objects.len() {
+            let object = self.track_objects[i];
+            let m = object.org_matrix;
+            self.set_position(object.body, &Vec3f::new(m.m[3][0], m.m[3][1], m.m[3][2]));
+            self.set_rotation(object.body, &m);
+        }
+    }
+
+    /// The world matrix of an object's body (what the game queues for the picture).
+    pub fn track_object_matrix(&self, number: usize) -> Option<Mat44f> {
+        self.track_objects.get(number).map(|o| self.get_world_matrix(o.body))
+    }
+}

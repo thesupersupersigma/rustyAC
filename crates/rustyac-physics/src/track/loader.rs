@@ -97,16 +97,56 @@ fn models_of(ini: &Path, folder: &Path) -> Result<Vec<rustyac_content::ModelEntr
     Ok(models)
 }
 
+/// What `TrackAvatar::init3D` @ 0x1401c8740 makes of the top node of a model: `ROTATION` of
+/// the models file (degrees: heading, pitch, roll) turns the matrix of the node
+/// (`createFromEuler`, then `R x matrix`), and `POSITION` always replaces its translation.
+/// Nothing else of the model changes: the vertices of the physical meshes are never moved,
+/// and helper nodes below the top node keep their own matrices, so for the physics this only
+/// matters when a helper node is the top node itself. The picture uses it for every model.
+#[allow(clippy::double_comparisons)] // "less or greater" is false for a NaN, "not equal" is not
+pub fn top_node_matrix(node: &Mat44f, position: [f32; 3], rotation: [f32; 3]) -> Mat44f {
+    let mut local = *node;
+    // 0.017453f, as the game has it (not pi / 180 to the last bit)
+    let rot = rotation.map(|degrees| degrees * f32::from_bits(0x3c8e_f998));
+    // three `ucomiss` against 0: a NaN counts as no rotation
+    if rot.iter().any(|r| *r < 0.0 || *r > 0.0) {
+        local = xm_matrix_multiply(&crate::vecmath::create_from_euler(rot, [0.0; 3]), &local);
+    }
+    local.m[3][0] = position[0];
+    local.m[3][1] = position[1];
+    local.m[3][2] = position[2];
+    local
+}
+
 /// Loads a track from `folder` (`content/tracks/<track>`), layout `config` ("" for none).
 pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport), String> {
     let start = Instant::now();
-    let mut files = TrackFiles::find(folder, config)?;
+    let mut files = TrackFiles::find_lenient(folder, config)?;
     // which models, in which order and where: by the game's own ini rules
     let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
     if ini.is_file() {
         files.models = models_of(&ini, folder)?;
     }
-    let mut report = TrackLoadReport { files: files.models.iter().map(|m| m.file.clone()).collect(), ..TrackLoadReport::default() };
+    // KN5IO::load @ 0x1402151a0 on a file that is not there: the game gets an empty node and
+    // goes on, so the model is left out (a track of which every model is missing is refused)
+    let mut skipped = Vec::new();
+    files.models.retain(|model| {
+        let there = model.file.is_file();
+        if !there {
+            skipped.push(model.file.clone());
+        }
+        there
+    });
+    if files.models.is_empty() {
+        return Err(match skipped.first() {
+            Some(file) => format!("the track model {} is missing (and so is every other model of this track)", file.display()),
+            None => format!("{} lists no model", ini.display()),
+        });
+    }
+    let mut report = TrackLoadReport { files: files.models.iter().map(|m| m.file.clone()).collect(), skipped_models: skipped.len() as u32, ..TrackLoadReport::default() };
+    for file in &skipped {
+        report.messages.push(format!("the track model {} is missing: left out, as the game does", file.display()));
+    }
     let mut track = Track { name: files.name.clone(), config: config.to_string(), data_folder: files.data.parent().unwrap_or(folder).to_path_buf(), ..Track::default() };
 
     // SurfacesManager::SurfacesManager: the game's own surfaces, then the track's
@@ -140,13 +180,7 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
     let mut seconds_trees = 0.0;
     for model in &files.models {
         if model.rotation != [0.0; 3] {
-            // the game turns the model's top node (init3D); the vertices of the physical
-            // meshes and the helper nodes' own matrices, which are all the physics reads,
-            // stay as they are unless a helper is that top node itself
-            report.messages.push(format!(
-                "{}: its ROTATION in models.ini is not applied (it only turns the model's top node, which the physics does not read)",
-                model.file.display()
-            ));
+            report.rotated_models += 1;
         }
         let kn5 = Kn5::open(&model.file).map_err(|e| format!("{}: {e}", model.file.display()))?;
         let mut reader = kn5.reader().map_err(|e| e.to_string())?;
@@ -156,10 +190,8 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
             let parent_world = match node.parent {
                 Some(parent) => world[parent],
                 None => {
-                    // init3D: the top node's translation is always replaced by POSITION
-                    local.m[3][0] = model.position[0];
-                    local.m[3][1] = model.position[1];
-                    local.m[3][2] = model.position[2];
+                    // init3D: ROTATION turns the top node, POSITION replaces its translation
+                    local = top_node_matrix(&local, model.position, model.rotation);
                     Mat44f::IDENTITY
                 }
             };
@@ -202,6 +234,27 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
                         seconds_trees += before.elapsed().as_secs_f64();
                         report.tree_nodes += track.world.meshes[made].data.model.nodes.len() as u64;
                     }
+                }
+            }
+            // TrackAvatar::TrackAvatar: every node whose name starts with AC_POBJECT becomes a
+            // TrackObject (Node::findChildrenByPrefix @ 0x14020e050, in tree order); it gets a
+            // PhysicsObject when its FIRST child is a mesh (TrackObject::TrackObject @
+            // 0x1401cf1a0), made of that mesh's vertices as they are in the file and placed
+            // by the node's own matrix
+            if name.starts_with("AC_POBJECT") {
+                let first = node.children.first().map(|&child| &kn5.nodes[child]);
+                if let Some(mesh) = first.filter(|child| child.class == NodeClass::Mesh).and_then(|child| child.mesh.as_ref()) {
+                    let vertices = reader.positions(mesh).map_err(|e| e.to_string())?;
+                    let indices = reader.indices(mesh).map_err(|e| e.to_string())?;
+                    if !rustyac_ode::collision::TriMeshData::indices_in_range(vertices.len(), &indices) {
+                        return Err(format!(
+                            "{}: the loose object {:?} has a triangle with a vertex number past its {} vertices (the game would read past the mesh)",
+                            model.file.display(),
+                            node.name,
+                            vertices.len()
+                        ));
+                    }
+                    track.objects.push(super::TrackObjectDef { name: name.to_string(), matrix: local, vertices, indices });
                 }
             }
             // the game finds helpers by name among all nodes, meshes too, the first in the tree

@@ -180,8 +180,11 @@ pub struct AiSpline {
     pub version: i32,
     pub spline: InterpolatingSpline,
     pub payloads: Vec<AiSplinePayload>,
-    /// The file stored no grid: the nearest point is searched among all points.
+    /// The file stored no grid and none could be built (fewer points than a cell holds): the
+    /// nearest point is searched among all points.
     pub grid_missing: bool,
+    /// The file stored no grid: it was built as the game builds it at load.
+    pub grid_built: bool,
 }
 
 /// The Catmull-Rom weights of a parameter, as the game evaluates them.
@@ -600,6 +603,294 @@ impl InterpolatingSpline {
     }
 }
 
+/// `Spline::ComparablePoint` (8 bytes): what `closestPointIndicesFlat` sorts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ComparablePoint {
+    index: u32,
+    distance: f32,
+}
+
+/// Visual Studio 2013's `std::sort` (`std::_Sort` @ 0x1401ecaa0 with `_Unguarded_partition` @
+/// 0x1401ecc70, `_Median` @ 0x1401ec810, `_Insertion_sort1` @ 0x1401ec6a0) over points by
+/// distance. The sort is not stable, points at the same distance are common, and the order
+/// it leaves them in decides which ten points a grid cell holds and which of two equally
+/// near ones a search finds first: so it is this algorithm, move for move.
+mod msvc_sort {
+    use super::ComparablePoint;
+
+    #[inline]
+    fn lt(a: &ComparablePoint, b: &ComparablePoint) -> bool {
+        a.distance < b.distance
+    }
+
+    fn med3(a: &mut [ComparablePoint], i: usize, j: usize, k: usize) {
+        if lt(&a[j], &a[i]) {
+            a.swap(j, i);
+        }
+        if lt(&a[k], &a[j]) {
+            a.swap(k, j);
+            if lt(&a[j], &a[i]) {
+                a.swap(j, i);
+            }
+        }
+    }
+
+    /// `last` is the last element itself here.
+    fn median(a: &mut [ComparablePoint], first: usize, mid: usize, last: usize) {
+        if 40 < last - first {
+            let step = (last - first + 1) / 8;
+            med3(a, first, first + step, first + 2 * step);
+            med3(a, mid - step, mid, mid + step);
+            med3(a, last - 2 * step, last - step, last);
+            med3(a, first + step, mid, last - step);
+        } else {
+            med3(a, first, mid, last);
+        }
+    }
+
+    fn partition(a: &mut [ComparablePoint], first: usize, last: usize) -> (usize, usize) {
+        let mid = first + (last - first) / 2;
+        median(a, first, mid, last - 1);
+        let mut pfirst = mid;
+        let mut plast = pfirst + 1;
+        while first < pfirst && !lt(&a[pfirst - 1], &a[pfirst]) && !lt(&a[pfirst], &a[pfirst - 1]) {
+            pfirst -= 1;
+        }
+        while plast < last && !lt(&a[plast], &a[pfirst]) && !lt(&a[pfirst], &a[plast]) {
+            plast += 1;
+        }
+        let mut gfirst = plast;
+        let mut glast = pfirst;
+        loop {
+            while gfirst < last {
+                if lt(&a[pfirst], &a[gfirst]) {
+                } else if lt(&a[gfirst], &a[pfirst]) {
+                    break;
+                } else {
+                    if plast != gfirst {
+                        a.swap(plast, gfirst);
+                    }
+                    plast += 1;
+                }
+                gfirst += 1;
+            }
+            while first < glast {
+                if lt(&a[glast - 1], &a[pfirst]) {
+                } else if lt(&a[pfirst], &a[glast - 1]) {
+                    break;
+                } else {
+                    pfirst -= 1;
+                    if pfirst != glast - 1 {
+                        a.swap(pfirst, glast - 1);
+                    }
+                }
+                glast -= 1;
+            }
+            if glast == first && gfirst == last {
+                return (pfirst, plast);
+            }
+            if glast == first {
+                if plast != gfirst {
+                    a.swap(pfirst, plast);
+                }
+                plast += 1;
+                a.swap(pfirst, gfirst);
+                pfirst += 1;
+                gfirst += 1;
+            } else if gfirst == last {
+                glast -= 1;
+                pfirst -= 1;
+                if glast != pfirst {
+                    a.swap(glast, pfirst);
+                }
+                plast -= 1;
+                a.swap(pfirst, plast);
+            } else {
+                glast -= 1;
+                a.swap(gfirst, glast);
+                gfirst += 1;
+            }
+        }
+    }
+
+    fn insertion(a: &mut [ComparablePoint], first: usize, last: usize) {
+        for next in first + 1..last {
+            let val = a[next];
+            if lt(&val, &a[first]) {
+                a.copy_within(first..next, first + 1);
+                a[first] = val;
+            } else {
+                let mut j = next;
+                while lt(&val, &a[j - 1]) {
+                    a[j] = a[j - 1];
+                    j -= 1;
+                }
+                a[j] = val;
+            }
+        }
+    }
+
+    // The heap sort the algorithm falls back on when its quick sort degenerates. Not read in
+    // the binary (no installed line reaches it): the same compiler's library header.
+    fn push_heap(a: &mut [ComparablePoint], first: usize, mut hole: usize, top: usize, val: ComparablePoint) {
+        while top < hole {
+            let idx = (hole - 1) / 2;
+            if !lt(&a[first + idx], &val) {
+                break;
+            }
+            a[first + hole] = a[first + idx];
+            hole = idx;
+        }
+        a[first + hole] = val;
+    }
+
+    fn adjust_heap(a: &mut [ComparablePoint], first: usize, mut hole: usize, bottom: usize, val: ComparablePoint) {
+        let top = hole;
+        let mut idx = 2 * hole + 2;
+        while idx < bottom {
+            if lt(&a[first + idx], &a[first + idx - 1]) {
+                idx -= 1;
+            }
+            a[first + hole] = a[first + idx];
+            hole = idx;
+            idx = 2 * idx + 2;
+        }
+        if idx == bottom {
+            a[first + hole] = a[first + bottom - 1];
+            hole = bottom - 1;
+        }
+        push_heap(a, first, hole, top, val);
+    }
+
+    fn heap_sort(a: &mut [ComparablePoint], first: usize, mut last: usize) {
+        let count = last - first;
+        let mut hole = count / 2;
+        while 0 < hole {
+            hole -= 1;
+            let val = a[first + hole];
+            adjust_heap(a, first, hole, count, val);
+        }
+        while 1 < last - first {
+            let val = a[last - 1];
+            a[last - 1] = a[first];
+            adjust_heap(a, first, 0, last - 1 - first, val);
+            last -= 1;
+        }
+    }
+
+    fn sort_range(a: &mut [ComparablePoint], mut first: usize, mut last: usize, mut ideal: isize) {
+        let mut count;
+        loop {
+            count = last - first;
+            if !(32 < count && 0 < ideal) {
+                break;
+            }
+            let (pf, pl) = partition(a, first, last);
+            ideal /= 2;
+            ideal += ideal / 2;
+            if pf - first < last - pl {
+                sort_range(a, first, pf, ideal);
+                first = pl;
+            } else {
+                sort_range(a, pl, last, ideal);
+                last = pf;
+            }
+        }
+        if 32 < count {
+            heap_sort(a, first, last);
+        } else if 1 < count {
+            insertion(a, first, last);
+        }
+    }
+
+    pub fn sort(a: &mut [ComparablePoint]) {
+        let n = a.len();
+        sort_range(a, 0, n, n as isize);
+    }
+}
+
+impl InterpolatingSpline {
+    /// `Spline::closestPointIndicesFlat` @ 0x1401edb00: the `n` points nearest to `pos` seen
+    /// from above (x and z only), nearest first in the order the game's sort leaves them.
+    /// (With fewer than `n` points the game reads past its array; here the list is shorter.)
+    fn closest_point_indices_flat(&self, pos: &P3, n: u32, scratch: &mut Vec<ComparablePoint>) -> Vec<u32> {
+        scratch.clear();
+        for (i, p) in self.points.iter().enumerate() {
+            let dz = pos[2] - p.point[2];
+            let dx = pos[0] - p.point[0];
+            let q = dx * dx + dz * dz;
+            let d = if is_zero(q) { 0.0 } else { sqrtf(q) };
+            scratch.push(ComparablePoint { index: i as u32, distance: d });
+        }
+        msvc_sort::sort(scratch);
+        scratch.iter().take(n as usize).map(|c| c.index).collect()
+    }
+
+    /// `InterpolatingSpline::buildGrid` @ 0x1401ef980: what the game does at load for a line
+    /// whose file stores no lookup grid (`loadGrid` @ 0x1401f31a0 with a flag of 0). Cells of
+    /// 10 m over the line's extent plus 350 m on every side; each holds the ten points
+    /// nearest to its middle, seen from above.
+    pub fn build_grid(&mut self) {
+        self.grid_columns.clear();
+        self.grid_cells.clear();
+        self.grid_indices.clear();
+        // the largest starts from the smallest positive number, not from the most negative
+        let mut g = GridData {
+            max_extreme: [f32::MIN_POSITIVE, 0.0, f32::MIN_POSITIVE],
+            min_extreme: [f32::MAX, 0.0, f32::MAX],
+            sampling_density: 10.0,
+            neighbors_considered_number: 10,
+        };
+        #[allow(clippy::neg_cmp_op_on_partial_ord)] // a NaN coordinate is stored as the smallest
+        for p in &self.points {
+            let (x, z) = (p.point[0], p.point[2]);
+            if !(x >= g.min_extreme[0]) {
+                g.min_extreme[0] = x;
+            }
+            if !(z >= g.min_extreme[2]) {
+                g.min_extreme[2] = z;
+            }
+            if x > g.max_extreme[0] {
+                g.max_extreme[0] = x;
+            }
+            if z > g.max_extreme[2] {
+                g.max_extreme[2] = z;
+            }
+        }
+        g.min_extreme[0] -= 350.0;
+        g.min_extreme[2] -= 350.0;
+        g.max_extreme[0] += 350.0;
+        g.max_extreme[2] += 350.0;
+        let inv = 1.0f32 / g.sampling_density;
+        let nx = truncate_i64((g.max_extreme[0] - g.min_extreme[0]) * inv) as u32;
+        let nz = truncate_i64((g.max_extreme[2] - g.min_extreme[2]) * inv) as u32;
+        self.grid_data = Some(g);
+        let mut scratch = Vec::with_capacity(self.points.len());
+        for ix in 0..nx {
+            self.grid_columns.push((self.grid_cells.len() as u32, nz));
+            let cx = ix as f64 + 0.5;
+            for iz in 0..nz {
+                let d = g.sampling_density;
+                let z = ((iz as f64 + 0.5) * d as f64 + g.min_extreme[2] as f64) as f32;
+                let x = (d as f64 * cx + g.min_extreme[0] as f64) as f32;
+                let indices = self.closest_point_indices_flat(&[x, 0.0, z], g.neighbors_considered_number, &mut scratch);
+                self.grid_cells.push((self.grid_indices.len() as u32, indices.len() as u32));
+                self.grid_indices.extend(indices);
+            }
+        }
+    }
+
+    /// The lookup grid as the file's layout has it: per column, per cell, the candidates.
+    pub fn grid_cells_in_order(&self) -> impl Iterator<Item = &[u32]> + '_ {
+        self.grid_cells.iter().map(|&(start, len)| &self.grid_indices[start as usize..(start + len) as usize])
+    }
+
+    /// Columns and, per column, cells of the lookup grid.
+    pub fn grid_size(&self) -> (usize, usize) {
+        (self.grid_columns.len(), self.grid_columns.first().map_or(0, |c| c.1 as usize))
+    }
+}
+
 struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -641,7 +932,22 @@ impl AiSpline {
         let mut r = Reader { bytes, at: 0 };
         let mut ai = AiSpline { version: r.i32(0), ..AiSpline::default() };
         if ai.version < 7 {
-            return Err(format!("an AI line of version {} (older than 7) is not ported", ai.version));
+            // AISpline::loadVersion6 @ 0x1402a85b0 (versions 0 to 6): the count, the lap time,
+            // then the points. A line with points is then rebuilt by the game in the same
+            // load (AISplineRecorder::save(true) @ 0x140296ae0: new track limits from rays,
+            // cleanSpline, closeSmooth, a grid) and written back as version 7, which is why
+            // no installed track has an old line with points. That rebuild is not ported.
+            let points_count = r.u32(0);
+            ai.lap_time = r.u32(0);
+            if points_count != 0 {
+                return Err(format!(
+                    "an AI line of version {} with {points_count} points: the game rebuilds such a line when it loads it and saves it as version 7 (drive the track once in Assetto Corsa); the rebuild is not ported",
+                    ai.version
+                ));
+            }
+            // no points (the Drift track's file): the empty line the game has without a file
+            ai.spline.compute_spline_length();
+            return Ok(ai);
         }
         let points_count = r.u32(0);
         ai.lap_time = r.u32(0);
@@ -713,7 +1019,12 @@ impl AiSpline {
                     }
                 }
             }
+        } else if ai.spline.points.len() >= 10 {
+            // InterpolatingSpline::loadGrid: no stored grid, the game builds one
+            ai.spline.build_grid();
+            ai.grid_built = true;
         } else {
+            // (the game would read past its array of points for a cell's ten candidates)
             ai.grid_missing = true;
         }
 
@@ -905,11 +1216,16 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
             Ok(spline) => {
                 if spline.grid_missing {
                     messages.push(format!(
-                        "{}: no lookup grid is stored; the game would build one (not ported), the port searches all points instead",
+                        "{}: no lookup grid is stored and the line has fewer than ten points; every point is searched instead",
                         fast_lane.display()
                     ));
                 }
-                track.ai_spline = Some(spline);
+                if spline.point_count() == 0 {
+                    // a file without points is the game's empty line: no position along the lap
+                    messages.push(format!("{}: the AI line has no points (version {}): no position along the lap", fast_lane.display(), spline.version));
+                } else {
+                    track.ai_spline = Some(spline);
+                }
             }
             // the track still drives: without its line there is no position along the lap
             Err(e) => messages.push(format!("the AI line was not read ({e}): no position along the lap")),
@@ -982,6 +1298,67 @@ impl Track {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The grids stored in the game's own AI lines were written by the game's `buildGrid`
+    /// from the very points of the file: building them again has to give the same header,
+    /// the same cells and the same order inside every cell (which only the game's own sort
+    /// gives: a stable sort gets about one cell in 300 wrong).
+    #[test]
+    fn the_lookup_grid_is_built_as_the_game_builds_it() {
+        let Some(root) = rustyac_content::install::ac_root() else {
+            eprintln!("NOT TESTED: Assetto Corsa's folder was not found (set AC_ROOT); the grid test needs the game's own AI lines");
+            return;
+        };
+        let mut tested = 0;
+        for track in ["magione", "monza", "ks_laguna_seca"] {
+            let file = root.join("content").join("tracks").join(track).join("ai").join("fast_lane.ai");
+            if !file.is_file() {
+                eprintln!("NOT TESTED: {} is missing", file.display());
+                continue;
+            }
+            let stored = AiSpline::load(&file).expect("the game's AI line");
+            assert!(!stored.grid_built && !stored.grid_missing, "{track}: the file stores its grid");
+            let mut built = stored.spline.clone();
+            built.build_grid();
+            assert_eq!(built.grid_data, stored.spline.grid_data, "{track}: the grid's header");
+            assert_eq!(built.grid_size(), stored.spline.grid_size(), "{track}: the grid's size");
+            let differing = built.grid_cells_in_order().zip(stored.spline.grid_cells_in_order()).filter(|(a, b)| a != b).count();
+            assert_eq!(differing, 0, "{track}: cells that differ from the game's");
+            assert_eq!(built.grid_indices.len(), stored.spline.grid_indices.len());
+            tested += 1;
+        }
+        eprintln!("the lookup grid of {tested} of the game's AI lines was rebuilt cell for cell");
+    }
+
+    #[test]
+    fn the_sort_orders_by_distance_and_handles_every_size() {
+        // sizes around the insertion-sort limit (32) and the median-of-nine limit (40)
+        for n in [0usize, 1, 2, 31, 32, 33, 40, 41, 42, 100, 1000] {
+            let mut state = 12345u32;
+            let mut points: Vec<ComparablePoint> = (0..n)
+                .map(|i| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    // few different values: many ties
+                    ComparablePoint { index: i as u32, distance: ((state >> 24) % 17) as f32 }
+                })
+                .collect();
+            msvc_sort::sort(&mut points);
+            assert!(points.windows(2).all(|w| w[0].distance <= w[1].distance), "{n} points are not in order");
+            let mut seen: Vec<u32> = points.iter().map(|p| p.index).collect();
+            seen.sort_unstable();
+            assert!(seen.iter().enumerate().all(|(i, &index)| i as u32 == index), "{n} points: one was lost");
+        }
+    }
+
+    #[test]
+    fn an_old_line_without_points_is_an_empty_line_and_one_with_points_is_refused() {
+        // the Drift track's file: version 3, no points, no lap time
+        let empty = AiSpline::parse(&[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        assert_eq!((empty.version, empty.point_count(), empty.length()), (3, 0, 0.0));
+        let mut old = vec![6u8, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0];
+        old.extend([0u8; 128]);
+        assert!(AiSpline::parse(&old).unwrap_err().contains("version 6 with 2 points"));
+    }
 
     /// A circle of radius 100 m around the origin in the x-z plane, a point every 2 degrees.
     fn circle() -> AiSpline {

@@ -211,10 +211,19 @@ fn flat_color(material: &str, shader: &str, texture: &str) -> [f32; 4] {
     }
 }
 
+/// Where the models file of a track puts one of its models: `POSITION` and `ROTATION`
+/// (degrees) of its `[MODEL_n]`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Placement {
+    pub position: [f32; 3],
+    pub rotation: [f32; 3],
+}
+
 impl GpuModel {
     /// Loads kn5 files as one model. Each file's root hangs under the model's root with
-    /// `placements[i]` (the identity where the list is shorter).
-    pub fn load(device: &ID3D11Device, context: &ID3D11DeviceContext, files: &[PathBuf], placements: &[Mat], options: &ModelOptions) -> Result<GpuModel, String> {
+    /// its own matrix; for a track model `placements[i]` (`POSITION` and `ROTATION` of the
+    /// models file) changes that matrix as the game does (`TrackAvatar::init3D`).
+    pub fn load(device: &ID3D11Device, context: &ID3D11DeviceContext, files: &[PathBuf], placements: &[Placement], options: &ModelOptions) -> Result<GpuModel, String> {
         let start = Instant::now();
         let mut stats = ModelStats { files: files.len(), ..ModelStats::default() };
         let kn5s: Vec<Kn5> = files.iter().map(|f| Kn5::open(f).map_err(|e| format!("{}: {e}", f.display()))).collect::<Result<_, _>>()?;
@@ -381,7 +390,13 @@ impl GpuModel {
             for (index, node) in kn5.nodes.iter().enumerate() {
                 let (parent, local) = match node.parent {
                     Some(parent) => (Some(node_base + parent), node.matrix),
-                    None => (Some(0), mul(&node.matrix, placements.get(file).unwrap_or(&IDENTITY))),
+                    None => (
+                        Some(0),
+                        match placements.get(file) {
+                            Some(place) => rustyac_physics::track::loader::top_node_matrix(&rustyac_physics::vecmath::Mat44f { m: node.matrix }, place.position, place.rotation).m,
+                            None => node.matrix,
+                        },
+                    ),
                 };
                 model.nodes.push(GpuNode { name: node.name.clone(), parent, local, active: node.active });
                 if !drawn(kn5, index) {

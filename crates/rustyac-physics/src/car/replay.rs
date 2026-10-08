@@ -1172,12 +1172,16 @@ pub struct TrackRun {
     pub armed: bool,
     /// `PhysicsEngine::allowedTyresOut`
     pub allowed_tyres_out: i32,
+    /// The track's loose objects are in the world (recordings since Task 18, header key
+    /// `track_objects`).
+    pub objects: bool,
 }
 
 impl PartialEq for TrackRun {
     fn eq(&self, other: &TrackRun) -> bool {
         std::sync::Arc::ptr_eq(&self.track, &other.track)
-            && (self.position, self.tail, self.armed, self.allowed_tyres_out) == (other.position, other.tail, other.armed, other.allowed_tyres_out)
+            && (self.position, self.tail, self.armed, self.allowed_tyres_out, self.objects)
+                == (other.position, other.tail, other.armed, other.allowed_tyres_out, other.objects)
     }
 }
 
@@ -1208,7 +1212,12 @@ impl RunSetup {
                 env.set_wind(speed, direction);
             }
         }
-        let mut chassis = RollingChassis::new(data_path, env, ground, rand.0, self.clock_start_ms)?;
+        // the track's loose objects exist before the car (TrackAvatar before Car::Car)
+        let objects: &[crate::track::TrackObjectDef] = match &self.track {
+            Some(run) if run.objects => &run.track.objects,
+            _ => &[],
+        };
+        let mut chassis = RollingChassis::new_with_objects(data_path, env, ground, rand.0, self.clock_start_ms, objects)?;
         chassis.dynamic_track = dynamic_track;
         if self.conditions.ballast_kg > 0.0 {
             chassis.ballast_kg = self.conditions.ballast_kg;
@@ -2054,6 +2063,9 @@ impl Golden {
                 tail: Vec3f::new(0.0, 0.0, -1.0),
                 armed: header.armed,
                 allowed_tyres_out: header.allowed_tyres_out,
+                // an excerpt's start state holds the car only: its stretch must be one in
+                // which no loose object is touched (asleep, they change nothing)
+                objects: false,
             });
         }
     }
@@ -2248,6 +2260,77 @@ pub fn contact_trace_values(contacts: &[ContactTrace]) -> Vec<TraceValue> {
     out
 }
 
+/// One loose track object after a step, as ODE holds it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ObjectTrace {
+    /// The body is awake (`dBodyIsEnabled`).
+    pub enabled: bool,
+    /// The collide bits of its mesh.
+    pub mask: u32,
+    pub pos: [f32; 3],
+    pub q: [f32; 4],
+    pub lvel: [f32; 3],
+    pub avel: [f32; 3],
+}
+
+/// The loose objects of a step as the recordings hold them: how many there are and how many
+/// are awake, a hash over every word of every object's state, and the place and speed of the
+/// first one that is awake (so that a table can say how far a cone went).
+pub fn object_trace_values(objects: &[ObjectTrace]) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    // FNV-1a, 64 bits, over the words of every object
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut awake = 0;
+    let mut first: Option<(usize, &ObjectTrace)> = None;
+    for (i, o) in objects.iter().enumerate() {
+        let mut words = vec![o.enabled as u32, o.mask];
+        words.extend(o.pos.iter().chain(&o.q).chain(&o.lvel).chain(&o.avel).map(|x| x.to_bits()));
+        for word in words {
+            for byte in word.to_le_bytes() {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        if o.enabled {
+            awake += 1;
+            first.get_or_insert((i, o));
+        }
+    }
+    out.push(TraceValue::i("objects.count", objects.len() as i32).extra());
+    out.push(TraceValue::i("objects.awake", awake).extra());
+    out.push(TraceValue::i("objects.hashLo", hash as u32 as i32).extra());
+    out.push(TraceValue::i("objects.hashHi", (hash >> 32) as u32 as i32).extra());
+    let blank = ObjectTrace::default();
+    let (index, o) = first.map_or((-1, &blank), |(i, o)| (i as i32, o));
+    out.push(TraceValue::i("objects.firstAwake", index).extra());
+    for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+        out.push(TraceValue::f(&format!("objects.firstAwake.pos.{axis}"), o.pos[k]).extra());
+    }
+    for (k, axis) in ["x", "y", "z"].iter().enumerate() {
+        out.push(TraceValue::f(&format!("objects.firstAwake.lvel.{axis}"), o.lvel[k]).extra());
+    }
+    out
+}
+
+/// The loose objects of the Rust car's world after a step.
+pub fn object_traces(chassis: &RollingChassis) -> Vec<ObjectTrace> {
+    let core = &chassis.core;
+    core.track_objects
+        .iter()
+        .map(|object| {
+            let b = core.world.body(object.body.id);
+            ObjectTrace {
+                enabled: core.is_enabled(object.body),
+                mask: core.world.collision.geom(object.geom).collide_bits,
+                pos: [b.pos[0], b.pos[1], b.pos[2]],
+                q: b.q,
+                lvel: [b.lvel[0], b.lvel[1], b.lvel[2]],
+                avel: [b.avel[0], b.avel[1], b.avel[2]],
+            }
+        })
+        .collect()
+}
+
 /// The collision values of the Rust car after a step, under the names of the recordings.
 pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     use rustyac_ode::{GeomRef, JointKind};
@@ -2260,6 +2343,8 @@ pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
                     1000 + k as i32
                 } else if let Some(k) = core.mesh_colliders(chassis.body).iter().position(|&m| m == id) {
                     2000 + k as i32
+                } else if let Some(k) = core.track_objects.iter().position(|o| o.geom == id) {
+                    3000 + k as i32
                 } else {
                     -1
                 }
@@ -2303,6 +2388,10 @@ pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         out.push(TraceValue::f(&format!("sus.{wheel}.damage"), suspension.get_damage()).extra());
     }
     out.extend(event_trace_values(&chassis.physics_events));
+    // (only in a world with loose objects: the older recordings and excerpts have none)
+    if !core.track_objects.is_empty() {
+        out.extend(object_trace_values(&object_traces(chassis)));
+    }
     out
 }
 

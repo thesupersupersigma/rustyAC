@@ -1233,6 +1233,8 @@ pub struct World<'a> {
     /// its index, floor box k of the car 1000 + k, the car's collider mesh 2000).
     collide: bool,
     geom_names: std::collections::HashMap<usize, i32>,
+    /// The track's loose objects (the game's `PhysicsObject`s), in creation order.
+    game_objects: Vec<crate::track::GameObject>,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1401,6 +1403,7 @@ impl<'a> World<'a> {
             let mut spawn: (V3, V3) = ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
             let mut armed = false;
             let mut track_meta: Vec<(String, String)> = Vec::new();
+            let mut game_objects: Vec<crate::track::GameObject> = Vec::new();
             let mut driver = scenario.driver();
             let (track, surface) = if let Some(folder) = &options.track {
                 let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
@@ -1434,11 +1437,18 @@ impl<'a> World<'a> {
                 let mut table: Vec<usize> = (0..5).map(|i| *original.offset(i as isize - 1)).collect();
                 table[1 + 3] = wrapped_create_ray_caster as *const () as usize;
                 wr(built.track, 0, leak(table).add(1));
+                // the track's loose objects (cones, marker boards): the game makes them while
+                // it loads the track, before any car. Only in a run with collisions.
+                if options.collide {
+                    game_objects = crate::track::create_objects(acs, engine, &built.rust);
+                }
                 let hex = |v: &V3| v.map(|x| format!("{:08x}", x.to_bits())).join(",");
                 track_meta = vec![
                     ("track".to_string(), built.rust.name.clone()),
                     ("track_folder".to_string(), folder.display().to_string()),
                     ("track_layout".to_string(), options.layout.clone()),
+                    ("track_objects".to_string(), (options.collide as u8).to_string()),
+                    ("track_object_count".to_string(), game_objects.len().to_string()),
                     ("spawn".to_string(), note),
                     ("spawn_position".to_string(), hex(&spawn.0)),
                     ("spawn_tail".to_string(), hex(&spawn.1)),
@@ -1640,6 +1650,9 @@ impl<'a> World<'a> {
                 if !floor_object.is_null() {
                     geom_names.insert(rd::<usize>(floor_object, 0x10), 0);
                 }
+                for (i, object) in game_objects.iter().enumerate() {
+                    geom_names.insert(object.geom() as usize, 3000 + i as i32);
+                }
                 // PhysicsEngine::setSessionInfo: no contacts for the first 250 steps (the lap
                 // scenario starts the way a session does; the others collide from step 0)
                 let no_collision_steps: i32 = if scenario.track_kind() == Some(crate::track_driver::TrackKind::Lap) { 250 } else { 0 };
@@ -1715,6 +1728,7 @@ impl<'a> World<'a> {
                 conditions_meta,
                 collide: options.collide,
                 geom_names,
+                game_objects,
             };
             world.track_meta.extend(collide_meta);
             if armed {
@@ -2135,6 +2149,35 @@ impl<'a> World<'a> {
                 });
             }
             for value in rustyac_physics::car::replay::event_trace_values(&events) {
+                match value.kind {
+                    'f' => row.f(&value.name, f32::from_bits(value.word as u32)),
+                    _ => row.i(&value.name, value.word as i32),
+                }
+            }
+        }
+        // the loose objects: the matrices their step handlers queued for the picture are
+        // thrown away (TrackObject::update pops them every frame), their bodies are noted
+        if !self.game_objects.is_empty() {
+            let pop: unsafe extern "system" fn(*mut u8, *mut u8) -> bool = std::mem::transmute(self.acs.msvcp_function(
+                c"?_Internal_pop_if_present@_Concurrent_queue_base_v4@details@Concurrency@@IEAA_NPEAX@Z",
+            ));
+            let mut matrix = [0u8; 0x40];
+            let mut traces = Vec::with_capacity(self.game_objects.len());
+            for object in &self.game_objects {
+                while pop(object.queue, matrix.as_mut_ptr()) {}
+                let body = object.body();
+                let state = body_state(body);
+                traces.push(rustyac_physics::car::replay::ObjectTrace {
+                    // dxBody::flags, dxBodyDisabled = 4
+                    enabled: rd::<u32>(body, 0x38) & 4 == 0,
+                    mask: rd(object.geom(), 0x7c),
+                    pos: state.pos,
+                    q: state.q,
+                    lvel: state.lvel,
+                    avel: state.avel,
+                });
+            }
+            for value in rustyac_physics::car::replay::object_trace_values(&traces) {
                 match value.kind {
                     'f' => row.f(&value.name, f32::from_bits(value.word as u32)),
                     _ => row.i(&value.name, value.word as i32),

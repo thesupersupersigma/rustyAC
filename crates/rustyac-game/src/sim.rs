@@ -581,6 +581,7 @@ fn build_car(
                 tail: spawn.tail,
                 armed: oracle.armed,
                 allowed_tyres_out: oracle.allowed_tyres_out,
+                objects: oracle.objects,
             });
         }
         if setup.oracle.as_ref().and_then(|o| o.collide).is_some_and(|c| c.collider_mesh) {
@@ -622,7 +623,13 @@ fn build_car(
     }
     // RaceManager::initOffline: a file with a hot-lap session arms the first lap
     let arm_first_lap = session.arm_first_lap.unwrap_or(env.session_type == 4);
-    let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
+    // the track's loose objects are made with the track, before the car
+    let with_objects = setup.track_objects || setup.oracle.as_ref().and_then(|o| o.track.as_ref()).is_some_and(|t| t.objects);
+    let objects: &[rustyac_physics::track::TrackObjectDef] = match track {
+        Some(track) if with_objects => &track.objects,
+        _ => &[],
+    };
+    let mut car = VanillaCar::new_with_objects(data_path, env, ground, setup.seed, physics_time, driver, objects)?;
     // the session of race.ini and assists.ini: the track's grip, ballast and restrictor
     // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
     car.car.dynamic_track = session.dynamic_track;

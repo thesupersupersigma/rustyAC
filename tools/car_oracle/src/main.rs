@@ -102,6 +102,10 @@ struct Args {
     track: Option<PathBuf>,
     /// `--layout <name>`: the track's layout ("" for a track without layouts).
     layout: String,
+    /// `rays --space0 <n>`: every n-th mesh in sub-space id 0. `rays --late <percent>`: the
+    /// last so many percent of the meshes are added after a first ray.
+    space0: usize,
+    late: Option<usize>,
     /// `--setup <file>`: the saved setup a Task 15 scenario loads.
     setup: Option<PathBuf>,
     count: usize,
@@ -141,6 +145,8 @@ fn parse_args() -> Result<Args, String> {
         verbose: false,
         track: None,
         layout: String::new(),
+        space0: 0,
+        late: None,
         setup: None,
         count: 1_000_000,
         count_given: false,
@@ -184,6 +190,8 @@ fn parse_args() -> Result<Args, String> {
                     a.layout.clear();
                 }
             }
+            "--space0" => a.space0 = number(value()?)?,
+            "--late" => a.late = Some(number(value()?)?),
             "--setup" => a.setup = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
             "--count" => {
                 a.count = number(value()?)?;
@@ -253,11 +261,26 @@ fn rays(args: &Args) -> Result<(), String> {
         acs.silence_game_stdout();
     }
     let engine = game::new_engine(&acs, 1);
-    let (report, ok) = track::rays(&acs, engine, &folder, &args.layout, args.count, args.seed)?;
+    // --late <percent>: that share of the meshes, the last ones, come after a first ray
+    let late_from = match args.late {
+        Some(percent) => {
+            let meshes = rustyac_physics::track::load_track(&folder, &args.layout)?.0.surfaces.len();
+            Some(meshes - meshes * percent.min(100) / 100)
+        }
+        None => None,
+    };
+    let plan = track::BuildPlan { space0_every: args.space0, late_from };
+    let (report, ok) = track::rays(&acs, engine, &folder, &args.layout, args.count, args.seed, &plan)?;
     let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let path = track::results_path(&repo, &name, &args.layout);
+    let path = track::results_path(&repo, &name, &args.layout, &plan);
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let layout = if args.layout.is_empty() { String::new() } else { format!(" --layout {}", args.layout) };
+    let mut layout = if args.layout.is_empty() { String::new() } else { format!(" --layout {}", args.layout) };
+    if args.space0 != 0 {
+        layout.push_str(&format!(" --space0 {}", args.space0));
+    }
+    if let Some(percent) = args.late {
+        layout.push_str(&format!(" --late {percent}"));
+    }
     std::fs::write(&path, format!("# Ray micro-oracle: the game's ODE / OPCODE against rustyac-ode\n\n`car_oracle rays --track {}{layout} --count {} --seed {}`\n\n{report}", track.display(), args.count, args.seed))
         .map_err(|e| e.to_string())?;
     println!("{report}");

@@ -79,7 +79,20 @@ fn read_models(ini: &Path, folder: &Path) -> Result<Vec<ModelEntry>, String> {
 
 impl TrackFiles {
     /// `folder` is `content/tracks/<track>`; `layout` is empty for a track without layouts.
+    /// Every model the list names has to be there.
     pub fn find(folder: &Path, layout: &str) -> Result<TrackFiles, String> {
+        let files = TrackFiles::find_lenient(folder, layout)?;
+        for model in &files.models {
+            if !model.file.is_file() {
+                return Err(format!("the track model {} is missing", model.file.display()));
+            }
+        }
+        Ok(files)
+    }
+
+    /// As [`TrackFiles::find`], but a model file that is not there stays in the list (the
+    /// game itself loads an empty node for it and goes on).
+    pub fn find_lenient(folder: &Path, layout: &str) -> Result<TrackFiles, String> {
         if !folder.is_dir() {
             return Err(format!("the track folder {} does not exist", folder.display()));
         }
@@ -94,11 +107,6 @@ impl TrackFiles {
         };
         if models.is_empty() {
             return Err(format!("{} lists no model", ini.display()));
-        }
-        for model in &models {
-            if !model.file.is_file() {
-                return Err(format!("the track model {} is missing", model.file.display()));
-            }
         }
         let base = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
         Ok(TrackFiles { folder: folder.to_path_buf(), name, layout: layout.to_string(), models, data: base.join("data"), ai: base.join("ai") })

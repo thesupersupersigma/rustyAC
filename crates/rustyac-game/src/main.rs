@@ -67,6 +67,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         auto_clutch: true,
         track,
         layout,
+        track_objects: true,
         spawn: options.spawn.clone(),
         session_starts_at_spawn: true,
         drs_zones: true,
@@ -87,9 +88,11 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
     let model_options = ModelOptions { texture_size: options.texture_size, flat: options.no_textures, ..ModelOptions::default() };
     let megabytes = |bytes: u64| bytes as f64 / 1_048_576.0;
     if let Some(folder) = &info.track_folder {
-        let loaded = rustyac_content::TrackFiles::find(folder, &info.track_layout).and_then(|files| {
-            let paths: Vec<_> = files.models.iter().map(|m| m.file.clone()).collect();
-            let placements: Vec<_> = files.models.iter().map(|m| rustyac_game::render::scene::translation(m.position[0], m.position[1], m.position[2])).collect();
+        let loaded = rustyac_content::TrackFiles::find_lenient(folder, &info.track_layout).and_then(|files| {
+            // (a model file that is not there is left out, as in the physics)
+            let models: Vec<_> = files.models.iter().filter(|m| m.file.is_file()).collect();
+            let paths: Vec<_> = models.iter().map(|m| m.file.clone()).collect();
+            let placements: Vec<_> = models.iter().map(|m| rustyac_game::render::models::Placement { position: m.position, rotation: m.rotation }).collect();
             renderer.load_track(&paths, &placements, &model_options)
         });
         match loaded {

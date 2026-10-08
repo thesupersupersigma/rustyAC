@@ -292,6 +292,7 @@ fn track_run(recording: &Recording) -> Result<Option<replay::TrackRun>, String> 
         tail,
         armed: get("armed")? != "0",
         allowed_tyres_out: get("allowed_tyres_out")?.parse().map_err(|e| format!("allowed_tyres_out: {e}"))?,
+        objects: recording.get("track_objects") == Some("1"),
     }))
 }
 
@@ -1730,6 +1731,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             ff_gain: 1.0,
             track: String::new(),
             layout: String::new(),
+            track_objects: false,
             spawn: "hotlap".to_string(),
             session: Default::default(),
             oracle: Some(input_file::OracleSetup {
@@ -1744,6 +1746,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
                 track: run.track.as_ref().map(|track| input_file::OracleTrack {
                     folder: recording.get("track_folder").unwrap_or("").to_string(),
                     layout: recording.get("track_layout").unwrap_or("").to_string(),
+                    objects: track.objects,
                     position: [track.position.x, track.position.y, track.position.z],
                     tail: [track.tail.x, track.tail.y, track.tail.z],
                     armed: track.armed,

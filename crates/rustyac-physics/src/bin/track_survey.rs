@@ -56,13 +56,13 @@ fn row(entry: &TrackEntry) -> String {
             "v{version}, {} points, {:.0} m{}{}",
             spline.point_count(),
             spline.length(),
-            if spline.grid_missing { ", no grid" } else { "" },
+            if spline.grid_built { ", grid built at load" } else if spline.grid_missing { ", no grid" } else { "" },
             if track.pit_lane_spline.is_some() { "; pit lane line" } else { "" }
         ),
         (None, Some(version)) => format!("v{version}, no points"),
         _ => "none".to_string(),
     };
-    let objects = report.helpers.iter().filter(|h| h.name.starts_with("AC_POBJECT")).count();
+    let objects = track.objects.len();
     let mut unusual: Vec<String> = Vec::new();
     unusual.extend(catalog::notes(entry));
     if report.rotated_models > 0 {
@@ -71,8 +71,32 @@ fn row(entry: &TrackEntry) -> String {
     if report.skipped_models > 0 {
         unusual.push(format!("{} `MODEL_n` file(s) missing", report.skipped_models));
     }
-    if report.groups.contains_key(&0) {
+    if track.world.direct_meshes() > 0 {
         unusual.push("a mesh in sub-space 0".to_string());
+    }
+    // a node matrix with a scale: the game's body has none (ODE makes the rotation orthonormal)
+    let scaled = track
+        .objects
+        .iter()
+        .filter(|o| {
+            let row = o.matrix.m[0];
+            let length = (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt();
+            (length - 1.0).abs() > 1e-3
+        })
+        .count();
+    if scaled > 0 {
+        unusual.push(format!("{scaled} loose objects with a scaled node"));
+    }
+    // AISplineRecorder::load: side csv files newer than the AI line make the game work the
+    // track limits out again (and rewrite the line)
+    let data = layout_base.join("data");
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    if let (Some(left), Some(right), Some(line)) = (modified(&data.join("side_l.csv")), modified(&data.join("side_r.csv")), modified(&layout_base.join("ai").join("fast_lane.ai"))) {
+        if left > line || right > line {
+            unusual.push("`side_l/r.csv` newer than the AI line: the game recomputes the track limits at load (not ported)".to_string());
+        } else {
+            unusual.push("has `side_l/r.csv` (older than the AI line: not used)".to_string());
+        }
     }
     if versions.iter().any(|v| *v < 5) {
         unusual.push(format!("kn5 version {versions:?}"));

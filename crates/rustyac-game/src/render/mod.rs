@@ -635,7 +635,7 @@ impl DebugRenderer {
     }
 
     /// Puts a track's kn5 models on the card; from then on they are drawn instead of the grid.
-    pub fn load_track(&mut self, files: &[std::path::PathBuf], placements: &[Mat], options: &ModelOptions) -> Result<ModelStats, String> {
+    pub fn load_track(&mut self, files: &[std::path::PathBuf], placements: &[models::Placement], options: &ModelOptions) -> Result<ModelStats, String> {
         let model = GpuModel::load(&self.device, &self.context, files, placements, options)?;
         let stats = model.stats.clone();
         self.track = Some(model);

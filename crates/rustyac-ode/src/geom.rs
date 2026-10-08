@@ -499,7 +499,7 @@ impl BroadPhase<'_> {
                 GeomKind::SimpleSpace { count, .. } => count,
                 _ => 0,
             },
-            GeomRef::StaticSpace => self.statics().spaces.len() as u32,
+            GeomRef::StaticSpace => self.statics().root.len() as u32,
             GeomRef::StaticSub(i) => self.statics().spaces[i as usize].members.len() as u32,
             GeomRef::StaticMesh(_) => 0,
         }
@@ -519,7 +519,14 @@ impl BroadPhase<'_> {
                 GeomRef::Dyn(g)
             }
             // the lists grow at their heads: the newest member comes first
-            GeomRef::StaticSpace => GeomRef::StaticSub(self.statics().spaces.len() as u32 - 1 - i),
+            GeomRef::StaticSpace => {
+                let root = &self.statics().root;
+                match root[root.len() - 1 - i as usize] {
+                    crate::collision::RootMember::Space(space) => GeomRef::StaticSub(space as u32),
+                    // a mesh of sub-space id 0 is a member of the static space itself
+                    crate::collision::RootMember::Mesh(mesh) => GeomRef::StaticMesh(mesh as u32),
+                }
+            }
             GeomRef::StaticSub(s) => {
                 let members = &self.statics().spaces[s as usize].members;
                 GeomRef::StaticMesh(members[members.len() - 1 - i as usize] as u32)

@@ -824,7 +824,24 @@ impl RollingChassis {
         rand_seed: u32,
         physics_time: f64,
     ) -> Result<RollingChassis, String> {
+        RollingChassis::new_with_objects(data_path, env, ground, rand_seed, physics_time, &[])
+    }
+
+    /// [`RollingChassis::new`] in a world that already holds the track's loose objects
+    /// (`Track::objects`): the game loads the track, and with it makes every object's body,
+    /// before it makes the car.
+    pub fn new_with_objects(
+        data_path: &Path,
+        env: ChassisEnvironment,
+        ground: Box<dyn RayTrackCollisionProvider>,
+        rand_seed: u32,
+        physics_time: f64,
+        objects: &[crate::track::TrackObjectDef],
+    ) -> Result<RollingChassis, String> {
         let mut core = PhysicsCore::new();
+        for object in objects {
+            core.create_track_object(&object.matrix, object.vertices.clone(), object.indices.clone());
+        }
         let body = core.create_rigid_body();
         let fuel_tank_body = core.create_rigid_body();
 
@@ -2548,6 +2565,8 @@ impl RollingChassis {
             }
         }
         self.step_stats = self.core.world_step(dt);
+        // PhysicsEngine::evOnStepCompleted: each loose object's own handler
+        self.core.step_track_objects();
     }
 
     /// `PhysicsEngine::onCollisionCallBack` @ 0x140264020 (the pair is turned round when only
