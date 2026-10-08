@@ -50,11 +50,23 @@ unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
 /// The car and session of a live drive: from the command line, and the conditions of the
 /// game's own last session (race.ini) unless that is switched off.
 fn live_setup(options: &Options) -> Result<SimSetup, String> {
+    // the track by the name the user gave it, the layout by --layout or race.ini's CONFIG_TRACK
+    let (mut track, mut layout) = (String::new(), String::new());
+    if let Some(name) = &options.track {
+        let race = rustyac_game::conditions::race_track(options);
+        let found = rustyac_game::sim::resolve_track(name, options.layout.as_deref(), race.as_ref())?;
+        for note in &found.notes {
+            println!("{note}");
+        }
+        track = found.entry.folder.display().to_string();
+        layout = found.entry.layout;
+    }
     let mut setup = SimSetup {
         car: options.car.clone(),
         // (the aids: `conditions::apply` below)
         auto_clutch: true,
-        track: options.track.clone().unwrap_or_default(),
+        track,
+        layout,
         spawn: options.spawn.clone(),
         session_starts_at_spawn: true,
         drs_zones: true,
@@ -75,7 +87,7 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
     let model_options = ModelOptions { texture_size: options.texture_size, flat: options.no_textures, ..ModelOptions::default() };
     let megabytes = |bytes: u64| bytes as f64 / 1_048_576.0;
     if let Some(folder) = &info.track_folder {
-        let loaded = rustyac_content::TrackFiles::find(folder, "").and_then(|files| {
+        let loaded = rustyac_content::TrackFiles::find(folder, &info.track_layout).and_then(|files| {
             let paths: Vec<_> = files.models.iter().map(|m| m.file.clone()).collect();
             let placements: Vec<_> = files.models.iter().map(|m| rustyac_game::render::scene::translation(m.position[0], m.position[1], m.position[2])).collect();
             renderer.load_track(&paths, &placements, &model_options)
@@ -326,6 +338,24 @@ fn run_headless(options: &Options) -> Result<(), String> {
 }
 
 /// The devices found, for the console.
+/// `--list-tracks`: every installed track and layout, and why some cannot be driven.
+fn list_tracks() -> String {
+    use rustyac_physics::track::catalog;
+    let Some(root) = rustyac_content::install::ac_root() else {
+        return format!("{}\n", rustyac_content::install::not_found_hint());
+    };
+    let mut out = String::new();
+    for entry in catalog::installed(&root) {
+        let layout = if entry.layout.is_empty() { String::new() } else { format!(" --layout {}", entry.layout) };
+        let name = if entry.ui_name.is_empty() { String::new() } else { format!("  ({})", entry.ui_name) };
+        match catalog::check(&entry) {
+            Ok(()) => out.push_str(&format!("--track {}{layout}{name}\n", entry.track)),
+            Err(refusal) => out.push_str(&format!("   refused: {}{}{name}: {refusal}\n", entry.track, if entry.layout.is_empty() { String::new() } else { format!(" / {}", entry.layout) })),
+        }
+    }
+    out
+}
+
 fn list_devices(bindings: &Bindings, wheel: &Option<WheelDevice>) -> String {
     let mut out = String::from("devices:\n  keyboard (always there)\n");
     let pads = XInput::new().scan();
@@ -636,6 +666,10 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
 }
 
 fn run(options: &Options) -> Result<(), String> {
+    if options.list_tracks {
+        print!("{}", list_tracks());
+        return Ok(());
+    }
     if options.list_devices {
         let mut notes = Vec::new();
         let bindings = Bindings::load(options, &mut notes);

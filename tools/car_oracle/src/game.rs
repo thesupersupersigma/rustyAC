@@ -1192,6 +1192,8 @@ pub struct Options {
     pub setup_check: bool,
     /// A track folder: the game's own track with its collision meshes instead of the flat road.
     pub track: Option<std::path::PathBuf>,
+    /// The track's layout ("" for none).
+    pub layout: String,
     /// Task 13: the body touches things. The track's meshes keep their real collision
     /// categories, the car gets its own collider mesh (`colliders`), and the contact joints
     /// are recorded.
@@ -1404,7 +1406,7 @@ impl<'a> World<'a> {
                 let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
                 // the game's own Track, surfaces, collision meshes and AI line; every mesh a
                 // ghost to the car's body
-                let mut built = crate::track::GameTrack::build(acs, engine, folder, !options.collide).expect("the track");
+                let mut built = crate::track::GameTrack::build(acs, engine, folder, &options.layout, !options.collide).expect("the track");
                 assert!(built.surface_mismatches.is_empty(), "the game's surfaces differ from the port's: {:?}", built.surface_mismatches);
                 // TrackAvatar::initTimeLines: the gates between the nodes AC_TIME_n_L / _R, from
                 // the nodes' own matrices
@@ -1436,6 +1438,7 @@ impl<'a> World<'a> {
                 track_meta = vec![
                     ("track".to_string(), built.rust.name.clone()),
                     ("track_folder".to_string(), folder.display().to_string()),
+                    ("track_layout".to_string(), options.layout.clone()),
                     ("spawn".to_string(), note),
                     ("spawn_position".to_string(), hex(&spawn.0)),
                     ("spawn_tail".to_string(), hex(&spawn.1)),

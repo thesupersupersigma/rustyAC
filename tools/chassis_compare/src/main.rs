@@ -261,14 +261,16 @@ fn track_run(recording: &Recording) -> Result<Option<replay::TrackRun>, String> 
     let get = |key: &str| recording.get(key).ok_or(format!("the recording's header has no {key}"));
     let position = hex3(get("spawn_position")?)?;
     let tail = hex3(get("spawn_tail")?)?;
+    let layout = recording.get("track_layout").unwrap_or("");
+    let key = format!("{folder}|{layout}");
     let track = TRACKS.with(|tracks| -> Result<_, String> {
-        if let Some((_, track)) = tracks.borrow().iter().find(|(f, _)| f == folder) {
+        if let Some((_, track)) = tracks.borrow().iter().find(|(f, _)| *f == key) {
             return Ok(std::sync::Arc::clone(track));
         }
-        let (mut track, _) = rustyac_physics::track::load_track(Path::new(folder), "")?;
+        let (mut track, _) = rustyac_physics::track::load_track(Path::new(folder), layout)?;
         rustyac_physics::track::init_respawn_position_set(&mut track, "HOTLAP_START");
         let track = std::sync::Arc::new(track);
-        tracks.borrow_mut().push((folder.to_string(), std::sync::Arc::clone(&track)));
+        tracks.borrow_mut().push((key.clone(), std::sync::Arc::clone(&track)));
         Ok(track)
     })?;
     if get("spawn")? == "AC_HOTLAP_START_0" {
@@ -1727,6 +1729,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             drs_zones: true,
             ff_gain: 1.0,
             track: String::new(),
+            layout: String::new(),
             spawn: "hotlap".to_string(),
             session: Default::default(),
             oracle: Some(input_file::OracleSetup {
@@ -1740,6 +1743,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
                 conditions: run.conditions.clone(),
                 track: run.track.as_ref().map(|track| input_file::OracleTrack {
                     folder: recording.get("track_folder").unwrap_or("").to_string(),
+                    layout: recording.get("track_layout").unwrap_or("").to_string(),
                     position: [track.position.x, track.position.y, track.position.z],
                     tail: [track.tail.x, track.tail.y, track.tail.z],
                     armed: track.armed,

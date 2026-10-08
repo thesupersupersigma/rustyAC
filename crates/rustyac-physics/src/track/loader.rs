@@ -59,6 +59,9 @@ pub struct TrackLoadReport {
     pub messages: Vec<String>,
     /// The helper nodes, in the order of the game's node tree.
     pub helpers: Vec<HelperNode>,
+    /// Models with a `ROTATION` in the models file, and `MODEL_n` files that are not there.
+    pub rotated_models: u32,
+    pub skipped_models: u32,
     pub seconds_models: f64,
     pub seconds_trees: f64,
     pub seconds_total: f64,

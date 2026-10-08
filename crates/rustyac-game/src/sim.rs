@@ -417,6 +417,30 @@ pub fn find_track(track: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// A track and layout as the user names them (`--track`, `--layout`): a folder, a folder
+/// name, the menu's name or a part of one; `race` is race.ini's `TRACK` and `CONFIG_TRACK`,
+/// whose layout is taken when no layout is asked for and the track is the same. A track
+/// that is unknown, not installed, made for Custom Shaders Patch only or encrypted is an
+/// error that says which.
+pub fn resolve_track(track: &str, layout: Option<&str>, race: Option<&(String, String)>) -> Result<rustyac_physics::track::catalog::Found, String> {
+    let root = ac_root();
+    let preferred = |name: &str| race.filter(|(race_track, _)| race_track.eq_ignore_ascii_case(name)).map(|(_, config)| config.clone());
+    rustyac_physics::track::catalog::find(root.as_deref(), track, layout, &preferred)
+}
+
+/// Loads a track that was already resolved: the folder (or name) and the layout exactly.
+fn load_resolved(track: &str, layout: &str) -> Result<(PathBuf, Track, rustyac_physics::track::TrackLoadReport), String> {
+    let folder = find_track(track)?;
+    let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let entry = rustyac_physics::track::catalog::entry_of(&folder, &name, layout);
+    if let Err(refusal) = rustyac_physics::track::catalog::check(&entry) {
+        let what = if layout.is_empty() { name } else { format!("{name} / {layout}") };
+        return Err(format!("the track {what} is refused: {refusal}"));
+    }
+    let (loaded, report) = load_track(&folder, layout)?;
+    Ok((folder, loaded, report))
+}
+
 /// The car's folder name (the game's `unixName`) from its data folder: the folder's own name,
 /// or its parent's when the folder is a car's `data` (`content/cars/<car>/data`).
 pub fn car_name(data_path: &Path) -> String {
@@ -469,6 +493,8 @@ pub struct CarInfo {
     pub tyre_radius: [f32; 4],
     /// The track's folder, when the car is on one.
     pub track_folder: Option<PathBuf>,
+    /// Its layout ("" for none).
+    pub track_layout: String,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -675,8 +701,7 @@ impl GameSim {
             if setup.oracle.is_some() {
                 return Err("an oracle set-up runs on the oracle's own road, not on a track".to_string());
             }
-            let folder = find_track(&setup.track)?;
-            let (mut loaded, report) = load_track(&folder, "")?;
+            let (folder, mut loaded, report) = load_resolved(&setup.track, &setup.layout)?;
             // RaceManager::initOffline: the spawn set of the session (a hot-lap session has
             // `HOTLAP_START`, practice `PIT`, a race `START`; the last two are then cast twice)
             let set = match setup.spawn.as_str() {
@@ -692,8 +717,7 @@ impl GameSim {
         }
         if let Some(oracle) = setup.oracle.as_ref().and_then(|o| o.track.as_ref()) {
             // a recording of the game on a track: the same track, the recording's spawn
-            let folder = find_track(&oracle.folder)?;
-            let (loaded, report) = load_track(&folder, "")?;
+            let (folder, loaded, report) = load_resolved(&oracle.folder, &oracle.layout)?;
             let v = |a: &[f32; 3]| Vec3f::new(a[0], a[1], a[2]);
             spawn = SpawnPose { position: v(&oracle.position), tail: v(&oracle.tail) };
             track_summary = report.summary(&loaded);
@@ -724,7 +748,7 @@ impl GameSim {
     pub fn car_info(&self) -> CarInfo {
         let car = &self.car.car;
         let mut info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), track_folder: self.track_folder.clone(), ..CarInfo::default() };
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), ..CarInfo::default() };
         for index in 0..4.min(car.tyres.len()) {
             let p = car.suspensions[index].get_base_position();
             info.wheel_positions[index] = [p.x, p.y, p.z];

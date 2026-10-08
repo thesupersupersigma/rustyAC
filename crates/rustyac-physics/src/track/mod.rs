@@ -15,6 +15,7 @@
 //! thread and its display (`Arc<Track>`); what does change during a session (the grip level,
 //! each car's timer) lives in [`DynamicTrack`] and in the car.
 
+pub mod catalog;
 pub mod loader;
 pub mod spline;
 pub mod surfaces;

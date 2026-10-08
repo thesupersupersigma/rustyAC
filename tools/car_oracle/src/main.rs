@@ -100,6 +100,8 @@ struct Args {
     car: String,
     verbose: bool,
     track: Option<PathBuf>,
+    /// `--layout <name>`: the track's layout ("" for a track without layouts).
+    layout: String,
     /// `--setup <file>`: the saved setup a Task 15 scenario loads.
     setup: Option<PathBuf>,
     count: usize,
@@ -138,6 +140,7 @@ fn parse_args() -> Result<Args, String> {
         car: game::DEFAULT_CAR.to_string(),
         verbose: false,
         track: None,
+        layout: String::new(),
         setup: None,
         count: 1_000_000,
         count_given: false,
@@ -175,6 +178,12 @@ fn parse_args() -> Result<Args, String> {
             "--car" => a.car = value()?,
             "--verbose" => a.verbose = true,
             "--track" => a.track = Some(PathBuf::from(value()?)),
+            "--layout" => {
+                a.layout = value()?;
+                if a.layout == "-" {
+                    a.layout.clear();
+                }
+            }
             "--setup" => a.setup = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
             "--count" => {
                 a.count = number(value()?)?;
@@ -235,7 +244,7 @@ fn rays(args: &Args) -> Result<(), String> {
     let folder = track_folder(args, track);
     let repo = repo_root();
     game::prepare_root(&repo, &args.root, &args.car)?;
-    track::prepare_root(&args.root, &folder)?;
+    track::prepare_root(&args.root, &folder, &args.layout)?;
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
     let acs = acs::Acs::load(&args.acs)?;
     if args.verbose {
@@ -244,10 +253,12 @@ fn rays(args: &Args) -> Result<(), String> {
         acs.silence_game_stdout();
     }
     let engine = game::new_engine(&acs, 1);
-    let (report, ok) = track::rays(&acs, engine, &folder, args.count, args.seed)?;
-    let path = track::results_path(&repo);
+    let (report, ok) = track::rays(&acs, engine, &folder, &args.layout, args.count, args.seed)?;
+    let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let path = track::results_path(&repo, &name, &args.layout);
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, format!("# Ray micro-oracle: the game's ODE / OPCODE against rustyac-ode\n\n`car_oracle rays --track {} --count {} --seed {}`\n\n{report}", track.display(), args.count, args.seed))
+    let layout = if args.layout.is_empty() { String::new() } else { format!(" --layout {}", args.layout) };
+    std::fs::write(&path, format!("# Ray micro-oracle: the game's ODE / OPCODE against rustyac-ode\n\n`car_oracle rays --track {}{layout} --count {} --seed {}`\n\n{report}", track.display(), args.count, args.seed))
         .map_err(|e| e.to_string())?;
     println!("{report}");
     println!("written to {}", path.display());
@@ -281,7 +292,7 @@ fn collide_poses(args: &Args) -> Result<(), String> {
     let repo = repo_root();
     let colliders = car_colliders(args)?;
     game::prepare_root(&repo, &args.root, &args.car)?;
-    track::prepare_root(&args.root, &folder)?;
+    track::prepare_root(&args.root, &folder, &args.layout)?;
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
     let acs = acs::Acs::load(&args.acs)?;
     if args.verbose {
@@ -290,7 +301,7 @@ fn collide_poses(args: &Args) -> Result<(), String> {
         acs.silence_game_stdout();
     }
     let engine = game::new_engine(&acs, 1);
-    let game_track = track::GameTrack::build(&acs, engine, &folder, false)?;
+    let game_track = track::GameTrack::build(&acs, engine, &folder, &args.layout, false)?;
     let count = if args.count_given { args.count } else { 200_000 };
     let (report, ok) = collide::collide(&acs, engine, &game_track, &colliders, count, args.mesh_count, args.seed, args.kind, args.boxes_only)?;
     let suffix = if args.kind.is_some() || args.count_given || args.boxes_only { "poses_partial.md" } else { "poses_results.md" };
@@ -359,6 +370,7 @@ fn sus_micro(args: &Args) -> Result<(), String> {
         car: args.car.clone(),
         setup_check: false,
         track: None,
+        layout: String::new(),
         collide: false,
         colliders: None,
         collider_kn5: None,
@@ -410,7 +422,7 @@ fn run(args: &Args) -> Result<(), String> {
     let track_folder = match (&args.track, scenario.track_kind()) {
         (Some(track), Some(_)) => {
             let folder = track_folder(args, track);
-            track::prepare_root(&args.root, &folder)?;
+            track::prepare_root(&args.root, &folder, &args.layout)?;
             Some(folder)
         }
         (None, Some(_)) => return Err(format!("the scenario {} runs on a track: add --track <folder> (for example --track spa)", scenario.name)),
@@ -431,6 +443,7 @@ fn run(args: &Args) -> Result<(), String> {
         car: args.car.clone(),
         setup_check: false,
         track: track_folder,
+        layout: args.layout.clone(),
         collide: args.collide,
         colliders,
         collider_kn5: args.acs.parent().map(|game| rustyac_physics::car::colliders::collider_kn5_path(game, &args.car)),
@@ -628,7 +641,7 @@ fn setup_check(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     acs.unbuffer_game_stdout();
     let scenarios = scenario::all();
-    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None, collide: false, colliders: None, collider_kn5: None, setup: None };
+    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None, layout: String::new(), collide: false, colliders: None, collider_kn5: None, setup: None };
     let world = game::World::build(&acs, &scenarios[0], &options);
     println!("{} values change: {}", world.setup_changes.len(), world.setup_changes.join(", "));
     Ok(())

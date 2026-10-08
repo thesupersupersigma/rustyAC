@@ -90,12 +90,19 @@ fn wstring(acs: &Acs, text: &str) -> *mut u8 {
 /// Puts the track's small files where the game looks for them: `content/tracks/<name>/data`
 /// and `ai` under the oracle's root, and the game's own `system/data/surfaces.ini`. The kn5
 /// models stay where they are.
-pub fn prepare_root(root: &Path, track_folder: &Path) -> Result<String, String> {
+pub fn prepare_root(root: &Path, track_folder: &Path, layout: &str) -> Result<String, String> {
     let io = |e: std::io::Error| e.to_string();
     let name = track_folder.file_name().ok_or("the track folder has no name")?.to_string_lossy().into_owned();
-    let to = root.join("content/tracks").join(&name);
+    // a layout keeps its own data and ai in a folder of its name
+    let (to, base) = if layout.is_empty() {
+        (root.join("content/tracks").join(&name), track_folder.to_path_buf())
+    } else {
+        (root.join("content/tracks").join(&name).join(layout), track_folder.join(layout))
+    };
     for sub in ["data", "ai"] {
-        let from = track_folder.join(sub);
+        // what an earlier run on another layout or track version left behind must not be read
+        let _ = std::fs::remove_dir_all(to.join(sub));
+        let from = base.join(sub);
         std::fs::create_dir_all(to.join(sub)).map_err(io)?;
         let Ok(entries) = std::fs::read_dir(&from) else { continue };
         for entry in entries {
@@ -176,18 +183,18 @@ impl GameTrack {
     /// `ghost`: every mesh gets collision category 0, which nothing but a ray meets, so the
     /// car's body passes through the track (and the walls) as it does in the Rust port so
     /// far; the sub-space of a mesh is still chosen from its real category.
-    pub fn build(acs: &Acs, engine: *mut u8, folder: &Path, ghost: bool) -> Result<GameTrack, String> {
-        let (rust, report) = load_track(folder, "")?;
+    pub fn build(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, ghost: bool) -> Result<GameTrack, String> {
+        let (rust, report) = load_track(folder, layout)?;
         let started = std::time::Instant::now();
         unsafe {
             let track = acs.alloc(TRACK_SIZE);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_CTOR));
-            ctor(track, engine, wstring(acs, &rust.name), wstring(acs, ""));
+            ctor(track, engine, wstring(acs, &rust.name), wstring(acs, layout));
 
             // a TrackAvatar of which only the name, the layout and the surfaces exist
             let avatar = acs.alloc(TRACK_AVATAR_SIZE);
             wstring_at(acs, avatar.add(TA_NAME), &rust.name);
-            wstring_at(acs, avatar.add(TA_CONFIG), "");
+            wstring_at(acs, avatar.add(TA_CONFIG), layout);
             let manager_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SURFACES_MANAGER_CTOR));
             manager_ctor(avatar.add(TA_SURFACES_MANAGER), avatar);
 
@@ -349,8 +356,8 @@ fn make_ray(rng: &mut Rng, track: &Track, kind: usize, bounds: &[f32; 6]) -> (V3
 /// `car_oracle rays`: `count` random rays through the game's ODE / OPCODE and through the
 /// Rust port; every answer compared bit for bit. Returns the report (markdown) and whether
 /// everything was identical.
-pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, count: usize, seed: u64) -> Result<(String, bool), String> {
-    let game = GameTrack::build(acs, engine, folder, false)?;
+pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, layout: &str, count: usize, seed: u64) -> Result<(String, bool), String> {
+    let game = GameTrack::build(acs, engine, folder, layout, false)?;
     let track = &game.rust;
     let mut bounds = [f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY];
     for mesh in &track.world.meshes {
@@ -409,8 +416,10 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, count: usize, seed: u64) 
     let same: u64 = tally.iter().map(|t| t.2).sum();
     let mut out = String::new();
     out.push_str(&format!(
-        "Track `{}`: {} physics meshes, {} triangles, {} sub-spaces; the game built its meshes and trees in {:.2} s, the port in {:.2} s.\n\n",
-        track.name, game.report.objects, game.report.tris, game.report.spaces.len(), game.seconds_game, game.report.seconds_trees
+        "Track `{}`{}: {} physics meshes, {} triangles, {} sub-spaces; the game built its meshes and trees in {:.2} s, the port in {:.2} s.\n\n",
+        track.name,
+        if layout.is_empty() { String::new() } else { format!(" layout `{layout}`") },
+        game.report.objects, game.report.tris, game.report.spaces.len(), game.seconds_game, game.report.seconds_trees
     ));
     out.push_str(&format!(
         "Surfaces: the game's own `SurfaceDef` for each of the {} mesh names against the port's: **{} differ**.\n\n",
@@ -440,6 +449,11 @@ pub fn rays(acs: &Acs, engine: *mut u8, folder: &Path, count: usize, seed: u64) 
 }
 
 /// Where the results of `car_oracle rays` go.
-pub fn results_path(repo: &Path) -> PathBuf {
-    repo.join("oracle/track/rays_results.md")
+pub fn results_path(repo: &Path, track: &str, layout: &str) -> PathBuf {
+    // Spa without a layout keeps the name of Task 12
+    if track == "spa" && layout.is_empty() {
+        return repo.join("oracle/track/rays_results.md");
+    }
+    let layout = if layout.is_empty() { String::new() } else { format!("_{layout}") };
+    repo.join(format!("oracle/track/rays_{track}{layout}.md"))
 }

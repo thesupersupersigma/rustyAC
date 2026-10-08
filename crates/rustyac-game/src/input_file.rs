@@ -174,6 +174,8 @@ pub struct OracleCollide {
 pub struct OracleTrack {
     /// The track's folder.
     pub folder: String,
+    /// The track's layout ("" for none).
+    pub layout: String,
     /// The spawn: a point on the road and the direction of the car's tail.
     pub position: [f32; 3],
     pub tail: [f32; 3],
@@ -264,6 +266,8 @@ pub struct SimSetup {
     /// The track: a folder, or a name under the game's `content/tracks`. Empty: the endless
     /// flat road.
     pub track: String,
+    /// The track's layout (`CONFIG_TRACK`), empty for a track without layouts.
+    pub layout: String,
     /// Where on the track the car starts: `hotlap`, `pit` or `start`.
     pub spawn: String,
     /// The session's wind, track grip, ballast, aids and saved setup.
@@ -287,6 +291,7 @@ impl Default for SimSetup {
             ff_gain: 1.0,
             oracle: None,
             track: String::new(),
+            layout: String::new(),
             spawn: "hotlap".to_string(),
             session: Session::default(),
         }
@@ -414,6 +419,9 @@ impl SimSetup {
         }
         if !self.track.is_empty() {
             put("track", self.track.clone());
+            if !self.layout.is_empty() {
+                put("layout", self.layout.clone());
+            }
             put("spawn", self.spawn.clone());
         }
         if let Some(o) = &self.oracle {
@@ -429,6 +437,9 @@ impl SimSetup {
             }
             if let Some(track) = &o.track {
                 put("oracle_track_folder", track.folder.clone());
+                if !track.layout.is_empty() {
+                    put("oracle_track_layout", track.layout.clone());
+                }
                 put("oracle_spawn_position", hex3(&track.position));
                 put("oracle_spawn_tail", hex3(&track.tail));
                 put("oracle_armed", (track.armed as u32).to_string());
@@ -484,7 +495,7 @@ impl SimSetup {
                 collide: None,
             };
             let blank_collide = || OracleCollide { collider_mesh: false, mesh_bounce_vel: 0, no_collision_steps: 0, floor: false };
-            let blank_track = || OracleTrack { folder: String::new(), position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1 };
+            let blank_track = || OracleTrack { folder: String::new(), layout: String::new(), position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1 };
             match key {
                 "car" => setup.car = value.to_string(),
                 "dt" => {
@@ -515,6 +526,7 @@ impl SimSetup {
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,
                 "track" => setup.track = value.to_string(),
+                "layout" => setup.layout = value.to_string(),
                 "spawn" => setup.spawn = value.to_string(),
                 "wind" => {
                     let [speed, direction] = hex_floats(key, value)?[..] else { return Err(format!("wind: two numbers expected, got {value:?}")) };
@@ -587,6 +599,7 @@ impl SimSetup {
                     oracle.get_or_insert_with(blank).damage = damage;
                 }
                 "oracle_track_folder" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).folder = value.to_string(),
+                "oracle_track_layout" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).layout = value.to_string(),
                 "oracle_spawn_position" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).position = parse_hex3(value)?,
                 "oracle_spawn_tail" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).tail = parse_hex3(value)?,
                 "oracle_armed" => oracle.get_or_insert_with(blank).track.get_or_insert_with(blank_track).armed = flag(),

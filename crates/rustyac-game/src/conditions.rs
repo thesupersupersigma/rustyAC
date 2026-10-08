@@ -26,6 +26,19 @@ pub fn race_ini_path() -> Option<PathBuf> {
     Some(documents_folder()?.join("cfg").join("race.ini"))
 }
 
+/// `[RACE] TRACK` and `CONFIG_TRACK` of the session file a live drive reads (`--race-ini
+/// <file>`, else the game's own unless `--no-race-ini`): the game's last track and layout.
+pub fn race_track(options: &Options) -> Option<(String, String)> {
+    let path = match (&options.race_ini_file, options.race_ini) {
+        (Some(path), _) => path.clone(),
+        (None, Some(false)) => return None,
+        (None, _) => race_ini_path()?,
+    };
+    let ini = IniReader::load(&path).ok().filter(|ini| ini.ready)?;
+    let race = RaceIni::from_ini(&ini);
+    Some((race.track, race.track_config))
+}
+
 /// Finds a saved setup: a file, or a name under `Documents\Assetto Corsa\setups\<car>\`, in
 /// the track's folder first, then in `generic` (the two folders the game's setup screen
 /// lists). `.ini` may be left off.

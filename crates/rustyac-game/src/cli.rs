@@ -64,6 +64,10 @@ pub struct Options {
     /// `--track <folder>`: a track folder, or a name under Assetto Corsa's `content/tracks`.
     /// Without it (or with `--flat`) the car drives on the endless flat road.
     pub track: Option<String>,
+    /// `--layout <name>`: the track's layout (`CONFIG_TRACK`); `-` for the track without one.
+    pub layout: Option<String>,
+    /// `--list-tracks`: print every installed track and layout and stop.
+    pub list_tracks: bool,
     /// `--spawn hotlap|pit|start`: where on the track the car starts.
     pub spawn: String,
     /// `--boxes`: draw the car as boxes even when its 3D model is found.
@@ -141,6 +145,8 @@ impl Default for Options {
             vsync: true,
             list_devices: false,
             track: None,
+            layout: None,
+            list_tracks: false,
             spawn: "hotlap".to_string(),
             boxes: false,
             texture_size: 1024,
@@ -158,8 +164,14 @@ usage: rustyac [options]
   --car <name|folder>   a car of your Assetto Corsa install by its folder name (default
                         ks_ferrari_f2004; read out of its data.acd in memory), or a path to
                         a car folder or to a folder with the plain data files
-  --track <folder>      a track: a folder, or a name under Assetto Corsa's content/tracks
-                        (for example --track spa); default: the endless flat road
+  --track <name>        a track: its folder name under Assetto Corsa's content/tracks
+                        (--track ks_laguna_seca), the name the game's menu shows or a part
+                        of either that fits one track (--track laguna), or a folder;
+                        default: the endless flat road
+  --layout <name>       the track's layout (--track ks_nurburgring --layout layout_gp_a).
+                        Without it: race.ini's CONFIG_TRACK when its TRACK is this track,
+                        else the track's first layout
+  --list-tracks         print every installed track and layout (and why some are refused)
   --flat                the endless flat road (the default)
   --spawn <where>       on a track: hotlap, pit or start (default: where race.ini's session
                         starts, [SESSION_0] SPAWN_SET; without a race.ini hotlap). In a
@@ -272,6 +284,8 @@ impl Options {
                 "--vsync" => o.vsync = value("--vsync")? != "0",
                 "--list-devices" => o.list_devices = true,
                 "--track" => o.track = Some(value("--track")?),
+                "--layout" => o.layout = Some(value("--layout")?),
+                "--list-tracks" => o.list_tracks = true,
                 "--flat" => o.track = None,
                 "--spawn" => {
                     o.spawn = value("--spawn")?;
@@ -322,6 +336,9 @@ impl Options {
         let session_options = o.wind_from_log || o.air_density.is_some() || o.pressure_law.is_some() || o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
         if session_options && o.replay.is_some() {
             return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir, --wind-from-log, --setup, --air-density and --pressure-law cannot be used with it".to_string());
+        }
+        if o.layout.is_some() && o.track.is_none() {
+            return Err("--layout needs --track <name>".to_string());
         }
         if o.autodrive && o.track.is_none() {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());
