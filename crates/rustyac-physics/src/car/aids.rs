@@ -120,7 +120,7 @@ impl TractionControl {
     pub fn new(data_path: &Path) -> Result<TractionControl, String> {
         let mut tc = TractionControl::default();
         let path = data_path.join("electronics.ini");
-        if !path.is_file() {
+        if !crate::data::exists(&path) {
             return Ok(tc);
         }
         let ini = IniReader::load(&path)?;
@@ -269,7 +269,7 @@ impl Abs {
     pub fn new(data_path: &Path) -> Result<Abs, String> {
         let mut abs = Abs::default();
         let path = data_path.join("electronics.ini");
-        if !path.is_file() {
+        if !crate::data::exists(&path) {
             return Ok(abs);
         }
         let ini = IniReader::load(&path)?;
@@ -426,7 +426,7 @@ impl Edl {
             edl.right_tyre_index = 1;
         }
         let path = data_path.join("electronics.ini");
-        if !path.is_file() {
+        if !crate::data::exists(&path) {
             return Ok(edl);
         }
         let ini = IniReader::load(&path)?;

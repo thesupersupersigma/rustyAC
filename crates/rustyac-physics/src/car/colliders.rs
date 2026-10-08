@@ -67,7 +67,7 @@ pub struct CarColliders {
 /// number has no section; of each the `CENTRE` and the `SIZE`.
 pub fn load_boxes(data_folder: &Path) -> Result<Vec<BoxColliderDef>, String> {
     let path = append_path(data_folder, "colliders.ini");
-    if !path.is_file() {
+    if !crate::data::exists(&path) {
         return Ok(Vec::new());
     }
     let ini = IniReader::load(&path)?;

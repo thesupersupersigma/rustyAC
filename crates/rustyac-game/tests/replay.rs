@@ -249,8 +249,9 @@ fn an_unsupported_car_is_refused_with_the_physics_message() {
     let output = Command::new(env!("CARGO_BIN_EXE_rustyac")).args(["--replay", input.to_str().unwrap(), "--headless", "--no-shm"]).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    // the same message, whatever way the folder was written
-    let message = direct.rsplit_once("cardata").unwrap().1;
+    // the same message, wherever the car's files were found (the program reads the game's own
+    // data.acd, this test the extracted folder)
+    let message = direct.rsplit_once(".ini").unwrap().1;
     assert!(stderr.contains(message), "stderr {stderr:?} does not hold {message:?}");
 }
 

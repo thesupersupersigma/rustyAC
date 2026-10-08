@@ -276,7 +276,7 @@ impl VanillaDrivetrain {
     pub fn new(car: &mut RollingChassis, engine: Box<dyn EngineModel>) -> Result<VanillaDrivetrain, String> {
         let data_path = car.data_path.clone();
         for name in ["kers.ini", "ers.ini"] {
-            if data_path.join(name).is_file() {
+            if crate::data::exists(&data_path.join(name)) {
                 return Err(format!("{}: hybrid systems (KERS, ERS) are not ported", data_path.join(name).display()));
             }
         }
@@ -327,7 +327,7 @@ impl VanillaDrivetrain {
         // Drivetrain::initControllers @ 0x140267070
         if drivetrain.base.traction_type == TractionType::Rwd {
             let path = data_path.join("ctrl_single_lock.ini");
-            if path.is_file() {
+            if crate::data::exists(&path) {
                 drivetrain.single_diff_lock = Some(DynamicController::load(&path)?);
             }
         }

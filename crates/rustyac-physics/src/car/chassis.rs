@@ -956,11 +956,11 @@ impl RollingChassis {
         chassis.antiroll_bars[1].k = suspensions_ini.get_float("ARB", "REAR")?;
         for (axle, name) in ["ctrl_arb_front.ini", "ctrl_arb_rear.ini"].into_iter().enumerate() {
             let path = data_path.join(name);
-            if path.is_file() {
+            if crate::data::exists(&path) {
                 chassis.antiroll_bars[axle].ctrl = super::DynamicController::load(&path)?;
             }
         }
-        if data_path.join("ctrl_4ws.ini").is_file() {
+        if crate::data::exists(&data_path.join("ctrl_4ws.ini")) {
             return Err(format!("{}: rear-wheel steering is not ported", data_path.join("ctrl_4ws.ini").display()));
         }
         chassis.sleeping_frames = 0;

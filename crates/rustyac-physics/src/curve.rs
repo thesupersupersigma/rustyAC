@@ -15,7 +15,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-use crate::data::ini::{sibling_acd, text_mode};
+use crate::data::ini::text_mode;
 use crate::math::wcstod;
 
 /// `CubicSpline<float,float>::Element` (0x14 bytes): one cubic piece starting at `x`.
@@ -73,17 +73,10 @@ impl Curve {
     /// `wcstod`, so trailing text such as a comment is ignored; a piece that does not start
     /// with a number makes the game throw, which is the `Err` here.
     pub fn load(&mut self, path: &Path) -> Result<(), String> {
-        if let Some(acd) = sibling_acd(path).filter(|acd| acd.is_file()) {
-            return Err(format!(
-                "{} exists: the game would read {} from that archive, which is not ported",
-                acd.display(),
-                path.display()
-            ));
-        }
         self.references.clear();
         self.values.clear();
         self.c_spline = OnceLock::new();
-        let Ok(bytes) = std::fs::read(path) else {
+        let Some(bytes) = crate::data::read(path)? else {
             return Ok(());
         };
         // a default-locale wide stream: every byte is one character

@@ -14,24 +14,27 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
 
 - Your own Assetto Corsa install. No Assetto Corsa file comes with rustyAC:
   the tracks, the car models and the car data are read from your own game.
-  If the game is not in Steam's usual place
-  (C:\Program Files (x86)\Steam\steamapps\common\assettocorsa), say where it is:
+  rustyAC finds the game by itself in Steam's usual place
+  (C:\Program Files (x86)\Steam\steamapps\common\assettocorsa) and in every
+  other Steam library (it reads Steam's libraryfolders.vdf). If your game is
+  somewhere else, say where it is:
 
       set AC_ROOT=D:\Games\assettocorsa
 
-- The car's data as plain files. Assetto Corsa keeps a car's data packed in
-  content\cars\<car>\data.acd. rustyAC reads the unpacked files (car.ini,
-  tyres.ini, ...) from a folder "cardata\<car>" next to rustyac.exe, or from any
-  folder you name with --car. The default car is ks_ferrari_f2004.
+  Nothing has to be unpacked or copied. A car is named by its folder name under
+  content\cars (--car ks_ferrari_f2004, which is also the default). Its data is
+  read straight out of content\cars\<car>\data.acd, in memory, the way the game
+  does it; a car that has a plain "data" folder instead (the SDK's cars,
+  unpacked mods) is read from that. Nothing is written into the game's folder.
 
-  To unpack your own car with the script from the source repository
-  (tools/acd_extract.py, needs Python 3):
+  --car also takes a folder: a car's folder, or a folder with the plain data
+  files (car.ini, tyres.ini, ...) in it:
 
-      python acd_extract.py --car "%AC_ROOT%\content\cars\ks_ferrari_f2004" --out cardata\ks_ferrari_f2004
+      rustyac.exe --car "D:\my cars\my_car\data"
 
-  A car that already has an unpacked "data" folder works directly:
-
-      rustyac.exe --car "%AC_ROOT%\content\cars\<car>\data"
+  Not every car drives yet: only cars with double-wishbone suspension all
+  round, rear- or front-wheel drive and no hybrid system. Any other car is
+  refused with a message that says which system is missing.
 
 - Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
   it, so you most likely have it. With it rustyAC computes with exactly the
@@ -49,7 +52,7 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --track spa --windowed --autodrive
                                              watch a simple driver follow the AI line
     rustyac.exe --car bmw_m3_e30 --track magione --windowed
-                                             another car (cardata\bmw_m3_e30) and track
+                                             another car (content\cars\bmw_m3_e30) and track
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 

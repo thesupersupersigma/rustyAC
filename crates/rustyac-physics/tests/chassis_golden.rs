@@ -241,10 +241,7 @@ const TRACK_GOLDEN: [(&str, &[u8]); 2] = [
 /// A track's folder in Assetto Corsa's own folder (`AC_ROOT`, else Steam's usual place), if
 /// it is there.
 fn track_folder(name: &str) -> Option<PathBuf> {
-    let root = match std::env::var_os("AC_ROOT") {
-        Some(root) => PathBuf::from(root),
-        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
-    };
+    let root = rustyac_content::install::ac_root().unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"));
     let folder = root.join("content").join("tracks").join(name);
     if folder.is_dir() {
         Some(folder)

@@ -72,11 +72,7 @@ pub fn game_root(track_folder: &Path) -> Option<PathBuf> {
     if let Some(root) = beside {
         return Some(root.to_path_buf());
     }
-    let root = match std::env::var_os("AC_ROOT") {
-        Some(root) => PathBuf::from(root),
-        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
-    };
-    root.join("system").is_dir().then_some(root)
+    rustyac_content::install::ac_root()
 }
 
 /// The `[MODEL_n]` list of a models file as the game's own ini reader gives it

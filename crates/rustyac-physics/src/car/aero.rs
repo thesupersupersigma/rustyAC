@@ -546,7 +546,7 @@ impl Drs {
     pub fn load(data_path: &Path, wing_count: usize) -> Result<Drs, String> {
         let mut drs = Drs::default();
         let path = data_path.join("drs.ini");
-        if !path.is_file() {
+        if !crate::data::exists(&path) {
             return Ok(drs);
         }
         let ini = IniReader::load(&path)?;
@@ -820,11 +820,11 @@ fn load_wing(ini: &IniReader, data_path: &Path, section: &str, vertical: bool) -
     wing.data.lut_aoa_cl.load(&append_path(data_path, &ini.get_string(section, "LUT_AOA_CL")))?;
     wing.data.lut_aoa_cd.load(&append_path(data_path, &ini.get_string(section, "LUT_AOA_CD")))?;
     let gh_cl = append_path(data_path, &ini.get_string(section, "LUT_GH_CL"));
-    if gh_cl.is_file() {
+    if crate::data::exists(&gh_cl) {
         wing.data.lut_gh_cl.load(&gh_cl)?;
     }
     let gh_cd = append_path(data_path, &ini.get_string(section, "LUT_GH_CD"));
-    if gh_cd.is_file() {
+    if crate::data::exists(&gh_cd) {
         wing.data.lut_gh_cd.load(&gh_cd)?;
     }
     wing.data.cd_gain = ini.get_float(section, "CD_GAIN")?;

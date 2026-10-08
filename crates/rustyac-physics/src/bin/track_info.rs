@@ -35,12 +35,7 @@ fn main() {
     // a name instead of a folder: under the game's content/tracks (AC_ROOT, else Steam's usual place)
     let mut folder = PathBuf::from(folder);
     if !folder.is_dir() {
-        let root = match std::env::var_os("AC_ROOT") {
-            Some(root) => PathBuf::from(root),
-            None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
-        };
-        let named = root.join("content").join("tracks").join(&folder);
-        if named.is_dir() {
+        if let Some(named) = rustyac_content::install::ac_root().map(|root| root.join("content").join("tracks").join(&folder)).filter(|named| named.is_dir()) {
             folder = named;
         }
     }

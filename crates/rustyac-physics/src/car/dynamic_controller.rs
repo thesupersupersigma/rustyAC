@@ -175,7 +175,7 @@ impl DynamicController {
     /// this.
     pub fn load(path: &Path) -> Result<DynamicController, String> {
         let mut controller = DynamicController::default();
-        if !path.is_file() {
+        if !crate::data::exists(&path) {
             return Ok(controller);
         }
         let ini = IniReader::load(path)?;

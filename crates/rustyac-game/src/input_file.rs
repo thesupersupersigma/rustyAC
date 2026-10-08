@@ -174,7 +174,7 @@ fn parse_hex3(text: &str) -> Result<[f32; 3], String> {
 /// Everything that decides what car is built and how its session starts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimSetup {
-    /// The car's folder under `cardata/`.
+    /// The car: its folder name in the game's `content/cars` (or under `cardata/`), or a path.
     pub car: String,
     /// `srand` seed of the C runtime when the car is built.
     pub seed: u32,

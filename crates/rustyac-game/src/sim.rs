@@ -341,15 +341,31 @@ impl ControlsProvider for Driver {
     }
 }
 
-/// Finds a car's data folder: a path to it, or its name under a `cardata` folder next to the
-/// working directory or above the program.
+/// Finds a car's data folder, in this order:
+/// 1. `car` as a path: a data folder (`car.ini` in it), or a car folder (with `data.acd` or
+///    a `data` folder in it);
+/// 2. `car` as a name in the game's own folder: `content/cars/<car>/data`, which is read out
+///    of `data.acd` in memory when that is there (as the game does), else from the plain
+///    `data` folder (the SDK's cars, unpacked mods);
+/// 3. `car` as a name under a `cardata` folder next to the working directory or above the
+///    program (extracted files: the test cars of the oracles).
 pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
+    let has_car = |data: &Path| rustyac_physics::data::exists(&data.join("car.ini"));
     let mut tried = Vec::new();
     let direct = PathBuf::from(car);
-    if direct.join("car.ini").is_file() {
-        return Ok(direct);
+    for folder in [direct.clone(), direct.join("data")] {
+        if has_car(&folder) {
+            return Ok(folder);
+        }
     }
     tried.push(direct);
+    if let Some(root) = ac_root() {
+        let folder = root.join("content").join("cars").join(car).join("data");
+        if has_car(&folder) {
+            return Ok(folder);
+        }
+        tried.push(folder);
+    }
     let mut roots = vec![PathBuf::from(".")];
     if let Ok(exe) = std::env::current_exe() {
         roots.extend(exe.ancestors().skip(1).map(Path::to_path_buf));
@@ -357,24 +373,22 @@ pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
     roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     for root in roots {
         let folder = root.join("cardata").join(car);
-        if folder.join("car.ini").is_file() {
+        if has_car(&folder) {
             return Ok(folder);
         }
         tried.push(folder);
     }
+    let hint = if ac_root().is_none() { format!("; {}", rustyac_content::install::not_found_hint()) } else { String::new() };
     Err(format!(
-        "the car {car:?} was not found: no car.ini in {} (extracted car data goes into cardata/<car>)",
+        "the car {car:?} was not found: no car.ini in {}{hint}",
         tried.iter().take(3).map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
     ))
 }
 
-/// Assetto Corsa's own folder: `AC_ROOT` if that is set, else Steam's usual place. Read only.
+/// Assetto Corsa's own folder: `AC_ROOT` if that is set, else Steam's usual place, else any
+/// Steam library (see `rustyac_content::install`). Read only.
 pub fn ac_root() -> Option<PathBuf> {
-    let root = match std::env::var_os("AC_ROOT") {
-        Some(root) => PathBuf::from(root),
-        None => PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"),
-    };
-    root.join("content").is_dir().then_some(root)
+    rustyac_content::install::ac_root()
 }
 
 /// Finds a track's folder: a path to it, or its name under the game's `content/tracks`.
@@ -390,7 +404,7 @@ pub fn find_track(track: &str) -> Result<PathBuf, String> {
         }
     }
     Err(format!(
-        "the track {track:?} was not found: it is neither a folder nor a name under Assetto Corsa's content/tracks (set AC_ROOT if the game is not in Steam's usual place)"
+        "the track {track:?} was not found: it is neither a folder nor a name under Assetto Corsa's content/tracks (set AC_ROOT if the game is not in a Steam library)"
     ))
 }
 
@@ -398,7 +412,7 @@ pub fn find_track(track: &str) -> Result<PathBuf, String> {
 pub fn find_car_model(car: &str, data_path: &Path) -> Option<PathBuf> {
     let name = Path::new(car).file_name()?.to_string_lossy().into_owned();
     let folder = ac_root()?.join("content").join("cars").join(&name);
-    let lods = std::fs::read_to_string(data_path.join("lods.ini")).unwrap_or_default();
+    let lods = rustyac_physics::data::read(&data_path.join("lods.ini")).ok().flatten().map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
     let mut in_first = false;
     for line in lods.lines() {
         let line = line.split(';').next().unwrap_or("").trim();

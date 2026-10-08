@@ -494,7 +494,7 @@ impl VanillaEngine {
             self.data.overlap_ideal_rpm = ini.get_float("OVERLAP", "IDEAL_RPM")?;
         }
         let throttle = data_path.join("throttle.lut");
-        if throttle.is_file() {
+        if crate::data::exists(&throttle) {
             self.throttle_response_curve.load(&throttle)?;
         }
         if self.default_engine_limiter != 0 {
@@ -515,7 +515,7 @@ impl VanillaEngine {
         for turbo in 0..self.turbos.len() {
             for (name, is_wastegate) in [("ctrl_turbo", false), ("ctrl_wastegate", true)] {
                 let path = data_path.join(format!("{name}{turbo}.ini"));
-                if path.is_file() {
+                if crate::data::exists(&path) {
                     let controller = DynamicController::load(&path)?;
                     self.turbo_controllers.push(TurboDynamicController { turbo, controller, is_wastegate });
                 }

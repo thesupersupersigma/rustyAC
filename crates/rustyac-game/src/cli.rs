@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
-    /// `--car`: a folder under `cardata/`, or a path to a car's data folder.
+    /// `--car`: a car of the install by name, or a path to a car folder / data folder.
     pub car: String,
     pub width: u32,
     pub height: u32,
@@ -111,7 +111,9 @@ rustyac: drive the Rust port of Assetto Corsa's car on a track or on an endless 
 
 usage: rustyac [options]
 
-  --car <folder>        car data folder under cardata/, or a path (default ks_ferrari_f2004)
+  --car <name|folder>   a car of your Assetto Corsa install by its folder name (default
+                        ks_ferrari_f2004; read out of its data.acd in memory), or a path to
+                        a car folder or to a folder with the plain data files
   --track <folder>      a track: a folder, or a name under Assetto Corsa's content/tracks
                         (for example --track spa); default: the endless flat road
   --flat                the endless flat road (the default)

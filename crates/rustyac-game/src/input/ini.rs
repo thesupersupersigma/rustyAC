@@ -51,6 +51,12 @@ fn leading_number(text: &str) -> Option<f64> {
 }
 
 impl ControlsIni {
+    /// A file of a car's data folder: out of the car's `data.acd` when there is one.
+    pub fn load_car_data(path: &Path) -> Result<ControlsIni, String> {
+        let bytes = rustyac_physics::data::read(path)?.ok_or_else(|| format!("{}: no such file", path.display()))?;
+        Ok(ControlsIni::parse(&String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes))))
+    }
+
     pub fn load(path: &Path) -> Result<ControlsIni, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         // Content Manager writes UTF-8; a UTF-16 file (byte order mark) is read as such

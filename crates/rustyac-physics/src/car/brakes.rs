@@ -183,7 +183,7 @@ impl VanillaBrakes {
         brakes.base.electronic_override = 0.0;
         brakes.load_ini(data_path)?;
         let ebb = data_path.join("ctrl_ebb.ini");
-        if ebb.is_file() {
+        if crate::data::exists(&ebb) {
             brakes.ebb_controller = DynamicController::load(&ebb)?;
             brakes.ebb_mode = EbbMode::DynamicController;
         }
@@ -205,7 +205,7 @@ impl VanillaBrakes {
             self.ebb_front_multiplier = if multiplier >= 1.1 { multiplier } else { 1.1 };
         }
         let steer_brake = data_path.join("steer_brake_controller.ini");
-        if steer_brake.is_file() {
+        if crate::data::exists(&steer_brake) {
             self.steer_brake.is_active = true;
             self.steer_brake.controller = DynamicController::load(&steer_brake)?;
         }

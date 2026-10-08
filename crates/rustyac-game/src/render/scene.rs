@@ -197,7 +197,7 @@ impl CarShape {
             size: [half_width * 2.0, top - floor, (front_z - rear_z) + tyre_radius[0] * 1.2],
             color: red,
         });
-        if let Ok(ini) = ControlsIni::load(&data_path.join("colliders.ini")) {
+        if let Ok(ini) = ControlsIni::load_car_data(&data_path.join("colliders.ini")) {
             for index in 0..32 {
                 let section = format!("COLLIDER_{index}");
                 if !ini.has_section(&section) {
@@ -210,7 +210,7 @@ impl CarShape {
                 }
             }
         }
-        if let Ok(ini) = ControlsIni::load(&data_path.join("car.ini")) {
+        if let Ok(ini) = ControlsIni::load_car_data(&data_path.join("car.ini")) {
             // `CarAvatar::makeBodyMatrix`: a point of the 3D model is at q . Rx(pitch) + offset
             let offset = three(ini.get_string("BASIC", "GRAPHICS_OFFSET")).unwrap_or([0.0; 3]);
             let pitch = ini.get_float("BASIC", "GRAPHICS_PITCH_ROTATION") * 0.017_453;

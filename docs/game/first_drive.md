@@ -129,7 +129,7 @@ Options:
 
 | Option | Meaning |
 |---|---|
-| `--car <folder>` | car data folder under `cardata/` or a path (default `ks_ferrari_f2004`); a car with a system that is not ported is refused with the physics crate's own message |
+| `--car <name or folder>` | a car of the game by its folder name under `content/cars` (default `ks_ferrari_f2004`), read straight out of its `data.acd` in memory (since Task 15, see `docs/port/conditions.md`; a plain `data` folder is read when there is no archive); or a path to a car folder or to a folder of plain data files; or, last, a name under `cardata/`; a car with a system that is not ported is refused with the physics crate's own message |
 | `--windowed`, `--width`, `--height` | a normal window with that client size (default 1280 x 720) |
 | `--no-shm` | do not publish the shared-memory pages |
 | `--record <file>` / `--replay <file>` | log the inputs of every physics step / drive from such a file |

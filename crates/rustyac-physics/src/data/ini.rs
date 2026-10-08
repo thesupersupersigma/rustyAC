@@ -4,9 +4,10 @@
 //! 1:1 port of AC's `INIReader` for plain (extracted) ini files: the parser with all its
 //! quirks, `hasSection` / `hasKey` / `getString`, the number readers and `getCurve`.
 //!
-//! Not ported: reading straight out of an encrypted `data.acd` (`INIReader::loadEncrypt`),
-//! the static file cache, and the error pop-ups. A file that sits next to a `<folder>.acd`
-//! is refused instead of being read differently from the game.
+//! A file whose folder has an archive next to it (`<folder>.acd`, a car's `data.acd`) is read
+//! out of that archive, as `INIReader::loadEncrypt` does; see [`crate::data::read`].
+//!
+//! Not ported: the static file cache and the error pop-ups.
 //!
 //! Quirks that are AC's, not this port's:
 //! * a line that contains both `[` and `]` **anywhere** is a section header, even inside a
@@ -31,15 +32,6 @@ pub struct IniReader {
     pub ready: bool,
     /// `sections`: section name -> (key -> value), ordered like the game's `std::map`s.
     sections: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-/// `Path::getPath(file) + L".acd"`: the archive the game would read instead of the file.
-pub(crate) fn sibling_acd(file: &Path) -> Option<PathBuf> {
-    let dir = file.parent()?;
-    let name = dir.file_name()?;
-    let mut acd = name.to_os_string();
-    acd.push(".acd");
-    Some(dir.with_file_name(acd))
 }
 
 /// What a text-mode `fopen` gives the stream: CR LF becomes LF and Ctrl-Z ends the file.
@@ -116,22 +108,14 @@ pub fn append_path(folder: &Path, name: &str) -> PathBuf {
 
 impl IniReader {
     /// `INIReader::INIReader(const std::wstring&)` @ 0x1402340a0 + `INIReader::load`
-    /// @ 0x140237140, for a file that is not inside an archive.
+    /// @ 0x140237140: the plain file, or the file of that name in the folder's archive.
     pub fn load(path: &Path) -> Result<IniReader, String> {
-        if let Some(acd) = sibling_acd(path).filter(|acd| acd.is_file()) {
-            return Err(format!(
-                "{} exists: the game would read {} from that archive, which is not ported; \
-                 extract it with tools/acd_extract.py",
-                acd.display(),
-                path.display()
-            ));
-        }
         let mut reader = IniReader {
             filename: path.to_path_buf(),
             ..IniReader::default()
         };
         // a file that cannot be opened leaves `ready == false` and no sections
-        if let Ok(bytes) = std::fs::read(path) {
+        if let Some(bytes) = crate::data::read(path)? {
             reader.ready = true;
             reader.parse(&decode_utf8_like_the_game(&text_mode(&bytes)));
         }
@@ -317,7 +301,7 @@ impl IniReader {
             // looks like an absolute path does not replace the folder
             let path = append_path(self.filename.parent().unwrap_or(Path::new("")), &text);
             let mut curve = Curve::new();
-            if path.is_file() {
+            if crate::data::exists(&path) {
                 curve.load(&path)?;
             }
             return Ok(curve);
