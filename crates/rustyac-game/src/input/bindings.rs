@@ -35,6 +35,50 @@ const AC_SECTIONS: [&str; 14] = [
 /// AC's command keys (with Ctrl) that rustyAC knows.
 const COMMAND_SECTIONS: [&str; 3] = ["ABS", "TRACTION_CONTROL", "AUTO_SHIFTER"];
 
+/// `[RUSTYAC] COMMAND_MODIFIER`: the key held for AC's Ctrl+letter commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandModifier {
+    /// A Ctrl key that is not a driving key, or Alt (always).
+    Auto,
+    Alt,
+    LeftCtrl,
+    RightCtrl,
+}
+
+impl CommandModifier {
+    /// Anything but `ALT`, `LCTRL` and `RCTRL` (any case) is `AUTO`.
+    pub fn from_name(name: &str) -> CommandModifier {
+        match name.trim().to_ascii_uppercase().as_str() {
+            "ALT" => CommandModifier::Alt,
+            "LCTRL" => CommandModifier::LeftCtrl,
+            "RCTRL" => CommandModifier::RightCtrl,
+            _ => CommandModifier::Auto,
+        }
+    }
+
+    /// Is the modifier held? `ctrl_drives`: the left / right Ctrl key is bound as a driving key.
+    pub fn held(self, left_ctrl: bool, right_ctrl: bool, alt: bool, ctrl_drives: [bool; 2]) -> bool {
+        match self {
+            CommandModifier::Auto => alt || (left_ctrl && !ctrl_drives[0]) || (right_ctrl && !ctrl_drives[1]),
+            CommandModifier::Alt => alt,
+            CommandModifier::LeftCtrl => left_ctrl,
+            CommandModifier::RightCtrl => right_ctrl,
+        }
+    }
+
+    /// How the modifier is typed, for the console.
+    pub fn label(self, ctrl_drives: [bool; 2]) -> &'static str {
+        match (self, ctrl_drives) {
+            (CommandModifier::Auto, [false, false]) => "Alt or Ctrl",
+            (CommandModifier::Auto, [true, false]) => "Alt or Right Ctrl",
+            (CommandModifier::Auto, [false, true]) => "Alt or Left Ctrl",
+            (CommandModifier::Auto, [true, true]) | (CommandModifier::Alt, _) => "Alt",
+            (CommandModifier::LeftCtrl, _) => "Left Ctrl",
+            (CommandModifier::RightCtrl, _) => "Right Ctrl",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bindings {
     /// The bindings in use, as `rustyac_controls.ini` holds them.
@@ -57,6 +101,8 @@ pub struct Bindings {
     pub key_abs: i32,
     pub key_traction_control: i32,
     pub key_auto_shifter: i32,
+    /// `[RUSTYAC] COMMAND_MODIFIER`.
+    pub command_modifier: CommandModifier,
 }
 
 /// The built-in layout: the Xbox pad as asked for in Task 11 (left stick, RT gas, LT brake,
@@ -138,6 +184,7 @@ fn add_own_sections(ini: &mut ControlsIni) {
         }
     };
     default("RUSTYAC", "USE_LEGACY_GAMEPAD_CODE", "0");
+    default("RUSTYAC", "COMMAND_MODIFIER", "AUTO");
     default("RUSTYAC_RESET", "XBOXBUTTON", "BACK");
     default("RUSTYAC_PAUSE", "XBOXBUTTON", "START");
     // a second key for each action: WASD beside the arrows, E / Q for the gears
@@ -219,6 +266,7 @@ impl Bindings {
             key_abs: ini.get_hex("ABS", "KEY"),
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
+            command_modifier: CommandModifier::from_name(ini.get_string("RUSTYAC", "COMMAND_MODIFIER")),
             ini,
         }
     }
@@ -270,7 +318,9 @@ impl Bindings {
              ; with RUSTYAC are rustyAC's own. First written from: {}\n\
              ; XBOXBUTTON: A B X Y LSHOULDER RSHOULDER DPAD_LEFT DPAD_RIGHT DPAD_UP DPAD_DOWN LTHUMB_PRESS\n\
              ;             RTHUMB_PRESS START BACK, or -1 for none. KEY: a Windows virtual-key code (0x20 = Space), -1 = none.\n\
-             ; [RUSTYAC_KEYS_2] gives every action a second key. Delete this file to start again from AC's bindings.\n\n{}",
+             ; [RUSTYAC_KEYS_2] gives every action a second key. Delete this file to start again from AC's bindings.\n\
+             ; [RUSTYAC] COMMAND_MODIFIER: the key held for the commands (T: traction control, A: ABS, G: automatic\n\
+             ;             gearbox). AUTO = Alt, or a Ctrl key that is not a driving key; or ALT, LCTRL, RCTRL.\n\n{}",
             self.origin,
             self.ini.to_text()
         )
@@ -317,14 +367,9 @@ impl Bindings {
         row("KERS / ERS (no-op)", pad("KERS"), key_pair("KERS"));
         row("headlights", pad("ACTION_HEADLIGHTS"), key_pair("ACTION_HEADLIGHTS"));
         row("brake bias + / -", &format!("{} / {}", pad("BALANCEUP"), pad("BALANCEDN")), format!("{} / {}", key_pair("BALANCEUP"), key_pair("BALANCEDN")));
-        // a Ctrl key that is bound as a driving key does not make a command
+        // a Ctrl key that is bound as a driving key does not make a command (unless the file names it)
         let drives = |key: i32| [&keys, &keys2].iter().any(|k| k.named().iter().any(|(_, code)| *code == key));
-        let ctrl = match (drives(0xa2) || drives(0x11), drives(0xa3) || drives(0x11)) {
-            (false, false) => "Ctrl",
-            (true, false) => "Right Ctrl",
-            (false, true) => "Left Ctrl",
-            (true, true) => "(no Ctrl key is free)",
-        };
+        let ctrl = self.command_modifier.label([drives(0xa2) || drives(0x11), drives(0xa3) || drives(0x11)]);
         row(
             "traction control + / -",
             &format!("{} / {}", pad("TCUP"), pad("TCDN")),
@@ -426,5 +471,26 @@ mod tests {
         let pad_only = Bindings::from_ini(&ControlsIni::parse("[HEADER]\nINPUT_METHOD=X360\n[X360]\nSTEER_THUMB=LEFT\n"), "test".to_string());
         assert_eq!(KeyboardCarControl::from_ini(&pad_only.ini).keys.left, 0x25);
         assert!(!usable(&ControlsIni::parse("[VIDEO]\nX=1\n")));
+    }
+
+    #[test]
+    fn alt_always_makes_a_command_and_a_driving_ctrl_key_never_does() {
+        let b = Bindings::from_ini(&default_ini(), "test".to_string());
+        assert_eq!(b.command_modifier, CommandModifier::Auto, "the default, written into the file");
+        assert_eq!(b.ini.get_string("RUSTYAC", "COMMAND_MODIFIER"), "AUTO");
+        let auto = CommandModifier::Auto;
+        // (left Ctrl, right Ctrl, Alt), the user's file: Left Ctrl is gear down
+        let user = [true, false];
+        assert!(auto.held(false, false, true, user), "Alt");
+        assert!(auto.held(false, true, false, user), "Right Ctrl");
+        assert!(!auto.held(true, false, false, user), "Left Ctrl drives");
+        assert!(auto.held(true, false, false, [false, false]), "Left Ctrl when it does not drive");
+        assert!(!auto.held(false, false, false, user));
+        assert_eq!(auto.label(user), "Alt or Right Ctrl");
+        let named = |name: &str| CommandModifier::from_name(name);
+        assert_eq!((named("alt"), named(" LCTRL "), named("RCTRL"), named("nonsense"), named("")), (CommandModifier::Alt, CommandModifier::LeftCtrl, CommandModifier::RightCtrl, auto, auto));
+        assert!(named("ALT").held(false, false, true, user) && !named("ALT").held(false, true, false, user));
+        assert!(named("LCTRL").held(true, false, false, user) && !named("LCTRL").held(false, false, true, user));
+        assert!(named("RCTRL").held(false, true, false, user) && !named("RCTRL").held(true, false, true, user));
     }
 }

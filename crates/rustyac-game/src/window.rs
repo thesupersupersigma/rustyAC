@@ -19,8 +19,8 @@ pub enum Event {
     /// The user closed it.
     Close,
     /// A key went down (not a repeat): its virtual-key code, and whether the left Ctrl, the
-    /// right Ctrl and a Shift key are held.
-    Key { key: u32, left_ctrl: bool, right_ctrl: bool, shift: bool },
+    /// right Ctrl, an Alt key and a Shift key are held.
+    Key { key: u32, left_ctrl: bool, right_ctrl: bool, alt: bool, shift: bool },
     /// The window got or lost the keyboard.
     Focus(bool),
     /// The client area's new size, pixels.
@@ -50,8 +50,8 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             // bit 30: the key was down already (auto-repeat)
             if lparam.0 & (1 << 30) == 0 {
                 // SAFETY: plain queries of the keyboard state of this thread's message.
-                let (left_ctrl, right_ctrl, shift) = unsafe { (GetKeyState(0xa2) < 0, GetKeyState(0xa3) < 0, GetKeyState(0x10) < 0) };
-                push(Event::Key { key: wparam.0 as u32, left_ctrl, right_ctrl, shift });
+                let (left_ctrl, right_ctrl, alt, shift) = unsafe { (GetKeyState(0xa2) < 0, GetKeyState(0xa3) < 0, GetKeyState(0x12) < 0, GetKeyState(0x10) < 0) };
+                push(Event::Key { key: wparam.0 as u32, left_ctrl, right_ctrl, alt, shift });
             }
             // Alt+F4 and the like still reach the default handler
             if message == WM_SYSKEYDOWN {
@@ -60,6 +60,9 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
             }
             LRESULT(0)
         }
+        // Alt+letter is a command of rustyAC's (Alt+T, Alt+A, Alt+G): the default handler would
+        // look for a menu entry with that letter, find none and beep
+        WM_SYSCHAR => LRESULT(0),
         // a tap on Alt or F10 would open the window's menu, whose loop stops the frames
         WM_SYSCOMMAND if (wparam.0 & 0xfff0) == SC_KEYMENU as usize => LRESULT(0),
         WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => {

@@ -76,9 +76,12 @@ bindings, the second is added by rustyAC):
     F                          DRS
     F9, or B                   handbrake
     L                          headlights
-    Right Ctrl + G             automatic gearbox on / off
-    Right Ctrl + T             traction control level up (with Shift: down)
-    Right Ctrl + A             ABS level up (with Shift: down)
+    Alt + G                    automatic gearbox on / off
+    Alt + T                    traction control level up (with Shift: down)
+    Alt + A                    ABS level up (with Shift: down)
+                               (a Ctrl key that is not a driving key works too;
+                               [RUSTYAC] COMMAND_MODIFIER in rustyac_controls.ini
+                               chooses: AUTO, ALT, LCTRL or RCTRL)
     C                          next camera: chase, chase far, cockpit
     R                          reset the car to the spawn point
     Shift + R                  back onto the track where the car is

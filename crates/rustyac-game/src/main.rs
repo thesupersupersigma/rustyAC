@@ -354,7 +354,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     // SAFETY: a plain request to the power manager, taken back at the end of this function.
     unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED) };
     // a Ctrl key that is itself a driving key (AC's files put gear-down on Left Ctrl) does not
-    // make a Ctrl+letter command: the other Ctrl key does
+    // make a Ctrl+letter command: the other Ctrl key does, and Alt (`[RUSTYAC] COMMAND_MODIFIER`)
     let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
     let ctrl_drives = [keyboard.drives_with(0xa2) || keyboard.drives_with(0x11), keyboard.drives_with(0xa3) || keyboard.drives_with(0x11)];
     if replay.is_none() {
@@ -438,8 +438,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                         break 'frames;
                     }
                 }
-                Event::Key { key, left_ctrl, right_ctrl, shift } => {
-                    let ctrl = (left_ctrl && !ctrl_drives[0]) || (right_ctrl && !ctrl_drives[1]);
+                Event::Key { key, left_ctrl, right_ctrl, alt, shift } => {
+                    let ctrl = bindings.command_modifier.held(left_ctrl, right_ctrl, alt, ctrl_drives);
                     let request = |bits: u32| {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };

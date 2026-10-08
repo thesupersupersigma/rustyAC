@@ -90,17 +90,36 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | F9, or B | handbrake |
 | K | KERS / ERS (nothing yet) |
 | L | headlights |
-| Right Ctrl+T (with Shift: down) | traction control level up |
-| Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
-| Right Ctrl+G | automatic gearbox on / off |
+| Alt+T or Right Ctrl+T (with Shift: down) | traction control level up |
+| Alt+A or Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
+| Alt+G or Right Ctrl+G | automatic gearbox on / off |
 | C | next camera: chase, chase far, cockpit |
 | R | reset the car to the spawn point (N: a brand-new car, cold tyres and all; since Task 12 Shift+R is "back onto the track where the car is", see `docs/port/track.md`) |
 | P or Pause | pause |
 | Esc | quit |
 
-The three commands are AC's own (Ctrl+T, Ctrl+A, Ctrl+G). With your bindings the **right** Ctrl key must be
-used for them: Left Ctrl is your gear-down key, and a Ctrl key that drives does not make a command (otherwise a
-downshift while steering left with A would switch the ABS).
+The three commands are AC's own (Ctrl+T, Ctrl+A, Ctrl+G). Of the Ctrl keys only the **right** one makes them
+with your bindings: Left Ctrl is your gear-down key, and a Ctrl key that drives does not make a command
+(otherwise a downshift while steering left with A would switch the ABS). Since Task 15 **Alt** makes them
+too, always, so that a keyboard without a Right Ctrl key (a MacBook's: Option is Alt under Boot Camp) can
+type them: Alt+T, Alt+A, Alt+G, with Shift for "down". Alt does not open the window's menu and does not beep.
+
+Which key it is can be chosen in `rustyac_controls.ini` (next to `rustyac.exe`):
+
+```
+[RUSTYAC]
+COMMAND_MODIFIER=AUTO
+```
+
+| Value | The commands are typed with |
+|---|---|
+| `AUTO` (the default, also when the line is missing) | Alt, or any Ctrl key that is not a driving key |
+| `ALT` | Alt only |
+| `LCTRL` | Left Ctrl only, also when it is a driving key |
+| `RCTRL` | Right Ctrl only |
+
+A `rustyac_controls.ini` written before Task 15 has no such line and behaves as `AUTO`. The bindings printed
+at the start name the modifier in use.
 
 Whichever device you touch last drives: with the pad lying untouched the keyboard takes over at the first key,
 and the pad takes back at the first button or stick movement. With no pad at all the keyboard simply drives. A
@@ -343,7 +362,7 @@ in the machine code's operation order, and held to the bit patterns of
 | Keyboard look-ahead on the AI line (`stepSteer`) | raises the steering limit towards a point on the AI line (through a frozen index: it follows the line's first points only; on a track without a line it uses the world origin) | 0: the limit is the speed rule alone. There is no track. **The one piece of the keyboard feel that is not AC's** |
 | Mouse steering | yes | not ported |
 | Clutch on the pad and the keyboard | none (always pedal up; the automatic clutch, which both classes force on, overwrites the pedal anyway) | the button of `[__EXT_KEYBOARD_CLUTCH]` (Custom Shaders Patch's name; A in your file) or the clutch key presses it fully; while it is held the automatic clutch aid is switched off step by step (recorded as a command, so it replays) and comes back when it is let go |
-| Ctrl+T / Ctrl+A / Ctrl+G | either Ctrl key | not a Ctrl key that is bound as a driving key |
+| Ctrl+T / Ctrl+A / Ctrl+G | either Ctrl key | not a Ctrl key that is bound as a driving key; Alt as well (`[RUSTYAC] COMMAND_MODIFIER`) |
 | Switching device | - | the class that takes over starts afresh: the keyboard's steering from the car's current steering, its throttle ramp from zero, a paddle's debouncing window closed. Shift, Ctrl and Alt alone never take the car away from the pad |
 | Pad index | XInput pad 0 only | the first connected of the four |
 | Rumble strength above 1 | wraps the 16-bit motor word | kept within 0..1 |
