@@ -1,0 +1,114 @@
+rustyAC @VERSION@ - how to run
+=====================================
+
+rustyAC is a Rust rewrite of Assetto Corsa. It is very experimental: one car on a
+track or on an endless flat road, in a debug view.
+
+Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
+
+
+1. What you need
+----------------
+
+- Windows 10 or 11, 64-bit, with a graphics card that does Direct3D 11.
+
+- Your own Assetto Corsa install. No Assetto Corsa file comes with rustyAC:
+  the tracks, the car models and the car data are read from your own game.
+  If the game is not in Steam's usual place
+  (C:\Program Files (x86)\Steam\steamapps\common\assettocorsa), say where it is:
+
+      set AC_ROOT=D:\Games\assettocorsa
+
+- The car's data as plain files. Assetto Corsa keeps a car's data packed in
+  content\cars\<car>\data.acd. rustyAC reads the unpacked files (car.ini,
+  tyres.ini, ...) from a folder "cardata\<car>" next to rustyac.exe, or from any
+  folder you name with --car. The default car is ks_ferrari_f2004.
+
+  To unpack your own car with the script from the source repository
+  (tools/acd_extract.py, needs Python 3):
+
+      python acd_extract.py --car "%AC_ROOT%\content\cars\ks_ferrari_f2004" --out cardata\ks_ferrari_f2004
+
+  A car that already has an unpacked "data" folder works directly:
+
+      rustyac.exe --car "%AC_ROOT%\content\cars\<car>\data"
+
+- Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
+  it, so you most likely have it. With it rustyAC computes with exactly the
+  game's maths; without it Rust's own maths is used.
+
+
+2. Commands
+-----------
+
+Open a console (cmd or PowerShell) in this folder.
+
+    rustyac.exe --track spa --windowed       drive at Spa, in a window
+    rustyac.exe --track spa                  the same, borderless full screen
+    rustyac.exe --windowed                   the endless flat road
+    rustyac.exe --track spa --windowed --autodrive
+                                             watch a simple driver follow the AI line
+    rustyac.exe --car bmw_m3_e30 --track magione --windowed
+                                             another car (cardata\bmw_m3_e30) and track
+    rustyac.exe --list-devices               the pads and wheels found, and the bindings
+    rustyac.exe --help                       every option
+
+The first run writes rustyac_controls.ini next to rustyac.exe with the bindings
+it found (your Assetto Corsa bindings if there are any). That file is yours to
+edit; delete it to import the game's bindings again.
+
+The window must have the keyboard focus to drive. Clicking another window
+pauses the drive.
+
+
+3. Keys
+-------
+
+Keyboard (yours may differ: the first key is taken from your Assetto Corsa
+bindings, the second is added by rustyAC):
+
+    Left / Right, or A / D     steer
+    Up, or W                   throttle
+    Down, or S                 brake
+    Space, or E                gear up
+    Left Ctrl, or Q            gear down
+    Left Shift                 clutch
+    F                          DRS
+    F9, or B                   handbrake
+    L                          headlights
+    Right Ctrl + G             automatic gearbox on / off
+    Right Ctrl + T             traction control level up (with Shift: down)
+    Right Ctrl + A             ABS level up (with Shift: down)
+    C                          next camera: chase, chase far, cockpit
+    R                          reset the car to the spawn point
+    Shift + R                  back onto the track where the car is
+    N                          a brand-new car
+    P or Pause                 pause
+    Esc                        quit
+
+Xbox pad:
+
+    Left stick                 steer
+    RT / LT                    throttle / brake
+    Y / X                      gear up / gear down
+    A                          clutch
+    LB                         DRS
+    D-pad right / left         brake bias forward / back
+    Right stick press          next camera
+    Back (View)                reset the car to the spawn point
+    Start (Menu)               pause
+
+A wheel is read through your Assetto Corsa bindings; add --ffb for force
+feedback (low strength).
+
+
+4. Licenses
+-----------
+
+rustyac.exe is free software under the GNU General Public License, version 3 or
+later (LICENSE-GPL); parts of it are under MIT / Apache-2.0 and BSD-3-Clause.
+LICENSING.md says which part is under which license. The source of this exact
+build is the tag @TAG@ of the repository above.
+
+Assetto Corsa is a trademark of its owners. rustyAC is not affiliated with them
+and is not endorsed by them.

@@ -13,7 +13,7 @@ Copyright (c) 2026 thesupersupersigma.
 | The game and the car physics | `crates/rustyac-game/`<br>`crates/rustyac-physics/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
 | Tools built on the car physics | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
-| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py` | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/` | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 
 **What the licenses mean in short:**

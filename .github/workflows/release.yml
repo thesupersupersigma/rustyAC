@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# A pushed tag vX.Y.Z becomes a release: built and tested from scratch on GitHub's own Windows
+# machine, zipped, and published in the repo's Releases section. See docs/release.md.
+# No Assetto Corsa file is here, is fetched or goes into the zip.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # the same version as in ci.yml
+  RUST_TOOLCHAIN: "1.97.0"
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check the tag against Cargo.toml
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/{s/^version *= *"\([^"]*\)".*/\1/p}' Cargo.toml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::no [workspace.package] version found in Cargo.toml"
+            exit 1
+          fi
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::the tag is $TAG but Cargo.toml says version $version: the tag must be v$version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # an existing release is never deleted or overwritten
+      - name: Check that the release does not exist yet
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::the release $TAG already exists; it is not overwritten. Delete it by hand on GitHub if it really must be made again, or release a new version."
+            exit 1
+          fi
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      # MSVCR120.dll: the maths of the game itself, which the tests compare against
+      - name: Install the Visual C++ 2013 runtime
+        run: |
+          choco install vcredist2013 -y --no-progress
+          if [ ! -f "$SYSTEMROOT/System32/msvcr120.dll" ]; then
+            echo "::error::MSVCR120.dll is not in System32 after installing vcredist2013: the tests would run on Rust's own maths"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --workspace --locked
+
+      - name: Test
+        run: cargo test --release --workspace --locked
+
+      - name: Package
+        shell: pwsh
+        run: ./packaging/package.ps1 -Version $env:VERSION -OutDir dist
+
+      - name: Publish the release
+        run: |
+          flags=()
+          # not stable yet: every 0.x release is a pre-release
+          if [ "${VERSION%%.*}" = "0" ]; then
+            flags+=(--prerelease)
+          fi
+          zip="dist/rustyAC-$TAG-windows-x64.zip"
+          gh release create "$TAG" "$zip" "$zip.sha256" \
+            --verify-tag \
+            --title "rustyAC $TAG" \
+            --generate-notes \
+            "${flags[@]}"
