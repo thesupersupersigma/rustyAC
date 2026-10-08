@@ -18,7 +18,7 @@ use rustyac_game::input_file::{event, InputFile, InputWriter, SimSetup, StepInpu
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
-use rustyac_game::render::scene::{CameraMode, CarShape, DrivingCamera};
+use rustyac_game::render::scene::{CarShape, DrivingCamera};
 use rustyac_game::render::{write_png, DebugRenderer};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
@@ -275,7 +275,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             renderer.adapter,
             if renderer.software { " (software rasteriser)" } else { "" }
         );
-        let mut camera = DrivingCamera::new(CameraMode::Chase);
+        let mut camera = DrivingCamera::chase();
         let mut shape = None;
         let mut last = Instant::now();
         while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
@@ -293,7 +293,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let now = Instant::now();
             let view = shared.frames().at(now);
             let frame = camera.update(&view, shape, view.acc_g, (now - last).as_secs_f32());
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.mode.name(), replay: replaying, ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, ..HudInfo::default() };
             renderer.draw(&view, shape, &frame, &info);
             renderer.finish();
             frames += 1;
@@ -425,7 +425,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         if renderer.software { " (software rasteriser)" } else { "" }
     );
     load_models(&mut renderer, options, &car_info);
-    let mut camera = DrivingCamera::new(if options.camera == "cockpit" { CameraMode::Cockpit } else { CameraMode::Chase });
+    let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
     let mut camera_toggles = 0;
     let started = Instant::now();
     let mut last = Instant::now();
@@ -459,7 +459,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                         match key {
                             // C: camera, P or Pause: pause, R: back to the spawn point,
                             // Shift+R: back onto the track where the car is, N: a new car
-                            0x43 => camera.mode = camera.mode.next(),
+                            // F1 (and C, as before): AC's driving views in turn; F6: the
+                            // cameras of the car's cameras.ini
+                            0x70 | 0x43 => camera.f1(),
+                            0x75 => camera.f6(shape.car_cameras.len()),
                             0x50 | 0x13 => {
                                 shared.paused.fetch_xor(true, Ordering::Relaxed);
                             }
@@ -474,7 +477,8 @@ fn run_window(options: &Options) -> Result<(), String> {
         let toggles = shared.camera_toggles.load(Ordering::Relaxed);
         if toggles != camera_toggles {
             camera_toggles = toggles;
-            camera.mode = camera.mode.next();
+            // the pad's camera button is F1 in the game too
+            camera.f1();
         }
         if thread.is_finished() || STOP.load(Ordering::Relaxed) || options.duration.is_some_and(|d| started.elapsed().as_secs_f64() >= d) {
             break;
@@ -490,7 +494,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             fps,
             timing: shared.timing(),
             paused: shared.paused.load(Ordering::Relaxed) || unfocused,
-            camera: camera.mode.name(),
+            camera: camera.name(),
             replay: replay.is_some(),
             notes: Vec::new(),
         };
@@ -588,12 +592,11 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let shape = CarShape::of(&sim.car_info());
     let mut renderer = DebugRenderer::new(options.width, options.height)?;
     load_models(&mut renderer, options, &sim.car_info());
-    let mode = if options.camera == "cockpit" { CameraMode::Cockpit } else { CameraMode::Chase };
-    let mut camera = DrivingCamera::new(mode);
+    let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
-    let info = HudInfo { fps: 0.0, camera: mode.name(), replay: steps.is_some(), ..HudInfo::default() };
+    let info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
     renderer.draw(&view, &shape, &frame, &info);
     let pixels = renderer.read_pixels()?;
     let (width, height) = renderer.size();

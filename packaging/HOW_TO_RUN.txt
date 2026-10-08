@@ -56,6 +56,15 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 
+The weather is your Assetto Corsa's: air and road temperature, track grip,
+wind and the driving aids are read from the session you last set up in the
+game (Documents\Assetto Corsa\cfg\race.ini and assists.ini). To change them:
+
+    rustyac.exe --track spa --windowed --air 26 --road 30 --grip 100 --wind 0
+    rustyac.exe --track spa --windowed --no-race-ini      26 C / 30 C, full grip, no wind
+    rustyac.exe --track spa --windowed --setup mysetup    a setup saved in the game
+    rustyac.exe --track spa --windowed --camera car0      start on the car's first camera
+
 The first run writes rustyac_controls.ini next to rustyac.exe with the bindings
 it found (your Assetto Corsa bindings if there are any). That file is yours to
 edit; delete it to import the game's bindings again.
@@ -85,7 +94,9 @@ bindings, the second is added by rustyAC):
                                (a Ctrl key that is not a driving key works too;
                                [RUSTYAC] COMMAND_MODIFIER in rustyac_controls.ini
                                chooses: AUTO, ALT, LCTRL or RCTRL)
-    C                          next camera: chase, chase far, cockpit
+    F1, or C                   next view: chase, chase 2, bonnet, bumper, dash, cockpit
+    F6                         the car's own cameras (the F2004's first one is above
+                               the driver's helmet, looking down the nose); F1 goes back
     R                          reset the car to the spawn point
     Shift + R                  back onto the track where the car is
     N                          a brand-new car
@@ -100,7 +111,7 @@ Xbox pad:
     A                          clutch
     LB                         DRS
     D-pad right / left         brake bias forward / back
-    Right stick press          next camera
+    Right stick press          next view (as F1)
     Back (View)                reset the car to the spawn point
     Start (Menu)               pause
 

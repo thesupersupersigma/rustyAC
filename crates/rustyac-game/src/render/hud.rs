@@ -22,7 +22,7 @@ pub struct HudInfo {
     pub fps: f32,
     pub timing: Timing,
     pub paused: bool,
-    pub camera: &'static str,
+    pub camera: String,
     /// A recorded drive is playing.
     pub replay: bool,
     /// Extra lines (top left, under the numbers).
@@ -152,7 +152,7 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         format!("physics {:.1} Hz  step {:.3} ms", t.rate_hz(), t.step_avg_us() / 1000.0),
         format!("late max {:.2} ms  over 1 ms: {}", t.late_max_us / 1000.0, t.late_over_1ms),
         format!("driver: {}", device_name(view.device)),
-        format!("camera: {}  (C)", info.camera),
+        format!("camera: {}  (F1, F6)", info.camera),
         format!("air {:.0} C  road {:.0} C  grip {:.1} %", view.air, view.road, view.grip * 100.0),
         if view.wind_kmh > 0.0 {
             format!("wind {:.1} km/h from {:.0} deg  air {:.3}", view.wind_kmh, view.wind_deg, view.air_density)
@@ -329,7 +329,7 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.rect((width - w) * 0.5, height * 0.36, w, gh * 2.5 * s + 20.0 * s, PANEL);
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
-    let keys = if lap.on_track { "C camera   R to the start   Shift+R back on track   N new car   P pause   Esc quit" } else { "C camera   R reset   N new car   P pause   Esc quit" };
+    let keys = if lap.on_track { "F1 view   F6 car cameras   R to the start   Shift+R back on track   N new car   P pause   Esc quit" } else { "F1 view   F6 car cameras   R reset   N new car   P pause   Esc quit" };
     hud.text(14.0 * s, height - 28.0 * s, 0.7 * s, DIM, keys);
     hud.vertices
 }

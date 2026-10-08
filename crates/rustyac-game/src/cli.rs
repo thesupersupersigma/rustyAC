@@ -172,11 +172,13 @@ usage: rustyac [options]
   --replay <file>       drive from a recorded input file
   --ffb                 force feedback to a DirectInput wheel, if one is found (low strength)
   --no-rumble           no rumble on the Xbox pad
-  --auto-shifter        start with the automatic gearbox aid on (Ctrl+G toggles it)
+  --auto-shifter        start with the automatic gearbox aid on (Alt+G or Ctrl+G toggles it)
   --no-auto-clutch      switch the automatic clutch aid off
   --controls <ini>      bindings file to use (default: AC's own controls.ini, read-only)
   --default-controls    ignore AC's controls.ini and use the built-in Xbox / keyboard layout
-  --camera <name>       chase (default) or cockpit
+  --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
+                        cockpit, or car0, car1 ... (the cameras of the car's cameras.ini);
+                        F1 goes through the first six while driving, F6 through the car's
   --vsync <0|1>         wait for the display (default 1)
   --list-devices        print the detected devices and the active bindings, then stop
 
@@ -253,8 +255,9 @@ impl Options {
         if o.width < 320 || o.height < 200 || o.width > 7680 || o.height > 4320 {
             return Err(format!("--width / --height: {} x {} is out of range", o.width, o.height));
         }
-        if o.camera != "chase" && o.camera != "cockpit" {
-            return Err(format!("--camera: {:?} is neither chase nor cockpit", o.camera));
+        let car_camera = o.camera.strip_prefix("car").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !["cockpit", "chase", "chase2", "bonnet", "bumper", "dash"].contains(&o.camera.as_str()) && !car_camera {
+            return Err(crate::render::scene::camera_name_error(&o.camera));
         }
         if o.grip.is_some_and(|grip| !(grip > 0.0 && grip <= 150.0)) {
             return Err("--grip: a percentage is expected, for example 97 (or 0.97)".to_string());

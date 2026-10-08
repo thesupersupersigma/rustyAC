@@ -69,7 +69,7 @@ running**. The window must have the keyboard focus to drive; clicking another wi
 | B | KERS / ERS (nothing happens until ERS is ported) and handbrake (the F2004 has none) |
 | D-pad right / left | brake bias forward / back one click |
 | Left stick press | headlights |
-| Right stick press | next camera |
+| Right stick press | next view, as F1 (AC's pad camera button is its F1 too) |
 | Back (View) | reset the car to the spawn point |
 | Start (Menu) | pause |
 
@@ -93,7 +93,8 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | Alt+T or Right Ctrl+T (with Shift: down) | traction control level up |
 | Alt+A or Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
 | Alt+G or Right Ctrl+G | automatic gearbox on / off |
-| C | next camera: chase, chase far, cockpit |
+| F1, or C | next view, AC's F1 cycle: chase, chase 2, bonnet, bumper, dash, cockpit (since Task 15; before: chase, chase far, cockpit) |
+| F6 | the car's own cameras (`data/cameras.ini`, up to six, each with its own field of view): the first press shows the one last used, each further press the next; F1 goes back to the driving view |
 | R | reset the car to the spawn point (N: a brand-new car, cold tyres and all; since Task 12 Shift+R is "back onto the track where the car is", see `docs/port/track.md`) |
 | P or Pause | pause |
 | Esc | quit |
@@ -134,7 +135,11 @@ Options:
 | `--no-shm` | do not publish the shared-memory pages |
 | `--record <file>` / `--replay <file>` | log the inputs of every physics step / drive from such a file |
 | `--auto-shifter`, `--no-auto-clutch` | the automatic gearbox aid on at start; the automatic clutch aid off (it is on, as AC forces it for pad and keyboard) |
-| `--camera chase\|cockpit`, `--vsync 0\|1` | camera at start; wait for the display (default 1) |
+| `--camera <name>`, `--vsync 0\|1` | the view at the start: `chase` (default), `chase2`, `bonnet`, `bumper`, `dash`, `cockpit`, or `car0`, `car1` ... (a camera of the car's `cameras.ini`; the F2004's `car0` is the one above the driver's helmet looking down the nose); wait for the display (default 1) |
+| `--race-ini [file]`, `--no-race-ini` | the session's conditions from AC's own last session file `Documents\Assetto Corsa\cfg\race.ini` with `assists.ini` beside it (air and road temperature, track grip, wind, ballast, restrictor, aids, damage and wear rates): **the default when the file exists** (since Task 15); `--no-race-ini`: the built-in 26 C air, 30 C road, grip 100 %, no wind. See `docs/port/conditions.md` |
+| `--air <C>`, `--road <C>`, `--grip <percent>`, `--wind <km/h>`, `--wind-dir <deg>` | over race.ini: temperatures; a fixed track grip; the wind exactly as given, not drawn like the game's (`--wind 0`: none) |
+| `--setup <name or file>` | a saved setup, loaded as AC's setup screen loads it: a file, or a name in `Documents\Assetto Corsa\setups\<car>\<track>` (then `...\generic`) |
+| `--air-density <kg/m3>` | NOT Assetto Corsa: a fixed air density instead of the game's `1.2922 - 0.0041 x air temperature`, to try what Custom Shaders Patch's thinner air at altitude does (see `docs/port/conditions.md`) |
 | `--no-rumble`, `--ffb` | no pad rumble; force feedback to a DirectInput wheel (see 5.4) |
 | `--controls <ini>`, `--default-controls` | another bindings file; the built-in layout (neither is written to `rustyac_controls.ini`) |
 | `--list-devices` | print the devices found and the active bindings, then stop |
@@ -154,7 +159,7 @@ What it shows:
 - Four wheels as cylinders of the tyres' real radius and width at the hubs' real positions and angles (so
   steering, camber, suspension travel and body roll are what the physics says), spinning with the physics'
   wheel rotation (a yellow bar across each rim shows it). A tyre past its peak slip turns red.
-- Cameras (C, or the pad's right stick press): AC's chase camera 0 (3.0 m behind and 1.4 m above the rear axle,
+- Cameras (as of Task 11; Task 15 added AC's whole F1 cycle and the car's F6 cameras, see `docs/port/conditions.md`) (C, or the pad's right stick press): AC's chase camera 0 (3.0 m behind and 1.4 m above the rear axle,
   rigid in yaw, leaning with the g forces exactly as `CameraDrivableManager::updateChase` does), AC's chase camera 1
   (3.9 m / 1.9 m), and the cockpit view from the car's `DRIVEREYES` point with its `ON_BOARD_PITCH_ANGLE` and the
   field of view of your AC `camera_onboard.ini`.
