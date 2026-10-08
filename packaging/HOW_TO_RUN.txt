@@ -37,6 +37,11 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
   Patch only (suspension TYPE=COSMIC, or data files encrypted for it) is
   refused with a message that says so.
 
+- Sound is Assetto Corsa's own: rustyAC loads the game's two FMOD DLLs
+  (fmod64.dll, fmodstudio64.dll) and its sound banks from your install when it
+  starts and plays them the way the game does. None of them comes with rustyAC.
+  If the game is not found, rustyAC says so and runs silently.
+
 - Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
   it, so you most likely have it. With it rustyAC computes with exactly the
   game's maths; without it Rust's own maths is used.
@@ -71,6 +76,15 @@ game (Documents\Assetto Corsa\cfg\race.ini and assists.ini). To change them:
     rustyac.exe --track spa --windowed --no-race-ini      26 C / 30 C, full grip, no wind
     rustyac.exe --track spa --windowed --setup mysetup    a setup saved in the game
     rustyac.exe --track spa --windowed --camera car0      start on the car's first camera
+
+The sound's volumes and the output device are your Assetto Corsa's too
+(Documents\Assetto Corsa\cfgudio.ini). To change them here:
+
+    rustyac.exe --track spa --windowed --volume 0.4       master volume, 0 to 1
+    rustyac.exe --track spa --windowed --no-audio         no sound
+    rustyac.exe --track spa --autodrive --headless --duration 40 --audio-wav lap.wav
+                                             no window, no speakers: the sound of
+                                             a drive into a WAV file
 
 The first run writes rustyac_controls.ini next to rustyac.exe with the bindings
 it found (your Assetto Corsa bindings if there are any). That file is yours to
@@ -135,4 +149,5 @@ LICENSING.md says which part is under which license. The source of this exact
 build is the tag @TAG@ of the repository above.
 
 Assetto Corsa is a trademark of its owners. rustyAC is not affiliated with them
-and is not endorsed by them.
+and is not endorsed by them. FMOD is a trademark of Firelight Technologies Pty
+Ltd; rustyAC ships no FMOD file and only calls the copy in your game's folder.
