@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
-//! `VanillaTyre`: 1:1 port of AC's `Tyre` for tyres.ini `VERSION >= 10` (acs.exe build
-//! 0x5a55e7a8): everything `Tyre::step` does, in the original order.
+//! `VanillaTyre`: 1:1 port of AC's `Tyre` (acs.exe build 0x5a55e7a8): everything
+//! `Tyre::step` does, in the original order, for every tyres.ini `VERSION`. From 10 on the
+//! forces come from `Tyre::addTyreForcesV10` and the force model in the `TyreModel` slot
+//! (the SCTM); below 10 from `Tyre::addTyreForces` and the brush curve
+//! ([`BrushSlipProvider`]).
 //!
 //! Transcribed from the disassembly. Every float operation is one f32 (or, where the
 //! original widens, f64) operation in the same order; comparisons are written the way the
 //! original branches, so NaN takes the same path. No FMA, no reassociation.
 //!
-//! Not ported (see `docs/port/tyre_step.md`): the `VERSION < 10` force path
-//! (`Tyre::addTyreForces` and the brush model), the `onStepCompleted` callback and the
+//! Not ported (see `docs/port/tyre_step.md`): the `onStepCompleted` callback and the
 //! `shakeGenerator` member, neither of which `Tyre::step` uses for its own results.
 
 #![allow(
@@ -258,13 +260,6 @@ impl VanillaTyre {
     /// `Tyre::initCompounds` @ 0x140280800, see [`crate::data::tyres_ini`].
     fn init_compounds(&mut self, data_path: &Path, index: i32) -> Result<(), String> {
         let tyres = init_compounds(data_path, index)?;
-        if tyres.version < 10 {
-            return Err(format!(
-                "{}: VERSION={} uses AC's old tyre path, which is not ported (VERSION >= 10 only)",
-                data_path.join("tyres.ini").display(),
-                tyres.version
-            ));
-        }
         if tyres.compound_defs.is_empty() {
             return Err(format!(
                 "{}: no compound for wheel {index}",
@@ -477,7 +472,11 @@ impl VanillaTyre {
 
                 let pos = self.contact_point;
                 self.add_ground_contact(&pos, &normal, hub);
-                self.add_tyre_forces_v10(&pos, &normal, &surface, dt, hub, car.as_deref());
+                if self.model_data.version < 10 {
+                    self.add_tyre_forces(&pos, &normal, &surface, dt, hub, car.as_deref());
+                } else {
+                    self.add_tyre_forces_v10(&pos, &normal, &surface, dt, hub, car.as_deref());
+                }
 
                 if surface.damping > 0.0 {
                     // loose surfaces drag on the whole car body
@@ -504,9 +503,15 @@ impl VanillaTyre {
         if !(brake_torque > hand_brake_torque) {
             brake_torque = hand_brake_torque;
         }
-        let feedback_torque = self.status.rolling_resistence
-            - (sign(self.status.angular_velocity) * brake_torque + self.local_mx)
-            + self.inputs.electric_torque;
+        let feedback_torque = if self.model_data.version < 10 {
+            // the old path: the grip force's own moment about the axle (`localMX` is not used)
+            (self.status.loaded_radius * self.status.fx - sign(self.status.angular_velocity) * brake_torque)
+                + self.status.rolling_resistence
+                + self.inputs.electric_torque
+        } else {
+            self.status.rolling_resistence - (sign(self.status.angular_velocity) * brake_torque + self.local_mx)
+                + self.inputs.electric_torque
+        };
         self.status.feedback_torque = feedback_torque;
         // a NaN here is only reported ("NaN feedbackTorque"), not corrected
 
@@ -770,6 +775,24 @@ impl VanillaTyre {
         let aligning = Vec3f::new(out.mz * normal.x, out.mz * normal.y, out.mz * normal.z);
         hub.add_torque(&aligning);
 
+        self.step_rolling_resistance();
+
+        if let Some(car) = car {
+            let load_mult = if self.use_load_for_vkm {
+                self.status.load / self.model_data.fz0
+            } else {
+                1.0
+            };
+            let distance = slide_speed * dt * car.tyre_consumption_rate() * load_mult;
+            self.status.virtual_km = distance as f64 * 0.001 + self.status.virtual_km;
+        }
+        self.status.d = self.tyre_model.get_static_dy(self.status.load);
+        self.status.nd_slip = out.nd_slip;
+    }
+
+    /// The rolling resistance block both `Tyre::addTyreForces` (0x14027eb5b..0x14027ecb0) and
+    /// `Tyre::addTyreForcesV10` end with.
+    fn step_rolling_resistance(&mut self) {
         let angular_velocity = self.status.angular_velocity;
         let angular_speed = angular_velocity.abs();
         if angular_speed > 1.0 {
@@ -816,18 +839,305 @@ impl VanillaTyre {
             self.status.rolling_resistence =
                 -(self.status.load * 0.001 * resistance * effective_radius);
         }
+    }
 
-        if let Some(car) = car {
-            let load_mult = if self.use_load_for_vkm {
-                self.status.load / self.model_data.fz0
+    /// `Tyre::getDY` @ 0x1402803d0: the peak lateral grip coefficient at this load (old tyre
+    /// path), lowered by blistering.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn get_dy(&self, load: f32) -> f32 {
+        if !(load > 0.0) {
+            return 0.0;
+        }
+        let m = &self.model_data;
+        let d = if m.dy_load_curve.get_count() > 0 {
+            m.dy_load_curve.get_cubic_spline_value(load)
+        } else if ordered_nonzero(m.ls_exp_y) {
+            (powf(load, m.ls_exp_y) * m.ls_mult_y) / load
+        } else {
+            (load * 0.0005) * m.dy1 + m.dy0
+        };
+        ((d as f64) / (self.blister_share() * 0.200_000_002_980_232_24_f64 + 1.0)) as f32
+    }
+
+    /// `Tyre::getDX` @ 0x140280240: the same lengthwise. (No test for a load of 0 or less at
+    /// the top, unlike `getDY`.)
+    fn get_dx(&self, load: f32) -> f32 {
+        let m = &self.model_data;
+        let d = if m.dx_load_curve.get_count() > 0 {
+            m.dx_load_curve.get_cubic_spline_value(load)
+        } else if ordered_nonzero(m.ls_exp_x) {
+            if ordered_nonzero(load) {
+                (powf(load, m.ls_exp_x) * m.ls_mult_x) / load
             } else {
-                1.0
-            };
-            let distance = slide_speed * dt * car.tyre_consumption_rate() * load_mult;
+                0.0
+            }
+        } else {
+            (load * 0.0005) * m.dx1 + m.dx0
+        };
+        ((d as f64) / (self.blister_share() * 0.200_000_002_980_232_24_f64 + 1.0)) as f32
+    }
+
+    /// `status.blister` as a share of 100, held to 0..1 (a NaN becomes 0).
+    fn blister_share(&self) -> f64 {
+        let x = self.status.blister * 0.01;
+        if x > 1.0 {
+            1.0
+        } else if x >= 0.0 {
+            x
+        } else {
+            0.0
+        }
+    }
+
+    /// `Tyre::getCamberedDy` @ 0x140280080: the lateral grip coefficient at this camber.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn get_cambered_dy(&self, camber_rad: f32, dy: f32) -> f32 {
+        let m = &self.model_data;
+        if m.d_camber_curve.get_count() != 0 {
+            let x = camber_rad * 57.295_78;
+            return dy * if m.use_smooth_d_camber_curve { m.d_camber_curve.get_cubic_spline_value(x) } else { m.d_camber_curve.get_value(x) };
+        }
+        let mut t = camber_rad * m.dcamber0 - (camber_rad * camber_rad) * m.dcamber1;
+        if !(t > -1.0) {
+            t = -0.9;
+        }
+        dy / (t + 1.0)
+    }
+
+    /// `Tyre::stepRelaxationLength` @ 0x140284a40 (old tyre path): the sliding velocities
+    /// follow the true ones with a lag. PDB names: `svx`, `svy`, `hubVelocity` (the caller
+    /// hands in the wheel's surface speed), `dt`.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_relaxation_length(&mut self, svx: f32, svy: f32, hub_velocity: f32, dt: f32) {
+        let rl = self.model_data.relaxation_length;
+        // (`modelData.Fz0` is never read from a file: always the constructor's 2000 N)
+        let loaded = (((self.status.load / self.model_data.fz0) * rl - rl) * 0.3 + rl) * 2.0;
+        let nd = self.status.nd_slip;
+        let nd = if nd > 1.0 {
+            1.0
+        } else if nd >= 0.0 {
+            nd
+        } else {
+            0.0
+        };
+        let dy = svy - self.r_sliding_velocity_y;
+        let dx = svx - self.r_sliding_velocity_x;
+        let relaxation = (rl - loaded) * nd + loaded;
+        if !ordered_nonzero(relaxation) {
+            self.r_sliding_velocity_x = 0.0;
+            self.r_sliding_velocity_y = 0.0;
+            return;
+        }
+        let mut rate = (hub_velocity * dt) / relaxation;
+        let direct = if rate > 1.0 {
+            true
+        } else if !(rate >= 0.04) {
+            rate = 0.04;
+            false
+        } else {
+            rate >= 1.0
+        };
+        if direct {
+            self.r_sliding_velocity_x = svx;
+            self.r_sliding_velocity_y = svy;
+        } else {
+            self.r_sliding_velocity_y = rate * dy + self.r_sliding_velocity_y;
+            self.r_sliding_velocity_x = rate * dx + self.r_sliding_velocity_x;
+        }
+    }
+
+    /// `Tyre::addTyreForces` @ 0x14027e1a0: the force path of tyres.ini `VERSION` below 10.
+    /// PDB names: `pos`, `normal`, `surfaceDef`, `dt`.
+    ///
+    /// The contact patch's sliding velocity (lagged by the relaxation length, with the camber
+    /// thrust added sideways) gives one combined slip; the brush curve
+    /// ([`BrushSlipProvider::get_slip_force`]) turns it into a share of the peak force
+    /// `load * D`, which acts against the sliding direction. The aligning moment is not a
+    /// torque here: the force is applied a pneumatic trail ahead of the contact point.
+    ///
+    /// Not ported: the call of `tyreModel->solve` the game makes in the middle (its input is
+    /// partly uninitialised and its result is thrown away).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn add_tyre_forces(
+        &mut self,
+        pos: &Vec3f,
+        normal: &Vec3f,
+        surface_def: &SurfaceDef,
+        dt: f32,
+        hub: &mut dyn Suspension,
+        car: Option<&dyn TyreCar>,
+    ) {
+        let m = self.world_rotation.m;
+        // the wheel's rolling direction (-z) and axle (x), projected on the ground plane
+        let (hx, hy, hz) = (-m[2][0], -m[2][1], -m[2][2]);
+        let (rx, ry, rz) = (m[0][0], m[0][1], m[0][2]);
+        let dot = hx * normal.x + hy * normal.y + hz * normal.z;
+        self.road_heading = Vec3f::new(hx - dot * normal.x, hy - dot * normal.y, hz - dot * normal.z);
+        let dot = rx * normal.x + ry * normal.y + rz * normal.z;
+        self.road_right = Vec3f::new(rx - dot * normal.x, ry - dot * normal.y, rz - dot * normal.z);
+        self.road_right.normalize();
+        self.road_heading.normalize();
+
+        // (no `getHubAngularVelocity` here: the wheel's spin is its own alone)
+        let v = hub.get_point_velocity(pos);
+        self.sliding_velocity_y = v.y * self.road_right.y + v.x * self.road_right.x + v.z * self.road_right.z;
+        // (not negated, unlike the newer path)
+        self.road_velocity_x = v.y * self.road_heading.y + v.x * self.road_heading.x + v.z * self.road_heading.z;
+        let slip_angle = ks_calc_slip_angle_rad(self.sliding_velocity_y, self.road_velocity_x);
+        self.status.slip_ratio = 0.0;
+        self.status.slip_angle_rad = slip_angle;
+        self.status.camber_rad = ks_calc_camber_rad(&self.contact_normal, &self.world_rotation);
+        let sin_camber = sinf(self.status.camber_rad);
+        self.road_velocity_y = self.sliding_velocity_y;
+        let camber_thrust = sin_camber * self.model_data.camber_gain;
+        self.sliding_velocity_x = self.status.angular_velocity * self.status.effective_radius + self.road_velocity_x;
+        // (an infinite or NaN sliding velocity is only reported: "SLIDING VELOCITY NAN!")
+
+        // nothing slides at all: everything keeps its value of the step before
+        if !ordered_nonzero(self.sliding_velocity_x) && !ordered_nonzero(self.sliding_velocity_y) {
+            return;
+        }
+        self.total_hub_velocity =
+            sqrtf(self.road_velocity_y * self.road_velocity_y + self.road_velocity_x * self.road_velocity_x);
+        let wheel_speed = self.status.angular_velocity.abs() * self.status.effective_radius;
+        self.step_relaxation_length(self.sliding_velocity_x, self.sliding_velocity_y, wheel_speed, dt);
+
+        let slide_x = self.r_sliding_velocity_x;
+        let slide_y = self.road_velocity_x * camber_thrust + self.r_sliding_velocity_y;
+        self.total_slide_velocity = if !ordered_nonzero(slide_x) && !ordered_nonzero(slide_y) {
+            0.0
+        } else {
+            sqrtf(slide_x * slide_x + slide_y * slide_y)
+        };
+        self.status.slip_ratio = if ordered_nonzero(self.road_velocity_x) {
+            -(self.sliding_velocity_x / self.road_velocity_x)
+        } else {
+            0.0
+        };
+        let total_slide = self.total_slide_velocity;
+        if !ordered_nonzero(total_slide) {
+            self.status.fy = 0.0;
+            self.status.fx = 0.0;
+            self.status.mz = 0.0;
+            return;
+        }
+        let slip = if self.total_hub_velocity > 1.0 { total_slide / self.total_hub_velocity } else { total_slide };
+
+        // the peak grip: load, camber, the direction of the slide, temperature, wear, speed
+        let load = self.status.load;
+        let dy = self.get_dy(load) * self.ai_mult;
+        let dx = self.get_dx(load);
+        let camber = self.status.camber_rad;
+        let camber_arg = if (camber > 0.0 && slide_y > 0.0) || (!(camber >= 0.0) && !(slide_y >= 0.0)) {
+            camber.abs()
+        } else {
+            -camber.abs()
+        };
+        let cambered_dy = self.get_cambered_dy(camber_arg, dy);
+        let inverse = 1.0 / total_slide;
+        let d_y = if cambered_dy >= 0.0 { cambered_dy } else { 0.0 };
+        let d_x = if dx >= 0.0 { dx } else { 0.0 };
+        let normalized_slide_y = (inverse * slide_y).abs();
+        let normalized_slide_x = (inverse * slide_x).abs();
+        self.status.dy = d_y;
+        self.status.normalized_slide_y = normalized_slide_y;
+        self.status.dx = d_x;
+        self.status.normalized_slide_x = normalized_slide_x;
+        let (along, across) = (normalized_slide_x * d_x, normalized_slide_y * d_y);
+        let d0 = sqrtf(along * along + across * across);
+        let mut d = self.get_corrected_d(d0, true) / (self.model_data.speed_sensitivity * total_slide + 1.0);
+        // riding on the rim
+        if self.data.rim_radius > self.status.loaded_radius {
+            d = 0.3;
+        }
+        self.status.d = d;
+
+        // the brush curve: graining makes the tyre softer
+        let grain = self.status.grain * 0.01;
+        let grain = if grain > 1.0 {
+            1.0
+        } else if grain >= 0.0 {
+            grain
+        } else {
+            0.0
+        };
+        let mut grip_mod = surface_def.grip_mod;
+        let (force_share, nd_slip);
+        if !ordered_nonzero(surface_def.granularity) {
+            let out = self.slip_provider.get_slip_force(slip / (grain + 1.0) as f32, load, 1.0 >= self.ai_mult);
+            force_share = out.force;
+            nd_slip = out.slip;
+        } else {
+            // a granular surface (no surface the game loads is one): its own curve and grip.
+            // The game writes the 1.0 into the track's surface itself, where it stays; here
+            // it holds for this tyre's copy of the surface, for the rest of this step.
+            force_share = 1.0 - crate::math::expf(slip * -14.0);
+            d = 0.65;
+            grip_mod = 1.0;
+            if let Some(surface) = &mut self.surface_def {
+                surface.grip_mod = 1.0;
+            }
+            nd_slip = slip;
+        }
+        self.status.nd_slip = nd_slip;
+        self.status.slip_factor = load * nd_slip;
+        let force = (load * force_share) * d;
+        let inverse = 1.0 / total_slide;
+        self.status.fx = -((force * slide_x) * inverse);
+        self.status.fy = -((force * slide_y) * inverse);
+
+        let dynamic_grip_level = match car {
+            Some(car) => car.dynamic_grip_level(),
+            None => 1.0,
+        };
+        self.status.fx = (dynamic_grip_level * grip_mod) * self.status.fx;
+        self.status.fy = (dynamic_grip_level * grip_mod) * self.status.fy;
+        self.step_dirty_level(dt, (self.status.angular_velocity * self.status.effective_radius).abs(), surface_def);
+        self.step_puncture(dt, self.total_hub_velocity, car);
+
+        // the pneumatic trail: longest with no slip, gone at the limit and when standing
+        let cp_length = ks_calc_contact_patch_length(self.status.live_radius, self.status.depth);
+        let t = 1.0 - nd_slip * 0.8;
+        let t = if t > 1.0 {
+            1.0
+        } else if t >= 0.0 {
+            t
+        } else {
+            0.0
+        };
+        let speed = self.total_hub_velocity;
+        let speed = if speed > 1.0 {
+            1.0
+        } else if speed >= 0.0 {
+            speed
+        } else {
+            0.0
+        };
+        let trail = ((((3.0 - t * 2.0) * (t * t)) * 1.1 - 0.1) * cp_length) * 0.12 * speed;
+        self.status.mz = 0.0;
+        let (fx, fy) = (self.status.fx, self.status.fy);
+        let force = Vec3f::new(
+            fy * self.road_right.x + fx * self.road_heading.x,
+            fy * self.road_right.y + fx * self.road_heading.y,
+            fy * self.road_right.z + fx * self.road_heading.z,
+        );
+        // (a NaN force is only reported: "TYRE GENERATED NAN FORCE")
+        let at = Vec3f::new(
+            trail * self.road_heading.x + pos.x,
+            trail * self.road_heading.y + pos.y,
+            trail * self.road_heading.z + pos.z,
+        );
+        // always this one call, whatever the car's torque mode; no aligning torque
+        hub.add_force_at_pos(&force, &at, self.driven, true);
+        self.status.mz = -(trail * self.status.fy);
+
+        self.step_rolling_resistance();
+
+        // wear distance (`[VIRTUALKM] USE_LOAD` has no effect on this path)
+        if let Some(car) = car {
+            let distance = (dt * total_slide) * car.tyre_consumption_rate();
             self.status.virtual_km = distance as f64 * 0.001 + self.status.virtual_km;
         }
-        self.status.d = self.tyre_model.get_static_dy(self.status.load);
-        self.status.nd_slip = out.nd_slip;
     }
 
     /// `Tyre::addTyreForceToHub` @ 0x14027dc00: for the non-original torque modes, the grip

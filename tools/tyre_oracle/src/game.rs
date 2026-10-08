@@ -381,6 +381,40 @@ impl<'a> Game<'a> {
 }
 
 /// One of the game's `Tyre` objects.
+/// One call of the brush micro-oracle. `SlipForce` and `Maximum` answer (force share, slip
+/// over the slip at the peak) and (maximum, slip at the maximum).
+#[derive(Clone, Copy, Debug)]
+pub enum BrushCall {
+    SlipForce { slip: f32, load: f32, use_asy: bool },
+    Maximum { load: f32 },
+    Solve { slip: f32, friction: f32, load: f32, cf1_mix: f32, asy: f32 },
+    SolveV5 { slip: f32, load: f32, asy: f32 },
+}
+
+impl BrushCall {
+    /// The port's answer.
+    pub fn port(&self, provider: &rustyac_physics::tyre::BrushSlipProvider) -> [f32; 2] {
+        match *self {
+            BrushCall::SlipForce { slip, load, use_asy } => {
+                let out = provider.get_slip_force(slip, load, use_asy);
+                [out.force, out.slip]
+            }
+            BrushCall::Maximum { load } => {
+                let (maximum, max_slip) = provider.calc_maximum(load);
+                [maximum, max_slip]
+            }
+            BrushCall::Solve { slip, friction, load, cf1_mix, asy } => {
+                let out = provider.brush_model.solve(slip, friction, load, cf1_mix, asy);
+                [out.force, out.slip]
+            }
+            BrushCall::SolveV5 { slip, load, asy } => {
+                let out = provider.brush_model.solve_v5(slip, load, asy);
+                [out.force, out.slip]
+            }
+        }
+    }
+}
+
 pub struct GameTyre<'a> {
     game: &'a Game<'a>,
     pub ptr: *mut u8,
@@ -423,6 +457,42 @@ impl GameTyre<'_> {
             unsafe { std::mem::transmute(self.game.acs.addr(RVA_SCTM_SOLVE)) };
         let mut out = SctmOutput::default();
         f(unsafe { self.ptr.add(T_SCTM) }, &mut out, input);
+        out
+    }
+
+    /// The game's brush curve on the tyre's own `slipProvider` (tyre +0x540), four functions
+    /// by address: `BrushSlipProvider::getSlipForce` (slip, load, useAsy),
+    /// `BrushSlipProvider::calcMaximum` (load), `BrushTyreModel::solve` (slip, friction, load,
+    /// CF1 share, asy) and `BrushTyreModel::solveV5` (slip, load, asy).
+    pub fn brush(&self, call: &BrushCall) -> [f32; 2] {
+        let provider = unsafe { self.ptr.add(0x540) };
+        let model = unsafe { provider.add(8) };
+        let at = |rva: usize| self.game.acs.addr(rva);
+        let mut out = [0.0f32; 2];
+        unsafe {
+            match *call {
+                BrushCall::SlipForce { slip, load, use_asy } => {
+                    // TyreSlipInput: slip, friction, load, normalizedSlipX, normalizedSlipY, D
+                    let input = [slip, 1.0, load, 0.0, 0.0, 1.0];
+                    let f: extern "C" fn(*mut u8, *mut [f32; 2], *const [f32; 6], u8) -> *mut [f32; 2] = std::mem::transmute(at(0x2b3190));
+                    f(provider, &mut out, &input, use_asy as u8);
+                }
+                BrushCall::Maximum { load } => {
+                    let f: extern "C" fn(*mut u8, f32, *mut f32, *mut f32) = std::mem::transmute(at(0x2b3090));
+                    let (mut maximum, mut max_slip) = (0.0f32, 0.0f32);
+                    f(provider, load, &mut maximum, &mut max_slip);
+                    out = [maximum, max_slip];
+                }
+                BrushCall::Solve { slip, friction, load, cf1_mix, asy } => {
+                    let f: extern "C" fn(*mut u8, *mut [f32; 2], f32, f32, f32, f32, f32) -> *mut [f32; 2] = std::mem::transmute(at(0x2cb3c0));
+                    f(model, &mut out, slip, friction, load, cf1_mix, asy);
+                }
+                BrushCall::SolveV5 { slip, load, asy } => {
+                    let f: extern "C" fn(*mut u8, *mut [f32; 2], f32, f32, f32) -> *mut [f32; 2] = std::mem::transmute(at(0x2cb4e0));
+                    f(model, &mut out, slip, load, asy);
+                }
+            }
+        }
         out
     }
 

@@ -2149,9 +2149,10 @@ impl<'a> World<'a> {
         row.i("car.meshCollideMask", rd(mesh_geom, 0x7c));
         // ISuspension::getDamage: the bend of each corner as a fraction of its most
         for (w, wheel) in WHEELS.iter().enumerate() {
-            let suspension = state().suspensions[w];
-            let (amount, most): (f32, f32) = (rd(suspension, 0x1f0), rd(suspension, 0x200));
-            row.f(&format!("sus.{wheel}.damage"), if most != 0.0 { amount / most } else { 0.0 });
+            // (through the class's own function: slot +0x88; an axle answers 0)
+            let st = state();
+            let get_damage: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(*st.suspension_vtables[w].add(17));
+            row.f(&format!("sus.{wheel}.damage"), get_damage(st.suspensions[w]));
         }
     }
 

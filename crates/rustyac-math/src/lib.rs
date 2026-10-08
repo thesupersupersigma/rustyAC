@@ -46,6 +46,7 @@ struct Crt {
     sinf: F1,
     cosf: F1,
     tanf: F1,
+    expf: F1,
     asinf: F1,
     acosf: F1,
     atanf: F1,
@@ -64,6 +65,9 @@ unsafe extern "C" fn std_cosf(x: f32) -> f32 {
 }
 unsafe extern "C" fn std_tanf(x: f32) -> f32 {
     x.tan()
+}
+unsafe extern "C" fn std_expf(x: f32) -> f32 {
+    x.exp()
 }
 unsafe extern "C" fn std_asinf(x: f32) -> f32 {
     x.asin()
@@ -89,6 +93,7 @@ const STD: Crt = Crt {
     sinf: std_sinf,
     cosf: std_cosf,
     tanf: std_tanf,
+    expf: std_expf,
     asinf: std_asinf,
     acosf: std_acosf,
     atanf: std_atanf,
@@ -126,6 +131,7 @@ mod msvcr120 {
                 sinf: std::mem::transmute::<*mut c_void, super::F1>(get(c"sinf")?),
                 cosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"cosf")?),
                 tanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"tanf")?),
+                expf: std::mem::transmute::<*mut c_void, super::F1>(get(c"expf")?),
                 asinf: std::mem::transmute::<*mut c_void, super::F1>(get(c"asinf")?),
                 acosf: std::mem::transmute::<*mut c_void, super::F1>(get(c"acosf")?),
                 atanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"atanf")?),
@@ -180,6 +186,13 @@ pub fn cosf(x: f32) -> f32 {
 pub fn tanf(x: f32) -> f32 {
     // SAFETY: as `sinf`.
     unsafe { (crt().tanf)(x) }
+}
+
+/// `expf` (MSVCR120).
+#[inline]
+pub fn expf(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().expf)(x) }
 }
 
 /// `asinf` (MSVCR120).

@@ -155,6 +155,45 @@ impl Rng {
     }
 }
 
+/// A random call of the brush curve: mostly the slip and load a tyre sees, some of the values
+/// the code branches on (no slip, slip past the peak, no or negative load, NaN), and now and
+/// then the search for the maximum (it tries a thousand slips, so one row in fifty).
+fn random_brush_call(rng: &mut Rng, row: usize) -> game::BrushCall {
+    let pick = rng.unit();
+    let slip = if pick < 0.6 {
+        rng.range(0.0, 0.5)
+    } else if pick < 0.8 {
+        rng.range(0.0, 5.0)
+    } else if pick < 0.87 {
+        0.0
+    } else if pick < 0.94 {
+        rng.range(-1.0, 0.0)
+    } else if pick < 0.97 {
+        rng.range(5.0, 500.0)
+    } else {
+        f32::NAN
+    };
+    let pick = rng.unit();
+    let load = if pick < 0.85 {
+        rng.range(50.0, 12_000.0)
+    } else if pick < 0.9 {
+        0.0
+    } else if pick < 0.95 {
+        rng.range(-2_000.0, 0.0)
+    } else {
+        rng.range(0.0, 50.0)
+    };
+    let asy = if rng.unit() < 0.2 { 1.0 } else { rng.range(0.5, 1.1) };
+    if row % 50 == 49 {
+        return game::BrushCall::Maximum { load };
+    }
+    match rng.next() % 4 {
+        0 | 1 => game::BrushCall::SlipForce { slip, load, use_asy: rng.unit() < 0.7 },
+        2 => game::BrushCall::Solve { slip, friction: rng.range(0.2, 1.5), load, cf1_mix: rng.range(0.0, 1.5), asy },
+        _ => game::BrushCall::SolveV5 { slip, load, asy },
+    }
+}
+
 /// The random `SCTM::solve` inputs of `sctm_oracle --sweep random` (same mix of normal
 /// ranges and the special values the code branches on).
 fn random_sctm_input(rng: &mut Rng, tyre_index: i32) -> SctmInput {
@@ -237,6 +276,11 @@ struct CarCoverage {
     value_differences: usize,
     rows: usize,
     exact_rows: usize,
+    /// tyres.ini `[HEADER] VERSION`
+    version: i32,
+    /// Calls of the brush curve compared, and how many gave the game's bits.
+    brush_rows: usize,
+    brush_exact: usize,
 }
 
 fn coverage_one(game: &Game, dir: &Path, args: &Args) -> CarCoverage {
@@ -249,17 +293,16 @@ fn coverage_one(game: &Game, dir: &Path, args: &Args) -> CarCoverage {
         value_differences: 0,
         rows: 0,
         exact_rows: 0,
+        version: 0,
+        brush_rows: 0,
+        brush_exact: 0,
     };
     match init_compounds(dir, 0) {
         Err(e) => {
             result.note = format!("not loaded: {e}");
             return result;
         }
-        Ok(tyres) if tyres.version < 10 => {
-            result.note = format!("skipped: VERSION={}", tyres.version);
-            return result;
-        }
-        Ok(_) => {}
+        Ok(tyres) => result.version = tyres.version,
     }
     let first = idle_input(false);
     game.set_world(&first);
@@ -294,6 +337,25 @@ fn coverage_one(game: &Game, dir: &Path, args: &Args) -> CarCoverage {
                 result.curve_compounds += 1;
             }
             tyre.set_compound(k as i32);
+            // the brush curve of this compound (every version has one; the old path uses it)
+            let mut rng = Rng(args.seed.wrapping_add(77 + k as u64 * 1000 + axle.tyre_index() as u64));
+            let mut reported = false;
+            for row in 0..args.n {
+                let call = random_brush_call(&mut rng, row);
+                let ac = tyre.brush(&call);
+                let ours = call.port(&def.slip_provider);
+                let exact = (0..2).all(|i| ac[i].to_bits() == ours[i].to_bits() || (ac[i].is_nan() && ours[i].is_nan()));
+                result.brush_rows += 1;
+                result.brush_exact += exact as usize;
+                if !exact && !reported {
+                    reported = true;
+                    eprintln!("  {} {} compound {k}: first brush mismatch at {call:?}: AC {ac:?}, port {ours:?}", result.car, axle.name());
+                }
+            }
+            if result.version < 10 {
+                // (the SCTM is not this tyre's force model)
+                continue;
+            }
             let mut sctm = VanillaSctm::default();
             def.mirror_into_sctm(&mut sctm);
             let mut rng = Rng(args
@@ -345,9 +407,9 @@ fn coverage_one(game: &Game, dir: &Path, args: &Args) -> CarCoverage {
 }
 
 fn coverage(game: &Game, args: &Args) -> Result<bool, String> {
-    println!("| Car | Compounds (front + rear) | ... with lookup curves | Loaded values compared | ... different | SCTM rows | Bit-exact | % |");
-    println!("|---|---|---|---|---|---|---|---|");
-    let mut total = [0usize; 6];
+    println!("| Car | VERSION | Compounds (front + rear) | ... with lookup curves | Loaded values compared | ... different | Brush curve calls | Bit-exact | SCTM rows | Bit-exact | % |");
+    println!("|---|---|---|---|---|---|---|---|---|---|---|");
+    let mut total = [0usize; 8];
     let mut cars = 0;
     let mut skipped = Vec::new();
     for dir in &args.cars {
@@ -358,15 +420,18 @@ fn coverage(game: &Game, args: &Args) -> Result<bool, String> {
         }
         cars += 1;
         println!(
-            "| {} | {} | {} | {} | {} | {} | {} | {:.4} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {:.4} |",
             r.car,
+            r.version,
             r.compounds,
             r.curve_compounds,
             r.values,
             r.value_differences,
+            r.brush_rows,
+            r.brush_exact,
             r.rows,
             r.exact_rows,
-            100.0 * r.exact_rows as f64 / r.rows.max(1) as f64
+            100.0 * (r.exact_rows + r.brush_exact) as f64 / (r.rows + r.brush_rows).max(1) as f64
         );
         for (sum, value) in total.iter_mut().zip([
             r.compounds,
@@ -375,19 +440,21 @@ fn coverage(game: &Game, args: &Args) -> Result<bool, String> {
             r.value_differences,
             r.rows,
             r.exact_rows,
+            r.brush_rows,
+            r.brush_exact,
         ]) {
             *sum += value;
         }
     }
     println!(
-        "| **Total: {cars} cars** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** | **{:.4}** |",
-        total[0], total[1], total[2], total[3], total[4], total[5],
-        100.0 * total[5] as f64 / total[4].max(1) as f64
+        "| **Total: {cars} cars** | | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}** | **{:.4}** |",
+        total[0], total[1], total[2], total[3], total[6], total[7], total[4], total[5],
+        100.0 * (total[5] + total[7]) as f64 / (total[4] + total[6]).max(1) as f64
     );
     for line in &skipped {
         println!("{line}");
     }
-    Ok(total[3] == 0 && total[4] == total[5])
+    Ok(total[3] == 0 && total[4] == total[5] && total[6] == total[7])
 }
 
 fn run(game: &Game, args: &Args) -> Result<bool, String> {

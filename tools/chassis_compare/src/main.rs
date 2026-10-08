@@ -2937,6 +2937,8 @@ fn write_ml_car(base: &str, name: &str) -> Result<(), String> {
         }
     }
     std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))?;
+    // (the body's collider mesh is the base car's: see `colliders::load`)
+    std::fs::write(path.with_file_name("collider_from.txt"), base).map_err(|e| e.to_string())?;
     println!("suspensions.ini: [FRONT] and [REAR] TYPE=ML with JOINT0..4 from the wishbone points");
     Ok(())
 }

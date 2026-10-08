@@ -7,9 +7,7 @@
 //! this produces is compared against what the game's own `Tyre::init` loads by
 //! `tools/tyre_oracle` (`tyre_compare params`).
 //!
-//! Left out, none of it reachable for `VERSION >= 10` physics:
-//! * the brush slip provider's own numbers (`CF`, `CF1`, `maximum`, `maxSlip`);
-//! * `generateCompoundNames` (`VERSION < 4`);
+//! Left out:
 //! * `PhysicsEngine::isTyreLegal`, which drops compounds a race does not allow (a rule of
 //!   the session, not of the tyre): every compound is kept.
 
@@ -142,7 +140,27 @@ pub fn init_compounds(data_path: &Path, index: i32) -> Result<TyresIni, String> 
         def.index = out.compound_defs.len() as u32;
         out.compound_defs.push(def);
     }
+    if out.version < 4 {
+        generate_compound_names(&mut out.compound_defs);
+    }
     Ok(out)
+}
+
+/// `Tyre::generateCompoundNames` @ 0x14027f7a0 (`VERSION < 4`, where a compound has no
+/// `SHORT_NAME`): the short name is the first letter of the name, with 2, 3, ... behind it
+/// when an earlier compound already has that; the name gets it in brackets. Names only.
+fn generate_compound_names(defs: &mut [TyreCompoundDef]) {
+    for i in 0..defs.len() {
+        let first: String = defs[i].name.chars().take(1).collect();
+        let mut short = first.clone();
+        let mut n = 1;
+        while defs[..i].iter().any(|earlier| earlier.short_name == short) {
+            n += 1;
+            short = format!("{first}{n}");
+        }
+        defs[i].name = format!("{} ({short})", defs[i].name);
+        defs[i].short_name = short;
+    }
 }
 
 /// The body of the compound loop of `Tyre::initCompounds`.
@@ -177,12 +195,15 @@ fn load_compound(
     };
     def.model_data.flex_k = float("FLEX")?;
     let mut friction_limit_angle = float("FRICTION_LIMIT_ANGLE")?;
-    let _xmu = float("XMU")?;
+    let mut xmu = float("XMU")?;
     if friction_limit_angle == 0.0 {
         friction_limit_angle = 7.5;
     }
-    // BrushSlipProvider(friction_limit_angle, xmu, flex): brush-only numbers, not ported
-    let mut slip_provider = BrushSlipProvider::default();
+    if version >= 5 {
+        xmu = 0.0;
+    }
+    // (the constructor does not store its `xu` argument)
+    let mut slip_provider = BrushSlipProvider::new(friction_limit_angle, xmu, def.model_data.flex_k);
 
     if version > 9 {
         def.model_data.cf_x_mult = float("CX_MULT")?;
@@ -206,6 +227,7 @@ fn load_compound(
         def.model_data.dx0 = float("DX0")?;
         def.model_data.dx1 = float("DX1")?;
         slip_provider.asy = 0.85;
+        slip_provider.brush_model.xu = xmu;
     } else {
         let fz0 = float("FZ0")?;
         def.model_data.ls_exp_x = float("LS_EXPX")?;
@@ -217,10 +239,10 @@ fn load_compound(
         def.model_data.ls_mult_y =
             calc_load_sens_mult(def.model_data.dy0, fz0, def.model_data.ls_exp_y);
         slip_provider.asy = 0.92;
-        slip_provider.fz0 = fz0;
+        slip_provider.brush_model.fz0 = fz0;
         let flex_gain = float("FLEX_GAIN")?;
-        slip_provider.max_slip0 = tanf(friction_limit_angle * DEG_TO_RAD);
-        slip_provider.max_slip1 = tanf((flex_gain + 1.0) * friction_limit_angle * DEG_TO_RAD);
+        slip_provider.brush_model.max_slip0 = tanf(friction_limit_angle * DEG_TO_RAD);
+        slip_provider.brush_model.max_slip1 = tanf((flex_gain + 1.0) * friction_limit_angle * DEG_TO_RAD);
         slip_provider.version = 5;
         if ini.has_key(section, "DY_CURVE") {
             def.model_data.dy_load_curve = ini.get_curve(section, "DY_CURVE")?;
@@ -229,9 +251,11 @@ fn load_compound(
             def.model_data.dx_load_curve = ini.get_curve(section, "DX_CURVE")?;
         }
     }
+    // the peak of the curve, still with the default fall-off (0.85 / 0.92 and speed 2)
+    slip_provider.recompute_maximum();
     if version > 6 {
         slip_provider.asy = float("FALLOFF_LEVEL")?;
-        slip_provider.falloff_speed = float("FALLOFF_SPEED")?;
+        slip_provider.brush_model.falloff_speed = float("FALLOFF_SPEED")?;
     }
     def.slip_provider = slip_provider;
 

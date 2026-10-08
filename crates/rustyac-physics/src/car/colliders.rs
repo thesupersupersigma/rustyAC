@@ -161,7 +161,14 @@ pub fn load(data_folder: &Path, game_root: Option<&Path>, car_name: &str) -> Res
     let boxes = load_boxes(data_folder)?;
     let mut mesh = None;
     if let Some(root) = game_root {
-        let path = collider_kn5_path(root, car_name);
+        let mut path = collider_kn5_path(root, car_name);
+        if !path.is_file() {
+            // a made-up test car has no folder in the game: `collider_from.txt` in its data
+            // names the car whose collider mesh it borrows
+            if let Ok(base) = std::fs::read_to_string(data_folder.join("collider_from.txt")) {
+                path = collider_kn5_path(root, base.trim());
+            }
+        }
         if path.is_file() {
             let car = IniReader::load(&append_path(data_folder, "car.ini"))?;
             let offset = car.get_float3("BASIC", "GRAPHICS_OFFSET")?;

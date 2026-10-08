@@ -5,7 +5,7 @@
 //! `TyreCompoundDef`, with the constructors' default values. Fields are the PDB member names
 //! in snake_case; the ini key each one comes from is in [`crate::data::tyres_ini`].
 
-use super::VanillaSctm;
+use super::{BrushSlipProvider, VanillaSctm};
 use crate::curve::Curve;
 
 /// AC's `TyreData` (0x48 bytes): carcass, geometry and thermal/wear constants of a compound.
@@ -218,39 +218,6 @@ impl Default for TyrePatchData {
     }
 }
 
-/// The members of AC's `BrushSlipProvider` (and its `BrushTyreModelData`) that the
-/// VERSION >= 10 path reads: `Tyre::setCompound` copies them into the SCTM. The brush model
-/// itself (`CF`, `xu`, `CF1`, `maximum`, `maxSlip`) belongs to the old path and is not
-/// ported.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BrushSlipProvider {
-    /// `brushModel.data.Fz0`
-    pub fz0: f32,
-    /// `brushModel.data.maxSlip0`
-    pub max_slip0: f32,
-    /// `brushModel.data.maxSlip1`
-    pub max_slip1: f32,
-    /// `brushModel.data.falloffSpeed`
-    pub falloff_speed: f32,
-    pub asy: f32,
-    pub version: i32,
-}
-
-impl Default for BrushSlipProvider {
-    /// `BrushSlipProvider::BrushSlipProvider` @ 0x1402b3030 +
-    /// `BrushTyreModel::BrushTyreModel` @ 0x1402cb350
-    fn default() -> BrushSlipProvider {
-        BrushSlipProvider {
-            fz0: 2000.0,
-            max_slip0: 0.2,
-            max_slip1: 0.4,
-            falloff_speed: 2.0,
-            asy: 1.0,
-            version: 0,
-        }
-    }
-}
-
 /// AC's `TyreCompoundDef` (0x3f0 bytes): one compound as loaded from tyres.ini.
 #[derive(Clone, Debug, Default)]
 pub struct TyreCompoundDef {
@@ -286,15 +253,15 @@ impl TyreCompoundDef {
     /// The part of `Tyre::setCompound` @ 0x1402834e0 that mirrors a compound into the SCTM.
     pub fn mirror_into_sctm(&self, sctm: &mut VanillaSctm) {
         let model = &self.model_data;
-        sctm.falloff_speed = self.slip_provider.falloff_speed;
+        sctm.falloff_speed = self.slip_provider.brush_model.falloff_speed;
         sctm.asy = self.slip_provider.asy;
-        sctm.fz0 = self.slip_provider.fz0;
+        sctm.fz0 = self.slip_provider.brush_model.fz0;
         sctm.ls_exp_x = model.ls_exp_x;
         sctm.ls_exp_y = model.ls_exp_y;
         sctm.ls_mult_x = model.ls_mult_x;
         sctm.ls_mult_y = model.ls_mult_y;
-        sctm.max_slip0 = self.slip_provider.max_slip0;
-        sctm.max_slip1 = self.slip_provider.max_slip1;
+        sctm.max_slip0 = self.slip_provider.brush_model.max_slip0;
+        sctm.max_slip1 = self.slip_provider.brush_model.max_slip1;
         sctm.speed_sensitivity = model.speed_sensitivity;
         sctm.camber_gain = model.camber_gain;
         sctm.dcamber0 = model.dcamber0;

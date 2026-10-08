@@ -236,25 +236,20 @@ pub fn compare(game: &GameTyre, port: &VanillaTyre) -> Comparison {
 
         let s = &def.slip_provider;
         let slip = unsafe { base.add(0x320) };
-        c.float(&n("slipProvider.brushModel.data.Fz0"), slip, 0x14, s.fz0);
-        c.float(
-            &n("slipProvider.brushModel.data.maxSlip0"),
-            slip,
-            0x18,
-            s.max_slip0,
-        );
-        c.float(
-            &n("slipProvider.brushModel.data.maxSlip1"),
-            slip,
-            0x1c,
-            s.max_slip1,
-        );
-        c.float(
-            &n("slipProvider.brushModel.data.falloffSpeed"),
-            slip,
-            0x20,
-            s.falloff_speed,
-        );
+        let b = &s.brush_model;
+        for (member, offset, value) in [
+            ("CF", 0x08, b.cf),
+            ("xu", 0x0c, b.xu),
+            ("CF1", 0x10, b.cf1),
+            ("Fz0", 0x14, b.fz0),
+            ("maxSlip0", 0x18, b.max_slip0),
+            ("maxSlip1", 0x1c, b.max_slip1),
+            ("falloffSpeed", 0x20, b.falloff_speed),
+        ] {
+            c.float(&n(&format!("slipProvider.brushModel.data.{member}")), slip, offset, value);
+        }
+        c.float(&n("slipProvider.maximum"), slip, 0x2c, s.maximum);
+        c.float(&n("slipProvider.maxSlip"), slip, 0x30, s.max_slip);
         c.float(&n("slipProvider.asy"), slip, 0x24, s.asy);
         c.int(
             &n("slipProvider.version"),

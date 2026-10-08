@@ -3,14 +3,17 @@
 
 //! The tyre.
 //!
-//! [`VanillaTyre`] is AC's `Tyre` for tyres.ini `VERSION >= 10`: ground contact, slip, forces
+//! [`VanillaTyre`] is AC's `Tyre`, for every tyres.ini `VERSION`: ground contact, slip, forces
 //! into the hub, wheel speed, temperatures, pressure and wear, once per physics step. It
 //! talks to the rest of the car through [`Suspension`], [`RayTrackCollisionProvider`] and
 //! [`TyreCar`], and owns a force model:
 //!
 //! [`TyreModel`] is AC's `ITyreModel`: one `solve` call turning the state of a contact patch
-//! into forces. [`VanillaSctm`] is AC's only implementation of it (`SCTM`).
+//! into forces. [`VanillaSctm`] is AC's only implementation of it (`SCTM`), used for
+//! `VERSION >= 10`. Older tyres go another way inside the tyre (`Tyre::addTyreForces`) and
+//! take their slip curve from [`BrushSlipProvider`], AC's brush model.
 
+mod brush;
 mod data;
 mod interfaces;
 pub mod oracle_csv;
@@ -20,7 +23,8 @@ mod status;
 mod thermal;
 mod vanilla_tyre;
 
-pub use data::{BrushSlipProvider, TyreCompoundDef, TyreData, TyreModelData, TyrePatchData};
+pub use brush::{BrushOutput, BrushSlipProvider, BrushTyreModel};
+pub use data::{TyreCompoundDef, TyreData, TyreModelData, TyrePatchData};
 pub use interfaces::{
     RayCastResult, RayTrackCollisionProvider, SurfaceDef, Suspension, TorqueModeEx, TyreCar,
 };
