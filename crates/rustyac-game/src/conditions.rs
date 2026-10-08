@@ -192,6 +192,14 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
         setup.session.wind_direction_deg = direction;
         overrides.push(format!("wind from {direction} deg"));
     }
+    if let Some(density) = options.air_density {
+        setup.env.air_density_override = Some(density);
+        overrides.push(format!(
+            "air density {density} kg/m3 (NOT the game's: acs.exe alone gives {:.4} at {} C)",
+            rustyac_physics::car::engine::get_air_density(setup.env.ambient_temperature),
+            setup.env.ambient_temperature
+        ));
+    }
     if !overrides.is_empty() {
         notes.push(format!("from the command line: {}", overrides.join(", ")));
     }

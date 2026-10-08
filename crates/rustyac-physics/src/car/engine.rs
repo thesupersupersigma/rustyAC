@@ -749,7 +749,7 @@ impl EngineModel for VanillaEngine {
         }
 
         // hot air makes the engine weaker; 1.0 at 20 deg C
-        let mut air = get_air_density(car.chassis.env.ambient_temperature) * 0.826_309_74;
+        let mut air = car.chassis.env.air_density() * 0.826_309_74;
         if self.base.restrictor > 0.0 {
             air -= ((self.base.restrictor * rpm) * 0.0001) * gas;
             if !(air >= 0.0) {

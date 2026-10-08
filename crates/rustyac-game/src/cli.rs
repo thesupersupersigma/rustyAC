@@ -80,6 +80,8 @@ pub struct Options {
     pub wind_dir: Option<f32>,
     /// `--setup`: a saved setup, by name or file.
     pub setup: Option<String>,
+    /// `--air-density`: kg/m^3 instead of the game's formula (an experiment, not AC).
+    pub air_density: Option<f32>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
 }
@@ -95,6 +97,7 @@ impl Default for Options {
             wind: None,
             wind_dir: None,
             setup: None,
+            air_density: None,
             car: "ks_ferrari_f2004".to_string(),
             width: 1280,
             height: 720,
@@ -156,6 +159,9 @@ usage: rustyac [options]
   --wind-dir <deg>      the direction the wind is handed to the game with
   --setup <name|file>   a saved setup: a file, or a name in Documents\\Assetto Corsa\\setups\\
                         <car>\\<track> (then ...\\generic), loaded as the game's setup screen does
+  --air-density <kg/m3> NOT Assetto Corsa: a fixed air density instead of the game's
+                        1.2922 - 0.0041 x air temperature, to try what Custom Shaders Patch's
+                        thinner air at altitude does (about 1.165 at Spa at 14 C)
   --autodrive           on a track: nobody at the controls, a simple driver follows the
                         track's AI line (automatic gearbox on); for checks and for watching
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's
@@ -239,6 +245,7 @@ impl Options {
                 "--wind" => o.wind = Some(value("--wind")?.parse().map_err(|e| format!("--wind: {e}"))?),
                 "--wind-dir" => o.wind_dir = Some(value("--wind-dir")?.parse().map_err(|e| format!("--wind-dir: {e}"))?),
                 "--setup" => o.setup = Some(value("--setup")?),
+                "--air-density" => o.air_density = Some(value("--air-density")?.parse().map_err(|e| format!("--air-density: {e}"))?),
                 "--help" | "-h" | "/?" => return Err(USAGE.to_string()),
                 other => return Err(format!("unknown option {other}\n\n{USAGE}")),
             }
@@ -255,9 +262,12 @@ impl Options {
         if o.wind.is_some_and(|wind| !(0.0..=200.0).contains(&wind)) {
             return Err("--wind: km/h from 0 up is expected".to_string());
         }
-        let session_options = o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
+        if o.air_density.is_some_and(|density| !(0.5..=2.0).contains(&density)) {
+            return Err("--air-density: kg/m3 is expected, between 0.5 and 2".to_string());
+        }
+        let session_options = o.air_density.is_some() || o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
         if session_options && o.replay.is_some() {
-            return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir and --setup cannot be used with it".to_string());
+            return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir, --setup and --air-density cannot be used with it".to_string());
         }
         if o.autodrive && o.track.is_none() {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());

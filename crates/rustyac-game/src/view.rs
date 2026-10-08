@@ -81,6 +81,8 @@ pub struct CarView {
     /// The session's conditions: air and road temperature (deg C), the track's grip (1 =
     /// 100 %), the wind's mean speed (km/h) and the direction it was set with (degrees).
     pub air: f32,
+    /// The air density at the car, kg/m^3.
+    pub air_density: f32,
     pub road: f32,
     pub grip: f32,
     pub wind_kmh: f32,
@@ -184,6 +186,7 @@ impl Default for CarView {
             contacts: 0,
             surfaces: [SurfaceName::default(); 4],
             air: 26.0,
+            air_density: 0.0,
             road: 30.0,
             grip: 1.0,
             wind_kmh: 0.0,
@@ -268,6 +271,7 @@ impl CarView {
             contacts: car.core.contact_joints().len() as u32,
             engine_life: 1000.0,
             air: car.env.ambient_temperature,
+            air_density: car.air_density,
             road: car.env.road_temperature,
             grip: car.env.dynamic_grip_level,
             wind_kmh: car.env.wind_speed * 3.6,

@@ -332,6 +332,9 @@ impl SimSetup {
         if s.wind_speed != 0.0 {
             put("wind", hex(&[s.wind_speed, s.wind_direction_deg]));
         }
+        if let Some(density) = e.air_density_override {
+            put("air_density_override", hex(&[density]));
+        }
         if let Some(t) = &s.dynamic_track {
             put(
                 "dynamic_track",
@@ -477,6 +480,7 @@ impl SimSetup {
                 "ballast_kg" => setup.session.ballast_kg = hex_floats(key, value)?.first().copied().unwrap_or(0.0),
                 "restrictor" => setup.session.restrictor = hex_floats(key, value)?.first().copied().unwrap_or(0.0),
                 "penalties" => setup.session.penalties = flag(),
+                "air_density_override" => e.air_density_override = hex_floats(key, value)?.first().copied(),
                 "assists" => {
                     let parts: Vec<&str> = value.split(',').collect();
                     let [abs, traction_control, stability] = parts[..] else { return Err(format!("assists: {value:?}")) };

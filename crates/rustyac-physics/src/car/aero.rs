@@ -1092,7 +1092,7 @@ impl RollingChassis {
     /// wakes of other cars. `wakes` are the other cars' `SlipStream`s (none for a car alone).
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn update_air_pressure(&mut self, wakes: &[SlipStream]) {
-        let mut density = super::engine::get_air_density(self.env.ambient_temperature);
+        let mut density = self.env.air_density();
         let gain = self.slip_stream_effect_gain;
         if !(0.0 >= gain) {
             let position = self.core.get_position(self.body);

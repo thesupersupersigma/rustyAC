@@ -154,7 +154,11 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         format!("driver: {}", device_name(view.device)),
         format!("camera: {}  (C)", info.camera),
         format!("air {:.0} C  road {:.0} C  grip {:.1} %", view.air, view.road, view.grip * 100.0),
-        if view.wind_kmh > 0.0 { format!("wind {:.1} km/h from {:.0} deg", view.wind_kmh, view.wind_deg) } else { "no wind".to_string() },
+        if view.wind_kmh > 0.0 {
+            format!("wind {:.1} km/h from {:.0} deg  air {:.3}", view.wind_kmh, view.wind_deg, view.air_density)
+        } else {
+            format!("no wind  air {:.3} kg/m3", view.air_density)
+        },
         format!("tyres {}  setup {}", view.compound.as_str(), if view.setup.as_str().is_empty() { "default" } else { view.setup.as_str() }),
     ] {
         hud.text(x, y, 0.75 * s, DIM, &text);

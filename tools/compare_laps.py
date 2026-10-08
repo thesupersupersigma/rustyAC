@@ -518,7 +518,7 @@ def main():
         print("lap times: %s %s, %s %s (%+.3f s)" % (args.name_a, fmt_time(lap_a.seconds), args.name_b, fmt_time(lap_b.seconds), lap_b.seconds - lap_a.seconds))
     both = [(name, nb["min"] - na["min"], nb["time"] - na["time"]) for name, _, _, na, nb in rows if na and nb]
     if both:
-        quick = sorted(both, key=lambda r: -r[1])[:3]
+        quick = sorted(both, key=lambda r: -abs(r[1]))[:3]
         print("largest difference in minimum speed: " + "; ".join("%s %+.1f km/h" % (name, dv) for name, dv, _ in quick))
 
     if args.plot:

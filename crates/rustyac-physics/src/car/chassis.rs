@@ -98,6 +98,11 @@ pub struct ChassisEnvironment {
     /// `PhysicsEngine::sessionInfo.type`: 1 practice, 2 qualifying, 3 race, 4 hot-lap. A
     /// race's lap timer stands still until the start.
     pub session_type: i32,
+    /// NOT the game's: an air density (kg/m^3) used instead of
+    /// `PhysicsEngine::getAirDensity`'s `1.2922 - 0.0041 * air temperature`, for experiments
+    /// (Custom Shaders Patch makes the air thinner with the track's altitude; `acs.exe`
+    /// alone does not). `None`: the game's formula.
+    pub air_density_override: Option<f32>,
 }
 
 impl Default for ChassisEnvironment {
@@ -132,11 +137,20 @@ impl Default for ChassisEnvironment {
             drs_zone_available: true,
             allowed_tyres_out: -1,
             session_type: 1,
+            air_density_override: None,
         }
     }
 }
 
 impl ChassisEnvironment {
+    /// `PhysicsEngine::getAirDensity` @ 0x140263a60, kg/m^3 (or the experiment's fixed value).
+    pub fn air_density(&self) -> f32 {
+        match self.air_density_override {
+            Some(density) => density,
+            None => super::engine::get_air_density(self.ambient_temperature),
+        }
+    }
+
     /// `PhysicsEngine::setWind` @ 0x1402645a0 for a speed in m/s and a direction in degrees:
     /// the vector (0, 0, speed) turned about the world's up axis by minus the direction, as
     /// the product with the rotation matrix the game builds (its additions of zero included).
