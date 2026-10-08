@@ -88,6 +88,9 @@ struct Args {
     /// closing speed per zone: front, rear, left, right, centre), instead of the scenario's.
     damage: Option<[f32; 5]>,
     hash_only: bool,
+    /// Task 19: also write `<scenario>.audiotape` (the game's own `CarPhysicsState` at 60
+    /// frames a second and every physics event), the input of `tools/audio_oracle`.
+    audio_tape: bool,
     only: Vec<String>,
     ignore: Vec<String>,
     table: String,
@@ -132,6 +135,7 @@ fn parse_args() -> Result<Args, String> {
         floor: false,
         damage: None,
         hash_only: false,
+        audio_tape: false,
         only: Vec::new(),
         ignore: Vec::new(),
         table: "steps".into(),
@@ -172,6 +176,7 @@ fn parse_args() -> Result<Args, String> {
                 a.damage = Some(levels.try_into().map_err(|_| format!("--damage wants five numbers, got {text:?}"))?);
             }
             "--hash-only" => a.hash_only = true,
+            "--audio-tape" => a.audio_tape = true,
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
             "--ignore" => a.ignore = value()?.split(',').map(str::to_string).collect(),
             "--table" => a.table = value()?,
@@ -513,6 +518,27 @@ fn run(args: &Args) -> Result<(), String> {
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;
     let mut sites = BTreeSet::new();
     let mut steps = steps;
+    // Task 19: the audio tape. A header of `key=value` lines and an empty line, then records:
+    // 1 + 0x48 bytes = a physics event (in the order the engine queued them), 2 + u32 step
+    // count + 0xb70 bytes = a picture frame with the car's state after that many steps.
+    // Frame n comes after floor(n * 50 / 9) steps: 60 frames a second of 3 ms steps.
+    let mut tape = if args.audio_tape {
+        use std::io::Write as _;
+        world.audio_events = Some(std::cell::RefCell::new(Vec::new()));
+        let tape_path = out.join(format!("{name}.audiotape"));
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let mut file = std::io::BufWriter::new(std::fs::File::create(&tape_path).map_err(|e| format!("{}: {e}", tape_path.display()))?);
+        let mut header = format!("audiotape=1\nscenario={name}\ncar={}\nframe_hz=60\nstep_ms=3\n", args.car);
+        for (key, value) in world.track_meta.iter() {
+            header.push_str(&format!("{key}={value}\n"));
+        }
+        header.push('\n');
+        file.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
+        Some(file)
+    } else {
+        None
+    };
+    let mut next_frame = 1usize;
     for i in 0..steps {
         if world.ended() {
             // the car left the track for good: its body would be in a wall
@@ -527,6 +553,24 @@ fn run(args: &Args) -> Result<(), String> {
             }
         }
         writer.step(&row, &calls).map_err(|e| e.to_string())?;
+        if let Some(file) = tape.as_mut() {
+            use std::io::Write as _;
+            world.pop_audio_events();
+            for event in world.audio_events.as_ref().unwrap().borrow_mut().drain(..) {
+                file.write_all(&[1]).and_then(|_| file.write_all(&event)).map_err(|e| e.to_string())?;
+            }
+            if next_frame * 50 / 9 <= i + 1 {
+                next_frame += 1;
+                file.write_all(&[2])
+                    .and_then(|_| file.write_all(&(i as u32 + 1).to_le_bytes()))
+                    .and_then(|_| file.write_all(world.physics_state()))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    if let Some(mut file) = tape.take() {
+        use std::io::Write as _;
+        file.flush().map_err(|e| e.to_string())?;
     }
     let mut trailer = String::new();
     for site in sites {

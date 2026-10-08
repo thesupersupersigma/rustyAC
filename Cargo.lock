@@ -105,6 +105,7 @@ name = "rustyac-audio"
 version = "0.18.0"
 dependencies = [
  "rustyac-math",
+ "rustyac-physics",
 ]
 
 [[package]]

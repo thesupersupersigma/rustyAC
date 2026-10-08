@@ -1242,6 +1242,8 @@ pub struct World<'a> {
     geom_names: std::collections::HashMap<usize, i32>,
     /// The track's loose objects (the game's `PhysicsObject`s), in creation order.
     game_objects: Vec<crate::track::GameObject>,
+    /// Task 19, `--audio-tape`: the raw `ACPhysicsEvent`s of the last step, for the sound.
+    pub audio_events: Option<std::cell::RefCell<Vec<[u8; 0x48]>>>,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1755,6 +1757,7 @@ impl<'a> World<'a> {
                 collide: options.collide,
                 geom_names,
                 game_objects,
+                audio_events: None,
             };
             world.track_meta.extend(collide_meta);
             if armed {
@@ -2100,6 +2103,31 @@ impl<'a> World<'a> {
     }
 
     /// The scripted driver gave up: the car left the track for good.
+    /// Task 19: the `CarPhysicsState` the game's own `Car::getPhysicsState` filled after the
+    /// last step (what the main thread's `CarAvatar` reads for the picture and the sound).
+    pub fn physics_state(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.avatar.add(AVATAR_PHYSICS_STATE), 0xb70) }
+    }
+
+    /// Task 19: empties the engine's event queue into the audio tape's list when the
+    /// recording itself does not (a recording without collisions never looks at it).
+    pub fn pop_audio_events(&self) {
+        let Some(tape) = self.audio_events.as_ref() else { return };
+        if self.collide {
+            return;
+        }
+        unsafe {
+            let pop: unsafe extern "system" fn(*mut u8, *mut u8) -> bool = std::mem::transmute(self.acs.msvcp_function(
+                c"?_Internal_pop_if_present@_Concurrent_queue_base_v4@details@Concurrency@@IEAA_NPEAX@Z",
+            ));
+            let queue = self.engine.add(0x30);
+            let mut raw = [0u8; 0x48];
+            while pop(queue, raw.as_mut_ptr()) {
+                tape.borrow_mut().push(raw);
+            }
+        }
+    }
+
     pub fn ended(&self) -> bool {
         self.driver.follower.ended
     }
@@ -2158,6 +2186,9 @@ impl<'a> World<'a> {
             let mut events = Vec::new();
             let mut raw = [0u8; 0x48];
             while pop(queue, raw.as_mut_ptr()) {
+                if let Some(tape) = self.audio_events.as_ref() {
+                    tape.borrow_mut().push(raw);
+                }
                 let p = raw.as_ptr();
                 let vector = |at: usize| -> Vec3f {
                     let v: [f32; 3] = rd(p, at);

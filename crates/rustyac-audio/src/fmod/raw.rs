@@ -69,6 +69,8 @@ pub struct Api {
     extra: Extra,
     output: Output,
     wav_file: CString,
+    /// The folder the DLLs were loaded from: the game's folder.
+    folder: PathBuf,
 }
 
 // SAFETY: function addresses and immutable settings.
@@ -129,7 +131,7 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
         }
         _ => CString::default(),
     };
-    Ok(API.get_or_init(|| Api { fns, extra, output, wav_file }))
+    Ok(API.get_or_init(|| Api { fns, extra, output, wav_file, folder: folder.to_path_buf() }))
 }
 
 impl Api {
@@ -450,8 +452,6 @@ fmod_api! {
         low "?setVolume@ChannelControl@FMOD@@QEAA?AW4FMOD_RESULT@@M@Z"
             fn channel_set_volume(this: Handle, volume: f32);
         // --- fmodstudio64.dll ---
-        studio "?create@System@Studio@FMOD@@SA?AW4FMOD_RESULT@@PEAPEAV123@I@Z"
-            fn studio_create(system: OutHandle, header_version: u32);
         studio "?getCPUUsage@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAUFMOD_STUDIO_CPU_USAGE@@@Z"
             fn studio_get_cpu_usage(this: Handle, usage: Quiet<c_void>);
         studio "?getBufferUsage@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAUFMOD_STUDIO_BUFFER_USAGE@@@Z"
@@ -504,8 +504,6 @@ fmod_api! {
             fn studio_get_listener_attributes(this: Handle, listener: i32, attributes: Out<Attributes3d>);
         studio "?setListenerAttributes@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@HPEBUFMOD_3D_ATTRIBUTES@@@Z"
             fn studio_set_listener_attributes(this: Handle, listener: i32, attributes: In<Attributes3d>);
-        studio "?loadBankFile@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAPEAVBank@23@@Z"
-            fn studio_load_bank_file(this: Handle, file: Str, flags: u32, bank: OutHandle);
     }
     manual {
         low "?addPolygon@Geometry@FMOD@@QEAA?AW4FMOD_RESULT@@MM_NHPEBUFMOD_VECTOR@@PEAH@Z"
@@ -518,6 +516,10 @@ fmod_api! {
             fn studio_register_plugin(this: Handle, description: *const c_void);
         studio "?update@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
             fn studio_update(this: Handle);
+        studio "?create@System@Studio@FMOD@@SA?AW4FMOD_RESULT@@PEAPEAV123@I@Z"
+            fn studio_create(system: OutHandle, header_version: u32);
+        studio "?loadBankFile@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAPEAVBank@23@@Z"
+            fn studio_load_bank_file(this: Handle, file: Str, flags: u32, bank: OutHandle);
     }
 }
 
@@ -583,9 +585,58 @@ pub unsafe extern "C" fn event_get_channel_group(this: Handle, group: *mut RawHa
     result
 }
 
-/// `Studio::System::initialize`. The caller's arguments are logged as given; when the layer was
-/// loaded for a non-real-time output, the output type, block size and format are set first and
-/// the Studio system is made synchronous, so that the mix depends on the calls alone.
+/// `Studio::System::create`. When the layer was loaded for a non-real-time output, the output
+/// type, block size and format are set on the new system at once, before the caller looks at
+/// the devices: what follows then never depends on the machine's sound cards.
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn studio_create(system: OutHandle, header_version: u32) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let result = (api.fns.studio_create)(system, header_version);
+    let nrt = match &api.output {
+        Output::Device => None,
+        Output::WavNrt { rate, block, .. } => Some((OUTPUTTYPE_WAVWRITER_NRT, *rate, *block)),
+        Output::NoSoundNrt { rate, block } => Some((OUTPUTTYPE_NOSOUND_NRT, *rate, *block)),
+    };
+    if let (Some((kind, rate, block)), true) = (nrt, result == FMOD_OK && !system.0.is_null()) {
+        let mut low: RawHandle = std::ptr::null_mut();
+        if (api.fns.studio_get_low_level_system)(Handle(*system.0), OutHandle(&mut low)) == FMOD_OK && !low.is_null() {
+            (api.extra.set_output)(low, kind);
+            (api.extra.set_dsp_buffer_size)(low, block, 4);
+            (api.fns.system_set_software_format)(Handle(low), rate, SPEAKERMODE_STEREO, 0);
+        }
+    }
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("studio_create", &[&system, &header_version], result, false);
+    }
+    result
+}
+
+/// `Studio::System::loadBankFile`. A relative file name is the game's, relative to its own
+/// folder (the game runs there): it is looked up in the folder the DLLs came from. The log
+/// keeps the name as given.
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn studio_load_bank_file(this: Handle, file: Str, flags: u32, bank: OutHandle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let given = if file.0.is_null() { String::new() } else { CStr::from_ptr(file.0).to_string_lossy().into_owned() };
+    let result = if !given.is_empty() && Path::new(&given).is_relative() {
+        let full = CString::new(api.folder.join(&given).to_string_lossy().into_owned()).unwrap_or_default();
+        (api.fns.studio_load_bank_file)(this, Str(full.as_ptr()), flags, bank)
+    } else {
+        (api.fns.studio_load_bank_file)(this, file, flags, bank)
+    };
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("studio_load_bank_file", &[&this, &file, &flags, &bank], result, false);
+    }
+    result
+}
+
+/// `Studio::System::initialize`. The caller's arguments are logged as given; for a
+/// non-real-time output the Studio system is made synchronous (and the WAV writer gets its file
+/// name), so that the mix depends on the calls alone.
 ///
 /// # Safety
 /// As the FMOD function.
@@ -601,18 +652,10 @@ pub unsafe extern "C" fn studio_initialize(
     let mut extra_used = extra;
     let nrt = match &api.output {
         Output::Device => None,
-        Output::WavNrt { rate, block, .. } => Some((OUTPUTTYPE_WAVWRITER_NRT, *rate, *block)),
-        Output::NoSoundNrt { rate, block } => Some((OUTPUTTYPE_NOSOUND_NRT, *rate, *block)),
+        Output::WavNrt { .. } => Some(OUTPUTTYPE_WAVWRITER_NRT),
+        Output::NoSoundNrt { .. } => Some(OUTPUTTYPE_NOSOUND_NRT),
     };
-    if let Some((kind, rate, block)) = nrt {
-        let mut low: RawHandle = std::ptr::null_mut();
-        let found = (api.fns.studio_get_low_level_system)(this, OutHandle(&mut low));
-        if found != FMOD_OK || low.is_null() {
-            return found;
-        }
-        (api.extra.set_output)(low, kind);
-        (api.extra.set_dsp_buffer_size)(low, block, 4);
-        (api.fns.system_set_software_format)(Handle(low), rate, SPEAKERMODE_STEREO, 0);
+    if let Some(kind) = nrt {
         studio_flags_used |= STUDIO_INIT_SYNCHRONOUS_UPDATE;
         if kind == OUTPUTTYPE_WAVWRITER_NRT {
             extra_used = api.wav_file.as_ptr() as *mut c_void;

@@ -10,3 +10,5 @@ license = "GPL-3.0-or-later"
 [dependencies]
 # AC's own powf / sinf / log10f (MSVCR120): the DSP plug-ins must give AC's numbers
 rustyac-math = { path = "../rustyac-math" }
+# the port of INIReader (plain files and data.acd)
+rustyac-physics = { path = "../rustyac-physics" }
