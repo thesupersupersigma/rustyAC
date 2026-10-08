@@ -33,6 +33,9 @@ pub enum TrackKind {
     WallLow,
     /// Flat out and straight on at a fast bend: into the barrier at more than 200 km/h.
     WallHigh,
+    /// The same run with the wheel let go: straight on, over the run-off (which slows the
+    /// car) and into the barrier at about 195 km/h, one corner first.
+    WallGravel,
     /// Steered off the road at a shallow angle and along the wall.
     WallSlide,
     /// As `EauRouge`: the floor meets the road in the compression.
@@ -46,7 +49,7 @@ pub enum TrackKind {
 impl TrackKind {
     /// The scenarios that leave the road on purpose (their runs do not end there).
     pub fn leaves_the_road(self) -> bool {
-        matches!(self, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover)
+        matches!(self, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover)
     }
 }
 
@@ -87,7 +90,7 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
             let corner = tightest_point(spline, 0.005, 0.07);
             on_line(track, corner - 110.0, "110 m before the tightest point of the first corner")
         }
-        TrackKind::WallHigh => {
+        TrackKind::WallHigh | TrackKind::WallGravel => {
             let spline = track.ai_spline.as_ref().ok_or("the track has no AI line")?;
             let bend = tightest_point(spline, 0.80, 0.885);
             on_line(track, bend - 560.0, "560 m before the tightest point of the fast bend at 80 to 88 % of the lap")
@@ -195,6 +198,8 @@ pub struct Follower {
     /// whether it has got there.
     release_at: Option<f32>,
     released: bool,
+    /// The wheel after that place (the fast wall scenario leans towards the outside of the bend).
+    release_steer: f32,
     /// The rollover scenario: where the car is put down (position on the road, tail).
     put_down: Option<([f32; 3], [f32; 3])>,
 }
@@ -301,7 +306,7 @@ impl Follower {
             }
             return;
         }
-        if matches!(kind, TrackKind::WallLow | TrackKind::WallHigh) {
+        if matches!(kind, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel) {
             // follow the line up to a place before the bend, then hold the wheel straight
             let release_at = *self.release_at.get_or_insert_with(|| match kind {
                 TrackKind::WallLow => tightest_point(spline, 0.005, 0.07) - 45.0,
@@ -313,8 +318,24 @@ impl Follower {
             } else if to_go > length * 0.5 {
                 to_go -= length;
             }
-            if to_go <= 0.0 {
+            if to_go <= 0.0 && !self.released {
                 self.released = true;
+                if kind == TrackKind::WallHigh {
+                    // a little wheel towards the outside of the bend: less of the run-off
+                    // (which slows the car) before the barrier. Positive turns right; a
+                    // positive curvature is a bend to the left.
+                    let amount = 0.06f32;
+                    let mut bend = 0.0f32;
+                    for (i, p) in spline.spline.points.iter().enumerate() {
+                        if (0.80..=0.885).contains(&(p.point_length / length)) {
+                            let k = curvature(spline, i, 4);
+                            if k.abs() > bend.abs() {
+                                bend = k;
+                            }
+                        }
+                    }
+                    self.release_steer = if bend >= 0.0 { amount } else { -amount };
+                }
             }
         }
 
@@ -364,7 +385,7 @@ impl Follower {
             TrackKind::Timing => (0.60, 36.0),
             TrackKind::EauRouge | TrackKind::Bottoming => (10.0, 200.0),
             TrackKind::WallLow => (0.8, 16.7),
-            TrackKind::WallHigh => (10.0, 200.0),
+            TrackKind::WallHigh | TrackKind::WallGravel => (10.0, 200.0),
             TrackKind::WallSlide => (0.8, 28.0),
             TrackKind::KerbStrike => (1.15, 52.0),
             TrackKind::Rollover => (0.0, 0.0),
@@ -374,11 +395,12 @@ impl Follower {
         if self.released {
             // straight on: the wheel is let go; the low-speed run keeps its 60 km/h, the fast
             // one stays flat out for two seconds and then brakes
-            c.steer = 0.0;
+            c.steer = self.release_steer;
         }
-        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (kind == TrackKind::WallHigh && t < 14.0) {
+        let fast_wall = matches!(kind, TrackKind::WallHigh | TrackKind::WallGravel);
+        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (fast_wall && t < 14.0) {
             c.gas = 1.0;
-        } else if kind == TrackKind::WallHigh {
+        } else if fast_wall {
             c.brake = 1.0;
         } else if kind == TrackKind::WallLow && self.released {
             let error = 16.7 - car.speed;

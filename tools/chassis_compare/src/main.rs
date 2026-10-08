@@ -994,6 +994,7 @@ struct Outcome {
     powertrain: PowertrainCoverage,
     whole: WholeCoverage,
     track: TrackCoverage,
+    collision: CollisionCoverage,
     track_name: String,
     /// Values of brakes, engine and drivetrain compared per step (those the recording holds).
     powertrain_values: usize,
@@ -1039,6 +1040,84 @@ struct TrackCoverage {
     last_lap: u32,
     last_pos: Option<[f32; 3]>,
     last_cuts: i32,
+}
+
+/// What a run with collisions on did with them, counted on the Rust car.
+#[derive(Clone, Copy, Default)]
+struct CollisionCoverage {
+    /// The recording was made with collisions (`car_oracle run --collide`).
+    on: bool,
+    /// Steps with at least one contact joint of a floor box / of the collider mesh.
+    steps_box: usize,
+    steps_mesh: usize,
+    /// The first step with a contact joint of the collider mesh.
+    first_mesh_step: Option<usize>,
+    /// Most contact joints alive in one step; the sum over all steps.
+    max_joints: usize,
+    joints: usize,
+    /// Calls of `Car::onCollisionCallBack` (new contact joints); the highest closing speed, km/h.
+    callbacks: usize,
+    max_rel_speed: f32,
+    /// Steps in which the stepper had bounded rows; rows and LCP pivots summed.
+    lcp_steps: usize,
+    lcp_rows: usize,
+    lcp_pivots: usize,
+    /// At the end: damage zones, suspension damage, engine life.
+    damage: [f32; 5],
+    suspension_damage: [f32; 4],
+    engine_life: f64,
+    steps: usize,
+}
+
+impl CollisionCoverage {
+    fn count(&mut self, chassis: &RollingChassis) {
+        use rustyac_physics::ode::{GeomRef, JointKind};
+        if !chassis.collisions_enabled {
+            return;
+        }
+        self.on = true;
+        let core = &chassis.core;
+        let (mut boxes, mut meshes, mut joints) = (0, 0, 0);
+        for id in core.contact_joints() {
+            let JointKind::Contact { contact, .. } = &core.world.joint(id).kind else { continue };
+            joints += 1;
+            for g in [contact.geom.g1, contact.geom.g2] {
+                if let GeomRef::Dyn(geom) = g {
+                    if core.box_colliders(chassis.body).contains(&geom) {
+                        boxes += 1;
+                    } else if core.mesh_colliders(chassis.body).contains(&geom) {
+                        meshes += 1;
+                    }
+                }
+            }
+        }
+        if boxes > 0 {
+            self.steps_box += 1;
+        }
+        if meshes > 0 {
+            self.steps_mesh += 1;
+            self.first_mesh_step.get_or_insert(self.steps);
+        }
+        self.max_joints = self.max_joints.max(joints);
+        self.joints += joints;
+        self.callbacks += chassis.contact_callbacks as usize;
+        for event in &chassis.collision_events {
+            self.max_rel_speed = self.max_rel_speed.max(event.rel_speed);
+        }
+        if chassis.step_stats.bounded_rows > 0 {
+            self.lcp_steps += 1;
+            self.lcp_rows += chassis.step_stats.bounded_rows as usize;
+            self.lcp_pivots += chassis.step_stats.lcp_pivots as usize;
+        }
+        self.damage = chassis.damage_zone_level;
+        for (slot, suspension) in self.suspension_damage.iter_mut().zip(&chassis.suspensions) {
+            *slot = suspension.get_damage();
+        }
+        if let Some(drivetrain) = &chassis.drivetrain {
+            self.engine_life = drivetrain.engine().base().life_left;
+        }
+        self.steps += 1;
+    }
 }
 
 impl TrackCoverage {
@@ -1144,6 +1223,7 @@ fn compare(
         powertrain: PowertrainCoverage::default(),
         whole: WholeCoverage::default(),
         track: TrackCoverage::default(),
+        collision: CollisionCoverage::default(),
         track_name: recording.get("track").unwrap_or("").to_string(),
         powertrain_values: 0,
         scenario: setup.scenario.clone(),
@@ -1193,6 +1273,7 @@ fn compare(
         outcome.powertrain.count(&chassis, &feed, request_before, paddles_before);
         outcome.whole.count(&chassis, recording, step, &feed);
         outcome.track.count(&chassis, step);
+        outcome.collision.count(&chassis);
         // the lap and split events were counted: the list does not grow over a long run
         chassis.transponder.take_events();
         let tape = compare_tape(recording, step, &chassis);
@@ -1294,10 +1375,7 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
             let path = entry.map_err(|e| e.to_string())?.path();
             if path.extension().is_some_and(|e| e == "carrec") {
                 let name = path.file_stem().unwrap().to_string_lossy().to_string();
-                // its floor contacts are stage 2 of the rigid-body port
-                if name != "settle_floor" {
-                    scenarios.push(name);
-                }
+                scenarios.push(name);
             }
         }
         scenarios.sort();
@@ -1306,6 +1384,12 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
     for name in &scenarios {
         let path = folder.join(format!("{name}.carrec"));
         let recording = Recording::read(&path)?;
+        if names.is_empty() && name == "settle_floor" && recording.get("collide").is_none() {
+            // a recording from before Task 13: the game's car stood on its floor boxes, but
+            // the file does not say what the floor was (record it again with --collide)
+            println!("{name}: skipped (recorded before the collision port; no collision set-up in its header)");
+            continue;
+        }
         let data = car_data(&recording)?;
         println!("{name}: {} steps", recording.steps.len());
         let outcome = compare(&recording, &data, systems, verbose, stop_after, None)?;
@@ -1402,8 +1486,12 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
     if outcomes.iter().any(|o| o.track.on_track) {
         writeln!(
             table,
-            "\nOn a real track (the car's body is a ghost in the game and in the port; only the tyres' rays meet the track's meshes). \
-             Counted on the Rust car, which the table above shows to be the game's car.\n"
+            "\nOn a real track ({}). Counted on the Rust car, which the table above shows to be the game's car.\n",
+            if outcomes.iter().any(|o| o.collision.on) {
+                "with collisions: the car's floor boxes and collider mesh meet the track's meshes, as in a session of the game"
+            } else {
+                "the car's body is a ghost in the game and in the port; only the tyres' rays meet the track's meshes"
+            }
         )
         .unwrap();
         writeln!(
@@ -1414,6 +1502,44 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
         writeln!(table, "|---|---|---|---|---|---|---|---|---|---|").unwrap();
         for o in outcomes.iter().filter(|o| o.track.on_track) {
             writeln!(table, "{}", o.track.row(&o.scenario, &o.track_name)).unwrap();
+        }
+    }
+    if outcomes.iter().any(|o| o.collision.on) {
+        writeln!(
+            table,
+            "\nCollisions (contacts between the car's six floor boxes / its collider mesh and the track's meshes, the contact joints the \
+             solver gets, and what the game's collision callback does with them). Counted on the Rust car; contact joints, damage zones, \
+             suspension damage, engine life and the two collision clocks are among the values compared every step.\n"
+        )
+        .unwrap();
+        writeln!(
+            table,
+            "| Scenario | Steps with floor-box contact joints | Steps with collider-mesh contact joints (first at step) | Most contact joints in a step / in all steps | Collision callbacks / highest closing speed | Steps solved by the LCP solver / bounded rows / pivots | Damage zones at the end (front, rear, left, right, centre) | Suspension damage at the end (LF, RF, LR, RR) | Engine life at the end |"
+        )
+        .unwrap();
+        writeln!(table, "|---|---|---|---|---|---|---|---|---|").unwrap();
+        for o in outcomes.iter().filter(|o| o.collision.on) {
+            let c = &o.collision;
+            let list = |values: &[f32]| values.iter().map(|v| format!("{v:.1}")).collect::<Vec<_>>().join(", ");
+            writeln!(
+                table,
+                "| `{}` | {} | {}{} | {} / {} | {} / {:.0} km/h | {} / {} / {} | {} | {} | {:.0} |",
+                o.scenario,
+                c.steps_box,
+                c.steps_mesh,
+                c.first_mesh_step.map(|s| format!(" ({s})")).unwrap_or_default(),
+                c.max_joints,
+                c.joints,
+                c.callbacks,
+                c.max_rel_speed,
+                c.lcp_steps,
+                c.lcp_rows,
+                c.lcp_pivots,
+                list(&c.damage),
+                c.suspension_damage.iter().map(|v| format!("{v:.2}")).collect::<Vec<_>>().join(", "),
+                c.engine_life
+            )
+            .unwrap();
         }
     }
     println!("\n{table}");
