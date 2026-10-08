@@ -113,6 +113,21 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
         None => folder.join("system_surfaces_not_found.ini"),
     };
     let manager = SurfacesManager::new(&system, &files.data.join("surfaces.ini"))?;
+    // DRSManager::DRSManager @ 0x140278ea0: [ZONE_0], [ZONE_1] ... of data/drs_zones.ini
+    let zones = crate::data::ini::IniReader::load(&files.data.join("drs_zones.ini"))?;
+    if zones.ready {
+        for n in 0.. {
+            let section = format!("ZONE_{n}");
+            if !zones.has_section(&section) {
+                break;
+            }
+            track.drs_zones.push(super::DrsZone {
+                detection: zones.get_float(&section, "DETECTION")?,
+                start: zones.get_float(&section, "START")?,
+                end: zones.get_float(&section, "END")?,
+            });
+        }
+    }
     for missing in &manager.missing {
         report.messages.push(format!("WARNING: Surface definition file {missing} not found"));
     }

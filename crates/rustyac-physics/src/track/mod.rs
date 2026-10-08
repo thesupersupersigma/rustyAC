@@ -87,9 +87,45 @@ pub struct Track {
     /// `TrackAvatar::spawnPositions`: set name (`PIT`, `START`, `HOTLAP_START` ...) -> the
     /// slots, as indices into [`Track::helper_nodes`] (nodes that were put on the ground).
     pub spawn_positions: BTreeMap<String, Vec<usize>>,
+    /// `drsMamanger.zones` (`data/drs_zones.ini`): where along the lap a car may open its
+    /// DRS. Empty: anywhere.
+    pub drs_zones: Vec<DrsZone>,
+}
+
+/// AC's `DRSZone` (0xc bytes): places along the lap, 0..1.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrsZone {
+    /// `detection` (read from the file, not used by the physics)
+    pub detection: f32,
+    pub start: f32,
+    pub end: f32,
 }
 
 impl Track {
+    /// `DRSManager::isDRSAvailable` @ 0x140279490 for a car at `npos` along the lap
+    /// (`Car::splineLocatorData.npos`): true on a track without zones, else inside any zone.
+    /// A zone whose end is not above its start goes over the start line.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn is_drs_available(&self, npos: f32) -> bool {
+        if self.drs_zones.is_empty() {
+            return true;
+        }
+        for zone in &self.drs_zones {
+            if zone.end > zone.start {
+                if npos >= zone.start && !(npos > zone.end) {
+                    return true;
+                }
+            } else if !(npos >= 0.5) {
+                if !(npos > zone.end) {
+                    return true;
+                }
+            } else if npos >= zone.start {
+                return true;
+            }
+        }
+        false
+    }
+
     /// `Track::addSurface` @ 0x140277e50: a collision mesh with its own copy of the surface,
     /// in the sub-space `sub_space_id`. Returns the mesh's index.
     #[allow(clippy::too_many_arguments)] // the game's `Track::addSurface` takes them all
