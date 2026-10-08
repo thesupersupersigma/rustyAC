@@ -1,5 +1,9 @@
 # Audio (FMOD Studio)
 
+> Ported in Task 19: `docs/port/audio.md`. That report's section 3 lists what this survey, written from
+> pseudo-C, got wrong (the version check, the `.strings.bank`, `impact_speed`, the listener distance, the
+> skid's load factor, the ambience emitters, the reverb's wet level).
+
 Source: `re/decomp/` pseudo-C (folders `AudioEngine`, `fmod_distance_filter`, `fmod_gain`, `CarAudioFMOD`,
 `TrackAudio`, `FormVolumes`), `re/types/*.txt`, `re/index/calls.tsv` (FMOD imports), `tools/re_query.py`
 (callers / callees / strings / vtable), `tools/ini_survey.py sounds.ini`, and the game's own

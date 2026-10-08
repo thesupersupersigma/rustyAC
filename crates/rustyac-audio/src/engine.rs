@@ -293,7 +293,20 @@ impl AudioEngine {
         self.chk("getDriver", r);
     }
 
-    /// The names of the output devices, for `--list-audio-devices`.
+    /// FMOD's own account of its processor use, percent of one core: the mixer (DSP), streams,
+    /// geometry, the low-level update, the Studio update (`Studio::System::getCPUUsage`, not
+    /// logged: the game only asks for its on-screen statistics).
+    pub fn cpu_usage(&self) -> [f32; 5] {
+        let mut usage = [0.0f32; 5];
+        // SAFETY: FMOD_STUDIO_CPU_USAGE is five floats.
+        unsafe {
+            let fns = &f::api().expect("FMOD is loaded").fns;
+            (fns.studio_get_cpu_usage)(Handle(self.system), Quiet(usage.as_mut_ptr().cast()));
+        }
+        usage
+    }
+
+    /// The names of the output devices.
     pub fn driver_names(&self) -> Vec<String> {
         // SAFETY: as above.
         unsafe {

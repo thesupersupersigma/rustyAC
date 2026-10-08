@@ -276,6 +276,9 @@ pub struct AudioTiming {
     pub frames: u64,
     pub sum: Duration,
     pub max: Duration,
+    /// FMOD's own figures at the end, percent of one core: mixer, streams, geometry, update,
+    /// Studio (its own threads when a sound card or the no-sound output paces it).
+    pub fmod: [f32; 5],
 }
 
 /// The display thread's end: the engine, the track's sounds, the car's.
@@ -514,7 +517,8 @@ impl GameAudio {
 
     /// Ends the sound: the cars' sounds, the track's, the engine (which closes a WAV).
     pub fn finish(self) -> AudioTiming {
-        let timing = self.timing;
+        let mut timing = self.timing;
+        timing.fmod = self.world.engine.cpu_usage();
         if self.logging {
             log::mark("teardown");
         }
@@ -532,10 +536,15 @@ impl AudioTiming {
             return "audio: no frame".to_string();
         }
         format!(
-            "audio: {} frames, {:.3} ms a frame on the display thread (slowest {:.3} ms)",
+            "audio: {} frames, {:.3} ms a frame on the display thread (slowest {:.3} ms); FMOD's own figures at the end: mixer {:.2} %, streams {:.2} %, geometry {:.2} %, update {:.2} %, studio {:.2} % of a core",
             self.frames,
             self.sum.as_secs_f64() * 1000.0 / self.frames as f64,
-            self.max.as_secs_f64() * 1000.0
+            self.max.as_secs_f64() * 1000.0,
+            self.fmod[0],
+            self.fmod[1],
+            self.fmod[2],
+            self.fmod[3],
+            self.fmod[4]
         )
     }
 }

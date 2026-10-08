@@ -10,8 +10,8 @@ Copyright (c) 2026 thesupersupersigma.
 
 | Part | Paths | License |
 |---|---|---|
-| The game and the car physics | `crates/rustyac-game/`<br>`crates/rustyac-physics/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
-| Tools built on the car physics | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/` | `GPL-3.0-or-later` |
+| The game, the car physics and the sound | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
+| Tools built on the car physics or the sound | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
 | Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/` | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
@@ -35,13 +35,22 @@ everything that links the car physics is GPL.
 - **MSVCR120.dll**, Microsoft's Visual C++ 2013 runtime. rustyAC loads it at run time from the
   user's system, when it is installed, to get the same maths results as the game. It is never
   shipped with rustyAC.
+- **FMOD Studio 1.08.12** (`fmod64.dll`, `fmodstudio64.dll`), Firelight Technologies' sound
+  engine, which Assetto Corsa is built on. rustyAC only calls the player's installed copy: it
+  loads the two DLLs at run time from the player's own Assetto Corsa folder and plays the
+  game's own sound banks from there. No FMOD DLL, header, library or sound bank is in this
+  repository or in a release; the binding (`crates/rustyac-audio/src/fmod/`) is written from
+  the names of the exported functions the game itself imports. Without an Assetto Corsa
+  install rustyAC runs silently. FMOD is a trademark of Firelight Technologies Pty Ltd, who
+  are not affiliated with rustyAC.
 - The Rust crates from crates.io (`windows`, `png` and what they depend on) are downloaded by
   Cargo at build time and keep their own licenses. They are not in this repository.
 
 ## No Assetto Corsa files
 
 No file of Assetto Corsa is in this repository: not the executable, not its content, cars or
-tracks, and not the data extracted from `.acd` archives. To use rustyAC you point it at your own
+tracks, not its sounds (banks, `GUIDs.txt`, recordings of them), and not the data extracted
+from `.acd` archives. To use rustyAC you point it at your own
 install. The oracle tools work the same way: they load `acs.exe` from your install when they run
 and contain none of it.
 

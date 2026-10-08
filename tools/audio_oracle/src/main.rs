@@ -154,9 +154,6 @@ fn run(args: &Args) -> Result<(), String> {
 
     match args.side.as_str() {
         "ac" => {
-            // a fault inside an FMOD DLL is named as such (the loader's own handler, set later,
-            // names the game's functions)
-            crash::install_for_fmod_only();
             // the game's code reads its files by relative path
             std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
             let imports: Vec<(&'static str, &'static str, usize)> = raw::imports()
@@ -165,6 +162,9 @@ fn run(args: &Args) -> Result<(), String> {
                 .collect();
             acs::set_extra_overrides(imports);
             let acs = acs::Acs::load(&args.acs)?;
+            // a fault inside an FMOD DLL is named as such (this handler is asked before the
+            // loader's own, which names the game's functions)
+            crash::install_for_fmod_only();
             acs.silence_game_stdout();
             raw::load(&ac, raw::Output::WavNrt { file: wav.clone(), rate: SAMPLE_RATE, block: BLOCK })?;
             log::start(Some(&log_file))?;
@@ -380,6 +380,8 @@ fn compare(args: &Args) -> Result<(), String> {
         if let Some(text) = first_difference(&ac_log, &scripted_log) {
             println!("{text}");
         }
+    } else if !wav_ok {
+        println!("the WAVs: {} / {} / {} bytes (game, game again, port); levels {:?} against {:?}", ac_wav.len(), ac_wav2.len(), port_wav.len(), apart(&sa, &sa2), apart(&sa, &sp));
     }
     // the recordings and logs are big: only a failing drive keeps its files
     if log_same && wav_ok && std::env::var_os("AUDIO_ORACLE_KEEP").is_none() {
