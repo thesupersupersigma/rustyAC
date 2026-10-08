@@ -658,6 +658,12 @@ pub fn track() -> Vec<Scenario> {
             22.0,
             TrackKind::ObjectHit,
         ),
+        on_track(
+            "trk_pit",
+            "flat out along the pit lane's own line (ai/pit_lane.ai) from its start: onto the pit surfaces far above 80 km/h, the limiter cuts the engine and asks for the brakes, a lift, flat out again, then the brakes",
+            20.0,
+            TrackKind::PitLane,
+        ),
         on_track("spa_rollover", "put down on its roof 0.8 m above the road and left to settle, five seconds later put down on its side (a second of throttle each time: a sleeping car would hang in the air)", 10.0, TrackKind::Rollover),
     ]);
     scenarios

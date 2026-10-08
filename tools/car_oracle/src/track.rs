@@ -179,7 +179,7 @@ pub fn prepare_root(root: &Path, track_folder: &Path, layout: &str) -> Result<St
         (root.join("content/tracks").join(&name).join(layout), track_folder.join(layout))
     };
     // the scratch root is rewritten below: it must never be a game folder
-    if root.join("acs.exe").is_file() || root.join("content").join("cars").is_dir() && root.join("system").join("cfg").is_dir() {
+    if root.join("acs.exe").is_file() || root.join("AssettoCorsa.exe").is_file() {
         return Err(format!("{} looks like a game folder: the oracle's root has to be a scratch folder of its own", root.display()));
     }
     for sub in ["data", "ai"] {

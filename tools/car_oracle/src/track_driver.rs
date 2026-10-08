@@ -53,6 +53,24 @@ pub enum TrackKind {
     RunFull,
     /// At the loose object nearest to the racing line.
     ObjectHit,
+    /// Flat out along the pit lane's own line: the speed limiter on the track's pit surfaces.
+    PitLane,
+}
+
+/// A point of the pit lane's line (`ai/pit_lane.ai`) at the normalised position `n`, put on
+/// the road, and the tail direction of a car that drives along the line there.
+pub fn pit_pose(track: &Track, n: f32) -> Option<(Vec3f, Vec3f)> {
+    use rustyac_physics::tyre::RayTrackCollisionProvider;
+    let pit = track.pit_lane_spline.as_ref()?;
+    if pit.spline.points.len() < 4 {
+        return None;
+    }
+    let p = pit.spline.spline_to_world(n);
+    let q = pit.spline.spline_to_world((n + 3.0 / pit.length()).min(1.0));
+    let (fx, fz) = (q[0] - p[0], q[2] - p[2]);
+    let l = (fx * fx + fz * fz).sqrt().max(1e-6);
+    let ground = track.ray_cast(&Vec3f::new(p[0], p[1] + 3.0, p[2]), &Vec3f::new(0.0, -1.0, 0.0), 20.0).map(|hit| hit.pos.y).unwrap_or(p[1]);
+    Some((Vec3f::new(p[0], ground, p[2]), Vec3f::new(-fx / l, 0.0, -fz / l)))
 }
 
 /// What the driver thinks the car can do: sideways grip at no speed and what every (m/s)^2
@@ -120,7 +138,7 @@ impl TrackKind {
     pub fn leaves_the_road(self) -> bool {
         matches!(
             self,
-            TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover | TrackKind::ObjectHit
+            TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover | TrackKind::ObjectHit | TrackKind::PitLane
         )
     }
 }
@@ -174,6 +192,10 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
             rustyac_physics::track::init_respawn_position_set(track, "HOTLAP_START");
             let (position, tail) = track.spawn_pose("HOTLAP_START", 0).ok_or("the track has no AC_HOTLAP_START_0")?;
             Ok((position, tail, false, "AC_HOTLAP_START_0".to_string()))
+        }
+        TrackKind::PitLane => {
+            let (position, tail) = pit_pose(track, 0.03).ok_or("the track has no pit lane line (ai/pit_lane.ai)")?;
+            Ok((position, tail, false, "the pit lane's own line, 3 % along it".to_string()))
         }
         TrackKind::ObjectHit => {
             let (_, metres, _) = nearest_object(track).ok_or("the track has no loose object within reach of its AI line")?;
@@ -286,6 +308,8 @@ pub struct Follower {
     jumped: bool,
     /// The object scenario: its object (place along the line in metres, metres to the left).
     object: Option<(f32, f32)>,
+    /// Since when the car has stood still (a lap or a run that ended in a wall).
+    stuck_since: Option<f32>,
 }
 
 /// The speed the bends ahead allow, m/s: for every point up to 320 m ahead the speed its
@@ -322,6 +346,33 @@ fn allowed_speed(spline: &AiSpline, index: usize, pace: f32, grip: &Grip) -> f32
 impl Follower {
     /// The controls of one step. `t` is the time since the car was released.
     pub fn controls(&mut self, kind: TrackKind, track: &Track, car: &CarView, t: f32, c: &mut Controls) {
+        if kind == TrackKind::PitLane {
+            // along the pit lane's own line: flat out (the limiter holds the car at 80 km/h
+            // on a pit surface), a lift, flat out again, then the brakes
+            let Some(pit) = &track.pit_lane_spline else { return };
+            let length = pit.length();
+            let position = [car.position[0], car.position[1], car.position[2]];
+            let n = pit.spline.world_to_spline(&position, -1);
+            let ahead = (n + (6.0 + 0.3 * car.speed) / length).min(1.0);
+            let p = pit.spline.spline_to_world(ahead);
+            let d = [p[0] - position[0], p[1] - position[1], p[2] - position[2]];
+            let to_left = d[0] * car.left[0] + d[1] * car.left[1] + d[2] * car.left[2];
+            let to_front = d[0] * car.forward[0] + d[1] * car.forward[1] + d[2] * car.forward[2];
+            let alpha = to_left.atan2(to_front.max(0.5));
+            let distance = (to_left * to_left + to_front * to_front).sqrt().max(1.0);
+            let wheel_angle = (2.0 * 3.05 * alpha.sin() / distance).atan();
+            c.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
+            if t < 9.0 || (10.5..15.0).contains(&t) {
+                c.gas = 1.0;
+            } else if t >= 15.0 {
+                c.brake = 0.6;
+            }
+            // the end of the pit lane's line
+            if n > 0.96 {
+                self.ended = true;
+            }
+            return;
+        }
         let Some(spline) = &track.ai_spline else { return };
         let length = spline.length();
         let position = [car.position[0], car.position[1], car.position[2]];
@@ -367,6 +418,18 @@ impl Follower {
             if t - done > 3.0 {
                 self.ended = true;
                 return;
+            }
+        }
+        if matches!(kind, TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull) && t > 12.0 {
+            // standing for six seconds: the drive is over (in a wall, or turned round)
+            if car.speed < 1.0 {
+                let since = *self.stuck_since.get_or_insert(t);
+                if t - since > 6.0 {
+                    self.ended = true;
+                    return;
+                }
+            } else {
+                self.stuck_since = None;
             }
         }
         if kind == TrackKind::Run && !self.jumped && t >= 40.0 {
@@ -524,6 +587,7 @@ impl Follower {
             TrackKind::FullLap => (0.78, 95.0),
             TrackKind::Run | TrackKind::RunFull => (0.70, 95.0),
             TrackKind::ObjectHit => (0.7, 19.5),
+            TrackKind::PitLane => (0.0, 0.0),
         };
         let target = allowed_speed(spline, index, pace, &self.grip).min(limit);
         let error = target - car.speed;
