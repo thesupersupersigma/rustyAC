@@ -358,7 +358,7 @@ impl ShmSink {
         page.set_i("numberOfSessions", 1);
         page.set_i("numCars", 1);
         // the car's folder name, however `--car` named it
-        let model = sim.data_path.file_name().map(|name| name.to_string_lossy().to_string()).unwrap_or_else(|| sim.setup.car.clone());
+        let model = crate::sim::car_name(&sim.data_path);
         page.set_w("carModel", &model);
         match &sim.track {
             Some(track) => {

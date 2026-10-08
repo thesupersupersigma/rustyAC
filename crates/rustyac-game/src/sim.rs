@@ -408,9 +408,20 @@ pub fn find_track(track: &str) -> Result<PathBuf, String> {
     ))
 }
 
+/// The car's folder name (the game's `unixName`) from its data folder: the folder's own name,
+/// or its parent's when the folder is a car's `data` (`content/cars/<car>/data`).
+pub fn car_name(data_path: &Path) -> String {
+    let name = |path: &Path| path.file_name().map(|n| n.to_string_lossy().into_owned());
+    match name(data_path) {
+        Some(folder) if folder.eq_ignore_ascii_case("data") => data_path.parent().and_then(name).unwrap_or(folder),
+        Some(folder) => folder,
+        None => String::new(),
+    }
+}
+
 /// The car's 3D model in the game's folder: `content/cars/<car>/<LOD_0 of data/lods.ini>`.
-pub fn find_car_model(car: &str, data_path: &Path) -> Option<PathBuf> {
-    let name = Path::new(car).file_name()?.to_string_lossy().into_owned();
+pub fn find_car_model(_car: &str, data_path: &Path) -> Option<PathBuf> {
+    let name = car_name(data_path);
     let folder = ac_root()?.join("content").join("cars").join(&name);
     let lods = rustyac_physics::data::read(&data_path.join("lods.ini")).ok().flatten().map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
     let mut in_first = false;
@@ -517,7 +528,7 @@ fn build_car(
         if setup.oracle.as_ref().and_then(|o| o.collide).is_some_and(|c| c.collider_mesh) {
             // the recording's car had its own collider mesh: the game's file, read as the
             // oracle read it
-            let name = data_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = car_name(data_path);
             let root = ac_root().ok_or("the recording was made with the car's collider mesh, which is in Assetto Corsa's folder (set AC_ROOT)")?;
             let colliders = rustyac_physics::car::colliders::load(data_path, Some(&root), &name)?;
             run.collide.mesh = Some(colliders.mesh.ok_or(format!("no collider.kn5 for {name} in {}", root.display()))?);
