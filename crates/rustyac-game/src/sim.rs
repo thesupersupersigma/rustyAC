@@ -561,8 +561,15 @@ fn build_car(
         // any number (-1)
         env.penalty_mode = 1;
         env.allowed_tyres_out = if session.penalties { 2 } else { -1 };
-        env.session_type = if setup.spawn == "hotlap" { 4 } else { 1 };
+        // the session of race.ini; without one, a hot-lap session from the hot-lap start
+        env.session_type = session.session_type.unwrap_or(if setup.spawn == "hotlap" { 4 } else { 1 });
     }
+    if setup.session_starts_at_spawn {
+        // RaceManager::setCurrentSession: the session starts now (the wind's slow swing and
+        // the automatic gearbox's 300 ms count from here)
+        env.session_start_time_ms = physics_time;
+    }
+    let session_type = env.session_type;
     let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
     // the session of race.ini and assists.ini: the track's grip, ballast and restrictor
     // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
@@ -589,8 +596,9 @@ fn build_car(
             car.car.pit_position = track.helper_nodes[node].local;
         }
         car.car.set_track(Arc::clone(track));
-        // RaceManager::initOffline -> CarAvatar::armFirstLap in a hot-lap session
-        if setup.spawn == "hotlap" {
+        // RaceManager::initOffline -> CarAvatar::armFirstLap, in a hot-lap session only (in any
+        // other the lap begins when the car first crosses the line)
+        if session_type == 4 {
             car.car.transponder.arm_first_lap();
         }
     }
@@ -601,6 +609,11 @@ fn build_car(
         car.car.autoclutch.use_auto_on_change = true;
     }
     car.car.auto_shifter.is_active = setup.auto_shifter;
+    // `CarAvatar::setAutoBlip` (assists.ini AUTO_BLIP): the flag of `AutoBlip`; a car with an
+    // electronic blip blips whatever it says
+    if let Some(blip) = setup.auto_blip {
+        car.car.auto_blip.is_active = blip;
+    }
     car.car.force_rotation(&spawn.tail);
     car.car.force_position(&spawn.position);
     car.car.session_start()?;

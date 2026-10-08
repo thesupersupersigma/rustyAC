@@ -12,14 +12,22 @@ State after the last commit (update this block with every commit):
     `setup.rs`: the ten 4WD items), from `re/scratch/task16/spec_awd.md`.
   - KERS, ERS, shared memory, HUD, controls: not started. Briefs: `spec_kers.md`, `spec_ers.md`,
     `spec_shm_controls.md`, `spec_leftovers.md` in `re/scratch/task16/` (written by the read-only workflow).
-- **Step 2 (oracle):** `car_oracle` records the 4WD members for a 4WD car. First recordings, each
-  `pt_autoshift`, `wc_stops`, `wc_spirited` on the flat road: `ks_lamborghini_sesto_elemento` (AWD) and
-  `ks_audi_r8_plus` (AWD2), both **100 % bit-exact (12,336 steps each)**.
-  `car_oracle all --car <car> --out oracle/<dir> --only pt_autoshift,wc_stops,wc_spirited`, then
-  `chassis_compare run --dir oracle/<dir>`. Still to do: the other AWD2 cars, Spa, made-up cars for the two
-  AWD controller files and an AWD2 car without `ctrl_awd2.ini`, faults, golden excerpts.
-- **Step 3 (leftovers):** not started. Also to do there (promised in the grip report): D1 session start time,
-  D2 `AUTO_BLIP` from assists.ini, D3 first lap armed only in a hot-lap session.
+- **Step 2 (oracle):** 4WD is done: all eight loadable 4WD cars on the flat road (`pt_autoshift`, `wc_stops`,
+  `wc_spirited`: 12,336 steps each), the Sesto Elemento and the R8 Plus on Spa (`spa_launch`, `spa_kerbs`,
+  `spa_lap`), and three made-up cars (`chassis_compare test-car`: `sesto_awd_ctrl`, `r8_awd2_plain`,
+  `r8_awd2_spool`): **every step bit-exact**. Recordings in `oracle/awd*` (git-ignored), result files
+  `oracle/chassis/results_awd*_whole.md`, logs `re/scratch/task16/cmp_*.txt`.
+  How: `car_oracle all --car <car> --out oracle/<dir> --only pt_autoshift,wc_stops,wc_spirited`;
+  `car_oracle run --track spa --scenario spa_launch --car <car> --out oracle/<dir>`;
+  `chassis_compare run --dir oracle/<dir>`. Still to do for 4WD: faults, a golden excerpt.
+  The refused-car list before this task: `re/scratch/task16/acd_before.txt` (made with v0.15.0 checked out
+  into `re/scratch/task16/v0150`, a git worktree: remove it at the end with `git worktree remove`).
+  `acd_check.exe --refused` now builds every installed car, also those without an extracted folder.
+- **Step 3 (leftovers): done** except the screenshots: assists.ini `AUTO_CLUTCH` / `AUTO_BLIP` /
+  `AUTO_SHIFTER` applied as the game does (flags `--auto-clutch`, `--no-auto-clutch`, `--auto-shifter`,
+  `--no-auto-shifter`, `--auto-blip`, `--no-auto-blip` on top), the session type and spawn set from race.ini
+  (the first lap is armed only in a hot-lap session), the session's start time (D1 of the grip report).
+  `spec_leftovers.md` (when the workflow has written it) should be read against this.
 - **Versioning:** not done. No tag yet.
 
 Next: KERS and ERS from the briefs; then the remaining 4WD recordings (Spa, the other cars, test cars).

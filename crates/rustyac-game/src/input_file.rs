@@ -195,11 +195,14 @@ pub struct Session {
     pub assists: Option<(i32, i32, f32)>,
     /// A saved setup, loaded after the default one.
     pub setup_file: Option<std::path::PathBuf>,
+    /// `[SESSION_0] TYPE` of race.ini (1 practice ... 4 hot-lap); `None`: a hot-lap session
+    /// when the car starts at the hot-lap start, else practice.
+    pub session_type: Option<i32>,
 }
 
 impl Default for Session {
     fn default() -> Session {
-        Session { wind_speed: 0.0, wind_direction_deg: 0.0, dynamic_track: None, ballast_kg: 0.0, restrictor: 0.0, penalties: true, assists: None, setup_file: None }
+        Session { wind_speed: 0.0, wind_direction_deg: 0.0, dynamic_track: None, ballast_kg: 0.0, restrictor: 0.0, penalties: true, assists: None, setup_file: None, session_type: None }
     }
 }
 
@@ -223,6 +226,13 @@ pub struct SimSetup {
     pub auto_clutch: bool,
     /// The "automatic gearbox" driving aid.
     pub auto_shifter: bool,
+    /// The "automatic throttle blip" driving aid (`assists.ini AUTO_BLIP` ->
+    /// `AutoBlip::isActive`); `None`: as the car's loader leaves it (on).
+    pub auto_blip: Option<bool>,
+    /// The session starts when the car is put down (`PhysicsEngine::sessionInfo.startTimeMS` =
+    /// the clock then, as `RaceManager::setCurrentSession` sets it); false: at clock 0, as in
+    /// files recorded before this was known.
+    pub session_starts_at_spawn: bool,
     /// `getFFGlobalGain` of the driver's device (a wheel's force-feedback gain; else 1).
     pub ff_gain: f32,
     pub oracle: Option<OracleSetup>,
@@ -246,6 +256,8 @@ impl Default for SimSetup {
             env: ChassisEnvironment::default(),
             auto_clutch: true,
             auto_shifter: false,
+            auto_blip: None,
+            session_starts_at_spawn: false,
             ff_gain: 1.0,
             oracle: None,
             track: String::new(),
@@ -325,6 +337,12 @@ impl SimSetup {
         put("damper_gain", format!("{:?}", e.damper_gain));
         put("auto_clutch", (self.auto_clutch as u32).to_string());
         put("auto_shifter", (self.auto_shifter as u32).to_string());
+        if let Some(blip) = self.auto_blip {
+            put("auto_blip", (blip as u32).to_string());
+        }
+        if self.session_starts_at_spawn {
+            put("session_starts_at_spawn", "1".to_string());
+        }
         put("ff_gain", format!("{:?}", self.ff_gain));
         // the session's additions, each only when it is not the default (older files have none)
         let s = &self.session;
@@ -358,6 +376,9 @@ impl SimSetup {
         }
         if let Some(file) = &s.setup_file {
             put("setup_file", file.display().to_string());
+        }
+        if let Some(session_type) = s.session_type {
+            put("session_type", session_type.to_string());
         }
         if !self.track.is_empty() {
             put("track", self.track.clone());
@@ -455,6 +476,9 @@ impl SimSetup {
                 "damper_gain" => e.damper_gain = float()?,
                 "auto_clutch" => setup.auto_clutch = flag(),
                 "auto_shifter" => setup.auto_shifter = flag(),
+                "auto_blip" => setup.auto_blip = Some(flag()),
+                "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
+                "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "ff_gain" => setup.ff_gain = float()?,
                 "track" => setup.track = value.to_string(),
                 "spawn" => setup.spawn = value.to_string(),

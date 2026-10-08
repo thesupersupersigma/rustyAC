@@ -160,6 +160,12 @@ pub struct RaceIni {
     /// `[CAR_0] SETUP`: not a key `acs.exe` reads (launchers write it); rustyAC loads the
     /// setup it names.
     pub setup: String,
+    /// `[SESSION_0] TYPE`: 1 practice, 2 qualifying, 3 race, 4 hot-lap, 5 time attack, 6 drift,
+    /// 7 drag; `None` without the section. Only a hot-lap session arms the first lap
+    /// (`RaceManager::initOffline` @ 0x14013a6c0).
+    pub session_type: Option<i32>,
+    /// `[SESSION_0] SPAWN_SET`: `PIT`, `START` or `HOTLAP_START`; empty without the key.
+    pub spawn_set: String,
 }
 
 impl RaceIni {
@@ -173,6 +179,8 @@ impl RaceIni {
             model: ini.get_string("RACE", "MODEL"),
             weather: ini.get_string("WEATHER", "NAME"),
             setup: ini.get_string("CAR_0", "SETUP"),
+            session_type: ini.has_section("SESSION_0").then(|| int("SESSION_0", "TYPE")),
+            spawn_set: ini.get_string("SESSION_0", "SPAWN_SET"),
             ..RaceIni::default()
         };
         if ini.has_section("TEMPERATURE") {

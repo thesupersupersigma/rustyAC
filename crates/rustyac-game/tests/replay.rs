@@ -444,8 +444,9 @@ fn the_session_travels_in_the_file() {
         penalties: false,
         assists: Some((1, 2, 35.0)),
         setup_file: Some(PathBuf::from(r"C:\some folder\setups\car\spa\a name, with = signs.ini")),
+        session_type: Some(1),
     };
-    let setup = SimSetup { session: session.clone(), ..SimSetup::default() };
+    let setup = SimSetup { session: session.clone(), auto_blip: Some(false), session_starts_at_spawn: true, ..SimSetup::default() };
     let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session.ryin");
     InputFile { setup: setup.clone(), steps: vec![StepInput::default()] }.write(&file).unwrap();
     let back = InputFile::read(&file).unwrap();

@@ -52,14 +52,16 @@ unsafe extern "system" fn console_handler(_kind: u32) -> windows::core::BOOL {
 fn live_setup(options: &Options) -> Result<SimSetup, String> {
     let mut setup = SimSetup {
         car: options.car.clone(),
-        auto_clutch: !options.no_auto_clutch,
-        // the line follower does not shift
-        auto_shifter: options.auto_shifter || options.autodrive,
+        // (the aids: `conditions::apply` below)
+        auto_clutch: true,
         track: options.track.clone().unwrap_or_default(),
         spawn: options.spawn.clone(),
+        session_starts_at_spawn: true,
         ..SimSetup::default()
     };
-    for note in rustyac_game::conditions::apply(options, &mut setup)? {
+    // the device the bindings name decides one aid (a pad has no clutch pedal)
+    let input_method = Bindings::load(options, &mut Vec::new()).input_method;
+    for note in rustyac_game::conditions::apply(options, &mut setup, &input_method)? {
         println!("{note}");
     }
     Ok(setup)

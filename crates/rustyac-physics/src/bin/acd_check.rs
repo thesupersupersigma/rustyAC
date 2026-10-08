@@ -76,6 +76,9 @@ fn main() {
     let (mut total_files, mut total_values) = (0usize, 0usize);
     let mut failures: Vec<String> = Vec::new();
     let mut duplicates: Vec<String> = Vec::new();
+    // every car the port does not drive, with the loader's words
+    let mut refused: Vec<(String, String)> = Vec::new();
+    let (mut archive_only_built, mut archive_only_refused) = (0usize, 0usize);
     for name in &names {
         let acd_path = cars_folder.join(name).join("data.acd");
         let archive = match Acd::open(&acd_path) {
@@ -88,8 +91,24 @@ fn main() {
         let extracted = cardata.join(name);
         if !extracted.join("car.ini").is_file() {
             no_extract += 1;
-            if verbose {
-                println!("{name}: {} files in the archive, no extracted folder to compare with", archive.len());
+            // nothing to compare the bytes with: the car is still built from its archive
+            let in_archive = cars_folder.join(name).join("data");
+            match drive(&in_archive, steps) {
+                Ok(values) => {
+                    archive_only_built += 1;
+                    if verbose {
+                        let count: usize = values.iter().map(Vec::len).sum();
+                        println!("{name}: {} files in the archive, no extracted folder to compare with; built and driven ({count} values over {steps} steps)", archive.len());
+                    }
+                }
+                Err(message) => {
+                    archive_only_refused += 1;
+                    let reason = without_path(&message, &in_archive);
+                    if verbose {
+                        println!("{name}: {} files in the archive, no extracted folder to compare with; not a car the port drives yet ({reason})", archive.len());
+                    }
+                    refused.push((name.clone(), reason));
+                }
             }
             continue;
         }
@@ -137,6 +156,7 @@ fn main() {
             (Err(a), Err(b)) => {
                 if without_path(&a, &in_archive) == without_path(&b, &extracted) {
                     cars_refused_same += 1;
+                    refused.push((name.clone(), without_path(&a, &in_archive)));
                     if verbose {
                         println!("{name}: {} files the same; not a car the port drives yet ({})", archive.len(), without_path(&a, &in_archive));
                     }
@@ -153,6 +173,26 @@ fn main() {
     }
     println!("files: {files_same} cars with every file of the archive byte-identical to the extracted one ({total_files} files), {files_differ} cars with a difference, {no_extract} cars without an extracted folder");
     println!("cars:  {cars_same} built and driven {steps} steps from both sources with the same bits in every value ({total_values} values), {cars_refused_same} refused by the port with the same words from both, {cars_differ} different");
+    println!("       of the {no_extract} without an extracted folder: {archive_only_built} built and driven from the archive alone, {archive_only_refused} refused");
+    if args.iter().any(|a| a == "--refused") {
+        // the refused cars by the reason's last clause ("only the double-wishbone suspension (DWB) is ported")
+        let mut groups: Vec<(String, Vec<&str>)> = Vec::new();
+        for (name, reason) in &refused {
+            let clause = reason.rsplit(": ").next().unwrap_or(reason).to_string();
+            match groups.iter_mut().find(|(c, _)| *c == clause) {
+                Some((_, names)) => names.push(name),
+                None => groups.push((clause, vec![name])),
+            }
+        }
+        groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        println!("refused: {} cars", refused.len());
+        for (clause, names) in &groups {
+            println!("  {} x {clause}: {}", names.len(), names.join(", "));
+        }
+        for (name, reason) in &refused {
+            println!("  REFUSED {name}: {reason}");
+        }
+    }
     if !duplicates.is_empty() {
         println!("note:  names that are twice in one archive (only the last entry was compared): {}", duplicates.join(", "));
     }

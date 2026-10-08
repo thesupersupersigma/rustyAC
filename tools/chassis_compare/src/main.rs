@@ -2530,7 +2530,95 @@ const WC_OLDAERO_FILES: [(&str, &str); 1] = [(
      CDY=2.0\r\n",
 )];
 
+/// Task 16, a four-wheel-drive car with the two `AWD` controller files no installed car that
+/// loads has (`ctrl_awd_front_share.ini`, which no car ships at all, and
+/// `ctrl_awd_center_lock.ini`), differentials away from their usual values, and three of the
+/// four-wheel-drive setup items on the setup screen.
+const AWD_CTRL: [(&str, &str, &str, &str); 34] = [
+    ("drivetrain.ini", "AWD", "FRONT_SHARE", "35"),
+    ("drivetrain.ini", "AWD", "FRONT_DIFF_POWER", "0.22"),
+    ("drivetrain.ini", "AWD", "FRONT_DIFF_COAST", "0.11"),
+    ("drivetrain.ini", "AWD", "FRONT_DIFF_PRELOAD", "15"),
+    ("drivetrain.ini", "AWD", "CENTRE_DIFF_POWER", "0.3"),
+    ("drivetrain.ini", "AWD", "CENTRE_DIFF_COAST", "0.2"),
+    ("drivetrain.ini", "AWD", "CENTRE_DIFF_PRELOAD", "30"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "SHOW_CLICKS", "0"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "TAB", "DRIVETRAIN"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "NAME", "Rear diff preload"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "MIN", "5"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "MAX", "400"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "STEP", "7"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "POS_X", "0.5"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "POS_Y", "4"),
+    ("setup.ini", "REAR_DIFF_PRELOAD", "HELP", "HELP_DIFF_PRELOAD"),
+    ("setup.ini", "FRONT_DIFF_POWER", "SHOW_CLICKS", "0"),
+    ("setup.ini", "FRONT_DIFF_POWER", "TAB", "DRIVETRAIN"),
+    ("setup.ini", "FRONT_DIFF_POWER", "NAME", "Front diff power"),
+    ("setup.ini", "FRONT_DIFF_POWER", "MIN", "0"),
+    ("setup.ini", "FRONT_DIFF_POWER", "MAX", "100"),
+    ("setup.ini", "FRONT_DIFF_POWER", "STEP", "3"),
+    ("setup.ini", "FRONT_DIFF_POWER", "POS_X", "0.5"),
+    ("setup.ini", "FRONT_DIFF_POWER", "POS_Y", "5"),
+    ("setup.ini", "FRONT_DIFF_POWER", "HELP", "HELP_DIFF_PRELOAD"),
+    ("setup.ini", "FRONT_DIFF_COAST", "SHOW_CLICKS", "0"),
+    ("setup.ini", "FRONT_DIFF_COAST", "TAB", "DRIVETRAIN"),
+    ("setup.ini", "FRONT_DIFF_COAST", "NAME", "Front diff coast"),
+    ("setup.ini", "FRONT_DIFF_COAST", "MIN", "0"),
+    ("setup.ini", "FRONT_DIFF_COAST", "MAX", "100"),
+    ("setup.ini", "FRONT_DIFF_COAST", "STEP", "4"),
+    ("setup.ini", "FRONT_DIFF_COAST", "POS_X", "0.5"),
+    ("setup.ini", "FRONT_DIFF_COAST", "POS_Y", "6"),
+    ("setup.ini", "FRONT_DIFF_COAST", "HELP", "HELP_DIFF_PRELOAD"),
+];
+
+const AWD_CTRL_FILES: [(&str, &str); 2] = [
+    (
+        "ctrl_awd_front_share.ini",
+        "[CONTROLLER_0]\r\nINPUT=SPEED_KMH\r\nCOMBINATOR=ADD\r\nLUT=(|0=0.45|80=0.35|200=0.2|)\r\nFILTER=0.95\r\nUP_LIMIT=0.6\r\nDOWN_LIMIT=0.1\r\n\
+         [CONTROLLER_1]\r\nINPUT=GAS\r\nCOMBINATOR=MULT\r\nLUT=(|0=1.2|1=0.8|)\r\nFILTER=0.5\r\nUP_LIMIT=0.7\r\nDOWN_LIMIT=0.05\r\n",
+    ),
+    (
+        "ctrl_awd_center_lock.ini",
+        "[CONTROLLER_0]\r\nINPUT=GEAR\r\nCOMBINATOR=ADD\r\nLUT=(|0=60|1=120|2=90|3=60|6=40|)\r\nFILTER=0.9\r\nUP_LIMIT=10000\r\nDOWN_LIMIT=0\r\n\
+         [CONTROLLER_1]\r\nINPUT=REAR_SPEED_RATIO\r\nCOMBINATOR=ADD\r\nLUT=(|0=20|1.02=20|1.1=200|1.3=400|)\r\nFILTER=0.98\r\nUP_LIMIT=10000\r\nDOWN_LIMIT=0\r\n\
+         [CONTROLLER_2]\r\nINPUT=BRAKE\r\nCOMBINATOR=MULT\r\nLUT=(|0=1|1=0.2|)\r\nFILTER=0.8\r\nUP_LIMIT=10000\r\nDOWN_LIMIT=0\r\n",
+    ),
+];
+
+/// Task 16, an `AWD2` car without `ctrl_awd2.ini` (every installed one has it): the limit of
+/// the coupling is the fixed `CENTRE_MAX_TORQUE`, low enough to be reached, and the car has
+/// its `DIFF_*` setup items, two of them on the setup screen.
+const AWD2_PLAIN: [(&str, &str, &str, &str); 20] = [
+    ("drivetrain.ini", "AWD2", "CENTRE_RAMP_TORQUE", "60"),
+    ("drivetrain.ini", "AWD2", "CENTRE_MAX_TORQUE", "350"),
+    ("setup.ini", "DIFF_PRELOAD", "SHOW_CLICKS", "0"),
+    ("setup.ini", "DIFF_PRELOAD", "TAB", "DRIVETRAIN"),
+    ("setup.ini", "DIFF_PRELOAD", "NAME", "Rear diff preload"),
+    ("setup.ini", "DIFF_PRELOAD", "MIN", "0"),
+    ("setup.ini", "DIFF_PRELOAD", "MAX", "200"),
+    ("setup.ini", "DIFF_PRELOAD", "STEP", "7"),
+    ("setup.ini", "DIFF_PRELOAD", "POS_X", "0.5"),
+    ("setup.ini", "DIFF_PRELOAD", "POS_Y", "4"),
+    ("setup.ini", "DIFF_PRELOAD", "HELP", "HELP_DIFF_PRELOAD"),
+    ("setup.ini", "DIFF_POWER", "SHOW_CLICKS", "0"),
+    ("setup.ini", "DIFF_POWER", "TAB", "DRIVETRAIN"),
+    ("setup.ini", "DIFF_POWER", "NAME", "Rear diff power"),
+    ("setup.ini", "DIFF_POWER", "MIN", "0"),
+    ("setup.ini", "DIFF_POWER", "MAX", "100"),
+    ("setup.ini", "DIFF_POWER", "STEP", "3"),
+    ("setup.ini", "DIFF_POWER", "POS_X", "0.5"),
+    ("setup.ini", "DIFF_POWER", "POS_Y", "5"),
+    ("setup.ini", "DIFF_POWER", "HELP", "HELP_DIFF_PRELOAD"),
+];
+
+/// Task 16, an `AWD2` car whose rear axle is a spool (`[DIFFERENTIAL]` 1 / 1: the test is
+/// made on that section, though the values of the rear differential then come from `[AWD2]`).
+const AWD2_SPOOL: [(&str, &str, &str, &str); 2] = [("drivetrain.ini", "DIFFERENTIAL", "POWER", "1"), ("drivetrain.ini", "DIFFERENTIAL", "COAST", "1")];
+
 fn test_car_command() -> Result<(), String> {
+    write_test_car_from("ks_lamborghini_sesto_elemento", "sesto_awd_ctrl", &AWD_CTRL, &AWD_CTRL_FILES, &[])?;
+    write_test_car_from("ks_audi_r8_plus", "r8_awd2_plain", &AWD2_PLAIN, &[], &["ctrl_awd2.ini"])?;
+    write_test_car_from("ks_audi_r8_plus", "r8_awd2_spool", &AWD2_SPOOL, &[], &[])?;
     write_test_car("f2004_wc_oldaero", &[], &WC_OLDAERO_FILES)?;
     write_test_car("f2004_wc_aids", &WC_AIDS, &WC_AIDS_FILES)?;
     write_test_car("f2004_wc_abs1", &WC_ABS1, &[])?;
@@ -2542,15 +2630,27 @@ fn test_car_command() -> Result<(), String> {
 }
 
 fn write_test_car(name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&str, &str)]) -> Result<(), String> {
+    write_test_car_from("ks_ferrari_f2004", name, patches, files, &[])
+}
+
+/// A test car: the data files of `base` with values changed, files added and files left out.
+fn write_test_car_from(base: &str, name: &str, patches: &[(&str, &str, &str, &str)], files: &[(&str, &str)], without: &[&str]) -> Result<(), String> {
     let repo = repo_root();
-    let from = repo.join("cardata/ks_ferrari_f2004");
+    let from = repo.join("cardata").join(base);
     let to = repo.join("cardata").join(name);
+    // a folder left from an earlier run may hold files this car must not have
+    if to.is_dir() {
+        std::fs::remove_dir_all(&to).map_err(|e| format!("{}: {e}", to.display()))?;
+    }
     std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(&from).map_err(|e| format!("{}: {e}", from.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;
-        if entry.file_type().map_err(|e| e.to_string())?.is_file() {
+        if entry.file_type().map_err(|e| e.to_string())?.is_file() && !without.iter().any(|name| entry.file_name().to_string_lossy() == *name) {
             std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
         }
+    }
+    for name in without {
+        println!("{name} (left out)");
     }
     for &(file, section, key, value) in patches {
         let path = to.join(file);

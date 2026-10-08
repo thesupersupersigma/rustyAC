@@ -41,6 +41,13 @@ pub struct Options {
     pub auto_shifter: bool,
     /// `--no-auto-clutch`: the automatic clutch aid off.
     pub no_auto_clutch: bool,
+    /// `--auto-clutch`, `--no-auto-shifter`, `--auto-blip`, `--no-auto-blip`: the other ways
+    /// round, over assists.ini.
+    pub auto_clutch: bool,
+    pub no_auto_shifter: bool,
+    pub auto_blip: Option<bool>,
+    /// `--spawn` was given (else race.ini's `[SESSION_0] SPAWN_SET` decides).
+    pub spawn_given: bool,
     /// `--controls <ini>`: read the bindings from this file instead of AC's / rustyAC's.
     pub controls: Option<PathBuf>,
     /// `--default-controls`: ignore AC's controls.ini, use the built-in layout.
@@ -123,6 +130,10 @@ impl Default for Options {
             camera: "chase".to_string(),
             auto_shifter: false,
             no_auto_clutch: false,
+            auto_clutch: false,
+            no_auto_shifter: false,
+            auto_blip: None,
+            spawn_given: false,
             controls: None,
             default_controls: false,
             bench_render: false,
@@ -150,7 +161,10 @@ usage: rustyac [options]
   --track <folder>      a track: a folder, or a name under Assetto Corsa's content/tracks
                         (for example --track spa); default: the endless flat road
   --flat                the endless flat road (the default)
-  --spawn <where>       on a track: hotlap (default), pit or start
+  --spawn <where>       on a track: hotlap, pit or start (default: where race.ini's session
+                        starts, [SESSION_0] SPAWN_SET; without a race.ini hotlap). The first
+                        lap counts from the start only in a hot-lap session ([SESSION_0] TYPE=4,
+                        or no race.ini); in any other it begins at the line, as in the game
   --boxes               draw the car as boxes, not with its 3D model
   --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
   --no-textures         flat colours instead of textures
@@ -185,8 +199,12 @@ usage: rustyac [options]
   --replay <file>       drive from a recorded input file
   --ffb                 force feedback to a DirectInput wheel, if one is found (low strength)
   --no-rumble           no rumble on the Xbox pad
-  --auto-shifter        start with the automatic gearbox aid on (Alt+G or Ctrl+G toggles it)
-  --no-auto-clutch      switch the automatic clutch aid off
+  --auto-shifter        the automatic gearbox aid on (Alt+G or Ctrl+G toggles it); default:
+  --no-auto-shifter     as assists.ini says (AUTO_SHIFTER), off without the file
+  --auto-clutch         the automatic clutch aid on / off; default: on with a pad or the
+  --no-auto-clutch      keyboard (the game forces it there), else as assists.ini says
+  --auto-blip           the automatic throttle blip on / off; default: as assists.ini says
+  --no-auto-blip        (a car with an electronic blip blips anyway)
   --controls <ini>      bindings file to use (default: AC's own controls.ini, read-only)
   --default-controls    ignore AC's controls.ini and use the built-in Xbox / keyboard layout
   --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
@@ -239,7 +257,11 @@ impl Options {
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
+                "--no-auto-shifter" => o.no_auto_shifter = true,
                 "--no-auto-clutch" => o.no_auto_clutch = true,
+                "--auto-clutch" => o.auto_clutch = true,
+                "--auto-blip" => o.auto_blip = Some(true),
+                "--no-auto-blip" => o.auto_blip = Some(false),
                 "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,
                 "--bench-render" => o.bench_render = true,
@@ -248,7 +270,10 @@ impl Options {
                 "--list-devices" => o.list_devices = true,
                 "--track" => o.track = Some(value("--track")?),
                 "--flat" => o.track = None,
-                "--spawn" => o.spawn = value("--spawn")?,
+                "--spawn" => {
+                    o.spawn = value("--spawn")?;
+                    o.spawn_given = true;
+                }
                 "--boxes" => o.boxes = true,
                 "--texture-size" => o.texture_size = value("--texture-size")?.parse().map_err(|e| format!("--texture-size: {e}"))?,
                 "--no-textures" => o.no_textures = true,

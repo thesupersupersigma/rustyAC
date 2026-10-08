@@ -78,7 +78,9 @@ fn last_name(text: &str) -> String {
 }
 
 /// Fills the session of a live drive. Returns what was done, for the console.
-pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, String> {
+///
+/// `input_method`: `[HEADER] INPUT_METHOD` of the bindings in use (`X360`, `KEYBOARD`, `WHEEL`).
+pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Result<Vec<String>, String> {
     let mut notes = Vec::new();
     let race_path = match (&options.race_ini_file, options.race_ini) {
         (Some(path), _) => Some(path.clone()),
@@ -90,6 +92,8 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
         },
     };
     let mut wind_base_direction = 0.0;
+    // assists.ini AUTO_CLUTCH, AUTO_BLIP, AUTO_SHIFTER
+    let mut shift_aids: Option<(bool, bool, bool)> = None;
     let mut setup_name = options.setup.clone();
     let mut setup_from_race_ini = false;
     match &race_path {
@@ -100,7 +104,19 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
             }
             let race = RaceIni::from_ini(&ini);
             race.apply_to_env(&mut setup.env);
+            // where the session starts, unless the command line says where
+            if !options.spawn_given {
+                if let Some(spawn) = match race.spawn_set.as_str() {
+                    "PIT" => Some("pit"),
+                    "START" => Some("start"),
+                    "HOTLAP_START" => Some("hotlap"),
+                    _ => None,
+                } {
+                    setup.spawn = spawn.to_string();
+                }
+            }
             let session = &mut setup.session;
+            session.session_type = race.session_type;
             session.penalties = race.penalties;
             session.ballast_kg = race.ballast_kg;
             session.restrictor = race.restrictor;
@@ -162,6 +178,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
                 let assists = Assists::from_ini(&assists_ini);
                 assists.apply_to_env(&mut setup.env);
                 session.assists = Some((assists.abs, assists.traction_control, assists.stability_control));
+                shift_aids = Some((assists.auto_clutch, assists.auto_blip, assists.auto_shifter));
                 let level = |v: i32| ["off", "as the car has it", "on"].get(v as usize).copied().unwrap_or("?");
                 notes.push(format!(
                     "aids from {}: ABS {}, traction control {}, stability {} %, mechanical damage {:.0} %, fuel x{}, tyre wear x{}, tyre blankets {}",
@@ -220,6 +237,49 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
     } else if let Some(direction) = options.wind_dir {
         setup.session.wind_direction_deg = direction;
         overrides.push(format!("wind from {direction} deg"));
+    }
+    // the shift aids as `DrivingAssistManager` sets them (0x1400fbfb8 .. 0x1400fc6aa): the
+    // gearbox and the blip from the file; the clutch on when the file says so or the device is
+    // a pad or the keyboard (their classes force it). The command line on top.
+    let device_forces_clutch = matches!(input_method, "X360" | "KEYBOARD");
+    if let Some((clutch, blip, shifter)) = shift_aids {
+        setup.auto_clutch = clutch || device_forces_clutch;
+        setup.auto_blip = Some(blip);
+        setup.auto_shifter = shifter;
+    }
+    if options.auto_clutch {
+        setup.auto_clutch = true;
+    }
+    if options.no_auto_clutch {
+        setup.auto_clutch = false;
+    }
+    if options.auto_shifter || options.autodrive {
+        // (the line follower does not shift)
+        setup.auto_shifter = true;
+    }
+    if options.no_auto_shifter && !options.autodrive {
+        setup.auto_shifter = false;
+    }
+    if options.auto_blip.is_some() {
+        setup.auto_blip = options.auto_blip;
+    }
+    notes.push(format!(
+        "shift aids: automatic clutch {}, automatic gearbox {}, automatic blip {}{}",
+        if setup.auto_clutch { "on" } else { "off" },
+        if setup.auto_shifter { "on" } else { "off" },
+        match setup.auto_blip {
+            Some(true) | None => "on",
+            Some(false) => "off (a car with an electronic blip blips anyway)",
+        },
+        if shift_aids.is_some() { " (assists.ini; a pad or the keyboard forces the clutch on, as in the game)" } else { "" }
+    ));
+    if let Some(session_type) = setup.session.session_type {
+        let name = ["?", "practice", "qualifying", "race", "hot-lap", "time attack", "drift", "drag"].get(session_type as usize).copied().unwrap_or("?");
+        notes.push(format!(
+            "session: {name} ([SESSION_0] TYPE={session_type}), from {}{}",
+            setup.spawn,
+            if session_type == 4 { "; the first lap counts from the start" } else { "; the first lap begins at the line (only a hot-lap session counts it from the start)" }
+        ));
     }
     if let Some(density) = options.air_density {
         setup.env.air_density_override = Some(density);
