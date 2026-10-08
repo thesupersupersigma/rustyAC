@@ -3,8 +3,28 @@
 version = 4
 
 [[package]]
+name = "rustyac-content"
+version = "0.14.0"
+
+[[package]]
+name = "rustyac-math"
+version = "0.14.0"
+
+[[package]]
+name = "rustyac-ode"
+version = "0.14.0"
+dependencies = [
+ "rustyac-math",
+]
+
+[[package]]
 name = "rustyac-physics"
-version = "0.1.0"
+version = "0.14.0"
+dependencies = [
+ "rustyac-content",
+ "rustyac-math",
+ "rustyac-ode",
+]
 
 [[package]]
 name = "tyre_oracle"
