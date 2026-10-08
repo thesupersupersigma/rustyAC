@@ -1077,6 +1077,15 @@ pub struct Options {
     pub setup_check: bool,
     /// A track folder: the game's own track with its collision meshes instead of the flat road.
     pub track: Option<std::path::PathBuf>,
+    /// Task 13: the body touches things. The track's meshes keep their real collision
+    /// categories, the car gets its own collider mesh (`colliders`), and the contact joints
+    /// are recorded.
+    pub collide: bool,
+    /// The car's colliders as the port reads them (the mesh of `collider.kn5`; the game's own
+    /// loader needs Direct3D).
+    pub colliders: Option<rustyac_physics::car::colliders::CarColliders>,
+    /// The file the collider mesh came from (for the recording's header).
+    pub collider_kn5: Option<std::path::PathBuf>,
 }
 
 /// One car on the fake track, ready to be stepped.
@@ -1099,6 +1108,10 @@ pub struct World<'a> {
     whole: bool,
     /// Header lines of a track scenario (the track, the spawn).
     pub track_meta: Vec<(String, String)>,
+    /// Task 13: the contact joints are recorded; the game's geoms by address (a track mesh is
+    /// its index, floor box k of the car 1000 + k, the car's collider mesh 2000).
+    collide: bool,
+    geom_names: std::collections::HashMap<usize, i32>,
 }
 
 /// Builds the small game folder the engine, track and car read their files from.
@@ -1227,6 +1240,7 @@ impl<'a> World<'a> {
             let engine = new_engine(acs, scenario.seed);
 
             let mut game_track: Option<&'static crate::track::GameTrack> = None;
+            let mut floor_object: *mut u8 = std::ptr::null_mut();
             let mut spawn: (V3, V3) = ([0.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
             let mut armed = false;
             let mut track_meta: Vec<(String, String)> = Vec::new();
@@ -1235,7 +1249,7 @@ impl<'a> World<'a> {
                 let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
                 // the game's own Track, surfaces, collision meshes and AI line; every mesh a
                 // ghost to the car's body
-                let mut built = crate::track::GameTrack::build(acs, engine, folder, true).expect("the track");
+                let mut built = crate::track::GameTrack::build(acs, engine, folder, !options.collide).expect("the track");
                 assert!(built.surface_mismatches.is_empty(), "the game's surfaces differ from the port's: {:?}", built.surface_mismatches);
                 // TrackAvatar::initTimeLines: the gates between the nodes AC_TIME_n_L / _R, from
                 // the nodes' own matrices
@@ -1318,7 +1332,7 @@ impl<'a> World<'a> {
                 let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
                 let add_surface: extern "C" fn(*mut u8, *mut u8, *const f32, i32, *const u16, i32, *const u8, u32) -> *mut u8 =
                     std::mem::transmute(acs.va(VA_TRACK_ADD_SURFACE));
-                add_surface(track, wstring(acs, "road"), vertices.as_ptr(), 4, indices.as_ptr(), 6, surface, 1);
+                floor_object = add_surface(track, wstring(acs, "road"), vertices.as_ptr(), 4, indices.as_ptr(), 6, surface, 1);
             }
 
             // the track answers the tyres' rays itself: a copy of its vtable (with the RTTI
@@ -1381,21 +1395,75 @@ impl<'a> World<'a> {
                 vertices[i * 11 + 1] = if i & 2 == 0 { 0.3 } else { 0.5 };
                 vertices[i * 11 + 2] = if i & 4 == 0 { -0.5 } else { 0.5 };
             }
-            let indices: Vec<u16> =
+            let mut indices: Vec<u16> =
                 vec![0, 1, 2, 1, 3, 2, 4, 6, 5, 5, 6, 7, 0, 4, 1, 1, 4, 5, 2, 3, 6, 3, 7, 6, 0, 2, 4, 2, 6, 4, 1, 5, 3, 3, 5, 7];
+            let mut identity: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+            // with collisions: the car's own collider mesh (the first mesh of collider.kn5, as
+            // CarAvatar::initPhysics picks it) and CarAvatar::makeBodyMatrix of the identity
+            let real_mesh = options.colliders.as_ref().and_then(|c| c.mesh.as_ref()).filter(|_| options.collide);
+            if let Some(real) = real_mesh {
+                vertices = vec![0f32; real.vertices.len() * 11];
+                for (i, p) in real.vertices.iter().enumerate() {
+                    vertices[i * 11..i * 11 + 3].copy_from_slice(p);
+                }
+                indices = real.indices.clone();
+                for r in 0..4 {
+                    for c in 0..4 {
+                        identity[4 * r + c] = real.matrix.m[r][c];
+                    }
+                }
+            }
+            let vertex_count = vertices.len() / 11;
             let vp = leak(vertices).cast::<u8>();
             wr(mesh, 0x108, vp);
-            wr(mesh, 0x110, vp.add(8 * 0x2c));
-            wr(mesh, 0x118, vp.add(8 * 0x2c));
+            wr(mesh, 0x110, vp.add(vertex_count * 0x2c));
+            wr(mesh, 0x118, vp.add(vertex_count * 0x2c));
             let n = indices.len();
             let ip = leak(indices).cast::<u8>();
             wr(mesh, 0x120, ip);
             wr(mesh, 0x128, ip.add(n * 2));
             wr(mesh, 0x130, ip.add(n * 2));
-            let identity: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
             let init_mesh: extern "C" fn(*mut u8, *mut u8, *const [f32; 16]) =
                 std::mem::transmute(acs.va(VA_CAR_INIT_COLLIDER_MESH));
             init_mesh(car, mesh, &identity);
+
+            // the game's geoms by address, for the contacts of the recording
+            let mut geom_names = std::collections::HashMap::new();
+            let mut collide_meta: Vec<(String, String)> = Vec::new();
+            if options.collide {
+                let body: *const u8 = rd(car, CAR_BODY);
+                let (begin, end): (*const usize, *const usize) = (rd(body, 0x10), rd(body, 0x18));
+                for k in 0..end.offset_from(begin) as usize {
+                    geom_names.insert(*begin.add(k), 1000 + k as i32);
+                }
+                // collisionMeshes[0] (a shared_ptr<BodyCollisionMesh>) -> geomID
+                let meshes: *const *const u8 = rd(body, 0x30);
+                let mesh_geom: usize = rd(*meshes, 0x10);
+                geom_names.insert(mesh_geom, 2000);
+                if let Some(track) = game_track {
+                    for (i, &object) in track.objects.iter().enumerate() {
+                        geom_names.insert(rd::<usize>(object, 0x10), i as i32);
+                    }
+                }
+                if !floor_object.is_null() {
+                    geom_names.insert(rd::<usize>(floor_object, 0x10), 0);
+                }
+                // PhysicsEngine::setSessionInfo: no contacts for the first 250 steps (the lap
+                // scenario starts the way a session does; the others collide from step 0)
+                let no_collision_steps: i32 = if scenario.track_kind() == Some(crate::track_driver::TrackKind::Lap) { 250 } else { 0 };
+                let core: *mut u8 = rd(engine, PE_CORE);
+                wr(core, 0x60, no_collision_steps);
+                collide_meta = vec![
+                    ("collide".to_string(), "1".to_string()),
+                    ("collider_mesh".to_string(), if real_mesh.is_some() { "real" } else { "box" }.to_string()),
+                    ("collider_kn5".to_string(), options.collider_kn5.as_ref().map(|p| p.display().to_string()).unwrap_or_default()),
+                    // what the game's mesh contact joints get as bounce_vel: the upper half of
+                    // the address of the car's mesh geom
+                    ("mesh_bounce_vel".to_string(), format!("{:08x}", (mesh_geom >> 32) as u32)),
+                    ("no_collision_steps".to_string(), no_collision_steps.to_string()),
+                    ("floor_boxes".to_string(), (end.offset_from(begin)).to_string()),
+                ];
+            }
 
             // the controls device: 12 virtual functions, with the RTTI pointer of a real device
             // in front so that the game's dynamic_cast<AIDriver*> answers "not an AI"
@@ -1452,7 +1520,10 @@ impl<'a> World<'a> {
                 powertrain: scenario.powertrain,
                 whole: scenario.whole.on,
                 track_meta,
+                collide: options.collide,
+                geom_names,
             };
+            world.track_meta.extend(collide_meta);
             if armed {
                 // RaceManager::initOffline -> CarAvatar::armFirstLap in a hot-lap session
                 wr(car, CAR_TRANSPONDER + 0x80, 1u8);
@@ -1667,6 +1738,64 @@ impl<'a> World<'a> {
         self.driver.follower.ended
     }
 
+    /// Task 13, what a recording with collisions holds on top: the contact joints that exist
+    /// after the step (the ones `dWorldStep` just used), the collision switches of the core,
+    /// and what the car's collision callback writes.
+    unsafe fn emit_collisions(&self, row: &mut Row) {
+        use rustyac_physics::car::replay::{contact_trace_values, ContactTrace};
+        let car = self.car;
+        let core: *const u8 = rd(self.engine, PE_CORE);
+        let world: *const u8 = rd(core, CORE_WORLD);
+        let vtable = self.acs.va(0x1_4051_2d50); // dxJointContact
+        let mut contacts = Vec::new();
+        // the world's joint list: the newest joint first
+        let mut joint: *const u8 = rd(world, 0x28);
+        while !joint.is_null() {
+            if rd::<usize>(joint, 0) == vtable {
+                let name = |geom: usize| self.geom_names.get(&geom).copied().unwrap_or(-1);
+                let mode: i32 = rd(joint, 0x90);
+                contacts.push(ContactTrace {
+                    pos: rd(joint, 0xd0),
+                    normal: rd(joint, 0xe0),
+                    depth: rd(joint, 0xf0),
+                    g1: name(rd(joint, 0xf8)),
+                    g2: name(rd(joint, 0x100)),
+                    side1: rd(joint, 0x108),
+                    side2: rd(joint, 0x10c),
+                    mode,
+                    mu: rd(joint, 0x94),
+                    bounce: rd(joint, 0xa8),
+                    soft_erp: if mode & 8 != 0 { rd(joint, 0xb0) } else { 0.0 },
+                    soft_cfm: rd(joint, 0xb4),
+                    bodies: !rd::<*const u8>(joint, 0x40).is_null() as i32 | (!rd::<*const u8>(joint, 0x58).is_null() as i32) << 1 | ((rd::<u32>(joint, 0x30) & 2 != 0) as i32) << 2,
+                });
+            }
+            joint = rd(joint, 0x10);
+        }
+        for value in contact_trace_values(&contacts) {
+            match value.kind {
+                'f' => row.f(&value.name, f32::from_bits(value.word as u32)),
+                'd' => row.d(&value.name, f64::from_bits(value.word)),
+                _ => row.i(&value.name, value.word as i32),
+            }
+        }
+        row.i("collide.noCollisionCounter", rd(core, 0x60));
+        row.i("collide.currentFrame", rd(core, 0xa0));
+        row.d("car.lastCollisionTime", rd(car, 0x3508));
+        row.d("car.lastCollisionWithCarTime", rd(car, 0x3c30));
+        // the collide bits of the car's collider mesh (Car::updateColliderStatus)
+        let body: *const u8 = rd(car, CAR_BODY);
+        let meshes: *const *const u8 = rd(body, 0x30);
+        let mesh_geom: *const u8 = rd(*meshes, 0x10);
+        row.i("car.meshCollideMask", rd(mesh_geom, 0x7c));
+        // ISuspension::getDamage: the bend of each corner as a fraction of its most
+        for (w, wheel) in WHEELS.iter().enumerate() {
+            let suspension = state().suspensions[w];
+            let (amount, most): (f32, f32) = (rd(suspension, 0x1f0), rd(suspension, 0x200));
+            row.f(&format!("sus.{wheel}.damage"), if most != 0.0 { amount / most } else { 0.0 });
+        }
+    }
+
     /// What a track scenario records on top: every tyre's ray, the lap timer, the lap
     /// invalidator, the place along the AI line.
     unsafe fn emit_track(&self, row: &mut Row, track: &crate::track::GameTrack) {
@@ -1766,8 +1895,21 @@ impl<'a> World<'a> {
             unsafe {
                 let force_rotation: extern "C" fn(*mut u8, *const V3) = std::mem::transmute(self.acs.va(VA_CAR_FORCE_ROTATION));
                 let force_position: extern "C" fn(*mut u8, *const V3, u8) = std::mem::transmute(self.acs.va(VA_CAR_FORCE_POSITION));
-                force_rotation(self.car, &controls.teleport_tail);
-                force_position(self.car, &controls.teleport_position, (controls.teleport == 2) as u8);
+                if controls.teleport == 3 {
+                    // put down in any attitude: RigidBodyODE::setRotation on the car body and
+                    // the fuel tank (the function itself, past the recorder's wrappers)
+                    let rows = &controls.teleport_rows;
+                    let m: [f32; 16] = [
+                        rows[0][0], rows[0][1], rows[0][2], 0.0, rows[1][0], rows[1][1], rows[1][2], 0.0, rows[2][0], rows[2][1], rows[2][2], 0.0, 0.0, 0.0, 0.0, 1.0,
+                    ];
+                    let set_rotation: extern "C" fn(*mut u8, *const [f32; 16]) = std::mem::transmute(self.acs.va(0x1_402c_ea00));
+                    set_rotation(st.bodies[0].wrapper, &m);
+                    set_rotation(st.bodies[1].wrapper, &m);
+                    force_position(self.car, &controls.teleport_position, 0);
+                } else {
+                    force_rotation(self.car, &controls.teleport_tail);
+                    force_position(self.car, &controls.teleport_position, (controls.teleport == 2) as u8);
+                }
             }
         }
         st.tape.clear();
@@ -1842,7 +1984,15 @@ impl<'a> World<'a> {
                 row.i("script.teleport", controls.teleport);
                 row.v("script.teleportPosition", &controls.teleport_position);
                 row.v("script.teleportTail", &controls.teleport_tail);
+                if self.collide {
+                    for (k, axis) in controls.teleport_rows.iter().enumerate() {
+                        row.v(&format!("script.teleportRow{k}"), axis);
+                    }
+                }
                 self.emit_track(&mut row, track);
+            }
+            if self.collide {
+                self.emit_collisions(&mut row);
             }
         }
         let calls = std::mem::take(&mut state().tape);

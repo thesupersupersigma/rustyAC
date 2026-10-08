@@ -227,6 +227,7 @@ impl SimSetup {
             auto_clutch: self.auto_clutch,
             auto_shifter: self.auto_shifter,
             track: None,
+            collide: Default::default(),
         })
     }
 

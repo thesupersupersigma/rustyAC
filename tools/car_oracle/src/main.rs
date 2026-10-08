@@ -6,7 +6,7 @@
 //! body and the full body / joint / tyre state recorded each step.
 //!
 //! car_oracle list
-//! car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]
+//! car_oracle run --scenario <name> [--out <dir>] [--steps <n>] [--floor] [--collide] [--no-joint-forces] [--hash-only]
 //!                [--car <folder under cardata/>]
 //!     One scenario in this process. Prints `<name> steps=… bytes=… hash=…`. `--floor` adds a
 //!     collision mesh under the car (file `<name>_floor.carrec`).
@@ -103,6 +103,7 @@ struct Args {
     kind: Option<usize>,
     hybrid: bool,
     boxes_only: bool,
+    collide: bool,
     seed: u64,
 }
 
@@ -137,6 +138,7 @@ fn parse_args() -> Result<Args, String> {
         kind: None,
         hybrid: false,
         boxes_only: false,
+        collide: false,
         seed: 12,
     };
     while let Some(flag) = it.next() {
@@ -169,6 +171,7 @@ fn parse_args() -> Result<Args, String> {
             "--kind" => a.kind = Some(number(value()?)?),
             "--hybrid" => a.hybrid = true,
             "--boxes-only" => a.boxes_only = true,
+            "--collide" => a.collide = true,
             "--seed" => a.seed = number(value()?)? as u64,
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
@@ -358,7 +361,16 @@ fn run(args: &Args) -> Result<(), String> {
     } else {
         acs.silence_game_stdout();
     }
-    let options = game::Options { joint_feedback: args.joint_forces, car: args.car.clone(), setup_check: false, track: track_folder };
+    let colliders = if args.collide { Some(car_colliders(args)?) } else { None };
+    let options = game::Options {
+        joint_feedback: args.joint_forces,
+        car: args.car.clone(),
+        setup_check: false,
+        track: track_folder,
+        collide: args.collide,
+        colliders,
+        collider_kn5: args.acs.parent().map(|game| rustyac_physics::car::colliders::collider_kn5_path(game, &args.car)),
+    };
     let mut world = game::World::build(&acs, scenario, &options);
     let steps = args.steps.unwrap_or(scenario.steps);
     let mut meta = vec![
@@ -550,7 +562,7 @@ fn setup_check(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     acs.unbuffer_game_stdout();
     let scenarios = scenario::all();
-    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None };
+    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None, collide: false, colliders: None, collider_kn5: None };
     let world = game::World::build(&acs, &scenarios[0], &options);
     println!("{} values change: {}", world.setup_changes.len(), world.setup_changes.join(", "));
     Ok(())

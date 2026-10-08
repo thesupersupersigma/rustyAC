@@ -177,6 +177,33 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         // the key came with the powertrain scenarios; older recordings ran without the aid
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
         track: track_run(recording)?,
+        collide: collide_run(recording)?,
+    })
+}
+
+/// What the car's body touches in a recording made with `car_oracle run --collide`. The
+/// collider mesh is read by the port from the game's folder, as the oracle read it.
+fn collide_run(recording: &Recording) -> Result<replay::CollideRun, String> {
+    if !recording.get("collide").is_some_and(|v| v != "0") {
+        return Ok(replay::CollideRun::default());
+    }
+    let get = |key: &str| recording.get(key).ok_or(format!("the recording's header has no {key}"));
+    let mesh = match get("collider_mesh")? {
+        "real" => {
+            let car = get("car")?;
+            let data = repo_root().join("cardata").join(car);
+            let game = rustyac_physics::track::loader::game_root(Path::new(get("collider_kn5")?)).ok_or("the collider mesh is not inside a game folder")?;
+            let colliders = rustyac_physics::car::colliders::load(&data, Some(&game), car)?;
+            Some(colliders.mesh.ok_or("the port finds no collider.kn5 for this car")?)
+        }
+        _ => None,
+    };
+    Ok(replay::CollideRun {
+        on: true,
+        mesh,
+        mesh_bounce_vel: f32::from_bits(u32::from_str_radix(get("mesh_bounce_vel")?, 16).map_err(|e| format!("mesh_bounce_vel: {e}"))?),
+        no_collision_steps: get("no_collision_steps")?.parse().map_err(|e| format!("no_collision_steps: {e}"))?,
+        floor: recording.get("floor_mesh").is_some_and(|v| v != "0"),
     })
 }
 
@@ -353,8 +380,15 @@ fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) 
         // a teleport of a track scenario, as the oracle made it through the game's own
         // Car::forceRotation and Car::forcePosition before the step
         let kind = recording.i(step, "script.teleport");
-        if kind != 0 {
-            let vector = |name: &str| Vec3f::new(recording.f(step, &format!("{name}.x")), recording.f(step, &format!("{name}.y")), recording.f(step, &format!("{name}.z")));
+        let vector = |name: &str| Vec3f::new(recording.f(step, &format!("{name}.x")), recording.f(step, &format!("{name}.y")), recording.f(step, &format!("{name}.z")));
+        if kind == 3 {
+            // put down in any attitude (a rolled-over car)
+            let row = |k: usize| {
+                let v = vector(&format!("script.teleportRow{k}"));
+                [v.x, v.y, v.z]
+            };
+            chassis.force_attitude(&[row(0), row(1), row(2)], &vector("script.teleportPosition"));
+        } else if kind != 0 {
             chassis.force_rotation(&vector("script.teleportTail"));
             chassis.force_position_with(&vector("script.teleportPosition"), kind == 2);
         }

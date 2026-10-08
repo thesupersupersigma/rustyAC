@@ -29,6 +29,40 @@ pub enum TrackKind {
     Grass,
     /// Over the timing lines one after the other, teleported from line to line.
     Timing,
+    /// Task 13. At 60 km/h straight on at the first corner: into the barrier.
+    WallLow,
+    /// Flat out and straight on at a fast bend: into the barrier at more than 200 km/h.
+    WallHigh,
+    /// Steered off the road at a shallow angle and along the wall.
+    WallSlide,
+    /// As `EauRouge`: the floor meets the road in the compression.
+    Bottoming,
+    /// The last chicane much too fast, deep over its kerbs.
+    KerbStrike,
+    /// Put down upside down, later on its side, and left alone.
+    Rollover,
+}
+
+impl TrackKind {
+    /// The scenarios that leave the road on purpose (their runs do not end there).
+    pub fn leaves_the_road(self) -> bool {
+        matches!(self, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover)
+    }
+}
+
+/// The body's axes (rows: x = left, y = up, z = forward) of a car that stands level with its
+/// tail towards `tail` and is then rolled about its length by `roll` radians.
+pub fn rolled_rows(tail: [f32; 3], roll: f32) -> [[f32; 3]; 3] {
+    let l = (tail[0] * tail[0] + tail[2] * tail[2]).sqrt().max(1e-6);
+    let z = [-tail[0] / l, 0.0, -tail[2] / l];
+    let x = [z[2], 0.0, -z[0]];
+    let y = [0.0f32, 1.0, 0.0];
+    let (s, c) = roll.sin_cos();
+    [
+        [c * x[0] + s * y[0], c * x[1] + s * y[1], c * x[2] + s * y[2]],
+        [c * y[0] - s * x[0], c * y[1] - s * x[1], c * y[2] - s * x[2]],
+        z,
+    ]
 }
 
 /// The timing lines the timing scenario crosses, in order: the start line (the armed first
@@ -48,6 +82,24 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
         Ok((position, tail, false, format!("{what}, {metres:.0} m along the AI line")))
     };
     match kind {
+        TrackKind::WallLow => {
+            let spline = track.ai_spline.as_ref().ok_or("the track has no AI line")?;
+            let corner = tightest_point(spline, 0.005, 0.07);
+            on_line(track, corner - 110.0, "110 m before the tightest point of the first corner")
+        }
+        TrackKind::WallHigh => {
+            let spline = track.ai_spline.as_ref().ok_or("the track has no AI line")?;
+            let bend = tightest_point(spline, 0.80, 0.885);
+            on_line(track, bend - 560.0, "560 m before the tightest point of the fast bend at 80 to 88 % of the lap")
+        }
+        TrackKind::Bottoming => spawn(TrackKind::EauRouge, track),
+        TrackKind::KerbStrike => spawn(TrackKind::Kerbs, track),
+        TrackKind::Rollover => spawn(TrackKind::Grass, track),
+        TrackKind::WallSlide => {
+            rustyac_physics::track::init_respawn_position_set(track, "HOTLAP_START");
+            let (position, tail) = track.spawn_pose("HOTLAP_START", 0).ok_or("the track has no AC_HOTLAP_START_0")?;
+            Ok((position, tail, false, "AC_HOTLAP_START_0".to_string()))
+        }
         TrackKind::Launch | TrackKind::Lap => {
             // RaceManager::initOffline for a hot-lap session
             rustyac_physics::track::init_respawn_position_set(track, "HOTLAP_START");
@@ -139,6 +191,12 @@ pub struct Follower {
     /// has been seen before that line since it was put down.
     hop: usize,
     before_line: bool,
+    /// Task 13: metres along the line of the place a wall scenario stops steering at, and
+    /// whether it has got there.
+    release_at: Option<f32>,
+    released: bool,
+    /// The rollover scenario: where the car is put down (position on the road, tail).
+    put_down: Option<([f32; 3], [f32; 3])>,
 }
 
 /// The speed the bends ahead allow, m/s: for every point up to 320 m ahead the speed its
@@ -214,6 +272,46 @@ impl Follower {
             }
         }
 
+        if kind == TrackKind::Rollover {
+            // nobody drives: the car is put down on its roof, later on its side
+            if self.put_down.is_none() {
+                let n = spline.spline.wrap_position(npos);
+                if let Some((p, tail)) = track.pose_on_ai_line_at(n) {
+                    self.put_down = Some(([p.x, p.y, p.z], [tail.x, tail.y, tail.z]));
+                }
+            }
+            if let Some((p, tail)) = self.put_down {
+                let roll = match car.step {
+                    0 => Some(std::f32::consts::PI),
+                    1500 => Some(std::f32::consts::FRAC_PI_2),
+                    _ => None,
+                };
+                if let Some(roll) = roll {
+                    c.teleport = 3;
+                    c.teleport_position = [p[0], p[1] + 1.25, p[2]];
+                    c.teleport_tail = tail;
+                    c.teleport_rows = rolled_rows(tail, roll);
+                }
+            }
+            return;
+        }
+        if matches!(kind, TrackKind::WallLow | TrackKind::WallHigh) {
+            // follow the line up to a place before the bend, then hold the wheel straight
+            let release_at = *self.release_at.get_or_insert_with(|| match kind {
+                TrackKind::WallLow => tightest_point(spline, 0.005, 0.07) - 45.0,
+                _ => tightest_point(spline, 0.80, 0.885) - 90.0,
+            });
+            let mut to_go = release_at - npos * length;
+            if to_go < -length * 0.5 {
+                to_go += length;
+            } else if to_go > length * 0.5 {
+                to_go -= length;
+            }
+            if to_go <= 0.0 {
+                self.released = true;
+            }
+        }
+
         // where to be beside the line
         let k_here = curvature(spline, index + 6, 5);
         let target_lateral = match kind {
@@ -222,6 +320,11 @@ impl Follower {
             TrackKind::Kerbs if k_here < -0.012 => -(payload.sides[1] - 0.9),
             // two wheels off: the car's middle just over the right edge
             TrackKind::Grass if (5.0..9.5).contains(&t) => -(payload.sides[1] + 0.15),
+            // deep over the inner kerbs
+            TrackKind::KerbStrike if k_here > 0.008 => payload.sides[0] - 0.15,
+            TrackKind::KerbStrike if k_here < -0.008 => -(payload.sides[1] - 0.15),
+            // further and further to the left, far beyond the edge of the road
+            TrackKind::WallSlide if t > 2.5 => (payload.sides[0] + 30.0).min((t - 2.5) * 6.0),
             _ => 0.0,
         };
         self.lateral += (target_lateral - self.lateral) * (DT / 0.35).min(1.0);
@@ -253,12 +356,27 @@ impl Follower {
             TrackKind::Kerbs => (0.55, 38.0),
             TrackKind::Grass => (0.80, 50.0),
             TrackKind::Timing => (0.60, 36.0),
-            TrackKind::EauRouge => (10.0, 200.0),
+            TrackKind::EauRouge | TrackKind::Bottoming => (10.0, 200.0),
+            TrackKind::WallLow => (0.8, 16.7),
+            TrackKind::WallHigh => (10.0, 200.0),
+            TrackKind::WallSlide => (0.8, 28.0),
+            TrackKind::KerbStrike => (1.15, 52.0),
+            TrackKind::Rollover => (0.0, 0.0),
         };
         let target = allowed_speed(spline, index, pace).min(limit);
         let error = target - car.speed;
-        if kind == TrackKind::EauRouge {
+        if self.released {
+            // straight on: the wheel is let go; the low-speed run keeps its 60 km/h, the fast
+            // one stays flat out for two seconds and then brakes
+            c.steer = 0.0;
+        }
+        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (kind == TrackKind::WallHigh && t < 14.0) {
             c.gas = 1.0;
+        } else if kind == TrackKind::WallHigh {
+            c.brake = 1.0;
+        } else if kind == TrackKind::WallLow && self.released {
+            let error = 16.7 - car.speed;
+            c.gas = if t < 11.0 { (0.2 + error * 0.4).clamp(0.0, 1.0) } else { 0.0 };
         } else if error >= 0.0 {
             c.gas = (0.25 + error * 0.4).clamp(0.0, 1.0);
         } else {
@@ -267,7 +385,7 @@ impl Follower {
 
         // off the track for good, or gone from the world: the body would be in a wall by now
         let side = if car.offset > 0.0 { payload.sides[0] } else { payload.sides[1] };
-        if t > 2.0 && (car.offset.abs() > side + 6.0 || !car.position[1].is_finite() || car.position[1] < -300.0) {
+        if !kind.leaves_the_road() && t > 2.0 && (car.offset.abs() > side + 6.0 || !car.position[1].is_finite() || car.position[1] < -300.0) {
             self.ended = true;
         }
     }

@@ -753,6 +753,9 @@ pub fn powertrain_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         out.push(TraceValue::i("car.blackFlagged", chassis.black_flagged as i32));
         out.push(TraceValue::d("car.penaltyTime", chassis.penalty_time));
     }
+    if chassis.collisions_enabled {
+        out.extend(collision_trace(chassis));
+    }
     if let Some(page) = &chassis.physics_page {
         // the telemetry page of this step, value by value
         for (name, kind, word) in page.named() {
@@ -911,6 +914,8 @@ pub struct RunSetup {
     pub auto_shifter: bool,
     /// The recording was made on a real track: the track, and where the car was put.
     pub track: Option<TrackRun>,
+    /// What the car's body touches (Task 13).
+    pub collide: CollideRun,
 }
 
 /// The track of a recording made with `car_oracle run --track`.
@@ -950,6 +955,15 @@ impl RunSetup {
             env.set_wind(self.wind_speed, self.wind_direction_deg);
         }
         let mut chassis = RollingChassis::new(data_path, env, ground, self.seed, self.clock_start_ms)?;
+        // the collider mesh comes right after `Car::Car` (CarAvatar::initPhysics)
+        chassis.collisions_enabled = self.collide.on;
+        if let Some(mesh) = &self.collide.mesh {
+            chassis.init_collider_mesh(mesh.clone());
+        }
+        chassis.core.mesh_bounce_vel = self.collide.mesh_bounce_vel;
+        if self.collide.floor {
+            chassis.core.statics = Some(std::sync::Arc::new(floor_world()));
+        }
         if self.rust_aero {
             chassis.install_aero()?;
         }
@@ -1003,6 +1017,7 @@ impl RunSetup {
         }
         chassis.damage_zone_level = self.damage;
         chassis.session_start()?;
+        chassis.core.set_no_collision_steps(self.collide.no_collision_steps);
         chassis.core.tape = Some(Vec::new());
         chassis.trace = Some(StepTrace::default());
         Ok(chassis)
@@ -1578,6 +1593,7 @@ impl Golden {
             auto_clutch: get("auto_clutch")? != "0",
             auto_shifter: get("auto_shifter")? != "0",
             track: None,
+            collide: CollideRun::default(),
         };
         let mut setup = setup;
         let track = match get("track") {
@@ -1697,5 +1713,183 @@ pub fn kind_name(call_kind: u32) -> &'static str {
         kind::ADD_LOCAL_TORQUE => "addLocalTorque",
         kind::STOP => "stop",
         _ => "?",
+    }
+}
+
+// --- Task 13: what a recording made with collisions holds on top -------------------------------
+
+/// How a recording was made as far as collisions go (`car_oracle run --collide`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CollideRun {
+    /// The body touches things. (Off: the body is a ghost, as in every older recording.)
+    pub on: bool,
+    /// The car's own collider mesh (`collider.kn5`), which the oracle handed the game's
+    /// `Car::initColliderMesh`. `None`: the little stand-in box of the older recordings,
+    /// which never touches anything.
+    pub mesh: Option<super::colliders::ColliderMesh>,
+    /// `bounce_vel` of the game's mesh contact joints in that run (see
+    /// [`PhysicsCore::mesh_bounce_vel`](super::body::PhysicsCore)).
+    pub mesh_bounce_vel: f32,
+    /// `PhysicsCore::setNoCollisionSteps` at the start.
+    pub no_collision_steps: i32,
+    /// The flat test floor: one big quad at y = 0 as a real mesh (category 1) in static
+    /// sub-space 1.
+    pub floor: bool,
+}
+
+/// The oracle's test floor (`car_oracle run --floor`) as a static world.
+pub fn floor_world() -> rustyac_ode::StaticWorld {
+    const HALF: f32 = 3000.0;
+    let mut world = rustyac_ode::StaticWorld::new();
+    world.create_tri_mesh(vec![[-HALF, 0.0, -HALF], [-HALF, 0.0, HALF], [HALF, 0.0, HALF], [HALF, 0.0, -HALF]], vec![0, 1, 2, 0, 2, 3], 1, 0x14, 1);
+    world.clean();
+    world
+}
+
+/// One contact joint as the recordings hold it. Geoms are numbered: a mesh of the track by
+/// its index, floor box `k` of the car as 1000 + k, the car's collider mesh as 2000.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContactTrace {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+    pub depth: f32,
+    pub g1: i32,
+    pub g2: i32,
+    pub side1: i32,
+    pub side2: i32,
+    pub mode: i32,
+    pub mu: f32,
+    pub bounce: f32,
+    /// 0 unless the mode has `dContactSoftERP` (the game leaves the field unwritten then).
+    pub soft_erp: f32,
+    pub soft_cfm: f32,
+    /// Bit 0: the joint has a first body, bit 1: a second one, bit 2: it is reversed.
+    pub bodies: i32,
+}
+
+/// How many contact joints a recording holds value by value (all of them are in the hash).
+pub const CONTACT_COLUMNS: usize = 6;
+
+/// The per-step values of the contact joints (newest first, the order of ODE's joint list):
+/// their number, a hash over everything of every joint, and the first few in full.
+pub fn contact_trace_values(contacts: &[ContactTrace]) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    out.push(TraceValue::i("collide.contactJoints", contacts.len() as i32).extra());
+    // FNV-1a over the words of every joint
+    let mut hash: u32 = 0x811c_9dc5;
+    for c in contacts {
+        let words = [
+            c.pos[0].to_bits(),
+            c.pos[1].to_bits(),
+            c.pos[2].to_bits(),
+            c.normal[0].to_bits(),
+            c.normal[1].to_bits(),
+            c.normal[2].to_bits(),
+            c.depth.to_bits(),
+            c.g1 as u32,
+            c.g2 as u32,
+            c.side1 as u32,
+            c.side2 as u32,
+            c.mode as u32,
+            c.mu.to_bits(),
+            c.bounce.to_bits(),
+            c.soft_erp.to_bits(),
+            c.soft_cfm.to_bits(),
+            c.bodies as u32,
+        ];
+        for word in words {
+            for byte in word.to_le_bytes() {
+                hash = (hash ^ byte as u32).wrapping_mul(0x0100_0193);
+            }
+        }
+    }
+    out.push(TraceValue::i("collide.hash", hash as i32).extra());
+    for k in 0..CONTACT_COLUMNS {
+        let c = contacts.get(k).copied().unwrap_or_default();
+        for (axis, value) in ["x", "y", "z"].iter().zip(c.pos) {
+            out.push(TraceValue::f(&format!("collide.c{k}.pos.{axis}"), value).extra());
+        }
+        for (axis, value) in ["x", "y", "z"].iter().zip(c.normal) {
+            out.push(TraceValue::f(&format!("collide.c{k}.normal.{axis}"), value).extra());
+        }
+        out.push(TraceValue::f(&format!("collide.c{k}.depth"), c.depth).extra());
+        out.push(TraceValue::i(&format!("collide.c{k}.g1"), c.g1).extra());
+        out.push(TraceValue::i(&format!("collide.c{k}.g2"), c.g2).extra());
+        out.push(TraceValue::i(&format!("collide.c{k}.side1"), c.side1).extra());
+        out.push(TraceValue::i(&format!("collide.c{k}.side2"), c.side2).extra());
+        out.push(TraceValue::i(&format!("collide.c{k}.mode"), c.mode).extra());
+    }
+    out
+}
+
+/// The collision values of the Rust car after a step, under the names of the recordings.
+pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
+    use rustyac_ode::{GeomRef, JointKind};
+    let core = &chassis.core;
+    let name = |g: GeomRef| -> i32 {
+        match g {
+            GeomRef::StaticMesh(i) => i as i32,
+            GeomRef::Dyn(id) => {
+                if let Some(k) = core.box_colliders(chassis.body).iter().position(|&b| b == id) {
+                    1000 + k as i32
+                } else if let Some(k) = core.mesh_colliders(chassis.body).iter().position(|&m| m == id) {
+                    2000 + k as i32
+                } else {
+                    -1
+                }
+            }
+            _ => -1,
+        }
+    };
+    let contacts: Vec<ContactTrace> = core
+        .contact_joints()
+        .into_iter()
+        .map(|id| {
+            let joint = core.world.joint(id);
+            let JointKind::Contact { contact, .. } = &joint.kind else { unreachable!() };
+            let (s, c) = (&contact.surface, &contact.geom);
+            ContactTrace {
+                pos: c.pos,
+                normal: c.normal,
+                depth: c.depth,
+                g1: name(c.g1),
+                g2: name(c.g2),
+                side1: c.side1,
+                side2: c.side2,
+                mode: s.mode,
+                mu: s.mu,
+                bounce: s.bounce,
+                soft_erp: if s.mode & 8 != 0 { s.soft_erp } else { 0.0 },
+                soft_cfm: s.soft_cfm,
+                bodies: joint.node[0].body.is_some() as i32 | (joint.node[1].body.is_some() as i32) << 1 | ((joint.flags & 2 != 0) as i32) << 2,
+            }
+        })
+        .collect();
+    let mut out = contact_trace_values(&contacts);
+    out.push(TraceValue::i("collide.noCollisionCounter", core.no_collision_counter).extra());
+    out.push(TraceValue::i("collide.currentFrame", core.current_frame as i32).extra());
+    out.push(TraceValue::d("car.lastCollisionTime", chassis.last_collision_time).extra());
+    out.push(TraceValue::d("car.lastCollisionWithCarTime", chassis.last_collision_with_car_time).extra());
+    for (k, level) in chassis.damage_zone_level.iter().enumerate() {
+        out.push(TraceValue::f(&format!("car.damageZoneLevel.{k}"), *level).extra());
+    }
+    for (wheel, suspension) in ["lf", "rf", "lr", "rr"].iter().zip(&chassis.suspensions) {
+        out.push(TraceValue::f(&format!("sus.{wheel}.damage"), suspension.get_damage()).extra());
+    }
+    out
+}
+
+impl RollingChassis {
+    /// The oracle's "put down in any attitude" (a rolled-over car): `rows` are the body's
+    /// x, y and z axes in the world. `RigidBodyODE::setRotation` on the car body and on the
+    /// fuel tank, then `Car::forcePosition` without spoiling the lap.
+    pub fn force_attitude(&mut self, rows: &[[f32; 3]; 3], position: &Vec3f) {
+        let mut m = crate::vecmath::Mat44f::IDENTITY;
+        for (row, axis) in rows.iter().enumerate() {
+            m.m[row][..3].copy_from_slice(axis);
+        }
+        self.core.set_rotation(self.body, &m);
+        self.core.set_rotation(self.fuel_tank_body, &m);
+        self.force_position_with(position, false);
     }
 }
