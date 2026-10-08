@@ -495,15 +495,17 @@ impl GameAudio {
                 self.world.engine.start();
             }
         }
+        // Game::onIdle does nothing in a frame without time: the events wait for the next one
+        let dt = frame_dt(seconds);
+        if dt.is_nan() || dt <= 0.0 {
+            return;
+        }
         let (state, events) = {
             let mut feed = self.feed.lock().unwrap();
-            (feed.state.clone().or_else(|| self.last.clone()), std::mem::take(&mut feed.events))
+            let Some(state) = feed.state.clone().or_else(|| self.last.clone()) else { return };
+            (state, std::mem::take(&mut feed.events))
         };
-        let Some(state) = state else { return };
-        let dt = frame_dt(seconds);
-        if dt > 0.0 {
-            self.one_frame(state, &events, camera, camera_matrix, dt);
-        }
+        self.one_frame(state, &events, camera, camera_matrix, dt);
     }
 
     /// The frames of the 60 Hz grid that are waiting (a WAV written without a clock): each is

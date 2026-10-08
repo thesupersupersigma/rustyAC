@@ -294,6 +294,25 @@ impl AudioWorld {
         }
         self.step_physics_events(input.events);
         self.listener_priorities();
+        // CarAvatar::setNewPhysicsState @ 0x1400da420: another car's throttle and brake follow
+        // the physics at ten per second (the player's car takes the step as it is)
+        let mut cars = input.cars.to_vec();
+        for (i, frame) in cars.iter_mut().enumerate() {
+            let other = self.cars.get(i).and_then(|c| c.audio.as_ref()).is_some_and(|a| a.info().guid != 0);
+            if let (true, Some(old)) = (other, self.previous.get(i)) {
+                let k = input.dt * 10.0;
+                let a = if k > 1.0 {
+                    1.0
+                } else if k >= 0.0 {
+                    k
+                } else {
+                    0.0
+                };
+                frame.gas = ((frame.gas - old.gas) * a) + old.gas;
+                frame.brake = ((frame.brake - old.brake) * a) + old.brake;
+            }
+        }
+        let input = &FrameInput { cars: &cars, events: input.events, sim: input.sim, listener: input.listener, dt: input.dt };
         for (car, frame) in self.cars.iter_mut().zip(input.cars) {
             car.avatar_update(&self.engine, frame, &input.sim, input.dt);
         }

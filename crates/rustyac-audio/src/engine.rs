@@ -326,7 +326,8 @@ impl AudioEngine {
         // a wifstream in the C locale: one byte, one character; text mode
         let text: String = bytes.iter().filter(|&&b| b != b'\r').map(|&b| b as char).collect();
         for line in text.split('\n') {
-            let line = line.trim_matches(|c: char| c == ' ' || c == '\t' || c == '\r' || c == '\n');
+            // ksTrim @ 0x1402396f0: space, tab, line feed, vertical tab, form feed, carriage return
+            let line = line.trim_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r'));
             if line.is_empty() {
                 continue;
             }
@@ -923,7 +924,9 @@ unsafe fn driver_info_unlogged(low: RawHandle, i: i32) -> String {
 
 fn name_of(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
+    // `mbstowcs` in the C locale: every byte becomes one character (a name that is not ASCII
+    // only matches an audio.ini that holds it in that same widened form, as in the game)
+    bytes[..end].iter().map(|&b| b as char).collect()
 }
 
 /// `fmodCallback` @ 0x1401f9580: the sound device was lost. The game stops with a "critical

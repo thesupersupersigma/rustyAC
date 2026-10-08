@@ -4,7 +4,7 @@
 
 State after the last commit (kept up to date with every commit):
 
-- **In progress**: everything of the task is written and checked; left are the version, the lock files and the tag.
+- **Done.** Everything is on `master`, nothing is pushed. The version is 0.19.0 and the tag `v0.19.0` is on the last commit. Nothing is half done.
 - What exists: `crates/rustyac-audio` (the binding to the player's FMOD DLLs with its call log, `AudioEngine`,
   the two DSP plug-ins, `CarAudioFMOD`, `TrackAudio`, the simulation's part, the golden file), the game side
   (`crates/rustyac-game/src/audio.rs`, the options in `cli.rs`, the wiring in `main.rs`), the oracle
@@ -42,7 +42,8 @@ placed and fed by a 1:1 port of the game's sound code.
   laps, launches, lock-ups, grass, gravel, kerb strikes, wall hits, the limiter, three listener positions)
   **the port makes exactly the calls the game makes: 16,704,338 FMOD calls, every argument bit equal.**
   And end to end: `rustyac.exe`, replaying a drive with its own physics and its own inputs for the sound,
-  writes the same call list as the game's sound code fed by the game's physics, on 6 drives.
+  writes the same call list as the game's sound code fed by the game's physics, on 7 drives, a whole
+  lap of Spa among them.
 - **The two DSP plug-ins are bit-exact**: 75 million samples through the game's own code and through the
   port, no difference.
 - **The WAV files cannot be byte-identical, and that is FMOD, not the port.** FMOD picks samples and start
@@ -314,6 +315,7 @@ listener and levels). Equal logs mean every input of the sound is bit-equal to t
 | BMW M3 E30 | `spa_wall_slide` (grass, the barrier; collisions) | chase | 1080 | 398,619 | identical | **identical** |
 | Ferrari F40 | `spa_launch` (turbo, blow-off) | cockpit | 723 | 285,725 | identical | **identical** |
 | Formula Alpha 2026 | `spa_launch` (ERS, its own GUIDs) | cockpit | 361 | 144,218 | identical | **identical** |
+| F2004 | `trk_lap`: a whole lap of Spa (collisions) | cockpit | 9079 | 3,354,231 | differs from frame 8193 on (FMOD ended a one-shot sound a frame apart) | **identical** |
 
 ### 5.4 The two DSP plug-ins
 
@@ -445,8 +447,15 @@ takes 0.4 to 0.8 ms: a 152 s lap is mixed in about 6 s.
   code and the same FMOD calls as the file writer's, FMOD picks the device as AC has it do, and it ran for
   minutes on the no-sound output; but a device problem would only show on the first real run.
 - **One car.** `CarAudioFMOD` is built per car and the rules for other cars are ported (the ranking by
-  distance, the fades from rank 2 on, the opponents' level, the smoothed throttle), but with one car none of
-  them is exercised, by the oracle or otherwise. Phase 4.
+  distance, the fades from rank 2 on, the opponents' level, their smoothed throttle and brake), but with one
+  car none of them is exercised, by the oracle or otherwise. Phase 4.
+- **Read-only review** (three readers against the machine code, after the comparisons; their notes are
+  `re/scratch/task19/review_*.md`): fixed from it are the device name's decoding, `ksTrim`'s full set of
+  characters in `GUIDs.txt`, the opponents' smoothed throttle and brake, and collision events kept for the
+  next frame when a frame has no time. Left as they are: the free camera's roll-off (mode 6 sets it from up
+  to two camera objects rustyAC does not have), `GameTime`'s "stabilizer" (its switch was not found), what a
+  tyre's surface is before it first touches the ground, and what the game reads from its stack after a
+  failed FMOD call on an event that does not exist.
 - **Cameras.** The listener is rustyAC's own camera matrix (cockpit, the five drivable views, the car's
   cameras), which are not AC's cameras bit for bit (no head shake, no glance); it is taken from the blended
   picture, the velocity from the unblended car as in AC. There is no track, free or helicopter camera in
