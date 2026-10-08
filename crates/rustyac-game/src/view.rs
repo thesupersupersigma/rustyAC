@@ -68,6 +68,14 @@ pub struct CarView {
     pub device: u32,
     /// The lap, on a track.
     pub lap: LapView,
+    /// `Car::damageZoneLevel`: front, rear, left, right, the largest; km/h of closing speed.
+    pub damage: [f32; 5],
+    /// `ISuspension::getDamage` per wheel: 0 … 1.
+    pub suspension_damage: [f32; 4],
+    /// `Engine::lifeLeft`: 1000 when new, below zero when blown.
+    pub engine_life: f32,
+    /// Contact joints of the body in the last step.
+    pub contacts: u32,
     /// The surface under each tyre (its `KEY` in `surfaces.ini`), where the car is on a track.
     pub surfaces: [SurfaceName; 4],
 }
@@ -160,6 +168,10 @@ impl Default for CarView {
             fuel: 0.0,
             device: 0,
             lap: LapView::default(),
+            damage: [0.0; 5],
+            suspension_damage: [0.0; 4],
+            engine_life: 1000.0,
+            contacts: 0,
             surfaces: [SurfaceName::default(); 4],
         }
     }
@@ -235,6 +247,9 @@ impl CarView {
             ff: car.last_ff,
             fuel: car.fuel as f32,
             device: sim.car.device.source.device_id(),
+            damage: car.damage_zone_level,
+            contacts: car.core.contact_joints().len() as u32,
+            engine_life: 1000.0,
             ..CarView::default()
         };
         for index in 0..4.min(car.tyres.len()) {
@@ -247,11 +262,13 @@ impl CarView {
             view.rim_radius[index] = tyre.data.rim_radius;
             view.wheel_load[index] = tyre.status.load;
             view.wheel_slip[index] = tyre.status.nd_slip;
+            view.suspension_damage[index] = car.suspensions[index].get_damage();
         }
         if let Some(drivetrain) = &car.drivetrain {
             view.rpm = drivetrain.get_engine_rpm();
             view.gear = drivetrain.base().current_gear;
             view.rpm_limit = drivetrain.engine().get_limiter_rpm() as f32;
+            view.engine_life = drivetrain.engine().base().life_left as f32;
         }
         if let Some(track) = &sim.track {
             for index in 0..4.min(car.tyres.len()) {

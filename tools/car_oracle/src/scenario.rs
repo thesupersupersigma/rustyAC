@@ -504,7 +504,7 @@ pub fn track() -> Vec<Scenario> {
         on_track("spa_wall_slide", "from the hot-lap start at 100 km/h, steered further and further to the left: off the road and along the wall", 18.0, TrackKind::WallSlide),
         on_track("spa_bottoming", "from 300 m before the bottom of Eau Rouge flat out through the compression: the floor on the road", 16.0, TrackKind::Bottoming),
         on_track("spa_kerb_strike", "at the Bus Stop chicane much too fast and deep over its inner kerbs", 16.0, TrackKind::KerbStrike),
-        on_track("spa_rollover", "put down on its roof above the road, left to settle for 4.5 s, then put down on its side", 10.0, TrackKind::Rollover),
+        on_track("spa_rollover", "put down on its roof 0.8 m above the road and left to settle, five seconds later put down on its side (a second of throttle each time: a sleeping car would hang in the air)", 10.0, TrackKind::Rollover),
     ]
 }
 

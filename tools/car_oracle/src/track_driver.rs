@@ -282,10 +282,16 @@ impl Follower {
             }
             if let Some((p, tail)) = self.put_down {
                 let roll = match car.step {
-                    0 => Some(std::f32::consts::PI),
-                    1500 => Some(std::f32::consts::FRAC_PI_2),
+                    400 => Some(std::f32::consts::PI),
+                    1900 => Some(std::f32::consts::FRAC_PI_2),
                     _ => None,
                 };
+                // a car that was asleep when it was put down stays frozen in the air (the
+                // game's sleeping rule only looks at speed, spin, the tyres' last loads and
+                // the throttle): a second of throttle wakes it, and it drops
+                if (400..750).contains(&car.step) || (1900..2250).contains(&car.step) {
+                    c.gas = 0.6;
+                }
                 if let Some(roll) = roll {
                     c.teleport = 3;
                     c.teleport_position = [p[0], p[1] + 1.25, p[2]];

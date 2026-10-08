@@ -182,7 +182,7 @@ pub struct LoopConfig {
     pub auto_reset: bool,
 }
 
-/// Steps of lying on its roof (or side) before the car is put back: 3 s.
+/// Steps of lying still on its roof (or side) before the car is put back: 3 s.
 const FLIPPED_STEPS: u32 = 1000;
 
 /// Runs the simulation until told to quit. Returns it with the timing.
@@ -329,12 +329,14 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             n += 1;
         }
         if config.auto_reset && config.replay.is_none() {
-            // there are no walls and the car body has nothing to lie on: a car that is on
-            // its roof, has left the world or has broken numbers is put back (on a track: on
-            // the road where it left it, as with Shift+R)
+            // a car that has come to rest on its roof or side for three seconds, has left the
+            // world or has broken numbers is put back (on a track: on the road where it lies,
+            // as with Shift+R). While it still slides or tumbles it is left alone.
             let body = sim.car.car.core.get_world_matrix(sim.car.car.body).m;
             let broken = body.iter().flatten().any(|x| !x.is_finite());
-            flipped = if body[1][1] < 0.2 { flipped + 1 } else { 0 };
+            let spin = sim.car.car.core.get_angular_velocity(sim.car.car.body);
+            let at_rest = sim.car.car.speed < 0.5 && (spin.x * spin.x + spin.y * spin.y + spin.z * spin.z) < 0.25;
+            flipped = if body[1][1] < 0.2 && at_rest { flipped + 1 } else { 0 };
             if broken {
                 sim.car.device.source.request(event::REBUILD);
             } else if body[3][1] < floor || body[3][1] > ceiling || flipped > FLIPPED_STEPS {

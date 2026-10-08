@@ -516,6 +516,13 @@ fn build_car(
         env.session_type = if setup.spawn == "hotlap" { 4 } else { 1 };
     }
     let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
+    // CarAvatar::initPhysics: the car's collider mesh, when the game's folder has one for it
+    // (without it the car has only its floor boxes: walls do not stop it)
+    if let Some(root) = ac_root() {
+        if let Err(message) = car.car.load_collider_mesh(&root) {
+            eprintln!("collider mesh: {message}");
+        }
+    }
     if let Some(track) = track {
         // CarAvatar::setSpawnPositionIndex("PIT", 0): the car's pit box
         if let Some(&node) = track.spawn_positions.get("PIT").and_then(|slots| slots.first()) {
@@ -537,6 +544,8 @@ fn build_car(
     car.car.force_rotation(&spawn.tail);
     car.car.force_position(&spawn.position);
     car.car.session_start()?;
+    // PhysicsEngine::setSessionInfo: no contacts are looked for during the first 0.75 s
+    car.car.reset_collisions_for_new_session();
     Ok(car)
 }
 
@@ -638,6 +647,10 @@ impl GameSim {
             self.car.car.queue(move |car| {
                 car.force_rotation(&spawn.tail);
                 car.force_position(&spawn.position);
+                // the game's teleport repairs the car (CarAvatar::forcePosition's job: body
+                // and suspension damage; the engine is renewed by Car::forcePosition itself)
+                car.set_damage_level(0.0);
+                car.reset_suspension_damage_level();
                 // back at the spawn point the timer starts again, as at a session's start
                 // (CarAvatar::onNewSession queues TimeTransponder::reset); the lap list stays
                 car.transponder.reset();
@@ -658,6 +671,8 @@ impl GameSim {
             self.car.car.queue(move |car| {
                 car.force_rotation(&pose.tail);
                 car.force_position(&pose.position);
+                car.set_damage_level(0.0);
+                car.reset_suspension_damage_level();
                 // the game's teleport only forgets the timing lines crossed so far (a lap past
                 // its first sector line then no longer counts); being lifted back onto the road
                 // is help the game does not have, so the lap in progress is also marked as cut

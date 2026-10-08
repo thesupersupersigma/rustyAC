@@ -162,6 +162,32 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         y += line;
     }
 
+    // under it: damage (the five zones in km/h of impact, the bend of each corner's
+    // suspension, the engine), shown once there is any or while the body touches something
+    let hurt = view.damage.iter().any(|d| *d > 0.0) || view.suspension_damage.iter().any(|d| *d > 0.0) || view.engine_life < 1000.0;
+    if hurt || view.contacts > 0 {
+        let top = 10.0 * s + line * rows as f32 + 16.0 * s + 8.0 * s;
+        hud.rect(10.0 * s, top, 430.0 * s, line * 3.0 + 14.0 * s, PANEL);
+        let mut y = top + 7.0 * s;
+        let level = |d: f32| if d > 60.0 { RED } else if d > 0.0 { YELLOW } else { DIM };
+        let mut tx = x + hud.text(x, y, 0.75 * s, if hurt { WHITE } else { DIM }, "DAMAGE") + 12.0 * s;
+        for (label, d) in ["front", "rear", "left", "right", "most"].iter().zip(view.damage) {
+            tx += hud.text(tx, y, 0.75 * s, level(d), &format!("{label} {d:.0}")) + 10.0 * s;
+        }
+        y += line;
+        let mut tx = x + hud.text(x, y, 0.75 * s, DIM, "suspension") + 12.0 * s;
+        for (label, d) in ["LF", "RF", "LR", "RR"].iter().zip(view.suspension_damage) {
+            tx += hud.text(tx, y, 0.75 * s, if d > 0.5 { RED } else if d > 0.0 { YELLOW } else { DIM }, &format!("{label} {:.0}%", d * 100.0)) + 10.0 * s;
+        }
+        y += line;
+        let life = view.engine_life;
+        let engine = if life <= 0.0 { "engine BLOWN".to_string() } else { format!("engine {:.0}%", life * 0.1) };
+        let w = hud.text(x, y, 0.75 * s, if life <= 0.0 { RED } else if life < 1000.0 { YELLOW } else { DIM }, &engine);
+        if view.contacts > 0 {
+            hud.text(x + w + 16.0 * s, y, 0.75 * s, YELLOW, &format!("touching: {} contact points", view.contacts));
+        }
+    }
+
     // bottom left: revs, gear, speed (the middle of the picture is the car's)
     let panel_w = 470.0 * s;
     let panel_h = 150.0 * s;
