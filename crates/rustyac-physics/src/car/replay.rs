@@ -1392,6 +1392,8 @@ impl RollingChassis {
         for bar in &self.antiroll_bars {
             out.extend(bar.ctrl.stages.iter().map(|stage| stage.current_value.to_bits()));
         }
+        // and of the rear-wheel-steering controller
+        out.extend(self.steering_system.ctrl_4ws.stages.iter().map(|stage| stage.current_value.to_bits()));
         // the ported systems, when the chassis has them
         if let Some(brakes) = &self.brake_system {
             brakes.save_state(&mut out);
@@ -1602,6 +1604,9 @@ impl RollingChassis {
             for stage in &mut bar.ctrl.stages {
                 stage.current_value = f32::from_bits(words.next().ok_or("the saved state is too short")?);
             }
+        }
+        for stage in &mut self.steering_system.ctrl_4ws.stages {
+            stage.current_value = f32::from_bits(words.next().ok_or("the saved state is too short")?);
         }
         if let Some(brakes) = &mut self.brake_system {
             brakes.load_state(&mut words)?;

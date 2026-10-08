@@ -308,13 +308,17 @@ fn ks_square_wave(t: f32, period: f32) -> f32 {
     }
 }
 
-/// AC's `SteeringSystem` (0x40 bytes) without the four-wheel-steer controller (`ctrl_4ws.ini`,
-/// 2 of the 113 cars; needs `DynamicController`, a later task).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// AC's `SteeringSystem` (0x40 bytes).
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SteeringSystem {
     /// `linearRatio`: metres of steering-rod shift per degree of `finalSteerAngleSignal`
     /// (`car.ini [CONTROLS] LINEAR_STEER_ROD_RATIO`).
     pub linear_ratio: f32,
+    /// `has4ws`: the car has a `ctrl_4ws.ini` (`SteeringSystem::init` @ 0x1402b80d0).
+    pub has_4ws: bool,
+    /// `ctrl4ws`: the rear-wheel-steering controller. Its output is the rod shift of both
+    /// rear wheels, in metres, with the same sign on both sides.
+    pub ctrl_4ws: super::DynamicController,
 }
 
 /// What one tyre was told and did during its step (only kept while tracing).
@@ -891,7 +895,7 @@ impl RollingChassis {
             tyres: Vec::new(),
             heave_springs: [HeaveSpring::default(); 2],
             antiroll_bars: Default::default(),
-            steering_system: SteeringSystem { linear_ratio: steer_linear_ratio },
+            steering_system: SteeringSystem { linear_ratio: steer_linear_ratio, ..SteeringSystem::default() },
             setup_manager: SetupManager::default(),
             brake_system: None,
             drivetrain: None,
@@ -1055,8 +1059,11 @@ impl RollingChassis {
                 chassis.antiroll_bars[axle].ctrl = super::DynamicController::load(&path)?;
             }
         }
-        if crate::data::exists(&data_path.join("ctrl_4ws.ini")) {
-            return Err(format!("{}: rear-wheel steering is not ported", data_path.join("ctrl_4ws.ini").display()));
+        // SteeringSystem::init @ 0x1402b80d0 ("Initializing 4ws")
+        let path = data_path.join("ctrl_4ws.ini");
+        if crate::data::exists(&path) {
+            chassis.steering_system.ctrl_4ws = super::DynamicController::load(&path)?;
+            chassis.steering_system.has_4ws = true;
         }
         chassis.sleeping_frames = 0;
         chassis.update_body_mass();
@@ -1782,6 +1789,15 @@ impl RollingChassis {
         self.suspensions[0].set_steer_length_offset(&mut self.core, offset);
         let offset = -(self.final_steer_angle_signal * self.steering_system.linear_ratio);
         self.suspensions[1].set_steer_length_offset(&mut self.core, offset);
+        // rear-wheel steering: one controller value for both rear rods (on a rear wheel this
+        // is also what brings toe and collision damage into the geometry every step)
+        if self.steering_system.has_4ws {
+            let mut ctrl = std::mem::take(&mut self.steering_system.ctrl_4ws);
+            let offset = ctrl.eval(&super::CarSignals::of(self));
+            self.steering_system.ctrl_4ws = ctrl;
+            self.suspensions[2].set_steer_length_offset(&mut self.core, offset);
+            self.suspensions[3].set_steer_length_offset(&mut self.core, offset);
+        }
         // 11 to 14: auto-blip, auto-shifter, gear changer, drivetrain
         match self.drivetrain.take() {
             Some(mut drivetrain) => {
