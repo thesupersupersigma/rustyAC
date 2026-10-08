@@ -21,6 +21,9 @@ pub struct CallLog {
     /// running hashes at the marks, for golden tests: (label, lines so far, hash so far)
     marks: Vec<(String, u64, u64)>,
     keep_marks: bool,
+    /// Another run's log, whose answers to the state queries are given to this run's caller
+    /// (see [`start_scripted`]).
+    script: Option<Vec<String>>,
 }
 
 pub(crate) static LOG: Mutex<Option<CallLog>> = Mutex::new(None);
@@ -55,8 +58,26 @@ pub fn start(file: Option<&Path>) -> Result<(), String> {
         hash: FNV_OFFSET,
         marks: Vec::new(),
         keep_marks: true,
+        script: None,
     });
     LOGGING.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// As [`start`], with the log of another run of the same drive as a script: wherever this run
+/// asks FMOD whether an event is playing or paused with the same call at the same place, it is
+/// told what the other run was told.
+///
+/// FMOD's mix is not the same from run to run (it picks samples and start offsets with random
+/// numbers seeded from the clock), so a one-shot sound ends a frame earlier or later, and the
+/// caller, who asks whether it still plays, goes another way. With the answers of one run
+/// given to the other, two callers make the same calls exactly when they are the same logic.
+pub fn start_scripted(file: Option<&Path>, script: &Path) -> Result<(), String> {
+    let text = std::fs::read_to_string(script).map_err(|e| format!("{}: {e}", script.display()))?;
+    start(file)?;
+    if let Some(log) = LOG.lock().unwrap().as_mut() {
+        log.script = Some(text.lines().map(str::to_string).collect());
+    }
     Ok(())
 }
 
@@ -97,6 +118,17 @@ impl CallLog {
             let _ = out.write_all(line.as_bytes());
             let _ = out.write_all(b"\n");
         }
+    }
+
+    /// What the script's run was answered at this place of the log, if it made the call that
+    /// `before_arrow` is: the words after the result code.
+    pub(crate) fn scripted_answer(&self, before_arrow: &str) -> Option<Vec<String>> {
+        let line = self.script.as_ref()?.get(self.lines as usize)?;
+        let (call, answer) = line.split_once(" -> ")?;
+        if call != before_arrow {
+            return None;
+        }
+        Some(answer.split(' ').skip(1).map(str::to_string).collect())
     }
 
     /// The number of an FMOD object: given at its first appearance.

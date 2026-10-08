@@ -12,3 +12,5 @@ license = "GPL-3.0-or-later"
 rustyac-math = { path = "../rustyac-math" }
 # the port of INIReader (plain files and data.acd)
 rustyac-physics = { path = "../rustyac-physics" }
+# kn5 models: the nodes of a track (ambience emitters, reverb nodes, occluder meshes)
+rustyac-content = { path = "../rustyac-content" }

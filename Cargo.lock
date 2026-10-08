@@ -104,6 +104,7 @@ dependencies = [
 name = "rustyac-audio"
 version = "0.18.0"
 dependencies = [
+ "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
 ]

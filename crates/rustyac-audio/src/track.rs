@@ -53,6 +53,53 @@ impl Scene {
         index
     }
 
+    /// The scene of an installed track: every model of the track (or layout) under the track
+    /// node, in the game's load order, each node with its own matrix (`TrackAvatar::init3D`
+    /// turns and places a model's top node as `models.ini` says). Vertices are only read for
+    /// the meshes `data/audio_sources.ini` names as occluders.
+    pub fn load(folder: &Path, config: &str) -> Result<Scene, String> {
+        use rustyac_content::kn5::{Kn5, NodeClass};
+        use rustyac_physics::track::loader::{top_node_matrix, track_models};
+        use rustyac_physics::vecmath::Mat44f;
+        let data = if config.is_empty() { folder.to_path_buf() } else { folder.join(config) };
+        let mut occluders = Vec::new();
+        let ini = IniReader::load(&append_path(&append_path(&data, "data"), "audio_sources.ini"))?;
+        for i in 0.. {
+            let sec = format!("OCCLUDER_{i}");
+            if !ini.has_section(&sec) {
+                break;
+            }
+            occluders.push(ini.get_string(&sec, "MESH"));
+        }
+        let mut scene = Scene::new();
+        for model in track_models(folder, config)? {
+            let kn5 = Kn5::open(&model.file).map_err(|e| format!("{}: {e}", model.file.display()))?;
+            let mut reader = None;
+            let mut index_of = vec![0usize; kn5.nodes.len()];
+            for (k, node) in kn5.nodes.iter().enumerate() {
+                let name = node.name.game_text().to_string();
+                let (parent, matrix) = match node.parent {
+                    Some(parent) => (index_of[parent], node.matrix),
+                    None => (0, top_node_matrix(&Mat44f { m: node.matrix }, model.position, model.rotation).m),
+                };
+                let flat: Mat = std::array::from_fn(|i| matrix[i / 4][i % 4]);
+                let renderable = node.class != NodeClass::Base;
+                let mesh = match (&node.mesh, node.class == NodeClass::Mesh && occluders.contains(&name)) {
+                    (Some(info), true) => {
+                        if reader.is_none() {
+                            reader = Some(kn5.reader().map_err(|e| e.to_string())?);
+                        }
+                        let r = reader.as_mut().unwrap();
+                        Some(SceneMesh { positions: r.positions(info).map_err(|e| e.to_string())?, indices: r.indices(info).map_err(|e| e.to_string())? })
+                    }
+                    _ => None,
+                };
+                index_of[k] = scene.add(parent, &name, flat, renderable, mesh);
+            }
+        }
+        Ok(scene)
+    }
+
     /// `Node::findChildrenByPrefix` @ 0x14020e050: depth first, the node itself included.
     pub fn find_children_by_prefix(&self, node: usize, prefix: &str, out: &mut Vec<usize>) {
         if self.nodes[node].name.starts_with(prefix) {

@@ -62,6 +62,7 @@ struct Extra {
     set_output: unsafe extern "C" fn(RawHandle, i32) -> i32,
     set_dsp_buffer_size: unsafe extern "C" fn(RawHandle, u32, i32) -> i32,
     flush_sample_loading: unsafe extern "C" fn(RawHandle) -> i32,
+    get_sample_loading_state: unsafe extern "C" fn(RawHandle, *mut i32) -> i32,
 }
 
 pub struct Api {
@@ -71,6 +72,10 @@ pub struct Api {
     wav_file: CString,
     /// The folder the DLLs were loaded from: the game's folder.
     folder: PathBuf,
+    /// The Studio system `studio_create` made last.
+    studio: std::sync::atomic::AtomicUsize,
+    /// Every event description handed out (non-real-time runs wait for their samples).
+    descriptions: std::sync::Mutex<Vec<usize>>,
 }
 
 // SAFETY: function addresses and immutable settings.
@@ -122,6 +127,10 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
                     studio,
                     "?flushSampleLoading@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ",
                 )?),
+                get_sample_loading_state: std::mem::transmute::<usize, unsafe extern "C" fn(RawHandle, *mut i32) -> i32>(symbol(
+                    studio,
+                    "?getSampleLoadingState@EventDescription@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAW4FMOD_STUDIO_LOADING_STATE@@@Z",
+                )?),
             },
         )
     };
@@ -131,7 +140,7 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
         }
         _ => CString::default(),
     };
-    Ok(API.get_or_init(|| Api { fns, extra, output, wav_file, folder: folder.to_path_buf() }))
+    Ok(API.get_or_init(|| Api { fns, extra, output, wav_file, folder: folder.to_path_buf(), studio: std::sync::atomic::AtomicUsize::new(0), descriptions: std::sync::Mutex::new(Vec::new()) }))
 }
 
 impl Api {
@@ -157,6 +166,9 @@ pub trait Arg {
     fn address(&self) -> usize {
         0
     }
+    /// Replaces what FMOD wrote by a scripted answer (the next of `words`), if this is an
+    /// output of plain data.
+    fn force(&self, _words: &mut std::slice::Iter<String>) {}
 }
 
 impl Arg for i32 {
@@ -241,6 +253,20 @@ impl<T> Clone for Out<T> {
 }
 impl<T> Copy for Out<T> {}
 impl<T: Pod> Arg for Out<T> {
+    fn force(&self, words: &mut std::slice::Iter<String>) {
+        let Some(word) = words.next() else { return };
+        if self.0.is_null() || word.contains('_') {
+            return;
+        }
+        // SAFETY: FMOD has just written a `T` here; the scripted bytes are a `T` of the same call.
+        unsafe {
+            match (size_of::<T>(), u32::from_str_radix(word, 16)) {
+                (4, Ok(value)) => self.0.cast::<u32>().write_unaligned(value),
+                (1, Ok(value)) => self.0.cast::<u8>().write(value as u8),
+                _ => {}
+            }
+        }
+    }
     fn post(&self, _: &mut CallLog, text: &mut String) {
         text.push(' ');
         if self.0.is_null() {
@@ -303,6 +329,14 @@ fn log_call(name: &str, args: &[&dyn Arg], result: i32, forget: bool) {
     text.push_str(name);
     for arg in args {
         arg.pre(log, &mut text);
+    }
+    if result == FMOD_OK && (name == "event_get_playback_state" || name == "event_get_paused") {
+        if let Some(answer) = log.scripted_answer(&text) {
+            let mut words = answer.iter();
+            for arg in args {
+                arg.force(&mut words);
+            }
+        }
     }
     let _ = write!(text, " -> {result}");
     if result == FMOD_OK {
@@ -408,8 +442,6 @@ fmod_api! {
             fn system_get_channels_playing(this: Handle, channels: Quiet<i32>, real: Quiet<i32>);
         low "?getDSPBufferSize@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAIPEAH@Z"
             fn system_get_dsp_buffer_size(this: Handle, length: Quiet<u32>, count: Quiet<i32>);
-        low "?setAdvancedSettings@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAUFMOD_ADVANCEDSETTINGS@@@Z"
-            fn system_set_advanced_settings(this: Handle, settings: Sized);
         low "?setCallback@System@FMOD@@QEAA?AW4FMOD_RESULT@@P6A?AW43@PEAUFMOD_SYSTEM@@IPEAX11@ZI@Z"
             fn system_set_callback(this: Handle, callback: Quiet<c_void>, mask: u32);
         low "?get3DSettings@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAM00@Z"
@@ -456,8 +488,6 @@ fmod_api! {
             fn studio_get_cpu_usage(this: Handle, usage: Quiet<c_void>);
         studio "?getBufferUsage@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAUFMOD_STUDIO_BUFFER_USAGE@@@Z"
             fn studio_get_buffer_usage(this: Handle, usage: Quiet<c_void>);
-        studio "?unload@Bank@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
-            fn bank_unload(this: Handle) [forget];
         studio "?setParameterValue@EventInstance@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDM@Z"
             fn event_set_parameter_value(this: Handle, name: Str, value: f32);
         studio "?release@EventInstance@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
@@ -482,8 +512,6 @@ fmod_api! {
             fn event_set_pitch(this: Handle, pitch: f32);
         studio "?setVolume@EventInstance@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@M@Z"
             fn event_set_volume(this: Handle, volume: f32);
-        studio "?unloadSampleData@EventDescription@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
-            fn description_unload_sample_data(this: Handle);
         studio "?loadSampleData@EventDescription@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
             fn description_load_sample_data(this: Handle);
         studio "?createInstance@EventDescription@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAPEAVEventInstance@23@@Z"
@@ -492,14 +520,8 @@ fmod_api! {
             fn description_get_maximum_distance(this: Handle, distance: Out<f32>);
         studio "?setAdvancedSettings@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@PEAUFMOD_STUDIO_ADVANCEDSETTINGS@@@Z"
             fn studio_set_advanced_settings(this: Handle, settings: Sized);
-        studio "?release@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
-            fn studio_release(this: Handle) [forget];
-        studio "?flushCommands@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
-            fn studio_flush_commands(this: Handle);
         studio "?getLowLevelSystem@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEAPEAV13@@Z"
             fn studio_get_low_level_system(this: Handle, system: OutHandle);
-        studio "?getEventByID@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEBUFMOD_GUID@@PEAPEAVEventDescription@23@@Z"
-            fn studio_get_event_by_id(this: Handle, guid: In<Guid>, description: OutHandle);
         studio "?getListenerAttributes@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@HPEAUFMOD_3D_ATTRIBUTES@@@Z"
             fn studio_get_listener_attributes(this: Handle, listener: i32, attributes: Out<Attributes3d>);
         studio "?setListenerAttributes@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@HPEBUFMOD_3D_ATTRIBUTES@@@Z"
@@ -518,6 +540,18 @@ fmod_api! {
             fn studio_update(this: Handle);
         studio "?create@System@Studio@FMOD@@SA?AW4FMOD_RESULT@@PEAPEAV123@I@Z"
             fn studio_create(system: OutHandle, header_version: u32);
+        studio "?unload@Bank@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
+            fn bank_unload(this: Handle);
+        studio "?unloadSampleData@EventDescription@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
+            fn description_unload_sample_data(this: Handle);
+        studio "?flushCommands@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
+            fn studio_flush_commands(this: Handle);
+        studio "?getEventByID@System@Studio@FMOD@@QEBA?AW4FMOD_RESULT@@PEBUFMOD_GUID@@PEAPEAVEventDescription@23@@Z"
+            fn studio_get_event_by_id(this: Handle, guid: In<Guid>, description: OutHandle);
+        studio "?release@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@XZ"
+            fn studio_release(this: Handle);
+        low "?setAdvancedSettings@System@FMOD@@QEAA?AW4FMOD_RESULT@@PEAUFMOD_ADVANCEDSETTINGS@@@Z"
+            fn system_set_advanced_settings(this: Handle, settings: Sized);
         studio "?loadBankFile@System@Studio@FMOD@@QEAA?AW4FMOD_RESULT@@PEBDIPEAPEAVBank@23@@Z"
             fn studio_load_bank_file(this: Handle, file: Str, flags: u32, bank: OutHandle);
     }
@@ -599,6 +633,9 @@ pub unsafe extern "C" fn studio_create(system: OutHandle, header_version: u32) -
         Output::WavNrt { rate, block, .. } => Some((OUTPUTTYPE_WAVWRITER_NRT, *rate, *block)),
         Output::NoSoundNrt { rate, block } => Some((OUTPUTTYPE_NOSOUND_NRT, *rate, *block)),
     };
+    if result == FMOD_OK && !system.0.is_null() {
+        api.studio.store(*system.0 as usize, Ordering::Relaxed);
+    }
     if let (Some((kind, rate, block)), true) = (nrt, result == FMOD_OK && !system.0.is_null()) {
         let mut low: RawHandle = std::ptr::null_mut();
         if (api.fns.studio_get_low_level_system)(Handle(*system.0), OutHandle(&mut low)) == FMOD_OK && !low.is_null() {
@@ -609,6 +646,154 @@ pub unsafe extern "C" fn studio_create(system: OutHandle, header_version: u32) -
     }
     if LOGGING.load(Ordering::Relaxed) {
         log_call("studio_create", &[&system, &header_version], result, false);
+    }
+    result
+}
+
+/// `Studio::System::getEventByID`: the description is noted for [`studio_flush_commands`].
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn studio_get_event_by_id(this: Handle, guid: In<Guid>, description: OutHandle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let result = (api.fns.studio_get_event_by_id)(this, guid, description);
+    if result == FMOD_OK && api.non_real_time() && !description.0.is_null() {
+        let mut list = api.descriptions.lock().unwrap();
+        let address = *description.0 as usize;
+        if !list.contains(&address) {
+            list.push(address);
+        }
+    }
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("studio_get_event_by_id", &[&this, &guid, &description], result, false);
+    }
+    result
+}
+
+/// `Studio::System::flushCommands` (the game calls it at the end of every car's sound
+/// constructor). For a non-real-time output the call also waits, without mixing anything,
+/// until FMOD's loader thread has the sample data of every event asked for so far: what plays
+/// in which block then never depends on how fast the disk was.
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn studio_flush_commands(this: Handle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let result = (api.fns.studio_flush_commands)(this);
+    if api.non_real_time() {
+        let list = api.descriptions.lock().unwrap().clone();
+        let start = std::time::Instant::now();
+        loop {
+            // FMOD_STUDIO_LOADING_STATE_LOADING = 2
+            let loading = list.iter().any(|&d| {
+                let mut state = 0i32;
+                (api.extra.get_sample_loading_state)(d as RawHandle, &mut state) == FMOD_OK && state == 2
+            });
+            if !loading || start.elapsed().as_secs() >= 30 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("studio_flush_commands", &[&this], result, false);
+    }
+    result
+}
+
+/// `EventDescription::unloadSampleData`. For a non-real-time output the unload is carried out
+/// before the call returns (FMOD's loader thread otherwise races the calls that follow at the
+/// end of a run, and FMOD crashes now and then).
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn description_unload_sample_data(this: Handle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let result = (api.fns.description_unload_sample_data)(this);
+    let studio = api.studio.load(Ordering::Relaxed) as RawHandle;
+    if api.non_real_time() && !studio.is_null() && result == FMOD_OK {
+        (api.fns.studio_flush_commands)(Handle(studio));
+        let start = std::time::Instant::now();
+        loop {
+            // FMOD_STUDIO_LOADING_STATE: 0 unloading, 2 loading
+            let mut state = 1i32;
+            let found = (api.extra.get_sample_loading_state)(this.0, &mut state);
+            if found != FMOD_OK || (state != 0 && state != 2) || start.elapsed().as_secs() >= 5 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("description_unload_sample_data", &[&this], result, false);
+    }
+    result
+}
+
+/// `System::setAdvancedSettings`. The game leaves `randomSeed` (the last member, +0x74) at 0,
+/// which makes FMOD seed its random numbers from the clock: every run then mixes differently
+/// (random start offsets and sample choices inside the events). For a non-real-time output the
+/// seed is fixed, so that two runs can be compared sample by sample. The log shows the
+/// structure as the caller gave it.
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn system_set_advanced_settings(this: Handle, settings: Sized) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let size = if settings.0.is_null() { 0 } else { *settings.0.cast::<i32>() };
+    let result = if api.non_real_time() && size == 0x78 {
+        let mut copy = [0u32; 0x78 / 4];
+        std::ptr::copy_nonoverlapping(settings.0.cast::<u8>(), copy.as_mut_ptr().cast::<u8>(), 0x78);
+        if copy[0x74 / 4] == 0 {
+            copy[0x74 / 4] = NRT_RANDOM_SEED;
+        }
+        (api.fns.system_set_advanced_settings)(this, Sized(copy.as_mut_ptr().cast()))
+    } else {
+        (api.fns.system_set_advanced_settings)(this, settings)
+    };
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("system_set_advanced_settings", &[&this, &settings], result, false);
+    }
+    result
+}
+
+/// The fixed random seed of a non-real-time run.
+pub const NRT_RANDOM_SEED: u32 = 0x0019_2014;
+
+/// `Studio::System::release`. For a non-real-time output whatever FMOD's own threads still
+/// have to do is finished first.
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn studio_release(this: Handle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    if api.non_real_time() {
+        (api.fns.studio_flush_commands)(this);
+        (api.extra.flush_sample_loading)(this.0);
+    }
+    let result = (api.fns.studio_release)(this);
+    api.studio.store(0, Ordering::Relaxed);
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("studio_release", &[&this], result, true);
+    }
+    result
+}
+
+/// `Bank::unload`. For a non-real-time output the sample loading still under way is finished
+/// first (FMOD's loader thread and an unload at the end of a run otherwise race).
+///
+/// # Safety
+/// As the FMOD function.
+pub unsafe extern "C" fn bank_unload(this: Handle) -> i32 {
+    let Some(api) = api() else { return ERR_NOT_LOADED };
+    let studio = api.studio.load(Ordering::Relaxed) as RawHandle;
+    if api.non_real_time() && !studio.is_null() {
+        (api.fns.studio_flush_commands)(Handle(studio));
+        (api.extra.flush_sample_loading)(studio);
+    }
+    let result = (api.fns.bank_unload)(this);
+    if LOGGING.load(Ordering::Relaxed) {
+        log_call("bank_unload", &[&this], result, true);
     }
     result
 }
@@ -691,18 +876,13 @@ pub unsafe extern "C" fn studio_register_plugin(this: Handle, description: *cons
     result
 }
 
-/// `Studio::System::update`. For a non-real-time output the sample loading the update has set
-/// off is finished before the call returns: what plays in the next block then never depends on
-/// how fast the disk was.
+/// `Studio::System::update`: for a non-real-time output, exactly one block of the mix.
 ///
 /// # Safety
 /// As the FMOD function.
 pub unsafe extern "C" fn studio_update(this: Handle) -> i32 {
     let Some(api) = api() else { return ERR_NOT_LOADED };
     let result = (api.fns.studio_update)(this);
-    if api.non_real_time() {
-        (api.extra.flush_sample_loading)(this.0);
-    }
     if LOGGING.load(Ordering::Relaxed) {
         log_call("studio_update", &[&this], result, false);
     }

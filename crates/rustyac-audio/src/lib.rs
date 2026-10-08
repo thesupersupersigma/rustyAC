@@ -11,6 +11,12 @@
 //! * [`sim`]: what `CarAvatar` and `Sim` do for the sound, and the frame.
 //! * [`tape`]: the recorded input of the oracle runs.
 
+// The ported code keeps the game's comparisons as the machine code has them: "less or greater"
+// is false for a NaN where "not equal" is true, and a negated comparison is not its opposite.
+// Loops over the four wheels index several arrays, as the game's do.
+// Products keep the operand order of the instruction (`x = k * x`).
+#![allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::assign_op_pattern)]
+
 pub mod car;
 pub mod dsp;
 pub mod engine;

@@ -118,6 +118,18 @@ pub fn top_node_matrix(node: &Mat44f, position: [f32; 3], rotation: [f32; 3]) ->
     local
 }
 
+/// The models of a track that exist, in the order the game loads them (the rules of
+/// [`load_track`]), with where `models.ini` puts each.
+pub fn track_models(folder: &Path, config: &str) -> Result<Vec<rustyac_content::ModelEntry>, String> {
+    let mut files = TrackFiles::find_lenient(folder, config)?;
+    let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
+    if ini.is_file() {
+        files.models = models_of(&ini, folder)?;
+    }
+    files.models.retain(|model| model.file.is_file());
+    Ok(files.models)
+}
+
 /// Loads a track from `folder` (`content/tracks/<track>`), layout `config` ("" for none).
 pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport), String> {
     let start = Instant::now();

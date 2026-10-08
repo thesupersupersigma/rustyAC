@@ -1100,7 +1100,8 @@ impl CarAudio {
         }
         let m: Mat = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, pos[0], pos[1], pos[2], 1.0];
         let vel = [0.0f32; 3];
-        let idx = match category {
+        // an `unsigned long`: 32 bits
+        let idx = match category as u32 {
             1 => 1,
             4 | 8 => 0,
             16 => 2,

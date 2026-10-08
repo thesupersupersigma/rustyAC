@@ -327,6 +327,16 @@ fn overrides() -> Vec<(&'static str, &'static str, usize)> {
     ]
 }
 
+/// More stand-ins for imports, for a tool that gives the game some of the DLLs this loader
+/// leaves out (`tools/audio_oracle`: FMOD, through its recording layer). Set before
+/// [`Acs::load`].
+static EXTRA_OVERRIDES: std::sync::OnceLock<Vec<(&'static str, &'static str, usize)>> = std::sync::OnceLock::new();
+
+#[allow(dead_code)]
+pub fn set_extra_overrides(list: Vec<(&'static str, &'static str, usize)>) {
+    let _ = EXTRA_OVERRIDES.set(list);
+}
+
 // --- executable scratch memory ---------------------------------------------------------------
 
 /// A block of executable memory for import stubs and detour trampolines.
@@ -589,7 +599,8 @@ impl Acs {
     unsafe fn bind_imports(&self) -> Result<(), String> {
         let opt = self.nt_headers() + 24;
         let import_rva = self.read::<u32>(opt + 112 + 8) as usize;
-        let overrides = overrides();
+        let mut overrides = overrides();
+        overrides.extend(EXTRA_OVERRIDES.get().cloned().unwrap_or_default());
         let mut unbound = Vec::new();
         let mut desc = import_rva;
         let mut bound = 0;

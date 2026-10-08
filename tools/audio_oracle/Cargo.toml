@@ -1,0 +1,18 @@
+[package]
+name = "audio_oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+description = "Test oracle for rustyac-audio: runs Assetto Corsa's own AudioEngine, CarAudioFMOD and TrackAudio (mapped from acs.exe, never executed as a program) and the Rust port on the same recorded drives, both through one recording layer over the player's own FMOD DLLs, and compares the FMOD call logs and the non-real-time WAV mixes"
+
+[dependencies]
+rustyac-audio = { path = "../../crates/rustyac-audio" }
+rustyac-physics = { path = "../../crates/rustyac-physics" }
+rustyac-content = { path = "../../crates/rustyac-content" }
+
+[profile.release]
+opt-level = 2
+
+# standalone crate, not part of the parent workspace
+[workspace]
