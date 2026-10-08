@@ -185,6 +185,19 @@ pub struct LoopConfig {
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
 const FLIPPED_STEPS: u32 = 1000;
 
+/// The rolled-over watch, one step on: how many steps in a row the car has now lain still on
+/// its roof or side. `up_y` is the height of the body's up axis (1 upright, -1 on the roof),
+/// `speed` in m/s, `spin_squared` the squared angular velocity. A car that still slides or
+/// tumbles starts the count again.
+fn flipped_steps(previous: u32, up_y: f32, speed: f32, spin_squared: f32) -> u32 {
+    let at_rest = speed < 0.5 && spin_squared < 0.25;
+    if up_y < 0.2 && at_rest {
+        previous + 1
+    } else {
+        0
+    }
+}
+
 /// Runs the simulation until told to quit. Returns it with the timing.
 pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>, config: LoopConfig) -> Result<(GameSim, Timing), String> {
     raise_thread_priority();
@@ -335,8 +348,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             let body = sim.car.car.core.get_world_matrix(sim.car.car.body).m;
             let broken = body.iter().flatten().any(|x| !x.is_finite());
             let spin = sim.car.car.core.get_angular_velocity(sim.car.car.body);
-            let at_rest = sim.car.car.speed < 0.5 && (spin.x * spin.x + spin.y * spin.y + spin.z * spin.z) < 0.25;
-            flipped = if body[1][1] < 0.2 && at_rest { flipped + 1 } else { 0 };
+            flipped = flipped_steps(flipped, body[1][1], sim.car.car.speed, spin.x * spin.x + spin.y * spin.y + spin.z * spin.z);
             if broken {
                 sim.car.device.source.request(event::REBUILD);
             } else if body[3][1] < floor || body[3][1] > ceiling || flipped > FLIPPED_STEPS {
@@ -393,5 +405,30 @@ impl StepSink for Recorder {
             Some(writer) => writer.finish().map(|_| ()),
             None => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rolled_over_car_is_put_back_only_after_three_seconds_at_rest() {
+        // on its roof and still sliding: the count does not start
+        let mut flipped = 0;
+        for _ in 0..5000 {
+            flipped = flipped_steps(flipped, -0.98, 3.0, 0.0);
+        }
+        assert_eq!(flipped, 0);
+        // at rest: put back after 1000 steps (3 s), not before
+        for step in 1..=FLIPPED_STEPS + 1 {
+            flipped = flipped_steps(flipped, -0.98, 0.1, 0.01);
+            assert_eq!(flipped > FLIPPED_STEPS, step == FLIPPED_STEPS + 1, "step {step}");
+        }
+        // a nudge (it rocks) starts the three seconds again; so does landing on its wheels
+        assert_eq!(flipped_steps(900, -0.98, 0.1, 0.3), 0);
+        assert_eq!(flipped_steps(900, 0.9, 0.0, 0.0), 0);
+        // on its side counts as rolled over
+        assert_eq!(flipped_steps(10, 0.05, 0.0, 0.0), 11);
     }
 }
