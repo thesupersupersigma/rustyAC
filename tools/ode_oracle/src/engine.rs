@@ -215,6 +215,8 @@ pub fn joint_params(kind: &JointKind) -> Vec<f32> {
                 limot.bounce,
             ]);
         }
+        // contacts are checked through tools/car_oracle (collide); no world of this tool makes one
+        JointKind::Contact { .. } => unimplemented!("contact joints are not part of the ode_oracle worlds"),
     }
     p
 }
@@ -490,6 +492,8 @@ impl Engine for RustEngine {
                 qrel.copy_from_slice(&p[3..7]);
                 offset[..3].copy_from_slice(&p[7..10]);
             }
+            // contacts are checked through tools/car_oracle (collide); no world of this tool makes one
+            JointKind::Contact { .. } => unimplemented!("contact joints are not part of the ode_oracle worlds"),
         }
     }
 }
