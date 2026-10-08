@@ -81,7 +81,7 @@ Spa, practice, hot-lap start).
 | Tyre blankets | `TYRE_BLANKETS=1` | on | on | no |
 | ABS, traction control | `ABS=1`, `TRACTION_CONTROL=1` | "as the car has it": on if the car has the system | as the car's file says | no for the F2004 |
 | Stability control | `STABILITY_CONTROL=0` | off | off | no |
-| Automatic clutch / gearbox | `AUTO_CLUTCH=0`, `AUTO_SHIFTER=0` | the clutch aid is forced on with a pad or keyboard | `--no-auto-clutch`, `--auto-shifter` | (rustyAC keeps its two switches) |
+| Automatic clutch / gearbox | `AUTO_CLUTCH=0`, `AUTO_SHIFTER=0` | the clutch aid is forced on with a pad or keyboard | `--no-auto-clutch`, `--auto-shifter` | (rustyAC kept its two switches; since Task 16 the three shift aids are read from assists.ini as the game applies them, see `docs/port/awd_ers.md` 3.7) |
 | Penalties | `[RACE] PENALTIES=0` | any number of tyres may leave the track | 2 tyres, then the lap is cut | lap validity only |
 | Ballast, restrictor | `[CAR_0] BALLAST=0 RESTRICTOR=0` | none | none | no |
 | Tyre compound, fuel | not in race.ini | the car's default compound (medium), `car.ini` fuel (80 l) | the same | no |
@@ -430,8 +430,14 @@ row 333 times a second), so only the first row of each new position is used; a l
    and `--auto-shifter` (and forces the gearbox aid for `--autodrive`). ABS, traction control, stability and
    the rates are applied. Without an `assists.ini` beside race.ini the car keeps its own aids and full rates
    (and says so); the game would read every key as 0.
+   **Closed in Task 16** (`docs/port/awd_ers.md` 3.7): the three keys are applied as the game applies them
+   (the clutch aid forced on for a pad or the keyboard, the blip aid's side effect on H-pattern cars); the
+   flags `--auto-clutch`, `--no-auto-clutch`, `--auto-shifter`, `--no-auto-shifter`, `--auto-blip`,
+   `--no-auto-blip` override the file.
 6. **The session type stays rustyAC's**: `--spawn hotlap` arms the first lap (AC's hot-lap mode). Your race.ini
    is a practice session spawned on the hot-lap point, where AC does not arm it. Lap timing only.
+   **Closed in Task 16**: the session type and the spawn set come from race.ini; the first lap is armed only
+   when race.ini has a hot-lap session (or there is no race.ini and the spawn is `hotlap`).
 7. **A setup is loaded before the first step**, as if "Load" were pressed before the car moves. In AC it is
    pressed in the pits some frames later; the final values are the same.
 8. **Not ported in the setup loader**: gear sets (`USE_GEARSET` cars), the ABS / turbo / ERS / engine-brake

@@ -66,7 +66,7 @@ running**. The window must have the keyboard focus to drive; clicking another wi
 | Y / X | gear up / gear down |
 | A | clutch: pedal to the floor while held, and the automatic clutch stands back for as long (a Custom Shaders Patch binding; the original AC pad has no clutch at all) |
 | LB | DRS |
-| B | KERS / ERS (nothing happens until ERS is ported) and handbrake (the F2004 has none) |
+| B | KERS / ERS boost while held (since Task 16, on a car that has the button: see `docs/port/awd_ers.md`) and handbrake (the F2004 has neither) |
 | D-pad right / left | brake bias forward / back one click |
 | Left stick press | headlights |
 | Right stick press | next view, as F1 (AC's pad camera button is its F1 too) |
@@ -88,7 +88,11 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | Left Shift | clutch (as the pad's A) |
 | F | DRS |
 | F9, or B | handbrake |
-| K | KERS / ERS (nothing yet) |
+| K | KERS / ERS boost while held (since Task 16) |
+| PageUp / PageDown, or Alt or Right Ctrl+2 (with Shift: down) | MGU-K delivery profile, next / previous (ERS cars; since Task 16) |
+| Home / End, or Alt or Right Ctrl+1 (with Shift: down) | MGU-K recovery, 10 % more / less |
+| M, or Alt or Right Ctrl+3 | MGU-H mode: battery / motor |
+| Insert / Delete, or Alt or Right Ctrl+4 (with Shift: down) | engine brake setting, next / previous |
 | L | headlights |
 | Alt+T or Right Ctrl+T (with Shift: down) | traction control level up |
 | Alt+A or Right Ctrl+A (with Shift: down) | ABS level up; the F2004 has no ABS |
@@ -373,7 +377,8 @@ in the machine code's operation order, and held to the bit patterns of
 | Pad index | XInput pad 0 only | the first connected of the four |
 | Rumble strength above 1 | wraps the 16-bit motor word | kept within 0..1 |
 | TC / ABS / brake-bias buttons | flags in `CarControls`, acted on by the game's main thread | acted on at the press, before the next physics step (one level / one click per press) |
-| Turbo, engine brake, MGU buttons | bound | read from the file, do nothing (systems not ported) |
+| Engine brake, MGU buttons | bound | since Task 16: read from the file and acted on at the press, like the TC / ABS buttons (`docs/port/awd_ers.md` 3.5) |
+| Turbo boost buttons | bound | read from the file, do nothing (the cockpit turbo control is not ported) |
 | Second keys, reset / pause buttons | - | `[RUSTYAC_KEYS_2]`, `[RUSTYAC_RESET]`, `[RUSTYAC_PAUSE]` in `rustyac_controls.ini` |
 | `USE_LEGACY_CODE` for the pad | `system/cfg/assetto_corsa.ini` | `[RUSTYAC] USE_LEGACY_GAMEPAD_CODE` (0, as on this install) |
 | The built-in pad layout's shaping numbers (only used when no `controls.ini` exists) | the launcher's preset | remembered values (gamma 2, filter 0.7, speed 0.2, sensitivity 0.5), not checked against an untouched install |
