@@ -17,7 +17,7 @@ Options:
                             complete lap, or the longest stretch if no lap is complete
     --name-a / --name-b     labels (default: A, B)
     --track spa|auto        the corner table: Spa's built-in one (default), or `auto`:
-                            corners found from lap A's lateral g
+                            corners found from lap A's lateral g (one per direction)
     --corners FILE          a track's data/sections.ini (IN / OUT / TEXT) instead
     --plot FILE.html        one self-contained page: speed, lateral g, steering and the time
                             difference against track position
@@ -25,7 +25,8 @@ Options:
 
 Signs and units, as the shared memory has them: speed km/h; lateral g = accG_x (negative in
 a right-hand corner); steering = steerAngle, the wheel's turn as a fraction of full lock,
-positive to the right; gear = the lowest gear used in the corner. "time" is the time spent
+positive to the right; gear = the lowest gear used in the corner. The lateral g is averaged
+over about 10 m before its peak is taken. "time" is the time spent
 between a corner's start and end by the game's own lap clock; the last column is B minus A
 (negative: B is quicker).
 
@@ -37,24 +38,30 @@ import html
 import json
 import sys
 
-# Spa (AC's `spa`): the track's own data/sections.ini, with Les Combes, Bruxelles and Fagnes
-# cut into their corners where the AI's lap changes direction.
+# Spa (AC's `spa`): the outer bounds are the track's own data/sections.ini; inside a section
+# the corners are cut where the lateral g of AC's own AI lap (F2004) changes sign, so every
+# row is one direction. Another line or a slower car moves those cuts by a few metres.
 SPA = [
     ("La Source", 0.038, 0.068),
-    ("Eau Rouge", 0.137, 0.154),
-    ("Raidillon", 0.155, 0.197),
-    ("Les Combes 1", 0.325, 0.3585),
-    ("Les Combes 2", 0.3585, 0.372),
-    ("Malmedy", 0.372, 0.392),
-    ("Bruxelles (Rivage)", 0.411, 0.447),
-    ("Speaker's Corner", 0.447, 0.490),
-    ("Double Gauche (Pouhon)", 0.529, 0.602),
-    ("Fagnes 1", 0.615, 0.662),
-    ("Fagnes 2", 0.662, 0.685),
-    ("Campus (Stavelot)", 0.693, 0.727),
-    ("Courbe Paul Frere", 0.732, 0.783),
-    ("Blanchimont", 0.824, 0.911),
-    ("Chicane", 0.947, 0.980),
+    ("Eau Rouge", 0.137, 0.1545),
+    ("Raidillon", 0.1545, 0.181),
+    ("Raidillon exit (crest)", 0.181, 0.200),
+    ("Kemmel kink", 0.221, 0.241),
+    ("Les Combes 1", 0.325, 0.3543),
+    ("Les Combes 2", 0.3543, 0.368),
+    ("Malmedy", 0.368, 0.396),
+    ("Rivage (Bruxelles)", 0.411, 0.458),
+    ("Speaker's Corner", 0.458, 0.490),
+    ("Pouhon 1 (Double Gauche)", 0.529, 0.570),
+    ("Pouhon 2", 0.570, 0.602),
+    ("Fagnes 1", 0.615, 0.6575),
+    ("Fagnes 2", 0.6575, 0.685),
+    ("Campus (Stavelot 1)", 0.693, 0.7215),
+    ("Courbe Paul Frere", 0.7215, 0.790),
+    ("Blanchimont 1", 0.820, 0.8575),
+    ("Blanchimont 2", 0.8575, 0.911),
+    ("Bus Stop 1", 0.947, 0.9697),
+    ("Bus Stop 2", 0.9697, 0.985),
 ]
 TRACKS = {"spa": SPA}
 
@@ -168,6 +175,12 @@ def read_laps(path):
             at_start, at_end = int(float(rows[0]["lastLapMs"])), int(float(rows[-1]["lastLapMs"]))
             if at_end != at_start and at_end > 0:
                 time_ms = at_end
+            elif i + 1 < len(groups):
+                # the counter and the last lap's time changed in the same row (rustyAC does it
+                # so): the time is in the next lap's first row
+                after = int(float(groups[i + 1][1][0].get("lastLapMs") or 0))
+                if after != at_start and after > 0:
+                    time_ms = after
         lap = Lap(number, rows, time_ms)
         if len(lap.pos) > 10:
             laps.append(lap)
@@ -219,6 +232,18 @@ def nearest(xs, ys, grid):
     return out
 
 
+def smooth(values, half):
+    """A running mean over `half` grid points to each side (None stays None)."""
+    out = []
+    for i, v in enumerate(values):
+        if v is None:
+            out.append(None)
+            continue
+        window = [x for x in values[max(0, i - half):i + half + 1] if x is not None]
+        out.append(sum(window) / len(window))
+    return out
+
+
 class Trace:
     """A lap on the common grid."""
 
@@ -226,7 +251,8 @@ class Trace:
         self.lap = lap
         self.t = interpolate(lap.pos, lap.t, grid)
         self.speed = interpolate(lap.pos, lap.speed, grid)
-        self.latg = interpolate(lap.pos, lap.latg, grid)
+        # averaged over about 10 m: a kerb's single spike is not the corner's g
+        self.latg = smooth(interpolate(lap.pos, lap.latg, grid), max(1, len(grid) // 1400))
         self.steer = interpolate(lap.pos, lap.steer, grid)
         self.gear = nearest(lap.pos, lap.gear, grid)
 
@@ -253,26 +279,33 @@ def read_sections(path):
 
 def find_corners(grid, latg):
     """Corners from one lap's lateral g: stretches above a third of its peak (at least 0.5 g)."""
-    values = [abs(v) if v is not None else 0.0 for v in latg]
-    limit = max(0.5, max(values) / 3.0)
+    values = [v if v is not None else 0.0 for v in latg]
+    limit = max(0.5, max(abs(v) for v in values) / 3.0)
+    # +1 / -1 where the car corners one way or the other, 0 in between
+    side = [1 if v >= limit else -1 if v <= -limit else 0 for v in values]
     runs, start = [], None
-    for i, v in enumerate(values):
-        if v >= limit and start is None:
-            start = i
-        elif v < limit and start is not None:
-            runs.append([grid[start], grid[i - 1]])
+    for i, s in enumerate(side + [0]):
+        if start is not None and (s != side[start]):
+            runs.append([grid[start], grid[i - 1], side[start]])
             start = None
-    if start is not None:
-        runs.append([grid[start], grid[-1]])
+        if s != 0 and start is None:
+            start = i
     merged = []
     for run in runs:
-        # a short dip below the limit does not end a corner
-        if merged and run[0] - merged[-1][1] < 0.004:
+        # a short dip below the limit does not end a corner; a change of direction does
+        if merged and run[2] == merged[-1][2] and run[0] - merged[-1][1] < 0.004:
             merged[-1][1] = run[1]
         else:
             merged.append(run)
     pad = 0.003
-    return [("T%d" % (i + 1), max(0.0, a - pad), min(1.0, b + pad)) for i, (a, b) in enumerate(m for m in merged if m[1] - m[0] >= 0.004)]
+    found = [m for m in merged if m[1] - m[0] >= 0.004]
+    corners = []
+    for i, (a, b, _) in enumerate(found):
+        # the pad stops halfway to a neighbour, so that no two corners overlap
+        lo = max(0.0, a - pad) if i == 0 else max(a - pad, (found[i - 1][1] + a) / 2.0)
+        hi = min(1.0, b + pad) if i + 1 == len(found) else min(b + pad, (b + found[i + 1][0]) / 2.0)
+        corners.append(("T%d" % (i + 1), lo, hi))
+    return corners
 
 
 def index_at(grid, position):
