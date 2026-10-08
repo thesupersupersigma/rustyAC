@@ -29,7 +29,7 @@ pub struct BoxColliderDef {
 
 /// `Car::bounds` (`CarBounds`): the box around the collider mesh, moved (not turned) by the
 /// mesh's matrix.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CarBounds {
     pub min: Vec3f,
     pub max: Vec3f,
@@ -37,6 +37,13 @@ pub struct CarBounds {
     pub width: f32,
     pub length_front: f32,
     pub length_rear: f32,
+}
+
+impl Default for CarBounds {
+    /// What `Car::Car` leaves there for a car without a collider mesh (0x14026c61e).
+    fn default() -> CarBounds {
+        CarBounds { min: Vec3f::default(), max: Vec3f::default(), length: 4.0, width: 2.0, length_front: 2.0, length_rear: 2.0 }
+    }
 }
 
 /// The collider mesh of a car as the game hands it to `Car::initColliderMesh`.

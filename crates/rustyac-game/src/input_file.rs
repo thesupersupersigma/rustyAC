@@ -130,6 +130,22 @@ pub struct OracleSetup {
     pub damage: [f32; 5],
     /// The recording was made on a real track (`car_oracle run --track`).
     pub track: Option<OracleTrack>,
+    /// The recording was made with collisions (`car_oracle run --collide`).
+    pub collide: Option<OracleCollide>,
+}
+
+/// How the car of an oracle recording touched things.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OracleCollide {
+    /// The car's own `collider.kn5` (from the game's folder), not the older recordings' stand-in.
+    pub collider_mesh: bool,
+    /// `bounce_vel` of the game's mesh contact joints in that run, as bits (the game never
+    /// writes it: it is whatever its stack held).
+    pub mesh_bounce_vel: u32,
+    /// `PhysicsCore::setNoCollisionSteps` at the start.
+    pub no_collision_steps: i32,
+    /// The oracle's flat test floor as a real mesh.
+    pub floor: bool,
 }
 
 /// The track of an oracle recording and where its car was put.
@@ -227,7 +243,17 @@ impl SimSetup {
             auto_clutch: self.auto_clutch,
             auto_shifter: self.auto_shifter,
             track: None,
-            collide: Default::default(),
+            // (the collider mesh is the game's file: `spawn_car` reads it)
+            collide: match &oracle.collide {
+                Some(c) => rustyac_physics::car::replay::CollideRun {
+                    on: true,
+                    mesh: None,
+                    mesh_bounce_vel: f32::from_bits(c.mesh_bounce_vel),
+                    no_collision_steps: c.no_collision_steps,
+                    floor: c.floor,
+                },
+                None => Default::default(),
+            },
         })
     }
 
@@ -278,6 +304,13 @@ impl SimSetup {
                 put("oracle_armed", (track.armed as u32).to_string());
                 put("oracle_allowed_tyres_out", track.allowed_tyres_out.to_string());
             }
+            if let Some(c) = &o.collide {
+                put("oracle_collide", "1".to_string());
+                put("oracle_collider_mesh", (c.collider_mesh as u32).to_string());
+                put("oracle_mesh_bounce_vel", format!("{:08x}", c.mesh_bounce_vel));
+                put("oracle_no_collision_steps", c.no_collision_steps.to_string());
+                put("oracle_floor", (c.floor as u32).to_string());
+            }
         }
         out.push_str("end\n");
         out
@@ -317,7 +350,9 @@ impl SimSetup {
                 wind_direction_deg: 0.0,
                 damage: [0.0; 5],
                 track: None,
+                collide: None,
             };
+            let blank_collide = || OracleCollide { collider_mesh: false, mesh_bounce_vel: 0, no_collision_steps: 0, floor: false };
             let blank_track = || OracleTrack { folder: String::new(), position: [0.0; 3], tail: [0.0, 0.0, -1.0], armed: false, allowed_tyres_out: -1 };
             match key {
                 "car" => setup.car = value.to_string(),
@@ -346,6 +381,19 @@ impl SimSetup {
                 "track" => setup.track = value.to_string(),
                 "spawn" => setup.spawn = value.to_string(),
                 "oracle_scenario" => oracle.get_or_insert_with(blank).scenario = value.to_string(),
+                "oracle_collide" => {
+                    oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide);
+                }
+                "oracle_collider_mesh" => oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide).collider_mesh = flag(),
+                "oracle_mesh_bounce_vel" => {
+                    oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide).mesh_bounce_vel =
+                        u32::from_str_radix(value, 16).map_err(|e| format!("oracle_mesh_bounce_vel: {e}"))?
+                }
+                "oracle_no_collision_steps" => {
+                    oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide).no_collision_steps =
+                        value.parse().map_err(|e| format!("oracle_no_collision_steps: {e}"))?
+                }
+                "oracle_floor" => oracle.get_or_insert_with(blank).collide.get_or_insert_with(blank_collide).floor = flag(),
                 "oracle_ground" => {
                     oracle.get_or_insert_with(blank).ground = Ground::parse(value).ok_or(format!("oracle_ground: {value:?}"))?
                 }

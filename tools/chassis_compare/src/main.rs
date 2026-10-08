@@ -1326,7 +1326,7 @@ fn compare(
                     differing.len() + trace_differences.len(),
                     columns.fields.len() + outcome.powertrain_values
                 );
-                for text in trace_differences.iter().take(60) {
+                for text in trace_differences.iter().filter(|t| t.starts_with("collide") || t.starts_with("car.damage") || t.starts_with("car.last") || t.starts_with("car.mesh")).take(120) {
                     println!("    {text}");
                 }
                 for &k in differing.iter().take(40) {
@@ -1579,7 +1579,7 @@ fn has_jobs(recording: &Recording) -> bool {
 /// (`--replay --headless --dump-states -`) and its car is compared with the recording after
 /// every step exactly as `run` compares: the 2,009 chassis values, the values of the other
 /// systems with the telemetry page, and the force tape.
-fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>) -> Result<(), String> {
+fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>, verbose: bool) -> Result<(), String> {
     use std::process::{Command, Stdio};
     let repo = repo_root();
     let folder = match dir {
@@ -1598,10 +1598,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
         for entry in std::fs::read_dir(&folder).map_err(|e| format!("{}: {e}", folder.display()))? {
             let path = entry.map_err(|e| e.to_string())?.path();
             if path.extension().is_some_and(|e| e == "carrec") {
-                let name = path.file_stem().unwrap().to_string_lossy().to_string();
-                if name != "settle_floor" {
-                    scenarios.push(name);
-                }
+                scenarios.push(path.file_stem().unwrap().to_string_lossy().to_string());
             }
         }
         scenarios.sort();
@@ -1628,6 +1625,10 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
         let path = folder.join(format!("{name}.carrec"));
         let recording = Recording::read(&path)?;
         let count = recording.steps.len();
+        if full && name == "settle_floor" && recording.get("collide").is_none() {
+            println!("{name}: skipped (recorded before the collision port; no collision set-up in its header)");
+            continue;
+        }
         println!("{name}: {count} steps");
         if has_jobs(&recording) {
             println!("  skipped: its script locks the controls / adds penalties, which an input file cannot ask for");
@@ -1659,6 +1660,12 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
                     tail: [track.tail.x, track.tail.y, track.tail.z],
                     armed: track.armed,
                     allowed_tyres_out: track.allowed_tyres_out,
+                }),
+                collide: run.collide.on.then(|| input_file::OracleCollide {
+                    collider_mesh: run.collide.mesh.is_some(),
+                    mesh_bounce_vel: run.collide.mesh_bounce_vel.to_bits(),
+                    no_collision_steps: run.collide.no_collision_steps,
+                    floor: run.collide.floor,
                 }),
             }),
         };
@@ -1729,6 +1736,23 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>)
                     (None, Ok(()), None) => unreachable!(),
                 };
                 first = Some((step, text, differing.len() + trace_differences.len()));
+                if verbose {
+                    // the whole list of that step: the chassis values by name, then the others
+                    for &k in differing.iter().take(40) {
+                        println!(
+                            "    {}: game {} / rustyac.exe {}",
+                            columns.fields[k].name,
+                            replay::describe(columns.fields[k].kind, game[k]),
+                            replay::describe(columns.fields[k].kind, rust.snapshot[k])
+                        );
+                    }
+                    for text in trace_differences.iter().filter(|t| t.starts_with("collide") || t.starts_with("car.damage") || t.starts_with("car.last") || t.starts_with("car.mesh")).take(120) {
+                        println!("    {text}");
+                    }
+                    if let Err(tape) = &tape {
+                        println!("    tape: {tape}");
+                    }
+                }
             }
         }
         if reader.next_step()?.is_some() {
@@ -2570,7 +2594,7 @@ fn main() {
         "excerpt-track" => excerpt_track_command(),
         "excerpt-collide" => excerpt_collide_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
-        "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref()),
+        "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), verbose),
         _ => Err(usage()),
     };
     if let Err(message) = result {

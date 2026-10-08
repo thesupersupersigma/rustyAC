@@ -500,6 +500,14 @@ fn build_car(
                 allowed_tyres_out: oracle.allowed_tyres_out,
             });
         }
+        if setup.oracle.as_ref().and_then(|o| o.collide).is_some_and(|c| c.collider_mesh) {
+            // the recording's car had its own collider mesh: the game's file, read as the
+            // oracle read it
+            let name = data_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let root = ac_root().ok_or("the recording was made with the car's collider mesh, which is in Assetto Corsa's folder (set AC_ROOT)")?;
+            let colliders = rustyac_physics::car::colliders::load(data_path, Some(&root), &name)?;
+            run.collide.mesh = Some(colliders.mesh.ok_or(format!("no collider.kn5 for {name} in {}", root.display()))?);
+        }
         return VanillaCar::from_chassis(run.build(data_path)?, driver);
     }
     // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start

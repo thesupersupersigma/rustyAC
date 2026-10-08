@@ -1210,7 +1210,8 @@ impl RollingChassis {
     }
 
     /// `Car::forcePosition(pos, invalidateLap)`: with `invalidate_lap` off the lap in
-    /// progress stays as it is (no caller in the game leaves it off; the oracle does).
+    /// progress stays as it is (in the game only the AI's pit teleport leaves it off; the
+    /// oracle does too).
     pub fn force_position_with(&mut self, pos: &Vec3f, invalidate_lap: bool) {
         let mut pos = *pos;
         pos.y += self.get_base_car_height() + 0.01;
