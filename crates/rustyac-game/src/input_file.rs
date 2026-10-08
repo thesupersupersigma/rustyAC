@@ -42,8 +42,19 @@ pub mod event {
     pub const MANUAL_CLUTCH: u32 = 1 << 7;
     /// Back onto the track: the car is put on the nearest point of the AI line, facing along it.
     pub const TO_TRACK: u32 = 1 << 8;
+    /// The cockpit's engine-brake setting one up / down (`CarAvatar::cycleEngineBrake`).
+    pub const ENGINE_BRAKE_UP: u32 = 1 << 9;
+    pub const ENGINE_BRAKE_DN: u32 = 1 << 10;
+    /// The MGU-K delivery profile, next / previous (`CarAvatar::cycleERSPower`).
+    pub const MGUK_DELIVERY_UP: u32 = 1 << 11;
+    pub const MGUK_DELIVERY_DN: u32 = 1 << 12;
+    /// The MGU-K recovery level up / down (`CarAvatar::cycleERSRecovery`).
+    pub const MGUK_RECOVERY_UP: u32 = 1 << 13;
+    pub const MGUK_RECOVERY_DN: u32 = 1 << 14;
+    /// The MGU-H between battery and motor (`CarAvatar::cycleERSHeatCharging`).
+    pub const MGUH_MODE: u32 = 1 << 15;
 
-    pub const NAMES: [(u32, &str); 9] = [
+    pub const NAMES: [(u32, &str); 16] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -53,6 +64,13 @@ pub mod event {
         (AUTO_SHIFTER, "auto-shifter"),
         (MANUAL_CLUTCH, "manual clutch"),
         (TO_TRACK, "to track"),
+        (ENGINE_BRAKE_UP, "engine brake+"),
+        (ENGINE_BRAKE_DN, "engine brake-"),
+        (MGUK_DELIVERY_UP, "mgu-k delivery+"),
+        (MGUK_DELIVERY_DN, "mgu-k delivery-"),
+        (MGUK_RECOVERY_UP, "mgu-k recovery+"),
+        (MGUK_RECOVERY_DN, "mgu-k recovery-"),
+        (MGUH_MODE, "mgu-h mode"),
     ];
 }
 

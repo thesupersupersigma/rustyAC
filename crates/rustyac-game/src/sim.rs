@@ -722,7 +722,8 @@ impl GameSim {
         if events & event::RESET != 0 {
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
-            let armed = self.track.is_some() && self.setup.spawn == "hotlap";
+            // (as at the session's start: only a hot-lap session counts the first lap at once)
+            let armed = self.track.is_some() && self.car.car.env.session_type == 4;
             self.car.car.queue(move |car| {
                 car.force_rotation(&spawn.tail);
                 car.force_position(&spawn.position);
@@ -778,6 +779,43 @@ impl GameSim {
         }
         if events & event::AUTO_SHIFTER != 0 {
             self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
+        }
+        // the cockpit of the hybrid system and the engine brake: what the game's notifiers
+        // and key handler do on a press, with the game's messages on the console
+        {
+            let car = &mut self.car.car;
+            let say = |title: &str, value: Option<String>| match value {
+                Some(value) => println!("{title}: {value}"),
+                None => println!("{title}: Not available"),
+            };
+            for (up, dn, which) in [
+                (event::ENGINE_BRAKE_UP, event::ENGINE_BRAKE_DN, 0),
+                (event::MGUK_DELIVERY_UP, event::MGUK_DELIVERY_DN, 1),
+                (event::MGUK_RECOVERY_UP, event::MGUK_RECOVERY_DN, 2),
+            ] {
+                let dir = if events & dn != 0 {
+                    -1
+                } else if events & up != 0 {
+                    1
+                } else {
+                    continue;
+                };
+                match which {
+                    0 => {
+                        let count = car.engine_brake_settings();
+                        say("Engine Brake", car.cycle_engine_brake(dir).map(|index| format!("{}/{count}", index + 1)));
+                    }
+                    1 => {
+                        let index = car.cycle_ers_power(dir);
+                        let name = index.and_then(|i| car.ers.as_ref().and_then(|ers| ers.power_controllers.get(i as usize)).map(|c| c.name.clone()));
+                        say("MGU-K Delivery", name);
+                    }
+                    _ => say("MGU-K Recovery", car.cycle_ers_recovery(dir).map(|level| format!("{}%", level * 10))),
+                }
+            }
+            if events & event::MGUH_MODE != 0 {
+                say("MGU-H Mode", car.cycle_ers_heat_charging().map(|battery| if battery { "Battery".to_string() } else { "Motor".to_string() }));
+            }
         }
         // the automatic clutch aid is the session's setting, except while the driver holds
         // the clutch himself (the aid's last act in a step is to overwrite the pedal)

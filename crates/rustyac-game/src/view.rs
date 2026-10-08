@@ -90,6 +90,35 @@ pub struct CarView {
     /// The tyre compound's name and the loaded setup's (empty: the default setup).
     pub compound: SurfaceName,
     pub setup: SurfaceName,
+    /// The hybrid system and the engine brake, for a car that has them.
+    pub hybrid: HybridView,
+}
+
+/// What the displays show of a KERS or an ERS and of the cockpit's engine-brake setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HybridView {
+    pub has_kers: bool,
+    pub has_ers: bool,
+    /// The battery, 0..1 (`kersCharge`), and how much of the motor is used now (`kersInput`).
+    pub charge: f32,
+    pub input: f32,
+    /// Energy handed out in this lap, kJ (`kersCurrentKJ`), and the lap's allowance (0: none).
+    pub used_kj: f32,
+    pub max_kj: f32,
+    /// The MGU-K is filling the battery.
+    pub charging: bool,
+    /// An ERS's cockpit: the delivery profile (index, how many, its name), the recovery level
+    /// (0..10), the MGU-H mode (true: it fills the battery), and which of the three the car's
+    /// cockpit offers.
+    pub power_index: i32,
+    pub power_count: i32,
+    pub power_name: SurfaceName,
+    pub recovery: i32,
+    pub heat_charging: bool,
+    pub offers: [bool; 3],
+    /// The engine-brake setting (index, how many; the control exists with more than one).
+    pub engine_brake: i32,
+    pub engine_brake_count: i32,
 }
 
 /// A short text that can be copied about: a surface's key.
@@ -193,6 +222,7 @@ impl Default for CarView {
             wind_deg: 0.0,
             compound: SurfaceName::default(),
             setup: SurfaceName::default(),
+            hybrid: HybridView::default(),
         }
     }
 }
@@ -326,6 +356,31 @@ impl CarView {
                 tyres_out: car.lap_invalidator.current_tyres_out,
                 position: car.spline_locator_data.npos,
                 in_pit_lane: car.is_in_pit_lane(),
+            };
+        }
+        view.hybrid = HybridView {
+            engine_brake: car.cockpit.engine_brake,
+            engine_brake_count: car.engine_brake_settings(),
+            ..HybridView::default()
+        };
+        if let Some(kers) = &car.kers {
+            view.hybrid = HybridView { has_kers: true, charge: kers.charge, input: kers.input, used_kj: kers.current_j * 0.001, max_kj: kers.max_j * 0.001, ..view.hybrid };
+        }
+        if let Some(ers) = &car.ers {
+            view.hybrid = HybridView {
+                has_ers: true,
+                charge: ers.charge as f32,
+                input: ers.input,
+                used_kj: ers.current_j * 0.001,
+                max_kj: ers.max_j * 0.001,
+                charging: ers.is_charging,
+                power_index: car.cockpit.ers_power_index,
+                power_count: ers.power_controllers.len() as i32,
+                power_name: SurfaceName::new(ers.power_controllers.get(car.cockpit.ers_power_index as usize).map_or("", |c| c.name.as_str())),
+                recovery: car.cockpit.ers_recovery,
+                heat_charging: car.cockpit.ers_heat_charging,
+                offers: [ers.cockpit_delivery_profile, ers.cockpit_recovery, ers.cockpit_mgu_h_mode],
+                ..view.hybrid
             };
         }
         if let Some(aids) = &car.aids {

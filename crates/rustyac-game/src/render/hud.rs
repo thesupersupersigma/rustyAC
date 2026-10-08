@@ -133,14 +133,45 @@ pub fn gear_label(gear: i32) -> String {
 }
 
 /// The whole HUD for a picture of `width` x `height` pixels.
+/// The lines of a hybrid car: battery, what the motor gives now, the lap's allowance, and
+/// the cockpit's settings as the game's own messages name them. None for a car without a
+/// hybrid system and without an engine-brake control.
+fn hybrid_lines(view: &CarView) -> Vec<String> {
+    let h = &view.hybrid;
+    let mut lines = Vec::new();
+    if h.has_kers || h.has_ers {
+        let mut text = format!("{} {:.0} %  deploy {:.0} %", if h.has_ers { "ERS" } else { "KERS" }, h.charge * 100.0, h.input * 100.0);
+        if h.max_kj > 0.0 && h.max_kj < 1.0e6 {
+            text.push_str(&format!("  lap {:.0} / {:.0} kJ", h.used_kj, h.max_kj));
+        } else {
+            text.push_str(&format!("  lap {:.0} kJ", h.used_kj));
+        }
+        if h.charging {
+            text.push_str("  CHG");
+        }
+        lines.push(text);
+    }
+    if h.has_ers {
+        let mut text = format!("MGU-K {}/{} {}", h.power_index + 1, h.power_count, h.power_name.as_str());
+        text.push_str(&format!("  rec {} %", h.recovery * 10));
+        text.push_str(if h.heat_charging { "  MGU-H battery" } else { "  MGU-H motor" });
+        lines.push(text);
+    }
+    if h.engine_brake_count > 1 {
+        lines.push(format!("engine brake {}/{}", h.engine_brake + 1, h.engine_brake_count));
+    }
+    lines
+}
+
 pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, height: f32) -> Vec<HudVertex> {
     let mut hud = Hud::new(font);
     let s = (height / 720.0).max(0.5);
     let (_, gh) = font.glyph();
     let line = gh * 0.75 * s + 3.0 * s;
 
-    // top left: timer, rates, who drives
-    let rows = 8 + info.notes.len();
+    // top left: timer, rates, who drives, the hybrid system
+    let hybrid = hybrid_lines(view);
+    let rows = 8 + info.notes.len() + hybrid.len();
     hud.rect(10.0 * s, 10.0 * s, 430.0 * s, line * rows as f32 + 16.0 * s, PANEL);
     let x = 20.0 * s;
     let mut y = 16.0 * s;
@@ -162,6 +193,10 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         format!("tyres {}  setup {}", view.compound.as_str(), if view.setup.as_str().is_empty() { "default" } else { view.setup.as_str() }),
     ] {
         hud.text(x, y, 0.75 * s, DIM, &text);
+        y += line;
+    }
+    for text in &hybrid {
+        hud.text(x, y, 0.75 * s, WHITE, text);
         y += line;
     }
     for note in &info.notes {

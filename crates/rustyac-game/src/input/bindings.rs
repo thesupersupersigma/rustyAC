@@ -34,6 +34,17 @@ const AC_SECTIONS: [&str; 14] = [
 ];
 /// AC's command keys (with Ctrl) that rustyAC knows.
 const COMMAND_SECTIONS: [&str; 3] = ["ABS", "TRACTION_CONTROL", "AUTO_SHIFTER"];
+/// AC's sections of the engine-brake and hybrid cockpit buttons, in the order used here:
+/// engine brake up / down, MGU-K delivery up / down, MGU-K recovery up / down, MGU-H mode.
+pub const HYBRID_SECTIONS: [&str; 7] =
+    ["ENGINE_BRAKE_UP", "ENGINE_BRAKE_DN", "MGUK_DELIVERY_UP", "MGUK_DELIVERY_DN", "MGUK_RECOVERY_UP", "MGUK_RECOVERY_DN", "MGUH_MODE"];
+/// The keys of AC's fixed commands (with the command modifier; Shift for "down"): MGU-K
+/// recovery '1', MGU-K delivery '2', MGU-H mode '3', engine brake '4'
+/// (`CommandManager::CommandManager` @ 0x1400e8b70).
+pub const KEY_MGUK_RECOVERY: i32 = 0x31;
+pub const KEY_MGUK_DELIVERY: i32 = 0x32;
+pub const KEY_MGUH_MODE: i32 = 0x33;
+pub const KEY_ENGINE_BRAKE: i32 = 0x34;
 
 /// `[RUSTYAC] COMMAND_MODIFIER`: the key held for AC's Ctrl+letter commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +114,10 @@ pub struct Bindings {
     pub key_auto_shifter: i32,
     /// `[RUSTYAC] COMMAND_MODIFIER`.
     pub command_modifier: CommandModifier,
+    /// The keys of the seven cockpit buttons of [`HYBRID_SECTIONS`]: AC's `KEY` of the section
+    /// (used while the keyboard drives, as in AC) and rustyAC's second key
+    /// (`[RUSTYAC_KEYS_2]`, used whichever device drives); -1 or 0: none.
+    pub hybrid_keys: [[i32; 2]; 7],
 }
 
 /// The built-in layout: the Xbox pad as asked for in Task 11 (left stick, RT gas, LT brake,
@@ -206,6 +221,15 @@ fn add_own_sections(ini: &mut ControlsIni) {
         ("ABSDN", "-1"),
         ("TCUP", "-1"),
         ("TCDN", "-1"),
+        // the hybrid system's cockpit: Insert / Delete, Home / End, PageUp / PageDown as three
+        // up / down pairs, M for the MGU-H
+        ("ENGINE_BRAKE_UP", "0x2D"),
+        ("ENGINE_BRAKE_DN", "0x2E"),
+        ("MGUK_RECOVERY_UP", "0x24"),
+        ("MGUK_RECOVERY_DN", "0x23"),
+        ("MGUK_DELIVERY_UP", "0x21"),
+        ("MGUK_DELIVERY_DN", "0x22"),
+        ("MGUH_MODE", "0x4D"),
     ] {
         default("RUSTYAC_KEYS_2", key, value);
     }
@@ -267,6 +291,7 @@ impl Bindings {
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
             command_modifier: CommandModifier::from_name(ini.get_string("RUSTYAC", "COMMAND_MODIFIER")),
+            hybrid_keys: HYBRID_SECTIONS.map(|section| [ini.get_hex(section, "KEY"), ini.get_hex("RUSTYAC_KEYS_2", section)]),
             ini,
         }
     }
@@ -318,7 +343,9 @@ impl Bindings {
              ; with RUSTYAC are rustyAC's own. First written from: {}\n\
              ; XBOXBUTTON: A B X Y LSHOULDER RSHOULDER DPAD_LEFT DPAD_RIGHT DPAD_UP DPAD_DOWN LTHUMB_PRESS\n\
              ;             RTHUMB_PRESS START BACK, or -1 for none. KEY: a Windows virtual-key code (0x20 = Space), -1 = none.\n\
-             ; [RUSTYAC_KEYS_2] gives every action a second key. Delete this file to start again from AC's bindings.\n\
+             ; [RUSTYAC_KEYS_2] gives every action a second key (also the hybrid cockpit: ENGINE_BRAKE_UP / _DN,\n\
+             ;             MGUK_DELIVERY_UP / _DN, MGUK_RECOVERY_UP / _DN, MGUH_MODE). Delete this file to start again\n\
+             ;             from AC's bindings.\n\
              ; [RUSTYAC] COMMAND_MODIFIER: the key held for the commands (T: traction control, A: ABS, G: automatic\n\
              ;             gearbox). AUTO = Alt, or a Ctrl key that is not a driving key; or ALT, LCTRL, RCTRL.\n\n{}",
             self.origin,
@@ -364,7 +391,7 @@ impl Bindings {
         row("clutch (to the floor)", pad("__EXT_KEYBOARD_CLUTCH"), key_pair("CLUTCH"));
         row("handbrake", pad("HANDBRAKE"), key_pair("HANDBRAKE"));
         row("DRS", pad("DRS"), key_pair("DRS"));
-        row("KERS / ERS (no-op)", pad("KERS"), key_pair("KERS"));
+        row("KERS / ERS boost (hold)", pad("KERS"), key_pair("KERS"));
         row("headlights", pad("ACTION_HEADLIGHTS"), key_pair("ACTION_HEADLIGHTS"));
         row("brake bias + / -", &format!("{} / {}", pad("BALANCEUP"), pad("BALANCEDN")), format!("{} / {}", key_pair("BALANCEUP"), key_pair("BALANCEDN")));
         // a Ctrl key that is bound as a driving key does not make a command (unless the file names it)
@@ -377,6 +404,24 @@ impl Bindings {
         );
         row("ABS + / -", &format!("{} / {}", pad("ABSUP"), pad("ABSDN")), format!("{ctrl}+{} (with Shift: down)", key_name(self.key_abs)));
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
+        // the hybrid system's cockpit: AC's sections for the pad, rustyAC's second keys, and
+        // AC's fixed commands on the digits
+        let keys_of = |index: usize| {
+            let names: Vec<String> = self.hybrid_keys[index].iter().filter(|code| **code > 0).map(|code| key_name(*code)).collect();
+            if names.is_empty() {
+                "-".to_string()
+            } else {
+                names.join(" or ")
+            }
+        };
+        for (what, up, command) in [("MGU-K delivery + / -", 2, KEY_MGUK_DELIVERY), ("MGU-K recovery + / -", 4, KEY_MGUK_RECOVERY), ("engine brake + / -", 0, KEY_ENGINE_BRAKE)] {
+            row(
+                what,
+                &format!("{} / {}", pad(HYBRID_SECTIONS[up]), pad(HYBRID_SECTIONS[up + 1])),
+                format!("{} / {}, or {ctrl}+{} (with Shift: down)", keys_of(up), keys_of(up + 1), key_name(command)),
+            );
+        }
+        row("MGU-H mode", pad(HYBRID_SECTIONS[6]), format!("{}, or {ctrl}+{}", keys_of(6), key_name(KEY_MGUH_MODE)));
         row("next view", pad("ACTION_CHANGE_CAMERA"), "F1 or C (F6: the car's own cameras)".to_string());
         row("reset to spawn", button_label(self.pad_reset.button), "R (N: a new car)".to_string());
         row("back on track", &format!("{} held", button_label(self.pad_reset.button)), "Shift+R".to_string());
@@ -417,6 +462,10 @@ pub fn key_name(code: i32) -> String {
         0x20 => "Space".to_string(),
         0x21 => "PageUp".to_string(),
         0x22 => "PageDown".to_string(),
+        0x23 => "End".to_string(),
+        0x24 => "Home".to_string(),
+        0x2d => "Insert".to_string(),
+        0x2e => "Delete".to_string(),
         0x25 => "Left".to_string(),
         0x26 => "Up".to_string(),
         0x27 => "Right".to_string(),

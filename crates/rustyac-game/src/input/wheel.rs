@@ -168,6 +168,8 @@ pub struct DiCarControl {
     pub abs_dn: Button,
     pub tc_up: Button,
     pub tc_dn: Button,
+    /// Engine brake up / down, MGU-K delivery up / down, MGU-K recovery up / down, MGU-H mode.
+    pub hybrid: [Button; 7],
     pub shift_up_trigger: Trigger,
     pub shift_dn_trigger: Trigger,
     pub steer_scale: f32,
@@ -227,6 +229,7 @@ impl DiCarControl {
             abs_dn: Button::load_optional(ini, "ABSDN"),
             tc_up: Button::load_optional(ini, "TCUP"),
             tc_dn: Button::load_optional(ini, "TCDN"),
+            hybrid: crate::input::bindings::HYBRID_SECTIONS.map(|section| Button::load_optional(ini, section)),
             shift_up_trigger: Trigger { accumulator: 0.0, limit },
             shift_dn_trigger: Trigger { accumulator: 0.0, limit },
             steer_scale: zero_means(ini.get_float("STEER", "SCALE"), 1.0),
@@ -337,6 +340,14 @@ impl DiCarControl {
         extra.tc_up = self.tc_up.pressed(di, key_down);
         extra.abs_dn = self.abs_dn.pressed(di, key_down);
         extra.abs_up = self.abs_up.pressed(di, key_down);
+        let hybrid = self.hybrid.each_ref().map(|button| button.pressed(di, key_down));
+        extra.engine_brake_up = hybrid[0];
+        extra.engine_brake_dn = hybrid[1];
+        extra.mguk_delivery_up = hybrid[2];
+        extra.mguk_delivery_dn = hybrid[3];
+        extra.mguk_recovery_up = hybrid[4];
+        extra.mguk_recovery_dn = hybrid[5];
+        extra.mguh_mode = hybrid[6];
     }
 
     /// `DICarControl::setVibrations` @ 0x140081010: the mix that is added to the steering force.

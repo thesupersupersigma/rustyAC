@@ -465,6 +465,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                         request(if shift { event::ABS_DN } else { event::ABS_UP });
                     } else if ctrl && key == bindings.key_auto_shifter {
                         request(event::AUTO_SHIFTER);
+                    } else if ctrl && key == rustyac_game::input::bindings::KEY_MGUK_RECOVERY {
+                        // AC's fixed commands of the hybrid cockpit: the digits 1 to 4
+                        request(if shift { event::MGUK_RECOVERY_DN } else { event::MGUK_RECOVERY_UP });
+                    } else if ctrl && key == rustyac_game::input::bindings::KEY_MGUK_DELIVERY {
+                        request(if shift { event::MGUK_DELIVERY_DN } else { event::MGUK_DELIVERY_UP });
+                    } else if ctrl && key == rustyac_game::input::bindings::KEY_MGUH_MODE {
+                        request(event::MGUH_MODE);
+                    } else if ctrl && key == rustyac_game::input::bindings::KEY_ENGINE_BRAKE {
+                        request(if shift { event::ENGINE_BRAKE_DN } else { event::ENGINE_BRAKE_UP });
                     } else if !ctrl {
                         match key {
                             // C: camera, P or Pause: pause, R: back to the spawn point,

@@ -513,7 +513,14 @@ impl JoypadCarControl {
         extra.tc_up = pressed("TCUP");
         extra.abs_dn = pressed("ABSDN");
         extra.abs_up = pressed("ABSUP");
-        // turbo, engine brake and the MGU buttons belong to systems that are not ported
+        extra.engine_brake_up = pressed("ENGINE_BRAKE_UP");
+        extra.engine_brake_dn = pressed("ENGINE_BRAKE_DN");
+        extra.mguk_delivery_up = pressed("MGUK_DELIVERY_UP");
+        extra.mguk_delivery_dn = pressed("MGUK_DELIVERY_DN");
+        extra.mguk_recovery_up = pressed("MGUK_RECOVERY_UP");
+        extra.mguk_recovery_dn = pressed("MGUK_RECOVERY_DN");
+        extra.mguh_mode = pressed("MGUH_MODE");
+        // the turbo buttons belong to a control that is not ported
 
         // not AC's: the clutch button presses the pedal to the floor
         if self.clutch.button != button::NONE && self.clutch.is_pressed(mask, key_down) {

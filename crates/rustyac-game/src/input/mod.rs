@@ -55,6 +55,15 @@ pub struct Extra {
     pub abs_dn: bool,
     pub tc_up: bool,
     pub tc_dn: bool,
+    /// The cockpit buttons of the engine brake and the hybrid system (`CarControls`
+    /// `engineBrakeUp` ... `MGUHMode`): levels; the game's main thread acts on the press.
+    pub engine_brake_up: bool,
+    pub engine_brake_dn: bool,
+    pub mguk_delivery_up: bool,
+    pub mguk_delivery_dn: bool,
+    pub mguk_recovery_up: bool,
+    pub mguk_recovery_dn: bool,
+    pub mguh_mode: bool,
     /// Not AC's: the driver presses the clutch himself (a button, a key, a pedal), so the
     /// automatic clutch aid must stand back for this step.
     pub clutch_pressed: bool,
@@ -262,8 +271,39 @@ impl DriverSource for LiveSource {
             }
             _ => self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down),
         }
+        // the cockpit keys of the hybrid system work whichever device drives: rustyAC's own
+        // second keys always, AC's `KEY` of each section while the keyboard is the device
+        {
+            let keyboard = self.active == DEVICE_KEYBOARD;
+            let down = |index: usize| {
+                let [ac, second] = self.bindings.hybrid_keys[index];
+                key_down(second) || (keyboard && key_down(ac))
+            };
+            extra.engine_brake_up |= down(0);
+            extra.engine_brake_dn |= down(1);
+            extra.mguk_delivery_up |= down(2);
+            extra.mguk_delivery_dn |= down(3);
+            extra.mguk_recovery_up |= down(4);
+            extra.mguk_recovery_dn |= down(5);
+            extra.mguh_mode |= down(6);
+        }
         // what the game's main thread does with the extra buttons, on the press
         let last = self.extra;
+        // the notifiers of the three pairs look at "down" first; a press of both does "down" only
+        for (up, dn, last_up, last_dn, up_bit, dn_bit) in [
+            (extra.engine_brake_up, extra.engine_brake_dn, last.engine_brake_up, last.engine_brake_dn, event::ENGINE_BRAKE_UP, event::ENGINE_BRAKE_DN),
+            (extra.mguk_delivery_up, extra.mguk_delivery_dn, last.mguk_delivery_up, last.mguk_delivery_dn, event::MGUK_DELIVERY_UP, event::MGUK_DELIVERY_DN),
+            (extra.mguk_recovery_up, extra.mguk_recovery_dn, last.mguk_recovery_up, last.mguk_recovery_dn, event::MGUK_RECOVERY_UP, event::MGUK_RECOVERY_DN),
+        ] {
+            if dn && !last_dn {
+                self.pending_events |= dn_bit;
+            } else if up && !last_up {
+                self.pending_events |= up_bit;
+            }
+        }
+        if extra.mguh_mode && !last.mguh_mode {
+            self.pending_events |= event::MGUH_MODE;
+        }
         for (now, before, bit) in [
             (extra.tc_up, last.tc_up, event::TC_UP),
             (extra.tc_dn, last.tc_dn, event::TC_DN),
