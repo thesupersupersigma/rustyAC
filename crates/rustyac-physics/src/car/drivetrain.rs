@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Ported from Assetto Corsa (acs.exe, Kunos Simulazioni).
 
-//! The drivetrain slot ([`DrivetrainModel`]) and AC's `Drivetrain` for two driven wheels as its
-//! Vanilla implementation ([`VanillaDrivetrain`]): clutch, gearbox with its shift timing,
-//! differential, and the integration of engine speed and driven-wheel speed.
+//! The drivetrain slot ([`DrivetrainModel`]) and AC's `Drivetrain` as its Vanilla implementation
+//! ([`VanillaDrivetrain`]): clutch, gearbox with its shift timing, differential, and the
+//! integration of engine speed and driven-wheel speed, for two driven wheels (`RWD`, `FWD`) and
+//! for four (`AWD`: three differentials; `AWD2`: a rear-wheel drive with a coupling to the
+//! front axle).
 //!
 //! The tyres do not spin the driven wheels up themselves. `Tyre::step` only leaves the net
 //! torque on each driven wheel in `status.feedbackTorque` (road reaction, brake, rolling
@@ -30,9 +32,9 @@ pub enum TractionType {
     #[default]
     Rwd = 0,
     Fwd = 1,
-    /// Three differentials (`step4WD`); not ported.
+    /// Three differentials (`step4WD`).
     Awd = 2,
-    /// Rear drive with a clutch to the front (`step4WD_new`); not ported.
+    /// Rear drive with a coupling to the front axle (`step4WD_new`, `TYPE=AWD2`).
     AwdNew = 3,
 }
 
@@ -64,6 +66,28 @@ pub struct GearElement {
     pub inertia: f64,
     /// `oldVelocity`: the speed at the top of the last `Drivetrain::step` (out-shafts only)
     pub old_velocity: f64,
+}
+
+/// AC's `DifferentialSetting` (0x10 bytes) of the `AWD` layout's three differentials. Its
+/// fourth member, `type`, is never read.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DifferentialSetting {
+    /// `power`, `coast`: fraction of the input torque that locks
+    pub power: f32,
+    pub coast: f32,
+    /// `preload`, Nm
+    pub preload: f32,
+}
+
+/// AC's `AWD2Data` (0x18 bytes): the coupling between the axles of an `AWD2` car.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Awd2Data {
+    /// `ramp`: Nm per rad/s the rear axle turns faster than the front
+    pub ramp: f64,
+    /// `maxTorque`, Nm: the most the coupling passes on; `ctrl_awd2.ini` rewrites it every step
+    pub max_torque: f64,
+    /// `currentLockTorque`: what it passed on in the last step
+    pub current_lock_torque: f32,
 }
 
 /// AC's `SGearRatio` (0x28 bytes).
@@ -118,9 +142,14 @@ pub struct DrivetrainBase {
     pub engine: GearElement,
     /// `drive` (+0x020): the differential carrier, wheel-side rad/s
     pub drive: GearElement,
-    /// `outShaftL`, `outShaftR` (+0x038, +0x050): the two driven half shafts
+    /// `outShaftL`, `outShaftR` (+0x038, +0x050): the two driven half shafts (the rear ones of
+    /// a four-wheel-drive car)
     pub out_shaft_l: GearElement,
     pub out_shaft_r: GearElement,
+    /// `outShaftLF`, `outShaftRF` (+0x068, +0x080): the front half shafts of a four-wheel-drive
+    /// car (their inertia stays 0 otherwise)
+    pub out_shaft_lf: GearElement,
+    pub out_shaft_rf: GearElement,
     /// `gears` (+0x098): `[0]` reverse, `[1]` neutral (ratio 0), `[2]` first ...
     pub gears: Vec<SGearRatio>,
     /// `rootVelocity` (+0x0b0): the gearbox input shaft (clutch output), engine-side rad/s
@@ -143,6 +172,14 @@ pub struct DrivetrainBase {
     pub clutch_max_torque: f64,
     /// `totalTorque` (+0x4d8): display value
     pub total_torque: f32,
+    /// `awdFrontShare` (+0x4dc): the front axle's share of the engine's torque (`AWD`), 0..1
+    pub awd_front_share: f32,
+    /// `awdFrontDiff`, `awdRearDiff`, `awdCenterDiff` (+0x4e0, +0x4f0, +0x500): `AWD`
+    pub awd_front_diff: DifferentialSetting,
+    pub awd_rear_diff: DifferentialSetting,
+    pub awd_center_diff: DifferentialSetting,
+    /// `awd2` (+0x520): `AWD2`
+    pub awd2: Awd2Data,
     /// `downshiftProtection` (+0x510)
     pub downshift_protection: DownshiftProtection,
     /// `currentClutchTorque` (+0x538)
@@ -256,9 +293,8 @@ pub fn is_gearbox_locked(car: &RollingChassis) -> bool {
     car.env.jump_start_penalty_mode == 0
 }
 
-/// AC's `Drivetrain` for the layouts `RWD` and `FWD`, with its engine slot. The four-wheel
-/// drive layouts, a KERS on the wheels and the body reaction torque of a rigid rear axle are
-/// not ported (such cars are refused when the drivetrain is built).
+/// AC's `Drivetrain` with its engine slot. The body reaction torque of a rigid rear axle is
+/// not ported (the chassis has no such axle).
 pub struct VanillaDrivetrain {
     pub base: DrivetrainBase,
     /// `acEngine` (+0x0e0)
@@ -266,6 +302,14 @@ pub struct VanillaDrivetrain {
     /// `controllers.singleDiffLock` (`ctrl_single_lock.ini`, rear-wheel drive only): its
     /// output is the differential's locking torque
     pub single_diff_lock: Option<DynamicController>,
+    /// `controllers.awdFrontShare` (`ctrl_awd_front_share.ini`, `AWD` only): its output is
+    /// `awdFrontShare`
+    pub awd_front_share_ctrl: Option<DynamicController>,
+    /// `controllers.awdCenterLock` (`ctrl_awd_center_lock.ini`, `AWD` only): its output is the
+    /// centre differential's preload
+    pub awd_center_lock: Option<DynamicController>,
+    /// `controllers.awd2` (`ctrl_awd2.ini`, `AWD2` only): its output is `awd2.maxTorque`
+    pub awd2_ctrl: Option<DynamicController>,
 }
 
 impl VanillaDrivetrain {
@@ -287,6 +331,8 @@ impl VanillaDrivetrain {
             drive: GearElement { velocity: 0.0, inertia: F64C_0_01F, old_velocity: 0.0 },
             out_shaft_l: GearElement { velocity: 0.0, inertia: car.tyres[2].data.angular_inertia as f64, old_velocity: 0.0 },
             out_shaft_r: GearElement { velocity: 0.0, inertia: car.tyres[3].data.angular_inertia as f64, old_velocity: 0.0 },
+            out_shaft_lf: GearElement::default(),
+            out_shaft_rf: GearElement::default(),
             gears: Vec::new(),
             root_velocity: 0.0,
             clutch_open_state: false,
@@ -299,6 +345,12 @@ impl VanillaDrivetrain {
             is_shifter_supported: false,
             clutch_max_torque: 0.0,
             total_torque: 0.0,
+            // 0.1 in the constructor, 0.3 in `init`
+            awd_front_share: 0.3,
+            awd_front_diff: DifferentialSetting::default(),
+            awd_rear_diff: DifferentialSetting::default(),
+            awd_center_diff: DifferentialSetting::default(),
+            awd2: Awd2Data { ramp: 20.0, max_torque: 800.0, current_lock_torque: 0.0 },
             downshift_protection: DownshiftProtection { is_active: false, is_debug: false, overrev: 0, lock_n: true },
             current_clutch_torque: 0.0,
             traction_type: TractionType::Rwd,
@@ -322,14 +374,33 @@ impl VanillaDrivetrain {
             clutch_inertia: 1.0,
             loc_clutch: 1.0,
         };
-        let mut drivetrain = VanillaDrivetrain { base, ac_engine: engine, single_diff_lock: None };
+        let mut drivetrain = VanillaDrivetrain {
+            base,
+            ac_engine: engine,
+            single_diff_lock: None,
+            awd_front_share_ctrl: None,
+            awd_center_lock: None,
+            awd2_ctrl: None,
+        };
         drivetrain.load_ini(car, &data_path)?;
-        // Drivetrain::initControllers @ 0x140267070
-        if drivetrain.base.traction_type == TractionType::Rwd {
-            let path = data_path.join("ctrl_single_lock.ini");
+        // Drivetrain::initControllers @ 0x140267070: one file for rear-wheel drive, two for
+        // `AWD` (the front share first), none for the others (an `AWD2` car's
+        // ctrl_single_lock.ini is not opened; its ctrl_awd2.ini was opened by the loader)
+        let controller = |name: &str| -> Result<Option<DynamicController>, String> {
+            let path = data_path.join(name);
             if crate::data::exists(&path) {
-                drivetrain.single_diff_lock = Some(DynamicController::load(&path)?);
+                Ok(Some(DynamicController::load(&path)?))
+            } else {
+                Ok(None)
             }
+        };
+        match drivetrain.base.traction_type {
+            TractionType::Rwd => drivetrain.single_diff_lock = controller("ctrl_single_lock.ini")?,
+            TractionType::Awd => {
+                drivetrain.awd_front_share_ctrl = controller("ctrl_awd_front_share.ini")?;
+                drivetrain.awd_center_lock = controller("ctrl_awd_center_lock.ini")?;
+            }
+            TractionType::Fwd | TractionType::AwdNew => {}
         }
         Ok(drivetrain)
     }
@@ -378,8 +449,57 @@ impl VanillaDrivetrain {
                     tyre.driven = driven;
                 }
             }
-            "AWD" | "AWD2" => {
-                return Err(format!("{}: [TRACTION] TYPE={traction}: four-wheel drive is not ported", ini.filename.display()))
+            "AWD" => {
+                b.traction_type = TractionType::Awd;
+                for tyre in car.tyres.iter_mut() {
+                    tyre.driven = true;
+                }
+                // the four wheels get the mean of the rear left's and the front left's
+                // inertia: written into the TYRES, and the shafts read it back from there
+                let mean = (car.tyres[2].data.angular_inertia + car.tyres[0].data.angular_inertia) * 0.5;
+                for tyre in car.tyres.iter_mut() {
+                    tyre.data.angular_inertia = mean;
+                }
+                b.out_shaft_lf.inertia = car.tyres[0].data.angular_inertia as f64;
+                b.out_shaft_rf.inertia = car.tyres[1].data.angular_inertia as f64;
+                b.out_shaft_l.inertia = car.tyres[2].data.angular_inertia as f64;
+                b.out_shaft_r.inertia = car.tyres[3].data.angular_inertia as f64;
+                // percent; the keys say CENTRE, the setup items CENTER
+                b.awd_front_share = ini.get_float("AWD", "FRONT_SHARE")? * 0.01;
+                b.awd_front_diff.power = ini.get_float("AWD", "FRONT_DIFF_POWER")?;
+                b.awd_front_diff.coast = ini.get_float("AWD", "FRONT_DIFF_COAST")?;
+                b.awd_front_diff.preload = ini.get_float("AWD", "FRONT_DIFF_PRELOAD")?;
+                b.awd_rear_diff.power = ini.get_float("AWD", "REAR_DIFF_POWER")?;
+                b.awd_rear_diff.coast = ini.get_float("AWD", "REAR_DIFF_COAST")?;
+                b.awd_rear_diff.preload = ini.get_float("AWD", "REAR_DIFF_PRELOAD")?;
+                b.awd_center_diff.power = ini.get_float("AWD", "CENTRE_DIFF_POWER")?;
+                b.awd_center_diff.coast = ini.get_float("AWD", "CENTRE_DIFF_COAST")?;
+                b.awd_center_diff.preload = ini.get_float("AWD", "CENTRE_DIFF_PRELOAD")?;
+            }
+            "AWD2" => {
+                b.traction_type = TractionType::AwdNew;
+                for tyre in car.tyres.iter_mut() {
+                    tyre.driven = true;
+                }
+                b.out_shaft_lf.inertia = car.tyres[0].data.angular_inertia as f64;
+                b.out_shaft_rf.inertia = car.tyres[1].data.angular_inertia as f64;
+                b.out_shaft_l.inertia = car.tyres[2].data.angular_inertia as f64;
+                b.out_shaft_r.inertia = car.tyres[3].data.angular_inertia as f64;
+                // read, never used: the front axle of this layout has no locking
+                b.awd_front_diff.power = ini.get_float("AWD2", "FRONT_DIFF_POWER")?;
+                b.awd_front_diff.coast = ini.get_float("AWD2", "FRONT_DIFF_COAST")?;
+                b.awd_front_diff.preload = ini.get_float("AWD2", "FRONT_DIFF_PRELOAD")?;
+                // the rear differential is the 2WD one; the spool test above was made on
+                // [DIFFERENTIAL] and is not made again
+                b.diff_power_ramp = ini.get_float("AWD2", "REAR_DIFF_POWER")?;
+                b.diff_coast_ramp = ini.get_float("AWD2", "REAR_DIFF_COAST")?;
+                b.diff_pre_load = ini.get_float("AWD2", "REAR_DIFF_PRELOAD")?;
+                b.awd2.ramp = ini.get_float("AWD2", "CENTRE_RAMP_TORQUE")? as f64;
+                b.awd2.max_torque = ini.get_float("AWD2", "CENTRE_MAX_TORQUE")? as f64;
+                let path = data_path.join("ctrl_awd2.ini");
+                if crate::data::exists(&path) {
+                    self.awd2_ctrl = Some(DynamicController::load(&path)?);
+                }
             }
             _ => {
                 return Err(format!(
@@ -429,6 +549,13 @@ impl VanillaDrivetrain {
         Ok(())
     }
 
+    /// The four-wheel-drive controllers the car has, under the names of the recordings.
+    fn awd_controllers(&self) -> impl Iterator<Item = (&'static str, &DynamicController)> {
+        [("awdFrontShare", &self.awd_front_share_ctrl), ("awdCenterLock", &self.awd_center_lock), ("awd2", &self.awd2_ctrl)]
+            .into_iter()
+            .filter_map(|(name, controller)| controller.as_ref().map(|c| (name, c)))
+    }
+
     /// What a controller or the engine reads of the car while the drivetrain is at work.
     fn signals<'a>(&self, car: &'a RollingChassis) -> CarSignals<'a> {
         CarSignals {
@@ -439,8 +566,28 @@ impl VanillaDrivetrain {
         }
     }
 
-    /// `Drivetrain::stepControllers` @ 0x14026b200 (the four-wheel-drive controllers left out).
+    /// `Drivetrain::stepControllers` @ 0x14026b200: front share, centre lock, single lock, in
+    /// this order (the `AWD2` controller is evaluated inside `step4WD_new`).
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn step_controllers(&mut self, car: &RollingChassis) {
+        if self.awd_front_share_ctrl.is_some() {
+            let signals = self.signals(car);
+            self.base.awd_front_share = self.awd_front_share_ctrl.as_mut().unwrap().eval(&signals);
+        }
+        if self.awd_center_lock.is_some() {
+            self.base.awd_center_diff.power = 0.0;
+            self.base.awd_center_diff.coast = 0.0;
+            // 20 Nm below 5 km/h, the controller's value from 25 km/h on
+            let mut k = ((car.speed * 3.6) - 5.0) * 0.05;
+            if k > 1.0 {
+                k = 1.0;
+            } else if !(k >= 0.0) {
+                k = 0.0;
+            }
+            let signals = self.signals(car);
+            let value = self.awd_center_lock.as_mut().unwrap().eval(&signals);
+            self.base.awd_center_diff.preload = ((value - 20.0) * k) + 20.0;
+        }
         if self.single_diff_lock.is_some() {
             self.base.diff_power_ramp = 0.0;
             self.base.diff_coast_ramp = 0.0;
@@ -455,7 +602,11 @@ impl VanillaDrivetrain {
         if !ordered_nonzero(b.ratio) {
             return b.engine.inertia;
         }
-        let wheels = (b.out_shaft_l.inertia + b.drive.inertia) + b.out_shaft_r.inertia;
+        let mut wheels = (b.out_shaft_l.inertia + b.drive.inertia) + b.out_shaft_r.inertia;
+        // an `AWD2` engine "sees" the rear axle only
+        if b.traction_type == TractionType::Awd {
+            wheels = (wheels + b.out_shaft_lf.inertia) + b.out_shaft_rf.inertia;
+        }
         (wheels / (b.ratio * b.ratio).abs()) + (b.clutch_inertia as f64 + b.engine.inertia)
     }
 
@@ -463,23 +614,40 @@ impl VanillaDrivetrain {
     /// wheels, as seen from them. Note the two orders of the sums.
     fn get_inertia_from_wheels(&self) -> f64 {
         let b = &self.base;
-        if !ordered_nonzero(b.ratio) {
-            return (b.out_shaft_l.inertia + b.drive.inertia) + b.out_shaft_r.inertia;
-        }
-        let r2 = (b.ratio * b.ratio).abs();
-        if !b.clutch_open_state {
-            (((r2 * (b.clutch_inertia as f64 + b.engine.inertia)) + b.drive.inertia) + b.out_shaft_l.inertia)
-                + b.out_shaft_r.inertia
+        let rear = if !ordered_nonzero(b.ratio) {
+            (b.out_shaft_l.inertia + b.drive.inertia) + b.out_shaft_r.inertia
         } else {
-            (((r2 * b.clutch_inertia as f64) + b.drive.inertia) + b.out_shaft_l.inertia) + b.out_shaft_r.inertia
+            let r2 = (b.ratio * b.ratio).abs();
+            if !b.clutch_open_state {
+                (((r2 * (b.clutch_inertia as f64 + b.engine.inertia)) + b.drive.inertia) + b.out_shaft_l.inertia)
+                    + b.out_shaft_r.inertia
+            } else {
+                (((r2 * b.clutch_inertia as f64) + b.drive.inertia) + b.out_shaft_l.inertia) + b.out_shaft_r.inertia
+            }
+        };
+        if b.traction_type == TractionType::Awd {
+            (rear + b.out_shaft_lf.inertia) + b.out_shaft_rf.inertia
+        } else {
+            rear
         }
     }
 
-    /// `Drivetrain::accelerateDrivetrainBlock` @ 0x1402664c0 (`fromEngine` only matters for
-    /// four-wheel drive).
-    fn accelerate_drivetrain_block(&mut self, acc: f64) {
+    /// `Drivetrain::accelerateDrivetrainBlock` @ 0x1402664c0. `AWD`: the engine's part goes
+    /// to the axles by `awdFrontShare` (`from_engine`), a realignment half and half; the
+    /// front shafts of an `AWD2` car are not touched.
+    fn accelerate_drivetrain_block(&mut self, acc: f64, from_engine: bool) {
         let b = &mut self.base;
         b.drive.velocity = acc + b.drive.velocity;
+        if b.traction_type == TractionType::Awd {
+            let share: f32 = if from_engine { b.awd_front_share } else { 0.5 };
+            let front = (share as f64 * acc) * 2.0;
+            b.out_shaft_rf.velocity = front + b.out_shaft_rf.velocity;
+            b.out_shaft_lf.velocity = front + b.out_shaft_lf.velocity;
+            let rear = ((1.0f32 - share) as f64 * acc) * 2.0;
+            b.out_shaft_r.velocity = rear + b.out_shaft_r.velocity;
+            b.out_shaft_l.velocity = rear + b.out_shaft_l.velocity;
+            return;
+        }
         b.out_shaft_r.velocity = acc + b.out_shaft_r.velocity;
         b.out_shaft_l.velocity = acc + b.out_shaft_l.velocity;
     }
@@ -506,7 +674,7 @@ impl VanillaDrivetrain {
         }
         // narrowed, then widened again
         let acc = ((self.base.root_velocity / r) - drive) as f32;
-        self.accelerate_drivetrain_block(acc as f64);
+        self.accelerate_drivetrain_block(acc as f64, false);
         if !self.base.clutch_open_state {
             self.base.engine.velocity = self.base.root_velocity;
         }
@@ -582,7 +750,7 @@ impl VanillaDrivetrain {
                 self.base.engine.velocity = (((clutch_torque + torque) / engine_inertia) * dtd) + engine_speed;
                 let d = dtd * ((-clutch_torque) / gearbox_inertia);
                 self.base.root_velocity = d + root;
-                self.accelerate_drivetrain_block(d / r);
+                self.accelerate_drivetrain_block(d / r, true);
             } else {
                 // the clutch torque is not applied in neutral (but the differential still sees it)
                 let speed = ((torque / engine_inertia) * dtd) + engine_speed;
@@ -592,7 +760,7 @@ impl VanillaDrivetrain {
         } else if in_gear {
             let d = dtd * (torque / inertia_from_engine);
             self.base.root_velocity = d + self.base.root_velocity;
-            self.accelerate_drivetrain_block(d / r);
+            self.accelerate_drivetrain_block(d / r, true);
         } else {
             self.base.root_velocity = ((torque / inertia_from_engine) * dtd) + self.base.root_velocity;
         }
@@ -677,14 +845,18 @@ impl VanillaDrivetrain {
             }
         }
 
-        // write-back: the doubles stay the state, the tyres get them narrowed
-        if !self.base.clutch_open_state {
-            self.base.engine.velocity = self.base.root_velocity;
+        // write-back: the doubles stay the state, the tyres get them narrowed. Not for
+        // `AWD2`: `step4WD_new` does it for all four wheels after its coupling (so a held
+        // clutch leaves the engine's speed one step old until then)
+        if self.base.traction_type != TractionType::AwdNew {
+            if !self.base.clutch_open_state {
+                self.base.engine.velocity = self.base.root_velocity;
+            }
+            car.tyres[tyre_left].status.angular_velocity = self.base.out_shaft_l.velocity as f32;
+            car.tyres[tyre_right].status.angular_velocity = self.base.out_shaft_r.velocity as f32;
+            car.step_wheel_rotation(tyre_left, dt);
+            car.step_wheel_rotation(tyre_right, dt);
         }
-        car.tyres[tyre_left].status.angular_velocity = self.base.out_shaft_l.velocity as f32;
-        car.tyres[tyre_right].status.angular_velocity = self.base.out_shaft_r.velocity as f32;
-        car.step_wheel_rotation(tyre_left, dt);
-        car.step_wheel_rotation(tyre_right, dt);
 
         // display value
         let b = &mut self.base;
@@ -696,10 +868,272 @@ impl VanillaDrivetrain {
         // (the reaction torque on the body exists only for a rigid rear axle, which the
         // chassis does not have, and for `torqueModeEx == reactionTorques`, which nothing sets)
     }
+
+    /// The narrowed speeds of the four shafts go to the tyres, each tyre done completely (speed,
+    /// spin matrix, the locked flag cleared) before the next: the end of both 4WD steps.
+    fn write_back_four(&mut self, car: &mut RollingChassis, dt: f32) {
+        let b = &self.base;
+        let speeds =
+            [b.out_shaft_lf.velocity as f32, b.out_shaft_rf.velocity as f32, b.out_shaft_l.velocity as f32, b.out_shaft_r.velocity as f32];
+        for (index, speed) in speeds.into_iter().enumerate() {
+            car.tyres[index].status.angular_velocity = speed;
+            car.step_wheel_rotation(index, dt);
+            car.tyres[index].status.is_locked = false;
+        }
+    }
+
+    /// `totalTorque` of both 4WD steps (single precision; note the order of the tyres).
+    fn total_torque_four(&mut self, car: &RollingChassis, torque: f64) {
+        let fb = [0, 1, 2, 3].map(|i| car.tyres[i].status.feedback_torque);
+        let b = &mut self.base;
+        b.total_torque = if ordered_nonzero(b.ratio) {
+            ((b.ratio as f32).abs() * ((torque as f32) * b.loc_clutch) - (((fb[1] + fb[0]) + fb[2]) + fb[3])).abs()
+        } else {
+            ((torque as f32) * b.loc_clutch).abs()
+        };
+    }
+
+    /// `Drivetrain::step4WD` @ 0x14026a220 (`AWD`): the engine and the clutch as for two driven
+    /// wheels, then three differentials (rear, front, centre) that only ever slip against a
+    /// locking torque: no hold, no spool, no locked wheels, no reaction on the body.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_4wd(&mut self, car: &mut RollingChassis, dt: f32) {
+        let dtd = dt as f64;
+
+        // a pending paddle shift: the gear goes in once the time is over
+        {
+            let b = &mut self.base;
+            if b.gear_request.request != GearChangeRequest::None && !(b.gear_request.timeout >= b.gear_request.time_accumulator) {
+                b.gear_request.request = GearChangeRequest::None;
+                b.current_gear = b.gear_request.requested_gear;
+            }
+            if b.gear_request.request != GearChangeRequest::None {
+                b.gear_request.time_accumulator = dtd + b.gear_request.time_accumulator;
+            }
+            b.ratio = b.final_ratio as f64 * b.gears[b.current_gear as usize].ratio;
+            b.engine.inertia = self.ac_engine.base().inertia as f64;
+        }
+        // (a KERS on the wheels would add a quarter of its torque to each tyre's feedback
+        // torque here)
+        if self.base.last_ratio < self.base.ratio || self.base.last_ratio > self.base.ratio {
+            self.reallign_speeds();
+            self.base.last_ratio = self.base.ratio;
+        }
+
+        // the throttle cut of an up-shift, then the engine
+        let mut input = SACEngineInput::default();
+        if self.base.cut_off > 0.0 {
+            input.gas_input = 0.0;
+            self.base.cut_off -= dtd;
+        } else {
+            input.gas_input = car.controls.gas;
+        }
+        input.rpm = ((self.base.engine.velocity as f32) * 0.159_155_07) * 60.0;
+        let signals = self.signals(car);
+        self.ac_engine.step(&input, dt, &signals);
+        let torque = self.ac_engine.base().status.out_torque;
+
+        // the clutch
+        let lc = self.base.loc_clutch;
+        {
+            let b = &mut self.base;
+            b.clutch_open_state = if !(lc >= 1.0) {
+                true
+            } else if ordered_nonzero(b.engine.velocity) {
+                ((b.root_velocity / b.engine.velocity) - 1.0).abs() >= 0.1
+            } else {
+                0.0 < b.root_velocity || 0.0 > b.root_velocity
+            };
+        }
+        let engine_inertia = self.base.engine.inertia;
+        let r = self.base.ratio;
+        let inertia_from_engine = self.get_inertia_from_engine();
+        let inertia_from_wheels = self.get_inertia_from_wheels();
+        let mut clutch_torque = 0.0f64;
+        let in_gear = ordered_nonzero(r);
+
+        // the engine side: its part of the block's speed goes to the axles by the front share
+        if self.base.clutch_open_state {
+            let engine_speed = self.base.engine.velocity;
+            let root = self.base.root_velocity;
+            let slip = engine_speed - root;
+            let capacity = lc as f64 * self.base.clutch_max_torque;
+            clutch_torque = -((slip / (slip.abs() + 4.0)) * capacity);
+            self.base.current_clutch_torque = clutch_torque as f32;
+            if in_gear {
+                let gearbox_inertia = inertia_from_engine - engine_inertia;
+                self.base.engine.velocity = (((clutch_torque + torque) / engine_inertia) * dtd) + engine_speed;
+                let d = dtd * ((-clutch_torque) / gearbox_inertia);
+                self.base.root_velocity = d + root;
+                self.accelerate_drivetrain_block(d / r, true);
+            } else {
+                let speed = ((torque / engine_inertia) * dtd) + engine_speed;
+                self.base.engine.velocity = speed;
+                self.base.root_velocity = speed;
+            }
+        } else if in_gear {
+            let d = dtd * (torque / inertia_from_engine);
+            self.base.root_velocity = d + self.base.root_velocity;
+            self.accelerate_drivetrain_block(d / r, true);
+        } else {
+            self.base.root_velocity = ((torque / inertia_from_engine) * dtd) + self.base.root_velocity;
+        }
+
+        // the wheel side: the sum of the four tyres' torques turns the whole block
+        let fb = [0, 1, 2, 3].map(|i| car.tyres[i].status.feedback_torque);
+        {
+            let b = &mut self.base;
+            let feedback: f32 = (fb[3] + fb[2]) + (fb[1] + fb[0]);
+            let a = if in_gear {
+                let a = dtd * (feedback as f64 / inertia_from_wheels);
+                b.root_velocity = (a * b.ratio) + b.root_velocity;
+                a
+            } else {
+                (feedback as f64 / inertia_from_wheels) * dtd
+            };
+            b.drive.velocity = a + b.drive.velocity;
+            let a2 = (a * 0.5) * 2.0;
+            b.out_shaft_lf.velocity = a2 + b.out_shaft_lf.velocity;
+            b.out_shaft_rf.velocity = a2 + b.out_shaft_rf.velocity;
+            b.out_shaft_r.velocity = a2 + b.out_shaft_r.velocity;
+            b.out_shaft_l.velocity = a2 + b.out_shaft_l.velocity;
+        }
+
+        // the three differentials. The input torque has no clutch-pedal factor here, and the
+        // slip's softening constant is 0.1, not the 0.01 of the two-wheel-drive differential
+        {
+            let b = &mut self.base;
+            let abs_ratio = b.ratio.abs();
+            let front_share: f32 = b.awd_front_share;
+            let rear_share: f32 = 1.0 - front_share;
+            let lock_of = |diff: &DifferentialSetting, input: f64| {
+                if input > 0.0 {
+                    (diff.power as f64 * input) * abs_ratio
+                } else {
+                    ((diff.coast as f64 * input) * abs_ratio).abs()
+                }
+            };
+
+            // rear
+            let input = if ordered_nonzero(clutch_torque) { -(rear_share as f64 * clutch_torque) } else { rear_share as f64 * torque };
+            let lock = lock_of(&b.awd_rear_diff, input);
+            let mut left = b.out_shaft_l.velocity;
+            let mut right = b.out_shaft_r.velocity;
+            let dv = left - right;
+            let friction = -((dv / (dv.abs() + F64C_0_1F)) * (b.awd_rear_diff.preload as f64 + lock));
+            let x = dtd * ((friction / b.out_shaft_l.inertia) * 0.5);
+            left += x;
+            right -= x;
+            let y = dtd * ((((fb[3] - fb[2]) as f64) / b.out_shaft_r.inertia) * 0.5);
+            b.out_shaft_l.velocity = left - y;
+            b.out_shaft_r.velocity = y + right;
+
+            // front
+            let input = if ordered_nonzero(clutch_torque) { -(front_share as f64 * clutch_torque) } else { front_share as f64 * torque };
+            let lock = lock_of(&b.awd_front_diff, input);
+            let dv = b.out_shaft_lf.velocity - b.out_shaft_rf.velocity;
+            let friction = -((dv / (dv.abs() + F64C_0_1F)) * (b.awd_front_diff.preload as f64 + lock));
+            let x = dtd * ((friction / b.out_shaft_lf.inertia) * 0.5);
+            let mut front_right = b.out_shaft_rf.velocity - x;
+            let mut front_left = x + b.out_shaft_lf.velocity;
+            let y = dtd * ((((fb[1] - fb[0]) as f64) / b.out_shaft_rf.inertia) * 0.5);
+            front_left -= y;
+            front_right = y + front_right;
+            b.out_shaft_lf.velocity = front_left;
+            b.out_shaft_rf.velocity = front_right;
+
+            // centre: the whole torque; the rear right's inertia is in the sum twice and the
+            // front right's not at all
+            let input = if ordered_nonzero(clutch_torque) { -clutch_torque } else { torque };
+            let lock = lock_of(&b.awd_center_diff, input);
+            let inv_inertia = 1.0 / (((b.out_shaft_r.inertia + b.out_shaft_l.inertia) + b.out_shaft_lf.inertia) + b.out_shaft_r.inertia);
+            let front_mean = (front_left + front_right) * 0.5;
+            let rear_mean = (b.out_shaft_l.velocity + b.out_shaft_r.velocity) * 0.5;
+            let dv = rear_mean - front_mean;
+            let friction = -((dv / (dv.abs() + F64C_0_1F)) * (b.awd_center_diff.preload as f64 + lock));
+            let x = dtd * (friction * inv_inertia);
+            front_left -= x;
+            front_right -= x;
+            let right = x + b.out_shaft_r.velocity;
+            let left = b.out_shaft_l.velocity + x;
+            let y = dtd * ((((fb[3] + fb[2]) - (fb[1] + fb[0])) as f64) * inv_inertia);
+            b.out_shaft_l.velocity = y + left;
+            b.out_shaft_r.velocity = y + right;
+            b.out_shaft_lf.velocity = front_left - y;
+            b.out_shaft_rf.velocity = front_right - y;
+        }
+
+        if !self.base.clutch_open_state {
+            self.base.engine.velocity = self.base.root_velocity;
+        }
+        self.write_back_four(car, dt);
+        self.total_torque_four(car, torque);
+    }
+
+    /// `Drivetrain::step4WD_new` @ 0x14026ad80 (`AWD2`): a complete rear-wheel drive, then one
+    /// torque between the axles, proportional to how much faster the rear one turns and limited
+    /// to `awd2.maxTorque`; the front wheels are otherwise free.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_4wd_new(&mut self, car: &mut RollingChassis, dt: f32) {
+        let dtd = dt as f64;
+        self.step_2wd(car, dt);
+        let torque = self.ac_engine.base().status.out_torque;
+
+        let b = &self.base;
+        let demand =
+            (((b.out_shaft_l.velocity + b.out_shaft_r.velocity) * 0.5) - ((b.out_shaft_lf.velocity + b.out_shaft_rf.velocity) * 0.5)) * b.awd2.ramp;
+        if self.awd2_ctrl.is_some() {
+            // evaluated here, after the rear axle's step: the gear of a shift just finished,
+            // the engine speed `step2WD` left
+            let signals = self.signals(car);
+            self.base.awd2.max_torque = self.awd2_ctrl.as_mut().unwrap().eval(&signals) as f64;
+        }
+        let fb_front_left = car.tyres[0].status.feedback_torque;
+        let fb_front_right = car.tyres[1].status.feedback_torque;
+        let b = &mut self.base;
+        let most = b.awd2.max_torque;
+        let coupling = if demand > most {
+            most
+        } else if !(demand >= -most) {
+            -most
+        } else {
+            demand
+        };
+        let inv_front = 1.0 / (b.out_shaft_rf.inertia + b.out_shaft_lf.inertia);
+        b.awd2.current_lock_torque = coupling as f32;
+        let df = (inv_front * coupling) * dtd;
+        let mut front_right = df + b.out_shaft_rf.velocity;
+        let mut front_left = df + b.out_shaft_lf.velocity;
+        // each front tyre's torque: to both shafts together, then as an open differential.
+        // `(x + e) - e` is not `x` in floating point: kept as the machine does it
+        let e = (fb_front_left as f64 * inv_front) * dtd;
+        front_left = (front_left + e) + e;
+        front_right = (front_right + e) - e;
+        let e = (fb_front_right as f64 * inv_front) * dtd;
+        front_left = (e + front_left) - e;
+        front_right = (e + front_right) + e;
+        b.out_shaft_lf.velocity = front_left;
+        b.out_shaft_rf.velocity = front_right;
+        // the rear block loses what the front shafts got
+        let inertia_from_wheels = self.get_inertia_from_wheels();
+        let acc = -((coupling / inertia_from_wheels) * dtd);
+        if ordered_nonzero(self.base.ratio) {
+            self.base.root_velocity = (self.base.ratio * acc) + self.base.root_velocity;
+        }
+        self.accelerate_drivetrain_block(acc, false);
+
+        if !self.base.clutch_open_state {
+            self.base.engine.velocity = self.base.root_velocity;
+        }
+        self.write_back_four(car, dt);
+        self.total_torque_four(car, torque);
+    }
 }
 
 impl DrivetrainModel for VanillaDrivetrain {
     fn step(&mut self, car: &mut RollingChassis, dt: f32) {
+        self.base.out_shaft_lf.old_velocity = self.base.out_shaft_lf.velocity;
+        self.base.out_shaft_rf.old_velocity = self.base.out_shaft_rf.velocity;
         self.base.out_shaft_l.old_velocity = self.base.out_shaft_l.velocity;
         self.base.out_shaft_r.old_velocity = self.base.out_shaft_r.velocity;
         let loc_clutch = powf(car.controls.clutch, 1.5);
@@ -708,7 +1142,8 @@ impl DrivetrainModel for VanillaDrivetrain {
         self.step_controllers(car);
         match self.base.traction_type {
             TractionType::Rwd | TractionType::Fwd => self.step_2wd(car, dt),
-            TractionType::Awd | TractionType::AwdNew => {}
+            TractionType::Awd => self.step_4wd(car, dt),
+            TractionType::AwdNew => self.step_4wd_new(car, dt),
         }
     }
 
@@ -838,6 +1273,8 @@ impl DrivetrainModel for VanillaDrivetrain {
         b.engine.velocity = 0.0;
         b.out_shaft_l.velocity = 0.0;
         b.out_shaft_r.velocity = 0.0;
+        b.out_shaft_lf.velocity = 0.0;
+        b.out_shaft_rf.velocity = 0.0;
         b.drive.velocity = 0.0;
         b.gear_request.request = GearChangeRequest::None;
         // the raw ini value: 0 when the key is missing
@@ -854,7 +1291,7 @@ impl DrivetrainModel for VanillaDrivetrain {
     }
 
     fn has_dynamic_controllers(&self) -> bool {
-        self.single_diff_lock.is_some()
+        self.awd2_ctrl.is_some() || self.awd_center_lock.is_some() || self.awd_front_share_ctrl.is_some() || self.single_diff_lock.is_some()
     }
 
     fn project_rpm_at_downshift(&self) -> f32 {
@@ -913,6 +1350,31 @@ impl DrivetrainModel for VanillaDrivetrain {
         out.push(TraceValue::d("drivetrain.lastRatio", b.last_ratio).extra());
         out.push(TraceValue::d("drivetrain.outShaftL.oldVelocity", b.out_shaft_l.old_velocity).extra());
         out.push(TraceValue::d("drivetrain.outShaftR.oldVelocity", b.out_shaft_r.old_velocity).extra());
+        if matches!(b.traction_type, TractionType::Awd | TractionType::AwdNew) {
+            out.push(TraceValue::i("drivetrain.tractionType", b.traction_type as i32).extra());
+            out.push(TraceValue::d("drivetrain.outShaftLF.velocity", b.out_shaft_lf.velocity).extra());
+            out.push(TraceValue::d("drivetrain.outShaftRF.velocity", b.out_shaft_rf.velocity).extra());
+            out.push(TraceValue::d("drivetrain.outShaftLF.oldVelocity", b.out_shaft_lf.old_velocity).extra());
+            out.push(TraceValue::d("drivetrain.outShaftRF.oldVelocity", b.out_shaft_rf.old_velocity).extra());
+            out.push(TraceValue::d("drivetrain.outShaftL.inertia", b.out_shaft_l.inertia).extra());
+            out.push(TraceValue::d("drivetrain.outShaftR.inertia", b.out_shaft_r.inertia).extra());
+            out.push(TraceValue::d("drivetrain.outShaftLF.inertia", b.out_shaft_lf.inertia).extra());
+            out.push(TraceValue::d("drivetrain.outShaftRF.inertia", b.out_shaft_rf.inertia).extra());
+            out.push(TraceValue::f("drivetrain.awdFrontShare", b.awd_front_share).extra());
+            for (name, diff) in [("awdFrontDiff", &b.awd_front_diff), ("awdRearDiff", &b.awd_rear_diff), ("awdCenterDiff", &b.awd_center_diff)] {
+                out.push(TraceValue::f(&format!("drivetrain.{name}.power"), diff.power).extra());
+                out.push(TraceValue::f(&format!("drivetrain.{name}.coast"), diff.coast).extra());
+                out.push(TraceValue::f(&format!("drivetrain.{name}.preload"), diff.preload).extra());
+            }
+            out.push(TraceValue::d("drivetrain.awd2.ramp", b.awd2.ramp).extra());
+            out.push(TraceValue::d("drivetrain.awd2.maxTorque", b.awd2.max_torque).extra());
+            out.push(TraceValue::f("drivetrain.awd2.currentLockTorque", b.awd2.current_lock_torque).extra());
+            for (name, controller) in self.awd_controllers() {
+                for (k, stage) in controller.stages.iter().enumerate() {
+                    out.push(TraceValue::f(&format!("drivetrain.ctrl.{name}.stage{k}.currentValue"), stage.current_value).extra());
+                }
+            }
+        }
         self.ac_engine.trace(out);
     }
 
@@ -952,6 +1414,21 @@ impl DrivetrainModel for VanillaDrivetrain {
         ]);
         if let Some(controller) = &self.single_diff_lock {
             out.extend(controller.stages.iter().map(|stage| stage.current_value.to_bits()));
+        }
+        // four-wheel drive (the saved states of the other cars keep their form)
+        if matches!(b.traction_type, TractionType::Awd | TractionType::AwdNew) {
+            for value in [b.out_shaft_lf.velocity, b.out_shaft_lf.old_velocity, b.out_shaft_rf.velocity, b.out_shaft_rf.old_velocity, b.awd2.max_torque] {
+                out.push(value.to_bits() as u32);
+                out.push((value.to_bits() >> 32) as u32);
+            }
+            out.push(b.awd_front_share.to_bits());
+            for diff in [&b.awd_front_diff, &b.awd_rear_diff, &b.awd_center_diff] {
+                out.extend([diff.power, diff.coast, diff.preload].map(f32::to_bits));
+            }
+            out.push(b.awd2.current_lock_torque.to_bits());
+            for (_, controller) in self.awd_controllers() {
+                out.extend(controller.stages.iter().map(|stage| stage.current_value.to_bits()));
+            }
         }
         self.ac_engine.save_state(out);
     }
@@ -1002,6 +1479,26 @@ impl DrivetrainModel for VanillaDrivetrain {
         if let Some(controller) = &mut self.single_diff_lock {
             for stage in &mut controller.stages {
                 stage.current_value = f32::from_bits(word(words)?);
+            }
+        }
+        if matches!(self.base.traction_type, TractionType::Awd | TractionType::AwdNew) {
+            let b = &mut self.base;
+            b.out_shaft_lf.velocity = double(words)?;
+            b.out_shaft_lf.old_velocity = double(words)?;
+            b.out_shaft_rf.velocity = double(words)?;
+            b.out_shaft_rf.old_velocity = double(words)?;
+            b.awd2.max_torque = double(words)?;
+            b.awd_front_share = f32::from_bits(word(words)?);
+            for diff in [&mut b.awd_front_diff, &mut b.awd_rear_diff, &mut b.awd_center_diff] {
+                diff.power = f32::from_bits(word(words)?);
+                diff.coast = f32::from_bits(word(words)?);
+                diff.preload = f32::from_bits(word(words)?);
+            }
+            b.awd2.current_lock_torque = f32::from_bits(word(words)?);
+            for controller in [&mut self.awd_front_share_ctrl, &mut self.awd_center_lock, &mut self.awd2_ctrl].into_iter().flatten() {
+                for stage in &mut controller.stages {
+                    stage.current_value = f32::from_bits(word(words)?);
+                }
             }
         }
         self.ac_engine.load_state(words)

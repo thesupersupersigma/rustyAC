@@ -68,6 +68,11 @@ pub enum SetupTarget {
     DiffPowerRamp,
     DiffCoastRamp,
     DiffPreLoad,
+    /// `drivetrain.awdFrontDiff` (0), `awdRearDiff` (1), `awdCenterDiff` (2): `power` (0),
+    /// `coast` (1), `preload` (2)
+    AwdDiff(usize, usize),
+    /// `drivetrain.awdFrontShare`
+    AwdFrontShare,
     /// `brakeSystem.brakePowerMultiplier`, `brakeSystem.frontBias`
     BrakePowerMultiplier,
     FrontBias,
@@ -119,6 +124,12 @@ impl SetupTarget {
             DiffPowerRamp => drivetrain(chassis).base().diff_power_ramp,
             DiffCoastRamp => drivetrain(chassis).base().diff_coast_ramp,
             DiffPreLoad => drivetrain(chassis).base().diff_pre_load,
+            AwdDiff(axle, part) => {
+                let b = drivetrain(chassis).base();
+                let diff = [&b.awd_front_diff, &b.awd_rear_diff, &b.awd_center_diff][axle];
+                [diff.power, diff.coast, diff.preload][part]
+            }
+            AwdFrontShare => drivetrain(chassis).base().awd_front_share,
             BrakePowerMultiplier => brakes(chassis).base().brake_power_multiplier,
             FrontBias => brakes(chassis).base().front_bias,
             GearSetting(_) => unreachable!("the gear items point into the setup manager"),
@@ -165,6 +176,12 @@ impl SetupTarget {
             DiffPowerRamp => drivetrain_mut(chassis).base_mut().diff_power_ramp = value,
             DiffCoastRamp => drivetrain_mut(chassis).base_mut().diff_coast_ramp = value,
             DiffPreLoad => drivetrain_mut(chassis).base_mut().diff_pre_load = value,
+            AwdDiff(axle, part) => {
+                let b = drivetrain_mut(chassis).base_mut();
+                let diff = [&mut b.awd_front_diff, &mut b.awd_rear_diff, &mut b.awd_center_diff].into_iter().nth(axle).expect("three differentials");
+                *[&mut diff.power, &mut diff.coast, &mut diff.preload].into_iter().nth(part).expect("three values") = value;
+            }
+            AwdFrontShare => drivetrain_mut(chassis).base_mut().awd_front_share = value,
             BrakePowerMultiplier => brakes_mut(chassis).base_mut().brake_power_multiplier = value,
             FrontBias => brakes_mut(chassis).base_mut().front_bias = value,
             GearSetting(_) => unreachable!("the gear items point into the setup manager"),
@@ -356,8 +373,15 @@ impl SetupManager {
                 add("DIFF_COAST".into(), DiffCoastRamp, 0.01, 1.0);
                 add("DIFF_PRELOAD".into(), DiffPreLoad, 1.0, 1.0);
             }
+            // the four-wheel-drive items: every car has them, whatever drives it (on an
+            // `AWD2` car FRONT_DIFF_* and REAR_DIFF_* point at values its drivetrain never reads)
+            for (axle, name) in ["FRONT", "REAR", "CENTER"].iter().enumerate() {
+                add(format!("{name}_DIFF_POWER"), AwdDiff(axle, 0), 0.01, 1.0);
+                add(format!("{name}_DIFF_COAST"), AwdDiff(axle, 1), 0.01, 1.0);
+                add(format!("{name}_DIFF_PRELOAD"), AwdDiff(axle, 2), 1.0, 1.0);
+            }
+            add("AWD_FRONT_TORQUE_DISTRIBUTION".into(), AwdFrontShare, 0.01, 1.0);
         }
-        // (the items of the four-wheel-drive differentials are registered here)
         for (w, wheel) in WHEELS.iter().enumerate() {
             add(format!("PRESSURE_{wheel}"), TyrePressure(w), 1.0, 1.0);
         }

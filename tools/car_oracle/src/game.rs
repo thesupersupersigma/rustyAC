@@ -2551,6 +2551,43 @@ impl<'a> World<'a> {
                 row.f(&format!("abs.override.{wheel}"), rd(car, CAR_TYRES + i * TYRE_SIZE + 0x41c));
             }
         }
+        // Task 16: a four-wheel-drive car (TractionType AWD 2, AWD_NEW 3) also has its front
+        // shafts, its three differentials or its coupling, and their controllers
+        let d = car.add(CAR_DRIVETRAIN);
+        let traction: i32 = rd(d, 0x580);
+        if traction >= 2 {
+            row.i("drivetrain.tractionType", traction);
+            row.d("drivetrain.outShaftLF.velocity", rd(d, 0x68));
+            row.d("drivetrain.outShaftRF.velocity", rd(d, 0x80));
+            row.d("drivetrain.outShaftLF.oldVelocity", rd(d, 0x78));
+            row.d("drivetrain.outShaftRF.oldVelocity", rd(d, 0x90));
+            row.d("drivetrain.outShaftL.inertia", rd(d, 0x40));
+            row.d("drivetrain.outShaftR.inertia", rd(d, 0x58));
+            row.d("drivetrain.outShaftLF.inertia", rd(d, 0x70));
+            row.d("drivetrain.outShaftRF.inertia", rd(d, 0x88));
+            row.f("drivetrain.awdFrontShare", rd(d, 0x4dc));
+            for (name, offset) in [("awdFrontDiff", 0x4e0), ("awdRearDiff", 0x4f0), ("awdCenterDiff", 0x500)] {
+                row.f(&format!("drivetrain.{name}.power"), rd(d, offset));
+                row.f(&format!("drivetrain.{name}.coast"), rd(d, offset + 4));
+                row.f(&format!("drivetrain.{name}.preload"), rd(d, offset + 8));
+            }
+            row.d("drivetrain.awd2.ramp", rd(d, 0x520));
+            row.d("drivetrain.awd2.maxTorque", rd(d, 0x528));
+            row.f("drivetrain.awd2.currentLockTorque", rd(d, 0x530));
+            // DrivetrainControllers: unique_ptr<DynamicController> each; the stages are 0xa0
+            // bytes with `currentValue` at +0x94
+            for (name, offset) in [("awdFrontShare", 0x620), ("awdCenterLock", 0x628), ("awd2", 0x638)] {
+                let controller: *const u8 = rd(d, offset);
+                if controller.is_null() {
+                    continue;
+                }
+                let first: *const u8 = rd(controller, 0x8);
+                let last: *const u8 = rd(controller, 0x10);
+                for k in 0..(last as usize - first as usize) / 0xa0 {
+                    row.f(&format!("drivetrain.ctrl.{name}.stage{k}.currentValue"), rd(first.add(k * 0xa0), 0x94));
+                }
+            }
+        }
     }
 
     /// Facts about the car that do not change during a run, for the recording's header.
