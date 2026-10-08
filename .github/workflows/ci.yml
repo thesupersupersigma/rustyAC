@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Builds and tests every push to master and every pull request, on GitHub's own Windows machine.
+# No Assetto Corsa file is here or is fetched: the tests that need the game's folder print
+# NOT TESTED and pass.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # the version the repo is built with; raise it by hand, so a new compiler's lints never
+  # break a build that nobody touched
+  RUST_TOOLCHAIN: "1.97.0"
+
+jobs:
+  build:
+    name: build and test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      - name: Cache Cargo downloads and build output
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            tools/*/target
+          key: cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', 'tools/*/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+
+      # MSVCR120.dll: the maths of the game itself, which the tests compare against
+      - name: Install the Visual C++ 2013 runtime
+        run: |
+          choco install vcredist2013 -y --no-progress
+          if [ ! -f "$SYSTEMROOT/System32/msvcr120.dll" ]; then
+            echo "::error::MSVCR120.dll is not in System32 after installing vcredist2013: the tests would run on Rust's own maths"
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --workspace --locked
+
+      - name: Test
+        run: cargo test --release --workspace --locked
+
+      # not clean yet (about 40 warnings): the step shows them and never fails the run.
+      # Take continue-on-error away once they are gone.
+      - name: Clippy (does not fail the run)
+        continue-on-error: true
+        run: cargo clippy --workspace --locked -- -D warnings
+
+      # build only: they need acs.exe to run
+      - name: Build the tools
+        run: |
+          for manifest in tools/*/Cargo.toml; do
+            echo "::group::$manifest"
+            cargo build --release --locked --manifest-path "$manifest"
+            echo "::endgroup::"
+          done
