@@ -166,6 +166,10 @@ pub struct RaceIni {
     pub session_type: Option<i32>,
     /// `[SESSION_0] SPAWN_SET`: `PIT`, `START` or `HOTLAP_START`; empty without the key.
     pub spawn_set: String,
+    /// Any `[SESSION_n]` has `TYPE=4`: `RaceManager::initOffline` then arms the first lap of
+    /// every car (`CarAvatar::armFirstLap`): the clock starts again when the car first crosses
+    /// the line. The flag belongs to the file, not to one session.
+    pub arm_first_lap: bool,
 }
 
 impl RaceIni {
@@ -180,6 +184,7 @@ impl RaceIni {
             weather: ini.get_string("WEATHER", "NAME"),
             setup: ini.get_string("CAR_0", "SETUP"),
             session_type: ini.has_section("SESSION_0").then(|| int("SESSION_0", "TYPE")),
+            arm_first_lap: (0..).map(|n| format!("SESSION_{n}")).take_while(|section| ini.has_section(section)).any(|section| int(&section, "TYPE") == 4),
             spawn_set: ini.get_string("SESSION_0", "SPAWN_SET"),
             ..RaceIni::default()
         };

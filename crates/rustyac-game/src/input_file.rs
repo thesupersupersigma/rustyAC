@@ -216,11 +216,14 @@ pub struct Session {
     /// `[SESSION_0] TYPE` of race.ini (1 practice ... 4 hot-lap); `None`: a hot-lap session
     /// when the car starts at the hot-lap start, else practice.
     pub session_type: Option<i32>,
+    /// race.ini has a hot-lap session (any `[SESSION_n] TYPE=4`): the first lap is armed.
+    /// `None`: armed when the session's type is 4.
+    pub arm_first_lap: Option<bool>,
 }
 
 impl Default for Session {
     fn default() -> Session {
-        Session { wind_speed: 0.0, wind_direction_deg: 0.0, dynamic_track: None, ballast_kg: 0.0, restrictor: 0.0, penalties: true, assists: None, setup_file: None, session_type: None }
+        Session { wind_speed: 0.0, wind_direction_deg: 0.0, dynamic_track: None, ballast_kg: 0.0, restrictor: 0.0, penalties: true, assists: None, setup_file: None, session_type: None, arm_first_lap: None }
     }
 }
 
@@ -398,6 +401,9 @@ impl SimSetup {
         if let Some(session_type) = s.session_type {
             put("session_type", session_type.to_string());
         }
+        if let Some(armed) = s.arm_first_lap {
+            put("arm_first_lap", (armed as u32).to_string());
+        }
         if !self.track.is_empty() {
             put("track", self.track.clone());
             put("spawn", self.spawn.clone());
@@ -497,6 +503,7 @@ impl SimSetup {
                 "auto_blip" => setup.auto_blip = Some(flag()),
                 "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
+                "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,
                 "track" => setup.track = value.to_string(),
                 "spawn" => setup.spawn = value.to_string(),

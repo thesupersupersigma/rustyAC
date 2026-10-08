@@ -441,8 +441,9 @@ impl ShmSink {
             let tp = &car.transponder;
             let db = &sim.lap_db;
             let last = db.last_lap();
-            // AC_PRACTICE 0, AC_QUALIFY 1, AC_RACE 2, AC_HOTLAP 3 ...: one less than race.ini's TYPE
-            g.set_i("session", (car.env.session_type - 1).max(0));
+            // AC_PRACTICE 0, AC_QUALIFY 1, AC_RACE 2, AC_HOTLAP 3 ...: one less than race.ini's
+            // TYPE for 1..7, else AC_UNKNOWN -1
+            g.set_i("session", if (1..=7).contains(&car.env.session_type) { car.env.session_type - 1 } else { -1 });
             g.set_w("currentTime", &time_to_string(tp.t as i32));
             g.set_w("lastTime", &time_to_string(last.time as i32));
             g.set_w("bestTime", &time_to_string(db.best_lap.time as i32));

@@ -445,6 +445,7 @@ fn the_session_travels_in_the_file() {
         assists: Some((1, 2, 35.0)),
         setup_file: Some(PathBuf::from(r"C:\some folder\setups\car\spa\a name, with = signs.ini")),
         session_type: Some(1),
+        arm_first_lap: Some(true),
     };
     let setup = SimSetup { session: session.clone(), auto_blip: Some(false), session_starts_at_spawn: true, ..SimSetup::default() };
     let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session.ryin");
@@ -454,7 +455,7 @@ fn the_session_travels_in_the_file() {
     assert_eq!(back.setup.session, session);
     // a drive without any of it writes none of the new lines: older programs read it
     let plain = SimSetup::default().header();
-    for key in ["wind=", "dynamic_track=", "ballast_kg=", "restrictor=", "penalties=", "assists=", "setup_file="] {
+    for key in ["wind=", "dynamic_track=", "ballast_kg=", "restrictor=", "penalties=", "assists=", "setup_file=", "session_type=", "arm_first_lap="] {
         assert!(!plain.contains(key), "{key} in a plain header");
     }
 }

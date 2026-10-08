@@ -117,6 +117,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             }
             let session = &mut setup.session;
             session.session_type = race.session_type;
+            session.arm_first_lap = race.session_type.map(|_| race.arm_first_lap);
             session.penalties = race.penalties;
             session.ballast_kg = race.ballast_kg;
             session.restrictor = race.restrictor;
@@ -278,7 +279,11 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
         notes.push(format!(
             "session: {name} ([SESSION_0] TYPE={session_type}), from {}{}",
             setup.spawn,
-            if session_type == 4 { "; the first lap counts from the start" } else { "; the first lap begins at the line (only a hot-lap session counts it from the start)" }
+            if setup.session.arm_first_lap.unwrap_or(session_type == 4) {
+                "; the clock starts again when the car first crosses the line (lap 1 is line to line)"
+            } else {
+                "; the clock runs from the spawn point, so lap 1 includes the run-up to the line (as in the game)"
+            }
         ));
     }
     if let Some(density) = options.air_density {

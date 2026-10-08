@@ -569,7 +569,8 @@ fn build_car(
         // the automatic gearbox's 300 ms count from here)
         env.session_start_time_ms = physics_time;
     }
-    let session_type = env.session_type;
+    // RaceManager::initOffline: a file with a hot-lap session arms the first lap
+    let arm_first_lap = session.arm_first_lap.unwrap_or(env.session_type == 4);
     let mut car = VanillaCar::new(data_path, env, ground, setup.seed, physics_time, driver)?;
     // the session of race.ini and assists.ini: the track's grip, ballast and restrictor
     // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
@@ -596,9 +597,11 @@ fn build_car(
             car.car.pit_position = track.helper_nodes[node].local;
         }
         car.car.set_track(Arc::clone(track));
-        // RaceManager::initOffline -> CarAvatar::armFirstLap, in a hot-lap session only (in any
-        // other the lap begins when the car first crosses the line)
-        if session_type == 4 {
+        // RaceManager::initOffline -> CarAvatar::armFirstLap, for a hot-lap session only: the
+        // clock starts again when the car first crosses the line (lap 1 is line to line). In
+        // any other session it keeps running from the session's start and the first lap
+        // includes the run-up from the spawn point
+        if arm_first_lap {
             car.car.transponder.arm_first_lap();
         }
     }
@@ -613,6 +616,16 @@ fn build_car(
     // electronic blip blips whatever it says
     if let Some(blip) = setup.auto_blip {
         car.car.auto_blip.is_active = blip;
+        // the same job (0x1400d07a0), with the aid off: a car with an H-pattern gearbox also
+        // stops cutting the ignition on up-shifts (switching the aid on does not restore it)
+        if !blip {
+            if let Some(drivetrain) = &mut car.car.drivetrain {
+                let base = drivetrain.base_mut();
+                if base.is_shifter_supported {
+                    base.auto_cut_off_time = 0.0;
+                }
+            }
+        }
     }
     car.car.force_rotation(&spawn.tail);
     car.car.force_position(&spawn.position);
@@ -722,8 +735,8 @@ impl GameSim {
         if events & event::RESET != 0 {
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
-            // (as at the session's start: only a hot-lap session counts the first lap at once)
-            let armed = self.track.is_some() && self.car.car.env.session_type == 4;
+            // (the game's restart leaves the armed flag of a hot-lap file as it is)
+            let armed = self.track.is_some() && self.setup.session.arm_first_lap.unwrap_or(self.car.car.env.session_type == 4);
             self.car.car.queue(move |car| {
                 car.force_rotation(&spawn.tail);
                 car.force_position(&spawn.position);
@@ -779,6 +792,8 @@ impl GameSim {
         }
         if events & event::AUTO_SHIFTER != 0 {
             self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
+            // (the toggle lives on in a car built anew, as in the game)
+            self.setup.auto_shifter = self.car.car.auto_shifter.is_active;
         }
         // the cockpit of the hybrid system and the engine brake: what the game's notifiers
         // and key handler do on a press, with the game's messages on the console

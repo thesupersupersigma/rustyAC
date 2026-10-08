@@ -162,9 +162,10 @@ usage: rustyac [options]
                         (for example --track spa); default: the endless flat road
   --flat                the endless flat road (the default)
   --spawn <where>       on a track: hotlap, pit or start (default: where race.ini's session
-                        starts, [SESSION_0] SPAWN_SET; without a race.ini hotlap). The first
-                        lap counts from the start only in a hot-lap session ([SESSION_0] TYPE=4,
-                        or no race.ini); in any other it begins at the line, as in the game
+                        starts, [SESSION_0] SPAWN_SET; without a race.ini hotlap). In a
+                        hot-lap session (a [SESSION_n] with TYPE=4, or no race.ini) the clock
+                        starts again when the car first crosses the line; in any other it
+                        runs from the spawn point and lap 1 includes the run-up, as in the game
   --boxes               draw the car as boxes, not with its 3D model
   --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
   --no-textures         flat colours instead of textures
@@ -202,9 +203,11 @@ usage: rustyac [options]
   --auto-shifter        the automatic gearbox aid on (Alt+G or Ctrl+G toggles it); default:
   --no-auto-shifter     as assists.ini says (AUTO_SHIFTER), off without the file
   --auto-clutch         the automatic clutch aid on / off; default: on with a pad or the
-  --no-auto-clutch      keyboard (the game forces it there), else as assists.ini says
-  --auto-blip           the automatic throttle blip on / off; default: as assists.ini says
-  --no-auto-blip        (a car with an electronic blip blips anyway)
+  --no-auto-clutch      keyboard (the game forces it there and refuses to switch it off), else
+                        as assists.ini says
+  --auto-blip           the automatic throttle blip on / off; default: as assists.ini says.
+  --no-auto-blip        Off: a car with an electronic blip blips anyway, and a car with an
+                        H-pattern gearbox also stops cutting the ignition on up-shifts
   --controls <ini>      bindings file to use (default: AC's own controls.ini, read-only)
   --default-controls    ignore AC's controls.ini and use the built-in Xbox / keyboard layout
   --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
