@@ -105,6 +105,26 @@ pub struct Whole {
     /// The session's penalty rule is "cut gas" (`PhysicsEngine::penaltyMode` 0) instead of the
     /// engine's default "nothing" (3).
     pub penalty_cut_gas: bool,
+    /// Task 15: the session's conditions as `cfg/race.ini` has them.
+    pub conditions: Conditions,
+}
+
+/// The session of a Task 15 scenario: what the game reads from `cfg/race.ini` (and a saved
+/// setup). Everything `None` / 0 is the oracle's usual session: 26 deg C air, 30 deg C road,
+/// no `[DYNAMIC_TRACK]` section (full grip), no wind, the default setup.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Conditions {
+    /// `[TEMPERATURE] AMBIENT`, `ROAD`
+    pub temperature: Option<(f32, f32)>,
+    /// `[DYNAMIC_TRACK] SESSION_START`, `RANDOMNESS`, `LAP_GAIN`, `SESSION_TRANSFER`
+    pub dynamic_track: Option<[f32; 4]>,
+    /// `[WIND] SPEED_KMH_MIN`, `SPEED_KMH_MAX`, `DIRECTION_DEG`
+    pub wind: Option<[f32; 3]>,
+    /// `[CAR_0] BALLAST`, `RESTRICTOR`
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    /// The scenario loads the saved setup given with `--setup <file>`.
+    pub setup: bool,
 }
 
 /// What a script may look at: the car as the previous step left it.
@@ -486,7 +506,49 @@ pub fn track() -> Vec<Scenario> {
         whole: Whole { on: true, ..Whole::default() },
         kind: Kind::Track(kind),
     };
-    vec![
+    // Task 15: the launch again, in other weather, on another track state, with another setup
+    let conditions_on = |name, about, secs: f32, kind, conditions: Conditions| Scenario {
+        whole: Whole { on: true, conditions, ..Whole::default() },
+        ..on_track(name, about, secs, kind)
+    };
+    let in_conditions = |name, about, conditions: Conditions| conditions_on(name, about, 24.0, TrackKind::Launch, conditions);
+    let mut scenarios = vec![
+        in_conditions(
+            "spa_cold_green_wind",
+            "spa_launch on a cold day (8 deg C air, 11 deg C road), a green track (88 % grip, +-3 % drawn, half a percent more per lap) and a wind drawn from 12 to 26 km/h around 130 degrees",
+            Conditions { temperature: Some((8.0, 11.0)), dynamic_track: Some([88.0, 3.0, 2.0, 50.0]), wind: Some([12.0, 26.0, 130.0]), ..Conditions::default() },
+        ),
+        in_conditions(
+            "spa_hot_optimum",
+            "spa_launch on a hot day (36 deg C air, 48 deg C road), the track at its optimum (100 %), no wind; 25 kg of ballast and a restrictor of 60",
+            Conditions { temperature: Some((36.0, 48.0)), dynamic_track: Some([100.0, 0.0, 1.0, 100.0]), ballast_kg: 25.0, restrictor: 60.0, ..Conditions::default() },
+        ),
+        in_conditions(
+            "spa_user",
+            "spa_launch in the conditions of the user's own race.ini: 14 deg C air, 20 deg C road, grip 100 %, wind 10 km/h from 0 degrees (drawn: 8 to 12 km/h, within 20 degrees)",
+            Conditions { temperature: Some((14.0, 20.0)), dynamic_track: Some([100.0, 0.0, 1.0, 100.0]), wind: Some([10.0, 10.0, 0.0]), ..Conditions::default() },
+        ),
+        conditions_on(
+            "spa_setup",
+            "spa_eau_rouge with a saved setup (--setup <file>) loaded before the first step",
+            16.0,
+            TrackKind::EauRouge,
+            Conditions { setup: true, ..Conditions::default() },
+        ),
+        in_conditions(
+            "spa_setup_launch",
+            "spa_launch with a saved setup (--setup <file>) loaded before the first step",
+            Conditions { setup: true, ..Conditions::default() },
+        ),
+        conditions_on(
+            "spa_green_laps",
+            "spa_timing on a green track that gains grip with every lap counted: 86 % at the start, +-2 % drawn, 1.25 % more per lap",
+            60.0,
+            TrackKind::Timing,
+            Conditions { dynamic_track: Some([86.0, 2.0, 0.8, 0.0]), ..Conditions::default() },
+        ),
+    ];
+    scenarios.extend(vec![
         on_track("spa_launch", "from the hot-lap start flat out down the pit straight, then on the brakes for La Source and round it", 24.0, TrackKind::Launch),
         on_track("spa_eau_rouge", "from 300 m before the bottom of Eau Rouge flat out through it and up Raidillon: compression, then the crest", 16.0, TrackKind::EauRouge),
         on_track("spa_kerbs", "through the Bus Stop chicane with the inner wheels over its kerbs", 20.0, TrackKind::Kerbs),
@@ -506,7 +568,8 @@ pub fn track() -> Vec<Scenario> {
         on_track("spa_bottoming", "from 300 m before the bottom of Eau Rouge flat out through the compression: the floor on the road", 16.0, TrackKind::Bottoming),
         on_track("spa_kerb_strike", "at the Bus Stop chicane much too fast and deep over its inner kerbs", 16.0, TrackKind::KerbStrike),
         on_track("spa_rollover", "put down on its roof 0.8 m above the road and left to settle, five seconds later put down on its side (a second of throttle each time: a sleeping car would hang in the air)", 10.0, TrackKind::Rollover),
-    ]
+    ]);
+    scenarios
 }
 
 /// Every scenario by name.

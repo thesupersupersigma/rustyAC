@@ -349,8 +349,8 @@ pub fn step_recorded(chassis: &mut RollingChassis, physics_time: f64, step: &Rec
             brakes.set_manual_front_bias(step.bias_clicks);
         }
     }
-    // PhysicsEngine::stepWind runs before the cars
-    chassis.env.step_wind(physics_time);
+    // Track::step and PhysicsEngine::stepWind run before the cars
+    chassis.step_session(physics_time);
     // The game's drivetrain left the driven wheels' speed at the end of the step before; a
     // chassis with its own brakes reads it for the disc temperatures, ahead of the `edl` hook.
     if chassis.drivetrain.is_none() {
@@ -916,6 +916,84 @@ pub struct RunSetup {
     pub track: Option<TrackRun>,
     /// What the car's body touches (Task 13).
     pub collide: CollideRun,
+    /// The session's conditions as race.ini has them, and a saved setup (Task 15).
+    pub conditions: Conditions,
+}
+
+/// The session of a recording made in other conditions than the oracle's usual ones
+/// (`car_oracle`'s `spa_cold_green_wind`, `spa_hot_optimum`, `spa_user`, `spa_setup`): what
+/// race.ini says, turned into the car's values by the port's own code
+/// ([`crate::session`], [`RollingChassis::load_setup`]). The temperatures are in `env`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Conditions {
+    /// `[WIND]`: drawn from with the C runtime's `rand()` of the recording's seed.
+    pub wind: Option<crate::session::WindIni>,
+    /// `[DYNAMIC_TRACK]`
+    pub dynamic_track: Option<crate::session::DynamicTrackIni>,
+    /// `[CAR_0] BALLAST`, `RESTRICTOR` (0: none)
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    /// A saved setup, loaded after the default one and before the first step.
+    pub setup_file: Option<std::path::PathBuf>,
+}
+
+impl Conditions {
+    /// One line of text (numbers as bit patterns), for a file's header.
+    pub fn encode(&self) -> String {
+        let hex = |values: &[f32]| values.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(",");
+        let mut parts = Vec::new();
+        if let Some(w) = &self.wind {
+            parts.push(format!("wind={}", hex(&[w.speed_kmh_min, w.speed_kmh_max, w.direction_deg])));
+        }
+        if let Some(d) = &self.dynamic_track {
+            parts.push(format!("dynamic_track={}", hex(&[d.session_start, d.randomness, d.lap_gain, d.session_transfer])));
+        }
+        if self.ballast_kg != 0.0 {
+            parts.push(format!("ballast_kg={}", hex(&[self.ballast_kg])));
+        }
+        if self.restrictor != 0.0 {
+            parts.push(format!("restrictor={}", hex(&[self.restrictor])));
+        }
+        if let Some(file) = &self.setup_file {
+            // last: a path may hold any character but a line break
+            parts.push(format!("setup_file={}", file.display()));
+        }
+        parts.join(";")
+    }
+
+    /// The inverse of [`Conditions::encode`].
+    pub fn decode(text: &str) -> Result<Conditions, String> {
+        let mut conditions = Conditions::default();
+        let mut rest = text;
+        while !rest.is_empty() {
+            let (key, after) = rest.split_once('=').ok_or(format!("conditions: no '=' in {rest:?}"))?;
+            if key == "setup_file" {
+                conditions.setup_file = Some(std::path::PathBuf::from(after));
+                break;
+            }
+            let (value, next) = after.split_once(';').unwrap_or((after, ""));
+            rest = next;
+            let numbers = Conditions::parse_hex(value)?;
+            match (key, numbers.as_slice()) {
+                ("wind", [min, max, direction]) => {
+                    conditions.wind = Some(crate::session::WindIni { speed_kmh_min: *min, speed_kmh_max: *max, direction_deg: *direction })
+                }
+                ("dynamic_track", [start, randomness, gain, transfer]) => {
+                    conditions.dynamic_track =
+                        Some(crate::session::DynamicTrackIni { session_start: *start, randomness: *randomness, lap_gain: *gain, session_transfer: *transfer })
+                }
+                ("ballast_kg", [kg]) => conditions.ballast_kg = *kg,
+                ("restrictor", [value]) => conditions.restrictor = *value,
+                _ => return Err(format!("conditions: {key}={value} is not understood")),
+            }
+        }
+        Ok(conditions)
+    }
+
+    /// Numbers written as comma-separated bit patterns (`41200000,43020000`).
+    pub fn parse_hex(text: &str) -> Result<Vec<f32>, String> {
+        text.split(',').map(|word| u32::from_str_radix(word, 16).map(f32::from_bits).map_err(|e| format!("{word:?}: {e}"))).collect()
+    }
 }
 
 /// The track of a recording made with `car_oracle run --track`.
@@ -954,7 +1032,22 @@ impl RunSetup {
         if self.wind_speed != 0.0 {
             env.set_wind(self.wind_speed, self.wind_direction_deg);
         }
-        let mut chassis = RollingChassis::new(data_path, env, ground, self.seed, self.clock_start_ms)?;
+        // the session's draws from the C runtime's `rand()`, in the order the oracle makes the
+        // game draw them: the wind's base speed (and direction), the track's grip, the wind
+        // itself; then the car's (one per suspension), which carries the generator on
+        let mut rand = crate::session::MsvcRand(self.seed);
+        let wind_settings = self.conditions.wind.map(|wind| wind.settings(&mut || rand.next()));
+        let dynamic_track = self.conditions.dynamic_track.map(|track| track.build(rand.next()));
+        if let Some(settings) = wind_settings {
+            if let Some((speed, direction)) = crate::session::generate_wind(&settings, &mut || rand.next()) {
+                env.set_wind(speed, direction);
+            }
+        }
+        let mut chassis = RollingChassis::new(data_path, env, ground, rand.0, self.clock_start_ms)?;
+        chassis.dynamic_track = dynamic_track;
+        if self.conditions.ballast_kg > 0.0 {
+            chassis.ballast_kg = self.conditions.ballast_kg;
+        }
         // the collider mesh comes right after `Car::Car` (CarAvatar::initPhysics)
         chassis.collisions_enabled = self.collide.on;
         if let Some(mesh) = &self.collide.mesh {
@@ -979,6 +1072,9 @@ impl RunSetup {
                 chassis.autoclutch.use_auto_on_change = true;
             }
             chassis.auto_shifter.is_active = self.auto_shifter;
+            if self.conditions.restrictor > 0.0 {
+                chassis.set_restrictor(self.conditions.restrictor);
+            }
         }
         if self.rust_aids {
             chassis.install_aids()?;
@@ -1017,6 +1113,11 @@ impl RunSetup {
         }
         chassis.damage_zone_level = self.damage;
         chassis.session_start()?;
+        if let Some(file) = &self.conditions.setup_file {
+            let saved = crate::data::ini::IniReader::load(file)?;
+            let name = file.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            chassis.load_setup(&saved, &name)?;
+        }
         chassis.core.set_no_collision_steps(self.collide.no_collision_steps);
         chassis.core.tape = Some(Vec::new());
         chassis.trace = Some(StepTrace::default());
@@ -1645,6 +1746,7 @@ impl Golden {
             auto_shifter: get("auto_shifter")? != "0",
             track: None,
             collide: CollideRun::default(),
+            conditions: Conditions::default(),
         };
         let mut setup = setup;
         let track = match get("track") {

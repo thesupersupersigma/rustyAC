@@ -539,16 +539,12 @@ pub struct RollingChassis {
     pub trace: Option<StepTrace>,
     /// The car's data folder.
     pub data_path: PathBuf,
-}
-
-/// The C runtime's `rand()` (MSVCR120): `Suspension::Suspension` draws one number each.
-struct MsvcRand(u32);
-
-impl MsvcRand {
-    fn next(&mut self) -> i32 {
-        self.0 = self.0.wrapping_mul(214013).wrapping_add(2531011);
-        ((self.0 >> 16) & 0x7fff) as i32
-    }
+    /// The track's grip of the session (`Track::dynamicTrack`), when race.ini has a
+    /// `[DYNAMIC_TRACK]` section: stepped before the car, it sets `env.dynamic_grip_level`.
+    /// `None`: `env.dynamic_grip_level` is a fixed number.
+    pub dynamic_track: Option<crate::track::DynamicTrack>,
+    /// The name of the setup file loaded with [`RollingChassis::load_setup`], for displays.
+    pub setup_name: String,
 }
 
 /// `ucomiss x, 0` + `je`: true for an ordered value that is not zero.
@@ -920,6 +916,8 @@ impl RollingChassis {
             last_body_mass_update_time: -1.0e8,
             fuel_tank_pos,
             ballast_kg: 0.0,
+            dynamic_track: None,
+            setup_name: String::new(),
             speed: 0.0,
             fuel_pressure: 0.0,
             physics_time,
@@ -929,7 +927,8 @@ impl RollingChassis {
 
         // the wheels: suspension, then its tyre
         let suspensions_ini = IniReader::load(&data_path.join("suspensions.ini"))?;
-        let mut rand = MsvcRand(rand_seed);
+        // the C runtime's `rand()`: `Suspension::Suspension` draws one number each
+        let mut rand = crate::session::MsvcRand(rand_seed);
         for index in 0..4 {
             let section = if index < 2 { "FRONT" } else { "REAR" };
             let kind = suspensions_ini.get_string(section, "TYPE");
@@ -1270,6 +1269,48 @@ impl RollingChassis {
             }
         }
         Ok(())
+    }
+
+    /// What `PhysicsEngine::step` @ 0x140264760 does before the cars: `Track::step` (the
+    /// track's grip, from the laps driven so far) and `stepWind`. `physics_time` is the clock
+    /// of the step, ms.
+    pub fn step_session(&mut self, physics_time: f64) {
+        if let Some(track) = &mut self.dynamic_track {
+            track.step(self.transponder.lap_count as i32);
+            self.env.dynamic_grip_level = track.dynamic_grip_level;
+        }
+        self.env.step_wind(physics_time);
+    }
+
+    /// `Car::setRestrictor` @ 0x140275d10 (`[CAR_0] RESTRICTOR` of race.ini).
+    pub fn set_restrictor(&mut self, restrictor: f32) {
+        let value = restrictor * 0.0025;
+        #[allow(clippy::manual_range_contains)] // the game's two comparisons: a NaN becomes 1
+        let value = if value <= 1.0 && 0.0 <= value {
+            value
+        } else if value <= 1.0 {
+            0.0
+        } else {
+            1.0
+        };
+        if let Some(drivetrain) = &mut self.drivetrain {
+            drivetrain.engine_mut().base_mut().restrictor = value;
+        }
+    }
+
+    /// Loads a saved setup (`Documents\Assetto Corsa\setups\<car>\<track>\<name>.ini`) as the
+    /// game's setup screen does when "Load" is pressed, here before the first step: after
+    /// [`RollingChassis::session_start`], whose default values stay for everything the file
+    /// does not name. Returns what was set, for the console.
+    pub fn load_setup(&mut self, saved: &IniReader, name: &str) -> Result<Vec<String>, String> {
+        let setup = IniReader::load(&self.data_path.join("setup.ini"))?;
+        let mut manager = std::mem::take(&mut self.setup_manager);
+        let result = manager.load_setup_file(self, &setup, saved);
+        self.setup_manager = manager;
+        if result.is_ok() {
+            self.setup_name = name.to_string();
+        }
+        result
     }
 
     /// The session start of the player's car as the game's setup screen does it with the

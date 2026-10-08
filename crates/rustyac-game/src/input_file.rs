@@ -132,6 +132,8 @@ pub struct OracleSetup {
     pub track: Option<OracleTrack>,
     /// The recording was made with collisions (`car_oracle run --collide`).
     pub collide: Option<OracleCollide>,
+    /// The recording's session conditions and saved setup (Task 15).
+    pub conditions: rustyac_physics::car::replay::Conditions,
 }
 
 /// How the car of an oracle recording touched things.
@@ -254,6 +256,7 @@ impl SimSetup {
                 },
                 None => Default::default(),
             },
+            conditions: oracle.conditions.clone(),
         })
     }
 
@@ -297,6 +300,9 @@ impl SimSetup {
             put("oracle_wind_speed", format!("{:?}", o.wind_speed));
             put("oracle_wind_direction_deg", format!("{:?}", o.wind_direction_deg));
             put("oracle_damage", o.damage.map(|d| format!("{d:?}")).join(","));
+            if o.conditions != Default::default() {
+                put("oracle_conditions", o.conditions.encode());
+            }
             if let Some(track) = &o.track {
                 put("oracle_track_folder", track.folder.clone());
                 put("oracle_spawn_position", hex3(&track.position));
@@ -349,6 +355,7 @@ impl SimSetup {
                 wind_speed: 0.0,
                 wind_direction_deg: 0.0,
                 damage: [0.0; 5],
+                conditions: Default::default(),
                 track: None,
                 collide: None,
             };
@@ -398,6 +405,7 @@ impl SimSetup {
                     oracle.get_or_insert_with(blank).ground = Ground::parse(value).ok_or(format!("oracle_ground: {value:?}"))?
                 }
                 "oracle_pitlane" => oracle.get_or_insert_with(blank).pitlane = flag(),
+                "oracle_conditions" => oracle.get_or_insert_with(blank).conditions = rustyac_physics::car::replay::Conditions::decode(value)?,
                 "oracle_stability_gain" => oracle.get_or_insert_with(blank).stability_gain = float()?,
                 "oracle_wind_speed" => oracle.get_or_insert_with(blank).wind_speed = float()?,
                 "oracle_wind_direction_deg" => oracle.get_or_insert_with(blank).wind_direction_deg = float()?,

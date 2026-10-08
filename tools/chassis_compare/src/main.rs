@@ -152,6 +152,12 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         allow_tyre_blankets: recording.i(0, "tyre.lf.in_allow_tyre_blankets") != 0,
         ..ChassisEnvironment::default()
     };
+    let conditions = conditions(recording)?;
+    let mut env = env;
+    if conditions.dynamic_track.is_some() {
+        // the port's own dynamic track has to find the grip: nothing of the game's is handed in
+        env.dynamic_grip_level = 1.0;
+    }
     Ok(RunSetup {
         scenario: get("scenario")?.to_string(),
         ground: Ground::parse(get("ground")?).ok_or("the recording's ground")?,
@@ -178,7 +184,31 @@ fn run_setup(recording: &Recording, systems: Systems) -> Result<RunSetup, String
         auto_shifter: recording.get("auto_shifter").is_some_and(|v| v != "0"),
         track: track_run(recording)?,
         collide: collide_run(recording)?,
+        conditions,
     })
+}
+
+/// The session's conditions of a Task 15 recording (`car_oracle`'s header keys); the port
+/// turns them into the car's values itself.
+fn conditions(recording: &Recording) -> Result<replay::Conditions, String> {
+    let numbers = |key: &str| recording.get(key).map(replay::Conditions::parse_hex).transpose().map_err(|e| format!("{key}: {e}"));
+    let mut conditions = replay::Conditions::default();
+    if let Some(w) = numbers("wind_ini")? {
+        let [min, max, direction] = w[..] else { return Err("wind_ini: three numbers expected".to_string()) };
+        conditions.wind = Some(rustyac_physics::session::WindIni { speed_kmh_min: min, speed_kmh_max: max, direction_deg: direction });
+    }
+    if let Some(d) = numbers("dynamic_track")? {
+        let [start, randomness, gain, transfer] = d[..] else { return Err("dynamic_track: four numbers expected".to_string()) };
+        conditions.dynamic_track = Some(rustyac_physics::session::DynamicTrackIni { session_start: start, randomness, lap_gain: gain, session_transfer: transfer });
+    }
+    if let Some(b) = numbers("ballast_kg")? {
+        conditions.ballast_kg = b[0];
+    }
+    if let Some(r) = numbers("restrictor")? {
+        conditions.restrictor = r[0];
+    }
+    conditions.setup_file = recording.get("setup_file").map(std::path::PathBuf::from);
+    Ok(conditions)
 }
 
 /// What the car's body touches in a recording made with `car_oracle run --collide`. The
@@ -1654,6 +1684,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
                 wind_speed: run.wind_speed,
                 wind_direction_deg: run.wind_direction_deg,
                 damage: run.damage,
+                conditions: run.conditions.clone(),
                 track: run.track.as_ref().map(|track| input_file::OracleTrack {
                     folder: recording.get("track_folder").unwrap_or("").to_string(),
                     position: [track.position.x, track.position.y, track.position.z],

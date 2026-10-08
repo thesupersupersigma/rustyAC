@@ -56,7 +56,7 @@ const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assett
 
 fn usage() -> String {
     "usage: car_oracle list\n       \
-     car_oracle run --scenario <name> [--track <track folder or name>] [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only]\n       \
+     car_oracle run --scenario <name> [--track <track folder or name>] [--out <dir>] [--steps <n>] [--floor] [--no-joint-forces] [--hash-only] [--setup <saved setup .ini>]\n       \
      car_oracle all [--out <dir>] [--only <name,name>] [--steps <n>]\n       \
      car_oracle check <recording>\n       \
      car_oracle setup-check [--car <name>]\n       \
@@ -97,6 +97,8 @@ struct Args {
     car: String,
     verbose: bool,
     track: Option<PathBuf>,
+    /// `--setup <file>`: the saved setup a Task 15 scenario loads.
+    setup: Option<PathBuf>,
     count: usize,
     count_given: bool,
     mesh_count: usize,
@@ -132,6 +134,7 @@ fn parse_args() -> Result<Args, String> {
         car: game::DEFAULT_CAR.to_string(),
         verbose: false,
         track: None,
+        setup: None,
         count: 1_000_000,
         count_given: false,
         mesh_count: 50_000,
@@ -163,6 +166,7 @@ fn parse_args() -> Result<Args, String> {
             "--car" => a.car = value()?,
             "--verbose" => a.verbose = true,
             "--track" => a.track = Some(PathBuf::from(value()?)),
+            "--setup" => a.setup = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
             "--count" => {
                 a.count = number(value()?)?;
                 a.count_given = true;
@@ -370,6 +374,7 @@ fn run(args: &Args) -> Result<(), String> {
         collide: args.collide,
         colliders,
         collider_kn5: args.acs.parent().map(|game| rustyac_physics::car::colliders::collider_kn5_path(game, &args.car)),
+        setup: args.setup.clone(),
     };
     let mut world = game::World::build(&acs, scenario, &options);
     let steps = args.steps.unwrap_or(scenario.steps);
@@ -407,6 +412,7 @@ fn run(args: &Args) -> Result<(), String> {
         meta.push(("penalty_mode".to_string(), penalty_mode.to_string()));
     }
     meta.extend(world.track_meta.clone());
+    meta.extend(world.conditions_meta.clone());
     let path = recording_path(&out, &name);
     let mut writer = Writer::new((!args.hash_only).then_some(path.as_path()), meta).map_err(|e| e.to_string())?;
     let mut sites = BTreeSet::new();
@@ -562,7 +568,7 @@ fn setup_check(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&args.acs)?;
     acs.unbuffer_game_stdout();
     let scenarios = scenario::all();
-    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None, collide: false, colliders: None, collider_kn5: None };
+    let options = game::Options { joint_feedback: false, car: args.car.clone(), setup_check: true, track: None, collide: false, colliders: None, collider_kn5: None, setup: None };
     let world = game::World::build(&acs, &scenarios[0], &options);
     println!("{} values change: {}", world.setup_changes.len(), world.setup_changes.join(", "));
     Ok(())

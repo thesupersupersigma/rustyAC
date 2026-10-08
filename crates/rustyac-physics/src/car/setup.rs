@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use super::chassis::RollingChassis;
-use crate::data::ini::IniReader;
+use crate::data::ini::{append_path, IniReader};
 
 /// Which float of the car a setup item is connected to (`SetupItem::connectedFloat`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -249,6 +249,85 @@ fn cvtt(x: f64) -> i32 {
     }
 }
 
+/// `Spinner::setValue` @ 0x14024de60: the value kept within the spinner's range.
+fn clamp_position(value: i32, low: i32, high: i32) -> i32 {
+    if value > high {
+        high
+    } else {
+        value.max(low)
+    }
+}
+
+/// The setup screen's whole-number spinner of an item (`SetupTab::addItem` @ 0x140183850
+/// with the `SetupItemDef` of `SetupScreen::loadINI` @ 0x14017d950).
+struct Spinner {
+    /// `[DISPLAY_METHOD]` + `SHOW_CLICKS`: 1 clicks, 2 clicks from the minimum, else plain
+    mode: i32,
+    /// `STEP`, `MIN` (the latter divided by the item's display factor)
+    step: f64,
+    min: f64,
+    /// The spinner's range.
+    low: i32,
+    high: i32,
+}
+
+impl Spinner {
+    /// The spinner of an item, if `setup.ini` has a section of its name.
+    fn of(item: &SetupItem, setup: &IniReader, clicks: bool) -> Option<Spinner> {
+        let name = item.name.as_str();
+        if !setup.has_section(name) {
+            return None;
+        }
+        // a missing key reads as 0, as in the game's INIReader
+        let float = |key: &str| setup.get_float(name, key).unwrap_or(0.0);
+        let label = item.label_multiplier.abs();
+        let min = (float("MIN") / label) as f64;
+        let max = (float("MAX") / label) as f64;
+        let step = setup.get_int(name, "STEP").unwrap_or(0) as f64;
+        let mode = if clicks { setup.get_int(name, "SHOW_CLICKS").unwrap_or(0) } else { 0 };
+        // C casts: toward zero
+        let (low, high) = match mode {
+            1 => (cvtt(min / step), cvtt(max / step)),
+            2 => (0, cvtt((max - min) / step)),
+            _ => (cvtt(min), cvtt(max)),
+        };
+        Some(Spinner { mode, step, min, low, high })
+    }
+
+    fn clamp(&self, position: i32) -> i32 {
+        clamp_position(position, self.low, self.high)
+    }
+
+    /// The item's `newValue` for a spinner position (the job @ 0x140183620).
+    fn value(&self, position: i32) -> f32 {
+        match self.mode {
+            1 => self.step as f32 * position as f32,
+            2 => self.step as f32 * position as f32 + self.min as f32,
+            _ => position as f32,
+        }
+    }
+}
+
+/// The table of a gear's `.rto` file as the setup screen's gear tab reads it
+/// (`SetupGearManager::populateSpinner` @ 0x140173810, `loadGearRatiosFromFile`
+/// @ 0x14029e7f0): one `label|ratio` per line, up to the first line without a `|`.
+pub fn load_gear_ratios(path: &Path) -> Result<Vec<(String, f32)>, String> {
+    let Some(bytes) = crate::data::read(path)? else {
+        return Ok(Vec::new());
+    };
+    let text: String = crate::data::ini::text_mode(&bytes).iter().map(|&b| b as char).collect();
+    let mut ratios = Vec::new();
+    for line in text.split('\n') {
+        let Some((label, ratio)) = line.split_once('|') else { break };
+        let parsed = crate::math::wcstod(ratio);
+        if parsed.consumed == 0 {
+            break;
+        }
+        ratios.push((label.to_string(), parsed.value as f32));
+    }
+    Ok(ratios)
+}
+
 impl SetupManager {
     /// `SetupManager::init` @ 0x140289290 with `SetupManager::initItems` @ 0x140289570 and
     /// `SetupItem::SetupItem` @ 0x1402cb170: every item starts detached, with
@@ -351,32 +430,115 @@ impl SetupManager {
     pub fn apply_setup_screen_defaults(&mut self, _chassis: &RollingChassis, setup: &IniReader) {
         let clicks = setup.has_section("DISPLAY_METHOD");
         for item in &mut self.items {
-            let name = item.name.as_str();
-            if !setup.has_section(name) {
-                continue;
-            }
-            // a missing key reads as 0, as in the game's INIReader
-            let float = |key: &str| setup.get_float(name, key).unwrap_or(0.0);
-            let label = item.label_multiplier.abs();
-            let min = (float("MIN") / label) as f64;
-            let max = (float("MAX") / label) as f64;
-            let step = setup.get_int(name, "STEP").unwrap_or(0) as f64;
-            let mode = if clicks { setup.get_int(name, "SHOW_CLICKS").unwrap_or(0) } else { 0 };
+            let Some(spinner) = Spinner::of(item, setup, clicks) else { continue };
             let value = item.new_value;
-            // the spinner's range and position (C casts: toward zero)
-            let (low, high, position) = match mode {
-                1 => (cvtt(min / step), cvtt(max / step), cvtt(value as f64 / step + 0.5)),
-                2 => (0, cvtt((max - min) / step), cvtt(((value - min as f32) / step as f32 + 0.5f32) as f64)),
-                _ => (cvtt(min), cvtt(max), cvtt(value as f64)),
+            let (step, min) = (spinner.step, spinner.min);
+            // the spinner's position (C casts: toward zero)
+            let position = match spinner.mode {
+                1 => cvtt(value as f64 / step + 0.5),
+                2 => cvtt(((value - min as f32) / step as f32 + 0.5f32) as f64),
+                _ => cvtt(value as f64),
             };
-            let position = if position > high { high } else { position.max(low) };
-            item.new_value = match mode {
-                1 => step as f32 * position as f32,
-                2 => step as f32 * position as f32 + min as f32,
-                _ => position as f32,
-            };
+            item.new_value = spinner.value(spinner.clamp(position));
             item.attached = true;
         }
+    }
+
+    /// A saved setup loaded the way the setup screen's "Load" does it
+    /// (`SetupScreen::loadSetupAbsolutePath` @ 0x14017f2c0 and the tabs' `loadFromINI`): every
+    /// `[NAME] VALUE=n` of the file is the whole-number position of the spinner of that name,
+    /// kept within the spinner's range; the spinner turns it into the item's value exactly as
+    /// for the default setup. What the file does not name keeps its value. The tabs in the
+    /// screen's order: gears (`SetupGearManager::loadFromINI` @ 0x1401734a0), tyres
+    /// (`SetupTyresManager` @ 0x140184eb0), fuel (`SetupFuelManager` @ 0x14016e8f0), traction
+    /// control (`SetupElectronics` @ 0x14016d050), then the generic items
+    /// (`SetupTab::loadFromINI` @ 0x140184120).
+    ///
+    /// The item values reach the car at the end of the next step ([`SetupManager::step`]); the
+    /// compound, the fuel and the traction-control level are set at once, as the screen's jobs
+    /// do. Call it after the default round trip and before the first step. Returns one line
+    /// per thing set.
+    ///
+    /// Not ported: gear sets (`[GEARS] USE_GEARSET`), the ABS, turbo, ERS and engine-brake
+    /// spinners, the pit-stop presets (`.sp`).
+    pub fn load_setup_file(&mut self, chassis: &mut RollingChassis, setup: &IniReader, saved: &IniReader) -> Result<Vec<String>, String> {
+        let mut log = Vec::new();
+        if !saved.ready {
+            return Err(format!("{}: the setup file cannot be read", saved.filename.display()));
+        }
+        // a missing VALUE reads as 0, as in the game's INIReader
+        let value_of = |name: &str| saved.get_int(name, "VALUE").unwrap_or(0);
+        // the gear tab: VALUE is a line of the gear's .rto file
+        if chassis.drivetrain.is_some() {
+            if setup.get_int("GEARS", "USE_GEARSET").unwrap_or(0) > 0 && saved.has_section("GEARSET") {
+                return Err("the setup chooses a gear set ([GEARSET]): gear sets are not ported".to_string());
+            }
+            for item in &mut self.items {
+                let section = match item.target {
+                    SetupTarget::GearSetting(gear) if gear >= 2 => format!("GEAR_{}", gear - 1),
+                    SetupTarget::FinalRatio => "FINAL_GEAR_RATIO".to_string(),
+                    _ => continue,
+                };
+                if !setup.has_section(&section) || !saved.has_section(&item.name) {
+                    continue;
+                }
+                let file = setup.get_string(&section, "RATIOS");
+                let ratios = load_gear_ratios(&append_path(&chassis.data_path, &file))?;
+                if ratios.is_empty() {
+                    continue;
+                }
+                let wanted = value_of(&item.name);
+                let line = clamp_position(wanted, 0, ratios.len() as i32 - 1);
+                item.new_value = ratios[line as usize].1;
+                log.push(format!("{} = line {line} of {file}: {} ({})", item.name, ratios[line as usize].0, item.new_value));
+            }
+        }
+        // the tyres tab: VALUE is the compound's index
+        if saved.has_section("TYRES") {
+            let count = chassis.tyres.first().map_or(0, |tyre| tyre.compound_defs.len()) as i32;
+            if count > 0 {
+                let index = clamp_position(value_of("TYRES"), 0, count - 1);
+                chassis.set_compound(index)?;
+                log.push(format!("TYRES = compound {index} ({})", chassis.tyres[0].compound_defs[index as usize].name));
+            }
+        }
+        // the fuel tab: whole litres, at most the tank (`Car::setRequestedFuel(v, true)`)
+        if saved.has_section("FUEL") {
+            let litres = clamp_position(value_of("FUEL"), 0, cvtt(chassis.max_fuel)) as f32;
+            chassis.fuel = litres as f64;
+            chassis.requested_fuel = litres;
+            log.push(format!("FUEL = {litres} l"));
+        }
+        // the electronics tab: the traction-control level, stepped to from the current one
+        if saved.has_section("TRACTION_CONTROL") {
+            if let Some(aids) = &mut chassis.aids {
+                let tc = &mut aids.base_mut().traction_control;
+                let (current, levels) = tc.get_current_mode();
+                if tc.is_present && levels > 0 {
+                    let wanted = clamp_position(value_of("TRACTION_CONTROL"), 0, levels as i32);
+                    let steps = (wanted as f32 - current as f32) as i32;
+                    for _ in 0..steps.abs() {
+                        tc.cycle_mode(if steps < 0 { -1 } else { 1 });
+                    }
+                    log.push(format!("TRACTION_CONTROL = level {wanted} of {levels} (was {current})"));
+                }
+            }
+        }
+        // the generic tabs
+        let clicks = setup.has_section("DISPLAY_METHOD");
+        for item in &mut self.items {
+            let Some(spinner) = Spinner::of(item, setup, clicks) else { continue };
+            if !saved.has_section(&item.name) {
+                continue;
+            }
+            let wanted = value_of(&item.name);
+            let position = spinner.clamp(wanted);
+            item.new_value = spinner.value(position);
+            item.attached = true;
+            let note = if position != wanted { format!(" (the file says {wanted}: outside {}..{})", spinner.low, spinner.high) } else { String::new() };
+            log.push(format!("{} = {position}{note}", item.name));
+        }
+        Ok(log)
     }
 
     /// `SetupManager::step` @ 0x14028d090: for every attached item, `multiplier * newValue`

@@ -240,7 +240,7 @@ impl<P: ControlsProvider> VanillaCar<P> {
     /// [`RollingChassis::queue`] between two calls. (A change that does not read the clock can
     /// as well be made directly.)
     pub fn step(&mut self, dt: f32, physics_time: f64) {
-        self.car.env.step_wind(physics_time);
+        self.car.step_session(physics_time);
         let mut feed = DeviceFeed { device: &mut self.device, dt };
         self.car.step(dt, physics_time, &mut feed);
     }

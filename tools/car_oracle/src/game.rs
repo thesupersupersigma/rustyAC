@@ -35,6 +35,22 @@ const VA_STEP_MEMORY_ESTIMATE: usize = 0x1_4035_0000; // dxEstimateStepMemoryReq
 const VA_STEP_STAGE0_JOINTS: usize = 0x1_4035_0b80; // dxStepIsland_Stage0_Joints (runs right after gravity and the gyroscopic torque were added)
 const VA_CAR_SET_DAMAGE_LEVEL: usize = 0x1_4027_5b20; // Car::setDamageLevel(float)
 const VA_PHYSICS_ENGINE_SET_WIND: usize = 0x1_4026_45a0; // PhysicsEngine::setWind(Speed, float)
+// Task 15: the session's conditions and a saved setup
+const VA_KS_RAND_RANGE: usize = 0x1_4003_3770; // float ksRand(float min, float max)
+const VA_SPEED_FROM_KMH: usize = 0x1_4023_9970; // static Speed Speed::fromKMH(float)
+const VA_GENERATE_WIND_JOB: usize = 0x1_4013_3ac0; // the job RaceManager::generateWind queues
+const VA_CAR_SET_BALLAST_KG: usize = 0x1_4027_59e0; // Car::setBallastKG(float)
+const VA_CAR_SET_RESTRICTOR: usize = 0x1_4027_5d10; // Car::setRestrictor(float)
+const VA_CAR_SET_REQUESTED_FUEL: usize = 0x1_4027_5cb0; // Car::setRequestedFuel(float, bool)
+const VA_SETUP_MANAGER_LOAD: usize = 0x1_4028_cc90; // SetupManager::load(const wstring& path)
+const VA_TC_CYCLE_MODE: usize = 0x1_4028_f8e0; // TractionControl::cycleMode(int dir)
+const VA_TC_GET_CURRENT_MODE: usize = 0x1_4028_f9b0; // pair<uint, uint> TractionControl::getCurrentMode()
+// RaceManager: windSettings (baseSpeed km/h, baseDirection deg) and the way to the engine
+const RM_WIND_BASE_SPEED: usize = 0xb8;
+const RM_WIND_BASE_DIRECTION: usize = 0xbc;
+const RM_SIM: usize = 0x168;
+const SIM_PHYSICS_AVATAR: usize = 0x1b8;
+const PHYSICS_AVATAR_ENGINE: usize = 0x58;
 const VA_CAR_LOCK_CONTROLS: usize = 0x1_4027_45f0; // Car::lockControls(bool)
 const VA_CAR_LOCK_CONTROLS_UNTIL: usize = 0x1_4027_4600; // Car::lockControlsUntil(double, double)
 const VA_CAR_ADD_PENALTY: usize = 0x1_4026_f6a0; // Car::addPenalty(double)
@@ -81,6 +97,8 @@ const PE_WIND: usize = 0x158;
 const PE_STEP_COUNTER: usize = 0x1a8;
 const TRACK_SIZE: usize = 0x148;
 const TRACK_DYNAMIC_GRIP_LEVEL: usize = 0x128;
+// DynamicTrackData: isExternal +0, enabled +1
+const TRACK_DYNAMIC_TRACK: usize = 0xb0;
 const SURFACE_SIZE: usize = 0xc8;
 const SD_GRIP_MOD: usize = 0x90;
 const SD_COLLISION_CATEGORY: usize = 0x9c;
@@ -1086,6 +1104,8 @@ pub struct Options {
     pub colliders: Option<rustyac_physics::car::colliders::CarColliders>,
     /// The file the collider mesh came from (for the recording's header).
     pub collider_kn5: Option<std::path::PathBuf>,
+    /// Task 15: a saved setup (`--setup <file>`), for the scenarios that load one.
+    pub setup: Option<std::path::PathBuf>,
 }
 
 /// One car on the fake track, ready to be stepped.
@@ -1108,6 +1128,8 @@ pub struct World<'a> {
     whole: bool,
     /// Header lines of a track scenario (the track, the spawn).
     pub track_meta: Vec<(String, String)>,
+    /// Task 15: header keys of the session's conditions (none for the older scenarios).
+    pub conditions_meta: Vec<(String, String)>,
     /// Task 13: the contact joints are recorded; the game's geoms by address (a track mesh is
     /// its index, floor box k of the car 1000 + k, the car's collider mesh 2000).
     collide: bool,
@@ -1238,6 +1260,42 @@ impl<'a> World<'a> {
     pub fn build(acs: &'a Acs, scenario: &Scenario, options: &Options) -> World<'a> {
         unsafe {
             let engine = new_engine(acs, scenario.seed);
+            // Task 15: the session's conditions. The temperatures are two plain stores in the
+            // game (RaceManager::initOffline, before the car exists).
+            let conditions = scenario.whole.conditions;
+            let hex = |values: &[f32]| values.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(",");
+            let mut conditions_meta: Vec<(String, String)> = Vec::new();
+            if let Some((air, road)) = conditions.temperature {
+                wr(engine, PE_AMBIENT_TEMPERATURE, air);
+                wr(engine, PE_ROAD_TEMPERATURE, road);
+            }
+            // [DYNAMIC_TRACK]: read by the game's own Track::initDynamicTrack (called from the
+            // Track constructor) out of cfg/race.ini in the working directory
+            let _ = std::fs::remove_file("cfg/race.ini");
+            if let Some([start, randomness, gain, transfer]) = conditions.dynamic_track {
+                std::fs::create_dir_all("cfg").expect("the cfg folder of the scratch root");
+                let text = format!("[DYNAMIC_TRACK]\nSESSION_START={start}\nSESSION_TRANSFER={transfer}\nRANDOMNESS={randomness}\nLAP_GAIN={gain}\n");
+                std::fs::write("cfg/race.ini", text).expect("cfg/race.ini of the scratch root");
+                conditions_meta.push(("dynamic_track".to_string(), hex(&[start, randomness, gain, transfer])));
+            }
+            // [WIND], the part in RaceManager::initOffline (0x14013bd75..): the two limits kept
+            // within 0..40 km/h, the game's own ksRand between them and Speed::fromKMH; the
+            // rest of that function needs the whole game, so its few lines are done here
+            let wind_settings = conditions.wind.map(|[min, max, direction]| {
+                let clamp = |x: f32| if x > 40.0 { 40.0 } else if 0.0 > x { 0.0 } else { x };
+                let ks_rand: extern "C" fn(f32, f32) -> f32 = std::mem::transmute(acs.va(VA_KS_RAND_RANGE));
+                let from_kmh: extern "C" fn(*mut f32, f32) -> *mut f32 = std::mem::transmute(acs.va(VA_SPEED_FROM_KMH));
+                let kmh = ks_rand(clamp(min), clamp(max));
+                let mut speed = 0.0f32;
+                from_kmh(&mut speed, kmh);
+                let mut direction = direction;
+                if direction < 0.0 {
+                    direction = ks_rand(0.0, 360.0);
+                }
+                conditions_meta.push(("wind_ini".to_string(), hex(&[min, max, direction])));
+                // Speed::kmh @ 0x140058f50
+                (speed * f32::from_bits(0x4066_6666), direction)
+            });
 
             let mut game_track: Option<&'static crate::track::GameTrack> = None;
             let mut floor_object: *mut u8 = std::ptr::null_mut();
@@ -1378,10 +1436,43 @@ impl<'a> World<'a> {
                 ray_hits: [RayRecord::default(); 4],
             });
 
+            if conditions.dynamic_track.is_some() {
+                assert_eq!(rd::<u8>(track, TRACK_DYNAMIC_TRACK + 1), 1, "the game's track did not read [DYNAMIC_TRACK] of cfg/race.ini");
+            }
+            if let Some((base_speed, base_direction)) = wind_settings {
+                // the game's own wind job (lambda @ 0x140133ac0: 80..120 % of the base speed,
+                // within 20 degrees of the base direction, then PhysicsEngine::setWind). It
+                // reads a RaceManager: two numbers and the way to the engine, laid out by hand.
+                let manager = object(0x200);
+                let sim = object(0x200);
+                wr(manager, RM_WIND_BASE_SPEED, base_speed);
+                wr(manager, RM_WIND_BASE_DIRECTION, base_direction);
+                wr(manager, RM_SIM, sim);
+                wr(sim, SIM_PHYSICS_AVATAR, engine.sub(PHYSICS_AVATAR_ENGINE));
+                let closure = object(8);
+                wr(closure, 0, manager);
+                let job: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GENERATE_WIND_JOB));
+                job(closure);
+                // Wind: vector, speed (m/s), directionDeg
+                let wind = engine.add(PE_WIND);
+                conditions_meta.push(("game_wind".to_string(), hex(&[rd::<f32>(wind, 0xc), rd::<f32>(wind, 0x10)])));
+            }
+
             let car = acs.alloc(CAR_SIZE);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 =
                 std::mem::transmute(acs.va(VA_CAR_CTOR));
             ctor(car, engine, wstring(acs, &options.car), wstring(acs, ""));
+            // [CAR_0] BALLAST / RESTRICTOR: the game's own setters (CarAvatar queues them)
+            if conditions.ballast_kg > 0.0 {
+                let set: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_SET_BALLAST_KG));
+                set(car, conditions.ballast_kg);
+                conditions_meta.push(("ballast_kg".to_string(), hex(&[conditions.ballast_kg])));
+            }
+            if conditions.restrictor > 0.0 {
+                let set: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_SET_RESTRICTOR));
+                set(car, conditions.restrictor);
+                conditions_meta.push(("restrictor".to_string(), hex(&[conditions.restrictor])));
+            }
             assert_eq!(rd::<u32>(car, CAR_PHYSICS_GUID), 0, "the car is not car 0");
             let st = state();
             st.car = car;
@@ -1520,6 +1611,7 @@ impl<'a> World<'a> {
                 powertrain: scenario.powertrain,
                 whole: scenario.whole.on,
                 track_meta,
+                conditions_meta,
                 collide: options.collide,
                 geom_names,
             };
@@ -1570,6 +1662,11 @@ impl<'a> World<'a> {
                 wr(car, CAR_DAMAGE_ZONE_LEVEL, scenario.whole.damage);
             }
             world.session_start_setup(&options.car);
+            if conditions.setup {
+                let file = options.setup.as_ref().expect("this scenario loads a saved setup: --setup <file>");
+                world.load_saved_setup(&options.car, file);
+                world.conditions_meta.push(("setup_file".to_string(), file.display().to_string()));
+            }
             state().tape.clear();
             world
         }
@@ -1592,6 +1689,94 @@ impl<'a> World<'a> {
         if let Ok(setup) = IniReader::load(&data.join("setup.ini")) {
             self.setup_changes = apply_setup_screen_defaults(self.car, &setup);
         }
+    }
+
+    /// Task 15: a saved setup, loaded after the default one and before the first step.
+    ///
+    /// The player's path is the setup screen (GUI code that cannot be built here). What it
+    /// does is done with the game's own functions wherever one exists without the screen:
+    /// * the generic items: `SetupManager::load` @ 0x14028cc90 (the loader the AI's setups go
+    ///   through: for every item with a section in the file and in the car's setup.ini it
+    ///   computes `newValue` from `VALUE`, `STEP`, `MIN` and `SHOW_CLICKS` and attaches the
+    ///   item). It does not keep a value within the spinner's range and knows no display
+    ///   factor: equal to the screen for a file whose values are in range;
+    /// * the compound: `Tyre::setCompound`; the fuel: `Car::setRequestedFuel(v, true)`; the
+    ///   traction-control level: `TractionControl::cycleMode`, as often as the screen's handler
+    ///   would call it;
+    /// * the gears: the screen writes the ratio of line `VALUE` of the gear's .rto file into
+    ///   the item's `newValue` (lambda @ 0x140171560); written here the same way (the table
+    ///   read by the port's reader). The game's `SetupManager::step` and
+    ///   `Drivetrain::setGearRatio` do the rest in the first step.
+    unsafe fn load_saved_setup(&mut self, car_name: &str, file: &Path) {
+        use rustyac_physics::data::ini::IniReader;
+        let saved = IniReader::load(file).expect("the saved setup");
+        assert!(saved.ready, "{}: not found", file.display());
+        let data = Path::new("content/cars").join(car_name).join("data");
+        let setup = IniReader::load(&data.join("setup.ini")).expect("the car's setup.ini");
+        let value = |name: &str| saved.get_int(name, "VALUE").unwrap_or(0);
+        let clamp = |v: i32, low: i32, high: i32| if v > high { high } else { v.max(low) };
+        let car = self.car;
+        // the gear tab
+        let manager = car.add(CAR_SETUP_MANAGER);
+        let mut item: *mut u8 = rd(manager, 0);
+        let end: *mut u8 = rd(manager, 8);
+        while item < end {
+            let name = read_wstring(item.add(SI_NAME));
+            let section = match name.strip_prefix("INTERNAL_GEAR_").and_then(|g| g.parse::<usize>().ok()) {
+                Some(gear) if gear >= 2 => Some(format!("GEAR_{}", gear - 1)),
+                _ if name == "FINAL_RATIO" => Some("FINAL_GEAR_RATIO".to_string()),
+                _ => None,
+            };
+            if let Some(section) = section.filter(|s| setup.has_section(s) && saved.has_section(&name)) {
+                let ratios = rustyac_physics::car::setup::load_gear_ratios(&data.join(setup.get_string(&section, "RATIOS"))).expect("the gear's .rto");
+                if !ratios.is_empty() {
+                    wr(item, SI_NEW_VALUE, ratios[clamp(value(&name), 0, ratios.len() as i32 - 1) as usize].1);
+                }
+            }
+            item = item.add(SETUP_ITEM_SIZE);
+        }
+        // the tyres tab
+        if saved.has_section("TYRES") {
+            let tyres = IniReader::load(&data.join("tyres.ini")).expect("the car's tyres.ini");
+            let mut count = 1;
+            while tyres.has_section(&format!("FRONT_{count}")) {
+                count += 1;
+            }
+            let set_compound: extern "C" fn(*mut u8, i32) -> u8 = std::mem::transmute(self.acs.va(VA_TYRE_SET_COMPOUND));
+            for wheel in 0..4 {
+                set_compound(car.add(CAR_TYRES + wheel * TYRE_SIZE), clamp(value("TYRES"), 0, count - 1));
+            }
+        }
+        // the fuel tab: whole litres, at most the tank
+        if saved.has_section("FUEL") {
+            let car_ini = IniReader::load(&data.join("car.ini")).expect("the car's car.ini");
+            let mut max_fuel = car_ini.get_float("FUEL", "MAX_FUEL").unwrap_or(0.0);
+            if max_fuel == 0.0 {
+                max_fuel = 30.0;
+            }
+            let set_fuel: extern "C" fn(*mut u8, f32, u8) = std::mem::transmute(self.acs.va(VA_CAR_SET_REQUESTED_FUEL));
+            set_fuel(car, clamp(value("FUEL"), 0, max_fuel as i32) as f32, 1);
+        }
+        // the electronics tab: the traction-control level
+        if saved.has_section("TRACTION_CONTROL") {
+            let tc = car.add(CAR_TRACTION_CONTROL);
+            let mut mode = [0u32; 2];
+            let get_mode: extern "C" fn(*mut u8, *mut [u32; 2]) -> *mut [u32; 2] = std::mem::transmute(self.acs.va(VA_TC_GET_CURRENT_MODE));
+            get_mode(tc, &mut mode);
+            // isPresent
+            if rd::<u8>(tc, 0) != 0 && mode[1] > 0 {
+                let steps = (clamp(value("TRACTION_CONTROL"), 0, mode[1] as i32) as f32 - mode[0] as f32) as i32;
+                let cycle: extern "C" fn(*mut u8, i32) = std::mem::transmute(self.acs.va(VA_TC_CYCLE_MODE));
+                for _ in 0..steps.abs() {
+                    cycle(tc, if steps < 0 { -1 } else { 1 });
+                }
+            }
+        }
+        // the generic tabs: the game's own loader, from a copy of the file in the scratch root
+        std::fs::create_dir_all("setups").expect("the setups folder of the scratch root");
+        std::fs::copy(file, "setups/task15_setup.ini").expect("a copy of the saved setup");
+        let load: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(self.acs.va(VA_SETUP_MANAGER_LOAD));
+        load(manager, wstring(self.acs, "setups/task15_setup.ini"));
     }
 
     unsafe fn find_bodies_and_joints(&self, options: &Options) {
