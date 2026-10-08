@@ -42,6 +42,8 @@ pub enum Refusal {
     CspOnly(String),
     /// A model file is encrypted or cannot be read.
     Encrypted(String),
+    /// A file of the track is one plain Assetto Corsa cannot read (for another reason).
+    Unreadable(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -50,6 +52,7 @@ impl std::fmt::Display for Refusal {
             Refusal::NotInstalled(why) => write!(f, "not installed: {why}"),
             Refusal::CspOnly(why) => write!(f, "made for Custom Shaders Patch only (rustyAC is plain Assetto Corsa): {why}"),
             Refusal::Encrypted(why) => write!(f, "encrypted or unreadable (rustyAC never decrypts content): {why}"),
+            Refusal::Unreadable(why) => write!(f, "acs.exe could not load it: {why}"),
         }
     }
 }
@@ -155,8 +158,8 @@ pub fn installed(root: &Path) -> Vec<TrackEntry> {
     out
 }
 
-/// The models file of a layout and the model files it names (`[MODEL_n] FILE`, every section
-/// that is there, not only up to a gap).
+/// The models file of a layout and the model files it names (`[MODEL_n] FILE` for n = 0, 1,
+/// 2 ... up to the first number that is missing, as the game reads it).
 fn model_files(folder: &Path, layout: &str) -> Result<Vec<PathBuf>, Refusal> {
     let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let ini = if layout.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{layout}.ini")) };
@@ -172,16 +175,25 @@ fn model_files(folder: &Path, layout: &str) -> Result<Vec<PathBuf>, Refusal> {
         }));
     }
     let text = read_text(&ini).unwrap_or_default();
-    let mut files = Vec::new();
-    let mut in_model = false;
+    let mut found: Vec<(u32, PathBuf)> = Vec::new();
+    let mut section: Option<u32> = None;
     for line in text.lines() {
         let line = line.split(';').next().unwrap_or("").trim();
         if line.starts_with('[') {
-            in_model = line.starts_with("[MODEL_");
-        } else if in_model {
+            section = line.strip_prefix("[MODEL_").and_then(|l| l.strip_suffix(']')).and_then(|n| n.parse().ok());
+        } else if let Some(number) = section {
             if let Some(file) = line.strip_prefix("FILE").map(str::trim_start).and_then(|l| l.strip_prefix('=')) {
-                files.push(folder.join(file.trim()));
+                if !found.iter().any(|(n, _)| *n == number) {
+                    found.push((number, folder.join(file.trim())));
+                }
             }
+        }
+    }
+    let mut files = Vec::new();
+    for number in 0.. {
+        match found.iter().find(|(n, _)| *n == number) {
+            Some((_, file)) => files.push(file.clone()),
+            None => break,
         }
     }
     Ok(files)
@@ -208,22 +220,39 @@ pub fn check(entry: &TrackEntry) -> Result<(), Refusal> {
             }
         }
     }
-    // surfaces.ini with values only Custom Shaders Patch understands: acs.exe stops on them
     let base = if entry.layout.is_empty() { entry.folder.clone() } else { entry.folder.join(&entry.layout) };
+    // a track whose data is packed into an archive keeps it from being read: it stays unread
+    if let Some(archive) = packed_data(&base) {
+        return Err(Refusal::Encrypted(format!("its data is packed in {} (a track's data folder is plain files in Assetto Corsa)", archive.display())));
+    }
+    // surfaces.ini with values only Custom Shaders Patch understands: acs.exe stops on them
     let surfaces = base.join("data").join("surfaces.ini");
     if surfaces.is_file() {
         // the game's own table is not needed to see whether the track's file can be read
         if let Err(message) = SurfacesManager::new(Path::new(""), &surfaces) {
             // without the long path in front
             let short = message.rsplit("surfaces.ini: ").next().unwrap_or(&message).to_string();
-            return Err(Refusal::CspOnly(format!("acs.exe cannot read its data/surfaces.ini ({short}) and would stop there")));
+            // `extended-...` is how Custom Shaders Patch's extended physics marks a value
+            return Err(if short.contains("extended") {
+                Refusal::CspOnly(format!("acs.exe cannot read its data/surfaces.ini ({short}) and would stop there"))
+            } else {
+                Refusal::Unreadable(format!("its data/surfaces.ini has a value that is not a number ({short})"))
+            });
         }
     }
     Ok(())
 }
 
-/// A sign that a kn5 was encrypted for Custom Shaders Patch: such files keep the container
-/// but carry a marker texture or node and scrambled vertices.
+/// `<layout folder>/data.acd`, if there is one: an archive in the place of the plain `data`
+/// folder. Assetto Corsa's tracks have none; one that has is refused and never opened.
+pub fn packed_data(base: &Path) -> Option<PathBuf> {
+    let archive = base.join("data.acd");
+    archive.is_file().then_some(archive)
+}
+
+/// A name in a kn5 that says "encrypted". This is a guess: no encrypted track is installed
+/// on the PC this was written on, so the names are the obvious ones and nothing more. A kn5
+/// the reader cannot parse at all is refused in any case.
 fn encryption_marker(kn5: &Kn5) -> Option<String> {
     let marked = |name: &str| {
         let lower = name.to_ascii_lowercase();

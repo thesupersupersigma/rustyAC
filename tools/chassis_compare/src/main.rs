@@ -2201,7 +2201,7 @@ fn excerpt18_command() -> Result<(), String> {
         let (mut first, count, name) = match scenario {
             "trk_lap" => {
                 let counted = (0..steps).find(|&step| recording.i(step, "transponder.lapCount") > 0).ok_or("the lap recording never counts a lap")?;
-                (counted - 120, 200, "lap")
+                (counted.saturating_sub(120).max(1), 200, "lap")
             }
             _ => {
                 // (after the first two seconds: the car is put down on its wheels at the start)

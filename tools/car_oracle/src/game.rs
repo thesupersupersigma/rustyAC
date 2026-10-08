@@ -1412,7 +1412,10 @@ impl<'a> World<'a> {
             let mut track_meta: Vec<(String, String)> = Vec::new();
             let mut game_objects: Vec<crate::track::GameObject> = Vec::new();
             let mut driver = scenario.driver();
-            driver.follower.grip = crate::track_driver::Grip::of(&options.car);
+            // (the scenarios of Task 18 only: the older ones keep the driver they were written with)
+            if scenario.name.starts_with("trk_") {
+                driver.follower.grip = crate::track_driver::Grip::of(&options.car);
+            }
             let (track, surface) = if let Some(folder) = &options.track {
                 let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
                 // the game's own Track, surfaces, collision meshes and AI line; every mesh a

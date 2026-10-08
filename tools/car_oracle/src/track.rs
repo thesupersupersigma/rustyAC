@@ -178,6 +178,10 @@ pub fn prepare_root(root: &Path, track_folder: &Path, layout: &str) -> Result<St
     } else {
         (root.join("content/tracks").join(&name).join(layout), track_folder.join(layout))
     };
+    // the scratch root is rewritten below: it must never be a game folder
+    if root.join("acs.exe").is_file() || root.join("content").join("cars").is_dir() && root.join("system").join("cfg").is_dir() {
+        return Err(format!("{} looks like a game folder: the oracle's root has to be a scratch folder of its own", root.display()));
+    }
     for sub in ["data", "ai"] {
         // what an earlier run on another layout or track version left behind must not be read
         let _ = std::fs::remove_dir_all(to.join(sub));

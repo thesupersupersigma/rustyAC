@@ -121,6 +121,12 @@ pub fn top_node_matrix(node: &Mat44f, position: [f32; 3], rotation: [f32; 3]) ->
 /// Loads a track from `folder` (`content/tracks/<track>`), layout `config` ("" for none).
 pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport), String> {
     let start = Instant::now();
+    // the reader of ini files would look into a `data.acd` next to a `data` folder (a car's
+    // packed data). A track has none in Assetto Corsa; one that has is not opened
+    let base = if config.is_empty() { folder.to_path_buf() } else { folder.join(config) };
+    if let Some(archive) = super::catalog::packed_data(&base) {
+        return Err(format!("the track's data is packed in {}: refused (rustyAC never decrypts track content)", archive.display()));
+    }
     let mut files = TrackFiles::find_lenient(folder, config)?;
     // which models, in which order and where: by the game's own ini rules
     let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
@@ -145,7 +151,7 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
     }
     let mut report = TrackLoadReport { files: files.models.iter().map(|m| m.file.clone()).collect(), skipped_models: skipped.len() as u32, ..TrackLoadReport::default() };
     for file in &skipped {
-        report.messages.push(format!("the track model {} is missing: left out, as the game does", file.display()));
+        report.messages.push(format!("the track model {} is missing: left out (the game loads an empty node in its place)", file.display()));
     }
     let mut track = Track { name: files.name.clone(), config: config.to_string(), data_folder: files.data.parent().unwrap_or(folder).to_path_buf(), ..Track::default() };
 

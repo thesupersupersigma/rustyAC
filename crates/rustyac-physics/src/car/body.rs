@@ -801,9 +801,10 @@ impl PhysicsCore {
     /// unless collisions are switched off for some more steps. Returns the calls of the
     /// game's collision callback in order (they happen before `dWorldStep`).
     ///
-    /// Even frames test the dynamic space against itself (car against car), odd frames the
-    /// dynamic space against the static one (car against track); each frame empties and
-    /// refills its own group of contact joints, so a contact lives for two steps.
+    /// Even frames test the dynamic space against itself (car against car, car against a
+    /// loose object, object against object), odd frames the dynamic space against the static
+    /// one (car against track, a loose object that is awake against track); each frame
+    /// empties and refills its own group of contact joints, so a contact lives for two steps.
     pub fn collision_step(&mut self, statics: Option<&StaticWorld>) -> Vec<CollisionEvent> {
         let mut events = Vec::new();
         if self.no_collision_counter != 0 {

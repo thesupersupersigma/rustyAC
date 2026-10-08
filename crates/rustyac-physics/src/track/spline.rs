@@ -880,6 +880,22 @@ impl InterpolatingSpline {
         }
     }
 
+    /// How many cells [`InterpolatingSpline::build_grid`] would make (`None`: no points).
+    fn grid_cell_count(&self) -> Option<u64> {
+        let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN_POSITIVE; 2]);
+        for p in &self.points {
+            for (k, c) in [p.point[0], p.point[2]].into_iter().enumerate() {
+                min[k] = min[k].min(c);
+                max[k] = max[k].max(c);
+            }
+        }
+        if self.points.is_empty() {
+            return None;
+        }
+        let cells = |k: usize| truncate_i64(((max[k] + 350.0) - (min[k] - 350.0)) * 0.1) as u32 as u64;
+        Some(cells(0) * cells(1))
+    }
+
     /// The lookup grid as the file's layout has it: per column, per cell, the candidates.
     pub fn grid_cells_in_order(&self) -> impl Iterator<Item = &[u32]> + '_ {
         self.grid_cells.iter().map(|&(start, len)| &self.grid_indices[start as usize..(start + len) as usize])
@@ -929,6 +945,12 @@ impl AiSpline {
     /// (`loadVersion7` @ 0x1402a8b80, `InterpolatingSpline::loadGrid` @ 0x1401f31a0, then
     /// `computeSplineLength`).
     pub fn parse(bytes: &[u8]) -> Result<AiSpline, String> {
+        AiSpline::parse_with(bytes, true)
+    }
+
+    /// [`AiSpline::parse`]; `build_grid`: build the lookup grid when the file stores none
+    /// (the game always does; a line that is never searched can do without).
+    pub fn parse_with(bytes: &[u8], build_grid: bool) -> Result<AiSpline, String> {
         let mut r = Reader { bytes, at: 0 };
         let mut ai = AiSpline { version: r.i32(0), ..AiSpline::default() };
         if ai.version < 7 {
@@ -1019,8 +1041,13 @@ impl AiSpline {
                     }
                 }
             }
+        } else if !build_grid {
+            ai.grid_missing = true;
         } else if ai.spline.points.len() >= 10 {
             // InterpolatingSpline::loadGrid: no stored grid, the game builds one
+            if let Some(cells) = ai.spline.grid_cell_count().filter(|cells| *cells > 20_000_000) {
+                return Err(format!("the AI line stores no lookup grid and spans so far that building one would take {cells} cells (a point far away from the track?)"));
+            }
             ai.spline.build_grid();
             ai.grid_built = true;
         } else {
@@ -1233,10 +1260,23 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
     } else {
         messages.push(format!("the track has no AI line ({}): no position along the lap", fast_lane.display()));
     }
+    // AISplineRecorder::load @ 0x1402952c0: when the side files are both there and one of
+    // them was written after the AI line, the game works the track limits out again from
+    // them (and writes the line back). Not ported: the limits of the file are used
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    if let (Some(left), Some(right), Some(line)) = (modified(&data.join("side_l.csv")), modified(&data.join("side_r.csv")), modified(&fast_lane)) {
+        if left > line || right > line {
+            messages.push(format!(
+                "{}: side_l.csv / side_r.csv are newer than the AI line: the game would recompute the track limits from them at load (not ported); the limits stored in the line are used, so \"off the track\" can differ from the game here",
+                data.display()
+            ));
+        }
+    }
     let pit_lane = ai.join("pit_lane.ai");
     if pit_lane.is_file() {
-        // only shown, never searched: a missing grid does not matter
-        track.pit_lane_spline = AiSpline::load(&pit_lane).ok();
+        // only shown, never searched: no lookup grid is built for it (the game builds one
+        // and does not search it either)
+        track.pit_lane_spline = std::fs::read(&pit_lane).ok().and_then(|bytes| AiSpline::parse_with(&bytes, false).ok());
     }
     // Track::initStartingBounds @ 0x140278790
     track.starting_bounds.clear();

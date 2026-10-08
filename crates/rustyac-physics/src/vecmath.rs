@@ -116,39 +116,13 @@ pub fn xm_matrix_multiply(m1: &Mat44f, m2: &Mat44f) -> Mat44f {
     out
 }
 
-/// `mat44f::createFromAxisAngle` @ 0x1400571a0: the axis is used as it is (not normalised).
-pub fn create_from_axis_angle(axis: [f32; 3], angle: f32) -> Mat44f {
-    let [x, y, z] = axis;
-    let c = crate::math::cosf(angle);
-    let s = crate::math::sinf(angle);
-    let t = 1.0f32 - c;
-    let mut out = Mat44f::default();
-    out.m[0][0] = (x * x) * t + c;
-    out.m[1][1] = (y * y) * t + c;
-    out.m[2][2] = (z * z) * t + c;
-    let yx = (y * x) * t;
-    let zs = z * s;
-    out.m[0][1] = zs + yx;
-    out.m[1][0] = yx - zs;
-    let ys = y * s;
-    let zx = (z * x) * t;
-    let xs = x * s;
-    let zy = (z * y) * t;
-    out.m[0][2] = zx - ys;
-    out.m[2][0] = ys + zx;
-    out.m[1][2] = xs + zy;
-    out.m[2][1] = zy - xs;
-    out.m[3][3] = 1.0;
-    out
-}
-
 /// `mat44f::createFromEuler` @ 0x140118ef0: heading about -Y, then pitch about X, then roll
 /// about Z (radians), four signs flipped at the end, and the position in row 3.
 pub fn create_from_euler(rot: [f32; 3], pos: [f32; 3]) -> Mat44f {
     let mut out = Mat44f::IDENTITY;
-    out = xm_matrix_multiply(&create_from_axis_angle([0.0, 1.0, 0.0], -rot[0]), &out);
-    out = xm_matrix_multiply(&create_from_axis_angle([1.0, 0.0, 0.0], rot[1]), &out);
-    out = xm_matrix_multiply(&create_from_axis_angle([0.0, 0.0, 1.0], rot[2]), &out);
+    out = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), -rot[0]), &out);
+    out = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), rot[1]), &out);
+    out = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), rot[2]), &out);
     out.m[0][1] = -out.m[0][1];
     out.m[1][0] = -out.m[1][0];
     out.m[1][2] = -out.m[1][2];

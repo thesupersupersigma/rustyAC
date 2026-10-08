@@ -805,6 +805,11 @@ impl GameSim {
         if events & event::REBUILD != 0 {
             self.rebuild()?;
         }
+        // a new session's jobs in the order the game queues them: the track's handler (the
+        // loose objects go home) was registered before the car's
+        if events & (event::OBJECTS_HOME | event::RESET) != 0 && !self.car.car.core.track_objects.is_empty() {
+            self.car.car.queue(|car| car.core.reset_track_objects());
+        }
         if events & event::RESET != 0 {
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
@@ -825,10 +830,6 @@ impl GameSim {
                 }
             });
             self.lap_db.current_splits.clear();
-        }
-        if events & event::OBJECTS_HOME != 0 {
-            // the job a new session queues: runs at the start of the step
-            self.car.car.queue(|car| car.core.reset_track_objects());
         }
         if events & event::TO_TRACK != 0 {
             // the nearest point of the AI line, facing along it; without an AI line, the spawn

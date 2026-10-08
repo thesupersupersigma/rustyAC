@@ -58,7 +58,10 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         for note in &found.notes {
             println!("{note}");
         }
-        track = found.entry.folder.display().to_string();
+        // by name when it is one of the game's own folder (a recording then replays on
+        // another PC), by path otherwise
+        let in_game = rustyac_content::install::ac_root().is_some_and(|root| root.join("content").join("tracks").join(&found.entry.track) == found.entry.folder);
+        track = if in_game { found.entry.track.clone() } else { found.entry.folder.display().to_string() };
         layout = found.entry.layout;
     }
     let mut setup = SimSetup {
@@ -341,7 +344,6 @@ fn run_headless(options: &Options) -> Result<(), String> {
     Ok(())
 }
 
-/// The devices found, for the console.
 /// `--list-tracks`: every installed track and layout, and why some cannot be driven.
 fn list_tracks() -> String {
     use rustyac_physics::track::catalog;
@@ -360,6 +362,7 @@ fn list_tracks() -> String {
     out
 }
 
+/// The devices found, for the console.
 fn list_devices(bindings: &Bindings, wheel: &Option<WheelDevice>) -> String {
     let mut out = String::from("devices:\n  keyboard (always there)\n");
     let pads = XInput::new().scan();
