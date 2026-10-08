@@ -84,6 +84,9 @@ struct Args {
     steps: Option<usize>,
     joint_forces: bool,
     floor: bool,
+    /// `--damage f,r,l,r,c`: the damage levels of the bodywork the car starts with (km/h of
+    /// closing speed per zone: front, rear, left, right, centre), instead of the scenario's.
+    damage: Option<[f32; 5]>,
     hash_only: bool,
     only: Vec<String>,
     ignore: Vec<String>,
@@ -121,6 +124,7 @@ fn parse_args() -> Result<Args, String> {
         steps: None,
         joint_forces: true,
         floor: false,
+        damage: None,
         hash_only: false,
         only: Vec::new(),
         ignore: Vec::new(),
@@ -153,6 +157,11 @@ fn parse_args() -> Result<Args, String> {
             "--steps" => a.steps = Some(number(value()?)?),
             "--no-joint-forces" => a.joint_forces = false,
             "--floor" => a.floor = true,
+            "--damage" => {
+                let text = value()?;
+                let levels: Vec<f32> = text.split(',').filter_map(|part| part.trim().parse().ok()).collect();
+                a.damage = Some(levels.try_into().map_err(|_| format!("--damage wants five numbers, got {text:?}"))?);
+            }
             "--hash-only" => a.hash_only = true,
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
             "--ignore" => a.ignore = value()?.split(',').map(str::to_string).collect(),
@@ -387,6 +396,12 @@ fn run(args: &Args) -> Result<(), String> {
     let scenario = &mut found;
     let name = if args.floor && !scenario.floor { format!("{}_floor", scenario.name) } else { scenario.name.to_string() };
     scenario.floor |= args.floor;
+    if let Some(damage) = args.damage {
+        if !scenario.whole.on {
+            return Err(format!("--damage needs a whole-car scenario; {} is not one", scenario.name));
+        }
+        scenario.whole.damage = damage;
+    }
     let scenario = &*scenario;
     let repo = repo_root();
     // relative paths are the caller's; the game needs its own working directory
