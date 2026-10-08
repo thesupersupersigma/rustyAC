@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rustyac_audio::car::{CameraView, CarFrame};
+use rustyac_audio::car::CarFrame;
 use rustyac_audio::engine::{Mat, Vec3};
 use rustyac_audio::tape::Tape;
 
@@ -16,70 +16,8 @@ pub const SAMPLE_RATE: i32 = 48000;
 /// One mixer block per frame: 48000 / 60 samples.
 pub const BLOCK: u32 = 800;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Camera {
-    Cockpit,
-    Chase,
-    Trackside,
-}
-
-impl Camera {
-    pub fn parse(text: &str) -> Result<Camera, String> {
-        match text {
-            "cockpit" => Ok(Camera::Cockpit),
-            "chase" => Ok(Camera::Chase),
-            "trackside" => Ok(Camera::Trackside),
-            _ => Err(format!("unknown camera {text:?} (cockpit, chase, trackside)")),
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Camera::Cockpit => "cockpit",
-            Camera::Chase => "chase",
-            Camera::Trackside => "trackside",
-        }
-    }
-
-    /// What the camera manager says for this camera.
-    pub fn view(&self) -> CameraView {
-        match self {
-            Camera::Cockpit => CameraView::COCKPIT,
-            Camera::Chase => CameraView::CHASE,
-            Camera::Trackside => CameraView::TRACK,
-        }
-    }
-
-    /// The listener's matrix and velocity for a frame. A camera looks along minus its row 2;
-    /// the car's row 2 points forwards.
-    pub fn listener(&self, frame: &CarFrame, first: &CarFrame) -> (Mat, Vec3) {
-        let car = &frame.world_matrix;
-        let mut m: Mat = *car;
-        for c in 0..3 {
-            m[c] = -car[c];
-            m[8 + c] = -car[8 + c];
-        }
-        match self {
-            Camera::Cockpit => {
-                for c in 0..3 {
-                    m[12 + c] = car[12 + c] + car[4 + c] * 0.9;
-                }
-                (m, frame.velocity)
-            }
-            Camera::Chase => {
-                for c in 0..3 {
-                    m[12 + c] = car[12 + c] + car[4 + c] * 1.8 - car[8 + c] * 6.0;
-                }
-                (m, frame.velocity)
-            }
-            Camera::Trackside => {
-                let f = &first.world_matrix;
-                let m: Mat = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, f[12] + 8.0, f[13] + 2.0, f[14] + 8.0, 1.0];
-                (m, [0.0; 3])
-            }
-        }
-    }
-}
+/// The listener of a drive: `rustyac.exe --audio-oracle-camera` has the same three.
+pub use rustyac_audio::tape::OracleCamera as Camera;
 
 /// One frame of a drive.
 pub struct Frame {

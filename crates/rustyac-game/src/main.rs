@@ -4,7 +4,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rustyac_game::autodrive::AutoDriver;
@@ -15,6 +15,7 @@ use rustyac_game::input::pad::XInput;
 use rustyac_game::input::wheel::WheelDevice;
 use rustyac_game::input::LiveSource;
 use rustyac_game::input_file::{event, InputFile, InputWriter, SimSetup, StepInput};
+use rustyac_game::audio::{AudioSink, Feed, GameAudio};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
@@ -147,8 +148,31 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
 }
 
 /// The recorder and the shared memory, as asked for.
-fn sinks(options: &Options, setup: &SimSetup) -> Result<Vec<Box<dyn StepSink>>, String> {
+/// The physics thread's hand-over to the sound, if this run has sound: always with a window
+/// (unless `--no-audio`); without one (`--headless`) only when the sound is asked for by one
+/// of its own options, so that a headless run stays silent.
+fn audio_feed(options: &Options, headless: bool) -> Option<Arc<Mutex<Feed>>> {
+    let audio = &options.audio;
+    if audio.off || (headless && audio.wav.is_none() && audio.log.is_none() && !audio.null) {
+        return None;
+    }
+    Some(Arc::new(Mutex::new(if audio.clockless() { Feed::with_grid() } else { Feed::default() })))
+}
+
+/// The sound of the car that was built (the engine, the track's sounds, the car's).
+fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, shape: &CarShape) -> Option<GameAudio> {
+    let feed = feed.as_ref()?;
+    // the car's folder name is its name in the game
+    let name = Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone());
+    let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
+    GameAudio::start(&options.audio, Arc::clone(feed), &name, &info.data_path, track, shape)
+}
+
+fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
     let mut sinks: Vec<Box<dyn StepSink>> = Vec::new();
+    if let Some(feed) = feed {
+        sinks.push(Box::new(AudioSink::new(Arc::clone(feed))));
+    }
     if let Some(path) = &options.record {
         sinks.push(Box::new(Recorder(Some(InputWriter::create(path, setup)?))));
         println!("recording the inputs of every step to {}", path.display());
@@ -252,7 +276,8 @@ fn report(view: &CarView, timing: &Timing) {
 /// `--bench-render` frames are drawn off screen meanwhile, as fast as the card goes.
 fn run_headless(options: &Options) -> Result<(), String> {
     let (setup, replay) = drive(options)?;
-    let sinks = sinks(options, &setup)?;
+    let feed = audio_feed(options, true);
+    let sinks = sinks(options, &setup, &feed)?;
     let shared = Shared::new();
     let config = LoopConfig {
         replay: replay.clone(),
@@ -279,6 +304,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
     let mut frames = 0u64;
     let mut frame_max = Duration::ZERO;
     let started = Instant::now();
+    let mut headless_audio: Option<GameAudio> = None;
     if options.bench_render {
         let mut renderer = match DebugRenderer::new(options.width, options.height) {
             Ok(renderer) => renderer,
@@ -324,6 +350,40 @@ fn run_headless(options: &Options) -> Result<(), String> {
             }
             last = now;
         }
+    } else if feed.is_some() {
+        // no picture, but sound: its frames at about 60 a second, the listener at the camera
+        let mut audio: Option<(GameAudio, CarShape, DrivingCamera)> = None;
+        let mut failed = false;
+        let mut last = Instant::now();
+        while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
+            if audio.is_none() && !failed {
+                let info = shared.car_info.lock().unwrap().clone();
+                if let Some(info) = info {
+                    let shape = CarShape::of(&info);
+                    let camera = DrivingCamera::from_name(&options.camera, &shape).unwrap_or_else(|_| DrivingCamera::chase());
+                    match start_audio(options, &feed, &info, &shape) {
+                        Some(sound) => audio = Some((sound, shape, camera)),
+                        None => failed = true,
+                    }
+                    last = Instant::now();
+                }
+            }
+            if let Some((sound, shape, camera)) = audio.as_mut() {
+                let now = Instant::now();
+                let view = shared.frames().at(now);
+                let frame = camera.update(&view, shape, view.acc_g, (now - last).as_secs_f32());
+                if options.audio.clockless() {
+                    sound.grid_frames(|_| (*camera, frame.matrix));
+                } else {
+                    sound.frame(camera, &frame.matrix, (now - last).as_secs_f64(), false);
+                }
+                last = now;
+                std::thread::sleep(Duration::from_millis(if options.audio.clockless() { 4 } else { 15 }));
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        headless_audio = audio.map(|(sound, _, _)| sound);
     } else {
         // a replay ends by itself; so does a run with a duration
         while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
@@ -334,6 +394,9 @@ fn run_headless(options: &Options) -> Result<(), String> {
     shared.quit.store(true, Ordering::Relaxed);
     let (view, timing) = thread.join().map_err(|_| "the physics thread panicked".to_string())??;
     report(&view, &timing);
+    if let Some(sound) = headless_audio {
+        println!("{}", sound.finish().report());
+    }
     if options.bench_render {
         println!(
             "render (off screen, not waiting for a display): {frames} frames in {seconds:.1} s = {:.0} FPS, slowest frame {:.1} ms",
@@ -410,7 +473,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             Err(message) => eprintln!("WARNING: {message}"),
         }
     }
-    let sinks = sinks(options, &setup)?;
+    let feed = audio_feed(options, false);
+    let sinks = sinks(options, &setup, &feed)?;
     let shared = Shared::new();
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
@@ -465,6 +529,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         if renderer.software { " (software rasteriser)" } else { "" }
     );
     load_models(&mut renderer, options, &car_info);
+    let mut audio = start_audio(options, &feed, &car_info, &shape);
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
         Ok(camera) => camera,
         Err(message) => {
@@ -560,6 +625,14 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else if unfocused {
             info.notes.push("click the window to drive".to_string());
         }
+        // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
+        if let Some(sound) = audio.as_mut() {
+            if options.audio.clockless() {
+                sound.grid_frames(|_| (camera, frame.matrix));
+            } else {
+                sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused);
+            }
+        }
         renderer.draw(&view, &shape, &frame, &info);
         match renderer.present(&chain, options.vsync) {
             // nothing is seen: no need to draw as fast as the card can
@@ -588,8 +661,12 @@ fn run_window(options: &Options) -> Result<(), String> {
     drop(window);
     // SAFETY: as above; the display may sleep again.
     unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+    let audio_timing = audio.map(GameAudio::finish);
     let (view, timing) = outcome?;
     report(&view, &timing);
+    if let Some(audio_timing) = audio_timing {
+        println!("{}", audio_timing.report());
+    }
     println!(
         "render: {frames} frames in {seconds:.1} s = {:.1} FPS ({}), slowest frame {:.1} ms",
         frames as f64 / seconds.max(1e-9),
@@ -672,6 +749,38 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// `--replay <file> --headless --audio-wav <wav>`: a recorded drive as fast as it goes, its
+/// sound written without a clock: one frame of the sound (one 1/60 s block of the WAV) after
+/// every `floor(n * 50 / 9)` physics steps, the listener at the camera of `--camera`.
+fn run_replay_audio(options: &Options, replay: &Path) -> Result<(), String> {
+    let file = rustyac_game::input_file::InputFile::read(replay)?;
+    let mut sim = GameSim::new(file.setup.clone(), Box::new(ReplaySource::default()))?;
+    let info = sim.car_info();
+    let shape = CarShape::of(&info);
+    let feed = Some(Arc::new(Mutex::new(Feed::with_grid())));
+    let mut audio = start_audio(options, &feed, &info, &shape).ok_or("there is no sound to write")?;
+    let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
+    let mut sticky = Default::default();
+    let started = Instant::now();
+    for step in &file.steps {
+        sim.step_recorded(step)?;
+        let waiting = {
+            let mut feed = feed.as_ref().unwrap().lock().unwrap();
+            feed.push(&sim, &mut sticky);
+            !feed.grid.is_empty()
+        };
+        if waiting {
+            let view = CarView::capture(&sim, 0.0);
+            let frame = camera.update(&view, &shape, view.acc_g, rustyac_game::audio::NRT_DT);
+            audio.grid_frames(|_| (camera, frame.matrix));
+        }
+    }
+    let timing = audio.finish();
+    println!("{}", timing.report());
+    eprintln!("replayed {} steps ({:.1} s of driving) with sound in {:.2} s", sim.steps, sim.steps as f64 * 0.003, started.elapsed().as_secs_f64());
+    Ok(())
+}
+
 fn run(options: &Options) -> Result<(), String> {
     if options.list_tracks {
         print!("{}", list_tracks());
@@ -692,6 +801,9 @@ fn run(options: &Options) -> Result<(), String> {
     }
     if options.headless {
         if let (Some(replay), false) = (&options.replay, options.realtime) {
+            if options.audio.wav.is_some() && !options.audio.off {
+                return run_replay_audio(options, replay);
+            }
             // as fast as it goes
             let started = Instant::now();
             let steps = rustyac_game::run_replay_headless(replay, options.dump_states.as_deref())?;

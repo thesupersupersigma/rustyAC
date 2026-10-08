@@ -34,6 +34,9 @@ pub enum Output {
     WavNrt { file: PathBuf, rate: i32, block: u32 },
     /// As `WavNrt` without the file.
     NoSoundNrt { rate: i32, block: u32 },
+    /// FMOD's no-sound output in real time: everything runs as with a sound card (the mixer
+    /// thread too), nothing is heard. For timing runs.
+    NoSound,
 }
 
 type Module = *mut c_void;
@@ -150,7 +153,7 @@ impl Api {
 
     /// Is the mix driven by `update` calls (no sound card, no clock)?
     pub fn non_real_time(&self) -> bool {
-        !matches!(self.output, Output::Device)
+        matches!(self.output, Output::WavNrt { .. } | Output::NoSoundNrt { .. })
     }
 }
 
@@ -629,12 +632,18 @@ pub unsafe extern "C" fn studio_create(system: OutHandle, header_version: u32) -
     let Some(api) = api() else { return ERR_NOT_LOADED };
     let result = (api.fns.studio_create)(system, header_version);
     let nrt = match &api.output {
-        Output::Device => None,
+        Output::Device | Output::NoSound => None,
         Output::WavNrt { rate, block, .. } => Some((OUTPUTTYPE_WAVWRITER_NRT, *rate, *block)),
         Output::NoSoundNrt { rate, block } => Some((OUTPUTTYPE_NOSOUND_NRT, *rate, *block)),
     };
     if result == FMOD_OK && !system.0.is_null() {
         api.studio.store(*system.0 as usize, Ordering::Relaxed);
+        if api.output == Output::NoSound {
+            let mut low: RawHandle = std::ptr::null_mut();
+            if (api.fns.studio_get_low_level_system)(Handle(*system.0), OutHandle(&mut low)) == FMOD_OK && !low.is_null() {
+                (api.extra.set_output)(low, OUTPUTTYPE_NOSOUND);
+            }
+        }
     }
     if let (Some((kind, rate, block)), true) = (nrt, result == FMOD_OK && !system.0.is_null()) {
         let mut low: RawHandle = std::ptr::null_mut();
@@ -836,7 +845,7 @@ pub unsafe extern "C" fn studio_initialize(
     let mut studio_flags_used = studio_flags;
     let mut extra_used = extra;
     let nrt = match &api.output {
-        Output::Device => None,
+        Output::Device | Output::NoSound => None,
         Output::WavNrt { .. } => Some(OUTPUTTYPE_WAVWRITER_NRT),
         Output::NoSoundNrt { .. } => Some(OUTPUTTYPE_NOSOUND_NRT),
     };

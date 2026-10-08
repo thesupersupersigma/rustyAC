@@ -76,6 +76,8 @@ pub struct Options {
     pub texture_size: u32,
     /// `--no-textures`: flat colours instead of textures.
     pub no_textures: bool,
+    /// `--no-audio`, `--volume`, `--audio-wav`, `--audio-log` and the sound's test switches.
+    pub audio: crate::audio::AudioOptions,
     /// `--race-ini` (true) / `--no-race-ini` (false): read the game's last session file or not;
     /// not given: read it when it exists.
     pub race_ini: Option<bool>,
@@ -151,6 +153,7 @@ impl Default for Options {
             boxes: false,
             texture_size: 1024,
             no_textures: false,
+            audio: crate::audio::AudioOptions::default(),
             autodrive: false,
         }
     }
@@ -181,6 +184,13 @@ usage: rustyac [options]
   --boxes               draw the car as boxes, not with its 3D model
   --texture-size <px>   longest texture side put on the graphics card (default 1024, 0 = as stored)
   --no-textures         flat colours instead of textures
+  --no-audio            no sound (the sound is Assetto Corsa's own: its FMOD DLLs and sound banks are
+                        loaded from its folder; without them rustyAC is silent)
+  --volume <0..1>       master volume instead of [LEVELS] MASTER of Documents\\Assetto Corsa\\cfg\\audio.ini
+  --audio-wav <file>    write the mix to a WAV file instead of playing it (FMOD's non-real-time writer:
+                        one 1/60 s block per 1/60 s of driving, whatever the PC's speed; also with --headless)
+  --audio-log <file>    write every FMOD call to a text file
+  --audio-null          FMOD's no-sound output (everything runs, nothing is heard; for timing runs)
   --race-ini [file]     the session's conditions from Assetto Corsa's last session file
                         (Documents\\Assetto Corsa\\cfg\\race.ini, with assists.ini beside it):
                         air and road temperature, track grip, wind, ballast, aids. This is
@@ -294,6 +304,20 @@ impl Options {
                 "--boxes" => o.boxes = true,
                 "--texture-size" => o.texture_size = value("--texture-size")?.parse().map_err(|e| format!("--texture-size: {e}"))?,
                 "--no-textures" => o.no_textures = true,
+                "--no-audio" => o.audio.off = true,
+                "--volume" => {
+                    let volume: f32 = value("--volume")?.parse().map_err(|e| format!("--volume: {e}"))?;
+                    if !(0.0..=1.0).contains(&volume) {
+                        return Err("--volume is between 0 and 1".to_string());
+                    }
+                    o.audio.volume = Some(volume);
+                }
+                "--audio-wav" => o.audio.wav = Some(PathBuf::from(value("--audio-wav")?)),
+                "--audio-log" => o.audio.log = Some(PathBuf::from(value("--audio-log")?)),
+                "--audio-null" => o.audio.null = true,
+                "--audio-ini" => o.audio.ini = Some(PathBuf::from(value("--audio-ini")?)),
+                "--audio-oracle-camera" => o.audio.oracle_camera = Some(value("--audio-oracle-camera")?),
+                "--audio-script" => o.audio.script = Some(PathBuf::from(value("--audio-script")?)),
                 "--autodrive" => o.autodrive = true,
                 "--no-race-ini" => o.race_ini = Some(false),
                 "--air" => o.air = Some(value("--air")?.parse().map_err(|e| format!("--air: {e}"))?),

@@ -118,6 +118,7 @@ name = "rustyac-game"
 version = "0.18.0"
 dependencies = [
  "png",
+ "rustyac-audio",
  "rustyac-content",
  "rustyac-math",
  "rustyac-physics",

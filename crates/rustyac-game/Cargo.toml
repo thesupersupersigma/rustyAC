@@ -23,6 +23,8 @@ rustyac-physics = { path = "../rustyac-physics" }
 rustyac-math = { path = "../rustyac-math" }
 # kn5 models: the track and the car of the debug view
 rustyac-content = { path = "../rustyac-content" }
+# AC's sound: its own FMOD banks through the player's own FMOD DLLs
+rustyac-audio = { path = "../rustyac-audio" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 

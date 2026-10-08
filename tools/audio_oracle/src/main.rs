@@ -21,6 +21,7 @@
 #[allow(dead_code)]
 #[path = "../../car_oracle/src/acs.rs"]
 mod acs;
+mod crash;
 mod drive;
 mod dsp_check;
 mod harness;
@@ -149,6 +150,9 @@ fn run(args: &Args) -> Result<(), String> {
 
     match args.side.as_str() {
         "ac" => {
+            // a fault inside an FMOD DLL is named as such (the loader's own handler, set later,
+            // names the game's functions)
+            crash::install_for_fmod_only();
             // the game's code reads its files by relative path
             std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
             let imports: Vec<(&'static str, &'static str, usize)> = raw::imports()
@@ -163,6 +167,7 @@ fn run(args: &Args) -> Result<(), String> {
             harness::run(&acs, &ac, &drive, scene.as_ref(), &drive::surface_cache_paths(&surfaces), master);
         }
         "port" => {
+            crash::install();
             raw::load(&ac, raw::Output::WavNrt { file: wav.clone(), rate: SAMPLE_RATE, block: BLOCK })?;
             match &args.script {
                 Some(script) => log::start_scripted(Some(&log_file), script)?,
@@ -204,6 +209,9 @@ fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfac
     Ok(())
 }
 
+/// Runs that were repeated because FMOD crashed.
+static FMOD_CRASHES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = std::process::Command::new(exe);
@@ -219,11 +227,22 @@ fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<S
     if let Some(script) = script {
         command.arg("--script").arg(script);
     }
-    let output = command.output().map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        return Err(format!("the {side} side failed ({}):\n{}", output.status, String::from_utf8_lossy(&output.stderr)));
+    // FMOD 1.08.12 itself crashes now and then in this configuration (about one run in a
+    // hundred, inside fmod64.dll, with the game's own code as with the port): such a run is
+    // done again, and counted
+    for attempt in 0..4 {
+        let output = command.output().map_err(|e| e.to_string())?;
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        }
+        let text = String::from_utf8_lossy(&output.stderr).into_owned();
+        let in_fmod = text.contains("at fmod64.dll+") || text.contains("at fmodstudio64.dll+");
+        if attempt == 3 || !in_fmod {
+            return Err(format!("the {side} side failed ({}):\n{}", output.status, text.lines().take(12).collect::<Vec<_>>().join("\n")));
+        }
+        FMOD_CRASHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    unreachable!()
 }
 
 /// First line where two logs differ, with some lines around it.
@@ -328,7 +347,11 @@ fn compare(args: &Args) -> Result<(), String> {
         sa.len() as f64 / 2.0 / drive::SAMPLE_RATE as f64,
         describe(wav_repeat, &sa, &sa2),
         describe(wav_same, &sa, &sp),
-        if log_same && wav_ok { "ok" } else { "FAIL" },
+        match (log_same && wav_ok, FMOD_CRASHES.load(std::sync::atomic::Ordering::Relaxed)) {
+            (true, 0) => "ok".to_string(),
+            (true, n) => format!("ok ({n} run(s) repeated: FMOD crashed)"),
+            (false, _) => "FAIL".to_string(),
+        },
     );
     if !log_same {
         if let Some(text) = first_difference(&ac_log, &scripted_log) {

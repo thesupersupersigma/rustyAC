@@ -67,3 +67,71 @@ impl Tape {
         self.header.iter().find(|h| h.0 == key).map(|h| h.1.as_str())
     }
 }
+
+/// The three listeners the oracle drives are run with. A camera looks along minus its row 2;
+/// the car's row 2 points forwards.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OracleCamera {
+    /// At the driver's head, the cockpit camera's mode.
+    Cockpit,
+    /// Behind and above the car, the chase camera's mode.
+    Chase,
+    /// A fixed point beside where the drive starts, the track camera's mode.
+    Trackside,
+}
+
+impl OracleCamera {
+    pub fn parse(text: &str) -> Result<OracleCamera, String> {
+        match text {
+            "cockpit" => Ok(OracleCamera::Cockpit),
+            "chase" => Ok(OracleCamera::Chase),
+            "trackside" => Ok(OracleCamera::Trackside),
+            _ => Err(format!("unknown camera {text:?} (cockpit, chase, trackside)")),
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            OracleCamera::Cockpit => "cockpit",
+            OracleCamera::Chase => "chase",
+            OracleCamera::Trackside => "trackside",
+        }
+    }
+
+    /// What the camera manager says for this camera.
+    pub fn view(&self) -> crate::car::CameraView {
+        match self {
+            OracleCamera::Cockpit => crate::car::CameraView::COCKPIT,
+            OracleCamera::Chase => crate::car::CameraView::CHASE,
+            OracleCamera::Trackside => crate::car::CameraView::TRACK,
+        }
+    }
+
+    /// The listener's matrix and velocity for a frame (`first` is the drive's first frame).
+    pub fn listener(&self, frame: &crate::car::CarFrame, first: &crate::car::CarFrame) -> (crate::engine::Mat, crate::engine::Vec3) {
+        let car = &frame.world_matrix;
+        let mut m = *car;
+        for c in 0..3 {
+            m[c] = -car[c];
+            m[8 + c] = -car[8 + c];
+        }
+        match self {
+            OracleCamera::Cockpit => {
+                for c in 0..3 {
+                    m[12 + c] = car[12 + c] + car[4 + c] * 0.9;
+                }
+                (m, frame.velocity)
+            }
+            OracleCamera::Chase => {
+                for c in 0..3 {
+                    m[12 + c] = car[12 + c] + car[4 + c] * 1.8 - car[8 + c] * 6.0;
+                }
+                (m, frame.velocity)
+            }
+            OracleCamera::Trackside => {
+                let f = &first.world_matrix;
+                ([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, f[12] + 8.0, f[13] + 2.0, f[14] + 8.0, 1.0], [0.0; 3])
+            }
+        }
+    }
+}
