@@ -1288,11 +1288,11 @@ impl<'a> World<'a> {
                 let kmh = ks_rand(clamp(min), clamp(max));
                 let mut speed = 0.0f32;
                 from_kmh(&mut speed, kmh);
+                conditions_meta.push(("wind_ini".to_string(), hex(&[min, max, direction])));
                 let mut direction = direction;
                 if direction < 0.0 {
                     direction = ks_rand(0.0, 360.0);
                 }
-                conditions_meta.push(("wind_ini".to_string(), hex(&[min, max, direction])));
                 // Speed::kmh @ 0x140058f50
                 (speed * f32::from_bits(0x4066_6666), direction)
             });

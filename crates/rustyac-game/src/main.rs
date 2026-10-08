@@ -425,7 +425,15 @@ fn run_window(options: &Options) -> Result<(), String> {
         if renderer.software { " (software rasteriser)" } else { "" }
     );
     load_models(&mut renderer, options, &car_info);
-    let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
+    let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
+        Ok(camera) => camera,
+        Err(message) => {
+            // (as above: the physics thread runs already)
+            shared.quit.store(true, Ordering::Relaxed);
+            let _ = thread.join();
+            return Err(message);
+        }
+    };
     let mut camera_toggles = 0;
     let started = Instant::now();
     let mut last = Instant::now();

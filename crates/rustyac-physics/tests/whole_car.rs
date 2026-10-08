@@ -132,6 +132,11 @@ fn the_game_s_assist_options() {
     assert_eq!(aids.stability_control.gain, 0.75);
     aids.apply_driving_assists(0, 0, -5.0);
     assert_eq!(aids.stability_control.gain, 0.0);
+    // a number that is none of the three options changes nothing
+    aids.apply_driving_assists(2, 2, 0.0);
+    aids.apply_driving_assists(3, -1, 0.0);
+    assert_eq!((aids.abs.is_active, aids.abs.is_present), (true, true));
+    assert_eq!((aids.traction_control.is_active, aids.traction_control.is_present), (true, true));
 }
 
 #[test]

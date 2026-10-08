@@ -540,6 +540,11 @@ pub fn track() -> Vec<Scenario> {
             "spa_launch with a saved setup (--setup <file>) loaded before the first step",
             Conditions { setup: true, ..Conditions::default() },
         ),
+        in_conditions(
+            "spa_wind_any",
+            "spa_launch with a wind from any direction (DIRECTION_DEG=-1: the direction is drawn too), 5 to 35 km/h",
+            Conditions { wind: Some([5.0, 35.0, -1.0]), ..Conditions::default() },
+        ),
         conditions_on(
             "spa_green_laps",
             "spa_timing on a green track that gains grip with every lap counted: 86 % at the start, +-2 % drawn, 1.25 % more per lap",

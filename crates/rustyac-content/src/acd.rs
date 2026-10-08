@@ -118,12 +118,41 @@ impl Acd {
     }
 
     /// Reads and decrypts `<car folder>/data.acd`; the key comes from the car folder's name.
+    ///
+    /// The game takes the name as the path spells it, and a folder renamed after packing (or
+    /// spelled in another case) decrypts to garbage there. Here the result is looked at: when
+    /// `car.ini` does not come out as text with a `[HEADER]`, the folder's spelling on disk is
+    /// tried, and if that fails too the archive is refused with the reason.
     pub fn open(acd: &Path) -> Result<Acd, String> {
         let name_of = |path: &Path| Some(path.parent()?.file_name()?.to_string_lossy().into_owned());
-        let name = name_of(acd)
-            .or_else(|| name_of(&acd.canonicalize().ok()?))
-            .ok_or_else(|| format!("{}: the car folder's name (the key) is not known", acd.display()))?;
-        Acd::open_as(acd, &name)
+        let on_disk = acd.canonicalize().ok().and_then(|path| name_of(&path));
+        let as_typed = name_of(acd).filter(|name| !name.is_empty() && name != "." && name != "..");
+        let mut names: Vec<String> = as_typed.into_iter().chain(on_disk).collect();
+        names.dedup();
+        if names.is_empty() {
+            return Err(format!("{}: the car folder's name (the key) is not known", acd.display()));
+        }
+        let container = std::fs::read(acd).map_err(|e| format!("{}: {e}", acd.display()))?;
+        for name in &names {
+            let archive = Acd::decrypt(&container, &key_from_string(name)?).map_err(|e| format!("{}: {e}", acd.display()))?;
+            if archive.looks_decrypted() {
+                return Ok(archive);
+            }
+        }
+        Err(format!(
+            "{}: its files do not decrypt with the key of the folder name {:?}: the data was packed under another folder name (Assetto Corsa cannot read it from this folder either)",
+            acd.display(),
+            names[0]
+        ))
+    }
+
+    /// Did the key fit? A car's `car.ini` starts with a `[HEADER]` section; an archive
+    /// without a `car.ini` is taken as it is.
+    fn looks_decrypted(&self) -> bool {
+        match self.get("car.ini") {
+            Some(bytes) => bytes.windows(8).any(|window| window == b"[HEADER]"),
+            None => true,
+        }
     }
 
     /// As [`Acd::open`] for a car folder that was renamed after packing: `name` is the name
@@ -173,14 +202,19 @@ pub fn sibling_acd(file: &Path) -> Option<PathBuf> {
     Some(dir.with_file_name(acd))
 }
 
-type Cache = Mutex<HashMap<PathBuf, Result<Arc<Acd>, String>>>;
+type Cache = Mutex<HashMap<PathBuf, Arc<Acd>>>;
 
 /// The decrypted archives of this process, by path: a car's files are asked for dozens of
-/// times while it is built. Memory only.
+/// times while it is built. Memory only. A failure is not kept: the next question tries again.
 fn cached(acd: &Path) -> Result<Arc<Acd>, String> {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let mut cache = CACHE.get_or_init(Cache::default).lock().unwrap_or_else(|e| e.into_inner());
-    cache.entry(acd.to_path_buf()).or_insert_with(|| Acd::open(acd).map(Arc::new)).clone()
+    if let Some(archive) = cache.get(acd) {
+        return Ok(Arc::clone(archive));
+    }
+    let archive = Arc::new(Acd::open(acd)?);
+    cache.insert(acd.to_path_buf(), Arc::clone(&archive));
+    Ok(archive)
 }
 
 /// The archive that holds `file`, if its folder has one.
@@ -202,13 +236,20 @@ pub fn read(file: &Path) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-/// Is there such a data file (in the archive when the folder has one, else on disk)?
+/// Is there such a data file? In the archive when the folder has one, else on disk; as in
+/// the game (`Path::fileExists` @ 0x1402305e0) a plain file also counts when the archive does
+/// not hold the name. (Reading never falls back: [`read`].)
 pub fn exists(file: &Path) -> bool {
     match archive_of(file) {
-        Some(Ok(archive)) => file.file_name().is_some_and(|n| archive.get(&n.to_string_lossy()).is_some()),
+        Some(Ok(archive)) => file.file_name().is_some_and(|n| archive.get(&n.to_string_lossy()).is_some()) || file.is_file(),
         Some(Err(_)) => false,
         None => file.is_file(),
     }
+}
+
+/// Why the archive of a data folder cannot be used, if it has one that cannot.
+pub fn archive_error(data_folder: &Path) -> Option<String> {
+    archive_of(&data_folder.join("car.ini"))?.err()
 }
 
 #[cfg(test)]
@@ -251,6 +292,10 @@ mod tests {
         assert_eq!(Acd::decrypt(&with_header, key).unwrap().len(), 2);
         // cut short
         assert!(Acd::decrypt(&container[..container.len() - 3], key).is_err());
+        // the right key gives a car.ini with its [HEADER]; another key does not
+        assert!(acd.looks_decrypted());
+        assert!(!Acd::decrypt(&container, "9-9-9").unwrap().looks_decrypted());
+        assert!(Acd::default().looks_decrypted(), "nothing to judge by");
     }
 
     #[test]

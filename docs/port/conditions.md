@@ -6,10 +6,10 @@ State after the last commit (kept up to date with every commit):
 
 - **Done.** Everything is on `master`, tagged `v0.15.0`, nothing is pushed.
 - All seven parts of `prompts/15_conditions_and_polish.md` are in: A conditions and setups (bit-exact against the
-  game on six new scenarios, 47,464 steps), B `tools/compare_laps.py`, C the two debug-view fixes, D the Alt
+  game on seven new scenarios, 55,465 steps), B `tools/compare_laps.py`, C the two debug-view fixes, D the Alt
   command modifier, E AC's camera set, F cars straight from `data.acd`, G the release / CI fixes.
 - `cargo test --release --workspace` passes; `cargo clippy --workspace -- -D warnings` is clean.
-- The large recordings (`oracle/conditions/*.carrec`, about 700 MB) are **deleted**; section 4.3 says how to make
+- The large recordings (`oracle/conditions/*.carrec`, about 800 MB) are **deleted**; section 4.3 says how to make
   them again. The result tables (`oracle/chassis/results_conditions_*.md`) are still on disk (not in git).
 - The briefs read from the machine code, the patch scripts and the helper scripts are in the git-ignored
   `re/scratch/task15/` (`spec_conditions.md`, `spec_setups.md`, `spec_acd.md`, `spec_render.md`,
@@ -48,7 +48,7 @@ switch is an experiment, not Assetto Corsa: the bit-exact car is the one without
   the wind (drawn at random as the game draws it), ballast, restrictor, ABS / traction control / stability,
   damage, fuel and tyre wear rates, tyre blankets. `--air`, `--road`, `--grip`, `--wind`, `--wind-dir`,
   `--wind-from-log` change single values; `--no-race-ini` gives the old conditions. `--setup <name>` loads a
-  setup saved in AC. The HUD shows all of it. The game's own code and the port agree to the last bit on six new
+  setup saved in AC. The HUD shows all of it. The game's own code and the port agree to the last bit on seven new
   recordings.
 - **B. Lap comparer.** `tools/compare_laps.py` lays a real-AC lap and a rustyAC lap over each other by position
   on the track and prints, per corner, entry / minimum / exit speed, peak lateral g, steering, gear and the time
@@ -227,8 +227,8 @@ picture.
 
 ### 4.1 Conditions and setups: the game's code against the port
 
-`tools/car_oracle` got six scenarios (`spa_cold_green_wind`, `spa_hot_optimum`, `spa_user`, `spa_setup`,
-`spa_setup_launch`, `spa_green_laps`). What runs in the game's own code: `Track::initDynamicTrack` (it reads a
+`tools/car_oracle` got seven scenarios (`spa_cold_green_wind`, `spa_hot_optimum`, `spa_user`, `spa_wind_any`,
+`spa_setup`, `spa_setup_launch`, `spa_green_laps`). What runs in the game's own code: `Track::initDynamicTrack` (it reads a
 `cfg/race.ini` written into the scratch root), `ksRand` and `Speed::fromKMH` for the wind's base, the wind job
 itself (called with a hand-made `RaceManager`: two numbers and the way to the engine), `PhysicsEngine::setWind`,
 `Car::setBallastKG`, `Car::setRestrictor`, and for the setup `SetupManager::load` @ 0x14028cc90 (the loader the
@@ -247,10 +247,11 @@ Free run, the whole car in Rust, given only the driver's controls (`oracle/chass
 | `spa_setup` | your `spa\god.ini` (the game writes 25 values in the first step: wings, diff, rods, camber, toe, packers, seven gears, final ratio; fuel 37 l; traction control off) at Eau Rouge; the car spins off after 5 s, traction control being off | 1,668 | 100 % | 2,412 | 104,725 |
 | `spa_setup_launch` | the same file with traction control left on, the 24 s launch drive to La Source | 8,001 | 100 % | 2,412 | 522,782 |
 | `spa_green_laps` | grip 86 % +-2 % drawn, +1.25 % per lap, over eight timing lines and two counted laps (the grip changes twice) | 13,792 | 100 % | 2,412 | 902,644 |
-| **all** | | **47,464** | **100 %** | | **3,108,019** |
+| `spa_wind_any` | wind from any direction (`DIRECTION_DEG=-1`: the direction is drawn too), 5..35 km/h (the game drew 4.42 km/h from 215.24 degrees) | 8,001 | 100 % | 2,412 | 527,375 |
+| **all** | | **55,465** | **100 %** | | **3,635,394** |
 
-`rustyac.exe` itself replaying the same recordings (`chassis_compare game-replay --dir oracle/conditions`): five
-scenarios, 33,672 steps, 100 % bit-exact (`spa_green_laps` is skipped, as `spa_timing` always was: its script
+`rustyac.exe` itself replaying the same recordings (`chassis_compare game-replay --dir oracle/conditions`): six
+scenarios, 41,673 steps, 100 % bit-exact (`spa_green_laps` is skipped, as `spa_timing` always was: its script
 teleports the car).
 
 What is mirrored, not run by the game's code: the setup screen is GUI code that cannot be built in the oracle.
@@ -281,6 +282,7 @@ set O=tools\car_oracle\target\release\car_oracle.exe
 %O% run --track spa --scenario spa_cold_green_wind --out oracle\conditions
 %O% run --track spa --scenario spa_hot_optimum --out oracle\conditions
 %O% run --track spa --scenario spa_user --out oracle\conditions
+%O% run --track spa --scenario spa_wind_any --out oracle\conditions
 %O% run --track spa --scenario spa_green_laps --out oracle\conditions
 %O% run --track spa --scenario spa_setup --out oracle\conditions --setup "%USERPROFILE%\Documents\Assetto Corsa\setups\ks_ferrari_f2004\spa\god.ini"
 %O% run --track spa --scenario spa_setup_launch --out oracle\conditions --setup re\scratch\task15\god_tc4.ini
@@ -361,6 +363,14 @@ row 333 times a second), so only the first row of each new position is used; a l
 
 ## 6. Tests and checks
 
+- A read-only review by three independent reviewers at the end (physics and session code against the
+  disassembly; archive, install lookup, CI and release files; renderer, cameras, tools and docs) found no error
+  in the ported arithmetic. What it did find is fixed: a renamed car folder decrypting to garbage without a
+  word, `set_restrictor` and the assist options for values the files never hold (a NaN, an option number above
+  2), a race.ini setup name stopping the start, an example car in `HOW_TO_RUN.txt` that the port refuses, the
+  lap comparer picking the wrong piece of a lap after a long wait before the line, and the oracle writing the
+  drawn wind direction into its header (hence the scenario `spa_wind_any`).
+
 - `cargo test --release --workspace`: all pass. New: the session files and the wind's draws (5 tests), the
   archive (3) and the install lookup (2), the command modifier (1), the cameras (3: the car's cameras, bonnet /
   bumper / dash, F1 and F6), the projection and the precise matrix product, the session in a drive's header (1),
@@ -414,9 +424,12 @@ row 333 times a second), so only the first row of each new position is used; a l
 3. **race.ini does not choose the car and the track.** `--car` and `--track` still do (race.ini's are printed).
    Starting whatever AC ran last could start a car the port refuses.
 4. **`[CAR_0] SETUP` is honoured** although `acs.exe` ignores it (Content Manager writes it). Yours is empty.
+   If it names a setup that is not found for the car and track being driven, that is a line on the console
+   and the default setup, not an error (`--setup` with a wrong name is an error).
 5. **`AUTO_CLUTCH`, `AUTO_BLIP`, `AUTO_SHIFTER` of assists.ini are not applied**: rustyAC keeps `--no-auto-clutch`
    and `--auto-shifter` (and forces the gearbox aid for `--autodrive`). ABS, traction control, stability and
-   the rates are applied.
+   the rates are applied. Without an `assists.ini` beside race.ini the car keeps its own aids and full rates
+   (and says so); the game would read every key as 0.
 6. **The session type stays rustyAC's**: `--spawn hotlap` arms the first lap (AC's hot-lap mode). Your race.ini
    is a practice session spawned on the hot-lap point, where AC does not arm it. Lap timing only.
 7. **A setup is loaded before the first step**, as if "Load" were pressed before the car moves. In AC it is
@@ -424,8 +437,9 @@ row 333 times a second), so only the first row of each new position is used; a l
 8. **Not ported in the setup loader**: gear sets (`USE_GEARSET` cars), the ABS / turbo / ERS / engine-brake
    spinners, pit-stop presets (`.sp`), and the gear tab's rule for a default ratio that is not in its `.rto`
    table. The F2004 needs none.
-9. **`--car` prefers the install over `cardata\`** for a name that is in both (proven identical). A renamed car
-   folder cannot be decrypted (the key is the folder's name; AC fails the same way).
+9. **`--car` prefers the install over `cardata\`** for a name that is in both (proven identical). A car folder
+   renamed after packing cannot be decrypted (the key is the folder's name; AC reads garbage from it). rustyAC
+   notices (the decrypted `car.ini` has no `[HEADER]`), says so, and goes on to the next place (`cardata\`).
 10. **The clippy fixes**: where clippy's rewrite could change what a NaN does or an operand order, an `#[allow]`
     with the reason instead of the rewrite.
 11. **Debug view**: the two light strengths (sky 1.2, sun 2.0) stand in for the weather's colours, which are not

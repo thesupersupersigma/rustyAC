@@ -350,7 +350,13 @@ impl ControlsProvider for Driver {
 /// 3. `car` as a name under a `cardata` folder next to the working directory or above the
 ///    program (extracted files: the test cars of the oracles).
 pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
-    let has_car = |data: &Path| rustyac_physics::data::exists(&data.join("car.ini"));
+    // an archive that is there but cannot be used (packed under another folder name, cut
+    // short) is not a car; why is said if nothing else is found
+    let mut unusable: Vec<String> = Vec::new();
+    let mut has_car = |data: &Path| {
+        unusable.extend(rustyac_content::acd::archive_error(data));
+        rustyac_physics::data::exists(&data.join("car.ini"))
+    };
     let mut tried = Vec::new();
     let direct = PathBuf::from(car);
     for folder in [direct.clone(), direct.join("data")] {
@@ -378,7 +384,10 @@ pub fn find_car_data(car: &str) -> Result<PathBuf, String> {
         }
         tried.push(folder);
     }
-    let hint = if ac_root().is_none() { format!("; {}", rustyac_content::install::not_found_hint()) } else { String::new() };
+    let mut hint = if ac_root().is_none() { format!("; {}", rustyac_content::install::not_found_hint()) } else { String::new() };
+    for message in &unusable {
+        hint.push_str(&format!("; {message}"));
+    }
     Err(format!(
         "the car {car:?} was not found: no car.ini in {}{hint}",
         tried.iter().take(3).map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")

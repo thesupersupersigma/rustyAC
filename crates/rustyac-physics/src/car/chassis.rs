@@ -1299,13 +1299,14 @@ impl RollingChassis {
     /// `Car::setRestrictor` @ 0x140275d10 (`[CAR_0] RESTRICTOR` of race.ini).
     pub fn set_restrictor(&mut self, restrictor: f32) {
         let value = restrictor * 0.0025;
-        #[allow(clippy::manual_range_contains)] // the game's two comparisons: a NaN becomes 1
-        let value = if value <= 1.0 && 0.0 <= value {
-            value
-        } else if value <= 1.0 {
-            0.0
-        } else {
+        // the game's two comparisons (`comiss` + `jbe`, `comiss` + `jb`): above 1 is 1, below
+        // 0 and a NaN are 0
+        let value = if value > 1.0 {
             1.0
+        } else if value >= 0.0 {
+            value
+        } else {
+            0.0
         };
         if let Some(drivetrain) = &mut self.drivetrain {
             drivetrain.engine_mut().base_mut().restrictor = value;

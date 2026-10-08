@@ -91,6 +91,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
     };
     let mut wind_base_direction = 0.0;
     let mut setup_name = options.setup.clone();
+    let mut setup_from_race_ini = false;
     match &race_path {
         Some(path) => {
             let ini = IniReader::load(path)?;
@@ -173,10 +174,13 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
                     assists.tyre_consumption_rate,
                     if assists.allow_tyre_blankets { "on" } else { "off" }
                 ));
+            } else {
+                notes.push(format!("  ({} is not there: the aids are as the car has them, damage, fuel use and tyre wear at 100 %)", assists_path.display()));
             }
             // not a key of acs.exe: launchers write the setup's name here
             if setup_name.is_none() && !race.setup.is_empty() {
                 setup_name = Some(race.setup.clone());
+                setup_from_race_ini = true;
             }
         }
         None => notes.push("conditions: the built-in ones (26 C air, 30 C road, grip 100 %, no wind); no race.ini is read".to_string()),
@@ -230,9 +234,15 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
     }
     if let Some(name) = setup_name {
         let car = crate::sim::find_car_data(&setup.car).map(|data| crate::sim::car_name(&data)).unwrap_or_else(|_| last_name(&setup.car));
-        let file = find_setup(&name, &car, &last_name(&setup.track))?;
-        notes.push(format!("setup: {}", file.display()));
-        setup.session.setup_file = Some(file);
+        match find_setup(&name, &car, &last_name(&setup.track)) {
+            Ok(file) => {
+                notes.push(format!("setup: {}", file.display()));
+                setup.session.setup_file = Some(file);
+            }
+            // nobody asked for it on the command line (it may belong to another car or track)
+            Err(message) if setup_from_race_ini => notes.push(format!("race.ini names a setup that is not used: {message}; the default setup it is")),
+            Err(message) => return Err(message),
+        }
     }
     Ok(notes)
 }

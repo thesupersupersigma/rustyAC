@@ -19,7 +19,8 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
   other Steam library (it reads Steam's libraryfolders.vdf). If your game is
   somewhere else, say where it is:
 
-      set AC_ROOT=D:\Games\assettocorsa
+      set AC_ROOT=D:\Games\assettocorsa               (in cmd)
+      $env:AC_ROOT = "D:\Games\assettocorsa"          (in PowerShell)
 
   Nothing has to be unpacked or copied. A car is named by its folder name under
   content\cars (--car ks_ferrari_f2004, which is also the default). Its data is
@@ -51,8 +52,9 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --windowed                   the endless flat road
     rustyac.exe --track spa --windowed --autodrive
                                              watch a simple driver follow the AI line
-    rustyac.exe --car bmw_m3_e30 --track magione --windowed
-                                             another car (content\cars\bmw_m3_e30) and track
+    rustyac.exe --car ks_ferrari_488_gt3 --track magione --windowed
+                                             another car (content\cars\ks_ferrari_488_gt3)
+                                             and track
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 

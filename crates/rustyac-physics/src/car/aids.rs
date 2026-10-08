@@ -673,15 +673,20 @@ impl AidsBase {
     /// `stability_percent`: 0 to 100. Read from the listing, not run: the recordings are made
     /// without that manager, so there the car's file decides alone.
     pub fn apply_driving_assists(&mut self, abs: i32, traction_control: i32, stability_percent: f32) {
-        let on = abs != 0;
-        self.abs.is_active = on;
-        if abs == 0 || abs == 2 {
-            self.abs.is_present = on;
+        // (any other number in the file: the game calls nothing, the car's file decides)
+        if (0..=2).contains(&abs) {
+            let on = abs != 0;
+            self.abs.is_active = on;
+            if abs == 0 || abs == 2 {
+                self.abs.is_present = on;
+            }
         }
-        let on = traction_control != 0;
-        self.traction_control.is_active = on;
-        if traction_control == 0 || traction_control == 2 {
-            self.traction_control.is_present = on;
+        if (0..=2).contains(&traction_control) {
+            let on = traction_control != 0;
+            self.traction_control.is_active = on;
+            if traction_control == 0 || traction_control == 2 {
+                self.traction_control.is_present = on;
+            }
         }
         let gain = stability_percent * 0.01;
         self.stability_control.gain = if 0.0 < gain { gain } else { 0.0 };

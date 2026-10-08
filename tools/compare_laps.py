@@ -88,7 +88,10 @@ class Lap:
                 pieces.append([])
             before = p
             pieces[-1].append(r)
-        rows = max(pieces, key=len)
+        # (by track covered, not by rows: a car waiting before the line fills many rows)
+        def covered(piece):
+            return float(piece[-1]["trackPos"]) - float(piece[0]["trackPos"]) if piece else -1.0
+        rows = max(pieces, key=covered)
         last = -1.0
         clock = []
         for r in rows:
@@ -441,13 +444,14 @@ for (const P of PANELS) {
   document.getElementById("charts").appendChild(box);
 }
 const tip = document.getElementById("tip");
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 function fmt(v, d) { return v === null || v === undefined ? "-" : v.toFixed(d); }
 function show(ev, chart) {
   const r = chart.svg.getBoundingClientRect(); const px = (ev.clientX - r.left) / r.width * W;
   const p = x0 + (px - L) / (W - L - R) * (x1 - x0); const i = Math.max(0, Math.min(D.grid.length - 1, Math.round((p - x0) / (D.grid[1] - D.grid[0]))));
   for (const c of charts) { c.cross.setAttribute("x1", sx(D.grid[i])); c.cross.setAttribute("x2", sx(D.grid[i])); c.cross.setAttribute("visibility", "visible"); }
   const corner = D.corners.find(c => D.grid[i] >= c[1] && D.grid[i] <= c[2]);
-  let h = `<b>track position ${D.grid[i].toFixed(4)}</b>${corner ? " &middot; " + corner[0].replace(/&/g, "&amp;").replace(/</g, "&lt;") : ""}<table><tr><td></td><td class="n"><span class="sw" style="border-color:var(--a)"></span>${D.nameA}</td><td class="n"><span class="sw" style="border-color:var(--b);border-top-style:dashed"></span>${D.nameB}</td></tr>`;
+  let h = `<b>track position ${D.grid[i].toFixed(4)}</b>${corner ? " &middot; " + esc(corner[0]) : ""}<table><tr><td></td><td class="n"><span class="sw" style="border-color:var(--a)"></span>${esc(D.nameA)}</td><td class="n"><span class="sw" style="border-color:var(--b);border-top-style:dashed"></span>${esc(D.nameB)}</td></tr>`;
   for (const [k, label, d] of [["speed", "speed km/h", 1], ["latg", "lateral g", 2], ["steer", "steering", 3], ["gear", "gear", 0]]) h += `<tr><td>${label}</td><td class="n">${fmt(D.a[k][i], d)}</td><td class="n">${fmt(D.b[k][i], d)}</td></tr>`;
   h += `</table>time difference ${D.delta[i] === null ? "-" : (D.delta[i] > 0 ? "+" : "") + D.delta[i].toFixed(3) + " s"}`;
   tip.innerHTML = h; tip.style.display = "block";
@@ -471,7 +475,7 @@ def write_plot(path, grid, a, b, delta, corners, name_a, name_b, title, sub, hea
         "grid": [round(g, 6) for g in grid[::step]],
         "a": lap(a), "b": lap(b), "delta": thin(delta, 4),
         "corners": [[n, i, o] for n, i, o in corners],
-        "nameA": html.escape(name_a), "nameB": html.escape(name_b),
+        "nameA": name_a, "nameB": name_b,
     }
     rows = "".join("<tr>" + "".join("<td>%s</td>" % html.escape(c) for c in line) + "</tr>" for line in body)
     table_html = "<table class=\"data\"><tr>%s</tr>%s</table>" % ("".join("<th>%s</th>" % html.escape(h) for h in head), rows)

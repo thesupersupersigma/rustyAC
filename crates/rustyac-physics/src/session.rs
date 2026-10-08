@@ -341,6 +341,7 @@ mod tests {
         let (high, right) = generate_wind(&settings, &mut || 32767).unwrap();
         assert!((low * 3.6 - 8.0).abs() < 1e-4 && (high * 3.6 - 12.0).abs() < 1e-3, "{low} {high}");
         assert!((left + 20.0).abs() < 1e-4 && (right - 20.0).abs() < 1e-2, "{left} {right}");
+        // (the restrictor's own conversion is `RollingChassis::set_restrictor`)
         // no wind in the file: none, and nothing is drawn
         let calm = wind_settings(0.0, 0.0, 0.0, &mut none);
         assert_eq!(generate_wind(&calm, &mut || panic!("no draw without wind")), None);
