@@ -1680,7 +1680,7 @@ impl<'a> World<'a> {
                 // PhysicsEngine::setSessionInfo: no contacts for the first 250 steps (the lap
                 // scenario starts the way a session does; the others collide from step 0)
                 use crate::track_driver::TrackKind;
-                let session_start = matches!(scenario.track_kind(), Some(TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull));
+                let session_start = matches!(scenario.track_kind(), Some(TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull | TrackKind::Free));
                 let no_collision_steps: i32 = if session_start { 250 } else { 0 };
                 let core: *mut u8 = rd(engine, PE_CORE);
                 wr(core, 0x60, no_collision_steps);

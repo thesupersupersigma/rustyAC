@@ -971,7 +971,13 @@ pub fn track_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
         out.push(TraceValue::i(&format!("transponder.status.{k}.lastResponse"), status.last_response));
         out.push(TraceValue::i(&format!("transponder.status.{k}.lastTime"), status.last_time as i32));
         out.push(TraceValue::i(&format!("transponder.currentSplits.{k}"), tp.current_splits.get(k).copied().unwrap_or(0) as i32));
-        out.push(TraceValue::i(&format!("transponder.lastLapSplits.{k}"), tp.last_lap_splits.get(k).copied().unwrap_or(0) as i32));
+        // On a track with ONE timing line (the drag strips) the game takes the lap's first
+        // split from `status[1]`, which is past the end of its one-element list: whatever
+        // the heap holds there (seen: the bits of 0.1f). The port has 0 there, and the value
+        // is left out of the comparison, since the game's own number is not defined.
+        if track.time_lines.len() != 1 {
+            out.push(TraceValue::i(&format!("transponder.lastLapSplits.{k}"), tp.last_lap_splits.get(k).copied().unwrap_or(0) as i32));
+        }
     }
     out.push(TraceValue::i("lapInvalidator.currentTyresOut", chassis.lap_invalidator.current_tyres_out));
     out.push(TraceValue::i("lapInvalidator.isInPenaltyZone", chassis.lap_invalidator.is_in_penalty_zone as i32));

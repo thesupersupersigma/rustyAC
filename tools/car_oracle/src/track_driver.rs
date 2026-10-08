@@ -55,6 +55,9 @@ pub enum TrackKind {
     ObjectHit,
     /// Flat out along the pit lane's own line: the speed limiter on the track's pit surfaces.
     PitLane,
+    /// From the hot-lap start by the clock alone (no AI line is read): for a track that has
+    /// none, and for the drag strips.
+    Free,
 }
 
 /// A point of the pit lane's line (`ai/pit_lane.ai`) at the normalised position `n`, put on
@@ -138,7 +141,15 @@ impl TrackKind {
     pub fn leaves_the_road(self) -> bool {
         matches!(
             self,
-            TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover | TrackKind::ObjectHit | TrackKind::PitLane
+            TrackKind::WallLow
+                | TrackKind::WallHigh
+                | TrackKind::WallGravel
+                | TrackKind::WallSlide
+                | TrackKind::KerbStrike
+                | TrackKind::Rollover
+                | TrackKind::ObjectHit
+                | TrackKind::PitLane
+                | TrackKind::Free
         )
     }
 }
@@ -201,7 +212,7 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
             let (_, metres, _) = nearest_object(track).ok_or("the track has no loose object within reach of its AI line")?;
             on_line(track, metres - 140.0, "140 m before the loose object nearest to the AI line")
         }
-        TrackKind::Launch | TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull => {
+        TrackKind::Launch | TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull | TrackKind::Free => {
             // RaceManager::initOffline for a hot-lap session
             rustyac_physics::track::init_respawn_position_set(track, "HOTLAP_START");
             let (position, tail) = track.spawn_pose("HOTLAP_START", 0).ok_or("the track has no AC_HOTLAP_START_0")?;
@@ -346,6 +357,18 @@ fn allowed_speed(spline: &AiSpline, index: usize, pace: f32, grip: &Grip) -> f32
 impl Follower {
     /// The controls of one step. `t` is the time since the car was released.
     pub fn controls(&mut self, kind: TrackKind, track: &Track, car: &CarView, t: f32, c: &mut Controls) {
+        if kind == TrackKind::Free {
+            // by the clock: a careful launch, flat out, a gentle weave, lift, brake
+            if (1.0..9.0).contains(&t) {
+                c.gas = (0.3 + 0.14 * (t - 1.0)).min(1.0);
+            } else if t >= 11.0 {
+                c.brake = 0.7;
+            }
+            if (4.0..11.0).contains(&t) {
+                c.steer = 0.03 * (1.1 * (t - 4.0)).sin();
+            }
+            return;
+        }
         if kind == TrackKind::PitLane {
             // along the pit lane's own line: flat out (the limiter holds the car at 80 km/h
             // on a pit surface), a lift, flat out again, then the brakes
@@ -587,7 +610,7 @@ impl Follower {
             TrackKind::FullLap => (0.78, 95.0),
             TrackKind::Run | TrackKind::RunFull => (0.70, 95.0),
             TrackKind::ObjectHit => (0.7, 19.5),
-            TrackKind::PitLane => (0.0, 0.0),
+            TrackKind::PitLane | TrackKind::Free => (0.0, 0.0),
         };
         let target = allowed_speed(spline, index, pace, &self.grip).min(limit);
         let error = target - car.speed;

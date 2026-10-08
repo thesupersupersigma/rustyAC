@@ -664,6 +664,12 @@ pub fn track() -> Vec<Scenario> {
             20.0,
             TrackKind::PitLane,
         ),
+        on_track(
+            "trk_free",
+            "from the hot-lap start by the clock alone, for a track without an AI line and for the drag strips: a careful launch, flat out for some seconds with a gentle weave, a lift, the brakes",
+            16.0,
+            TrackKind::Free,
+        ),
         on_track("spa_rollover", "put down on its roof 0.8 m above the road and left to settle, five seconds later put down on its side (a second of throttle each time: a sleeping car would hang in the air)", 10.0, TrackKind::Rollover),
     ]);
     scenarios
