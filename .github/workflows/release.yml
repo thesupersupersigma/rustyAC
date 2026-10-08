@@ -86,14 +86,9 @@ jobs:
 
       - name: Publish the release
         run: |
-          flags=()
-          # not stable yet: every 0.x release is a pre-release
-          if [ "${VERSION%%.*}" = "0" ]; then
-            flags+=(--prerelease)
-          fi
           zip="dist/rustyAC-$TAG-windows-x64.zip"
           gh release create "$TAG" "$zip" "$zip.sha256" \
             --verify-tag \
             --title "rustyAC $TAG" \
             --generate-notes \
-            "${flags[@]}"
+            --latest
