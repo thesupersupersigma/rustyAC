@@ -1326,7 +1326,7 @@ fn compare(
                     differing.len() + trace_differences.len(),
                     columns.fields.len() + outcome.powertrain_values
                 );
-                for text in trace_differences.iter().filter(|t| t.starts_with("collide") || t.starts_with("car.damage") || t.starts_with("car.last") || t.starts_with("car.mesh")).take(120) {
+                for text in trace_differences.iter().take(60) {
                     println!("    {text}");
                 }
                 for &k in differing.iter().take(40) {
@@ -1746,7 +1746,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
                             replay::describe(columns.fields[k].kind, rust.snapshot[k])
                         );
                     }
-                    for text in trace_differences.iter().filter(|t| t.starts_with("collide") || t.starts_with("car.damage") || t.starts_with("car.last") || t.starts_with("car.mesh")).take(120) {
+                    for text in trace_differences.iter().take(60) {
                         println!("    {text}");
                     }
                     if let Err(tape) = &tape {
