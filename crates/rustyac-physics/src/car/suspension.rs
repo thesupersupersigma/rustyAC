@@ -12,6 +12,8 @@
 
 use std::path::Path;
 
+use rustyac_ode::JointId;
+
 use super::body::{DistanceJoint, ForceSource, PhysicsCore, RigidBody};
 use crate::data::ini::IniReader;
 use crate::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
@@ -154,6 +156,19 @@ impl Default for SuspensionBase {
     }
 }
 
+/// AC's `SuspensionType` (`Car::suspensionTypeF`, `Car::suspensionTypeR`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SuspensionType {
+    /// `DWB`: [`VanillaDwb`]
+    DoubleWishbone = 0,
+    /// `STRUT`: [`super::VanillaStrut`]
+    Strut = 1,
+    /// `AXLE` (rear only): [`super::VanillaAxle`]
+    Axle = 2,
+    /// `ML`: [`super::VanillaMultilink`]
+    Multilink = 3,
+}
+
 /// The suspension slot: AC's `ISuspension` (25 virtual functions, vtables at 0x1404ff870
 /// DWB, 0x1404ffc80 STRUT, 0x1404ffe90 AXLE, 0x1405001a0 ML). Method names are the PDB's in
 /// snake_case. The rigid bodies live in the [`PhysicsCore`], which every method that touches
@@ -217,14 +232,26 @@ pub trait SuspensionModel {
     /// +0xc0 `addLocalForceAndTorque(force, torque, driveTorque)`
     fn add_local_force_and_torque(&mut self, core: &mut PhysicsCore, force: &Vec3f, torque: &Vec3f, drive_torque: &Vec3f);
 
+    /// Which of AC's four suspension classes this is (the game asks with `dynamic_cast`).
+    fn kind(&self) -> SuspensionType;
     /// The shared members (`k`, `rodLength`, …).
     fn base(&self) -> &SuspensionBase;
     /// The shared members, for the setup.
     fn base_mut(&mut self) -> &mut SuspensionBase;
     /// The hub body (the heave spring and the comparison with the game read it).
     fn hub(&self) -> RigidBody;
-    /// The joints, in creation order.
-    fn joints(&self) -> Vec<DistanceJoint>;
+    /// The joints, in creation order (for a rigid axle: the links on the left instance, none
+    /// on the right one).
+    fn joints(&self) -> Vec<JointId>;
+    /// The names of the joints in the recordings, in the order of [`SuspensionModel::joints`].
+    fn joint_names(&self) -> Vec<String> {
+        ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"].map(String::from).to_vec()
+    }
+    /// Every body this suspension created, in creation order (a strut: hub, then the strut
+    /// body; the right side of a rigid axle: none, the axle body belongs to the left side).
+    fn bodies(&self) -> Vec<RigidBody> {
+        vec![self.hub()]
+    }
     /// Puts back what a step leaves behind (`status` and the steer torque): for restoring a
     /// saved state, not part of AC's interface.
     fn restore_step_state(&mut self, status: SuspensionStatus, steer_torque: f32);
@@ -310,7 +337,7 @@ pub struct VanillaDwb {
 
 /// `sign()` as the compiled code spells it (`comiss` + `jbe` / `jae`): a NaN counts as
 /// negative.
-fn sign(x: f32) -> f32 {
+pub(super) fn sign(x: f32) -> f32 {
     if x > 0.0 {
         1.0
     } else if x >= 0.0 {
@@ -322,7 +349,7 @@ fn sign(x: f32) -> f32 {
 
 /// `ucomiss x, 0` + `je`: true for an ordered value that is not zero.
 #[allow(clippy::double_comparisons)]
-fn ordered_nonzero(x: f32) -> bool {
+pub(super) fn ordered_nonzero(x: f32) -> bool {
     x < 0.0 || x > 0.0
 }
 
@@ -474,7 +501,7 @@ impl VanillaDwb {
     }
 }
 
-fn add(a: &Vec3f, b: &Vec3f) -> Vec3f {
+pub(super) fn add(a: &Vec3f, b: &Vec3f) -> Vec3f {
     Vec3f::new(a.x + b.x, a.y + b.y, a.z + b.z)
 }
 
@@ -741,6 +768,10 @@ impl SuspensionModel for VanillaDwb {
         }
     }
 
+    fn kind(&self) -> SuspensionType {
+        SuspensionType::DoubleWishbone
+    }
+
     fn base(&self) -> &SuspensionBase {
         &self.base
     }
@@ -753,8 +784,8 @@ impl SuspensionModel for VanillaDwb {
         self.hub
     }
 
-    fn joints(&self) -> Vec<DistanceJoint> {
-        self.joints.clone()
+    fn joints(&self) -> Vec<JointId> {
+        self.joints.iter().map(|joint| joint.id).collect()
     }
 
     fn restore_step_state(&mut self, status: SuspensionStatus, steer_torque: f32) {

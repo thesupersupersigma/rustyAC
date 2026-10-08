@@ -600,7 +600,7 @@ const XYZ: [&str; 3] = ["x", "y", "z"];
 const WXYZ: [&str; 4] = ["w", "x", "y", "z"];
 const NINE: [&str; 9] = ["0", "1", "2", "3", "4", "5", "6", "7", "8"];
 
-/// The names of the joints in the recordings, in creation order.
+/// The names of the joints of a car on four double wishbones, in creation order.
 pub fn joint_names() -> Vec<String> {
     let mut names = vec!["fuel_tank".to_string()];
     for wheel in WHEELS {
@@ -611,11 +611,94 @@ pub fn joint_names() -> Vec<String> {
     names
 }
 
-/// Every value [`snapshot`] returns, in its order.
+/// What kind of joint a recorded joint is (it decides the joint's recorded values).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JointShape {
+    /// `dxJointFixed`: qrel, offset, erp, cfm
+    Fixed,
+    /// `dxJointDBall` (a rod): anchor1, anchor2, erp, cfm, distance
+    Rod,
+    /// `dxJointBall`: anchor1, anchor2, erp, cfm
+    Ball,
+    /// `dxJointSlider`: axis1, qrel, offset, cfm (of its limit-motor block)
+    Slider,
+}
+
+/// The rigid bodies and joints of one car under their names in the recordings. A car on four
+/// double wishbones has six bodies and 21 joints; a strut adds a body per corner and swaps
+/// two rods for a slider and a ball joint; a rigid axle is one body for both rear wheels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CarLayout {
+    /// The bodies in creation order.
+    pub bodies: Vec<String>,
+    /// The joints in creation order.
+    pub joints: Vec<(String, JointShape)>,
+}
+
+impl CarLayout {
+    /// Four double wishbones.
+    pub fn double_wishbone() -> CarLayout {
+        CarLayout {
+            bodies: BODIES.iter().map(|name| name.to_string()).collect(),
+            joints: joint_names()
+                .into_iter()
+                .enumerate()
+                .map(|(j, name)| (name, if j == 0 { JointShape::Fixed } else { JointShape::Rod }))
+                .collect(),
+        }
+    }
+
+    /// The layout of a built car.
+    pub fn of(chassis: &RollingChassis) -> CarLayout {
+        let mut bodies = vec![(chassis.body, "body".to_string()), (chassis.fuel_tank_body, "fuel_tank".to_string())];
+        if let Some(axle) = chassis.rigid_axle {
+            bodies.push((axle, "axle".to_string()));
+        }
+        let mut joints = vec![(chassis.fuel_tank_joint.id, "fuel_tank".to_string())];
+        for (wheel, suspension) in WHEELS.iter().zip(&chassis.suspensions) {
+            for (body, part) in suspension.bodies().into_iter().zip(["hub", "strut"]) {
+                bodies.push((body, format!("{part}_{wheel}")));
+            }
+            for (id, name) in suspension.joints().into_iter().zip(suspension.joint_names()) {
+                joints.push((id, format!("{wheel}.{name}")));
+            }
+        }
+        bodies.sort_by_key(|(body, _)| body.index);
+        joints.sort_by_key(|(id, _)| id.0);
+        let shape = |id: rustyac_ode::JointId| match chassis.core.world.joint(id).kind {
+            JointKind::Fixed { .. } => JointShape::Fixed,
+            JointKind::DBall { .. } => JointShape::Rod,
+            JointKind::Ball { .. } => JointShape::Ball,
+            JointKind::Slider { .. } => JointShape::Slider,
+            JointKind::Contact { .. } => unreachable!("a car is not built from contact joints"),
+        };
+        CarLayout {
+            bodies: bodies.into_iter().map(|(_, name)| name).collect(),
+            joints: joints.into_iter().map(|(id, name)| (name, shape(id))).collect(),
+        }
+    }
+
+    /// The ids of the joints in the order of [`CarLayout::of`].
+    pub fn joint_ids(chassis: &RollingChassis) -> Vec<rustyac_ode::JointId> {
+        let mut joints = vec![chassis.fuel_tank_joint.id];
+        for suspension in &chassis.suspensions {
+            joints.extend(suspension.joints());
+        }
+        joints.sort_by_key(|id| id.0);
+        joints
+    }
+}
+
+/// Every value [`snapshot`] returns for a car on four double wishbones, in its order.
 pub fn fields() -> Vec<Field> {
+    fields_of(&CarLayout::double_wishbone())
+}
+
+/// Every value [`snapshot`] returns for a car of this layout, in its order.
+pub fn fields_of(layout: &CarLayout) -> Vec<Field> {
     let mut out = Vec::new();
     field(&mut out, 'f', "car.finalSteerAngleSignal".into());
-    for body in BODIES {
+    for body in &layout.bodies {
         field(&mut out, 'f', format!("{body}.mass"));
         vector(&mut out, &format!("{body}.inertia"), &XYZ);
         for part in ["pre", "post"] {
@@ -631,18 +714,28 @@ pub fn fields() -> Vec<Field> {
         }
         field(&mut out, 'i', format!("{body}.tag"));
     }
-    for (j, name) in joint_names().iter().enumerate() {
+    for (name, shape) in &layout.joints {
         let n = format!("joint.{name}");
-        if j == 0 {
-            vector(&mut out, &format!("{n}.qrel"), &WXYZ);
-            vector(&mut out, &format!("{n}.offset"), &XYZ);
-        } else {
-            vector(&mut out, &format!("{n}.anchor1"), &XYZ);
-            vector(&mut out, &format!("{n}.anchor2"), &XYZ);
+        match shape {
+            JointShape::Fixed => {
+                vector(&mut out, &format!("{n}.qrel"), &WXYZ);
+                vector(&mut out, &format!("{n}.offset"), &XYZ);
+            }
+            JointShape::Rod | JointShape::Ball => {
+                vector(&mut out, &format!("{n}.anchor1"), &XYZ);
+                vector(&mut out, &format!("{n}.anchor2"), &XYZ);
+            }
+            JointShape::Slider => {
+                vector(&mut out, &format!("{n}.axis1"), &XYZ);
+                vector(&mut out, &format!("{n}.qrel"), &WXYZ);
+                vector(&mut out, &format!("{n}.offset"), &XYZ);
+            }
         }
-        field(&mut out, 'f', format!("{n}.erp"));
+        if *shape != JointShape::Slider {
+            field(&mut out, 'f', format!("{n}.erp"));
+        }
         field(&mut out, 'f', format!("{n}.cfm"));
-        if j != 0 {
+        if *shape == JointShape::Rod {
             field(&mut out, 'f', format!("{n}.distance"));
         }
         field(&mut out, 'i', format!("{n}.tag"));
@@ -704,11 +797,7 @@ pub fn snapshot(chassis: &RollingChassis) -> Vec<u64> {
         }
         out.push(chassis.core.world.body(body.id).tag as u32 as u64);
     }
-    let mut joints = vec![chassis.fuel_tank_joint.id];
-    for suspension in &chassis.suspensions {
-        joints.extend(suspension.joints().iter().map(|joint| joint.id));
-    }
-    for id in joints {
+    for id in CarLayout::joint_ids(chassis) {
         let joint = chassis.core.world.joint(id);
         match &joint.kind {
             JointKind::Fixed { qrel, offset, erp, cfm } => {
@@ -719,7 +808,16 @@ pub fn snapshot(chassis: &RollingChassis) -> Vec<u64> {
                 out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
                 out.extend([*erp, *cfm, *target_distance].map(f));
             }
-            _ => unreachable!("the chassis has rods and one fixed joint"),
+            JointKind::Ball { anchor1, anchor2, erp, cfm } => {
+                out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
+                out.extend([*erp, *cfm].map(f));
+            }
+            JointKind::Slider { axis1, qrel, offset, limot } => {
+                out.extend([axis1[0], axis1[1], axis1[2]].map(f));
+                out.extend(qrel.map(f));
+                out.extend([offset[0], offset[1], offset[2], limot.normal_cfm].map(f));
+            }
+            JointKind::Contact { .. } => unreachable!("a car is not built from contact joints"),
         }
         out.push(joint.tag as u32 as u64);
         let fb = joint.feedback.unwrap_or_default();
@@ -1238,7 +1336,16 @@ impl RollingChassis {
                     out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
                     out.extend([*erp, *cfm, *target_distance].map(f));
                 }
-                _ => unreachable!("the chassis has rods and one fixed joint"),
+                JointKind::Ball { anchor1, anchor2, erp, cfm } => {
+                    out.extend([anchor1[0], anchor1[1], anchor1[2], anchor2[0], anchor2[1], anchor2[2]].map(f));
+                    out.extend([*erp, *cfm, 0.0].map(f));
+                }
+                JointKind::Slider { axis1, qrel, offset, limot } => {
+                    out.extend([axis1[0], axis1[1], axis1[2]].map(f));
+                    out.extend(qrel.map(f));
+                    out.extend([offset[0], offset[1], offset[2], limot.normal_cfm].map(f));
+                }
+                JointKind::Contact { .. } => unreachable!("a state is saved while nothing touches the car"),
             }
         }
         for tyre in &self.tyres {
@@ -1416,8 +1523,10 @@ impl RollingChassis {
         }
         let ids: Vec<_> = self.core.world.joint_ids().collect();
         for id in ids {
-            let mut v = [0.0f32; 9];
-            for value in &mut v {
+            // nine words a joint, eleven for a slider
+            let words = if matches!(self.core.world.joint(id).kind, JointKind::Slider { .. }) { 11 } else { 9 };
+            let mut v = [0.0f32; 11];
+            for value in &mut v[..words] {
                 *value = f!();
             }
             match &mut self.core.world.joint_mut(id).kind {
@@ -1434,7 +1543,19 @@ impl RollingChassis {
                     *cfm = v[7];
                     *target_distance = v[8];
                 }
-                _ => unreachable!("the chassis has rods and one fixed joint"),
+                JointKind::Ball { anchor1, anchor2, erp, cfm } => {
+                    anchor1[..3].copy_from_slice(&v[0..3]);
+                    anchor2[..3].copy_from_slice(&v[3..6]);
+                    *erp = v[6];
+                    *cfm = v[7];
+                }
+                JointKind::Slider { axis1, qrel, offset, limot } => {
+                    axis1[..3].copy_from_slice(&v[0..3]);
+                    qrel.copy_from_slice(&v[3..7]);
+                    offset[..3].copy_from_slice(&v[7..10]);
+                    limot.normal_cfm = v[10];
+                }
+                JointKind::Contact { .. } => unreachable!("a state is saved while nothing touches the car"),
             }
         }
         let count = rig::output_fields().len();

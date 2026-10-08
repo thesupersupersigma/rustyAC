@@ -493,6 +493,39 @@ impl PhysicsCore {
         FixedJoint { id }
     }
 
+    /// `PhysicsCore::createSliderJoint` @ 0x1402cc3f0: a slider joint between two bodies
+    /// along `axis` (world), which is normalised first (left as it is when its length is 0).
+    #[allow(clippy::double_comparisons)]
+    pub fn create_slider_joint(&mut self, body1: RigidBody, body2: RigidBody, axis: &Vec3f) -> JointId {
+        let id = self.world.joint_create_slider();
+        self.world.joint_attach(id, Some(body1.id), Some(body2.id));
+        let (mut x, mut y, mut z) = (axis.x, axis.y, axis.z);
+        let length = crate::math::sqrtf((x * x + y * y) + z * z);
+        if length < 0.0 || length > 0.0 {
+            let inverse = 1.0 / length;
+            x *= inverse;
+            y *= inverse;
+            z *= inverse;
+        }
+        self.world.joint_set_slider_axis(id, x, y, z);
+        if self.joint_feedback {
+            self.world.joint_set_feedback(id, true);
+        }
+        id
+    }
+
+    /// `PhysicsCore::createBallJoint` @ 0x1402cc010: a ball joint between two bodies at a
+    /// world point.
+    pub fn create_ball_joint(&mut self, body1: RigidBody, body2: RigidBody, anchor: &Vec3f) -> JointId {
+        let id = self.world.joint_create_ball();
+        self.world.joint_attach(id, Some(body1.id), Some(body2.id));
+        self.world.joint_set_ball_anchor(id, anchor.x, anchor.y, anchor.z);
+        if self.joint_feedback {
+            self.world.joint_set_feedback(id, true);
+        }
+        id
+    }
+
     /// `PhysicsCore::reseatDistanceJointLocal` @ 0x1402cd480: both anchors, given in their
     /// body's own coordinates, are converted to world (`dBodyGetRelPointPos`) and set again;
     /// then the rod gets its original length back (`dJointSetDBallDistance`).

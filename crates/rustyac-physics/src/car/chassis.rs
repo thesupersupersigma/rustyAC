@@ -23,7 +23,8 @@ use super::feed::{CarControls, ChassisFeed, EngineFeed, VibrationDef};
 use super::shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 use super::heave_spring::HeaveSpring;
 use super::setup::SetupManager;
-use super::suspension::{SuspensionModel, VanillaDwb};
+use super::suspension::{SuspensionModel, SuspensionType, VanillaDwb};
+use super::suspension_strut::VanillaStrut;
 use super::telemetry::{PhysicsPage, PhysicsPageWriter};
 use crate::track::timing::{FinishContext, InvalidatorAction, InvalidatorInput};
 use crate::track::{LapInvalidator, SplineLocator, TimeTransponder, Track};
@@ -381,6 +382,10 @@ pub struct RollingChassis {
     pub fuel_tank_body: RigidBody,
     /// `Car::fuelTankJoint`
     pub fuel_tank_joint: FixedJoint,
+    /// `Car::rigidAxle`: the one body of a rigid rear axle (`[REAR] TYPE=AXLE`).
+    pub rigid_axle: Option<RigidBody>,
+    /// `Car::axleTorqueReaction` (`[AXLE] TORQUE_REACTION`)
+    pub axle_torque_reaction: f32,
     /// `Car::suspensions`: LF, RF, LR, RR. The suspension slot.
     pub suspensions: Vec<Box<dyn SuspensionModel>>,
     /// `Car::tyres`
@@ -879,6 +884,8 @@ impl RollingChassis {
             body,
             fuel_tank_body,
             fuel_tank_joint,
+            rigid_axle: None,
+            axle_torque_reaction: 0.0,
             suspensions: Vec::new(),
             tyres: Vec::new(),
             heave_springs: [HeaveSpring::default(); 2],
@@ -995,14 +1002,26 @@ impl RollingChassis {
         for index in 0..4 {
             let section = if index < 2 { "FRONT" } else { "REAR" };
             let kind = suspensions_ini.get_string(section, "TYPE");
-            if kind != "DWB" {
-                return Err(format!(
-                    "{}: [{section}] TYPE={kind}: only the double-wishbone suspension (DWB) is ported",
-                    data_path.join("suspensions.ini").display()
-                ));
-            }
-            let suspension = VanillaDwb::new(&mut chassis.core, body, data_path, index, rand.next())?;
-            chassis.suspensions.push(Box::new(suspension));
+            // the order of the game's string compares: STRUT, DWB, ML, AXLE
+            let suspension: Box<dyn SuspensionModel> = match kind.as_str() {
+                "STRUT" => Box::new(VanillaStrut::new(&mut chassis.core, body, data_path, index, rand.next())?),
+                "DWB" => Box::new(VanillaDwb::new(&mut chassis.core, body, data_path, index, rand.next())?),
+                _ => {
+                    // the game prints this and calls exit(1)
+                    return Err(format!(
+                        "{}: ERROR: Cannot create suspension type: {kind}  for wheel:{index}{}",
+                        data_path.join("suspensions.ini").display(),
+                        if kind == "COSMIC" {
+                            " (COSMIC is Custom Shaders Patch's own suspension: this car needs CSP)"
+                        } else if kind.is_empty() && !suspensions_ini.has_section(section) {
+                            " (the file has no readable sections: this car's data is encrypted for Custom Shaders Patch)"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+            };
+            chassis.suspensions.push(suspension);
             let mut tyre = VanillaTyre::new();
             let (result, _) =
                 chassis.with_tyre_ports(index as usize, None, |hub, _ground, car| tyre.init(hub, data_path, index, Some(&*car)));
@@ -1010,9 +1029,12 @@ impl RollingChassis {
             chassis.tyres.push(tyre);
         }
 
-        // Car::initHeaveSprings @ 0x140273f40 (all four wheels are double wishbone here)
-        chassis.heave_springs[0].init(data_path, true)?;
-        chassis.heave_springs[1].init(data_path, false)?;
+        // Car::initHeaveSprings @ 0x140273f40: only when all four wheels are double wishbone
+        // ("IGNORING HEAVE SPRING BECAUSE SUSPENSION %d  IS NOT DOUBLE WISHBONE" otherwise)
+        if chassis.suspensions.iter().all(|suspension| suspension.kind() == SuspensionType::DoubleWishbone) {
+            chassis.heave_springs[0].init(data_path, true)?;
+            chassis.heave_springs[1].init(data_path, false)?;
+        }
         // Car::buildARBS @ 0x14026f750
         chassis.antiroll_bars[0].k = suspensions_ini.get_float("ARB", "FRONT")?;
         chassis.antiroll_bars[1].k = suspensions_ini.get_float("ARB", "REAR")?;

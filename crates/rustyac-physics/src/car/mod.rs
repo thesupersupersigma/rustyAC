@@ -59,6 +59,7 @@ pub mod replay;
 pub mod setup;
 pub mod shift_assists;
 pub mod suspension;
+pub mod suspension_strut;
 pub mod telemetry;
 pub mod vanilla_car;
 
@@ -80,4 +81,5 @@ pub use setup::{SetupItem, SetupManager};
 pub use shift_assists::{AutoBlip, AutoShifter, Autoclutch, GearChanger};
 pub use telemetry::{PhysicsPage, PhysicsPageWriter};
 pub use vanilla_car::{CarControlsInput, ControlsProvider, ScriptedDevice, VanillaCar};
-pub use suspension::{Damper, SuspensionBase, SuspensionModel, SuspensionStatus, VanillaDwb};
+pub use suspension::{Damper, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType, VanillaDwb};
+pub use suspension_strut::VanillaStrut;
