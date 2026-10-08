@@ -483,8 +483,12 @@ impl SetupManager {
     /// do. Call it after the default round trip and before the first step. Returns one line
     /// per thing set.
     ///
-    /// Not ported: gear sets (`[GEARS] USE_GEARSET`), the ABS, turbo, ERS and engine-brake
-    /// spinners, the pit-stop presets (`.sp`).
+    /// The hybrid's three knobs (`MGUK_DELIVERY`, `MGUK_RECOVERY`, `MGUH_MODE`, each a spinner
+    /// only when the cockpit has the control) are stepped to from the current setting by the
+    /// cockpit's own cyclers, as the spinners' handler 0x14016a8f0 does it.
+    ///
+    /// Not ported: gear sets (`[GEARS] USE_GEARSET`), the ABS, turbo and engine-brake
+    /// spinners (a `[BRAKE_ENGINE]` is named in the log), the pit-stop presets (`.sp`).
     pub fn load_setup_file(&mut self, chassis: &mut RollingChassis, setup: &IniReader, saved: &IniReader) -> Result<Vec<String>, String> {
         let mut log = Vec::new();
         if !saved.ready {
@@ -547,6 +551,42 @@ impl SetupManager {
                     log.push(format!("TRACTION_CONTROL = level {wanted} of {levels} (was {current})"));
                 }
             }
+        }
+        // the electronics tab's hybrid spinners: `n = (int)((float)value - current)`, then |n|
+        // calls of the cycler (each delivery click sets the map anew, its filters restart)
+        if let Some(ers) = &chassis.ers {
+            let count = ers.power_controllers.len() as i32;
+            let (delivery, recovery, heat) = (ers.cockpit_delivery_profile, ers.cockpit_recovery, ers.cockpit_mgu_h_mode);
+            if count > 0 && delivery && saved.has_section("MGUK_DELIVERY") {
+                let wanted = clamp_position(value_of("MGUK_DELIVERY"), 0, count - 1);
+                let current = chassis.cockpit.ers_power_index;
+                let steps = (wanted as f32 - current as f32) as i32;
+                for _ in 0..steps.abs() {
+                    chassis.cycle_ers_power(if steps < 0 { -1 } else { 1 });
+                }
+                log.push(format!("MGUK_DELIVERY = profile {wanted} of {count} (was {current})"));
+            }
+            if count > 0 && recovery && saved.has_section("MGUK_RECOVERY") {
+                let wanted = clamp_position(value_of("MGUK_RECOVERY"), 0, 10);
+                let current = chassis.cockpit.ers_recovery;
+                let steps = (wanted as f32 - current as f32) as i32;
+                for _ in 0..steps.abs() {
+                    chassis.cycle_ers_recovery(if steps < 0 { -1 } else { 1 });
+                }
+                log.push(format!("MGUK_RECOVERY = {} % (was {} %)", wanted * 10, current * 10));
+            }
+            if heat && saved.has_section("MGUH_MODE") {
+                let wanted = clamp_position(value_of("MGUH_MODE"), 0, 1);
+                let current = chassis.cockpit.ers_heat_charging as i32;
+                // (the cycler is a toggle: one call per step of the spinner)
+                for _ in 0..(wanted - current).abs() {
+                    chassis.cycle_ers_heat_charging();
+                }
+                log.push(format!("MGUH_MODE = {} (was {})", if wanted != 0 { "battery" } else { "motor" }, if current != 0 { "battery" } else { "motor" }));
+            }
+        }
+        if chassis.engine_brake_settings() != 0 && saved.has_section("BRAKE_ENGINE") {
+            log.push(format!("BRAKE_ENGINE = {}: not applied (the engine-brake spinner is not ported)", value_of("BRAKE_ENGINE")));
         }
         // the generic tabs
         let clicks = setup.has_section("DISPLAY_METHOD");

@@ -254,6 +254,10 @@ pub struct SimSetup {
     /// the clock then, as `RaceManager::setCurrentSession` sets it); false: at clock 0, as in
     /// files recorded before this was known.
     pub session_starts_at_spawn: bool,
+    /// On a track with `data/drs_zones.ini` the wing opens only in its zones
+    /// (`DRSManager::isDRSAvailable`); false: everywhere, as in files recorded before the zones
+    /// were ported.
+    pub drs_zones: bool,
     /// `getFFGlobalGain` of the driver's device (a wheel's force-feedback gain; else 1).
     pub ff_gain: f32,
     pub oracle: Option<OracleSetup>,
@@ -279,6 +283,7 @@ impl Default for SimSetup {
             auto_shifter: false,
             auto_blip: None,
             session_starts_at_spawn: false,
+            drs_zones: false,
             ff_gain: 1.0,
             oracle: None,
             track: String::new(),
@@ -363,6 +368,9 @@ impl SimSetup {
         }
         if self.session_starts_at_spawn {
             put("session_starts_at_spawn", "1".to_string());
+        }
+        if self.drs_zones {
+            put("drs_zones", "1".to_string());
         }
         put("ff_gain", format!("{:?}", self.ff_gain));
         // the session's additions, each only when it is not the default (older files have none)
@@ -502,6 +510,7 @@ impl SimSetup {
                 "auto_shifter" => setup.auto_shifter = flag(),
                 "auto_blip" => setup.auto_blip = Some(flag()),
                 "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
+                "drs_zones" => setup.drs_zones = flag(),
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,

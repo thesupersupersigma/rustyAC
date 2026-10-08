@@ -447,7 +447,7 @@ fn the_session_travels_in_the_file() {
         session_type: Some(1),
         arm_first_lap: Some(true),
     };
-    let setup = SimSetup { session: session.clone(), auto_blip: Some(false), session_starts_at_spawn: true, ..SimSetup::default() };
+    let setup = SimSetup { session: session.clone(), auto_blip: Some(false), session_starts_at_spawn: true, drs_zones: true, ..SimSetup::default() };
     let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("session.ryin");
     InputFile { setup: setup.clone(), steps: vec![StepInput::default()] }.write(&file).unwrap();
     let back = InputFile::read(&file).unwrap();
@@ -458,4 +458,61 @@ fn the_session_travels_in_the_file() {
     for key in ["wind=", "dynamic_track=", "ballast_kg=", "restrictor=", "penalties=", "assists=", "setup_file=", "session_type=", "arm_first_lap="] {
         assert!(!plain.contains(key), "{key} in a plain header");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 16: hybrids.
+
+/// The static shared-memory page holds the car as it was built (`CarAvatar::initPhysics`): the
+/// SF15-T's turbo has a controller that gives no boost at a standing engine, and from the
+/// first step on the turbo's own number is that controller's.
+#[test]
+fn the_static_page_holds_the_hybrid_as_built() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata");
+    if !root.join("ks_ferrari_sf15t/ers.ini").is_file() {
+        eprintln!("NOT TESTED: cardata/ks_ferrari_sf15t is missing (the SF15-T's extracted data files)");
+        return;
+    }
+    let setup = SimSetup { car: "ks_ferrari_sf15t".to_string(), ..SimSetup::default() };
+    let mut sim = GameSim::new(setup, Box::new(ReplaySource::default())).unwrap();
+    let built = rustyac_game::shm::ShmSink::static_page(&sim);
+    for _ in 0..5 {
+        sim.step_recorded(&StepInput::default()).unwrap();
+    }
+    let page = rustyac_game::shm::ShmSink::static_page(&sim);
+    // [TURBO_0] MAX_BOOST=3.5
+    assert_eq!(page.get_f("maxTurboBoost"), 3.5);
+    assert_eq!(page.get_f("maxPower"), built.get_f("maxPower"));
+    assert!(page.get_f("maxPower") > 0.0);
+    assert_eq!((page.get_i("hasERS"), page.get_i("hasKERS")), (1, 0));
+    // six delivery profiles, thirteen engine-brake settings, 4000 kJ a lap
+    assert_eq!((page.get_i("ersPowerControllerCount"), page.get_i("engineBrakeSettingsCount")), (6, 13));
+    assert_eq!(page.get_f("ersMaxJ"), 4_000_000.0);
+}
+
+/// A saved setup's hybrid knobs are stepped to by the cockpit's cyclers.
+#[test]
+fn a_saved_setup_sets_the_hybrid_knobs() {
+    use rustyac_physics::data::ini::IniReader;
+    let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata/ks_ferrari_sf15t");
+    if !data.join("ers.ini").is_file() {
+        eprintln!("NOT TESTED: cardata/ks_ferrari_sf15t is missing (the SF15-T's extracted data files)");
+        return;
+    }
+    let mut car = VanillaCar::new(&data, ChassisEnvironment::default(), Box::new(Ground::Flat), 1, 60_000.0, ScriptedDevice::default()).unwrap();
+    let chassis = &mut car.car;
+    assert_eq!((chassis.cockpit.ers_power_index, chassis.cockpit.ers_recovery, chassis.cockpit.ers_heat_charging), (1, 5, true));
+    let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let file = folder.join("hybrid_setup.ini");
+    std::fs::write(&file, "[MGUK_DELIVERY]\nVALUE=4\n\n[MGUK_RECOVERY]\nVALUE=8\n\n[MGUH_MODE]\nVALUE=0\n\n[BRAKE_ENGINE]\nVALUE=3\n").unwrap();
+    let saved = IniReader::load(&file).unwrap();
+    let setup = IniReader::load(&data.join("setup.ini")).unwrap();
+    let mut manager = std::mem::take(&mut chassis.setup_manager);
+    let log = manager.load_setup_file(chassis, &setup, &saved).unwrap();
+    chassis.setup_manager = manager;
+    assert_eq!((chassis.cockpit.ers_power_index, chassis.cockpit.ers_recovery, chassis.cockpit.ers_heat_charging), (4, 8, false));
+    let ers = chassis.ers.as_ref().unwrap();
+    assert_eq!((ers.kinetic_recovery, ers.is_heat_charging_battery), (8.0f32 * 0.1, false));
+    assert!(log.iter().any(|line| line.starts_with("MGUK_DELIVERY = profile 4")), "{log:?}");
+    assert!(log.iter().any(|line| line.starts_with("BRAKE_ENGINE = 3: not applied")), "{log:?}");
 }

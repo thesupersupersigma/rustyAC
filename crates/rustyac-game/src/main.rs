@@ -57,6 +57,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         track: options.track.clone().unwrap_or_default(),
         spawn: options.spawn.clone(),
         session_starts_at_spawn: true,
+        drs_zones: true,
         ..SimSetup::default()
     };
     // the device the bindings name decides one aid (a pad has no clutch pedal)

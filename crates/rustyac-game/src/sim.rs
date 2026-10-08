@@ -471,11 +471,34 @@ pub struct CarInfo {
     pub track_folder: Option<PathBuf>,
 }
 
+/// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
+/// `CarPhysicsInfo`): from the first step on a turbo's controller has rewritten the boost
+/// these two come from.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhysicsInfo {
+    pub max_power_w: f32,
+    pub max_turbo_boost: f32,
+}
+
+impl PhysicsInfo {
+    fn of(car: &VanillaCar<Driver>) -> PhysicsInfo {
+        match &car.car.drivetrain {
+            Some(drivetrain) => {
+                let engine = drivetrain.engine();
+                PhysicsInfo { max_power_w: engine.get_max_power_w(), max_turbo_boost: engine.get_max_turbo_boost() }
+            }
+            None => PhysicsInfo::default(),
+        }
+    }
+}
+
 /// One car on the endless flat road or on a track, and the count of its steps.
 pub struct GameSim {
     pub setup: SimSetup,
     pub data_path: PathBuf,
     pub car: VanillaCar<Driver>,
+    /// The car's numbers of the static shared-memory page, taken before its first step.
+    pub physics_info: PhysicsInfo,
     /// Steps run so far; the next one runs at `setup.time_of_step(steps)`.
     pub steps: u64,
     /// The track, and its folder.
@@ -564,6 +587,8 @@ fn build_car(
         // the session of race.ini; without one, a hot-lap session from the hot-lap start
         env.session_type = session.session_type.unwrap_or(if setup.spawn == "hotlap" { 4 } else { 1 });
     }
+    // the track's DRS zones (files recorded before they were ported have the wing free everywhere)
+    env.track_drs_zones = setup.drs_zones;
     if setup.session_starts_at_spawn {
         // RaceManager::setCurrentSession: the session starts now (the wind's slow swing and
         // the automatic gearbox's 300 ms count from here)
@@ -681,7 +706,8 @@ impl GameSim {
         }
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
-        Ok(GameSim { setup, data_path, car, steps: 0, track, track_folder, spawn, track_summary, lap_db })
+        let physics_info = PhysicsInfo::of(&car);
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db })
     }
 
     /// The physics clock after the last step, ms.
@@ -723,6 +749,7 @@ impl GameSim {
         std::mem::swap(&mut car.device, &mut self.car.device);
         // the engine's step count goes on (lap times carry its remainder of three)
         car.car.step_counter = self.car.car.step_counter;
+        self.physics_info = PhysicsInfo::of(&car);
         self.car = car;
         self.lap_db = LapDb::new(self.lap_db.sector_count);
         Ok(())
@@ -792,8 +819,6 @@ impl GameSim {
         }
         if events & event::AUTO_SHIFTER != 0 {
             self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
-            // (the toggle lives on in a car built anew, as in the game)
-            self.setup.auto_shifter = self.car.car.auto_shifter.is_active;
         }
         // the cockpit of the hybrid system and the engine brake: what the game's notifiers
         // and key handler do on a press, with the game's messages on the console

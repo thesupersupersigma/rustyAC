@@ -1312,8 +1312,13 @@ impl RollingChassis {
             }
             if let Some(ers) = &self.ers {
                 ers.save_state(&mut out);
+            }
+            // the cockpit's settings: of an ERS car, and of a car with engine-brake settings
+            if self.ers.is_some() || self.engine_brake_settings() > 1 {
                 let cockpit = &self.cockpit;
                 out.extend([cockpit.engine_brake as u32, cockpit.ers_power_index as u32, cockpit.ers_recovery as u32, cockpit.ers_heat_charging as u32]);
+            }
+            if self.ers.is_some() {
                 out.extend([self.tyres[0].inputs.electric_torque, self.tyres[1].inputs.electric_torque].map(f32::to_bits));
             }
         }
@@ -1523,11 +1528,15 @@ impl RollingChassis {
             }
             if let Some(ers) = &mut self.ers {
                 ers.load_state(&mut words)?;
-                let mut next = || words.next().ok_or("the saved state is too short".to_string());
+            }
+            let mut next = || words.next().ok_or("the saved state is too short".to_string());
+            if self.ers.is_some() || self.engine_brake_settings() > 1 {
                 self.cockpit.engine_brake = next()? as i32;
                 self.cockpit.ers_power_index = next()? as i32;
                 self.cockpit.ers_recovery = next()? as i32;
                 self.cockpit.ers_heat_charging = next()? != 0;
+            }
+            if self.ers.is_some() {
                 self.tyres[0].inputs.electric_torque = f32::from_bits(next()?);
                 self.tyres[1].inputs.electric_torque = f32::from_bits(next()?);
             }

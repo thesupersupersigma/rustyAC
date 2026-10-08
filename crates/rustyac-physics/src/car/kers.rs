@@ -72,7 +72,11 @@ impl Kers {
             return Ok(None);
         }
         let version = ini.get_int("HEADER", "VERSION")?;
-        let brake_power = car.brake_system.as_deref().map(|brakes| brakes.get_brake_power()).unwrap_or(0.0);
+        let brake_power = match car.brake_system.as_deref() {
+            Some(brakes) => brakes.get_brake_power(),
+            // (a chassis that is fed its brakes: the number its brake system would hold)
+            None => IniReader::load(&data_path.join("brakes.ini"))?.get_float("DATA", "MAX_TORQUE")?,
+        };
         let mut kers = Kers {
             attachment: KersAttachment::Engine,
             input: 0.0,

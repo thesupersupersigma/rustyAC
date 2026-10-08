@@ -381,11 +381,12 @@ impl ShmSink {
             if let Ok(curve) = ini.and_then(|ini| ini.get_curve("HEADER", "POWER_CURVE")) {
                 page.set_f("maxTorque", curve.get_value(engine.get_max_torque_rpm()));
             }
-            page.set_f("maxPower", engine.get_max_power_w());
+            // (`CarAvatar::initPhysics` reads it right after building the car)
+            page.set_f("maxPower", sim.physics_info.max_power_w);
             // `acEngine.defaultEngineLimiter`: nothing has moved the limiter when the page is written
             page.set_i("maxRpm", engine.get_limiter_rpm());
             // `CarAvatar::initPhysics`: the turbos' boost added up, the cockpit's engine-brake settings
-            page.set_f("maxTurboBoost", engine.get_max_turbo_boost());
+            page.set_f("maxTurboBoost", sim.physics_info.max_turbo_boost);
             page.set_i("engineBrakeSettingsCount", engine.coast_settings_count());
         }
         // the hybrid system (`physicsInfo.hasKERS`, `hasERS`, the two allowances in joules)

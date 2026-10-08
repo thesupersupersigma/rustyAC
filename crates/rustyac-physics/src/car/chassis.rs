@@ -92,6 +92,9 @@ pub struct ChassisEnvironment {
     pub wind_direction_deg: f32,
     /// `DRSManager::isDRSAvailable` of the track for this car: true on a track without DRS zones
     pub drs_zone_available: bool,
+    /// On a track, `DRSManager::isDRSAvailable` is asked of the track's own zones
+    /// (`data/drs_zones.ini`); false: `drs_zone_available` stands in there too.
+    pub track_drs_zones: bool,
     /// `PhysicsEngine::allowedTyresOut`: more tyres than this off the track is a cut or a
     /// penalty (by `penalty_mode`); -1 = no limit (the engine's own default).
     pub allowed_tyres_out: i32,
@@ -169,6 +172,7 @@ impl Default for ChassisEnvironment {
             wind_speed: 0.0,
             wind_direction_deg: 0.0,
             drs_zone_available: true,
+            track_drs_zones: true,
             allowed_tyres_out: -1,
             session_type: 1,
             air_density_override: None,

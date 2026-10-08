@@ -880,8 +880,8 @@ impl AeroModel for VanillaAero {
         // 6: DRS
         // DRSManager::isDRSAvailable: the track's zones, by where the car was after the last step
         let zone_available = match &car.track {
-            Some(track) => track.is_drs_available(car.spline_locator_data.npos),
-            None => car.env.drs_zone_available,
+            Some(track) if car.env.track_drs_zones => track.is_drs_available(car.spline_locator_data.npos),
+            _ => car.env.drs_zone_available,
         };
         base.drs.step(car, &mut base.wings, zone_available);
         // 7: AeroMap::step. A car without wings has the old one-body aero.

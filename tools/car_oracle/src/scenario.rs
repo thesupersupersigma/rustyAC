@@ -127,6 +127,9 @@ pub struct Whole {
     pub conditions: Conditions,
     /// Task 16: the KERS / ERS button is held whenever the throttle is above a half.
     pub kers_held: bool,
+    /// Task 16: the DRS button is pressed for 30 ms every 1.2 s (the wing opens where the
+    /// track's zones allow it).
+    pub drs_pulsed: bool,
 }
 
 /// The session of a Task 15 scenario: what the game reads from `cfg/race.ini` (and a saved
@@ -590,6 +593,15 @@ pub fn track() -> Vec<Scenario> {
             TrackKind::Timing,
         ),
         with_button("spa_hybrid_lap", "spa_lap with the KERS / ERS button held on the throttle", 60.0, TrackKind::Lap),
+        Scenario {
+            whole: Whole { on: true, kers_held: true, drs_pulsed: true, ..Whole::default() },
+            ..on_track(
+                "spa_drs_timing",
+                "spa_hybrid_timing with the DRS button pressed every 1.2 s: the wing opens only in the track's DRS zones (data/drs_zones.ini; the first one runs over the start line) and shuts on leaving one",
+                60.0,
+                TrackKind::Timing,
+            )
+        },
     ]);
     scenarios.extend(vec![
         on_track("spa_launch", "from the hot-lap start flat out down the pit straight, then on the brakes for La Source and round it", 24.0, TrackKind::Launch),
@@ -681,8 +693,9 @@ pub struct Driver {
     lever: i32,
     lever_target: i32,
     extra: [f32; 3],
-    /// `Whole::kers_held` of the scenario.
+    /// `Whole::kers_held` and `Whole::drs_pulsed` of the scenario.
     kers_held: bool,
+    drs_pulsed: bool,
     /// The track a track scenario drives on (the Rust port of it: only its AI line is read).
     pub track: Option<std::sync::Arc<rustyac_physics::track::Track>>,
     pub follower: Follower,
@@ -703,6 +716,7 @@ impl Scenario {
             follower: Follower::default(),
             kind: self.kind,
             kers_held: self.whole.kers_held,
+            drs_pulsed: self.whole.drs_pulsed,
             auto_clutch: self.auto_clutch,
             paddle: 0,
             paddle_up: false,
@@ -826,6 +840,9 @@ impl Driver {
         let mut c = self.controls_of(car, t, c);
         if self.kers_held && c.gas > 0.5 {
             c.kers = true;
+        }
+        if self.drs_pulsed {
+            c.drs = t % 1.2 < 0.03;
         }
         c
     }
