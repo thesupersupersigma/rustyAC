@@ -10,6 +10,8 @@
 //! audio_oracle compare --tape <file> [--camera ...] [--frames <n>] [--out <dir>]
 //!     Runs the game's side twice and the port once (three processes) and compares the logs
 //!     line by line and the WAVs byte by byte.
+//! audio_oracle golden --tape <file> --camera <c> --frames <n> --out-file <file.augold>
+//!     Writes the golden file of `crates/rustyac-audio/tests/golden.rs` from the game's own run.
 //! audio_oracle dsp [--count <n>] [--seed <n>]
 //!     The two DSP plug-ins: the game's own callbacks against the port's on random buffers.
 //! audio_oracle survey [--out <file.md>]
@@ -30,11 +32,12 @@ mod survey;
 use std::path::{Path, PathBuf};
 
 use drive::{Camera, Drive, BLOCK, DT, SAMPLE_RATE};
-use rustyac_audio::car::{CarInfo, SimView};
-use rustyac_audio::engine::{AudioEngine, EngineFiles};
+use rustyac_audio::car::CarInfo;
+use rustyac_audio::engine::EngineFiles;
 use rustyac_audio::fmod::{log, raw};
-use rustyac_audio::sim::{AudioWorld, CarSound, FrameInput, PhysicsEvent};
-use rustyac_audio::track::{cache_surface_sounds, Scene, TrackAudio};
+use rustyac_audio::golden::{run_session, Golden, GoldenFrame, Session, SessionFrame};
+use rustyac_audio::sim::PhysicsEvent;
+use rustyac_audio::track::Scene;
 
 const DEFAULT_ACS: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\acs.exe";
 
@@ -106,6 +109,7 @@ fn main() {
     let result = parse().and_then(|args| match args.command.as_str() {
         "run" => run(&args),
         "compare" => compare(&args),
+        "golden" => golden(&args),
         "dsp" => dsp_check::run(&args),
         "survey" => survey::run(&args),
         other => Err(format!("unknown command {other}")),
@@ -184,28 +188,44 @@ fn run(args: &Args) -> Result<(), String> {
 
 /// The port's side: the same session through `rustyac_audio`.
 fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfaces: &[(String, String)], master: f32) -> Result<(), String> {
-    log::mark("setup");
     let files = EngineFiles { content_root: ac.to_path_buf(), audio_engine_ini: root.join("system/cfg/audio_engine.ini"), audio_ini: root.join("cfg/audio.ini") };
-    let mut engine = AudioEngine::new(files)?;
-    engine.set_volume(master);
     let track = match (scene, drive.track_data_relative()) {
-        (Some(scene), Some(relative)) => Some(TrackAudio::new(&mut engine, scene, &root.join(relative))?),
+        (Some(scene), Some(relative)) => Some((scene, root.join(relative))),
         _ => None,
     };
-    cache_surface_sounds(&mut engine, surfaces);
-    let info = CarInfo { unix_name: drive.car.clone(), guid: 0, data_folder: root.join("content/cars").join(&drive.car).join("data"), car_cameras_external_sound: Vec::new() };
-    let car = CarSound::new(&mut engine, info)?;
-    let mut world = AudioWorld::new(engine, track, vec![car]);
-    let sim = SimView { focused_car_index: 0, camera: Some(drive.camera.view()) };
-    // the session's camera is set up: ACCameraManager::setAudioDistanceScale
-    world.set_audio_distance_scale(&sim, 1.0);
-    for (i, frame) in drive.frames.iter().enumerate() {
-        log::mark(&format!("frame {i}"));
-        let events: Vec<PhysicsEvent> = frame.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect();
-        world.frame(&FrameInput { cars: std::slice::from_ref(&frame.car), events: &events, sim, listener: Some(frame.listener), dt: DT });
-    }
-    log::mark("teardown");
-    world.destroy();
+    let car = CarInfo { unix_name: drive.car.clone(), guid: 0, data_folder: root.join("content/cars").join(&drive.car).join("data"), car_cameras_external_sound: Vec::new() };
+    let session = Session { files, master, track, surfaces, car, camera: drive.camera.view(), dt: DT };
+    let events: Vec<Vec<PhysicsEvent>> = drive.frames.iter().map(|f| f.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect()).collect();
+    run_session(session, drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener }))
+}
+
+/// `audio_oracle golden --tape <file> --camera <c> --frames <n> --out-file <file.augold>`: the
+/// game's own sound code on the first frames of a drive; the drive's inputs, the answers its
+/// run got about its events' states, and its log's line count and hash go into a golden file
+/// for `cargo test -p rustyac-audio`.
+fn golden(args: &Args) -> Result<(), String> {
+    let tape = args.tape.as_ref().ok_or("golden needs --tape <file.audiotape>")?;
+    let path = args.out_file.as_ref().ok_or("golden needs --out-file <file.augold>")?;
+    let drive = Drive::load(tape, args.camera, args.frames)?;
+    let out = std::path::absolute(&args.out).map_err(|e| e.to_string())?.join("golden");
+    child(args, "ac", &out, None)?;
+    let log_file = out.join(format!("{}.log", file_stem(&drive, "ac")));
+    let bytes = std::fs::read(&log_file).map_err(|e| format!("{}: {e}", log_file.display()))?;
+    let (lines, hash) = log::summary_of(&bytes);
+    let answers = log::answers_of(&String::from_utf8_lossy(&bytes));
+    let golden = Golden {
+        car: drive.car.clone(),
+        track: drive.track_folder.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        layout: drive.layout.clone(),
+        camera: drive.camera,
+        frames: drive.frames.iter().map(|f| GoldenFrame { car: f.car.clone(), events: f.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect() }).collect(),
+        answers,
+        lines,
+        hash,
+    };
+    golden.write(path)?;
+    let _ = std::fs::remove_dir_all(&out);
+    println!("{}: {} frames, {} lines, hash {hash:016x}, {} answers, {} bytes", path.display(), golden.frames.len(), lines, golden.answers.len(), std::fs::metadata(path).map(|m| m.len()).unwrap_or(0));
     Ok(())
 }
 
@@ -269,9 +289,10 @@ fn samples(wav: &[u8]) -> Vec<i16> {
     wav[start..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
 }
 
-/// How far two mixes are apart: the largest difference of their levels over windows of a
-/// second (dB, only where one of them is above -60 dB), and the level of their difference
-/// relative to the first one (dB; minus infinity for equal files).
+/// How far two mixes are apart, by their levels over windows of a second (only where one of
+/// them is above -60 dB): the root mean square of the windows' level differences and the
+/// largest one, dB. Two runs of the same calls differ sample by sample (FMOD picks samples and
+/// start offsets with random numbers), so the levels are what can be compared.
 fn apart(a: &[i16], b: &[i16]) -> (f64, f64) {
     let window = (drive::SAMPLE_RATE as usize) * 2;
     let level = |x: &[i16]| -> f64 {
@@ -279,17 +300,17 @@ fn apart(a: &[i16], b: &[i16]) -> (f64, f64) {
         10.0 * (sum / x.len().max(1) as f64 / (32768.0 * 32768.0)).max(1e-12).log10()
     };
     let n = a.len().min(b.len());
-    let mut worst = 0.0f64;
+    let (mut worst, mut squares, mut count) = (0.0f64, 0.0f64, 0u32);
     for start in (0..n).step_by(window) {
         let end = (start + window).min(n);
         let (la, lb) = (level(&a[start..end]), level(&b[start..end]));
         if la.max(lb) > -60.0 {
             worst = worst.max((la - lb).abs());
+            squares += (la - lb) * (la - lb);
+            count += 1;
         }
     }
-    let difference: f64 = a[..n].iter().zip(&b[..n]).map(|(x, y)| ((*x as f64) - (*y as f64)).powi(2)).sum();
-    let signal: f64 = a[..n].iter().map(|x| (*x as f64).powi(2)).sum();
-    (worst, 10.0 * (difference / signal.max(1.0)).max(1e-12).log10())
+    ((squares / count.max(1) as f64).sqrt(), worst)
 }
 
 /// Both sides of a drive, compared.
@@ -327,11 +348,13 @@ fn compare(args: &Args) -> Result<(), String> {
         if same {
             "identical".to_string()
         } else {
-            let (level, difference) = apart(a, b);
-            format!("levels within {level:.2} dB, difference {difference:.1} dB")
+            let (rms, worst) = apart(a, b);
+            format!("{rms:.2} dB rms, {worst:.2} dB at most")
         }
     };
-    let wav_ok = wav_same || (!wav_repeat && ac_wav.len() == port_wav.len() && apart(&sa, &sp).0 <= (apart(&sa, &sa2).0 * 2.0).max(1.5));
+    // the port's mix is as far from the game's as the game's own second run is (within twice
+    // that, or half a dB), and as long
+    let wav_ok = wav_same || (!wav_repeat && ac_wav.len() == port_wav.len() && apart(&sa, &sp).0 <= (apart(&sa, &sa2).0 * 2.0).max(0.5));
     let word = |same: bool| if same { "identical" } else { "differs" };
     println!(
         "{} | {} | {} | {} | {} | {} | {} | {} | {} | {:.1} s | {} | {} | {}",

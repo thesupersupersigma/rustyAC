@@ -10,6 +10,7 @@
 //! * [`track`]: AC's `TrackAudio` and the surface-sound pool.
 //! * [`sim`]: what `CarAvatar` and `Sim` do for the sound, and the frame.
 //! * [`tape`]: the recorded input of the oracle runs.
+//! * [`golden`]: a session as the oracle runs it, and the golden file of the test.
 
 // The ported code keeps the game's comparisons as the machine code has them: "less or greater"
 // is false for a NaN where "not equal" is true, and a negated comparison is not its opposite.
@@ -21,6 +22,7 @@ pub mod car;
 pub mod dsp;
 pub mod engine;
 pub mod fmod;
+pub mod golden;
 pub mod sim;
 pub mod tape;
 pub mod track;

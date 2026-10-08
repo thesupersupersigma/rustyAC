@@ -71,7 +71,7 @@ fn copy(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// The levels both sides run with (the game reads them from Documents `cfg/audio.ini`).
-pub const AUDIO_INI: &str = "[LEVELS]\nBRAKES=0.8\nDIRT_BOTTOM=1\nENGINE=1\nMASTER=1\nOPPONENTS=0.8\nSURFACES=0.9\nTYRES=1\nWIND=0.3\nTRANSMISSION=0.33333334\n\n[SETTINGS]\nDRIVER_NAME=no such device\n\n[SKIDS]\nENTRY_POINT=100\n";
+pub use rustyac_audio::golden::AUDIO_INI;
 
 /// Builds the small game folder: the ini and GUID files the game's sound code reads by
 /// relative path. The banks stay where they are (the FMOD layer finds them in the game folder).

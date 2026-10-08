@@ -24,6 +24,8 @@ pub struct CallLog {
     /// Another run's log, whose answers to the state queries are given to this run's caller
     /// (see [`start_scripted`]).
     script: Option<Vec<String>>,
+    /// Or just those answers, in the order of the questions (see [`start_with_answers`]).
+    answers: Option<std::collections::VecDeque<u32>>,
 }
 
 pub(crate) static LOG: Mutex<Option<CallLog>> = Mutex::new(None);
@@ -59,6 +61,7 @@ pub fn start(file: Option<&Path>) -> Result<(), String> {
         marks: Vec::new(),
         keep_marks: true,
         script: None,
+        answers: None,
     });
     LOGGING.store(true, Ordering::Relaxed);
     Ok(())
@@ -79,6 +82,37 @@ pub fn start_scripted(file: Option<&Path>, script: &Path) -> Result<(), String> 
         log.script = Some(text.lines().map(str::to_string).collect());
     }
     Ok(())
+}
+
+/// As [`start_scripted`] with only the other run's answers, in the order it asked (a golden
+/// file carries them like this).
+pub fn start_with_answers(file: Option<&Path>, answers: &[u32]) -> Result<(), String> {
+    start(file)?;
+    if let Some(log) = LOG.lock().unwrap().as_mut() {
+        log.answers = Some(answers.iter().copied().collect());
+    }
+    Ok(())
+}
+
+/// The answers a finished log holds to the questions [`start_scripted`] answers (a playback
+/// state or a paused flag each), in order.
+pub fn answers_of(log_text: &str) -> Vec<u32> {
+    log_text
+        .lines()
+        .filter(|l| l.starts_with("event_get_playback_state ") || l.starts_with("event_get_paused "))
+        .filter_map(|l| l.rsplit(' ').next().and_then(|word| u32::from_str_radix(word, 16).ok()))
+        .collect()
+}
+
+/// The line count and hash a log file has (what [`finish`] reports for the run that wrote it).
+pub fn summary_of(log_text: &[u8]) -> (u64, u64) {
+    let mut hash = FNV_OFFSET;
+    let mut lines = 0u64;
+    for &b in log_text {
+        hash = (hash ^ b as u64).wrapping_mul(FNV_PRIME);
+        lines += (b == b'\n') as u64;
+    }
+    (lines, hash)
 }
 
 /// Is a log running?
@@ -122,7 +156,12 @@ impl CallLog {
 
     /// What the script's run was answered at this place of the log, if it made the call that
     /// `before_arrow` is: the words after the result code.
-    pub(crate) fn scripted_answer(&self, before_arrow: &str) -> Option<Vec<String>> {
+    pub(crate) fn scripted_answer(&mut self, before_arrow: &str) -> Option<Vec<String>> {
+        if let Some(answers) = self.answers.as_mut() {
+            let answer = answers.pop_front()?;
+            // a playback state is a word, a paused flag a byte
+            return Some(vec![if before_arrow.starts_with("event_get_paused") { format!("{answer:02x}") } else { format!("{answer:08x}") }]);
+        }
         let line = self.script.as_ref()?.get(self.lines as usize)?;
         let (call, answer) = line.split_once(" -> ")?;
         if call != before_arrow {

@@ -317,6 +317,11 @@ impl GameAudio {
 
     fn try_start(options: &AudioOptions, feed: Arc<Mutex<Feed>>, car_name: &str, car_data: &Path, track: Option<(&Path, &str)>, shape: &CarShape) -> Result<GameAudio, String> {
         let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found: its FMOD DLLs and sound banks are needed")?;
+        // Game::Game makes the sound engine only when the game's own switch is on
+        let switch = IniReader::load(&ac.join("system/cfg/audio_engine.ini"))?;
+        if switch.ready && switch.get_int("SETTINGS", "ENABLE_AUDIO").unwrap_or(0) == 0 {
+            return Err("system/cfg/audio_engine.ini has ENABLE_AUDIO=0".to_string());
+        }
         let output = match (&options.wav, options.null) {
             (Some(file), _) => raw::Output::WavNrt { file: std::path::absolute(file).map_err(|e| e.to_string())?, rate: NRT_RATE, block: NRT_BLOCK },
             (None, true) => raw::Output::NoSound,
