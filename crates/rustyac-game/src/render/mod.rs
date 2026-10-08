@@ -827,6 +827,12 @@ impl DebugRenderer {
         };
         let planes = frustum(&view_proj);
         let eye3 = [eye[0], eye[1], eye[2]];
+        // the track's loose objects follow their bodies
+        if let Some(track) = &mut self.track {
+            if track.place_objects(&view.moved_objects[..view.moved_object_count as usize]) {
+                track.update(&crate::view::IDENTITY, &[]);
+            }
+        }
         // the car's model follows the physics: the body with the model's offset, the wheels
         // and hubs where the physics has them, the steering wheel turned
         let use_car_model = self.car_model.is_some() && !self.boxes;

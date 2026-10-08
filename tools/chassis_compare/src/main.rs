@@ -451,6 +451,10 @@ impl Columns {
 /// way the oracle applied it: the car's own functions, called before the step (the clock
 /// still shows the last step). Only the whole-car recordings have such jobs.
 fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) {
+    if recording.has("script.resetObjects") && recording.i(step, "script.resetObjects") != 0 {
+        // the job of a new session: the loose objects back where the track has them
+        chassis.core.reset_track_objects();
+    }
     if recording.has("script.teleport") {
         // a teleport of a track scenario, as the oracle made it through the game's own
         // Car::forceRotation and Car::forcePosition before the step
@@ -1149,6 +1153,20 @@ struct CollisionCoverage {
     suspension_damage: [f32; 4],
     engine_life: f64,
     steps: usize,
+    /// Task 18, the track's loose objects: how many there are; steps with one awake and the
+    /// most awake at once; steps with a contact joint between the car and an object, between
+    /// an object and the track, between two objects; the first step of a car contact; the
+    /// furthest any object got from its place, m; the fastest one, m/s.
+    objects: usize,
+    object_steps_awake: usize,
+    object_max_awake: usize,
+    object_steps_car: usize,
+    object_steps_track: usize,
+    object_steps_object: usize,
+    object_joints: usize,
+    object_first_hit: Option<usize>,
+    object_far: f32,
+    object_fast: f32,
 }
 
 impl CollisionCoverage {
@@ -1160,19 +1178,55 @@ impl CollisionCoverage {
         self.on = true;
         let core = &chassis.core;
         let (mut boxes, mut meshes, mut joints) = (0, 0, 0);
+        let (mut with_car, mut with_track, mut with_object) = (0, 0, 0);
         for id in core.contact_joints() {
             let JointKind::Contact { contact, .. } = &core.world.joint(id).kind else { continue };
             joints += 1;
-            for g in [contact.geom.g1, contact.geom.g2] {
+            // which of the two geoms is the car's, an object's, the track's
+            let mut kinds = [0u8; 2];
+            for (slot, g) in kinds.iter_mut().zip([contact.geom.g1, contact.geom.g2]) {
                 if let GeomRef::Dyn(geom) = g {
                     if core.box_colliders(chassis.body).contains(&geom) {
                         boxes += 1;
+                        *slot = 1;
                     } else if core.mesh_colliders(chassis.body).contains(&geom) {
                         meshes += 1;
+                        *slot = 1;
+                    } else if core.track_objects.iter().any(|o| o.geom == geom) {
+                        *slot = 2;
                     }
                 }
             }
+            if kinds.contains(&2) {
+                self.object_joints += 1;
+                match (kinds.contains(&1), kinds == [2, 2]) {
+                    (true, _) => with_car += 1,
+                    (false, true) => with_object += 1,
+                    _ => with_track += 1,
+                }
+            }
         }
+        self.objects = core.track_objects.len();
+        if with_car > 0 {
+            self.object_steps_car += 1;
+            self.object_first_hit.get_or_insert(self.steps);
+        }
+        self.object_steps_track += (with_track > 0) as usize;
+        self.object_steps_object += (with_object > 0) as usize;
+        let mut awake = 0;
+        for object in &core.track_objects {
+            let body = core.world.body(object.body.id);
+            if core.is_enabled(object.body) {
+                awake += 1;
+                let home = object.org_matrix.m[3];
+                let d = [body.pos[0] - home[0], body.pos[1] - home[1], body.pos[2] - home[2]];
+                self.object_far = self.object_far.max((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt());
+                let v = body.lvel;
+                self.object_fast = self.object_fast.max((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt());
+            }
+        }
+        self.object_steps_awake += (awake > 0) as usize;
+        self.object_max_awake = self.object_max_awake.max(awake);
         if boxes > 0 {
             self.steps_box += 1;
         }
@@ -1624,6 +1678,38 @@ fn run_command(names: &[String], dir: Option<&Path>, systems: Systems, verbose: 
             .unwrap();
         }
     }
+    if outcomes.iter().any(|o| o.collision.objects > 0) {
+        writeln!(
+            table,
+            "\nLoose track objects (cones, marker boards: bodies of 1 kg with their own mesh, asleep until the car's collider mesh hits them). Counted on the Rust car's world; every object's state (awake or asleep, collide mask, position, rotation, both velocities) is hashed into the values compared every step, and the contact joints above include theirs.\n"
+        )
+        .unwrap();
+        writeln!(
+            table,
+            "| Scenario | Objects on the track | Steps with an object awake / most awake at once | Steps with a contact joint car-object (first at step) / object-track / object-object | Contact joints with an object, all steps | Furthest an object got from its place / fastest |"
+        )
+        .unwrap();
+        writeln!(table, "|---|---|---|---|---|---|").unwrap();
+        for o in outcomes.iter().filter(|o| o.collision.objects > 0) {
+            let c = &o.collision;
+            writeln!(
+                table,
+                "| `{}` | {} | {} / {} | {}{} / {} / {} | {} | {:.1} m / {:.1} m/s |",
+                o.scenario,
+                c.objects,
+                c.object_steps_awake,
+                c.object_max_awake,
+                c.object_steps_car,
+                c.object_first_hit.map(|s| format!(" ({s})")).unwrap_or_default(),
+                c.object_steps_track,
+                c.object_steps_object,
+                c.object_joints,
+                c.object_far,
+                c.object_fast
+            )
+            .unwrap();
+        }
+    }
     println!("\n{table}");
     let out = repo.join("oracle/chassis");
     std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -1732,6 +1818,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             track: String::new(),
             layout: String::new(),
             track_objects: false,
+            session_transfer: false,
             spawn: "hotlap".to_string(),
             session: Default::default(),
             oracle: Some(input_file::OracleSetup {
@@ -1763,10 +1850,11 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
         let mut steps = Vec::with_capacity(count);
         for step in 0..count {
             let feed = recorded_step(&recording, step)?.driver_only();
+            let objects_home = recording.has("script.resetObjects") && recording.i(step, "script.resetObjects") != 0;
             steps.push(input_file::StepInput {
                 controls: feed.controls,
                 headlights: feed.headlights,
-                events: 0,
+                events: if objects_home { input_file::event::OBJECTS_HOME } else { 0 },
                 bias_clicks: feed.bias_clicks,
                 device: 0,
             });
@@ -2094,6 +2182,41 @@ fn excerpt_track_command() -> Result<(), String> {
         let path = out.join(format!("track_{scenario}_{first}_{count}.chgold"));
         let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
         println!("{} ({bytes} bytes, steps {first}..{})", path.display(), first + count);
+    }
+    Ok(())
+}
+
+/// `excerpt18`: the golden files of a second track (Task 18), from the recordings in
+/// `oracle/t18_golden` (`car_oracle run --track magione --collide --scenario trk_lap` and
+/// `trk_kerb_strike`, the F2004): the end of a whole lap, where the game counts it, and the
+/// kerb strike from just before the floor first touches something.
+fn excerpt18_command() -> Result<(), String> {
+    let repo = repo_root();
+    let out = repo.join("crates/rustyac-physics/tests/golden");
+    for scenario in ["trk_lap", "trk_kerb_strike"] {
+        let recording = Recording::read(&repo.join(format!("oracle/t18_golden/{scenario}.carrec")))?;
+        let data = car_data(&recording)?;
+        let track = recording.get("track").unwrap_or("track").to_string();
+        let steps = recording.steps.len();
+        let (mut first, count, name) = match scenario {
+            "trk_lap" => {
+                let counted = (0..steps).find(|&step| recording.i(step, "transponder.lapCount") > 0).ok_or("the lap recording never counts a lap")?;
+                (counted - 120, 200, "lap")
+            }
+            _ => {
+                // (after the first two seconds: the car is put down on its wheels at the start)
+                let touch = (600..steps).find(|&step| recording.i(step, "collide.contactJoints") != 0).ok_or("the kerb strike never touches anything")?;
+                (touch.saturating_sub(30).max(1), 300, "kerb_strike")
+            }
+        };
+        // at a moment no contact joint lives into
+        while first > 1 && recording.i(first - 1, "collide.contactJoints") != 0 {
+            first -= 1;
+        }
+        let path = out.join(format!("track_{track}_{name}_{first}_{count}.chgold"));
+        let bytes = write_excerpt(&recording, &data, Systems::ALL, first, count, &path)?;
+        let with_joints = (first..first + count).filter(|&step| recording.i(step, "collide.contactJoints") != 0).count();
+        println!("{} ({bytes} bytes, steps {first}..{}, {with_joints} steps with contact joints)", path.display(), first + count);
     }
     Ok(())
 }
@@ -3011,7 +3134,7 @@ fn write_test_car_from(base: &str, name: &str, patches: &[(&str, &str, &str, &st
 
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
+     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare excerpt18\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
      chassis_compare test-car\n       \
      chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
@@ -3070,6 +3193,7 @@ fn main() {
         "faults16" => faults16_command(&names, dir.as_deref()),
         "excerpt16" => excerpt16_command(),
         "excerpt17" => excerpt17_command(),
+        "excerpt18" => excerpt18_command(),
         "game-replay" => game_replay_command(&names, dir.as_deref(), exe.as_deref(), verbose),
         _ => Err(usage()),
     };

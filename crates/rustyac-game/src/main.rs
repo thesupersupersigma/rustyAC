@@ -68,6 +68,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         track,
         layout,
         track_objects: true,
+        session_transfer: true,
         spawn: options.spawn.clone(),
         session_starts_at_spawn: true,
         drs_zones: true,

@@ -518,6 +518,8 @@ struct State {
     world_steps: u32,
     /// How often ODE started on an island (one island holds the whole car).
     islands: u32,
+    /// `islands` when the current `dWorldStep` began.
+    islands_before_step: u32,
     image_base: usize,
     /// The real track of a track scenario, and what each tyre's ray found in this step.
     game_track: Option<&'static crate::track::GameTrack>,
@@ -1019,6 +1021,7 @@ extern "C" fn world_step_hook(world: *mut u8, step: f32) -> i32 {
             }
         }
     }
+    state().islands_before_step = state().islands;
     let result = original(world, step);
     let st = state();
     st.post = st.bodies.iter().map(|b| unsafe { body_state(b.ode) }).collect();
@@ -1032,7 +1035,11 @@ extern "C" fn stage0_joints_hook(a: usize, b: usize, c: usize, d: usize) -> usiz
     let st = state();
     let original: extern "C" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(st.stage0_original) };
-    st.solver = st.bodies.iter().map(|body| unsafe { (v3(body.ode, B_FACC), v3(body.ode, B_TACC)) }).collect();
+    // the island of the car is the first one of a step (its bodies are at the head of the
+    // list of the world; a loose object that flies on its own is an island after it)
+    if st.islands == st.islands_before_step {
+        st.solver = st.bodies.iter().map(|body| unsafe { (v3(body.ode, B_FACC), v3(body.ode, B_TACC)) }).collect();
+    }
     st.islands += 1;
     original(a, b, c, d)
 }
@@ -1405,6 +1412,7 @@ impl<'a> World<'a> {
             let mut track_meta: Vec<(String, String)> = Vec::new();
             let mut game_objects: Vec<crate::track::GameObject> = Vec::new();
             let mut driver = scenario.driver();
+            driver.follower.grip = crate::track_driver::Grip::of(&options.car);
             let (track, surface) = if let Some(folder) = &options.track {
                 let kind = scenario.track_kind().expect("--track needs one of the track scenarios (spa_...)");
                 // the game's own Track, surfaces, collision meshes and AI line; every mesh a
@@ -1420,6 +1428,18 @@ impl<'a> World<'a> {
                 let add_time_line: extern "C" fn(*mut u8, *const V3, *const V3, i32) = std::mem::transmute(acs.va(VA_TRACK_ADD_TIME_LINE));
                 let mut lines = 0;
                 while let (Some(left), Some(right)) = (place(&format!("AC_TIME_{lines}_L")), place(&format!("AC_TIME_{lines}_R"))) {
+                    add_time_line(built.track, &left, &right, 0);
+                    lines += 1;
+                }
+                // a point-to-point track: the start and the finish gate (types 1 and 2), and
+                // the finish line of a drag strip (an ordinary line again)
+                let ab = ["AC_AB_START_L", "AC_AB_START_R", "AC_AB_FINISH_L", "AC_AB_FINISH_R"].map(place);
+                if let [Some(sl), Some(sr), Some(fl), Some(fr)] = ab {
+                    add_time_line(built.track, &sl, &sr, 1);
+                    add_time_line(built.track, &fl, &fr, 2);
+                    lines += 2;
+                }
+                if let (Some(left), Some(right)) = (place("AC_OPEN_FINISH_L"), place("AC_OPEN_FINISH_R")) {
                     add_time_line(built.track, &left, &right, 0);
                     lines += 1;
                 }
@@ -1542,6 +1562,7 @@ impl<'a> World<'a> {
                 stage0_original: 0,
                 world_steps: 0,
                 islands: 0,
+                islands_before_step: 0,
                 image_base: acs.va(crate::acs::GHIDRA_BASE),
                 game_track,
                 ray_hits: [RayRecord::default(); 4],
@@ -1655,7 +1676,9 @@ impl<'a> World<'a> {
                 }
                 // PhysicsEngine::setSessionInfo: no contacts for the first 250 steps (the lap
                 // scenario starts the way a session does; the others collide from step 0)
-                let no_collision_steps: i32 = if scenario.track_kind() == Some(crate::track_driver::TrackKind::Lap) { 250 } else { 0 };
+                use crate::track_driver::TrackKind;
+                let session_start = matches!(scenario.track_kind(), Some(TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull));
+                let no_collision_steps: i32 = if session_start { 250 } else { 0 };
                 let core: *mut u8 = rd(engine, PE_CORE);
                 wr(core, 0x60, no_collision_steps);
                 collide_meta = vec![
@@ -2283,6 +2306,7 @@ impl<'a> World<'a> {
                 road_rpm: if radius > 0.0 { speed / radius * ratio.abs() * 9.549_296_6 } else { 0.0 },
                 gear: rd(car, CAR_DRIVETRAIN + 0x584),
                 yaw_rate: -(w[0] * up[0] + w[1] * up[1] + w[2] * up[2]),
+                laps: rd(car.add(CAR_TRANSPONDER), 0x0c),
             }
         }
     }
@@ -2317,6 +2341,10 @@ impl<'a> World<'a> {
                     force_position(self.car, &controls.teleport_position, (controls.teleport == 2) as u8);
                 }
             }
+        }
+        if controls.reset_objects {
+            // the job a new session queues for the start of the next step
+            unsafe { crate::track::reset_objects(self.acs, &self.game_objects) };
         }
         st.tape.clear();
         st.ray_hits = [RayRecord::default(); 4];
@@ -2398,7 +2426,11 @@ impl<'a> World<'a> {
         step(self.engine, DT, time_ms, time_ms);
         let st = state();
         assert_eq!(st.world_steps, before_world_steps + 1, "dWorldStep did not run exactly once");
-        assert_eq!(st.islands, before_islands + 1, "ODE did not step exactly one island");
+        // (one island: the car; more when loose objects are awake and not touching it)
+        assert!(st.islands > before_islands, "ODE stepped no island");
+        if self.game_objects.is_empty() {
+            assert_eq!(st.islands, before_islands + 1, "ODE did not step exactly one island");
+        }
         // a car whose controls are locked outright (or that is black-flagged) does not ask
         let locked = unsafe { rd::<u8>(self.car, CAR_IS_CONTROLS_LOCKED) != 0 || rd::<u8>(self.car, CAR_BLACK_FLAGGED) != 0 };
         assert_eq!(st.polled, if locked { 0 } else { 1 }, "the controls device was not polled as expected");
@@ -2426,6 +2458,9 @@ impl<'a> World<'a> {
         unsafe {
             self.emit(&mut row, &controls);
             if let Some(track) = state().game_track {
+                if !self.game_objects.is_empty() {
+                    row.i("script.resetObjects", controls.reset_objects as i32);
+                }
                 row.i("script.teleport", controls.teleport);
                 row.v("script.teleportPosition", &controls.teleport_position);
                 row.v("script.teleportTail", &controls.teleport_tail);

@@ -389,6 +389,70 @@ fn the_car_hits_spa_s_walls_and_lands_on_its_roof_like_the_game() {
     assert!(error.contains("spa_wall_low step"), "{error}");
 }
 
+// --- Task 18: a second track ---------------------------------------------------------------
+//
+// Two excerpts of recordings of the F2004 on Magione, made with collisions on
+// (`car_oracle run --track magione --collide --scenario trk_lap` and `trk_kerb_strike`,
+// written by `tools/chassis_compare excerpt18`):
+//
+// * `trk_lap`, steps 27238 to 27437: the end of a whole lap. The car crosses the start line
+//   at speed and the game's timer counts the lap (its time and its sector times are in the
+//   hash, with everything the Spa excerpts hash);
+// * `trk_kerb_strike`, steps 1393 to 1692: much too fast into the tightest corner of the
+//   lap's last tenth, deep over the inner kerb: the floor boxes strike it (198 steps with
+//   contact joints) and the car leaves the track.
+//
+// The track and the collider mesh are read from the game's folder: NOT TESTED without it.
+const MAGIONE_GOLDEN: [(&str, &[u8]); 2] = [
+    ("trk_lap", include_bytes!("golden/track_magione_lap_27238_200.chgold")),
+    ("trk_kerb_strike", include_bytes!("golden/track_magione_kerb_strike_1393_300.chgold")),
+];
+
+#[test]
+fn magione_golden_files_read_back() {
+    for (name, bytes) in MAGIONE_GOLDEN {
+        let golden = Golden::parse(bytes).unwrap();
+        assert_eq!(golden.setup.scenario, name);
+        assert_eq!(golden.track.as_ref().map(|track| track.name.as_str()), Some("magione"));
+        assert!(golden.setup.collide.on && golden.collider_mesh, "{name}: collisions with the car's own mesh");
+        assert!(golden.setup.is_whole() && !golden.state.is_empty());
+        assert_eq!(golden.to_bytes(), bytes, "{name}: parse and write do not round-trip");
+    }
+}
+
+#[test]
+fn the_car_on_magione_matches_the_game() {
+    let Some(data) = car_data("ks_ferrari_f2004") else { return };
+    let Some(folder) = track_folder("magione") else { return };
+    let Some(mesh) = collider_mesh("ks_ferrari_f2004", &data, &folder) else { return };
+    let (track, _) = rustyac_physics::track::load_track(&folder, "").expect("Magione loads");
+    let track = std::sync::Arc::new(track);
+    let attach = |golden: &mut Golden| {
+        golden.attach_track(std::sync::Arc::clone(&track));
+        golden.attach_collider_mesh(mesh.clone());
+    };
+    for (name, bytes) in MAGIONE_GOLDEN {
+        let mut golden = Golden::parse(bytes).unwrap();
+        attach(&mut golden);
+        golden.check(&data).unwrap_or_else(|e| panic!("{name} ({}): {e}", backend()));
+    }
+    // the lap excerpt on another track's road is noticed at once (Spa, if it is there)
+    if let Some(spa) = track_folder("spa") {
+        let (other, _) = rustyac_physics::track::load_track(&spa, "").expect("Spa loads");
+        let mut golden = Golden::parse(MAGIONE_GOLDEN[0].1).unwrap();
+        golden.attach_track(std::sync::Arc::new(other));
+        golden.attach_collider_mesh(mesh.clone());
+        assert!(golden.check(&data).is_err(), "Magione's lap on Spa's road went unnoticed");
+    }
+    // and so is a throttle pedal one bit off in one step of the kerb strike
+    let mut golden = Golden::parse(MAGIONE_GOLDEN[1].1).unwrap();
+    attach(&mut golden);
+    let step = golden.steps.iter().position(|step| step.feed.controls.gas != 0.0 && step.feed.controls.gas != 1.0).unwrap_or(0);
+    let gas = &mut golden.steps[step].feed.controls.gas;
+    *gas = f32::from_bits(gas.to_bits() ^ 1);
+    assert!(golden.check(&data).is_err(), "a changed throttle went unnoticed");
+}
+
 // --- Task 16: four-wheel drive and hybrids -------------------------------------------------
 //
 // Two excerpts of whole-car recordings on the flat road (`tools/chassis_compare excerpt16`),

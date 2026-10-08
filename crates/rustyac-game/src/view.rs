@@ -14,6 +14,9 @@ pub type Mat = [[f32; 4]; 4];
 
 pub const IDENTITY: Mat = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
 
+/// How many loose objects the picture follows at a time.
+pub const MOVED_OBJECTS: usize = 8;
+
 /// The car after one physics step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CarView {
@@ -24,6 +27,11 @@ pub struct CarView {
     pub drive_seconds: f64,
     /// The car body's world matrix.
     pub body: Mat,
+    /// The track's loose objects that are not where the track has them (awake, or lying
+    /// where a hit left them): the object's number and its body's world matrix. At most
+    /// [`MOVED_OBJECTS`] are shown moved.
+    pub moved_objects: [(u16, Mat); MOVED_OBJECTS],
+    pub moved_object_count: u8,
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
     /// in the order LF, RF, LR, RR.
     pub wheels: [Mat; 4],
@@ -174,6 +182,8 @@ pub struct LapView {
 impl Default for CarView {
     fn default() -> CarView {
         CarView {
+            moved_objects: [(0, IDENTITY); MOVED_OBJECTS],
+            moved_object_count: 0,
             steps: 0,
             sim_seconds: 0.0,
             drive_seconds: 0.0,
@@ -278,11 +288,25 @@ impl CarView {
     /// The car as it is after the last step.
     pub fn capture(sim: &GameSim, drive_seconds: f64) -> CarView {
         let car = &sim.car.car;
+        // TrackObject::update: the picture's node takes the body's matrix
+        let mut moved_objects = [(0u16, IDENTITY); MOVED_OBJECTS];
+        let mut moved_object_count = 0u8;
+        for (number, object) in car.core.track_objects.iter().enumerate() {
+            let matrix = car.core.get_world_matrix(object.body).m;
+            let home = object.org_matrix.m[3];
+            let away = (0..3).any(|k| matrix[3][k] != home[k]);
+            if (away || car.core.is_enabled(object.body)) && (moved_object_count as usize) < MOVED_OBJECTS {
+                moved_objects[moved_object_count as usize] = (number as u16, matrix);
+                moved_object_count += 1;
+            }
+        }
         let mut view = CarView {
             steps: sim.steps,
             sim_seconds: sim.sim_seconds(),
             drive_seconds,
             body: car.core.get_world_matrix(car.body).m,
+            moved_objects,
+            moved_object_count,
             speed_kmh: car.speed * 3.6,
             gas: car.controls.gas,
             brake: car.controls.brake,

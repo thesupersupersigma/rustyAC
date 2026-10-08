@@ -119,6 +119,11 @@ pub struct GpuModel {
     pub meshes: Vec<GpuMesh>,
     pub materials: Vec<GpuMaterial>,
     pub stats: ModelStats,
+    /// A track's loose objects in the order the physics has them: the node (its name starts
+    /// with `AC_POBJECT` and its first child is a mesh) and the matrix the file gives it.
+    pub object_nodes: Vec<(usize, Mat)>,
+    /// The objects whose nodes are away from the file's matrix at the moment.
+    moved: Vec<usize>,
 }
 
 /// How to load a set of models.
@@ -326,7 +331,15 @@ impl GpuModel {
         }
         stats.texture_size = cap;
 
-        let mut model = GpuModel { nodes: Vec::new(), world: Vec::new(), meshes: Vec::new(), materials: Vec::new(), stats: ModelStats::default() };
+        let mut model = GpuModel {
+            nodes: Vec::new(),
+            world: Vec::new(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            stats: ModelStats::default(),
+            object_nodes: Vec::new(),
+            moved: Vec::new(),
+        };
         model.nodes.push(GpuNode { name: Name::default(), parent: None, local: IDENTITY, active: true });
         for (file, kn5) in kn5s.iter().enumerate() {
             let node_base = model.nodes.len();
@@ -398,6 +411,10 @@ impl GpuModel {
                         },
                     ),
                 };
+                // a loose object as the physics finds it (TrackObject::TrackObject)
+                if node.name.starts_with("AC_POBJECT") && node.children.first().is_some_and(|&child| kn5.nodes[child].class == NodeClass::Mesh && kn5.nodes[child].mesh.is_some()) {
+                    model.object_nodes.push((model.nodes.len(), local));
+                }
                 model.nodes.push(GpuNode { name: node.name.clone(), parent, local, active: node.active });
                 if !drawn(kn5, index) {
                     continue;
@@ -434,6 +451,28 @@ impl GpuModel {
         model.world = vec![IDENTITY; model.nodes.len()];
         model.update(&IDENTITY, &[]);
         Ok(model)
+    }
+
+    /// Puts the nodes of a track's loose objects where their bodies are: `moved` lists the
+    /// objects that are not at home (number, world matrix); every other object goes back
+    /// to the matrix of the file. Returns whether anything changed.
+    pub fn place_objects(&mut self, moved: &[(u16, Mat)]) -> bool {
+        if moved.is_empty() && self.moved.is_empty() {
+            return false;
+        }
+        for &number in &self.moved {
+            let (node, home) = self.object_nodes[number];
+            self.nodes[node].local = home;
+        }
+        self.moved.clear();
+        for &(number, matrix) in moved {
+            if let Some(&(node, _)) = self.object_nodes.get(number as usize) {
+                // (the node hangs under its file's top node, which the game leaves at the origin)
+                self.nodes[node].local = matrix;
+                self.moved.push(number as usize);
+            }
+        }
+        true
     }
 
     pub fn find_node(&self, name: &str) -> Option<usize> {

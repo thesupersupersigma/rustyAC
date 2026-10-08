@@ -537,6 +537,8 @@ pub struct GameSim {
     /// The lap list (the game's `RaceTimingServices` for this one car): what the lap
     /// displays and the shared memory show.
     pub lap_db: LapDb,
+    /// Which session this is (0 at the start; a new car starts the next one).
+    pub session_index: i32,
 }
 
 /// Where the car is spawned: on the road at the origin, the nose towards +z (so the tail,
@@ -738,7 +740,7 @@ impl GameSim {
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db })
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0 })
     }
 
     /// The physics clock after the last step, ms.
@@ -775,6 +777,19 @@ impl GameSim {
         if self.setup.oracle.is_some() {
             return Err("an oracle set-up cannot be rebuilt mid-run".to_string());
         }
+        if self.setup.session_transfer {
+            // the handler `Track` hangs on a new session (lambda @ 0x140277740): the next
+            // session starts from the session's start grip plus SESSION_TRANSFER of what
+            // this one gained, with its own random part
+            if let Some(mut track) = self.car.car.dynamic_track {
+                self.session_index += 1;
+                let mut rand = rustyac_physics::session::MsvcRand(self.setup.seed.wrapping_add(self.session_index as u32));
+                track.on_new_session(self.session_index, rand.next());
+                track.step(0);
+                self.setup.env.dynamic_grip_level = track.dynamic_grip_level;
+                self.setup.session.dynamic_track = Some(track);
+            }
+        }
         let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
         let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
         std::mem::swap(&mut car.device, &mut self.car.device);
@@ -810,6 +825,10 @@ impl GameSim {
                 }
             });
             self.lap_db.current_splits.clear();
+        }
+        if events & event::OBJECTS_HOME != 0 {
+            // the job a new session queues: runs at the start of the step
+            self.car.car.queue(|car| car.core.reset_track_objects());
         }
         if events & event::TO_TRACK != 0 {
             // the nearest point of the AI line, facing along it; without an AI line, the spawn

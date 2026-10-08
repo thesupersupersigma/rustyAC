@@ -57,6 +57,7 @@ type V3 = [f32; 3];
 
 const VA_PHYSICS_OBJECT_CTOR: usize = 0x1_402a_c8a0; // PhysicsObject::PhysicsObject(PhysicsEngine&, const PhysicsObjectDesc&, BufferedChannel<mat44f>&)
 const VA_MATRIX_QUEUE_VFTABLE: usize = 0x1_404d_f0f8; // Concurrency::concurrent_queue<mat44f>::`vftable'
+const VA_PHYSICS_OBJECT_SET_WORLD_MATRIX: usize = 0x1_402a_cb90; // PhysicsObject::setWorldMatrix(const mat44f&)
 
 /// One of the game's `PhysicsObject`s (a loose track object) and the queue it pushes its
 /// matrix on after every step.
@@ -65,6 +66,8 @@ pub struct GameObject {
     /// `PhysicsObject` (0x20 bytes): +0x10 is its `RigidBodyODE`.
     pub object: *mut u8,
     pub queue: *mut u8,
+    /// `TrackObject::orgMatrix`: the node's own matrix.
+    pub org_matrix: [[f32; 4]; 4],
 }
 
 impl GameObject {
@@ -116,9 +119,19 @@ pub unsafe fn create_objects(acs: &Acs, engine: *mut u8, track: &Track) -> Vec<G
         wr(desc, 0x7c, 1.0f32);
         let object = acs.alloc(0x20);
         ctor(object, engine, desc, queue);
-        out.push(GameObject { object, queue });
+        out.push(GameObject { object, queue, org_matrix: def.matrix.m });
     }
     out
+}
+
+/// What the job of a new session does (lambda @ 0x1401c6f40): `TrackObject::resetOrgMatrix`
+/// @ 0x1401cf6d0 for every object in order, which is `PhysicsObject::setWorldMatrix` with
+/// the matrix the object was made with.
+pub unsafe fn reset_objects(acs: &Acs, objects: &[GameObject]) {
+    let set_world_matrix: extern "C" fn(*mut u8, *const [[f32; 4]; 4]) = std::mem::transmute(acs.va(VA_PHYSICS_OBJECT_SET_WORLD_MATRIX));
+    for object in objects {
+        set_world_matrix(object.object, &object.org_matrix);
+    }
 }
 
 /// The game's `RayCastResult` (0x30 bytes).

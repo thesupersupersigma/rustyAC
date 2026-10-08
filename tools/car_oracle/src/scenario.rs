@@ -56,6 +56,9 @@ pub struct Controls {
     pub teleport_position: [f32; 3],
     pub teleport_tail: [f32; 3],
     pub teleport_rows: [[f32; 3]; 3],
+    /// Task 18. Before this step the track's loose objects are put back where the track has
+    /// them, as the job a new session queues does (`TrackObject::resetOrgMatrix` for each).
+    pub reset_objects: bool,
     /// Task 16. The KERS / ERS button (`CarControls::kers`).
     pub kers: bool,
     /// The cockpit settings of a hybrid car. In the game they are jobs the main thread queues
@@ -93,6 +96,7 @@ impl Default for Controls {
             teleport_position: [0.0; 3],
             teleport_tail: [0.0; 3],
             teleport_rows: [[0.0; 3]; 3],
+            reset_objects: false,
             kers: false,
             ers_power: -1,
             ers_recovery: -1,
@@ -174,6 +178,8 @@ pub struct CarView {
     pub offset: f32,
     /// The front wheels' angle at full lock, rad.
     pub max_wheel_angle: f32,
+    /// Laps the game's own timer has counted (`TimeTransponder::lapCount`).
+    pub laps: i32,
 }
 
 impl CarView {
@@ -541,6 +547,14 @@ pub fn track() -> Vec<Scenario> {
     };
     let in_conditions = |name, about, conditions: Conditions| conditions_on(name, about, 24.0, TrackKind::Launch, conditions);
     let mut scenarios = vec![
+        // Task 18: the conditions of a session on any track
+        conditions_on(
+            "trk_green_lap",
+            "trk_lap on a cold day (9 deg C air, 12 deg C road) on a green track that gains grip with every lap counted (87 % at the start, +-2 % drawn, 1.25 % more per lap) in a wind drawn from 8 to 20 km/h",
+            480.0,
+            TrackKind::FullLap,
+            Conditions { temperature: Some((9.0, 12.0)), dynamic_track: Some([87.0, 2.0, 0.8, 0.0]), wind: Some([8.0, 20.0, 70.0]), ..Conditions::default() },
+        ),
         in_conditions(
             "spa_cold_green_wind",
             "spa_launch on a cold day (8 deg C air, 11 deg C road), a green track (88 % grip, +-3 % drawn, half a percent more per lap) and a wind drawn from 12 to 26 km/h around 130 degrees",
@@ -622,6 +636,28 @@ pub fn track() -> Vec<Scenario> {
         on_track("spa_wall_slide", "from the hot-lap start at 100 km/h, steered further and further to the left: off the road and along the wall", 18.0, TrackKind::WallSlide),
         on_track("spa_bottoming", "from 300 m before the bottom of Eau Rouge flat out through the compression: the floor on the road", 16.0, TrackKind::Bottoming),
         on_track("spa_kerb_strike", "at the Bus Stop chicane much too fast and deep over its inner kerbs", 16.0, TrackKind::KerbStrike),
+        // Task 18: every track. These are written for any track (and any car: the driver's
+        // idea of the car's grip is set from its name, `track_driver::Grip::of`)
+        on_track(
+            "trk_lap",
+            "from the hot-lap start: a careful launch, over the start line, one whole lap along the AI line and three seconds more (the game's own lap and sector times)",
+            480.0,
+            TrackKind::FullLap,
+        ),
+        on_track("trk_kerb_strike", "the tightest corner of the last tenth of the lap much too fast and deep over its inner kerbs", 16.0, TrackKind::KerbStrike),
+        on_track(
+            "trk_run",
+            "a point-to-point track: a careful launch through the start gate, 40 s of the road, then put down 250 m before the finish gate (the game's own Car::forcePosition) and through it: the run is timed",
+            90.0,
+            TrackKind::Run,
+        ),
+        on_track("trk_run_full", "a point-to-point track: the whole run from the start through both gates", 1200.0, TrackKind::RunFull),
+        on_track(
+            "trk_object",
+            "at 70 km/h along the racing line and then at the loose object nearest to it (a cone, a marker board): the collider mesh hits it, it tumbles and comes to rest; after 14 s the objects are put back as a new session does, and the car drives on",
+            22.0,
+            TrackKind::ObjectHit,
+        ),
         on_track("spa_rollover", "put down on its roof 0.8 m above the road and left to settle, five seconds later put down on its side (a second of throttle each time: a sleeping car would hang in the air)", 10.0, TrackKind::Rollover),
     ]);
     scenarios

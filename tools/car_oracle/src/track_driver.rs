@@ -44,12 +44,84 @@ pub enum TrackKind {
     KerbStrike,
     /// Put down upside down, later on its side, and left alone.
     Rollover,
+    /// Task 18. From the hot-lap start one whole lap, until the game has counted it.
+    FullLap,
+    /// A point-to-point track: through the start gate, some of the road, a jump to before
+    /// the finish gate, through it.
+    Run,
+    /// A point-to-point track: the whole run.
+    RunFull,
+    /// At the loose object nearest to the racing line.
+    ObjectHit,
+}
+
+/// What the driver thinks the car can do: sideways grip at no speed and what every (m/s)^2
+/// adds to it (downforce), and braking, all in m/s^2 before the scenario's pace factor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grip {
+    pub lateral: f32,
+    pub downforce: f32,
+    pub braking: f32,
+    /// Top speed the driver allows himself, m/s.
+    pub top: f32,
+}
+
+impl Default for Grip {
+    /// The F2004 (the numbers the Spa scenarios of Task 12 were written with).
+    fn default() -> Grip {
+        Grip { lateral: 14.0, downforce: 0.0036, braking: 21.0, top: 95.0 }
+    }
+}
+
+impl Grip {
+    /// By the car's folder name: the cars with wings and slicks drive as the F2004 does,
+    /// everything else as a road car on road tyres.
+    pub fn of(car: &str) -> Grip {
+        if car.contains("f2004") || car.contains("formula") || car.contains("_f1") || car.contains("sf15") || car.contains("f138") {
+            Grip::default()
+        } else if car.contains("gt3") || car.contains("gt2") || car.contains("gte") {
+            Grip { lateral: 11.0, downforce: 0.0012, braking: 13.0, top: 80.0 }
+        } else {
+            Grip { lateral: 7.8, downforce: 0.0, braking: 7.5, top: 70.0 }
+        }
+    }
+}
+
+/// The loose object of a track that is easiest to drive at: the one nearest to the racing
+/// line, not further out than a few metres beyond the track's edge. Returns its number,
+/// its place along the line in metres, and how far to the left of the line it stands.
+pub fn nearest_object(track: &Track) -> Option<(usize, f32, f32)> {
+    let spline = track.ai_spline.as_ref()?;
+    let length = spline.length();
+    let mut best: Option<(usize, f32, f32)> = None;
+    for (number, object) in track.objects.iter().enumerate() {
+        let p = [object.matrix.m[3][0], object.matrix.m[3][1], object.matrix.m[3][2]];
+        let n = spline.spline.world_to_spline(&p, -1);
+        let on_line = spline.spline.spline_to_world(n);
+        let f = spline.payload_at_position(n).forward_vector;
+        let l = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+        let (lx, lz) = (f[2] / l, -f[0] / l);
+        let lateral = (p[0] - on_line[0]) * lx + (p[2] - on_line[2]) * lz;
+        let sides = spline.payload_at_position(n).sides;
+        let edge = if lateral > 0.0 { sides[0] } else { sides[1] };
+        // on the level of the road, within reach, and not where a lap starts or ends
+        if (p[1] - on_line[1]).abs() > 1.2 || lateral.abs() > edge + 4.0 || !(0.04..0.96).contains(&n) {
+            continue;
+        }
+        if best.is_none_or(|(_, _, other)| lateral.abs() < other.abs()) {
+            best = Some((number, n * length, lateral));
+        }
+    }
+    best
 }
 
 impl TrackKind {
     /// The scenarios that leave the road on purpose (their runs do not end there).
     pub fn leaves_the_road(self) -> bool {
-        matches!(self, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover)
+        matches!(
+            self,
+            TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::WallSlide | TrackKind::KerbStrike | TrackKind::Rollover | TrackKind::ObjectHit
+        )
     }
 }
 
@@ -103,7 +175,11 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
             let (position, tail) = track.spawn_pose("HOTLAP_START", 0).ok_or("the track has no AC_HOTLAP_START_0")?;
             Ok((position, tail, false, "AC_HOTLAP_START_0".to_string()))
         }
-        TrackKind::Launch | TrackKind::Lap => {
+        TrackKind::ObjectHit => {
+            let (_, metres, _) = nearest_object(track).ok_or("the track has no loose object within reach of its AI line")?;
+            on_line(track, metres - 140.0, "140 m before the loose object nearest to the AI line")
+        }
+        TrackKind::Launch | TrackKind::Lap | TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull => {
             // RaceManager::initOffline for a hot-lap session
             rustyac_physics::track::init_respawn_position_set(track, "HOTLAP_START");
             let (position, tail) = track.spawn_pose("HOTLAP_START", 0).ok_or("the track has no AC_HOTLAP_START_0")?;
@@ -202,16 +278,24 @@ pub struct Follower {
     release_steer: f32,
     /// The rollover scenario: where the car is put down (position on the road, tail).
     put_down: Option<([f32; 3], [f32; 3])>,
+    /// Task 18. What the driver thinks the car can do.
+    pub grip: Grip,
+    /// When the game counted the lap or the run (seconds since the release).
+    done_at: Option<f32>,
+    /// The point-to-point scenario has made its jump.
+    jumped: bool,
+    /// The object scenario: its object (place along the line in metres, metres to the left).
+    object: Option<(f32, f32)>,
 }
 
 /// The speed the bends ahead allow, m/s: for every point up to 320 m ahead the speed its
 /// curvature allows, plus what can be braked away on the way there.
-fn allowed_speed(spline: &AiSpline, index: usize, pace: f32) -> f32 {
+fn allowed_speed(spline: &AiSpline, index: usize, pace: f32, grip: &Grip) -> f32 {
     let points = &spline.spline.points;
     let n = points.len();
     let here = points[index % n].point_length;
     let length = spline.length();
-    let mut allowed = 95.0f32;
+    let mut allowed = grip.top;
     let mut i = index;
     loop {
         let mut ahead = points[i % n].point_length - here;
@@ -223,9 +307,9 @@ fn allowed_speed(spline: &AiSpline, index: usize, pace: f32) -> f32 {
         }
         let k = curvature(spline, i, 5).abs();
         // grip that grows with the square of the speed (downforce): v^2 k = a0 + a1 v^2
-        let (a0, a1) = (14.0 * pace, 0.0036 * pace);
-        let corner = if k <= a1 * 1.08 { 95.0 } else { (a0 / (k - a1)).sqrt() };
-        let braked = (corner * corner + 2.0 * 21.0 * pace * ahead).sqrt();
+        let (a0, a1) = (grip.lateral * pace, grip.downforce * pace);
+        let corner = if k <= a1 * 1.08 { grip.top } else { (a0 / (k - a1)).sqrt() };
+        let braked = (corner * corner + 2.0 * grip.braking * pace * ahead).sqrt();
         allowed = allowed.min(braked);
         i += 3;
         if i >= index + n {
@@ -275,6 +359,37 @@ impl Follower {
                 }
                 return;
             }
+        }
+
+        if matches!(kind, TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull) && car.laps >= 1 {
+            // the game has counted the lap (or the run): three seconds more, then the end
+            let done = *self.done_at.get_or_insert(t);
+            if t - done > 3.0 {
+                self.ended = true;
+                return;
+            }
+        }
+        if kind == TrackKind::Run && !self.jumped && t >= 40.0 {
+            // put down 250 m before the finish gate, without spoiling anything
+            self.jumped = true;
+            if let Some(gate) = track.time_lines.iter().find(|line| line.line_type == 2) {
+                let mid = [(gate.points[0].x + gate.points[1].x) * 0.5, (gate.points[0].y + gate.points[1].y) * 0.5, (gate.points[0].z + gate.points[1].z) * 0.5];
+                let at = spline.spline.world_to_spline(&mid, -1);
+                let n = spline.spline.wrap_position(at - 250.0 / length);
+                if let Some((p, tail)) = track.pose_on_ai_line_at(n) {
+                    c.teleport = 1;
+                    c.teleport_position = [p.x, p.y, p.z];
+                    c.teleport_tail = [tail.x, tail.y, tail.z];
+                }
+            }
+            return;
+        }
+        if kind == TrackKind::ObjectHit {
+            if self.object.is_none() {
+                self.object = nearest_object(track).map(|(_, metres, lateral)| (metres, lateral));
+            }
+            // the job of a new session, while the object lies where the car left it
+            c.reset_objects = car.step == (14.0 / DT) as usize;
         }
 
         if kind == TrackKind::Rollover {
@@ -352,6 +467,23 @@ impl Follower {
             TrackKind::KerbStrike if k_here < -0.008 => -(payload.sides[1] - 0.15),
             // further and further to the left, far beyond the edge of the road
             TrackKind::WallSlide if t > 2.5 => (payload.sides[0] + 30.0).min((t - 2.5) * 6.0),
+            // the car's middle at the object from 90 m before it until 12 m past it
+            TrackKind::ObjectHit => match self.object {
+                Some((metres, lateral)) => {
+                    let mut to_go = metres - npos * length;
+                    if to_go < -length * 0.5 {
+                        to_go += length;
+                    } else if to_go > length * 0.5 {
+                        to_go -= length;
+                    }
+                    if (-12.0..90.0).contains(&to_go) {
+                        lateral
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            },
             _ => 0.0,
         };
         self.lateral += (target_lateral - self.lateral) * (DT / 0.35).min(1.0);
@@ -389,8 +521,11 @@ impl Follower {
             TrackKind::WallSlide => (0.8, 28.0),
             TrackKind::KerbStrike => (1.15, 52.0),
             TrackKind::Rollover => (0.0, 0.0),
+            TrackKind::FullLap => (0.78, 95.0),
+            TrackKind::Run | TrackKind::RunFull => (0.70, 95.0),
+            TrackKind::ObjectHit => (0.7, 19.5),
         };
-        let target = allowed_speed(spline, index, pace).min(limit);
+        let target = allowed_speed(spline, index, pace, &self.grip).min(limit);
         let error = target - car.speed;
         if self.released {
             // straight on: the wheel is let go; the low-speed run keeps its 60 km/h, the fast
@@ -409,6 +544,11 @@ impl Follower {
             c.gas = (0.25 + error * 0.4).clamp(0.0, 1.0);
         } else {
             c.brake = (-error * 0.25).clamp(0.0, 1.0);
+        }
+
+        if matches!(kind, TrackKind::FullLap | TrackKind::Run | TrackKind::RunFull) && t < 5.0 {
+            // a careful launch: the hot-lap start of some tracks is in a corner
+            c.gas = c.gas.min(0.3 + 0.14 * t);
         }
 
         // off the track for good, or gone from the world: the body would be in a wall by now

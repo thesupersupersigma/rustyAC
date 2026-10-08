@@ -55,6 +55,11 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --car ks_ferrari_488_gt3 --track magione --windowed
                                              another car (content\cars\ks_ferrari_488_gt3)
                                              and track
+    rustyac.exe --track laguna --windowed    a track by a part of its name (Laguna Seca)
+    rustyac.exe --track ks_nurburgring --layout layout_sprint_a --windowed
+                                             a track with layouts: say which one
+    rustyac.exe --list-tracks                every track and layout of your game, and
+                                             which ones cannot be driven (and why)
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 

@@ -53,8 +53,12 @@ pub mod event {
     pub const MGUK_RECOVERY_DN: u32 = 1 << 14;
     /// The MGU-H between battery and motor (`CarAvatar::cycleERSHeatCharging`).
     pub const MGUH_MODE: u32 = 1 << 15;
+    /// The track's loose objects back where the track has them: what a new session does
+    /// (`TrackObject::resetOrgMatrix`). Position and rotation only; a cone that is still
+    /// flying flies on from there.
+    pub const OBJECTS_HOME: u32 = 1 << 16;
 
-    pub const NAMES: [(u32, &str); 16] = [
+    pub const NAMES: [(u32, &str); 17] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -71,6 +75,7 @@ pub mod event {
         (MGUK_RECOVERY_UP, "mgu-k recovery+"),
         (MGUK_RECOVERY_DN, "mgu-k recovery-"),
         (MGUH_MODE, "mgu-h mode"),
+        (OBJECTS_HOME, "objects home"),
     ];
 }
 
@@ -273,6 +278,9 @@ pub struct SimSetup {
     /// The track's loose objects (cones, marker boards) are in the world. False in files
     /// recorded before they were ported.
     pub track_objects: bool,
+    /// A new car (`N`) is a new session for the track's grip: part of what the laps added is
+    /// carried over (`[DYNAMIC_TRACK] SESSION_TRANSFER`). False in files recorded before.
+    pub session_transfer: bool,
     /// Where on the track the car starts: `hotlap`, `pit` or `start`.
     pub spawn: String,
     /// The session's wind, track grip, ballast, aids and saved setup.
@@ -298,6 +306,7 @@ impl Default for SimSetup {
             track: String::new(),
             layout: String::new(),
             track_objects: false,
+            session_transfer: false,
             spawn: "hotlap".to_string(),
             session: Session::default(),
         }
@@ -431,6 +440,9 @@ impl SimSetup {
             if self.track_objects {
                 put("track_objects", "1".to_string());
             }
+            if self.session_transfer {
+                put("session_transfer", "1".to_string());
+            }
             put("spawn", self.spawn.clone());
         }
         if let Some(o) = &self.oracle {
@@ -540,6 +552,7 @@ impl SimSetup {
                 "track" => setup.track = value.to_string(),
                 "layout" => setup.layout = value.to_string(),
                 "track_objects" => setup.track_objects = flag(),
+                "session_transfer" => setup.session_transfer = flag(),
                 "spawn" => setup.spawn = value.to_string(),
                 "wind" => {
                     let [speed, direction] = hex_floats(key, value)?[..] else { return Err(format!("wind: two numbers expected, got {value:?}")) };
