@@ -19,11 +19,14 @@
 //!
 //! `--set key=value` (several allowed): `air`, `road` (deg C), `grip` (1 = 100 %),
 //! `air_density` (kg/m3; not Assetto Corsa, Custom Shaders Patch's thin air), `blankets`
-//! (0/1), `wind` (km/h, from 0 deg) and `wind_dir`, `tc`, `abs` (0 off, 1 as the car has it,
+//! (0/1), `mesh_ground` (1: not Assetto Corsa, the car's collider mesh may touch the road and
+//! the kerbs at any attitude), `wind` (km/h, from 0 deg) and `wind_dir`, `tc`, `abs` (0 off, 1 as the car has it,
 //! 2 on), `stability` (percent), `auto_clutch` (0/1), `wear_rate`, `fuel_rate`, `ballast`
 //! (kg), `fuel` (litres at the start), `pressure` (psi added to every tyre's static
 //! pressure), `pressure_static` (psi) and `pressure_gain` (psi per deg C of core temperature
-//! above 26; the game's is 0.16), `setup` (a saved setup file), `steer_rate` (full locks per second the driver
+//! above 26; the game's is 0.16), `pressure_law` (`<psi at 26 C>:<psi per C>`, the whole law
+//! replaced: `10.97:0.084` is what a recording of the game with Custom Shaders Patch shows),
+//! `setup` (a saved setup file), `steer_rate` (full locks per second the driver
 //! may turn the wheel: a pad's limit; 0 = none), `base_pace` (the pace outside the stretch),
 //! `brake_pace` (the share of the braking planned with inside it, default 0.85).
 
@@ -239,6 +242,11 @@ impl Variant {
                 "grip" => setup.env.dynamic_grip_level = n()?,
                 "air_density" => setup.env.air_density_override = Some(n()?),
                 "blankets" => setup.env.allow_tyre_blankets = n()? != 0.0,
+                "mesh_ground" => setup.env.experiment_mesh_on_ground = n()? != 0.0,
+                "pressure_law" => {
+                    let (at_26, per_degree) = value.split_once(':').ok_or(format!("--set pressure_law={value}: <psi at 26 C>:<psi per C> expected"))?;
+                    setup.env.experiment_tyre_pressure_law = Some((Variant::number(key, at_26)?, Variant::number(key, per_degree)?));
+                }
                 "wear_rate" => setup.env.tyre_consumption_rate = n()?,
                 "fuel_rate" => setup.env.fuel_consumption_rate = n()?,
                 "wind" => wind = n()?,
@@ -416,9 +424,11 @@ fn run(options: &RunOptions) -> Result<Pass, String> {
     let mut window: VecDeque<(f64, f32, f32)> = VecDeque::new();
     let (mut sum_lat, mut sum_long, mut travelled) = (0.0f64, 0.0f64, 0.0f64);
     let limit_steps = (420.0 / DT) as u64;
+    let mut last_speed = 0.0f32;
     while sim.steps < limit_steps {
         sim.step()?;
         let view = CarView::capture(&sim, 0.0);
+        last_speed = view.speed_kmh;
         let position = view.lap.position;
         let seconds = sim.sim_seconds();
         if !flying && seconds > 40.0 && last_position >= 0.0 && last_position < plan.zone.0 && position >= plan.zone.0 {
@@ -524,7 +534,7 @@ fn run(options: &RunOptions) -> Result<Pass, String> {
         file.flush().map_err(|e| e.to_string())?;
     }
     if !flying {
-        pass.failure = "the car never came round to the stretch".to_string();
+        pass.failure = format!("never came round to the stretch (ended at {last_position:.4}, {last_speed:.0} km/h)");
     } else if pass.failure.is_empty() && !measured {
         pass.failure = "the measured part was never reached".to_string();
     }

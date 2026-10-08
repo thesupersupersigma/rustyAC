@@ -335,6 +335,9 @@ impl SimSetup {
         if let Some(density) = e.air_density_override {
             put("air_density_override", hex(&[density]));
         }
+        if let Some((at_26, per_degree)) = e.experiment_tyre_pressure_law {
+            put("experiment_tyre_pressure_law", hex(&[at_26, per_degree]));
+        }
         if let Some(t) = &s.dynamic_track {
             put(
                 "dynamic_track",
@@ -481,6 +484,10 @@ impl SimSetup {
                 "restrictor" => setup.session.restrictor = hex_floats(key, value)?.first().copied().unwrap_or(0.0),
                 "penalties" => setup.session.penalties = flag(),
                 "air_density_override" => e.air_density_override = hex_floats(key, value)?.first().copied(),
+                "experiment_tyre_pressure_law" => {
+                    let [at_26, per_degree] = hex_floats(key, value)?[..] else { return Err(format!("experiment_tyre_pressure_law: two numbers expected, got {value:?}")) };
+                    e.experiment_tyre_pressure_law = Some((at_26, per_degree));
+                }
                 "assists" => {
                     let parts: Vec<&str> = value.split(',').collect();
                     let [abs, traction_control, stability] = parts[..] else { return Err(format!("assists: {value:?}")) };

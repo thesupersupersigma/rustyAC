@@ -229,6 +229,10 @@ pub fn apply(options: &Options, setup: &mut SimSetup) -> Result<Vec<String>, Str
             setup.env.ambient_temperature
         ));
     }
+    if let Some((at_26, per_degree)) = options.pressure_law {
+        setup.env.experiment_tyre_pressure_law = Some((at_26, per_degree));
+        overrides.push(format!("tyre pressure {at_26} psi + {per_degree} per deg C of core temperature above 26 (NOT the game's: acs.exe alone gives the static pressure + 0.16 per deg C)"));
+    }
     if !overrides.is_empty() {
         notes.push(format!("from the command line: {}", overrides.join(", ")));
     }

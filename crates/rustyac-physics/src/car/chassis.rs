@@ -103,6 +103,16 @@ pub struct ChassisEnvironment {
     /// (Custom Shaders Patch makes the air thinner with the track's altitude; `acs.exe`
     /// alone does not). `None`: the game's formula.
     pub air_density_override: Option<f32>,
+    /// NOT the game's: the car's collider mesh may touch the track at any attitude, for
+    /// experiments. `acs.exe` lets it only when the car lies on its side or roof (only the
+    /// floor boxes meet the road and the kerbs otherwise); Custom Shaders Patch has an
+    /// option that lets it "sooner".
+    pub experiment_mesh_on_ground: bool,
+    /// NOT the game's: another law for the tyres' pressure, for experiments: (psi at a core
+    /// temperature of 26 deg C, psi per deg C). `acs.exe` computes `(core - 26) * 0.16 +
+    /// static pressure`; a recording of the game with Custom Shaders Patch shows `10.97 +
+    /// 0.084 * (core - 26)` for the F2004 on a 14 deg C day (a gas law).
+    pub experiment_tyre_pressure_law: Option<(f32, f32)>,
 }
 
 impl Default for ChassisEnvironment {
@@ -138,6 +148,8 @@ impl Default for ChassisEnvironment {
             allowed_tyres_out: -1,
             session_type: 1,
             air_density_override: None,
+            experiment_mesh_on_ground: false,
+            experiment_tyre_pressure_law: None,
         }
     }
 }
@@ -1932,7 +1944,7 @@ impl RollingChassis {
             0x1e
         };
         let up = self.core.get_world_matrix(self.body).m[1][1];
-        if 0.25 > up {
+        if 0.25 > up || self.env.experiment_mesh_on_ground {
             mask |= 1;
         }
         self.mesh_collide_mask = mask;
@@ -2102,6 +2114,10 @@ impl RollingChassis {
             trace.calls.append(&mut body_calls);
             trace.output = rig::snapshot(&tyre, &trace.calls);
             self.trace.as_mut().unwrap().tyres.push(trace);
+        }
+        if let Some((at_26, per_degree)) = self.env.experiment_tyre_pressure_law {
+            // the experiment: the pressure the next step's tyre forces see
+            tyre.status.pressure_dynamic = (tyre.thermal_model.core_temp - 26.0) * per_degree + at_26;
         }
         self.tyres[index] = tyre;
     }
