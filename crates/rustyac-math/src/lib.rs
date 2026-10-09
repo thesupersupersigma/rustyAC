@@ -16,10 +16,18 @@
 //! and [`backend`] reports [`Backend::Std`]. Setting the environment variable
 //! `RUSTYAC_MATH=std` forces that fallback, to compare the two.
 //!
+//! A third implementation, [`pure`], is the DLL's own algorithms ported to plain Rust
+//! (bit-identical on all 2^32 inputs of every one-argument function, see `docs/port/web.md`).
+//! `RUSTYAC_MATH=pure` selects it, and a wasm build always uses it, because a browser cannot
+//! load a DLL. The desktop default stays the DLL itself.
+//!
 //! `sqrtf` is not routed through the DLL: an IEEE square root has exactly one correct
 //! result and both sides return it (checked by a test below).
 
 use std::sync::OnceLock;
+
+pub mod pure;
+mod pure_tables;
 
 /// Which implementation the runtime functions resolve to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +37,8 @@ pub enum Backend {
     /// Rust std (UCRT on Windows). No difference from MSVCR120 has been observed, but it is
     /// not the code the game runs.
     Std,
+    /// [`pure`]: MSVCR120's algorithms in plain Rust. What a wasm build runs.
+    Pure,
 }
 
 type F1 = unsafe extern "C" fn(f32) -> f32;
@@ -87,6 +97,53 @@ unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
 unsafe extern "C" fn std_sin(x: f64) -> f64 {
     x.sin()
 }
+
+unsafe extern "C" fn pure_sinf(x: f32) -> f32 {
+    pure::sinf(x)
+}
+unsafe extern "C" fn pure_cosf(x: f32) -> f32 {
+    pure::cosf(x)
+}
+unsafe extern "C" fn pure_tanf(x: f32) -> f32 {
+    pure::tanf(x)
+}
+unsafe extern "C" fn pure_expf(x: f32) -> f32 {
+    pure::expf(x)
+}
+unsafe extern "C" fn pure_asinf(x: f32) -> f32 {
+    pure::asinf(x)
+}
+unsafe extern "C" fn pure_acosf(x: f32) -> f32 {
+    pure::acosf(x)
+}
+unsafe extern "C" fn pure_atanf(x: f32) -> f32 {
+    pure::atanf(x)
+}
+unsafe extern "C" fn pure_atan2f(y: f32, x: f32) -> f32 {
+    pure::atan2f(y, x)
+}
+unsafe extern "C" fn pure_powf(x: f32, y: f32) -> f32 {
+    pure::powf(x, y)
+}
+unsafe extern "C" fn pure_sin(x: f64) -> f64 {
+    pure::sin(x)
+}
+
+/// The number parsers stay Rust's with this backend (see [`wcstod`]).
+const PURE: Crt = Crt {
+    backend: Backend::Pure,
+    sinf: pure_sinf,
+    cosf: pure_cosf,
+    tanf: pure_tanf,
+    expf: pure_expf,
+    asinf: pure_asinf,
+    acosf: pure_acosf,
+    atanf: pure_atanf,
+    atan2f: pure_atan2f,
+    powf: pure_powf,
+    sin: pure_sin,
+    parse: None,
+};
 
 const STD: Crt = Crt {
     backend: Backend::Std,
@@ -151,8 +208,16 @@ mod msvcr120 {
 fn crt() -> &'static Crt {
     static CRT: OnceLock<Crt> = OnceLock::new();
     CRT.get_or_init(|| {
-        if std::env::var("RUSTYAC_MATH").is_ok_and(|v| v.eq_ignore_ascii_case("std")) {
+        // no DLL and no environment in a browser
+        if cfg!(target_family = "wasm") {
+            return PURE;
+        }
+        let choice = std::env::var("RUSTYAC_MATH").unwrap_or_default();
+        if choice.eq_ignore_ascii_case("std") {
             return STD;
+        }
+        if choice.eq_ignore_ascii_case("pure") {
+            return PURE;
         }
         #[cfg(windows)]
         if let Some(crt) = msvcr120::load() {
@@ -317,7 +382,8 @@ fn is_c_space(c: char) -> bool {
 }
 
 /// Fallback for [`wcstod`] without MSVCR120: `[space] [sign] digits [. digits] [e|d exp]`.
-fn std_wcstod(text: &str) -> Parsed<f64> {
+/// Public so `tools/math_proof parse` can hold it against the runtime's parser.
+pub fn std_wcstod(text: &str) -> Parsed<f64> {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     while i < chars.len() && is_c_space(chars[i]) {
@@ -371,7 +437,7 @@ fn std_wcstod(text: &str) -> Parsed<f64> {
 }
 
 /// Fallback for [`wcstol`] without MSVCR120.
-fn std_wcstol(text: &str) -> Parsed<i32> {
+pub fn std_wcstol(text: &str) -> Parsed<i32> {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     while i < chars.len() && is_c_space(chars[i]) {

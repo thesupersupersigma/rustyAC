@@ -1,0 +1,16 @@
+[package]
+name = "math_proof"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Proof tool: holds rustyac-math's pure-Rust maths against the real MSVCR120.dll, every one of the 2^32 inputs of each one-argument function"
+
+[dependencies]
+rustyac-math = { path = "../../crates/rustyac-math" }
+
+[profile.release]
+opt-level = 3
+
+# standalone crate, not part of the parent workspace
+[workspace]
