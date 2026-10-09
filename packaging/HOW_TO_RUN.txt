@@ -45,8 +45,11 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
   If the game is not found, rustyAC says so and runs silently.
 
 - Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
-  it, so you most likely have it. With it rustyAC computes with exactly the
-  game's maths; without it Rust's own maths is used.
+  it, so you most likely have it. With it rustyAC calls the game's own maths
+  functions. Without it rustyAC uses its own copy of those functions, rewritten
+  in Rust, which gives the same results bit for bit (on any processor since
+  about 2013). rustyAC prints which of the two it uses when it starts
+  ("maths: ...").
 
 
 2. Commands
@@ -112,11 +115,19 @@ bindings, the second is added by rustyAC):
     F9, or B                   handbrake
     L                          headlights
     Alt + G                    automatic gearbox on / off
-    Alt + T                    traction control level up (with Shift: down)
-    Alt + A                    ABS level up (with Shift: down)
-                               (a Ctrl key that is not a driving key works too;
-                               [RUSTYAC] COMMAND_MODIFIER in rustyac_controls.ini
-                               chooses: AUTO, ALT, LCTRL or RCTRL)
+    T, or Alt + T              traction control level up (with Shift: down)
+    Y, or Alt + A              ABS level up (with Shift: down)
+                               (for the Alt commands a Ctrl key that is not a
+                               driving key works too; [RUSTYAC] COMMAND_MODIFIER
+                               in rustyac_controls.ini chooses: AUTO, ALT, LCTRL
+                               or RCTRL)
+    ]                          brake bias one click forward
+    [                          brake bias one click rearward
+                               (T, Y, ] and [ are rustyAC's own keys, the same as
+                               in the browser preview. If your bindings use one
+                               of them for something else, it keeps that use.
+                               ] and [ are the two keys right of P on a US
+                               keyboard.)
     F1, or C                   next view: chase, chase 2, bonnet, bumper, dash, cockpit
     F6                         the car's own cameras (the F2004's first one is above
                                the driver's helmet, looking down the nose); F1 goes back
@@ -133,10 +144,23 @@ Xbox pad:
     Y / X                      gear up / gear down
     A                          clutch
     LB                         DRS
+    D-pad up / down            traction control level up / down
     D-pad right / left         brake bias forward / back
+    Back held + D-pad up/down  ABS level up / down
     Right stick press          next view (as F1)
-    Back (View)                reset the car to the spawn point
+    Back (View), a tap         reset the car to the spawn point
+    Back held 0.6 s, let go    back onto the track where the car is
     Start (Menu)               pause
+
+    What Back does is decided when you let it go: nothing if you pressed the
+    D-pad's up or down while holding it (it was the ABS combination), else the
+    reset after a tap, or "back onto the track" after 0.6 s or more.
+
+The display always shows the levels: "TC 2/3", "ABS off" (or "not fitted" for
+a car without it) and "Bias 58.0 %", and a note in the upper middle for a
+moment when one of them changes. A level goes up to its highest and then to
+off, as in the game. The numbers are the game's own: the level and count its
+own message shows, and the brake bias of its shared memory (brakeBias).
 
 A wheel is read through your Assetto Corsa bindings; add --ffb for force
 feedback (low strength).

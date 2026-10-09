@@ -78,7 +78,36 @@ and open `http://127.0.0.1:8080/` in Chrome or Edge. The server serves `dist-web
 
 In the page: pick the folder (or use the pack), pick a car and a track, press **Drive**. R puts the car back
 in the pits, Shift+R back on the track where it is, F1 changes the view, Esc goes back to the menu; the page
-lists the rest.
+lists the rest (H shows the list while driving).
+
+### Keys and pad
+
+| | keyboard | Xbox pad |
+|---|---|---|
+| throttle, brake | Up / W, Down / S | RT, LT |
+| steer | Left / A, Right / D | left stick |
+| gear up, down | Space / E, Left Ctrl / Q | Y, X |
+| clutch, handbrake | Left Shift, B (F9) | A, RB |
+| DRS, KERS / ERS | F, K | LB, B |
+| **traction control up, down** | **T, Shift+T** | D-pad up, down |
+| **ABS up, down** | **Y, Shift+Y** | **Back held + D-pad up, down** |
+| **brake bias forward, rearward** | **], [** | D-pad right, left |
+| back to the pits | R | Back, a tap |
+| back onto the track | Shift+R | Back, held 0.6 s and let go |
+| next view | F1 or C | right stick press |
+| new car, automatic gearbox | N, G | |
+| pause, menu, the key list | P, Esc, H | Start |
+
+- The display shows `TC 2/3`, `ABS off` (or `not fitted`) and `Bias 58.0 %` all the time, lit while the aid
+  acts, and a note in the upper middle for a moment when one changes. A level goes up to its highest and then
+  to off, as in the game.
+- **Back is decided when you let it go**: nothing if the D-pad's up or down went down while you held it (it
+  was the ABS combination), else back to the pits after less than 0.6 s, back onto the track after more.
+- Keys pressed with Ctrl or Alt are left to the browser (Ctrl+T, Ctrl+W and the like cannot be taken from
+  Chrome anyway), which is why the aids have plain keys here. The page only keeps the keys it uses; every
+  other key (F5, F11, F12, Tab ...) does what it does in the browser.
+- Left Shift is also the clutch: use Right Shift for Shift+T / Shift+Y while moving. `]` and `[` are the two
+  keys right of P (by position, whatever the keyboard layout prints on them).
 
 Useful address options: `?car=bmw_z4_gt3&track=ks_laguna_seca&go=1` (start without a click),
 `&autodrive=1` (a line follower drives), `&backend=webgl` (do not use WebGPU), `&tex=512` (smaller textures),
@@ -106,6 +135,21 @@ node web/check.mjs --url "http://127.0.0.1:8080/?go=1&autodrive=1&car=bmw_z4_gt3
 ```
 
 Both print the car's whole state after 10,000 steps as one number (`state` / `hash`). They must be equal.
+
+The same with key presses on the way (the aids and the brake bias change the car, so the number changes, and
+it still has to be the same on both sides). The page sends each key through its own key handler:
+
+```
+cargo run --release -p rustyac-web --example selftest -- bmw_z4_gt3 ks_laguna_seca --steps 10000 --keys "KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"
+node web/check.mjs --url "http://127.0.0.1:8080/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca&selftest=10000&keys=KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"
+```
+
+`selftest.presses` in the second one's output is what the display showed before and after each key. And with
+real key presses while the page drives (trusted events, through the browser's own input path):
+
+```
+node web/check.mjs --url "http://127.0.0.1:8080/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca" --seconds 8 --keys "KeyT,Shift+KeyT,KeyY,BracketRight,BracketLeft"
+```
 
 ## Host it
 

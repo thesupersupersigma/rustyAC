@@ -9,8 +9,10 @@ the end of this file). State after the last commit:
   Back decided on release; `TC n/max`, `ABS n/max`, `Bias 58.0 %` and a note on a change, in both programs;
   the desktop also takes the plain keys). Checked in headless Chrome: real key presses change the display, and
   a self test with key presses ends in the desktop's state hash.
-- to do, in this order: step 4 (key lists in `docs/web.md`, `packaging/HOW_TO_RUN.txt`), step 5 (the pure
-  maths as the desktop's fallback, and say which maths is used), step 6 (`web/Dockerfile`, `web/nginx.conf`,
+- done too: step 4 (key lists in `docs/web.md`, `packaging/HOW_TO_RUN.txt`, the console's bindings table),
+  step 5 (without MSVCR120.dll the desktop uses `rustyac_math::pure`; it prints `maths: ...` at the start;
+  `RUSTYAC_MATH=no-dll` tries that fallback on a PC that has the DLL).
+- to do, in this order: step 6 (`web/Dockerfile`, `web/nginx.conf`,
   `.dockerignore`, "Deploy with Coolify" in `docs/web.md`), step 7 (14 replays against
   `re/scratch/task20w2/bin/rustyac_v0201.exe`, golden tests, the browser run), the report, then v0.20.2.
 - scratch: `re/scratch/task20w2/` (the v0.20.1 exe in `bin/`, patch scripts, three reader maps `recon_*.md`,
@@ -207,7 +209,8 @@ Recommendation: **the desktop could switch, and it would be an improvement in on
 that was found.** Today a PC without the Visual C++ 2013 runtime falls back to Rust's own maths, which is not
 proven equal; `pure` is. Switching the *default* is still not urgent: the DLL is by definition what the game
 runs, including on an old CPU where the DLL takes its SSE2 path and `pure` would not. A sensible middle step
-later: use `pure` instead of Rust's std as the fallback when the DLL is missing. Not done here.
+later: use `pure` instead of Rust's std as the fallback when the DLL is missing. Not done here. *(Done in
+Task 20w.2.)*
 
 How far that old fallback is from the game was measured too (`math_proof std`: Rust's std, which is the UCRT
 on Windows, against `pure`): `sinf cosf tanf asinf acosf atanf` and the double `sin` are identical on every
@@ -562,6 +565,8 @@ Does not, or not yet:
    Worth it?
 3. **The desktop fallback.** Without the VC++ 2013 runtime the desktop still falls back to Rust's std maths,
    as before. `pure` would be the better fallback now. Not changed, because the desktop was to stay as it is.
+   *(Changed in Task 20w.2, at the end of this file: the fallback is `pure` now, and the program says which
+   maths it uses.)*
 4. **The preview pack is 1.46 GB.** Spa and Laguna Seca are among the largest tracks. For a Chromebook,
    Magione (350 MB) or Imola would be kinder; the default in `web/preview.toml` is what the task named.
 5. **Hosting the pack.** `docs/web.md` says: for yourself only (behind a login or on your own network). The
