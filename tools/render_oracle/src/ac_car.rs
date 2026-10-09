@@ -12,8 +12,10 @@
 //! unworn seat belt out of the tree, and the steering wheel's matrix (the game's own
 //! `mat44f::createFromAxisAngle` gives the rotation; the product with the wheel's rest matrix
 //! is the port's `XMMatrixMultiply`, which the track frames prove on thousands of nodes).
-//! Not run, like in the port: the driver, `ConstrainedObjectsManager` (its `addModel` is
-//! patched out), the damage, light and mirror helpers.
+//! Task 21 added the car's other objects, each built by the game's own constructor on the same
+//! fake blocks and updated in the game's order: `ConstrainedObjectsManager`,
+//! `VisualDamageManager`, `CarBrakeLights`, `TyreBlur`, `BlurredObjects`, `BrakeDiscGraphics`,
+//! `DynamicCarEffects`, `CarFakeShadow`.
 
 use std::path::Path;
 
@@ -24,7 +26,8 @@ use crate::frames::CarSpec;
 
 const VA_FONT_CTOR: usize = 0x1_4020_0bb0; // Font::Font(eFontType, float, bool, bool): DirectWrite, not part of the 3D frame
 const VA_CONSOLE_SINGLETON: usize = 0x1_4155_9c08; // static Console* Console::_singleton
-const VA_CONSTRAINED_ADD_MODEL: usize = 0x1_4007_7040; // ConstrainedObjectsManager::addModel(Node*)
+const VA_CONSTRAINED_CTOR: usize = 0x1_4007_6d10; // ConstrainedObjectsManager::ConstrainedObjectsManager(CarAvatar*)
+const VA_CONSTRAINED_UPDATE_CONSTRAINTS: usize = 0x1_4007_7320; // ConstrainedObjectsManager::updateConstraints(float)
 const VA_NODE_BOUNDING_SPHERE_CTOR: usize = 0x1_4021_8a30; // NodeBoundingSphere::NodeBoundingSphere(std::wstring, float)
 const VA_NODE_BOUNDING_SPHERE_APPLY_NO_CULL: usize = 0x1_4021_8b50; // NodeBoundingSphere::applyNoCull(Node*)
 const VA_SUSPENSION_AVATAR_CTOR: usize = 0x1_401b_2fe0; // SuspensionAvatar::SuspensionAvatar(CarAvatar*)
@@ -189,6 +192,7 @@ pub struct Car {
     body_transform: *mut u8,
     steer_transform: *mut u8,
     steer_lock: f32,
+    constrained: *mut u8,
     visual_damage: *mut u8,
     brake_lights: *mut u8,
     tyre_blur: *mut u8,
@@ -203,8 +207,6 @@ impl Game {
         let acs = &self.acs;
         // mov rax, rcx; ret: a Font that is never used (the level-of-detail manager's debug text)
         acs.patch(acs.va(VA_FONT_CTOR), &[0x48, 0x89, 0xc8, 0xc3]);
-        // ret: the constrained objects (steering rods …) are a later task on both sides
-        acs.patch(acs.va(VA_CONSTRAINED_ADD_MODEL), &[0xc3]);
         for va in VA_NAME_TABLE_INITIALISERS {
             let init: extern "C" fn() = std::mem::transmute(acs.va(va));
             init();
@@ -284,8 +286,10 @@ impl Game {
         wr(car, 0x1c0, steer_transform);
         self.add_child(body_transform, steer_transform);
         self.add_child(car_node, body_transform);
-        // a ConstrainedObjectsManager that is never looked into (its addModel is patched out)
-        wr(car, 0x1018, acs.alloc(0x78));
+        let constrained = acs.alloc(0x78);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CONSTRAINED_CTOR));
+        ctor(constrained, car);
+        wr(car, 0x1018, constrained);
 
         // the models of every level, each with the number the game wants to have been told
         let lods = rustyac_physics::data::ini::IniReader::load(&data.join("lods.ini"))?;
@@ -352,7 +356,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, visual_damage, brake_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, brake_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -402,6 +406,8 @@ impl Game {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SUSPENSION_ANIMATOR_UPDATE));
             update(c.suspension, dt);
         }
+        let update_constraints: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CONSTRAINED_UPDATE_CONSTRAINTS));
+        update_constraints(c.constrained, dt);
         let update_lod_visibility: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY));
         update_lod_visibility(c.lod_manager);
     }

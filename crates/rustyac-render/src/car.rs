@@ -20,6 +20,7 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 use crate::animator::SuspensionAnimator;
 use crate::blur::{BlurredObjects, TyreBlur};
 use crate::camera::DEG_TO_RAD;
+use crate::constrained::ConstrainedObjectsManager;
 use crate::damage::VisualDamageManager;
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
@@ -81,6 +82,8 @@ pub struct CarAvatar {
     pub driver_hr_distance: f32,
     pub pro_view_nodes: Vec<NodeId>,
     pub suspension: Suspension,
+    /// `ConstrainedObjectsManager`
+    pub constrained: ConstrainedObjectsManager,
     /// `VisualDamageManager`
     pub damage: Option<VisualDamageManager>,
     /// the pause menu shows (the damage's parts stop shaking)
@@ -164,6 +167,7 @@ impl CarAvatar {
             driver_hr_distance: 15.0,
             pro_view_nodes: Vec::new(),
             suspension,
+            constrained: ConstrainedObjectsManager::default(),
             damage: None,
             pause_menu: false,
             brake_lights: CarBrakeLights::default(),
@@ -315,7 +319,7 @@ impl CarAvatar {
         }
         self.lods[lod_index].cockpit_hr = scene.find_child_by_name(root, "COCKPIT_HR", true);
         self.lods[lod_index].cockpit_lr = scene.find_child_by_name(root, "COCKPIT_LR", true);
-        // (ConstrainedObjectsManager::addModel: Task 21)
+        self.constrained.add_model(scene, root);
         let folder = self.folder.clone();
         let car_node = self.car_node;
         match &mut self.suspension {
@@ -428,13 +432,15 @@ impl CarAvatar {
     }
 
     /// What runs after all updates and before the picture (the handlers of `evOnPostUpdate`):
-    /// the animated suspensions, then `CarLodManager::updateLodVisibility` 0x1400e5810.
+    /// the animated suspensions, `ConstrainedObjectsManager::updateConstraints`, then
+    /// `CarLodManager::updateLodVisibility` 0x1400e5810.
     /// `camera` is the scene camera's matrix; `track_camera` is the track-side camera mode
     /// (its distances count a tenth).
     pub fn post_update(&mut self, scene: &mut Scene, state: &CarPhysicsState, dt: f32, camera: &Mat44f, fov: f32, track_camera: bool) {
         if let Suspension::Animator(animator) = &mut self.suspension {
             animator.update(scene, self.body_transform, state, dt);
         }
+        self.constrained.update_constraints(scene);
         let mut div = 1.0f32;
         if track_camera {
             div *= 10.0;
