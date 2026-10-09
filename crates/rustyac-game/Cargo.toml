@@ -23,10 +23,6 @@ rustyac-physics = { path = "../rustyac-physics" }
 rustyac-math = { path = "../rustyac-math" }
 # kn5 models: the track and the car of the debug view
 rustyac-content = { path = "../rustyac-content" }
-# AC's sound: its own FMOD banks through the player's own FMOD DLLs
-rustyac-audio = { path = "../rustyac-audio" }
-# AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
-rustyac-render = { path = "../rustyac-render" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 
@@ -35,7 +31,7 @@ png = "0.17"
 # be ported later), XInput (the Xbox pad, read directly, so Steam Input is not needed),
 # DirectInput 8 (wheels and other pads, force feedback), the keyboard, named shared memory, the
 # high-resolution timer of the physics thread. No window or input crate is needed on top.
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
@@ -60,3 +56,11 @@ features = [
     "Win32_UI_HiDpi",
     "Win32_Devices_HumanInterfaceDevice",
 ]
+
+# Windows only, like the `windows` crate above: on another target (the browser build, the
+# replay check under WASI) the crate is the simulation, the input classes and the scene maths.
+[target.'cfg(windows)'.dependencies]
+# AC's sound: its own FMOD banks through the player's own FMOD DLLs
+rustyac-audio = { path = "../rustyac-audio" }
+# AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
+rustyac-render = { path = "../rustyac-render" }

@@ -13,6 +13,10 @@
 //!                                                             `wcstol`) against the Rust
 //!                                                             fallback, on every number in
 //!                                                             every text file below
+//! math_proof rcpps                                              `rustyac_ode`'s table copy of
+//!                                                             Intel's `rcpps` instruction
+//!                                                             against this processor's, on
+//!                                                             every 32-bit pattern
 //! math_proof digest [--stride N]                              pure only: a hash of the results
 //!                                                             over a fixed input set (also
 //!                                                             builds for wasm32-wasip1, to
@@ -588,6 +592,61 @@ fn parse(folders: &[String]) {
     );
 }
 
+/// `rcpps`: the instruction of this processor against `rustyac_ode::matrix::rcpps_intel`.
+#[cfg(target_arch = "x86_64")]
+fn rcpps(threads: usize) {
+    use core::arch::x86_64::{__cpuid, _mm_loadu_ps, _mm_rcp_ps, _mm_storeu_ps};
+    let leaf = __cpuid(0);
+    let vendor: Vec<u8> = [leaf.ebx, leaf.edx, leaf.ecx]
+        .iter()
+        .flat_map(|r| r.to_le_bytes())
+        .collect();
+    let vendor = String::from_utf8_lossy(&vendor).into_owned();
+    let chunk = (1u64 << 32) / threads as u64;
+    let mut stats = Stats::default();
+    for part in split(threads, |t| {
+        let start = t as u64 * chunk;
+        let end = if t + 1 == threads {
+            1u64 << 32
+        } else {
+            start + chunk
+        };
+        let mut s = Stats::default();
+        let mut bits = start;
+        while bits < end {
+            let v: [f32; 4] = std::array::from_fn(|k| f32::from_bits((bits + k as u64) as u32));
+            let mut want = [0.0f32; 4];
+            // SAFETY: SSE is part of x86_64; the pointers are to four f32 each.
+            unsafe { _mm_storeu_ps(want.as_mut_ptr(), _mm_rcp_ps(_mm_loadu_ps(v.as_ptr()))) };
+            let got = rustyac_ode::matrix::rcpps_intel(&v);
+            for k in 0..4 {
+                s.note32(|| format!("rcpps({:08x})", v[k].to_bits()), want[k], got[k]);
+            }
+            bits += 4;
+        }
+        s
+    }) {
+        stats.add(part);
+    }
+    let mut out = String::new();
+    row(
+        &mut out,
+        "rcpps",
+        &format!("every 32-bit pattern, on a {vendor} processor"),
+        &stats,
+    );
+    if stats.different != 0 && vendor != "GenuineIntel" {
+        println!(
+            "(expected: the table is Intel's; this processor's own rcpps is another approximation)"
+        );
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn rcpps(_: usize) {
+    println!("NOT TESTED: rcpps is an x86 instruction");
+}
+
 fn option<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     let at = args.iter().position(|a| a == name)?;
     args.get(at + 1)?.parse().ok()
@@ -669,10 +728,11 @@ fn main() {
             compare(&args, &only, !args.iter().any(|a| a == "--fma3-off"));
         }
         Some("parse") => parse(&args[1..]),
+        Some("rcpps") => rcpps(option(&args, "--threads").unwrap_or_else(threads_default)),
         Some("digest") => digest(option(&args, "--stride").unwrap_or(4099)),
         _ => {
             eprintln!(
-                "usage: math_proof all | fma3-off | one <function>... | digest | parse <folder>...  \
+                "usage: math_proof all | fma3-off | one <function>... | rcpps | digest | parse <folder>...  \
                  [--threads N] [--pairs N] [--out <file.md>] [--stride N]"
             );
             std::process::exit(2);

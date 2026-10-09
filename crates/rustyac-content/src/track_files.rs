@@ -9,6 +9,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::vfs::{self, PathExt};
+
 /// One `[MODEL_n]` of a models file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelEntry {
@@ -55,7 +57,7 @@ fn file_name(bytes: &[u8]) -> PathBuf {
 /// The `[MODEL_n]` sections of a models file, n = 0, 1, 2 ... up to the first missing one.
 fn read_models(ini: &Path, folder: &Path) -> Result<Vec<ModelEntry>, String> {
     // the file is read as bytes: sections, keys and values are never decoded
-    let text = std::fs::read(ini).map_err(|e| format!("{}: {e}", ini.display()))?;
+    let text = vfs::read(ini).map_err(|e| format!("{}: {e}", ini.display()))?;
     let text = text.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&text);
     type Section<'a> = (&'a [u8], Vec<(&'a [u8], &'a [u8])>);
     let mut sections: Vec<Section> = Vec::new();
@@ -83,7 +85,7 @@ impl TrackFiles {
     pub fn find(folder: &Path, layout: &str) -> Result<TrackFiles, String> {
         let files = TrackFiles::find_lenient(folder, layout)?;
         for model in &files.models {
-            if !model.file.is_file() {
+            if !model.file.vfs_is_file() {
                 return Err(format!("the track model {} is missing", model.file.display()));
             }
         }
@@ -93,12 +95,12 @@ impl TrackFiles {
     /// As [`TrackFiles::find`], but a model file that is not there stays in the list (the
     /// game itself loads an empty node for it and goes on).
     pub fn find_lenient(folder: &Path, layout: &str) -> Result<TrackFiles, String> {
-        if !folder.is_dir() {
+        if !folder.vfs_is_dir() {
             return Err(format!("the track folder {} does not exist", folder.display()));
         }
         let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let ini = if layout.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{layout}.ini")) };
-        let models = if ini.is_file() {
+        let models = if ini.vfs_is_file() {
             read_models(&ini, folder)?
         } else if layout.is_empty() {
             vec![ModelEntry { file: folder.join(format!("{name}.kn5")), position: [0.0; 3], rotation: [0.0; 3] }]

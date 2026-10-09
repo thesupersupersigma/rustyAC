@@ -8,6 +8,7 @@
 
 use rustyac_math::powf;
 use rustyac_physics::car::{CarControls, CarControlsInput, VibrationDef};
+#[cfg(windows)]
 use windows::Win32::UI::Input::XboxController::{XInputGetState, XInputSetState, XINPUT_STATE, XINPUT_VIBRATION};
 
 use super::ini::ControlsIni;
@@ -181,6 +182,7 @@ pub fn motor_word(level: f32) -> u16 {
 
 /// The pads Windows offers through XInput. AC only ever reads pad 0; rustyAC takes the first
 /// one that is connected.
+#[cfg(windows)]
 pub struct XInput {
     /// The pad in use.
     pub index: Option<u32>,
@@ -188,6 +190,7 @@ pub struct XInput {
     since_scan: u32,
 }
 
+#[cfg(windows)]
 impl XInput {
     pub fn new() -> XInput {
         let mut xinput = XInput { index: None, since_scan: 0 };
@@ -253,6 +256,7 @@ impl XInput {
     }
 }
 
+#[cfg(windows)]
 impl Default for XInput {
     fn default() -> XInput {
         XInput::new()

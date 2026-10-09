@@ -40,9 +40,10 @@
 //! have no matrix of their own. The game reads the format with `KN5IO::load` @ 0x1402151a0; it
 //! never checks the magic, and version 1 files (32-bit indices) are not read here.
 
-use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+use crate::vfs::File;
 
 /// Bytes of one vertex of a mesh (class 2).
 pub const VERTEX_STRIDE: u32 = 44;
@@ -334,7 +335,7 @@ impl Kn5 {
     /// Reads the structure of a kn5: a few hundred kilobytes even for a 400 MB track.
     pub fn open(path: &Path) -> io::Result<Kn5> {
         let file = File::open(path)?;
-        let length = file.metadata()?.len();
+        let length = file.len()?;
         let mut s = Scanner { file: BufReader::with_capacity(1 << 16, file), position: 0, length };
         if &s.bytes::<6>()? != b"sc6969" {
             return Err(bad(format!("{} is not a kn5 file", path.display())));

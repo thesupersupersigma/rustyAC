@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use rustyac_content::kn5::Kn5;
+use rustyac_content::vfs::{self, PathExt};
 
 use super::surfaces::SurfacesManager;
 
@@ -77,7 +78,7 @@ fn json_string(text: &str, key: &str) -> Option<String> {
 }
 
 fn read_text(path: &Path) -> Option<String> {
-    Some(String::from_utf8_lossy(&std::fs::read(path).ok()?).into_owned())
+    Some(String::from_utf8_lossy(&vfs::read(path).ok()?).into_owned())
 }
 
 /// The entry of a track folder and layout, whether it is installed or not.
@@ -92,7 +93,7 @@ fn entry(folder: &Path, track: &str, layout: &str) -> TrackEntry {
     let author = json_string(&json, "author").unwrap_or_default();
     let base = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
     // a layout with Custom Shaders Patch's own settings folder was not made by Kunos
-    let kunos = (author.is_empty() || author.to_ascii_lowercase().contains("kunos")) && !base.join("extension").is_dir() && !folder.join("extension").is_dir();
+    let kunos = (author.is_empty() || author.to_ascii_lowercase().contains("kunos")) && !base.join("extension").vfs_is_dir() && !folder.join("extension").vfs_is_dir();
     TrackEntry {
         track: track.to_string(),
         layout: layout.to_string(),
@@ -114,16 +115,16 @@ pub fn layouts_of(folder: &Path) -> Vec<String> {
         }
     };
     let mut named: Vec<String> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(folder.join("ui")) {
-        for e in entries.flatten() {
-            if e.path().join("ui_track.json").is_file() || e.path().join("dlc_ui_track.json").is_file() {
-                named.push(e.file_name().to_string_lossy().into_owned());
+    let ui = folder.join("ui");
+    if let Ok(entries) = vfs::read_dir(&ui) {
+        for (entry, _) in entries {
+            if ui.join(&entry).join("ui_track.json").vfs_is_file() || ui.join(&entry).join("dlc_ui_track.json").vfs_is_file() {
+                named.push(entry);
             }
         }
     }
-    if let Ok(entries) = std::fs::read_dir(folder) {
-        for e in entries.flatten() {
-            let file = e.file_name().to_string_lossy().into_owned();
+    if let Ok(entries) = vfs::read_dir(folder) {
+        for (file, _) in entries {
             if let Some(layout) = file.strip_prefix("models_").and_then(|f| f.strip_suffix(".ini")) {
                 if !layout.is_empty() {
                     named.push(layout.to_string());
@@ -132,8 +133,8 @@ pub fn layouts_of(folder: &Path) -> Vec<String> {
         }
     }
     named.sort();
-    let has_base_ui = folder.join("ui").join("ui_track.json").is_file() || folder.join("ui").join("dlc_ui_track.json").is_file();
-    let has_base_models = folder.join("models.ini").is_file() || (named.is_empty() && folder.join(format!("{name}.kn5")).is_file());
+    let has_base_ui = folder.join("ui").join("ui_track.json").vfs_is_file() || folder.join("ui").join("dlc_ui_track.json").vfs_is_file();
+    let has_base_models = folder.join("models.ini").vfs_is_file() || (named.is_empty() && folder.join(format!("{name}.kn5")).vfs_is_file());
     if has_base_ui || has_base_models {
         add(String::new());
     }
@@ -146,7 +147,7 @@ pub fn layouts_of(folder: &Path) -> Vec<String> {
 /// Every track and layout under `<root>/content/tracks`, by folder name.
 pub fn installed(root: &Path) -> Vec<TrackEntry> {
     let tracks = root.join("content").join("tracks");
-    let mut folders: Vec<PathBuf> = std::fs::read_dir(&tracks).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default();
+    let mut folders: Vec<PathBuf> = vfs::read_dir(&tracks).map(|d| d.into_iter().filter(|(_, is_dir)| *is_dir).map(|(name, _)| tracks.join(name)).collect()).unwrap_or_default();
     folders.sort();
     let mut out = Vec::new();
     for folder in folders {
@@ -163,9 +164,9 @@ pub fn installed(root: &Path) -> Vec<TrackEntry> {
 fn model_files(folder: &Path, layout: &str) -> Result<Vec<PathBuf>, Refusal> {
     let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let ini = if layout.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{layout}.ini")) };
-    if !ini.is_file() {
+    if !ini.vfs_is_file() {
         let single = folder.join(format!("{name}.kn5"));
-        if layout.is_empty() && single.is_file() {
+        if layout.is_empty() && single.vfs_is_file() {
             return Ok(vec![single]);
         }
         return Err(Refusal::NotInstalled(if layout.is_empty() {
@@ -201,8 +202,19 @@ fn model_files(folder: &Path, layout: &str) -> Result<Vec<PathBuf>, Refusal> {
 
 /// Can this track / layout be loaded by plain Assetto Corsa, and so by rustyAC?
 pub fn check(entry: &TrackEntry) -> Result<(), Refusal> {
+    check_with(entry, true)
+}
+
+/// [`check`] without opening the model files: what can be said from the small files alone.
+/// For a list of tracks where the models (hundreds of megabytes) are not at hand yet, as in
+/// the browser build; the full [`check`] runs when one is loaded.
+pub fn check_without_models(entry: &TrackEntry) -> Result<(), Refusal> {
+    check_with(entry, false)
+}
+
+fn check_with(entry: &TrackEntry, open_models: bool) -> Result<(), Refusal> {
     let files = model_files(&entry.folder, &entry.layout)?;
-    let missing: Vec<String> = files.iter().filter(|f| !f.is_file()).map(|f| f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
+    let missing: Vec<String> = files.iter().filter(|f| !f.vfs_is_file()).map(|f| f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect();
     if !files.is_empty() && missing.len() == files.len() {
         return Err(Refusal::NotInstalled(format!("none of its {} model files is there ({} ...): the track it is a layout of is not installed", files.len(), missing[0])));
     }
@@ -210,7 +222,7 @@ pub fn check(entry: &TrackEntry) -> Result<(), Refusal> {
         return Err(Refusal::NotInstalled("its models file names no model".to_string()));
     }
     // a model the reader cannot make sense of: damaged, or encrypted by its maker
-    for file in files.iter().filter(|f| f.is_file()) {
+    for file in files.iter().filter(|f| open_models && f.vfs_is_file()) {
         match Kn5::open(file) {
             Err(e) => return Err(Refusal::Encrypted(format!("{}: {e}", file.display()))),
             Ok(kn5) => {
@@ -227,7 +239,7 @@ pub fn check(entry: &TrackEntry) -> Result<(), Refusal> {
     }
     // surfaces.ini with values only Custom Shaders Patch understands: acs.exe stops on them
     let surfaces = base.join("data").join("surfaces.ini");
-    if surfaces.is_file() {
+    if surfaces.vfs_is_file() {
         // the game's own table is not needed to see whether the track's file can be read
         if let Err(message) = SurfacesManager::new(Path::new(""), &surfaces) {
             // without the long path in front
@@ -247,7 +259,7 @@ pub fn check(entry: &TrackEntry) -> Result<(), Refusal> {
 /// folder. Assetto Corsa's tracks have none; one that has is refused and never opened.
 pub fn packed_data(base: &Path) -> Option<PathBuf> {
     let archive = base.join("data.acd");
-    archive.is_file().then_some(archive)
+    archive.vfs_is_file().then_some(archive)
 }
 
 /// A name in a kn5 that says "encrypted". This is a guess: no encrypted track is installed
@@ -271,10 +283,10 @@ fn encryption_marker(kn5: &Kn5) -> Option<String> {
 pub fn notes(entry: &TrackEntry) -> Vec<String> {
     let mut notes = Vec::new();
     let base = if entry.layout.is_empty() { entry.folder.clone() } else { entry.folder.join(&entry.layout) };
-    if base.join("extension").is_dir() || entry.folder.join("extension").is_dir() {
+    if base.join("extension").vfs_is_dir() || entry.folder.join("extension").vfs_is_dir() {
         notes.push("has a CSP `extension` folder (ignored)".to_string());
     }
-    let has_patch = std::fs::read_dir(&entry.folder).map(|d| d.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".vao-patch"))).unwrap_or(false);
+    let has_patch = vfs::read_dir(&entry.folder).map(|d| d.iter().any(|(name, _)| name.ends_with(".vao-patch"))).unwrap_or(false);
     if has_patch {
         notes.push("CSP `.vao-patch` files (ignored)".to_string());
     }
@@ -306,7 +318,7 @@ pub fn find(root: Option<&Path>, name: &str, layout: Option<&str>, preferred_lay
     let mut notes = Vec::new();
     let direct = PathBuf::from(name);
     let has_separator = name.contains('/') || name.contains('\\');
-    let (folder, track, mut layout_from_name) = if direct.is_dir() && (has_separator || root.is_none()) {
+    let (folder, track, mut layout_from_name) = if direct.vfs_is_dir() && (has_separator || root.is_none()) {
         let track = std::path::absolute(&direct).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
         (direct, track, None)
     } else {

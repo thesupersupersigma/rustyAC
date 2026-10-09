@@ -8,11 +8,14 @@
 //! (only ever read); the built-in layout. Whatever is in use is written to
 //! `rustyac_controls.ini` if that file does not exist yet.
 
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use super::ini::ControlsIni;
 use super::keyboard::Keys;
 use super::pad::{button, button_from_name, button_label, PadButton, PAD_ACTIONS};
+#[cfg(windows)]
 use crate::cli::Options;
 
 /// The sections of AC's file that rustyAC reads (whole sections are carried over).
@@ -256,6 +259,7 @@ pub fn effective(source: &ControlsIni) -> ControlsIni {
 }
 
 /// Can a `controls.ini` be used: does it say how to drive with a pad or a keyboard?
+#[cfg(windows)]
 fn usable(ini: &ControlsIni) -> bool {
     ini.has_section("X360") || ini.has_section("KEYBOARD") || ini.has_section("STEER")
 }
@@ -297,6 +301,7 @@ impl Bindings {
     }
 
     /// Finds the bindings as the module's head describes; `notes` gets what happened on the way.
+    #[cfg(windows)]
     pub fn load(options: &Options, notes: &mut Vec<String>) -> Bindings {
         let try_file = |path: &Path, notes: &mut Vec<String>| -> Option<ControlsIni> {
             match ControlsIni::load(path) {
@@ -505,9 +510,12 @@ mod tests {
         let text = b.describe();
         assert!(text.contains("gear up") && text.contains("Space or E"), "{text}");
         // the built-in layout binds no DirectInput device: no axis, no button
-        let wheel = crate::input::wheel::DiCarControl::from_ini(&b.ini);
-        assert_eq!((wheel.steer.joy, wheel.steer.index, wheel.gas.joy, wheel.brake.index), (-1, -1, -1, -1));
-        assert_eq!((wheel.gear_up.joy, wheel.gear_up.index, wheel.drs.index, wheel.hand_brake.index), (-1, -1, -1, -1));
+        #[cfg(windows)]
+        {
+            let wheel = crate::input::wheel::DiCarControl::from_ini(&b.ini);
+            assert_eq!((wheel.steer.joy, wheel.steer.index, wheel.gas.joy, wheel.brake.index), (-1, -1, -1, -1));
+            assert_eq!((wheel.gear_up.joy, wheel.gear_up.index, wheel.drs.index, wheel.hand_brake.index), (-1, -1, -1, -1));
+        }
         assert!(b.keep);
     }
 

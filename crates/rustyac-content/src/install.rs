@@ -12,17 +12,31 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::vfs::PathExt;
+
 /// The game's folder name inside a Steam library.
 const GAME_FOLDER: &str = r"steamapps\common\assettocorsa";
 const USUAL_PLACE: &str = r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa";
 
 /// Is this Assetto Corsa's folder? (It has `content` and `system`.)
 pub fn is_ac_root(folder: &Path) -> bool {
-    folder.join("content").is_dir() && folder.join("system").is_dir()
+    folder.join("content").vfs_is_dir() && folder.join("system").vfs_is_dir()
+}
+
+static GIVEN_ROOT: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Says where the game's folder is, instead of looking for it (`None`: look again). For a
+/// program whose files do not come from a Steam library: the browser build names the folder
+/// its mounted files sit under ([`crate::vfs::mount`]).
+pub fn set_ac_root(root: Option<PathBuf>) {
+    *GIVEN_ROOT.write().unwrap() = root;
 }
 
 /// Assetto Corsa's own folder, or `None` when it is not found. Read only.
 pub fn ac_root() -> Option<PathBuf> {
+    if let Some(root) = GIVEN_ROOT.read().unwrap().clone() {
+        return Some(root);
+    }
     if let Some(root) = std::env::var_os("AC_ROOT") {
         let root = PathBuf::from(root);
         return is_ac_root(&root).then_some(root);

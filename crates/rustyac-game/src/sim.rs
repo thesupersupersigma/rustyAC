@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rustyac_content::vfs::PathExt;
 use rustyac_physics::car::replay::Ground;
 use rustyac_physics::track::{load_track, LapDb, Track, TrackGround};
 use rustyac_physics::tyre::RayTrackCollisionProvider;
@@ -403,12 +404,12 @@ pub fn ac_root() -> Option<PathBuf> {
 /// Finds a track's folder: a path to it, or its name under the game's `content/tracks`.
 pub fn find_track(track: &str) -> Result<PathBuf, String> {
     let direct = PathBuf::from(track);
-    if direct.is_dir() {
+    if direct.vfs_is_dir() {
         return Ok(direct);
     }
     if let Some(root) = ac_root() {
         let folder = root.join("content").join("tracks").join(track);
-        if folder.is_dir() {
+        if folder.vfs_is_dir() {
             return Ok(folder);
         }
     }
@@ -464,14 +465,14 @@ pub fn find_car_model(_car: &str, data_path: &Path) -> Option<PathBuf> {
             in_first = line == "[LOD_0]";
         } else if let (true, Some(("FILE", file))) = (in_first, line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))) {
             let path = folder.join(file);
-            if path.is_file() {
+            if path.vfs_is_file() {
                 return Some(path);
             }
         }
     }
     // no lods.ini: the model named like the folder
     let path = folder.join(format!("{name}.kn5"));
-    path.is_file().then_some(path)
+    path.vfs_is_file().then_some(path)
 }
 
 /// Where a car is put down: a point on the road and the direction its tail points

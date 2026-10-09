@@ -7,8 +7,16 @@ name = "math_proof"
 version = "0.1.0"
 dependencies = [
  "rustyac-math",
+ "rustyac-ode",
 ]
 
 [[package]]
 name = "rustyac-math"
 version = "0.20.0"
+
+[[package]]
+name = "rustyac-ode"
+version = "0.20.0"
+dependencies = [
+ "rustyac-math",
+]

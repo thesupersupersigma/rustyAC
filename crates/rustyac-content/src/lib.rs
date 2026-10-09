@@ -10,6 +10,8 @@
 //! * [`install`]: where Assetto Corsa is installed (`AC_ROOT`, Steam's library folders).
 //! * [`track_files`]: which model files make up a track (`models.ini` / `models_<layout>.ini`)
 //!   and where its `data` and `ai` folders are.
+//! * [`vfs`]: where the files come from. The disk, unless a set of files in memory is mounted
+//!   (the browser build).
 //!
 //! Nothing here is physics: the files that decide what the car feels (`surfaces.ini`, the AI
 //! line, the timing gates) are read by `rustyac-physics` with the game's own parsing rules.
@@ -18,6 +20,7 @@ pub mod acd;
 pub mod install;
 pub mod kn5;
 pub mod track_files;
+pub mod vfs;
 
 pub use kn5::{Kn5, Kn5Reader, Material, MeshInfo, Name, Node, NodeClass, TextureEntry, Vertex};
 pub use track_files::{ModelEntry, TrackFiles};

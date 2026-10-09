@@ -294,6 +294,7 @@ pub fn lerp_pose(a: &Mat, b: &Mat, t: f32) -> Mat {
 
 impl CarView {
     /// The part of the game's `CarPhysicsState` its renderer poses the car from.
+    #[cfg(windows)]
     pub fn physics_state(&self) -> rustyac_render::car::CarPhysicsState {
         let m = |m: &Mat| Mat44f { m: *m };
         rustyac_render::car::CarPhysicsState {

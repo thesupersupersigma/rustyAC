@@ -16,16 +16,48 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use rustyac_content::kn5::{Kn5, NodeClass};
 use rustyac_content::track_files::TrackFiles;
+use rustyac_content::vfs::PathExt;
 
 use super::spline;
 use super::surfaces::{get_sector_id, SurfacesManager};
 use super::timing;
 use super::Track;
 use crate::vecmath::{xm_matrix_multiply, Mat44f};
+
+/// The clock of the load report. A browser's wasm has no clock of its own (`Instant::now`
+/// panics there): the report's seconds are then zero.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+#[derive(Clone, Copy)]
+struct Instant(std::time::Instant);
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl Instant {
+    fn now() -> Instant {
+        Instant(std::time::Instant::now())
+    }
+
+    fn elapsed(&self) -> std::time::Duration {
+        self.0.elapsed()
+    }
+}
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+#[derive(Clone, Copy)]
+struct Instant;
+
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+impl Instant {
+    fn now() -> Instant {
+        Instant
+    }
+
+    fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
 
 /// A helper node of the track's models: a node whose name starts with `AC_`.
 #[derive(Clone, Debug, PartialEq)]
@@ -71,7 +103,7 @@ pub struct TrackLoadReport {
 /// kept elsewhere, the game's folder itself (`AC_ROOT`, else Steam's usual place), which has
 /// the surfaces every track starts from.
 pub fn game_root(track_folder: &Path) -> Option<PathBuf> {
-    let beside = track_folder.parent().and_then(Path::parent).and_then(Path::parent).filter(|root| root.join("system").is_dir());
+    let beside = track_folder.parent().and_then(Path::parent).and_then(Path::parent).filter(|root| root.join("system").vfs_is_dir());
     if let Some(root) = beside {
         return Some(root.to_path_buf());
     }
@@ -123,10 +155,10 @@ pub fn top_node_matrix(node: &Mat44f, position: [f32; 3], rotation: [f32; 3]) ->
 pub fn track_models(folder: &Path, config: &str) -> Result<Vec<rustyac_content::ModelEntry>, String> {
     let mut files = TrackFiles::find_lenient(folder, config)?;
     let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
-    if ini.is_file() {
+    if ini.vfs_is_file() {
         files.models = models_of(&ini, folder)?;
     }
-    files.models.retain(|model| model.file.is_file());
+    files.models.retain(|model| model.file.vfs_is_file());
     Ok(files.models)
 }
 
@@ -142,14 +174,14 @@ pub fn load_track(folder: &Path, config: &str) -> Result<(Track, TrackLoadReport
     let mut files = TrackFiles::find_lenient(folder, config)?;
     // which models, in which order and where: by the game's own ini rules
     let ini = if config.is_empty() { folder.join("models.ini") } else { folder.join(format!("models_{config}.ini")) };
-    if ini.is_file() {
+    if ini.vfs_is_file() {
         files.models = models_of(&ini, folder)?;
     }
     // KN5IO::load @ 0x1402151a0 on a file that is not there: the game gets an empty node and
     // goes on, so the model is left out (a track of which every model is missing is refused)
     let mut skipped = Vec::new();
     files.models.retain(|model| {
-        let there = model.file.is_file();
+        let there = model.file.vfs_is_file();
         if !there {
             skipped.push(model.file.clone());
         }

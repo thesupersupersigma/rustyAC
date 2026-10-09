@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::vfs::{self, PathExt};
+
 /// The optional header of a container: this number, then one more `i32`.
 const ACD_MAGIC: i32 = -1111;
 
@@ -132,7 +134,7 @@ impl Acd {
         if names.is_empty() {
             return Err(format!("{}: the car folder's name (the key) is not known", acd.display()));
         }
-        let container = std::fs::read(acd).map_err(|e| format!("{}: {e}", acd.display()))?;
+        let container = vfs::read(acd).map_err(|e| format!("{}: {e}", acd.display()))?;
         for name in &names {
             let archive = Acd::decrypt(&container, &key_from_string(name)?).map_err(|e| format!("{}: {e}", acd.display()))?;
             if archive.looks_decrypted() {
@@ -158,7 +160,7 @@ impl Acd {
     /// As [`Acd::open`] for a car folder that was renamed after packing: `name` is the name
     /// the data was packed under.
     pub fn open_as(acd: &Path, name: &str) -> Result<Acd, String> {
-        let container = std::fs::read(acd).map_err(|e| format!("{}: {e}", acd.display()))?;
+        let container = vfs::read(acd).map_err(|e| format!("{}: {e}", acd.display()))?;
         let key = key_from_string(name)?;
         Acd::decrypt(&container, &key).map_err(|e| format!("{}: {e}", acd.display()))
     }
@@ -219,7 +221,7 @@ fn cached(acd: &Path) -> Result<Arc<Acd>, String> {
 
 /// The archive that holds `file`, if its folder has one.
 fn archive_of(file: &Path) -> Option<Result<Arc<Acd>, String>> {
-    let acd = sibling_acd(file).filter(|acd| acd.is_file())?;
+    let acd = sibling_acd(file).filter(|acd| acd.vfs_is_file())?;
     Some(cached(&acd))
 }
 
@@ -232,7 +234,7 @@ pub fn read(file: &Path) -> Result<Option<Vec<u8>>, String> {
             let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok(archive.get(&name).map(<[u8]>::to_vec))
         }
-        None => Ok(std::fs::read(file).ok()),
+        None => Ok(vfs::read(file).ok()),
     }
 }
 
@@ -241,9 +243,9 @@ pub fn read(file: &Path) -> Result<Option<Vec<u8>>, String> {
 /// not hold the name. (Reading never falls back: [`read`].)
 pub fn exists(file: &Path) -> bool {
     match archive_of(file) {
-        Some(Ok(archive)) => file.file_name().is_some_and(|n| archive.get(&n.to_string_lossy()).is_some()) || file.is_file(),
+        Some(Ok(archive)) => file.file_name().is_some_and(|n| archive.get(&n.to_string_lossy()).is_some()) || file.vfs_is_file(),
         Some(Err(_)) => false,
-        None => file.is_file(),
+        None => file.vfs_is_file(),
     }
 }
 

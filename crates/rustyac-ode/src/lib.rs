@@ -45,6 +45,7 @@ pub mod lcp;
 pub mod mass;
 pub mod matrix;
 pub mod odemath;
+mod rcp_table;
 pub mod opcode;
 pub mod opcode_obb;
 pub mod opcode_tree;

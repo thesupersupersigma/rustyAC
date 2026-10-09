@@ -25,6 +25,8 @@
 
 use std::path::Path;
 
+use rustyac_content::vfs::{self, PathExt};
+
 use super::Track;
 use crate::data::ini::IniReader;
 use crate::math::sqrtf;
@@ -1065,7 +1067,7 @@ impl AiSpline {
     }
 
     pub fn load(path: &Path) -> Result<AiSpline, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = vfs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         AiSpline::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
@@ -1238,7 +1240,7 @@ impl SplineLocator {
 /// line, the starting bounds.
 pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut Vec<String>) -> Result<(), String> {
     let fast_lane = ai.join("fast_lane.ai");
-    if fast_lane.is_file() {
+    if fast_lane.vfs_is_file() {
         match AiSpline::load(&fast_lane) {
             Ok(spline) => {
                 if spline.grid_missing {
@@ -1273,10 +1275,10 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
         }
     }
     let pit_lane = ai.join("pit_lane.ai");
-    if pit_lane.is_file() {
+    if pit_lane.vfs_is_file() {
         // only shown, never searched: no lookup grid is built for it (the game builds one
         // and does not search it either)
-        track.pit_lane_spline = std::fs::read(&pit_lane).ok().and_then(|bytes| AiSpline::parse_with(&bytes, false).ok());
+        track.pit_lane_spline = vfs::read(&pit_lane).ok().and_then(|bytes| AiSpline::parse_with(&bytes, false).ok());
     }
     // Track::initStartingBounds @ 0x140278790
     track.starting_bounds.clear();
@@ -1352,7 +1354,7 @@ mod tests {
         let mut tested = 0;
         for track in ["magione", "monza", "ks_laguna_seca"] {
             let file = root.join("content").join("tracks").join(track).join("ai").join("fast_lane.ai");
-            if !file.is_file() {
+            if !file.vfs_is_file() {
                 eprintln!("NOT TESTED: {} is missing", file.display());
                 continue;
             }

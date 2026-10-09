@@ -637,10 +637,30 @@ pub fn rcpps(v: &[f32; 4]) -> [f32; 4] {
     out
 }
 
-/// Where there is no `rcpps` the exact reciprocal has to do (the last bits then differ from
-/// the game's).
+/// Where there is no `rcpps` (a wasm build): what an Intel processor's `rcpps` answers,
+/// from a table, so a browser gets the bits of the desktop it is most likely compared with.
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
 pub fn rcpps(v: &[f32; 4]) -> [f32; 4] {
-    [1.0 / v[0], 1.0 / v[1], 1.0 / v[2], 1.0 / v[3]]
+    rcpps_intel(v)
+}
+
+/// Intel's `rcpps` in plain arithmetic: the sign kept, the exponent negated, the mantissa
+/// looked up by its top eleven bits; an operand below the smallest normal number gives an
+/// infinity, one of 2^126 and above (or an infinity) gives zero, a NaN comes back quiet.
+/// Bit-identical with the instruction of an Intel processor for every operand
+/// (`tools/math_proof rcpps`); AMD's instruction answers differently in the last bits.
+pub fn rcpps_intel(v: &[f32; 4]) -> [f32; 4] {
+    v.map(|x| {
+        let bits = x.to_bits();
+        let sign = bits & 0x8000_0000;
+        let exponent = (bits >> 23) & 0xff;
+        let mantissa = bits & 0x007f_ffff;
+        f32::from_bits(match exponent {
+            0 => sign | 0x7f80_0000,
+            255 if mantissa != 0 => bits | 0x0040_0000,
+            253..=255 => sign,
+            _ => sign | (253 - exponent) << 23 | (crate::rcp_table::RCPPS_INTEL[(mantissa >> 12) as usize] as u32) << 8,
+        })
+    })
 }

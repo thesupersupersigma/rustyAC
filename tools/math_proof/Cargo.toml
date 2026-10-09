@@ -8,6 +8,8 @@ description = "Proof tool: holds rustyac-math's pure-Rust maths against the real
 
 [dependencies]
 rustyac-math = { path = "../../crates/rustyac-math" }
+# for `math_proof rcpps`: the software copy of Intel's approximate reciprocal
+rustyac-ode = { path = "../../crates/rustyac-ode" }
 
 [profile.release]
 opt-level = 3
