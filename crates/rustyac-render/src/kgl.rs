@@ -578,6 +578,22 @@ impl Kgl {
         }
     }
 
+    /// `kglVertexBufferMapNoOverwrite` 0x14001a080 (`KGLVertexBuffer::mapNoOverWrite`
+    /// 0x140023ec0): `length` bytes at `offset` of `data` go to the same place in the buffer,
+    /// the rest of the buffer stays.
+    pub fn vertex_buffer_map_no_overwrite(&self, vb: &KglVertexBuffer, data: &[u8], offset: usize, length: usize) {
+        let Some(buffer) = &vb.buffer else {
+            return;
+        };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            if self.context.Map(buffer, 0, D3D11_MAP_WRITE_NO_OVERWRITE, 0, Some(&mut mapped)).is_ok() {
+                std::ptr::copy_nonoverlapping(data.as_ptr().add(offset), (mapped.pData as *mut u8).add(offset), length);
+            }
+            self.context.Unmap(buffer, 0);
+        }
+    }
+
     /// `kglSetPrimitiveType` 0x140019340: 0 a triangle list, 1 a line list, 2 a line strip,
     /// 3 a triangle strip.
     pub fn set_primitive_type(&self, kind: i32) {

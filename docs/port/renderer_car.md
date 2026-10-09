@@ -21,6 +21,7 @@ State after the last commit (kept up to date with every commit):
   - `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects` (`lights.rs`; `graphics.crt_rand` = the C runtime's rand): proven on lights on / brake (1M), a hard stop (F2004 disc glow, 69 frames), grass (dirt, 39 frames); oracle `--set name=value[@frame]` writes over the state;
   - `ConstrainedObjectsManager` (`constrained.rs`, the `DIR_` nodes): proven on the E30 (8 nodes) and the F2004 (2) over 29 frames of a lap each;
   - `.ksanim` version 1 (`QuatPos::from_matrix`) and `AnimatedLights`: proven on the F40's pop-up lights (49 frames);
+  - `SkidMarkBuffer`, `DynamicBuffer`, `CarAvatar::updateSkidMarks` (`skid.rs`; `Scene` has `RenderableObject` nodes): proven on the F2004's launch (119 frames, two marks growing);
 - Next: the specs of the nine items (`re/scratch/task21/spec_*.md`, written by reader agents from the
   disassembly), then port and prove item by item in this order: damage glass and damage meshes, blur meshes
   and `lods.ini` rules, lights and disc glow, the driver, `DIR_` nodes, instruments, ground shadows, skid

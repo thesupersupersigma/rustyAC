@@ -309,6 +309,7 @@ pub struct AcRenderer {
     track_node: NodeId,
     cars: NodeId,
     car_shadows: NodeId,
+    sim_nodes: rustyac_render::car::SimNodes,
     car: Option<CarAvatar>,
     track_folder: Option<String>,
     options: AcOptions,
@@ -384,7 +385,7 @@ impl AcRenderer {
         }
         camera.set_cubemap_size(&graphics, cube_size);
         let hud = HudPass::new(&graphics.kgl.device)?;
-        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -420,7 +421,7 @@ impl AcRenderer {
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90. `folder` is the car's folder in the game.
-    pub fn load_car(&mut self, folder: &Path, steer_lock: f32) -> Result<String, String> {
+    pub fn load_car(&mut self, folder: &Path, steer_lock: f32, tyre_width: [f32; 4]) -> Result<String, String> {
         let started = std::time::Instant::now();
         let skin = match &self.options.skin {
             Some(skin) => skin.clone(),
@@ -431,7 +432,7 @@ impl AcRenderer {
             }
         };
         let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock))?;
-        car.init_common_post_physics(&mut self.graphics, &mut self.scene)?;
+        car.init_common_post_physics(&mut self.graphics, &mut self.scene, &self.sim_nodes, tyre_width)?;
         let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
         self.car = Some(car);
         Ok(summary)

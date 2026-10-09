@@ -125,7 +125,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
 
     // Sim::onPostLoad: CarAvatar::onPostLoad
     if let Some(car) = &mut car {
-        car.init_common_post_physics(&mut graphics, &mut scene)?;
+        let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
+        car.init_common_post_physics(&mut graphics, &mut scene, &sim, frame.car.as_ref().map(|c| c.tyre_width).unwrap_or([0.0; 4]))?;
         car.on_post_load(&mut graphics, &mut scene, car_shadows);
     }
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;

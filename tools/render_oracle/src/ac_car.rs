@@ -40,6 +40,8 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
+const VA_CAR_AVATAR_UPDATE_SKID_MARKS: usize = 0x1_400d_d780; // CarAvatar::updateSkidMarks(float)
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
 const VA_CAR_BRAKE_LIGHTS_CTOR: usize = 0x1_400d_dbb0; // CarBrakeLights::CarBrakeLights(CarAvatar*)
 const VA_CAR_BRAKE_LIGHTS_UPDATE: usize = 0x1_400e_0450; // CarBrakeLights::update(float)
@@ -150,7 +152,7 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
         }
     }
     // textures the car's objects open by a path under the game's folder
-    for name in ["content/texture/DAMAGE_GLASS.dds"] {
+    for name in ["content/texture/DAMAGE_GLASS.dds", "content/texture/skids.dds"] {
         if game.join(name).is_file() {
             copy_file(&game.join(name), &root.join(name))?;
         }
@@ -341,6 +343,27 @@ impl Game {
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
         // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
+        // (the skid marks: world detail above 0; 6000 vertices x QUANTITY_MULT, 12000 from detail 3)
+        wr(car, 0xe5c, spec.tyre_width);
+        {
+            let mut mult = 1.0f32;
+            if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new("system/cfg/skidmarks.ini")) {
+                if ini.has_key("GRAPHICS", "QUANTITY_MULT") {
+                    mult = ini.get_float("GRAPHICS", "QUANTITY_MULT").unwrap_or(0.0);
+                }
+            }
+            let detail = crate::root::profile().world_detail;
+            for i in 0..4 {
+                if detail > 0 && mult != 0.0 {
+                    let size = if detail >= 3 { (mult * 12000.0) as i32 } else { (mult * 6000.0) as i32 };
+                    let buffer = acs.alloc(0x198);
+                    let ctor: extern "C" fn(*mut u8, *mut u8, u32) -> *mut u8 = std::mem::transmute(acs.va(VA_SKID_MARK_BUFFER_CTOR));
+                    ctor(buffer, self.graphics, size as u32);
+                    wr(car, 0xe20 + 8 * i, buffer);
+                    self.add_child(nodes.skid_marks, buffer);
+                }
+            }
+        }
         let make = |size: usize, va: usize| -> *mut u8 {
             let object = acs.alloc(size);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(va));
@@ -392,6 +415,9 @@ impl Game {
         create_from_axis_angle(&mut r, &axis, a);
         let matrix = |f: &[f32; 16]| Mat44f { m: std::array::from_fn(|row| std::array::from_fn(|col| f[row * 4 + col])) };
         wr(c.steer_transform, 8, flat(&xm_matrix_multiply(&matrix(&r), &matrix(&org))));
+        // … and the skid marks, with the wheels where the last frame left them
+        let update_skid_marks: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AVATAR_UPDATE_SKID_MARKS));
+        update_skid_marks(c.car, dt);
         // the car's objects in the order they were added
         wr(c.game, 0x20, dt);
         if !c.animated {

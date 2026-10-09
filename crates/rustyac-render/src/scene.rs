@@ -189,8 +189,16 @@ pub enum NodeKind {
     SkinnedMesh(Box<SkinnedMeshData>),
     /// `NodeBoundingSphere`: its world matrix is copied from the delegate when it is drawn
     BoundingSphere { delegate: Option<NodeId> },
+    /// a `Renderable` that draws itself
+    Object { object: Option<std::rc::Rc<std::cell::RefCell<dyn RenderableObject>>> },
     /// `NodeEvent` (0xf8 bytes): its handlers are called whenever a pass reaches the node
     Event { handlers: Vec<std::rc::Rc<std::cell::RefCell<dyn NodeEventHandler>>> },
+}
+
+/// A `Renderable` of the game's own code that draws itself (skid marks, particles): its
+/// `render`. Returns whether `Node::render` follows (the world matrix, the children).
+pub trait RenderableObject {
+    fn render(&mut self, scene: &mut Scene, graphics: &mut Graphics, event: &OnNodeRenderEvent) -> bool;
 }
 
 /// `OnNodeRenderEvent`: the node and what the handlers read of the `RenderContext`.
@@ -266,6 +274,18 @@ impl Scene {
     /// `NodeEvent`.
     pub fn node_event(&mut self, name: &str) -> NodeId {
         self.push(name, NodeKind::Event { handlers: Vec::new() }, None, true)
+    }
+
+    /// A `Renderable` whose `render` is the game's own code for that class; its object is set
+    /// with [`Scene::set_renderable_object`].
+    pub fn renderable_object(&mut self, name: &str) -> NodeId {
+        self.push(name, NodeKind::Object { object: None }, Some(Renderable::new()), true)
+    }
+
+    pub fn set_renderable_object(&mut self, node: NodeId, value: std::rc::Rc<std::cell::RefCell<dyn RenderableObject>>) {
+        if let NodeKind::Object { object } = &mut self.nodes[node].kind {
+            *object = Some(value);
+        }
     }
 
     /// `Event<OnNodeRenderEvent>::addHandler` on a `NodeEvent`.
@@ -513,6 +533,16 @@ impl Scene {
                 }
                 self.render_node(graphics, n, rc)
             }
+            NodeKind::Object { object } => {
+                let event = OnNodeRenderEvent { node: n, pass_id: rc.pass_id, max_layer: rc.max_layer, camera: rc.camera };
+                let follow = match object.clone() {
+                    Some(object) => object.borrow_mut().render(self, graphics, &event),
+                    None => true,
+                };
+                if follow {
+                    self.render_node(graphics, n, rc)
+                }
+            }
             NodeKind::Node => self.render_node(graphics, n, rc),
         }
     }
@@ -639,10 +669,19 @@ fn update_bounding_sphere(vertices: &[u8], stride: usize) -> Sphere {
 /// `CameraMeshFilter::isVisible` 0x140219af0. `world` is the world matrix of the mesh's parent.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn is_visible(rc: &RenderContext, m: &Renderable, world: &Mat44f) -> bool {
-    if m.layer > rc.max_layer {
+    is_visible_to(rc.pass_id, rc.max_layer, &rc.camera, m, world)
+}
+
+/// [`is_visible`] for a handler or an object that has the event and not the context.
+pub fn is_visible_in(event: &OnNodeRenderEvent, m: &Renderable, world: &Mat44f) -> bool {
+    is_visible_to(event.pass_id, event.max_layer, &event.camera, m, world)
+}
+
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn is_visible_to(pass: i32, max_layer: i32, cam: &CullCamera, m: &Renderable, world: &Mat44f) -> bool {
+    if m.layer > max_layer {
         return false;
     }
-    let pass = rc.pass_id;
     if pass == PASS_SHADOW && !m.cast_shadows {
         return false;
     }
@@ -659,7 +698,6 @@ pub fn is_visible(rc: &RenderContext, m: &Renderable, world: &Mat44f) -> bool {
     if m.no_cull {
         return true;
     }
-    let cam = &rc.camera;
     let x = cam.fov * f32::from_bits(0x3c4c_cccd);
     let f = if x > 1.0 {
         1.0

@@ -43,6 +43,8 @@ pub struct CarSpec {
     pub skin: String,
     /// `car.ini [CONTROLS] STEER_LOCK`
     pub steer_lock: f32,
+    /// `CarPhysicsInfo::tyreWidth`: `tyres.ini [FRONT] / [REAR] WIDTH`
+    pub tyre_width: [f32; 4],
 }
 
 #[derive(Clone, Copy)]
@@ -180,7 +182,13 @@ pub fn build(args: &Args) -> Result<Frame, String> {
                 skins.first().cloned().unwrap_or_default()
             }
         };
-        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock });
+        let mut tyre_width = [0.0f32; 4];
+        if let Ok(tyres) = rustyac_physics::data::ini::IniReader::load(&folder.join("data/tyres.ini")) {
+            let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
+            let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
+            tyre_width = [front, front, rear, rear];
+        }
+        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock, tyre_width });
     }
     // where the sun is seen from the car (for the view into the sun): the same angles the
     // lighting uses, to the precision a camera needs

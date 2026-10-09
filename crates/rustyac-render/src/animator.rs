@@ -429,13 +429,18 @@ impl SuspensionAnimator {
         SuspensionAnimator { animations, lods: Vec::new() }
     }
 
-    /// `SuspensionAnimator::addModel` 0x1401b14f0, once per level of detail: the nodes, and
-    /// for each wheel the curve from its height to the animation's position.
     /// `SuspensionAnimator::getWheelTransform` 0x1401b2470 for every level of detail.
     pub fn wheel_transforms(&self, wheel: usize) -> Vec<NodeId> {
         self.lods.iter().filter_map(|d| d.wheels[wheel]).collect()
     }
 
+    /// `ISuspensionAvatar::getWheelTransform` 0x1401b2460: the first level's wheel node.
+    pub fn wheel_transform(&self, wheel: usize) -> Option<NodeId> {
+        self.lods.first().and_then(|d| d.wheels[wheel])
+    }
+
+    /// `SuspensionAnimator::addModel` 0x1401b14f0, once per level of detail: the nodes, and
+    /// for each wheel the curve from its height to the animation's position.
     pub fn add_model(&mut self, scene: &mut Scene, root: NodeId) {
         let mut d = LodDef {
             players: Vec::new(),

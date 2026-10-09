@@ -188,7 +188,14 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             let skin = skin.filter(|s| folder.join("skins").join(s).is_dir());
             renderer.set_skin(skin);
             let steer_lock = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
-            println!("{}", renderer.load_car(&folder, steer_lock)?);
+            // CarPhysicsInfo::tyreWidth
+            let mut tyre_width = [0.0f32; 4];
+            if let Ok(tyres) = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("tyres.ini")) {
+                let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
+                let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
+                tyre_width = [front, front, rear, rear];
+            }
+            println!("{}", renderer.load_car(&folder, steer_lock, tyre_width)?);
         }
         None => println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name),
     }

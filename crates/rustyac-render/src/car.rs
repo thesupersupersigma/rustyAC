@@ -27,6 +27,7 @@ use crate::graphics::Graphics;
 use crate::lights::{AnimatedLights, BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
+use crate::skid::CarSkidMarks;
 
 pub use crate::state::CarPhysicsState;
 
@@ -61,6 +62,18 @@ pub enum Suspension {
     Animator(Box<SuspensionAnimator>),
 }
 
+/// The nodes of `Sim::initSceneGraph` 0x140199d70 the car's objects hang things on.
+#[derive(Clone, Copy, Debug)]
+pub struct SimNodes {
+    pub root: NodeId,
+    pub cars: NodeId,
+    pub skid_marks: NodeId,
+    pub particles: NodeId,
+    pub car_shadows: NodeId,
+    pub before_cars: NodeId,
+    pub render_finished: NodeId,
+}
+
 /// The graphics side of `CarAvatar` with its `CarLodManager`.
 pub struct CarAvatar {
     /// the car's folder: `<game>/content/cars/<car>`
@@ -88,6 +101,8 @@ pub struct CarAvatar {
     pub damage: Option<VisualDamageManager>,
     /// the pause menu shows (the damage's parts stop shaking)
     pub pause_menu: bool,
+    /// the skid marks: `CarAvatar::skidMarkBuffers`
+    pub skid_marks: CarSkidMarks,
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
     pub brake_lights: CarBrakeLights,
     pub animated_lights: AnimatedLights,
@@ -171,6 +186,7 @@ impl CarAvatar {
             constrained: ConstrainedObjectsManager::default(),
             damage: None,
             pause_menu: false,
+            skid_marks: CarSkidMarks::default(),
             brake_lights: CarBrakeLights::default(),
             animated_lights: AnimatedLights::default(),
             brake_discs: BrakeDiscGraphics::default(),
@@ -242,7 +258,11 @@ impl CarAvatar {
 
     /// `CarAvatar::initCommonPostPhysics` 0x1400d6190, the objects of the picture, in the
     /// game's order.
-    pub fn init_common_post_physics(&mut self, graphics: &mut Graphics, scene: &mut Scene) -> Result<(), String> {
+    pub fn init_common_post_physics(&mut self, graphics: &mut Graphics, scene: &mut Scene, sim: &SimNodes, tyre_width: [f32; 4]) -> Result<(), String> {
+        self.skid_marks.tyre_width = tyre_width;
+        for i in 0..4 {
+            self.skid_marks.make_buffer(graphics, scene, sim.skid_marks, i)?;
+        }
         let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
         let wheel_nodes = |w: usize| wheels[w].clone();
         self.brake_lights = CarBrakeLights::new(graphics, scene, &self.folder, self.body_transform)?;
@@ -414,6 +434,17 @@ impl CarAvatar {
         let r = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), a);
         scene.nodes[self.steer_transform_hr].matrix = xm_matrix_multiply(&r, &self.org_steer_matrix);
 
+        // CarAvatar::updateSkidMarks 0x1400dd780, before the car's objects move the wheels
+        {
+            let wheel_node = |i: usize| match &self.suspension {
+                Suspension::Avatar(avatar) => Some(avatar.wheel_transforms[i]),
+                Suspension::Animator(animator) => animator.wheel_transform(i),
+            };
+            let nodes: [Option<NodeId>; 4] = std::array::from_fn(wheel_node);
+            let scene_ref: &Scene = scene;
+            let active = scene_ref.nodes[self.car_node].is_active;
+            self.skid_marks.update(state, active, &|i| nodes[i].map(|n| scene_ref.get_world_matrix(n)).unwrap_or(Mat44f::IDENTITY));
+        }
         if let Suspension::Avatar(avatar) = &self.suspension {
             avatar.update(scene, state);
         }
