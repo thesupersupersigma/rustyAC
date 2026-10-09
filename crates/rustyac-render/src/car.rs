@@ -20,6 +20,7 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 use crate::animator::SuspensionAnimator;
 use crate::blur::{BlurredObjects, TyreBlur};
 use crate::camera::DEG_TO_RAD;
+use crate::cockpit::{AnalogInstruments, CarAnimations, DriverShiftPositions, GearShiftShake, RotatingObjects};
 use crate::constrained::ConstrainedObjectsManager;
 use crate::damage::VisualDamageManager;
 use crate::driver::{DriverFrame, DriverModel};
@@ -138,6 +139,15 @@ pub struct CarAvatar {
     pub damage: Option<VisualDamageManager>,
     /// the pause menu shows (the damage's parts stop shaking)
     pub pause_menu: bool,
+    /// `RotatingObjects`, `CarAnimations`, `GearShiftShake`, `AnalogInstruments`
+    pub rotating_objects: RotatingObjects,
+    pub car_animations: CarAnimations,
+    pub gear_shift_shake: Option<GearShiftShake>,
+    pub analog_instruments: AnalogInstruments,
+    /// `car.ini [GRAPHICS] DRIVEREYES`
+    pub driver_eyes_position: [f32; 3],
+    /// `CarAvatar::wingsStatus[i].angle`: each wing's angle, degrees
+    pub wing_angles: Vec<f32>,
     /// the skid marks: `CarAvatar::skidMarkBuffers`
     pub skid_marks: CarSkidMarks,
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
@@ -243,6 +253,12 @@ impl CarAvatar {
             constrained: ConstrainedObjectsManager::default(),
             damage: None,
             pause_menu: false,
+            rotating_objects: RotatingObjects::default(),
+            car_animations: CarAnimations::default(),
+            gear_shift_shake: None,
+            analog_instruments: AnalogInstruments::default(),
+            driver_eyes_position: car_ini.as_ref().and_then(|i| i.get_float3("GRAPHICS", "DRIVEREYES").ok()).unwrap_or([0.0; 3]),
+            wing_angles: Vec::new(),
             skid_marks: CarSkidMarks::default(),
             brake_lights: CarBrakeLights::default(),
             animated_lights: AnimatedLights::default(),
@@ -300,6 +316,7 @@ impl CarAvatar {
             }
         }
         car.damage = Some(VisualDamageManager::new(graphics, scene, folder, body_transform)?);
+        car.rotating_objects = RotatingObjects::new(scene, folder, car_node);
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
     }
@@ -322,6 +339,9 @@ impl CarAvatar {
         }
         let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
         let wheel_nodes = |w: usize| wheels[w].clone();
+        self.car_animations = CarAnimations::new(scene, &self.folder, self.body_transform, self.driver_eyes_position[0]);
+        self.gear_shift_shake = Some(GearShiftShake::new(scene, self.car_node));
+        self.analog_instruments = AnalogInstruments::new(scene, &self.folder, self.car_node, self.body_transform)?;
         self.brake_lights = CarBrakeLights::new(graphics, scene, &self.folder, self.body_transform)?;
         self.animated_lights = AnimatedLights::new(scene, &self.folder, self.body_transform);
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
@@ -563,6 +583,21 @@ impl CarAvatar {
         if let Some(damage) = &mut self.damage {
             damage.update(graphics, scene, state, replay_dt, self.pause_menu);
         }
+        self.rotating_objects.update(scene, state, replay_dt);
+        {
+            // CarAvatar::getActiveDriverModel 0x1400d30b0
+            let driver = if self.is_driver_hr { &self.driver_hr } else { &self.driver_lr };
+            let positions = driver.as_ref().map(|d| DriverShiftPositions {
+                shift: d.shift_player.as_ref().map(|p| p.get_current_pos()).unwrap_or(0.0),
+                shift_down: d.shift_down_player.as_ref().map(|p| p.get_current_pos()).unwrap_or(0.0),
+            });
+            self.car_animations.door_animation_target = if self.guid == 0 && self.view.camera_mode == 9 { 1.0 } else { 0.0 };
+            self.car_animations.update(scene, state, dt, self.steer_lock.unwrap_or(0.0), &self.wing_angles, positions);
+        }
+        if let Some(shake) = &mut self.gear_shift_shake {
+            shake.update(scene, state, dt, &mut graphics.crt_rand);
+        }
+        self.analog_instruments.update(scene, state, dt, self.guid == self.view.focused_car_index);
         self.brake_lights.update(scene, state, replay_dt, self.in_pitlane);
         self.animated_lights.update(scene, self.brake_lights.front_lights_on, dt);
         let scale = if self.replay_mode && self.replay_scale != 0.0 { self.replay_scale } else { 1.0 };

@@ -40,6 +40,14 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_ROTATING_OBJECTS_CTOR: usize = 0x1_400b_a560; // RotatingObjects::RotatingObjects(CarAvatar*)
+const VA_ROTATING_OBJECTS_UPDATE: usize = 0x1_400b_ae20; // RotatingObjects::update(float)
+const VA_CAR_ANIMATIONS_CTOR: usize = 0x1_4006_0ba0; // CarAnimations::CarAnimations(CarAvatar*)
+const VA_CAR_ANIMATIONS_UPDATE: usize = 0x1_4006_2160; // CarAnimations::update(float)
+const VA_GEAR_SHIFT_SHAKE_CTOR: usize = 0x1_4010_48f0; // GearShiftShake::GearShiftShake(CarAvatar*)
+const VA_GEAR_SHIFT_SHAKE_UPDATE: usize = 0x1_4010_4ca0; // GearShiftShake::update(float)
+const VA_ANALOG_INSTRUMENTS_CTOR: usize = 0x1_4005_6480; // AnalogInstruments::AnalogInstruments(CarAvatar*)
+const VA_ANALOG_INSTRUMENTS_UPDATE: usize = 0x1_4005_9770; // AnalogInstruments::update(float)
 const VA_CAR_AVATAR_INIT_DRIVER: usize = 0x1_400d_7380; // CarAvatar::initDriver()
 const VA_DRIVER_MODEL_UPDATE: usize = 0x1_400f_b5d0; // DriverModel::update(float)
 const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
@@ -237,6 +245,10 @@ pub struct Car {
     steer_lock: f32,
     constrained: *mut u8,
     visual_damage: *mut u8,
+    rotating_objects: *mut u8,
+    car_animations: *mut u8,
+    gear_shift_shake: *mut u8,
+    analog_instruments: *mut u8,
     brake_lights: *mut u8,
     animated_lights: *mut u8,
     tyre_blur: *mut u8,
@@ -323,6 +335,8 @@ impl Game {
         wr(car, 0xfe0, 1u8);
         wr(car, 0x1060, spec.steer_lock);
         wr(car, 0xe44, spec.max_gear);
+        wr(car, 0xe40, spec.steer_lock);
+        wr(car, 0x218, car_ini.get_float3("GRAPHICS", "DRIVEREYES").unwrap_or([0.0; 3]));
         // CarAvatar::initDriver 0x1400d7380: the two driver models, the first children of BODYTR
         let init_driver: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_INIT_DRIVER));
         init_driver(car);
@@ -388,6 +402,9 @@ impl Game {
         let visual_damage = acs.alloc(0xd0);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VISUAL_DAMAGE_CTOR));
         ctor(visual_damage, car);
+        let rotating_objects = acs.alloc(0x78);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_ROTATING_OBJECTS_CTOR));
+        ctor(rotating_objects, car);
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
         // CarAvatar::initPhysics: a Car of which only the steering lock is ever read
@@ -421,6 +438,10 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(va));
             ctor(object, car)
         };
+        let car_animations = make(0xa8, VA_CAR_ANIMATIONS_CTOR);
+        wr(car, 0x1270, car_animations);
+        let gear_shift_shake = make(0x128, VA_GEAR_SHIFT_SHAKE_CTOR);
+        let analog_instruments = make(0x490, VA_ANALOG_INSTRUMENTS_CTOR);
         let brake_lights = make(0xf0, VA_CAR_BRAKE_LIGHTS_CTOR);
         // GameObject::addGameObject: the object's parent is the car
         wr(brake_lights, 0x38, car);
@@ -441,7 +462,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, brake_lights, animated_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -513,6 +534,10 @@ impl Game {
         update(c.lod_manager, dt);
         for (object, va) in [
             (c.visual_damage, VA_VISUAL_DAMAGE_UPDATE),
+            (c.rotating_objects, VA_ROTATING_OBJECTS_UPDATE),
+            (c.car_animations, VA_CAR_ANIMATIONS_UPDATE),
+            (c.gear_shift_shake, VA_GEAR_SHIFT_SHAKE_UPDATE),
+            (c.analog_instruments, VA_ANALOG_INSTRUMENTS_UPDATE),
             (c.brake_lights, VA_CAR_BRAKE_LIGHTS_UPDATE),
             (c.animated_lights, VA_ANIMATED_LIGHTS_UPDATE),
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),

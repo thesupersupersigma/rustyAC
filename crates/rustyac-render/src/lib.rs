@@ -15,6 +15,7 @@ pub mod animator;
 pub mod blur;
 pub mod camera;
 pub mod car;
+pub mod cockpit;
 pub mod constrained;
 pub mod cubemap;
 pub mod damage;

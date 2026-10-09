@@ -23,6 +23,7 @@ State after the last commit (kept up to date with every commit):
   - `.ksanim` version 1 (`QuatPos::from_matrix`) and `AnimatedLights`: proven on the F40's pop-up lights (49 frames);
   - `SkidMarkBuffer`, `DynamicBuffer`, `CarAvatar::updateSkidMarks` (`skid.rs`; `Scene` has `RenderableObject` nodes): proven on the F2004's launch (119 frames, two marks growing);
   - the driver (`driver.rs`: both models, `driver_base_pos.knh`, skins, steering, the lever and paddle shift animations with `AnimationBlender` and the matrix lerp, head movement, visibility; `animator.rs` has mode-0 players): proven on cockpit sequences of 89 frames with gear changes on the E30, F2004 and 1M, and a far view (plain model); oracle views `onboard` and `dash` (the eyes with `GRAPHICS_OFFSET`; Task 20's `eyes` left it out and looks from above the roof), the Documents folder is a stand-in on both sides;
+  - `AnalogInstruments`, `GearShiftShake`, `CarAnimations`, `RotatingObjects` (`cockpit.rs`): proven on cockpit sequences of the E30 (rev, speed, fuel, water needles with LUTs), F40 (turbo), 1M, F2004; the game has no wiper code at all;
 - Next: the specs of the nine items (`re/scratch/task21/spec_*.md`, written by reader agents from the
   disassembly), then port and prove item by item in this order: damage glass and damage meshes, blur meshes
   and `lods.ini` rules, lights and disc glow, the driver, `DIR_` nodes, instruments, ground shadows, skid
