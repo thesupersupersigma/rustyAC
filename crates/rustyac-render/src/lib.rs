@@ -12,6 +12,7 @@
 #![allow(clippy::neg_multiply, clippy::erasing_op, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::too_many_arguments, clippy::assign_op_pattern, clippy::eq_op)]
 
 pub mod animator;
+pub mod blur;
 pub mod camera;
 pub mod car;
 pub mod cubemap;

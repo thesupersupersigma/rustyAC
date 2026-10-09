@@ -14,6 +14,9 @@ State after the last commit (kept up to date with every commit):
     `car_oracle run --audio-tape`), updates and renders every frame, and compares the command log and the
     pixels of each (`--dump <i,j>` writes those frames whole; the first frame that differs is run again and
     shown). New views `side`, `rear`, `front`; `--label <word>`; `--serial`.
+  - the following cube map (`--cubemap-faces` in the oracle, `--cube-faces` in `rustyac.exe`): proven on a sequence;
+  - `GLRenderer`, `NodeEvent` handlers, `CarFakeShadow` (ground shadows): proven; `rustyac.exe` fills the car state the helpers read (`view.rs` `RenderState`);
+  - `TyreBlur` and `BlurredObjects` (`blur.rs`, with `Material::clone_material`): proven on two sequences;
 - Next: the specs of the nine items (`re/scratch/task21/spec_*.md`, written by reader agents from the
   disassembly), then port and prove item by item in this order: damage glass and damage meshes, blur meshes
   and `lods.ini` rules, lights and disc glow, the driver, `DIR_` nodes, instruments, ground shadows, skid

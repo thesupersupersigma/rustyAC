@@ -37,6 +37,10 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_TYRE_BLUR_CTOR: usize = 0x1_401c_f760; // TyreBlur::TyreBlur(CarAvatar*)
+const VA_TYRE_BLUR_UPDATE: usize = 0x1_401c_fdb0; // TyreBlur::update(float)
+const VA_BLURRED_OBJECTS_CTOR: usize = 0x1_400c_35d0; // BlurredObjects::BlurredObjects(CarAvatar*)
+const VA_BLURRED_OBJECTS_UPDATE: usize = 0x1_400c_43b0; // BlurredObjects::update(float)
 const VA_CAR_FAKE_SHADOW_CTOR: usize = 0x1_400e_0d80; // CarFakeShadow::CarFakeShadow(CarAvatar*)
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 
@@ -61,7 +65,30 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// The data files the car's objects read.
-const DATA_FILES: [&str; 4] = ["car.ini", "lods.ini", "suspensions.ini", "ambient_shadows.ini"];
+const DATA_FILES: [&str; 22] = [
+    "car.ini",
+    "lods.ini",
+    "suspensions.ini",
+    "ambient_shadows.ini",
+    "blurred_objects.ini",
+    "lights.ini",
+    "brakes.ini",
+    "damage.ini",
+    "mirrors.ini",
+    "driver3d.ini",
+    "analog_instruments.ini",
+    "analog_speed_curve.lut",
+    "digital_instruments.ini",
+    "digital_panels.ini",
+    "flames.ini",
+    "flame_presets.ini",
+    "extra_animations.ini",
+    "wing_animations.ini",
+    "suspension_graphics.ini",
+    "engine.ini",
+    "drivetrain.ini",
+    "tyres.ini",
+];
 /// Loose files of the car's folder the car's objects read.
 const LOOSE_FILES: [&str; 5] = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_shadow.png", "tyre_2_shadow.png", "tyre_3_shadow.png"];
 
@@ -146,6 +173,8 @@ pub struct Car {
     body_transform: *mut u8,
     steer_transform: *mut u8,
     steer_lock: f32,
+    tyre_blur: *mut u8,
+    blurred_objects: *mut u8,
 }
 
 impl Game {
@@ -273,13 +302,20 @@ impl Game {
         }
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
+        // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
+        let tyre_blur = acs.alloc(0x120);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_BLUR_CTOR));
+        ctor(tyre_blur, car);
+        let blurred_objects = acs.alloc(0x78);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BLURRED_OBJECTS_CTOR));
+        ctor(blurred_objects, car);
         // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
         {
             let shadow = acs.alloc(0x158);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, tyre_blur, blurred_objects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -311,6 +347,10 @@ impl Game {
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE));
         update(c.lod_manager, dt);
+        for (object, va) in [(c.tyre_blur, VA_TYRE_BLUR_UPDATE), (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE)] {
+            let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
+            update(object, dt);
+        }
         // the handlers of evOnPostUpdate, in the order they were registered
         if c.animated {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SUSPENSION_ANIMATOR_UPDATE));

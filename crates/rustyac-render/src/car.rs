@@ -18,6 +18,7 @@ use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
 use crate::animator::SuspensionAnimator;
+use crate::blur::{BlurredObjects, TyreBlur};
 use crate::camera::DEG_TO_RAD;
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
@@ -78,6 +79,11 @@ pub struct CarAvatar {
     pub driver_hr_distance: f32,
     pub pro_view_nodes: Vec<NodeId>,
     pub suspension: Suspension,
+    /// `TyreBlur` and `BlurredObjects`, made by [`CarAvatar::init_common_post_physics`]
+    pub tyre_blur: TyreBlur,
+    pub blurred_objects: BlurredObjects,
+    /// `ReplayManager::timeMult` while a replay plays, else 1
+    pub replay_scale: f32,
     /// `CarFakeShadow`, made by [`CarAvatar::on_post_load`]
     pub fake_shadow: Option<Rc<RefCell<CarFakeShadow>>>,
     /// the car's folder as its textures are named by
@@ -144,6 +150,9 @@ impl CarAvatar {
             driver_hr_distance: 15.0,
             pro_view_nodes: Vec::new(),
             suspension,
+            tyre_blur: TyreBlur::default(),
+            blurred_objects: BlurredObjects::default(),
+            replay_scale: 1.0,
             fake_shadow: None,
             folder_text: folder_text.to_string(),
         };
@@ -192,6 +201,25 @@ impl CarAvatar {
         }
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
+    }
+
+    /// The nodes `ISuspensionAvatar::getWheelTransform` gives for a wheel: the transform that
+    /// holds every level's wheel, or (animated suspensions) each level's wheel node.
+    fn wheel_transforms(&self, wheel: usize) -> Vec<NodeId> {
+        match &self.suspension {
+            Suspension::Avatar(avatar) => vec![avatar.wheel_transforms[wheel]],
+            Suspension::Animator(animator) => animator.wheel_transforms(wheel),
+        }
+    }
+
+    /// `CarAvatar::initCommonPostPhysics` 0x1400d6190, the objects of the picture, in the
+    /// game's order.
+    pub fn init_common_post_physics(&mut self, graphics: &mut Graphics, scene: &mut Scene) -> Result<(), String> {
+        let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
+        let wheel_nodes = |w: usize| wheels[w].clone();
+        self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
+        self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
+        Ok(())
     }
 
     /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows, drawn when the scene's
@@ -358,6 +386,8 @@ impl CarAvatar {
         for &n in &self.pro_view_nodes {
             scene.nodes[n].is_active = true;
         }
+        self.tyre_blur.update(scene, state, self.replay_scale);
+        self.blurred_objects.update(scene, state, self.replay_scale);
     }
 
     /// What runs after all updates and before the picture (the handlers of `evOnPostUpdate`):

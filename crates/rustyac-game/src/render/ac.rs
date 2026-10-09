@@ -430,7 +430,8 @@ impl AcRenderer {
                 skins.first().cloned().unwrap_or_default()
             }
         };
-        let car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock))?;
+        let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock))?;
+        car.init_common_post_physics(&mut self.graphics, &mut self.scene)?;
         let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
         self.car = Some(car);
         Ok(summary)

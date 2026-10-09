@@ -151,6 +151,44 @@ impl Material {
         }
     }
 
+    /// `Material::Material(const Material&)` 0x140209a40: a material of its own with the same
+    /// shader, textures and values. The cull mode and the wire-frame flag are not copied.
+    pub fn clone_material(&self, graphics: &mut Graphics) -> Result<Material, String> {
+        let mut m = Material::new(&self.name);
+        m.blend_mode = self.blend_mode;
+        m.double_face = self.double_face;
+        if let Some(shader) = self.shader {
+            let name = graphics.shaders.get(shader).name.clone();
+            m.set_shader(graphics, &name)?;
+        }
+        m.resources = self.resources.clone();
+        for i in 0..m.vars.len().min(self.vars.len()) {
+            // MaterialVar::copyValues 0x14020a850
+            let old = &self.vars[i];
+            let mut mv = m.vars[i].clone();
+            mv.f_value = old.f_value;
+            mv.f_value4 = old.f_value4;
+            mv.f_value2 = old.f_value2;
+            mv.f_value3 = old.f_value3;
+            mv.m_value = old.m_value;
+            m.write_var(i, &mv);
+            m.vars[i] = mv;
+        }
+        m.depth_mode = self.depth_mode;
+        m.double_face_shadow = self.double_face_shadow;
+        Ok(m)
+    }
+
+    /// `Material::getVar` 0x14020ab30 as the game's own code calls it: a missing variable is
+    /// reported.
+    pub fn get_var_reporting(&self, name: &str) -> Option<usize> {
+        let found = self.get_var(name);
+        if found.is_none() {
+            println!("ERROR: Material::getVar CANT FIND VAR {name} in material {}", self.name);
+        }
+        found
+    }
+
     /// `Material::getVar` 0x14020ab30.
     pub fn get_var(&self, name: &str) -> Option<usize> {
         self.vars.iter().position(|v| v.name == name)
