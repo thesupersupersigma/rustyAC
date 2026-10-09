@@ -53,6 +53,8 @@ TOOLS = {
         f'binaryen-{BINARYEN}/bin/wasm-opt'),
 }
 SITE_FILES = ['index.html', 'app.js', 'style.css']
+# everything a site (and so a release's web zip) holds; anything else in it stops the build
+SITE_CONTENT = sorted(SITE_FILES + ['LICENSE-GPL', 'LICENSING.md', 'pkg/rustyac_web.js', 'pkg/rustyac_web_bg.wasm'])
 
 
 def say(text):
@@ -97,14 +99,33 @@ def tool(name, given):
             download(url, archive)
         if sha256(archive) != digest:
             sys.exit(f'{archive}: SHA-256 is not the pinned {digest}')
-        with tarfile.open(archive) as tar:
-            tar.extractall(folder)
+        unpack(archive, folder)
     return program
+
+
+def unpack(archive, folder):
+    """Extracts an archive whose hash was checked, refusing members that would leave the folder."""
+    with tarfile.open(archive) as tar:
+        try:
+            tar.extractall(folder, filter='data')
+        except TypeError:
+            # a Python without extraction filters
+            base = os.path.realpath(folder)
+            for member in tar.getmembers():
+                target = os.path.realpath(os.path.join(folder, member.name))
+                if os.path.commonpath([base, target]) != base or member.issym() or member.islnk():
+                    sys.exit(f'{archive}: {member.name} would be written outside {folder}')
+            tar.extractall(folder)
 
 
 def wasm_target_env():
     """The environment that lets cargo build for wasm, installing Rust's wasm std if needed."""
     env = dict(os.environ)
+    # flags from the environment would replace the build's own (and could switch on SIMD or a
+    # fast-math flavour, which must not happen: the wasm has to compute what the desktop does)
+    for name in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS'):
+        if env.pop(name, None) is not None:
+            say(f'{name} is set in the environment: ignored for this build')
     libdir = subprocess.run(['rustc', '--print', 'target-libdir', '--target', TARGET], capture_output=True, text=True).stdout.strip()
     if libdir and os.path.isdir(libdir) and any(n.startswith('libstd') for n in os.listdir(libdir)):
         return env
@@ -127,8 +148,7 @@ def wasm_target_env():
         if sha256(archive) != expected:
             sys.exit(f'{archive}: SHA-256 is not the one rust-lang.org publishes ({expected})')
         unpacked = os.path.join(sysroot, 'dl')
-        with tarfile.open(archive) as tar:
-            tar.extractall(unpacked)
+        unpack(archive, unpacked)
         shutil.rmtree(os.path.join(sysroot, 'lib', 'rustlib', TARGET), ignore_errors=True)
         shutil.copytree(os.path.join(unpacked, name, f'rust-std-{TARGET}', 'lib', 'rustlib', TARGET), os.path.join(sysroot, 'lib', 'rustlib', TARGET))
         shutil.rmtree(os.path.join(unpacked, name), ignore_errors=True)
@@ -141,7 +161,7 @@ def wasm_target_env():
 
 
 def megabytes(path):
-    return os.path.getsize(path) / 1048576
+    return os.path.getsize(path) / 1e6
 
 
 def main():
@@ -153,15 +173,23 @@ def main():
     parser.add_argument('--wasm-opt', help='path to wasm-opt')
     args = parser.parse_args()
 
+    out = os.path.abspath(args.out)
+    # the output folder is emptied first: it must be a folder of its own
+    if os.path.isdir(out) and os.listdir(out) and not os.path.isfile(os.path.join(out, 'pkg', 'rustyac_web.js')) and not os.path.isfile(os.path.join(out, 'index.html')):
+        sys.exit(f'{out} is not empty and is not an earlier build of the site: give --out a folder of its own')
+    if os.path.commonpath([out, ROOT]) == out:
+        sys.exit(f'{out} holds the repository: give --out a folder of its own')
+
     env = wasm_target_env()
     run(['cargo', 'build', '--release', '--locked', '-p', 'rustyac-web', '--lib', '--target', TARGET], cwd=ROOT, env=env)
     built = os.path.join(ROOT, 'target', TARGET, 'release', 'rustyac_web.wasm')
+    bindgen = tool('wasm-bindgen', args.wasm_bindgen)
+    wasm_opt = None if args.no_opt else tool('wasm-opt', args.wasm_opt)
 
-    out = os.path.abspath(args.out)
     pkg = os.path.join(out, 'pkg')
     shutil.rmtree(out, ignore_errors=True)
     os.makedirs(pkg)
-    run([tool('wasm-bindgen', args.wasm_bindgen), '--target', 'web', '--no-typescript', '--out-dir', pkg, '--out-name', 'rustyac_web', built])
+    run([bindgen, '--target', 'web', '--no-typescript', '--out-dir', pkg, '--out-name', 'rustyac_web', built])
     wasm = os.path.join(pkg, 'rustyac_web_bg.wasm')
     before = megabytes(wasm)
     if not args.no_opt:
@@ -169,7 +197,7 @@ def main():
         # is not given); only the features rustc's wasm32 baseline uses are switched on
         features = ['--enable-bulk-memory', '--enable-bulk-memory-opt', '--enable-nontrapping-float-to-int', '--enable-sign-ext',
                     '--enable-mutable-globals', '--enable-reference-types', '--enable-multivalue', '--enable-call-indirect-overlong']
-        run([tool('wasm-opt', args.wasm_opt), '-O3', *features, wasm, '-o', wasm + '.opt'])
+        run([wasm_opt, '-O3', *features, wasm, '-o', wasm + '.opt'])
         os.replace(wasm + '.opt', wasm)
     for name in SITE_FILES:
         shutil.copyfile(os.path.join(ROOT, 'web', name), os.path.join(out, name))
@@ -179,17 +207,27 @@ def main():
     files = []
     for folder, _, names in os.walk(out):
         files += [os.path.join(folder, n) for n in names]
+    inside = sorted(os.path.relpath(p, out).replace('\\', '/') for p in files)
+    if inside != SITE_CONTENT:
+        sys.exit(f'the site holds {inside}, expected exactly {SITE_CONTENT}')
     say(f'\nsite: {out}')
     for path in sorted(files):
         say(f'  {os.path.getsize(path):>10,}  {os.path.relpath(path, out)}')
     total = sum(os.path.getsize(p) for p in files)
-    say(f'  wasm {megabytes(wasm):.2f} MB' + ('' if args.no_opt else f' (before wasm-opt: {before:.2f} MB)') + f'; the whole site {total / 1048576:.2f} MB')
+    say(f'  wasm {megabytes(wasm):.2f} MB' + ('' if args.no_opt else f' (before wasm-opt: {before:.2f} MB)') + f'; the whole site {total / 1e6:.2f} MB')
     if args.zip:
         os.makedirs(os.path.dirname(os.path.abspath(args.zip)), exist_ok=True)
         with zipfile.ZipFile(args.zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
             for path in sorted(files):
                 z.write(path, os.path.relpath(path, out).replace('\\', '/'))
-        say(f'zip: {args.zip} ({megabytes(args.zip):.2f} MB, sha256 {sha256(args.zip)})')
+        # read back: the zip is the site and nothing else
+        with zipfile.ZipFile(args.zip) as z:
+            if sorted(z.namelist()) != SITE_CONTENT:
+                sys.exit(f'{args.zip} holds {sorted(z.namelist())}, expected exactly {SITE_CONTENT}')
+        digest = sha256(args.zip)
+        with open(args.zip + '.sha256', 'w', newline='\n') as f:
+            f.write(f'{digest}  {os.path.basename(args.zip)}\n')
+        say(f'zip: {args.zip} ({megabytes(args.zip):.2f} MB, sha256 {digest})')
     say('try it: python web/serve.py')
 
 

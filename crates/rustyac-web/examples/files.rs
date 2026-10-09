@@ -35,5 +35,5 @@ fn main() {
         planned_bytes += if p { size } else { 0 };
         println!("{}{} {:>12} {}", if r { 'R' } else { '-' }, if p { 'P' } else { '-' }, size, file.strip_prefix(&root).unwrap_or(file).display());
     }
-    println!("read {:.1} MB, planned {:.1} MB", read_bytes as f64 / 1_048_576.0, planned_bytes as f64 / 1_048_576.0);
+    println!("read {:.1} MB, planned {:.1} MB", read_bytes as f64 / 1e6, planned_bytes as f64 / 1e6);
 }

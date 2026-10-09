@@ -78,7 +78,21 @@ fn a_drive_from_memory_is_the_drive_from_disk() {
         let missed: Vec<String> = read.iter().filter(in_root).filter(|f| !planned.contains(f)).map(|f| relative(&root, f)).collect();
         assert!(missed.is_empty(), "the load of {car} on {track} read files the page would not have fetched: {missed:?}");
         let bytes: u64 = planned.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
-        println!("{car} on {track}: {} files read, {} planned ({:.1} MB)", read.iter().filter(in_root).count(), planned.len(), bytes as f64 / 1_048_576.0);
+        println!("{car} on {track}: {} files read, {} planned ({:.1} MB)", read.iter().filter(in_root).count(), planned.len(), bytes as f64 / 1e6);
+
+        // R: the car is back in its pit box at once, the settling steps run inside one frame
+        {
+            let mut session = Session::new(car, track, layout, true, "pit").expect("a session from the pits");
+            session.input.lock().unwrap().keys.insert(0x57);
+            for _ in 0..180 {
+                session.advance(1.0 / 60.0).unwrap();
+            }
+            let moving = session.view().speed_kmh;
+            session.request(rustyac_game::input_file::event::RESET);
+            session.input.lock().unwrap().keys.clear();
+            let frame = session.advance(1.0 / 60.0).unwrap();
+            assert!(moving > 10.0 && frame.steps >= 470 && session.view().speed_kmh < 1.0, "{moving} km/h before R; after: {} steps in the frame, {} km/h", frame.steps, session.view().speed_kmh);
+        }
 
         // from memory: only the planned files, under the name the page mounts them at
         let fs = Arc::new(MemFs::new());
@@ -118,7 +132,7 @@ fn a_drive_from_memory_is_the_drive_from_disk() {
             track_model.meshes.len(),
             car_model.meshes.len(),
             sink.textures,
-            sink.texture_bytes as f64 / 1_048_576.0,
+            sink.texture_bytes as f64 / 1e6,
             track_model.stats.notes
         );
     }

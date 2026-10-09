@@ -138,6 +138,14 @@ impl Session {
             self.accumulator -= DT as f64;
             self.step()?;
             stats.steps += 1;
+            // a car that was just put back (R, N) settles unpaced, as on the desktop and as at
+            // the start: the 470 steps of the spawn sequence run inside this frame
+            let mut burst = 0;
+            while self.sim.car.device.source.in_spawn_sequence() && burst < 2000 {
+                self.step()?;
+                stats.steps += 1;
+                burst += 1;
+            }
         }
         Ok(stats)
     }
@@ -153,7 +161,8 @@ impl Session {
         for _ in 0..toggles {
             self.camera.f1();
         }
-        self.camera.update(view, &self.shape, view.acc_g, seconds.clamp(0.0, MAX_FRAME_SECONDS) as f32)
+        let seconds = if seconds.is_finite() { seconds.clamp(0.0, MAX_FRAME_SECONDS) } else { 0.0 };
+        self.camera.update(view, &self.shape, view.acc_g, seconds as f32)
     }
 
     /// R, Shift+R, N and the other one-off commands (`rustyac_game::input_file::event` bits).

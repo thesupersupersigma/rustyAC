@@ -74,7 +74,7 @@ pub fn fs_has(path: &str) -> bool {
 /// Megabytes of file held in memory right now.
 #[wasm_bindgen]
 pub fn fs_megabytes() -> f64 {
-    files().bytes_held() as f64 / 1_048_576.0
+    files().bytes_held() as f64 / 1e6
 }
 
 /// A small file in one piece.
@@ -96,8 +96,12 @@ impl FileWriter {
     /// Room for a file of `size` bytes. `hashed`: work out the SHA-256 as the pieces arrive
     /// (a pack's manifest says what it has to be).
     #[wasm_bindgen(constructor)]
-    pub fn new(size: f64, hashed: bool) -> FileWriter {
-        FileWriter { bytes: std::iter::repeat_n(0u8, size as usize).collect(), filled: 0, hash: hashed.then(crate::pack::Sha256::new) }
+    pub fn new(size: f64, hashed: bool) -> Result<FileWriter, JsValue> {
+        // (a wasm memory is 4 GB at most; the game's largest files are under half a gigabyte)
+        if !(0.0..=3.0e9).contains(&size) {
+            return Err(JsValue::from_str(&format!("a file of {size} bytes cannot be held in memory")));
+        }
+        Ok(FileWriter { bytes: std::iter::repeat_n(0u8, size as usize).collect(), filled: 0, hash: hashed.then(crate::pack::Sha256::new) })
     }
 
     /// The next piece. Returns the bytes received so far.
@@ -178,7 +182,10 @@ pub fn index(check_cars: bool) -> String {
 /// Does this car load? Empty, or the loader's refusal.
 #[wasm_bindgen]
 pub fn check_car(car: &str) -> String {
-    content::check_car(car).err().map(|why| why.replace(&format!("{ROOT}/"), "")).unwrap_or_default()
+    let result = content::check_car(car).err().map(|why| why.replace(&format!("{ROOT}/"), "")).unwrap_or_default();
+    // (the check asked for the car's collider model, which a list does not need: not wanted)
+    files().take_wanted();
+    result
 }
 
 /// The files a drive needs that are listed but not here yet, one per line. Call it again
@@ -187,18 +194,21 @@ pub fn check_car(car: &str) -> String {
 #[wasm_bindgen]
 pub fn files_wanted(car: &str, track: &str, layout: &str) -> String {
     let mut wanted: Vec<String> = content::files_of_drive(Path::new(ROOT), car, track, layout).iter().map(|path| relative(path)).filter(|path| !fs_has(path)).collect();
-    // and what a load stumbled over last time
-    wanted.extend(files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path)));
+    // and what a load of this car or track stumbled over last time
+    let mine = [format!("content/cars/{car}/").to_ascii_lowercase(), format!("content/tracks/{track}/").to_ascii_lowercase(), "system/".to_string()];
+    wanted.extend(files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path) && mine.iter().any(|prefix| path.to_ascii_lowercase().starts_with(prefix))));
     wanted.sort();
     wanted.dedup();
     wanted.join("\n")
 }
 
-/// Gives the memory of the big model files back once a drive is loaded.
+/// Gives the memory of the big model files back once a drive is loaded. The car's collider
+/// stays: it is a few kilobytes, and a new car (N) reads it again.
 #[wasm_bindgen]
 pub fn fs_forget_models() {
     for path in files().paths() {
-        if path.to_ascii_lowercase().ends_with(".kn5") {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".kn5") && !lower.ends_with("/collider.kn5") {
             files().forget(&path);
         }
     }
@@ -354,24 +364,26 @@ impl Game {
     pub fn hud(&self) -> String {
         let v = &self.view;
         let lap = &v.lap;
+        // (JSON has no NaN: a car with broken numbers shows zeros until it is rebuilt)
+        let n = |x: f32| if x.is_finite() { x } else { 0.0 };
         format!(
             "{{\"kmh\": {:.1}, \"gear\": {}, \"rpm\": {:.0}, \"rpm_limit\": {:.0}, \"gas\": {:.3}, \"brake\": {:.3}, \"clutch\": {:.3}, \"steer\": {:.3}, \
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}}}",
-            v.speed_kmh,
+            n(v.speed_kmh),
             v.gear,
-            v.rpm,
-            v.rpm_limit,
-            v.gas,
-            v.brake,
-            v.clutch,
-            v.steer,
+            n(v.rpm),
+            n(v.rpm_limit),
+            n(v.gas),
+            n(v.brake),
+            n(v.clutch),
+            n(v.steer),
             lap.current_ms,
             lap.last_ms,
             lap.best_ms,
             lap.laps,
             lap.valid,
-            lap.position,
+            n(lap.position),
             lap.in_pit_lane,
             v.tc_in_action,
             v.abs_in_action,
@@ -379,8 +391,8 @@ impl Game {
             v.auto_shifter,
             json_text(device_name(v.device)),
             json_text(&self.session.camera.name()),
-            v.drive_seconds,
-            v.fuel
+            if v.drive_seconds.is_finite() { v.drive_seconds } else { 0.0 },
+            n(v.fuel)
         )
     }
 

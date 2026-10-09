@@ -664,3 +664,53 @@ pub fn rcpps_intel(v: &[f32; 4]) -> [f32; 4] {
         })
     })
 }
+
+#[cfg(test)]
+mod rcpps_tests {
+    use super::*;
+
+    /// Answers of an Intel processor's `rcpps`, measured (operand bits, result bits).
+    #[test]
+    fn the_table_gives_the_measured_answers() {
+        for (operand, result) in [
+            (0x3f80_0000u32, 0x3f7f_f000u32),
+            (0x3f80_1000, 0x3f7f_d000),
+            (0x3fff_f000, 0x3f00_0800),
+            (0x0080_0000, 0x7e7f_f000),
+            (0x00ff_f000, 0x7e00_0800),
+            (0x7e00_0000, 0x00ff_f000),
+            (0x7e7f_ffff, 0x0080_0800),
+            (0x7e80_0000, 0x0000_0000),
+            (0x7f7f_ffff, 0x0000_0000),
+            (0x7f80_0000, 0x0000_0000),
+            (0xff80_0000, 0x8000_0000),
+            (0x0000_0000, 0x7f80_0000),
+            (0x8000_0000, 0xff80_0000),
+            (0x007f_ffff, 0x7f80_0000),
+            (0x7fa0_0001, 0x7fe0_0001),
+            (0xffc0_1234, 0xffc0_1234),
+        ] {
+            let got = rcpps_intel(&[f32::from_bits(operand); 4])[0].to_bits();
+            assert_eq!(got, result, "rcpps({operand:08x})");
+        }
+    }
+
+    /// On an Intel processor the table is the instruction (every 4099th operand here; all
+    /// 2^32 in `tools/math_proof rcpps`). Another maker's `rcpps` is another approximation.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_table_is_the_instruction_on_an_intel_processor() {
+        let leaf = core::arch::x86_64::__cpuid(0);
+        let vendor: Vec<u8> = [leaf.ebx, leaf.edx, leaf.ecx].iter().flat_map(|r| r.to_le_bytes()).collect();
+        if vendor != b"GenuineIntel" {
+            println!("NOT TESTED: the processor is {} (the table is Intel's rcpps)", String::from_utf8_lossy(&vendor));
+            return;
+        }
+        let mut bits = 0u64;
+        while bits < 1 << 32 {
+            let v = [f32::from_bits(bits as u32); 4];
+            assert_eq!(rcpps(&v)[0].to_bits(), rcpps_intel(&v)[0].to_bits(), "rcpps({:08x})", bits as u32);
+            bits += 4099;
+        }
+    }
+}

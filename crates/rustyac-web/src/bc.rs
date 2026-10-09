@@ -185,7 +185,15 @@ pub fn for_card(mut image: Image, unpack: bool) -> Result<Image, String> {
             Ok(image)
         }
         other if unpack => Err(format!("DXGI format {other} cannot be unpacked here")),
-        _ => Ok(image),
+        // the other block formats (BC4, BC5, BC7) go to the card as they are, in whole blocks
+        _ if top.width % 4 != 0 || top.height % 4 != 0 => Err(format!("a block-compressed image of {} x {} (not whole blocks)", top.width, top.height)),
+        _ => {
+            let keep = image.levels.iter().take_while(|l| l.width >= 4 && l.height >= 4).count().max(1);
+            image.levels.truncate(keep);
+            let end = image.levels.last().map_or(0, |l| l.bytes.end);
+            image.data.truncate(end);
+            Ok(image)
+        }
     }
 }
 

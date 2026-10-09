@@ -474,7 +474,7 @@ impl Gpu {
             s.meshes,
             s.triangles,
             s.textures,
-            s.texture_bytes as f64 / 1_048_576.0,
+            s.texture_bytes as f64 / 1e6,
             s.texture_size,
             if options.unpack_bc { ", unpacked" } else { "" },
             if s.notes.is_empty() { String::new() } else { format!("; {}", s.notes.join("; ")) }
@@ -494,7 +494,7 @@ impl Gpu {
             scene,
         };
         let s = &car.scene.model.stats;
-        let summary = format!("car: {} meshes, {} triangles, {} textures ({:.0} MB)", s.meshes, s.triangles, s.textures, s.texture_bytes as f64 / 1_048_576.0);
+        let summary = format!("car: {} meshes, {} triangles, {} textures ({:.0} MB)", s.meshes, s.triangles, s.textures, s.texture_bytes as f64 / 1e6);
         self.car = Some(car);
         Ok(summary)
     }
@@ -676,6 +676,8 @@ impl Gpu {
                 self.surface.configure(&self.device, &self.config);
                 return Ok(stats);
             }
+            // hidden or busy: no picture this frame
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return Ok(stats),
             other => return Err(format!("the canvas gave no picture to draw into ({other:?})")),
         };
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());

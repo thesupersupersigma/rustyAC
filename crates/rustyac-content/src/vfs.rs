@@ -300,7 +300,8 @@ impl Vfs for MemFs {
                 out.push((spelled.to_string(), is_dir));
             }
         }
-        if out.is_empty() && !prefix.is_empty() && !self.is_dir(path) {
+        // (nothing below the name: there is no such folder)
+        if out.is_empty() && !prefix.is_empty() {
             return Err(io::Error::new(io::ErrorKind::NotFound, format!("{prefix}: no such folder")));
         }
         Ok(out)

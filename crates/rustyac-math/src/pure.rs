@@ -415,6 +415,13 @@ pub fn expf(x: f32) -> f32 {
     (value * scale) as f32
 }
 
+/// What `addss x, x` leaves for a NaN `x` (the DLL's way of returning one): the same NaN, quiet.
+/// Written with bits: WebAssembly does not promise which NaN an addition gives.
+#[inline(always)]
+fn quiet(x: f32) -> f32 {
+    f32::from_bits(x.to_bits() | 0x0040_0000)
+}
+
 /// `powf`'s "is `y` an odd whole number" test for a `y` below 2^24 (`cvtss2si`,
 /// `cvtsi2ss`, `ucomiss`, `rcr`): `None` when `y` is not whole.
 #[inline(always)]
@@ -444,10 +451,10 @@ pub fn powf(x: f32, y: f32) -> f32 {
             if ux == 0x3f80_0000 {
                 return 1.0;
             }
-            return y + y;
+            return quiet(y);
         }
         if ax > INF32 {
-            return x + x;
+            return quiet(x);
         }
         if ax == 0x3f80_0000 {
             return f32::from_bits(ux & (uy | 0x7fff_ffff));
@@ -462,7 +469,7 @@ pub fn powf(x: f32, y: f32) -> f32 {
     if ay <= 0x3f80_0000 {
         if ay == 0 {
             if ax > INF32 {
-                return x + x;
+                return quiet(x);
             }
             return 1.0;
         }
@@ -482,7 +489,7 @@ pub fn powf(x: f32, y: f32) -> f32 {
             }
             return f32::from_bits(sign | magnitude);
         }
-        return x + x;
+        return quiet(x);
     }
     let xd = x as f64;
     let yd = y as f64;

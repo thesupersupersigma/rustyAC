@@ -39,9 +39,12 @@ def make_handler(mounts):
                 if path == prefix.rstrip('/') or path.startswith(prefix):
                     rest = path[len(prefix):].lstrip('/')
                     full = os.path.normpath(os.path.join(folder, *rest.split('/'))) if rest else folder
-                    if os.path.commonpath([full, folder]) != folder:
-                        return None, query
-                    return full, query
+                    try:
+                        inside = os.path.commonpath([full, folder]) == folder
+                    except ValueError:
+                        # (another drive letter in the request)
+                        inside = False
+                    return (full if inside else None), query
             return None, query
 
         def send(self, status, body, kind='text/plain; charset=utf-8'):
@@ -57,6 +60,11 @@ def make_handler(mounts):
             self.do_GET()
 
         def do_GET(self):
+            # only this computer's own pages may ask: a name that merely resolves to 127.0.0.1
+            # (DNS rebinding) is turned away
+            host = (self.headers.get('Host') or '').split(':')[0].lower()
+            if host not in ('127.0.0.1', 'localhost', '[::1]'):
+                return self.send(403, b'this server only answers to 127.0.0.1 / localhost')
             full, query = self.resolve()
             if full is None:
                 return self.send(404, b'not found')

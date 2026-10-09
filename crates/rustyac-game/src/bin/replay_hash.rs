@@ -46,8 +46,10 @@ fn hashes(dump: &StepDump) -> (u64, u64) {
     let mut blind = exact;
     for &word in &dump.state {
         fnv(&mut exact, &word.to_le_bytes());
-        // the saved state does not say which words are floats; no counter in it reaches a NaN's
-        // bit pattern
+        // the saved state does not say which words are floats, so every word with a NaN's bit
+        // pattern is made the same here, a small negative integer (a gear index of -1) among
+        // them. This second hash only says "nothing but NaN-like words differ" when the exact
+        // hash differs; the exact hash is the proof.
         fnv(&mut blind, &canonical32(word).to_le_bytes());
     }
     for value in &dump.trace {

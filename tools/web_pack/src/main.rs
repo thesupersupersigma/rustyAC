@@ -44,7 +44,7 @@ fn string_list(text: &str, key: &str) -> Result<Vec<String>, String> {
 }
 
 fn megabytes(bytes: u64) -> String {
-    format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    format!("{:.1} MB", bytes as f64 / 1e6)
 }
 
 /// Copies a file and returns its size and SHA-256.
@@ -89,6 +89,13 @@ fn run(args: &[String]) -> Result<(), String> {
     if !rustyac_content::install::is_ac_root(&root) {
         return Err(format!("{} is not Assetto Corsa's folder (no content and system folders in it)", root.display()));
     }
+    // the pack is written next to nothing of the game: never into its folder (a file would be
+    // truncated before it is read), never around it
+    let whole = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let (whole_out, whole_root) = (whole(&out), whole(&root));
+    if whole_out.starts_with(&whole_root) || whole_root.starts_with(&whole_out) {
+        return Err(format!("the pack's folder {} and the game's folder {} must not lie inside one another", out.display(), root.display()));
+    }
     let text = std::fs::read_to_string(&config).map_err(|e| format!("{}: {e}", config.display()))?;
     let cars = string_list(&text, "cars").map_err(|e| format!("{}: {e}", config.display()))?;
     let tracks = string_list(&text, "tracks").map_err(|e| format!("{}: {e}", config.display()))?;
@@ -108,7 +115,8 @@ fn run(args: &[String]) -> Result<(), String> {
     println!("pack: {}{}", out.display(), if dry { " (dry run: nothing is written)" } else { "" });
 
     // every car on every track: what each load read, by the folder it belongs to
-    let relative = |file: &Path| file.strip_prefix(&root).ok().map(|rest| rest.to_string_lossy().replace('\\', "/"));
+    // (a path that climbs out of the game's folder with `..` is not copied anywhere)
+    let relative = |file: &Path| file.strip_prefix(&root).ok().filter(|rest| rest.components().all(|part| matches!(part, std::path::Component::Normal(_)))).map(|rest| rest.to_string_lossy().replace('\\', "/"));
     let mut car_files: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut track_files: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut shared: Vec<String> = Vec::new();

@@ -15,7 +15,7 @@
 // physics steps per second and the page's notes as JSON.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,8 +46,17 @@ if (!chrome) {
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 // --keep-profile: the browser's storage of the last run stays (to see the page's file cache work)
 const keepProfile = args.includes('--keep-profile');
-if (!keepProfile) rmSync(profile, { recursive: true, force: true });
+// the profile folder is emptied before and after: it has to be one this script made (it leaves
+// a marker file beside it), so a slip of the hand cannot delete a real browser profile
+const marker = `${profile}.rustyac-check`;
+const emptied = { recursive: true, force: true, maxRetries: 40, retryDelay: 250 };
+if (existsSync(profile) && readdirSync(profile).length > 0 && !existsSync(marker)) {
+  console.error(`${profile} exists and was not made by this script: give --profile a new or empty folder`);
+  process.exit(2);
+}
+if (!keepProfile) rmSync(profile, emptied);
 mkdirSync(profile, { recursive: true });
+writeFileSync(marker, 'the folder beside this file is a throw-away browser profile of web/check.mjs\n');
 // (the browser's temporary files go into the profile's folder too, not the system's)
 const env = { ...process.env, TEMP: profile, TMP: profile, TMPDIR: profile };
 const flags = [
@@ -79,10 +88,19 @@ async function close(code) {
   } catch {
     // already gone
   }
-  for (let i = 0; i < 50 && !closed; i++) await sleep(100);
+  // (a busy machine can take a while to let the browser go)
+  for (let i = 0; i < 300 && !closed; i++) await sleep(100);
   if (!closed) browser.kill();
-  await sleep(300);
-  if (!keepProfile) rmSync(profile, { recursive: true, force: true });
+  await sleep(1000);
+  if (!keepProfile) {
+    // (the browser lets go of its files a moment after it has gone)
+    try {
+      rmSync(profile, emptied);
+      rmSync(marker, { force: true });
+    } catch (error) {
+      console.error(`the profile ${profile} could not be removed: ${error.message}`);
+    }
+  }
   process.exit(code);
 }
 

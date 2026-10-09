@@ -35,6 +35,7 @@ const state = {
   cars: [], // { id, name, refused }
   tracks: [], // { track, layout, name, refused }
   game: null,
+  loading: false,
   running: false,
   paused: false,
 };
@@ -59,7 +60,7 @@ function fail(error) {
   $('drive').disabled = !state.source;
 }
 
-const megabytes = (bytes) => (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + ' MB';
+const megabytes = (bytes) => (bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0) + ' MB';
 const nextPaint = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
 // ---------------------------------------------------------------- the pack behind a URL
@@ -214,10 +215,18 @@ async function openFolder(root) {
     kind: 'folder',
     name: root.name,
     sizes,
-    async open(path) {
+    find(path) {
       const handle = handles.get(path) || [...handles].find(([p]) => p.toLowerCase() === path.toLowerCase())?.[1];
       if (!handle) throw new Error(`${path} is not in the folder`);
-      const file = await handle.getFile();
+      return handle;
+    },
+    // (asked before a load, so the progress bar knows its total)
+    async size(path) {
+      if (!sizes.has(path)) sizes.set(path, (await this.find(path).getFile()).size);
+      return sizes.get(path);
+    },
+    async open(path) {
+      const file = await this.find(path).getFile();
       sizes.set(path, file.size);
       return { size: file.size, stream: file.stream(), sha256: '', from: 'folder' };
     },
@@ -362,7 +371,7 @@ function markRefused() {
   const chosen = state.cars.find((c) => c.id === $('car').value);
   const chosenTrack = state.tracks.find((t) => `${t.track}|${t.layout}` === $('track').value);
   const why = (chosen && chosen.refused) || (chosenTrack && chosenTrack.refused);
-  $('drive').disabled = !chosen || !chosenTrack || !!why || state.running;
+  $('drive').disabled = !chosen || !chosenTrack || !!why || state.running || state.loading;
 }
 
 async function useSource(source, line) {
@@ -377,20 +386,34 @@ async function useSource(source, line) {
 async function loadFiles(paths, done) {
   for (const path of paths) {
     const file = await state.source.open(path);
-    const writer = new rac.FileWriter(file.size, !!file.sha256);
-    const reader = file.stream.getReader();
-    for (;;) {
-      const { done: end, value } = await reader.read();
-      if (end) break;
-      writer.write(value);
-      if (file.keep) await file.keep.write(value).catch(() => (file.keep = null));
-      done(value.length, path, file.from);
-    }
+    let writer = new rac.FileWriter(file.size, !!file.sha256);
+    let keep = file.keep || null;
     try {
-      writer.commit(path, file.sha256 || '');
-      if (file.keep) await file.keep.close().catch(() => {});
+      const reader = file.stream.getReader();
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) break;
+        writer.write(value);
+        if (keep) {
+          try {
+            await keep.write(value);
+          } catch {
+            // the browser's storage is full or gone: go on without keeping the file
+            await keep.abort().catch(() => {});
+            keep = null;
+            if (file.discard) await file.discard();
+          }
+        }
+        done(value.length, path, file.from);
+      }
+      // (commit takes the writer; it checks the hash before the file is mounted or kept)
+      const committing = writer;
+      writer = null;
+      committing.commit(path, file.sha256 || '');
+      if (keep) await keep.close().catch(() => {});
     } catch (error) {
-      if (file.keep) await file.keep.abort().catch(() => {});
+      if (writer) writer.free();
+      if (keep) await keep.abort().catch(() => {});
       if (file.discard) await file.discard();
       throw error;
     }
@@ -402,6 +425,7 @@ async function drive() {
   const [track, layout] = $('track').value.split('|');
   const autodrive = params.get('autodrive') === '1';
   const spawn = params.get('spawn') || (autodrive ? 'hotlap' : $('spawn').value);
+  state.loading = true;
   $('drive').disabled = true;
   $('refusal').hidden = true;
   $('notes').hidden = true;
@@ -415,7 +439,7 @@ async function drive() {
       const wanted = rac.files_wanted(car, track, layout).split('\n').filter(Boolean);
       if (!wanted.length) break;
       let total = 0;
-      for (const path of wanted) total += state.source.sizes.get(path) || 0;
+      for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
       let got = 0;
       $('progress').hidden = false;
       await loadFiles(wanted, (bytes, path, from) => {
@@ -431,7 +455,12 @@ async function drive() {
     await nextPaint();
     resizeCanvas();
     const built = performance.now();
-    const game = await rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, params.get('backend') || $('backend').value, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
+    let backend = params.get('backend') || $('backend').value;
+    if (backend !== 'webgl') {
+      const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
+      if (!adapter) backend = 'webgl';
+    }
+    const game = await rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
     rac.fs_forget_models();
     state.game = game;
     game.set_autodrive(autodrive);
@@ -448,10 +477,13 @@ async function drive() {
       window.rustyac.selftest = { car, track, layout, steps, hash: game.state_hash(), seconds, steps_per_second: steps / seconds, hud: JSON.parse(game.hud()) };
       setStatus(`self test: ${steps} steps in ${seconds.toFixed(2)} s, state ${window.rustyac.selftest.hash}`);
       window.rustyac.state = 'selftest';
+      state.loading = false;
       return;
     }
+    state.loading = false;
     startDriving();
   } catch (error) {
+    state.loading = false;
     fail(error);
   }
 }
@@ -530,7 +562,15 @@ function frame(now) {
       return;
     }
   }
-  const hud = JSON.parse(state.game.hud());
+  let hud;
+  try {
+    hud = JSON.parse(state.game.hud());
+  } catch (error) {
+    state.running = false;
+    $('menu').hidden = false;
+    fail(error);
+    return;
+  }
   window.rustyac.hud = hud;
   $('hud-gear').textContent = hud.gear === 0 ? 'R' : hud.gear === 1 ? 'N' : String(hud.gear - 1);
   $('hud-speed').textContent = Math.round(hud.kmh);
@@ -574,6 +614,8 @@ window.addEventListener('keydown', (event) => {
   if (!state.running || !state.game) return;
   const code = VK[event.code];
   if (code === undefined && event.code !== 'Escape' && event.code !== 'Pause') return;
+  const isControl = event.code === 'ControlLeft' || event.code === 'ControlRight';
+  if (['F5', 'F11', 'F12', 'Tab'].includes(event.code) || event.metaKey || event.altKey || (event.ctrlKey && !isControl)) return;
   event.preventDefault();
   if (event.repeat) return;
   switch (event.code) {

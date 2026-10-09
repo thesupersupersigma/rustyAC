@@ -5,7 +5,13 @@
 //!
 //! ```text
 //! math_proof all [--threads N] [--pairs N] [--out <file.md>]   every check, a results table
-//! math_proof one <function> [...]                             a single function
+//! math_proof one <function> [...]                             single functions: sinf cosf tanf
+//!                                                             expf asinf acosf atanf atan2f
+//!                                                             powf sin, or the sweeps `edges`
+//! math_proof std                                              the same against Rust's own
+//!                                                             maths (the UCRT on Windows)
+//!                                                             instead of the DLL: how far the
+//!                                                             old fallback is from the game
 //! math_proof fma3-off                                         the same, with the DLL's FMA3
 //!                                                             paths switched off (what a CPU
 //!                                                             older than 2013 computes)
@@ -17,23 +23,38 @@
 //!                                                             Intel's `rcpps` instruction
 //!                                                             against this processor's, on
 //!                                                             every 32-bit pattern
-//! math_proof digest [--stride N]                              pure only: a hash of the results
+//! math_proof digest [--stride N] [--offset K]                 pure only: a hash of the results
 //!                                                             over a fixed input set (also
 //!                                                             builds for wasm32-wasip1, to
-//!                                                             compare a wasm build with native)
+//!                                                             compare a wasm build with native;
+//!                                                             N runs with --stride N and
+//!                                                             --offset 0 .. N-1 cover every
+//!                                                             float)
 //! ```
 //!
 //! One-argument functions get every one of the 2^32 bit patterns. `atan2f` and `powf` get
 //! `--pairs` random pairs (default 1.6e9) drawn four ways, plus the cross product of a list
 //! of special values. The double `sin` gets every float widened to a double, random doubles
 //! and the range the physics uses. Bits are compared, so a NaN with another payload counts.
+//!
+//! `edges` are sweeps aimed at what random pairs reach too thinly: `powf` with a base on
+//! either side of where its two logarithms meet (0.9375 and 1.0625) against every one of the
+//! 2^32 exponents; every float base of the "near 1" logarithm against 4096 exponents;
+//! `atan2f` with one argument exactly sixteen times the other (where its two formulas meet)
+//! for every float; pairs on each side of every exponent-gap threshold; the doubles around
+//! `sin`'s thresholds and one that needs the most bits of pi.
+//!
+//! The exit code is 1 when a comparison that should be identical is not.
 
 use std::fmt::Write as _;
 
 use rustyac_math::pure;
 
+#[cfg(windows)]
 type F1 = unsafe extern "C" fn(f32) -> f32;
+#[cfg(windows)]
 type F2 = unsafe extern "C" fn(f32, f32) -> f32;
+#[cfg(windows)]
 type D1 = unsafe extern "C" fn(f64) -> f64;
 
 #[cfg(windows)]
@@ -455,7 +476,238 @@ fn sin_double(want: D1, count: u64, threads: usize) -> [Stats; 4] {
     all
 }
 
+static DIFFERENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A two-argument function over a set of pairs made per thread.
+#[cfg(windows)]
+fn sweep(
+    name: &str,
+    want: F2,
+    got: fn(f32, f32) -> f32,
+    threads: usize,
+    count: u64,
+    make: impl Fn(u64, &mut Rng) -> (f32, f32) + Sync,
+) -> Stats {
+    let chunk = count / threads as u64;
+    let mut stats = Stats::default();
+    for part in split(threads, |t| {
+        let start = t as u64 * chunk;
+        let end = if t + 1 == threads {
+            count
+        } else {
+            start + chunk
+        };
+        let mut rng = Rng(0xed6e_0000 + t as u64 * 31337);
+        let mut s = Stats::default();
+        for i in start..end {
+            let (a, b) = make(i, &mut rng);
+            // SAFETY: a C maths function taking and returning floats by value.
+            let w = unsafe { want(a, b) };
+            s.note32(
+                || format!("{name}({:08x}, {:08x})", a.to_bits(), b.to_bits()),
+                w,
+                got(a, b),
+            );
+        }
+        s
+    }) {
+        stats.add(part);
+    }
+    stats
+}
+
+/// The sweeps described at the top of the file. `sin` is the function the doubles are
+/// compared with (the DLL's, or std's).
+#[cfg(windows)]
+fn edges(out: &mut String, atan2f: F2, powf: F2, sin: D1, threads: usize) {
+    // powf: bases on either side of where the "near 1" logarithm takes over, every exponent
+    const BASES: [u32; 6] = [
+        0x3f6f_ffff,
+        0x3f70_0000,
+        0x3f70_0001,
+        0x3f87_ffff,
+        0x3f88_0000,
+        0x3f88_0001,
+    ];
+    let s = sweep("powf", powf, pure::powf, threads, 6 << 32, |i, _| {
+        (
+            f32::from_bits(BASES[(i >> 32) as usize]),
+            f32::from_bits(i as u32),
+        )
+    });
+    row(
+        out,
+        "powf",
+        "6 bases around 0.9375 and 1.0625, each with every 32-bit exponent",
+        &s,
+    );
+    // powf: every base the "near 1" logarithm handles (and a few beyond), 4096 exponents each
+    const FIRST: u64 = 0x3f6f_fff0;
+    const BASE_COUNT: u64 = 0x3f88_0010 - FIRST;
+    let s = sweep(
+        "powf",
+        powf,
+        pure::powf,
+        threads,
+        BASE_COUNT * 4096,
+        |i, rng| {
+            let base = f32::from_bits((FIRST + i / 4096) as u32);
+            let exponent = match i % 4 {
+                0 => rng.range(-40.0, 40.0) as f32,
+                1 => rng.range(-1500.0, 1500.0) as f32,
+                2 => (rng.next() % 2001) as f32 - 1000.0,
+                _ => rng.edgy(),
+            };
+            (base, exponent)
+        },
+    );
+    row(
+        out,
+        "powf",
+        "every float base from 0.9375 to 1.0625, 4096 exponents each",
+        &s,
+    );
+    // atan2f: one argument sixteen times the other, where its two formulas meet
+    let s = sweep("atan2f", atan2f, pure::atan2f, threads, 4 << 32, |i, _| {
+        let a = f32::from_bits(i as u32);
+        match i >> 32 {
+            0 => (a, a * 16.0),
+            1 => (a * 16.0, a),
+            2 => (a, a * -16.0),
+            _ => (f32::from_bits((i as u32).wrapping_add(1)), a * 16.0),
+        }
+    });
+    row(
+        out,
+        "atan2f",
+        "y and 16 y, both ways round, either sign of x, and one step beside, for every float",
+        &s,
+    );
+    // atan2f: both sides of every exponent-gap threshold, for many mantissas
+    const GAPS: [i32; 12] = [26, 27, -13, -14, -26, -27, -126, -127, -150, -151, 0, 1];
+    let s = sweep(
+        "atan2f",
+        atan2f,
+        pure::atan2f,
+        threads,
+        12 * 60_000_000,
+        |i, rng| {
+            let gap = GAPS[(i % 12) as usize];
+            let r = rng.next();
+            // y with a random mantissa and an exponent that leaves room for the gap
+            let ye = (rng.next() % 254 + 1) as i32;
+            let xe = (ye - gap).clamp(0, 254);
+            let y = f32::from_bits(
+                ((r >> 63) as u32) << 31 | (ye as u32) << 23 | (r as u32 & 0x7f_ffff),
+            );
+            let x = f32::from_bits(
+                ((r >> 62) as u32 & 1) << 31 | (xe as u32) << 23 | ((r >> 32) as u32 & 0x7f_ffff),
+            );
+            (y, x)
+        },
+    );
+    row(
+        out,
+        "atan2f",
+        "exponent gaps 26 / 27, -13 / -14, -26 / -27, -126 / -127, -150 / -151, 0 / 1 with random mantissas",
+        &s,
+    );
+    // chosen pairs
+    let mut s = Stats::default();
+    const POW: [(u32, u32); 12] = [
+        (0x4000_0000, 0xc315_8000),
+        (0x4000_0000, 0xc315_0000),
+        (0x4000_0000, 0xc316_0000),
+        (0xc000_0000, 0xc321_0000),
+        (0xc000_0000, 0x4301_0000),
+        (0x8000_0000, 0x4b7f_ffff),
+        (0x8000_0000, 0x4b80_0000),
+        (0x8000_0000, 0xcb7f_ffff),
+        (0x3f80_0001, 0x7f7f_ffff),
+        (0x3f7f_ffff, 0x7f7f_ffff),
+        (0x0000_0001, 0x3f00_0000),
+        (0x7f7f_ffff, 0x3f80_0001),
+    ];
+    for (a, b) in POW {
+        let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+        // SAFETY: as above.
+        let w = unsafe { powf(a, b) };
+        s.note32(
+            || format!("powf({:08x}, {:08x})", a.to_bits(), b.to_bits()),
+            w,
+            pure::powf(a, b),
+        );
+    }
+    const ATAN: [(u32, u32); 12] = [
+        (0x3f80_0000, 0x4180_0000),
+        (0x3f80_0001, 0x4180_0000),
+        (0x3f7f_ffff, 0x4180_0000),
+        (0xbf80_0000, 0x4180_0000),
+        (0x3f80_0000, 0xc180_0000),
+        (0x0000_0001, 0x3f80_0000),
+        (0x0000_0001, 0x4000_0000),
+        (0x0000_0005, 0x4000_0000),
+        (0x0000_0003, 0x4000_0000),
+        (0x0080_0000, 0x4b80_0000),
+        (0x0080_0000, 0x4c00_0000),
+        (0x3f80_0000, 0x7f00_0000),
+    ];
+    for (a, b) in ATAN {
+        for sign in [0u32, 0x8000_0000] {
+            let (a, b) = (f32::from_bits(a | sign), f32::from_bits(b));
+            // SAFETY: as above.
+            let w = unsafe { atan2f(a, b) };
+            s.note32(
+                || format!("atan2f({:08x}, {:08x})", a.to_bits(), b.to_bits()),
+                w,
+                pure::atan2f(a, b),
+            );
+        }
+    }
+    row(out, "powf, atan2f", "36 chosen pairs", &s);
+    // the double sin: around its thresholds, the largest doubles, and the double that is
+    // nearest of all to a multiple of pi/2 (6381956970095103 x 2^797)
+    let mut s = Stats::default();
+    let mut doubles: Vec<u64> = Vec::new();
+    for centre in [
+        0x3fe9_21fb_5444_2d18u64,
+        0x4173_12d0_0000_0000,
+        0x3f20_0000_0000_0000,
+        0x3e40_0000_0000_0000,
+        0x7fef_ffff_ffff_fff0,
+        0x7fe0_0000_0000_0000,
+        0x0010_0000_0000_0000,
+        0x0000_0000_0000_0010,
+        (6381956970095103.0f64 * 2.0f64.powi(797)).to_bits(),
+    ] {
+        doubles.extend((0..32u64).map(|k| centre.wrapping_add(k).wrapping_sub(16)));
+    }
+    // and the doubles next to whole multiples of pi/2, where the reduction has least to keep
+    for k in 1..200_000u64 {
+        let x = k as f64 * std::f64::consts::FRAC_PI_2;
+        doubles.extend([x.to_bits() - 1, x.to_bits(), x.to_bits() + 1]);
+        let big = x * 2.0f64.powi((k % 900) as i32);
+        doubles.push(big.to_bits());
+    }
+    for bits in doubles {
+        for sign in [0u64, 1 << 63] {
+            let x = f64::from_bits(bits | sign);
+            // SAFETY: as above.
+            s.note64(x, unsafe { sin(x) }, pure::sin(x));
+        }
+    }
+    row(
+        out,
+        "sin",
+        "around its thresholds, and next to 200,000 multiples of pi/2 (scaled up to 2^900)",
+        &s,
+    );
+}
+
 fn row(out: &mut String, name: &str, what: &str, s: &Stats) {
+    if s.different != 0 {
+        DIFFERENT.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let verdict = if s.different == 0 {
         "identical".to_string()
     } else {
@@ -481,11 +733,13 @@ fn fnv(hash: &mut u64, bits: u64) {
 
 /// `digest`: results of the pure functions over a fixed input set, as one hash per function.
 /// Needs no DLL, so the same command under wasm must print the same lines.
-fn digest(stride: u64) {
-    println!("pure maths digest, every {stride}th float and 2,000,000 pairs / doubles:");
+fn digest(stride: u64, offset: u64) {
+    println!(
+        "pure maths digest, every {stride}th float from {offset} on and 2,000,000 pairs / doubles:"
+    );
     for (name, f) in PURE_ONE {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        let mut bits = 0u64;
+        let mut bits = offset;
         while bits < 1 << 32 {
             fnv(&mut hash, f(f32::from_bits(bits as u32)).to_bits() as u64);
             bits += stride;
@@ -649,7 +903,13 @@ fn rcpps(_: usize) {
 
 fn option<T: std::str::FromStr>(args: &[String], name: &str) -> Option<T> {
     let at = args.iter().position(|a| a == name)?;
-    args.get(at + 1)?.parse().ok()
+    match args.get(at + 1).map(|text| text.parse()) {
+        Some(Ok(value)) => Some(value),
+        _ => {
+            eprintln!("{name}: needs a value (got {:?})", args.get(at + 1));
+            std::process::exit(2);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -702,11 +962,103 @@ fn compare(args: &[String], only: &[String], fma3: bool) {
         row(&mut out, "sin", "uniform in -1e6 .. 1e6", &physics);
         row(&mut out, "sin", "2^-30 .. 2^40, either sign", &wide);
     }
+    if wanted("edges") {
+        edges(&mut out, dll.atan2f, dll.powf, dll.sin, threads);
+    }
     println!("took {:.0} s", started.elapsed().as_secs_f64());
     if let Some(path) = option::<String>(args, "--out") {
         std::fs::write(&path, out).expect("writing the results file");
         println!("wrote {path}");
     }
+}
+
+// Rust's own maths (what the desktop falls back to without the DLL) with a C signature.
+#[cfg(windows)]
+mod rust_std {
+    pub unsafe extern "C" fn sinf(x: f32) -> f32 {
+        x.sin()
+    }
+    pub unsafe extern "C" fn cosf(x: f32) -> f32 {
+        x.cos()
+    }
+    pub unsafe extern "C" fn tanf(x: f32) -> f32 {
+        x.tan()
+    }
+    pub unsafe extern "C" fn expf(x: f32) -> f32 {
+        x.exp()
+    }
+    pub unsafe extern "C" fn asinf(x: f32) -> f32 {
+        x.asin()
+    }
+    pub unsafe extern "C" fn acosf(x: f32) -> f32 {
+        x.acos()
+    }
+    pub unsafe extern "C" fn atanf(x: f32) -> f32 {
+        x.atan()
+    }
+    pub unsafe extern "C" fn atan2f(y: f32, x: f32) -> f32 {
+        y.atan2(x)
+    }
+    pub unsafe extern "C" fn powf(x: f32, y: f32) -> f32 {
+        x.powf(y)
+    }
+    pub unsafe extern "C" fn sin(x: f64) -> f64 {
+        x.sin()
+    }
+}
+
+/// `std`: Rust's own maths against the pure functions (so, by the proof, against the DLL).
+#[cfg(windows)]
+fn compare_std(args: &[String]) {
+    let threads = option(args, "--threads").unwrap_or_else(threads_default);
+    let pair_count: u64 = option(args, "--pairs").unwrap_or(400_000_000);
+    println!("Rust std (the UCRT here) against rustyac_math::pure, {threads} threads");
+    let mut out = String::from("| Function | Inputs | Count | Result |\n|---|---|---|---|\n");
+    let one: [(&str, F1); 7] = [
+        ("sinf", rust_std::sinf),
+        ("cosf", rust_std::cosf),
+        ("tanf", rust_std::tanf),
+        ("expf", rust_std::expf),
+        ("asinf", rust_std::asinf),
+        ("acosf", rust_std::acosf),
+        ("atanf", rust_std::atanf),
+    ];
+    for ((name, want), (_, got)) in one.into_iter().zip(PURE_ONE) {
+        let s = exhaustive(name, want, got, threads);
+        row(&mut out, name, "every 32-bit pattern", &s);
+    }
+    let s = pairs(
+        "atan2f",
+        rust_std::atan2f,
+        pure::atan2f,
+        false,
+        pair_count,
+        threads,
+    );
+    row(&mut out, "atan2f", "special and random pairs", &s);
+    let s = pairs(
+        "powf",
+        rust_std::powf,
+        pure::powf,
+        true,
+        pair_count,
+        threads,
+    );
+    row(&mut out, "powf", "special and random pairs", &s);
+    let [floats, random, physics, wide] = sin_double(rust_std::sin, pair_count / 4, threads);
+    row(&mut out, "sin", "every float, widened to a double", &floats);
+    row(&mut out, "sin", "random 64-bit patterns", &random);
+    row(&mut out, "sin", "uniform in -1e6 .. 1e6", &physics);
+    row(&mut out, "sin", "2^-30 .. 2^40, either sign", &wide);
+    if let Some(path) = option::<String>(args, "--out") {
+        std::fs::write(&path, out).expect("writing the results file");
+        println!("wrote {path}");
+    }
+}
+
+#[cfg(not(windows))]
+fn compare_std(_: &[String]) {
+    println!("NOT TESTED: this comparison is about the Windows runtimes");
 }
 
 #[cfg(not(windows))]
@@ -718,24 +1070,46 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("all") => compare(&args, &[], true),
-        Some("fma3-off") => compare(&args, &[], false),
+        // (differences are what this one is run to count: its exit code stays 0)
+        Some("fma3-off") => {
+            compare(&args, &[], false);
+            return;
+        }
+        Some("std") => {
+            compare_std(&args);
+            return;
+        }
         Some("one") => {
             let only: Vec<String> = args[1..]
                 .iter()
                 .take_while(|a| !a.starts_with("--"))
                 .cloned()
                 .collect();
+            const KNOWN: [&str; 11] = [
+                "sinf", "cosf", "tanf", "expf", "asinf", "acosf", "atanf", "atan2f", "powf", "sin",
+                "edges",
+            ];
+            if only.is_empty() || only.iter().any(|name| !KNOWN.contains(&name.as_str())) {
+                eprintln!("one: give one or more of {}", KNOWN.join(" "));
+                std::process::exit(2);
+            }
             compare(&args, &only, !args.iter().any(|a| a == "--fma3-off"));
         }
         Some("parse") => parse(&args[1..]),
         Some("rcpps") => rcpps(option(&args, "--threads").unwrap_or_else(threads_default)),
-        Some("digest") => digest(option(&args, "--stride").unwrap_or(4099)),
+        Some("digest") => digest(
+            option(&args, "--stride").unwrap_or(4099).max(1),
+            option(&args, "--offset").unwrap_or(0),
+        ),
         _ => {
             eprintln!(
-                "usage: math_proof all | fma3-off | one <function>... | rcpps | digest | parse <folder>...  \
-                 [--threads N] [--pairs N] [--out <file.md>] [--stride N]"
+                "usage: math_proof all | fma3-off | std | one <function>... | rcpps | digest | parse <folder>...  \
+                 [--threads N] [--pairs N] [--out <file.md>] [--stride N] [--offset K]"
             );
             std::process::exit(2);
         }
+    }
+    if DIFFERENT.load(std::sync::atomic::Ordering::Relaxed) {
+        std::process::exit(1);
     }
 }

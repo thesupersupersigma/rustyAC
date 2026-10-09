@@ -98,6 +98,13 @@ fn sample_matches_msvcr120() {
         );
         return;
     }
+    // the pure functions are the DLL's FMA3 path, which it only takes on a processor with
+    // FMA3 (every x86 since about 2013); on an older one the DLL itself computes other bits
+    #[cfg(target_arch = "x86_64")]
+    if !std::arch::is_x86_feature_detected!("fma") {
+        println!("NOT TESTED: this processor has no FMA3, so msvcr120.dll runs its SSE2 path");
+        return;
+    }
     for (name, pure, dll) in ONE {
         for x in floats() {
             assert_eq!(
