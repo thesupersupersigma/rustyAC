@@ -563,6 +563,39 @@ impl Kgl {
         unsafe { self.context.IASetVertexBuffers(0, 1, Some(&vb.buffer), Some(&vb.stride), Some(&offset)) }
     }
 
+    /// `kglVertexBufferMap` 0x14001a090 (`KGLVertexBuffer::map` 0x140023e30): the bytes go
+    /// into a dynamic buffer whose old content is thrown away.
+    pub fn vertex_buffer_map(&self, vb: &KglVertexBuffer, data: &[u8]) {
+        let Some(buffer) = &vb.buffer else {
+            return;
+        };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            if self.context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)).is_ok() {
+                std::ptr::copy_nonoverlapping(data.as_ptr(), mapped.pData as *mut u8, data.len());
+            }
+            self.context.Unmap(buffer, 0);
+        }
+    }
+
+    /// `kglSetPrimitiveType` 0x140019340: 0 a triangle list, 1 a line list, 2 a line strip,
+    /// 3 a triangle strip.
+    pub fn set_primitive_type(&self, kind: i32) {
+        let topology = match kind {
+            0 => D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            1 => D3D_PRIMITIVE_TOPOLOGY_LINELIST,
+            2 => D3D_PRIMITIVE_TOPOLOGY_LINESTRIP,
+            3 => D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
+            _ => return,
+        };
+        unsafe { self.context.IASetPrimitiveTopology(topology) }
+    }
+
+    /// `kglDraw` 0x14001a1b0.
+    pub fn draw(&self, vertex_count: i32, start_vertex: i32) {
+        unsafe { self.context.Draw(vertex_count as u32, start_vertex as u32) }
+    }
+
     /// `kglSetIndexBuffer` 0x14001a170.
     pub fn set_index_buffer(&self, ib: &KglIndexBuffer) {
         unsafe { self.context.IASetIndexBuffer(ib.buffer.as_ref(), DXGI_FORMAT_R16_UINT, 0) }

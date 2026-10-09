@@ -308,6 +308,7 @@ pub struct AcRenderer {
     blurred: NodeId,
     track_node: NodeId,
     cars: NodeId,
+    car_shadows: NodeId,
     car: Option<CarAvatar>,
     track_folder: Option<String>,
     options: AcOptions,
@@ -383,7 +384,7 @@ impl AcRenderer {
         }
         camera.set_cubemap_size(&graphics, cube_size);
         let hud = HudPass::new(&graphics.kgl.device)?;
-        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -438,6 +439,10 @@ impl AcRenderer {
     /// What follows the loading in the game: the sun (`RaceManager::initLighting`), the weather
     /// (`Sim::applyCustomWeather`) and the reflection cube map (`Sim::initStaticCubemap`).
     pub fn finish_loading(&mut self) -> Result<(), String> {
+        // Sim::onPostLoad: CarAvatar::onPostLoad
+        if let Some(car) = &mut self.car {
+            car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
+        }
         self.graphics.set_sun_angle(self.options.sun_angle);
         if !self.options.weather.is_empty() {
             self.graphics.apply_custom_weather(&self.options.weather.clone());

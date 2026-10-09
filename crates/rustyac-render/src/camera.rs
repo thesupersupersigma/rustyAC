@@ -187,7 +187,7 @@ impl Camera {
 
     /// What the mesh filter and the bounding-sphere nodes read of the camera right now.
     pub fn cull_camera(&self) -> CullCamera {
-        CullCamera { fov: self.fov, lod_multiplier: self.lod_multiplier, position: [self.matrix.m[3][0], self.matrix.m[3][1], self.matrix.m[3][2]], frustum: self.frustum }
+        CullCamera { fov: self.fov, lod_multiplier: self.lod_multiplier, position: [self.matrix.m[3][0], self.matrix.m[3][1], self.matrix.m[3][2]], frustum: self.frustum, is_cube_map_camera: self.is_cube_map_camera, is_mirror: self.is_mirror }
     }
 }
 

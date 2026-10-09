@@ -10,13 +10,16 @@
 //! Not here yet (Task 21): the driver, lights, blurred rims, brake-disc glow, damage, dirt,
 //! mirrors. Their meshes are drawn as the model file has them.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
 use crate::animator::SuspensionAnimator;
 use crate::camera::DEG_TO_RAD;
+use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
@@ -75,6 +78,10 @@ pub struct CarAvatar {
     pub driver_hr_distance: f32,
     pub pro_view_nodes: Vec<NodeId>,
     pub suspension: Suspension,
+    /// `CarFakeShadow`, made by [`CarAvatar::on_post_load`]
+    pub fake_shadow: Option<Rc<RefCell<CarFakeShadow>>>,
+    /// the car's folder as its textures are named by
+    pub folder_text: String,
 }
 
 fn ini(folder: &Path, name: &str) -> Option<IniReader> {
@@ -137,6 +144,8 @@ impl CarAvatar {
             driver_hr_distance: 15.0,
             pro_view_nodes: Vec::new(),
             suspension,
+            fake_shadow: None,
+            folder_text: folder_text.to_string(),
         };
 
         // CarLodManager::CarLodManager 0x1400e2f80
@@ -183,6 +192,14 @@ impl CarAvatar {
         }
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
+    }
+
+    /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows, drawn when the scene's
+    /// `CAR_SHADOWS` node is reached.
+    pub fn on_post_load(&mut self, graphics: &mut Graphics, scene: &mut Scene, car_shadows_node: NodeId) {
+        let shadow = Rc::new(RefCell::new(CarFakeShadow::new(graphics, &self.folder_text, &self.folder, self.car_node, self.body_transform)));
+        scene.add_event_handler(car_shadows_node, shadow.clone());
+        self.fake_shadow = Some(shadow);
     }
 
     /// `CarAvatar::makeTyresDoubleFacedShadows` 0x1400d9020: the tyres' material casts its
@@ -321,6 +338,9 @@ impl CarAvatar {
     pub fn update(&mut self, scene: &mut Scene, state: &CarPhysicsState, _dt: f32) {
         self.body_matrix = self.make_body_matrix(&state.world_matrix);
         scene.nodes[self.body_transform].matrix = self.body_matrix;
+        if let Some(shadow) = &self.fake_shadow {
+            shadow.borrow_mut().state = *state;
+        }
         // the steering wheel
         scene.nodes[self.steer_transform_hr].matrix = self.org_steer_matrix;
         let mut a = state.steer;

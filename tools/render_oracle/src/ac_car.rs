@@ -37,6 +37,7 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_CAR_FAKE_SHADOW_CTOR: usize = 0x1_400e_0d80; // CarFakeShadow::CarFakeShadow(CarAvatar*)
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
@@ -59,6 +60,11 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The data files the car's objects read.
+const DATA_FILES: [&str; 4] = ["car.ini", "lods.ini", "suspensions.ini", "ambient_shadows.ini"];
+/// Loose files of the car's folder the car's objects read.
+const LOOSE_FILES: [&str; 5] = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_shadow.png", "tyre_2_shadow.png", "tyre_3_shadow.png"];
+
 /// The car's files in the oracle's scratch folder: the game's code opens them by relative
 /// paths (`content/cars/<car>/…`). The data files are plain ones (from `cardata/` or unpacked
 /// from the car's `data.acd` in memory), the models, the skin and the animations are copies.
@@ -74,7 +80,7 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
     let _ = std::fs::remove_file(data.join("proview_nodes.ini"));
     let plain = repo.join("cardata").join(&spec.name);
     let unpacked = source.join("data");
-    for name in ["car.ini", "lods.ini", "suspensions.ini"] {
+    for name in DATA_FILES {
         let bytes = if plain.join(name).is_file() {
             std::fs::read(plain.join(name)).map_err(|e| e.to_string())?
         } else {
@@ -95,6 +101,11 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
         copy_file(&source.join(&file), &target.join(&file))?;
         index += 1;
     }
+    for name in LOOSE_FILES {
+        if source.join(name).is_file() {
+            copy_file(&source.join(name), &target.join(name))?;
+        }
+    }
     let skin = source.join("skins").join(&spec.skin);
     if let Ok(entries) = std::fs::read_dir(&skin) {
         for entry in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
@@ -107,6 +118,19 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
         }
     }
     Ok(())
+}
+
+/// The nodes of `Sim::initSceneGraph` the car's objects hang things on.
+pub struct SimNodes {
+    pub root: *mut u8,
+    pub cars: *mut u8,
+    pub skid_marks: *mut u8,
+    pub particles: *mut u8,
+    pub car_shadows: *mut u8,
+    pub before_cars: *mut u8,
+    pub render_finished: *mut u8,
+    pub blurred: *mut u8,
+    pub unblurred: *mut u8,
 }
 
 /// The game's objects of one car.
@@ -146,7 +170,8 @@ impl Game {
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90 by hand around the game's own constructors.
-    pub unsafe fn load_car(&self, spec: &CarSpec, cars_node: *mut u8, camera: *mut u8) -> Result<Car, String> {
+    pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8) -> Result<Car, String> {
+        let cars_node = nodes.cars;
         let acs = &self.acs;
         self.prepare_cars();
         let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
@@ -161,6 +186,15 @@ impl Game {
         wr(sim, 0x188, camera_manager);
         wr(sim, 0x1b0, replay_manager);
         wr(sim, 0x238, camera);
+        wr(sim, 0x120, nodes.root);
+        wr(sim, 0x130, nodes.cars);
+        wr(sim, 0x138, nodes.skid_marks);
+        wr(sim, 0x140, nodes.particles);
+        wr(sim, 0x148, nodes.car_shadows);
+        wr(sim, 0x158, nodes.blurred);
+        wr(sim, 0x160, nodes.unblurred);
+        wr(sim, 0x170, nodes.render_finished);
+        wr(sim, 0x178, nodes.before_cars);
         let car = acs.alloc(0x12a8);
         wr(car, 0x8, game);
         wr(car, 0x130, sim);
@@ -239,6 +273,12 @@ impl Game {
         }
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
+        // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
+        {
+            let shadow = acs.alloc(0x158);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
+            ctor(shadow, car);
+        }
         Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock })
     }
 

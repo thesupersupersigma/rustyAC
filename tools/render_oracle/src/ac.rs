@@ -32,6 +32,7 @@ const VA_GRAPHICS_END_SCENE: usize = 0x1_4020_2850; // GraphicsManager::endScene
 const VA_GRAPHICS_COMPILE: usize = 0x1_4020_26e0; // GraphicsManager::compile(Node*)
 const VA_GRAPHICS_SET_SCREEN_SPACE_MODE: usize = 0x1_4020_48e0; // GraphicsManager::setScreenSpaceMode()
 const VA_NODE_CTOR: usize = 0x1_4020_db10; // Node::Node(const std::wstring&)
+const VA_NODE_EVENT_CTOR: usize = 0x1_4021_e4c0; // NodeEvent::NodeEvent(const std::wstring&)
 const VA_KN5IO_CTOR: usize = 0x1_4021_45a0; // KN5IO::KN5IO(GraphicsManager*)
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 const VA_KN5IO_LOAD: usize = 0x1_4021_51a0; // Node* KN5IO::load(const std::wstring&)
@@ -282,6 +283,13 @@ impl Game {
         ctor(node, wstring(&self.acs, name))
     }
 
+    /// A `NodeEvent` (0xf8 bytes) of the game.
+    pub unsafe fn node_event(&self, name: &str) -> *mut u8 {
+        let node = self.acs.alloc(0xf8);
+        let ctor: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_NODE_EVENT_CTOR));
+        ctor(node, wstring(&self.acs, name))
+    }
+
     /// `parent->addChild(child)` (virtual, slot +8).
     pub unsafe fn add_child(&self, parent: *mut u8, child: *mut u8) {
         let vtable = rd::<*const usize>(parent, 0);
@@ -359,7 +367,7 @@ impl Game {
         begin(self.graphics);
         screen_space(self.graphics);
         end(self.graphics);
-        // Sim::initSceneGraph 0x140199d70 (the NodeEvents have no handler here: plain nodes)
+        // Sim::initSceneGraph 0x140199d70
         let root = self.node("ROOT");
         let blurred = self.node("BLURRED");
         let unblurred = self.node("UNBLURRED");
@@ -369,15 +377,15 @@ impl Game {
         self.add_child(blurred, track_node);
         let skid_marks = self.node("SKIDMARKS");
         self.add_child(blurred, skid_marks);
-        let car_shadows = self.node("CAR_SHADOWS");
+        let car_shadows = self.node_event("CAR_SHADOWS");
         self.add_child(blurred, car_shadows);
-        let before_cars = self.node("BEFORE_CARS_NODE");
+        let before_cars = self.node_event("BEFORE_CARS_NODE");
         self.add_child(unblurred, before_cars);
         let cars = self.node("CARS");
         self.add_child(unblurred, cars);
         let particles = self.node("PARTICLES_NODE");
         self.add_child(unblurred, particles);
-        let render_finished = self.node("RENDER FINISHED");
+        let render_finished = self.node_event("RENDER FINISHED");
         self.add_child(unblurred, render_finished);
 
         let compile: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_COMPILE));
@@ -453,7 +461,7 @@ impl Game {
         set_cubemap_size(camera, crate::root::profile().cubemap_size);
         // Sim::addCar: the car's models and its objects
         let car = match &frame.car {
-            Some(spec) => Some(self.load_car(spec, cars, camera)?),
+            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred }, camera)?),
             None => None,
         };
 

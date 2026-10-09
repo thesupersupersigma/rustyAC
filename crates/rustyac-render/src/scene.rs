@@ -189,8 +189,22 @@ pub enum NodeKind {
     SkinnedMesh(Box<SkinnedMeshData>),
     /// `NodeBoundingSphere`: its world matrix is copied from the delegate when it is drawn
     BoundingSphere { delegate: Option<NodeId> },
-    /// `NodeEvent`: the callbacks belong to Task 21; without them it is a node
-    Event,
+    /// `NodeEvent` (0xf8 bytes): its handlers are called whenever a pass reaches the node
+    Event { handlers: Vec<std::rc::Rc<std::cell::RefCell<dyn NodeEventHandler>>> },
+}
+
+/// `OnNodeRenderEvent`: the node and what the handlers read of the `RenderContext`.
+#[derive(Clone, Copy, Debug)]
+pub struct OnNodeRenderEvent {
+    pub node: NodeId,
+    pub pass_id: i32,
+    pub max_layer: i32,
+    pub camera: CullCamera,
+}
+
+/// A handler of a `NodeEvent`'s `evOnRender`.
+pub trait NodeEventHandler {
+    fn on_node_render(&mut self, scene: &mut Scene, graphics: &mut Graphics, event: &OnNodeRenderEvent);
 }
 
 /// `Node` (0xe0 bytes) and what its subclasses add.
@@ -214,6 +228,8 @@ pub struct CullCamera {
     /// `Camera::matrix` row 3
     pub position: [f32; 3],
     pub frustum: BoundingFrustum,
+    pub is_cube_map_camera: bool,
+    pub is_mirror: bool,
 }
 
 /// `RenderContext` with its `CameraMeshFilter`.
@@ -249,7 +265,14 @@ impl Scene {
 
     /// `NodeEvent`.
     pub fn node_event(&mut self, name: &str) -> NodeId {
-        self.push(name, NodeKind::Event, None, true)
+        self.push(name, NodeKind::Event { handlers: Vec::new() }, None, true)
+    }
+
+    /// `Event<OnNodeRenderEvent>::addHandler` on a `NodeEvent`.
+    pub fn add_event_handler(&mut self, node: NodeId, handler: std::rc::Rc<std::cell::RefCell<dyn NodeEventHandler>>) {
+        if let NodeKind::Event { handlers } = &mut self.nodes[node].kind {
+            handlers.push(handler);
+        }
     }
 
     /// `Mesh::Mesh` 0x140225be0: the only kind of node that asks for no world matrix.
@@ -478,7 +501,19 @@ impl Scene {
                     self.render_node(graphics, n, rc);
                 }
             }
-            NodeKind::Node | NodeKind::Event => self.render_node(graphics, n, rc),
+            NodeKind::Event { handlers } => {
+                // NodeEvent::render 0x14021e5c0: the handlers in the order they were added,
+                // then the node's children
+                if self.nodes[n].is_active {
+                    let handlers = handlers.clone();
+                    let event = OnNodeRenderEvent { node: n, pass_id: rc.pass_id, max_layer: rc.max_layer, camera: rc.camera };
+                    for handler in handlers {
+                        handler.borrow_mut().on_node_render(self, graphics, &event);
+                    }
+                }
+                self.render_node(graphics, n, rc)
+            }
+            NodeKind::Node => self.render_node(graphics, n, rc),
         }
     }
 

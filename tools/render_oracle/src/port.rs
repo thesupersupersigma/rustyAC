@@ -122,6 +122,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         None => None,
     };
 
+    // Sim::onPostLoad: CarAvatar::onPostLoad
+    if let Some(car) = &mut car {
+        car.on_post_load(&mut graphics, &mut scene, car_shadows);
+    }
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
