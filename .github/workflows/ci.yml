@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-# Builds and tests every push to master and every pull request, on GitHub's own Windows machine.
+# Builds and tests every push to master and every pull request, on GitHub's own Windows machine,
+# and builds the browser preview (the code only: the site has no content in it).
 # No Assetto Corsa file is here or is fetched: the tests that need the game's folder print
 # NOT TESTED and pass.
 name: CI
@@ -40,6 +41,8 @@ jobs:
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy --no-self-update
           rustup default "$RUST_TOOLCHAIN"
+          # the browser preview (wasm32-unknown-unknown) and the replay check under WASI
+          rustup target add wasm32-unknown-unknown wasm32-wasip1
           rustc --version
           cargo --version
 
@@ -84,3 +87,19 @@ jobs:
             cargo build --release --locked --manifest-path "$manifest"
             echo "::endgroup::"
           done
+
+      # The browser preview: the wasm build of the physics and the page around it, into
+      # dist-web/site/ (wasm-bindgen and wasm-opt are pinned in web/build.py and downloaded into
+      # target/web-tools). Code only: no car, no track, no preview pack.
+      - name: Build the browser preview
+        run: python web/build.py
+
+      - name: Clippy (wasm)
+        run: |
+          cargo clippy -p rustyac-web --lib --target wasm32-unknown-unknown --locked -- -D warnings
+          cargo clippy -p rustyac-math -p rustyac-ode -p rustyac-content -p rustyac-physics -p rustyac-game --target wasm32-wasip1 --locked -- -D warnings
+
+      # the replay runner of the wasm-against-desktop proof (docs/port/web.md); running it needs
+      # the game's folder, building it does not
+      - name: Build the WASI replay runner
+        run: cargo build --release --locked -p rustyac-game --target wasm32-wasip1

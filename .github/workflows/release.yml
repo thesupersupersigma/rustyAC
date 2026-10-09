@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 # A pushed tag vX.Y.Z becomes a release: built and tested from scratch on GitHub's own Windows
-# machine, zipped, and published in the repo's Releases section. See docs/release.md.
+# machine, zipped, and published in the repo's Releases section, with the browser preview's site
+# as a second zip. See docs/release.md.
 # It can also be started by hand for a tag that exists already (Actions -> Release -> Run workflow).
 # No Assetto Corsa file is here, is fetched or goes into the zip.
 name: Release
@@ -80,6 +81,7 @@ jobs:
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --no-self-update
           rustup default "$RUST_TOOLCHAIN"
+          rustup target add wasm32-unknown-unknown
           rustc --version
           cargo --version
 
@@ -102,10 +104,16 @@ jobs:
         shell: pwsh
         run: ./packaging/package.ps1 -Version $env:VERSION -OutDir dist
 
+      # the site only (the page, its script, the wasm): build.py reads the zip back and stops if
+      # anything else is in it. No preview pack, no Assetto Corsa file.
+      - name: Package the browser preview
+        run: python web/build.py --zip "dist/rustyAC-$TAG-web.zip"
+
       - name: Publish the release
         run: |
           zip="dist/rustyAC-$TAG-windows-x64.zip"
-          gh release create "$TAG" "$zip" "$zip.sha256" \
+          web="dist/rustyAC-$TAG-web.zip"
+          gh release create "$TAG" "$zip" "$zip.sha256" "$web" "$web.sha256" \
             --verify-tag \
             --title "rustyAC $TAG" \
             --generate-notes \
