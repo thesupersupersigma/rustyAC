@@ -390,12 +390,9 @@ impl State {
             Ok(r) => self.resource_name(r.as_raw()),
             Err(_) => "-".into(),
         };
-        // Texture2D / TextureCube / Texture2DArray all start with MostDetailedMip, MipLevels
         let detail = desc.Anonymous.Texture2DArray;
-        format!(
-            "srv(f{} d{} {} {} {} {} {name})",
-            desc.Format.0, desc.ViewDimension.0, detail.MostDetailedMip, detail.MipLevels, detail.FirstArraySlice, detail.ArraySize
-        )
+        let fields = view_fields(0, desc.ViewDimension.0, &[detail.MostDetailedMip, detail.MipLevels, detail.FirstArraySlice, detail.ArraySize]);
+        format!("srv(f{} d{}{fields} {name})", desc.Format.0, desc.ViewDimension.0)
     }
 
     unsafe fn rtv_name(&mut self, view: *mut c_void) -> String {
@@ -412,7 +409,8 @@ impl State {
             Err(_) => "-".into(),
         };
         let detail = desc.Anonymous.Texture2DArray;
-        format!("rtv(f{} d{} {} {} {} {name})", desc.Format.0, desc.ViewDimension.0, detail.MipSlice, detail.FirstArraySlice, detail.ArraySize)
+        let fields = view_fields(1, desc.ViewDimension.0, &[detail.MipSlice, detail.FirstArraySlice, detail.ArraySize]);
+        format!("rtv(f{} d{}{fields} {name})", desc.Format.0, desc.ViewDimension.0)
     }
 
     unsafe fn dsv_name(&mut self, view: *mut c_void) -> String {
@@ -429,10 +427,8 @@ impl State {
             Err(_) => "-".into(),
         };
         let detail = desc.Anonymous.Texture2DArray;
-        format!(
-            "dsv(f{} d{} g{:x} {} {} {} {name})",
-            desc.Format.0, desc.ViewDimension.0, desc.Flags, detail.MipSlice, detail.FirstArraySlice, detail.ArraySize
-        )
+        let fields = view_fields(2, desc.ViewDimension.0, &[detail.MipSlice, detail.FirstArraySlice, detail.ArraySize]);
+        format!("dsv(f{} d{} g{:x}{fields} {name})", desc.Format.0, desc.ViewDimension.0, desc.Flags)
     }
 
     /// The constant buffers a draw call sees, with the hash of what is in each right now.
@@ -454,6 +450,29 @@ impl State {
         }
         text
     }
+}
+
+/// The fields of a view description that mean something for its dimension: the rest of the
+/// union is whatever was in that memory, in the caller's description and in `GetDesc`'s.
+/// `kind`: 0 shader resource view, 1 render target view, 2 depth-stencil view.
+fn view_fields(kind: u32, dimension: i32, union: &[u32]) -> String {
+    let used = match (kind, dimension) {
+        // SRV: TEXTURE2D, TEXTURECUBE: most detailed mip, mip levels; TEXTURE2DARRAY: + first slice, size
+        (0, 4) | (0, 9) => 2,
+        (0, 5) => 4,
+        // RTV: TEXTURE2D: mip slice; TEXTURE2DARRAY: + first slice, size
+        (1, 4) => 1,
+        (1, 5) => 3,
+        // DSV: TEXTURE2D: mip slice; TEXTURE2DARRAY: + first slice, size
+        (2, 3) => 1,
+        (2, 4) => 3,
+        _ => 0,
+    };
+    let mut text = String::new();
+    for v in &union[..used.min(union.len())] {
+        let _ = write!(text, " {v}");
+    }
+    text
 }
 
 fn sampler_name(sampler: *mut c_void) -> String {
@@ -694,12 +713,22 @@ unsafe extern "system" fn dev_create_texture_2d(this: P, desc: *const D3D11_TEXT
 
 /// A view: its description as passed (or `null`) and what it is a view of.
 macro_rules! create_view_hook {
-    ($name:ident, $slot:expr, $label:expr, $size:expr) => {
-        unsafe extern "system" fn $name(this: P, resource: P, desc: *const u8, out: *mut P) -> i32 {
-            let orig: unsafe extern "system" fn(P, P, *const u8, *mut P) -> i32 = orig_dev($slot);
+    ($name:ident, $slot:expr, $label:expr, $kind:expr) => {
+        unsafe extern "system" fn $name(this: P, resource: P, desc: *const u32, out: *mut P) -> i32 {
+            let orig: unsafe extern "system" fn(P, P, *const u32, *mut P) -> i32 = orig_dev($slot);
             if let Some(mut state) = enter() {
                 if state.capturing {
-                    let text = if desc.is_null() { "null".to_string() } else { hex(std::slice::from_raw_parts(desc, $size)) };
+                    let text = if desc.is_null() {
+                        "null".to_string()
+                    } else if $kind == 2 {
+                        // format, dimension, flags, then the union
+                        let d = std::slice::from_raw_parts(desc, 6);
+                        format!("f{} d{} g{:x}{}", d[0], d[1], d[2], view_fields(2, d[1] as i32, &d[3..6]))
+                    } else {
+                        // format, dimension, then the union
+                        let d = std::slice::from_raw_parts(desc, if $kind == 0 { 6 } else { 5 });
+                        format!("f{} d{}{}", d[0], d[1], view_fields($kind, d[1] as i32, &d[2..]))
+                    };
                     let name = state.resource_name(resource);
                     state.line(format_args!("{} {text} {name}", $label));
                 }
@@ -709,9 +738,9 @@ macro_rules! create_view_hook {
     };
 }
 
-create_view_hook!(dev_create_shader_resource_view, 7, "dev.CreateShaderResourceView", 0x18);
-create_view_hook!(dev_create_render_target_view, 9, "dev.CreateRenderTargetView", 0x14);
-create_view_hook!(dev_create_depth_stencil_view, 10, "dev.CreateDepthStencilView", 0x14);
+create_view_hook!(dev_create_shader_resource_view, 7, "dev.CreateShaderResourceView", 0);
+create_view_hook!(dev_create_render_target_view, 9, "dev.CreateRenderTargetView", 1);
+create_view_hook!(dev_create_depth_stencil_view, 10, "dev.CreateDepthStencilView", 2);
 
 // --- hooks: the context ------------------------------------------------------------------------
 

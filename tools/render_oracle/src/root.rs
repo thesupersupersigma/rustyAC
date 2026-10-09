@@ -1,25 +1,81 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The oracle's scratch game folder. The game's code builds relative paths (`system/cfg/…`,
-//! `system/shaders/win/…`, `content/weather/…`, `cfg/video.ini`), so the oracle runs with its
-//! current directory in a folder of its own that holds copies of those small files, and its
-//! own `cfg/video.ini`: the Task 20 profile. The game's folder itself is only ever read; the
-//! big files (kn5 models) are opened there through absolute paths.
+//! The oracle's scratch game folder, and the Task 20 profile. The game's code builds relative
+//! paths (`system/cfg/…`, `system/shaders/win/…`, `content/weather/…`, `cfg/video.ini`), so
+//! the oracle runs with its current directory in a folder of its own that holds copies of
+//! those small files, and its own `cfg/video.ini`. The game's folder itself is only ever read;
+//! the big files (kn5 models) are opened there through absolute paths.
 
 use std::path::Path;
 
 use crate::Args;
 
+/// The Task 20 profile: the values of `cfg/video.ini` both sides run with.
+pub const ANISOTROPIC: i32 = 8;
+pub const SHADOW_MAP_SIZE: i32 = 2048;
+pub const WORLD_DETAIL: i32 = 5;
+pub const CUBEMAP_SIZE: i32 = 512;
+pub const CUBEMAP_FACES_PER_FRAME: i32 = 0;
+
 /// `cfg/video.ini` of the proof: no post-processing, no motion blur, no MSAA, no mirror, no
-/// smoke, a cube map that renders no faces, shadows on at a fixed size.
+/// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 pub fn video_ini(width: u32, height: u32) -> String {
-    format!(
-        "[VIDEO]\nWIDTH={width}\nHEIGHT={height}\nREFRESH=60\nFULLSCREEN=0\nVSYNC=0\nAASAMPLES=1\nAAQUALITY=0\nANISOTROPIC=8\nSHADOW_MAP_SIZE=2048\nFPS_CAP_MS=0\nINDEX=0\nDISABLE_LEGACY_HDR=1\n\n\
-         [REFRESH]\nVALUE=60\n\n[CAMERA]\nMODE=DEFAULT\n\n[ASSETTOCORSA]\nHIDE_ARMS=0\nHIDE_STEER=0\nLOCK_STEER=0\nWORLD_DETAIL=5\n\n\
-         [EFFECTS]\nMOTION_BLUR=0\nRENDER_SMOKE_IN_MIRROR=0\nSMOKE=0\nFXAA=0\n\n\
-         [POST_PROCESS]\nENABLED=0\nQUALITY=0\nFILTER=default\nGLARE=0\nDOF=0\nRAYS_OF_GOD=0\nHEAT_SHIMMER=0\nFXAA=0\n\n\
-         [MIRROR]\nHQ=0\nSIZE=512\n\n[CUBEMAP]\nSIZE=512\nFACES_PER_FRAME=0\nFARPLANE=500\n\n[SATURATION]\nLEVEL=100\n"
-    )
+    let lines = [
+        "[VIDEO]".to_string(),
+        format!("WIDTH={width}"),
+        format!("HEIGHT={height}"),
+        "REFRESH=60".into(),
+        "FULLSCREEN=0".into(),
+        "VSYNC=0".into(),
+        "AASAMPLES=1".into(),
+        "AAQUALITY=0".into(),
+        format!("ANISOTROPIC={ANISOTROPIC}"),
+        format!("SHADOW_MAP_SIZE={SHADOW_MAP_SIZE}"),
+        "FPS_CAP_MS=0".into(),
+        "INDEX=0".into(),
+        String::new(),
+        "[REFRESH]".into(),
+        "VALUE=60".into(),
+        String::new(),
+        "[CAMERA]".into(),
+        "MODE=DEFAULT".into(),
+        String::new(),
+        "[ASSETTOCORSA]".into(),
+        "HIDE_ARMS=0".into(),
+        "HIDE_STEER=0".into(),
+        "LOCK_STEER=0".into(),
+        format!("WORLD_DETAIL={WORLD_DETAIL}"),
+        String::new(),
+        "[EFFECTS]".into(),
+        "MOTION_BLUR=0".into(),
+        "RENDER_SMOKE_IN_MIRROR=0".into(),
+        "SMOKE=0".into(),
+        "FXAA=0".into(),
+        String::new(),
+        "[POST_PROCESS]".into(),
+        "ENABLED=0".into(),
+        "QUALITY=0".into(),
+        "FILTER=default".into(),
+        "GLARE=0".into(),
+        "DOF=0".into(),
+        "RAYS_OF_GOD=0".into(),
+        "HEAT_SHIMMER=0".into(),
+        "FXAA=0".into(),
+        String::new(),
+        "[MIRROR]".into(),
+        "HQ=0".into(),
+        "SIZE=0".into(),
+        String::new(),
+        "[CUBEMAP]".into(),
+        format!("SIZE={CUBEMAP_SIZE}"),
+        format!("FACES_PER_FRAME={CUBEMAP_FACES_PER_FRAME}"),
+        "FARPLANE=0".into(),
+        String::new(),
+        "[SATURATION]".into(),
+        "LEVEL=100".into(),
+        String::new(),
+    ];
+    lines.join("\n")
 }
 
 fn copy_dir(from: &Path, to: &Path, deep: bool) -> Result<(), String> {
@@ -50,13 +106,17 @@ fn copy_dir(from: &Path, to: &Path, deep: bool) -> Result<(), String> {
 pub fn prepare(args: &Args) -> Result<(), String> {
     let root = &args.root;
     if root.join("acs.exe").is_file() || root.join("AssettoCorsa.exe").is_file() {
-        return Err(format!("{} looks like a game folder: the oracle's root has to be a scratch folder of its own", root.display()));
+        return Err(format!("{} looks like a game folder: the oracle root has to be a scratch folder of its own", root.display()));
     }
     let game = &args.game;
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
     copy_dir(&game.join("content/weather"), &root.join("content/weather"), true)?;
     std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
-    std::fs::write(root.join("cfg/video.ini"), video_ini(args.width, args.height)).map_err(|e| e.to_string())?;
+    let video = video_ini(args.width, args.height);
+    let same = std::fs::read_to_string(root.join("cfg/video.ini")).is_ok_and(|old| old == video);
+    if !same {
+        std::fs::write(root.join("cfg/video.ini"), video).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

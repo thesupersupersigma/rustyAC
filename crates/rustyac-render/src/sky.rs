@@ -9,5 +9,9 @@ use crate::scene::RenderContext;
 pub struct SkyBox {}
 
 impl SkyBox {
+    pub fn new(_graphics: &mut Graphics) -> Result<SkyBox, String> {
+        Ok(SkyBox {})
+    }
+
     pub fn render(&mut self, _graphics: &mut Graphics, _rc: &mut RenderContext, _cube_map_camera: bool) {}
 }

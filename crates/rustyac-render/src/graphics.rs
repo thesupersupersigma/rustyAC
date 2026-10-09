@@ -482,3 +482,30 @@ impl Graphics {
         self.cb_shadow_map.set_f32s(&transposed(m), offset);
     }
 }
+
+impl Graphics {
+    /// `GraphicsManager::setScreenRenderTargets` 0x140204880.
+    pub fn set_screen_render_targets(&mut self) {
+        let with_depth = !(self.video.aa_samples != 1 && self.video.pp_hdr_enabled);
+        self.kgl.set_screen_render_targets(with_depth);
+        self.set_viewport(0, 0, self.video.width, self.video.height);
+    }
+
+    /// `GraphicsManager::setScreenSpaceMode` 0x1402048e0: what the frame ends with before the
+    /// 2D drawing. No Direct3D call, but the camera and per-object buffers are written.
+    pub fn set_screen_space_mode(&mut self) {
+        let w = self.video.width as f32;
+        let h = self.video.height as f32;
+        let mut proj = Mat44f::default();
+        proj.m[0][0] = 2.0 / w;
+        proj.m[1][1] = 2.0 / (-h);
+        proj.m[2][2] = -0.5;
+        proj.m[3][0] = w / (-w);
+        proj.m[3][1] = h / h;
+        proj.m[3][2] = 0.5;
+        proj.m[3][3] = 1.0;
+        self.set_projection_matrix(&proj);
+        self.set_view_matrix(&Mat44f::IDENTITY, None);
+        self.set_world_matrix(&Mat44f::IDENTITY);
+    }
+}

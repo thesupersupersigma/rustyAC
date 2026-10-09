@@ -51,7 +51,7 @@ pub struct KglRenderTarget {
 
 /// `KGLCubeMap`: the reflection cube map with its per-face views.
 pub struct KglCubeMap {
-    pub texture: ID3D11Texture2D,
+    pub texture: Option<ID3D11Texture2D>,
     pub srv_cube: Option<ID3D11ShaderResourceView>,
     pub rtv_face: Vec<Option<ID3D11RenderTargetView>>,
     pub depth_texture: Option<ID3D11Texture2D>,
@@ -649,5 +649,88 @@ impl Kgl {
             self.context.Unmap(&staging, 0);
             Ok((desc.Width, desc.Height, pixels))
         }
+    }
+}
+
+impl Kgl {
+    /// `kglCreateCubeMap` 0x140018a30 / `KGLCubeMap::KGLCubeMap` 0x140023530: a depth texture
+    /// (with as many mip levels as the cube, as the game asks for), the cube, a view per face
+    /// and the cube's shader view. A size the device refuses leaves every view empty.
+    pub fn create_cube_map(&self, size: i32, hdr: bool, mips: i32) -> KglCubeMap {
+        let mut cube = KglCubeMap { texture: None, srv_cube: None, rtv_face: vec![None; 6], depth_texture: None, dsv_depth: None, size, mips };
+        unsafe {
+            let depth_desc = D3D11_TEXTURE2D_DESC {
+                Width: size as u32,
+                Height: size as u32,
+                MipLevels: mips as u32,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_D16_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_DEPTH_STENCIL.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let _ = self.device.CreateTexture2D(&depth_desc, None, Some(&mut cube.depth_texture));
+            let mut dd: D3D11_DEPTH_STENCIL_VIEW_DESC = std::mem::zeroed();
+            dd.Format = DXGI_FORMAT_D16_UNORM;
+            dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+            dd.Anonymous.Texture2D = D3D11_TEX2D_DSV { MipSlice: 0 };
+            if let Some(texture) = &cube.depth_texture {
+                let _ = self.device.CreateDepthStencilView(texture, Some(&dd), Some(&mut cube.dsv_depth));
+            }
+            let format = if hdr { DXGI_FORMAT_R16G16B16A16_FLOAT } else { DXGI_FORMAT_R8G8B8A8_UNORM };
+            let cube_desc = D3D11_TEXTURE2D_DESC {
+                Width: size as u32,
+                Height: size as u32,
+                MipLevels: mips as u32,
+                ArraySize: 6,
+                Format: format,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: (D3D11_RESOURCE_MISC_GENERATE_MIPS.0 | D3D11_RESOURCE_MISC_TEXTURECUBE.0) as u32,
+            };
+            let _ = self.device.CreateTexture2D(&cube_desc, None, Some(&mut cube.texture));
+            if let Some(texture) = &cube.texture {
+                for face in 0..6u32 {
+                    let mut rd: D3D11_RENDER_TARGET_VIEW_DESC = std::mem::zeroed();
+                    rd.Format = format;
+                    rd.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+                    rd.Anonymous.Texture2DArray = D3D11_TEX2D_ARRAY_RTV { MipSlice: 0, FirstArraySlice: face, ArraySize: 1 };
+                    let _ = self.device.CreateRenderTargetView(texture, Some(&rd), Some(&mut cube.rtv_face[face as usize]));
+                }
+                let mut sd: D3D11_SHADER_RESOURCE_VIEW_DESC = std::mem::zeroed();
+                sd.Format = format;
+                sd.ViewDimension = D3D_SRV_DIMENSION_TEXTURECUBE;
+                sd.Anonymous.TextureCube = D3D11_TEXCUBE_SRV { MostDetailedMip: 0, MipLevels: mips as u32 };
+                let _ = self.device.CreateShaderResourceView(texture, Some(&sd), Some(&mut cube.srv_cube));
+            }
+        }
+        cube
+    }
+
+    /// `kglCubeMapBeginFace` 0x140018b30.
+    pub fn cube_map_begin_face(&mut self, cube: &KglCubeMap, face: usize) {
+        unsafe {
+            self.context.OMSetRenderTargets(Some(std::slice::from_ref(&cube.rtv_face[face])), cube.dsv_depth.as_ref());
+        }
+        self.set_viewport(0.0, 0.0, cube.size as f32, cube.size as f32);
+        self.active_depth_stencil_view = cube.dsv_depth.clone();
+        self.active_render_target_view = cube.rtv_face[face].clone();
+    }
+
+    /// `kglCubeMapGenerateMips` 0x140019310.
+    pub fn cube_map_generate_mips(&self, cube: &KglCubeMap, face: i32) {
+        if cube.mips > 1 && face == -1 {
+            unsafe { self.context.GenerateMips(cube.srv_cube.as_ref()) }
+        }
+    }
+
+    /// `kglSetTextureCubeMap` 0x1400192c0.
+    pub fn set_texture_cube_map(&self, cube: Option<&KglCubeMap>, slot: u32) {
+        let view = cube.and_then(|c| c.srv_cube.clone());
+        self.set_texture(slot, &view);
     }
 }

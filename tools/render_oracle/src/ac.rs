@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The game's side: acs.exe's own `GraphicsManager` (and with it kgl, the state objects, the
-//! `ShaderManager`), built by address on a WARP device with a window that is never shown.
+//! `ShaderManager`), `KN5IO`, `SkyBox` and `CameraForward`, built by address on a WARP device
+//! with a window that is never shown, and one frame rendered by the game's own
+//! `CameraForward::render`.
+//!
+//! What the harness itself does in place of game code it cannot run (the whole `Sim`, `Game`,
+//! `TrackAvatar` and `CarAvatar`) is listed in `docs/port/renderer_core.md`: the scene graph of
+//! `Sim::initSceneGraph`, the loop over `models.ini` of `TrackAvatar::init3D`, what `Sim::Sim`
+//! and `Sim::initCubemaps` set on the camera, what the game camera of the moment sets every
+//! frame, and the order of calls of `Game::onIdle`.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,20 +20,24 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, Lo
 use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP};
 
 use crate::acs::Acs;
+use crate::frames::Frame;
 use crate::Args;
 
 const VA_GRAPHICS_MANAGER_CTOR: usize = 0x1_4020_1620; // GraphicsManager::GraphicsManager(const VideoSettings&)
 const VA_KGL_INIT_FONTS: usize = 0x1_4001_8210; // kglInitFonts (FW1FontWrapper + DirectWrite: not part of the 3D frame)
 const VA_INIREADERDOCUMENTS_INITIALIZED: usize = 0x1_4155_a588; // static bool INIReaderDocuments::initialized
 const VA_ATEXIT: usize = 0x1_4039_9754; // atexit (the program's own, statically linked)
-
 const VA_GRAPHICS_BEGIN_SCENE: usize = 0x1_4020_2580; // GraphicsManager::beginScene()
 const VA_GRAPHICS_END_SCENE: usize = 0x1_4020_2850; // GraphicsManager::endScene()
+const VA_GRAPHICS_COMPILE: usize = 0x1_4020_26e0; // GraphicsManager::compile(Node*)
+const VA_GRAPHICS_SET_SCREEN_SPACE_MODE: usize = 0x1_4020_48e0; // GraphicsManager::setScreenSpaceMode()
 const VA_NODE_CTOR: usize = 0x1_4020_db10; // Node::Node(const std::wstring&)
 const VA_KN5IO_CTOR: usize = 0x1_4021_45a0; // KN5IO::KN5IO(GraphicsManager*)
-const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(int)
+const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 const VA_KN5IO_LOAD: usize = 0x1_4021_51a0; // Node* KN5IO::load(const std::wstring&)
 const VA_CAMERA_FORWARD_CTOR: usize = 0x1_4021_f230; // CameraForward::CameraForward(const std::wstring&, GraphicsManager*, bool)
+const VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE: usize = 0x1_4022_01b0; // CameraForward::setCubemapSize(int)
+const VA_CAMERA_SET_SHADOW_MAPS_SPLITS: usize = 0x1_4020_d5f0; // CameraShadowMapped::setShadowMapsSplits(float, float, float, float)
 const VA_SKYBOX_CTOR: usize = 0x1_4021_c790; // SkyBox::SkyBox(GraphicsManager*)
 const VA_WORLD_MATRIX_TRAVERSE: usize = 0x1_4021_abf0; // WorldMatrixTraverser::traverse(Node*)
 
@@ -39,6 +51,14 @@ const SIZE_NODE: usize = 0xe0;
 const SIZE_KN5IO: usize = 0xc0;
 const SIZE_CAMERA_FORWARD: usize = 0x788;
 const SIZE_SKYBOX: usize = 0x80;
+
+pub unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
+    std::ptr::write_unaligned(base.add(offset) as *mut T, value);
+}
+
+pub unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
+    std::ptr::read_unaligned(base.add(offset) as *const T)
+}
 
 /// Writes an MSVC `std::wstring` (0x20 bytes: buffer or pointer, size, capacity).
 pub unsafe fn write_wstring(acs: &Acs, at: *mut u8, text: &str) {
@@ -64,15 +84,6 @@ pub unsafe fn wstring(acs: &Acs, text: &str) -> *mut u8 {
     s
 }
 
-pub unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
-    std::ptr::write_unaligned(base.add(offset) as *mut T, value);
-}
-
-#[allow(dead_code)]
-pub unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
-    std::ptr::read_unaligned(base.add(offset) as *const T)
-}
-
 static DEVICE: AtomicUsize = AtomicUsize::new(0);
 static CONTEXT: AtomicUsize = AtomicUsize::new(0);
 static SWAP_CHAIN: AtomicUsize = AtomicUsize::new(0);
@@ -96,7 +107,7 @@ type CreateDeviceAndSwapChain = unsafe extern "system" fn(
 /// rasteriser: the same pixels on every machine, no GPU needed), whatever adapter was asked for.
 unsafe extern "system" fn create_device_and_swap_chain(
     _adapter: *mut c_void,
-    driver_type: i32,
+    _driver_type: i32,
     software: *mut c_void,
     flags: u32,
     levels: *const i32,
@@ -111,12 +122,6 @@ unsafe extern "system" fn create_device_and_swap_chain(
     const D3D_DRIVER_TYPE_WARP: i32 = 5;
     let module = LoadLibraryW(w!("d3d11.dll")).expect("d3d11.dll");
     let real: CreateDeviceAndSwapChain = std::mem::transmute(GetProcAddress(module, windows::core::s!("D3D11CreateDeviceAndSwapChain")).expect("D3D11CreateDeviceAndSwapChain"));
-    let wanted: Vec<i32> = if levels.is_null() { Vec::new() } else { std::slice::from_raw_parts(levels, level_count as usize).to_vec() };
-    eprintln!("oracle: the game asks for a device: driver type {driver_type}, flags {flags:#x}, feature levels {wanted:x?}, sdk {sdk}");
-    if !swap_chain_desc.is_null() {
-        let words = std::slice::from_raw_parts(swap_chain_desc as *const u32, 18);
-        eprintln!("oracle: its DXGI_SWAP_CHAIN_DESC: {words:x?}");
-    }
     let result = real(std::ptr::null_mut(), D3D_DRIVER_TYPE_WARP, software, flags, levels, level_count, sdk, swap_chain_desc, swap_chain, device, level, context);
     if result >= 0 {
         DEVICE.store(*device as usize, Ordering::SeqCst);
@@ -130,6 +135,17 @@ unsafe extern "system" fn create_device_and_swap_chain(
         eprintln!("oracle: D3D11CreateDeviceAndSwapChain on WARP failed: {result:#x}");
     }
     result
+}
+
+type CreateDevice = unsafe extern "system" fn(*mut c_void, i32, *mut c_void, u32, *const i32, u32, u32, *mut *mut c_void, *mut i32, *mut *mut c_void) -> i32;
+
+/// In place of `D3D11CreateDevice` (the game's throw-away first device, made to learn the
+/// feature level): on WARP as well, so that no graphics card is touched.
+unsafe extern "system" fn create_device(_adapter: *mut c_void, _driver_type: i32, software: *mut c_void, flags: u32, levels: *const i32, level_count: u32, sdk: u32, device: *mut *mut c_void, level: *mut i32, context: *mut *mut c_void) -> i32 {
+    const D3D_DRIVER_TYPE_WARP: i32 = 5;
+    let module = LoadLibraryW(w!("d3d11.dll")).expect("d3d11.dll");
+    let real: CreateDevice = std::mem::transmute(GetProcAddress(module, windows::core::s!("D3D11CreateDevice")).expect("D3D11CreateDevice"));
+    real(std::ptr::null_mut(), D3D_DRIVER_TYPE_WARP, software, flags, levels, level_count, sdk, device, level, context)
 }
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -152,12 +168,26 @@ pub struct Game {
     pub device: *mut c_void,
     pub context: *mut c_void,
     pub swap_chain: *mut c_void,
+    /// the calls of the start-up (state objects, constant buffers, samplers)
+    pub init_log: Vec<u8>,
+}
+
+/// What one run of a renderer gave.
+pub struct Rendered {
+    pub log: Vec<u8>,
+    pub draws: u64,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
 }
 
 impl Game {
     pub fn start(args: &Args) -> Result<Game, String> {
         crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll"]);
-        crate::acs::set_extra_overrides(vec![("d3d11.dll", "D3D11CreateDeviceAndSwapChain", create_device_and_swap_chain as *const () as usize)]);
+        crate::acs::set_extra_overrides(vec![
+            ("d3d11.dll", "D3D11CreateDeviceAndSwapChain", create_device_and_swap_chain as *const () as usize),
+            ("d3d11.dll", "D3D11CreateDevice", create_device as *const () as usize),
+        ]);
         let acs = Acs::load(&args.acs)?;
         if args.verbose {
             acs.unbuffer_game_stdout();
@@ -170,14 +200,13 @@ impl Game {
             acs.patch(acs.va(VA_ATEXIT), &[0x31, 0xc0, 0xc3]);
             // ret: no fonts (the 3D frame draws no text)
             acs.patch(acs.va(VA_KGL_INIT_FONTS), &[0xc3]);
-
             for va in VA_STATIC_INITIALISERS {
                 let init: extern "C" fn() = std::mem::transmute(acs.va(va));
                 init();
             }
 
             let window = hidden_window(args.width, args.height)?;
-            // VideoSettings (0x50 bytes), as Game::Game fills it from cfg/video.ini
+            // VideoSettings (0x50 bytes), as loadVideoSettings fills it from the profile's video.ini
             let settings = acs.alloc(0x50);
             wr(settings, 0x00, 1i32); // aaSamples
             wr(settings, 0x04, args.width as i32);
@@ -185,12 +214,12 @@ impl Game {
             wr(settings, 0x10, window.0 as usize);
             wr(settings, 0x18, 0u8); // isFullscreen
             wr(settings, 0x19, 0u8); // vSync
-            wr(settings, 0x1c, 8i32); // anisotropic
+            wr(settings, 0x1c, crate::root::ANISOTROPIC); // anisotropic
             wr(settings, 0x20, 0i32); // aaQuality
-            wr(settings, 0x24, 2048i32); // shadowMapSize
+            wr(settings, 0x24, crate::root::SHADOW_MAP_SIZE); // shadowMapSize
             wr(settings, 0x28, 0f64); // fpsCapMS
             wr(settings, 0x30, 0i32); // dxgiModeIndex
-            wr(settings, 0x34, 5i32); // worldDetail
+            wr(settings, 0x34, crate::root::WORLD_DETAIL); // worldDetail
             wr(settings, 0x3c, 0i32); // ppQuality
             wr(settings, 0x40, 0i32); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
@@ -202,19 +231,17 @@ impl Game {
             rustyac_render::gpulog::capture_from_install(true);
             ctor(graphics, settings);
             let init = rustyac_render::gpulog::end_capture();
-            std::fs::write(crate::repo_root().join("re/scratch/task20/init_ac.gpulog"), &init.text).map_err(|e| e.to_string())?;
             Ok(Game {
                 acs,
                 graphics,
                 device: DEVICE.load(Ordering::SeqCst) as *mut c_void,
                 context: CONTEXT.load(Ordering::SeqCst) as *mut c_void,
                 swap_chain: SWAP_CHAIN.load(Ordering::SeqCst) as *mut c_void,
+                init_log: init.text,
             })
         }
     }
-}
 
-impl Game {
     pub unsafe fn node(&self, name: &str) -> *mut u8 {
         let node = self.acs.alloc(SIZE_NODE);
         let ctor: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_NODE_CTOR));
@@ -228,74 +255,129 @@ impl Game {
         add(parent, child);
     }
 
+    /// A `KN5IO` of the game.
+    pub unsafe fn kn5io(&self) -> *mut u8 {
+        let io = self.acs.alloc(SIZE_KN5IO);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_KN5IO_CTOR));
+        ctor(io, self.graphics)
+    }
+
     /// The game's own `KN5IO::load` of a model file (an absolute path into the game's folder).
-    pub unsafe fn load_kn5(&self, path: &std::path::Path) -> *mut u8 {
+    pub unsafe fn load_kn5(&self, io: *mut u8, path: &str) -> Result<*mut u8, String> {
         // a version 6 file carries a number that must be one the game was told at start-up (by
         // SteamInit, per owned pack): the oracle tells it the file's own
-        if let Ok(bytes) = std::fs::read(path) {
-            if bytes.len() >= 14 && i32::from_le_bytes(bytes[6..10].try_into().unwrap()) >= 6 {
-                let key = i32::from_le_bytes(bytes[10..14].try_into().unwrap());
+        if let Ok(mut file) = std::fs::File::open(path) {
+            let mut head = [0u8; 14];
+            if std::io::Read::read_exact(&mut file, &mut head).is_ok() && i32::from_le_bytes(head[6..10].try_into().unwrap()) >= 6 {
+                let key = u32::from_le_bytes(head[10..14].try_into().unwrap());
                 if key != 0 {
-                    let add: extern "C" fn(i32) = std::mem::transmute(self.acs.va(VA_KN5IO_ADD_DLC_KEY));
+                    let add: extern "C" fn(u32) = std::mem::transmute(self.acs.va(VA_KN5IO_ADD_DLC_KEY));
                     add(key);
                 }
             }
         }
-        let io = self.acs.alloc(SIZE_KN5IO);
-        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_KN5IO_CTOR));
-        ctor(io, self.graphics);
         let load: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_KN5IO_LOAD));
-        load(io, wstring(&self.acs, &path.to_string_lossy()))
+        let node = load(io, wstring(&self.acs, path));
+        if node.is_null() {
+            return Err(format!("the game's KN5IO::load gave nothing for {path}"));
+        }
+        Ok(node)
     }
 
-    /// First experiment: one model, the game's camera, one frame.
-    pub unsafe fn experiment(&self, model: &std::path::Path, out: &std::path::Path) -> Result<(), String> {
+    /// The scene of a frame built with the game's own objects, and the frame rendered by the
+    /// game's own camera.
+    pub unsafe fn render(&self, frame: &Frame) -> Result<Rendered, String> {
         let acs = &self.acs;
+        // Sim::initSceneGraph 0x140199d70 (the NodeEvents have no handler here: plain nodes)
         let root = self.node("ROOT");
         let blurred = self.node("BLURRED");
         let unblurred = self.node("UNBLURRED");
         self.add_child(root, blurred);
         self.add_child(root, unblurred);
-        let model_node = self.load_kn5(model);
-        eprintln!("oracle: model root {model_node:p}");
-        self.add_child(blurred, model_node);
+        let track_node = self.node("TRACK");
+        self.add_child(blurred, track_node);
+        let skid_marks = self.node("SKIDMARKS");
+        self.add_child(blurred, skid_marks);
+        let car_shadows = self.node("CAR_SHADOWS");
+        self.add_child(blurred, car_shadows);
+        let before_cars = self.node("BEFORE_CARS_NODE");
+        self.add_child(unblurred, before_cars);
+        let cars = self.node("CARS");
+        self.add_child(unblurred, cars);
+        let particles = self.node("PARTICLES_NODE");
+        self.add_child(unblurred, particles);
+        let render_finished = self.node("RENDER FINISHED");
+        self.add_child(unblurred, render_finished);
 
+        let compile: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_COMPILE));
+        // TrackAvatar::init3D 0x1401c8740: one importer, the files of models.ini in order
+        if let Some(track) = &frame.track {
+            let model = self.node(&format!("TRACK {}", track.name));
+            let io = self.kn5io();
+            for entry in &track.models {
+                let top = self.load_kn5(io, &entry.filename)?;
+                self.add_child(model, top);
+                let matrix: [f32; 16] = rd(top, 8);
+                wr(top, 8, crate::frames::placed(&matrix, entry));
+            }
+            compile(self.graphics, model);
+            self.add_child(track_node, model);
+        }
+
+        // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
         let camera = acs.alloc(SIZE_CAMERA_FORWARD);
         let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
         ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false);
+        wr(camera, 0x80, [0.3f32, 0.25, 0.25, 1.0]); // clearColor
+        wr(camera, 0x1ac, crate::root::WORLD_DETAIL as f32); // maxLayer
         let sky = acs.alloc(SIZE_SKYBOX);
         let sky_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SKYBOX_CTOR));
         sky_ctor(sky, self.graphics);
         wr(camera, 0x98, sky);
-        // what Sim::Sim sets after Sim::createCamera: the clear colour and Camera::maxLayer = WORLD_DETAIL
-        wr(camera, 0x80, [0.3f32, 0.25, 0.25, 1.0]);
-        wr(camera, 0x1ac, 5f32);
-        // Camera::matrix: at (0, 1.2, -6), looking along +z
-        let matrix: [f32; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.2, -6.0, 1.0];
-        wr(camera, 0xc, matrix);
-        eprintln!("oracle: camera fov {} near {} far {} aspect {}", rd::<f32>(camera, 8), rd::<f32>(camera, 0x70), rd::<f32>(camera, 0x74), rd::<f32>(camera, 0x1a8));
+        wr(camera, 0x70, 0.05f32); // nearPlane
+        wr(camera, 0x74, 40000.0f32); // farPlane
+        // Sim::initCubemaps 0x1401997a0 with the profile's [CUBEMAP]
+        wr(camera, 0x2b8, crate::root::CUBEMAP_FACES_PER_FRAME); // cubeMapRenderer.facesPerFrame
+        let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
+        set_cubemap_size(camera, crate::root::CUBEMAP_SIZE);
 
         let begin: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_BEGIN_SCENE));
         let end: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_END_SCENE));
+        let screen_space: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_SCREEN_SPACE_MODE));
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
+        let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
-        for frame in 0..3 {
-            rustyac_render::gpulog::begin_capture("frame");
+        let mut rendered = None;
+        for index in 0..=frame.capture {
+            // the game camera's update: where it looks from, its lens and the shadow splits
+            wr(camera, 0x8, frame.camera.fov);
+            wr(camera, 0xc, frame.camera.matrix);
+            wr(camera, 0x70, frame.camera.near);
+            if let Some(far) = frame.camera.far {
+                wr(camera, 0x74, far);
+            }
+            let s = frame.camera.splits;
+            set_splits(camera, s[0], s[1], s[2], s[3]);
+
+            if index == frame.capture {
+                rustyac_render::gpulog::begin_capture(&frame.name);
+            }
+            // Game::onIdle 0x140242730
             begin(self.graphics);
+            // Sim::renderScene 0x14019e570
             traverse(traverser, root);
             let vtable = rd::<*const usize>(camera, 0);
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
-            let capture = rustyac_render::gpulog::end_capture();
-            eprintln!("oracle: frame {frame}: {} lines, {} draws", capture.lines, capture.draws);
-            if frame == 1 {
-                std::fs::write(out.with_extension("gpulog"), &capture.text).map_err(|e| e.to_string())?;
+            screen_space(self.graphics);
+            if index == frame.capture {
+                let capture = rustyac_render::gpulog::end_capture();
                 let (width, height, pixels) = self.read_back()?;
-                write_png(&out.with_extension("png"), width, height, &pixels)?;
+                rendered = Some(Rendered { log: capture.text, draws: capture.draws, width, height, pixels });
             }
             end(self.graphics);
         }
-        Ok(())
+        rendered.ok_or_else(|| "no frame was captured".to_string())
     }
 
     /// The swap chain's back buffer, as RGBA rows.
@@ -327,13 +409,4 @@ impl Game {
         context.Unmap(&staging, 0);
         Ok((desc.Width, desc.Height, pixels))
     }
-}
-
-pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    writer.write_image_data(rgba).map_err(|e| e.to_string())
 }

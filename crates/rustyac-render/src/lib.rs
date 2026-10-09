@@ -12,6 +12,8 @@
 #![allow(clippy::neg_multiply, clippy::erasing_op, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::too_many_arguments)]
 
 pub mod camera;
+pub mod cubemap;
+pub mod forward;
 pub mod gpulog;
 pub mod graphics;
 pub mod kgl;
