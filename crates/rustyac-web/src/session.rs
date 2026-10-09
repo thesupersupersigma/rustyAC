@@ -47,6 +47,8 @@ pub struct Session {
     pub camera: DrivingCamera,
     /// The keys and pad buttons in use, as text (the built-in layout).
     pub keys: String,
+    /// The virtual-key codes the built-in layout uses.
+    pub keys_used: Vec<i32>,
     accumulator: f64,
     prev: CarView,
     curr: CarView,
@@ -67,6 +69,7 @@ impl Session {
         let input: SharedInput = Arc::new(Mutex::new(Input::default()));
         let source = WebSource::new(input.clone());
         let keys = source.bindings.describe();
+        let keys_used = source.keys_used();
         let source = SpawnSequence::new(source, true);
         let mut sim = GameSim::new(crate::content::setup(car, track, layout, auto_shifter, spawn), Box::new(source))?;
         while sim.car.device.source.in_spawn_sequence() {
@@ -89,6 +92,7 @@ impl Session {
             shape,
             camera: DrivingCamera::chase(),
             keys,
+            keys_used,
             accumulator: 0.0,
             prev: view,
             curr: view,
@@ -168,5 +172,31 @@ impl Session {
     /// R, Shift+R, N and the other one-off commands (`rustyac_game::input_file::event` bits).
     pub fn request(&mut self, events: u32) {
         self.input.lock().unwrap().requests |= events;
+    }
+
+    /// One of the page's command keys by its `KeyboardEvent.code` name, with `Shift+` in front
+    /// for the shifted one: what `web/app.js` does on that key, for a check that has no page
+    /// (`examples/selftest.rs --keys`). False for a key that is no command.
+    pub fn press(&mut self, name: &str) -> bool {
+        let (shift, code) = match name.strip_prefix("Shift+") {
+            Some(code) => (true, code),
+            None => (false, name),
+        };
+        match code {
+            "KeyT" => self.request(if shift { event::TC_DN } else { event::TC_UP }),
+            "KeyY" => self.request(if shift { event::ABS_DN } else { event::ABS_UP }),
+            "BracketRight" => self.request_bias(1),
+            "BracketLeft" => self.request_bias(-1),
+            "KeyR" => self.request(if shift { event::TO_TRACK } else { event::RESET }),
+            "KeyN" => self.request(event::REBUILD),
+            "KeyG" => self.request(event::AUTO_SHIFTER),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Clicks of the cockpit's brake-bias control (] forward, [ rearward), before the next step.
+    pub fn request_bias(&mut self, clicks: i32) {
+        self.input.lock().unwrap().bias_clicks += clicks;
     }
 }

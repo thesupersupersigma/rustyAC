@@ -23,6 +23,8 @@
     <div>best <span id="hud-best">-:--.---</span></div>
   </div>
   <div id="hud-info"></div>
+  <div id="hud-aids"><span id="hud-tc"></span><span id="hud-abs"></span><span id="hud-bias"></span></div>
+  <div id="hud-note" hidden></div>
   <div id="hud-perf"></div>
 </div>
 
@@ -90,12 +92,21 @@
       <tr><td>gear up, down</td><td>Space / E, Left Ctrl / Q</td><td>Y, X</td></tr>
       <tr><td>clutch, handbrake</td><td>Left Shift, B (F9)</td><td>A, RB</td></tr>
       <tr><td>DRS, KERS / ERS</td><td>F, K</td><td>LB, B</td></tr>
-      <tr><td>back to the pits</td><td>R</td><td>Back</td></tr>
-      <tr><td>back onto the track</td><td>Shift+R</td><td>Back, held</td></tr>
+      <tr><td>traction control up, down</td><td>T, Shift+T</td><td>D-pad up, down</td></tr>
+      <tr><td>ABS up, down</td><td>Y, Shift+Y</td><td>Back held + D-pad up, down</td></tr>
+      <tr><td>brake bias forward, rearward</td><td>], [</td><td>D-pad right, left</td></tr>
+      <tr><td>back to the pits</td><td>R</td><td>Back, a tap</td></tr>
+      <tr><td>back onto the track</td><td>Shift+R</td><td>Back, held 0.6 s and let go</td></tr>
       <tr><td>next view</td><td>F1 or C</td><td>right stick press</td></tr>
       <tr><td>new car, automatic gearbox</td><td>N, G</td><td></td></tr>
       <tr><td>pause, menu</td><td>P, Esc</td><td>Start</td></tr>
     </table>
+    <p class="hint">
+      The display shows the levels all the time (<code>TC 2/3</code>, <code>ABS off</code>,
+      <code>Bias 58.0 %</code>); a level goes up to its highest and then to off. Back does its
+      own job when you let it go, and none at all if you used the D-pad while holding it.
+      Left Shift is also the clutch: use Right Shift for Shift+T and Shift+Y while moving.
+    </p>
     <p class="hint">
       These are Assetto Corsa's default keys plus WASD. AC keeps your own bindings in
       <code>Documents\Assetto Corsa\cfg\controls.ini</code>, which is not inside the game's folder,

@@ -9,10 +9,14 @@
 //        [--profile <folder>] [--port 9333] [--timeout 900] [--flags "--use-angle=d3d11 ..."]
 //        [--wait-checks]   (with the folder: wait until every car was checked, then list the refusals)
 //        [--keep-profile]  (do not empty the browser profile before and after)
+//        [--keys "KeyT,Shift+KeyT,KeyY,BracketRight,BracketLeft"]   (after --seconds of driving:
+//                          real key presses, one by one, with what the display showed of the
+//                          aids before and after each)
 //
 // Waits until the page drives (or its self test is done, with ?selftest=N), lets it drive for
 // --seconds, takes a screenshot and prints the lap timer, the speed, the frame rate, the
-// physics steps per second and the page's notes as JSON.
+// physics steps per second and the page's notes as JSON. A self test with `&keys=...` in the
+// address reports its key presses in `selftest.presses`.
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -123,6 +127,18 @@ async function evaluate(expression) {
   return result.result.value;
 }
 
+// A key press as a keyboard makes it (a trusted event, through the browser's own input path).
+const KEY_FACTS = { KeyT: ['t', 0x54], KeyY: ['y', 0x59], BracketRight: [']', 0xdd], BracketLeft: ['[', 0xdb], KeyR: ['r', 0x52], KeyG: ['g', 0x47], KeyH: ['h', 0x48] };
+async function pressKey(name) {
+  const parts = name.split('+');
+  const code = parts.pop();
+  const [key, windowsVirtualKeyCode] = KEY_FACTS[code] || [code, 0];
+  const shift = parts.includes('Shift');
+  const base = { code, key: shift ? key.toUpperCase() : key, windowsVirtualKeyCode, modifiers: (shift ? 8 : 0) | (parts.includes('Ctrl') ? 2 : 0) | (parts.includes('Alt') ? 1 : 0) };
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+
 try {
   let target;
   for (let i = 0; i < 100 && !target; i++) {
@@ -184,6 +200,18 @@ try {
         samples.push(now.perf);
       }
       if (now.state !== 'driving') break;
+    }
+    const wantKeys = option('--keys', '').split(',').filter(Boolean);
+    if (wantKeys.length && now.state === 'driving') {
+      const shown = () => evaluate("['hud-tc', 'hud-abs', 'hud-bias'].map((id) => document.getElementById(id).textContent).join(' | ') + '  note: ' + (document.getElementById('hud-note').hidden ? '' : document.getElementById('hud-note').textContent)");
+      report.key_presses = [];
+      for (const name of wantKeys) {
+        const before = await shown();
+        await pressKey(name);
+        await sleep(400);
+        report.key_presses.push({ key: name, before, after: await shown() });
+      }
+      now = await page();
     }
     // (the first second holds the shader compiles)
     const steady = samples.slice(1);

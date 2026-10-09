@@ -21,6 +21,11 @@
 //                      physics steps at once and report the car's state hash in
 //                      `window.rustyac.selftest` (the desktop prints the same number:
 //                      `cargo run --release -p rustyac-web --example selftest`)
+//   ?keys=<list>       with ?selftest: keys pressed on the way, through the page's own key
+//                      handler: `KeyT@300,Shift+KeyT@600,BracketRight@900` presses T after
+//                      300 steps and so on (`KeyboardEvent.code` names). What the display
+//                      showed after each press is in `window.rustyac.selftest.presses`. The
+//                      desktop's selftest takes the same list with `--keys`.
 //   ?testfolder=<url>  the test hook of the folder picker: reads the folder over HTTP from
 //                      `web/serve.py --ac <folder>` through the same code the picker feeds
 
@@ -38,6 +43,7 @@ const state = {
   loading: false,
   running: false,
   paused: false,
+  testing: false, // the self test runs: its keys count although nothing is being driven
 };
 
 // what a test (or the curious) can read from outside
@@ -471,10 +477,40 @@ async function drive() {
     window.rustyac.bindings = game.bindings();
     if (params.has('selftest')) {
       const steps = Number(params.get('selftest'));
+      // ?keys: `Shift+KeyT@600` = that key after 600 steps
+      const script = (params.get('keys') || '')
+        .split(',')
+        .filter(Boolean)
+        .map((item) => {
+          // (a `+` in an address arrives as a space)
+          const [name, at] = item.replace(/ /g, '+').split('@');
+          return { key: name, at: Math.min(steps, Number(at) || 0) };
+        })
+        .sort((a, b) => a.at - b.at);
+      const presses = [];
       const before = performance.now();
-      game.run_steps(steps);
+      state.testing = true;
+      $('hud').hidden = false;
+      let done = 0;
+      for (const { key, at } of script) {
+        game.run_steps(at - done);
+        done = at;
+        showHud(JSON.parse(game.hud()));
+        const was = aidsShown();
+        const prevented = window.rustyac.press(key);
+        // the command runs before the next physics step
+        if (done < steps) {
+          game.run_steps(1);
+          done += 1;
+        }
+        showHud(JSON.parse(game.hud()));
+        presses.push({ key, at, prevented, before: was, after: aidsShown(), note: $('hud-note').textContent });
+      }
+      game.run_steps(steps - done);
+      state.testing = false;
       const seconds = (performance.now() - before) / 1000;
-      window.rustyac.selftest = { car, track, layout, steps, hash: game.state_hash(), seconds, steps_per_second: steps / seconds, hud: JSON.parse(game.hud()) };
+      showHud(JSON.parse(game.hud()));
+      window.rustyac.selftest = { car, track, layout, steps, hash: game.state_hash(), seconds, steps_per_second: steps / seconds, hud: JSON.parse(game.hud()), presses };
       setStatus(`self test: ${steps} steps in ${seconds.toFixed(2)} s, state ${window.rustyac.selftest.hash}`);
       window.rustyac.state = 'selftest';
       state.loading = false;
@@ -507,6 +543,9 @@ const KEY_LIST =
   'steer       Left / A, Right / D   left stick\n' +
   'gears     Space / E, Ctrl / Q         Y, X\n' +
   'clutch, DRS, KERS   Shift, F, K     A, LB, B\n' +
+  'TC up, down     T, Shift+T   D-pad up, down\n' +
+  'ABS up, down    Y, Shift+Y   Back + D-pad up, down\n' +
+  'brake bias fwd, back   ], [   D-pad right, left\n' +
   'pits R   track Shift+R   view F1 / C   new car N\n' +
   'gearbox G   pause P   menu Esc   this list H';
 let keysTimer = 0;
@@ -521,7 +560,7 @@ function showKeys(forMs) {
 function startDriving() {
   $('menu').hidden = true;
   $('hud').hidden = false;
-  showKeys(12000);
+  showKeys(15000);
   state.running = true;
   state.paused = false;
   window.rustyac.state = 'driving';
@@ -548,6 +587,33 @@ const time = (ms) => {
 
 const perf = { since: 0, text: '' };
 
+// The display over the picture, from the wasm side's numbers. The aids' levels and the brake
+// bias are there all the time (lit while the aid acts); a change shows as a note for a moment.
+function showHud(hud) {
+  window.rustyac.hud = hud;
+  $('hud-gear').textContent = hud.gear === 0 ? 'R' : hud.gear === 1 ? 'N' : String(hud.gear - 1);
+  $('hud-speed').textContent = Math.round(hud.kmh);
+  $('hud-rpm-bar').style.width = `${Math.min(100, (hud.rpm / Math.max(1, hud.rpm_limit)) * 100).toFixed(1)}%`;
+  $('hud-rpm-text').textContent = `${Math.round(hud.rpm)} rpm`;
+  $('hud-lap-time').textContent = time(hud.lap_ms);
+  $('hud-last').textContent = time(hud.last_ms);
+  $('hud-best').textContent = time(hud.best_ms);
+  $('hud-info').textContent =
+    `${hud.camera} view   ${hud.device}\n` +
+    `${hud.auto_shifter ? 'automatic' : 'manual'} gearbox${hud.drs ? '   DRS' : ''}\n` +
+    `lap ${hud.laps + 1}${hud.valid ? '' : ' (not valid)'}${hud.in_pit_lane ? '   pit lane' : ''}${state.paused ? '\nPAUSED (P)' : ''}`;
+  $('hud-tc').textContent = hud.tc_text;
+  $('hud-tc').classList.toggle('acting', hud.tc);
+  $('hud-abs').textContent = hud.abs_text;
+  $('hud-abs').classList.toggle('acting', hud.abs);
+  $('hud-bias').textContent = hud.bias_text;
+  $('hud-note').textContent = hud.note;
+  $('hud-note').hidden = !hud.note;
+}
+
+// What the display says about the aids right now (a test reads it).
+const aidsShown = () => `${$('hud-tc').textContent} | ${$('hud-abs').textContent} | ${$('hud-bias').textContent}`;
+
 function frame(now) {
   if (!state.running) return;
   resizeCanvas();
@@ -571,18 +637,7 @@ function frame(now) {
     fail(error);
     return;
   }
-  window.rustyac.hud = hud;
-  $('hud-gear').textContent = hud.gear === 0 ? 'R' : hud.gear === 1 ? 'N' : String(hud.gear - 1);
-  $('hud-speed').textContent = Math.round(hud.kmh);
-  $('hud-rpm-bar').style.width = `${Math.min(100, (hud.rpm / Math.max(1, hud.rpm_limit)) * 100).toFixed(1)}%`;
-  $('hud-rpm-text').textContent = `${Math.round(hud.rpm)} rpm`;
-  $('hud-lap-time').textContent = time(hud.lap_ms);
-  $('hud-last').textContent = time(hud.last_ms);
-  $('hud-best').textContent = time(hud.best_ms);
-  $('hud-info').textContent =
-    `${hud.camera} view   ${hud.device}\n` +
-    `${hud.auto_shifter ? 'automatic' : 'manual'} gearbox${hud.tc ? '   TC' : ''}${hud.abs ? '   ABS' : ''}${hud.drs ? '   DRS' : ''}\n` +
-    `lap ${hud.laps + 1}${hud.valid ? '' : ' (not valid)'}${hud.in_pit_lane ? '   pit lane' : ''}${state.paused ? '\nPAUSED (P)' : ''}`;
+  showHud(hud);
   if (now - perf.since >= 1000) {
     const stats = JSON.parse(state.game.take_stats());
     const seconds = (now - perf.since) / 1000;
@@ -602,20 +657,35 @@ function frame(now) {
 const VK = {
   ArrowUp: 0x26, ArrowDown: 0x28, ArrowLeft: 0x25, ArrowRight: 0x27, Space: 0x20, Enter: 0x0d, Tab: 0x09, Backspace: 0x08,
   ShiftLeft: 0xa0, ShiftRight: 0xa1, ControlLeft: 0xa2, ControlRight: 0xa3, AltLeft: 0xa4, AltRight: 0xa5,
-  Insert: 0x2d, Delete: 0x2e, Home: 0x24, End: 0x23, PageUp: 0x21, PageDown: 0x22,
+  Insert: 0x2d, Delete: 0x2e, Home: 0x24, End: 0x23, PageUp: 0x21, PageDown: 0x22, BracketLeft: 0xdb, BracketRight: 0xdd,
 };
 for (let i = 0; i < 26; i++) VK[`Key${String.fromCharCode(65 + i)}`] = 0x41 + i;
 for (let i = 0; i < 10; i++) VK[`Digit${i}`] = 0x30 + i;
 for (let i = 1; i <= 12; i++) VK[`F${i}`] = 0x6f + i;
 
-const EVENT = { RESET: 1, REBUILD: 2, AUTO_SHIFTER: 64, TO_TRACK: 256 };
+// `rustyac_game::input_file::event`: commands that run before the next physics step.
+const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32, AUTO_SHIFTER: 64, TO_TRACK: 256 };
+
+// The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
+// once a car is there) they are the only keys the page keeps from the browser.
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight'];
+let drivingKeys = null;
+
+function pageUses(event) {
+  if (PAGE_KEYS.includes(event.code)) return true;
+  if (!drivingKeys) drivingKeys = new Set(state.game.keys_used());
+  return drivingKeys.has(VK[event.code]);
+}
 
 window.addEventListener('keydown', (event) => {
-  if (!state.running || !state.game) return;
-  const code = VK[event.code];
-  if (code === undefined && event.code !== 'Escape' && event.code !== 'Pause') return;
+  if (!(state.running || state.testing) || !state.game) return;
+  // a key with Ctrl, Alt or the Windows key is the browser's (Ctrl+T, Alt+Left ...), except
+  // that a Ctrl key is itself a driving key (gear down)
   const isControl = event.code === 'ControlLeft' || event.code === 'ControlRight';
-  if (['F5', 'F11', 'F12', 'Tab'].includes(event.code) || event.metaKey || event.altKey || (event.ctrlKey && !isControl)) return;
+  if (event.metaKey || event.altKey || (event.ctrlKey && !isControl)) return;
+  // every other key the page has no use for stays the browser's too (F5, F11, F12, Tab ...)
+  if (!pageUses(event)) return;
+  const code = VK[event.code];
   event.preventDefault();
   if (event.repeat) return;
   switch (event.code) {
@@ -639,6 +709,19 @@ window.addEventListener('keydown', (event) => {
     case 'KeyG':
       state.game.request(EVENT.AUTO_SHIFTER);
       break;
+    // the aids and the brake bias: the same commands the desktop's keys and the pad give
+    case 'KeyT':
+      state.game.request(event.shiftKey ? EVENT.TC_DN : EVENT.TC_UP);
+      break;
+    case 'KeyY':
+      state.game.request(event.shiftKey ? EVENT.ABS_DN : EVENT.ABS_UP);
+      break;
+    case 'BracketRight':
+      state.game.bias(1);
+      break;
+    case 'BracketLeft':
+      state.game.bias(-1);
+      break;
     case 'KeyH':
       if ($('keys').hidden) showKeys(0);
       else $('keys').hidden = true;
@@ -654,6 +737,18 @@ window.addEventListener('keyup', (event) => {
 });
 
 window.addEventListener('blur', () => state.game && state.game.release_keys());
+
+// The test hook of the keys: `press('KeyT')`, `press('Shift+KeyT')`, `press('BracketRight')`
+// send a key-down and a key-up through the handlers above, as a keyboard would. Returns
+// whether the page kept the key from the browser (`preventDefault`).
+window.rustyac.press = (name) => {
+  const parts = name.split('+');
+  const code = parts.pop();
+  const init = { code, shiftKey: parts.includes('Shift'), ctrlKey: parts.includes('Ctrl'), altKey: parts.includes('Alt'), bubbles: true, cancelable: true };
+  const kept = !window.dispatchEvent(new KeyboardEvent('keydown', init));
+  window.dispatchEvent(new KeyboardEvent('keyup', init));
+  return kept;
+};
 
 // The Gamepad API's standard layout, as XInput's `wButtons` bits: A B X Y, LB RB, (the
 // triggers are analog), Back Start, the stick presses, the d-pad.

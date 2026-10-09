@@ -2,7 +2,21 @@
 
 ## Resume here
 
-State after the last commit (kept up to date with every commit):
+**Task 20w.2 is in progress** (`prompts/20w2_web_controls.md`; its report will be the section "Task 20w.2" at
+the end of this file). State after the last commit:
+
+- done: steps 1 to 3 (the browser's keys T / Shift+T, Y / Shift+Y, ] / [; ABS on Back + D-pad up / down with
+  Back decided on release; `TC n/max`, `ABS n/max`, `Bias 58.0 %` and a note on a change, in both programs;
+  the desktop also takes the plain keys). Checked in headless Chrome: real key presses change the display, and
+  a self test with key presses ends in the desktop's state hash.
+- to do, in this order: step 4 (key lists in `docs/web.md`, `packaging/HOW_TO_RUN.txt`), step 5 (the pure
+  maths as the desktop's fallback, and say which maths is used), step 6 (`web/Dockerfile`, `web/nginx.conf`,
+  `.dockerignore`, "Deploy with Coolify" in `docs/web.md`), step 7 (14 replays against
+  `re/scratch/task20w2/bin/rustyac_v0201.exe`, golden tests, the browser run), the report, then v0.20.2.
+- scratch: `re/scratch/task20w2/` (the v0.20.1 exe in `bin/`, patch scripts, three reader maps `recon_*.md`,
+  browser results `browser_*.json`).
+
+State of Task 20w itself (v0.20.1):
 
 - **Done.** Everything is on `master`, nothing is pushed. The version is 0.20.1 and the tag `v0.20.1` is on
   the last commit. Nothing is half done.

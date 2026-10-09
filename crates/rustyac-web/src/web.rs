@@ -346,9 +346,16 @@ impl Game {
     }
 
     /// One-off commands: bit 0 back to the pits (R), bit 8 back onto the track where the
-    /// car is (Shift+R), bit 1 a new car (N), bit 6 the automatic gearbox on / off (G).
+    /// car is (Shift+R), bit 1 a new car (N), bit 6 the automatic gearbox on / off (G),
+    /// bits 2 / 3 the traction control one level up / down (T, Shift+T), bits 4 / 5 the
+    /// ABS (Y, Shift+Y). They run before the next physics step, as on the desktop.
     pub fn request(&mut self, events: u32) {
         self.session.request(events);
+    }
+
+    /// Clicks of the cockpit's brake-bias control: positive forward (]), negative rearward ([).
+    pub fn bias(&mut self, clicks: i32) {
+        self.session.request_bias(clicks);
     }
 
     /// F1: the next view (chase, chase 2, bonnet, bumper, dash, cockpit).
@@ -369,7 +376,9 @@ impl Game {
         format!(
             "{{\"kmh\": {:.1}, \"gear\": {}, \"rpm\": {:.0}, \"rpm_limit\": {:.0}, \"gas\": {:.3}, \"brake\": {:.3}, \"clutch\": {:.3}, \"steer\": {:.3}, \
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
-             \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}}}",
+             \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
+             \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -392,7 +401,19 @@ impl Game {
             json_text(device_name(v.device)),
             json_text(&self.session.camera.name()),
             if v.drive_seconds.is_finite() { v.drive_seconds } else { 0.0 },
-            n(v.fuel)
+            n(v.fuel),
+            // the aids' levels and the brake bias, worded by the code the desktop's display uses
+            json_text(&v.tc_text()),
+            json_text(&v.abs_text()),
+            json_text(&v.bias_text()),
+            v.tc_mode.0,
+            v.tc_mode.1,
+            v.tc_present,
+            v.abs_mode.0,
+            v.abs_mode.1,
+            v.abs_present,
+            n(v.brake_bias),
+            json_text(v.aid_note().unwrap_or(""))
         )
     }
 
@@ -417,6 +438,12 @@ impl Game {
         self.work_ms = 0.0;
         self.dropped_seconds = 0.0;
         out
+    }
+
+    /// The keys the built-in layout uses, as Windows virtual-key codes: with the page's own
+    /// keys they are the only ones the page keeps from the browser.
+    pub fn keys_used(&self) -> Vec<i32> {
+        self.session.keys_used.clone()
     }
 
     /// The keys and pad buttons of the built-in layout, for the page's key list.
