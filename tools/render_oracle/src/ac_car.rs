@@ -43,6 +43,9 @@ const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f:
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
 const VA_CAR_BRAKE_LIGHTS_CTOR: usize = 0x1_400d_dbb0; // CarBrakeLights::CarBrakeLights(CarAvatar*)
 const VA_CAR_BRAKE_LIGHTS_UPDATE: usize = 0x1_400e_0450; // CarBrakeLights::update(float)
+const VA_ANIMATED_LIGHTS_CTOR: usize = 0x1_4005_a850; // AnimatedLights::AnimatedLights(CarBrakeLights&)
+const VA_ANIMATED_LIGHTS_UPDATE: usize = 0x1_4005_aef0; // AnimatedLights::update(float)
+const VA_CAR_AVATAR_VTABLE: usize = 0x1_404b_e5e8; // const CarAvatar::`vftable' (for the game's dynamic_cast of an object's parent)
 const VA_BRAKE_DISC_GRAPHICS_CTOR: usize = 0x1_4005_ca40; // BrakeDiscGraphics::BrakeDiscGraphics(CarAvatar&)
 const VA_BRAKE_DISC_GRAPHICS_UPDATE: usize = 0x1_4005_d930; // BrakeDiscGraphics::update(float)
 const VA_DYNAMIC_CAR_EFFECTS_CTOR: usize = 0x1_4009_1230; // DynamicCarEffects::DynamicCarEffects(CarAvatar*)
@@ -195,6 +198,7 @@ pub struct Car {
     constrained: *mut u8,
     visual_damage: *mut u8,
     brake_lights: *mut u8,
+    animated_lights: *mut u8,
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
     brake_discs: *mut u8,
@@ -253,6 +257,7 @@ impl Game {
         wr(sim, 0x170, nodes.render_finished);
         wr(sim, 0x178, nodes.before_cars);
         let car = acs.alloc(0x12a8);
+        wr(car, 0x0, acs.va(VA_CAR_AVATAR_VTABLE));
         wr(car, 0x8, game);
         wr(car, 0x130, sim);
         write_wstring(acs, car.add(0x138), &spec.name);
@@ -342,6 +347,11 @@ impl Game {
             ctor(object, car)
         };
         let brake_lights = make(0xf0, VA_CAR_BRAKE_LIGHTS_CTOR);
+        // GameObject::addGameObject: the object's parent is the car
+        wr(brake_lights, 0x38, car);
+        let animated_lights = acs.alloc(0x88);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_ANIMATED_LIGHTS_CTOR));
+        ctor(animated_lights, brake_lights);
         let tyre_blur = acs.alloc(0x120);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_BLUR_CTOR));
         ctor(tyre_blur, car);
@@ -356,7 +366,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, brake_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, brake_lights, animated_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -393,6 +403,7 @@ impl Game {
         for (object, va) in [
             (c.visual_damage, VA_VISUAL_DAMAGE_UPDATE),
             (c.brake_lights, VA_CAR_BRAKE_LIGHTS_UPDATE),
+            (c.animated_lights, VA_ANIMATED_LIGHTS_UPDATE),
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
             (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
             (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),

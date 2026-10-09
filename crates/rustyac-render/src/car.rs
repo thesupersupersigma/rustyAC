@@ -24,7 +24,7 @@ use crate::constrained::ConstrainedObjectsManager;
 use crate::damage::VisualDamageManager;
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
-use crate::lights::{BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
+use crate::lights::{AnimatedLights, BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
 
@@ -90,6 +90,7 @@ pub struct CarAvatar {
     pub pause_menu: bool,
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
     pub brake_lights: CarBrakeLights,
+    pub animated_lights: AnimatedLights,
     pub brake_discs: BrakeDiscGraphics,
     pub dynamic_effects: DynamicCarEffects,
     /// `CarAvatar::inPitlane`: a tyre stands on a pit-lane surface
@@ -171,6 +172,7 @@ impl CarAvatar {
             damage: None,
             pause_menu: false,
             brake_lights: CarBrakeLights::default(),
+            animated_lights: AnimatedLights::default(),
             brake_discs: BrakeDiscGraphics::default(),
             dynamic_effects: DynamicCarEffects::default(),
             in_pitlane: false,
@@ -244,6 +246,7 @@ impl CarAvatar {
         let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
         let wheel_nodes = |w: usize| wheels[w].clone();
         self.brake_lights = CarBrakeLights::new(graphics, scene, &self.folder, self.body_transform)?;
+        self.animated_lights = AnimatedLights::new(scene, &self.folder, self.body_transform);
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
         self.brake_discs = BrakeDiscGraphics::new(graphics, scene, &self.folder, self.car_node)?;
@@ -422,6 +425,7 @@ impl CarAvatar {
             damage.update(graphics, scene, state, replay_dt, self.pause_menu);
         }
         self.brake_lights.update(scene, state, replay_dt, self.in_pitlane);
+        self.animated_lights.update(scene, self.brake_lights.front_lights_on, dt);
         let scale = if self.replay_mode && self.replay_scale != 0.0 { self.replay_scale } else { 1.0 };
         self.tyre_blur.update(scene, state, scale);
         self.blurred_objects.update(scene, state, scale);

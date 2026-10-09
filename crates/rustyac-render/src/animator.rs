@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use rustyac_math::asinf;
+use rustyac_math::{asinf, sqrtf};
 use rustyac_physics::curve::Curve;
 use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f, Vec3f};
 
@@ -175,6 +175,54 @@ fn set_scale(m: &mut Mat44f, s: [f32; 3]) {
 
 impl QuatPos {
     /// `quatpos::lerp` 0x140208d30: the matrix between `self` and `b`.
+    /// The ten floats as bits (the game compares frames byte for byte).
+    pub fn to_bits(&self) -> [u32; 10] {
+        let mut out = [0u32; 10];
+        for (slot, v) in out.iter_mut().zip(self.quat.iter().chain(&self.pos).chain(&self.scale)) {
+            *slot = v.to_bits();
+        }
+        out
+    }
+
+    /// `quatpos::quatpos(const mat44f&)` 0x140207700: a node's matrix as rotation, position
+    /// and scale. The rotation is `XMQuaternionRotationMatrix` 0x1400c4540 of the rows as
+    /// they are (not made unit length first), then `XMQuaternionNormalize`.
+    pub fn from_matrix(m: &Mat44f) -> QuatPos {
+        let r = &m.m;
+        let scale = crate::scene::get_scale(m);
+        let (r00, r11, r22) = (r[0][0], r[1][1], r[2][2]);
+        let x2 = ((r00 + (-r11)) + (-r22)) + 1.0;
+        let y2 = (((-r00) + r11) + (-r22)) + 1.0;
+        let z2 = (((-r00) + (-r11)) + r22) + 1.0;
+        let w2 = ((r00 + r11) + r22) + 1.0;
+        let (xy, xz, yz) = (r[0][1] + r[1][0], r[0][2] + r[2][0], r[1][2] + r[2][1]);
+        let (xw, yw, zw) = (-(r[2][1] - r[1][2]), r[2][0] - r[0][2], -(r[1][0] - r[0][1]));
+        let t = if r22 <= 0.0 {
+            if (r11 - r00) <= 0.0 {
+                [x2, xy, xz, xw]
+            } else {
+                [xy, y2, yz, yw]
+            }
+        } else if (r11 + r00) <= 0.0 {
+            [xz, yz, z2, zw]
+        } else {
+            [xw, yw, zw, w2]
+        };
+        let len = sqrtf(((t[0] * t[0]) + (t[2] * t[2])) + ((t[1] * t[1]) + (t[3] * t[3])));
+        let q = [t[0] / len, t[1] / len, t[2] / len, t[3] / len];
+        // XMQuaternionNormalize
+        let len_sq = ((q[0] * q[0]) + (q[2] * q[2])) + ((q[1] * q[1]) + (q[3] * q[3]));
+        let len = sqrtf(len_sq);
+        let mut quat = [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
+        if len == 0.0 {
+            quat = [0.0; 4];
+        }
+        if len_sq == f32::INFINITY {
+            quat = [f32::from_bits(0x7fc0_0000); 4];
+        }
+        QuatPos { quat, pos: [r[3][0], r[3][1], r[3][2]], scale: [scale.x, scale.y, scale.z] }
+    }
+
     pub fn lerp(&self, b: &QuatPos, t: f32) -> Mat44f {
         let a = self;
         let q = xm_quaternion_slerp(&a.quat, &b.quat, t);
@@ -213,8 +261,10 @@ pub struct Animation {
 }
 
 impl Animation {
-    /// `Animation::load` 0x140207b30. A file that is not there gives no sets. Version 1
-    /// files (matrices in place of rotations) are not read: no stock car has one.
+    /// `Animation::load` 0x140207b30. A file that is not there gives no sets. A file of a
+    /// version below 2 holds a matrix per frame (64 bytes) where a newer one holds a rotation,
+    /// a position and a scale (40 bytes); `quatpos::quatpos(const mat44f&)` 0x140207700
+    /// converts them.
     pub fn load(path: &Path) -> Animation {
         println!("LOADING ANIMATION: {}", path.display());
         let mut animation = Animation::default();
@@ -226,10 +276,7 @@ impl Animation {
         let f32_at = |at: usize| f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
         let version = i32_at(0).unwrap_or(1);
         println!("VERSION: {version}");
-        if version < 2 {
-            println!("ERROR: {} is a version {version} animation, which is not read", path.display());
-            return animation;
-        }
+        let frame_size = if version < 2 { 64usize } else { 40 };
         let count = i32_at(4).unwrap_or(0);
         let mut at = 8usize;
         for _ in 0..count {
@@ -239,17 +286,22 @@ impl Animation {
             at += name_len as usize;
             let Some(frame_count) = i32_at(at) else { break };
             at += 4;
-            let Some(block) = bytes.get(at..at + frame_count as usize * 40) else { break };
+            let Some(block) = bytes.get(at..at + frame_count as usize * frame_size) else { break };
             let base = at;
             at += block.len();
             let frames: Vec<QuatPos> = (0..frame_count as usize)
                 .map(|k| {
-                    let o = base + k * 40;
-                    QuatPos { quat: [f32_at(o), f32_at(o + 4), f32_at(o + 8), f32_at(o + 12)], pos: [f32_at(o + 16), f32_at(o + 20), f32_at(o + 24)], scale: [f32_at(o + 28), f32_at(o + 32), f32_at(o + 36)] }
+                    let o = base + k * frame_size;
+                    if version < 2 {
+                        let m = Mat44f { m: std::array::from_fn(|r| std::array::from_fn(|c| f32_at(o + (r * 4 + c) * 4))) };
+                        QuatPos::from_matrix(&m)
+                    } else {
+                        QuatPos { quat: [f32_at(o), f32_at(o + 4), f32_at(o + 8), f32_at(o + 12)], pos: [f32_at(o + 16), f32_at(o + 20), f32_at(o + 24)], scale: [f32_at(o + 28), f32_at(o + 32), f32_at(o + 36)] }
+                    }
                 })
                 .collect();
             // a set moves when any frame differs from the first, byte for byte
-            let is_animated = block.chunks_exact(40).any(|frame| frame != &block[..40]);
+            let is_animated = frames.iter().any(|frame| frame.to_bits() != frames[0].to_bits());
             animation.sets.push(AnimationSet { target_name: name.iter().map(|b| *b as char).collect(), frames, is_animated });
         }
         animation
@@ -270,7 +322,7 @@ pub struct AnimationPlayer {
 
 impl AnimationPlayer {
     /// `AnimationPlayer::AnimationPlayer` 0x140208570, with only the animated sets.
-    fn new(animation: &Animation, scene: &Scene, root: NodeId) -> AnimationPlayer {
+    pub fn new(animation: &Animation, scene: &Scene, root: NodeId) -> AnimationPlayer {
         let mut sets = Vec::new();
         for set in &animation.sets {
             let mut found = Vec::new();
@@ -284,8 +336,13 @@ impl AnimationPlayer {
         AnimationPlayer { sets, current_pos: -1.0 }
     }
 
+    /// `AnimationPlayer::getCurrentPos` 0x140208cc0.
+    pub fn get_current_pos(&self) -> f32 {
+        self.current_pos
+    }
+
     /// `AnimationPlayer::setCurrentPos` 0x140209040.
-    fn set_current_pos(&mut self, scene: &mut Scene, pos: f32, force: bool) {
+    pub fn set_current_pos(&mut self, scene: &mut Scene, pos: f32, force: bool) {
         if self.sets.is_empty() {
             return;
         }

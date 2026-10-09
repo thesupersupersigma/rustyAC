@@ -7,6 +7,8 @@
 //!   0x1400de0b0, `getVars` 0x1400de020, `update` 0x1400e0450): the `ksEmissive` of the meshes
 //!   of `data/lights.ini`: brake lights by the pedal, the other lights by the headlight switch
 //!   (there is no reverse light in the game), the flash button, the pit-lane and KERS pulses.
+//! * `AnimatedLights` (0x88 bytes; constructor 0x14005a850, `update` 0x14005aef0): lights
+//!   that come out of the body, by `animations/lights.ksanim`, one second from shut to open.
 //! * `BrakeDiscGraphics` (0x148 bytes; constructor 0x14005ca40, `update` 0x14005d930): the
 //!   glow and the blur of the `ksBrakeDisc` meshes. The glow follows pedal x wheel speed, not
 //!   the physics' disc temperature.
@@ -20,6 +22,7 @@ use rustyac_math::sqrtf;
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::session::ks_rand;
 
+use crate::animator::{Animation, AnimationPlayer};
 use crate::graphics::Graphics;
 use crate::material::MaterialId;
 use crate::scene::{NodeId, NodeKind, Scene};
@@ -518,6 +521,46 @@ impl DynamicCarEffects {
         self.current_dirt_level = d;
         if old != d && !(old.is_nan() || d.is_nan()) {
             self.push(scene, d);
+        }
+    }
+}
+
+/// `AnimatedLights`: at most one animation.
+#[derive(Default)]
+pub struct AnimatedLights {
+    lights: Vec<AnimationPlayer>,
+    pub front_lights_on: bool,
+}
+
+impl AnimatedLights {
+    /// `AnimatedLights::AnimatedLights` 0x14005a850.
+    pub fn new(scene: &Scene, folder: &Path, body_transform: NodeId) -> AnimatedLights {
+        let mut lights = AnimatedLights::default();
+        let path = folder.join("animations/lights.ksanim");
+        if path.is_file() {
+            let animation = Animation::load(&path);
+            lights.lights.push(AnimationPlayer::new(&animation, scene, body_transform));
+        }
+        lights
+    }
+
+    /// `AnimatedLights::update` 0x14005aef0. `dt` is the frame's own time.
+    pub fn update(&mut self, scene: &mut Scene, front_lights_on: bool, dt: f32) {
+        self.front_lights_on = front_lights_on;
+        for player in &mut self.lights {
+            let pos = player.get_current_pos();
+            let new_pos = if front_lights_on {
+                if pos >= 1.0 {
+                    1.0
+                } else {
+                    pos + dt
+                }
+            } else if pos > 0.0 {
+                pos - dt
+            } else {
+                0.0
+            };
+            player.set_current_pos(scene, new_pos, false);
         }
     }
 }
