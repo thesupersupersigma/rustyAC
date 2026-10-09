@@ -1,0 +1,32 @@
+[package]
+name = "rustyac-web"
+description = "rustyAC in the browser, a preview: the Vanilla physics as WebAssembly, a small wgpu picture (WebGPU, WebGL2 fallback), keyboard and gamepad"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rustyac-physics = { path = "../rustyac-physics" }
+rustyac-math = { path = "../rustyac-math" }
+rustyac-content = { path = "../rustyac-content" }
+# the simulation, AC's keyboard and pad classes and the scene maths (its Windows parts are
+# not compiled for wasm)
+rustyac-game = { path = "../rustyac-game" }
+
+# Everything below is the browser side and only exists in a wasm build: the desktop build of
+# the workspace compiles this crate's plain logic and its tests, nothing else.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# the picture: WebGPU where the browser has it, WebGL2 otherwise
+wgpu = { version = "=30.0.1", default-features = false, features = ["webgpu", "webgl", "wgsl"] }
+# the glue to JavaScript; the version must be the one of the wasm-bindgen program that
+# `web/build.py` runs (pinned there too)
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "console", "Performance"] }
+console_error_panic_hook = "0.1"
