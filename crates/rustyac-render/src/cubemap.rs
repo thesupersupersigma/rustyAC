@@ -31,3 +31,8 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, _scene: &
     graphics.kgl.set_sampler_ps(&graphics.samplers.aniso, 0);
     graphics.state.override_no_ms = false;
 }
+
+/// `SkyBox::render` 0x14021d0d0 for the cube-map camera.
+pub fn render_sky(sky: &mut crate::sky::SkyBox, graphics: &mut Graphics, rc: &mut crate::scene::RenderContext) {
+    sky.render_mesh(graphics, rc);
+}

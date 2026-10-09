@@ -116,8 +116,7 @@ pub struct Graphics {
     pub cb_shadow_map: CBuffer,
     pub shaders: ShaderManager,
     pub resources: ResourceStore,
-    /// `currentCubeMap`'s view, bound to pixel-shader slot 10 by the passes
-    pub lighting_curves: crate::lighting::LightingCurves,
+    pub custom_sun_direction: rustyac_physics::vecmath::Vec3f,
 }
 
 fn ini_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
@@ -221,7 +220,7 @@ impl Graphics {
             cb_shadow_map,
             shaders: ShaderManager::new(game_folder),
             resources: ResourceStore::new(),
-            lighting_curves: crate::lighting::LightingCurves::default(),
+            custom_sun_direction: rustyac_physics::vecmath::Vec3f::default(),
         };
         graphics.set_sampler_state();
         graphics.set_viewport(0, 0, video.width, video.height);
