@@ -25,6 +25,8 @@ const USAGE: &str = "usage:
                     [--car <folder name> --pose <file> [--skin <folder name>]]
                     a sequence: --car <c> --tape <file.audiotape> [--tape-from <frame>] [--frames <count>] (every
                     frame from --capture on is compared; --dump <i,j> also writes those frames whole)
+                    [--set name=value[@frame],…] writes over the car's state (lights flash brake gas gear rpm kmh
+                    damage=f:r:l:r:c pit kers dirt fuel turbo water limiter)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
@@ -57,6 +59,9 @@ pub struct Args {
     pub dump: Vec<usize>,
     /// a word for the frame's name (to tell runs with different inputs apart)
     pub label: String,
+    /// `--set name=value[@frame],…`: values written over the car's state of every frame (from
+    /// `frame` on), on both sides alike
+    pub set: Vec<(String, String, usize)>,
     pub layout: String,
     pub view: String,
     pub capture: usize,
@@ -95,6 +100,7 @@ fn parse() -> Result<Args, String> {
         frames: 60,
         dump: Vec::new(),
         label: String::new(),
+        set: Vec::new(),
         layout: String::new(),
         view: "chase".into(),
         capture: 1,
@@ -171,6 +177,17 @@ fn parse() -> Result<Args, String> {
             "--label" => {
                 text = value()?;
                 a.label = text.clone();
+            }
+            "--set" => {
+                text = value()?;
+                for item in text.split(',').filter(|s| !s.is_empty()) {
+                    let (item, from) = match item.split_once('@') {
+                        Some((item, from)) => (item, from.parse().map_err(|_| format!("--set {item}@<frame>"))?),
+                        None => (item, 0usize),
+                    };
+                    let (name, value) = item.split_once('=').ok_or("--set name=value[@frame],…")?;
+                    a.set.push((name.to_string(), value.to_string(), from));
+                }
             }
             "--dump" => {
                 let list = value()?;

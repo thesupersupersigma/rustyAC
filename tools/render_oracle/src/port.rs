@@ -116,6 +116,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), crate::root::profile().cubemap_far_plane);
     }
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
+    graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
     // Sim::addCar: CarAvatar::init3D
     let mut car = match &frame.car {
         Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock))?),

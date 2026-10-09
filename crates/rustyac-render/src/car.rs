@@ -23,6 +23,7 @@ use crate::camera::DEG_TO_RAD;
 use crate::damage::VisualDamageManager;
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
+use crate::lights::{BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
 
@@ -84,6 +85,14 @@ pub struct CarAvatar {
     pub damage: Option<VisualDamageManager>,
     /// the pause menu shows (the damage's parts stop shaking)
     pub pause_menu: bool,
+    /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
+    pub brake_lights: CarBrakeLights,
+    pub brake_discs: BrakeDiscGraphics,
+    pub dynamic_effects: DynamicCarEffects,
+    /// `CarAvatar::inPitlane`: a tyre stands on a pit-lane surface
+    pub in_pitlane: bool,
+    /// a replay plays
+    pub replay_mode: bool,
     /// `TyreBlur` and `BlurredObjects`, made by [`CarAvatar::init_common_post_physics`]
     pub tyre_blur: TyreBlur,
     pub blurred_objects: BlurredObjects,
@@ -157,6 +166,11 @@ impl CarAvatar {
             suspension,
             damage: None,
             pause_menu: false,
+            brake_lights: CarBrakeLights::default(),
+            brake_discs: BrakeDiscGraphics::default(),
+            dynamic_effects: DynamicCarEffects::default(),
+            in_pitlane: false,
+            replay_mode: false,
             tyre_blur: TyreBlur::default(),
             blurred_objects: BlurredObjects::default(),
             replay_scale: 1.0,
@@ -225,8 +239,11 @@ impl CarAvatar {
     pub fn init_common_post_physics(&mut self, graphics: &mut Graphics, scene: &mut Scene) -> Result<(), String> {
         let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
         let wheel_nodes = |w: usize| wheels[w].clone();
+        self.brake_lights = CarBrakeLights::new(graphics, scene, &self.folder, self.body_transform)?;
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
+        self.brake_discs = BrakeDiscGraphics::new(graphics, scene, &self.folder, self.car_node)?;
+        self.dynamic_effects = DynamicCarEffects::new(graphics, scene, self.body_transform);
         Ok(())
     }
 
@@ -372,6 +389,9 @@ impl CarAvatar {
     /// What the frame's `update`s do to the nodes, in the game's order: `CarAvatar::update`
     /// (the body, the steering wheel), `SuspensionAvatar::update`, `CarLodManager::update`.
     pub fn update(&mut self, graphics: &mut Graphics, scene: &mut Scene, state: &CarPhysicsState, dt: f32) {
+        // CarAvatar::updateInPitlaneState 0x1400dd6d0
+        self.in_pitlane = state.tyre_surface_def.iter().any(|s| s.is_pitlane);
+        let replay_dt = if self.replay_mode { dt * self.replay_scale } else { dt };
         self.body_matrix = self.make_body_matrix(&state.world_matrix);
         scene.nodes[self.body_transform].matrix = self.body_matrix;
         if let Some(shadow) = &self.fake_shadow {
@@ -395,10 +415,16 @@ impl CarAvatar {
             scene.nodes[n].is_active = true;
         }
         if let Some(damage) = &mut self.damage {
-            damage.update(graphics, scene, state, dt, self.pause_menu);
+            damage.update(graphics, scene, state, replay_dt, self.pause_menu);
         }
-        self.tyre_blur.update(scene, state, self.replay_scale);
-        self.blurred_objects.update(scene, state, self.replay_scale);
+        self.brake_lights.update(scene, state, replay_dt, self.in_pitlane);
+        let scale = if self.replay_mode && self.replay_scale != 0.0 { self.replay_scale } else { 1.0 };
+        self.tyre_blur.update(scene, state, scale);
+        self.blurred_objects.update(scene, state, scale);
+        self.brake_discs.update(scene, state, dt, self.replay_mode.then_some(self.replay_scale));
+        if !self.replay_mode {
+            self.dynamic_effects.update(scene, state);
+        }
     }
 
     /// What runs after all updates and before the picture (the handlers of `evOnPostUpdate`):

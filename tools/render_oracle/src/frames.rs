@@ -11,6 +11,9 @@ use rustyac_physics::vecmath::Mat44f;
 
 use crate::Args;
 
+/// What both sides seed the C runtime's `rand()` with before the car is loaded.
+pub const RAND_SEED: u32 = 21;
+
 /// The frame time both sides run with.
 pub const DT: f32 = 1.0 / 60.0;
 
@@ -213,6 +216,13 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         };
         camera_for(&args.view, &at, &eye_point, sun_from, state)
     };
+    for (index, state) in states.iter_mut().enumerate() {
+        for (name, value, from) in &args.set {
+            if index >= *from {
+                apply_set(state, name, value)?;
+            }
+        }
+    }
     let steps: Vec<Step> = if states.is_empty() {
         let camera = camera_of(None)?;
         (0..=args.capture).map(|_| Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera }).collect()
@@ -275,6 +285,42 @@ pub fn read_tape(path: &Path, from: usize, count: usize) -> Result<Vec<rustyac_r
         }
     }
     Ok(out)
+}
+
+/// One `--set name=value`.
+fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, name: &str, value: &str) -> Result<(), String> {
+    let number = |v: &str| v.parse::<f32>().map_err(|_| format!("--set {name}={v}: not a number"));
+    let on = |v: &str| -> Result<bool, String> { Ok(number(v)? != 0.0) };
+    match name {
+        "lights" => s.status_bytes = (s.status_bytes & !1) | on(value)? as u32,
+        "flash" => s.actions_state = (s.actions_state & !0x400) | if on(value)? { 0x400 } else { 0 },
+        "brake" => s.brake = number(value)?,
+        "gas" => s.gas = number(value)?,
+        "gear" => s.gear = number(value)? as i32,
+        "rpm" => s.engine_rpm = number(value)?,
+        "limiter" => s.limiter_rpm = number(value)? as i32,
+        "kmh" => s.speed = number(value)? / 3.6,
+        "fuel" => s.fuel = number(value)?,
+        "turbo" => s.turbo_boost = number(value)?,
+        "water" => s.water = number(value)?,
+        "kers" => s.kers_is_charging = on(value)?,
+        "pit" => s.tyre_surface_def.iter_mut().for_each(|d| d.is_pitlane = value != "0"),
+        "dirt" => {
+            let k = number(value)?;
+            s.tyre_surface_def.iter_mut().for_each(|d| d.dirt_additive_k = k);
+        }
+        "damage" => {
+            let parts: Vec<&str> = value.split(':').collect();
+            if parts.len() != 5 {
+                return Err("--set damage=front:rear:left:right:centre".into());
+            }
+            for (slot, part) in s.damage_zone_level.iter_mut().zip(parts) {
+                *slot = number(part)?;
+            }
+        }
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers pit dirt damage")),
+    }
+    Ok(())
 }
 
 type Point<'a> = &'a dyn Fn(f32, f32) -> [f32; 3];

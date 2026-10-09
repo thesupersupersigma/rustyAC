@@ -98,6 +98,10 @@ pub struct Samplers {
 
 /// `GraphicsManager` (0x4e0 bytes).
 pub struct Graphics {
+    /// The C runtime's `rand()` of the game's main thread, which its visual objects draw from
+    /// (`ksRand`): one stream for all of them, in the order they ask. The game seeds it from
+    /// the clock; whoever needs a run to repeat sets it.
+    pub crt_rand: rustyac_physics::session::MsvcRand,
     pub kgl: Kgl,
     pub game_folder: PathBuf,
     pub use_custom_sun_direction: bool,
@@ -192,6 +196,7 @@ impl Graphics {
         };
 
         let mut graphics = Graphics {
+            crt_rand: rustyac_physics::session::MsvcRand(1),
             kgl,
             game_folder: game_folder.to_path_buf(),
             use_custom_sun_direction: false,

@@ -24,6 +24,7 @@ pub mod gpulog;
 pub mod graphics;
 pub mod kgl;
 pub mod lighting;
+pub mod lights;
 pub mod material;
 pub mod model;
 pub mod scene;

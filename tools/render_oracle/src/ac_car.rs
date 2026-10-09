@@ -37,6 +37,13 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
+const VA_CAR_BRAKE_LIGHTS_CTOR: usize = 0x1_400d_dbb0; // CarBrakeLights::CarBrakeLights(CarAvatar*)
+const VA_CAR_BRAKE_LIGHTS_UPDATE: usize = 0x1_400e_0450; // CarBrakeLights::update(float)
+const VA_BRAKE_DISC_GRAPHICS_CTOR: usize = 0x1_4005_ca40; // BrakeDiscGraphics::BrakeDiscGraphics(CarAvatar&)
+const VA_BRAKE_DISC_GRAPHICS_UPDATE: usize = 0x1_4005_d930; // BrakeDiscGraphics::update(float)
+const VA_DYNAMIC_CAR_EFFECTS_CTOR: usize = 0x1_4009_1230; // DynamicCarEffects::DynamicCarEffects(CarAvatar*)
+const VA_DYNAMIC_CAR_EFFECTS_UPDATE: usize = 0x1_4009_1ac0; // DynamicCarEffects::update(float)
 const VA_TYRE_BLUR_CTOR: usize = 0x1_401c_f760; // TyreBlur::TyreBlur(CarAvatar*)
 const VA_TYRE_BLUR_UPDATE: usize = 0x1_401c_fdb0; // TyreBlur::update(float)
 const VA_BLURRED_OBJECTS_CTOR: usize = 0x1_400c_35d0; // BlurredObjects::BlurredObjects(CarAvatar*)
@@ -183,8 +190,11 @@ pub struct Car {
     steer_transform: *mut u8,
     steer_lock: f32,
     visual_damage: *mut u8,
+    brake_lights: *mut u8,
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
+    brake_discs: *mut u8,
+    dynamic_effects: *mut u8,
 }
 
 impl Game {
@@ -214,6 +224,9 @@ impl Game {
         let cars_node = nodes.cars;
         let acs = &self.acs;
         let console = self.prepare_cars();
+        // the C runtime's rand() of this thread: the same start as the port's
+        let randomize: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KS_RANDOMIZE));
+        randomize(crate::frames::RAND_SEED);
         let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
         let car_ini = rustyac_physics::data::ini::IniReader::load(&data.join("car.ini"))?;
 
@@ -319,19 +332,27 @@ impl Game {
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
         // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
+        let make = |size: usize, va: usize| -> *mut u8 {
+            let object = acs.alloc(size);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(va));
+            ctor(object, car)
+        };
+        let brake_lights = make(0xf0, VA_CAR_BRAKE_LIGHTS_CTOR);
         let tyre_blur = acs.alloc(0x120);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_BLUR_CTOR));
         ctor(tyre_blur, car);
         let blurred_objects = acs.alloc(0x78);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BLURRED_OBJECTS_CTOR));
         ctor(blurred_objects, car);
+        let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
+        let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
         // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
         {
             let shadow = acs.alloc(0x158);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, visual_damage, tyre_blur, blurred_objects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, visual_damage, brake_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -342,6 +363,8 @@ impl Game {
         // CarAvatar::setNewPhysicsState: the state the physics handed over
         let bytes = s.to_game_bytes();
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), c.car.add(0x268), bytes.len());
+        // CarAvatar::updateInPitlaneState 0x1400dd6d0
+        wr(c.car, 0x129c, s.tyre_surface_def.iter().any(|d| d.is_pitlane) as u8);
         // CarAvatar::update 0x1400db830: the body …
         let make_body_matrix: extern "C" fn(*mut u8, *const u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_MAKE_BODY_MATRIX));
         make_body_matrix(c.car, c.car.add(0x26c), c.car.add(0x224));
@@ -363,7 +386,14 @@ impl Game {
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE));
         update(c.lod_manager, dt);
-        for (object, va) in [(c.visual_damage, VA_VISUAL_DAMAGE_UPDATE), (c.tyre_blur, VA_TYRE_BLUR_UPDATE), (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE)] {
+        for (object, va) in [
+            (c.visual_damage, VA_VISUAL_DAMAGE_UPDATE),
+            (c.brake_lights, VA_CAR_BRAKE_LIGHTS_UPDATE),
+            (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
+            (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
+            (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),
+            (c.dynamic_effects, VA_DYNAMIC_CAR_EFFECTS_UPDATE),
+        ] {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }
