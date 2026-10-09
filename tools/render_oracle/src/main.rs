@@ -69,7 +69,9 @@ fn run() -> Result<(), String> {
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(&args)?;
             println!("GraphicsManager at {:p}", game.graphics);
-            Ok(())
+            let model = args.game.join("content/cars/ks_ferrari_f2004/ferrari_f2004.kn5");
+            let out = repo_root().join("re/scratch/task20/probe");
+            unsafe { game.experiment(&model, &out) }
         }
         _ => Err(USAGE.into()),
     }

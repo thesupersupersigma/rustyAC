@@ -8,10 +8,14 @@
 //! are the same file" means the two renderers asked Direct3D for exactly the same things in
 //! the same order, with the same bytes in every constant buffer.
 //!
-//! How it works: the vtables of the device and of its immediate context are patched in place
-//! (they belong to `d3d11.dll`'s data, mapped privately once written to). Calls that matter get
-//! a hook that understands their arguments; every other method gets a small machine-code stub
-//! that reports the call by name. Objects are named by what they are, never by where they are:
+//! How it works: the renderer is handed a stand-in for the immediate context, an object with a
+//! vtable of its own whose methods write the call down and pass it on to the real context.
+//! (Patching the real context's vtable does not work: Direct3D 11 swaps entries of it, such as
+//! the draw calls, `Map` and the clears, between implementations as the pipeline state changes,
+//! which silently removes a hook.) The device's vtable is patched in place for the few
+//! `Create…` calls that give objects their names. Calls that matter get a hook that understands
+//! their arguments; every other method gets a small machine-code stub that reports the call by
+//! name. Objects are named by what they are, never by where they are:
 //!
 //! * a state object by its whole description,
 //! * a shader by a hash of its bytecode, an input layout by a hash of its elements,
@@ -34,7 +38,10 @@ use windows::Win32::System::Memory::{VirtualAlloc, VirtualProtect, MEM_COMMIT, M
 const CTX_SLOTS: usize = 115;
 const DEV_SLOTS: usize = 43;
 
-static ORIG_CTX: [AtomicUsize; CTX_SLOTS] = [const { AtomicUsize::new(0) }; CTX_SLOTS];
+/// The real immediate context (the stand-in forwards to it).
+static REAL_CTX: AtomicUsize = AtomicUsize::new(0);
+/// The stand-in handed to the renderer.
+static PROXY_CTX: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DEV: [AtomicUsize; DEV_SLOTS] = [const { AtomicUsize::new(0) }; DEV_SLOTS];
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -168,10 +175,19 @@ fn enter() -> Option<Guard> {
     Some(Guard(guard))
 }
 
+/// The real context.
+fn real() -> P {
+    REAL_CTX.load(Ordering::Relaxed) as P
+}
+
+/// A method of the real context, as its vtable has it right now.
 fn orig_ctx<T: Copy>(slot: usize) -> T {
-    let p = ORIG_CTX[slot].load(Ordering::Relaxed);
-    debug_assert!(p != 0 && std::mem::size_of::<T>() == std::mem::size_of::<usize>());
-    unsafe { std::mem::transmute_copy(&p) }
+    debug_assert!(std::mem::size_of::<T>() == std::mem::size_of::<usize>());
+    unsafe {
+        let vtable = *(real() as *const *const usize);
+        let p = *vtable.add(slot);
+        std::mem::transmute_copy(&p)
+    }
 }
 
 fn orig_dev<T: Copy>(slot: usize) -> T {
@@ -642,6 +658,7 @@ macro_rules! set_buffers_hook {
     ($name:ident, $slot:expr, $label:expr) => {
         unsafe extern "system" fn $name(this: P, start: u32, count: u32, list: *const P) {
             let orig: unsafe extern "system" fn(P, u32, u32, *const P) = orig_ctx($slot);
+            let this = { let _ = this; real() };
             if let Some(mut state) = enter() {
                 if state.capturing {
                     let names: Vec<String> = pointer_list(list, count).into_iter().map(|b| state.buffer_name(b)).collect();
@@ -657,6 +674,7 @@ macro_rules! set_views_hook {
     ($name:ident, $slot:expr, $label:expr) => {
         unsafe extern "system" fn $name(this: P, start: u32, count: u32, list: *const P) {
             let orig: unsafe extern "system" fn(P, u32, u32, *const P) = orig_ctx($slot);
+            let this = { let _ = this; real() };
             if let Some(mut state) = enter() {
                 if state.capturing {
                     let mut names = Vec::new();
@@ -675,6 +693,7 @@ macro_rules! set_samplers_hook {
     ($name:ident, $slot:expr, $label:expr) => {
         unsafe extern "system" fn $name(this: P, start: u32, count: u32, list: *const P) {
             let orig: unsafe extern "system" fn(P, u32, u32, *const P) = orig_ctx($slot);
+            let this = { let _ = this; real() };
             if let Some(mut state) = enter() {
                 if state.capturing {
                     let names: Vec<String> = pointer_list(list, count).into_iter().map(sampler_name).collect();
@@ -690,6 +709,7 @@ macro_rules! set_shader_hook {
     ($name:ident, $slot:expr, $label:expr, $prefix:expr) => {
         unsafe extern "system" fn $name(this: P, shader: P, instances: *const P, count: u32) {
             let orig: unsafe extern "system" fn(P, P, *const P, u32) = orig_ctx($slot);
+            let this = { let _ = this; real() };
             if let Some(mut state) = enter() {
                 state.line(format_args!("{} {} {count}", $label, tagged($prefix, shader)));
             }
@@ -710,6 +730,7 @@ set_shader_hook!(ctx_vs_set_shader, 11, "VSSetShader", "vs");
 
 unsafe extern "system" fn ctx_draw_indexed(this: P, count: u32, start: u32, base: i32) {
     let orig: unsafe extern "system" fn(P, u32, u32, i32) = orig_ctx(12);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             state.draws += 1;
@@ -722,6 +743,7 @@ unsafe extern "system" fn ctx_draw_indexed(this: P, count: u32, start: u32, base
 
 unsafe extern "system" fn ctx_draw(this: P, count: u32, start: u32) {
     let orig: unsafe extern "system" fn(P, u32, u32) = orig_ctx(13);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             state.draws += 1;
@@ -734,6 +756,7 @@ unsafe extern "system" fn ctx_draw(this: P, count: u32, start: u32) {
 
 unsafe extern "system" fn ctx_draw_indexed_instanced(this: P, count: u32, instances: u32, start: u32, base: i32, first: u32) {
     let orig: unsafe extern "system" fn(P, u32, u32, u32, i32, u32) = orig_ctx(20);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             state.draws += 1;
@@ -746,6 +769,7 @@ unsafe extern "system" fn ctx_draw_indexed_instanced(this: P, count: u32, instan
 
 unsafe extern "system" fn ctx_draw_instanced(this: P, count: u32, instances: u32, start: u32, first: u32) {
     let orig: unsafe extern "system" fn(P, u32, u32, u32, u32) = orig_ctx(21);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             state.draws += 1;
@@ -758,6 +782,7 @@ unsafe extern "system" fn ctx_draw_instanced(this: P, count: u32, instances: u32
 
 unsafe extern "system" fn ctx_map(this: P, resource: P, sub: u32, kind: u32, flags: u32, out: *mut D3D11_MAPPED_SUBRESOURCE) -> i32 {
     let orig: unsafe extern "system" fn(P, P, u32, u32, u32, *mut D3D11_MAPPED_SUBRESOURCE) -> i32 = orig_ctx(14);
+    let this = { let _ = this; real() };
     let result = orig(this, resource, sub, kind, flags, out);
     if let Some(mut state) = enter() {
         let is_buffer = state.buffers.contains_key(&(resource as usize));
@@ -779,6 +804,7 @@ unsafe extern "system" fn ctx_map(this: P, resource: P, sub: u32, kind: u32, fla
 
 unsafe extern "system" fn ctx_unmap(this: P, resource: P, sub: u32) {
     let orig: unsafe extern "system" fn(P, P, u32) = orig_ctx(15);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         let mapped = state.mapped.remove(&(resource as usize, sub));
         let mut shown = None;
@@ -812,6 +838,7 @@ unsafe extern "system" fn ctx_unmap(this: P, resource: P, sub: u32) {
 
 unsafe extern "system" fn ctx_update_subresource(this: P, resource: P, sub: u32, region: *const D3D11_BOX, data: *const c_void, row_pitch: u32, depth_pitch: u32) {
     let orig: unsafe extern "system" fn(P, P, u32, *const D3D11_BOX, *const c_void, u32, u32) = orig_ctx(48);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         let region_text = if region.is_null() {
             "all".to_string()
@@ -843,6 +870,7 @@ unsafe extern "system" fn ctx_update_subresource(this: P, resource: P, sub: u32,
 
 unsafe extern "system" fn ctx_ia_set_input_layout(this: P, layout: P) {
     let orig: unsafe extern "system" fn(P, P) = orig_ctx(17);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         state.line(format_args!("IASetInputLayout {}", tagged("layout", layout)));
     }
@@ -851,6 +879,7 @@ unsafe extern "system" fn ctx_ia_set_input_layout(this: P, layout: P) {
 
 unsafe extern "system" fn ctx_ia_set_vertex_buffers(this: P, start: u32, count: u32, buffers: *const P, strides: *const u32, offsets: *const u32) {
     let orig: unsafe extern "system" fn(P, u32, u32, *const P, *const u32, *const u32) = orig_ctx(18);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let mut text = String::new();
@@ -867,6 +896,7 @@ unsafe extern "system" fn ctx_ia_set_vertex_buffers(this: P, start: u32, count: 
 
 unsafe extern "system" fn ctx_ia_set_index_buffer(this: P, buffer: P, format: u32, offset: u32) {
     let orig: unsafe extern "system" fn(P, P, u32, u32) = orig_ctx(19);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let name = state.buffer_name(buffer);
@@ -878,6 +908,7 @@ unsafe extern "system" fn ctx_ia_set_index_buffer(this: P, buffer: P, format: u3
 
 unsafe extern "system" fn ctx_ia_set_primitive_topology(this: P, topology: u32) {
     let orig: unsafe extern "system" fn(P, u32) = orig_ctx(24);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         state.line(format_args!("IASetPrimitiveTopology {topology}"));
     }
@@ -886,6 +917,7 @@ unsafe extern "system" fn ctx_ia_set_primitive_topology(this: P, topology: u32) 
 
 unsafe extern "system" fn ctx_om_set_render_targets(this: P, count: u32, views: *const P, depth: P) {
     let orig: unsafe extern "system" fn(P, u32, *const P, P) = orig_ctx(33);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let mut names = Vec::new();
@@ -901,6 +933,7 @@ unsafe extern "system" fn ctx_om_set_render_targets(this: P, count: u32, views: 
 
 unsafe extern "system" fn ctx_om_set_blend_state(this: P, blend: P, factor: *const f32, mask: u32) {
     let orig: unsafe extern "system" fn(P, P, *const f32, u32) = orig_ctx(35);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let factor_text = if factor.is_null() {
@@ -917,6 +950,7 @@ unsafe extern "system" fn ctx_om_set_blend_state(this: P, blend: P, factor: *con
 
 unsafe extern "system" fn ctx_om_set_depth_stencil_state(this: P, depth: P, reference: u32) {
     let orig: unsafe extern "system" fn(P, P, u32) = orig_ctx(36);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         state.line(format_args!("OMSetDepthStencilState {} {reference}", depth_name(depth)));
     }
@@ -925,6 +959,7 @@ unsafe extern "system" fn ctx_om_set_depth_stencil_state(this: P, depth: P, refe
 
 unsafe extern "system" fn ctx_rs_set_state(this: P, raster: P) {
     let orig: unsafe extern "system" fn(P, P) = orig_ctx(43);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         state.line(format_args!("RSSetState {}", raster_name(raster)));
     }
@@ -933,6 +968,7 @@ unsafe extern "system" fn ctx_rs_set_state(this: P, raster: P) {
 
 unsafe extern "system" fn ctx_rs_set_viewports(this: P, count: u32, viewports: *const D3D11_VIEWPORT) {
     let orig: unsafe extern "system" fn(P, u32, *const D3D11_VIEWPORT) = orig_ctx(44);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let mut text = String::new();
@@ -958,6 +994,7 @@ unsafe extern "system" fn ctx_rs_set_viewports(this: P, count: u32, viewports: *
 
 unsafe extern "system" fn ctx_clear_render_target_view(this: P, view: P, colour: *const f32) {
     let orig: unsafe extern "system" fn(P, P, *const f32) = orig_ctx(50);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let c = std::slice::from_raw_parts(colour, 4);
@@ -976,6 +1013,7 @@ unsafe extern "system" fn ctx_clear_render_target_view(this: P, view: P, colour:
 
 unsafe extern "system" fn ctx_clear_depth_stencil_view(this: P, view: P, flags: u32, depth: f32, stencil: u8) {
     let orig: unsafe extern "system" fn(P, P, u32, f32, u8) = orig_ctx(53);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let name = state.dsv_name(view);
@@ -987,6 +1025,7 @@ unsafe extern "system" fn ctx_clear_depth_stencil_view(this: P, view: P, flags: 
 
 unsafe extern "system" fn ctx_copy_resource(this: P, to: P, from: P) {
     let orig: unsafe extern "system" fn(P, P, P) = orig_ctx(47);
+    let this = { let _ = this; real() };
     if let Some(mut state) = enter() {
         if state.capturing {
             let a = state.resource_name(to);
@@ -1009,8 +1048,43 @@ extern "C" fn other_call(index: u32) {
     }
 }
 
-/// Machine code that reports a call (`other_call(index)`) and goes on into the real method with
-/// every argument register as it was.
+/// Machine code of a method of the stand-in context without a hook of its own: reports the call
+/// (`other_call(slot)`) when `report` is set, then goes on into the real context's method with
+/// every argument register as it was but `this`.
+fn forward_code(slot: u32, report: bool) -> Vec<u8> {
+    let mut c: Vec<u8> = Vec::new();
+    if report {
+        c.extend([
+            0x51, 0x52, 0x41, 0x50, 0x41, 0x51, // push rcx, rdx, r8, r9
+            0x48, 0x83, 0xec, 0x68, // sub rsp, 0x68
+            0x0f, 0x11, 0x44, 0x24, 0x20, // movups [rsp+0x20], xmm0
+            0x0f, 0x11, 0x4c, 0x24, 0x30, // movups [rsp+0x30], xmm1
+            0x0f, 0x11, 0x54, 0x24, 0x40, // movups [rsp+0x40], xmm2
+            0x0f, 0x11, 0x5c, 0x24, 0x50, // movups [rsp+0x50], xmm3
+            0xb9,
+        ]);
+        c.extend(slot.to_le_bytes()); // mov ecx, slot
+        c.extend([0x48, 0xb8]);
+        c.extend((other_call as *const () as u64).to_le_bytes()); // mov rax, other_call
+        c.extend([0xff, 0xd0]); // call rax
+        c.extend([
+            0x0f, 0x10, 0x44, 0x24, 0x20, // movups xmm0, [rsp+0x20]
+            0x0f, 0x10, 0x4c, 0x24, 0x30,
+            0x0f, 0x10, 0x54, 0x24, 0x40,
+            0x0f, 0x10, 0x5c, 0x24, 0x50,
+            0x48, 0x83, 0xc4, 0x68, // add rsp, 0x68
+            0x41, 0x59, 0x41, 0x58, 0x5a, 0x59, // pop r9, r8, rdx, rcx
+        ]);
+    }
+    c.extend([0x48, 0x8b, 0x49, 0x08]); // mov rcx, [rcx+8]   the real context
+    c.extend([0x48, 0x8b, 0x01]); // mov rax, [rcx]     its vtable
+    c.extend([0xff, 0xa0]); // jmp [rax + slot*8]
+    c.extend((slot * 8).to_le_bytes());
+    c
+}
+
+/// Machine code that reports a call of the device (`other_call(index)`) and goes on into the
+/// real method with every argument register as it was.
 fn stub_code(index: u32, original: usize) -> Vec<u8> {
     let mut c: Vec<u8> = vec![
         0x51, 0x52, 0x41, 0x50, 0x41, 0x51, // push rcx, rdx, r8, r9
@@ -1049,17 +1123,35 @@ unsafe fn patch_slot(vtable: *mut usize, slot: usize, target: usize) -> Result<(
     Ok(())
 }
 
+/// The stand-in context: a vtable pointer and the real context, which the machine-code stubs
+/// read at +8.
+#[repr(C)]
+struct Proxy {
+    vtable: *const usize,
+    real: *mut c_void,
+}
+
+/// `ID3D11Device::GetImmediateContext`: the stand-in, so that nobody gets around the log.
+unsafe extern "system" fn dev_get_immediate_context(_this: P, out: *mut P) {
+    let proxy = PROXY_CTX.load(Ordering::Relaxed) as P;
+    // the reference the caller will release goes to the real context
+    let add_ref: unsafe extern "system" fn(P) -> u32 = orig_ctx(1);
+    add_ref(real());
+    *out = proxy;
+}
+
 /// Starts logging the calls of this device and its immediate context. Once per process.
+/// Returns the stand-in context: the renderer must make all its calls through that pointer.
 ///
 /// # Safety
 /// The two pointers must be a live `ID3D11Device` and its `ID3D11DeviceContext`, and they must
-/// outlive every later use of the log.
+/// outlive every later use of the log and of the returned pointer.
 #[allow(clippy::needless_range_loop)] // slots are vtable indices
-pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<(), String> {
+pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<*mut c_void, String> {
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return Err("the command log is already installed".into());
     }
-    let stubs = VirtualAlloc(None, 0x4000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
+    let stubs = VirtualAlloc(None, 0x8000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
     if stubs.is_null() {
         return Err("VirtualAlloc failed".into());
     }
@@ -1068,7 +1160,7 @@ pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<(), S
         let at = stubs.add(used);
         std::ptr::copy_nonoverlapping(code.as_ptr(), at, code.len());
         used += code.len().next_multiple_of(16);
-        assert!(used <= 0x4000);
+        assert!(used <= 0x8000);
         at as usize
     };
 
@@ -1120,28 +1212,23 @@ pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<(), S
         draws: 0,
     });
 
-    let ctx_vtable = *(context as *const *mut usize);
-    for slot in 0..CTX_SLOTS {
-        ORIG_CTX[slot].store(*ctx_vtable.add(slot), Ordering::SeqCst);
-    }
+    REAL_CTX.store(context as usize, Ordering::SeqCst);
     let dev_vtable = *(device as *const *mut usize);
     for slot in 0..DEV_SLOTS {
         ORIG_DEV[slot].store(*dev_vtable.add(slot), Ordering::SeqCst);
     }
-    // the context: everything from VSSetConstantBuffers on, but not the getters (they change
-    // nothing and the log itself uses them)
-    for slot in 7..CTX_SLOTS {
-        let getter = (72..=109).contains(&slot) || slot == 56 || slot >= 112;
-        if getter {
-            continue;
-        }
-        let original = ORIG_CTX[slot].load(Ordering::SeqCst);
-        let target = match ctx_hooks.iter().find(|h| h.0 == slot) {
+    // the stand-in context: a hook or a reporting stub for everything from VSSetConstantBuffers
+    // on but the getters (they change nothing); plain forwarding for those and for IUnknown
+    let mut vtable = vec![0usize; CTX_SLOTS + 64];
+    for slot in 0..vtable.len() {
+        let getter = slot < 7 || (72..=109).contains(&slot) || slot == 56 || slot >= 112;
+        vtable[slot] = match ctx_hooks.iter().find(|h| h.0 == slot) {
             Some(hook) => hook.1,
-            None => push(stub_code(slot as u32, original)),
+            None => push(forward_code(slot as u32, !getter)),
         };
-        patch_slot(ctx_vtable, slot, target)?;
     }
+    let proxy = Box::leak(Box::new(Proxy { vtable: Box::leak(vtable.into_boxed_slice()).as_ptr(), real: context }));
+    PROXY_CTX.store(proxy as *mut Proxy as usize, Ordering::SeqCst);
     // the device: what it creates (the checks and getters stay as they are)
     for slot in 3..=28 {
         let original = ORIG_DEV[slot].load(Ordering::SeqCst);
@@ -1151,7 +1238,8 @@ pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<(), S
         };
         patch_slot(dev_vtable, slot, target)?;
     }
-    Ok(())
+    patch_slot(dev_vtable, 40, dev_get_immediate_context as *const () as usize)?;
+    Ok(proxy as *mut Proxy as *mut c_void)
 }
 
 pub fn installed() -> bool {
