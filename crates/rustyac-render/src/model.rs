@@ -22,6 +22,11 @@ pub struct Kn5Io {
     pub skin_override_path: Vec<String>,
 }
 
+/// A path as text with forward slashes.
+pub fn path_text(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// `Path::getFileName` 0x140230910.
 fn file_name(s: &str) -> &str {
     match s.rfind(['/', '\\']) {

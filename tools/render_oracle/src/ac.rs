@@ -44,6 +44,7 @@ const VA_KN5IO_ADD_TEXTURE_FOLDER: usize = 0x1_4021_4e90; // KN5IO::addTextureFo
 const VA_GRAPHICS_UPDATE_LIGHTING: usize = 0x1_4020_5190; // GraphicsManager::updateLightingSetttings()
 const VA_GRAPHICS_LOAD_LIGHTING: usize = 0x1_4020_3250; // GraphicsManager::loadLightingSettings(const std::wstring&)
 const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGenerator::loadPreset(const std::wstring&, GraphicsManager*, float)
+const VA_CUBE_MAP_RENDERER_RENDER: usize = 0x1_4021_edb0; // CubeMapRenderer::render(CubeMap*, Node*, Camera*)
 const VA_SKYBOX_UPDATE_CLOUDS: usize = 0x1_4021_db00; // SkyBox::updateCloudsGeneration(const std::wstring&)
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
@@ -179,6 +180,8 @@ pub struct Game {
 
 /// What one run of a renderer gave.
 pub struct Rendered {
+    /// the calls of the one-time render of the reflection cube map (`Sim::initStaticCubemap`)
+    pub cube_log: Vec<u8>,
     pub log: Vec<u8>,
     pub draws: u64,
     pub width: u32,
@@ -321,6 +324,15 @@ impl Game {
     /// game's own camera.
     pub unsafe fn render(&self, frame: &Frame) -> Result<Rendered, String> {
         let acs = &self.acs;
+        let begin: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_BEGIN_SCENE));
+        let end: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_END_SCENE));
+        let screen_space: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_SCREEN_SPACE_MODE));
+        // the splash screen: in the game frames are drawn before the Sim exists (the loading
+        // screen), so the default state of beginScene is there when the Sim loads and draws
+        // its static cube map. One frame with nothing in it stands for them.
+        begin(self.graphics);
+        screen_space(self.graphics);
+        end(self.graphics);
         // Sim::initSceneGraph 0x140199d70 (the NodeEvents have no handler here: plain nodes)
         let root = self.node("ROOT");
         let blurred = self.node("BLURRED");
@@ -409,10 +421,22 @@ impl Game {
         wr(camera, 0x2b8, crate::root::CUBEMAP_FACES_PER_FRAME); // cubeMapRenderer.facesPerFrame
         let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
         set_cubemap_size(camera, crate::root::CUBEMAP_SIZE);
+        let cube_log;
+        // Sim::initStaticCubemap 0x14019a2a0, from Sim::onPostLoad: the small model and the sky
+        // into the six faces, once, with the scene camera where its constructor left it
+        {
+            let io = self.kn5io();
+            let model = self.load_kn5(io, &frame.cubemap_model)?;
+            compile(self.graphics, model);
+            let saved: i32 = rd(camera, 0x2b8);
+            wr(camera, 0x2b8, 6i32);
+            let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(VA_CUBE_MAP_RENDERER_RENDER));
+            rustyac_render::gpulog::begin_capture("static cube map");
+            render(camera.add(0x2b0), rd::<*mut u8>(camera, 0x690), model, camera);
+            cube_log = rustyac_render::gpulog::end_capture().text;
+            wr(camera, 0x2b8, saved);
+        }
 
-        let begin: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_BEGIN_SCENE));
-        let end: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_END_SCENE));
-        let screen_space: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_SCREEN_SPACE_MODE));
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
@@ -442,7 +466,7 @@ impl Game {
             if index == frame.capture {
                 let capture = rustyac_render::gpulog::end_capture();
                 let (width, height, pixels) = self.read_back()?;
-                rendered = Some(Rendered { log: capture.text, draws: capture.draws, width, height, pixels });
+                rendered = Some(Rendered { cube_log: cube_log.clone(), log: capture.text, draws: capture.draws, width, height, pixels });
             }
             end(self.graphics);
         }

@@ -172,6 +172,7 @@ fn run_side(args: &Args) -> Result<(), String> {
     let base = args.out.join(format!("{}.{}", frame.name, args.side));
     std::fs::write(base.with_extension(format!("{}.gpulog", args.side)), &rendered.log).map_err(|e| e.to_string())?;
     std::fs::write(base.with_extension(format!("{}.init.gpulog", args.side)), &init).map_err(|e| e.to_string())?;
+    std::fs::write(base.with_extension(format!("{}.cube.gpulog", args.side)), &rendered.cube_log).map_err(|e| e.to_string())?;
     std::fs::write(base.with_extension(format!("{}.rgba", args.side)), &rendered.pixels).map_err(|e| e.to_string())?;
     write_png(&base.with_extension(format!("{}.png", args.side)), rendered.width, rendered.height, &rendered.pixels)?;
     println!("{}: {} draw calls, {} log lines, {}x{}", base.display(), rendered.draws, rendered.log.iter().filter(|b| **b == b'\n').count(), rendered.width, rendered.height);

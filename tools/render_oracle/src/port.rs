@@ -44,6 +44,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let mut graphics = Graphics::new(video, DeviceOptions { warp: true, window: Some(window), log: true }, &args.game)?;
     let init = rustyac_render::gpulog::end_capture();
 
+    // the splash screen's frame (see the game's side)
+    graphics.begin_scene();
+    graphics.set_screen_space_mode();
+    graphics.end_scene();
+
     // Sim::initSceneGraph
     let mut scene = Scene::new();
     let root = scene.node("ROOT");
@@ -108,6 +113,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     camera.base.camera.far_plane = 40000.0;
     camera.cube_map_renderer.faces_per_frame = crate::root::CUBEMAP_FACES_PER_FRAME;
     camera.set_cubemap_size(&graphics, crate::root::CUBEMAP_SIZE);
+    let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
+    rustyac_render::gpulog::begin_capture("static cube map");
+    rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
+    let cube_log = rustyac_render::gpulog::end_capture().text;
 
     let mut rendered = None;
     for index in 0..=frame.capture {
@@ -130,7 +139,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         if index == frame.capture {
             let capture = rustyac_render::gpulog::end_capture();
             let (width, height, pixels) = graphics.kgl.read_screen()?;
-            rendered = Some(Rendered { log: capture.text, draws: capture.draws, width, height, pixels });
+            rendered = Some(Rendered { cube_log: cube_log.clone(), log: capture.text, draws: capture.draws, width, height, pixels });
         }
         graphics.end_scene();
     }

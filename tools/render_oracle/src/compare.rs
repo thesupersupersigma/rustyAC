@@ -105,6 +105,28 @@ pub fn compare(args: &Args) -> Result<(), String> {
         }
     }
 
+    // the one-time render of the reflection cube map
+    let (cube_ac, cube_port) = (read("ac", "cube.gpulog")?, read("port", "cube.gpulog")?);
+    let cube_lines = cube_ac.iter().filter(|b| **b == b'\n').count();
+    let cube_draws = cube_ac.split(|b| *b == b'\n').filter(|l| l.starts_with(b"Draw")).count();
+    if cube_ac == cube_port {
+        println!("static cube map: {cube_lines} calls, {cube_draws} draws, the same on both sides");
+    } else {
+        failed = true;
+        let (la, lp): (Vec<&[u8]>, Vec<&[u8]>) = (cube_ac.split(|b| *b == b'\n').collect(), cube_port.split(|b| *b == b'\n').collect());
+        println!("static cube map: DIFFERENT ({} calls of the game, {} of the port)", la.len() - 1, lp.len() - 1);
+        for i in 0..la.len().max(lp.len()) {
+            let (a, b) = (la.get(i).copied().unwrap_or(b"<end>"), lp.get(i).copied().unwrap_or(b"<end>"));
+            if a != b {
+                println!("  first difference at line {i}:\n    game: {}\n    port: {}", show(a), show(b));
+                if let Some(detail) = payload_difference(a, b) {
+                    println!("    {detail}");
+                }
+                break;
+            }
+        }
+    }
+
     // the frame
     let (log_ac, log_port) = (read("ac", "gpulog")?, read("port", "gpulog")?);
     let lines_ac: Vec<&[u8]> = log_ac.split(|b| *b == b'\n').collect();

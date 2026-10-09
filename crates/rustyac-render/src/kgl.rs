@@ -711,14 +711,16 @@ impl Kgl {
         cube
     }
 
-    /// `kglCubeMapBeginFace` 0x140018b30.
+    /// `kglCubeMapBeginFace` 0x140018b30. The viewport is set behind the manager's back (the
+    /// lighting buffer's 1/width, 1/height do not follow).
     pub fn cube_map_begin_face(&mut self, cube: &KglCubeMap, face: usize) {
         unsafe {
             self.context.OMSetRenderTargets(Some(std::slice::from_ref(&cube.rtv_face[face])), cube.dsv_depth.as_ref());
         }
         self.set_viewport(0.0, 0.0, cube.size as f32, cube.size as f32);
+        // only the depth view becomes the active one: the colour clear that follows goes to
+        // whatever colour view was active before (the game never clears a cube face's colour)
         self.active_depth_stencil_view = cube.dsv_depth.clone();
-        self.active_render_target_view = cube.rtv_face[face].clone();
     }
 
     /// `kglCubeMapGenerateMips` 0x140019310.

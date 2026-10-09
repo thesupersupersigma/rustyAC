@@ -50,6 +50,8 @@ pub struct Frame {
     pub sun_angle: f32,
     /// race.ini `[WEATHER] NAME`
     pub weather: String,
+    /// the model `Sim::initStaticCubemap` draws into the reflection cube map
+    pub cubemap_model: String,
 }
 
 /// `TrackAvatar::init3D` placing a model's top node (`models.ini` ROTATION / POSITION).
@@ -136,7 +138,14 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         None => format!("empty_{}", args.view),
     };
     let name = if args.sun_angle == -16.0 { name } else { format!("{name}_sun{}", args.sun_angle) };
-    Ok(Frame { name, track, camera, capture: args.capture, sun_angle: args.sun_angle, weather: args.weather.clone() })
+    let mut cubemap_model = format!("{}/content/objects3D/cubemap_model.kn5", path_text(&args.game));
+    if let Some(track) = &track {
+        let own = format!("{}/cubemap_model.kn5", track.folder);
+        if Path::new(&own).is_file() {
+            cubemap_model = own;
+        }
+    }
+    Ok(Frame { name, track, camera, capture: args.capture, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model })
 }
 
 /// A path as text with forward slashes.

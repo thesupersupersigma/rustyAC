@@ -72,7 +72,8 @@ impl CameraForward {
         graphics.clear_texture_slot(5);
         self.base.shadow_map_pass(graphics, scene, root)?;
         if let Some(blurred) = blurred {
-            crate::cubemap::render(&mut self.cube_map_renderer, graphics, scene, &self.cube_map, blurred, &self.base);
+            let position = [self.base.camera.matrix.m[3][0], self.base.camera.matrix.m[3][1], self.base.camera.matrix.m[3][2]];
+            crate::cubemap::render(&mut self.cube_map_renderer, graphics, scene, &self.cube_map, blurred, position, self.base.sky_box.as_mut());
         }
         graphics.set_screen_render_targets();
         graphics.stats.is_in_main_render_pass = true;
