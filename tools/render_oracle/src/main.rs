@@ -26,7 +26,7 @@ const USAGE: &str = "usage:
                     a sequence: --car <c> --tape <file.audiotape> [--tape-from <frame>] [--frames <count>] (every
                     frame from --capture on is compared; --dump <i,j> also writes those frames whole)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
-                    [--world-detail <n>] [--anisotropic <n>]
+                    [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
@@ -189,15 +189,21 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.capture = text.parse().map_err(|_| "--capture <n>")?;
             }
-            "--shadow-size" | "--cubemap-size" | "--world-detail" | "--anisotropic" => {
+            "--shadow-size" | "--cubemap-size" | "--world-detail" | "--anisotropic" | "--cubemap-faces" => {
                 text = value()?;
                 let number: i32 = text.parse().map_err(|_| format!("{flag} <number>"))?;
                 match flag.as_str() {
                     "--shadow-size" => profile.shadow_map_size = number,
                     "--cubemap-size" => profile.cubemap_size = number,
                     "--world-detail" => profile.world_detail = number,
+                    // Sim::initCubemaps 0x1401997a0: 0 to 6
+                    "--cubemap-faces" => profile.cubemap_faces_per_frame = number.clamp(0, 6),
                     _ => profile.anisotropic = number,
                 }
+            }
+            "--cubemap-far" => {
+                text = value()?;
+                profile.cubemap_far_plane = text.parse().map_err(|_| "--cubemap-far <metres>")?;
             }
             "--sun" => {
                 text = value()?;

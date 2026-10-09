@@ -47,6 +47,9 @@ pub struct Options {
     /// `--video-ini-exact`: follow `video.ini` also where plain acs.exe cannot make a proper
     /// picture with it (a shadow map or cube map size of 0 or less).
     pub video_ini_exact: bool,
+    /// `--cube-faces <n>`: how many faces of the reflection cube map are drawn again every
+    /// frame (`[CUBEMAP] FACES_PER_FRAME` of `video.ini`), 0 to 6.
+    pub cube_faces: Option<i32>,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -153,6 +156,7 @@ impl Default for Options {
             gpu_log: None,
             skin: None,
             video_ini_exact: false,
+            cube_faces: None,
             at: None,
             camera: "chase".to_string(),
             auto_shifter: false,
@@ -272,6 +276,8 @@ for checks, without anybody at the controls:
   --video-ini-exact     follow video.ini also where plain acs.exe cannot make a proper picture with
                         it (SHADOW_MAP_SIZE=-1 and [CUBEMAP] SIZE=0, which Content Manager writes
                         for Custom Shaders Patch: everything in shadow, no reflections)
+  --cube-faces <n>      faces of the reflection cube map drawn again every frame, 0 to 6
+                        (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
   --at <s>              with --screenshot: seconds into the drive (default: the end of the replay, or 3)
   --bench-render        with --headless: also draw frames off screen and report their rate
@@ -314,6 +320,7 @@ impl Options {
                 "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),
                 "--skin" => o.skin = Some(value("--skin")?),
                 "--video-ini-exact" => o.video_ini_exact = true,
+                "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
                 "--no-auto-shifter" => o.no_auto_shifter = true,

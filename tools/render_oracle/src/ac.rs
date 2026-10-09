@@ -45,6 +45,7 @@ const VA_GRAPHICS_UPDATE_LIGHTING: usize = 0x1_4020_5190; // GraphicsManager::up
 const VA_GRAPHICS_LOAD_LIGHTING: usize = 0x1_4020_3250; // GraphicsManager::loadLightingSettings(const std::wstring&)
 const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGenerator::loadPreset(const std::wstring&, GraphicsManager*, float)
 const VA_CUBE_MAP_RENDERER_RENDER: usize = 0x1_4021_edb0; // CubeMapRenderer::render(CubeMap*, Node*, Camera*)
+const VA_CUBE_MAP_RENDERER_SET_PLANES: usize = 0x1_4021_f110; // CubeMapRenderer::setCameraNearFarPlanes(float, float)
 const VA_SKYBOX_UPDATE_CLOUDS: usize = 0x1_4021_db00; // SkyBox::updateCloudsGeneration(const std::wstring&)
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
@@ -444,6 +445,10 @@ impl Game {
         wr(camera, 0x74, 40000.0f32); // farPlane
         // Sim::initCubemaps 0x1401997a0 with the profile's [CUBEMAP]
         wr(camera, 0x2b8, crate::root::profile().cubemap_faces_per_frame); // cubeMapRenderer.facesPerFrame
+        if crate::root::profile().cubemap_far_plane != 0.0 {
+            let set_planes: extern "C" fn(*mut u8, f32, f32) = std::mem::transmute(acs.va(VA_CUBE_MAP_RENDERER_SET_PLANES));
+            set_planes(camera.add(0x2b0), f32::from_bits(0x3c23_d70a), crate::root::profile().cubemap_far_plane);
+        }
         let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
         set_cubemap_size(camera, crate::root::profile().cubemap_size);
         // Sim::addCar: the car's models and its objects

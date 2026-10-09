@@ -18,9 +18,11 @@ pub struct Profile {
     pub world_detail: i32,
     pub cubemap_size: i32,
     pub cubemap_faces_per_frame: i32,
+    /// `[CUBEMAP] FARPLANE`; 0 leaves the cube-map camera's 350 m
+    pub cubemap_far_plane: f32,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0 };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0 };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 
@@ -36,7 +38,7 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE } = profile();
     let lines = [
         "[VIDEO]".to_string(),
         format!("WIDTH={width}"),
@@ -86,7 +88,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         "[CUBEMAP]".into(),
         format!("SIZE={CUBEMAP_SIZE}"),
         format!("FACES_PER_FRAME={CUBEMAP_FACES_PER_FRAME}"),
-        "FARPLANE=0".into(),
+        format!("FARPLANE={CUBEMAP_FARPLANE}"),
         String::new(),
         "[SATURATION]".into(),
         "LEVEL=100".into(),

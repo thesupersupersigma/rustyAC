@@ -112,6 +112,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     camera.base.camera.near_plane = 0.05;
     camera.base.camera.far_plane = 40000.0;
     camera.cube_map_renderer.faces_per_frame = crate::root::profile().cubemap_faces_per_frame;
+    if crate::root::profile().cubemap_far_plane != 0.0 {
+        camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), crate::root::profile().cubemap_far_plane);
+    }
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
     // Sim::addCar: CarAvatar::init3D
     let mut car = match &frame.car {

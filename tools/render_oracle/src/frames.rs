@@ -237,6 +237,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     let p = crate::root::profile();
     let t = crate::root::TASK_20;
     let name = if (p.shadow_map_size, p.cubemap_size, p.world_detail, p.anisotropic) == (t.shadow_map_size, t.cubemap_size, t.world_detail, t.anisotropic) { name } else { format!("{name}_s{}c{}w{}a{}", p.shadow_map_size, p.cubemap_size, p.world_detail, p.anisotropic) };
+    let name = if p.cubemap_faces_per_frame == 0 && p.cubemap_far_plane == 0.0 { name } else { format!("{name}_f{}far{}", p.cubemap_faces_per_frame, p.cubemap_far_plane) };
     let mut cubemap_model = format!("{}/content/objects3D/cubemap_model.kn5", path_text(&args.game));
     if let Some(track) = &track {
         let own = format!("{}/cubemap_model.kn5", track.folder);

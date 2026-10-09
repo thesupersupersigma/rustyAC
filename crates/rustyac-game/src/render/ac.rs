@@ -218,18 +218,20 @@ pub struct AcOptions {
     /// `--video-ini-exact`: also follow the values of `video.ini` that plain acs.exe cannot
     /// make a proper picture with (a shadow map or cube map size of 0 or less).
     pub video_exact: bool,
+    /// `--cube-faces <n>`: `[CUBEMAP] FACES_PER_FRAME` whatever `video.ini` says.
+    pub cube_faces: Option<i32>,
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
-fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, i32, Vec<String>) {
+fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, i32, f32, Vec<String>) {
     let mut video = VideoSettings { width: width as i32, height: height as i32, is_fullscreen: false, ..VideoSettings::default() };
     let mut notes = Vec::new();
-    let (mut cube_size, mut cube_faces) = (512, 0);
+    let (mut cube_size, mut cube_faces, mut cube_far) = (512, 0, 0.0f32);
     let documents = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini"));
     let Some(ini) = documents.and_then(|p| IniReader::load(&p).ok()) else {
         notes.push("no Documents/Assetto Corsa/cfg/video.ini: the game's defaults are used".to_string());
         video.world_detail = 5;
-        return (video, cube_size, cube_faces, notes);
+        return (video, cube_size, cube_faces, cube_far, notes);
     };
     let int = |section: &str, key: &str| ini.get_int(section, key).unwrap_or(0);
     video.anisotropic = int("VIDEO", "ANISOTROPIC");
@@ -239,7 +241,9 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     };
     video.world_detail = int("ASSETTOCORSA", "WORLD_DETAIL");
     cube_size = int("CUBEMAP", "SIZE");
+    // Sim::initCubemaps 0x1401997a0
     cube_faces = int("CUBEMAP", "FACES_PER_FRAME").clamp(0, 6);
+    cube_far = ini.get_float("CUBEMAP", "FARPLANE").unwrap_or(0.0);
     if int("VIDEO", "AASAMPLES") > 1 {
         notes.push(format!("video.ini AASAMPLES={}: multisampling comes in Task 22, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
     }
@@ -248,10 +252,6 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     }
     if ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0) > 0.0 {
         notes.push("video.ini MOTION_BLUR: motion blur comes in Task 22, treated as off".to_string());
-    }
-    if cube_faces > 0 {
-        notes.push(format!("video.ini [CUBEMAP] FACES_PER_FRAME={cube_faces}: reflections that follow the car come in Task 21; the cube map drawn once at load is used"));
-        cube_faces = 0;
     }
     if int("MIRROR", "SIZE") != 0 {
         notes.push("video.ini [MIRROR]: mirrors come in Task 21, treated as off".to_string());
@@ -278,7 +278,7 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
             cube_size = 512;
         }
     }
-    (video, cube_size, cube_faces, notes)
+    (video, cube_size, cube_faces, cube_far, notes)
 }
 
 /// The shadow ranges the game's camera of the moment asks for (`setShadowMapsSplits`).
@@ -324,7 +324,10 @@ pub struct AcRenderer {
 
 impl AcRenderer {
     pub fn new(width: u32, height: u32, options: AcOptions) -> Result<AcRenderer, String> {
-        let (video, cube_size, cube_faces, notes) = video_settings(width, height, options.video_exact);
+        let (video, cube_size, mut cube_faces, cube_far, notes) = video_settings(width, height, options.video_exact);
+        if let Some(faces) = options.cube_faces {
+            cube_faces = faces.clamp(0, 6);
+        }
         let mut graphics = Graphics::new(video, DeviceOptions { warp: options.warp, window: None, log: options.gpu_log.is_some() }, &options.game)?;
         // SAFETY: COM calls on the live device.
         let adapter = unsafe {
@@ -375,6 +378,9 @@ impl AcRenderer {
         camera.base.camera.near_plane = 0.05;
         camera.base.camera.far_plane = 40000.0;
         camera.cube_map_renderer.faces_per_frame = cube_faces;
+        if cube_far != 0.0 {
+            camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), cube_far);
+        }
         camera.set_cubemap_size(&graphics, cube_size);
         let hud = HudPass::new(&graphics.kgl.device)?;
         Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
