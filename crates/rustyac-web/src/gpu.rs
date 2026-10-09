@@ -129,6 +129,7 @@ pub struct Gpu {
     textures: Vec<wgpu::TextureView>,
     meshes: Vec<GpuMesh>,
     cube: usize,
+    cube_vertices: u32,
     track: Option<Scene>,
     car: Option<CarModel>,
     scratch: Vec<u8>,
@@ -329,7 +330,8 @@ impl Gpu {
             device,
             queue,
             config,
-            backend: format!("{} ({})", if backends == wgpu::Backends::BROWSER_WEBGPU { "WebGPU" } else { "WebGL2" }, info.name),
+            // (a browser's WebGPU does not say which card it is)
+            backend: format!("{}{}", if backends == wgpu::Backends::BROWSER_WEBGPU { "WebGPU" } else { "WebGL2" }, if info.name.is_empty() { String::new() } else { format!(" ({})", info.name) }),
             compressed_textures,
             samples,
             max_texture_size: limits.max_texture_dimension_2d,
@@ -350,6 +352,7 @@ impl Gpu {
             textures: Vec::new(),
             meshes: Vec::new(),
             cube: 0,
+            cube_vertices: 0,
             track: None,
             car: None,
             scratch: Vec::new(),
@@ -364,6 +367,7 @@ impl Gpu {
             indices: gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &[0; 4], usage: wgpu::BufferUsages::INDEX }),
         });
         gpu.cube = gpu.meshes.len() - 1;
+        gpu.cube_vertices = cube.len() as u32;
         Ok(gpu)
     }
 
@@ -646,7 +650,7 @@ impl Gpu {
         }
         let shadow = mul(&scale_then(x_max * 2.0, 0.002, z_max - z_min, &translation(0.0, 0.0, (z_max + z_min) * 0.5)), &flat);
         let offset = self.push(&DrawConstants { world: shadow, color: [0.0, 0.0, 0.0, 0.42], ..base });
-        self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: 36, offset });
+        self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
         if self.car.is_some() {
             self.model_calls(true, &base, &planes, eye3, &mut stats);
         } else {
@@ -654,7 +658,7 @@ impl Gpu {
             for b in &shape.boxes {
                 let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), body);
                 let offset = self.push(&DrawConstants { world, color: [b.color[0], b.color[1], b.color[2], 1.0], ..base });
-                self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: 36, offset });
+                self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
             }
         }
 

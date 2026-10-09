@@ -1,0 +1,11 @@
+# The preview pack of the browser build: which cars and tracks `tools/web_pack` copies out of
+# your own Assetto Corsa install into dist-web/preview/ (a folder git ignores). At most two
+# cars and two tracks. The pack is your copy of Kunos' files, for a page you host yourself:
+# it is never part of the repository or of a release.
+#
+# A car is its folder name under content/cars; a track its folder name under content/tracks,
+# with "/<layout>" behind it for one layout of a track that has several
+# ("ks_nurburgring/layout_gp_a").
+
+cars = ["ks_ferrari_f2004", "bmw_z4_gt3"]
+tracks = ["spa", "ks_laguna_seca"]

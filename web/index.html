@@ -1,0 +1,119 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rustyAC browser preview</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div id="hud" hidden>
+  <div id="hud-main">
+    <span id="hud-gear">N</span>
+    <span id="hud-speed">0</span><span class="unit">km/h</span>
+    <div id="hud-rpm"><div id="hud-rpm-bar"></div></div>
+    <span id="hud-rpm-text">0 rpm</span>
+  </div>
+  <div id="hud-lap">
+    <div>lap <b id="hud-lap-time">-:--.---</b></div>
+    <div>last <span id="hud-last">-:--.---</span></div>
+    <div>best <span id="hud-best">-:--.---</span></div>
+  </div>
+  <div id="hud-info"></div>
+  <div id="hud-perf"></div>
+</div>
+
+<div id="keys" hidden></div>
+
+<main id="menu">
+  <h1>rustyAC <small>browser preview</small></h1>
+  <p class="lead">
+    Assetto Corsa's physics, rewritten in Rust and compiled to WebAssembly: the same numbers,
+    bit for bit, as the desktop build. A small picture, keyboard and gamepad. No sound, and not
+    AC's own look: this is a preview.
+  </p>
+
+  <section>
+    <h2>1. Content</h2>
+    <p id="pack-line" hidden></p>
+    <p>
+      <button id="open-folder">Open your Assetto Corsa folder</button>
+      <button id="reopen-folder" hidden></button>
+      <input id="folder-input" type="file" webkitdirectory hidden>
+    </p>
+    <p class="hint">
+      The folder is the one with <code>content</code> and <code>system</code> in it
+      (<code>...\steamapps\common\assettocorsa</code>). Its files are read on this computer by
+      this page only; nothing is uploaded and nothing is changed.
+    </p>
+    <p id="content-line" class="status"></p>
+  </section>
+
+  <section>
+    <h2>2. Car and track</h2>
+    <div class="row">
+      <label>Car <select id="car" disabled></select></label>
+      <label>Track <select id="track" disabled></select></label>
+    </div>
+    <div class="row">
+      <label>Start <select id="spawn">
+        <option value="pit">in the pits</option>
+        <option value="hotlap">hot-lap start</option>
+        <option value="start">on the grid</option>
+      </select></label>
+      <label><input id="auto-shifter" type="checkbox" checked> automatic gearbox</label>
+      <label>Picture <select id="backend">
+        <option value="auto">WebGPU, else WebGL2</option>
+        <option value="webgl">WebGL2</option>
+      </select></label>
+    </div>
+    <p id="refusal" class="refusal" hidden></p>
+    <details id="refused-list" hidden><summary></summary><ul></ul></details>
+  </section>
+
+  <section>
+    <h2>3. Drive</h2>
+    <p><button id="drive" disabled>Drive</button></p>
+    <div id="progress" hidden><div id="progress-bar"></div></div>
+    <p id="status" class="status"></p>
+    <pre id="notes" hidden></pre>
+  </section>
+
+  <section class="small">
+    <h2>Keys</h2>
+    <table>
+      <tr><td>throttle, brake</td><td>Up / W, Down / S</td><td>RT, LT</td></tr>
+      <tr><td>steer</td><td>Left / A, Right / D</td><td>left stick</td></tr>
+      <tr><td>gear up, down</td><td>Space / E, Left Ctrl / Q</td><td>Y, X</td></tr>
+      <tr><td>clutch, handbrake</td><td>Left Shift, B (F9)</td><td>A, RB</td></tr>
+      <tr><td>DRS, KERS / ERS</td><td>F, K</td><td>LB, B</td></tr>
+      <tr><td>back to the pits</td><td>R</td><td>Back</td></tr>
+      <tr><td>back onto the track</td><td>Shift+R</td><td>Back, held</td></tr>
+      <tr><td>next view</td><td>F1 or C</td><td>right stick press</td></tr>
+      <tr><td>new car, automatic gearbox</td><td>N, G</td><td></td></tr>
+      <tr><td>pause, menu</td><td>P, Esc</td><td>Start</td></tr>
+    </table>
+    <p class="hint">
+      These are Assetto Corsa's default keys plus WASD. AC keeps your own bindings in
+      <code>Documents\Assetto Corsa\cfg\controls.ini</code>, which is not inside the game's folder,
+      so the page cannot read it: the defaults stand.
+    </p>
+  </section>
+
+  <footer>
+    <p id="version"></p>
+    <p>
+      rustyAC is free software (GPL-3.0-or-later):
+      <a href="https://github.com/thesupersupersigma/rustyAC">source</a>,
+      <a href="LICENSING.md">licences</a>. Assetto Corsa and its content belong to Kunos
+      Simulazioni; this page ships none of it.
+    </p>
+  </footer>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

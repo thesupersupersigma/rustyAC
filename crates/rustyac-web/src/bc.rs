@@ -5,8 +5,8 @@
 //! AC's textures are mostly block compressed (DXT1 / DXT3 / DXT5 = BC1 / BC2 / BC3). WebGPU
 //! and WebGL2 only take those where the device offers the feature (desktop GPUs do, many
 //! phones and ARM Chromebooks do not). [`for_card`] unpacks them to RGBA for such a device,
-//! builds the mip chain of an image that came with a single level, and sets the unused
-//! alpha byte of the "X8" layout.
+//! builds the mip chain of an image that came with a single level, and turns the blue-first
+//! pixel layouts into red-first ones (the only uncompressed layout WebGL2 has).
 
 use rustyac_game::render::dds::{Image, Level, B8G8R8A8_UNORM, B8G8R8X8_UNORM, BC1_UNORM, BC2_UNORM, BC3_UNORM, R8G8B8A8_UNORM};
 
@@ -165,11 +165,17 @@ pub fn for_card(mut image: Image, unpack: bool) -> Result<Image, String> {
             Ok(image)
         }
         B8G8R8X8_UNORM | B8G8R8A8_UNORM | R8G8B8A8_UNORM => {
-            if image.format == B8G8R8X8_UNORM {
+            // blue-first pixels become red-first: WebGL2 has no BGRA texture at all (a mask
+            // stored that way came out black there), and "X8" means "no alpha"
+            if image.format != R8G8B8A8_UNORM {
+                let opaque = image.format == B8G8R8X8_UNORM;
                 for pixel in image.data.chunks_exact_mut(4) {
-                    pixel[3] = 255;
+                    pixel.swap(0, 2);
+                    if opaque {
+                        pixel[3] = 255;
+                    }
                 }
-                image.format = B8G8R8A8_UNORM;
+                image.format = R8G8B8A8_UNORM;
             }
             if image.wants_generated_mips() {
                 let format = image.format;
@@ -207,6 +213,15 @@ mod tests {
         let image = Image { format: BC3_UNORM, data: block.to_vec(), levels: vec![Level { width: 4, height: 4, pitch: 16, bytes: 0..16 }] };
         let out = for_card(image, true).unwrap();
         assert_eq!(&out.data[0..8], &[255, 255, 255, 255, 255, 255, 255, 0]);
+    }
+
+    #[test]
+    fn blue_first_pixels_are_turned_round() {
+        let image = Image { format: B8G8R8X8_UNORM, data: vec![10, 20, 30, 0, 1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0], levels: vec![Level { width: 2, height: 2, pitch: 8, bytes: 0..16 }] };
+        let out = for_card(image, false).unwrap();
+        assert_eq!((out.format, &out.data[0..8]), (R8G8B8A8_UNORM, &[30, 20, 10, 255, 3, 2, 1, 255][..]));
+        let image = Image { format: B8G8R8A8_UNORM, data: vec![10, 20, 30, 40], levels: vec![Level { width: 1, height: 1, pitch: 4, bytes: 0..4 }] };
+        assert_eq!(for_card(image, false).unwrap().data, vec![30, 20, 10, 40]);
     }
 
     #[test]

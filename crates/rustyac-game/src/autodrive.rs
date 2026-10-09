@@ -21,6 +21,25 @@ const PACE: f32 = 0.80;
 /// It never plans for more than this, m/s.
 const TOP_SPEED: f32 = 95.0;
 
+// The follower's three trigonometric calls. On Windows they are Rust's own, as they always
+// were (a recorded `--autodrive` run is not to change); on another target (wasm) Rust's come
+// from another library, so the C runtime's algorithms of `rustyac-math` are used, which give
+// the same bits as Windows' wherever the two have been compared.
+#[cfg(windows)]
+fn atan2(y: f32, x: f32) -> f32 {
+    y.atan2(x)
+}
+#[cfg(windows)]
+fn sin(x: f32) -> f32 {
+    x.sin()
+}
+#[cfg(windows)]
+fn atan(x: f32) -> f32 {
+    x.atan()
+}
+#[cfg(not(windows))]
+use rustyac_math::{atan2f as atan2, atanf as atan, sinf as sin};
+
 /// The line follower.
 #[derive(Default)]
 pub struct AutoDriver {
@@ -108,9 +127,9 @@ impl DriverSource for AutoDriver {
         let d = [p[0] - car.position[0], p[1] - car.position[1], p[2] - car.position[2]];
         let to_left = d[0] * car.left[0] + d[1] * car.left[1] + d[2] * car.left[2];
         let to_front = d[0] * car.forward[0] + d[1] * car.forward[1] + d[2] * car.forward[2];
-        let alpha = to_left.atan2(to_front.max(0.5));
+        let alpha = atan2(to_left, to_front.max(0.5));
         let distance = (to_left * to_left + to_front * to_front).sqrt().max(1.0);
-        let wheel_angle = (2.0 * car.wheelbase * alpha.sin() / distance).atan();
+        let wheel_angle = atan(2.0 * car.wheelbase * sin(alpha) / distance);
         // positive turns right
         controls.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
 

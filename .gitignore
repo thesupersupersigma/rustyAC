@@ -21,3 +21,6 @@ tools/rea/
 
 # Notes
 brainstorm.md
+
+# The browser build: the site and the preview pack (the pack is Assetto Corsa content)
+dist-web/

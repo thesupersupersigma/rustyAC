@@ -88,14 +88,16 @@ pub fn fs_put(path: &str, bytes: &[u8]) {
 pub struct FileWriter {
     bytes: Arc<[u8]>,
     filled: usize,
+    hash: Option<crate::pack::Sha256>,
 }
 
 #[wasm_bindgen]
 impl FileWriter {
-    /// Room for a file of `size` bytes.
+    /// Room for a file of `size` bytes. `hashed`: work out the SHA-256 as the pieces arrive
+    /// (a pack's manifest says what it has to be).
     #[wasm_bindgen(constructor)]
-    pub fn new(size: f64) -> FileWriter {
-        FileWriter { bytes: std::iter::repeat_n(0u8, size as usize).collect(), filled: 0 }
+    pub fn new(size: f64, hashed: bool) -> FileWriter {
+        FileWriter { bytes: std::iter::repeat_n(0u8, size as usize).collect(), filled: 0, hash: hashed.then(crate::pack::Sha256::new) }
     }
 
     /// The next piece. Returns the bytes received so far.
@@ -107,16 +109,24 @@ impl FileWriter {
         }
         bytes[self.filled..end].copy_from_slice(chunk);
         self.filled = end;
+        if let Some(hash) = &mut self.hash {
+            hash.update(chunk);
+        }
         Ok(end as f64)
     }
 
-    /// Mounts the file. An error when pieces are missing.
-    pub fn commit(self, path: &str) -> Result<(), JsValue> {
+    /// Mounts the file and returns its SHA-256 (empty when it was not asked for). An error
+    /// when pieces are missing, or when `sha256` is given and is not the file's.
+    pub fn commit(self, path: &str, sha256: &str) -> Result<String, JsValue> {
         if self.filled != self.bytes.len() {
             return Err(JsValue::from_str(&format!("{path}: {} of {} bytes arrived", self.filled, self.bytes.len())));
         }
+        let hash = self.hash.map(crate::pack::Sha256::finish).unwrap_or_default();
+        if !sha256.is_empty() && !hash.is_empty() && !hash.eq_ignore_ascii_case(sha256) {
+            return Err(JsValue::from_str(&format!("{path}: the file is not the one the pack's manifest lists (SHA-256 {hash}, expected {sha256})")));
+        }
         files().insert(&mounted(path), self.bytes);
-        Ok(())
+        Ok(hash)
     }
 }
 
@@ -206,6 +216,7 @@ pub struct Game {
     frames: u32,
     steps: u32,
     work_ms: f64,
+    dropped_seconds: f64,
     drawn: crate::gpu::DrawStats,
 }
 
@@ -223,7 +234,8 @@ impl Game {
         let mut gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
         let mut notes = vec![format!("picture: {}{}", gpu.backend, if gpu.compressed_textures { "" } else { ", no compressed textures (they are unpacked, at half the size)" })];
         let session = Session::new(&car, &track, &layout, auto_shifter, &spawn)?;
-        notes.push(session.sim.track_summary.clone());
+        // (without the loader's timing line: a browser's wasm has no clock of its own)
+        notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &car, &track, &layout);
         let options = gpu.model_options(texture_size);
         // a model that cannot be drawn is a line for the page, not the end of the drive
@@ -242,7 +254,7 @@ impl Game {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
         }
         let view = session.view();
-        Ok(Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, drawn: Default::default() })
+        Ok(Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default() })
     }
 
     /// What loading found, one line each.
@@ -261,6 +273,7 @@ impl Game {
         self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera)?;
         self.frames += 1;
         self.steps += stats.steps;
+        self.dropped_seconds += stats.dropped_seconds;
         self.work_ms += now_ms() - started;
         Ok(())
     }
@@ -372,7 +385,8 @@ impl Game {
     }
 
     /// The counters since the last call, as JSON: frames, physics steps, the milliseconds a
-    /// frame's physics and drawing took, what the last frame drew.
+    /// frame's physics and drawing took, the seconds slow frames dropped, what the last frame
+    /// drew.
     pub fn take_stats(&mut self) -> String {
         let out = format!(
             "{{\"frames\": {}, \"steps\": {}, \"work_ms_per_frame\": {:.3}, \"meshes\": {}, \"triangles\": {}, \"total_steps\": {}, \"dropped_seconds\": {:.3}, \"file_megabytes\": {:.1}, \"backend\": {}}}",
@@ -382,13 +396,14 @@ impl Game {
             self.drawn.meshes,
             self.drawn.triangles,
             self.session.total_steps,
-            self.session.total_dropped_seconds,
+            self.dropped_seconds,
             fs_megabytes(),
             json_text(&self.gpu.backend)
         );
         self.frames = 0;
         self.steps = 0;
         self.work_ms = 0.0;
+        self.dropped_seconds = 0.0;
         out
     }
 
