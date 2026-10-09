@@ -12,9 +12,11 @@ the end of this file). State after the last commit:
 - done too: step 4 (key lists in `docs/web.md`, `packaging/HOW_TO_RUN.txt`, the console's bindings table),
   step 5 (without MSVCR120.dll the desktop uses `rustyac_math::pure`; it prints `maths: ...` at the start;
   `RUSTYAC_MATH=no-dll` tries that fallback on a PC that has the DLL).
-- to do, in this order: step 6 (`web/Dockerfile`, `web/nginx.conf`,
-  `.dockerignore`, "Deploy with Coolify" in `docs/web.md`), step 7 (14 replays against
-  `re/scratch/task20w2/bin/rustyac_v0201.exe`, golden tests, the browser run), the report, then v0.20.2.
+- done too: step 6 (`web/Dockerfile`, `web/nginx.conf`, `.dockerignore`, "Deploy with Coolify" in
+  `docs/web.md`). There is no Docker on this PC: the image was **not built**; `web/nginx.conf` was run with a
+  stand-alone nginx 1.28.0 from `re/scratch/task20w2/docker/` and every rule in it was fetched.
+- to do, in this order: step 7 (14 replays against `re/scratch/task20w2/bin/rustyac_v0201.exe` with
+  `python re/scratch/task20w2/desktop_same.py`, golden tests, the browser run), the report, then v0.20.2.
 - scratch: `re/scratch/task20w2/` (the v0.20.1 exe in `bin/`, patch scripts, three reader maps `recon_*.md`,
   browser results `browser_*.json`).
 

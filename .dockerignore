@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# What `docker build -f web/Dockerfile .` does not send to the builder: everything the site's
+# build does not read. Above all the folders that hold Assetto Corsa's files or are large.
+
+# build output, and the built site and the preview pack (the pack is Kunos' content: it is
+# mounted when the container runs, never built in)
+target/
+**/target/
+dist-web/
+
+# reverse-engineering scratch, recordings, extracted game data, local notes
+re/
+oracle/
+cardata/
+ignored/
+ghidra/
+prompts/
+things/
+f2004ButBetter/
+brainstorm.md
+*.csv
+
+# tools' downloaded or local parts
+tools/_pydeps/
+tools/kawaiidra-mcp/
+tools/rea/
+
+**/__pycache__/
+.git/
+.github/
+.claude/
