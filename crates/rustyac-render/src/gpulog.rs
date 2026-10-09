@@ -44,6 +44,13 @@ static REAL_CTX: AtomicUsize = AtomicUsize::new(0);
 static PROXY_CTX: AtomicUsize = AtomicUsize::new(0);
 static ORIG_DEV: [AtomicUsize; DEV_SLOTS] = [const { AtomicUsize::new(0) }; DEV_SLOTS];
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+static CAPTURE_FROM_INSTALL: AtomicBool = AtomicBool::new(false);
+
+/// Start writing calls down as soon as the log is installed (the set-up of the renderer: its
+/// state objects, constant buffers, render targets), not only from [`begin_capture`] on.
+pub fn capture_from_install(on: bool) {
+    CAPTURE_FROM_INSTALL.store(on, Ordering::SeqCst);
+}
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 thread_local! {
@@ -652,6 +659,60 @@ unsafe extern "system" fn dev_create_pixel_shader(this: P, code: *const c_void, 
     result
 }
 
+/// `Create…State`: the description exactly as the renderer passed it (what `GetDesc` gives back
+/// later is Direct3D's tidied-up copy, and equal descriptions share one object).
+macro_rules! create_state_hook {
+    ($name:ident, $slot:expr, $label:expr, $size:expr) => {
+        unsafe extern "system" fn $name(this: P, desc: *const u8, out: *mut P) -> i32 {
+            let orig: unsafe extern "system" fn(P, *const u8, *mut P) -> i32 = orig_dev($slot);
+            if !desc.is_null() {
+                if let Some(mut state) = enter() {
+                    let bytes = std::slice::from_raw_parts(desc, $size);
+                    state.line(format_args!("{} {}", $label, hex(bytes)));
+                }
+            }
+            orig(this, desc, out)
+        }
+    };
+}
+
+create_state_hook!(dev_create_blend_state, 20, "dev.CreateBlendState", 0x108);
+create_state_hook!(dev_create_depth_stencil_state, 21, "dev.CreateDepthStencilState", 0x34);
+create_state_hook!(dev_create_rasterizer_state, 22, "dev.CreateRasterizerState", 0x28);
+create_state_hook!(dev_create_sampler_state, 23, "dev.CreateSamplerState", 0x34);
+
+unsafe extern "system" fn dev_create_texture_2d(this: P, desc: *const D3D11_TEXTURE2D_DESC, init: *const D3D11_SUBRESOURCE_DATA, out: *mut P) -> i32 {
+    let orig: unsafe extern "system" fn(P, *const D3D11_TEXTURE2D_DESC, *const D3D11_SUBRESOURCE_DATA, *mut P) -> i32 = orig_dev(5);
+    if !desc.is_null() {
+        if let Some(mut state) = enter() {
+            let bytes = std::slice::from_raw_parts(desc as *const u8, std::mem::size_of::<D3D11_TEXTURE2D_DESC>());
+            state.line(format_args!("dev.CreateTexture2D {} {}", hex(bytes), if init.is_null() { "empty" } else { "filled" }));
+        }
+    }
+    orig(this, desc, init, out)
+}
+
+/// A view: its description as passed (or `null`) and what it is a view of.
+macro_rules! create_view_hook {
+    ($name:ident, $slot:expr, $label:expr, $size:expr) => {
+        unsafe extern "system" fn $name(this: P, resource: P, desc: *const u8, out: *mut P) -> i32 {
+            let orig: unsafe extern "system" fn(P, P, *const u8, *mut P) -> i32 = orig_dev($slot);
+            if let Some(mut state) = enter() {
+                if state.capturing {
+                    let text = if desc.is_null() { "null".to_string() } else { hex(std::slice::from_raw_parts(desc, $size)) };
+                    let name = state.resource_name(resource);
+                    state.line(format_args!("{} {text} {name}", $label));
+                }
+            }
+            orig(this, resource, desc, out)
+        }
+    };
+}
+
+create_view_hook!(dev_create_shader_resource_view, 7, "dev.CreateShaderResourceView", 0x18);
+create_view_hook!(dev_create_render_target_view, 9, "dev.CreateRenderTargetView", 0x14);
+create_view_hook!(dev_create_depth_stencil_view, 10, "dev.CreateDepthStencilView", 0x14);
+
 // --- hooks: the context ------------------------------------------------------------------------
 
 macro_rules! set_buffers_hook {
@@ -1196,6 +1257,14 @@ pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<*mut 
     ];
     let dev_hooks: &[(usize, usize)] = &[
         (3, dev_create_buffer as *const () as usize),
+        (5, dev_create_texture_2d as *const () as usize),
+        (7, dev_create_shader_resource_view as *const () as usize),
+        (9, dev_create_render_target_view as *const () as usize),
+        (10, dev_create_depth_stencil_view as *const () as usize),
+        (20, dev_create_blend_state as *const () as usize),
+        (21, dev_create_depth_stencil_state as *const () as usize),
+        (22, dev_create_rasterizer_state as *const () as usize),
+        (23, dev_create_sampler_state as *const () as usize),
         (11, dev_create_input_layout as *const () as usize),
         (12, dev_create_vertex_shader as *const () as usize),
         (15, dev_create_pixel_shader as *const () as usize),
@@ -1203,7 +1272,7 @@ pub unsafe fn install(device: *mut c_void, context: *mut c_void) -> Result<*mut 
 
     *STATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(State {
         out: Vec::new(),
-        capturing: false,
+        capturing: CAPTURE_FROM_INSTALL.load(Ordering::SeqCst),
         buffers: HashMap::new(),
         mapped: HashMap::new(),
         device: device as usize,

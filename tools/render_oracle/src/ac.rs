@@ -137,7 +137,7 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
 }
 
 /// A window that is never shown: the swap chain needs one.
-unsafe fn hidden_window(width: u32, height: u32) -> Result<HWND, String> {
+pub unsafe fn hidden_window(width: u32, height: u32) -> Result<HWND, String> {
     let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
     let class = WNDCLASSW { lpfnWndProc: Some(window_proc), hInstance: instance.into(), lpszClassName: w!("rustyac_render_oracle"), ..Default::default() };
     RegisterClassW(&class);
@@ -199,7 +199,10 @@ impl Game {
 
             let graphics = acs.alloc(SIZE_GRAPHICS_MANAGER);
             let ctor: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GRAPHICS_MANAGER_CTOR));
+            rustyac_render::gpulog::capture_from_install(true);
             ctor(graphics, settings);
+            let init = rustyac_render::gpulog::end_capture();
+            std::fs::write(crate::repo_root().join("re/scratch/task20/init_ac.gpulog"), &init.text).map_err(|e| e.to_string())?;
             Ok(Game {
                 acs,
                 graphics,

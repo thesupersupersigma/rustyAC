@@ -73,6 +73,17 @@ fn run() -> Result<(), String> {
             let out = repo_root().join("re/scratch/task20/probe");
             unsafe { game.experiment(&model, &out) }
         }
+        "port-probe" => {
+            use rustyac_render::graphics::{Graphics, VideoSettings};
+            use rustyac_render::kgl::DeviceOptions;
+            let window = unsafe { ac::hidden_window(args.width, args.height)? };
+            let video = VideoSettings { aa_samples: 1, width: args.width as i32, height: args.height as i32, is_fullscreen: false, v_sync: false, anisotropic: 8, aa_quality: 0, shadow_map_size: 2048, fps_cap_ms: 0.0, world_detail: 5, pp_hdr_enabled: false, triple_buffer: false };
+            rustyac_render::gpulog::capture_from_install(true);
+            let _graphics = Graphics::new(video, DeviceOptions { warp: true, window: Some(window), log: true }, &args.game)?;
+            let init = rustyac_render::gpulog::end_capture();
+            std::fs::write(repo_root().join("re/scratch/task20/init_port.gpulog"), &init.text).map_err(|e| e.to_string())?;
+            Ok(())
+        }
         _ => Err(USAGE.into()),
     }
 }

@@ -544,6 +544,13 @@ impl Kn5Reader {
             .collect())
     }
 
+    /// The whole vertex block of a mesh as it is in the file: `vertex_count` records of
+    /// `vertex_stride` bytes (position, normal, texture coordinate, tangent; a skinned mesh
+    /// adds four weights and four bone indices).
+    pub fn vertex_bytes(&mut self, mesh: &MeshInfo) -> io::Result<Vec<u8>> {
+        Ok(self.block(mesh.vertex_offset, mesh.vertex_count as usize * mesh.vertex_stride as usize)?.to_vec())
+    }
+
     pub fn indices(&mut self, mesh: &MeshInfo) -> io::Result<Vec<u16>> {
         let block = self.block(mesh.index_offset, mesh.index_count as usize * 2)?;
         Ok(block.chunks_exact(2).map(|i| u16::from_le_bytes([i[0], i[1]])).collect())
