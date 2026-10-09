@@ -12,14 +12,18 @@
 //! functions are called directly: "same bits as AC" then holds by construction instead of
 //! by observation.
 //!
-//! If `MSVCR120.dll` is not installed (or on another OS) the std functions are used instead
-//! and [`backend`] reports [`Backend::Std`]. Setting the environment variable
-//! `RUSTYAC_MATH=std` forces that fallback, to compare the two.
-//!
-//! A third implementation, [`pure`], is the DLL's own algorithms ported to plain Rust
+//! A second implementation, [`pure`], is the DLL's own algorithms ported to plain Rust
 //! (bit-identical on all 2^32 inputs of every one-argument function, see `docs/port/web.md`).
-//! `RUSTYAC_MATH=pure` selects it, and a wasm build always uses it, because a browser cannot
-//! load a DLL. The desktop default stays the DLL itself.
+//! It is what runs where the DLL cannot be had: **if `MSVCR120.dll` is not installed (or on
+//! another OS) [`pure`] is used** and [`backend`] reports [`Backend::Pure`]; a wasm build
+//! always uses it, because a browser cannot load a DLL. `RUSTYAC_MATH=pure` selects it by
+//! hand. The desktop default stays the DLL itself.
+//!
+//! `RUSTYAC_MATH=no-dll` behaves as if the DLL were not installed (to try that fallback on a
+//! machine that has it).
+//!
+//! The third, Rust's std functions ([`Backend::Std`]), is only used when asked for with
+//! `RUSTYAC_MATH=std`, to compare. (It was the fallback up to v0.20.1.)
 //!
 //! `sqrtf` is not routed through the DLL: an IEEE square root has exactly one correct
 //! result and both sides return it (checked by a test below).
@@ -34,11 +38,25 @@ mod pure_tables;
 pub enum Backend {
     /// `MSVCR120.dll`, the runtime `acs.exe` itself imports. Bit-exact with the game.
     Msvcr120,
-    /// Rust std (UCRT on Windows). No difference from MSVCR120 has been observed, but it is
-    /// not the code the game runs.
+    /// Rust std (UCRT on Windows). It is not the code the game runs and differs from it on a
+    /// few inputs (`docs/port/web.md`, section 2.3). Only with `RUSTYAC_MATH=std`.
     Std,
-    /// [`pure`]: MSVCR120's algorithms in plain Rust. What a wasm build runs.
+    /// [`pure`]: MSVCR120's algorithms in plain Rust. What a wasm build runs, and what the
+    /// desktop runs when the DLL is missing.
     Pure,
+}
+
+/// How the implementation in use was arrived at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    /// `MSVCR120.dll` was found and is used (the default).
+    Dll,
+    /// `MSVCR120.dll` was not found (or this is not Windows): [`pure`] is used instead.
+    DllMissing,
+    /// A wasm build: always [`pure`].
+    Wasm,
+    /// `RUSTYAC_MATH=pure` or `RUSTYAC_MATH=std` asked for it.
+    Forced,
 }
 
 type F1 = unsafe extern "C" fn(f32) -> f32;
@@ -205,31 +223,57 @@ mod msvcr120 {
     }
 }
 
-fn crt() -> &'static Crt {
-    static CRT: OnceLock<Crt> = OnceLock::new();
+fn chosen() -> &'static (Crt, Choice) {
+    static CRT: OnceLock<(Crt, Choice)> = OnceLock::new();
     CRT.get_or_init(|| {
         // no DLL and no environment in a browser
         if cfg!(target_family = "wasm") {
-            return PURE;
+            return (PURE, Choice::Wasm);
         }
         let choice = std::env::var("RUSTYAC_MATH").unwrap_or_default();
         if choice.eq_ignore_ascii_case("std") {
-            return STD;
+            return (STD, Choice::Forced);
         }
         if choice.eq_ignore_ascii_case("pure") {
-            return PURE;
+            return (PURE, Choice::Forced);
         }
+        // (`RUSTYAC_MATH=no-dll`: as if the DLL were not installed, to try the fallback)
         #[cfg(windows)]
-        if let Some(crt) = msvcr120::load() {
-            return crt;
+        if !choice.eq_ignore_ascii_case("no-dll") {
+            if let Some(crt) = msvcr120::load() {
+                return (crt, Choice::Dll);
+            }
         }
-        STD
+        // the DLL's own algorithms, not another library's
+        (PURE, Choice::DllMissing)
     })
+}
+
+fn crt() -> &'static Crt {
+    &chosen().0
 }
 
 /// The implementation in use for this process.
 pub fn backend() -> Backend {
     crt().backend
+}
+
+/// How it was chosen.
+pub fn choice() -> Choice {
+    chosen().1
+}
+
+/// One line for a console: which maths is used and why.
+pub fn describe() -> String {
+    match (backend(), choice()) {
+        (Backend::Msvcr120, _) => "maths: MSVCR120.dll, the runtime Assetto Corsa itself uses".to_string(),
+        (Backend::Pure, Choice::DllMissing) => {
+            "maths: MSVCR120.dll (the Visual C++ 2013 runtime) was not found; its functions rewritten in Rust are used instead (rustyac_math::pure: the results the DLL gives on any processor since about 2013, bit for bit)".to_string()
+        }
+        (Backend::Pure, Choice::Wasm) => "maths: MSVCR120.dll's functions rewritten in Rust (rustyac_math::pure)".to_string(),
+        (Backend::Pure, _) => "maths: MSVCR120.dll's functions rewritten in Rust (rustyac_math::pure), because RUSTYAC_MATH=pure".to_string(),
+        (Backend::Std, _) => "maths: Rust's std, because RUSTYAC_MATH=std (not the game's maths: results can differ in the last digits)".to_string(),
+    }
 }
 
 /// `sinf` (MSVCR120).

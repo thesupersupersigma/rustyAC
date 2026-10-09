@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `expf` of the game's C runtime (MSVCR120.dll), which `rustyac-math` does not carry: the
-//! keyboard steering uses it. Taken from the DLL when the machine has it (it does wherever
-//! AC is installed); otherwise Rust's `exp`, which can differ in the last bit.
+//! `expf` of the game's C runtime (MSVCR120.dll) for the keyboard steering. Taken from the
+//! DLL when `rustyac-math` uses the DLL (it does wherever AC is installed); otherwise it is
+//! `rustyac-math`'s own: the DLL's algorithm in plain Rust when the DLL is missing or with
+//! `RUSTYAC_MATH=pure`, Rust's `exp` only with `RUSTYAC_MATH=std`.
 
 #[cfg(windows)]
 use std::ffi::c_void;
@@ -29,7 +30,8 @@ fn runtime() -> Option<F1> {
 fn runtime() -> Option<F1> {
     static EXPF: OnceLock<Option<F1>> = OnceLock::new();
     *EXPF.get_or_init(|| {
-        if std::env::var("RUSTYAC_MATH").is_ok_and(|v| v.eq_ignore_ascii_case("std")) {
+        // only where the maths crate itself uses the DLL (not with RUSTYAC_MATH=std or =pure)
+        if rustyac_math::backend() != rustyac_math::Backend::Msvcr120 {
             return None;
         }
         // SAFETY: plain Win32 calls with terminated names; `expf` is the documented C function.
@@ -46,17 +48,14 @@ fn runtime() -> Option<F1> {
 
 /// Is `expf` the game's own (the DLL's, or its algorithm in plain Rust)?
 pub fn is_msvcr120() -> bool {
-    runtime().is_some() || rustyac_math::backend() == rustyac_math::Backend::Pure && cfg!(not(windows))
+    runtime().is_some() || rustyac_math::backend() == rustyac_math::Backend::Pure
 }
 
-/// `expf` (MSVCR120 when available).
+/// `expf` (the DLL's, or `rustyac-math`'s).
 pub fn expf(x: f32) -> f32 {
     match runtime() {
         // SAFETY: a C function of one float.
         Some(f) => unsafe { f(x) },
-        #[cfg(windows)]
-        None => x.exp(),
-        #[cfg(not(windows))]
         None => rustyac_math::expf(x),
     }
 }

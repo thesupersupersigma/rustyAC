@@ -132,7 +132,7 @@ fn stats(recording: &Recording) -> String {
 fn run() -> Result<bool, String> {
     let args = parse_args()?;
     if math::backend() == Backend::Std {
-        eprintln!("note: MSVCR120.dll was not found; using Rust std maths and number parsing");
+        eprintln!("note: RUSTYAC_MATH=std: using Rust std maths and number parsing");
     }
     println!("| Scenario | Axle | Steps | Bit-exact steps | % | Same with NaN = NaN | % | First divergence |");
     println!("|---|---|---|---|---|---|---|---|");

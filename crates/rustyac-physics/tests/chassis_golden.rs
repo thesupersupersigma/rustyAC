@@ -69,7 +69,7 @@ fn car_data(car: &str) -> Option<PathBuf> {
 fn backend() -> &'static str {
     match math::backend() {
         Backend::Msvcr120 => "MSVCR120.dll",
-        Backend::Std => "Rust std; MSVCR120.dll (Visual C++ 2013 runtime) was not found",
+        Backend::Std => "Rust std, asked for with RUSTYAC_MATH=std",
         Backend::Pure => "MSVCR120's algorithms in pure Rust (rustyac_math::pure)",
     }
 }

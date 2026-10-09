@@ -872,6 +872,13 @@ fn run(options: &Options) -> Result<(), String> {
         print!("{}{}", list_devices(&bindings, &wheel), bindings.describe());
         return Ok(());
     }
+    // which maths this run computes with (on the error stream where the standard output may
+    // be carrying a state dump)
+    if options.dump_states.is_some() {
+        eprintln!("{}", rustyac_math::describe());
+    } else {
+        println!("{}", rustyac_math::describe());
+    }
     if let Some(path) = &options.screenshot {
         return run_screenshot(options, path);
     }

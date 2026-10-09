@@ -430,8 +430,9 @@ mod tests {
         CarControlsInput { steer_lock: 180.0, speed }
     }
 
-    /// `expf` here is the C runtime's when MSVCR120.dll is on the machine, else Rust's: the
-    /// numbers that go through it are held to the last bit only with the game's own.
+    /// `expf` here is the C runtime's (the DLL's, or its algorithm in Rust when the DLL is
+    /// missing); only with `RUSTYAC_MATH=std` is it Rust's, and then the numbers that go
+    /// through it are not held to the last bit.
     fn same(got: f32, expected: u32) {
         if crate::crt::is_msvcr120() {
             assert_eq!(bits(got), expected, "{got}");
