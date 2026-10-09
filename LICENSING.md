@@ -10,8 +10,8 @@ Copyright (c) 2026 thesupersupersigma.
 
 | Part | Paths | License |
 |---|---|---|
-| The game, the car physics and the sound | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
-| Tools built on the car physics or the sound | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/` | `GPL-3.0-or-later` |
+| The game, the car physics, the sound and the renderer | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
+| Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
 | Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/` | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |

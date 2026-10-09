@@ -2,7 +2,9 @@ rustyAC @VERSION@ - how to run
 =====================================
 
 rustyAC is a Rust rewrite of Assetto Corsa. It is very experimental: one car on a
-track or on an endless flat road, in a debug view.
+track or on an endless flat road. The picture is drawn by a port of the game's
+own renderer with the game's own shaders (no post-processing, no mirrors, no
+driver yet); --debug-view brings the older, simpler picture back.
 
 Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
 

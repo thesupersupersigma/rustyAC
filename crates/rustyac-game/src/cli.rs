@@ -181,7 +181,7 @@ impl Default for Options {
 }
 
 pub const USAGE: &str = "\
-rustyac: drive the Rust port of Assetto Corsa's car on a track or on an endless flat road (debug view)
+rustyac: drive the Rust port of Assetto Corsa's car on a track or on an endless flat road
 
 usage: rustyac [options]
 
