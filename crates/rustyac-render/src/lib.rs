@@ -9,7 +9,7 @@
 // The ported code keeps the game's operations as the machine code has them: a product by -1 or
 // by 0 is a product, comparisons are spelled so that a NaN takes the game's branch, loops over
 // matrix cells index several arrays.
-#![allow(clippy::neg_multiply, clippy::erasing_op, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::too_many_arguments)]
+#![allow(clippy::neg_multiply, clippy::erasing_op, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::too_many_arguments, clippy::assign_op_pattern, clippy::eq_op)]
 
 pub mod animator;
 pub mod camera;
