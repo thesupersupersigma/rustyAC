@@ -222,12 +222,12 @@ impl Game {
             wr(settings, 0x10, window.0 as usize);
             wr(settings, 0x18, 0u8); // isFullscreen
             wr(settings, 0x19, 0u8); // vSync
-            wr(settings, 0x1c, crate::root::ANISOTROPIC); // anisotropic
+            wr(settings, 0x1c, crate::root::profile().anisotropic); // anisotropic
             wr(settings, 0x20, 0i32); // aaQuality
-            wr(settings, 0x24, crate::root::SHADOW_MAP_SIZE); // shadowMapSize
+            wr(settings, 0x24, crate::root::profile().shadow_map_size); // shadowMapSize
             wr(settings, 0x28, 0f64); // fpsCapMS
             wr(settings, 0x30, 0i32); // dxgiModeIndex
-            wr(settings, 0x34, crate::root::WORLD_DETAIL); // worldDetail
+            wr(settings, 0x34, crate::root::profile().world_detail); // worldDetail
             wr(settings, 0x3c, 0i32); // ppQuality
             wr(settings, 0x40, 0i32); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
@@ -378,7 +378,7 @@ impl Game {
         let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
         ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false);
         wr(camera, 0x80, [0.3f32, 0.25, 0.25, 1.0]); // clearColor
-        wr(camera, 0x1ac, crate::root::WORLD_DETAIL as f32); // maxLayer
+        wr(camera, 0x1ac, crate::root::profile().world_detail as f32); // maxLayer
         let sky = acs.alloc(SIZE_SKYBOX);
         let sky_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SKYBOX_CTOR));
         sky_ctor(sky, self.graphics);
@@ -418,9 +418,9 @@ impl Game {
         wr(camera, 0x70, 0.05f32); // nearPlane
         wr(camera, 0x74, 40000.0f32); // farPlane
         // Sim::initCubemaps 0x1401997a0 with the profile's [CUBEMAP]
-        wr(camera, 0x2b8, crate::root::CUBEMAP_FACES_PER_FRAME); // cubeMapRenderer.facesPerFrame
+        wr(camera, 0x2b8, crate::root::profile().cubemap_faces_per_frame); // cubeMapRenderer.facesPerFrame
         let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
-        set_cubemap_size(camera, crate::root::CUBEMAP_SIZE);
+        set_cubemap_size(camera, crate::root::profile().cubemap_size);
         let cube_log;
         // Sim::initStaticCubemap 0x14019a2a0, from Sim::onPostLoad: the small model and the sky
         // into the six faces, once, with the scene camera where its constructor left it

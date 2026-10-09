@@ -10,16 +10,32 @@ use std::path::Path;
 
 use crate::Args;
 
-/// The Task 20 profile: the values of `cfg/video.ini` both sides run with.
-pub const ANISOTROPIC: i32 = 8;
-pub const SHADOW_MAP_SIZE: i32 = 2048;
-pub const WORLD_DETAIL: i32 = 5;
-pub const CUBEMAP_SIZE: i32 = 512;
-pub const CUBEMAP_FACES_PER_FRAME: i32 = 0;
+/// The values of `cfg/video.ini` both sides run with. The default is the Task 20 profile.
+#[derive(Clone, Copy, Debug)]
+pub struct Profile {
+    pub anisotropic: i32,
+    pub shadow_map_size: i32,
+    pub world_detail: i32,
+    pub cubemap_size: i32,
+    pub cubemap_faces_per_frame: i32,
+}
+
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0 };
+
+static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
+
+pub fn set_profile(profile: Profile) {
+    let _ = PROFILE.set(profile);
+}
+
+pub fn profile() -> Profile {
+    *PROFILE.get().unwrap_or(&TASK_20)
+}
 
 /// `cfg/video.ini` of the proof: no post-processing, no motion blur, no MSAA, no mirror, no
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 pub fn video_ini(width: u32, height: u32) -> String {
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME } = profile();
     let lines = [
         "[VIDEO]".to_string(),
         format!("WIDTH={width}"),

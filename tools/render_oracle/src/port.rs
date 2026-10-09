@@ -32,11 +32,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         height: args.height as i32,
         is_fullscreen: false,
         v_sync: false,
-        anisotropic: crate::root::ANISOTROPIC,
+        anisotropic: crate::root::profile().anisotropic,
         aa_quality: 0,
-        shadow_map_size: crate::root::SHADOW_MAP_SIZE,
+        shadow_map_size: crate::root::profile().shadow_map_size,
         fps_cap_ms: 0.0,
-        world_detail: crate::root::WORLD_DETAIL,
+        world_detail: crate::root::profile().world_detail,
         pp_hdr_enabled: false,
         triple_buffer: false,
     };
@@ -101,7 +101,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
-    camera.base.camera.max_layer = crate::root::WORLD_DETAIL as f32;
+    camera.base.camera.max_layer = crate::root::profile().world_detail as f32;
     camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics)?);
     // RaceManager::initLighting, TrackAvatar::TrackAvatar, Sim::applyCustomWeather
     graphics.set_sun_angle(frame.sun_angle);
@@ -117,8 +117,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     }
     camera.base.camera.near_plane = 0.05;
     camera.base.camera.far_plane = 40000.0;
-    camera.cube_map_renderer.faces_per_frame = crate::root::CUBEMAP_FACES_PER_FRAME;
-    camera.set_cubemap_size(&graphics, crate::root::CUBEMAP_SIZE);
+    camera.cube_map_renderer.faces_per_frame = crate::root::profile().cubemap_faces_per_frame;
+    camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);

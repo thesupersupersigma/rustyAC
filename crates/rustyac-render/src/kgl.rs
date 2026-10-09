@@ -269,7 +269,11 @@ impl Kgl {
         if self.device.CreateTexture2D(&td, None, Some(&mut texture)).is_err() {
             eprintln!("ERROR: CreateTexture2D depthStencilTexture failed");
         }
-        let texture = texture.ok_or("no depth texture")?;
+        // a size the device refuses (video.ini SHADOW_MAP_SIZE=-1): the game goes on with no
+        // texture and no views
+        let Some(texture) = texture else {
+            return Ok(KglRenderTarget { texture: None, render_target_view: None, shader_resource_view: None, depth_view: None, format: DXGI_FORMAT_R32_TYPELESS, width, height, samples: -1 });
+        };
         let mut dd: D3D11_DEPTH_STENCIL_VIEW_DESC = std::mem::zeroed();
         dd.Format = DXGI_FORMAT_D32_FLOAT;
         dd.ViewDimension = if samples == 1 { D3D11_DSV_DIMENSION_TEXTURE2D } else { D3D11_DSV_DIMENSION_TEXTURE2DMS };
@@ -734,5 +738,41 @@ impl Kgl {
     pub fn set_texture_cube_map(&self, cube: Option<&KglCubeMap>, slot: u32) {
         let view = cube.and_then(|c| c.srv_cube.clone());
         self.set_texture(slot, &view);
+    }
+}
+
+impl Kgl {
+    /// `kglResizeBuffers` 0x1400193d0 for a screen that is a texture: nothing stays bound, the
+    /// screen's colour and depth targets are made again and bound.
+    pub fn resize_screen(&mut self, width: i32, height: i32) -> Result<(), String> {
+        if self.swap_chain.is_some() {
+            return Err("resizing a swap chain's buffers is the window's business here".into());
+        }
+        self.video.width = width;
+        self.video.height = height;
+        unsafe {
+            self.context.OMSetRenderTargets(None, None);
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width as u32,
+                Height: height as u32,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut texture = None;
+            err("CreateTexture2D", self.device.CreateTexture2D(&desc, None, Some(&mut texture)))?;
+            let texture = texture.ok_or("no screen texture")?;
+            let mut rtv = None;
+            err("CreateRenderTargetView", self.device.CreateRenderTargetView(&texture, None, Some(&mut rtv)))?;
+            self.screen_render_target = KglRenderTarget { texture: Some(texture), render_target_view: rtv, samples: -1, ..Default::default() };
+            self.create_depth_buffer()?;
+        }
+        self.set_screen_render_targets(true);
+        Ok(())
     }
 }

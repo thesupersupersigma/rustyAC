@@ -20,7 +20,8 @@ use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink,
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::scene::{CarShape, DrivingCamera};
-use rustyac_game::render::{write_png, DebugRenderer};
+use rustyac_game::render::ac::{AcOptions, AcRenderer};
+use rustyac_game::render::{write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
 use rustyac_game::view::CarView;
@@ -145,6 +146,68 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
             None => println!("no 3D model of {} in Assetto Corsa's folder: the car is drawn as boxes", info.name),
         }
     }
+}
+
+/// AC's own renderer with the track and the car loaded.
+fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo) -> Result<AcRenderer, String> {
+    let game = rustyac_content::install::ac_root().ok_or_else(rustyac_content::install::not_found_hint)?;
+    // the sun and the weather of race.ini; without one, midday and clear
+    let (mut sun_angle, mut weather, mut skin) = (-16.0f32, "3_clear".to_string(), options.skin.clone());
+    let race = match (&options.race_ini_file, options.race_ini) {
+        (Some(file), _) => Some(file.clone()),
+        (None, Some(false)) => None,
+        (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
+    };
+    if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
+        if ini.has_section("LIGHTING") {
+            sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(sun_angle);
+        }
+        weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
+        if skin.is_none() {
+            let name = ini.get_string("CAR_0", "SKIN");
+            if !name.is_empty() {
+                skin = Some(name);
+            }
+        }
+    }
+    if !weather.is_empty() && weather != "3_clear" && game.join("content/weather").join(&weather).join("weather.ini").is_file() {
+        println!("weather {weather}: its fog and colours are used; its clouds come in Task 21");
+    }
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact })?;
+    for note in &renderer.notes {
+        println!("{note}");
+    }
+    if let Some(folder) = &info.track_folder {
+        println!("{}", renderer.load_track(folder, &info.track_layout)?);
+    }
+    // the car's folder in the game (its data may come from elsewhere)
+    let car_folder = rustyac_game::sim::find_car_model(&info.name, &info.data_path).and_then(|kn5| kn5.parent().map(|p| p.to_path_buf()));
+    match car_folder {
+        Some(folder) => {
+            // a skin that the car does not have: the first one
+            let skin = skin.filter(|s| folder.join("skins").join(s).is_dir());
+            renderer.set_skin(skin);
+            let steer_lock = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
+            println!("{}", renderer.load_car(&folder, steer_lock)?);
+        }
+        None => println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name),
+    }
+    renderer.finish_loading()?;
+    Ok(renderer)
+}
+
+/// The picture: AC's renderer, or the debug view when it was asked for or when AC's renderer
+/// cannot start (no Assetto Corsa folder, no Direct3D 11 …).
+fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo) -> Result<Picture, String> {
+    if !options.debug_view {
+        match make_ac(options, width, height, info) {
+            Ok(renderer) => return Ok(Picture::Ac(Box::new(renderer))),
+            Err(message) => eprintln!("WARNING: Assetto Corsa's renderer could not start ({message}); the debug view is drawn instead"),
+        }
+    }
+    let mut renderer = DebugRenderer::new(width, height)?;
+    load_models(&mut renderer, options, info);
+    Ok(Picture::Debug(Box::new(renderer)))
 }
 
 /// The recorder and the shared memory, as asked for.
@@ -305,45 +368,47 @@ fn run_headless(options: &Options) -> Result<(), String> {
     let mut frame_max = Duration::ZERO;
     let started = Instant::now();
     let mut headless_audio: Option<GameAudio> = None;
+    let mut bench_stats = None;
     if options.bench_render {
-        let mut renderer = match DebugRenderer::new(options.width, options.height) {
-            Ok(renderer) => renderer,
-            Err(message) => {
-                // the physics thread runs already: end it tidily first
-                shared.quit.store(true, Ordering::Relaxed);
-                let _ = thread.join();
-                return Err(message);
-            }
-        };
-        println!(
-            "drawing {} x {} off screen with {} samples per pixel on {}{}",
-            options.width,
-            options.height,
-            renderer.samples(),
-            renderer.adapter,
-            if renderer.software { " (software rasteriser)" } else { "" }
-        );
-        let mut camera = DrivingCamera::chase();
+        let mut renderer: Option<Picture> = None;
+        let mut camera = None;
         let mut shape = None;
         let mut last = Instant::now();
         while !shared.finished.load(Ordering::Relaxed) && !thread.is_finished() && !STOP.load(Ordering::Relaxed) {
             if shape.is_none() {
                 let info = shared.car_info.lock().unwrap().clone();
                 if let Some(info) = info {
-                    load_models(&mut renderer, options, &info);
-                    shape = Some(CarShape::of(&info));
+                    match make_picture(options, options.width, options.height, &info) {
+                        Ok(picture) => {
+                            println!("drawing {} x {} off screen: {}", options.width, options.height, picture.describe());
+                            renderer = Some(picture);
+                        }
+                        Err(message) => {
+                            // the physics thread runs already: end it tidily first
+                            shared.quit.store(true, Ordering::Relaxed);
+                            let _ = thread.join();
+                            return Err(message);
+                        }
+                    }
+                    let car_shape = CarShape::of(&info);
+                    camera = Some(DrivingCamera::from_name(&options.camera, &car_shape).unwrap_or_else(|_| DrivingCamera::chase()));
+                    shape = Some(car_shape);
+                    // the loading is not part of the timing
+                    last = Instant::now();
                 }
             }
-            let Some(shape) = &shape else {
+            let (Some(shape), Some(renderer), Some(camera)) = (&shape, &mut renderer, &mut camera) else {
                 std::thread::sleep(Duration::from_millis(2));
                 continue;
             };
             let now = Instant::now();
             let view = shared.frames().at(now);
-            let frame = camera.update(&view, shape, view.acc_g, (now - last).as_secs_f32());
+            let dt = (now - last).as_secs_f32();
+            let frame = camera.update(&view, shape, view.acc_g, dt);
             let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, ..HudInfo::default() };
-            renderer.draw(&view, shape, &frame, &info);
+            renderer.draw(&view, shape, camera, &frame, &info, dt);
             renderer.finish();
+            bench_stats = renderer.frame_stats();
             frames += 1;
             if frames > 10 {
                 frame_max = frame_max.max(now - last);
@@ -403,6 +468,9 @@ fn run_headless(options: &Options) -> Result<(), String> {
             frames as f64 / seconds,
             frame_max.as_secs_f64() * 1000.0
         );
+        if let Some(stats) = bench_stats {
+            println!("  {stats}");
+        }
     }
     Ok(())
 }
@@ -509,7 +577,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     };
     let shape = CarShape::of(&car_info);
     let (width, height) = window.client_size();
-    let graphics = DebugRenderer::new(width, height).and_then(|renderer| {
+    let graphics = make_picture(options, width, height, &car_info).and_then(|renderer| {
         let chain = renderer.swap_chain(window.handle)?;
         Ok((renderer, chain))
     });
@@ -522,13 +590,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             return Err(message);
         }
     };
-    println!(
-        "window {width} x {height}, {} samples per pixel, {}{}",
-        renderer.samples(),
-        renderer.adapter,
-        if renderer.software { " (software rasteriser)" } else { "" }
-    );
-    load_models(&mut renderer, options, &car_info);
+    println!("window {width} x {height}: {}", renderer.describe());
     let mut audio = start_audio(options, &feed, &car_info, &shape);
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
         Ok(camera) => camera,
@@ -633,7 +695,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused);
             }
         }
-        renderer.draw(&view, &shape, &frame, &info);
+        renderer.draw(&view, &shape, &camera, &frame, &info, dt.as_secs_f32());
         match renderer.present(&chain, options.vsync) {
             // nothing is seen: no need to draw as fast as the card can
             Ok(false) => std::thread::sleep(Duration::from_millis(15)),
@@ -728,27 +790,23 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         println!("{}: the car's state after {} steps", pose.display(), sim.steps);
     }
     let shape = CarShape::of(&sim.car_info());
-    let mut renderer = DebugRenderer::new(options.width, options.height)?;
-    load_models(&mut renderer, options, &sim.car_info());
+    let mut renderer = make_picture(options, options.width, options.height, &sim.car_info())?;
     let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
     let info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
-    renderer.draw(&view, &shape, &frame, &info);
+    // two frames: the second is a frame as the game draws them one after the other (the first
+    // after loading still uploads and binds everything)
+    renderer.draw(&view, &shape, &camera, &frame, &info, 0.0);
+    renderer.draw(&view, &shape, &camera, &frame, &info, 0.0);
     let pixels = renderer.read_pixels()?;
     let (width, height) = renderer.size();
     write_png(path, width, height, &pixels)?;
-    println!(
-        "{}: {width} x {height}, {} samples per pixel, drawn by {}{} after {} steps ({:.1} km/h, gear {})",
-        path.display(),
-        renderer.samples(),
-        renderer.adapter,
-        if renderer.software { " (software rasteriser)" } else { "" },
-        sim.steps,
-        view.speed_kmh,
-        view.gear - 1
-    );
+    println!("{}: {width} x {height}, drawn by {} after {} steps ({:.1} km/h, gear {})", path.display(), renderer.describe(), sim.steps, view.speed_kmh, view.gear - 1);
+    if let Some(stats) = renderer.frame_stats() {
+        println!("  {stats}");
+    }
     lap_report(&view);
     Ok(())
 }

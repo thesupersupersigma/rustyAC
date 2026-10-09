@@ -9,10 +9,12 @@
 //! Everything is drawn into an off-screen target (4x multisampled where the card can), which
 //! is then copied to the window or read back for `--screenshot`: the window is optional.
 
+pub mod ac;
 pub mod dds;
 pub mod font;
 pub mod hud;
 pub mod models;
+pub mod picture;
 pub mod scene;
 
 use windows::core::{Interface, PCSTR};
@@ -34,6 +36,7 @@ use windows::Win32::Graphics::Dxgi::{
 
 use crate::view::{CarView, Mat};
 use font::FontBitmap;
+pub use picture::Picture;
 use hud::{HudInfo, HudVertex};
 use models::{frustum, sphere_visible, GpuModel, ModelOptions, ModelStats};
 use scene::{cube, cylinder, mul, mul_precise, perspective_reversed, point, rotate_pitch, scale_then, translation, view_matrix, CameraFrame, CarShape, Vertex};

@@ -221,6 +221,9 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         _ => name,
     };
     let name = if args.sun_angle == -16.0 { name } else { format!("{name}_sun{}", args.sun_angle) };
+    let p = crate::root::profile();
+    let t = crate::root::TASK_20;
+    let name = if (p.shadow_map_size, p.cubemap_size, p.world_detail, p.anisotropic) == (t.shadow_map_size, t.cubemap_size, t.world_detail, t.anisotropic) { name } else { format!("{name}_s{}c{}w{}a{}", p.shadow_map_size, p.cubemap_size, p.world_detail, p.anisotropic) };
     let mut cubemap_model = format!("{}/content/objects3D/cubemap_model.kn5", path_text(&args.game));
     if let Some(track) = &track {
         let own = format!("{}/cubemap_model.kn5", track.folder);

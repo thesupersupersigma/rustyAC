@@ -35,6 +35,18 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// `--at <s>`: with `--screenshot`, how far into the drive the picture is taken.
     pub at: Option<f64>,
+    /// `--debug-view`: the old debug view (own shader, flat colours) instead of AC's renderer.
+    pub debug_view: bool,
+    /// `--warp`: AC's renderer on WARP, Microsoft's software rasteriser (slow; the same pixels
+    /// on every machine).
+    pub warp: bool,
+    /// `--gpu-log <file>`: write the Direct3D command log of the second frame.
+    pub gpu_log: Option<PathBuf>,
+    /// `--skin <folder>`: the car's skin (default: race.ini's, else the first one).
+    pub skin: Option<String>,
+    /// `--video-ini-exact`: follow `video.ini` also where plain acs.exe cannot make a proper
+    /// picture with it (a shadow map or cube map size of 0 or less).
+    pub video_ini_exact: bool,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -136,6 +148,11 @@ impl Default for Options {
             dump_states: None,
             screenshot: None,
             pose_out: None,
+            debug_view: false,
+            warp: false,
+            gpu_log: None,
+            skin: None,
+            video_ini_exact: false,
             at: None,
             camera: "chase".to_string(),
             auto_shifter: false,
@@ -248,6 +265,13 @@ for checks, without anybody at the controls:
   --realtime            with --replay --headless: keep to the clock, publish shared memory
   --duration <s>        stop by itself after this many seconds
   --dump-states <file>  with --replay --headless: write the car's state after every step
+  --debug-view          the old debug view (own shader) instead of Assetto Corsa's renderer
+  --warp                draw with WARP, Windows' software rasteriser (slow; no graphics card needed)
+  --gpu-log <file>      write the Direct3D command log of the second frame
+  --skin <folder>       the car's skin (default: race.ini's, else the first one)
+  --video-ini-exact     follow video.ini also where plain acs.exe cannot make a proper picture with
+                        it (SHADOW_MAP_SIZE=-1 and [CUBEMAP] SIZE=0, which Content Manager writes
+                        for Custom Shaders Patch: everything in shadow, no reflections)
   --screenshot <png>    draw one frame off screen into a PNG and stop
   --at <s>              with --screenshot: seconds into the drive (default: the end of the replay, or 3)
   --bench-render        with --headless: also draw frames off screen and report their rate
@@ -285,6 +309,11 @@ impl Options {
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
+                "--debug-view" => o.debug_view = true,
+                "--warp" => o.warp = true,
+                "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),
+                "--skin" => o.skin = Some(value("--skin")?),
+                "--video-ini-exact" => o.video_ini_exact = true,
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
                 "--no-auto-shifter" => o.no_auto_shifter = true,

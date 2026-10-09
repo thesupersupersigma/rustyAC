@@ -21,6 +21,8 @@ const USAGE: &str = "usage:
                                                      by line and the pictures byte by byte
      frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free|eyes|sun|far] [--capture <n>]
                     [--car <folder name> --pose <file> [--skin <folder name>]]
+                    other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
+                    [--world-detail <n>] [--anisotropic <n>]
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
@@ -79,6 +81,7 @@ fn parse() -> Result<Args, String> {
         loose: false,
         frame_options: Vec::new(),
     };
+    let mut profile = root::TASK_20;
     while let Some(flag) = list.next() {
         let mut value = || list.next().ok_or(format!("{flag} needs a value"));
         let mut frame_option = true;
@@ -139,6 +142,16 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.capture = text.parse().map_err(|_| "--capture <n>")?;
             }
+            "--shadow-size" | "--cubemap-size" | "--world-detail" | "--anisotropic" => {
+                text = value()?;
+                let number: i32 = text.parse().map_err(|_| format!("{flag} <number>"))?;
+                match flag.as_str() {
+                    "--shadow-size" => profile.shadow_map_size = number,
+                    "--cubemap-size" => profile.cubemap_size = number,
+                    "--world-detail" => profile.world_detail = number,
+                    _ => profile.anisotropic = number,
+                }
+            }
             "--sun" => {
                 text = value()?;
                 a.sun_angle = text.parse().map_err(|_| "--sun <degrees>")?;
@@ -164,6 +177,7 @@ fn parse() -> Result<Args, String> {
             }
         }
     }
+    root::set_profile(profile);
     Ok(a)
 }
 

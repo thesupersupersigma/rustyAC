@@ -508,3 +508,31 @@ impl Graphics {
         self.set_world_matrix(&Mat44f::IDENTITY);
     }
 }
+
+impl Graphics {
+    /// `GraphicsManager::resetRenderStates` 0x140204440: what the game's 2D drawing calls
+    /// before it draws. The states are set for real and everything the manager believes about
+    /// the shader and the textures is forgotten (the textures stay bound).
+    pub fn reset_render_states(&mut self) {
+        self.state.blend_mode = 0;
+        self.kgl.set_blend_state(0);
+        self.state.cull_mode = 0;
+        self.kgl.set_cull_state(0);
+        self.state.depth_state = 0;
+        self.kgl.set_depth_state(0);
+        self.state.override_no_ms = false;
+        self.state.shader = None;
+        self.state.textures = [None; 32];
+    }
+
+    /// `GraphicsManager::onResize` 0x140204330 for a screen that is a texture (no swap chain):
+    /// the screen's colour and depth targets are made again at the new size.
+    pub fn on_resize(&mut self, width: i32, height: i32) -> Result<(), String> {
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        self.video.width = width;
+        self.video.height = height;
+        self.kgl.resize_screen(width, height)
+    }
+}
