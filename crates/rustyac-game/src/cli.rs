@@ -35,6 +35,9 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// `--at <s>`: with `--screenshot`, how far into the drive the picture is taken.
     pub at: Option<f64>,
+    /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
+    /// from (for the render oracle: the game's own renderer is given the same state).
+    pub pose_out: Option<PathBuf>,
     /// `--camera chase|cockpit`: the camera at start.
     pub camera: String,
     /// `--auto-shifter`: the automatic gearbox aid on at start.
@@ -132,6 +135,7 @@ impl Default for Options {
             duration: None,
             dump_states: None,
             screenshot: None,
+            pose_out: None,
             at: None,
             camera: "chase".to_string(),
             auto_shifter: false,
@@ -280,6 +284,7 @@ impl Options {
                 "--dump-states" => o.dump_states = Some(PathBuf::from(value("--dump-states")?)),
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
+                "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
                 "--no-auto-shifter" => o.no_auto_shifter = true,

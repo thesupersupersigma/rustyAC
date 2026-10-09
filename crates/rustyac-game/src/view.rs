@@ -37,6 +37,12 @@ pub struct CarView {
     pub wheels: [Mat; 4],
     /// Each hub's world matrix (steering and camber, no spin).
     pub hubs: [Mat; 4],
+    /// `CarPhysicsState::tyreMatrix`: the wheel's rotation with its spin as the tyre had it in
+    /// its step (`Tyre::getFinalTyreRotation`), at the hub's place. What the game's renderer
+    /// and its sound take as the wheel.
+    pub tyre_matrix: [Mat; 4],
+    /// `CarPhysicsState::wheelAngularSpeed`, rad/s: 0 while the tyre is locked or the car sleeps.
+    pub wheel_angular_speed: [f32; 4],
     pub tyre_radius: [f32; 4],
     pub tyre_width: [f32; 4],
     pub rim_radius: [f32; 4],
@@ -189,6 +195,8 @@ impl Default for CarView {
             drive_seconds: 0.0,
             body: IDENTITY,
             wheels: [IDENTITY; 4],
+            tyre_matrix: [IDENTITY; 4],
+            wheel_angular_speed: [0.0; 4],
             hubs: [IDENTITY; 4],
             tyre_radius: [0.33; 4],
             tyre_width: [0.3; 4],
@@ -285,6 +293,18 @@ pub fn lerp_pose(a: &Mat, b: &Mat, t: f32) -> Mat {
 }
 
 impl CarView {
+    /// The part of the game's `CarPhysicsState` its renderer poses the car from.
+    pub fn physics_state(&self) -> rustyac_render::car::CarPhysicsState {
+        let m = |m: &Mat| Mat44f { m: *m };
+        rustyac_render::car::CarPhysicsState {
+            world_matrix: m(&self.body),
+            suspension_matrix: [m(&self.hubs[0]), m(&self.hubs[1]), m(&self.hubs[2]), m(&self.hubs[3])],
+            tyre_matrix: [m(&self.tyre_matrix[0]), m(&self.tyre_matrix[1]), m(&self.tyre_matrix[2]), m(&self.tyre_matrix[3])],
+            wheel_angular_speed: self.wheel_angular_speed,
+            steer: self.steer_deg,
+        }
+    }
+
     /// The car as it is after the last step.
     pub fn capture(sim: &GameSim, drive_seconds: f64) -> CarView {
         let car = &sim.car.car;
@@ -339,6 +359,14 @@ impl CarView {
             let hub: Mat44f = car.suspensions[index].get_hub_world_matrix(&car.core);
             view.hubs[index] = hub.m;
             view.wheels[index] = xm_matrix_multiply(&tyre.local_wheel_rotation, &hub).m;
+            // Car::getPhysicsState 0x140270d70
+            let mut m = xm_matrix_multiply(&tyre.local_wheel_rotation, &tyre.world_rotation);
+            m.m[3][0] = hub.m[3][0];
+            m.m[3][1] = hub.m[3][1];
+            m.m[3][2] = hub.m[3][2];
+            view.tyre_matrix[index] = m.m;
+            let asleep = car.sleeping_frames > car.frames_to_sleep;
+            view.wheel_angular_speed[index] = if !tyre.status.is_locked && !asleep { tyre.status.angular_velocity } else { 0.0 };
             view.tyre_radius[index] = tyre.data.radius;
             view.tyre_width[index] = tyre.data.width;
             view.rim_radius[index] = tyre.data.rim_radius;
@@ -432,6 +460,7 @@ impl CarView {
         out.body = lerp_pose(&a.body, &b.body, t);
         for k in 0..4 {
             out.wheels[k] = lerp_pose(&a.wheels[k], &b.wheels[k], t);
+            out.tyre_matrix[k] = lerp_pose(&a.tyre_matrix[k], &b.tyre_matrix[k], t);
             out.hubs[k] = lerp_pose(&a.hubs[k], &b.hubs[k], t);
         }
         out.speed_kmh = lerp(a.speed_kmh, b.speed_kmh, t);

@@ -723,6 +723,10 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         }
     }
     let view = CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003);
+    if let Some(pose) = &options.pose_out {
+        std::fs::write(pose, view.physics_state().to_bytes()).map_err(|e| format!("{}: {e}", pose.display()))?;
+        println!("{}: the car's state after {} steps", pose.display(), sim.steps);
+    }
     let shape = CarShape::of(&sim.car_info());
     let mut renderer = DebugRenderer::new(options.width, options.height)?;
     load_models(&mut renderer, options, &sim.car_info());

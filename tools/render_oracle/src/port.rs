@@ -92,6 +92,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.hide_helpers(model);
     }
 
+    // Sim::addCar: CarAvatar::init3D
+    let mut car = match &frame.car {
+        Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock))?),
+        None => None,
+    };
+
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -128,6 +134,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         let s = frame.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
+        // Game::update: the car's objects, then the handlers of evOnPostUpdate
+        if let (Some(car), Some(spec)) = (&mut car, &frame.car) {
+            car.update(&mut scene, &spec.pose, crate::frames::DT);
+            car.post_update(&mut scene, &spec.pose, crate::frames::DT, &mat(&frame.camera.matrix), frame.camera.fov, false);
+        }
 
         if index == frame.capture {
             rustyac_render::gpulog::begin_capture(&frame.name);

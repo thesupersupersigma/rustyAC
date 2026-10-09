@@ -19,7 +19,8 @@ const USAGE: &str = "usage:
                                                      <out>/<frame>.<side>.gpulog / .init.gpulog / .png
   render_oracle compare [frame options] [--loose]    both sides (a process each), then the logs line
                                                      by line and the pictures byte by byte
-     frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free] [--capture <n>]
+     frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free|eyes|sun|far] [--capture <n>]
+                    [--car <folder name> --pose <file> [--skin <folder name>]]
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
@@ -38,6 +39,9 @@ pub struct Args {
     pub verbose: bool,
     pub side: String,
     pub track: Option<String>,
+    pub car: Option<String>,
+    pub skin: Option<String>,
+    pub pose: Option<PathBuf>,
     pub layout: String,
     pub view: String,
     pub capture: usize,
@@ -64,6 +68,9 @@ fn parse() -> Result<Args, String> {
         verbose: false,
         side: String::new(),
         track: None,
+        car: None,
+        skin: None,
+        pose: None,
         layout: String::new(),
         view: "chase".into(),
         capture: 1,
@@ -105,6 +112,20 @@ fn parse() -> Result<Args, String> {
             "--track" => {
                 text = value()?;
                 a.track = Some(text.clone());
+            }
+            "--car" => {
+                text = value()?;
+                a.car = Some(text.clone());
+            }
+            "--skin" => {
+                text = value()?;
+                a.skin = Some(text.clone());
+            }
+            "--pose" => {
+                let given = PathBuf::from(value()?);
+                let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
+                text = absolute.to_string_lossy().into_owned();
+                a.pose = Some(absolute);
             }
             "--layout" => {
                 text = value()?;

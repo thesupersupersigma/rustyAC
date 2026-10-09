@@ -273,6 +273,16 @@ impl Scene {
         None
     }
 
+    /// `Node::getWorldMatrix` 0x14020e190: from the local matrices up the tree, as they are
+    /// now (not the world matrices of the last traversal).
+    pub fn get_world_matrix(&self, node: NodeId) -> Mat44f {
+        let n = &self.nodes[node];
+        match n.parent {
+            Some(parent) => xm_matrix_multiply(&n.matrix, &self.get_world_matrix(parent)),
+            None => n.matrix,
+        }
+    }
+
     /// `NodeBoundingSphere::applyNoCull` 0x140218b50: marks what is below `start` right now.
     pub fn apply_no_cull(&mut self, start: NodeId) {
         let children = self.nodes[start].children.clone();

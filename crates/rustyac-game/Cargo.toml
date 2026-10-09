@@ -25,6 +25,8 @@ rustyac-math = { path = "../rustyac-math" }
 rustyac-content = { path = "../rustyac-content" }
 # AC's sound: its own FMOD banks through the player's own FMOD DLLs
 rustyac-audio = { path = "../rustyac-audio" }
+# AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
+rustyac-render = { path = "../rustyac-render" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 

@@ -11,7 +11,9 @@
 // matrix cells index several arrays.
 #![allow(clippy::neg_multiply, clippy::erasing_op, clippy::neg_cmp_op_on_partial_ord, clippy::needless_range_loop, clippy::too_many_arguments)]
 
+pub mod animator;
 pub mod camera;
+pub mod car;
 pub mod cubemap;
 pub mod forward;
 pub mod gpulog;

@@ -11,6 +11,9 @@ use rustyac_physics::vecmath::Mat44f;
 
 use crate::Args;
 
+/// The frame time both sides run with.
+pub const DT: f32 = 1.0 / 60.0;
+
 pub struct ModelFile {
     /// the path the model is opened by, on both sides
     pub filename: String,
@@ -29,6 +32,18 @@ pub struct TrackSpec {
     pub sun_heading: Option<f32>,
 }
 
+pub struct CarSpec {
+    /// the car's folder name under `content/cars`
+    pub name: String,
+    /// the car's folder as text (the models are opened by `<folder>/<file>`)
+    pub folder: String,
+    pub skin: String,
+    /// `car.ini [CONTROLS] STEER_LOCK`
+    pub steer_lock: f32,
+    /// the state of the physics the car is posed from
+    pub pose: rustyac_render::car::CarPhysicsState,
+}
+
 pub struct CameraSpec {
     /// `Camera::matrix`: rows right, up, back, position
     pub matrix: [f32; 16],
@@ -43,6 +58,7 @@ pub struct CameraSpec {
 pub struct Frame {
     pub name: String,
     pub track: Option<TrackSpec>,
+    pub car: Option<CarSpec>,
     pub camera: CameraSpec,
     /// which frame is logged and read back (0 = the first one rendered)
     pub capture: usize,
@@ -124,18 +140,85 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             forward = [-tail.x, -tail.y, -tail.z];
         }
     }
+    // the car, where its physics state has it
+    let mut car = None;
+    let mut eyes = [0.0f32, 1.0, 0.0];
+    if let Some(name) = &args.car {
+        let folder = args.game.join("content/cars").join(name);
+        if !folder.is_dir() {
+            return Err(format!("no car folder {}", folder.display()));
+        }
+        let pose = match &args.pose {
+            Some(file) => rustyac_render::car::CarPhysicsState::from_bytes(&std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?)?,
+            None => return Err("--car needs --pose <file> (rustyac.exe --screenshot … --pose-out <file> writes one)".into()),
+        };
+        let car_ini = rustyac_physics::data::ini::IniReader::load(&folder.join("data/car.ini"))?;
+        let steer_lock = car_ini.get_float("CONTROLS", "STEER_LOCK").unwrap_or(0.0);
+        eyes = car_ini.get_float3("GRAPHICS", "DRIVEREYES").unwrap_or(eyes);
+        let skin = match &args.skin {
+            Some(skin) => skin.clone(),
+            None => {
+                // the first skin folder by name
+                let mut skins: Vec<String> = std::fs::read_dir(folder.join("skins")).map_err(|e| e.to_string())?.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+                skins.sort();
+                skins.first().cloned().unwrap_or_default()
+            }
+        };
+        let w = pose.world_matrix.m;
+        place = [w[3][0], w[3][1], w[3][2]];
+        forward = [w[2][0], w[2][1], w[2][2]];
+        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock, pose });
+    }
     let at = |ahead: f32, up: f32| [place[0] + forward[0] * ahead, place[1] + up, place[2] + forward[2] * ahead];
+    // the driver's eyes: car axes are +x left, +y up, +z forward
+    let eye_point = |ahead: f32| match &car {
+        Some(c) => {
+            let w = c.pose.world_matrix.m;
+            let p = [eyes[0], eyes[1], eyes[2] + ahead];
+            [p[0] * w[0][0] + p[1] * w[1][0] + p[2] * w[2][0] + w[3][0], p[0] * w[0][1] + p[1] * w[1][1] + p[2] * w[2][1] + w[3][1], p[0] * w[0][2] + p[1] * w[1][2] + p[2] * w[2][2] + w[3][2]]
+        }
+        None => at(ahead, 1.0),
+    };
+    // where the sun is seen from the car (for the view into the sun): the same angles the
+    // lighting uses, to the precision a camera needs
+    let sun_from = {
+        let (pitch, heading) = match &track {
+            Some(t) => (t.sun_pitch.unwrap_or(45.0), t.sun_heading.unwrap_or(0.0)),
+            None => (45.0, 0.0),
+        };
+        let (p, a, h) = (pitch.to_radians(), args.sun_angle.to_radians(), heading.to_radians());
+        // (0, -1, 0) through Rx(pitch) Rz(angle) Ry(heading), row vectors
+        let v1 = [0.0, -p.cos(), -p.sin()];
+        let v2 = [v1[0] * a.cos() - v1[1] * a.sin(), v1[0] * a.sin() + v1[1] * a.cos(), v1[2]];
+        let light = [v2[0] * h.cos() + v2[2] * h.sin(), v2[1], -v2[0] * h.sin() + v2[2] * h.cos()];
+        [-light[0], -light[1], -light[2]]
+    };
     // the lens and the shadow ranges the game cameras use (CameraDrivableManager::updateChase
     // 0x1400c7120, ::updateDash 0x1400c7b50, CameraOnBoardFree::update 0x140115db0)
     let camera = match args.view.as_str() {
         "chase" => CameraSpec { matrix: look_from(at(-6.0, 2.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
         "cockpit" => CameraSpec { matrix: look_from(at(0.0, 1.0), at(10.0, 0.9)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0] },
         "free" => CameraSpec { matrix: look_from(at(-30.0, 15.0), at(20.0, 0.0)), fov: 60.0, near: 0.1, far: None, splits: [10.0, 80.0, 300.0, 1500.0] },
-        other => return Err(format!("the view {other:?} is not one of chase, cockpit, free")),
+        // from the driver's eyes
+        "eyes" => CameraSpec { matrix: look_from(eye_point(0.0), eye_point(10.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0] },
+        // a chase camera on the far side of the car from the sun, looking at it over the car
+        "sun" => {
+            let target = at(0.0, 1.0);
+            let eye = [target[0] - sun_from[0] * 7.0, target[1] + 0.6, target[2] - sun_from[2] * 7.0];
+            let look = [eye[0] + sun_from[0], eye[1] + sun_from[1], eye[2] + sun_from[2]];
+            CameraSpec { matrix: look_from(eye, look), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] }
+        }
+        // far enough for the second level of detail
+        "far" => CameraSpec { matrix: look_from(at(-25.0, 4.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
+        other => return Err(format!("the view {other:?} is not one of chase, cockpit, free, eyes, sun, far")),
     };
     let name = match &args.track {
         Some(t) => format!("{t}_{}", args.view),
         None => format!("empty_{}", args.view),
+    };
+    let name = match (&car, &args.pose) {
+        (Some(c), Some(pose)) => format!("{name}_{}_{}", c.name, pose.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
+        _ => name,
     };
     let name = if args.sun_angle == -16.0 { name } else { format!("{name}_sun{}", args.sun_angle) };
     let mut cubemap_model = format!("{}/content/objects3D/cubemap_model.kn5", path_text(&args.game));
@@ -145,7 +228,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             cubemap_model = own;
         }
     }
-    Ok(Frame { name, track, camera, capture: args.capture, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model })
+    Ok(Frame { name, track, car, camera, capture: args.capture, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model })
 }
 
 /// A path as text with forward slashes.
