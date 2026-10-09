@@ -1,0 +1,35 @@
+[package]
+name = "rustyac-render"
+description = "rustyAC: Assetto Corsa's renderer. Direct3D 11 through the `windows` crate, driven by a 1:1 port of the game's kgl layer, GraphicsManager, materials, scene graph, PvsProcessor, shadow cascades, lighting and sky. It loads the game's own compiled shaders and textures from the player's install at run time and ships none of them."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# AC's own sinf / cosf / tanf / powf (MSVCR120): matrices and lighting must give AC's numbers
+rustyac-math = { path = "../rustyac-math" }
+# the port of INIReader (plain files and data.acd) and the car's state
+rustyac-physics = { path = "../rustyac-physics" }
+# kn5 models: nodes, meshes, materials, textures
+rustyac-content = { path = "../rustyac-content" }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_UI_WindowsAndMessaging",
+]

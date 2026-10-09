@@ -337,6 +337,16 @@ pub fn set_extra_overrides(list: Vec<(&'static str, &'static str, usize)>) {
     let _ = EXTRA_OVERRIDES.set(list);
 }
 
+/// More DLLs whose imports are bound for real, for a tool that lets the game's code reach them
+/// (`tools/render_oracle`: Direct3D 11, DXGI, the shader reflection and D3DX's texture loader).
+/// Set before [`Acs::load`].
+static EXTRA_BOUND: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+
+#[allow(dead_code)]
+pub fn set_extra_bound(list: Vec<&'static str>) {
+    let _ = EXTRA_BOUND.set(list);
+}
+
 // --- executable scratch memory ---------------------------------------------------------------
 
 /// A block of executable memory for import stubs and detour trampolines.
@@ -612,9 +622,10 @@ impl Acs {
                 break;
             }
             let dll = self.cstr(name_rva).to_ascii_lowercase();
-            let real = BOUND_DLLS.contains(&dll.as_str());
+            let runtime = BOUND_DLLS.contains(&dll.as_str());
+            let real = runtime || EXTRA_BOUND.get().is_some_and(|list| list.contains(&dll.as_str()));
             self.bind_one(&dll, if ilt != 0 { ilt } else { iat }, iat, real, &overrides, &mut unbound)?;
-            bound += real as usize;
+            bound += runtime as usize;
             desc += 20;
         }
         if bound != BOUND_DLLS.len() {

@@ -101,29 +101,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustyac-audio"
-version = "0.19.0"
+name = "render_oracle"
+version = "0.1.0"
 dependencies = [
+ "png",
  "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
+ "rustyac-render",
+ "windows",
 ]
 
 [[package]]
 name = "rustyac-content"
 version = "0.19.0"
-
-[[package]]
-name = "rustyac-game"
-version = "0.19.0"
-dependencies = [
- "png",
- "rustyac-audio",
- "rustyac-content",
- "rustyac-math",
- "rustyac-physics",
- "windows",
-]
 
 [[package]]
 name = "rustyac-math"
