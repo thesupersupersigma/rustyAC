@@ -25,5 +25,6 @@ pub mod model;
 pub mod scene;
 pub mod shader;
 pub mod sky;
+pub mod state;
 pub mod texture;
 pub mod texture_fallback;

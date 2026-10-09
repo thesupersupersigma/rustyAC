@@ -10,7 +10,7 @@ use rustyac_render::kgl::DeviceOptions;
 use rustyac_render::model::Kn5Io;
 use rustyac_render::scene::Scene;
 
-use crate::ac::Rendered;
+use crate::ac::{Captured, Rendered};
 use crate::frames::Frame;
 use crate::Args;
 
@@ -124,35 +124,37 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
     let cube_log = rustyac_render::gpulog::end_capture().text;
 
-    let mut rendered = None;
-    for index in 0..=frame.capture {
-        camera.base.camera.fov = frame.camera.fov;
-        camera.base.camera.matrix = mat(&frame.camera.matrix);
-        camera.base.camera.near_plane = frame.camera.near;
-        if let Some(far) = frame.camera.far {
+    let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+    for (index, step) in frame.steps.iter().enumerate() {
+        camera.base.camera.fov = step.camera.fov;
+        camera.base.camera.matrix = mat(&step.camera.matrix);
+        camera.base.camera.near_plane = step.camera.near;
+        if let Some(far) = step.camera.far {
             camera.base.camera.far_plane = far;
         }
-        let s = frame.camera.splits;
+        let s = step.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
-        if let (Some(car), Some(spec)) = (&mut car, &frame.car) {
-            car.update(&mut scene, &spec.pose, crate::frames::DT);
-            car.post_update(&mut scene, &spec.pose, crate::frames::DT, &mat(&frame.camera.matrix), frame.camera.fov, false);
+        if let Some(car) = &mut car {
+            car.update(&mut scene, &step.state, crate::frames::DT);
+            car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }
 
-        if index == frame.capture {
+        if index >= frame.capture {
             rustyac_render::gpulog::begin_capture(&frame.name);
         }
         graphics.begin_scene();
         scene.traverse(root);
         camera.render(&mut graphics, &mut scene, Some(blurred), root)?;
         graphics.set_screen_space_mode();
-        if index == frame.capture {
+        if index >= frame.capture {
             let capture = rustyac_render::gpulog::end_capture();
             let (width, height, pixels) = graphics.kgl.read_screen()?;
-            rendered = Some(Rendered { cube_log: cube_log.clone(), log: capture.text, draws: capture.draws, width, height, pixels });
+            rendered.width = width;
+            rendered.height = height;
+            rendered.frames.push(Captured::new(index, capture.text, capture.draws, pixels, !frame.sequence || args.dump.contains(&index)));
         }
         graphics.end_scene();
     }
-    Ok((init.text, rendered.ok_or("no frame was captured")?))
+    Ok((init.text, rendered))
 }

@@ -21,8 +21,10 @@ const USAGE: &str = "usage:
                                                      <out>/<frame>.<side>.gpulog / .init.gpulog / .png
   render_oracle compare [frame options] [--loose] [--own-textures]    both sides (a process each), then the logs line
                                                      by line and the pictures byte by byte
-     frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free|eyes|sun|far] [--capture <n>]
+     frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free|eyes|sun|far|side|rear|front] [--capture <n>]
                     [--car <folder name> --pose <file> [--skin <folder name>]]
+                    a sequence: --car <c> --tape <file.audiotape> [--tape-from <frame>] [--frames <count>] (every
+                    frame from --capture on is compared; --dump <i,j> also writes those frames whole)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>]
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
@@ -46,12 +48,23 @@ pub struct Args {
     pub car: Option<String>,
     pub skin: Option<String>,
     pub pose: Option<PathBuf>,
+    /// a tape of `car_oracle run --audio-tape`: the game's own car states, 60 a second
+    pub tape: Option<PathBuf>,
+    pub tape_from: usize,
+    /// how many frames of the tape
+    pub frames: usize,
+    /// frames of a sequence whose whole log and picture are written (not only their hashes)
+    pub dump: Vec<usize>,
+    /// a word for the frame's name (to tell runs with different inputs apart)
+    pub label: String,
     pub layout: String,
     pub view: String,
     pub capture: usize,
     pub sun_angle: f32,
     pub weather: String,
     pub loose: bool,
+    /// `compare` runs the two sides one after the other
+    pub serial: bool,
     /// the port reads textures with its own reader, not with d3dx11_43.dll
     pub own_textures: bool,
     /// the options of the frame, to hand on to the two child processes of `compare`
@@ -77,12 +90,18 @@ fn parse() -> Result<Args, String> {
         car: None,
         skin: None,
         pose: None,
+        tape: None,
+        tape_from: 0,
+        frames: 60,
+        dump: Vec::new(),
+        label: String::new(),
         layout: String::new(),
         view: "chase".into(),
         capture: 1,
         sun_angle: -16.0,
         weather: "3_clear".into(),
         loose: false,
+        serial: false,
         own_textures: false,
         frame_options: Vec::new(),
     };
@@ -135,6 +154,29 @@ fn parse() -> Result<Args, String> {
                 text = absolute.to_string_lossy().into_owned();
                 a.pose = Some(absolute);
             }
+            "--tape" => {
+                let given = PathBuf::from(value()?);
+                let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
+                text = absolute.to_string_lossy().into_owned();
+                a.tape = Some(absolute);
+            }
+            "--tape-from" => {
+                text = value()?;
+                a.tape_from = text.parse().map_err(|_| "--tape-from <frame>")?;
+            }
+            "--frames" => {
+                text = value()?;
+                a.frames = text.parse().map_err(|_| "--frames <count>")?;
+            }
+            "--label" => {
+                text = value()?;
+                a.label = text.clone();
+            }
+            "--dump" => {
+                let list = value()?;
+                a.dump = list.split(',').filter(|s| !s.is_empty()).map(|s| s.parse().map_err(|_| "--dump <frame,frame,...>".to_string())).collect::<Result<_, _>>()?;
+                frame_option = false;
+            }
             "--layout" => {
                 text = value()?;
                 a.layout = if text == "-" { String::new() } else { text.clone() };
@@ -170,6 +212,10 @@ fn parse() -> Result<Args, String> {
             }
             "--loose" => {
                 a.loose = true;
+                frame_option = false;
+            }
+            "--serial" => {
+                a.serial = true;
                 frame_option = false;
             }
             "--verbose" => {
@@ -209,7 +255,7 @@ fn run_side(args: &Args) -> Result<(), String> {
             }
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(args)?;
-            let rendered = unsafe { game.render(&frame)? };
+            let rendered = unsafe { game.render(&frame, &args.dump)? };
             (game.init_log.clone(), rendered)
         }
         "port" => {
@@ -218,13 +264,30 @@ fn run_side(args: &Args) -> Result<(), String> {
         }
         other => return Err(format!("--side {other:?} is not ac or port")),
     };
-    let base = args.out.join(format!("{}.{}", frame.name, args.side));
-    std::fs::write(base.with_extension(format!("{}.gpulog", args.side)), &rendered.log).map_err(|e| e.to_string())?;
-    std::fs::write(base.with_extension(format!("{}.init.gpulog", args.side)), &init).map_err(|e| e.to_string())?;
-    std::fs::write(base.with_extension(format!("{}.cube.gpulog", args.side)), &rendered.cube_log).map_err(|e| e.to_string())?;
-    std::fs::write(base.with_extension(format!("{}.rgba", args.side)), &rendered.pixels).map_err(|e| e.to_string())?;
-    write_png(&base.with_extension(format!("{}.png", args.side)), rendered.width, rendered.height, &rendered.pixels)?;
-    println!("{}: {} draw calls, {} log lines, {}x{}", base.display(), rendered.draws, rendered.log.iter().filter(|b| **b == b'\n').count(), rendered.width, rendered.height);
+    let file = |kind: &str| args.out.join(format!("{}.{}.{kind}", frame.name, args.side));
+    std::fs::write(file("init.gpulog"), &init).map_err(|e| e.to_string())?;
+    std::fs::write(file("cube.gpulog"), &rendered.cube_log).map_err(|e| e.to_string())?;
+    if frame.sequence {
+        // one line per frame, and the whole of the frames asked for
+        let mut list = String::new();
+        for f in &rendered.frames {
+            list.push_str(&format!("{} calls={} draws={} log={:016x} pixels={:016x}\n", f.index, f.calls, f.draws, f.log_hash, f.pixels_hash));
+            if let (Some(log), Some(pixels)) = (&f.log, &f.pixels) {
+                std::fs::write(file(&format!("f{}.gpulog", f.index)), log).map_err(|e| e.to_string())?;
+                std::fs::write(file(&format!("f{}.rgba", f.index)), pixels).map_err(|e| e.to_string())?;
+                write_png(&file(&format!("f{}.png", f.index)), rendered.width, rendered.height, pixels)?;
+            }
+        }
+        std::fs::write(file("seq"), list).map_err(|e| e.to_string())?;
+        println!("{}: {} frames", file("seq").display(), rendered.frames.len());
+        return Ok(());
+    }
+    let f = rendered.frames.last().ok_or("no frame was captured")?;
+    let (log, pixels) = (f.log.as_ref().ok_or("no log")?, f.pixels.as_ref().ok_or("no pixels")?);
+    std::fs::write(file("gpulog"), log).map_err(|e| e.to_string())?;
+    std::fs::write(file("rgba"), pixels).map_err(|e| e.to_string())?;
+    write_png(&file("png"), rendered.width, rendered.height, pixels)?;
+    println!("{}: {} draw calls, {} log lines, {}x{}", file("").display(), f.draws, f.calls, rendered.width, rendered.height);
     Ok(())
 }
 

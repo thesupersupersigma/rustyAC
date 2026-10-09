@@ -244,18 +244,12 @@ impl Game {
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
     /// nodes. The camera of the frame must be set already.
-    pub unsafe fn update_car(&self, c: &Car, spec: &CarSpec, dt: f32) {
+    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, dt: f32) {
         let acs = &self.acs;
-        let s = &spec.pose;
         let flat = |m: &Mat44f| -> [f32; 16] { std::array::from_fn(|i| m.m[i / 4][i % 4]) };
         // CarAvatar::setNewPhysicsState: the state the physics handed over
-        wr(c.car, 0x26c, flat(&s.world_matrix));
-        for i in 0..4 {
-            wr(c.car, 0x2ac + 0x40 * i, flat(&s.suspension_matrix[i]));
-            wr(c.car, 0x3ac + 0x40 * i, flat(&s.tyre_matrix[i]));
-            wr(c.car, 0x4b4 + 4 * i, s.wheel_angular_speed[i]);
-        }
-        wr(c.car, 0x4c4, s.steer);
+        let bytes = s.to_game_bytes();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), c.car.add(0x268), bytes.len());
         // CarAvatar::update 0x1400db830: the body …
         let make_body_matrix: extern "C" fn(*mut u8, *const u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_MAKE_BODY_MATRIX));
         make_body_matrix(c.car, c.car.add(0x26c), c.car.add(0x224));

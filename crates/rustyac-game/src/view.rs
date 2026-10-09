@@ -310,6 +310,7 @@ impl CarView {
             tyre_matrix: [m(&self.tyre_matrix[0]), m(&self.tyre_matrix[1]), m(&self.tyre_matrix[2]), m(&self.tyre_matrix[3])],
             wheel_angular_speed: self.wheel_angular_speed,
             steer: self.steer_deg,
+            ..rustyac_render::car::CarPhysicsState::at_origin()
         }
     }
 

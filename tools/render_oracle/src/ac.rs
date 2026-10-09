@@ -178,15 +178,40 @@ pub struct Game {
     pub init_log: Vec<u8>,
 }
 
+/// One captured frame: its hashes, and the whole of it when it was asked for.
+pub struct Captured {
+    pub index: usize,
+    pub calls: usize,
+    pub draws: u64,
+    pub log_hash: u64,
+    pub pixels_hash: u64,
+    pub log: Option<Vec<u8>>,
+    pub pixels: Option<Vec<u8>>,
+}
+
+/// FNV-1a.
+pub fn hash(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+impl Captured {
+    pub fn new(index: usize, log: Vec<u8>, draws: u64, pixels: Vec<u8>, keep: bool) -> Captured {
+        Captured { index, calls: log.iter().filter(|b| **b == 10).count(), draws, log_hash: hash(&log), pixels_hash: hash(&pixels), log: keep.then_some(log), pixels: keep.then_some(pixels) }
+    }
+}
+
 /// What one run of a renderer gave.
 pub struct Rendered {
     /// the calls of the one-time render of the reflection cube map (`Sim::initStaticCubemap`)
     pub cube_log: Vec<u8>,
-    pub log: Vec<u8>,
-    pub draws: u64,
+    pub frames: Vec<Captured>,
     pub width: u32,
     pub height: u32,
-    pub pixels: Vec<u8>,
 }
 
 impl Game {
@@ -322,7 +347,7 @@ impl Game {
 
     /// The scene of a frame built with the game's own objects, and the frame rendered by the
     /// game's own camera.
-    pub unsafe fn render(&self, frame: &Frame) -> Result<Rendered, String> {
+    pub unsafe fn render(&self, frame: &Frame, dump: &[usize]) -> Result<Rendered, String> {
         let acs = &self.acs;
         let begin: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_BEGIN_SCENE));
         let end: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_END_SCENE));
@@ -446,23 +471,23 @@ impl Game {
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
-        let mut rendered = None;
-        for index in 0..=frame.capture {
+        let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+        for (index, step) in frame.steps.iter().enumerate() {
             // the game camera's update: where it looks from, its lens and the shadow splits
-            wr(camera, 0x8, frame.camera.fov);
-            wr(camera, 0xc, frame.camera.matrix);
-            wr(camera, 0x70, frame.camera.near);
-            if let Some(far) = frame.camera.far {
+            wr(camera, 0x8, step.camera.fov);
+            wr(camera, 0xc, step.camera.matrix);
+            wr(camera, 0x70, step.camera.near);
+            if let Some(far) = step.camera.far {
                 wr(camera, 0x74, far);
             }
-            let s = frame.camera.splits;
+            let s = step.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
-            if let (Some(car), Some(spec)) = (&car, &frame.car) {
-                self.update_car(car, spec, crate::frames::DT);
+            if let Some(car) = &car {
+                self.update_car(car, &step.state, crate::frames::DT);
             }
 
-            if index == frame.capture {
+            if index >= frame.capture {
                 rustyac_render::gpulog::begin_capture(&frame.name);
             }
             // Game::onIdle 0x140242730
@@ -473,14 +498,16 @@ impl Game {
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
             screen_space(self.graphics);
-            if index == frame.capture {
+            if index >= frame.capture {
                 let capture = rustyac_render::gpulog::end_capture();
                 let (width, height, pixels) = self.read_back()?;
-                rendered = Some(Rendered { cube_log: cube_log.clone(), log: capture.text, draws: capture.draws, width, height, pixels });
+                rendered.width = width;
+                rendered.height = height;
+                rendered.frames.push(Captured::new(index, capture.text, capture.draws, pixels, !frame.sequence || dump.contains(&index)));
             }
             end(self.graphics);
         }
-        rendered.ok_or_else(|| "no frame was captured".to_string())
+        Ok(rendered)
     }
 
     /// The swap chain's back buffer, as RGBA rows.

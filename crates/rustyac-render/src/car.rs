@@ -21,70 +21,7 @@ use crate::graphics::Graphics;
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
 
-/// The part of the game's `CarPhysicsState` the picture is made from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CarPhysicsState {
-    /// the body's world matrix
-    pub world_matrix: Mat44f,
-    /// each hub's world matrix (`ISuspension::getHubWorldMatrix`), LF, RF, LR, RR
-    pub suspension_matrix: [Mat44f; 4],
-    /// each wheel's rotation with its spin (`Tyre::getFinalTyreRotation`) at the hub
-    pub tyre_matrix: [Mat44f; 4],
-    /// rad/s; 0 while a tyre is locked or the car sleeps
-    pub wheel_angular_speed: [f32; 4],
-    /// the steering wheel's angle, degrees (`controls.steer * steerLock`)
-    pub steer: f32,
-}
-
-impl CarPhysicsState {
-    /// The car at rest at the origin.
-    pub fn at_origin() -> CarPhysicsState {
-        CarPhysicsState { world_matrix: Mat44f::IDENTITY, suspension_matrix: [Mat44f::IDENTITY; 4], tyre_matrix: [Mat44f::IDENTITY; 4], wheel_angular_speed: [0.0; 4], steer: 0.0 }
-    }
-
-    /// 149 floats, little endian: the body, the four hubs, the four wheels, the wheel speeds,
-    /// the steer angle.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(149 * 4);
-        let mut put = |m: &Mat44f| {
-            for row in &m.m {
-                for v in row {
-                    out.extend(v.to_le_bytes());
-                }
-            }
-        };
-        put(&self.world_matrix);
-        self.suspension_matrix.iter().for_each(&mut put);
-        self.tyre_matrix.iter().for_each(&mut put);
-        for v in self.wheel_angular_speed.iter().chain([&self.steer]) {
-            out.extend(v.to_le_bytes());
-        }
-        out
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Result<CarPhysicsState, String> {
-        if bytes.len() != 149 * 4 {
-            return Err(format!("a car state is {} bytes, not {}", 149 * 4, bytes.len()));
-        }
-        let f: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-        let matrix = |at: usize| {
-            let mut m = Mat44f::default();
-            for r in 0..4 {
-                for c in 0..4 {
-                    m.m[r][c] = f[at + r * 4 + c];
-                }
-            }
-            m
-        };
-        Ok(CarPhysicsState {
-            world_matrix: matrix(0),
-            suspension_matrix: [matrix(16), matrix(32), matrix(48), matrix(64)],
-            tyre_matrix: [matrix(80), matrix(96), matrix(112), matrix(128)],
-            wheel_angular_speed: [f[144], f[145], f[146], f[147]],
-            steer: f[148],
-        })
-    }
-}
+pub use crate::state::CarPhysicsState;
 
 pub const WHEEL_NAMES: [&str; 4] = ["WHEEL_LF", "WHEEL_RF", "WHEEL_LR", "WHEEL_RR"];
 pub const SUS_NAMES: [&str; 4] = ["SUSP_LF", "SUSP_RF", "SUSP_LR", "SUSP_RR"];
