@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use rustyac_game::autodrive::AutoDriver;
 use rustyac_game::cli::Options;
-use rustyac_game::input::bindings::Bindings;
+use rustyac_game::input::bindings::{Bindings, KEY_PLAIN_ABS, KEY_PLAIN_BIAS_DN, KEY_PLAIN_BIAS_UP, KEY_PLAIN_TC};
 use rustyac_game::input::keyboard::KeyboardCarControl;
 use rustyac_game::input::pad::XInput;
 use rustyac_game::input::wheel::WheelDevice;
@@ -533,6 +533,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     // make a Ctrl+letter command: the other Ctrl key does, and Alt (`[RUSTYAC] COMMAND_MODIFIER`)
     let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
     let ctrl_drives = [keyboard.drives_with(0xa2) || keyboard.drives_with(0x11), keyboard.drives_with(0xa3) || keyboard.drives_with(0x11)];
+    // rustyAC's plain keys for the aids and the brake bias, where the bindings leave them free
+    let plain_keys: Vec<i32> = [KEY_PLAIN_TC, KEY_PLAIN_ABS, KEY_PLAIN_BIAS_UP, KEY_PLAIN_BIAS_DN].into_iter().filter(|key| bindings.plain_key_free(*key)).collect();
     if replay.is_none() {
         print!("{}", bindings.describe());
         match bindings.write_if_missing() {
@@ -639,6 +641,18 @@ fn run_window(options: &Options) -> Result<(), String> {
                         request(event::MGUH_MODE);
                     } else if ctrl && key == rustyac_game::input::bindings::KEY_ENGINE_BRAKE {
                         request(if shift { event::ENGINE_BRAKE_DN } else { event::ENGINE_BRAKE_UP });
+                    } else if !ctrl && !alt && plain_keys.contains(&key) {
+                        // rustyAC's plain keys, as in the browser: T / Y (Shift: down), ] / [
+                        match key {
+                            KEY_PLAIN_TC => request(if shift { event::TC_DN } else { event::TC_UP }),
+                            KEY_PLAIN_ABS => request(if shift { event::ABS_DN } else { event::ABS_UP }),
+                            KEY_PLAIN_BIAS_UP => {
+                                shared.bias_requests.fetch_add(1, Ordering::Relaxed);
+                            }
+                            _ => {
+                                shared.bias_requests.fetch_sub(1, Ordering::Relaxed);
+                            }
+                        }
                     } else if !ctrl {
                         match key {
                             // C: camera, P or Pause: pause, R: back to the spawn point,

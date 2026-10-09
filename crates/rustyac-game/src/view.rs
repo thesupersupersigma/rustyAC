@@ -6,7 +6,7 @@
 use rustyac_physics::car::Abs;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
 
-use crate::sim::GameSim;
+use crate::sim::{aid_level_text, bias_text, AidNote, GameSim};
 
 /// A 4x4 matrix as the physics has it: row vectors, the translation in the fourth row
 /// (Direct3D's convention). Row 0 is the part's left (+x), row 1 its up, row 2 its forward.
@@ -70,6 +70,11 @@ pub struct CarView {
     pub abs_mode: (u32, u32),
     pub tc_present: bool,
     pub abs_present: bool,
+    /// `BrakeSystem::getFrontBias` (the cockpit's bias if one is set, else the setup's), the
+    /// value of `acpmf_physics.brakeBias`: the front share, 0..1.
+    pub brake_bias: f32,
+    /// The last change of an aid or of the bias (shown for a moment), see [`CarView::aid_note`].
+    pub note: AidNote,
     pub drs: bool,
     pub lights: bool,
     pub auto_shifter: bool,
@@ -219,6 +224,8 @@ impl Default for CarView {
             abs_mode: (0, 0),
             tc_present: false,
             abs_present: false,
+            brake_bias: 0.0,
+            note: AidNote::default(),
             drs: false,
             lights: false,
             auto_shifter: false,
@@ -353,6 +360,8 @@ impl CarView {
             wind_deg: car.env.wind_direction_deg,
             compound: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.name.as_str())),
             setup: SurfaceName::new(&car.setup_name),
+            brake_bias: car.brake_system.as_deref().map_or(0.0, |brakes| brakes.get_front_bias()),
+            note: sim.aid_note,
             ..CarView::default()
         };
         for index in 0..4.min(car.tyres.len()) {
@@ -448,6 +457,26 @@ impl CarView {
         view
     }
 
+    /// `TC 2/3`, `TC off` or `TC not fitted`.
+    pub fn tc_text(&self) -> String {
+        format!("TC {}", aid_level_text(self.tc_present, self.tc_mode))
+    }
+
+    /// `ABS 1/4`, `ABS off` or `ABS not fitted`.
+    pub fn abs_text(&self) -> String {
+        format!("ABS {}", aid_level_text(self.abs_present, self.abs_mode))
+    }
+
+    /// `Bias 58.0 %`.
+    pub fn bias_text(&self) -> String {
+        format!("Bias {}", bias_text(self.brake_bias))
+    }
+
+    /// The note about the last change of an aid or of the bias, while it is fresh (2.5 s).
+    pub fn aid_note(&self) -> Option<&str> {
+        self.note.shown_at(self.steps)
+    }
+
     /// The car between two steps, for a frame that falls between them: poses are blended, the
     /// HUD's numbers are the newer step's.
     pub fn between(a: &CarView, b: &CarView, t: f32) -> CarView {
@@ -498,6 +527,28 @@ mod tests {
                 assert!((end[r][c] - b[r][c]).abs() < 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn the_aids_and_the_bias_as_the_displays_word_them() {
+        let mut view = CarView { tc_present: true, tc_mode: (2, 3), abs_present: true, abs_mode: (0, 0), brake_bias: 0.58, ..CarView::default() };
+        assert_eq!((view.tc_text(), view.abs_text(), view.bias_text()), ("TC 2/3".to_string(), "ABS off".to_string(), "Bias 58.0 %".to_string()));
+        // a single level reads 1/1; an aid the car does not have is "not fitted", not "off"
+        view.tc_mode = (1, 1);
+        view.abs_present = false;
+        view.brake_bias = 0.725;
+        assert_eq!((view.tc_text(), view.abs_text(), view.bias_text()), ("TC 1/1".to_string(), "ABS not fitted".to_string(), "Bias 72.5 %".to_string()));
+        // a note is shown for 2.5 s of steps after it was made, and no longer
+        assert_eq!(view.aid_note(), None);
+        view.note = AidNote::new("TC 2/3", 1000);
+        view.steps = 1000;
+        assert_eq!(view.aid_note(), Some("TC 2/3"));
+        view.steps = 1000 + AidNote::STEPS - 1;
+        assert_eq!(view.aid_note(), Some("TC 2/3"));
+        view.steps = 1000 + AidNote::STEPS;
+        assert_eq!(view.aid_note(), None);
+        // the longest note fits
+        assert_eq!(AidNote::new("Brake bias 100.0 % (no change)", 0).as_str(), "Brake bias 100.0 % (no change)");
     }
 
     #[test]

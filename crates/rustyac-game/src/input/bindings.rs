@@ -48,6 +48,13 @@ pub const KEY_MGUK_RECOVERY: i32 = 0x31;
 pub const KEY_MGUK_DELIVERY: i32 = 0x32;
 pub const KEY_MGUH_MODE: i32 = 0x33;
 pub const KEY_ENGINE_BRAKE: i32 = 0x34;
+/// rustyAC's own plain keys (no modifier), the same as in the browser: T traction control,
+/// Y ABS (Shift for "down"), ] brake bias forward, [ rearward. A key that the bindings file
+/// uses for something else keeps that use and is not a plain key.
+pub const KEY_PLAIN_TC: i32 = 0x54;
+pub const KEY_PLAIN_ABS: i32 = 0x59;
+pub const KEY_PLAIN_BIAS_UP: i32 = 0xdd;
+pub const KEY_PLAIN_BIAS_DN: i32 = 0xdb;
 
 /// `[RUSTYAC] COMMAND_MODIFIER`: the key held for AC's Ctrl+letter commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -370,6 +377,12 @@ impl Bindings {
     }
 
     /// The active mapping, for the console.
+    /// Is the plain key (`KEY_PLAIN_*`) free: does the bindings file use it for nothing else?
+    pub fn plain_key_free(&self, key: i32) -> bool {
+        let named = |keys: Keys| keys.named().iter().any(|(_, code)| *code == key);
+        !named(Keys::from_ini(&self.ini)) && !named(Keys::second_from_ini(&self.ini)) && !self.hybrid_keys.iter().flatten().any(|code| *code == key)
+    }
+
     pub fn describe(&self) -> String {
         let ini = &self.ini;
         let keys = Keys::from_ini(ini);
@@ -398,16 +411,41 @@ impl Bindings {
         row("DRS", pad("DRS"), key_pair("DRS"));
         row("KERS / ERS boost (hold)", pad("KERS"), key_pair("KERS"));
         row("headlights", pad("ACTION_HEADLIGHTS"), key_pair("ACTION_HEADLIGHTS"));
-        row("brake bias + / -", &format!("{} / {}", pad("BALANCEUP"), pad("BALANCEDN")), format!("{} / {}", key_pair("BALANCEUP"), key_pair("BALANCEDN")));
+        // rustyAC's plain keys, where the file leaves them free
+        let plain = |key: i32, text: &str| if self.plain_key_free(key) { text.to_string() } else { String::new() };
+        let bias_keys = {
+            let own = format!("{} / {}", key_pair("BALANCEUP"), key_pair("BALANCEDN"));
+            match (own.as_str(), self.plain_key_free(KEY_PLAIN_BIAS_UP) && self.plain_key_free(KEY_PLAIN_BIAS_DN)) {
+                ("- / -", true) => "] / [".to_string(),
+                (_, true) => format!("{own}, or ] / ["),
+                _ => own,
+            }
+        };
+        row("brake bias + / -", &format!("{} / {}", pad("BALANCEUP"), pad("BALANCEDN")), bias_keys);
         // a Ctrl key that is bound as a driving key does not make a command (unless the file names it)
         let drives = |key: i32| [&keys, &keys2].iter().any(|k| k.named().iter().any(|(_, code)| *code == key));
         let ctrl = self.command_modifier.label([drives(0xa2) || drives(0x11), drives(0xa3) || drives(0x11)]);
         row(
             "traction control + / -",
             &format!("{} / {}", pad("TCUP"), pad("TCDN")),
-            format!("{ctrl}+{} (with Shift: down)", key_name(self.key_traction_control)),
+            format!("{}{ctrl}+{} (with Shift: down)", plain(KEY_PLAIN_TC, "T, or "), key_name(self.key_traction_control)),
         );
-        row("ABS + / -", &format!("{} / {}", pad("ABSUP"), pad("ABSDN")), format!("{ctrl}+{} (with Shift: down)", key_name(self.key_abs)));
+        // the pad's second layer: the reset button held makes the traction-control buttons ABS's
+        let abs_pad = |section: &str, tc: &str| {
+            let (own, reset, tc) = (button_from_name(ini.get_string(section, "XBOXBUTTON")), self.pad_reset.button, button_from_name(ini.get_string(tc, "XBOXBUTTON")));
+            if own != button::NONE {
+                button_label(own).to_string()
+            } else if reset != button::NONE && tc != button::NONE {
+                format!("{} + {}", button_label(reset), button_label(tc))
+            } else {
+                "-".to_string()
+            }
+        };
+        row(
+            "ABS + / -",
+            &format!("{} / {}", abs_pad("ABSUP", "TCUP"), abs_pad("ABSDN", "TCDN")),
+            format!("{}{ctrl}+{} (with Shift: down)", plain(KEY_PLAIN_ABS, "Y, or "), key_name(self.key_abs)),
+        );
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         // the hybrid system's cockpit: AC's sections for the pad, rustyAC's second keys, and
         // AC's fixed commands on the digits
@@ -428,8 +466,8 @@ impl Bindings {
         }
         row("MGU-H mode", pad(HYBRID_SECTIONS[6]), format!("{}, or {ctrl}+{}", keys_of(6), key_name(KEY_MGUH_MODE)));
         row("next view", pad("ACTION_CHANGE_CAMERA"), "F1 or C (F6: the car's own cameras)".to_string());
-        row("reset to spawn", button_label(self.pad_reset.button), "R (N: a new car)".to_string());
-        row("back on track", &format!("{} held", button_label(self.pad_reset.button)), "Shift+R".to_string());
+        row("reset to spawn", &format!("{}, a tap", button_label(self.pad_reset.button)), "R (N: a new car)".to_string());
+        row("back on track", &format!("{}, held 0.6 s", button_label(self.pad_reset.button)), "Shift+R".to_string());
         row("pause", button_label(self.pad_pause.button), "P".to_string());
         row("quit", "-", "Esc".to_string());
         out.push_str(&format!(
@@ -483,6 +521,8 @@ pub fn key_name(code: i32) -> String {
         0xa2 => "Left Ctrl".to_string(),
         0xa3 => "Right Ctrl".to_string(),
         0xa4 => "Left Alt".to_string(),
+        0xdb => "[".to_string(),
+        0xdd => "]".to_string(),
         code if code <= 0 => "-".to_string(),
         other => format!("key {other:#04x}"),
     }

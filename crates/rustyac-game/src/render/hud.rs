@@ -231,7 +231,9 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     }
 
     // bottom left: revs, gear, speed (the middle of the picture is the car's)
-    let panel_w = 470.0 * s;
+    // (wide enough for the lamps at their longest: two aids that are not fitted)
+    let lamps: f32 = [view.tc_text(), view.abs_text(), "DRS".to_string(), "AUTO".to_string(), "LIGHTS".to_string()].iter().map(|label| hud.width(label, 0.7 * s) + 18.0 * s).sum();
+    let panel_w = (470.0 * s).max(lamps + 26.0 * s);
     let panel_h = 150.0 * s;
     let px = 10.0 * s;
     let py = height - panel_h - 40.0 * s;
@@ -250,6 +252,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     };
     hud.rect(bx, by, bw * revs, bh, rev_color);
     hud.text(bx, by + bh + 4.0 * s, 0.7 * s, DIM, &format!("{:.0} rpm", view.rpm));
+    // the brake bias, always: AC's own number (getFrontBias x 100, one decimal)
+    hud.text_centred(px + panel_w * 0.5, by + bh + 4.0 * s, 0.7 * s, WHITE, &view.bias_text());
     hud.text_right(bx + bw, by + bh + 4.0 * s, 0.7 * s, DIM, &format!("{limit:.0}"));
     // gear and speed
     let centre = px + panel_w * 0.5;
@@ -259,18 +263,18 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     // lamps
     let lamp_y = py + panel_h - 34.0 * s;
     let mut lx = px + 16.0 * s;
-    let level = |mode: (u32, u32)| if mode.1 > 1 { format!(" {}", mode.0) } else { String::new() };
-    for (lit, present, color, label) in [
-        (view.tc_in_action, view.tc_present && view.tc_mode.0 > 0, YELLOW, format!("TC{}", level(view.tc_mode))),
-        (view.abs_in_action, view.abs_present && view.abs_mode.0 > 0, YELLOW, format!("ABS{}", level(view.abs_mode))),
-        (view.drs, true, GREEN, "DRS".to_string()),
-        (view.auto_shifter, true, BLUE, "AUTO".to_string()),
-        (view.lights, true, WHITE, "LIGHTS".to_string()),
+    // the aids' lamps say their level all the time (`TC 2/3`, `ABS off`, `TC not fitted`) and
+    // are lit while the aid acts
+    for (lit, color, label) in [
+        (view.tc_in_action, YELLOW, view.tc_text()),
+        (view.abs_in_action, YELLOW, view.abs_text()),
+        (view.drs, GREEN, "DRS".to_string()),
+        (view.auto_shifter, BLUE, "AUTO".to_string()),
+        (view.lights, WHITE, "LIGHTS".to_string()),
     ] {
-        let label = if present { label } else { format!("{label} off") };
-        let w = hud.width(&label, 0.7 * s) + 16.0 * s;
+        let w = hud.width(&label, 0.7 * s) + 12.0 * s;
         hud.lamp(lx, lamp_y, w, 24.0 * s, lit, color, &label, s);
-        lx += w + 8.0 * s;
+        lx += w + 6.0 * s;
     }
 
     // bottom right: pedals and steering
@@ -359,12 +363,23 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         let y = if view.lap.on_track { 114.0 * s } else { 14.0 * s };
         hud.text_centred(width * 0.5, y, 1.0 * s, YELLOW, "REPLAY");
     }
+    // a change of an aid or of the brake bias: a note for a moment, in the upper middle
+    if let Some(note) = view.aid_note() {
+        let w = hud.width(note, 1.2 * s) + 32.0 * s;
+        let y = height * 0.24;
+        hud.rect((width - w) * 0.5, y, w, gh * 1.2 * s + 14.0 * s, PANEL);
+        hud.text_centred(width * 0.5, y + 7.0 * s, 1.2 * s, YELLOW, note);
+    }
     if info.paused {
         let w = hud.width("PAUSED", 2.5 * s) + 40.0 * s;
         hud.rect((width - w) * 0.5, height * 0.36, w, gh * 2.5 * s + 20.0 * s, PANEL);
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
-    let keys = if lap.on_track { "F1 view   F6 car cameras   R to the start   Shift+R back on track   N new car   P pause   Esc quit" } else { "F1 view   F6 car cameras   R reset   N new car   P pause   Esc quit" };
+    let keys = if lap.on_track {
+        "F1 view   F6 car cameras   R to the start   Shift+R back on track   N new car   T / Y TC / ABS (Shift: down)   ] [ brake bias   P pause   Esc quit"
+    } else {
+        "F1 view   F6 car cameras   R reset   N new car   T / Y TC / ABS (Shift: down)   ] [ brake bias   P pause   Esc quit"
+    };
     hud.text(14.0 * s, height - 28.0 * s, 0.7 * s, DIM, keys);
     hud.vertices
 }

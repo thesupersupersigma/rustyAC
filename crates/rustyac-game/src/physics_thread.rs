@@ -8,7 +8,7 @@
 //! Only when the thread falls hopelessly behind (more than 100 ms: a debugger, a sleeping
 //! laptop) is the schedule started again from "now".
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -116,6 +116,8 @@ pub struct Shared {
     pub focused: AtomicBool,
     /// [`event`] bits asked for from outside the thread (the window's keys).
     pub requests: AtomicU32,
+    /// Clicks of the cockpit's brake-bias control asked for from outside the thread.
+    pub bias_requests: AtomicI32,
     /// The replay or the duration has run out.
     pub finished: AtomicBool,
     pub frames: Mutex<Frames>,
@@ -138,6 +140,7 @@ impl Shared {
             paused: AtomicBool::new(false),
             focused: AtomicBool::new(true),
             requests: AtomicU32::new(0),
+            bias_requests: AtomicI32::new(0),
             finished: AtomicBool::new(false),
             frames: Mutex::new(Frames { prev: view, curr: view, curr_due: Instant::now() }),
             timing: Mutex::new(Timing::default()),
@@ -278,6 +281,10 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             let requests = shared.requests.swap(0, Ordering::Relaxed);
             if requests != 0 {
                 sim.car.device.source.request(requests);
+            }
+            let clicks = shared.bias_requests.swap(0, Ordering::Relaxed);
+            if clicks != 0 {
+                sim.car.device.source.request_bias(clicks);
             }
         }
         let burst = sim.car.device.source.in_spawn_sequence();

@@ -62,6 +62,10 @@ pub trait DriverSource: Send {
     /// back). A recorded drive has its own commands and ignores this.
     fn request(&mut self, _events: u32) {}
 
+    /// Clicks of the cockpit's brake-bias control asked for from outside the device (a key of
+    /// the window or of the page), before the next step. A recorded drive ignores this.
+    fn request_bias(&mut self, _clicks: i32) {}
+
     /// Called now and then while the simulation is paused (devices can be looked after).
     fn idle(&mut self) {}
 
@@ -187,6 +191,8 @@ pub struct SpawnSequence<S: DriverSource> {
     pub at: u32,
     /// Commands asked for by the game itself ([`DriverSource::request`]).
     requested: u32,
+    /// Brake-bias clicks asked for from outside ([`DriverSource::request_bias`]).
+    requested_bias: i32,
     /// Shift into first gear at the end of the sequence.
     pub first_gear: bool,
     /// The last `acquire` was a step of the sequence.
@@ -195,7 +201,7 @@ pub struct SpawnSequence<S: DriverSource> {
 
 impl<S: DriverSource> SpawnSequence<S> {
     pub fn new(inner: S, first_gear: bool) -> SpawnSequence<S> {
-        SpawnSequence { inner, at: 0, requested: 0, first_gear, last_was_sequence: false }
+        SpawnSequence { inner, at: 0, requested: 0, requested_bias: 0, first_gear, last_was_sequence: false }
     }
 
     fn length(&self) -> u32 {
@@ -210,7 +216,7 @@ impl<S: DriverSource> DriverSource for SpawnSequence<S> {
         if events & (event::RESET | event::REBUILD) != 0 {
             self.at = 0;
         }
-        (events, bias_clicks)
+        (events, bias_clicks + std::mem::take(&mut self.requested_bias))
     }
 
     fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
@@ -254,6 +260,10 @@ impl<S: DriverSource> DriverSource for SpawnSequence<S> {
 
     fn request(&mut self, events: u32) {
         self.requested |= events;
+    }
+
+    fn request_bias(&mut self, clicks: i32) {
+        self.requested_bias += clicks;
     }
 
     fn idle(&mut self) {
@@ -540,6 +550,66 @@ pub struct GameSim {
     pub lap_db: LapDb,
     /// Which session this is (0 at the start; a new car starts the next one).
     pub session_index: i32,
+    /// The last change of an aid or of the brake bias, for the displays. Never read by the
+    /// physics and not part of any dump.
+    pub aid_note: AidNote,
+}
+
+/// A short on-screen note about the traction control, the ABS or the brake bias: what the
+/// driver just set (AC shows a system message for the same presses).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AidNote {
+    bytes: [u8; 40],
+    /// The step count ([`GameSim::steps`]) when it was made.
+    pub step: u64,
+}
+
+impl Default for AidNote {
+    fn default() -> AidNote {
+        AidNote { bytes: [0; 40], step: 0 }
+    }
+}
+
+impl AidNote {
+    /// How long a note is shown: 2.5 s of physics steps.
+    pub const STEPS: u64 = 833;
+
+    pub fn new(text: &str, step: u64) -> AidNote {
+        let mut bytes = [0u8; 40];
+        for (slot, byte) in bytes.iter_mut().zip(text.bytes().filter(u8::is_ascii)) {
+            *slot = byte;
+        }
+        AidNote { bytes, step }
+    }
+
+    pub fn as_str(&self) -> &str {
+        let end = self.bytes.iter().position(|b| *b == 0).unwrap_or(self.bytes.len());
+        std::str::from_utf8(&self.bytes[..end]).unwrap_or("")
+    }
+
+    /// The text while the note is fresh at step count `steps`, else nothing.
+    pub fn shown_at(&self, steps: u64) -> Option<&str> {
+        (!self.as_str().is_empty() && steps.saturating_sub(self.step) < AidNote::STEPS).then(|| self.as_str())
+    }
+}
+
+/// A level of the traction control or the ABS as the displays word it: `2/3`, `off`, or
+/// `not fitted`. `mode` is `getCurrentMode`'s pair (level from 1, number of levels; (0, 0)
+/// while switched off), which is what AC's own message shows.
+pub fn aid_level_text(present: bool, mode: (u32, u32)) -> String {
+    if !present {
+        "not fitted".to_string()
+    } else if mode.0 == 0 {
+        "off".to_string()
+    } else {
+        format!("{}/{}", mode.0, mode.1)
+    }
+}
+
+/// The brake bias as AC's message and its apps show it: `BrakeSystem::getFrontBias` (the
+/// value of `acpmf_physics.brakeBias`) times 100 with one decimal, `58.0 %`.
+pub fn bias_text(front_bias: f32) -> String {
+    format!("{:.1} %", front_bias * 100.0)
 }
 
 /// Where the car is spawned: on the road at the origin, the nose towards +z (so the tail,
@@ -741,7 +811,7 @@ impl GameSim {
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0 })
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, aid_note: AidNote::default() })
     }
 
     /// The physics clock after the last step, ms.
@@ -851,9 +921,16 @@ impl GameSim {
                 car.transponder.add_cut();
             });
         }
+        // the notes below are for the displays only: they read what the calls left behind
+        let steps = self.steps;
         if bias_clicks != 0 {
             if let Some(brakes) = &mut self.car.car.brake_system {
+                let before = brakes.get_front_bias();
                 brakes.set_manual_front_bias(bias_clicks);
+                let after = brakes.get_front_bias();
+                // (a car without a cockpit control, or the control at its stop)
+                let same = if before.to_bits() == after.to_bits() { " (no change)" } else { "" };
+                self.aid_note = AidNote::new(&format!("Brake bias {}{same}", bias_text(after)), steps);
             }
         }
         if let Some(aids) = &mut self.car.car.aids {
@@ -861,13 +938,21 @@ impl GameSim {
             for (bit, direction) in [(event::TC_UP, 1), (event::TC_DN, -1)] {
                 if events & bit != 0 {
                     aids.traction_control.cycle_mode(direction);
+                    let tc = &aids.traction_control;
+                    self.aid_note = AidNote::new(&format!("TC {}", aid_level_text(tc.is_present, tc.get_current_mode())), steps);
                 }
             }
             for (bit, direction) in [(event::ABS_UP, 1), (event::ABS_DN, -1)] {
                 if events & bit != 0 {
                     aids.abs.cycle_mode(direction);
+                    let abs = &aids.abs;
+                    self.aid_note = AidNote::new(&format!("ABS {}", aid_level_text(abs.is_present, abs.get_current_mode())), steps);
                 }
             }
+        } else if events & (event::TC_UP | event::TC_DN) != 0 {
+            self.aid_note = AidNote::new("TC not fitted", steps);
+        } else if events & (event::ABS_UP | event::ABS_DN) != 0 {
+            self.aid_note = AidNote::new("ABS not fitted", steps);
         }
         if events & event::AUTO_SHIFTER != 0 {
             self.car.car.auto_shifter.is_active = !self.car.car.auto_shifter.is_active;
