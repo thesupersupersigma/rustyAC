@@ -12,7 +12,7 @@ use rustyac_physics::vecmath::{Mat44f, Vec3f};
 
 use crate::graphics::{Graphics, BLEND_ALPHA, BLEND_ALPHA_TO_COVERAGE};
 use crate::material::{Material, MaterialId};
-use crate::scene::{MeshData, NodeId, Renderable, Scene, Sphere};
+use crate::scene::{MeshData, NodeId, NodeKind, Renderable, Scene, SkinnedBone, SkinnedMeshData, Sphere};
 use crate::texture::Texture;
 
 /// `KN5IO`: the importer, with the folders whose image files replace textures of the same
@@ -171,6 +171,9 @@ impl Kn5Io {
 
         // loadBinaryV2: the nodes, in file order (parents come before their children)
         let mut ids: Vec<NodeId> = Vec::with_capacity(kn5.nodes.len());
+        // `KN5IO::bonesToSolve`: the bones whose node comes later in the file
+        let mut bones_to_solve: Vec<(NodeId, String, Mat44f)> = Vec::new();
+        let mut load_success = true;
         for node in &kn5.nodes {
             let name = node.name.display().into_owned();
             let id = match (&node.class, &node.mesh) {
@@ -195,11 +198,40 @@ impl Kn5Io {
                     let mesh = MeshData { vertices, indices, material, is_renderable: info.is_renderable, vb: None, ib: None, compiled_indices_count: 0, compiled_vertices_count: 0 };
                     scene.mesh(&name, renderable, mesh)
                 }
-                (NodeClass::SkinnedMesh, _) => {
-                    // skinned meshes (the driver, a few flags) are drawn from Task 21 on
-                    println!("NOTE: skinned mesh {name} of {filename} is not drawn yet");
-                    let id = scene.node(&name);
-                    scene.nodes[id].needs_matrix_ws = true;
+                (NodeClass::SkinnedMesh, Some(info)) => {
+                    let mut renderable = Renderable::new();
+                    renderable.cast_shadows = info.cast_shadows;
+                    renderable.is_visible = info.is_visible;
+                    renderable.is_transparent = info.is_transparent;
+                    renderable.layer = info.layer as i32;
+                    renderable.lod_in = info.lod_in;
+                    renderable.lod_out = info.lod_out;
+                    // a bone is bound now when a node of its name was read before this mesh
+                    // (Node::findChildByName from the file's wrapper node: file order)
+                    let mut bones = Vec::new();
+                    let mut late = Vec::new();
+                    for (bone_name, matrix) in &info.bones {
+                        let bone_name = bone_name.display().into_owned();
+                        let matrix = Mat44f { m: *matrix };
+                        match ids.iter().copied().find(|&i| scene.nodes[i].name == bone_name) {
+                            Some(bone) => bones.push(SkinnedBone { bone, offset_matrix: matrix }),
+                            None => late.push((bone_name, matrix)),
+                        }
+                    }
+                    let vertices = if info.vertex_count != 0 { reader.vertex_bytes(info).map_err(|e| format!("{}: {e}", file.display()))? } else { Vec::new() };
+                    let indices = if info.index_count != 0 { reader.indices(info).map_err(|e| format!("{}: {e}", file.display()))? } else { Vec::new() };
+                    let mat_id = info.material_id as i32;
+                    let material = if mat_id >= 0 && (mat_id as usize) < material_count {
+                        Some(MaterialId((first_material + mat_id as usize) as u32))
+                    } else {
+                        println!("ERROR: matid={mat_id}");
+                        None
+                    };
+                    let mesh = SkinnedMeshData { vertices, indices, material, bones, vb: None, ib: None, bones_buffer: None, bones_staging_buffer: Vec::new(), compiled_indices_count: 0, compiled_vertices_count: 0 };
+                    let id = scene.skinned_mesh(&name, renderable, mesh);
+                    for (bone_name, matrix) in late {
+                        bones_to_solve.push((id, bone_name, matrix));
+                    }
                     id
                 }
                 _ => {
@@ -214,6 +246,21 @@ impl Kn5Io {
             }
             ids.push(id);
         }
+        // the end of KN5IO::load: the bones that were not found while reading
+        for (mesh, bone_name, matrix) in bones_to_solve {
+            match ids.iter().copied().find(|&i| scene.nodes[i].name == bone_name) {
+                Some(bone) => {
+                    if let NodeKind::SkinnedMesh(data) = &mut scene.nodes[mesh].kind {
+                        data.bones.push(SkinnedBone { bone, offset_matrix: matrix });
+                    }
+                }
+                None => {
+                    println!("ERROR LATE SOLVING BONE: {bone_name}");
+                    load_success = false;
+                }
+            }
+        }
+        let _ = load_success;
         ids.first().copied().ok_or_else(|| format!("{}: no node in the model", file.display()))
     }
 }

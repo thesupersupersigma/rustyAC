@@ -34,6 +34,7 @@ pub fn profile() -> Profile {
 
 /// `cfg/video.ini` of the proof: no post-processing, no motion blur, no MSAA, no mirror, no
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
+#[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
     let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME } = profile();
     let lines = [

@@ -151,6 +151,13 @@ fn release(scene: &mut Scene, node: NodeId) {
         mesh.vertices = Vec::new();
         mesh.indices = Vec::new();
     }
+    if let NodeKind::SkinnedMesh(mesh) = &mut scene.nodes[node].kind {
+        mesh.vb = None;
+        mesh.ib = None;
+        mesh.bones_buffer = None;
+        mesh.vertices = Vec::new();
+        mesh.indices = Vec::new();
+    }
     let children = scene.nodes[node].children.clone();
     for child in children {
         release(scene, child);

@@ -14,7 +14,7 @@ use rustyac_math::sqrtf;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
 use crate::graphics::Graphics;
-use crate::kgl::{KglIndexBuffer, KglVertexBuffer};
+use crate::kgl::{KglCBuffer, KglIndexBuffer, KglVertexBuffer};
 use crate::material::{Material, MaterialFilter, MaterialId, PASS_SHADOW, PASS_TRANSPARENT};
 
 pub type NodeId = usize;
@@ -157,11 +157,36 @@ pub struct MeshData {
     pub compiled_vertices_count: u32,
 }
 
+/// `SkinnedBone` (0x68 bytes): the node that moves the bone, and the 64 bytes of the file.
+pub struct SkinnedBone {
+    pub bone: NodeId,
+    pub offset_matrix: Mat44f,
+}
+
+/// The members of `SkinnedMesh` (0x188 bytes).
+pub struct SkinnedMeshData {
+    /// `SkinnedMeshVertex` records of 76 bytes, exactly the bytes of the file
+    pub vertices: Vec<u8>,
+    pub indices: Vec<u16>,
+    pub material: Option<MaterialId>,
+    /// the bones found while the file was read, then the ones found after it
+    pub bones: Vec<SkinnedBone>,
+    pub vb: Option<KglVertexBuffer>,
+    pub ib: Option<KglIndexBuffer>,
+    /// `bones.len() * 64` bytes at slot 13
+    pub bones_buffer: Option<KglCBuffer>,
+    pub bones_staging_buffer: Vec<u8>,
+    pub compiled_indices_count: u32,
+    pub compiled_vertices_count: u32,
+}
+
 pub enum NodeKind {
     /// `Node`, `Model`, `CarNodeSorter`
     Node,
     /// `Mesh`
     Mesh(Box<MeshData>),
+    /// `SkinnedMesh`
+    SkinnedMesh(Box<SkinnedMeshData>),
     /// `NodeBoundingSphere`: its world matrix is copied from the delegate when it is drawn
     BoundingSphere { delegate: Option<NodeId> },
     /// `NodeEvent`: the callbacks belong to Task 21; without them it is a node
@@ -230,6 +255,11 @@ impl Scene {
     /// `Mesh::Mesh` 0x140225be0: the only kind of node that asks for no world matrix.
     pub fn mesh(&mut self, name: &str, renderable: Renderable, mesh: MeshData) -> NodeId {
         self.push(name, NodeKind::Mesh(Box::new(mesh)), Some(renderable), false)
+    }
+
+    /// `SkinnedMesh::SkinnedMesh` 0x14022bda0: its own world matrix stays the identity.
+    pub fn skinned_mesh(&mut self, name: &str, renderable: Renderable, mesh: SkinnedMeshData) -> NodeId {
+        self.push(name, NodeKind::SkinnedMesh(Box::new(mesh)), Some(renderable), false)
     }
 
     /// `NodeBoundingSphere::NodeBoundingSphere` 0x140218a30.
@@ -389,8 +419,38 @@ impl Scene {
             mesh.vb = Some(graphics.kgl.create_vertex_buffer(&mesh.vertices, count * 44, 44, false));
             mesh.ib = Some(graphics.kgl.create_index_buffer(&mesh.indices));
             if renderable.bounding_sphere.radius == 0.0 || renderable.bounding_sphere.radius.is_nan() {
-                renderable.bounding_sphere = update_bounding_sphere(&mesh.vertices);
+                renderable.bounding_sphere = update_bounding_sphere(&mesh.vertices, 44);
             }
+            mesh.compiled_indices_count = mesh.indices.len() as u32;
+            mesh.compiled_vertices_count = count as u32;
+            return;
+        }
+        if let NodeKind::SkinnedMesh(mesh) = &mut node.kind {
+            // SkinnedMesh::compile 0x14022c910
+            let renderable = node.renderable.as_mut().expect("a skinned mesh is a renderable");
+            if mesh.ib.is_some() || mesh.vb.is_some() {
+                println!("WARNING: Skinned Mesh {name} is already compiled");
+            }
+            if mesh.vertices.is_empty() {
+                println!("WARNING ZERO VERTICES IN SKINNED MESH {name}");
+            }
+            if mesh.indices.is_empty() {
+                return;
+            }
+            if mesh.material.is_none() {
+                println!("WARNING: SKINNED MESH {name} has NULL material");
+            }
+            let count = mesh.vertices.len() / 76;
+            if count > 0xfffa {
+                println!("WARNING,SKINNED MESH {name} HAS {count} vertices");
+            }
+            mesh.vb = Some(graphics.kgl.create_vertex_buffer(&mesh.vertices, count * 76, 76, false));
+            mesh.ib = Some(graphics.kgl.create_index_buffer(&mesh.indices));
+            renderable.bounding_sphere = update_bounding_sphere(&mesh.vertices, 76);
+            // SkinnedMesh::initBonesBuffer 0x14022cb30
+            let size = mesh.bones.len() * 64;
+            mesh.bones_buffer = Some(graphics.kgl.create_cbuffer(size as i32));
+            mesh.bones_staging_buffer = vec![0u8; size];
             mesh.compiled_indices_count = mesh.indices.len() as u32;
             mesh.compiled_vertices_count = count as u32;
             return;
@@ -406,6 +466,7 @@ impl Scene {
     pub fn render(&mut self, graphics: &mut Graphics, n: NodeId, rc: &mut RenderContext) {
         match &self.nodes[n].kind {
             NodeKind::Mesh(_) => self.render_mesh(graphics, n, rc),
+            NodeKind::SkinnedMesh(_) => self.render_skinned_mesh(graphics, n, rc),
             NodeKind::BoundingSphere { delegate } => {
                 // NodeBoundingSphere::render 0x140218b80
                 if let Some(delegate) = *delegate {
@@ -459,17 +520,65 @@ impl Scene {
         graphics.commit_shader_changes();
         graphics.draw_primitive(mesh.compiled_indices_count as i32, 0, 0);
     }
+
+    /// `SkinnedMesh::render` 0x14022cdc0.
+    fn render_skinned_mesh(&mut self, graphics: &mut Graphics, n: NodeId, rc: &mut RenderContext) {
+        let node = &self.nodes[n];
+        let NodeKind::SkinnedMesh(mesh) = &node.kind else {
+            return;
+        };
+        if mesh.compiled_indices_count < 3 {
+            return;
+        }
+        // the game reads the parent without a test; a skinned mesh always hangs under a node
+        let parent_world = node.parent.map(|p| self.nodes[p].matrix_ws).unwrap_or(Mat44f::IDENTITY);
+        let renderable = node.renderable.as_ref().expect("a skinned mesh is a renderable");
+        if !is_visible(rc, renderable, &parent_world) {
+            return;
+        }
+        if let Some(material) = mesh.material {
+            rc.material_filter.apply(material, &mut self.materials[material.0 as usize], graphics, rc.pass_id);
+        }
+        // SkinnedMesh::updateBonesBuffer 0x14022ce90: offsetMatrix * the bone node's world
+        // matrix, rows as they are (not transposed)
+        let NodeKind::SkinnedMesh(mesh) = &self.nodes[n].kind else {
+            return;
+        };
+        let mut staging = Vec::with_capacity(mesh.bones.len() * 64);
+        for bone in &mesh.bones {
+            let s = xm_matrix_multiply(&bone.offset_matrix, &self.nodes[bone.bone].matrix_ws);
+            for row in &s.m {
+                for v in row {
+                    staging.extend(v.to_le_bytes());
+                }
+            }
+        }
+        let NodeKind::SkinnedMesh(mesh) = &mut self.nodes[n].kind else {
+            return;
+        };
+        mesh.bones_staging_buffer = staging;
+        graphics.set_vb(mesh.vb.as_ref().expect("compiled"));
+        graphics.set_ib(mesh.ib.as_ref().expect("compiled"));
+        graphics.commit_shader_changes();
+        if let Some(buffer) = &mesh.bones_buffer {
+            graphics.kgl.cbuffer_map(buffer, &mesh.bones_staging_buffer);
+            graphics.kgl.cbuffer_bind(buffer, 13);
+        }
+        graphics.draw_primitive(mesh.compiled_indices_count as i32, 0, 0);
+        // Node::render: the mesh's own world matrix (the identity), then its children
+        self.render_node(graphics, n, rc);
+    }
 }
 
 /// `Mesh::updateBoundingSphere` 0x140226280: the average of the vertices and the farthest one.
-fn update_bounding_sphere(vertices: &[u8]) -> Sphere {
+fn update_bounding_sphere(vertices: &[u8], stride: usize) -> Sphere {
     let position = |v: &[u8]| {
         let f = |at: usize| f32::from_le_bytes([v[at], v[at + 1], v[at + 2], v[at + 3]]);
         (f(0), f(4), f(8))
     };
     let (mut cx, mut cy, mut cz) = (0.0f32, 0.0f32, 0.0f32);
-    let count = vertices.len() / 44;
-    for v in vertices.chunks_exact(44) {
+    let count = vertices.len() / stride;
+    for v in vertices.chunks_exact(stride) {
         let (x, y, z) = position(v);
         cx += x;
         cy += y;
@@ -479,7 +588,7 @@ fn update_bounding_sphere(vertices: &[u8]) -> Sphere {
     let (cx, cy, cz) = (inv * cx, inv * cy, inv * cz);
     let mut radius = 0.0f32;
     let mut best = 0.0f32;
-    for v in vertices.chunks_exact(44) {
+    for v in vertices.chunks_exact(stride) {
         let (x, y, z) = position(v);
         let (dx, dy, dz) = (x - cx, y - cy, z - cz);
         let d2 = (dy * dy + dx * dx) + dz * dz;

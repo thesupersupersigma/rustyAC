@@ -4,6 +4,7 @@
 //! device, off screen) against the Rust port in `crates/rustyac-render`.
 //! See `docs/port/renderer_core.md`.
 
+#[allow(dead_code)]
 #[path = "../../car_oracle/src/acs.rs"]
 mod acs;
 mod ac;
@@ -18,7 +19,7 @@ use std::path::PathBuf;
 const USAGE: &str = "usage:
   render_oracle run --side ac|port [frame options]   render one frame with one side; writes
                                                      <out>/<frame>.<side>.gpulog / .init.gpulog / .png
-  render_oracle compare [frame options] [--loose]    both sides (a process each), then the logs line
+  render_oracle compare [frame options] [--loose] [--own-textures]    both sides (a process each), then the logs line
                                                      by line and the pictures byte by byte
      frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free|eyes|sun|far] [--capture <n>]
                     [--car <folder name> --pose <file> [--skin <folder name>]]
@@ -51,6 +52,8 @@ pub struct Args {
     pub sun_angle: f32,
     pub weather: String,
     pub loose: bool,
+    /// the port reads textures with its own reader, not with d3dx11_43.dll
+    pub own_textures: bool,
     /// the options of the frame, to hand on to the two child processes of `compare`
     pub frame_options: Vec<String>,
 }
@@ -80,6 +83,7 @@ fn parse() -> Result<Args, String> {
         sun_angle: -16.0,
         weather: "3_clear".into(),
         loose: false,
+        own_textures: false,
         frame_options: Vec::new(),
     };
     let mut profile = root::TASK_20;
@@ -161,6 +165,9 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.weather = text.clone();
             }
+            "--own-textures" => {
+                a.own_textures = true;
+            }
             "--loose" => {
                 a.loose = true;
                 frame_option = false;
@@ -205,7 +212,10 @@ fn run_side(args: &Args) -> Result<(), String> {
             let rendered = unsafe { game.render(&frame)? };
             (game.init_log.clone(), rendered)
         }
-        "port" => port::render(args, &frame)?,
+        "port" => {
+            rustyac_render::texture::force_fallback(args.own_textures);
+            port::render(args, &frame)?
+        }
         other => return Err(format!("--side {other:?} is not ac or port")),
     };
     let base = args.out.join(format!("{}.{}", frame.name, args.side));
