@@ -400,7 +400,7 @@ impl DriverModel {
             if !self.lock_animation {
                 let k = -1.0f32 / self.animation_lock;
                 let mut x = frame.graphic_steer_deg * k;
-                if !(x >= -1.0 && x <= 1.0) {
+                if !(-1.0..=1.0).contains(&x) {
                     // fmodf: exact, so the language's remainder is the C runtime's
                     x %= 1.0;
                 }
