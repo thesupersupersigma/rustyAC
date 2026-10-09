@@ -6,6 +6,8 @@ assetto corsa rust rewrite
 
 **Download:** the Windows builds are on the [Releases page](https://github.com/thesupersupersigma/rustyAC/releases) (you need your own Assetto Corsa install).
 
+**In a browser (a preview):** the same physics as WebAssembly, with a small picture, keyboard and gamepad. Each release has a `-web.zip` with the site; you open your own Assetto Corsa folder in the page. How to build and host it: [docs/web.md](docs/web.md).
+
 very experimental, join the [very experimental discord](https://discord.gg/trvtVNWzaf) too (https://discord.gg/trvtVNWzaf)
 
 idk rust, if ur gonna hate on me using claude for this msg me on discord at thesuper2sigma 
