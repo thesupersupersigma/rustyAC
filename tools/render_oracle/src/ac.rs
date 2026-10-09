@@ -421,6 +421,12 @@ impl Game {
         wr(camera, 0x2b8, crate::root::profile().cubemap_faces_per_frame); // cubeMapRenderer.facesPerFrame
         let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
         set_cubemap_size(camera, crate::root::profile().cubemap_size);
+        // Sim::addCar: the car's models and its objects
+        let car = match &frame.car {
+            Some(spec) => Some(self.load_car(spec, cars, camera)?),
+            None => None,
+        };
+
         let cube_log;
         // Sim::initStaticCubemap 0x14019a2a0, from Sim::onPostLoad: the small model and the sky
         // into the six faces, once, with the scene camera where its constructor left it
@@ -451,6 +457,10 @@ impl Game {
             }
             let s = frame.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
+            // Game::update: the car's objects, then the handlers of evOnPostUpdate
+            if let (Some(car), Some(spec)) = (&car, &frame.car) {
+                self.update_car(car, spec, crate::frames::DT);
+            }
 
             if index == frame.capture {
                 rustyac_render::gpulog::begin_capture(&frame.name);

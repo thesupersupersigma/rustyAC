@@ -7,6 +7,7 @@
 #[path = "../../car_oracle/src/acs.rs"]
 mod acs;
 mod ac;
+mod ac_car;
 mod compare;
 mod frames;
 mod port;
@@ -196,6 +197,9 @@ fn run_side(args: &Args) -> Result<(), String> {
     let (init, rendered) = match args.side.as_str() {
         "ac" => {
             root::prepare(args)?;
+            if let Some(car) = &frame.car {
+                ac_car::prepare_root(&args.root, &args.game, &repo_root(), car)?;
+            }
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(args)?;
             let rendered = unsafe { game.render(&frame)? };

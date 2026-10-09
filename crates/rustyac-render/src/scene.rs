@@ -283,6 +283,40 @@ impl Scene {
         }
     }
 
+    /// `Node::findChildrenByName` 0x14020df50: the node itself and everything below it, each
+    /// node before its children.
+    pub fn find_children_by_name(&self, node: NodeId, name: &str, out: &mut Vec<NodeId>) {
+        if self.nodes[node].name == name {
+            out.push(node);
+        }
+        for &child in &self.nodes[node].children {
+            self.find_children_by_name(child, name, out);
+        }
+    }
+
+    /// `Node::findChildrenByPrefix` 0x14020e050: the same walk, for names that start with
+    /// `prefix`.
+    pub fn find_children_by_prefix(&self, node: NodeId, prefix: &str, out: &mut Vec<NodeId>) {
+        if self.nodes[node].name.starts_with(prefix) {
+            out.push(node);
+        }
+        for &child in &self.nodes[node].children {
+            self.find_children_by_prefix(child, prefix, out);
+        }
+    }
+
+    /// `Node::localToWorld` 0x14020e230: a point through the node's world matrix (from the
+    /// local matrices, as they are now).
+    pub fn local_to_world(&self, node: NodeId, v: &Vec3f) -> Vec3f {
+        let w = self.get_world_matrix(node);
+        let m = &w.m;
+        Vec3f::new(
+            (((v.y * m[1][0]) + (v.x * m[0][0])) + (v.z * m[2][0])) + m[3][0],
+            (((v.x * m[0][1]) + (v.y * m[1][1])) + (v.z * m[2][1])) + m[3][1],
+            (((v.x * m[0][2]) + (v.y * m[1][2])) + (v.z * m[2][2])) + m[3][2],
+        )
+    }
+
     /// `NodeBoundingSphere::applyNoCull` 0x140218b50: marks what is below `start` right now.
     pub fn apply_no_cull(&mut self, start: NodeId) {
         let children = self.nodes[start].children.clone();

@@ -92,12 +92,6 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.hide_helpers(model);
     }
 
-    // Sim::addCar: CarAvatar::init3D
-    let mut car = match &frame.car {
-        Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock))?),
-        None => None,
-    };
-
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -119,6 +113,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     camera.base.camera.far_plane = 40000.0;
     camera.cube_map_renderer.faces_per_frame = crate::root::profile().cubemap_faces_per_frame;
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
+    // Sim::addCar: CarAvatar::init3D
+    let mut car = match &frame.car {
+        Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock))?),
+        None => None,
+    };
+
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
