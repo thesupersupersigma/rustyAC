@@ -46,6 +46,9 @@
 //!
 //! The exit code is 1 when a comparison that should be identical is not.
 
+// (without the DLL only `digest` is left: the comparison's own types are then unused)
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use std::fmt::Write as _;
 
 use rustyac_math::pure;

@@ -109,7 +109,7 @@ The tables (2^(j/64), ln, 1/F, atan(j/256), the bits of 2/π) are copied from th
 
 ### 2.2 The proof
 
-`tools/math_proof all` (16 threads, 293 s), against the real `MSVCR120.dll` of this PC. Bits are compared, so
+`tools/math_proof all` (16 threads, 22 minutes with the sweeps below), against the real `MSVCR120.dll` of this PC. Bits are compared, so
 a NaN with another sign or payload would count as a difference.
 
 | Function | Inputs | Count | Result |
@@ -168,8 +168,13 @@ That is also a fact about the game: **Assetto Corsa's maths depends on whether t
 drive recorded on a pre-2013 CPU (or with AVX switched off in Windows) would not replay bit for bit on a
 modern one, in the real game either.
 
-Two more checks:
+Three more checks:
 
+- **The wasm build of the maths, on every float.** The proof above runs the desktop build. The same
+  functions compiled to `wasm32-wasip1` (where the fused multiply-add is software) were run under wasmtime
+  on all 2^32 inputs of each one-argument function, in 16 shards (`math_proof digest --stride 16 --offset
+  0..15`), and the hashes of the results compared with the desktop build's: **16 of 16 shards identical**,
+  with the pair and double samples. (`re/scratch/task20w/digest_shards.sh`)
 - **Numbers in files.** The game parses its ini files with the runtime's `wcstod` / `wcstol`; a wasm build
   uses Rust's parser behind the same rules. `tools/math_proof parse` ran both over every number-like token of
   every text file under `cardata/` and the install's `content/cars`, `content/tracks` and `system`:
@@ -189,6 +194,13 @@ that was found.** Today a PC without the Visual C++ 2013 runtime falls back to R
 proven equal; `pure` is. Switching the *default* is still not urgent: the DLL is by definition what the game
 runs, including on an old CPU where the DLL takes its SSE2 path and `pure` would not. A sensible middle step
 later: use `pure` instead of Rust's std as the fallback when the DLL is missing. Not done here.
+
+How far that old fallback is from the game was measured too (`math_proof std`: Rust's std, which is the UCRT
+on Windows, against `pure`): `sinf cosf tanf asinf acosf atanf` and the double `sin` are identical on every
+input tried (all 2^32 each), and `atan2f` on 400 million pairs. `expf` differs on every NaN (the sign) and on
+one number (`-inf`); `powf` differs on NaN payloads and on 14,830 of 400 million pairs with ordinary results
+(the special cases, such as a NaN base with a zero exponent). So the fallback was nearly, not exactly, the
+game's maths.
 
 ## 3. The physics as WebAssembly
 
@@ -301,7 +313,8 @@ same on the desktop.
 
 (The first try differed: the line follower's own `atan2` and `sin` came from Rust's maths library, which is
 another one in wasm. On a non-Windows build it now uses `rustyac-math`. That was the driver's input, not the
-physics; the desktop's follower is untouched.)
+physics; the desktop's follower is untouched and still calls Rust's std, which section 2.3 found identical
+to `pure` for exactly these three functions.)
 
 `cargo test -p rustyac-web` does the memory-file-system half on the desktop: the files a drive needs are
 copied into memory, mounted in place of the disk, and the drive (5 s, two car and track pairs) ends in the
