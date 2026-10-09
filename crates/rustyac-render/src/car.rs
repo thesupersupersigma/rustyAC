@@ -20,6 +20,7 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 use crate::animator::SuspensionAnimator;
 use crate::blur::{BlurredObjects, TyreBlur};
 use crate::camera::DEG_TO_RAD;
+use crate::damage::VisualDamageManager;
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
 use crate::model::Kn5Io;
@@ -79,6 +80,10 @@ pub struct CarAvatar {
     pub driver_hr_distance: f32,
     pub pro_view_nodes: Vec<NodeId>,
     pub suspension: Suspension,
+    /// `VisualDamageManager`
+    pub damage: Option<VisualDamageManager>,
+    /// the pause menu shows (the damage's parts stop shaking)
+    pub pause_menu: bool,
     /// `TyreBlur` and `BlurredObjects`, made by [`CarAvatar::init_common_post_physics`]
     pub tyre_blur: TyreBlur,
     pub blurred_objects: BlurredObjects,
@@ -150,6 +155,8 @@ impl CarAvatar {
             driver_hr_distance: 15.0,
             pro_view_nodes: Vec::new(),
             suspension,
+            damage: None,
+            pause_menu: false,
             tyre_blur: TyreBlur::default(),
             blurred_objects: BlurredObjects::default(),
             replay_scale: 1.0,
@@ -199,6 +206,7 @@ impl CarAvatar {
                 scene.remove_child(parent, n);
             }
         }
+        car.damage = Some(VisualDamageManager::new(graphics, scene, folder, body_transform)?);
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
     }
@@ -363,7 +371,7 @@ impl CarAvatar {
 
     /// What the frame's `update`s do to the nodes, in the game's order: `CarAvatar::update`
     /// (the body, the steering wheel), `SuspensionAvatar::update`, `CarLodManager::update`.
-    pub fn update(&mut self, scene: &mut Scene, state: &CarPhysicsState, _dt: f32) {
+    pub fn update(&mut self, graphics: &mut Graphics, scene: &mut Scene, state: &CarPhysicsState, dt: f32) {
         self.body_matrix = self.make_body_matrix(&state.world_matrix);
         scene.nodes[self.body_transform].matrix = self.body_matrix;
         if let Some(shadow) = &self.fake_shadow {
@@ -385,6 +393,9 @@ impl CarAvatar {
         // CarLodManager::update 0x1400e57c0
         for &n in &self.pro_view_nodes {
             scene.nodes[n].is_active = true;
+        }
+        if let Some(damage) = &mut self.damage {
+            damage.update(graphics, scene, state, dt, self.pause_menu);
         }
         self.tyre_blur.update(scene, state, self.replay_scale);
         self.blurred_objects.update(scene, state, self.replay_scale);

@@ -144,7 +144,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut car {
-            car.update(&mut scene, &step.state, crate::frames::DT);
+            car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }
 

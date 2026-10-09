@@ -467,7 +467,7 @@ impl AcRenderer {
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut self.car {
             let state = view.physics_state();
-            car.update(&mut self.scene, &state, dt);
+            car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }
         self.frames += 1;

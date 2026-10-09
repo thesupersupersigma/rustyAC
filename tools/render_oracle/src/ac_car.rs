@@ -46,7 +46,10 @@ const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCK
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
 /// SuspensionAvatar.obj and SuspensionAnimator.obj.
-const VA_NAME_TABLE_INITIALISERS: [usize; 10] = [0x1_4000_75c0, 0x1_4000_74b0, 0x1_4000_7220, 0x1_4000_e2e0, 0x1_4000_e1d0, 0x1_4000_e0c0, 0x1_4000_dc10, 0x1_4000_dd20, 0x1_4000_dfb0, 0x1_4000_db00];
+const VA_NAME_TABLE_INITIALISERS: [usize; 11] = [0x1_4000_75c0, 0x1_4000_74b0, 0x1_4000_7220, 0x1_4000_e2e0, 0x1_4000_e1d0, 0x1_4000_e0c0, 0x1_4000_dc10, 0x1_4000_dd20, 0x1_4000_dfb0, 0x1_4000_db00, VA_GLASS_DAMAGE_NAMES_INITIALISER];
+const VA_GLASS_DAMAGE_NAMES_INITIALISER: usize = 0x1_4000_fc00; // the names DAMAGE_GLASS_FRONT … of VisualDamageManager.obj
+const VA_VISUAL_DAMAGE_CTOR: usize = 0x1_401d_2890; // VisualDamageManager::VisualDamageManager(CarAvatar*)
+const VA_VISUAL_DAMAGE_UPDATE: usize = 0x1_401d_56f0; // VisualDamageManager::update(float)
 
 const DEG: f32 = f32::from_bits(0x3c8e_f998);
 
@@ -133,6 +136,12 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
             copy_file(&source.join(name), &target.join(name))?;
         }
     }
+    // textures the car's objects open by a path under the game's folder
+    for name in ["content/texture/DAMAGE_GLASS.dds"] {
+        if game.join(name).is_file() {
+            copy_file(&game.join(name), &root.join(name))?;
+        }
+    }
     let skin = source.join("skins").join(&spec.skin);
     if let Ok(entries) = std::fs::read_dir(&skin) {
         for entry in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
@@ -173,13 +182,14 @@ pub struct Car {
     body_transform: *mut u8,
     steer_transform: *mut u8,
     steer_lock: f32,
+    visual_damage: *mut u8,
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
 }
 
 impl Game {
     /// What has to be there once before any car: patches, the tables of node names, a console.
-    unsafe fn prepare_cars(&self) {
+    unsafe fn prepare_cars(&self) -> *mut u8 {
         let acs = &self.acs;
         // mov rax, rcx; ret: a Font that is never used (the level-of-detail manager's debug text)
         acs.patch(acs.va(VA_FONT_CTOR), &[0x48, 0x89, 0xc8, 0xc3]);
@@ -196,13 +206,14 @@ impl Game {
         wr(console, 0xe0, 7u64);
         wr(console, 0x118, 7u64);
         acs.set_global(VA_CONSOLE_SINGLETON, console);
+        console
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90 by hand around the game's own constructors.
     pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8) -> Result<Car, String> {
         let cars_node = nodes.cars;
         let acs = &self.acs;
-        self.prepare_cars();
+        let console = self.prepare_cars();
         let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
         let car_ini = rustyac_physics::data::ini::IniReader::load(&data.join("car.ini"))?;
 
@@ -215,6 +226,8 @@ impl Game {
         wr(sim, 0x188, camera_manager);
         wr(sim, 0x1b0, replay_manager);
         wr(sim, 0x238, camera);
+        wr(sim, 0x110, acs.alloc(0x200)); // pauseMenu: not visible
+        wr(sim, 0x228, console);
         wr(sim, 0x120, nodes.root);
         wr(sim, 0x130, nodes.cars);
         wr(sim, 0x138, nodes.skid_marks);
@@ -300,6 +313,9 @@ impl Game {
                 }
             }
         }
+        let visual_damage = acs.alloc(0xd0);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VISUAL_DAMAGE_CTOR));
+        ctor(visual_damage, car);
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
         // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
@@ -315,7 +331,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, tyre_blur, blurred_objects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, visual_damage, tyre_blur, blurred_objects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -347,7 +363,7 @@ impl Game {
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE));
         update(c.lod_manager, dt);
-        for (object, va) in [(c.tyre_blur, VA_TYRE_BLUR_UPDATE), (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE)] {
+        for (object, va) in [(c.visual_damage, VA_VISUAL_DAMAGE_UPDATE), (c.tyre_blur, VA_TYRE_BLUR_UPDATE), (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE)] {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }

@@ -209,6 +209,14 @@ impl Material {
         }
     }
 
+    /// `Material::setTexture` 0x14020b740.
+    pub fn set_texture(&mut self, name: &str, texture: Texture) {
+        match self.resources.iter_mut().find(|r| r.name == name) {
+            Some(r) => r.texture = texture,
+            None => println!("ERROR: Material::setTexture CANT FIND Resource {name} in material {}", self.name),
+        }
+    }
+
     /// `Material::getResourceIndex` 0x14020aa40.
     pub fn get_resource_index(&self, name: &str) -> Option<usize> {
         self.resources.iter().position(|r| r.name == name)
