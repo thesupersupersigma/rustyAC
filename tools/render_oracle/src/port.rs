@@ -69,8 +69,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     // TrackAvatar::init3D
     if let Some(track) = &frame.track {
         let model = scene.node(&format!("TRACK {}", track.name));
-        let io = Kn5Io::new();
+        let mut io = Kn5Io::new();
         for entry in &track.models {
+            io.skin_override_path.push(format!("{}/texture", rustyac_render::model::get_path(&entry.filename)));
             let top = io.load(&mut graphics, &mut scene, &entry.filename, std::path::Path::new(&entry.filename))?;
             scene.add_child(model, top);
             let mut flat = [0.0f32; 16];
@@ -83,6 +84,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         scene.compile(&graphics, model);
         scene.add_child(track_node, model);
+        scene.hide_helpers(model);
     }
 
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
@@ -90,6 +92,18 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = crate::root::WORLD_DETAIL as f32;
     camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics)?);
+    // RaceManager::initLighting, TrackAvatar::TrackAvatar, Sim::applyCustomWeather
+    graphics.set_sun_angle(frame.sun_angle);
+    if let Some(track) = &frame.track {
+        if let (Some(pitch), Some(heading)) = (track.sun_pitch, track.sun_heading) {
+            graphics.lighting.pitch_angle = pitch;
+            graphics.lighting.heading_angle = heading;
+            graphics.update_lighting_settings();
+        }
+    }
+    if !frame.weather.is_empty() {
+        graphics.apply_custom_weather(&frame.weather);
+    }
     camera.base.camera.near_plane = 0.05;
     camera.base.camera.far_plane = 40000.0;
     camera.cube_map_renderer.faces_per_frame = crate::root::CUBEMAP_FACES_PER_FRAME;

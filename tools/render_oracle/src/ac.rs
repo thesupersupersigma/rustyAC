@@ -40,6 +40,11 @@ const VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE: usize = 0x1_4022_01b0; // CameraForwar
 const VA_CAMERA_SET_SHADOW_MAPS_SPLITS: usize = 0x1_4020_d5f0; // CameraShadowMapped::setShadowMapsSplits(float, float, float, float)
 const VA_SKYBOX_CTOR: usize = 0x1_4021_c790; // SkyBox::SkyBox(GraphicsManager*)
 const VA_WORLD_MATRIX_TRAVERSE: usize = 0x1_4021_abf0; // WorldMatrixTraverser::traverse(Node*)
+const VA_KN5IO_ADD_TEXTURE_FOLDER: usize = 0x1_4021_4e90; // KN5IO::addTextureFolder(const std::wstring&)
+const VA_GRAPHICS_UPDATE_LIGHTING: usize = 0x1_4020_5190; // GraphicsManager::updateLightingSetttings()
+const VA_GRAPHICS_LOAD_LIGHTING: usize = 0x1_4020_3250; // GraphicsManager::loadLightingSettings(const std::wstring&)
+const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGenerator::loadPreset(const std::wstring&, GraphicsManager*, float)
+const VA_SKYBOX_UPDATE_CLOUDS: usize = 0x1_4021_db00; // SkyBox::updateCloudsGeneration(const std::wstring&)
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
 /// would run them all, is never run): kgl's map of input layouts, `Curve::openedFiles`,
@@ -284,6 +289,34 @@ impl Game {
         Ok(node)
     }
 
+    /// The name of a node of the game.
+    pub unsafe fn node_name(&self, node: *const u8) -> String {
+        let s = node.add(0xb8);
+        let (length, capacity): (usize, usize) = (rd(s, 0x10), rd(s, 0x18));
+        let text = if capacity >= 8 { rd::<*const u16>(s, 0) } else { s as *const u16 };
+        String::from_utf16_lossy(std::slice::from_raw_parts(text, length))
+    }
+
+    /// The children of a node of the game.
+    pub unsafe fn children(&self, node: *const u8) -> Vec<*mut u8> {
+        let (begin, end): (*const *mut u8, *const *mut u8) = (rd(node, 0x90), rd(node, 0x98));
+        if begin.is_null() {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(begin, end.offset_from(begin) as usize).to_vec()
+    }
+
+    /// `TrackAvatar::processPhysicsNode` 0x1401cc5e0, the part the picture sees: every node
+    /// whose name starts with `AC_` (spawn points, timing gates, loose objects …) is switched off.
+    unsafe fn hide_helpers(&self, node: *mut u8) {
+        if self.node_name(node).starts_with("AC_") {
+            wr(node, 0xd8, 0u8);
+        }
+        for child in self.children(node) {
+            self.hide_helpers(child);
+        }
+    }
+
     /// The scene of a frame built with the game's own objects, and the frame rendered by the
     /// game's own camera.
     pub unsafe fn render(&self, frame: &Frame) -> Result<Rendered, String> {
@@ -314,7 +347,10 @@ impl Game {
         if let Some(track) = &frame.track {
             let model = self.node(&format!("TRACK {}", track.name));
             let io = self.kn5io();
+            // Model::load 0x140217d30 adds `<folder of the model>/texture` before every load
+            let add_folder: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_KN5IO_ADD_TEXTURE_FOLDER));
             for entry in &track.models {
+                add_folder(io, wstring(acs, &format!("{}/texture", rustyac_render::model::get_path(&entry.filename))));
                 let top = self.load_kn5(io, &entry.filename)?;
                 self.add_child(model, top);
                 let matrix: [f32; 16] = rd(top, 8);
@@ -322,6 +358,7 @@ impl Game {
             }
             compile(self.graphics, model);
             self.add_child(track_node, model);
+            self.hide_helpers(model);
         }
 
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
@@ -334,6 +371,38 @@ impl Game {
         let sky_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SKYBOX_CTOR));
         sky_ctor(sky, self.graphics);
         wr(camera, 0x98, sky);
+        // RaceManager::initLighting 0x14013a3d0: race.ini [LIGHTING] SUN_ANGLE (no SunAnimator
+        // runs here: the frame is a still, the clock of the lighting stays 0)
+        let update_lighting: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_UPDATE_LIGHTING));
+        wr(self.graphics, 0xd4, frame.sun_angle);
+        update_lighting(self.graphics);
+        // TrackAvatar::TrackAvatar 0x1401c5250: the track's data/lighting.ini
+        if let Some(track) = &frame.track {
+            if let (Some(pitch), Some(heading)) = (track.sun_pitch, track.sun_heading) {
+                wr(self.graphics, 0xdc, pitch);
+                wr(self.graphics, 0xd8, heading);
+                update_lighting(self.graphics);
+            }
+        }
+        // Sim::applyCustomWeather 0x140198010 / WeatherManager::applyCustomWeather 0x1401d8110
+        if !frame.weather.is_empty() {
+            let update_clouds: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_SKYBOX_UPDATE_CLOUDS));
+            update_clouds(sky, wstring(acs, &frame.weather));
+            let weather_ini = format!("content/weather/{}/weather.ini", frame.weather);
+            let curves_ini = format!("content/weather/{}/colorCurves.ini", frame.weather);
+            let mut m = 1.0f32;
+            if let Ok(c) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new(&curves_ini)) {
+                m = c.get_float("HEADER", "HDR_OFF_MULT").unwrap_or(0.0);
+            }
+            if std::path::Path::new(&weather_ini).is_file() {
+                let load_preset: extern "C" fn(*const u8, *mut u8, f32) -> bool = std::mem::transmute(acs.va(VA_WEATHER_LOAD_PRESET));
+                load_preset(wstring(acs, &weather_ini), self.graphics, m);
+            }
+            if std::path::Path::new(&curves_ini).is_file() {
+                let load_lighting: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_GRAPHICS_LOAD_LIGHTING));
+                load_lighting(self.graphics, wstring(acs, &curves_ini));
+            }
+        }
         wr(camera, 0x70, 0.05f32); // nearPlane
         wr(camera, 0x74, 40000.0f32); // farPlane
         // Sim::initCubemaps 0x1401997a0 with the profile's [CUBEMAP]

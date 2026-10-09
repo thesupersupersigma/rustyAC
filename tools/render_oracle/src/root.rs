@@ -118,5 +118,11 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     if !same {
         std::fs::write(root.join("cfg/video.ini"), video).map_err(|e| e.to_string())?;
     }
+    // what the game's SkyBox constructor reads (the clouds of the weather)
+    let race = format!("[WEATHER]\nNAME={}\n\n[LIGHTING]\nSUN_ANGLE={}\nTIME_MULT=1\nCLOUD_SPEED=0.2\n", args.weather, args.sun_angle);
+    let same = std::fs::read_to_string(root.join("cfg/race.ini")).is_ok_and(|old| old == race);
+    if !same {
+        std::fs::write(root.join("cfg/race.ini"), race).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

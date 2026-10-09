@@ -284,6 +284,19 @@ impl Scene {
         }
     }
 
+    /// `TrackAvatar::processPhysicsNode` 0x1401cc5e0, the part the picture sees: every node of
+    /// a track whose name starts with `AC_` (spawn points, timing gates, loose objects …) is
+    /// switched off, and with it everything below it.
+    pub fn hide_helpers(&mut self, node: NodeId) {
+        if self.nodes[node].name.starts_with("AC_") {
+            self.nodes[node].is_active = false;
+        }
+        let children = self.nodes[node].children.clone();
+        for child in children {
+            self.hide_helpers(child);
+        }
+    }
+
     /// `WorldMatrixTraverser::traverse` 0x14021abf0.
     pub fn traverse(&mut self, n: NodeId) {
         let node = &self.nodes[n];

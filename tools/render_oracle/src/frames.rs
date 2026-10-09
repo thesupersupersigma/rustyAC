@@ -20,7 +20,13 @@ pub struct ModelFile {
 
 pub struct TrackSpec {
     pub name: String,
+    /// the folder of the track's models, as text (its `texture` folder holds loose images that
+    /// replace embedded ones)
+    pub folder: String,
     pub models: Vec<ModelFile>,
+    /// `data/lighting.ini` of the track (or of its layout): the sun's pitch and heading
+    pub sun_pitch: Option<f32>,
+    pub sun_heading: Option<f32>,
 }
 
 pub struct CameraSpec {
@@ -40,6 +46,10 @@ pub struct Frame {
     pub camera: CameraSpec,
     /// which frame is logged and read back (0 = the first one rendered)
     pub capture: usize,
+    /// race.ini `[LIGHTING] SUN_ANGLE`
+    pub sun_angle: f32,
+    /// race.ini `[WEATHER] NAME`
+    pub weather: String,
 }
 
 /// `TrackAvatar::init3D` placing a model's top node (`models.ini` ROTATION / POSITION).
@@ -97,7 +107,14 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         for model in &models {
             files.push(ModelFile { filename: path_text(&model.file), position: model.position, rotation: model.rotation });
         }
-        track = Some(TrackSpec { name: name.clone(), models: files });
+        // TrackAvatar::TrackAvatar: `<data folder>/data/lighting.ini`
+        let data = if args.layout.is_empty() { folder.clone() } else { folder.join(&args.layout) };
+        let (mut sun_pitch, mut sun_heading) = (None, None);
+        if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&data.join("data/lighting.ini")) {
+            sun_pitch = Some(ini.get_float("LIGHTING", "SUN_PITCH_ANGLE").unwrap_or(0.0));
+            sun_heading = Some(ini.get_float("LIGHTING", "SUN_HEADING_ANGLE").unwrap_or(0.0));
+        }
+        track = Some(TrackSpec { name: name.clone(), folder: path_text(&folder), models: files, sun_pitch, sun_heading });
         let (physical, _) = loader::load_track(&folder, &args.layout)?;
         let pose = ["START", "HOTLAP_START", "PIT"].iter().find_map(|set| physical.spawn_pose(set, 0));
         if let Some((position, tail)) = pose {
@@ -118,7 +135,8 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         Some(t) => format!("{t}_{}", args.view),
         None => format!("empty_{}", args.view),
     };
-    Ok(Frame { name, track, camera, capture: args.capture })
+    let name = if args.sun_angle == -16.0 { name } else { format!("{name}_sun{}", args.sun_angle) };
+    Ok(Frame { name, track, camera, capture: args.capture, sun_angle: args.sun_angle, weather: args.weather.clone() })
 }
 
 /// A path as text with forward slashes.

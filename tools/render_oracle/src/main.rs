@@ -20,6 +20,7 @@ const USAGE: &str = "usage:
   render_oracle compare [frame options] [--loose]    both sides (a process each), then the logs line
                                                      by line and the pictures byte by byte
      frame options: [--track <folder name>] [--layout <l>] [--view chase|cockpit|free] [--capture <n>]
+                    [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
 pub fn repo_root() -> PathBuf {
@@ -40,6 +41,8 @@ pub struct Args {
     pub layout: String,
     pub view: String,
     pub capture: usize,
+    pub sun_angle: f32,
+    pub weather: String,
     pub loose: bool,
     /// the options of the frame, to hand on to the two child processes of `compare`
     pub frame_options: Vec<String>,
@@ -64,6 +67,8 @@ fn parse() -> Result<Args, String> {
         layout: String::new(),
         view: "chase".into(),
         capture: 1,
+        sun_angle: -16.0,
+        weather: "3_clear".into(),
         loose: false,
         frame_options: Vec::new(),
     };
@@ -112,6 +117,14 @@ fn parse() -> Result<Args, String> {
             "--capture" => {
                 text = value()?;
                 a.capture = text.parse().map_err(|_| "--capture <n>")?;
+            }
+            "--sun" => {
+                text = value()?;
+                a.sun_angle = text.parse().map_err(|_| "--sun <degrees>")?;
+            }
+            "--weather" => {
+                text = value()?;
+                a.weather = text.clone();
             }
             "--loose" => {
                 a.loose = true;
