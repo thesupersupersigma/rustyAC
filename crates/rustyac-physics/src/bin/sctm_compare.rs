@@ -157,6 +157,7 @@ fn run() -> Result<bool, String> {
         match math::backend() {
             Backend::Msvcr120 => "MSVCR120.dll (the runtime acs.exe uses)",
             Backend::Std => "Rust std (not the runtime acs.exe uses)",
+            Backend::Pure => "MSVCR120's algorithms in pure Rust (rustyac_math::pure)",
         }
     );
     for (name, value) in [
