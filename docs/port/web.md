@@ -2,23 +2,12 @@
 
 ## Resume here
 
-**Task 20w.2 is in progress** (`prompts/20w2_web_controls.md`; its report will be the section "Task 20w.2" at
-the end of this file). State after the last commit:
-
-- done: steps 1 to 3 (the browser's keys T / Shift+T, Y / Shift+Y, ] / [; ABS on Back + D-pad up / down with
-  Back decided on release; `TC n/max`, `ABS n/max`, `Bias 58.0 %` and a note on a change, in both programs;
-  the desktop also takes the plain keys). Checked in headless Chrome: real key presses change the display, and
-  a self test with key presses ends in the desktop's state hash.
-- done too: step 4 (key lists in `docs/web.md`, `packaging/HOW_TO_RUN.txt`, the console's bindings table),
-  step 5 (without MSVCR120.dll the desktop uses `rustyac_math::pure`; it prints `maths: ...` at the start;
-  `RUSTYAC_MATH=no-dll` tries that fallback on a PC that has the DLL).
-- done too: step 6 (`web/Dockerfile`, `web/nginx.conf`, `.dockerignore`, "Deploy with Coolify" in
-  `docs/web.md`). There is no Docker on this PC: the image was **not built**; `web/nginx.conf` was run with a
-  stand-alone nginx 1.28.0 from `re/scratch/task20w2/docker/` and every rule in it was fetched.
-- to do, in this order: step 7 (14 replays against `re/scratch/task20w2/bin/rustyac_v0201.exe` with
-  `python re/scratch/task20w2/desktop_same.py`, golden tests, the browser run), the report, then v0.20.2.
-- scratch: `re/scratch/task20w2/` (the v0.20.1 exe in `bin/`, patch scripts, three reader maps `recon_*.md`,
-  browser results `browser_*.json`).
+**Task 20w.2 is done** (`prompts/20w2_web_controls.md`): its report is the last section of this file, "Task
+20w.2". The version is 0.20.2 and the tag `v0.20.2` is on the last commit; nothing is pushed, nothing is half
+done. The one thing that could not be done here: **the Docker image was never built** (no Docker on this PC);
+the first build on the server is its test. Scratch: `re/scratch/task20w2/` (the v0.20.1 exe in `bin/`, the
+proof script `desktop_same.py` and its table `same/results.md`, browser results `browser_*.json`, three reader
+maps `recon_*.md`, three reviews `review_*.md`, a stand-alone nginx in `docker/`).
 
 State of Task 20w itself (v0.20.1):
 
@@ -660,3 +649,218 @@ against this branch's):
 | `--help`, `--list-tracks`, `--list-devices` | the printed text | identical |
 | `cargo test --release --workspace` | 201 tests (was 189: twelve new ones) | all pass |
 | the release zip | `packaging/package.ps1` is untouched; it packs `rustyac.exe` and the same seven files | the same |
+
+## Task 20w.2: aids and brake bias while driving, the pure maths as the fallback, a Docker image
+
+A small fix after the browser preview (v0.20.2). The sections above describe v0.20.1 and are left as they
+were, except for the notes that point here.
+
+### Plain-English summary
+
+**You can now change traction control, ABS and brake bias while driving, in both programs, and always see
+what they are set to.**
+
+- **Keys, the same in the browser and on the desktop:** **T** traction control one level up, **Shift+T** down;
+  **Y** ABS up, **Shift+Y** down; **]** brake bias one click forward, **[** one click rearward. None of them
+  was in use in the page, so no other key had to be picked. On the desktop the old Alt+T / Alt+A still work.
+- **Pad:** the D-pad as before (up / down traction control, right / left brake bias), and new: **hold Back and
+  press D-pad up / down for the ABS**.
+- **Back's rule** (it used to act while it was held, which would have fired during the new combination): what
+  Back does is now **decided when you let it go**. If D-pad up or down was down at any moment while you held
+  it: nothing. Otherwise: back to the pits if you held it for less than 0.6 s, back onto the track if longer.
+  A D-pad press that lands a moment *before* Back (two thumbs are never quite together) has already made its
+  traction-control step; it makes no ABS step, and Back still does nothing. A pad that is unplugged while
+  Back is held does nothing either.
+- **The display, both programs:** `TC 3/12`, `ABS 5/12` and `Bias 72.0 %` are there all the time (`off` when
+  switched off, `not fitted` for a car without it), lit while the aid acts, and a note appears in the upper
+  middle for 2.5 s when one of them changes (`TC 4/12`, `Brake bias 72.5 %`). Before, the desktop showed a
+  level only for cars with more than one, never the count, "off" also for "not fitted", and no bias; the
+  browser showed "TC" / "ABS" only while they acted.
+- **The numbers are the game's own.** The level and the count are what `TractionControl::getCurrentMode` /
+  `ABS::getCurrentMode` return, which is what AC's own message prints; the bias is
+  `BrakeSystem::getFrontBias` x 100 with one decimal, the number of AC's "Brake Bias" message and of
+  `acpmf_physics.brakeBias`. (`acpmf_physics.tc` and `.abs` are not levels but slip limits, so they are not
+  what a display wants.)
+- **The physics is untouched.** A key or a button only asks for the same three calls as before
+  (`cycleMode` of the two aids, `setManualFrontBias`), before the next physics step, exactly as the desktop's
+  Alt+T and the D-pad always did. No file of `rustyac-physics` changed except the wording of two messages in
+  test helpers.
+- **The page takes fewer keys from the browser.** It used to swallow every letter, digit and function key
+  while driving. Now it keeps only the keys it uses (the driving keys of the built-in layout and its own
+  commands); F5, F11, F12, Tab and every key with Ctrl or Alt stay the browser's.
+- **Maths without the DLL.** A PC without `MSVCR120.dll` used to fall back to Rust's own maths, which is close
+  but not proven equal. It now falls back to rustyAC's own copy of the DLL's functions (`rustyac_math::pure`,
+  proven bit-identical in Task 20w). The program prints which maths it uses when it starts. **With the DLL
+  present nothing changes.**
+- **A Docker image for the site.** `web/Dockerfile` builds the site and serves it with nginx; the preview pack
+  is never in the image and is mounted when the container runs. `docs/web.md` has a "Deploy with Coolify"
+  section. **There is no Docker on this PC, so the image was not built here** (see below for what was checked
+  instead).
+
+### Controls (desktop and browser)
+
+| | Keyboard, browser | Keyboard, desktop | Xbox pad, both |
+|---|---|---|---|
+| traction control up / down | T / Shift+T | T / Shift+T, or Alt+T / Alt+Shift+T | D-pad up / down |
+| ABS up / down | Y / Shift+Y | Y / Shift+Y, or Alt+A / Alt+Shift+A | **Back held + D-pad up / down** |
+| brake bias forward / rearward | ] / [ | ] / [ | D-pad right / left |
+| back to the pits | R | R | Back, a tap (let go within 0.6 s) |
+| back onto the track | Shift+R | Shift+R | Back, held 0.6 s or more, then let go |
+
+- "Up" from the highest level goes to off, and from off to level 1, as in the game.
+- Desktop: the Alt commands also work with a Ctrl key that is not a driving key, and a key that your
+  `rustyac_controls.ini` uses for something else is not taken as a plain key (the console's bindings table
+  says what is in force). The pad's combination uses whatever buttons the bindings give to "reset" and to
+  traction control up / down; a pad button bound to `ABSUP` / `ABSDN` works as well.
+- Browser: Ctrl+T, Alt+T and the like never reach the page; that is why the keys are plain.
+- Left Shift is also the clutch key, in both programs: Shift+T with the left Shift key dips the clutch for as
+  long as it is held. The right Shift key does not.
+
+### What changed in the code
+
+- `rustyac-game/src/input/mod.rs`: `ResetCombo`, the rule of the Back button, used by the desktop's
+  `LiveSource` and the browser's `WebSource` (one implementation, two unit tests in `rustyac-web`).
+- `rustyac-game/src/sim.rs`: `AidNote` (the on-screen note, written where the commands are applied, so it
+  also shows for a recorded drive), `aid_level_text`, `bias_text`, `DriverSource::request_bias` (bias clicks
+  from a window or page key). `view.rs`: `brake_bias`, the note and the three texts, so both displays word
+  them with the same code.
+- `rustyac-game/src/render/hud.rs`, `desktop.rs`, `input/bindings.rs`: the lamps with levels, the bias, the
+  note, the plain keys, the bindings table.
+- `rustyac-web`: `Game::bias`, `Game::keys_used`, more fields in `Game::hud`; `web/app.js`: the keys, the
+  display, `window.rustyac.press(...)` and `?keys=` for the self test; `web/check.mjs --keys`.
+- `rustyac-math/src/lib.rs`: the fallback, `Choice`, `describe()`, `RUSTYAC_MATH=no-dll` (behave as if the DLL
+  were missing, to try the fallback on a PC that has it). `rustyac-game/src/crt.rs`: the keyboard steering's
+  `expf` follows the same choice (it had its own loader, which would have stayed on Rust's `exp`).
+
+### The Docker image
+
+| | |
+|---|---|
+| Built here? | **No.** This PC has no Docker, no Podman and no WSL. |
+| Size | not measured. Expected about 60 to 65 MB on disk: `nginx:1.30.0-alpine` (26 MB compressed on Docker Hub) plus the site (4.3 MB) and its five `.gz` copies (1.6 MB). The build stage (`rust:1.97.0-slim-bookworm`, 317 MB compressed) is not part of the image. |
+| Build time | not measured. For scale: this PC compiles the wasm build from nothing in 1 min 39 s; two 2010 Xeons will take several times that, plus the downloads. |
+| Checked instead | both base image tags exist on Docker Hub (asked its API); `web/nginx.conf` was run unchanged, except for the port and the root folder, by a stand-alone nginx 1.28.0 for Windows over the built site with its `.gz` files and a made-up `preview/` folder, and every rule was fetched (table below); `web/build.py`, which is all the build stage runs, is what CI and this PC run. **The Dockerfile itself has never been executed.** |
+
+| Request | Answer |
+|---|---|
+| `/` | 200 `text/html`, `Cache-Control: no-cache`; gzip when asked for (5,201 -> 2,044 bytes) |
+| `/healthz` | 200 `ok`, `no-store` |
+| `/pkg/rustyac_web_bg.wasm` | 200 **`application/wasm`**, `no-cache`; gzip from the `.gz` file (4.09 MB -> 1.54 MB) |
+| `/app.js`, `/pkg/rustyac_web.js` | `application/javascript`, gzip, `no-cache` |
+| `/style.css` | `text/css`, gzip, `max-age=300` |
+| `/LICENSING.md`, `/LICENSE-GPL` | `text/plain; charset=utf-8` (shown, not downloaded) |
+| `/preview/manifest.json` | `no-cache`, **not compressed** although gzip was asked for |
+| `/preview/content/text.ini` (10 kB of text) | **not compressed**, `max-age=300` |
+| `/preview/content/big.kn5` with `Range: bytes=1000000-1000255` | 206, `Content-Range: bytes 1000000-1000255/5120000`, the right 256 bytes |
+| `/preview/nothing.kn5`, `/.hidden` | 404 (so a missing mount is "no pack", and the page offers the folder) |
+
+The processor: the image only runs nginx, which needs nothing special. The build runs two downloaded programs,
+`wasm-bindgen` and `wasm-opt`; whether they run on a processor without AVX **could not be tried here**. For
+`wasm-opt` there is the build argument `WASM_OPT=0` (`web/build.py --no-opt`: a 5.7 MB wasm instead of 4.1 MB
+before compression, the same physics). `wasm-bindgen` cannot be skipped; if it does not run there, build the
+site on another machine.
+
+### What was proven
+
+| What | How | Result |
+|---|---|---|
+| The desktop's physics did not move | `re/scratch/task20w2/desktop_same.py`: 14 recorded drives through `rustyac.exe` of v0.20.1 and of this version with `--dump-states` (flat-road random and stops, two Spa crashes and a Spa lap with the collider, 4WD, ERS, the E30's suspension, a loose object at Monza, a saved setup, a whole lap, three line-follower drives at Laguna Seca), 53 MB to 1.66 GB per dump | **byte-identical, all 14** |
+| The car in the off-screen screenshots | the same script: the pose file after 12 s of the line follower, three cameras | identical (the pictures differ, as they must: the display changed) |
+| `--help`, `--list-tracks` | the printed text | identical (`--list-devices` differs: its bindings table has the new rows) |
+| The whole test suite, golden tests included | `cargo test --release --workspace --locked` | 204 tests pass (was 201) |
+| The same with the DLL hidden | `RUSTYAC_MATH=no-dll cargo test --release --workspace --locked` | 204 pass: every bit-exact golden test holds on the fallback |
+| One recorded drive under each maths | `replay_hash oracle/game/car_random.ryin` with nothing, `no-dll`, `pure`, `std` | the same hash four times (`89fd8ad1ee17fd0b`); the start-up line names the maths each time |
+| Lints, locked builds | CI's three clippy commands (`-D warnings`: native, `wasm32-unknown-unknown`, `wasm32-wasip1`), `cargo build --release --workspace --locked`, the tools with `--locked`, `python web/build.py` | clean |
+| **The browser: keys change the display, and the car is still the desktop's** | headless Chrome, Z4 GT3 at Laguna Seca, the line follower, `?selftest=10000&keys=KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500`: each key goes through the page's own key handler; against `examples/selftest --keys` with the same list | **the same state hash, `315571fe440e508a`**, and the display's text after each key is the desktop's (below) |
+| The keys do change the car | the same 10,000 steps without keys | another hash, `6fb6f38be9bf7692`, also equal on both sides |
+| Real key presses while driving | `web/check.mjs --keys`: trusted key events through Chrome's input path, the frame loop running at 60 frames/s | T, Shift+T, Y, Shift+Y, ], [ each change the display and show the note; Ctrl+T and Alt+T change nothing |
+| The pad | unit tests on the browser's driver (`rustyac-web/src/driver.rs`) with XInput button words: D-pad alone, Back + D-pad in both release orders, Back alone as a tap and as a hold, D-pad before Back | pass. **No real pad was used** |
+
+What the display said in the browser's self test, before and after each key (the desktop's run prints the
+same lines):
+
+| Key | after step | the display before | the display after | the note |
+|---|---|---|---|---|
+| T | 300 | `TC 3/12 | ABS 5/12 | Bias 72.0 %` | `TC 4/12 | ABS 5/12 | Bias 72.0 %` | `TC 4/12` |
+| Shift+T | 600 | `TC 4/12 | ABS 5/12 | Bias 72.0 %` | `TC 3/12 | ABS 5/12 | Bias 72.0 %` | `TC 3/12` |
+| Y | 900 | `TC 3/12 | ABS 5/12 | Bias 72.0 %` | `TC 3/12 | ABS 6/12 | Bias 72.0 %` | `ABS 6/12` |
+| ] | 1200 | `TC 3/12 | ABS 6/12 | Bias 72.0 %` | `TC 3/12 | ABS 6/12 | Bias 72.5 %` | `Brake bias 72.5 %` |
+| [ | 1500 | `TC 3/12 | ABS 6/12 | Bias 72.5 %` | `TC 3/12 | ABS 6/12 | Bias 72.0 %` | `Brake bias 72.0 %` |
+
+### Open questions (choices made without asking)
+
+1. **The desktop got the plain keys and the pad combination too.** The task named the browser; one table for
+   both seemed better than two. A plain key steps aside if your bindings use it. Say so if the desktop should
+   keep only Alt+T / Alt+A.
+2. **Back acts on release now, on the desktop too.** Before, "back onto the track" fired after 0.6 s while
+   Back was still held; now it fires when you let go. That is what makes the combination safe; it costs a
+   moment of feedback.
+3. **`]` and `[` by position or by letter.** The browser takes them by position (the two keys right of P, on
+   every layout). The desktop takes Windows' `VK_OEM_6` / `VK_OEM_4`, which are those keys on a US layout but
+   sit elsewhere on some others (German: `+` is not one of them). Bind `BALANCEUP` / `BALANCEDN` in
+   `rustyac_controls.ini` if they are awkward.
+4. **Left Shift is the clutch.** Shift+T / Shift+Y with the left Shift key dip the clutch (as Shift+R always
+   did). Not changed: it is AC's default clutch key. A separate "down" key would avoid it.
+5. **The wording.** AC's own messages say `TC` / `Not available`, `ABS` / `OFF`, `Brake Bias` / `58.0 %`. The
+   display here says `not fitted`, `off` and `n/max`, as the task asked. A bias click that changes nothing (a
+   car without a cockpit control, or the control at its stop) shows `(no change)`; AC shows nothing then.
+6. **The note also shows for an aid a car does not have** (`TC not fitted`), as AC's "Not available" does.
+7. **The fallback's exact claim.** `pure` is the DLL's FMA3 path, which is what the DLL runs on any processor
+   since about 2013. On an older processor *with* the DLL the game's other path is used, as before; on an
+   older processor *without* the DLL the fallback now gives the modern processor's results. Number parsing
+   without the DLL is Rust's, as before (it was never the DLL's in that case).
+8. **`RUSTYAC_MATH=no-dll`** is new and only for trying the fallback. Keep it?
+9. **The maths line** is printed on every run that simulates (on the error stream when a state dump is asked
+   for). Nothing in the repository parses the program's first lines, but a script of yours might.
+10. **The image was never built.** Everything in "Deploy with Coolify" about Coolify's screens is written
+    from its documentation as remembered, not from a deployment: the field names may differ a little in your
+    version. The first build on the server is the real test, and `WASM_OPT=0` is the first thing to try if it
+    stops in `wasm-opt`.
+11. **nginx 1.30.0-alpine** is the tag pinned (the stable one on Docker Hub today); the config was run on
+    1.28.0 for Windows, the only nginx that could be had here without Docker. It uses nothing new.
+12. **Cache times: more is "not cached" than the task said.** The task asked for `index.html` and the
+    manifest not cached and the rest short-cached. The page's script, the wasm and its glue are `no-cache`
+    too: the three only work together, and with five minutes each a visitor could get two builds mixed right
+    after a deploy. `no-cache` costs one short "not changed" answer per file and visit. Only the style sheet,
+    the licence texts and the pack's files have the five minutes. Hashed file names would be the real fix and
+    are a change to `web/build.py`.
+13. **The pack's folder on the server** is `/srv/rustyac/preview` in the how-to: any folder will do.
+14. **What a proxy does to the pack's files.** nginx does not compress `/preview/`. Whether Coolify's Traefik
+    or Cloudflare compress on the way out as well could not be seen from here. If the progress bar shows no
+    total for a big file, look at `curl -sI -H "Accept-Encoding: gzip" https://<host>/preview/manifest.json`
+    for a `Content-Encoding` line: that would be the proxy's doing.
+15. **The sound's maths is outside the fallback.** `rustyac-audio` has its own small loader for the DLL's
+    `log10f` and `sprintf`; without the DLL it uses Rust's, as before. It decides levels in decibels, not the
+    car. `pure` has no `log10f` yet.
+16. **Not fixed, found by the review:** on a keyboard layout with AltGr, Windows sends a Left Ctrl press with
+    every AltGr press, and Left Ctrl is gear down in the page (this was so in v0.20.1 too; not tried on such
+    a layout). On a window narrower than about 650 px the aids' line runs into the lap times. The desktop's
+    key hint at the bottom always names T / Y / ] / [, also when your bindings use one of them otherwise (the
+    console's table is right then).
+
+### The review
+
+Three readers (Sonnet, reading only) went through the change: input and simulation, the page, the maths
+fallback and the Docker files (`re/scratch/task20w2/review_*.md`). None found a way for the change to reach
+the physics or a recorded drive. Fixed from their lists: the desktop's key hint was wider than the window; a
+D-pad press landing just before Back led to a reset when Back came up; a pad dropping out during a hold fired
+a reset; bias keys pressed while paused arrived all at once afterwards; a car without brakes showed
+`Bias 0.0 %`; two keys at the same step made the self test run four billion steps, and the two self tests
+read a malformed step number differently; the start-up line said "bit for bit" without saying that numbers in
+files are read by Rust's parser then, and gave a false reason with `RUSTYAC_MATH=no-dll`; the wasm, its glue
+and the page's script could be cached for different five minutes; the licence link downloaded a file. The
+two Linux tool archives the image build unpacks were fetched and looked at: their hashes are the pinned ones
+and neither holds a link (which the unpacker of an older Python would refuse).
+
+### To check it again
+
+```
+cargo test --release --workspace --locked
+RUSTYAC_MATH=no-dll cargo test --release --workspace --locked
+python re/scratch/task20w2/desktop_same.py      # needs re/scratch/task20w2/bin/rustyac_v0201.exe and rustyac_new.exe
+python web/build.py && python web/serve.py --port 8137        # the second in another terminal
+cargo run --release -p rustyac-web --example selftest -- bmw_z4_gt3 ks_laguna_seca --steps 10000 --keys "KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"
+node web/check.mjs --url "http://127.0.0.1:8137/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca&nocache=1&selftest=10000&keys=KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"
+node web/check.mjs --url "http://127.0.0.1:8137/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca&nocache=1" --seconds 8 --keys "KeyT,Shift+KeyT,KeyY,Shift+KeyY,BracketRight,BracketLeft,Ctrl+KeyT,Alt+KeyT"
+docker build -f web/Dockerfile -t rustyac-web . && docker run --rm -p 8080:80 rustyac-web     # where there is Docker
+```

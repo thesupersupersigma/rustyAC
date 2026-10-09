@@ -186,8 +186,10 @@ What the image does:
   (plain HTTP: the proxy in front does TLS)
 - `.wasm` is sent as `application/wasm`; html, js, css and the wasm are sent gzip-compressed (compressed once
   when the image is built); **nothing under `/preview/` is compressed**
-- `index.html` and `preview/manifest.json` are `no-cache` (asked for again on every visit); everything else is
-  cached for five minutes, because the file names are not hashed
+- `index.html`, `preview/manifest.json`, the page's script and the wasm with its glue are `no-cache` (asked
+  for again on every visit, a short "not changed" answer when they are the same: the script, the glue and the
+  wasm of one build only work together); everything else (the style sheet, the pack's files) is cached for
+  five minutes, because the file names are not hashed
 - byte ranges and large files work (plain `sendfile`); `/healthz` answers `ok`
 
 ### In Coolify
@@ -201,7 +203,8 @@ What the image does:
    redirect loop).
 5. **Health check** (the *Healthcheck* tab): the image has its own (`/healthz`), which Coolify uses. If you
    set one by hand: path `/healthz`, port `80`, scheme `http`.
-6. **Persistent Storage** -> *Add* -> **Bind Mount** (only if you want a preview pack):
+6. **Persistent Storage** -> *Add* -> **Bind Mount** (named *Directory Mount* in some versions; only if you
+   want a preview pack):
    - Source Path (on the server): `/srv/rustyac/preview`
    - Destination Path (in the container): `/usr/share/nginx/html/preview`
 7. **Deploy.** The first build compiles everything and takes a while on an old server; later builds too
@@ -233,8 +236,10 @@ finds no pack and simply offers "Open your Assetto Corsa folder".**
 The pack is Kunos Simulazioni's content: **do not leave the site open to the public while a pack is mounted.**
 
 1. Tunnel: in Cloudflare Zero Trust -> *Networks* -> *Tunnels* -> your tunnel -> *Public Hostname* -> add
-   `rustyac.example.com` with service `http://localhost:80` (Coolify's Traefik on the server). Traefik picks
-   the container by the host name, which is why the domain in Coolify must be the same name.
+   `rustyac.example.com` with service `http://localhost:80` (Coolify's Traefik on the server; if `cloudflared`
+   itself runs in a container, the address is the one that reaches Traefik from there, as for your other
+   sites). Traefik picks the container by the host name, which is why the domain in Coolify must be the same
+   name.
 2. Access: Zero Trust -> *Access* -> *Applications* -> *Add an application* -> *Self-hosted*. Application
    domain `rustyac.example.com`; add a policy with action *Allow* and *Include* -> *Emails* -> your address
    (or your identity provider's group). Everybody else gets Cloudflare's login page and never reaches the
