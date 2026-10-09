@@ -536,6 +536,14 @@ impl JoypadCarControl {
     /// `JoypadCarControl::getAction` @ 0x1401dc130 (0 glance left, 1 glance right, 4
     /// headlights, 5 camera, 6 horn, 9 glance back, 10 flash), on the state of the last
     /// `acquire_controls`.
+    /// Not AC's: the pad's own traction-control buttons (up, down) on a button mask, for
+    /// [`super::ResetCombo`]. A key bound to the same action does not count.
+    pub fn tc_buttons_on(&self, mask: u32) -> [bool; 2] {
+        let never: &dyn Fn(i32) -> bool = &|_| false;
+        // (button 0 is "no button": bit 0 of a mask is never set)
+        [self.button("TCUP").is_pressed(mask, never), self.button("TCDN").is_pressed(mask, never)]
+    }
+
     pub fn get_action(&self, action: i32, key_down: &dyn Fn(i32) -> bool) -> bool {
         let section = match action {
             0 => "GLANCELEFT",

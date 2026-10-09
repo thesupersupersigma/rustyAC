@@ -15,9 +15,9 @@ use rustyac_game::autodrive::AutoDriver;
 use rustyac_game::input::bindings::{default_ini, Bindings};
 use rustyac_game::input::keyboard::KeyboardCarControl;
 use rustyac_game::input::pad::{JoypadCarControl, PadState};
-use rustyac_game::input::{Extra, DEVICE_KEYBOARD, DEVICE_PAD};
+use rustyac_game::input::{Extra, ResetCombo, DEVICE_KEYBOARD, DEVICE_PAD};
 use rustyac_game::input_file::event;
-use rustyac_game::sim::{CarProbe, DriverSource};
+use rustyac_game::sim::{CarProbe, DriverSource, DT};
 use rustyac_physics::car::{CarControls, CarControlsInput, VibrationDef};
 use rustyac_physics::track::Track;
 
@@ -28,8 +28,11 @@ pub struct Input {
     pub keys: HashSet<i32>,
     /// The first connected pad, `None` without one.
     pub pad: Option<PadState>,
-    /// Event bits (`rustyac_game::input_file::event`) asked for from outside: R, Shift+R, N.
+    /// Event bits (`rustyac_game::input_file::event`) asked for from outside: R, Shift+R, N,
+    /// G, and the page's keys of the aids (T, Y with Shift for "down").
     pub requests: u32,
+    /// Clicks of the cockpit's brake-bias control asked for from outside: the page's ] and [.
+    pub bias_clicks: i32,
     /// The line follower drives instead of the devices.
     pub autodrive: bool,
     /// The pad's two motors, 0..1, as AC's class last set them (the page plays them).
@@ -53,10 +56,10 @@ pub struct WebSource {
     pending_events: u32,
     pending_bias: i32,
     probe: CarProbe,
-    /// The pad's own buttons (reset, camera) as they were in the last look.
-    meta_down: [bool; 2],
-    /// Steps since the reset button went down, and whether its hold has already acted.
-    reset_down: Option<(u32, bool)>,
+    /// The pad's camera button as it was in the last look.
+    camera_down: bool,
+    /// The reset button and its second layer (held: the D-pad's up / down are the ABS's).
+    reset: ResetCombo,
 }
 
 impl WebSource {
@@ -77,47 +80,45 @@ impl WebSource {
             pending_events: 0,
             pending_bias: 0,
             probe: CarProbe::default(),
-            meta_down: [false; 2],
-            reset_down: None,
+            camera_down: false,
+            reset: ResetCombo::default(),
         }
     }
 
-    /// The pad buttons that are rustyAC's own: reset (a tap: back to the pits; held 0.6 s:
-    /// back onto the track where the car is) and the camera.
+    /// Every key the layout uses (Windows virtual-key codes): the keyboard's two tables and
+    /// the hybrid cockpit's keys.
+    pub fn keys_used(&self) -> Vec<i32> {
+        let mut keys: Vec<i32> = [self.keyboard.keys, self.keyboard.keys2].iter().flat_map(|k| k.named().map(|(_, code)| code)).chain(self.bindings.hybrid_keys.iter().flatten().copied()).filter(|code| *code > 0).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
+
+    /// The pad buttons that are rustyAC's own: the camera, and reset (Back). What Back does
+    /// is decided when it comes up ([`ResetCombo`]): if the D-pad's up or down went down
+    /// while it was held, nothing (it was the ABS's second layer); else back to the pits
+    /// after less than 0.6 s, back onto the track where the car is after more.
     fn meta_buttons(&mut self, state: Option<&PadState>, camera_toggles: &mut u32) {
-        /// 0.6 s of physics steps.
-        const HOLD_STEPS: u32 = 200;
         let mask = state.map(PadState::button_mask).unwrap_or(0);
         let never: &dyn Fn(i32) -> bool = &|_| false;
-        let down = [self.bindings.pad_reset.is_pressed(mask, never), self.pad.get_action(5, never) && mask != 0];
-        if down[0] && !self.meta_down[0] {
-            self.reset_down = Some((0, false));
-        }
-        match (down[0], self.reset_down) {
-            (true, Some((steps, false))) if steps >= HOLD_STEPS => {
-                self.pending_events |= event::TO_TRACK;
-                self.reset_down = Some((steps, true));
-            }
-            (true, Some((steps, held))) => self.reset_down = Some((steps + 1, held)),
-            (false, Some((_, held))) => {
-                if !held {
-                    self.pending_events |= event::RESET;
-                }
-                self.reset_down = None;
-            }
-            _ => {}
-        }
-        if down[1] && !self.meta_down[1] {
+        let reset = self.bindings.pad_reset.is_pressed(mask, never);
+        // (one look per physics step)
+        self.pending_events |= self.reset.update(reset, self.pad.tc_buttons_on(mask), DT as f64);
+        let camera = self.pad.get_action(5, never) && mask != 0;
+        if camera && !self.camera_down {
             *camera_toggles += 1;
         }
-        self.meta_down = down;
+        self.camera_down = camera;
     }
 }
 
 impl DriverSource for WebSource {
     fn take_events(&mut self) -> (u32, i32) {
-        let requests = std::mem::take(&mut self.input.lock().unwrap().requests);
-        (std::mem::take(&mut self.pending_events) | requests, std::mem::take(&mut self.pending_bias))
+        let (requests, clicks) = {
+            let mut input = self.input.lock().unwrap();
+            (std::mem::take(&mut input.requests), std::mem::take(&mut input.bias_clicks))
+        };
+        (std::mem::take(&mut self.pending_events) | requests, std::mem::take(&mut self.pending_bias) + clicks)
     }
 
     fn request(&mut self, events: u32) {
@@ -180,6 +181,8 @@ impl DriverSource for WebSource {
         } else {
             self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down);
         }
+        // Back held: the D-pad's up / down are the ABS's
+        self.reset.apply(&mut extra);
         // the cockpit keys of the hybrid system, as on the desktop
         {
             let keyboard = self.active == DEVICE_KEYBOARD;
@@ -288,5 +291,73 @@ mod tests {
         input.lock().unwrap().requests |= event::RESET;
         assert_eq!(source.take_events().0 & event::RESET, event::RESET);
         assert_eq!(source.take_events().0, 0);
+        // the keys the page keeps from the browser: the arrows, WASD, Left Ctrl ... but not T
+        let used = source.keys_used();
+        assert!([0x26, 0x57, 0xa2, 0xa0, 0x20, 0x4d].iter().all(|key| used.contains(key)) && !used.contains(&0x54) && !used.contains(&0x74), "{used:x?}");
+        // the page's ] and [ are clicks of the brake bias
+        input.lock().unwrap().bias_clicks += 2;
+        assert_eq!(source.take_events(), (0, 2));
+        assert_eq!(source.take_events(), (0, 0));
+    }
+
+    /// XInput's bits: Back, D-pad up, D-pad down, D-pad right.
+    const BACK: u16 = 0x0020;
+    const UP: u16 = 0x0001;
+    const DOWN: u16 = 0x0002;
+    const RIGHT: u16 = 0x0008;
+
+    /// Holds `buttons` for `steps` physics steps and returns the events and bias clicks raised.
+    fn hold(source: &mut WebSource, input: &SharedInput, buttons: u16, steps: u32) -> (u32, i32) {
+        let mut controls = CarControls::default();
+        let car = CarControlsInput { steer_lock: 180.0, speed: 20.0 };
+        input.lock().unwrap().pad = Some(PadState { buttons, ..PadState::default() });
+        let mut out = (0, 0);
+        for _ in 0..steps {
+            source.acquire(&mut controls, 0.003, &car);
+            let (events, clicks) = source.take_events();
+            out = (out.0 | events, out.1 + clicks);
+        }
+        out
+    }
+
+    #[test]
+    fn the_d_pad_sets_tc_and_bias_and_with_back_held_the_abs() {
+        let input: SharedInput = Arc::default();
+        let mut source = WebSource::new(input.clone());
+        // plain D-pad: up / down traction control, right brake bias forward
+        assert_eq!(hold(&mut source, &input, UP, 5), (event::TC_UP, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, DOWN, 5), (event::TC_DN, 0));
+        assert_eq!(hold(&mut source, &input, RIGHT, 5), (0, 1));
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
+        // Back held, D-pad up, then down: the ABS, once per press, and never the traction control
+        assert_eq!(hold(&mut source, &input, BACK, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, BACK | UP, 5), (event::ABS_UP, 0));
+        assert_eq!(hold(&mut source, &input, BACK, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, BACK | DOWN, 5), (event::ABS_DN, 0));
+        // Back let go first while the D-pad is still down: no traction-control press appears
+        assert_eq!(hold(&mut source, &input, DOWN, 5), (0, 0));
+        // and Back's own release did nothing: it was the second layer, however long it took
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, BACK, 300), (0, 0));
+        assert_eq!(hold(&mut source, &input, BACK | UP, 5), (event::ABS_UP, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
+    }
+
+    #[test]
+    fn back_alone_is_decided_when_it_comes_up() {
+        let input: SharedInput = Arc::default();
+        let mut source = WebSource::new(input.clone());
+        // a tap: nothing while it is down, the pits when it comes up
+        assert_eq!(hold(&mut source, &input, BACK, 50), (0, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (event::RESET, 0));
+        // held for 0.6 s (200 steps) or more: nothing while it is down, back onto the track after
+        assert_eq!(hold(&mut source, &input, BACK, 260), (0, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (event::TO_TRACK, 0));
+        // the D-pad pressed before Back does not make Back a second layer
+        assert_eq!(hold(&mut source, &input, UP, 5), (event::TC_UP, 0));
+        assert_eq!(hold(&mut source, &input, UP | BACK, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, UP, 5), (event::RESET, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
     }
 }

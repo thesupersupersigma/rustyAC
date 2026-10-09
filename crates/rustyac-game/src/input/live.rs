@@ -14,7 +14,7 @@ use super::bindings::Bindings;
 use super::keyboard::KeyboardCarControl;
 use super::pad::{self, JoypadCarControl, PadButton, PadState, XInput};
 use super::wheel::WheelDevice;
-use super::{Extra, DEVICE_KEYBOARD, DEVICE_PAD, DEVICE_WHEEL};
+use super::{Extra, ResetCombo, DEVICE_KEYBOARD, DEVICE_PAD, DEVICE_WHEEL};
 use crate::input_file::event;
 use crate::physics_thread::Shared;
 use crate::sim::CarProbe;
@@ -46,8 +46,10 @@ pub struct LiveSource {
     pad_state: Option<PadState>,
     /// The pad's own buttons (reset, pause, camera) as they were in the last look.
     meta_down: [bool; 3],
-    /// When the reset button went down, and whether its hold has already acted.
-    reset_down: Option<(std::time::Instant, bool)>,
+    /// The reset button and its second layer (held: the traction-control buttons are ABS's).
+    reset: ResetCombo,
+    /// When the pad's own buttons were last looked at.
+    meta_at: std::time::Instant,
     rumbling: bool,
 }
 
@@ -78,7 +80,8 @@ impl LiveSource {
             rumble,
             pad_state: None,
             meta_down: [false; 3],
-            reset_down: None,
+            reset: ResetCombo::default(),
+            meta_at: std::time::Instant::now(),
             rumbling: false,
         }
     }
@@ -104,26 +107,15 @@ impl LiveSource {
         if pressed(1) {
             self.shared.paused.fetch_xor(true, Ordering::Relaxed);
         }
-        // the reset button: a tap puts the car back at its spawn point (on release), holding
-        // it for 0.6 s puts it back on the track where it is
-        const HOLD: std::time::Duration = std::time::Duration::from_millis(600);
-        if pressed(0) {
-            self.reset_down = Some((std::time::Instant::now(), false));
-        }
-        match (down[0], self.reset_down) {
-            (true, Some((since, false))) if since.elapsed() >= HOLD => {
-                if !paused {
-                    self.pending_events |= event::TO_TRACK;
-                }
-                self.reset_down = Some((since, true));
-            }
-            (false, Some((_, held))) => {
-                if !held && !paused {
-                    self.pending_events |= event::RESET;
-                }
-                self.reset_down = None;
-            }
-            _ => {}
+        // the reset button, decided when it comes up (`ResetCombo`): a tap puts the car back at
+        // its spawn point, 0.6 s or more puts it back on the track where it is, and if a
+        // traction-control button was pressed meanwhile it only was the ABS's second layer
+        let now = std::time::Instant::now();
+        let seconds = (now - self.meta_at).as_secs_f64();
+        self.meta_at = now;
+        let released = self.reset.update(down[0], self.pad.tc_buttons_on(mask), seconds);
+        if !paused {
+            self.pending_events |= released;
         }
         if !paused && pressed(2) {
             self.shared.camera_toggles.fetch_add(1, Ordering::Relaxed);
@@ -207,6 +199,7 @@ impl DriverSource for LiveSource {
             }
             _ => self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down),
         }
+        self.reset.apply(&mut extra);
         // the cockpit keys of the hybrid system work whichever device drives: rustyAC's own
         // second keys always, AC's `KEY` of each section while the keyboard is the device
         {

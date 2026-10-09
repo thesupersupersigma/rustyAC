@@ -64,6 +64,77 @@ pub struct Extra {
     pub clutch_pressed: bool,
 }
 
+/// How long the pad's reset button is held for "back onto the track", seconds.
+pub const RESET_HOLD_SECONDS: f64 = 0.6;
+
+/// The pad's reset button (Back), which is also a second layer for the two traction-control
+/// buttons (D-pad up / down): held, they change the ABS instead. Not AC's.
+///
+/// The rule, decided when the reset button comes up:
+/// * a traction-control button went down while it was held: nothing (it was the second layer);
+/// * else it was held for less than [`RESET_HOLD_SECONDS`]: back to the pits;
+/// * else: back onto the track where the car is.
+///
+/// A traction-control button that went down under the reset button stays an ABS button until
+/// it is released itself, whichever of the two is let go first.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ResetCombo {
+    /// Seconds the reset button has been down, and whether it served as the second layer.
+    held: Option<(f64, bool)>,
+    /// The traction-control buttons (up, down) as they were in the last look.
+    was: [bool; 2],
+    /// Traction-control buttons that are ABS buttons until released.
+    latched: [bool; 2],
+}
+
+impl ResetCombo {
+    /// One look at the pad, `seconds` after the last one: is the reset button down, are the
+    /// pad's traction-control buttons (up, down) down. Returns the [`event`] bit of the reset
+    /// button: `RESET` or `TO_TRACK` in the look that sees it released, else 0.
+    ///
+    /// [`event`]: crate::input_file::event
+    pub fn update(&mut self, reset: bool, tc: [bool; 2], seconds: f64) -> u32 {
+        use crate::input_file::event;
+        let mut events = 0;
+        match (reset, self.held) {
+            (true, None) => self.held = Some((0.0, false)),
+            (true, Some((held, used))) => self.held = Some((held + seconds, used)),
+            (false, Some((held, used))) => {
+                self.held = None;
+                if !used {
+                    events = if held >= RESET_HOLD_SECONDS { event::TO_TRACK } else { event::RESET };
+                }
+            }
+            (false, None) => {}
+        }
+        for (k, down) in tc.into_iter().enumerate() {
+            if !down {
+                self.latched[k] = false;
+            } else if !self.was[k] {
+                if let Some((held, _)) = self.held {
+                    self.latched[k] = true;
+                    self.held = Some((held, true));
+                }
+            }
+        }
+        self.was = tc;
+        events
+    }
+
+    /// The device's buttons with the second layer applied: a latched traction-control button
+    /// is the ABS button of the same direction.
+    pub fn apply(&self, extra: &mut Extra) {
+        if self.latched[0] {
+            extra.tc_up = false;
+            extra.abs_up = true;
+        }
+        if self.latched[1] {
+            extra.tc_dn = false;
+            extra.abs_dn = true;
+        }
+    }
+}
+
 /// `StepInput::device` values.
 pub const DEVICE_KEYBOARD: u32 = 1;
 pub const DEVICE_PAD: u32 = 2;
