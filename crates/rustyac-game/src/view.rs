@@ -17,9 +17,55 @@ pub const IDENTITY: Mat = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0
 /// How many loose objects the picture follows at a time.
 pub const MOVED_OBJECTS: usize = 8;
 
+/// What the game's `Car::getPhysicsState` @ 0x140270d70 hands the car's picture beyond the
+/// members of [`CarView`]: the values the car's visual helpers read (ground shadows, skid
+/// marks, smoke, disc glow, instruments).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RenderState {
+    pub velocity: [f32; 3],
+    pub local_velocity: [f32; 3],
+    pub angular_velocity: [f32; 3],
+    pub local_angular_velocity: [f32; 3],
+    /// degrees
+    pub slip_angle: [f32; 4],
+    pub slip_ratio: [f32; 4],
+    /// `TyreStatus::slipFactor`
+    pub tyre_slip: [f32; 4],
+    pub dy: [f32; 4],
+    pub mz: [f32; 4],
+    pub dirty_level: [f32; 4],
+    pub camber_rad: [f32; 4],
+    pub loaded_radius: [f32; 4],
+    pub suspension_travel: [f32; 4],
+    pub contact_point: [[f32; 3]; 4],
+    pub contact_normal: [[f32; 3]; 4],
+    /// the plane through the first three tyres' contact points: normal, offset
+    pub ground_plane: [f32; 4],
+    /// the last surface each tyre touched
+    pub surface_grip_mod: [f32; 4],
+    pub surface_dirt_additive_k: [f32; 4],
+    pub surface_is_valid_track: [bool; 4],
+    pub surface_is_pitlane: [bool; 4],
+    pub disc_temps: [f32; 4],
+    pub core_temps: [f32; 4],
+    pub virtual_km: [f32; 4],
+    pub inflation: [f32; 4],
+    pub flat_spot: [f32; 4],
+    pub water: f32,
+    pub turbo_boost: f32,
+    pub turbo_bov: f32,
+    pub drivetrain_speed: f32,
+    pub is_gear_grinding: bool,
+    pub is_engine_limiter_on: bool,
+    pub cg_height: f32,
+    pub time_stamp: f64,
+}
+
 /// The car after one physics step.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CarView {
+    /// See [`RenderState`].
+    pub render: RenderState,
     /// Physics steps so far, and the seconds they stand for.
     pub steps: u64,
     pub sim_seconds: f64,
@@ -50,6 +96,8 @@ pub struct CarView {
     pub wheel_load: [f32; 4],
     pub wheel_slip: [f32; 4],
     pub speed_kmh: f32,
+    /// `Car::getSpeed`, m/s
+    pub speed_ms: f32,
     pub rpm: f32,
     /// The limiter's revs (the end of the rev bar).
     pub rpm_limit: f32,
@@ -193,6 +241,7 @@ pub struct LapView {
 impl Default for CarView {
     fn default() -> CarView {
         CarView {
+            render: RenderState::default(),
             moved_objects: [(0, IDENTITY); MOVED_OBJECTS],
             moved_object_count: 0,
             steps: 0,
@@ -209,6 +258,7 @@ impl Default for CarView {
             wheel_load: [0.0; 4],
             wheel_slip: [0.0; 4],
             speed_kmh: 0.0,
+            speed_ms: 0.0,
             rpm: 0.0,
             rpm_limit: 10_000.0,
             gear: 1,
@@ -304,12 +354,73 @@ impl CarView {
     #[cfg(windows)]
     pub fn physics_state(&self) -> rustyac_render::car::CarPhysicsState {
         let m = |m: &Mat| Mat44f { m: *m };
+        let r = &self.render;
+        let mut surfaces = [rustyac_render::state::SurfaceDef::default(); 4];
+        let mut thermal = [rustyac_render::state::TyreThermalState::default(); 4];
+        for i in 0..4 {
+            surfaces[i].grip_mod = r.surface_grip_mod[i];
+            surfaces[i].dirt_additive_k = r.surface_dirt_additive_k[i];
+            surfaces[i].is_valid_track = r.surface_is_valid_track[i];
+            surfaces[i].is_pitlane = r.surface_is_pitlane[i];
+            thermal[i].core_temp = r.core_temps[i];
+        }
         rustyac_render::car::CarPhysicsState {
             world_matrix: m(&self.body),
             suspension_matrix: [m(&self.hubs[0]), m(&self.hubs[1]), m(&self.hubs[2]), m(&self.hubs[3])],
             tyre_matrix: [m(&self.tyre_matrix[0]), m(&self.tyre_matrix[1]), m(&self.tyre_matrix[2]), m(&self.tyre_matrix[3])],
             wheel_angular_speed: self.wheel_angular_speed,
             steer: self.steer_deg,
+            engine_rpm: if self.rpm >= 0.0 { self.rpm } else { 0.0 },
+            is_engine_limiter_on: r.is_engine_limiter_on,
+            gas: self.gas,
+            brake: self.brake,
+            clutch: self.clutch,
+            gear: self.gear,
+            speed: self.speed_ms,
+            velocity: r.velocity,
+            local_velocity: r.local_velocity,
+            angular_velocity: r.angular_velocity,
+            local_angular_velocity: r.local_angular_velocity,
+            slip_angle: r.slip_angle,
+            slip_ratio: r.slip_ratio,
+            tyre_slip: r.tyre_slip,
+            nd_slip: self.wheel_slip,
+            load: self.wheel_load,
+            dy: r.dy,
+            mz: r.mz,
+            tyre_dirty_level: r.dirty_level,
+            tyre_surface_def: surfaces,
+            cg_height: r.cg_height,
+            acc_g: self.acc_g,
+            tyre_contact_point: r.contact_point,
+            tyre_contact_normal: r.contact_normal,
+            camber_rad: r.camber_rad,
+            tyre_radius: self.tyre_radius,
+            tyre_loaded_radius: r.loaded_radius,
+            suspension_travel: r.suspension_travel,
+            drivetrain_speed: r.drivetrain_speed,
+            turbo_boost: r.turbo_boost,
+            turbo_bov: r.turbo_bov,
+            is_gear_grinding: r.is_gear_grinding,
+            tyre_virtual_km: r.virtual_km,
+            damage_zone_level: self.damage,
+            limiter_rpm: self.rpm_limit as i32,
+            ground_plane: r.ground_plane,
+            time_stamp: r.time_stamp,
+            air_density: self.air_density,
+            fuel: self.fuel,
+            engine_life_left: self.engine_life,
+            tyre_inflation: r.inflation,
+            kers_charge: self.hybrid.charge,
+            kers_input: self.hybrid.input,
+            kers_current_kj: self.hybrid.used_kj,
+            kers_is_charging: self.hybrid.charging,
+            sus_damage: self.suspension_damage,
+            tyre_flat_spot: r.flat_spot,
+            water: r.water,
+            tyre_thermal_states: thermal,
+            disc_temps: r.disc_temps,
+            status_bytes: self.lights as u32 | if self.drs { 4 } else { 0 },
             ..rustyac_render::car::CarPhysicsState::at_origin()
         }
     }
@@ -337,6 +448,7 @@ impl CarView {
             moved_objects,
             moved_object_count,
             speed_kmh: car.speed * 3.6,
+            speed_ms: car.speed,
             gas: car.controls.gas,
             brake: car.controls.brake,
             clutch: car.controls.clutch,
@@ -384,12 +496,64 @@ impl CarView {
             view.wheel_load[index] = tyre.status.load;
             view.wheel_slip[index] = tyre.status.nd_slip;
             view.suspension_damage[index] = car.suspensions[index].get_damage();
+            // Car::getPhysicsState 0x140270d70, the tyre's part
+            let r = &mut view.render;
+            let s = &tyre.status;
+            r.slip_angle[index] = s.slip_angle_rad * f32::from_bits(0x4265_2ee1);
+            r.slip_ratio[index] = s.slip_ratio;
+            r.tyre_slip[index] = s.slip_factor;
+            r.dy[index] = s.dy;
+            r.mz[index] = s.mz;
+            r.dirty_level[index] = s.dirty_level;
+            r.camber_rad[index] = if index & 1 == 0 { s.camber_rad } else { -s.camber_rad };
+            r.loaded_radius[index] = tyre.data.radius - s.depth;
+            r.suspension_travel[index] = car.suspensions[index].get_status().travel;
+            r.contact_point[index] = [tyre.contact_point.x, tyre.contact_point.y, tyre.contact_point.z];
+            r.contact_normal[index] = [tyre.contact_normal.x, tyre.contact_normal.y, tyre.contact_normal.z];
+            r.virtual_km[index] = s.virtual_km as f32;
+            r.inflation[index] = s.inflation;
+            r.flat_spot[index] = s.flat_spot as f32;
+            r.core_temps[index] = tyre.thermal_model.core_temp;
+            if let Some(surface) = &tyre.surface_def {
+                r.surface_grip_mod[index] = surface.grip_mod;
+                r.surface_dirt_additive_k[index] = surface.dirt_additive_k;
+                r.surface_is_valid_track[index] = surface.is_valid_track;
+                r.surface_is_pitlane[index] = surface.is_pitlane;
+            }
+            if let Some(brakes) = car.brake_system.as_deref() {
+                r.disc_temps[index] = brakes.disc_temperatures()[index];
+            }
+        }
+        {
+            let r = &mut view.render;
+            let v3 = |v: rustyac_physics::vecmath::Vec3f| [v.x, v.y, v.z];
+            r.velocity = v3(car.core.get_velocity(car.body));
+            r.local_velocity = v3(car.core.get_local_velocity(car.body));
+            r.angular_velocity = v3(car.core.get_angular_velocity(car.body));
+            r.local_angular_velocity = v3(car.core.get_local_angular_velocity(car.body));
+            if car.tyres.len() >= 4 {
+                let t = &car.tyres;
+                r.ground_plane = rustyac_physics::car::aero::plane4f(&t[0].unmodified_contact_point, &t[1].unmodified_contact_point, &t[2].unmodified_contact_point);
+                let mut sum = 0.0f32;
+                for tyre in t.iter() {
+                    sum += tyre.contact_point.y;
+                }
+                r.cg_height = car.core.get_position(car.body).y - sum * 0.25;
+            }
+            r.water = car.water.t;
+            r.time_stamp = sim.sim_seconds() * 1000.0;
         }
         if let Some(drivetrain) = &car.drivetrain {
             view.rpm = drivetrain.get_engine_rpm();
             view.gear = drivetrain.base().current_gear;
             view.rpm_limit = drivetrain.engine().get_limiter_rpm() as f32;
             view.engine_life = drivetrain.engine().base().life_left as f32;
+            let engine = drivetrain.engine();
+            view.render.turbo_boost = engine.base().status.turbo_boost;
+            view.render.turbo_bov = engine.base().bov;
+            view.render.drivetrain_speed = (drivetrain.base().drive.velocity as f32).abs();
+            view.render.is_gear_grinding = drivetrain.base().is_gear_grinding;
+            view.render.is_engine_limiter_on = engine.is_limiter_on();
         }
         if let Some(track) = &sim.track {
             for index in 0..4.min(car.tyres.len()) {
