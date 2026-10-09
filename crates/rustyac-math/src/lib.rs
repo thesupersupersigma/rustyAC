@@ -57,6 +57,8 @@ pub enum Choice {
     Wasm,
     /// `RUSTYAC_MATH=pure` or `RUSTYAC_MATH=std` asked for it.
     Forced,
+    /// `RUSTYAC_MATH=no-dll`: [`pure`], as if the DLL were not installed.
+    DllHidden,
 }
 
 type F1 = unsafe extern "C" fn(f32) -> f32;
@@ -238,11 +240,12 @@ fn chosen() -> &'static (Crt, Choice) {
             return (PURE, Choice::Forced);
         }
         // (`RUSTYAC_MATH=no-dll`: as if the DLL were not installed, to try the fallback)
+        if choice.eq_ignore_ascii_case("no-dll") {
+            return (PURE, Choice::DllHidden);
+        }
         #[cfg(windows)]
-        if !choice.eq_ignore_ascii_case("no-dll") {
-            if let Some(crt) = msvcr120::load() {
-                return (crt, Choice::Dll);
-            }
+        if let Some(crt) = msvcr120::load() {
+            return (crt, Choice::Dll);
         }
         // the DLL's own algorithms, not another library's
         (PURE, Choice::DllMissing)
@@ -268,8 +271,9 @@ pub fn describe() -> String {
     match (backend(), choice()) {
         (Backend::Msvcr120, _) => "maths: MSVCR120.dll, the runtime Assetto Corsa itself uses".to_string(),
         (Backend::Pure, Choice::DllMissing) => {
-            "maths: MSVCR120.dll (the Visual C++ 2013 runtime) was not found; its functions rewritten in Rust are used instead (rustyac_math::pure: the results the DLL gives on any processor since about 2013, bit for bit)".to_string()
+            "maths: MSVCR120.dll (the Visual C++ 2013 runtime) was not found; its maths functions rewritten in Rust are used instead (rustyac_math::pure: sin, cos, pow and the like give the bits the DLL gives on any processor since about 2013; numbers in files are read by Rust's parser)".to_string()
         }
+        (Backend::Pure, Choice::DllHidden) => "maths: MSVCR120.dll's maths functions rewritten in Rust (rustyac_math::pure), as if the DLL were not installed, because RUSTYAC_MATH=no-dll".to_string(),
         (Backend::Pure, Choice::Wasm) => "maths: MSVCR120.dll's functions rewritten in Rust (rustyac_math::pure)".to_string(),
         (Backend::Pure, _) => "maths: MSVCR120.dll's functions rewritten in Rust (rustyac_math::pure), because RUSTYAC_MATH=pure".to_string(),
         (Backend::Std, _) => "maths: Rust's std, because RUSTYAC_MATH=std (not the game's maths: results can differ in the last digits)".to_string(),

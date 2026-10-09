@@ -102,8 +102,13 @@ impl WebSource {
         let mask = state.map(PadState::button_mask).unwrap_or(0);
         let never: &dyn Fn(i32) -> bool = &|_| false;
         let reset = self.bindings.pad_reset.is_pressed(mask, never);
-        // (one look per physics step)
-        self.pending_events |= self.reset.update(reset, self.pad.tc_buttons_on(mask), DT as f64);
+        if state.is_none() {
+            // a pad that went away let go of nothing
+            self.reset.cancel();
+        } else {
+            // (one look per physics step)
+            self.pending_events |= self.reset.update(reset, self.pad.tc_buttons_on(mask), DT as f64);
+        }
         let camera = self.pad.get_action(5, never) && mask != 0;
         if camera && !self.camera_down {
             *camera_toggles += 1;
@@ -354,10 +359,18 @@ mod tests {
         // held for 0.6 s (200 steps) or more: nothing while it is down, back onto the track after
         assert_eq!(hold(&mut source, &input, BACK, 260), (0, 0));
         assert_eq!(hold(&mut source, &input, 0, 5), (event::TO_TRACK, 0));
-        // the D-pad pressed before Back does not make Back a second layer
-        assert_eq!(hold(&mut source, &input, UP, 5), (event::TC_UP, 0));
+        // the D-pad a moment before Back (two thumbs): its traction-control step has happened,
+        // no ABS step follows, and Back does nothing when it comes up
+        assert_eq!(hold(&mut source, &input, UP, 2), (event::TC_UP, 0));
         assert_eq!(hold(&mut source, &input, UP | BACK, 5), (0, 0));
-        assert_eq!(hold(&mut source, &input, UP, 5), (event::RESET, 0));
+        assert_eq!(hold(&mut source, &input, UP, 5), (0, 0));
+        assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
+        // a pad that goes away while Back is held lets go of nothing: no reset
+        assert_eq!(hold(&mut source, &input, BACK, 300), (0, 0));
+        input.lock().unwrap().pad = None;
+        let mut controls = CarControls::default();
+        source.acquire(&mut controls, 0.003, &CarControlsInput { steer_lock: 180.0, speed: 20.0 });
+        assert_eq!(source.take_events(), (0, 0));
         assert_eq!(hold(&mut source, &input, 0, 5), (0, 0));
     }
 }

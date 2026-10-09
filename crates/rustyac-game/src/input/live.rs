@@ -113,9 +113,13 @@ impl LiveSource {
         let now = std::time::Instant::now();
         let seconds = (now - self.meta_at).as_secs_f64();
         self.meta_at = now;
-        let released = self.reset.update(down[0], self.pad.tc_buttons_on(mask), seconds);
-        if !paused {
-            self.pending_events |= released;
+        if state.is_none() {
+            self.reset.cancel();
+        } else {
+            let released = self.reset.update(down[0], self.pad.tc_buttons_on(mask), seconds);
+            if !paused {
+                self.pending_events |= released;
+            }
         }
         if !paused && pressed(2) {
             self.shared.camera_toggles.fetch_add(1, Ordering::Relaxed);

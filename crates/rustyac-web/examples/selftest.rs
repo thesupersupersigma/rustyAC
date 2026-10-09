@@ -55,8 +55,9 @@ fn main() {
     };
     let mut done = 0;
     for (at, name) in &keys {
-        run(&mut session, at - done);
-        done = *at;
+        // (a key at the step of the one before it comes a step later: that step has been run)
+        run(&mut session, at.saturating_sub(done));
+        done = done.max(*at);
         let before = shown(&session);
         if !session.press(name) {
             eprintln!("{name}: not a command key of the page");

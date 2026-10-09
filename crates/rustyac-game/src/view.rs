@@ -71,7 +71,7 @@ pub struct CarView {
     pub tc_present: bool,
     pub abs_present: bool,
     /// `BrakeSystem::getFrontBias` (the cockpit's bias if one is set, else the setup's), the
-    /// value of `acpmf_physics.brakeBias`: the front share, 0..1.
+    /// value of `acpmf_physics.brakeBias`: the front share, 0..1. Negative: no brake system.
     pub brake_bias: f32,
     /// The last change of an aid or of the bias (shown for a moment), see [`CarView::aid_note`].
     pub note: AidNote,
@@ -360,7 +360,7 @@ impl CarView {
             wind_deg: car.env.wind_direction_deg,
             compound: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.name.as_str())),
             setup: SurfaceName::new(&car.setup_name),
-            brake_bias: car.brake_system.as_deref().map_or(0.0, |brakes| brakes.get_front_bias()),
+            brake_bias: car.brake_system.as_deref().map_or(-1.0, |brakes| brakes.get_front_bias()),
             note: sim.aid_note,
             ..CarView::default()
         };
@@ -467,9 +467,13 @@ impl CarView {
         format!("ABS {}", aid_level_text(self.abs_present, self.abs_mode))
     }
 
-    /// `Bias 58.0 %`.
+    /// `Bias 58.0 %` (`Bias -` for a car without brakes).
     pub fn bias_text(&self) -> String {
-        format!("Bias {}", bias_text(self.brake_bias))
+        if self.brake_bias < 0.0 {
+            "Bias -".to_string()
+        } else {
+            format!("Bias {}", bias_text(self.brake_bias))
+        }
     }
 
     /// The note about the last change of an aid or of the bias, while it is fresh (2.5 s).
@@ -538,6 +542,8 @@ mod tests {
         view.abs_present = false;
         view.brake_bias = 0.725;
         assert_eq!((view.tc_text(), view.abs_text(), view.bias_text()), ("TC 1/1".to_string(), "ABS not fitted".to_string(), "Bias 72.5 %".to_string()));
+        view.brake_bias = -1.0;
+        assert_eq!(view.bias_text(), "Bias -");
         // a note is shown for 2.5 s of steps after it was made, and no longer
         assert_eq!(view.aid_note(), None);
         view.note = AidNote::new("TC 2/3", 1000);

@@ -376,11 +376,15 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
     let keys = if lap.on_track {
-        "F1 view   F6 car cameras   R to the start   Shift+R back on track   N new car   T / Y TC / ABS (Shift: down)   ] [ brake bias   P pause   Esc quit"
+        "F1 view  F6 car cameras  R to the start  Shift+R back on track  N new car  T / Y TC / ABS (Shift: down)  ] [ bias  P pause  Esc quit"
     } else {
-        "F1 view   F6 car cameras   R reset   N new car   T / Y TC / ABS (Shift: down)   ] [ brake bias   P pause   Esc quit"
+        "F1 view  F6 car cameras  R reset  N new car  T / Y TC / ABS (Shift: down)  ] [ bias  P pause  Esc quit"
     };
-    hud.text(14.0 * s, height - 28.0 * s, 0.7 * s, DIM, keys);
+    // (smaller where the picture is too narrow for the line)
+    let room = width - 28.0 * s;
+    let wide = hud.width(keys, 0.7 * s);
+    let scale = if wide > room { 0.7 * s * room / wide } else { 0.7 * s };
+    hud.text(14.0 * s, height - 28.0 * s, scale, DIM, keys);
     hud.vertices
 }
 

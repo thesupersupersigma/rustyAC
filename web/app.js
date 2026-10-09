@@ -484,7 +484,8 @@ async function drive() {
         .map((item) => {
           // (a `+` in an address arrives as a space)
           const [name, at] = item.replace(/ /g, '+').split('@');
-          return { key: name, at: Math.min(steps, Number(at) || 0) };
+          // (a step that is not a plain whole number counts as 0, as in the desktop's self test)
+          return { key: name, at: Math.min(steps, /^\d+$/.test(at || '') ? Number(at) : 0) };
         })
         .sort((a, b) => a.at - b.at);
       const presses = [];
@@ -493,8 +494,9 @@ async function drive() {
       $('hud').hidden = false;
       let done = 0;
       for (const { key, at } of script) {
-        game.run_steps(at - done);
-        done = at;
+        // (a key at the step of the one before it comes a step later: that step has been run)
+        game.run_steps(Math.max(0, at - done));
+        done = Math.max(at, done);
         showHud(JSON.parse(game.hud()));
         const was = aidsShown();
         const prevented = window.rustyac.press(key);

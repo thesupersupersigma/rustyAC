@@ -46,10 +46,11 @@ Source, notes and newer versions: https://github.com/thesupersupersigma/rustyAC
 
 - Optional: the Visual C++ 2013 runtime (MSVCR120.dll). Assetto Corsa installs
   it, so you most likely have it. With it rustyAC calls the game's own maths
-  functions. Without it rustyAC uses its own copy of those functions, rewritten
-  in Rust, which gives the same results bit for bit (on any processor since
-  about 2013). rustyAC prints which of the two it uses when it starts
-  ("maths: ...").
+  functions. Without it rustyAC uses its own copy of those functions (sin, cos,
+  pow and the like), rewritten in Rust, which gives the same results bit for
+  bit on any processor since about 2013; the numbers in the cars' files are
+  then read by Rust's own parser, and the sound's level maths is Rust's.
+  rustyAC prints which of the two it uses when it starts ("maths: ...").
 
 
 2. Commands

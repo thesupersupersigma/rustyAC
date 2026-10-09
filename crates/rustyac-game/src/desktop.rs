@@ -642,8 +642,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                     } else if ctrl && key == rustyac_game::input::bindings::KEY_ENGINE_BRAKE {
                         request(if shift { event::ENGINE_BRAKE_DN } else { event::ENGINE_BRAKE_UP });
                     } else if !ctrl && !alt && plain_keys.contains(&key) {
-                        // rustyAC's plain keys, as in the browser: T / Y (Shift: down), ] / [
+                        // rustyAC's plain keys, as in the browser: T / Y (Shift: down), ] / [.
+                        // Not while paused: the presses would all arrive at once afterwards.
                         match key {
+                            _ if shared.paused.load(Ordering::Relaxed) => {}
                             KEY_PLAIN_TC => request(if shift { event::TC_DN } else { event::TC_UP }),
                             KEY_PLAIN_ABS => request(if shift { event::ABS_DN } else { event::ABS_UP }),
                             KEY_PLAIN_BIAS_UP => {

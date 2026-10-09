@@ -71,12 +71,16 @@ pub const RESET_HOLD_SECONDS: f64 = 0.6;
 /// buttons (D-pad up / down): held, they change the ABS instead. Not AC's.
 ///
 /// The rule, decided when the reset button comes up:
-/// * a traction-control button went down while it was held: nothing (it was the second layer);
+/// * a traction-control button was down at any moment while it was held: nothing;
 /// * else it was held for less than [`RESET_HOLD_SECONDS`]: back to the pits;
 /// * else: back onto the track where the car is.
 ///
-/// A traction-control button that went down under the reset button stays an ABS button until
-/// it is released itself, whichever of the two is let go first.
+/// A traction-control button that went down under the reset button is an ABS button, and
+/// stays one until it is released itself, whichever of the two is let go first. One that was
+/// down already when the reset button went down (two thumbs are never quite together) has
+/// done its traction-control step and does no more; the reset button still does nothing then.
+///
+/// A pad that goes away while the button is held lets go of nothing: see [`ResetCombo::cancel`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ResetCombo {
     /// Seconds the reset button has been down, and whether it served as the second layer.
@@ -110,15 +114,22 @@ impl ResetCombo {
         for (k, down) in tc.into_iter().enumerate() {
             if !down {
                 self.latched[k] = false;
-            } else if !self.was[k] {
-                if let Some((held, _)) = self.held {
+            } else if let Some((held, _)) = self.held {
+                // down under the reset button: the button is spoken for; a new press is the ABS's
+                self.held = Some((held, true));
+                if !self.was[k] {
                     self.latched[k] = true;
-                    self.held = Some((held, true));
                 }
             }
         }
         self.was = tc;
         events
+    }
+
+    /// The pad is gone (unplugged, a radio drop-out): nothing is held any more and nothing
+    /// was let go, so no reset follows.
+    pub fn cancel(&mut self) {
+        *self = ResetCombo::default();
     }
 
     /// The device's buttons with the second layer applied: a latched traction-control button
