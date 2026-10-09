@@ -22,6 +22,7 @@ use crate::blur::{BlurredObjects, TyreBlur};
 use crate::camera::DEG_TO_RAD;
 use crate::constrained::ConstrainedObjectsManager;
 use crate::damage::VisualDamageManager;
+use crate::driver::{DriverFrame, DriverModel};
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
 use crate::lights::{AnimatedLights, BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
@@ -62,6 +63,27 @@ pub enum Suspension {
     Animator(Box<SuspensionAnimator>),
 }
 
+/// What the car's objects read of the camera manager and the session every frame.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewState {
+    /// `ACCameraManager::mode`: 0 cockpit, 2 drivable (chase, bonnet …), 3 track side
+    pub camera_mode: i32,
+    /// `CameraDrivableManager::currentMode`
+    pub drivable_mode: i32,
+    /// `Sim::focusedCarIndex`
+    pub focused_car_index: i32,
+    /// the scene camera's position
+    pub camera_position: [f32; 3],
+    /// `Sim::useProView`
+    pub use_pro_view: bool,
+}
+
+impl Default for ViewState {
+    fn default() -> ViewState {
+        ViewState { camera_mode: 2, drivable_mode: 0, focused_car_index: 0, camera_position: [0.0; 3], use_pro_view: false }
+    }
+}
+
 /// The nodes of `Sim::initSceneGraph` 0x140199d70 the car's objects hang things on.
 #[derive(Clone, Copy, Debug)]
 pub struct SimNodes {
@@ -95,6 +117,21 @@ pub struct CarAvatar {
     pub driver_hr_distance: f32,
     pub pro_view_nodes: Vec<NodeId>,
     pub suspension: Suspension,
+    /// `driverModel_HR` and `driverModel_LR`
+    pub driver_hr: Option<DriverModel>,
+    pub driver_lr: Option<DriverModel>,
+    /// `isDriverHR`: written after the updates, read by the next frame's
+    pub is_driver_hr: bool,
+    /// 0: the player's car
+    pub guid: i32,
+    /// `video.ini [ASSETTOCORSA] LOCK_STEER`, `HIDE_ARMS`, `HIDE_STEER`
+    pub lock_virtual_steer: bool,
+    pub hide_arms_in_cockpit: bool,
+    pub hide_steer: bool,
+    /// `CarPhysicsInfo::maxGear`
+    pub max_gear: i32,
+    /// what the car's objects read of the cameras and the session in a frame
+    pub view: ViewState,
     /// `ConstrainedObjectsManager`
     pub constrained: ConstrainedObjectsManager,
     /// `VisualDamageManager`
@@ -134,7 +171,7 @@ fn get_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
 impl CarAvatar {
     /// `CarAvatar::init3D` 0x1400d3b90 with what `initCommon` 0x1400d56e0 read before it.
     /// `folder` is the car's folder as text (its texture keys are made of it) and on disk.
-    pub fn init_3d(graphics: &mut Graphics, scene: &mut Scene, cars_node: NodeId, folder_text: &str, folder: &Path, skin: &str, steer_lock: Option<f32>) -> Result<CarAvatar, String> {
+    pub fn init_3d(graphics: &mut Graphics, scene: &mut Scene, cars_node: NodeId, folder_text: &str, folder: &Path, skin: &str, steer_lock: Option<f32>, guid: i32) -> Result<CarAvatar, String> {
         let car_ini = ini(folder, "car.ini");
         // initCommon: [BASIC] GRAPHICS_OFFSET, GRAPHICS_PITCH_ROTATION
         let graphics_offset = car_ini.as_ref().and_then(|i| i.get_float3("BASIC", "GRAPHICS_OFFSET").ok()).unwrap_or([0.0; 3]);
@@ -143,7 +180,18 @@ impl CarAvatar {
         let car_node = scene.bounding_sphere("CARNODE", 4.0);
         scene.add_child(cars_node, car_node);
         let body_transform = scene.node("BODYTR");
-        // (the driver's two models would be the first children of BODYTR: Task 21)
+        // CarAvatar::initDriver 0x1400d7380: the two driver models, the first children of BODYTR
+        let (mut driver_hr, mut driver_lr) = (None, None);
+        if folder.join("data/driver3d.ini").is_file() || rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")).is_ok() {
+            driver_hr = DriverModel::new(graphics, scene, folder_text, folder, skin, guid, true)?;
+            if let Some(d) = &driver_hr {
+                scene.add_child(body_transform, d.driver_root);
+            }
+            driver_lr = DriverModel::new(graphics, scene, folder_text, folder, skin, guid, false)?;
+            if let Some(d) = &driver_lr {
+                scene.add_child(body_transform, d.driver_root);
+            }
+        }
         let animated = car_ini.as_ref().and_then(|i| i.get_int("GRAPHICS", "USE_ANIMATED_SUSPENSIONS").ok()).unwrap_or(0) != 0;
         let suspension = if animated {
             println!("USING ANIMATED SUSPENSIONS");
@@ -183,6 +231,15 @@ impl CarAvatar {
             driver_hr_distance: 15.0,
             pro_view_nodes: Vec::new(),
             suspension,
+            driver_hr,
+            driver_lr,
+            is_driver_hr: true,
+            guid,
+            lock_virtual_steer: false,
+            hide_arms_in_cockpit: false,
+            hide_steer: false,
+            max_gear: 0,
+            view: ViewState::default(),
             constrained: ConstrainedObjectsManager::default(),
             damage: None,
             pause_menu: false,
@@ -424,15 +481,53 @@ impl CarAvatar {
         if let Some(shadow) = &self.fake_shadow {
             shadow.borrow_mut().state = *state;
         }
+        // ACCameraManager::isCameraOnBoard 0x1400336f0
+        let on_board = self.guid == self.view.focused_car_index && (self.view.camera_mode == 0 || (self.view.camera_mode == 2 && self.view.drivable_mode == 4));
         // the steering wheel
         scene.nodes[self.steer_transform_hr].matrix = self.org_steer_matrix;
-        let mut a = state.steer;
+        // CarAvatar::getGraphicSteerDeg 0x1400d34b0
+        let mut graphic_steer_deg = state.steer;
         if let Some(lock) = self.steer_lock {
-            a = (a / lock) * self.graphic_steer_lock_degrees;
+            graphic_steer_deg = (graphic_steer_deg / lock) * self.graphic_steer_lock_degrees;
         }
-        a *= DEG_TO_RAD;
-        let r = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), a);
-        scene.nodes[self.steer_transform_hr].matrix = xm_matrix_multiply(&r, &self.org_steer_matrix);
+        if !(self.lock_virtual_steer && on_board) {
+            let r = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), graphic_steer_deg * DEG_TO_RAD);
+            scene.nodes[self.steer_transform_hr].matrix = xm_matrix_multiply(&r, &self.org_steer_matrix);
+        }
+        // the driver: which model shows, and whether it shows at all
+        if self.lock_virtual_steer {
+            for driver in [&mut self.driver_hr, &mut self.driver_lr].into_iter().flatten() {
+                driver.lock_animation = on_board;
+                if on_board {
+                    driver.set_locked_position(scene);
+                }
+            }
+        }
+        if let Some(d) = &self.driver_hr {
+            scene.nodes[d.driver_root].is_active = self.is_driver_hr;
+        }
+        if let Some(d) = &self.driver_lr {
+            scene.nodes[d.driver_root].is_active = !self.is_driver_hr;
+        }
+        let shown = if self.is_driver_hr { &self.driver_hr } else { &self.driver_lr };
+        if self.guid == 0 && self.view.camera_mode == 9 {
+            if let Some(d) = shown {
+                d.set_visible(scene, false);
+            }
+        } else {
+            let special = self.view.camera_mode == 2 && self.view.drivable_mode == 4 && self.view.focused_car_index == self.guid;
+            if let Some(d) = shown {
+                d.set_visible(scene, !special);
+                scene.nodes[self.steer_transform_hr].is_active = !special;
+                if self.hide_arms_in_cockpit {
+                    d.set_visible(scene, !on_board);
+                }
+                if self.hide_steer {
+                    d.set_visible(scene, !on_board);
+                    scene.nodes[self.steer_transform_hr].is_active = !on_board;
+                }
+            }
+        }
 
         // CarAvatar::updateSkidMarks 0x1400dd780, before the car's objects move the wheels
         {
@@ -444,6 +539,19 @@ impl CarAvatar {
             let scene_ref: &Scene = scene;
             let active = scene_ref.nodes[self.car_node].is_active;
             self.skid_marks.update(state, active, &|i| nodes[i].map(|n| scene_ref.get_world_matrix(n)).unwrap_or(Mat44f::IDENTITY));
+        }
+        // the car's objects, in the order they were added: the two drivers first
+        let frame = DriverFrame {
+            dt,
+            dt_scaled: replay_dt,
+            camera_position: self.view.camera_position,
+            on_board,
+            use_pro_view: self.view.use_pro_view,
+            graphic_steer_deg,
+            max_gear: self.max_gear,
+        };
+        for driver in [&mut self.driver_hr, &mut self.driver_lr].into_iter().flatten() {
+            driver.update(scene, state, &frame);
         }
         if let Suspension::Avatar(avatar) = &self.suspension {
             avatar.update(scene, state);
@@ -497,6 +605,7 @@ impl CarAvatar {
             for &n in &lod.nodes {
                 scene.nodes[n].is_active = active;
             }
+            self.is_driver_hr = !(d > self.driver_hr_distance);
             let mut set = |n: Option<NodeId>, on: bool| {
                 if let Some(n) = n {
                     scene.nodes[n].is_active = on;

@@ -153,6 +153,80 @@ fn xm_quaternion_slerp(q0: &[f32; 4], q1: &[f32; 4], t: f32) -> [f32; 4] {
 }
 
 /// `mat44f::setScale` 0x140209210.
+/// `DirectX::XMQuaternionRotationMatrix` 0x1400c4540: the rotation of a matrix whose rows are
+/// taken as they are.
+fn xm_quaternion_rotation_matrix(m: &Mat44f) -> [f32; 4] {
+    let r = &m.m;
+    let (r00, r11, r22) = (r[0][0], r[1][1], r[2][2]);
+    let x2 = ((r00 + (-r11)) + (-r22)) + 1.0;
+    let y2 = (((-r00) + r11) + (-r22)) + 1.0;
+    let z2 = (((-r00) + (-r11)) + r22) + 1.0;
+    let w2 = ((r00 + r11) + r22) + 1.0;
+    let (xy, xz, yz) = (r[0][1] + r[1][0], r[0][2] + r[2][0], r[1][2] + r[2][1]);
+    let (xw, yw, zw) = (-(r[2][1] - r[1][2]), r[2][0] - r[0][2], -(r[1][0] - r[0][1]));
+    let t = if r22 <= 0.0 {
+        if (r11 - r00) <= 0.0 {
+            [x2, xy, xz, xw]
+        } else {
+            [xy, y2, yz, yw]
+        }
+    } else if (r11 + r00) <= 0.0 {
+        [xz, yz, z2, zw]
+    } else {
+        [xw, yw, zw, w2]
+    };
+    let len = sqrtf(((t[0] * t[0]) + (t[2] * t[2])) + ((t[1] * t[1]) + (t[3] * t[3])));
+    [t[0] / len, t[1] / len, t[2] / len, t[3] / len]
+}
+
+/// `DirectX::XMQuaternionNormalize`, as it is inlined.
+fn xm_quaternion_normalize(q: &[f32; 4]) -> [f32; 4] {
+    let len_sq = ((q[0] * q[0]) + (q[2] * q[2])) + ((q[1] * q[1]) + (q[3] * q[3]));
+    let len = sqrtf(len_sq);
+    let mut quat = [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
+    if len == 0.0 {
+        quat = [0.0; 4];
+    }
+    if len_sq == f32::INFINITY {
+        quat = [f32::from_bits(0x7fc0_0000); 4];
+    }
+    quat
+}
+
+/// `DirectX::XMMatrixRotationQuaternion` 0x140107260.
+fn xm_matrix_rotation_quaternion(q: &[f32; 4]) -> Mat44f {
+    let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+    let (x2, y2, z2) = (x + x, y + y, z + z);
+    let (xx, yy, zz) = (x2 * x, y2 * y, z2 * z);
+    Mat44f {
+        m: [
+            [(1.0 - yy) - zz, (z2 * w) + (y2 * x), (z2 * x) - (y2 * w), 0.0],
+            [(y2 * x) - (z2 * w), (1.0 - xx) - zz, (x2 * w) + (z2 * y), 0.0],
+            [(y2 * w) + (z2 * x), (z2 * y) - (x2 * w), (1.0 - xx) - yy, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+    }
+}
+
+/// `mat44f lerp(const mat44f&, const mat44f&, float)` 0x140108600: between two matrices by
+/// their rotations and their places. The scale is lost on the way.
+pub fn mat44f_lerp(a: &Mat44f, b: &Mat44f, t: f32) -> Mat44f {
+    if t == 0.0 || t.is_nan() {
+        return *a;
+    }
+    if t == 1.0 {
+        return *b;
+    }
+    let qa = xm_quaternion_normalize(&xm_quaternion_rotation_matrix(a));
+    let qb = xm_quaternion_normalize(&xm_quaternion_rotation_matrix(b));
+    let mut r = xm_matrix_rotation_quaternion(&xm_quaternion_slerp(&qa, &qb, t));
+    for k in 0..3 {
+        r.m[3][k] = ((b.m[3][k] - a.m[3][k]) * t) + a.m[3][k];
+    }
+    r.m[3][3] = 1.0;
+    r
+}
+
 fn set_scale(m: &mut Mat44f, s: [f32; 3]) {
     let row = |x: f32, y: f32, z: f32, k: f32| {
         let (mut x, mut y, mut z) = (x, y, z);
@@ -188,39 +262,9 @@ impl QuatPos {
     /// and scale. The rotation is `XMQuaternionRotationMatrix` 0x1400c4540 of the rows as
     /// they are (not made unit length first), then `XMQuaternionNormalize`.
     pub fn from_matrix(m: &Mat44f) -> QuatPos {
-        let r = &m.m;
         let scale = crate::scene::get_scale(m);
-        let (r00, r11, r22) = (r[0][0], r[1][1], r[2][2]);
-        let x2 = ((r00 + (-r11)) + (-r22)) + 1.0;
-        let y2 = (((-r00) + r11) + (-r22)) + 1.0;
-        let z2 = (((-r00) + (-r11)) + r22) + 1.0;
-        let w2 = ((r00 + r11) + r22) + 1.0;
-        let (xy, xz, yz) = (r[0][1] + r[1][0], r[0][2] + r[2][0], r[1][2] + r[2][1]);
-        let (xw, yw, zw) = (-(r[2][1] - r[1][2]), r[2][0] - r[0][2], -(r[1][0] - r[0][1]));
-        let t = if r22 <= 0.0 {
-            if (r11 - r00) <= 0.0 {
-                [x2, xy, xz, xw]
-            } else {
-                [xy, y2, yz, yw]
-            }
-        } else if (r11 + r00) <= 0.0 {
-            [xz, yz, z2, zw]
-        } else {
-            [xw, yw, zw, w2]
-        };
-        let len = sqrtf(((t[0] * t[0]) + (t[2] * t[2])) + ((t[1] * t[1]) + (t[3] * t[3])));
-        let q = [t[0] / len, t[1] / len, t[2] / len, t[3] / len];
-        // XMQuaternionNormalize
-        let len_sq = ((q[0] * q[0]) + (q[2] * q[2])) + ((q[1] * q[1]) + (q[3] * q[3]));
-        let len = sqrtf(len_sq);
-        let mut quat = [q[0] / len, q[1] / len, q[2] / len, q[3] / len];
-        if len == 0.0 {
-            quat = [0.0; 4];
-        }
-        if len_sq == f32::INFINITY {
-            quat = [f32::from_bits(0x7fc0_0000); 4];
-        }
-        QuatPos { quat, pos: [r[3][0], r[3][1], r[3][2]], scale: [scale.x, scale.y, scale.z] }
+        let quat = xm_quaternion_normalize(&xm_quaternion_rotation_matrix(m));
+        QuatPos { quat, pos: [m.m[3][0], m.m[3][1], m.m[3][2]], scale: [scale.x, scale.y, scale.z] }
     }
 
     pub fn lerp(&self, b: &QuatPos, t: f32) -> Mat44f {
@@ -311,7 +355,36 @@ impl Animation {
 struct AnimationPlayerSet {
     target: NodeId,
     frames: Vec<QuatPos>,
+    /// the matrix of the last pose, also when the node itself was switched off
+    baked_matrix: Mat44f,
     is_active: bool,
+}
+
+/// `AnimationBlender` (0x18 bytes): nodes that take a pose between two players'.
+#[derive(Default)]
+pub struct AnimationBlender {
+    target_nodes: Vec<NodeId>,
+}
+
+impl AnimationBlender {
+    /// `AnimationBlender::addTargetNode` 0x14021b060.
+    pub fn add_target_node(&mut self, scene: &Scene, node: NodeId, recursive: bool) {
+        self.target_nodes.push(node);
+        if recursive {
+            for &child in &scene.nodes[node].children {
+                self.add_target_node(scene, child, true);
+            }
+        }
+    }
+
+    /// `AnimationBlender::blendAnimations` 0x14021b0f0.
+    pub fn blend_animations(&self, scene: &mut Scene, a: &AnimationPlayer, b: &AnimationPlayer, w: f32) {
+        for &node in &self.target_nodes {
+            if let (Some(ma), Some(mb)) = (a.get_baked_matrix(node), b.get_baked_matrix(node)) {
+                scene.nodes[node].matrix = mat44f_lerp(&ma, &mb, w);
+            }
+        }
+    }
 }
 
 /// `AnimationPlayer` (0x28 bytes).
@@ -321,19 +394,52 @@ pub struct AnimationPlayer {
 }
 
 impl AnimationPlayer {
-    /// `AnimationPlayer::AnimationPlayer` 0x140208570, with only the animated sets.
+    /// `AnimationPlayer::AnimationPlayer` 0x140208570, with only the animated sets (mode 1).
     pub fn new(animation: &Animation, scene: &Scene, root: NodeId) -> AnimationPlayer {
+        AnimationPlayer::with_mode(animation, scene, root, 1)
+    }
+
+    /// `AnimationPlayer::AnimationPlayer` 0x140208570; mode 0 takes every set of the file,
+    /// also those that never move.
+    pub fn with_mode(animation: &Animation, scene: &Scene, root: NodeId, mode: i32) -> AnimationPlayer {
         let mut sets = Vec::new();
         for set in &animation.sets {
             let mut found = Vec::new();
             scene.find_children_by_name(root, &set.target_name, &mut found);
             for node in found {
-                if set.is_animated {
-                    sets.push(AnimationPlayerSet { target: node, frames: set.frames.clone(), is_active: true });
+                if set.is_animated || mode == 0 {
+                    sets.push(AnimationPlayerSet { target: node, frames: set.frames.clone(), baked_matrix: Mat44f { m: [[0.0; 4]; 4] }, is_active: true });
                 }
             }
         }
         AnimationPlayer { sets, current_pos: -1.0 }
+    }
+
+    /// `AnimationPlayer::activateNodes` 0x140208b80: only the sets of `node` and of what is
+    /// below it stay in play.
+    pub fn activate_nodes(&mut self, scene: &Scene, node: NodeId) {
+        for set in &mut self.sets {
+            set.is_active = false;
+        }
+        self.activate_nodes_rec(scene, node);
+    }
+
+    fn activate_nodes_rec(&mut self, scene: &Scene, node: NodeId) {
+        for set in &mut self.sets {
+            if set.target == node {
+                set.is_active = true;
+            }
+        }
+        for &child in &scene.nodes[node].children {
+            self.activate_nodes_rec(scene, child);
+        }
+    }
+
+    /// `AnimationPlayer::getSetByNode` 0x140208cd0: the baked matrix of the first set of a
+    /// node, if that set is in play.
+    pub fn get_baked_matrix(&self, node: NodeId) -> Option<Mat44f> {
+        let set = self.sets.iter().find(|s| s.target == node)?;
+        set.is_active.then_some(set.baked_matrix)
     }
 
     /// `AnimationPlayer::getCurrentPos` 0x140208cc0.
@@ -376,7 +482,7 @@ impl AnimationPlayer {
             f1 = 1;
             blend = 0.0;
         }
-        for set in &self.sets {
+        for set in &mut self.sets {
             if !set.is_active {
                 continue;
             }
@@ -384,6 +490,7 @@ impl AnimationPlayer {
                 continue;
             };
             let m = a.lerp(b, blend);
+            set.baked_matrix = m;
             if scene.nodes[set.target].is_active {
                 scene.nodes[set.target].matrix = m;
             }
@@ -392,6 +499,7 @@ impl AnimationPlayer {
     }
 
     /// `AnimationPlayer::isAnimatingNode` 0x140208d00.
+    #[allow(dead_code)]
     fn is_animating_node(&self, node: NodeId) -> bool {
         self.sets.iter().any(|s| s.target == node && s.is_active)
     }

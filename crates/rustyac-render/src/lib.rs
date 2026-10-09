@@ -18,6 +18,7 @@ pub mod car;
 pub mod constrained;
 pub mod cubemap;
 pub mod damage;
+pub mod driver;
 pub mod fake_shadow;
 pub mod forward;
 pub mod gl;

@@ -25,6 +25,16 @@ pub struct Profile {
 pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0 };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
+static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// The folder both sides take for the user's Documents: `<scratch root>/documents` (empty).
+pub fn set_documents(root: &Path) {
+    let _ = DOCUMENTS.set(root.join("documents"));
+}
+
+pub fn documents() -> std::path::PathBuf {
+    DOCUMENTS.get().cloned().unwrap_or_default()
+}
 
 pub fn set_profile(profile: Profile) {
     let _ = PROFILE.set(profile);

@@ -102,6 +102,8 @@ pub struct Graphics {
     /// (`ksRand`): one stream for all of them, in the order they ask. The game seeds it from
     /// the clock; whoever needs a run to repeat sets it.
     pub crt_rand: rustyac_physics::session::MsvcRand,
+    /// The user's Documents folder (`Path::getDocumentPath`), where `Assetto Corsa/cfg` is.
+    pub documents_folder: std::path::PathBuf,
     pub kgl: Kgl,
     pub game_folder: PathBuf,
     pub use_custom_sun_direction: bool,
@@ -197,6 +199,7 @@ impl Graphics {
 
         let mut graphics = Graphics {
             crt_rand: rustyac_physics::session::MsvcRand(1),
+            documents_folder: std::env::var_os("USERPROFILE").map(|p| std::path::PathBuf::from(p).join("Documents")).unwrap_or_default(),
             kgl,
             game_folder: game_folder.to_path_buf(),
             use_custom_sun_direction: false,

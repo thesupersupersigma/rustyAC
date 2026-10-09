@@ -195,7 +195,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                 let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
                 tyre_width = [front, front, rear, rear];
             }
-            println!("{}", renderer.load_car(&folder, steer_lock, tyre_width)?);
+            // CarPhysicsInfo::maxGear
+            let max_gear = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("drivetrain.ini")).ok().and_then(|ini| ini.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
+            println!("{}", renderer.load_car(&folder, steer_lock, tyre_width, max_gear)?);
         }
         None => println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name),
     }

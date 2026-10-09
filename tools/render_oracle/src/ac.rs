@@ -156,6 +156,15 @@ unsafe extern "system" fn create_device(_adapter: *mut c_void, _driver_type: i32
     real(std::ptr::null_mut(), D3D_DRIVER_TYPE_WARP, software, flags, levels, level_count, sdk, device, level, context)
 }
 
+/// In place of `SHGetFolderPathW` (the game asks for the Documents folder): a folder of the
+/// oracle's scratch root, so that nothing of the user's own settings is read.
+unsafe extern "system" fn sh_get_folder_path(_window: *mut c_void, _folder: i32, _token: *mut c_void, _flags: u32, path: *mut u16) -> i32 {
+    let documents = crate::root::documents();
+    let units: Vec<u16> = documents.to_string_lossy().encode_utf16().chain([0]).collect();
+    std::ptr::copy_nonoverlapping(units.as_ptr(), path, units.len().min(260));
+    0
+}
+
 unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     DefWindowProcW(window, message, wparam, lparam)
 }
@@ -222,6 +231,7 @@ impl Game {
         crate::acs::set_extra_overrides(vec![
             ("d3d11.dll", "D3D11CreateDeviceAndSwapChain", create_device_and_swap_chain as *const () as usize),
             ("d3d11.dll", "D3D11CreateDevice", create_device as *const () as usize),
+            ("shell32.dll", "SHGetFolderPathW", sh_get_folder_path as *const () as usize),
         ]);
         let acs = Acs::load(&args.acs)?;
         if args.verbose {
@@ -497,7 +507,7 @@ impl Game {
             set_splits(camera, s[0], s[1], s[2], s[3]);
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
-                self.update_car(car, &step.state, crate::frames::DT);
+                self.update_car(car, &step.state, &step.camera, crate::frames::DT);
             }
 
             if index >= frame.capture {

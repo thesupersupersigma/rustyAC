@@ -310,6 +310,8 @@ pub struct AcRenderer {
     cars: NodeId,
     car_shadows: NodeId,
     sim_nodes: rustyac_render::car::SimNodes,
+    /// `video.ini [ASSETTOCORSA] LOCK_STEER`, `HIDE_ARMS`, `HIDE_STEER`
+    cockpit_flags: (bool, bool, bool),
     car: Option<CarAvatar>,
     track_folder: Option<String>,
     options: AcOptions,
@@ -385,7 +387,13 @@ impl AcRenderer {
         }
         camera.set_cubemap_size(&graphics, cube_size);
         let hud = HudPass::new(&graphics.kgl.device)?;
-        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        // CarAvatar::initCommonPostPhysics: the cockpit switches of video.ini
+        let cockpit_flags = {
+            let ini = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini")).and_then(|p| IniReader::load(&p).ok());
+            let flag = |key: &str| ini.as_ref().is_some_and(|i| i.has_section("ASSETTOCORSA") && i.get_int("ASSETTOCORSA", key).unwrap_or(0) != 0);
+            (flag("LOCK_STEER"), flag("HIDE_ARMS"), flag("HIDE_STEER"))
+        };
+        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -421,7 +429,7 @@ impl AcRenderer {
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90. `folder` is the car's folder in the game.
-    pub fn load_car(&mut self, folder: &Path, steer_lock: f32, tyre_width: [f32; 4]) -> Result<String, String> {
+    pub fn load_car(&mut self, folder: &Path, steer_lock: f32, tyre_width: [f32; 4], max_gear: i32) -> Result<String, String> {
         let started = std::time::Instant::now();
         let skin = match &self.options.skin {
             Some(skin) => skin.clone(),
@@ -431,7 +439,9 @@ impl AcRenderer {
                 skins.first().cloned().unwrap_or_default()
             }
         };
-        let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock))?;
+        let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock), 0)?;
+        car.max_gear = max_gear;
+        (car.lock_virtual_steer, car.hide_arms_in_cockpit, car.hide_steer) = self.cockpit_flags;
         car.init_common_post_physics(&mut self.graphics, &mut self.scene, &self.sim_nodes, tyre_width)?;
         let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
         self.car = Some(car);
@@ -468,6 +478,22 @@ impl AcRenderer {
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut self.car {
             let state = view.physics_state();
+            // ACCameraManager::mode and CameraDrivableManager::currentMode
+            let (camera_mode, drivable_mode) = match driving.mode {
+                CameraMode::Cockpit => (0, 0),
+                CameraMode::Drivable => (
+                    2,
+                    match driving.drivable {
+                        Drivable::Chase => 0,
+                        Drivable::Chase2 => 1,
+                        Drivable::Bonnet => 2,
+                        Drivable::Bumper => 3,
+                        Drivable::Dash => 4,
+                    },
+                ),
+                CameraMode::Car => (4, 0),
+            };
+            car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], use_pro_view: false };
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }

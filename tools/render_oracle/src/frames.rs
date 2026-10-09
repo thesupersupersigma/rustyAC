@@ -45,6 +45,8 @@ pub struct CarSpec {
     pub steer_lock: f32,
     /// `CarPhysicsInfo::tyreWidth`: `tyres.ini [FRONT] / [REAR] WIDTH`
     pub tyre_width: [f32; 4],
+    /// `CarPhysicsInfo::maxGear`: `drivetrain.ini [GEARS] COUNT`
+    pub max_gear: i32,
 }
 
 #[derive(Clone, Copy)]
@@ -57,6 +59,9 @@ pub struct CameraSpec {
     pub far: Option<f32>,
     /// the arguments of `setShadowMapsSplits`
     pub splits: [f32; 4],
+    /// `ACCameraManager::mode` (0 cockpit, 2 drivable) and `CameraDrivableManager::currentMode`
+    pub mode: i32,
+    pub drivable_mode: i32,
 }
 
 /// One frame of a run: the car's state of that frame and where the camera stands.
@@ -157,6 +162,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     let mut car = None;
     let mut states: Vec<rustyac_render::car::CarPhysicsState> = Vec::new();
     let mut eyes = [0.0f32, 1.0, 0.0];
+    let mut graphics_offset = [0.0f32; 3];
     if let Some(name) = &args.car {
         let folder = args.game.join("content/cars").join(name);
         if !folder.is_dir() {
@@ -173,6 +179,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         let car_ini = rustyac_physics::data::ini::IniReader::load(&folder.join("data/car.ini"))?;
         let steer_lock = car_ini.get_float("CONTROLS", "STEER_LOCK").unwrap_or(0.0);
         eyes = car_ini.get_float3("GRAPHICS", "DRIVEREYES").unwrap_or(eyes);
+        graphics_offset = car_ini.get_float3("BASIC", "GRAPHICS_OFFSET").unwrap_or([0.0; 3]);
         let skin = match &args.skin {
             Some(skin) => skin.clone(),
             None => {
@@ -188,7 +195,8 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
             tyre_width = [front, front, rear, rear];
         }
-        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock, tyre_width });
+        let max_gear = rustyac_physics::data::ini::IniReader::load(&folder.join("data/drivetrain.ini")).ok().and_then(|i| i.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
+        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock, tyre_width, max_gear });
     }
     // where the sun is seen from the car (for the view into the sun): the same angles the
     // lighting uses, to the precision a camera needs
@@ -214,14 +222,26 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         }
         let at = |ahead: f32, up: f32| [place[0] + forward[0] * ahead, place[1] + up, place[2] + forward[2] * ahead];
         // the driver's eyes: car axes are +x left, +y up, +z forward
-        let eye_point = |ahead: f32| match state {
+        // a point given from the driver's eyes: metres up and ahead in the car's axes
+        let eye_offset = |up: f32, ahead: f32| match state {
             Some(s) => {
                 let w = s.world_matrix.m;
-                let p = [eyes[0], eyes[1], eyes[2] + ahead];
+                let p = [eyes[0], eyes[1] + up, eyes[2] + ahead];
                 [p[0] * w[0][0] + p[1] * w[1][0] + p[2] * w[2][0] + w[3][0], p[0] * w[0][1] + p[1] * w[1][1] + p[2] * w[2][1] + w[3][1], p[0] * w[0][2] + p[1] * w[1][2] + p[2] * w[2][2] + w[3][2]]
             }
-            None => at(ahead, 1.0),
+            None => at(ahead, 1.0 + up),
         };
+        let eye_point = |ahead: f32| eye_offset(0.0, ahead);
+        // the eyes where the game has them: on the model, which sits GRAPHICS_OFFSET from the
+        // physics body ("eyes" of Task 20 leaves the offset out and looks from above the roof)
+        let seat = |up: f32, ahead: f32| eye_offset(up + graphics_offset[1], ahead + graphics_offset[2]);
+        match args.view.as_str() {
+            // looking ahead over the wheel
+            "onboard" => return Ok(CameraSpec { matrix: look_from(seat(0.0, 0.0), seat(-0.12, 1.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 }),
+            // looking down at the dials and the hands
+            "dash" => return Ok(CameraSpec { matrix: look_from(seat(0.0, 0.0), seat(-0.42, 1.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 }),
+            _ => {}
+        }
         camera_for(&args.view, &at, &eye_point, sun_from, state)
     };
     for (index, state) in states.iter_mut().enumerate() {
@@ -337,33 +357,33 @@ type Point<'a> = &'a dyn Fn(f32, f32) -> [f32; 3];
 /// 0x1400c7120, ::updateDash 0x1400c7b50, CameraOnBoardFree::update 0x140115db0).
 fn camera_for(view: &str, at: Point, eye_point: &dyn Fn(f32) -> [f32; 3], sun_from: [f32; 3], state: Option<&rustyac_render::car::CarPhysicsState>) -> Result<CameraSpec, String> {
     let camera = match view {
-        "chase" => CameraSpec { matrix: look_from(at(-6.0, 2.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
-        "cockpit" => CameraSpec { matrix: look_from(at(0.0, 1.0), at(10.0, 0.9)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0] },
-        "free" => CameraSpec { matrix: look_from(at(-30.0, 15.0), at(20.0, 0.0)), fov: 60.0, near: 0.1, far: None, splits: [10.0, 80.0, 300.0, 1500.0] },
+        "chase" => CameraSpec { matrix: look_from(at(-6.0, 2.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
+        "cockpit" => CameraSpec { matrix: look_from(at(0.0, 1.0), at(10.0, 0.9)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 },
+        "free" => CameraSpec { matrix: look_from(at(-30.0, 15.0), at(20.0, 0.0)), fov: 60.0, near: 0.1, far: None, splits: [10.0, 80.0, 300.0, 1500.0], mode: 2, drivable_mode: 0 },
         // from the driver's eyes
-        "eyes" => CameraSpec { matrix: look_from(eye_point(0.0), eye_point(10.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0] },
+        "eyes" => CameraSpec { matrix: look_from(eye_point(0.0), eye_point(10.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 },
         // a chase camera on the far side of the car from the sun, looking at it over the car
         "sun" => {
             let target = at(0.0, 1.0);
             let eye = [target[0] - sun_from[0] * 7.0, target[1] + 0.6, target[2] - sun_from[2] * 7.0];
             let look = [eye[0] + sun_from[0], eye[1] + sun_from[1], eye[2] + sun_from[2]];
-            CameraSpec { matrix: look_from(eye, look), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] }
+            CameraSpec { matrix: look_from(eye, look), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 }
         }
         // far enough for the second level of detail
-        "far" => CameraSpec { matrix: look_from(at(-25.0, 4.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
+        "far" => CameraSpec { matrix: look_from(at(-25.0, 4.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
         // beside the car, low: the wheels, the discs, the ground under the car
         "side" => {
             let w = state.map(|s| s.world_matrix.m).unwrap_or(Mat44f::IDENTITY.m);
             let target = at(0.0, 0.5);
             let ahead = at(1.5, 0.5);
             let eye = [ahead[0] + w[0][0] * 4.5, target[1] + 0.6, ahead[2] + w[0][2] * 4.5];
-            CameraSpec { matrix: look_from(eye, target), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] }
+            CameraSpec { matrix: look_from(eye, target), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 }
         }
         // behind the car, close: the rear lights, the exhausts
-        "rear" => CameraSpec { matrix: look_from(at(-4.5, 1.2), at(0.0, 0.6)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
+        "rear" => CameraSpec { matrix: look_from(at(-4.5, 1.2), at(0.0, 0.6)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
         // in front of the car, close: the head lights, the windscreen, the driver
-        "front" => CameraSpec { matrix: look_from(at(4.5, 1.2), at(0.0, 0.6)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0] },
-        other => return Err(format!("the view {other:?} is not one of chase, cockpit, free, eyes, sun, far, side, rear, front")),
+        "front" => CameraSpec { matrix: look_from(at(4.5, 1.2), at(0.0, 0.6)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
+        other => return Err(format!("the view {other:?} is not one of chase, cockpit, free, eyes, onboard, dash, sun, far, side, rear, front")),
     };
     Ok(camera)
 }

@@ -40,6 +40,8 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_CAR_AVATAR_INIT_DRIVER: usize = 0x1_400d_7380; // CarAvatar::initDriver()
+const VA_DRIVER_MODEL_UPDATE: usize = 0x1_400f_b5d0; // DriverModel::update(float)
 const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
 const VA_CAR_AVATAR_UPDATE_SKID_MARKS: usize = 0x1_400d_d780; // CarAvatar::updateSkidMarks(float)
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
@@ -82,6 +84,15 @@ fn copy_file(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn copy_folder(from: &Path, to: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))?.filter_map(|e| e.ok()) {
+        if entry.path().is_file() {
+            copy_file(&entry.path(), &to.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
 /// The data files the car's objects read.
 const DATA_FILES: [&str; 22] = [
     "car.ini",
@@ -108,7 +119,7 @@ const DATA_FILES: [&str; 22] = [
     "tyres.ini",
 ];
 /// Loose files of the car's folder the car's objects read.
-const LOOSE_FILES: [&str; 5] = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_shadow.png", "tyre_2_shadow.png", "tyre_3_shadow.png"];
+const LOOSE_FILES: [&str; 6] = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_shadow.png", "tyre_2_shadow.png", "tyre_3_shadow.png", "driver_base_pos.knh"];
 
 /// The car's files in the oracle's scratch folder: the game's code opens them by relative
 /// paths (`content/cars/<car>/…`). The data files are plain ones (from `cardata/` or unpacked
@@ -149,6 +160,33 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
     for name in LOOSE_FILES {
         if source.join(name).is_file() {
             copy_file(&source.join(name), &target.join(name))?;
+        }
+    }
+    // the driver: its two models, and the texture folders the skin names
+    if let Ok(driver) = rustyac_physics::data::ini::IniReader::load(&data.join("driver3d.ini")) {
+        let model = driver.get_string("MODEL", "NAME");
+        for file in [format!("content/driver/{model}.kn5"), format!("content/driver/{model}_B.kn5")] {
+            if game.join(&file).is_file() {
+                copy_file(&game.join(&file), &root.join(&file))?;
+            }
+        }
+        if let Ok(skin_ini) = rustyac_physics::data::ini::IniReader::load(&source.join("skins").join(&spec.skin).join("skin.ini")) {
+            for part in ["SUIT", "GLOVES", "HELMET"] {
+                if !skin_ini.has_key(&model, part) {
+                    continue;
+                }
+                let value = skin_ini.get_string(&model, part).replace('\\', "/");
+                let colour = format!("content/texture/driver_{}{value}", part.to_lowercase());
+                let normal = match colour.rfind('/') {
+                    Some(at) => format!("{}/_nm", &colour[..at]),
+                    None => String::new(),
+                };
+                for folder in [colour, normal] {
+                    if !folder.is_empty() && game.join(&folder).is_dir() {
+                        copy_folder(&game.join(&folder), &root.join(&folder))?;
+                    }
+                }
+            }
         }
     }
     // textures the car's objects open by a path under the game's folder
@@ -245,6 +283,9 @@ impl Game {
         let sim = acs.alloc(0x2d0);
         wr(sim, 0x08, game);
         wr(sim, 0x188, camera_manager);
+        wr(camera_manager, 0x110, sim);
+        let camera_drivable = acs.alloc(0x100);
+        wr(camera_manager, 0xc0, camera_drivable);
         wr(sim, 0x1b0, replay_manager);
         wr(sim, 0x238, camera);
         wr(sim, 0x110, acs.alloc(0x200)); // pauseMenu: not visible
@@ -278,6 +319,13 @@ impl Game {
         wr(car, 0x210, car_node);
         let body_transform = self.node("BODYTR");
         wr(car, 0x1b8, body_transform);
+        // initCommon: the detailed driver shows until the first frame says otherwise
+        wr(car, 0xfe0, 1u8);
+        wr(car, 0x1060, spec.steer_lock);
+        wr(car, 0xe44, spec.max_gear);
+        // CarAvatar::initDriver 0x1400d7380: the two driver models, the first children of BODYTR
+        let init_driver: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_INIT_DRIVER));
+        init_driver(car);
         let animated = car_ini.get_int("GRAPHICS", "USE_ANIMATED_SUSPENSIONS").unwrap_or(0) != 0;
         let suspension = if animated {
             let s = acs.alloc(0xf0);
@@ -342,6 +390,10 @@ impl Game {
         ctor(visual_damage, car);
         let double_faced: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS));
         double_faced(car_node);
+        // CarAvatar::initPhysics: a Car of which only the steering lock is ever read
+        let physics = acs.alloc(0x4000);
+        wr(physics, 0x174, spec.steer_lock);
+        wr(car, 0x1168, physics);
         // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
         // (the skid marks: world detail above 0; 6000 vertices x QUANTITY_MULT, 12000 from detail 3)
         wr(car, 0xe5c, spec.tyre_width);
@@ -394,7 +446,12 @@ impl Game {
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
     /// nodes. The camera of the frame must be set already.
-    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, dt: f32) {
+    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, dt: f32) {
+        // the camera manager of the frame
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let camera_manager: *mut u8 = rd(sim, 0x188);
+        wr(camera_manager, 0x120, camera.mode);
+        wr(rd::<*mut u8>(camera_manager, 0xc0), 0x58, camera.drivable_mode);
         let acs = &self.acs;
         let flat = |m: &Mat44f| -> [f32; 16] { std::array::from_fn(|i| m.m[i / 4][i % 4]) };
         // CarAvatar::setNewPhysicsState: the state the physics handed over
@@ -415,11 +472,39 @@ impl Game {
         create_from_axis_angle(&mut r, &axis, a);
         let matrix = |f: &[f32; 16]| Mat44f { m: std::array::from_fn(|row| std::array::from_fn(|col| f[row * 4 + col])) };
         wr(c.steer_transform, 8, flat(&xm_matrix_multiply(&matrix(&r), &matrix(&org))));
+        // … the driver block of CarAvatar::update (LOCK_STEER, HIDE_ARMS and HIDE_STEER are 0 in
+        // the profile): which of the two models shows
+        {
+            let (hr, lr): (*mut u8, *mut u8) = (rd(c.car, 0xfe8), rd(c.car, 0xff0));
+            let is_hr: u8 = rd(c.car, 0xfe0);
+            let root_of = |d: *mut u8| rd::<*mut u8>(d, 0x58);
+            if !hr.is_null() {
+                wr(root_of(hr), 0xd8, is_hr);
+            }
+            if !lr.is_null() {
+                wr(root_of(lr), 0xd8, (is_hr == 0) as u8);
+            }
+            let shown = if is_hr != 0 { hr } else { lr };
+            let guid: i32 = rd(c.car, 0x1158);
+            let special = camera.mode == 2 && camera.drivable_mode == 4 && rd::<i32>(sim, 0x220) == guid;
+            if !shown.is_null() {
+                // DriverModel::setVisible 0x1400fb5a0
+                let force_hidden: u8 = rd(shown, 0xb8);
+                wr(root_of(shown), 0xd8, (!special && force_hidden == 0) as u8);
+                wr(c.steer_transform, 0xd8, !special as u8);
+            }
+        }
         // … and the skid marks, with the wheels where the last frame left them
         let update_skid_marks: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AVATAR_UPDATE_SKID_MARKS));
         update_skid_marks(c.car, dt);
         // the car's objects in the order they were added
         wr(c.game, 0x20, dt);
+        for driver in [rd::<*mut u8>(c.car, 0xfe8), rd::<*mut u8>(c.car, 0xff0)] {
+            if !driver.is_null() {
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_DRIVER_MODEL_UPDATE));
+                update(driver, dt);
+            }
+        }
         if !c.animated {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SUSPENSION_AVATAR_UPDATE));
             update(c.suspension, dt);

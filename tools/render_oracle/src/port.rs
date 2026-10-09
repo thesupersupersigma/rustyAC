@@ -116,10 +116,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), crate::root::profile().cubemap_far_plane);
     }
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
+    graphics.documents_folder = crate::root::documents();
     graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
     // Sim::addCar: CarAvatar::init3D
     let mut car = match &frame.car {
-        Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock))?),
+        Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock), 0)?),
         None => None,
     };
 
@@ -146,6 +147,14 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut car {
+            car.max_gear = frame.car.as_ref().map(|c| c.max_gear).unwrap_or(0);
+            car.view = rustyac_render::car::ViewState {
+                camera_mode: step.camera.mode,
+                drivable_mode: step.camera.drivable_mode,
+                focused_car_index: 0,
+                camera_position: [step.camera.matrix[12], step.camera.matrix[13], step.camera.matrix[14]],
+                use_pro_view: false,
+            };
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }

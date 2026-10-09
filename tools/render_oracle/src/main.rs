@@ -268,6 +268,7 @@ fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Re
 }
 
 fn run_side(args: &Args) -> Result<(), String> {
+    root::set_documents(&args.root);
     let frame = frames::build(args)?;
     std::fs::create_dir_all(&args.out).map_err(|e| e.to_string())?;
     let (init, rendered) = match args.side.as_str() {
