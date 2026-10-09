@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-audio"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -22,22 +22,22 @@ dependencies = [
 
 [[package]]
 name = "rustyac-content"
-version = "0.20.0"
+version = "0.20.1"
 
 [[package]]
 name = "rustyac-math"
-version = "0.20.0"
+version = "0.20.1"
 
 [[package]]
 name = "rustyac-ode"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "rustyac-math",
 ]
 
 [[package]]
 name = "rustyac-physics"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
