@@ -14,8 +14,12 @@ idk rust, if ur gonna hate on me using claude for this msg me on discord at thes
 
 ## What it can do so far
 
-it renders like a very shitty f2004 car model and map model from assetto corsa installation now. tyre physics are improving from what ive tested.
-Doing a fat burnout (no audio or smoke bcus its still early on) pops both rear tyres, and it just about adds up with how the actual f2004 handles in the real game.
+it renders the car model and map model from assetto corsa installation kinda good now. tyre physics are improving from what ive tested.
+Doing a fat burnout (no smoke yet) pops both rear tyres (unless u have damage off), and it just about adds up with how the actual cars handles in the real game (WITHOUT CSP, if you have CSP enabled in assetto corsa the cars wont handle the same).
+
+## WASM build
+
+wasm build has basically same stuff but it currently doesnt use assetto corsa asctual renderer, it also has no sounds. its basically a shittier version of the exe.
 
 ## What i want it to do once its done
 
@@ -26,7 +30,7 @@ ill prob have like 2 versions where 1 is just pure vanilla ac and another versio
 
 ## Will i work on this every day
 
-no. i have SAT's and shit to stufy for, plus i need some tokens to study, and sometimes claude deciudes to spawn like 30 subagents at once draining my tokens so idk.
+no. i have SAT's and shit to stufy for, plus i need some tokens to study.
 
 ## Contributing
 
