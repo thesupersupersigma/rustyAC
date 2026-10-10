@@ -56,6 +56,14 @@ impl Picture {
         }
     }
 
+    /// Ctrl+I: the ideal line (AC's renderer only).
+    pub fn toggle_ideal_line(&mut self) -> Option<bool> {
+        match self {
+            Picture::Debug(_) => None,
+            Picture::Ac(r) => r.toggle_ideal_line(),
+        }
+    }
+
     pub fn set_virtual_mirror(&mut self, active: bool) {
         if let Picture::Ac(r) = self {
             r.set_virtual_mirror(active);

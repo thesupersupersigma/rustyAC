@@ -55,6 +55,8 @@ pub struct Args {
     pub tape_from: usize,
     /// how many frames of the tape
     pub frames: usize,
+    /// `--frames` was given (without a car: that many frames of the track alone)
+    pub frames_given: bool,
     /// frames of a sequence whose whole log and picture are written (not only their hashes)
     pub dump: Vec<usize>,
     /// a word for the frame's name (to tell runs with different inputs apart)
@@ -105,6 +107,7 @@ fn parse() -> Result<Args, String> {
         tape: None,
         tape_from: 0,
         frames: 60,
+        frames_given: false,
         dump: Vec::new(),
         label: String::new(),
         set: Vec::new(),
@@ -188,6 +191,7 @@ fn parse() -> Result<Args, String> {
             "--frames" => {
                 text = value()?;
                 a.frames = text.parse().map_err(|_| "--frames <count>")?;
+                a.frames_given = true;
             }
             "--label" => {
                 text = value()?;
@@ -286,6 +290,25 @@ fn parse() -> Result<Args, String> {
     Ok(a)
 }
 
+/// `RENDER_ORACLE_TIMING=1`: each side prints how long its frames took (from `beginScene` to the
+/// picture read back, so the graphics card has finished), for the cost of a setting on the
+/// game's own renderer against the port's (with `RENDER_ORACLE_HARDWARE=1`).
+pub static FRAME_MS: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
+
+pub fn timing() -> bool {
+    std::env::var_os("RENDER_ORACLE_TIMING").is_some_and(|v| v == "1")
+}
+
+fn print_timing(side: &str) {
+    let mut ms = FRAME_MS.lock().unwrap().clone();
+    if !timing() || ms.is_empty() {
+        return;
+    }
+    let mean = ms.iter().sum::<f64>() / ms.len() as f64;
+    ms.sort_by(|a, b| a.total_cmp(b));
+    println!("timing {side}: {} frames, median {:.2} ms, mean {:.2} ms, fastest {:.2} ms, slowest {:.2} ms", ms.len(), ms[ms.len() / 2], mean, ms[0], ms[ms.len() - 1]);
+}
+
 fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
@@ -320,6 +343,7 @@ fn run_side(args: &Args) -> Result<(), String> {
         }
         other => return Err(format!("--side {other:?} is not ac or port")),
     };
+    print_timing(&args.side);
     let file = |kind: &str| args.out.join(format!("{}.{}.{kind}", frame.name, args.side));
     std::fs::write(file("init.gpulog"), &init).map_err(|e| e.to_string())?;
     std::fs::write(file("cube.gpulog"), &rendered.cube_log).map_err(|e| e.to_string())?;

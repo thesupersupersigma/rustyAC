@@ -107,11 +107,13 @@ pub struct Extra {
     /// `CarPhysicsInfo::kersMaxJ` (with `hasKERS`) and `ersMaxJ`
     pub kers_max: f32,
     pub ers_max: f32,
+    /// `DrivingAssistManager::idealLine`: what its `update` writes into the line's node
+    pub ideal: bool,
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false }
     }
 }
 
@@ -131,6 +133,24 @@ pub struct Frame {
     pub weather: String,
     /// the model `Sim::initStaticCubemap` draws into the reflection cube map
     pub cubemap_model: String,
+    /// `--set ideal=…`: the ideal line is built, from this file (`data/ideal_line.ai`)
+    pub ideal_line: Option<String>,
+}
+
+thread_local! {
+    /// The port's track, for the rays both sides cast (the game's `Track::rayCast` needs its
+    /// whole physics engine; the port's ray is proven against it by `car_oracle rays`).
+    static RAY_TRACK: std::cell::RefCell<Option<rustyac_physics::track::Track>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `Track::rayCast` 0x140278bb0 on the port's track: where the ray hits and the normal there.
+pub fn ray_cast(from: &[f32; 3], dir: &[f32; 3], length: f32) -> Option<([f32; 3], [f32; 3])> {
+    use rustyac_physics::vecmath::Vec3f;
+    RAY_TRACK.with(|t| {
+        let track = t.borrow();
+        let hit = track.as_ref()?.ray_cast_hit(&Vec3f::new(from[0], from[1], from[2]), &Vec3f::new(dir[0], dir[1], dir[2]), length)?;
+        Some((hit.contact.pos, hit.contact.normal))
+    })
 }
 
 /// `TrackAvatar::init3D` placing a model's top node (`models.ini` ROTATION / POSITION).
@@ -202,6 +222,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             place = [position.x, position.y, position.z];
             forward = [-tail.x, -tail.y, -tail.z];
         }
+        RAY_TRACK.with(|t| *t.borrow_mut() = Some(physical));
     }
     // the car, where its physics state has it
     let mut car = None;
@@ -301,7 +322,20 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     }
     let steps: Vec<Step> = if states.is_empty() {
         let camera = camera_of(None)?;
-        (0..=args.capture).map(|_| Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera, extra: Extra::default() }).collect()
+        // without a car: `--frames` frames when asked for (things of the track that move)
+        let count = if args.frames_given { args.frames.max(args.capture + 1) } else { args.capture + 1 };
+        let mut steps = Vec::with_capacity(count);
+        for index in 0..count {
+            let mut state = rustyac_render::car::CarPhysicsState::at_origin();
+            let mut extra = Extra::default();
+            for (name, value, from) in &args.set {
+                if index >= *from {
+                    apply_set(&mut state, &mut extra, name, value)?;
+                }
+            }
+            steps.push(Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera, extra });
+        }
+        steps
     } else {
         let mut steps = Vec::with_capacity(states.len());
         for (state, extra) in states.iter().zip(&extras) {
@@ -331,9 +365,19 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             cubemap_model = own;
         }
     }
-    let sequence = args.tape.is_some();
+    let sequence = args.tape.is_some() || (states.is_empty() && args.frames_given);
+    let ideal_line = match (&track, args.set.iter().any(|(name, _, _)| name == "ideal")) {
+        (Some(track), true) => {
+            let file = format!("{}/data/ideal_line.ai", track.data_folder);
+            if !Path::new(&file).is_file() {
+                return Err(format!("--set ideal: no {file}"));
+            }
+            Some(file)
+        }
+        _ => None,
+    };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
-    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model })
+    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line })
 }
 
 /// The picture frames `from .. from + count` of a tape written by `car_oracle run
@@ -394,6 +438,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "rscale" => x.replay_scale = number(value)?,
         "rstatus" => x.replay_status = number(value)? as i32,
         "pause" => x.pause = on(value)?,
+        "ideal" => x.ideal = on(value)?,
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
@@ -415,7 +460,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

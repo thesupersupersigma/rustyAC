@@ -168,6 +168,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
         (None, Some(false)) => None,
         (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
     };
+    let assists_file = race.as_ref().map(|p| p.with_file_name("assists.ini")).filter(|p| p.is_file());
     if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
         if ini.has_section("LIGHTING") {
             sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(sun_angle);
@@ -186,6 +187,16 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             }
         }
     }
+    // DrivingAssistManager::DrivingAssistManager 0x1400fbd90: assists.ini [ASSISTS] IDEAL_LINE,
+    // beside the race.ini (not with --no-race-ini); --ideal-line / --no-ideal-line come first
+    let mut ideal_line = false;
+    if let Some(assists) = assists_file.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
+        ideal_line = assists.get_int("ASSISTS", "IDEAL_LINE").unwrap_or(0) != 0;
+    }
+    if let Some(on) = options.ideal_line {
+        ideal_line = on;
+    }
+    rustyac_game::shm::IDEAL_LINE_ON.store(ideal_line, Ordering::Relaxed);
     if let Some(sun) = options.sun {
         sun_angle = sun;
     }
@@ -197,7 +208,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
     rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -679,6 +690,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                         request(if shift { event::ABS_DN } else { event::ABS_UP });
                     } else if ctrl && key == bindings.key_auto_shifter {
                         request(event::AUTO_SHIFTER);
+                    } else if ctrl && key == bindings.key_ideal_line {
+                        // Sim::onKeyDown 0x14019a940: no text on the screen in the game; a line here
+                        match renderer.toggle_ideal_line() {
+                            Some(on) => {
+                                rustyac_game::shm::IDEAL_LINE_ON.store(on, Ordering::Relaxed);
+                                println!("IDEAL LINE: {}", if on { "ON" } else { "OFF" });
+                            }
+                            None => println!("IDEAL LINE: this track has none (or the debug view is drawing)"),
+                        }
                     } else if ctrl && key == rustyac_game::input::bindings::KEY_MGUK_RECOVERY {
                         // AC's fixed commands of the hybrid cockpit: the digits 1 to 4
                         request(if shift { event::MGUK_RECOVERY_DN } else { event::MGUK_RECOVERY_UP });

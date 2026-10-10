@@ -58,6 +58,36 @@ const VA_UPDATE_DYNAMIC_OBJECTS: usize = 0x1_401c_cb30; // TrackAvatar::updateDy
 const VA_MESH_VTABLE: usize = 0x1_404e_da28; // const Mesh::`vftable'
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
+const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70; // AISpline::AISpline()
+const VA_AI_SPLINE_LOAD_FAST: usize = 0x1_402a_83c0; // AISpline::loadFast(const std::wstring&)
+const VA_IDEAL_LINE_CTOR: usize = 0x1_4010_9d10; // IdealLine::IdealLine(AISpline*, GraphicsManager*, IRayTrackCollisionProvider*)
+
+/// In place of `Track::rayCast` 0x140278bb0 (slot 1 of the track's table): the port's ray on
+/// the port's track. A hit fills the game's `RayCastResult` (position +8, normal +0x14, the hit
+/// flag +0x20); a miss only clears the flag, as the game's does.
+unsafe extern "C" fn track_ray_cast(_track: *mut u8, from: *const [f32; 3], dir: *const [f32; 3], out: *mut u8, length: f32) -> bool {
+    match crate::frames::ray_cast(&*from, &*dir, length) {
+        Some((pos, normal)) => {
+            wr(out, 0x8, pos);
+            wr(out, 0x14, normal);
+            wr(out, 0x20, 1u8);
+            true
+        }
+        None => {
+            wr(out, 0x20, 0u8);
+            false
+        }
+    }
+}
+
+/// A stand-in `Track` (0x148 bytes) of which only `rayCast` is ever called.
+pub unsafe fn ray_track(acs: &Acs) -> *mut u8 {
+    let table = acs.alloc(0x40);
+    wr(table, 8, track_ray_cast as *const () as usize);
+    let track = acs.alloc(0x148);
+    wr(track, 0, table);
+    track
+}
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
 /// would run them all, is never run): kgl's map of input layouts, `Curve::openedFiles`,
@@ -148,7 +178,10 @@ unsafe extern "system" fn create_device_and_swap_chain(
             SWAP_CHAIN.store(*swap_chain as usize, Ordering::SeqCst);
         }
         // the game gets the logging stand-in of the context; the oracle keeps the real one
-        *context = rustyac_render::gpulog::install(*device, *context).expect("the command log");
+        // (a timing run draws on the real context: the stand-in costs far more than a frame)
+        if !crate::timing() {
+            *context = rustyac_render::gpulog::install(*device, *context).expect("the command log");
+        }
     } else {
         eprintln!("oracle: D3D11CreateDeviceAndSwapChain on WARP failed: {result:#x}");
     }
@@ -213,6 +246,8 @@ pub struct Game {
     pub swap_chain: *mut c_void,
     /// the calls of the start-up (state objects, constant buffers, samplers)
     pub init_log: Vec<u8>,
+    /// the game's folder (files the oracle copies into its scratch root)
+    pub game_folder: std::path::PathBuf,
 }
 
 /// One captured frame: its hashes, and the whole of it when it was asked for.
@@ -309,6 +344,7 @@ impl Game {
                 context: CONTEXT.load(Ordering::SeqCst) as *mut c_void,
                 swap_chain: SWAP_CHAIN.load(Ordering::SeqCst) as *mut c_void,
                 init_log: init.text,
+                game_folder: args.game.clone(),
             })
         }
     }
@@ -454,6 +490,7 @@ impl Game {
         let track_sim = acs.alloc(0x2d0);
         let mut grooves = std::ptr::null_mut::<u8>();
         let mut dynamic_track = std::ptr::null_mut::<u8>();
+        let mut ideal_line = std::ptr::null_mut::<u8>();
         if let Some(track) = &frame.track {
             let game = acs.alloc(0x278);
             wr(game, 0x138, self.graphics);
@@ -515,6 +552,27 @@ impl Game {
                         dynamic_track = track_avatar;
                     }
                 }
+            }
+            // TrackAvatar::TrackAvatar: the ideal line, the game's own on its own reader of the
+            // file; its rays are the port's
+            if let Some(file) = &frame.ideal_line {
+                let texture = std::path::Path::new("content/texture/ideal_line.png");
+                if !texture.is_file() {
+                    std::fs::create_dir_all("content/texture").map_err(|e| e.to_string())?;
+                    std::fs::copy(std::path::Path::new(&crate::frames::path_text(&self.game_folder)).join(texture), texture).map_err(|e| format!("ideal_line.png: {e}"))?;
+                }
+                let spline = acs.alloc(0xe0);
+                let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AI_SPLINE_CTOR));
+                ctor(spline);
+                let load: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_AI_SPLINE_LOAD_FAST));
+                load(spline, wstring(acs, file));
+                let line = acs.alloc(0xe8);
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_IDEAL_LINE_CTOR));
+                ctor(line, spline, self.graphics, ray_track(acs));
+                compile(self.graphics, line);
+                self.add_child(track_node, line);
+                wr(track_avatar, 0x58, line);
+                ideal_line = line;
             }
             grooves = acs.alloc(0x90);
             let ctor: extern "C" fn(*mut u8, *mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_DYNAMIC_TRACK_MANAGER_CTOR));
@@ -598,7 +656,7 @@ impl Game {
         }
         // Sim::addCar: the car's models and its objects
         let car = match &frame.car {
-            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred }, camera, console)?),
+            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred, ideal_line }, camera, console)?),
             None => None,
         };
         // Sim::cars, for the grooves
@@ -647,6 +705,10 @@ impl Game {
             }
             let s = step.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
+            // DrivingAssistManager::update 0x1400fcb20
+            if !ideal_line.is_null() {
+                wr(ideal_line, 0xd8, step.extra.ideal as u8);
+            }
             // TrackAvatar::update 0x1401cca10: updateDynamicObjects
             if !dynamic_track.is_null() {
                 let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_UPDATE_DYNAMIC_OBJECTS));
@@ -667,10 +729,11 @@ impl Game {
                 update(grooves, crate::frames::DT);
             }
 
-            if index >= frame.capture {
+            if index >= frame.capture && !crate::timing() {
                 rustyac_render::gpulog::begin_capture(&frame.name);
             }
             // Game::onIdle 0x140242730
+            let started = std::time::Instant::now();
             begin(self.graphics);
             // Sim::renderScene 0x14019e570
             traverse(traverser, root);
@@ -685,11 +748,18 @@ impl Game {
                 self.render_virtual_mirror(car, 1.0 / 60.0);
             }
             if index >= frame.capture {
-                let capture = rustyac_render::gpulog::end_capture();
+                // (a timing run keeps no log: the logger costs far more than the frame)
+                let (text, draws) = if crate::timing() {
+                    (Vec::new(), 0)
+                } else {
+                    let capture = rustyac_render::gpulog::end_capture();
+                    (capture.text, capture.draws)
+                };
                 let (width, height, pixels) = self.read_back()?;
+                crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
                 rendered.width = width;
                 rendered.height = height;
-                rendered.frames.push(Captured::new(index, capture.text, capture.draws, pixels, !frame.sequence || dump.contains(&index)));
+                rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
             }
             end(self.graphics);
         }

@@ -28,6 +28,7 @@ pub mod flames;
 pub mod gl;
 pub mod gpulog;
 pub mod graphics;
+pub mod ideal_line;
 pub mod kgl;
 pub mod lighting;
 pub mod lights;

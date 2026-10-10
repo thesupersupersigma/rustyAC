@@ -235,6 +235,8 @@ pub struct AcOptions {
     pub render_seed: u32,
     /// `--cube-size <n>`: `[CUBEMAP] SIZE` whatever the video settings say
     pub cube_size: Option<i32>,
+    /// `assists.ini [ASSISTS] IDEAL_LINE` (or `--ideal-line`): the ideal line shows from the start
+    pub ideal_line: bool,
     /// `--video-ini <file>`: this file instead of `Documents/Assetto Corsa/cfg/video.ini`
     pub video_ini: Option<PathBuf>,
     /// `--graphics max|low`: a built-in `video.ini`; the player's file is not read
@@ -417,6 +419,9 @@ pub struct AcRenderer {
     /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
     mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
     virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
+    /// `TrackAvatar::idealLine` and `DrivingAssistManager::idealLine`
+    ideal_line: Option<NodeId>,
+    ideal_on: bool,
     /// `Game::gameTime.now`, milliseconds
     time_ms: f64,
     /// `RaceManager::initLighting`'s `SunAnimator`
@@ -533,6 +538,10 @@ impl AcRenderer {
             camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), cube_far);
         }
         camera.set_cubemap_size(&graphics, cube_size);
+        if std::env::var_os("RUSTYAC_DIAG_NO_CUBE_MIPS").is_some_and(|v| v == "1") {
+            camera.cube_map_renderer.diagnosis_no_mips = true;
+            notes.push("RUSTYAC_DIAG_NO_CUBE_MIPS=1: NOT Assetto Corsa, a diagnosis switch: the reflection cube map's mip levels are made once, not every frame".into());
+        }
         let hud = HudPass::new(&graphics.kgl.device)?;
         // CarAvatar::initCommonPostPhysics: the cockpit switches of video.ini
         let cockpit_flags = {
@@ -557,7 +566,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -592,6 +601,16 @@ impl AcRenderer {
         self.dynamic_objects = rustyac_render::crowds::init_dynamic_objects(&mut self.graphics, &mut self.scene, folder, layout, model);
         self.track_folder = Some(path_text(folder));
         let data = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
+        // TrackAvatar::TrackAvatar: the ideal line, from data/ideal_line.ai or else the AI line
+        match self.build_ideal_line(folder, layout, &data) {
+            Ok(line) => {
+                self.scene.compile(&self.graphics, line);
+                self.scene.add_child(self.track_node, line);
+                self.scene.nodes[line].is_active = self.ideal_on;
+                self.ideal_line = Some(line);
+            }
+            Err(message) => println!("no ideal line: {message}"),
+        }
         self.graphics.load_track_lighting(&data.join("data/lighting.ini"));
         // TrackAvatar::TrackAvatar: the grooves, then the crowds (which leave rand() seeded)
         let grooves = rustyac_render::crowds::DynamicTrackManager::new(&mut self.scene, &data, self.track_node, self.options.groove);
@@ -602,6 +621,37 @@ impl AcRenderer {
             Err(message) => println!("WARNING: no crowds: {message}"),
         }
         Ok(format!("track models: {} files, {} textures, {} materials, loaded in {:.2} s", models.len(), self.graphics.resources.textures.len(), self.scene.materials.len(), started.elapsed().as_secs_f64()))
+    }
+
+    /// The ideal line of `TrackAvatar::TrackAvatar` 0x1401c5250: `IdealLine::IdealLine` on
+    /// `data/ideal_line.ai` when the track has one, else on its AI line, with the track's own
+    /// rays (straight down from every sample).
+    fn build_ideal_line(&mut self, folder: &Path, layout: &str, data: &Path) -> Result<NodeId, String> {
+        use rustyac_physics::track::spline::AiSpline;
+        use rustyac_physics::vecmath::Vec3f;
+        let (track, _) = rustyac_physics::track::loader::load_track(folder, layout)?;
+        let file = data.join("data/ideal_line.ai");
+        let own;
+        let spline = if rustyac_physics::data::exists(&file) {
+            let bytes = rustyac_content::vfs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            own = AiSpline::parse_fast(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+            &own
+        } else {
+            track.ai_spline.as_ref().ok_or("the track has neither data/ideal_line.ai nor an AI line")?
+        };
+        if spline.point_count() == 0 || !(spline.length() > 0.0) {
+            return Err("the line has no points".into());
+        }
+        let down = Vec3f::new(0.0, -1.0, 0.0);
+        rustyac_render::ideal_line::build(&mut self.graphics, &mut self.scene, spline, &|from| track.ray_cast_hit(&Vec3f::new(from[0], from[1], from[2]), &down, 100.0).map(|hit| hit.contact.pos))
+    }
+
+    /// `DrivingAssistManager::setIdealLine` 0x1400fcb00 from the key (Ctrl+I in the game): the
+    /// ideal line on or off. The answer is what it is now; `None`: the track has no line.
+    pub fn toggle_ideal_line(&mut self) -> Option<bool> {
+        self.ideal_line?;
+        self.ideal_on = !self.ideal_on;
+        Some(self.ideal_on)
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90. `folder` is the car's folder in the game.
@@ -809,6 +859,10 @@ impl AcRenderer {
         if logging {
             rustyac_render::gpulog::begin_capture("rustyac.exe");
         }
+        // DrivingAssistManager::update 0x1400fcb20: every frame
+        if let Some(line) = self.ideal_line {
+            self.scene.nodes[line].is_active = self.ideal_on;
+        }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
         // Sim::renderScene: the mirror before the picture
@@ -820,7 +874,7 @@ impl AcRenderer {
                     root: self.root,
                     particles: self.sim_nodes.particles,
                     before_cars: self.sim_nodes.before_cars,
-                    ideal_line: None,
+                    ideal_line: self.ideal_line,
                     body_transform: car.body_transform,
                     car_nodes: &nodes,
                     mirror_position: car.mirror_position,

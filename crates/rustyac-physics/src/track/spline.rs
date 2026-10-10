@@ -1071,6 +1071,87 @@ impl AiSpline {
         AiSpline::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
+    /// `AISpline::loadFast` @ 0x1402a83c0 alone, as `TrackAvatar::TrackAvatar` calls it for
+    /// `data/ideal_line.ai`: no rebuild and no lookup grid, and the old versions (2, 3 and 6
+    /// are among the game's own tracks) read by `AISpline::loadVersion6` @ 0x1402a85b0.
+    pub fn parse_fast(bytes: &[u8]) -> Result<AiSpline, String> {
+        let mut r = Reader { bytes, at: 0 };
+        let version = r.i32(0);
+        if version >= 7 {
+            return AiSpline::parse_with(bytes, false);
+        }
+        let mut ai = AiSpline { version, ..AiSpline::default() };
+        let points_count = r.u32(0);
+        ai.lap_time = r.u32(0);
+        if points_count as u64 * 28 > bytes.len() as u64 {
+            return Err(format!("the line says it has {points_count} points, more than the file holds"));
+        }
+        // version 2 keeps every third record only
+        let skip = if version >= 3 { 0 } else { 3 };
+        let mut prev_speed = 0.0f32;
+        let mut prev_pos = [0.0f32; 3];
+        for i in 0..points_count {
+            let pos = r.p3([0.0; 3]);
+            let mut p = AiSplinePayload::default();
+            if version < 5 {
+                let _ = r.f32(0.0);
+            }
+            p.speed_ms = r.f32(0.0);
+            p.gas = r.f32(0.0);
+            if version >= 6 {
+                p.brake = r.f32(0.0);
+            }
+            let _obsolete_lat_g = r.f32(0.0);
+            if version >= 3 {
+                p.radius = r.f32(0.0);
+                p.sides[0] = r.f32(0.0);
+                p.sides[1] = r.f32(0.0);
+                p.camber = r.f32(0.0);
+                p.direction = r.f32(1.0);
+                p.normal = r.p3([0.0; 3]);
+                p.length = r.f32(0.0);
+            }
+            if version < 6 {
+                // gas and brake from the change of speed
+                let accel = (p.speed_ms - prev_speed) / (p.length / p.speed_ms);
+                if accel >= 0.0 {
+                    p.gas = 1.0;
+                } else {
+                    let b = -accel;
+                    p.brake = if b > 1.0 {
+                        1.0
+                    } else if b >= 0.0 {
+                        b
+                    } else {
+                        0.0
+                    };
+                }
+                prev_speed = p.speed_ms;
+            }
+            p.forward_vector = normalized(sub(&pos, &prev_pos));
+            prev_pos = pos;
+            if skip == 0 || i % skip == 0 {
+                // Spline::addPoint @ 0x1401ed660: the running length; the tag is the point's index
+                let tag = ai.spline.points.len() as i32;
+                let point_length = match ai.spline.points.last() {
+                    Some(last) => last.point_length + sqrtf(len_sq(&sub(&pos, &last.point))),
+                    None => 0.0,
+                };
+                ai.spline.m_length = point_length;
+                ai.spline.points.push(SplinePoint { point: pos, point_length, tag });
+                ai.payloads.push(p);
+            }
+        }
+        if ai.payloads.len() >= 2 {
+            let last = ai.spline.point_at((ai.spline.points.len() as u32).wrapping_sub(1));
+            let first = ai.spline.point_at(0);
+            ai.payloads[0].forward_vector = normalized(sub(&first, &last));
+        }
+        ai.grid_missing = true;
+        ai.spline.compute_spline_length();
+        Ok(ai)
+    }
+
     /// The lap's length, m.
     pub fn length(&self) -> f32 {
         self.spline.length()

@@ -212,6 +212,10 @@ impl Page {
 }
 
 /// A lap time the way AC's pages show it: `m:ss:mmm`.
+/// `DrivingAssistManager::idealLine`: whether the ideal line shows (the window's Ctrl+I and
+/// `assists.ini` set it; the graphics page reports it).
+pub static IDEAL_LINE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn time_string(ms: i32) -> String {
     let ms = ms.max(0);
     format!("{}:{:02}:{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
@@ -466,6 +470,8 @@ impl ShmSink {
             g.set_i("lastSectorTime", last_sector as i32);
             g.set_f("normalizedCarPosition", car.spline_locator_data.npos);
             g.set_i("isInPitLane", car.is_in_pit_lane() as i32);
+            // SharedMemoryWriter::update 0x140186230: DrivingAssistManager::idealLine
+            g.set_i("idealLineOn", IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed) as i32);
             g.set_i("isInPit", car.is_in_pits() as i32);
         } else {
             g.set_i("session", 0);

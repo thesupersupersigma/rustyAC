@@ -65,7 +65,9 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
         n += 1;
     }
     graphics.kgl.set_render_targets(None, None);
-    graphics.kgl.cube_map_generate_mips(cube, -1);
+    if !renderer.diagnosis_no_mips {
+        graphics.kgl.cube_map_generate_mips(cube, -1);
+    }
     // evOnRenderEnd
     if renderer.faces_per_frame > 0 {
         for &mesh in &graphics.cube_map_hidden {

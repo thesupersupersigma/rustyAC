@@ -18,6 +18,9 @@ pub struct CubeMapRenderer {
     pub camera_matrix: [Mat44f; 6],
     pub camera: Camera,
     pub current_face: i32,
+    /// NOT Assetto Corsa, diagnosis only (`RUSTYAC_DIAG_NO_CUBE_MIPS=1`): the mip levels are not
+    /// made again every frame. The game always makes them.
+    pub diagnosis_no_mips: bool,
 }
 
 impl CubeMapRenderer {
@@ -30,7 +33,7 @@ impl CubeMapRenderer {
         camera.far_plane = 350.0;
         camera.aspect_ratio = 1.0;
         camera.max_layer = 0.0;
-        CubeMapRenderer { faces_per_frame: 6, camera_matrix: crate::cubemap::face_matrices(), camera, current_face: 0 }
+        CubeMapRenderer { faces_per_frame: 6, camera_matrix: crate::cubemap::face_matrices(), camera, current_face: 0, diagnosis_no_mips: false }
     }
 
     /// `CubeMapRenderer::setCameraNearFarPlanes` 0x14021f110.

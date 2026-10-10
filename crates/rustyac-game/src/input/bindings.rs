@@ -122,6 +122,9 @@ pub struct Bindings {
     pub key_abs: i32,
     pub key_traction_control: i32,
     pub key_auto_shifter: i32,
+    /// `[IDEAL_LINE] KEY`: with Ctrl, the ideal line on / off (`CommandManager`: I when the
+    /// section is missing)
+    pub key_ideal_line: i32,
     /// `[RUSTYAC] COMMAND_MODIFIER`.
     pub command_modifier: CommandModifier,
     /// The keys of the seven cockpit buttons of [`HYBRID_SECTIONS`]: AC's `KEY` of the section
@@ -301,6 +304,7 @@ impl Bindings {
             key_abs: ini.get_hex("ABS", "KEY"),
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
+            key_ideal_line: if ini.has_section("IDEAL_LINE") { ini.get_hex("IDEAL_LINE", "KEY") } else { 0x49 },
             command_modifier: CommandModifier::from_name(ini.get_string("RUSTYAC", "COMMAND_MODIFIER")),
             hybrid_keys: HYBRID_SECTIONS.map(|section| [ini.get_hex(section, "KEY"), ini.get_hex("RUSTYAC_KEYS_2", section)]),
             ini,
@@ -447,6 +451,7 @@ impl Bindings {
             format!("{}{ctrl}+{} (with Shift: down)", plain(KEY_PLAIN_ABS, "Y, or "), key_name(self.key_abs)),
         );
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
+        row("ideal line", "-", format!("{ctrl}+{}", key_name(self.key_ideal_line)));
         // the hybrid system's cockpit: AC's sections for the pad, rustyAC's second keys, and
         // AC's fixed commands on the digits
         let keys_of = |index: usize| {

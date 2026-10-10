@@ -44,7 +44,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         triple_buffer: false,
     };
     rustyac_render::gpulog::capture_from_install(true);
-    let mut graphics = Graphics::new(video, DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: true }, &args.game)?;
+    let mut graphics = Graphics::new(video, DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: !crate::timing() }, &args.game)?;
     let init = rustyac_render::gpulog::end_capture();
 
     // the splash screen's frame (see the game's side)
@@ -97,6 +97,16 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.show_track_objects(model);
         // TrackAvatar::initDynamicObjects
         dynamic_objects = rustyac_render::crowds::init_dynamic_objects(&mut graphics, &mut scene, std::path::Path::new(&track.folder), &track.layout, model);
+    }
+    // TrackAvatar::TrackAvatar: the ideal line
+    let mut ideal_line = None;
+    if let Some(file) = &frame.ideal_line {
+        let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+        let spline = rustyac_physics::track::spline::AiSpline::parse_fast(&bytes)?;
+        let line = rustyac_render::ideal_line::build(&mut graphics, &mut scene, &spline, &|from| crate::frames::ray_cast(from, &[0.0, -1.0, 0.0], 100.0).map(|hit| hit.0))?;
+        scene.compile(&graphics, line);
+        scene.add_child(track_node, line);
+        ideal_line = Some(line);
     }
     // TrackAvatar::TrackAvatar: DynamicTrackManager, then CameraFacing
     let mut grooves = None;
@@ -189,6 +199,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         let s = step.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
+        // DrivingAssistManager::update
+        if let Some(line) = ideal_line {
+            scene.nodes[line].is_active = step.extra.ideal;
+        }
         // TrackAvatar::update
         rustyac_render::crowds::update_dynamic_objects(&mut scene, &mut dynamic_objects, crate::frames::DT);
         // SunAnimator::update, the clouds' part
@@ -238,9 +252,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             grooves.update(&mut scene, crate::frames::DT, None, &laps);
         }
 
-        if index >= frame.capture {
+        if index >= frame.capture && !crate::timing() {
             rustyac_render::gpulog::begin_capture(&frame.name);
         }
+        let started = std::time::Instant::now();
         graphics.begin_scene();
         scene.traverse(root);
         // Sim::renderScene: the mirror before the picture
@@ -248,7 +263,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             let active = virtual_mirror.as_ref().is_some_and(|v| v.active);
             if mirror.wants_render(step.camera.mode, step.camera.drivable_mode, active) {
                 let nodes = car.visibility_nodes();
-                let s = rustyac_render::mirror::MirrorScene { root, particles, before_cars, ideal_line: None, body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
+                let s = rustyac_render::mirror::MirrorScene { root, particles, before_cars, ideal_line, body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
                 mirror.render(&mut graphics, &mut scene, camera.base.sky_box.as_mut(), &s);
             }
         }
@@ -259,11 +274,17 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             v.render(&mut graphics, &mirror.texture, step.camera.mode);
         }
         if index >= frame.capture {
-            let capture = rustyac_render::gpulog::end_capture();
+            let (text, draws) = if crate::timing() {
+                (Vec::new(), 0)
+            } else {
+                let capture = rustyac_render::gpulog::end_capture();
+                (capture.text, capture.draws)
+            };
             let (width, height, pixels) = graphics.kgl.read_screen()?;
+            crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
             rendered.width = width;
             rendered.height = height;
-            rendered.frames.push(Captured::new(index, capture.text, capture.draws, pixels, !frame.sequence || args.dump.contains(&index)));
+            rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
         }
         graphics.end_scene();
     }

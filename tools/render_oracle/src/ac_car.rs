@@ -87,6 +87,9 @@ const VA_CAR_FAKE_SHADOW_CTOR: usize = 0x1_400e_0d80; // CarFakeShadow::CarFakeS
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 const VA_DIGITAL_PANELS_CTOR: usize = 0x1_4008_20f0; // DigitalPanels::DigitalPanels(CarAvatar*)
 const VA_DIGITAL_PANELS_UPDATE: usize = 0x1_4008_3f70; // DigitalPanels::update(float)
+const VA_SUS_GRAPHICS_GENERATOR_CTOR: usize = 0x1_401b_4120; // SuspensionGraphicsGenerator::SuspensionGraphicsGenerator(CarAvatar*)
+const VA_SUS_GRAPHICS_GENERATE: usize = 0x1_401b_4280; // SuspensionGraphicsGenerator::generateConnections()
+const VA_SUS_GRAPHICS_UPDATE: usize = 0x1_401b_3ca0; // SuspensionGraphics::update(float)
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
 /// SuspensionAvatar.obj and SuspensionAnimator.obj.
@@ -315,6 +318,8 @@ pub struct SimNodes {
     pub render_finished: *mut u8,
     pub blurred: *mut u8,
     pub unblurred: *mut u8,
+    /// `TrackAvatar::idealLine` (null: none was built)
+    pub ideal_line: *mut u8,
 }
 
 /// The game's objects of one car.
@@ -355,6 +360,8 @@ pub struct Car {
     /// stand-ins for the other cars of the real-time order and of the leaderboard
     other_cars: *mut u8,
     wings: *mut u8,
+    /// the `SuspensionGraphics` of `data/suspension_graphics.ini`
+    rods: Vec<*mut u8>,
     /// the pause and the replay status of the last frame
     last_pause: std::cell::Cell<bool>,
     last_status: std::cell::Cell<i32>,
@@ -482,7 +489,7 @@ impl Game {
         let (mut mirror, mut virtual_mirror) = (std::ptr::null_mut::<u8>(), std::ptr::null_mut::<u8>());
         if crate::root::profile().mirror_size != 0 {
             let track = acs.alloc(0x200);
-            wr(track, 0x58, acs.alloc(0xe0));
+            wr(track, 0x58, if nodes.ideal_line.is_null() { acs.alloc(0xe0) } else { nodes.ideal_line });
             wr(sim, 0x150, track);
             let cars = acs.alloc(0x10);
             wr(cars, 0, car);
@@ -658,6 +665,17 @@ impl Game {
         let animated_lights = acs.alloc(0x88);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_ANIMATED_LIGHTS_CTOR));
         ctor(animated_lights, brake_lights);
+        // SuspensionGraphicsGenerator::generateConnections 0x1401b4280: the rods are the only
+        // objects here that the game's own addGameObject puts into the car's list (+0x40)
+        let rods: Vec<*mut u8> = {
+            let generator = acs.alloc(0x28);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SUS_GRAPHICS_GENERATOR_CTOR));
+            ctor(generator, car);
+            let generate: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_SUS_GRAPHICS_GENERATE));
+            generate(generator);
+            let (begin, end): (*const *mut u8, *const *mut u8) = (rd(car, 0x40), rd(car, 0x48));
+            if begin.is_null() { Vec::new() } else { std::slice::from_raw_parts(begin, end.offset_from(begin) as usize).to_vec() }
+        };
         let tyre_blur = acs.alloc(0x120);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_BLUR_CTOR));
         ctor(tyre_blur, car);
@@ -671,7 +689,7 @@ impl Game {
         let flames = make(0x158, VA_FLAMES_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -870,12 +888,17 @@ impl Game {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }
+        let rods = c.rods.iter().map(|rod| (*rod, VA_SUS_GRAPHICS_UPDATE));
         for (object, va) in [
             (c.car_animations, VA_CAR_ANIMATIONS_UPDATE),
             (c.gear_shift_shake, VA_GEAR_SHIFT_SHAKE_UPDATE),
             (c.analog_instruments, VA_ANALOG_INSTRUMENTS_UPDATE),
             (c.brake_lights, VA_CAR_BRAKE_LIGHTS_UPDATE),
             (c.animated_lights, VA_ANIMATED_LIGHTS_UPDATE),
+        ]
+        .into_iter()
+        .chain(rods)
+        .chain([
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
             (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
             (c.digital_instruments, VA_DIGITAL_INSTRUMENTS_UPDATE),
@@ -883,7 +906,7 @@ impl Game {
             (c.flames, VA_FLAMES_UPDATE),
             (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),
             (c.dynamic_effects, VA_DYNAMIC_CAR_EFFECTS_UPDATE),
-        ] {
+        ]) {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }

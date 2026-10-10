@@ -104,6 +104,8 @@ pub struct Options {
     pub auto_clutch: bool,
     pub no_auto_shifter: bool,
     pub auto_blip: Option<bool>,
+    /// `--ideal-line` / `--no-ideal-line`: the ideal line whatever assists.ini says
+    pub ideal_line: Option<bool>,
     /// `--spawn` was given (else race.ini's `[SESSION_0] SPAWN_SET` decides).
     pub spawn_given: bool,
     /// `--controls <ini>`: read the bindings from this file instead of AC's / rustyAC's.
@@ -225,6 +227,7 @@ impl Default for Options {
             auto_clutch: false,
             no_auto_shifter: false,
             auto_blip: None,
+            ideal_line: None,
             spawn_given: false,
             controls: None,
             default_controls: false,
@@ -366,6 +369,10 @@ for checks, without anybody at the controls:
                         4096, world detail 5, anisotropic 16, reflections 2048 with 6 faces a frame,
                         mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5); low:
                         everything off or at the lowest value. The options above still win.
+  --ideal-line, --no-ideal-line
+                        AC's ideal line (the coloured arrows on the road) on or off from the start,
+                        whatever assists.ini [ASSISTS] IDEAL_LINE says; Ctrl+I switches it while
+                        driving (the key of controls.ini [IDEAL_LINE])
   --show-fps            the frame-rate counter on from the start (Ctrl+F or F9 switches it while
                         driving: frame time, FPS, physics steps a second)
   --no-a2c              NOT Assetto Corsa, a diagnosis only: no alpha to coverage. It proves where
@@ -459,6 +466,8 @@ impl Options {
                 "--auto-clutch" => o.auto_clutch = true,
                 "--auto-blip" => o.auto_blip = Some(true),
                 "--no-auto-blip" => o.auto_blip = Some(false),
+                "--ideal-line" => o.ideal_line = Some(true),
+                "--no-ideal-line" => o.ideal_line = Some(false),
                 "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,
                 "--bench-render" => o.bench_render = true,
