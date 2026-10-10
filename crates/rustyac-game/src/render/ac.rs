@@ -528,6 +528,11 @@ impl AcRenderer {
         rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())
     }
 
+    /// `CarAvatar::evOnBackfireTriggered` of the last frame; `None` without a car that tests.
+    pub fn backfire_triggered(&self) -> Option<bool> {
+        self.car.as_ref().filter(|car| car.backfire.is_some()).map(|car| car.backfire_triggered)
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.graphics.video.width as u32, self.graphics.video.height as u32)
     }

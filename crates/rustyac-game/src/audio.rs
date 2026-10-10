@@ -482,6 +482,15 @@ impl GameAudio {
         self.timing.max = self.timing.max.max(took);
     }
 
+    /// `CarAvatar::evOnBackfireTriggered` of the frame, when the picture's car ran the test
+    /// (it owns `fuelInExhaust`, which its flames empty): the sound plays on that, as in the
+    /// game, and does not test by itself. `None`: no such car (the sound tests by itself).
+    pub fn set_picture_backfire(&mut self, fired: Option<bool>) {
+        if let Some(car) = self.world.cars.first_mut() {
+            car.picture_backfire = fired;
+        }
+    }
+
     /// One picture frame against the clock: the newest physics state, the events since the
     /// last frame, the camera's matrix as the listener. `seconds` is the time since the last
     /// frame; a paused game keeps running its sound on the frozen state with the master volume

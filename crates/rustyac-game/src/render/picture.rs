@@ -33,6 +33,14 @@ impl Picture {
         }
     }
 
+    /// Whether the car's backfire test of the last frame fired; `None`: nothing ran one.
+    pub fn backfire_triggered(&self) -> Option<bool> {
+        match self {
+            Picture::Debug(_) => None,
+            Picture::Ac(renderer) => renderer.backfire_triggered(),
+        }
+    }
+
     pub fn draw(&mut self, view: &CarView, shape: &CarShape, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         match self {
             Picture::Debug(r) => r.draw(view, shape, frame, info),

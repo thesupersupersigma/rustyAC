@@ -135,6 +135,10 @@ pub struct CarSound {
     gear_old: i32,
     /// `aiState.isActive`
     pub ai_active: bool,
+    /// The car's one backfire test of this frame was run by the picture's `CarAvatar` (which
+    /// owns the counter the flames empty): `Some(whether it fired)`. `None`: the test runs
+    /// here, as for a car without flames.
+    pub picture_backfire: Option<bool>,
 }
 
 impl CarSound {
@@ -143,14 +147,18 @@ impl CarSound {
         let sounds = IniReader::load(&append_path(&info.data_folder, "sounds.ini"))?;
         let backfire = BackfireParams::new(&sounds)?;
         let audio = CarAudio::for_car(engine, info)?;
-        Ok(CarSound { audio, backfire, fuel_in_exhaust: 0.0, gear_old: 0, ai_active: false })
+        Ok(CarSound { audio, backfire, fuel_in_exhaust: 0.0, gear_old: 0, ai_active: false, picture_backfire: None })
     }
 
     /// The sound's share of `CarAvatar::update` @ 0x1400db830: the backfire test first, then
     /// the gear trigger (`EventTriggerOnChange<int>::update` @ 0x1400daef0).
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn avatar_update(&mut self, engine: &AudioEngine, frame: &CarFrame, sim: &SimView, dt: f32) {
-        if !(0.0 >= frame.engine_life_left) && self.backfire.check(frame, &mut self.fuel_in_exhaust, self.ai_active, dt) {
+        let fired = match self.picture_backfire {
+            Some(fired) => fired,
+            None => !(0.0 >= frame.engine_life_left) && self.backfire.check(frame, &mut self.fuel_in_exhaust, self.ai_active, dt),
+        };
+        if fired {
             if let Some(audio) = self.audio.as_ref() {
                 audio.on_backfire(engine, sim);
             }

@@ -742,15 +742,18 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else if unfocused {
             info.notes.push("click the window to drive".to_string());
         }
+        // Game::update: the car's one backfire test (CarAvatar::update), whose event the sound
+        // and the flames both hear; the flames empty its counter
+        renderer.draw(&view, &shape, &camera, &frame, &info, dt.as_secs_f32());
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
             if options.audio.clockless() {
                 sound.grid_frames(|_| (camera, frame.matrix));
             } else {
+                sound.set_picture_backfire(renderer.backfire_triggered());
                 sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused);
             }
         }
-        renderer.draw(&view, &shape, &camera, &frame, &info, dt.as_secs_f32());
         match renderer.present(&chain, options.vsync) {
             // nothing is seen: no need to draw as fast as the card can
             Ok(false) => std::thread::sleep(Duration::from_millis(15)),
