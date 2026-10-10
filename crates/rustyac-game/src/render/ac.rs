@@ -338,6 +338,10 @@ pub struct AcRenderer {
     /// with the matrix of the file; and the ones that are not at home
     object_nodes: Vec<(NodeId, Mat44f)>,
     moved_objects: Vec<usize>,
+    /// what the car's objects were last told: the pause menu shows; the replay's status
+    /// (-1: no replay yet)
+    told_paused: bool,
+    told_replay_status: i32,
     track_folder: Option<String>,
     options: AcOptions,
     hud: HudPass,
@@ -440,7 +444,7 @@ impl AcRenderer {
             let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -562,11 +566,42 @@ impl AcRenderer {
         let s = splits_of(driving);
         self.camera.base.set_shadow_maps_splits(&mut self.graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
+        // GameTime::update 0x14044c250: a frame is never longer than a fifth of a second
+        let dt = dt.min(0.2);
         self.time_ms += dt as f64 * 1000.0;
-        // SunAnimator::update: the sun, the lighting's clock, the clouds' drift (a rustyAC
-        // replay is the drive run again, so its sun moves as it did)
+        // The pause and the replay as the game has them. Driving: P is the pause menu
+        // (Sim::setPauseMode). A replay: P is the transport's pause (ReplayManager::pause /
+        // play), and the replay pauses itself at its end; no pause menu shows.
+        let replay_status = match (info.replay, info.paused || info.replay_over) {
+            (false, _) => -1,
+            (true, false) => 0,
+            (true, true) => 1,
+        };
+        if let Some(car) = &mut self.car {
+            if info.replay {
+                if self.told_replay_status == -1 {
+                    // ReplayManager::startReplayMode: evOnReplayStarted, then status 6
+                    car.on_replay_started_or_stopped(true);
+                    car.on_replay_status_changed(&mut self.scene, 6, 1.0, 2.0);
+                }
+                if replay_status != self.told_replay_status {
+                    car.on_replay_status_changed(&mut self.scene, replay_status, if replay_status == 1 { 0.0 } else { 1.0 }, 2.0);
+                    if let Some(grooves) = &mut self.grooves {
+                        grooves.reset_to_target = true;
+                    }
+                }
+            } else if info.paused != self.told_paused {
+                car.on_pause_mode_changed(info.paused);
+            }
+        }
+        self.told_paused = info.paused && !info.replay;
+        self.told_replay_status = replay_status;
+        // SunAnimator::update: the sun, the lighting's clock, the clouds' drift. A rustyAC
+        // replay is the drive run again, so its sun moves as it did; a paused replay's stands.
         if let Some(sun) = &mut self.sun {
-            sun.update(&mut self.graphics, self.camera.base.sky_box.as_mut(), dt, info.paused, None);
+            if replay_status != 1 {
+                sun.update(&mut self.graphics, self.camera.base.sky_box.as_mut(), dt, self.told_paused, None);
+            }
         }
         let mut modes = (2, 0);
         if let Some(car) = &mut self.car {
@@ -603,9 +638,9 @@ impl AcRenderer {
             car.has_kers = view.hybrid.has_kers;
             car.has_energy_store = view.hybrid.has_kers || view.hybrid.has_ers;
             car.drivetrain = Some((view.total_torque, view.drive_ratio));
-            car.pause_menu = info.paused;
+            car.pause_menu = self.told_paused;
             car.replay_mode = info.replay;
-            car.replay_scale = 1.0;
+            car.replay_scale = if replay_status == 1 { 0.0 } else { 1.0 };
             // a session of one car: rustyAC's sessions are practice (hot lap from the line)
             car.session_type = 1;
             car.leaderboard_position = 1;

@@ -735,6 +735,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             paused: shared.paused.load(Ordering::Relaxed) || unfocused,
             camera: camera.name(),
             replay: replay.is_some(),
+            replay_over,
             notes: Vec::new(),
         };
         if replay_over {

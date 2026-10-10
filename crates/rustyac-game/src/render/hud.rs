@@ -25,6 +25,8 @@ pub struct HudInfo {
     pub camera: String,
     /// A recorded drive is playing.
     pub replay: bool,
+    /// … and has come to its end.
+    pub replay_over: bool,
     /// Extra lines (top left, under the numbers).
     pub notes: Vec<String>,
 }
