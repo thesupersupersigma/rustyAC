@@ -169,6 +169,10 @@ pub struct CarView {
     /// The track's grip changes with the session (`Track::dynamicTrack.enabled`).
     pub dynamic_track: bool,
     pub max_fuel: f64,
+    /// `CarAvatar::getKmPerLiter` and `FuelLapEvaluator::getFuelLaps` (the displays' `FUEL_CONS`
+    /// and `EST_LAPS`)
+    pub km_per_liter: f32,
+    pub fuel_laps: f32,
     pub kers_max_j: f32,
     pub ers_max_j: f32,
     pub total_torque: f32,
@@ -317,6 +321,8 @@ impl Default for CarView {
             wing_count: 0,
             dynamic_track: false,
             max_fuel: 0.0,
+            km_per_liter: 0.0,
+            fuel_laps: -1.0,
             kers_max_j: 0.0,
             ers_max_j: 0.0,
             total_torque: 0.0,
@@ -432,6 +438,7 @@ impl CarView {
             time_stamp: r.time_stamp,
             air_density: self.air_density,
             fuel: self.fuel,
+            fuel_laps: self.fuel_laps,
             engine_life_left: self.engine_life,
             tyre_inflation: r.inflation,
             kers_charge: self.hybrid.charge,
@@ -635,6 +642,8 @@ impl CarView {
             };
         }
         view.max_fuel = car.max_fuel;
+        view.km_per_liter = sim.fuel_evaluator.km_per_liter();
+        view.fuel_laps = sim.fuel_evaluator.fuel_laps(car.fuel);
         view.dynamic_track = car.dynamic_track.is_some();
         if let Some(aero) = &car.aero {
             let wings = &aero.base().wings;

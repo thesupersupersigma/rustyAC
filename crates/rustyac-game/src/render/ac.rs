@@ -962,6 +962,7 @@ impl AcRenderer {
             car.wing_angles.clear();
             car.wing_angles.extend_from_slice(&view.wing_angles[..view.wing_count as usize]);
             car.max_fuel = view.max_fuel;
+            car.km_per_liter = view.km_per_liter;
             car.kers_max_j = view.kers_max_j;
             car.ers_max_j = view.ers_max_j;
             car.has_kers = view.hybrid.has_kers;

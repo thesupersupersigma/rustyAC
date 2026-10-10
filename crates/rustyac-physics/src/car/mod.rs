@@ -53,6 +53,7 @@ pub mod dynamic_controller;
 pub mod engine;
 pub mod ers;
 pub mod feed;
+pub mod fuel_lap_evaluator;
 pub mod heave_spring;
 pub mod kers;
 pub mod replay;

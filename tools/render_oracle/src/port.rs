@@ -295,6 +295,21 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             car.kers_max_j = step.extra.kers_max;
             car.ers_max_j = step.extra.ers_max;
             car.has_kers = step.extra.kers_max > 0.0;
+            car.max_fuel = step.extra.max_fuel;
+            car.session_laps = step.extra.session_laps;
+            // (the game's side: the Sim's list of cars has the one car only with mirrors)
+            car.cars_count = if step.extra.cars > 0 {
+                step.extra.cars
+            } else if crate::root::profile().mirror_size != 0 {
+                1
+            } else {
+                0
+            };
+            car.km_per_liter = step.extra.fuel_use().2;
+            if step.extra.drive {
+                car.drivetrain = Some((step.extra.torque, step.extra.ratio));
+                car.has_energy_store = step.extra.kers_max > 0.0 || step.extra.ers_max > 0.0;
+            }
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }

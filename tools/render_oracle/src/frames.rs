@@ -117,11 +117,34 @@ pub struct Extra {
     /// `--set pitstate=<n>`: the pit crew and the pit box marker are built; `PitStop::state`
     /// as the lollipop man reads it (1: up, 4: down)
     pub pit_state: i32,
+    /// what the display items read beside the physics state (`--set kmpl= cars= maxfuel=
+    /// torque= ratio= sessionlaps=`): `Car`'s fuel use (km per litre; 0: none yet), the cars of
+    /// the `Sim` (0: as the run has it), `CarPhysicsInfo::maxFuel`, the drivetrain's torque
+    /// and ratio (with `drive`: the port gets them), the race's laps
+    pub kmpl: f32,
+    pub cars: i32,
+    pub max_fuel: f64,
+    pub torque: f32,
+    pub ratio: f64,
+    pub drive: bool,
+    pub session_laps: u32,
+}
+
+impl Extra {
+    /// `Car+0x3b18` and `Car+0x3b20` (metres and litres, doubles) for a fuel use, and what
+    /// `CarAvatar::getKmPerLiter` 0x1400d3510 makes of them.
+    pub fn fuel_use(&self) -> (f64, f64, f32) {
+        if self.kmpl == 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+        let (metres, litres) = (self.kmpl as f64 * 1000.0, 1.0f64);
+        (metres, litres, (metres * 0.001 / litres) as f32)
+    }
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0 }
     }
 }
 
@@ -504,6 +527,29 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "tts" => x.tts = number(value)?,
         "newsession" => x.new_session = number(value)? as i32,
         "pitstate" => x.pit_state = number(value)? as i32,
+        "kmpl" => x.kmpl = number(value)?,
+        "cars" => x.cars = number(value)? as i32,
+        "maxfuel" => x.max_fuel = number(value)? as f64,
+        "torque" => {
+            x.torque = number(value)?;
+            x.drive = true;
+        }
+        "ratio" => {
+            x.ratio = number(value)? as f64;
+            x.drive = true;
+        }
+        "sessionlaps" => x.session_laps = number(value)? as u32,
+        "turbolevel" => s.turbo_boost_level = number(value)?,
+        "fuellaps" => s.fuel_laps = number(value)?,
+        "accg" => {
+            let parts: Vec<&str> = value.split(':').collect();
+            if parts.len() != 3 {
+                return Err("--set accg=x:y:z".into());
+            }
+            for (slot, part) in s.acc_g.iter_mut().zip(parts) {
+                *slot = number(part)?;
+            }
+        }
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
@@ -525,7 +571,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate kmpl cars maxfuel torque ratio sessionlaps turbolevel fuellaps accg wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

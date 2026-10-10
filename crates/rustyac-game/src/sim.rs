@@ -575,6 +575,8 @@ pub struct GameSim {
     /// New sessions so far (N: a new car at the spawn point): the picture's handlers of the
     /// game's new-session event run when it changes
     pub new_sessions: u32,
+    /// `Car::fuelLapEvaluator`: the fuel a lap takes, the distance per litre (for the displays)
+    pub fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator,
     /// The last change of an aid or of the brake bias, for the displays. Never read by the
     /// physics and not part of any dump.
     pub aid_note: AidNote,
@@ -836,7 +838,7 @@ impl GameSim {
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, aid_note: AidNote::default() })
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default() })
     }
 
     /// The physics clock after the last step, ms.
@@ -895,6 +897,8 @@ impl GameSim {
         self.car = car;
         self.lap_db = LapDb::new(self.lap_db.sector_count);
         self.new_sessions += 1;
+        // (a new Car: a new evaluator)
+        self.fuel_evaluator = rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new();
         Ok(())
     }
 
@@ -908,6 +912,8 @@ impl GameSim {
             self.car.car.queue(|car| car.core.reset_track_objects());
         }
         if events & event::RESET != 0 {
+            // CarAvatar::goToSpawnPosition 0x1400d3ae0: the lap under way does not count for the fuel
+            self.fuel_evaluator.ignore_lap = true;
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
             // (the game's restart leaves the armed flag of a hot-lap file as it is)
@@ -1038,6 +1044,9 @@ impl GameSim {
         self.car.device.polled = false;
         self.car.step(DT, self.setup.time_of_step(self.steps));
         self.steps += 1;
+        // FuelLapEvaluator::step (the end of Car::stepComponents)
+        let (speed, fuel, in_pit_lane) = (self.car.car.speed, self.car.car.fuel, self.car.car.is_in_pit_lane());
+        self.fuel_evaluator.step(DT, speed, fuel, in_pit_lane);
         // Car::evOnSectorSplit / evOnLapCompleted -> the lap list
         if self.track.is_some() {
             let (laps, splits) = self.car.car.transponder.take_events();
@@ -1046,6 +1055,7 @@ impl GameSim {
             }
             for lap in &laps {
                 self.lap_db.on_lap_completed(lap);
+                self.fuel_evaluator.on_lap_completed(fuel, in_pit_lane);
             }
         }
         let device = &self.car.device;

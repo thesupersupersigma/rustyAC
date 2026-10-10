@@ -87,6 +87,7 @@ const VA_CAR_FAKE_SHADOW_CTOR: usize = 0x1_400e_0d80; // CarFakeShadow::CarFakeS
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
 const VA_DIGITAL_PANELS_CTOR: usize = 0x1_4008_20f0; // DigitalPanels::DigitalPanels(CarAvatar*)
 const VA_DIGITAL_PANELS_UPDATE: usize = 0x1_4008_3f70; // DigitalPanels::update(float)
+const VA_CAR_AVATAR_UPDATE_ERS_CHARGE: usize = 0x1_400d_d330; // CarAvatar::updateERSCharge()
 const VA_SUS_GRAPHICS_GENERATOR_CTOR: usize = 0x1_401b_4120; // SuspensionGraphicsGenerator::SuspensionGraphicsGenerator(CarAvatar*)
 const VA_SUS_GRAPHICS_GENERATE: usize = 0x1_401b_4280; // SuspensionGraphicsGenerator::generateConnections()
 const VA_SUS_GRAPHICS_UPDATE: usize = 0x1_401b_3ca0; // SuspensionGraphics::update(float)
@@ -366,6 +367,8 @@ pub struct Car {
     wings: *mut u8,
     /// the `SuspensionGraphics` of `data/suspension_graphics.ini`
     rods: Vec<*mut u8>,
+    /// `RaceManager::sessions`: one `Session` (0x70 bytes)
+    sessions: *mut u8,
     /// the pause and the replay status of the last frame
     last_pause: std::cell::Cell<bool>,
     last_status: std::cell::Cell<i32>,
@@ -476,6 +479,14 @@ impl Game {
         // carsRealTimePosition (records of 0x10 bytes)
         wr(race_manager, 0x140, -1.0f64);
         wr(race_manager, 0x8, game);
+        // RaceManager::sessions (+0x188): the one session, for getSessionInfo's copy
+        let sessions = acs.alloc(0x70);
+        write_wstring(acs, sessions.add(0x18), "");
+        write_wstring(acs, sessions.add(0x38), "");
+        wr(race_manager, 0x188, sessions);
+        wr(race_manager, 0x190, sessions.add(0x70));
+        // CarAvatar::CarAvatar: lastERSBatteryCharge = 1, currentERSNormalizedRecharge = 0
+        let ers_start = 0x0000_0000_3f80_0000u64;
         let other_cars = acs.alloc(0x12a8);
         wr(other_cars, 0x1158, 99i32);
         let real_time = acs.alloc(0x10 * 40);
@@ -527,6 +538,7 @@ impl Game {
             wr(sim, 0x150, nodes.track_avatar);
             wr(sim, 0x1d0, nodes.pit_stop);
         }
+        wr(car, 0x128c, ers_start);
         wr(car, 0x0, acs.va(VA_CAR_AVATAR_VTABLE));
         wr(car, 0x8, game);
         wr(car, 0x130, sim);
@@ -706,7 +718,7 @@ impl Game {
         let flames = make(0x158, VA_FLAMES_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, sessions, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 
     /// `Sim::evOnNewSession` (+0xc0) for the handlers the car's objects registered (the four
@@ -812,6 +824,28 @@ impl Game {
             wr(c.car, 0xf54, extra.kers_max);
             wr(c.car, 0xf58, extra.ers_max);
             wr(c.car, 0xf60, (extra.kers_max > 0.0) as u8);
+            // CarPhysicsInfo::maxFuel; the race's laps (RaceManager::sessions, one Session);
+            // the cars of the Sim; the physics car's fuel use, drivetrain, KERS / ERS
+            wr(c.car, 0xec8, extra.max_fuel);
+            wr(c.sessions, 0x8, extra.session_laps);
+            if extra.cars > 0 {
+                let list = self.acs.alloc(8 * extra.cars as usize);
+                for i in 0..extra.cars as usize {
+                    wr(list, 8 * i, c.car);
+                }
+                wr(sim, 0x208, list);
+                wr(sim, 0x210, list.add(8 * extra.cars as usize));
+            }
+            {
+                let physics: *mut u8 = rd(c.car, 0x1168);
+                let (metres, litres, _) = extra.fuel_use();
+                wr(physics, 0x3b18, metres);
+                wr(physics, 0x3b20, litres);
+                wr(physics, 0x7e8, extra.torque);
+                wr(physics, 0x3d0, extra.ratio);
+                wr(physics, 0x3688, (extra.drive && extra.kers_max > 0.0) as u8);
+                wr(physics, 0x3778, (extra.drive && extra.ers_max > 0.0) as u8);
+            }
             // Car::tractionControl (+0xa00) and Car::abs (+0x958): isActive, currentMode, a
             // level curve that is not empty (its vector's begin and end)
             let physics: *mut u8 = rd(c.car, 0x1168);
@@ -889,6 +923,11 @@ impl Game {
                 wr(root_of(shown), 0xd8, (!special && force_hidden == 0) as u8);
                 wr(c.steer_transform, 0xd8, !special as u8);
             }
+        }
+        // … CarAvatar::updateERSCharge (the first car, with a physics car)
+        if extra.drive {
+            let update_ers_charge: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_UPDATE_ERS_CHARGE));
+            update_ers_charge(c.car);
         }
         // … and the skid marks, with the wheels where the last frame left them
         let update_skid_marks: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AVATAR_UPDATE_SKID_MARKS));
