@@ -296,7 +296,7 @@ magione --view chase --car bmw_m3_e30 --pose crates/rustyac-render/tests/data/e3
 oracle's port log but for the frame's name and the back buffer's bind flags (5 lines).
 
 Also run at the end: `cargo clippy --workspace --locked -- -D warnings` (clean), the two wasm clippy runs
-(clean), `cargo test --release --workspace --locked` (all pass), `cargo build --release --locked` for the
+(clean), `cargo test --release --workspace --locked` (207 tests pass), `cargo build --release --locked` for the
 workspace and every tool.
 
 ## 5. Screenshots (hardware graphics card, off screen) and how to drive
