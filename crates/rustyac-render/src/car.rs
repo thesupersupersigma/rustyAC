@@ -166,7 +166,11 @@ pub struct CarAvatar {
     pub ers_max_j: f32,
     pub has_kers: bool,
     pub drivetrain: Option<(f32, f64)>,
+    /// `currentERSNormalizedRecharge` and `lastERSBatteryCharge` (`updateERSCharge`
+    /// 0x1400dd330); `has_energy_store`: the physics car has an ERS or a KERS
     pub ers_recharge: f32,
+    pub last_ers_battery_charge: f32,
+    pub has_energy_store: bool,
     /// `Game::gameTime.now`, milliseconds: the clock the dashboard's lights blink by
     pub game_time_ms: f64,
     /// the aids' levels as the displays show them, the air's temperature, miles for km
@@ -316,6 +320,8 @@ impl CarAvatar {
             has_kers: false,
             drivetrain: None,
             ers_recharge: 0.0,
+            last_ers_battery_charge: 1.0,
+            has_energy_store: false,
             game_time_ms: 0.0,
             tc_level: 0,
             abs_level: 0,
@@ -663,6 +669,13 @@ impl CarAvatar {
             }
         }
 
+        // CarAvatar::updateERSCharge 0x1400dd330: the first car only, with a physics car
+        if self.guid == 0 && self.drivetrain.is_some() && self.has_energy_store {
+            let c = state.kers_charge;
+            let d = c - self.last_ers_battery_charge;
+            self.last_ers_battery_charge = c;
+            self.ers_recharge = if d > 0.0 { d } else { 0.0 };
+        }
         // CarAvatar::updateSkidMarks 0x1400dd780, before the car's objects move the wheels
         {
             let wheel_node = |i: usize| match &self.suspension {

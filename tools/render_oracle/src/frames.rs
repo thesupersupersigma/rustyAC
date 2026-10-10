@@ -91,11 +91,16 @@ pub struct Extra {
     pub replay: bool,
     pub replay_scale: f32,
     pub pause: bool,
+    /// `CarAvatar::wingsStatus`: eight wings at this angle (`None`: the car has no wing)
+    pub wing: Option<f32>,
+    /// `CarPhysicsInfo::kersMaxJ` (with `hasKERS`) and `ersMaxJ`
+    pub kers_max: f32,
+    pub ers_max: f32,
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, wing: None, kers_max: 0.0, ers_max: 0.0 }
     }
 }
 
@@ -376,6 +381,12 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
             x.replay_scale = number(value)?;
         }
         "pause" => x.pause = on(value)?,
+        "wing" => x.wing = Some(number(value)?),
+        "kersmax" => x.kers_max = number(value)?,
+        "ersmax" => x.ers_max = number(value)?,
+        "kerskj" => s.kers_current_kj = number(value)?,
+        "kerscharge" => s.kers_charge = number(value)?,
+        "perf" => s.performance_meter = number(value)?,
         "pit" => s.tyre_surface_def.iter_mut().for_each(|d| d.is_pitlane = value != "0"),
         "dirt" => {
             let k = number(value)?;
@@ -390,7 +401,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause wing kersmax ersmax kerskj kerscharge perf pit dirt damage")),
     }
     Ok(())
 }

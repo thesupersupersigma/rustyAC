@@ -159,6 +159,16 @@ pub struct CarView {
     pub setup: SurfaceName,
     /// The hybrid system and the engine brake, for a car that has them.
     pub hybrid: HybridView,
+    /// What the dashboard's lights read: every wing's angle as the aero uses it
+    /// (`Wing::getCurrentModifiedAngle`), the fuel tank's size, the energy stores' allowances in
+    /// joules (0: none), the drivetrain's display torque and its ratio.
+    pub wing_angles: [f32; 8],
+    pub wing_count: u8,
+    pub max_fuel: f64,
+    pub kers_max_j: f32,
+    pub ers_max_j: f32,
+    pub total_torque: f32,
+    pub drive_ratio: f64,
 }
 
 /// What the displays show of a KERS or an ERS and of the cockpit's engine-brake setting.
@@ -298,6 +308,13 @@ impl Default for CarView {
             compound: SurfaceName::default(),
             setup: SurfaceName::default(),
             hybrid: HybridView::default(),
+            wing_angles: [0.0; 8],
+            wing_count: 0,
+            max_fuel: 0.0,
+            kers_max_j: 0.0,
+            ers_max_j: 0.0,
+            total_torque: 0.0,
+            drive_ratio: 0.0,
         }
     }
 }
@@ -609,6 +626,24 @@ impl CarView {
                 offers: [ers.cockpit_delivery_profile, ers.cockpit_recovery, ers.cockpit_mgu_h_mode],
                 ..view.hybrid
             };
+        }
+        view.max_fuel = car.max_fuel;
+        if let Some(aero) = &car.aero {
+            let wings = &aero.base().wings;
+            view.wing_count = wings.len().min(8) as u8;
+            for (slot, wing) in view.wing_angles.iter_mut().zip(wings) {
+                *slot = wing.get_current_modified_angle();
+            }
+        }
+        if let Some(kers) = &car.kers {
+            view.kers_max_j = kers.max_j;
+        }
+        if let Some(ers) = &car.ers {
+            view.ers_max_j = ers.max_j;
+        }
+        if let Some(drivetrain) = &car.drivetrain {
+            view.total_torque = drivetrain.base().total_torque;
+            view.drive_ratio = drivetrain.base().ratio;
         }
         if let Some(aids) = &car.aids {
             let aids = aids.base();

@@ -192,6 +192,18 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec, car_d
             copy_file(&source.join(name), &target.join(name))?;
         }
     }
+    // the textures of the displays' graphs (digital_instruments.ini TEXTURE_BASE / TEXTURE_TOP)
+    if let Ok(text) = std::fs::read_to_string(data.join("digital_instruments.ini")) {
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            if matches!(key.trim(), "TEXTURE_BASE" | "TEXTURE_TOP") {
+                let name = value.split(';').next().unwrap_or("").trim();
+                if !name.is_empty() && source.join("texture").join(name).is_file() {
+                    copy_file(&source.join("texture").join(name), &target.join("texture").join(name))?;
+                }
+            }
+        }
+    }
     // the digits of the panels
     if source.join("texture/display_panel").is_dir() {
         copy_folder(&source.join("texture/display_panel"), &target.join("texture/display_panel"))?;
@@ -342,6 +354,7 @@ pub struct Car {
     race_manager: *mut u8,
     /// stand-ins for the other cars of the real-time order and of the leaderboard
     other_cars: *mut u8,
+    wings: *mut u8,
 }
 
 impl Game {
@@ -607,7 +620,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8) })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -650,6 +663,32 @@ impl Game {
             // PauseMenu::visible, PhysicsAvatar::engine.ambientTemperature
             wr(rd::<*mut u8>(sim, 0x110), 0x150, extra.pause as u8);
             wr(rd::<*mut u8>(sim, 0x1b8), 0x158, extra.air);
+            // CarAvatar::wingsStatus (WingState: 0x44 bytes, the angle at +0xc), physicsInfo
+            match extra.wing {
+                Some(angle) => {
+                    for i in 0..8 {
+                        wr(c.wings, 0x44 * i + 0xc, angle);
+                    }
+                    wr(c.car, 0xfa0, c.wings);
+                    wr(c.car, 0xfa8, c.wings.add(0x44 * 8));
+                }
+                None => {
+                    wr(c.car, 0xfa0, 0usize);
+                    wr(c.car, 0xfa8, 0usize);
+                }
+            }
+            wr(c.car, 0xf54, extra.kers_max);
+            wr(c.car, 0xf58, extra.ers_max);
+            wr(c.car, 0xf60, (extra.kers_max > 0.0) as u8);
+            // Car::tractionControl (+0xa00) and Car::abs (+0x958): isActive, currentMode, a
+            // level curve that is not empty (its vector's begin and end)
+            let physics: *mut u8 = rd(c.car, 0x1168);
+            for (aid, mode, curve, level) in [(0xa00usize, 0xa20usize, 0xa48usize, extra.tc), (0x958, 0x9f8, 0x998, extra.abs)] {
+                wr(physics, aid + 1, (level != 0) as u8);
+                wr(physics, mode, level.saturating_sub(1));
+                wr(physics, curve, c.other_cars);
+                wr(physics, curve + 8, c.other_cars.add(64));
+            }
             for i in 0..40usize {
                 let who = if i as i32 == extra.position { c.car } else { c.other_cars };
                 wr(real_time, 0x10 * i, who);

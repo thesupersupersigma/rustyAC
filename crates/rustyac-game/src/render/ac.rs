@@ -559,6 +559,28 @@ impl AcRenderer {
             };
             modes = (camera_mode, drivable_mode);
             car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
+            // what the car's objects read beside the physics state: the aids' levels and the air
+            // (CarAvatar::getTCMode, getABSMode, PhysicsEngine::ambientTemperature), the wings
+            // (CarAvatar::wingsStatus), CarPhysicsInfo, the session, the pause menu and the replay
+            car.tc_level = view.tc_mode.0;
+            car.abs_level = view.abs_mode.0;
+            car.ambient_temperature = view.air;
+            car.wing_angles.clear();
+            car.wing_angles.extend_from_slice(&view.wing_angles[..view.wing_count as usize]);
+            car.max_fuel = view.max_fuel;
+            car.kers_max_j = view.kers_max_j;
+            car.ers_max_j = view.ers_max_j;
+            car.has_kers = view.hybrid.has_kers;
+            car.has_energy_store = view.hybrid.has_kers || view.hybrid.has_ers;
+            car.drivetrain = Some((view.total_torque, view.drive_ratio));
+            car.pause_menu = info.paused;
+            car.replay_mode = info.replay;
+            car.replay_scale = 1.0;
+            // a session of one car: rustyAC's sessions are practice (hot lap from the line)
+            car.session_type = 1;
+            car.leaderboard_position = 1;
+            car.real_time_position = 0;
+            car.cars_count = 1;
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }

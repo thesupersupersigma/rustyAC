@@ -187,6 +187,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             car.replay_mode = step.extra.replay;
             car.replay_scale = step.extra.replay_scale;
             car.pause_menu = step.extra.pause;
+            car.wing_angles = step.extra.wing.map(|a| vec![a; 8]).unwrap_or_default();
+            car.kers_max_j = step.extra.kers_max;
+            car.ers_max_j = step.extra.ers_max;
+            car.has_kers = step.extra.kers_max > 0.0;
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }
