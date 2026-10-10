@@ -245,6 +245,9 @@ pub struct CullCamera {
     pub is_mirror: bool,
     /// `Camera::matrix`
     pub matrix: rustyac_physics::vecmath::Mat44f,
+    /// the render context has no camera (`CameraMeshFilter::camera == NULL`): nothing is left
+    /// out for its distance or for being outside the view
+    pub none: bool,
 }
 
 /// `RenderContext` with its `CameraMeshFilter`.
@@ -734,7 +737,7 @@ fn is_visible_to(pass: i32, max_layer: i32, cam: &CullCamera, m: &Renderable, wo
     if pass != PASS_SHADOW && !m.is_visible {
         return false;
     }
-    if m.no_cull {
+    if m.no_cull || cam.none {
         return true;
     }
     let x = cam.fov * f32::from_bits(0x3c4c_cccd);

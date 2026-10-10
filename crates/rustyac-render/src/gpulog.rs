@@ -875,6 +875,11 @@ unsafe extern "system" fn ctx_map(this: P, resource: P, sub: u32, kind: u32, fla
     let this = { let _ = this; real() };
     let result = orig(this, resource, sub, kind, flags, out);
     if let Some(mut state) = enter() {
+        // (a texture can sit at the address of a buffer that was released: the table of
+        // buffers goes by address, so ask the resource what it is)
+        if state.buffers.contains_key(&(resource as usize)) && ID3D11Resource::from_raw_borrowed(&resource).is_some_and(|r| r.GetType() != D3D11_RESOURCE_DIMENSION_BUFFER) {
+            state.buffers.remove(&(resource as usize));
+        }
         let is_buffer = state.buffers.contains_key(&(resource as usize));
         if result >= 0 && !out.is_null() && is_buffer {
             // a discarded buffer comes back with whatever the driver has in that memory, and

@@ -255,6 +255,9 @@ pub enum MaterialFilter {
     Plain { last_material: Option<MaterialId> },
     /// `MaterialFilterSM` (0x30 bytes): the shadow pass, where one of three shaders stands in.
     ShadowMap { sm_alpha_tested: ShaderId, sm_normal: ShaderId, sm_skinned: Option<ShaderId> },
+    /// `FakeMaterialFilter` (`CarFakeShadow::generateFakeShadow`): `apply` does nothing, the
+    /// one shader set beforehand draws everything.
+    Fake,
 }
 
 impl MaterialFilter {
@@ -281,6 +284,7 @@ impl MaterialFilter {
     /// The virtual `apply` (vtable slot +8).
     pub fn apply(&mut self, id: MaterialId, material: &mut Material, graphics: &mut Graphics, pass_id: i32) {
         match self {
+            MaterialFilter::Fake => {}
             MaterialFilter::Plain { last_material } => {
                 if *last_material == Some(id) {
                     return;

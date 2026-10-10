@@ -558,6 +558,14 @@ impl Game {
             cube_log = rustyac_render::gpulog::end_capture().text;
             wr(camera, 0x2b8, saved);
         }
+        // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad
+        let mut cube_log = cube_log;
+        if let (Some(car), Some(spec)) = (&car, &frame.car) {
+            rustyac_render::gpulog::begin_capture("car shadows");
+            let lines = self.post_load_car(car, &spec.name);
+            cube_log.extend_from_slice(&rustyac_render::gpulog::end_capture().text);
+            cube_log.extend_from_slice(&lines?);
+        }
 
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));

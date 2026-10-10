@@ -467,7 +467,12 @@ impl CarAvatar {
     /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows, drawn when the scene's
     /// `CAR_SHADOWS` node is reached.
     pub fn on_post_load(&mut self, graphics: &mut Graphics, scene: &mut Scene, car_shadows_node: NodeId) {
-        let shadow = Rc::new(RefCell::new(CarFakeShadow::new(graphics, &self.folder_text, &self.folder, self.car_node, self.body_transform)));
+        // SuspensionAvatar::getWheelTransform / SuspensionAnimator's: the node of each wheel
+        let wheels: [Option<NodeId>; 4] = std::array::from_fn(|i| match &self.suspension {
+            Suspension::Avatar(avatar) => Some(avatar.wheel_transforms[i]),
+            Suspension::Animator(animator) => animator.wheel_transform(i),
+        });
+        let shadow = Rc::new(RefCell::new(CarFakeShadow::new(graphics, scene, &self.folder_text, &self.folder, self.car_node, self.body_transform, wheels)));
         scene.add_event_handler(car_shadows_node, shadow.clone());
         self.fake_shadow = Some(shadow);
     }

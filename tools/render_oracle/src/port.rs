@@ -156,12 +156,24 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     if let Some(car) = &mut car {
         let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
         car.init_common_post_physics(&mut graphics, &mut scene, &sim, frame.car.as_ref().map(|c| c.tyre_width).unwrap_or([0.0; 4]))?;
-        car.on_post_load(&mut graphics, &mut scene, car_shadows);
     }
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
-    let cube_log = rustyac_render::gpulog::end_capture().text;
+    let mut cube_log = rustyac_render::gpulog::end_capture().text;
+    // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad (the flat ground shadows; a car
+    // without body_shadow.png has its five pictures drawn here)
+    if let Some(car) = &mut car {
+        rustyac_render::gpulog::begin_capture("car shadows");
+        car.on_post_load(&mut graphics, &mut scene, car_shadows);
+        cube_log.extend_from_slice(&rustyac_render::gpulog::end_capture().text);
+        if let Some(pictures) = car.fake_shadow.as_ref().and_then(|s| s.borrow().generated.clone()) {
+            for (i, picture) in pictures.iter().enumerate() {
+                cube_log.extend_from_slice(format!("generated shadow {i}: {} bytes {:016x}
+", picture.len(), crate::ac::hash(picture)).as_bytes());
+            }
+        }
+    }
 
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
     let (mut last_pause, mut last_status) = (false, -1);

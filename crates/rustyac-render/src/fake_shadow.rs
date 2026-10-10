@@ -6,8 +6,10 @@
 //! 0x1400e0d80, `loadShadows` 0x1400e1eb0, `onNodeRenderEvent` 0x1400e22b0;
 //! `mat44f::setFromHeadingUp` 0x1400602f0.
 //!
-//! Not ported: `generateFakeShadow` 0x1400e1430, which makes the textures of a car that has no
-//! `body_shadow.png` (no car of the game is without one).
+//! `generateFakeShadow` 0x1400e1430 makes the five pictures of a car that has no
+//! `body_shadow.png`: the body and each wheel seen from 10 m below, white on black. The game
+//! saves them into the car's folder and shows no shadow until its next start; here they are
+//! kept in memory (`generated`) and never written into the game's folder.
 
 use std::path::Path;
 
@@ -17,8 +19,8 @@ use rustyac_physics::vecmath::Mat44f;
 
 use crate::gl::{GlRenderer, GL_QUADS};
 use crate::graphics::{Graphics, BLEND_ALPHA, CULL_FRONT, DEPTH_NORMAL, DEPTH_NO_WRITE};
-use crate::material::PASS_OPAQUE;
-use crate::scene::{NodeEventHandler, NodeId, OnNodeRenderEvent, Scene};
+use crate::material::{MaterialFilter, PASS_OPAQUE};
+use crate::scene::{NodeEventHandler, NodeId, OnNodeRenderEvent, RenderContext, Scene};
 use crate::shader::ShaderId;
 use crate::state::CarPhysicsState;
 use crate::texture::Texture;
@@ -39,6 +41,9 @@ pub struct CarFakeShadow {
     body_transform: NodeId,
     /// `car->physicsState`, as of the frame's update
     pub state: CarPhysicsState,
+    /// what `generateFakeShadow` drew: the four wheels (64 x 64) and the body (512 x 512), as
+    /// RGBA bytes with the rows from the top, in the order the game saves them
+    pub generated: Option<Vec<Vec<u8>>>,
 }
 
 /// `mat44f::setFromHeadingUp` 0x1400602f0: the three rows of the rotation; the rest of the
@@ -68,7 +73,8 @@ pub fn set_from_heading_up(m: &mut Mat44f, h: &[f32; 3], u: &[f32; 3]) {
 impl CarFakeShadow {
     /// `CarFakeShadow::CarFakeShadow` 0x1400e0d80. `folder_text` is the car's folder as the
     /// textures are named by; `folder` the same on disk.
-    pub fn new(graphics: &mut Graphics, folder_text: &str, folder: &Path, car_node: NodeId, body_transform: NodeId) -> CarFakeShadow {
+    /// `wheels`: `SuspensionAvatar::getWheelTransform(i)` (for the generator).
+    pub fn new(graphics: &mut Graphics, scene: &mut Scene, folder_text: &str, folder: &Path, car_node: NodeId, body_transform: NodeId, wheels: [Option<NodeId>; 4]) -> CarFakeShadow {
         let local_gl = GlRenderer::new(graphics, 6);
         let sh_fake_car_shadows = graphics.shaders.get_shader(&graphics.kgl, "ksFakeCarShadows").ok();
         let ini = IniReader::load(&folder.join("data/ambient_shadows.ini")).ok();
@@ -90,6 +96,7 @@ impl CarFakeShadow {
             car_node,
             body_transform,
             state: CarPhysicsState::at_origin(),
+            generated: None,
         };
         if folder.join("body_shadow.png").is_file() {
             // loadShadows 0x1400e1eb0
@@ -98,9 +105,98 @@ impl CarFakeShadow {
                 shadow.tx_wheels[i] = graphics.resources.get_texture(&graphics.kgl, &format!("{folder_text}/tyre_{i}_shadow.png"));
             }
         } else {
-            println!("WARNING: {folder_text} has no body_shadow.png: its ground shadows are not generated");
+            match shadow.generate_fake_shadow(graphics, scene, wheels) {
+                Ok(pictures) => shadow.generated = Some(pictures),
+                Err(message) => println!("WARNING: {folder_text} has no body_shadow.png and its ground shadows could not be generated: {message}"),
+            }
         }
         shadow
+    }
+
+    /// `CarFakeShadow::loadShadows` 0x1400e1eb0 from a folder of one's choice (the pictures
+    /// `generateFakeShadow` made, saved somewhere that is not the game's folder).
+    pub fn load_shadows(&mut self, graphics: &mut Graphics, folder_text: &str) {
+        self.tx_body = graphics.resources.get_texture(&graphics.kgl, &format!("{folder_text}/body_shadow.png"));
+        for i in 0..4 {
+            self.tx_wheels[i] = graphics.resources.get_texture(&graphics.kgl, &format!("{folder_text}/tyre_{i}_shadow.png"));
+        }
+    }
+
+    /// `CarFakeShadow::generateFakeShadow` 0x1400e1430, without the saving: the pictures come
+    /// back instead. Nothing is put back afterwards, as in the game (the next frame's start
+    /// does that).
+    fn generate_fake_shadow(&mut self, graphics: &mut Graphics, scene: &mut Scene, wheels: [Option<NodeId>; 4]) -> Result<Vec<Vec<u8>>, String> {
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
+        let k = f32::from_bits(0x3f7a_e148); // 0.98
+        // an orthographic projection of +-w by +-l, near 0.1, far 500
+        let ortho = |w: f32, l: f32| -> Mat44f {
+            let mut p = Mat44f { m: [[0.0; 4]; 4] };
+            p.m[0][0] = 2.0 / (w - (-w));
+            p.m[1][1] = 2.0 / (l - (-l));
+            p.m[2][2] = f32::from_bits(0xbb03_1925);
+            p.m[3][0] = ((-w) + w) / ((-w) - w);
+            p.m[3][1] = ((-l) + l) / ((-l) - l);
+            p.m[3][2] = f32::from_bits(0xb951_c1d5);
+            p.m[3][3] = 1.0;
+            p
+        };
+        let look_up_at = |p: [f32; 3]| crate::camera::create_look_at(&rustyac_physics::vecmath::Vec3f::new(p[0], p[1] - 10.0, p[2]), &rustyac_physics::vecmath::Vec3f::new(p[0], p[1], p[2]), &rustyac_physics::vecmath::Vec3f::new(0.0, 0.0, 1.0));
+        let no_camera = {
+            let mut c = crate::camera::Camera::new().cull_camera();
+            c.none = true;
+            c
+        };
+        // the body
+        let body = graphics.kgl.create_render_target(DXGI_FORMAT_R8G8B8A8_UNORM, 512, 512, 1, 1);
+        graphics.kgl.set_render_target(Some(&body));
+        graphics.kgl.set_viewport(0.0, 0.0, 512.0, 512.0);
+        graphics.kgl.clear_color(&[0.0, 0.0, 0.0, 1.0]);
+        graphics.kgl.clear_depth(1.0);
+        graphics.set_blend_mode(0);
+        graphics.set_depth_mode(0);
+        graphics.set_projection_matrix(&ortho(self.width * k, self.length * k));
+        let m = &scene.nodes[self.body_transform].matrix.m;
+        graphics.set_view_matrix(&look_up_at([m[3][0], m[3][1], m[3][2]]), None);
+        let mut filter = MaterialFilter::Fake;
+        let shader = graphics.shaders.get_shader(&graphics.kgl, "ksFakeCarShadowsGen")?;
+        graphics.set_shader(shader);
+        scene.traverse(self.body_transform);
+        {
+            let s = graphics.shaders.get_mut(shader);
+            for (name, value) in [("refHeight", self.body_ref_height), ("heightGain", self.height_gain), ("gain", self.ambient_gain)] {
+                if let Some(v) = s.get_var(name) {
+                    s.set_var(v, &value.to_le_bytes());
+                }
+            }
+            if let Some(b) = s.get_var("gain").and_then(|v| s.vars[v].buffer) {
+                s.cbuffers[b].commit(&graphics.kgl);
+            }
+        }
+        graphics.commit_shader_changes();
+        {
+            let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer: 5, camera: no_camera };
+            scene.render(graphics, self.body_transform, &mut rc);
+        }
+        // the wheels
+        let side = self.tyre_side_size * k;
+        graphics.set_projection_matrix(&ortho(side, side));
+        let mut pictures = Vec::new();
+        for wheel in wheels {
+            let target = graphics.kgl.create_render_target(DXGI_FORMAT_R8G8B8A8_UNORM, 64, 64, 1, 1);
+            let Some(wheel) = wheel else { return Err("a wheel has no node".into()) };
+            scene.traverse(wheel);
+            graphics.kgl.set_render_target(Some(&target));
+            graphics.kgl.set_viewport(0.0, 0.0, 64.0, 64.0);
+            graphics.clear_render_target(&[0.0, 0.0, 0.0, 1.0]);
+            graphics.clear_render_target_depth(1.0);
+            let w = scene.get_world_matrix(wheel);
+            graphics.set_view_matrix(&look_up_at([w.m[3][0], w.m[3][1], w.m[3][2]]), None);
+            let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer: 5, camera: no_camera };
+            scene.render(graphics, wheel, &mut rc);
+            pictures.push(graphics.kgl.read_render_target(&target)?);
+        }
+        pictures.push(graphics.kgl.read_render_target(&body)?);
+        Ok(pictures)
     }
 }
 

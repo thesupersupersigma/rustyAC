@@ -367,6 +367,47 @@ impl Car {
     }
 }
 
+/// An 8-bit PNG as RGBA bytes.
+fn png_rgba(path: &Path) -> Result<Vec<u8>, String> {
+    let decoder = png::Decoder::new(std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?);
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
+    buffer.truncate(info.buffer_size());
+    Ok(match info.color_type {
+        png::ColorType::Rgba => buffer,
+        png::ColorType::Rgb => buffer.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        other => return Err(format!("{}: a PNG of colour type {other:?}", path.display())),
+    })
+}
+
+impl Game {
+    /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows (the game's own
+    /// `CarFakeShadow` constructor). A car without `body_shadow.png` gets its five pictures
+    /// drawn and saved into the car's folder of the scratch root: the answer is a line with
+    /// each one's hash, and the files are taken away again.
+    pub unsafe fn post_load_car(&self, c: &Car, name: &str) -> Result<Vec<u8>, String> {
+        let folder = std::path::PathBuf::from(format!("content/cars/{name}"));
+        let generates = !folder.join("body_shadow.png").is_file();
+        let shadow = self.acs.alloc(0x158);
+        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_CAR_FAKE_SHADOW_CTOR));
+        ctor(shadow, c.car);
+        let mut lines = Vec::new();
+        if generates {
+            let files: Vec<std::path::PathBuf> = (0..4).map(|i| folder.join(format!("tyre_{i}_shadow.png"))).chain([folder.join("body_shadow.png")]).collect();
+            for (i, file) in files.iter().enumerate() {
+                let picture = png_rgba(file)?;
+                lines.extend_from_slice(format!("generated shadow {i}: {} bytes {:016x}
+", picture.len(), crate::ac::hash(&picture)).as_bytes());
+            }
+            for file in files {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+        Ok(lines)
+    }
+}
+
 impl Game {
     /// What has to be there once before any car: patches, the tables of node names, a console.
     pub(crate) unsafe fn prepare_cars(&self) -> *mut u8 {
@@ -630,12 +671,6 @@ impl Game {
         let flames = make(0x158, VA_FLAMES_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
-        // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
-        {
-            let shadow = acs.alloc(0x158);
-            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
-            ctor(shadow, car);
-        }
         Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 

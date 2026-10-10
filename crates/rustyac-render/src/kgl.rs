@@ -776,6 +776,32 @@ impl Kgl {
         self.active_depth_stencil_view = cube.dsv_depth.clone();
     }
 
+    /// The pixels of a colour render target of four bytes a pixel, rows from the top.
+    pub fn read_render_target(&self, target: &KglRenderTarget) -> Result<Vec<u8>, String> {
+        unsafe {
+            let source = target.texture.clone().ok_or("the render target has no texture")?;
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            source.GetDesc(&mut desc);
+            desc.Usage = D3D11_USAGE_STAGING;
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            desc.MiscFlags = 0;
+            let mut staging = None;
+            err("CreateTexture2D", self.device.CreateTexture2D(&desc, None, Some(&mut staging)))?;
+            let staging = staging.ok_or("no staging texture")?;
+            self.context.CopyResource(&staging, &source);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            err("Map", self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)))?;
+            let mut pixels = Vec::with_capacity((desc.Width * desc.Height * 4) as usize);
+            for row in 0..desc.Height as usize {
+                let p = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize);
+                pixels.extend_from_slice(std::slice::from_raw_parts(p, desc.Width as usize * 4));
+            }
+            self.context.Unmap(&staging, 0);
+            Ok(pixels)
+        }
+    }
+
     /// `kglResolveRenderTarget` 0x140019650: the multisampled colour target into a plain one.
     /// `code`: 0 R8G8B8A8, 1 R16G16B16A16F, 2 and 4 R32F, 3 R16F.
     pub fn resolve_render_target(&self, source: &KglRenderTarget, target: &KglRenderTarget, code: i32) {
