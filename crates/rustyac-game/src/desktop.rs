@@ -602,6 +602,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
     };
     println!("window {width} x {height}: {}", renderer.describe());
+    if options.virtual_mirror {
+        renderer.set_virtual_mirror(true);
+    }
     let mut audio = start_audio(options, &feed, &car_info, &shape);
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
         Ok(camera) => camera,
@@ -672,6 +675,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // cameras of the car's cameras.ini
                             0x70 | 0x43 => camera.f1(),
                             0x75 => camera.f6(shape.car_cameras.len()),
+                            // F11: AC's virtual mirror
+                            0x7a => match renderer.toggle_virtual_mirror() {
+                                Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
+                                None => println!("VIRTUAL MIRROR: video.ini has no mirrors ([MIRROR] SIZE=0)"),
+                            },
                             0x50 | 0x13 => {
                                 shared.paused.fetch_xor(true, Ordering::Relaxed);
                             }
@@ -784,6 +792,11 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         println!("{}", sim.track_summary);
     }
     let wanted = options.at.map(|seconds| (seconds / 0.003).round() as usize);
+    // --lead-in: the car as it was every 1/60 s over the last seconds
+    let total = wanted.unwrap_or(1000);
+    let lead_from = total.saturating_sub((options.lead_in / 0.003).round() as usize);
+    let mut lead: Vec<CarView> = Vec::new();
+    let mut lead_due = 0.0f64;
     let mut drive_start = 0;
     let mut previous = CarView::capture(&sim, 0.0);
     match &steps {
@@ -794,11 +807,18 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
             }
         }
         None => {
-            for _ in 0..wanted.unwrap_or(1000) {
+            for i in 0..total {
                 if sim.car.device.source.in_spawn_sequence() {
                     drive_start = sim.steps + 1;
                 }
                 previous = CarView::capture(&sim, 0.0);
+                if options.lead_in > 0.0 && i >= lead_from {
+                    lead_due += 0.003;
+                    if lead_due >= 1.0 / 60.0 {
+                        lead_due -= 1.0 / 60.0;
+                        lead.push(CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003));
+                    }
+                }
                 let input = sim.step()?;
                 if let Some(writer) = &mut writer {
                     writer.push(&input)?;
@@ -817,14 +837,23 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let shape = CarShape::of(&sim.car_info());
     let mut renderer = make_picture(options, options.width, options.height, &sim.car_info())?;
     let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
+    if options.virtual_mirror {
+        renderer.set_virtual_mirror(true);
+    }
+    let lead_info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
+    for old in &lead {
+        let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
+        renderer.draw(old, &shape, &camera, &frame, &lead_info, 1.0 / 60.0);
+    }
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
     let info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
     // two frames: the second is a frame as the game draws them one after the other (the first
     // after loading still uploads and binds everything)
-    renderer.draw(&view, &shape, &camera, &frame, &info, 0.0);
-    renderer.draw(&view, &shape, &camera, &frame, &info, 0.0);
+    let dt = if lead.is_empty() { 0.0 } else { 1.0 / 60.0 };
+    renderer.draw(&view, &shape, &camera, &frame, &info, dt);
+    renderer.draw(&view, &shape, &camera, &frame, &info, dt);
     let pixels = renderer.read_pixels()?;
     let (width, height) = renderer.size();
     write_png(path, width, height, &pixels)?;

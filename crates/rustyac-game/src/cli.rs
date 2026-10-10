@@ -35,6 +35,11 @@ pub struct Options {
     pub screenshot: Option<PathBuf>,
     /// `--at <s>`: with `--screenshot`, how far into the drive the picture is taken.
     pub at: Option<f64>,
+    /// `--lead-in <s>`: with `--screenshot`, the seconds before it that are drawn frame by
+    /// frame first (smoke, skid marks and flames need the frames before them)
+    pub lead_in: f64,
+    /// `--virtual-mirror`: the F11 mirror on from the start
+    pub virtual_mirror: bool,
     /// `--debug-view`: the old debug view (own shader, flat colours) instead of AC's renderer.
     pub debug_view: bool,
     /// `--warp`: AC's renderer on WARP, Microsoft's software rasteriser (slow; the same pixels
@@ -158,6 +163,8 @@ impl Default for Options {
             video_ini_exact: false,
             cube_faces: None,
             at: None,
+            lead_in: 0.0,
+            virtual_mirror: false,
             camera: "chase".to_string(),
             auto_shifter: false,
             no_auto_clutch: false,
@@ -260,6 +267,8 @@ usage: rustyac [options]
   --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
                         cockpit, or car0, car1 ... (the cameras of the car's cameras.ini);
                         F1 goes through the first six while driving, F6 through the car's
+  --virtual-mirror      the virtual mirror on from the start (F11 switches it while driving;
+                        it needs mirrors in video.ini: [MIRROR] SIZE above 0)
   --vsync <0|1>         wait for the display (default 1)
   --list-devices        print the detected devices and the active bindings, then stop
 
@@ -315,6 +324,8 @@ impl Options {
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
+                "--lead-in" => o.lead_in = value("--lead-in")?.parse().map_err(|e| format!("--lead-in: {e}"))?,
+                "--virtual-mirror" => o.virtual_mirror = true,
                 "--debug-view" => o.debug_view = true,
                 "--warp" => o.warp = true,
                 "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),

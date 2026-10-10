@@ -38,6 +38,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         fps_cap_ms: 0.0,
         world_detail: crate::root::profile().world_detail,
         smoke: Some(crate::root::profile().smoke),
+        mirror_size: crate::root::profile().mirror_size,
+        mirror_smoke: crate::root::profile().mirror_smoke,
         pp_hdr_enabled: false,
         triple_buffer: false,
     };

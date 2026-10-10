@@ -40,6 +40,20 @@ impl Picture {
         }
     }
 
+    /// F11: the virtual mirror on or off (AC's renderer with mirrors on only).
+    pub fn toggle_virtual_mirror(&mut self) -> Option<bool> {
+        match self {
+            Picture::Debug(_) => None,
+            Picture::Ac(r) => r.toggle_virtual_mirror(),
+        }
+    }
+
+    pub fn set_virtual_mirror(&mut self, active: bool) {
+        if let Picture::Ac(r) = self {
+            r.set_virtual_mirror(active);
+        }
+    }
+
     pub fn read_pixels(&mut self) -> Result<Vec<u8>, String> {
         match self {
             Picture::Debug(r) => r.read_pixels(),

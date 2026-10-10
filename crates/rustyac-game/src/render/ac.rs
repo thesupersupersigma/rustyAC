@@ -231,6 +231,8 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     let Some(ini) = documents.and_then(|p| IniReader::load(&p).ok()) else {
         notes.push("no Documents/Assetto Corsa/cfg/video.ini: the game's defaults are used".to_string());
         video.world_detail = 5;
+        // TyreSmoke / EngineSmoke without the file: the Normal level
+        video.smoke = None;
         return (video, cube_size, cube_faces, cube_far, notes);
     };
     let int = |section: &str, key: &str| ini.get_int(section, key).unwrap_or(0);
@@ -253,11 +255,11 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     if ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0) > 0.0 {
         notes.push("video.ini MOTION_BLUR: motion blur comes in Task 22, treated as off".to_string());
     }
-    if int("MIRROR", "SIZE") != 0 {
-        notes.push("video.ini [MIRROR]: mirrors come in Task 21, treated as off".to_string());
-    }
-    if int("EFFECTS", "SMOKE") != 0 {
-        notes.push("video.ini SMOKE: tyre smoke comes in Task 21, treated as off".to_string());
+    video.smoke = Some(int("EFFECTS", "SMOKE"));
+    video.mirror_size = int("MIRROR", "SIZE");
+    video.mirror_smoke = int("EFFECTS", "RENDER_SMOKE_IN_MIRROR") > 0;
+    if video.mirror_size != 0 && int("MIRROR", "HQ") > 0 {
+        notes.push("video.ini [MIRROR] HQ=1: the multisampled mirror is not ported, the plain mirror is drawn".to_string());
     }
     // values Content Manager writes for Custom Shaders Patch: plain acs.exe cannot make a
     // shadow map or a cube map of such a size and then draws everything in shadow, without
@@ -313,6 +315,11 @@ pub struct AcRenderer {
     /// `video.ini [ASSETTOCORSA] LOCK_STEER`, `HIDE_ARMS`, `HIDE_STEER`
     cockpit_flags: (bool, bool, bool),
     car: Option<CarAvatar>,
+    /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
+    mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
+    virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
+    /// `Game::gameTime.now`, milliseconds
+    time_ms: f64,
     track_folder: Option<String>,
     options: AcOptions,
     hud: HudPass,
@@ -393,7 +400,20 @@ impl AcRenderer {
             let flag = |key: &str| ini.as_ref().is_some_and(|i| i.has_section("ASSETTOCORSA") && i.get_int("ASSETTOCORSA", key).unwrap_or(0) != 0);
             (flag("LOCK_STEER"), flag("HIDE_ARMS"), flag("HIDE_STEER"))
         };
-        Ok(AcRenderer { graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        // Sim::Sim: the mirror texture and the virtual mirror (gameplay.ini says whether it shows)
+        let mirror = match graphics.video.mirror_size {
+            0 => None,
+            size => {
+                let smoke = graphics.video.mirror_smoke;
+                Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, smoke)?)
+            }
+        };
+        let virtual_mirror = mirror.as_ref().map(|_| {
+            let ini = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/gameplay.ini")).and_then(|p| IniReader::load(&p).ok());
+            let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
+            rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
+        });
+        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -441,6 +461,9 @@ impl AcRenderer {
         };
         let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock), 0)?;
         car.max_gear = max_gear;
+        if let Some(mirror) = &self.mirror {
+            car.init_mirror_materials(&mut self.graphics, &mut self.scene, &mirror.texture)?;
+        }
         (car.lock_virtual_steer, car.hide_arms_in_cockpit, car.hide_steer) = self.cockpit_flags;
         car.init_common_post_physics(&mut self.graphics, &mut self.scene, &self.sim_nodes, tyre_width)?;
         let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
@@ -466,6 +489,21 @@ impl AcRenderer {
         (self.graphics.video.width as u32, self.graphics.video.height as u32)
     }
 
+    /// F11, `VirtualMirrorRenderer::update` 0x1401d2190: the virtual mirror on or off. The
+    /// answer is what it is now; `None`: `video.ini` has no mirrors.
+    pub fn toggle_virtual_mirror(&mut self) -> Option<bool> {
+        let mirror = self.virtual_mirror.as_mut()?;
+        mirror.active = !mirror.active;
+        Some(mirror.active)
+    }
+
+    /// Switches the virtual mirror (`--virtual-mirror`).
+    pub fn set_virtual_mirror(&mut self, active: bool) {
+        if let Some(mirror) = &mut self.virtual_mirror {
+            mirror.active = active;
+        }
+    }
+
     /// One frame: `Game::onIdle` 0x140242730 as far as the picture goes, then the HUD.
     pub fn draw(&mut self, view: &CarView, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         // the game camera of the moment
@@ -476,7 +514,10 @@ impl AcRenderer {
         let s = splits_of(driving);
         self.camera.base.set_shadow_maps_splits(&mut self.graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
+        self.time_ms += dt as f64 * 1000.0;
+        let mut modes = (2, 0);
         if let Some(car) = &mut self.car {
+            car.game_time_ms = self.time_ms;
             let state = view.physics_state();
             // ACCameraManager::mode and CameraDrivableManager::currentMode
             let (camera_mode, drivable_mode) = match driving.mode {
@@ -493,6 +534,7 @@ impl AcRenderer {
                 ),
                 CameraMode::Car => (4, 0),
             };
+            modes = (camera_mode, drivable_mode);
             car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
@@ -504,12 +546,33 @@ impl AcRenderer {
         }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
+        // Sim::renderScene: the mirror before the picture
+        if let (Some(mirror), Some(car)) = (&mut self.mirror, &self.car) {
+            let active = self.virtual_mirror.as_ref().is_some_and(|v| v.active);
+            if mirror.wants_render(modes.0, modes.1, active) {
+                let nodes = car.visibility_nodes();
+                let s = rustyac_render::mirror::MirrorScene {
+                    root: self.root,
+                    particles: self.sim_nodes.particles,
+                    before_cars: self.sim_nodes.before_cars,
+                    ideal_line: None,
+                    body_transform: car.body_transform,
+                    car_nodes: &nodes,
+                    mirror_position: car.mirror_position,
+                };
+                mirror.render(&mut self.graphics, &mut self.scene, self.camera.base.sky_box.as_mut(), &s);
+            }
+        }
         if let Err(message) = self.camera.render(&mut self.graphics, &mut self.scene, Some(self.blurred), self.root) {
             eprintln!("WARNING: the frame was not drawn: {message}");
         }
         self.draw_calls = self.graphics.stats.dip_calls;
         self.triangles = self.graphics.stats.triangles;
         self.graphics.set_screen_space_mode();
+        // Game::evOnPreGUI
+        if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
+            v.render(&mut self.graphics, &mirror.texture, modes.0);
+        }
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
             if let Some(path) = &self.options.gpu_log {

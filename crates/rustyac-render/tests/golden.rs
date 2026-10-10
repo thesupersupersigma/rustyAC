@@ -81,6 +81,8 @@ fn magione_frame_is_the_games() {
         pp_hdr_enabled: false,
         triple_buffer: false,
         smoke: Some(0),
+        mirror_size: 0,
+        mirror_smoke: false,
     };
     let mut graphics = match Graphics::new(video, DeviceOptions { warp: true, window: None, log: true }, &game) {
         Ok(graphics) => graphics,
