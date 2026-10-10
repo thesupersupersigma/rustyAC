@@ -83,6 +83,7 @@ struct Crt {
     atan2f: F2,
     powf: F2,
     sin: D1,
+    cos: D1,
     /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
     parse: Option<(Wcstod, Wcstol, Errno)>,
 }
@@ -116,6 +117,10 @@ unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
 }
 unsafe extern "C" fn std_sin(x: f64) -> f64 {
     x.sin()
+}
+
+unsafe extern "C" fn std_cos(x: f64) -> f64 {
+    x.cos()
 }
 
 unsafe extern "C" fn pure_sinf(x: f32) -> f32 {
@@ -162,6 +167,9 @@ const PURE: Crt = Crt {
     atan2f: pure_atan2f,
     powf: pure_powf,
     sin: pure_sin,
+    // (the DLL's double-precision cosine is not rewritten: only the version 1 flames' wobble
+    // reads it, on a desktop that has the DLL)
+    cos: std_cos,
     parse: None,
 };
 
@@ -177,6 +185,7 @@ const STD: Crt = Crt {
     atan2f: std_atan2f,
     powf: std_powf,
     sin: std_sin,
+    cos: std_cos,
     parse: None,
 };
 
@@ -215,6 +224,7 @@ mod msvcr120 {
                 atan2f: std::mem::transmute::<*mut c_void, super::F2>(get(c"atan2f")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
                 sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
+                cos: std::mem::transmute::<*mut c_void, super::D1>(get(c"cos")?),
                 parse: Some((
                     std::mem::transmute::<*mut c_void, super::Wcstod>(get(c"wcstod")?),
                     std::mem::transmute::<*mut c_void, super::Wcstol>(get(c"wcstol")?),
@@ -348,6 +358,13 @@ pub fn powf(x: f32, y: f32) -> f32 {
 pub fn sin(x: f64) -> f64 {
     // SAFETY: as `sinf`.
     unsafe { (crt().sin)(x) }
+}
+
+/// `cos` (MSVCR120), double precision. Without the DLL: Rust's own.
+#[inline]
+pub fn cos(x: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().cos)(x) }
 }
 
 /// `sqrtf`: correctly rounded on both sides, so std is used.

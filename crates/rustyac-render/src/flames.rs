@@ -119,6 +119,18 @@ pub struct FlameInstance {
     pub flash: Vec<FlameTexture>,
 }
 
+/// `FlameInstance` (0x58 bytes): one exhaust of a version 1 car.
+#[derive(Clone, Debug)]
+pub struct FlameInstanceV1 {
+    pub matrix: Mat44f,
+    pub vsize_start: f32,
+    pub vsize_end: f32,
+    pub lsize: f32,
+    pub vis_time: f32,
+    pub texture_index: u32,
+    pub sin_variation: f32,
+}
+
 /// `FlameGroup` (0x38 bytes). `state`: 0 idle, 1 start, 2 loop, 3 end.
 #[derive(Clone, Debug)]
 pub struct FlameGroup {
@@ -229,8 +241,13 @@ pub struct Flames {
     pub flash_threshold: f32,
     is_flashing: bool,
     current_dt: f32,
-    /// 2 with `flame_presets.ini`; 1 (not ported) draws nothing
+    /// 2 with `flame_presets.ini`, else 1: three crossed quads per exhaust that fade in a
+    /// quarter of a second
     pub version: u16,
+    /// version 1: `flames.ini [HEADER] INTENSITY`, the exhausts, the seconds since the start
+    pub intensity: f32,
+    pub flames_v1: Vec<FlameInstanceV1>,
+    pub flames_time: f64,
     pub burn_fuel_mult: f32,
     gl: GlRenderer,
     body_transform: NodeId,
@@ -254,14 +271,17 @@ impl Flames {
             flash_threshold: 2.0,
             is_flashing: false,
             current_dt: 1.0,
-            version: if IniReader::load(&folder.join("data/flame_presets.ini")).is_ok() { 2 } else { 1 },
+            version: if rustyac_physics::data::exists(&folder.join("data/flame_presets.ini")) { 2 } else { 1 },
             burn_fuel_mult: 10.0,
+            intensity: 1.0,
+            flames_v1: Vec::new(),
+            flames_time: 0.0,
             gl: GlRenderer::new(graphics, 6),
             body_transform,
             scene_camera: Mat44f::IDENTITY,
         };
         flames.load_textures(graphics, &folder.join("texture/flames"));
-        flames.load_flames(folder)?;
+        flames.load_flames(folder, graphics.video.pp_hdr_enabled)?;
         let flames = Rc::new(RefCell::new(flames));
         scene.add_event_handler(render_finished, flames.clone());
         Ok(flames)
@@ -271,6 +291,16 @@ impl Flames {
     /// folder's order (NTFS: by name, case ignored).
     fn load_textures(&mut self, graphics: &mut Graphics, dir: &Path) {
         if self.version != 2 {
+            // version 1: every png, in the folder's order
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .map(|entries| entries.flatten().filter(|e| e.path().is_file()).filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.to_ascii_lowercase().ends_with(".png")).collect())
+                .unwrap_or_default();
+            names.sort_by_key(|n| n.to_uppercase());
+            let dir_text = crate::model::path_text(dir);
+            for name in names {
+                let texture = graphics.resources.get_texture(&graphics.kgl, &format!("{dir_text}/{name}"));
+                self.textures.push(texture);
+            }
             return;
         }
         let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -328,9 +358,56 @@ impl Flames {
     }
 
     /// `Flames::loadFlames` 0x140101f90.
-    fn load_flames(&mut self, folder: &Path) -> Result<(), String> {
+    fn load_flames(&mut self, folder: &Path, hdr: bool) -> Result<(), String> {
         self.groups.clear();
+        self.flames_v1.clear();
         if self.version != 2 {
+            let Ok(ini) = IniReader::load(&folder.join("data/flames.ini")) else {
+                println!("WARNING: flames.ini not found");
+                return Ok(());
+            };
+            self.intensity = ini.get_float("HEADER", "INTENSITY").unwrap_or(0.0);
+            if !hdr {
+                let i = self.intensity;
+                self.intensity = if i > 1.0 {
+                    1.0
+                } else if i >= 0.0 {
+                    i
+                } else {
+                    0.0
+                };
+            }
+            if ini.has_key("HEADER", "BURN_FUEL_MULT") {
+                self.burn_fuel_mult = ini.get_float("HEADER", "BURN_FUEL_MULT").unwrap_or(0.0);
+            }
+            if ini.has_key("HEADER", "FLASH_THRESHOLD") {
+                self.flash_threshold = ini.get_float("HEADER", "FLASH_THRESHOLD").unwrap_or(0.0);
+            }
+            let mut i = 0;
+            loop {
+                let section = format!("FLAME_{i}");
+                if !ini.has_section(&section) {
+                    break;
+                }
+                i += 1;
+                let mut dir = rustyac_physics::vecmath::Vec3f::new(0.0, 0.0, 0.0);
+                let d: [f32; 3] = floats(&ini, &section, "DIRECTION");
+                (dir.x, dir.y, dir.z) = (d[0], d[1], d[2]);
+                dir.normalize();
+                let mut matrix = create_target(&[dir.x, dir.y, dir.z], &[0.0; 3]);
+                let p: [f32; 3] = floats(&ini, &section, "POSITION");
+                matrix.m[3][0] = p[0];
+                matrix.m[3][1] = p[1];
+                matrix.m[3][2] = p[2];
+                let get = |key: &str| ini.get_float(&section, key).unwrap_or(0.0);
+                let lsize = get("LSIZE");
+                let vsize_start = get("VSIZE_START");
+                let vsize_end = get("VSIZE_END");
+                self.flames_v1.push(FlameInstanceV1 { matrix, vsize_start, vsize_end, lsize, vis_time: 0.0, texture_index: 0, sin_variation: f32::from_bits(0x3dcc_cccd) });
+            }
+            if !self.flames_v1.is_empty() && self.textures.is_empty() {
+                return Err(format!("{}: Flame V1: texture not found", folder.display()));
+            }
             return Ok(());
         }
         let presets = Self::read_presets(folder);
@@ -392,10 +469,17 @@ impl Flames {
     /// The handler of `CarAvatar::evOnBackfireTriggered` 0x140100070: one `rand()` for every
     /// group that is idle.
     pub fn on_backfire(&mut self, car_fuel_in_exhaust: f32, rand: &mut MsvcRand) {
+        let c = f32::from_bits(0x3800_0100);
         if self.version != 2 {
+            // version 1: two numbers for every exhaust, how bright and which picture
+            for inst in &mut self.flames_v1 {
+                inst.vis_time = rand.next() as f32 * c;
+                let n = self.textures.len() as i64;
+                let t = (rand.next() as f32 * c) * (n as f32 - 1.0);
+                inst.texture_index = t as i64 as u32;
+            }
             return;
         }
-        let c = f32::from_bits(0x3800_0100);
         for g in &mut self.groups {
             if g.state != 0 {
                 continue;
@@ -431,7 +515,19 @@ impl Flames {
             dt *= m;
         }
         let mut empty = false;
+        self.flames_time += dt as f64;
         if self.version != 2 {
+            let d = dt * 4.0;
+            for inst in &mut self.flames_v1 {
+                let v = inst.vis_time - d;
+                inst.vis_time = if v > 1.0 {
+                    1.0
+                } else if v >= 0.0 {
+                    v
+                } else {
+                    0.0
+                };
+            }
             return false;
         }
         for g in &mut self.groups {
@@ -617,6 +713,56 @@ impl Flames {
     }
 }
 
+impl Flames {
+    /// `Flames::drawFlame` 0x1401010a0 (version 1): three crossed quads, fixed in the car,
+    /// through the manager's `GLRenderer`.
+    fn draw_flame_v1(&mut self, scene: &Scene, graphics: &mut Graphics, index: usize) {
+        let inst = &self.flames_v1[index];
+        if 0.0 >= inst.vis_time {
+            return;
+        }
+        let t = self.flames_time;
+        let mut a = rustyac_math::sin(t) as f32;
+        a *= inst.sin_variation;
+        a *= inst.vsize_end;
+        let mut c = rustyac_math::cos(t) as f32;
+        c *= inst.sin_variation;
+        c *= inst.lsize;
+        let world = xm_matrix_multiply(&inst.matrix, &scene.nodes[self.body_transform].matrix);
+        graphics.set_world_matrix(&world);
+        let Some(texture) = self.textures.get(inst.texture_index as usize) else {
+            println!("ERROR, FLAME INDEX: {} NOT VALID", inst.texture_index);
+            return;
+        };
+        graphics.set_texture(0, texture);
+        graphics.set_blend_mode(BLEND_ALPHA);
+        let Some(mut gl) = graphics.gl.take() else { return };
+        gl.color4f(self.intensity, self.intensity, self.intensity, inst.vis_time);
+        gl.begin(GL_QUADS, None);
+        let (vs, ve, l) = (inst.vsize_start, inst.vsize_end, inst.lsize);
+        let corners: [([f32; 2], [f32; 3]); 12] = [
+            ([0.0, 0.0], [0.0, a - vs, 0.0]),
+            ([0.0, 1.0], [0.0, vs - a, 0.0]),
+            ([1.0, 1.0], [0.0, a + ve, c + l]),
+            ([1.0, 0.0], [0.0, (-ve) - a, l - c]),
+            ([0.0, 0.0], [a - vs, 0.0, 0.0]),
+            ([0.0, 1.0], [vs - a, 0.0, 0.0]),
+            ([1.0, 1.0], [a + ve, 0.0, c + l]),
+            ([1.0, 0.0], [(-ve) - a, 0.0, l - c]),
+            ([0.0, 0.0], [a - vs, a - vs, 0.0]),
+            ([0.0, 1.0], [vs - a, (-vs) - a, 0.0]),
+            ([1.0, 1.0], [vs + a, vs - a, 0.0]),
+            ([1.0, 0.0], [(-vs) - a, vs + a, 0.0]),
+        ];
+        for (uv, p) in corners {
+            gl.tex_coord2f(uv[0], uv[1]);
+            gl.vertex3f(p[0], p[1], p[2]);
+        }
+        gl.end(graphics);
+        graphics.gl = Some(gl);
+    }
+}
+
 impl NodeEventHandler for Flames {
     /// `Flames::onNodeRenderEvent` 0x140103aa0: in the transparent pass, while the body shows.
     fn on_node_render(&mut self, scene: &mut Scene, graphics: &mut Graphics, event: &OnNodeRenderEvent) {
@@ -626,6 +772,9 @@ impl NodeEventHandler for Flames {
         graphics.set_cull_mode(2);
         graphics.set_blend_mode(BLEND_ALPHA);
         if self.version != 2 {
+            for index in 0..self.flames_v1.len() {
+                self.draw_flame_v1(scene, graphics, index);
+            }
             return;
         }
         self.cycle_index = 0;
