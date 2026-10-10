@@ -355,6 +355,9 @@ pub struct Car {
     /// stand-ins for the other cars of the real-time order and of the leaderboard
     other_cars: *mut u8,
     wings: *mut u8,
+    /// the pause and the replay status of the last frame
+    last_pause: std::cell::Cell<bool>,
+    last_status: std::cell::Cell<i32>,
 }
 
 impl Car {
@@ -633,7 +636,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8) })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -673,6 +676,38 @@ impl Game {
             wr(c.race_manager, 0xe8, extra.session_type);
             let real_time: *mut u8 = rd(c.race_manager, 0x1a0);
             let sim: *mut u8 = rd(c.car, 0x130);
+            // ReplayManager: replayMode, timeMult, isActive, status
+            let replay: *mut u8 = rd(sim, 0x1b0);
+            wr(replay, 0x148, extra.replay as u8);
+            wr(replay, 0x130, extra.replay_scale);
+            wr(replay, 0x30, extra.replay as u8);
+            // Sim::evOnPauseModeChanged (+0x90) and evOnReplayStatusChanged (+0x78): every
+            // handler the car's objects registered (records of 0x28 bytes, the function object
+            // at +0x20), in their order
+            let fire = |event: usize, payload: *mut u8| {
+                let (mut at, end): (*mut u8, *mut u8) = (rd(sim, event), rd(sim, event + 8));
+                while at < end {
+                    let object: *mut u8 = rd(at, 0x20);
+                    let vtable: *const usize = rd(object, 0);
+                    let call: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*vtable.add(2));
+                    call(object, payload);
+                    at = at.add(0x28);
+                }
+            };
+            if extra.pause != c.last_pause.get() {
+                c.last_pause.set(extra.pause);
+                let mut paused = extra.pause as u8;
+                fire(0x90, &mut paused);
+            }
+            if extra.replay_status != c.last_status.get() {
+                c.last_status.set(extra.replay_status);
+                wr(replay, 0xbc, extra.replay_status);
+                let mut payload = [0u8; 12];
+                payload[0..4].copy_from_slice(&extra.replay_status.to_le_bytes());
+                payload[4..8].copy_from_slice(&extra.replay_scale.to_le_bytes());
+                payload[8..12].copy_from_slice(&2.0f32.to_le_bytes());
+                fire(0x78, payload.as_mut_ptr());
+            }
             // PauseMenu::visible, PhysicsAvatar::engine.ambientTemperature
             wr(rd::<*mut u8>(sim, 0x110), 0x150, extra.pause as u8);
             wr(rd::<*mut u8>(sim, 0x1b8), 0x158, extra.air);
@@ -793,6 +828,10 @@ impl Game {
             update(c.mirror_manager, dt);
         }
         for (object, va) in [(c.visual_damage, VA_VISUAL_DAMAGE_UPDATE), (c.rotating_objects, VA_ROTATING_OBJECTS_UPDATE)].into_iter().chain(c.smokes.iter().copied()) {
+            // Game::update 0x140243010 leaves out an object whose isActive is off
+            if rd::<u8>(object, 0x30) == 0 {
+                continue;
+            }
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }
@@ -814,7 +853,7 @@ impl Game {
             update(object, dt);
         }
         // the handlers of evOnPostUpdate, in the order they were registered
-        if c.animated {
+        if c.animated && rd::<u8>(c.suspension, 0x30) != 0 {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SUSPENSION_ANIMATOR_UPDATE));
             update(c.suspension, dt);
         }

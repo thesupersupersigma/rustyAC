@@ -366,6 +366,8 @@ pub struct SmokeFrame {
     pub connected: bool,
     /// the replay's speed while a replay plays (`ReplayManager::isInReplaymode`)
     pub replay_time_mult: Option<f32>,
+    /// `ReplayManager::isActive`
+    pub replay_active: bool,
 }
 
 /// The input velocity of every generator: a hundredth of the car's, and 1 m/s up.
@@ -387,6 +389,8 @@ fn smoke_level(smoke: Option<i32>, table: [(i32, f32); 5]) -> Option<(i32, f32)>
 /// `TyreSmoke`: one per wheel.
 pub struct TyreSmoke {
     pub tyre_index: usize,
+    /// `GameObject::isActive`: the pause and the replay's status switch the object off
+    pub is_active: bool,
     pub time_mult: f32,
     pub trigger_slip_level: f32,
     /// (smoke, grass smoke, grass pieces) and their generators; `None`: smoke is off
@@ -427,7 +431,7 @@ impl TyreSmoke {
             TyreSystems { system, grass, pieces, generator, generator_grass, generator_pieces }
         });
         let trigger_slip_level = IniReader::load(&folder.join("system/cfg/tyre_smoke.ini")).ok().map(|ini| ini.get_float("TRIGGERS", "SLIP_LEVEL").unwrap_or(0.0)).unwrap_or(0.0);
-        TyreSmoke { tyre_index, time_mult: 1.0, trigger_slip_level, systems }
+        TyreSmoke { tyre_index, is_active: true, time_mult: 1.0, trigger_slip_level, systems }
     }
 
     /// `TyreSmoke::update` 0x1401d0b80.
@@ -468,6 +472,24 @@ impl TyreSmoke {
         }
     }
 
+    /// `TyreSmoke::onReplayStatusChanged` 0x1401d0ad0.
+    pub fn on_replay_status_changed(&mut self, status: i32, time_mult: f32, slow_mo: f32) {
+        self.is_active = (status.wrapping_sub(1) as u32) > 1;
+        if status == 5 {
+            if slow_mo > 0.0 {
+                self.time_mult = 1.0 / slow_mo;
+            }
+        } else if (status.wrapping_sub(3) as u32) <= 1 {
+            self.time_mult = time_mult;
+        } else {
+            self.time_mult = 1.0;
+        }
+        if matches!(status, 2 | 6 | 7 | 9 | 10) {
+            self.clear();
+            self.time_mult = time_mult;
+        }
+    }
+
     /// The handler of `Sim::evOnNewSession`: every particle goes.
     pub fn clear(&mut self) {
         if let Some(s) = &self.systems {
@@ -481,8 +503,11 @@ impl TyreSmoke {
 /// `EngineSmoke`: a dying engine smokes from between the rear wheels.
 pub struct EngineSmoke {
     system: Option<(Rc<RefCell<ParticleSystem>>, ParticleGenerator)>,
-    /// `EngineSmokeStatus live`: (oldValue, smokeTimer)
+    /// `GameObject::isActive`
+    pub is_active: bool,
+    /// `EngineSmokeStatus live` and `replay`: (oldValue, smokeTimer)
     pub live: (f32, f32),
+    pub replay: (f32, f32),
     pub trigger_engine_life: f32,
     pub max_smoke_timer: f32,
 }
@@ -506,7 +531,7 @@ impl EngineSmoke {
             }
             (system, generator)
         });
-        EngineSmoke { system, live: (1000.0, 0.0), trigger_engine_life: 25.0, max_smoke_timer }
+        EngineSmoke { system, is_active: true, live: (1000.0, 0.0), replay: (1000.0, 0.0), trigger_engine_life: 25.0, max_smoke_timer }
     }
 
     /// `EngineSmoke::update` 0x1400935e0.
@@ -529,17 +554,30 @@ impl EngineSmoke {
         if life > self.trigger_engine_life {
             return;
         }
-        if life != self.live.0 {
-            self.live = (life, self.max_smoke_timer);
+        // the replay keeps a pair of its own (`ReplayManager::isActive`)
+        let slot = if frame.replay_active { &mut self.replay } else { &mut self.live };
+        if life != slot.0 {
+            *slot = (life, self.max_smoke_timer);
         }
-        if !(self.live.1 > 0.0) {
+        if !(slot.1 > 0.0) {
             return;
         }
         let (t2, t3) = (&state.tyre_matrix[2].m[3], &state.tyre_matrix[3].m[3]);
         let pos = [(t2[0] + t3[0]) * 0.5, (t2[1] + t3[1]) * 0.5, (t2[2] + t3[2]) * 0.5];
         let vin = velocity_in(state);
         generator.generate_particle(&pos, &vin, frame.now_ms, mult as f64, rand);
-        self.live.1 -= dt;
+        slot.1 -= dt;
+    }
+
+    /// The handler of `Sim::evOnReplayStatusChanged` 0x1400934c0.
+    pub fn on_replay_status_changed(&mut self, status: i32) {
+        self.is_active = (status.wrapping_sub(1) as u32) > 1;
+        if status == 6 {
+            self.replay = (1000.0, 0.0);
+        }
+        if matches!(status, 2 | 6 | 7 | 9 | 10) {
+            self.clear();
+        }
     }
 
     pub fn clear(&mut self) {

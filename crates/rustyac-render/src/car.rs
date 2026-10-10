@@ -171,6 +171,8 @@ pub struct CarAvatar {
     pub ers_recharge: f32,
     pub last_ers_battery_charge: f32,
     pub has_energy_store: bool,
+    /// `SuspensionAnimator`'s `GameObject::isActive`
+    pub suspension_animator_active: bool,
     /// `Game::gameTime.now`, milliseconds: the clock the dashboard's lights blink by
     pub game_time_ms: f64,
     /// the aids' levels as the displays show them, the air's temperature, miles for km
@@ -322,6 +324,7 @@ impl CarAvatar {
             ers_recharge: 0.0,
             last_ers_battery_charge: 1.0,
             has_energy_store: false,
+            suspension_animator_active: true,
             game_time_ms: 0.0,
             tc_level: 0,
             abs_level: 0,
@@ -718,12 +721,18 @@ impl CarAvatar {
                 now_ms: self.game_time_ms,
                 connected: scene.nodes[self.car_node].is_active,
                 replay_time_mult: self.replay_mode.then_some(self.replay_scale),
+                replay_active: self.replay_mode,
             };
+            // (Game::update leaves out an object that is not active)
             for smoke in &mut self.tyre_smoke {
-                smoke.update(scene, state, &frame, &mut graphics.crt_rand);
+                if smoke.is_active {
+                    smoke.update(scene, state, &frame, &mut graphics.crt_rand);
+                }
             }
             if let Some(smoke) = &mut self.engine_smoke {
-                smoke.update(state, &frame, &mut graphics.crt_rand);
+                if smoke.is_active {
+                    smoke.update(state, &frame, &mut graphics.crt_rand);
+                }
             }
         }
         {
@@ -742,7 +751,7 @@ impl CarAvatar {
         self.analog_instruments.update(scene, state, dt, self.guid == self.view.focused_car_index);
         self.brake_lights.update(scene, state, replay_dt, self.in_pitlane);
         self.animated_lights.update(scene, self.brake_lights.front_lights_on, dt);
-        let scale = if self.replay_mode && self.replay_scale != 0.0 { self.replay_scale } else { 1.0 };
+        let scale = if self.replay_mode && self.replay_scale != 0.0 && !self.replay_scale.is_nan() { self.replay_scale } else { 1.0 };
         self.tyre_blur.update(scene, state, scale);
         self.blurred_objects.update(scene, state, scale);
         self.digital_instruments.update(
@@ -788,8 +797,60 @@ impl CarAvatar {
             }
         }
         self.brake_discs.update(scene, state, dt, self.replay_mode.then_some(self.replay_scale));
-        if !self.replay_mode {
+        if self.replay_mode {
+            self.dynamic_effects.update_replay_mode(scene);
+        } else {
             self.dynamic_effects.update(scene, state);
+        }
+    }
+
+    /// `Sim::evOnPauseModeChanged` (`Sim::setPauseMode` 0x14019e6d0) as the car's objects hear
+    /// it: the damage, the smokes and the animated suspension stop being updated.
+    pub fn on_pause_mode_changed(&mut self, paused: bool) {
+        if let Some(damage) = &mut self.damage {
+            damage.is_active = !paused;
+        }
+        if let Some(smoke) = &mut self.engine_smoke {
+            smoke.is_active = !paused;
+        }
+        for smoke in &mut self.tyre_smoke {
+            smoke.is_active = !paused;
+        }
+        self.suspension_animator_active = !paused;
+    }
+
+    /// `Sim::evOnReplayStatusChanged` as the car's objects hear it. `status`: 0 play, 1 pause,
+    /// 2 stop, 3 rewind, 4 fast forward, 5 slow motion, 6 replay mode begun, 7 ended.
+    pub fn on_replay_status_changed(&mut self, scene: &mut Scene, status: i32, time_mult: f32, slow_mo: f32) {
+        let running = (status.wrapping_sub(1) as u32) > 1;
+        for driver in [&mut self.driver_hr, &mut self.driver_lr].into_iter().flatten() {
+            driver.animation_enabled = running;
+        }
+        if let Some(damage) = &mut self.damage {
+            damage.is_active = running;
+        }
+        for smoke in &mut self.tyre_smoke {
+            smoke.on_replay_status_changed(status, time_mult, slow_mo);
+        }
+        if let Some(smoke) = &mut self.engine_smoke {
+            smoke.on_replay_status_changed(status);
+        }
+        self.suspension_animator_active = !((status.wrapping_sub(1) as u32) <= 1 || (status == 10 && time_mult == 0.0));
+        self.dynamic_effects.on_replay_status_changed(scene, status);
+    }
+
+    /// `CarAvatar::onStartReplay` 0x1400d9400 and `onStopReplay` 0x1400d9520, the picture's
+    /// part: the flames go out and the exhaust's fuel counter is emptied; at the start the
+    /// skid marks go too.
+    pub fn on_replay_started_or_stopped(&mut self, started: bool) {
+        if let Some(flames) = &self.flames {
+            flames.borrow_mut().reset();
+        }
+        self.fuel_in_exhaust = 0.0;
+        if started {
+            for buffer in self.skid_marks.buffers.iter().flatten() {
+                buffer.borrow_mut().reset();
+            }
         }
     }
 
@@ -800,7 +861,13 @@ impl CarAvatar {
     /// (its distances count a tenth).
     pub fn post_update(&mut self, scene: &mut Scene, state: &CarPhysicsState, dt: f32, camera: &Mat44f, fov: f32, track_camera: bool) {
         if let Suspension::Animator(animator) = &mut self.suspension {
-            animator.update(scene, self.body_transform, state, dt);
+            // (the handler of Game::evOnPostUpdate calls it only while the object is active)
+            if self.suspension_animator_active {
+                // SuspensionAnimator::suspensionAnimatorUpdate 0x1401b25a0: the replay's speed
+                // scales the time the wheels turn by
+                let dt = if self.replay_mode { dt * self.replay_scale } else { dt };
+                animator.update(scene, self.body_transform, state, dt);
+            }
         }
         self.constrained.update_constraints(scene);
         let mut div = 1.0f32;

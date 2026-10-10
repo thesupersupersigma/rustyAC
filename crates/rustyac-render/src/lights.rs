@@ -450,11 +450,13 @@ pub struct DynamicCarEffects {
     dirt_vars: Vec<(MaterialId, Option<usize>)>,
     pub current_dirt_level: f32,
     pub dirt_multiplier: f32,
+    /// the level when the replay began, put back when it ends
+    pub replay_old_dirt_level: f32,
 }
 
 impl Default for DynamicCarEffects {
     fn default() -> DynamicCarEffects {
-        DynamicCarEffects { dirt_vars: Vec::new(), current_dirt_level: 0.0, dirt_multiplier: 1.0 }
+        DynamicCarEffects { dirt_vars: Vec::new(), current_dirt_level: 0.0, dirt_multiplier: 1.0, replay_old_dirt_level: 0.0 }
     }
 }
 
@@ -494,6 +496,21 @@ impl DynamicCarEffects {
     pub fn reset_dirt(&mut self, scene: &mut Scene) {
         self.current_dirt_level = 0.0;
         self.push(scene, 0.0);
+    }
+
+    /// `DynamicCarEffects::updateReplayMode` 0x140091e40: the level as it is, every frame.
+    pub fn update_replay_mode(&mut self, scene: &mut Scene) {
+        self.push(scene, self.current_dirt_level);
+    }
+
+    /// The handler of `Sim::evOnReplayStatusChanged` 0x1400916c0.
+    pub fn on_replay_status_changed(&mut self, scene: &mut Scene, status: i32) {
+        if status == 6 {
+            self.replay_old_dirt_level = self.current_dirt_level;
+        } else if status == 7 {
+            self.push(scene, self.replay_old_dirt_level);
+            self.current_dirt_level = self.replay_old_dirt_level;
+        }
     }
 
     /// `DynamicCarEffects::update` 0x140091ac0 (outside a replay).

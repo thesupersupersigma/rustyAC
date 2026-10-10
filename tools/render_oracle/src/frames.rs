@@ -95,6 +95,11 @@ pub struct Extra {
     pub replay: bool,
     pub replay_scale: f32,
     pub pause: bool,
+    /// `ReplayManager::status` (0 play, 1 pause, 2 stop, 3 rewind, 4 fast forward, 5 slow motion,
+    /// 6 replay mode begun, 7 ended); -1: none. A change fires `Sim::evOnReplayStatusChanged`
+    /// with this status, `replay_scale` and a slow-motion level of 2; a change of `pause` fires
+    /// `Sim::evOnPauseModeChanged`.
+    pub replay_status: i32,
     /// `CarAvatar::wingsStatus`: eight wings at this angle (`None`: the car has no wing)
     pub wing: Option<f32>,
     /// `CarPhysicsInfo::kersMaxJ` (with `hasKERS`) and `ersMaxJ`
@@ -104,7 +109,7 @@ pub struct Extra {
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, wing: None, kers_max: 0.0, ers_max: 0.0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0 }
     }
 }
 
@@ -384,6 +389,8 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
             x.replay = number(value)? != 0.0;
             x.replay_scale = number(value)?;
         }
+        "rscale" => x.replay_scale = number(value)?,
+        "rstatus" => x.replay_status = number(value)? as i32,
         "pause" => x.pause = on(value)?,
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
@@ -406,7 +413,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

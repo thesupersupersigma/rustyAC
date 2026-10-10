@@ -164,6 +164,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let cube_log = rustyac_render::gpulog::end_capture().text;
 
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+    let (mut last_pause, mut last_status) = (false, -1);
     for (index, step) in frame.steps.iter().enumerate() {
         camera.base.camera.fov = step.camera.fov;
         camera.base.camera.matrix = mat(&step.camera.matrix);
@@ -198,6 +199,15 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             car.replay_mode = step.extra.replay;
             car.replay_scale = step.extra.replay_scale;
             car.pause_menu = step.extra.pause;
+            // Sim::setPauseMode and the replay's transport: the events, before the updates
+            if step.extra.pause != last_pause {
+                last_pause = step.extra.pause;
+                car.on_pause_mode_changed(last_pause);
+            }
+            if step.extra.replay_status != last_status {
+                last_status = step.extra.replay_status;
+                car.on_replay_status_changed(&mut scene, last_status, step.extra.replay_scale, 2.0);
+            }
             car.wing_angles = step.extra.wing.map(|a| vec![a; 8]).unwrap_or_default();
             car.kers_max_j = step.extra.kers_max;
             car.ers_max_j = step.extra.ers_max;
