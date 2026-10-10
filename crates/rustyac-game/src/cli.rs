@@ -366,8 +366,8 @@ for checks, without anybody at the controls:
                         4096, world detail 5, anisotropic 16, reflections 2048 with 6 faces a frame,
                         mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5); low:
                         everything off or at the lowest value. The options above still win.
-  --show-fps            the frame-rate counter on from the start (Ctrl+F switches it while driving:
-                        frame time, FPS, physics steps a second)
+  --show-fps            the frame-rate counter on from the start (Ctrl+F or F9 switches it while
+                        driving: frame time, FPS, physics steps a second)
   --no-a2c              NOT Assetto Corsa, a diagnosis only: no alpha to coverage. It proves where
                         the dotted trees and fences of a picture without anti-aliasing come from
                         (plain acs.exe with AASAMPLES=1 draws the same dots); the price is that
@@ -450,7 +450,7 @@ impl Options {
                 }
                 "--no-a2c" => o.no_a2c = true,
                 "--show-fps" => o.show_fps = true,
-                "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().map_err(|_| "--cube-size <pixels: 512, 1024 or 2048>".to_string())?),
+                "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().ok().filter(|size| (16..=4096).contains(size)).ok_or("--cube-size <pixels: 512, 1024 or 2048>")?),
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
@@ -539,6 +539,9 @@ impl Options {
         let session_options = o.wind_from_log || o.damage.is_some() || o.air_density.is_some() || o.pressure_law.is_some() || o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
         if session_options && o.replay.is_some() {
             return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir, --wind-from-log, --setup, --damage, --air-density and --pressure-law cannot be used with it".to_string());
+        }
+        if o.graphics.is_some() && o.video_ini.is_some() {
+            return Err("--graphics and --video-ini cannot be used together: a preset reads no file".to_string());
         }
         if o.layout.is_some() && o.track.is_none() {
             return Err("--layout needs --track <name>".to_string());

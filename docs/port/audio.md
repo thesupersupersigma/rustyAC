@@ -296,8 +296,10 @@ game's own (or half a dB).
 | Ferrari 488 GT3 | Imola | `trk_lap` | cockpit | 151.5 s | 0.32 dB rms, 1.56 dB at most | 0.28 dB rms, 1.17 dB at most | ok |
 | F2004 | Spa | `trk_lap` | cockpit | 152.9 s | 0.17 dB rms, 1.09 dB at most | 0.16 dB rms, 0.97 dB at most | ok |
 
-All WAVs of a drive have the same length to the byte. The port's mix is as close to the game's as the game's
-is to itself.
+All WAVs of a drive had the same length to the byte in this run. (That does not hold in general: FMOD writes
+a varying number of silent blocks while it starts up. Since Task 22b the oracle compares the mixes from their
+first audible block on, where they are equally long: `docs/port/damage_sparkles.md`, section 5.) The port's
+mix is as close to the game's as the game's is to itself.
 
 ### 5.3 End to end: `rustyac.exe` against the game
 

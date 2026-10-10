@@ -444,7 +444,12 @@ impl AcRenderer {
         // a preset is followed to the letter: the launcher's "None" for reflections is SIZE=0
         let exact = options.video_exact || options.preset.is_some();
         let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, mut notes) = video_settings(width, height, exact, video_ini.as_ref(), &video_name);
-        let cube_size = options.cube_size.filter(|size| *size > 0).unwrap_or(cube_size);
+        if let Some(size) = options.cube_size {
+            // (what the file's own size would have been is no longer of interest)
+            notes.retain(|n| !n.contains("[CUBEMAP] SIZE="));
+            notes.push(format!("--cube-size {size}: the reflection cube map's side"));
+        }
+        let cube_size = options.cube_size.unwrap_or(cube_size);
         if options.preset.is_some() {
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
             notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));

@@ -399,7 +399,6 @@ fn run_headless(options: &Options) -> Result<(), String> {
     let thread = start_physics(setup, source, &shared, sinks, config)?;
     let mut frames = 0u64;
     let mut frame_max = Duration::ZERO;
-    let started = Instant::now();
     let mut headless_audio: Option<GameAudio> = None;
     let mut bench_stats = None;
     // --bench-render: the frames are counted from the first one (the loading of the picture,
@@ -494,7 +493,6 @@ fn run_headless(options: &Options) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    let _seconds = started.elapsed().as_secs_f64();
     shared.quit.store(true, Ordering::Relaxed);
     let (view, timing) = thread.join().map_err(|_| "the physics thread panicked".to_string())??;
     report(&view, &timing);
@@ -671,8 +669,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
                     let key = key as i32;
-                    if ctrl && key == 0x46 {
-                        // Ctrl+F: the frame-rate counter (rustyAC's own key; AC has an app for it)
+                    if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
+                        // Ctrl+F or F9: the frame-rate counter (rustyAC's own keys; AC has an
+                        // app for it). F alone is the keyboard's second DRS key, hence F9 too
                         fps_counter = !fps_counter;
                     } else if ctrl && key == bindings.key_traction_control {
                         request(if shift { event::TC_DN } else { event::TC_UP });

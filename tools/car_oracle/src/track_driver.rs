@@ -39,7 +39,7 @@ pub enum TrackKind {
     /// Steered off the road at a shallow angle and along the wall.
     WallSlide,
     /// Task 22b. `WallGravel`'s crash (it bends the suspension of two corners), and what the
-    /// car does afterwards: twelve seconds with nobody at the wheel and a little throttle (the
+    /// car does afterwards: six seconds with nobody at the wheel and a little throttle (the
     /// bent toe decides where it goes), then the driver follows the line again, then brakes.
     Crash,
     /// As `EauRouge`: the floor meets the road in the compression.
@@ -641,13 +641,14 @@ impl Follower {
             c.steer = self.release_steer;
         }
         let fast_wall = matches!(kind, TrackKind::WallHigh | TrackKind::WallGravel);
-        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (fast_wall && t < 14.0) || (kind == TrackKind::Crash && since_crash.is_none()) {
+        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (fast_wall && t < 14.0) || (kind == TrackKind::Crash && since_crash.is_none() && t < 30.0) {
             c.gas = 1.0;
         } else if since_crash.is_some_and(|s| s < CRASH_AFTER.0) {
             // nobody holds the wheel (it stays where it was let go): a little throttle, and
             // the car goes where its bent toe points
             c.gas = 0.25;
-        } else if since_crash.is_some_and(|s| s >= CRASH_AFTER.1) {
+        } else if since_crash.is_some_and(|s| s >= CRASH_AFTER.1) || (kind == TrackKind::Crash && since_crash.is_none() && t >= 30.0) {
+            // (or the car never met the barrier: it stops, as the wall scenarios do)
             c.brake = 1.0;
         } else if fast_wall {
             c.brake = 1.0;

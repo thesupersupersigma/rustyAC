@@ -143,29 +143,16 @@ pub fn gear_label(gear: i32) -> String {
 /// The lines of a hybrid car: battery, what the motor gives now, the lap's allowance, and
 /// the cockpit's settings as the game's own messages name them. None for a car without a
 /// hybrid system and without an engine-brake control.
-/// What a crash left (rustyAC's own lines; the game shows it with the icons of its damage
-/// display): the damage zones in km/h of closing speed, the bent steering rods as a share of
-/// the car's most (`ISuspension::getDamage`), the tyres that burst.
-fn damage_lines(view: &CarView) -> Vec<String> {
+/// The tyres that have burst (`TyreStatus::inflation` 0), for the damage panel; the game shows
+/// them as red tyre icons in its damage display.
+fn burst_tyres(view: &CarView) -> Vec<&'static str> {
     const WHEEL: [&str; 4] = ["LF", "RF", "LR", "RR"];
-    let mut lines = Vec::new();
-    if view.damage.iter().any(|d| *d > 0.0) {
-        let d = &view.damage;
-        lines.push(format!("hit km/h: front {:.0} rear {:.0} left {:.0} right {:.0}", d[0], d[1], d[2], d[3]));
-    }
-    let bent: Vec<String> = WHEEL.iter().zip(&view.suspension_damage).filter(|(_, d)| **d > 0.0).map(|(w, d)| format!("{w} {:.0} %", d * 100.0)).collect();
-    if !bent.is_empty() {
-        lines.push(format!("bent steering: {}", bent.join("  ")));
-    }
     // (before the car is put down every tyre's inflation is 0)
     let inflation = &view.render.inflation;
-    if inflation.iter().any(|i| *i > 0.0) {
-        let burst: Vec<&str> = WHEEL.iter().zip(inflation).filter(|(_, i)| **i <= 0.0).map(|(w, _)| *w).collect();
-        if !burst.is_empty() {
-            lines.push(format!("tyre burst: {}", burst.join(" ")));
-        }
+    if inflation.iter().all(|i| *i <= 0.0) {
+        return Vec::new();
     }
-    lines
+    WHEEL.iter().zip(inflation).filter(|(_, i)| **i <= 0.0).map(|(w, _)| *w).collect()
 }
 
 fn hybrid_lines(view: &CarView) -> Vec<String> {
@@ -208,13 +195,12 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.rect(x, y, w, gh * s + 12.0 * s + line, PANEL);
         hud.text(x + 14.0 * s, y + 6.0 * s, 1.0 * s, if info.fps >= 59.0 { GREEN } else { YELLOW }, &format!("{:.0} FPS", info.fps));
         hud.text_right(x + w - 14.0 * s, y + 10.0 * s, 0.75 * s, WHITE, &format!("frame {:.2} ms  longest {:.1} ms", info.frame_ms, info.frame_max_ms));
-        hud.text(x + 14.0 * s, y + gh * s + 8.0 * s, 0.75 * s, DIM, &format!("physics {:.1} steps/s  step {:.3} ms  (Ctrl+F)", info.timing.rate_hz(), info.timing.step_avg_us() / 1000.0));
+        hud.text(x + 14.0 * s, y + gh * s + 8.0 * s, 0.75 * s, DIM, &format!("physics {:.1} steps/s  step {:.3} ms  (Ctrl+F, F9)", info.timing.rate_hz(), info.timing.step_avg_us() / 1000.0));
     }
 
     // top left: timer, rates, who drives, the hybrid system
     let hybrid = hybrid_lines(view);
-    let damage = damage_lines(view);
-    let rows = 8 + info.notes.len() + hybrid.len() + damage.len();
+    let rows = 8 + info.notes.len() + hybrid.len();
     hud.rect(10.0 * s, 10.0 * s, 430.0 * s, line * rows as f32 + 16.0 * s, PANEL);
     let x = 20.0 * s;
     let mut y = 16.0 * s;
@@ -242,10 +228,7 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.text(x, y, 0.75 * s, WHITE, text);
         y += line;
     }
-    for text in &damage {
-        hud.text(x, y, 0.75 * s, YELLOW, text);
-        y += line;
-    }
+
     for note in &info.notes {
         hud.text(x, y, 0.75 * s, YELLOW, note);
         y += line;
@@ -253,7 +236,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
 
     // under it: damage (the five zones in km/h of impact, the bend of each corner's
     // suspension, the engine), shown once there is any or while the body touches something
-    let hurt = view.damage.iter().any(|d| *d > 0.0) || view.suspension_damage.iter().any(|d| *d > 0.0) || view.engine_life < 1000.0;
+    let burst = burst_tyres(view);
+    let hurt = view.damage.iter().any(|d| *d > 0.0) || view.suspension_damage.iter().any(|d| *d > 0.0) || view.engine_life < 1000.0 || !burst.is_empty();
     if hurt || view.contacts > 0 {
         let top = 10.0 * s + line * rows as f32 + 16.0 * s + 8.0 * s;
         hud.rect(10.0 * s, top, 430.0 * s, line * 3.0 + 14.0 * s, PANEL);
@@ -271,7 +255,10 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         y += line;
         let life = view.engine_life;
         let engine = if life <= 0.0 { "engine BLOWN".to_string() } else { format!("engine {:.0}%", life * 0.1) };
-        let w = hud.text(x, y, 0.75 * s, if life <= 0.0 { RED } else if life < 1000.0 { YELLOW } else { DIM }, &engine);
+        let mut w = hud.text(x, y, 0.75 * s, if life <= 0.0 { RED } else if life < 1000.0 { YELLOW } else { DIM }, &engine);
+        if !burst.is_empty() {
+            w += 16.0 * s + hud.text(x + w + 16.0 * s, y, 0.75 * s, RED, &format!("tyre burst: {}", burst.join(" ")));
+        }
         if view.contacts > 0 {
             hud.text(x + w + 16.0 * s, y, 0.75 * s, YELLOW, &format!("touching: {} contact points", view.contacts));
         }
