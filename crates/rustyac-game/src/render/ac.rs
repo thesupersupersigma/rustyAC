@@ -237,6 +237,9 @@ pub struct AcOptions {
     pub cube_size: Option<i32>,
     /// `assists.ini [ASSISTS] IDEAL_LINE` (or `--ideal-line`): the ideal line shows from the start
     pub ideal_line: bool,
+    /// the session's kind as the pit box marker reads it (1 practice, 2 qualifying, 3 race:
+    /// the marker can show; 4 hot lap and above: never)
+    pub session_type: i32,
     /// a race start: the seconds the start lights count down from (`RaceManager::startRace`
     /// gives 20, give or take one); `None`: a session that has started (no countdown)
     pub start_lights: Option<f32>,
@@ -432,6 +435,12 @@ pub struct AcRenderer {
     ideal_on: bool,
     /// `StartingLights`, `StartingTrackSemaphore`, and `RaceManager::currentSession.startTime`
     /// on the picture's clock (`None`: no race start)
+    /// `TrackAvatar::lollipopCrews`, the marker of `PitStop`, and what they are built from
+    /// once the car is there: the track's model, its data folder, its pit boxes (on the road)
+    /// and the track itself for the rays
+    lollipops: Vec<rustyac_render::pit_crew::LollipopCrew>,
+    pit_marker: Option<rustyac_render::pit_crew::PitIndicator>,
+    pit_setup: Option<(NodeId, PathBuf, Vec<Mat44f>, rustyac_physics::track::Track)>,
     start_lights: Option<rustyac_render::start_lights::StartingLights>,
     semaphore: Option<rustyac_render::start_lights::StartingTrackSemaphore>,
     race_start_ms: Option<f64>,
@@ -581,7 +590,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -616,15 +625,24 @@ impl AcRenderer {
         self.dynamic_objects = rustyac_render::crowds::init_dynamic_objects(&mut self.graphics, &mut self.scene, folder, layout, model);
         self.track_folder = Some(path_text(folder));
         let data = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
-        // TrackAvatar::TrackAvatar: the ideal line, from data/ideal_line.ai or else the AI line
-        match self.build_ideal_line(folder, layout, &data) {
-            Ok(line) => {
-                self.scene.compile(&self.graphics, line);
-                self.scene.add_child(self.track_node, line);
-                self.scene.nodes[line].is_active = self.ideal_on;
-                self.ideal_line = Some(line);
+        // the track as the physics has it: the rays of the ideal line and of the pit crew, the
+        // pit boxes where initRespawnPositionSet put them
+        match rustyac_physics::track::loader::load_track(folder, layout) {
+            Ok((track, _)) => {
+                // TrackAvatar::TrackAvatar: the ideal line, from data/ideal_line.ai or else the AI line
+                match self.build_ideal_line(&track, &data) {
+                    Ok(line) => {
+                        self.scene.compile(&self.graphics, line);
+                        self.scene.add_child(self.track_node, line);
+                        self.scene.nodes[line].is_active = self.ideal_on;
+                        self.ideal_line = Some(line);
+                    }
+                    Err(message) => println!("no ideal line: {message}"),
+                }
+                let pits: Vec<Mat44f> = track.spawn_positions.get("PIT").map(|slots| slots.iter().map(|i| track.helper_nodes[*i].local).collect()).unwrap_or_default();
+                self.pit_setup = Some((model, data.clone(), pits, track));
             }
-            Err(message) => println!("no ideal line: {message}"),
+            Err(message) => println!("no ideal line and no pit crew: {message}"),
         }
         self.graphics.load_track_lighting(&data.join("data/lighting.ini"));
         // TrackAvatar::TrackAvatar: the grooves, then the crowds (which leave rand() seeded)
@@ -651,10 +669,9 @@ impl AcRenderer {
     /// The ideal line of `TrackAvatar::TrackAvatar` 0x1401c5250: `IdealLine::IdealLine` on
     /// `data/ideal_line.ai` when the track has one, else on its AI line, with the track's own
     /// rays (straight down from every sample).
-    fn build_ideal_line(&mut self, folder: &Path, layout: &str, data: &Path) -> Result<NodeId, String> {
+    fn build_ideal_line(&mut self, track: &rustyac_physics::track::Track, data: &Path) -> Result<NodeId, String> {
         use rustyac_physics::track::spline::AiSpline;
         use rustyac_physics::vecmath::Vec3f;
-        let (track, _) = rustyac_physics::track::loader::load_track(folder, layout)?;
         let file = data.join("data/ideal_line.ai");
         let own;
         let spline = if rustyac_physics::data::exists(&file) {
@@ -712,8 +729,39 @@ impl AcRenderer {
         }
         (car.lock_virtual_steer, car.hide_arms_in_cockpit, car.hide_steer) = self.cockpit_flags;
         car.init_common_post_physics(&mut self.graphics, &mut self.scene, &self.sim_nodes, tyre_width)?;
-        let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
+        let mut summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
         self.car = Some(car);
+        // Sim::Sim, once the cars are there: TrackAvatar::initPitCrew, then PitStop::PitStop's marker
+        if let Some((model, data, pits, track)) = &self.pit_setup {
+            use rustyac_physics::vecmath::Vec3f;
+            let cars = [rustyac_render::pit_crew::CrewCar { folder_text: path_text(folder), folder: folder.to_path_buf(), skin: skin.clone(), guid: 0 }];
+            let down = Vec3f::new(0.0, -1.0, 0.0);
+            let ray = |from: &[f32; 3], length: f32| track.ray_cast_hit(&Vec3f::new(from[0], from[1], from[2]), &down, length).map(|hit| hit.contact.pos);
+            match rustyac_render::pit_crew::init_pit_crew(&mut self.graphics, &mut self.scene, *model, data, pits, &cars, &ray) {
+                Ok(crews) => self.lollipops = crews,
+                Err(message) => println!("WARNING: no pit crew: {message}"),
+            }
+            if let Some(pit) = pits.first() {
+                // cfg/gameplay.ini [PIT_INDICATOR] ONLY_IN_PITLINE: on when the key is missing
+                let mut only_in_pitline = true;
+                let gameplay = self.graphics.documents_folder.join("Assetto Corsa/cfg/gameplay.ini");
+                if gameplay.is_file() {
+                    if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&gameplay) {
+                        if ini.has_key("PIT_INDICATOR", "ONLY_IN_PITLINE") {
+                            only_in_pitline = ini.get_int("PIT_INDICATOR", "ONLY_IN_PITLINE").unwrap_or(0) > 0;
+                        }
+                    }
+                }
+                match rustyac_render::pit_crew::PitIndicator::new(&mut self.graphics, &mut self.scene, self.track_node, pit, only_in_pitline) {
+                    Ok(marker) => self.pit_marker = Some(marker),
+                    Err(message) => println!("WARNING: no pit box marker: {message}"),
+                }
+            }
+            summary.push_str(&format!("; pit crew: {} lollipop man, the marker {}", self.lollipops.len(), if self.pit_marker.is_some() { "loaded" } else { "missing" }));
+            if !self.lollipops.is_empty() && self.graphics.video.world_detail < 5 {
+                summary.push_str(" (the lollipop man only shows with WORLD_DETAIL 5, as in the game)");
+            }
+        }
         Ok(summary)
     }
 
@@ -878,6 +926,12 @@ impl AcRenderer {
             }
             self.start_race();
         }
+        // Game::update, the track's children: LollipopCrew::update (the player's man follows the
+        // pit stop's state: up while the car is in the pit lane, down once it has stopped in its box)
+        let pit_state = self.pit_marker.as_ref().map(|m| m.state);
+        for crew in &mut self.lollipops {
+            crew.update(&mut self.scene, dt, pit_state, false);
+        }
         let mut modes = (2, 0);
         if let Some(car) = &mut self.car {
             car.game_time_ms = self.time_ms;
@@ -923,6 +977,17 @@ impl AcRenderer {
             car.cars_count = 1;
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
+        }
+        // PitStop::update, after the cars: the pit box marker
+        let pit_inputs = self.car.as_ref().map(|car| {
+            let b = self.scene.nodes[car.body_transform].matrix.m[3];
+            rustyac_render::pit_crew::PitInputs { car_position: [b[0], b[1], b[2]], speed: view.speed_ms, in_pitlane: view.lap.in_pit_lane, session_type: self.options.session_type, pause_menu: self.told_paused, replay: info.replay }
+        });
+        if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {
+            let rand = &mut self.graphics.crt_rand;
+            marker.update(&mut self.scene, &mut || {
+                rand.next();
+            }, inputs);
         }
         // TrackAvatar::update: the drifting objects (the pause menu does not stop them)
         rustyac_render::crowds::update_dynamic_objects(&mut self.scene, &mut self.dynamic_objects, dt);
@@ -985,6 +1050,10 @@ impl AcRenderer {
         // Game::evOnPreGUI
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
+        }
+        // Game::renderHUD: PitStop::renderHUD, the marker's part
+        if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {
+            marker.render_hud(&mut self.scene, inputs);
         }
         // Game::renderHUD: StartingLights::renderHUD writes the lamps after the scene is drawn
         // (they change in the next frame, as in the game)

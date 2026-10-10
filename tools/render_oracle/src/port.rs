@@ -76,8 +76,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
 
     // TrackAvatar::init3D
     let mut dynamic_objects = Vec::new();
+    let mut track_model = None;
     if let Some(track) = &frame.track {
         let model = scene.node(&format!("TRACK {}", track.name));
+        track_model = Some(model);
         let mut io = Kn5Io::new();
         for entry in &track.models {
             io.skin_override_path.push(format!("{}/texture", rustyac_render::model::get_path(&entry.filename)));
@@ -167,6 +169,17 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         None => None,
     };
 
+    // Sim::Sim: TrackAvatar::initPitCrew, then the pit box marker of PitStop::PitStop
+    let mut lollipops = Vec::new();
+    let mut pit_marker = None;
+    if let (true, Some(track), Some(model), Some(spec)) = (frame.pit_crew, &frame.track, track_model, &frame.car) {
+        let pits = crate::frames::pit_matrices();
+        let cars = [rustyac_render::pit_crew::CrewCar { folder_text: spec.folder.clone(), folder: std::path::PathBuf::from(&spec.folder), skin: spec.skin.clone(), guid: 0 }];
+        lollipops = rustyac_render::pit_crew::init_pit_crew(&mut graphics, &mut scene, model, std::path::Path::new(&track.data_folder), &pits, &cars, &|from, length| crate::frames::ray_cast(from, &[0.0, -1.0, 0.0], length).map(|hit| hit.0))?;
+        if let Some(pit) = pits.first() {
+            pit_marker = Some(rustyac_render::pit_crew::PitIndicator::new(&mut graphics, &mut scene, track_node, pit, true)?);
+        }
+    }
     // Sim::Sim: the mirror texture and the virtual mirror, when video.ini asks for mirrors
     let profile = crate::root::profile();
     let mut mirror = match profile.mirror_size {
@@ -244,6 +257,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         if let Some(sky) = &mut camera.base.sky_box {
             sky.update_clouds_animation(crate::frames::DT * args.time_mult);
         }
+        // Game::update: the track's children first: LollipopCrew::update
+        for crew in &mut lollipops {
+            crew.update(&mut scene, crate::frames::DT, Some(step.extra.pit_state), false);
+        }
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut car {
             car.max_gear = frame.car.as_ref().map(|c| c.max_gear).unwrap_or(0);
@@ -280,6 +297,15 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             car.has_kers = step.extra.kers_max > 0.0;
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
+        }
+        // PitStop::update (after the cars): the marker
+        if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
+            let b = scene.nodes[car.body_transform].matrix.m[3];
+            let inputs = crate::frames::pit_inputs(step, [b[0], b[1], b[2]]);
+            let rand = &mut graphics.crt_rand;
+            marker.update(&mut scene, &mut || {
+                rand.next();
+            }, &inputs);
         }
         // DynamicTrackManager::update
         if let Some(grooves) = &mut grooves {
@@ -320,6 +346,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             rendered.width = width;
             rendered.height = height;
             rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+        }
+        // Game::renderHUD: PitStop::renderHUD, the marker's part
+        if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
+            let b = scene.nodes[car.body_transform].matrix.m[3];
+            marker.render_hud(&mut scene, &crate::frames::pit_inputs(step, [b[0], b[1], b[2]]));
         }
         // Game::renderHUD, after the scene: StartingLights::renderHUD
         if let Some((lights, _)) = &mut start_lights {

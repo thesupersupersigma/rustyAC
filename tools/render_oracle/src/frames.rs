@@ -114,11 +114,14 @@ pub struct Extra {
     pub tts: f32,
     /// `--set newsession=<n>@<frame>`: `Sim::evOnNewSession` fires when the number changes
     pub new_session: i32,
+    /// `--set pitstate=<n>`: the pit crew and the pit box marker are built; `PitStop::state`
+    /// as the lollipop man reads it (1: up, 4: down)
+    pub pit_state: i32,
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4 }
     }
 }
 
@@ -142,6 +145,30 @@ pub struct Frame {
     pub ideal_line: Option<String>,
     /// `--set tts=…`: `StartingLights` and `StartingTrackSemaphore` are built
     pub start_lights: bool,
+    /// `--set pitstate=…`: the lollipop men, the static crews and the pit box marker are built
+    pub pit_crew: bool,
+}
+
+/// The matrices of the track's `AC_PIT_<n>` nodes as the port's physics has them (put on the
+/// road by `initRespawnPositionSet`).
+pub fn pit_matrices() -> Vec<Mat44f> {
+    RAY_TRACK.with(|t| {
+        let track = t.borrow();
+        let Some(track) = track.as_ref() else { return Vec::new() };
+        track.spawn_positions.get("PIT").map(|slots| slots.iter().map(|i| track.helper_nodes[*i].local).collect()).unwrap_or_default()
+    })
+}
+
+/// What the pit box marker's rules read in a frame.
+pub fn pit_inputs(step: &Step, body_position: [f32; 3]) -> rustyac_render::pit_crew::PitInputs {
+    rustyac_render::pit_crew::PitInputs {
+        car_position: body_position,
+        speed: step.state.speed,
+        in_pitlane: step.state.tyre_surface_def.iter().any(|d| d.is_pitlane),
+        session_type: step.extra.session_type,
+        pause_menu: step.extra.pause,
+        replay: step.extra.replay,
+    }
 }
 
 /// `RaceManager::currentSession.startTime` of a frame, and what the game then computes from
@@ -213,6 +240,8 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     // where the car would stand: the first grid slot, or the origin without a track
     let mut place = [0.0f32, 0.0, 0.0];
     let mut forward = [0.0f32, 0.0, 1.0];
+    // the first pit box and the direction a car stands in it
+    let mut pit_box: Option<([f32; 3], [f32; 3])> = None;
     if let Some(name) = &args.track {
         let folder = args.game.join("content/tracks").join(name);
         if !folder.is_dir() {
@@ -237,6 +266,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             place = [position.x, position.y, position.z];
             forward = [-tail.x, -tail.y, -tail.z];
         }
+        pit_box = physical.spawn_pose("PIT", 0).map(|(position, tail)| ([position.x, position.y, position.z], [-tail.x, -tail.y, -tail.z]));
         RAY_TRACK.with(|t| *t.borrow_mut() = Some(physical));
     }
     // the car, where its physics state has it
@@ -319,6 +349,14 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         // physics body ("eyes" of Task 20 leaves the offset out and looks from above the roof)
         let seat = |up: f32, ahead: f32| eye_offset(up + graphics_offset[1], ahead + graphics_offset[2]);
         match args.view.as_str() {
+            // from the pit lane ahead of the first pit box, back at the box: the lollipop man,
+            // the crew, the marker ("pit2": from the side)
+            "pit" | "pit2" => {
+                let (p, f) = pit_box.ok_or("the view pit: the track has no AC_PIT_0")?;
+                let eye = if args.view == "pit" { [p[0] + f[0] * 13.0, p[1] + 2.2, p[2] + f[2] * 13.0] } else { [p[0] + f[0] * 4.0 - f[2] * 9.0, p[1] + 1.8, p[2] + f[2] * 4.0 + f[0] * 9.0] };
+                let target = [p[0] + f[0] * 3.0, p[1] + 1.0, p[2] + f[2] * 3.0];
+                return Ok(CameraSpec { matrix: look_from(eye, target), fov: 60.0, near: 0.1, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 });
+            }
             // looking ahead over the wheel
             "onboard" => return Ok(CameraSpec { matrix: look_from(seat(0.0, 0.0), seat(-0.12, 1.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 }),
             // looking down at the dials and the hands
@@ -394,7 +432,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         _ => None,
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
-    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts") })
+    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate") })
 }
 
 /// The picture frames `from .. from + count` of a tape written by `car_oracle run
@@ -465,6 +503,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "ideal" => x.ideal = on(value)?,
         "tts" => x.tts = number(value)?,
         "newsession" => x.new_session = number(value)? as i32,
+        "pitstate" => x.pit_state = number(value)? as i32,
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
@@ -486,7 +525,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

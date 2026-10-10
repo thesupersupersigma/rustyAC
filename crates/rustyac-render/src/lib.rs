@@ -37,6 +37,7 @@ pub mod mirror;
 pub mod model;
 pub mod panels;
 pub mod particles;
+pub mod pit_crew;
 pub mod scene;
 pub mod shader;
 pub mod skid;

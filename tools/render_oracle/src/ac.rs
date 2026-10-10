@@ -60,6 +60,10 @@ const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): sran
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70; // AISpline::AISpline()
 const VA_AI_SPLINE_LOAD_FAST: usize = 0x1_402a_83c0; // AISpline::loadFast(const std::wstring&)
+const VA_INIT_RESPAWN_POSITION_SET: usize = 0x1_401c_b8c0; // TrackAvatar::initRespawnPositionSet(const std::wstring&)
+const VA_SPAWN_POSITIONS_HEAD: usize = 0x1_401c_6d80; // the head node of TrackAvatar::spawnPositions (std::map's _Buyheadnode)
+const VA_INIT_PIT_CREW: usize = 0x1_401c_a630; // TrackAvatar::initPitCrew()
+const VA_LOLLIPOP_CREW_UPDATE: usize = 0x1_4011_3ab0; // LollipopCrew::update(float)
 const VA_TRACK_NEW_SESSION_HANDLER: usize = 0x1_401c_6b70; // the handler TrackAvatar::TrackAvatar hangs on Sim::evOnNewSession
 const VA_FUNCTION_QUEUE_VTABLE: usize = 0x1_404c_7b30; // Concurrency::concurrent_queue<std::function<void(void)>>::`vftable'
 const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
@@ -89,11 +93,36 @@ unsafe extern "C" fn track_ray_cast(_track: *mut u8, from: *const [f32; 3], dir:
 
 /// A stand-in `Track` (0x148 bytes) of which only `rayCast` is ever called.
 pub unsafe fn ray_track(acs: &Acs) -> *mut u8 {
+    let track = acs.alloc(0x148);
+    wr(track, 0, ray_table(acs));
+    track
+}
+
+/// The table of a stand-in `Track`: `rayCast` in slot 1.
+unsafe fn ray_table(acs: &Acs) -> *mut u8 {
     let table = acs.alloc(0x40);
     wr(table, 8, track_ray_cast as *const () as usize);
-    let track = acs.alloc(0x148);
-    wr(track, 0, table);
-    track
+    table
+}
+
+/// Files of the game the pit crew opens by paths under the current folder (the scratch root).
+fn copy_into_root(game: &std::path::Path, relative: &str) -> Result<(), String> {
+    let from = game.join(relative);
+    if from.is_dir() {
+        std::fs::create_dir_all(relative).map_err(|e| format!("{relative}: {e}"))?;
+        for entry in std::fs::read_dir(&from).map_err(|e| e.to_string())?.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
+            let to = std::path::Path::new(relative).join(entry.file_name());
+            if !to.is_file() {
+                std::fs::copy(entry.path(), &to).map_err(|e| format!("{}: {e}", to.display()))?;
+            }
+        }
+    } else if from.is_file() && !std::path::Path::new(relative).is_file() {
+        if let Some(parent) = std::path::Path::new(relative).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(&from, relative).map_err(|e| format!("{relative}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
@@ -499,6 +528,9 @@ impl Game {
         let mut dynamic_track = std::ptr::null_mut::<u8>();
         let mut ideal_line = std::ptr::null_mut::<u8>();
         let mut new_session_track = std::ptr::null_mut::<u8>();
+        let mut pit_track = std::ptr::null_mut::<u8>();
+        let pit_stop = acs.alloc(0x240);
+        wr(pit_stop, 0x120, 4i32);
         let mut start_lights = std::ptr::null_mut::<u8>();
         let mut semaphore = std::ptr::null_mut::<u8>();
         let mut track_game = std::ptr::null_mut::<u8>();
@@ -528,6 +560,18 @@ impl Game {
             wr(track_avatar, 0xe8, track_sim);
             wr(track_avatar, 0x08, game);
             new_session_track = track_avatar;
+            // TrackAvatar::TrackAvatar: the pit boxes put on the road by the game's own
+            // initRespawnPositionSet, with the port's rays
+            if frame.pit_crew {
+                wr(track_avatar, 0xf0, track_model);
+                wr(track_avatar, 0xf8, ray_table(acs));
+                let head: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SPAWN_POSITIONS_HEAD));
+                wr(track_avatar, 0x240, head(track_avatar.add(0x240)));
+                let init: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_INIT_RESPAWN_POSITION_SET));
+                init(track_avatar, wstring(acs, "PIT"));
+                wr(track_avatar, 0x58, acs.alloc(0xe0));
+                pit_track = track_avatar;
+            }
             write_wstring(acs, track_avatar.add(0x200), &track.data_folder);
             wr(track_sim, 0x150, track_avatar);
             // TrackAvatar::initDynamicObjects 0x1401c9840: the game's own, on the files of the
@@ -595,6 +639,9 @@ impl Game {
                 self.add_child(track_node, line);
                 wr(track_avatar, 0x58, line);
                 ideal_line = line;
+                if !pit_track.is_null() {
+                    wr(pit_track, 0x58, line);
+                }
             }
             grooves = acs.alloc(0x90);
             let ctor: extern "C" fn(*mut u8, *mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_DYNAMIC_TRACK_MANAGER_CTOR));
@@ -701,7 +748,7 @@ impl Game {
         }
         // Sim::addCar: the car's models and its objects
         let car = match &frame.car {
-            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred, ideal_line }, camera, console)?),
+            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred, ideal_line, track_avatar: pit_track, pit_stop }, camera, console)?),
             None => None,
         };
         // Sim::cars, for the grooves
@@ -710,6 +757,53 @@ impl Game {
             wr(list, 0, car.avatar());
             wr(track_sim, 0x208, list);
             wr(track_sim, 0x210, list.add(8));
+        }
+        // Sim::Sim: TrackAvatar::initPitCrew (the lollipop men, the track's crew meshes), the
+        // game's own; then the pit box marker of PitStop::PitStop, its model by hand
+        let mut lollipops: Vec<*mut u8> = Vec::new();
+        let mut pit_marker: Option<(*mut u8, rustyac_render::scene::Scene, rustyac_render::pit_crew::PitIndicator)> = None;
+        if let (false, Some(spec)) = (pit_track.is_null(), &frame.car) {
+            for file in ["pitcrew.kn5", "pitcrew.ksanim", "pitcrew_idle_up.ksanim", "pitcrew_idle_dw.ksanim", "pitcrew_Left.kn5", "pitcrew_Left.ksanim", "pitcrew_Left_idle_up.ksanim", "pitcrew_Left_idle_dw.ksanim"] {
+                copy_into_root(&self.game_folder, &format!("content/objects3D/{file}"))?;
+            }
+            if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&self.game_folder.join(format!("content/cars/{}/skins/{}/skin.ini", spec.name, spec.skin))) {
+                for key in ["SUIT", "HELMET", "BRAND"] {
+                    let folder = format!("content/texture/crew_{key}{}", ini.get_string("CREW", key).replace('\\', "/"));
+                    copy_into_root(&self.game_folder, &folder)?;
+                    if let Some(at) = folder.rfind('/') {
+                        copy_into_root(&self.game_folder, &format!("{}/_nm", &folder[..at]))?;
+                    }
+                }
+            }
+            wr(track_sim, 0x1d0, pit_stop);
+            let init: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_INIT_PIT_CREW));
+            init(pit_track);
+            let (begin, end): (*const *mut u8, *const *mut u8) = (rd(pit_track, 0x2a0), rd(pit_track, 0x2a8));
+            if !begin.is_null() {
+                lollipops = std::slice::from_raw_parts(begin, end.offset_from(begin) as usize).to_vec();
+            }
+            // the marker at the player's pit box (the node as initRespawnPositionSet left it)
+            let vtable = rd::<*const usize>(track_model, 0);
+            let find: extern "C" fn(*mut u8, *const u8, bool) -> *mut u8 = std::mem::transmute(*vtable.add(5));
+            let pit_node = find(track_model, wstring(acs, "AC_PIT_0"), true);
+            if !pit_node.is_null() {
+                let marker = self.node("PIT_INDICATOR");
+                let io = self.kn5io();
+                let file = format!("{}/content/objects3D/pit_indicator.kn5", crate::frames::path_text(&self.game_folder));
+                let add_folder: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_KN5IO_ADD_TEXTURE_FOLDER));
+                add_folder(io, wstring(acs, &format!("{}/texture", rustyac_render::model::get_path(&file))));
+                let top = self.load_kn5(io, &file)?;
+                self.add_child(marker, top);
+                compile(self.graphics, marker);
+                self.add_child(track_node, marker);
+                let matrix: [f32; 16] = rd(pit_node, 8);
+                wr(marker, 8, matrix);
+                // its rules are the port's (PitStop::update needs the game's whole pit menu)
+                let mut rules_scene = rustyac_render::scene::Scene::new();
+                let rules_node = rules_scene.node("PIT_INDICATOR");
+                let rules = rustyac_render::pit_crew::PitIndicator::rules_only(rules_node, [matrix[12], matrix[13], matrix[14]], true);
+                pit_marker = Some((marker, rules_scene, rules));
+            }
         }
 
         let cube_log;
@@ -814,9 +908,25 @@ impl Game {
                 let animate: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SKYBOX_UPDATE_CLOUDS_ANIMATION));
                 animate(sky, crate::frames::DT * time_mult);
             }
+            // Game::update: the track's children first: LollipopCrew::update
+            wr(pit_stop, 0x120, step.extra.pit_state);
+            for &crew in &lollipops {
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_LOLLIPOP_CREW_UPDATE));
+                update(crew, crate::frames::DT);
+            }
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
                 self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
+            }
+            // PitStop::update (after the cars): the marker's rules; the number Car::getPitstopTime
+            // draws comes from the game's own rand()
+            if let (Some((marker, rules_scene, rules)), Some(car)) = (&mut pit_marker, &car) {
+                let inputs = crate::frames::pit_inputs(step, car.body_position());
+                let rand: extern "C" fn() -> i32 = std::mem::transmute(acs.crt_function(c"rand"));
+                rules.update(rules_scene, &mut || {
+                    rand();
+                }, &inputs);
+                wr(*marker, 0xd8, rules_scene.nodes[rules.node].is_active as u8);
             }
             // DynamicTrackManager::update 0x1401cdba0 (Game::update skips an object that is not active)
             if !grooves.is_null() && rd::<u8>(grooves, 0x30) != 0 {
@@ -855,6 +965,12 @@ impl Game {
                 rendered.width = width;
                 rendered.height = height;
                 rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            }
+            // Game::renderHUD: PitStop::renderHUD, the marker's part
+            if let (Some((marker, rules_scene, rules)), Some(car)) = (&mut pit_marker, &car) {
+                let inputs = crate::frames::pit_inputs(step, car.body_position());
+                rules.render_hud(rules_scene, &inputs);
+                wr(*marker, 0xd8, rules_scene.nodes[rules.node].is_active as u8);
             }
             // Game::renderHUD 0x140242e30, after the scene: StartingLights::renderHUD (an object
             // that is not active is left out)

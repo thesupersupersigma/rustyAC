@@ -320,6 +320,10 @@ pub struct SimNodes {
     pub unblurred: *mut u8,
     /// `TrackAvatar::idealLine` (null: none was built)
     pub ideal_line: *mut u8,
+    /// the track's stand-in `TrackAvatar` and a stand-in `PitStop`, for the pit crew (null: the
+    /// car's `Sim` gets a small track block of its own, as before)
+    pub track_avatar: *mut u8,
+    pub pit_stop: *mut u8,
 }
 
 /// The game's objects of one car.
@@ -371,6 +375,12 @@ impl Car {
     /// The fake `CarAvatar`.
     pub fn avatar(&self) -> *mut u8 {
         self.car
+    }
+
+    /// `CarAvatar::bodyMatrix`'s position, as of the last update.
+    pub unsafe fn body_position(&self) -> [f32; 3] {
+        let m: [f32; 16] = rd(self.car, 0x224);
+        [m[12], m[13], m[14]]
     }
 }
 
@@ -488,9 +498,11 @@ impl Game {
         // A TrackAvatar of which only the ideal line's node is touched; the one car.
         let (mut mirror, mut virtual_mirror) = (std::ptr::null_mut::<u8>(), std::ptr::null_mut::<u8>());
         if crate::root::profile().mirror_size != 0 {
-            let track = acs.alloc(0x200);
-            wr(track, 0x58, if nodes.ideal_line.is_null() { acs.alloc(0xe0) } else { nodes.ideal_line });
-            wr(sim, 0x150, track);
+            if nodes.track_avatar.is_null() {
+                let track = acs.alloc(0x200);
+                wr(track, 0x58, if nodes.ideal_line.is_null() { acs.alloc(0xe0) } else { nodes.ideal_line });
+                wr(sim, 0x150, track);
+            }
             let cars = acs.alloc(0x10);
             wr(cars, 0, car);
             wr(sim, 0x208, cars);
@@ -510,6 +522,10 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VIRTUAL_MIRROR_CTOR));
             ctor(virtual_mirror, sim);
             wr(sim, 0x280, virtual_mirror);
+        }
+        if !nodes.track_avatar.is_null() {
+            wr(sim, 0x150, nodes.track_avatar);
+            wr(sim, 0x1d0, nodes.pit_stop);
         }
         wr(car, 0x0, acs.va(VA_CAR_AVATAR_VTABLE));
         wr(car, 0x8, game);
