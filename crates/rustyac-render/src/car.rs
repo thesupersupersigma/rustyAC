@@ -440,7 +440,7 @@ impl CarAvatar {
         self.animated_lights = AnimatedLights::new(scene, &self.folder, self.body_transform);
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
-        self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder, self.body_transform)?;
+        self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder_text, &self.folder, self.body_transform)?;
         self.digital_panels = Some(crate::panels::DigitalPanels::new(graphics, scene, &self.folder_text, &self.folder, self.body_transform)?);
         // (the game stops on a car whose flames have no textures; here it has no flames)
         self.flames = match Flames::new(graphics, scene, &self.folder, self.body_transform, sim.render_finished) {

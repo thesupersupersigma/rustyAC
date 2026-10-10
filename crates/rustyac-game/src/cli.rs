@@ -41,6 +41,10 @@ pub struct Options {
     /// `--sun <angle>`: `SUN_ANGLE` whatever race.ini says (-80 sunrise, 0 one o'clock, 80
     /// sunset)
     pub sun: Option<f32>,
+    /// `--weather <folder of content/weather>`: the weather whatever race.ini says;
+    /// `--time-mult <n>`: race.ini `TIME_MULT` (how fast the sun and the clouds move)
+    pub weather: Option<String>,
+    pub time_mult: Option<f32>,
     /// `--show-lights`, `--show-damage f,r,l,r,c`: with `--screenshot`, the picture is drawn
     /// with the headlights on / with these damage levels (km/h) whatever the physics says
     pub show_lights: bool,
@@ -178,6 +182,8 @@ impl Default for Options {
             mirror_size: None,
             flat_out: false,
             sun: None,
+            weather: None,
+            time_mult: None,
             show_lights: false,
             show_damage: None,
             virtual_mirror: false,
@@ -354,6 +360,8 @@ impl Options {
                 "--virtual-mirror" => o.virtual_mirror = true,
                 "--mirror-size" => o.mirror_size = Some(value("--mirror-size")?.parse().map_err(|_| "--mirror-size <pixels, 0: no mirrors>".to_string())?),
                 "--sun" => o.sun = Some(value("--sun")?.parse().map_err(|e| format!("--sun: {e}"))?),
+                "--weather" => o.weather = Some(value("--weather")?),
+                "--time-mult" => o.time_mult = Some(value("--time-mult")?.parse().map_err(|e| format!("--time-mult: {e}"))?),
                 "--show-lights" => o.show_lights = true,
                 "--flat-out" => o.flat_out = true,
                 "--show-damage" => {

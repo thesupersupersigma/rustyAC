@@ -99,7 +99,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = crate::root::profile().world_detail as f32;
-    camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics)?);
+    // (the oracle's race.ini has [WEATHER]: the clouds are made a first time in the constructor)
+    camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics, Some(&frame.weather))?);
     // RaceManager::initLighting, TrackAvatar::TrackAvatar, Sim::applyCustomWeather
     graphics.set_sun_angle(frame.sun_angle);
     if let Some(track) = &frame.track {
@@ -110,6 +111,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
     }
     if !frame.weather.is_empty() {
+        if let Some(sky) = &mut camera.base.sky_box {
+            sky.update_clouds_generation(&mut graphics, &frame.weather);
+        }
         graphics.apply_custom_weather(&frame.weather);
     }
     camera.base.camera.near_plane = 0.05;
@@ -158,6 +162,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         let s = step.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
+        // SunAnimator::update, the clouds' part
+        if let Some(sky) = &mut camera.base.sky_box {
+            sky.update_clouds_animation(crate::frames::DT * args.time_mult);
+        }
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut car {
             car.max_gear = frame.car.as_ref().map(|c| c.max_gear).unwrap_or(0);

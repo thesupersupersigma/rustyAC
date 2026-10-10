@@ -222,6 +222,9 @@ pub struct AcOptions {
     pub cube_faces: Option<i32>,
     /// `--mirror-size <n>`: `[MIRROR] SIZE` whatever `video.ini` says.
     pub mirror_size: Option<i32>,
+    /// race.ini `[LIGHTING] TIME_MULT` and `CLOUD_SPEED`; `None`: the file has no `[LIGHTING]`
+    /// (the game then makes no `SunAnimator`: the sun and the clouds stand still)
+    pub sun_animation: Option<(f32, f32)>,
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
@@ -249,13 +252,13 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     cube_faces = int("CUBEMAP", "FACES_PER_FRAME").clamp(0, 6);
     cube_far = ini.get_float("CUBEMAP", "FARPLANE").unwrap_or(0.0);
     if int("VIDEO", "AASAMPLES") > 1 {
-        notes.push(format!("video.ini AASAMPLES={}: multisampling comes in Task 22, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
+        notes.push(format!("video.ini AASAMPLES={}: multisampling comes in Task 23, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
     }
     if int("POST_PROCESS", "ENABLED") != 0 {
-        notes.push("video.ini [POST_PROCESS] ENABLED=1: post-processing comes in Task 22, the plain picture is drawn".to_string());
+        notes.push("video.ini [POST_PROCESS] ENABLED=1: post-processing comes in Task 23, the plain picture is drawn".to_string());
     }
     if ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0) > 0.0 {
-        notes.push("video.ini MOTION_BLUR: motion blur comes in Task 22, treated as off".to_string());
+        notes.push("video.ini MOTION_BLUR: motion blur comes in Task 23, treated as off".to_string());
     }
     video.smoke = Some(int("EFFECTS", "SMOKE"));
     video.mirror_size = int("MIRROR", "SIZE");
@@ -322,6 +325,8 @@ pub struct AcRenderer {
     virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
     /// `Game::gameTime.now`, milliseconds
     time_ms: f64,
+    /// `RaceManager::initLighting`'s `SunAnimator`
+    sun: Option<rustyac_render::sky::SunAnimator>,
     track_folder: Option<String>,
     options: AcOptions,
     hud: HudPass,
@@ -390,7 +395,9 @@ impl AcRenderer {
         let mut camera = CameraForward::new(&mut graphics)?;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
         camera.base.camera.max_layer = graphics.video.world_detail as f32;
-        camera.base.sky_box = Some(SkyBox::new(&mut graphics)?);
+        // SkyBox::SkyBox: race.ini [WEATHER] NAME makes the clouds a first time
+        let weather = (!options.weather.is_empty()).then(|| options.weather.clone());
+        camera.base.sky_box = Some(SkyBox::new(&mut graphics, weather.as_deref())?);
         camera.base.camera.near_plane = 0.05;
         camera.base.camera.far_plane = 40000.0;
         camera.cube_map_renderer.faces_per_frame = cube_faces;
@@ -418,7 +425,7 @@ impl AcRenderer {
             let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -484,7 +491,13 @@ impl AcRenderer {
             car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
         }
         self.graphics.set_sun_angle(self.options.sun_angle);
+        // RaceManager::initLighting 0x14013a3d0
+        self.sun = self.options.sun_animation.map(|(time_mult, cloud_speed)| rustyac_render::sky::SunAnimator::new(self.options.sun_angle, time_mult, cloud_speed));
         if !self.options.weather.is_empty() {
+            // Sim::applyCustomWeather 0x140198010: the clouds first
+            if let Some(sky) = &mut self.camera.base.sky_box {
+                sky.update_clouds_generation(&mut self.graphics, &self.options.weather.clone());
+            }
             self.graphics.apply_custom_weather(&self.options.weather.clone());
         }
         rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())
@@ -520,6 +533,11 @@ impl AcRenderer {
         self.camera.base.set_shadow_maps_splits(&mut self.graphics, s[0], s[1], s[2], s[3]);
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         self.time_ms += dt as f64 * 1000.0;
+        // SunAnimator::update: the sun, the lighting's clock, the clouds' drift (a rustyAC
+        // replay is the drive run again, so its sun moves as it did)
+        if let Some(sun) = &mut self.sun {
+            sun.update(&mut self.graphics, self.camera.base.sky_box.as_mut(), dt, info.paused, None);
+        }
         let mut modes = (2, 0);
         if let Some(car) = &mut self.car {
             car.game_time_ms = self.time_ms;

@@ -243,6 +243,8 @@ pub struct CullCamera {
     pub frustum: BoundingFrustum,
     pub is_cube_map_camera: bool,
     pub is_mirror: bool,
+    /// `Camera::matrix`
+    pub matrix: rustyac_physics::vecmath::Mat44f,
 }
 
 /// `RenderContext` with its `CameraMeshFilter`.

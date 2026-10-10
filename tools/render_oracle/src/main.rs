@@ -77,6 +77,8 @@ pub struct Args {
     /// of the car's folder), an empty file takes it away, and what is under `root/` goes into
     /// the car's folder as it is
     pub car_data: Option<PathBuf>,
+    /// `--time-mult <n>`: how fast the clouds drift (race.ini `TIME_MULT`)
+    pub time_mult: f32,
     /// the options of the frame, to hand on to the two child processes of `compare`
     pub frame_options: Vec<String>,
 }
@@ -115,6 +117,7 @@ fn parse() -> Result<Args, String> {
         serial: false,
         own_textures: false,
         car_data: None,
+        time_mult: 1.0,
         frame_options: Vec::new(),
     };
     let mut profile = root::TASK_20;
@@ -240,6 +243,10 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.sun_angle = text.parse().map_err(|_| "--sun <degrees>")?;
             }
+            "--time-mult" => {
+                text = value()?;
+                a.time_mult = text.parse().map_err(|_| "--time-mult <number>")?;
+            }
             "--weather" => {
                 text = value()?;
                 a.weather = text.clone();
@@ -299,7 +306,7 @@ fn run_side(args: &Args) -> Result<(), String> {
             }
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(args)?;
-            let rendered = unsafe { game.render(&frame, &args.dump)? };
+            let rendered = unsafe { game.render(&frame, &args.dump, args.time_mult)? };
             (game.init_log.clone(), rendered)
         }
         "port" => {

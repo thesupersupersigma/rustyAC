@@ -146,7 +146,7 @@ fn e30_at_magione_is_the_games() {
     let mut camera = CameraForward::new(&mut graphics).expect("the camera");
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = 5.0;
-    camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics).expect("the sky"));
+    camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics, Some("3_clear")).expect("the sky"));
     graphics.set_sun_angle(-16.0);
     if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&folder.join("data/lighting.ini")) {
         graphics.lighting.pitch_angle = ini.get_float("LIGHTING", "SUN_PITCH_ANGLE").unwrap_or(0.0);

@@ -149,6 +149,8 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
     copy_dir(&game.join("content/weather"), &root.join("content/weather"), true)?;
+    // the clouds' textures: the files of the folder itself
+    copy_dir(&game.join("content/texture/clouds"), &root.join("content/texture/clouds"), false)?;
     std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
     let video = video_ini(args.width, args.height);
     let same = std::fs::read_to_string(root.join("cfg/video.ini")).is_ok_and(|old| old == video);

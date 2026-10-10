@@ -48,6 +48,7 @@ const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGener
 const VA_CUBE_MAP_RENDERER_RENDER: usize = 0x1_4021_edb0; // CubeMapRenderer::render(CubeMap*, Node*, Camera*)
 const VA_CUBE_MAP_RENDERER_SET_PLANES: usize = 0x1_4021_f110; // CubeMapRenderer::setCameraNearFarPlanes(float, float)
 const VA_SKYBOX_UPDATE_CLOUDS: usize = 0x1_4021_db00; // SkyBox::updateCloudsGeneration(const std::wstring&)
+const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
 /// would run them all, is never run): kgl's map of input layouts, `Curve::openedFiles`,
@@ -366,7 +367,7 @@ impl Game {
 
     /// The scene of a frame built with the game's own objects, and the frame rendered by the
     /// game's own camera.
-    pub unsafe fn render(&self, frame: &Frame, dump: &[usize]) -> Result<Rendered, String> {
+    pub unsafe fn render(&self, frame: &Frame, dump: &[usize], time_mult: f32) -> Result<Rendered, String> {
         let acs = &self.acs;
         let begin: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_BEGIN_SCENE));
         let end: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_END_SCENE));
@@ -505,6 +506,11 @@ impl Game {
             }
             let s = step.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
+            // SunAnimator::update 0x1401adc10, the clouds' part
+            {
+                let animate: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SKYBOX_UPDATE_CLOUDS_ANIMATION));
+                animate(sky, crate::frames::DT * time_mult);
+            }
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
                 self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));

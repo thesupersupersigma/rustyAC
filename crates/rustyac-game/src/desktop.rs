@@ -153,6 +153,8 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     let game = rustyac_content::install::ac_root().ok_or_else(rustyac_content::install::not_found_hint)?;
     // the sun and the weather of race.ini; without one, midday and clear
     let (mut sun_angle, mut weather, mut skin) = (-16.0f32, "3_clear".to_string(), options.skin.clone());
+    // without a race.ini: the time runs at its own pace and the clouds drift
+    let mut sun_animation = Some((1.0f32, 0.2f32));
     let race = match (&options.race_ini_file, options.race_ini) {
         (Some(file), _) => Some(file.clone()),
         (None, Some(false)) => None,
@@ -161,6 +163,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
         if ini.has_section("LIGHTING") {
             sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(sun_angle);
+            sun_animation = Some((ini.get_float("LIGHTING", "TIME_MULT").unwrap_or(0.0), ini.get_float("LIGHTING", "CLOUD_SPEED").unwrap_or(0.0)));
+        } else {
+            sun_animation = None;
         }
         weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
         if skin.is_none() {
@@ -170,13 +175,16 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             }
         }
     }
-    if !weather.is_empty() && weather != "3_clear" && game.join("content/weather").join(&weather).join("weather.ini").is_file() {
-        println!("weather {weather}: its fog and colours are used; its clouds come in Task 21");
-    }
     if let Some(sun) = options.sun {
         sun_angle = sun;
     }
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size })?;
+    if let Some(name) = &options.weather {
+        weather = name.clone();
+    }
+    if let (Some(mult), Some((time_mult, _))) = (options.time_mult, &mut sun_animation) {
+        *time_mult = mult;
+    }
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation })?;
     for note in &renderer.notes {
         println!("{note}");
     }

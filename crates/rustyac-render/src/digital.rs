@@ -13,10 +13,10 @@
 //! Shift lights are either meshes whose `ksEmissive` is switched (`LED_n`) or meshes that are
 //! shown and hidden (`RPM_SERIE_n` and the other series).
 //!
-//! Not ported: `DigitalPanels` (two cars), the items drawn by a `DisplayNode` (`RPM_GRAPH`,
-//! `DELTA_GRAPH`, `GEAR_TX`), and the item types and LED types listed where they are skipped.
+//! The items drawn by a `DisplayNode` (`RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`) have theirs in
+//! `panels.rs`, next to `DigitalPanels`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -25,6 +25,7 @@ use rustyac_physics::data::ini::IniReader;
 use crate::gl::{GlRenderer, GL_QUADS};
 use crate::graphics::{Graphics, BLEND_ALPHA};
 use crate::material::{MaterialId, PASS_TRANSPARENT};
+use crate::panels::{DisplayNode, TYPE_DELTA_GRAPH, TYPE_GEAR_TX};
 use crate::scene::{NodeId, NodeKind, OnNodeRenderEvent, RenderableObject, Scene};
 use crate::shader::ShaderId;
 use crate::state::CarPhysicsState;
@@ -199,6 +200,9 @@ enum ItemType {
     PlaceHolder,
     GearColor,
     BestLap,
+    RpmGraph,
+    DeltaGraph,
+    GearTx,
     TurboLevel,
     TotalLaps,
     EstLaps,
@@ -221,7 +225,9 @@ struct DigitalItem {
     graph_max: f32,
     add_sign: i32,
     fuel_cons_units: i32,
-    text_node: Rc<RefCell<TextNode>>,
+    /// a text item has a `TextNode`, the graphs and `GEAR_TX` a `DisplayNode`
+    text_node: Option<Rc<RefCell<TextNode>>>,
+    display_node: Option<Rc<RefCell<DisplayNode>>>,
     decimals: i32,
     max_rpm: i32,
     max_speed: i32,
@@ -231,7 +237,8 @@ struct DigitalItem {
     current_refresh: f32,
     speedometer_units: i32,
     tyre_number: i32,
-    last_gear: i32,
+    /// (shared: a `GEAR_TX` node reads the gear of the item it refers to)
+    last_gear: Rc<Cell<i32>>,
     time_to_ignore: f32,
     time_to_ignore_base: f32,
 }
@@ -451,7 +458,7 @@ fn time_to_diff_string(ms: i32, d: i32) -> String {
 
 impl DigitalInstruments {
     /// `DigitalInstruments::DigitalInstruments` 0x1400eb030 with `initInstruments` 0x1400eb510.
-    pub fn new(graphics: &mut Graphics, scene: &mut Scene, folder: &Path, body_transform: NodeId) -> Result<DigitalInstruments, String> {
+    pub fn new(graphics: &mut Graphics, scene: &mut Scene, folder_text: &str, folder: &Path, body_transform: NodeId) -> Result<DigitalInstruments, String> {
         let mut d = DigitalInstruments::default();
         let Ok(ini) = IniReader::load(&folder.join("data/digital_instruments.ini")) else {
             return Ok(d);
@@ -482,6 +489,7 @@ impl DigitalInstruments {
                 current_refresh = (graphics.crt_rand.next() as f32 * f32::from_bits(0x3800_0100)) * update_refresh;
             }
             let type_name = ini.get_string(&section, "TYPE");
+            let mut display: Option<DisplayNode> = None;
             let mut item_decimals = 3;
             let (mut pre_fix, mut post_fix) = (String::new(), String::new());
             let mut tyre_number = 0;
@@ -623,8 +631,53 @@ impl DigitalInstruments {
                     ItemType::Fuel
                 }
                 "RPM_GRAPH" | "DELTA_GRAPH" | "GEAR_TX" => {
-                    println!("NOTE: digital item {section} TYPE={type_name} is drawn by a DisplayNode, which is not ported: it is left out");
-                    continue;
+                    let (name, kind, number) = match type_name.as_str() {
+                        "RPM_GRAPH" => ("RPM_DISPLAY", ItemType::RpmGraph, 6),
+                        "DELTA_GRAPH" => ("DELTA_DISPLAY", ItemType::DeltaGraph, TYPE_DELTA_GRAPH),
+                        _ => ("GEAR_TX", ItemType::GearTx, TYPE_GEAR_TX),
+                    };
+                    let node = scene.object_node(name);
+                    let mut dn = DisplayNode::new(node);
+                    dn.kind = number;
+                    let mut texture = |key: &str, null_test: bool| -> Texture {
+                        let name = ini.get_string(&section, key);
+                        let path = format!("{folder_text}/texture/{name}");
+                        if !(null_test && name == "NULL") && Path::new(&path).is_file() {
+                            graphics.resources.get_texture(&graphics.kgl, &path)
+                        } else {
+                            println!("[ERROR]: {key} {path} NOT FOUND");
+                            Texture::default()
+                        }
+                    };
+                    dn.tx_base = texture("TEXTURE_BASE", true);
+                    if kind != ItemType::GearTx {
+                        dn.tx_top = texture("TEXTURE_TOP", false);
+                    }
+                    dn.size = [get(&section, "WIDTH"), get(&section, "HEIGHT")];
+                    match kind {
+                        ItemType::RpmGraph => {
+                            graph_min = get(&section, "RPM_MIN");
+                            graph_max = get(&section, "RPM_MAX");
+                        }
+                        ItemType::DeltaGraph => {
+                            dn.trigger = get(&section, "DIRECTION");
+                            graph_max = get(&section, "DELTA_MAX");
+                            graph_min = ini.get_int(&section, "DEBUG").unwrap_or(0) as f32;
+                        }
+                        _ => {
+                            dn.trigger = get(&section, "TRIGGER");
+                            if ini.has_key(&section, "ITEM_REF") {
+                                let n = get(&section, "ITEM_REF") as i32;
+                                // (the game does not test the index)
+                                match d.items.get(n.max(0) as usize) {
+                                    Some(item) if n >= 0 => dn.value_int = Some(item.last_gear.clone()),
+                                    _ => println!("NOTE: digital item {section} ITEM_REF={n} is no earlier item: it never shows"),
+                                }
+                            }
+                        }
+                    }
+                    display = Some(dn);
+                    kind
                 }
                 other => {
                     println!("NOTE: digital item {section} TYPE={other} is not ported: it shows nothing");
@@ -643,6 +696,21 @@ impl DigitalInstruments {
             let c = float4(&ini, &section, "COLOR");
             let k = get(&section, "INTENSITY") * f32::from_bits(0x3b80_8081);
             let color = [k * c[0], k * c[1], k * c[2], c[3] * f32::from_bits(0x3b80_8081)];
+            let last_gear = Rc::new(Cell::new(if kind == ItemType::GForces { add_sign } else { 1 }));
+            if let Some(mut dn) = display {
+                // the quad's colour is the item's, never brought down to 1
+                dn.color = color;
+                let position = get3(&section, "POSITION");
+                scene.nodes[dn.node].matrix.m[3][0] = position[0];
+                scene.nodes[dn.node].matrix.m[3][1] = position[1];
+                scene.nodes[dn.node].matrix.m[3][2] = position[2];
+                let node = dn.node;
+                let dn = Rc::new(RefCell::new(dn));
+                scene.set_renderable_object(node, dn.clone());
+                scene.add_child(parent, node);
+                d.items.push(DigitalItem { kind, color, color2, color3, graph_min, graph_max, add_sign, fuel_cons_units, text_node: None, display_node: Some(dn), decimals: item_decimals, max_rpm, max_speed: 0, pre_fix, post_fix, update_refresh, current_refresh, speedometer_units: units, tyre_number, last_gear, time_to_ignore: -1.0, time_to_ignore_base });
+                continue;
+            }
             let blitter = StringBlitter3D::new(graphics, &ini.get_string(&section, "FONT"), gl.clone());
             let node = scene.object_node(&section);
             let scale = get(&section, "SIZE") / blitter.size_y;
@@ -671,7 +739,8 @@ impl DigitalInstruments {
                 graph_max,
                 add_sign,
                 fuel_cons_units,
-                text_node,
+                text_node: Some(text_node),
+                display_node: None,
                 decimals: item_decimals,
                 max_rpm,
                 max_speed: 0,
@@ -681,7 +750,7 @@ impl DigitalInstruments {
                 current_refresh,
                 speedometer_units: units,
                 tyre_number,
-                last_gear: 1,
+                last_gear,
                 time_to_ignore: -1.0,
                 time_to_ignore_base,
             });
@@ -896,7 +965,7 @@ impl DigitalInstruments {
         // 17: DRS_SERIE_n
         for section in sections("DRS_SERIE_") {
             let prefix = ini.get_string(&section, "PREFIX");
-            let (a, b) = (get(&section, "START_ANGLE"), get(&section, "END_ANGLE"));
+            let (a, b) = (get_int(&section, "START_ANGLE") as f32, get_int(&section, "END_ANGLE") as f32);
             let count = get_int(&section, "LED_COUNT") as f32;
             let inverted = get_int(&section, "INVERTED_DRS") != 0;
             let step = (b - a) / count;
@@ -951,7 +1020,7 @@ impl DigitalInstruments {
         // 21: POWER_918_n
         for section in sections("POWER_918_") {
             let prefix = ini.get_string(&section, "PREFIX");
-            let (a, b) = (get(&section, "START_TORQUE"), get(&section, "END_TORQUE"));
+            let (a, b) = (get_int(&section, "START_TORQUE") as f32, get_int(&section, "END_TORQUE") as f32);
             let count = get_int(&section, "LED_COUNT") as f32;
             let step = (b - a) / count;
             let mut t = step + a;
@@ -994,9 +1063,11 @@ impl DigitalInstruments {
                 item.color = [c[0], c[1], c[2], item.color[3]];
                 let c = get_ldr_color(graphics, [item.color2[0], item.color2[1], item.color2[2]]);
                 item.color2 = [c[0], c[1], c[2], item.color2[3]];
-                let mut node = item.text_node.borrow_mut();
-                let c = get_ldr_color(graphics, [node.color[0], node.color[1], node.color[2]]);
-                node.color = [c[0], c[1], c[2], node.color[3]];
+                if let Some(node) = &item.text_node {
+                    let mut node = node.borrow_mut();
+                    let c = get_ldr_color(graphics, [node.color[0], node.color[1], node.color[2]]);
+                    node.color = [c[0], c[1], c[2], node.color[3]];
+                }
             }
         }
         Ok(d)
@@ -1192,29 +1263,40 @@ impl DigitalItem {
         }
         let kmh = f32::from_bits(0x4066_6666);
         let mph = f32::from_bits(0x400f_29f7);
-        let mut node = self.text_node.borrow_mut();
+        // the graphs: how much of the top texture shows
+        if let Some(display) = &self.display_node {
+            let clamp = |t: f32| if t > 1.0 { 1.0 } else if t >= 0.0 { t } else { 0.0 };
+            match self.kind {
+                ItemType::RpmGraph => display.borrow_mut().blend_x = clamp((s.engine_rpm - self.graph_min) / (self.graph_max - self.graph_min)),
+                ItemType::DeltaGraph => display.borrow_mut().blend_x = if 0.0 >= self.graph_min { clamp(s.performance_meter / self.graph_max) } else { 1.0 },
+                _ => {}
+            }
+            return;
+        }
+        let Some(text_node) = self.text_node.clone() else { return };
+        let mut node = text_node.borrow_mut();
         let text = match self.kind {
-            ItemType::Unknown => return,
+            ItemType::Unknown | ItemType::RpmGraph | ItemType::DeltaGraph | ItemType::GearTx => return,
             ItemType::Gear | ItemType::GearColor => {
                 let g = s.gear as u32;
                 if g > 9 {
                     return;
                 }
                 if self.time_to_ignore_base <= 0.0 {
-                    self.last_gear = g as i32;
-                } else if self.last_gear != g as i32 && self.time_to_ignore <= 0.0 {
+                    self.last_gear.set(g as i32);
+                } else if self.last_gear.get() != g as i32 && self.time_to_ignore <= 0.0 {
                     self.time_to_ignore = self.time_to_ignore_base;
                 } else {
                     self.time_to_ignore = if g == 1 { self.time_to_ignore - f.dt } else { 0.0 };
                     if self.time_to_ignore <= 0.0 {
                         self.time_to_ignore = 0.0;
-                        self.last_gear = s.gear;
+                        self.last_gear.set(s.gear);
                     }
                 }
                 if self.kind == ItemType::GearColor {
                     node.color = if (self.max_rpm as f32) > s.engine_rpm { self.color } else { self.color2 };
                 }
-                GEARS.get(self.last_gear as usize).copied().unwrap_or("").to_string()
+                GEARS.get(self.last_gear.get() as usize).copied().unwrap_or("").to_string()
             }
             ItemType::Speed => {
                 let in_kmh = self.speedometer_units == 1 || (self.speedometer_units == 0 && !f.use_mph);
