@@ -33,6 +33,7 @@ pub mod lights;
 pub mod material;
 pub mod mirror;
 pub mod model;
+pub mod panels;
 pub mod particles;
 pub mod scene;
 pub mod shader;

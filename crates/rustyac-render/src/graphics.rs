@@ -129,6 +129,9 @@ pub struct Graphics {
     pub shaders: ShaderManager,
     pub resources: ResourceStore,
     pub custom_sun_direction: rustyac_physics::vecmath::Vec3f,
+    /// `GraphicsManager::gl` (+0x380): the manager's own immediate-mode drawer, 32 vertices
+    /// (taken out while it draws)
+    pub gl: Option<crate::gl::GlRenderer>,
 }
 
 fn ini_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
@@ -235,7 +238,9 @@ impl Graphics {
             shaders: ShaderManager::new(game_folder),
             resources: ResourceStore::new(),
             custom_sun_direction: rustyac_physics::vecmath::Vec3f::default(),
+            gl: None,
         };
+        graphics.gl = Some(crate::gl::GlRenderer::new(&graphics, 0x20));
         graphics.set_sampler_state();
         graphics.set_viewport(0, 0, video.width, video.height);
         graphics.load_lighting_settings(&game_folder.join("system/cfg/colorCurves.ini"));

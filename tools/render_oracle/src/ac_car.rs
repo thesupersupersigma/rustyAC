@@ -85,6 +85,8 @@ const VA_BLURRED_OBJECTS_CTOR: usize = 0x1_400c_35d0; // BlurredObjects::Blurred
 const VA_BLURRED_OBJECTS_UPDATE: usize = 0x1_400c_43b0; // BlurredObjects::update(float)
 const VA_CAR_FAKE_SHADOW_CTOR: usize = 0x1_400e_0d80; // CarFakeShadow::CarFakeShadow(CarAvatar*)
 const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCKey(unsigned int)
+const VA_DIGITAL_PANELS_CTOR: usize = 0x1_4008_20f0; // DigitalPanels::DigitalPanels(CarAvatar*)
+const VA_DIGITAL_PANELS_UPDATE: usize = 0x1_4008_3f70; // DigitalPanels::update(float)
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
 /// SuspensionAvatar.obj and SuspensionAnimator.obj.
@@ -152,7 +154,7 @@ const LOOSE_FILES: [&str; 6] = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_
 /// The car's files in the oracle's scratch folder: the game's code opens them by relative
 /// paths (`content/cars/<car>/…`). The data files are plain ones (from `cardata/` or unpacked
 /// from the car's `data.acd` in memory), the models, the skin and the animations are copies.
-pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Result<(), String> {
+pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec, car_data: Option<&Path>) -> Result<(), String> {
     let source = game.join("content/cars").join(&spec.name);
     let target = root.join("content/cars").join(&spec.name);
     if target.join("data.acd").exists() {
@@ -189,6 +191,52 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
         if source.join(name).is_file() {
             copy_file(&source.join(name), &target.join(name))?;
         }
+    }
+    // the digits of the panels
+    if source.join("texture/display_panel").is_dir() {
+        copy_folder(&source.join("texture/display_panel"), &target.join("texture/display_panel"))?;
+    }
+    // a made-up test car: files laid over the real car's (and the leftovers of an earlier one gone)
+    let marker = target.join("car_data_overlay.txt");
+    if marker.is_file() {
+        for line in std::fs::read_to_string(&marker).unwrap_or_default().lines() {
+            let _ = std::fs::remove_file(target.join(line));
+        }
+        let _ = std::fs::remove_file(&marker);
+        return prepare_root(root, game, repo, spec, car_data);
+    }
+    if let Some(overlay) = car_data {
+        let mut laid = Vec::new();
+        for entry in std::fs::read_dir(overlay).map_err(|e| format!("{}: {e}", overlay.display()))?.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let loose = name.ends_with(".png") || name.ends_with(".knh");
+            let relative = if loose { name.clone() } else { format!("data/{name}") };
+            let bytes = std::fs::read(entry.path()).map_err(|e| e.to_string())?;
+            if bytes.is_empty() {
+                let _ = std::fs::remove_file(target.join(&relative));
+            } else {
+                std::fs::write(target.join(&relative), bytes).map_err(|e| e.to_string())?;
+            }
+            laid.push(relative);
+        }
+        fn walk(from: &Path, to: &Path, relative: &str, laid: &mut Vec<String>) -> Result<(), String> {
+            for entry in std::fs::read_dir(from).map_err(|e| format!("{}: {e}", from.display()))?.filter_map(|e| e.ok()) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let r = if relative.is_empty() { name.clone() } else { format!("{relative}/{name}") };
+                if entry.path().is_dir() {
+                    walk(&entry.path(), to, &r, laid)?;
+                } else {
+                    std::fs::create_dir_all(to.join(&r).parent().unwrap()).map_err(|e| e.to_string())?;
+                    std::fs::copy(entry.path(), to.join(&r)).map_err(|e| e.to_string())?;
+                    laid.push(r);
+                }
+            }
+            Ok(())
+        }
+        if overlay.join("root").is_dir() {
+            walk(&overlay.join("root"), &target, "", &mut laid)?;
+        }
+        std::fs::write(&marker, laid.join("\n")).map_err(|e| e.to_string())?;
     }
     // the fonts of the dashboard's displays
     copy_folder(&game.join("content/fonts"), &root.join("content/fonts"))?;
@@ -290,6 +338,10 @@ pub struct Car {
     smokes: Vec<(*mut u8, usize)>,
     brake_discs: *mut u8,
     dynamic_effects: *mut u8,
+    digital_panels: *mut u8,
+    race_manager: *mut u8,
+    /// stand-ins for the other cars of the real-time order and of the leaderboard
+    other_cars: *mut u8,
 }
 
 impl Game {
@@ -340,6 +392,15 @@ impl Game {
         // a PhysicsAvatar whose engine has an air temperature of 0
         let race_manager = acs.alloc(0x400);
         wr(race_manager, 0x168, sim);
+        // the session started long ago; no RaceTimingServices (the leaderboard answers -1);
+        // carsRealTimePosition (records of 0x10 bytes)
+        wr(race_manager, 0x140, -1.0f64);
+        wr(race_manager, 0x8, game);
+        let other_cars = acs.alloc(0x12a8);
+        wr(other_cars, 0x1158, 99i32);
+        let real_time = acs.alloc(0x10 * 40);
+        wr(race_manager, 0x1a0, real_time);
+        wr(race_manager, 0x1a8, real_time.add(0x10 * 40));
         wr(sim, 0x1a8, race_manager);
         wr(sim, 0x1b8, acs.alloc(0x400));
         wr(sim, 0x228, console);
@@ -534,6 +595,7 @@ impl Game {
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BLURRED_OBJECTS_CTOR));
         ctor(blurred_objects, car);
         let digital_instruments = make(0xc8, VA_DIGITAL_INSTRUMENTS_CTOR);
+        let digital_panels = make(0xd8, VA_DIGITAL_PANELS_CTOR);
         let backfire = make(0x28, VA_BACKFIRE_PARAMS_CTOR);
         wr(car, 0x1068, backfire);
         let flames = make(0x158, VA_FLAMES_CTOR);
@@ -545,7 +607,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -578,8 +640,21 @@ impl Game {
         }
     }
 
-    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, dt: f32, now_ms: f64) {
+    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, extra: &crate::frames::Extra, dt: f32, now_ms: f64) {
         wr(c.game, 0x18, now_ms);
+        // the session and where the car stands in it
+        {
+            wr(c.race_manager, 0xe8, extra.session_type);
+            let real_time: *mut u8 = rd(c.race_manager, 0x1a0);
+            let sim: *mut u8 = rd(c.car, 0x130);
+            // PauseMenu::visible, PhysicsAvatar::engine.ambientTemperature
+            wr(rd::<*mut u8>(sim, 0x110), 0x150, extra.pause as u8);
+            wr(rd::<*mut u8>(sim, 0x1b8), 0x158, extra.air);
+            for i in 0..40usize {
+                let who = if i as i32 == extra.position { c.car } else { c.other_cars };
+                wr(real_time, 0x10 * i, who);
+            }
+        }
         // the camera manager of the frame
         let sim: *mut u8 = rd(c.car, 0x130);
         let camera_manager: *mut u8 = rd(sim, 0x188);
@@ -678,6 +753,7 @@ impl Game {
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
             (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
             (c.digital_instruments, VA_DIGITAL_INSTRUMENTS_UPDATE),
+            (c.digital_panels, VA_DIGITAL_PANELS_UPDATE),
             (c.flames, VA_FLAMES_UPDATE),
             (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),
             (c.dynamic_effects, VA_DYNAMIC_CAR_EFFECTS_UPDATE),

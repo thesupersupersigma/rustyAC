@@ -507,7 +507,7 @@ impl Game {
             set_splits(camera, s[0], s[1], s[2], s[3]);
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
-                self.update_car(car, &step.state, &step.camera, crate::frames::DT, crate::frames::game_time_ms(index));
+                self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
             }
 
             if index >= frame.capture {

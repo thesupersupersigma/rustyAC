@@ -151,6 +151,22 @@ pub struct CarAvatar {
     pub analog_instruments: AnalogInstruments,
     /// `DigitalInstruments`
     pub digital_instruments: DigitalInstruments,
+    pub digital_panels: Option<crate::panels::DigitalPanels>,
+    /// `RaceManager::getCurrentSessionType`, `getCarLeaderboardPosition` and
+    /// `getCarRealTimePosition` of this car, for the panels
+    pub session_type: i32,
+    pub leaderboard_position: i32,
+    pub real_time_position: i32,
+    /// what else the displays read (see `DigitalFrame`)
+    pub session_laps: u32,
+    pub cars_count: i32,
+    pub km_per_liter: f32,
+    pub max_fuel: f64,
+    pub kers_max_j: f32,
+    pub ers_max_j: f32,
+    pub has_kers: bool,
+    pub drivetrain: Option<(f32, f64)>,
+    pub ers_recharge: f32,
     /// `Game::gameTime.now`, milliseconds: the clock the dashboard's lights blink by
     pub game_time_ms: f64,
     /// the aids' levels as the displays show them, the air's temperature, miles for km
@@ -287,6 +303,19 @@ impl CarAvatar {
             gear_shift_shake: None,
             analog_instruments: AnalogInstruments::default(),
             digital_instruments: DigitalInstruments::default(),
+            digital_panels: None,
+            session_type: 0,
+            leaderboard_position: -1,
+            real_time_position: 0,
+            session_laps: 0,
+            cars_count: 1,
+            km_per_liter: 0.0,
+            max_fuel: 0.0,
+            kers_max_j: 0.0,
+            ers_max_j: 0.0,
+            has_kers: false,
+            drivetrain: None,
+            ers_recharge: 0.0,
             game_time_ms: 0.0,
             tc_level: 0,
             abs_level: 0,
@@ -412,6 +441,7 @@ impl CarAvatar {
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
         self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder, self.body_transform)?;
+        self.digital_panels = Some(crate::panels::DigitalPanels::new(graphics, scene, &self.folder_text, &self.folder, self.body_transform)?);
         // (the game stops on a car whose flames have no textures; here it has no flames)
         self.flames = match Flames::new(graphics, scene, &self.folder, self.body_transform, sim.render_finished) {
             Ok(flames) => Some(flames),
@@ -716,8 +746,26 @@ impl CarAvatar {
                 lap_count: state.lap_count,
                 sun_angle: graphics.lighting.angle,
                 use_mph: self.use_mph,
+                session_type: self.session_type,
+                session_laps: self.session_laps,
+                real_time_position: self.real_time_position,
+                leaderboard_position: self.leaderboard_position,
+                cars_count: self.cars_count,
+                km_per_liter: self.km_per_liter,
+                max_fuel: self.max_fuel,
+                kers_max_j: self.kers_max_j,
+                ers_max_j: self.ers_max_j,
+                has_kers: self.has_kers,
+                wing_angles: std::array::from_fn(|i| self.wing_angles.get(i).copied().unwrap_or(0.0)),
+                wings_count: self.wing_angles.len(),
+                drivetrain: self.drivetrain,
+                ers_recharge: self.ers_recharge,
             },
         );
+        if let Some(panels) = &mut self.digital_panels {
+            let frame = crate::panels::PanelFrame { game_time_ms: self.game_time_ms, pause_menu: self.pause_menu, session_type: self.session_type, leaderboard_position: self.leaderboard_position, real_time_position: self.real_time_position };
+            panels.update(scene, state, &frame);
+        }
         if let Some(flames) = &self.flames {
             let mut flames = flames.borrow_mut();
             flames.scene_camera = self.view.camera_matrix;

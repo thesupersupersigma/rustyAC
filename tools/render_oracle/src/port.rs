@@ -170,6 +170,15 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
                 camera_matrix: rustyac_physics::vecmath::Mat44f { m: std::array::from_fn(|r| std::array::from_fn(|c| step.camera.matrix[r * 4 + c])) },
                 use_pro_view: false,
             };
+            car.session_type = step.extra.session_type;
+            car.real_time_position = step.extra.position;
+            car.leaderboard_position = -1;
+            car.tc_level = step.extra.tc;
+            car.abs_level = step.extra.abs;
+            car.ambient_temperature = step.extra.air;
+            car.replay_mode = step.extra.replay;
+            car.replay_scale = step.extra.replay_scale;
+            car.pause_menu = step.extra.pause;
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
         }

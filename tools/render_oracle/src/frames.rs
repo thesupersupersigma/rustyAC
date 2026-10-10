@@ -73,6 +73,30 @@ pub struct CameraSpec {
 pub struct Step {
     pub state: rustyac_render::car::CarPhysicsState,
     pub camera: CameraSpec,
+    pub extra: Extra,
+}
+
+/// What a frame sets beside the car's physics state (`--set`), on both sides alike.
+#[derive(Clone, Copy, Debug)]
+pub struct Extra {
+    /// `RaceManager::currentSession.sessionType`
+    pub session_type: i32,
+    /// the car's slot among the cars in real time (0 the first); the leaderboard has it one higher
+    pub position: i32,
+    /// `Car::tractionControl` / `abs` current mode, the air temperature
+    pub tc: u32,
+    pub abs: u32,
+    pub air: f32,
+    /// `ReplayManager::isInReplaymode`, its time multiplier, `PauseMenu::visible`
+    pub replay: bool,
+    pub replay_scale: f32,
+    pub pause: bool,
+}
+
+impl Default for Extra {
+    fn default() -> Extra {
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false }
+    }
 }
 
 pub struct Frame {
@@ -201,7 +225,9 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             tyre_width = [front, front, rear, rear];
         }
         let max_gear = rustyac_physics::data::ini::IniReader::load(&folder.join("data/drivetrain.ini")).ok().and_then(|i| i.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
-        car = Some(CarSpec { name: name.clone(), folder: path_text(&folder), skin, steer_lock, tyre_width, max_gear });
+        // a made-up test car is read from the folder the oracle lays out for the port
+        let port_folder = if args.car_data.is_some() { args.root.join("port_side/content/cars").join(name) } else { folder.clone() };
+        car = Some(CarSpec { name: name.clone(), folder: path_text(&port_folder), skin, steer_lock, tyre_width, max_gear });
     }
     // where the sun is seen from the car (for the view into the sun): the same angles the
     // lighting uses, to the precision a camera needs
@@ -249,20 +275,21 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         }
         camera_for(&args.view, &at, &eye_point, sun_from, state)
     };
+    let mut extras = vec![Extra::default(); states.len()];
     for (index, state) in states.iter_mut().enumerate() {
         for (name, value, from) in &args.set {
             if index >= *from {
-                apply_set(state, name, value)?;
+                apply_set(state, &mut extras[index], name, value)?;
             }
         }
     }
     let steps: Vec<Step> = if states.is_empty() {
         let camera = camera_of(None)?;
-        (0..=args.capture).map(|_| Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera }).collect()
+        (0..=args.capture).map(|_| Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera, extra: Extra::default() }).collect()
     } else {
         let mut steps = Vec::with_capacity(states.len());
-        for state in &states {
-            steps.push(Step { state: *state, camera: camera_of(Some(state))? });
+        for (state, extra) in states.iter().zip(&extras) {
+            steps.push(Step { state: *state, camera: camera_of(Some(state))?, extra: *extra });
         }
         steps
     };
@@ -321,7 +348,7 @@ pub fn read_tape(path: &Path, from: usize, count: usize) -> Result<Vec<rustyac_r
 }
 
 /// One `--set name=value`.
-fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, name: &str, value: &str) -> Result<(), String> {
+fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: &str, value: &str) -> Result<(), String> {
     let number = |v: &str| v.parse::<f32>().map_err(|_| format!("--set {name}={v}: not a number"));
     let on = |v: &str| -> Result<bool, String> { Ok(number(v)? != 0.0) };
     match name {
@@ -337,6 +364,18 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, name: &str, value: &s
         "turbo" => s.turbo_boost = number(value)?,
         "water" => s.water = number(value)?,
         "kers" => s.kers_is_charging = on(value)?,
+        "p2p" => s.p2p_status = number(value)? as u8,
+        "p2pn" => s.p2p_activations = number(value)? as u8,
+        "session" => x.session_type = number(value)? as i32,
+        "pos" => x.position = number(value)? as i32,
+        "tc" => x.tc = number(value)? as u32,
+        "abs" => x.abs = number(value)? as u32,
+        "air" => x.air = number(value)?,
+        "replay" => {
+            x.replay = number(value)? != 0.0;
+            x.replay_scale = number(value)?;
+        }
+        "pause" => x.pause = on(value)?,
         "pit" => s.tyre_surface_def.iter_mut().for_each(|d| d.is_pitlane = value != "0"),
         "dirt" => {
             let k = number(value)?;
@@ -351,7 +390,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, name: &str, value: &s
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause pit dirt damage")),
     }
     Ok(())
 }

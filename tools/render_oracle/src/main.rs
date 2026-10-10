@@ -72,6 +72,11 @@ pub struct Args {
     pub serial: bool,
     /// the port reads textures with its own reader, not with d3dx11_43.dll
     pub own_textures: bool,
+    /// `--car-data <folder>`: files laid over the car's data on both sides (a made-up test car):
+    /// a file of the folder replaces the data file of that name (`.png` / `.knh`: the loose file
+    /// of the car's folder), an empty file takes it away, and what is under `root/` goes into
+    /// the car's folder as it is
+    pub car_data: Option<PathBuf>,
     /// the options of the frame, to hand on to the two child processes of `compare`
     pub frame_options: Vec<String>,
 }
@@ -109,6 +114,7 @@ fn parse() -> Result<Args, String> {
         loose: false,
         serial: false,
         own_textures: false,
+        car_data: None,
         frame_options: Vec::new(),
     };
     let mut profile = root::TASK_20;
@@ -165,6 +171,12 @@ fn parse() -> Result<Args, String> {
                 let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
                 text = absolute.to_string_lossy().into_owned();
                 a.tape = Some(absolute);
+            }
+            "--car-data" => {
+                let given = PathBuf::from(value()?);
+                let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
+                text = absolute.to_string_lossy().into_owned();
+                a.car_data = Some(absolute);
             }
             "--tape-from" => {
                 text = value()?;
@@ -283,7 +295,7 @@ fn run_side(args: &Args) -> Result<(), String> {
         "ac" => {
             root::prepare(args)?;
             if let Some(car) = &frame.car {
-                ac_car::prepare_root(&args.root, &args.game, &repo_root(), car)?;
+                ac_car::prepare_root(&args.root, &args.game, &repo_root(), car, args.car_data.as_deref())?;
             }
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(args)?;
@@ -292,6 +304,10 @@ fn run_side(args: &Args) -> Result<(), String> {
         }
         "port" => {
             rustyac_render::texture::force_fallback(args.own_textures);
+            // a made-up test car: the port reads a folder of its own, laid out like the game's
+            if let (Some(car), Some(_)) = (&frame.car, &args.car_data) {
+                ac_car::prepare_root(&args.root.join("port_side"), &args.game, &repo_root(), car, args.car_data.as_deref())?;
+            }
             port::render(args, &frame)?
         }
         other => return Err(format!("--side {other:?} is not ac or port")),

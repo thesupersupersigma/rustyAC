@@ -199,12 +199,28 @@ enum ItemType {
     PlaceHolder,
     GearColor,
     BestLap,
+    TurboLevel,
+    TotalLaps,
+    EstLaps,
+    FuelCons,
+    GForces,
+    KersLoad,
+    PositionCar,
+    PositionCount,
+    P2pDash,
+    FuelPerc,
 }
 
 struct DigitalItem {
     kind: ItemType,
     color: [f32; 4],
     color2: [f32; 4],
+    color3: [f32; 4],
+    /// `rpmGraphMin` / `rpmGraphMax`: also the limits of a `GFORCES` item
+    graph_min: f32,
+    graph_max: f32,
+    add_sign: i32,
+    fuel_cons_units: i32,
     text_node: Rc<RefCell<TextNode>>,
     decimals: i32,
     max_rpm: i32,
@@ -286,6 +302,27 @@ pub struct DigitalFrame {
     pub sun_angle: f32,
     /// `Speed::useMPH`
     pub use_mph: bool,
+    /// `RaceManager::getCurrentSessionType`, the laps of the session (`getSessionInfo`),
+    /// `getCarRealTimePosition` and `getCarLeaderboardPosition` of this car, the cars of the `Sim`
+    pub session_type: i32,
+    pub session_laps: u32,
+    pub real_time_position: i32,
+    pub leaderboard_position: i32,
+    pub cars_count: i32,
+    /// `CarAvatar::getKmPerLiter` 0x1400d3510
+    pub km_per_liter: f32,
+    /// `CarPhysicsInfo`: `maxFuel`, `kersMaxJ`, `ersMaxJ`, `hasKERS`
+    pub max_fuel: f64,
+    pub kers_max_j: f32,
+    pub ers_max_j: f32,
+    pub has_kers: bool,
+    /// `CarAvatar::wingsStatus`: the angle of each wing
+    pub wing_angles: [f32; 8],
+    pub wings_count: usize,
+    /// `Car::drivetrain.totalTorque` and `ratio`; `None` without a physics car
+    pub drivetrain: Option<(f32, f64)>,
+    /// `CarAvatar::currentERSNormalizedRecharge`
+    pub ers_recharge: f32,
 }
 
 #[derive(Default)]
@@ -308,7 +345,7 @@ fn float4(ini: &IniReader, section: &str, key: &str) -> [f32; 4] {
 
 /// `Node::getNodeChild<Mesh>` 0x1400e5d50: the first node of that name that is a mesh (a
 /// plain node of the same name is searched through like any other).
-fn mesh_node(scene: &Scene, node: NodeId, name: &str) -> Option<NodeId> {
+pub(crate) fn mesh_node(scene: &Scene, node: NodeId, name: &str) -> Option<NodeId> {
     for &child in &scene.nodes[node].children {
         if scene.nodes[child].name == name && matches!(scene.nodes[child].kind, NodeKind::Mesh(_) | NodeKind::SkinnedMesh(_)) {
             return Some(child);
@@ -328,7 +365,7 @@ fn mesh_material(scene: &Scene, n: NodeId) -> Option<MaterialId> {
     }
 }
 
-fn clone_material(graphics: &mut Graphics, scene: &mut Scene, n: NodeId) -> Result<Option<MaterialId>, String> {
+pub(crate) fn clone_material(graphics: &mut Graphics, scene: &mut Scene, n: NodeId) -> Result<Option<MaterialId>, String> {
     let Some(old) = mesh_material(scene, n) else {
         return Ok(None);
     };
@@ -450,8 +487,16 @@ impl DigitalInstruments {
             let mut tyre_number = 0;
             let mut time_to_ignore_base = -1.0f32;
             let mut color2 = [0.0f32; 4];
+            let mut color3 = [0.0f32; 4];
+            let (mut graph_min, mut graph_max, mut add_sign, mut fuel_cons_units) = (0.0f32, 0.0f32, 0, 0);
             let mut max_rpm = 0;
             let mut units = 0;
+            // KERS_LOAD keeps its INVERTED flag in the decimals' place
+            let optional_inverted = |decimals: &mut i32| {
+                if ini.has_key(&section, "INVERTED") {
+                    *decimals = ini.get_int(&section, "INVERTED").unwrap_or(0);
+                }
+            };
             let optional_decimals = |decimals: &mut i32| {
                 if ini.has_key(&section, "DECIMALS") {
                     *decimals = ini.get_int(&section, "DECIMALS").unwrap_or(0);
@@ -518,6 +563,55 @@ impl DigitalInstruments {
                     ItemType::Perf
                 }
                 "TURBO_BOOST" => ItemType::TurboBoost,
+                "TURBO_LEVEL" => ItemType::TurboLevel,
+                "TOTAL_LAPS" => ItemType::TotalLaps,
+                "EST_LAPS" => ItemType::EstLaps,
+                "POSITION_CAR" => ItemType::PositionCar,
+                "POSITION_COUNT" => ItemType::PositionCount,
+                "FUEL_CONS" => {
+                    if ini.has_key(&section, "UNITS") {
+                        fuel_cons_units = match ini.get_string(&section, "UNITS").as_str() {
+                            "MPG_UK" => 1,
+                            "MPG_US" => 2,
+                            "L100" => 3,
+                            _ => 0,
+                        };
+                    }
+                    ItemType::FuelCons
+                }
+                "GFORCES" => {
+                    item_decimals = ini.get_int(&section, "DECIMALS").unwrap_or(0);
+                    if ini.has_key(&section, "DIRECTION") {
+                        tyre_number = match ini.get_string(&section, "DIRECTION").as_str() {
+                            "Y" => 1,
+                            "Z" => 2,
+                            _ => 0,
+                        };
+                    }
+                    add_sign = ini.get_int(&section, "ADDSIGN").unwrap_or(0);
+                    graph_min = get(&section, "MIN");
+                    graph_max = get(&section, "MAX");
+                    ItemType::GForces
+                }
+                "KERS_LOAD" => {
+                    optional_inverted(&mut item_decimals);
+                    ItemType::KersLoad
+                }
+                "P2P_DASH" => {
+                    let c = float4(&ini, &section, "COLOR_ACTIVE");
+                    let k = get(&section, "INTENSITY_ACTIVE") * f32::from_bits(0x3b80_8081);
+                    color2 = [k * c[0], k * c[1], k * c[2], c[3] * f32::from_bits(0x3b80_8081)];
+                    let c = float4(&ini, &section, "COLOR_COOLING");
+                    let k = get(&section, "INTENSITY_COOLING") * f32::from_bits(0x3b80_8081);
+                    color3 = [k * c[0], k * c[1], k * c[2], c[3] * f32::from_bits(0x3b80_8081)];
+                    ItemType::P2pDash
+                }
+                "FUEL_PERC" => {
+                    pre_fix = ini.get_string(&section, "PREFIX");
+                    post_fix = ini.get_string(&section, "POSTFIX");
+                    item_decimals = ini.get_int(&section, "DECIMALS").unwrap_or(0);
+                    ItemType::FuelPerc
+                }
                 "TC_LEVEL" => ItemType::TcLevel,
                 "ABS_LEVEL" => ItemType::AbsLevel,
                 "CLOCK" => ItemType::Clock,
@@ -572,6 +666,11 @@ impl DigitalInstruments {
                 kind,
                 color,
                 color2,
+                color3,
+                graph_min,
+                graph_max,
+                add_sign,
+                fuel_cons_units,
                 text_node,
                 decimals: item_decimals,
                 max_rpm,
@@ -794,9 +893,41 @@ impl DigitalInstruments {
                 }
             }
         }
-        for prefix in ["DRS_SERIE_", "KERS_LOAD_SERIE_", "POWER_918_", "KERS_RECHARGE_SERIE_"] {
-            if !sections(prefix).is_empty() {
-                println!("NOTE: the {prefix}n lights of digital_instruments.ini are not ported: their meshes stay as the model has them");
+        // 17: DRS_SERIE_n
+        for section in sections("DRS_SERIE_") {
+            let prefix = ini.get_string(&section, "PREFIX");
+            let (a, b) = (get(&section, "START_ANGLE"), get(&section, "END_ANGLE"));
+            let count = get_int(&section, "LED_COUNT") as f32;
+            let inverted = get_int(&section, "INVERTED_DRS") != 0;
+            let step = (b - a) / count;
+            let mut t = step + a;
+            let mut k = 0;
+            while (k as f32) < count {
+                let mut led = serie(scene, format!("{prefix}{k}"), t, -1.0, 0.0);
+                led.kind = 8;
+                led.selected_wing = get_int(&section, "WING_NUMBER");
+                led.inverted = inverted;
+                d.leds.push(led);
+                t += step;
+                k += 1;
+            }
+        }
+        // 18: KERS_LOAD_SERIE_n
+        for section in sections("KERS_LOAD_SERIE_") {
+            let prefix = ini.get_string(&section, "PREFIX");
+            let (start, end) = (get_int(&section, "START_INDEX") as f32, get_int(&section, "END_INDEX") as f32);
+            let inverted = get_int(&section, "INVERTED") != 0;
+            let (p0, p1) = (get(&section, "PERC_START"), get(&section, "PERC_END"));
+            let step = (p1 - p0) / (end - start);
+            let mut t = p0;
+            let mut i = start;
+            while i <= end {
+                let mut led = serie(scene, format!("{prefix}{}", float_text(i)), t, -1.0, 0.0);
+                led.kind = 11;
+                led.inverted = inverted;
+                d.leds.push(led);
+                t += step;
+                i += 1.0;
             }
         }
         // 19, 20: counted series
@@ -815,6 +946,40 @@ impl DigitalInstruments {
                     t += step;
                     k += 1;
                 }
+            }
+        }
+        // 21: POWER_918_n
+        for section in sections("POWER_918_") {
+            let prefix = ini.get_string(&section, "PREFIX");
+            let (a, b) = (get(&section, "START_TORQUE"), get(&section, "END_TORQUE"));
+            let count = get_int(&section, "LED_COUNT") as f32;
+            let step = (b - a) / count;
+            let mut t = step + a;
+            let mut k = 0;
+            while (k as f32) < count {
+                let mut led = serie(scene, format!("{prefix}{k}"), t, -1.0, 0.0);
+                led.kind = 17;
+                led.show_min = get(&section, "FILTER");
+                d.leds.push(led);
+                t += step;
+                k += 1;
+            }
+        }
+        // 22: KERS_RECHARGE_SERIE_n
+        for section in sections("KERS_RECHARGE_SERIE_") {
+            let prefix = ini.get_string(&section, "PREFIX");
+            let (start, end) = (get(&section, "START_INDEX"), get(&section, "END_INDEX"));
+            let step = get(&section, "NORM_MAX") / (end - start);
+            let inverted = ini.has_key(&section, "INVERTED") && get_int(&section, "INVERTED") != 0;
+            let mut t = 0.0f32;
+            let mut i = start;
+            while i <= end {
+                let mut led = serie(scene, format!("{prefix}{}", float_text(i)), t, -1.0, 0.0);
+                led.kind = 18;
+                led.inverted = inverted;
+                d.leds.push(led);
+                t += step;
+                i += 1.0;
             }
         }
         // with the HDR post-processing off the colours are brought down to 1
@@ -912,6 +1077,41 @@ impl DigitalInstruments {
                 }
                 6 => show(scene, led.fswitch <= s.water),
                 7 => show(scene, s.turbo_boost * 100.0 >= led.fswitch),
+                8 => {
+                    if led.selected_wing < 0 || led.selected_wing as usize >= f.wings_count {
+                        continue;
+                    }
+                    let a = f.wing_angles[(led.selected_wing as usize).min(7)];
+                    show(scene, if led.inverted { a <= led.fswitch } else { led.fswitch <= a });
+                }
+                11 => {
+                    if led.target_mesh.is_none() {
+                        continue;
+                    }
+                    let milli = f32::from_bits(0x3a83_126f);
+                    if f.kers_max_j > 0.0 {
+                        let v = (s.kers_current_kj * 100.0) / (f.kers_max_j * milli);
+                        show(scene, if led.inverted { v <= led.fswitch } else { v >= led.fswitch });
+                    }
+                    if f.ers_max_j > 0.0 {
+                        let v = (s.kers_current_kj * 100.0) / (f.ers_max_j * milli);
+                        show(scene, if led.inverted { v <= led.fswitch } else { v >= led.fswitch });
+                    }
+                }
+                17 => {
+                    let (Some(_), Some((torque, ratio))) = (led.target_mesh, f.drivetrain) else { continue };
+                    let r = if ratio != 0.0 { ratio as f32 } else { 1.0 };
+                    if !torque.is_finite() || !r.is_finite() {
+                        continue;
+                    }
+                    let mut t = if ratio != 0.0 { torque / r } else { torque };
+                    t = if t > 1000.0 { 1000.0 } else if t >= 0.0 { t } else { 0.0 };
+                    let k = f.dt * led.show_min;
+                    let k = if k > 1.0 { 1.0 } else if k >= 0.0 { k } else { 0.0 };
+                    led.show_max = (t - led.show_max) * k + led.show_max;
+                    show(scene, led.show_max >= led.fswitch);
+                }
+                18 => show(scene, if led.inverted { f.ers_recharge <= led.fswitch } else { led.fswitch <= f.ers_recharge }),
                 9 => {
                     let g = match led.g_force {
                         0 => s.acc_g[0],
@@ -1069,6 +1269,110 @@ impl DigitalItem {
             ItemType::CurrentLap => format!("{}{}{}", self.pre_fix, f.lap_count.wrapping_add(1), self.post_fix),
             ItemType::KersCharge => format!("{}", (s.kers_charge * 100.0) as i32),
             ItemType::PlaceHolder => self.pre_fix.clone(),
+            ItemType::TurboLevel => {
+                let r = (s.turbo_boost_level * 10.0).round();
+                format!("{}%", (r * 10.0) as i32)
+            }
+            ItemType::TotalLaps => {
+                if f.session_type == 3 {
+                    format!("{}", f.session_laps)
+                } else {
+                    "---".to_string()
+                }
+            }
+            ItemType::EstLaps => {
+                if s.fuel_laps >= 0.0 {
+                    format!("{:.1}", s.fuel_laps as f64)
+                } else {
+                    "--.-".to_string()
+                }
+            }
+            ItemType::FuelCons => {
+                let x = f.km_per_liter as f64;
+                if x > 0.0 && x <= 99.0 {
+                    let v = match self.fuel_cons_units {
+                        1 => x * 2.819999933242798,
+                        2 => x * 2.3499999046325684,
+                        3 => 100.0 / x,
+                        _ => x,
+                    };
+                    format!("{v:.1}")
+                } else {
+                    "--.-".to_string()
+                }
+            }
+            ItemType::GForces => {
+                let g = match self.tyre_number {
+                    0 => s.acc_g[0],
+                    1 => s.acc_g[1],
+                    2 => s.acc_g[2],
+                    _ => 0.0,
+                };
+                let v = if g > self.graph_max {
+                    self.graph_max
+                } else if g < self.graph_min {
+                    self.graph_min
+                } else {
+                    g
+                };
+                let sign = if self.add_sign == 0 {
+                    ""
+                } else if v > 0.0 {
+                    "+"
+                } else if v < 0.0 {
+                    "-"
+                } else {
+                    ""
+                };
+                format!("{sign}{:.*}", self.decimals.max(0) as usize, v.abs() as f64)
+            }
+            ItemType::KersLoad => {
+                if f.has_kers {
+                    let mut v = (s.kers_current_kj / f.kers_max_j) * 100000.0;
+                    if self.decimals == 0 {
+                        v = 100.0 - v;
+                    }
+                    let v = if v > 100.0 {
+                        100.0
+                    } else if v < 0.0 {
+                        0.0
+                    } else {
+                        v
+                    };
+                    format!("{:.0}{}", v as f64, self.post_fix)
+                } else {
+                    String::new()
+                }
+            }
+            ItemType::PositionCar => {
+                if f.session_type == 3 {
+                    format!("{}{}{}", self.pre_fix, f.real_time_position + 1, self.post_fix)
+                } else {
+                    format!("{}{}{}", self.pre_fix, f.leaderboard_position, self.post_fix)
+                }
+            }
+            ItemType::PositionCount => format!("{}{}{}", self.pre_fix, f.cars_count, self.post_fix),
+            ItemType::P2pDash => {
+                match s.p2p_status {
+                    1 => node.color = self.color3,
+                    2 => node.color = self.color,
+                    3 => node.color = self.color2,
+                    _ => {}
+                }
+                format!("{}", s.p2p_activations)
+            }
+            ItemType::FuelPerc => {
+                let x = s.fuel as f64 / f.max_fuel;
+                let x = if x > 1.0 {
+                    1.0
+                } else if x < 0.0 {
+                    0.0
+                } else {
+                    x
+                };
+                let n = (x * 100.0) as i32;
+                format!("{}{:.*}{}", self.pre_fix, self.decimals.max(0) as usize, n as f64, self.post_fix)
+            }
         };
         node.text = text;
     }
