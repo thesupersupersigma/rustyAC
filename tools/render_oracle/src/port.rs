@@ -157,7 +157,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     }
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
     graphics.documents_folder = crate::root::documents();
-    graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
+    // (the game's side seeds rand() again where the car is loaded: only with a car)
+    if frame.car.is_some() {
+        graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
+    }
     // Sim::addCar: CarAvatar::init3D
     let mut car = match &frame.car {
         Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock), 0)?),
@@ -200,7 +203,16 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
     let (mut last_pause, mut last_status) = (false, -1);
     let (mut lights_pause, mut lights_status) = (false, -1);
+    let mut told_new_session = 0;
     for (index, step) in frame.steps.iter().enumerate() {
+        // Sim::evOnNewSession: the track's handler, then the car's objects'
+        if step.extra.new_session != told_new_session {
+            told_new_session = step.extra.new_session;
+            rustyac_render::crowds::on_new_session(&mut graphics.crt_rand, &mut dynamic_objects, crate::frames::game_time_ms(index), 0.0);
+            if let Some(car) = &mut car {
+                car.on_new_session(&mut scene);
+            }
+        }
         let (_, session_started, tts) = crate::frames::session_start(index, step.extra.tts);
         if let Some((lights, semaphore)) = &mut start_lights {
             if step.extra.pause != lights_pause {

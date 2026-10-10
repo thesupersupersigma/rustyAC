@@ -60,6 +60,8 @@ const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): sran
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70; // AISpline::AISpline()
 const VA_AI_SPLINE_LOAD_FAST: usize = 0x1_402a_83c0; // AISpline::loadFast(const std::wstring&)
+const VA_TRACK_NEW_SESSION_HANDLER: usize = 0x1_401c_6b70; // the handler TrackAvatar::TrackAvatar hangs on Sim::evOnNewSession
+const VA_FUNCTION_QUEUE_VTABLE: usize = 0x1_404c_7b30; // Concurrency::concurrent_queue<std::function<void(void)>>::`vftable'
 const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
 const VA_STARTING_LIGHTS_RENDER_HUD: usize = 0x1_401a_2e80; // StartingLights::renderHUD(float)
 const VA_STARTING_LIGHTS_RENDER_LIGHT: usize = 0x1_401a_3420; // StartingLights::renderLight(float, float, vec3f): the HUD's lamp
@@ -496,6 +498,7 @@ impl Game {
         let mut grooves = std::ptr::null_mut::<u8>();
         let mut dynamic_track = std::ptr::null_mut::<u8>();
         let mut ideal_line = std::ptr::null_mut::<u8>();
+        let mut new_session_track = std::ptr::null_mut::<u8>();
         let mut start_lights = std::ptr::null_mut::<u8>();
         let mut semaphore = std::ptr::null_mut::<u8>();
         let mut track_game = std::ptr::null_mut::<u8>();
@@ -513,9 +516,18 @@ impl Game {
             // PhysicsAvatar::engine.track: a Track whose grip does not change
             let physics_avatar = acs.alloc(0x600);
             wr(physics_avatar, 0x58 + 0x198, acs.alloc(0x400));
+            // PhysicsAvatar::PhysicsAvatar 0x140120a0c: its queue of jobs for the physics thread
+            // (the new-session handler puts one in; nothing ever takes it out)
+            {
+                let ctor: extern "C" fn(*mut u8, usize) -> *mut u8 = std::mem::transmute(acs.msvcp_function(c"??0_Concurrent_queue_base_v4@details@Concurrency@@IEAA@_K@Z"));
+                ctor(physics_avatar.add(0x318), 0x20);
+                wr(physics_avatar, 0x318, acs.va(VA_FUNCTION_QUEUE_VTABLE));
+            }
             wr(track_sim, 0x1b8, physics_avatar);
             let track_avatar = acs.alloc(0x308);
             wr(track_avatar, 0xe8, track_sim);
+            wr(track_avatar, 0x08, game);
+            new_session_track = track_avatar;
             write_wstring(acs, track_avatar.add(0x200), &track.data_folder);
             wr(track_sim, 0x150, track_avatar);
             // TrackAvatar::initDynamicObjects 0x1401c9840: the game's own, on the files of the
@@ -729,7 +741,23 @@ impl Game {
         let traverser = acs.alloc(0x40);
         let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
         let (mut lights_pause, mut lights_status) = (false, -1);
+        let mut told_new_session = 0;
         for (index, step) in frame.steps.iter().enumerate() {
+            // RaceManager::setCurrentSession 0x140140df0: Sim::evOnNewSession, the handlers in the
+            // order they were registered: the track's own, then the car's objects'
+            if step.extra.new_session != told_new_session {
+                told_new_session = step.extra.new_session;
+                let event = acs.alloc(0x78);
+                if !new_session_track.is_null() {
+                    wr(track_game, 0x18, crate::frames::game_time_ms(index));
+                    let mut captured = new_session_track;
+                    let handler: extern "C" fn(*mut *mut u8, *const u8) = std::mem::transmute(acs.va(VA_TRACK_NEW_SESSION_HANDLER));
+                    handler(&mut captured, event);
+                }
+                if let Some(car) = &car {
+                    self.fire_new_session(car, event);
+                }
+            }
             // the session's clock, and the events the start lights listen to
             if !start_lights.is_null() {
                 wr(track_game, 0x18, crate::frames::game_time_ms(index));

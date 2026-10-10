@@ -693,6 +693,20 @@ impl Game {
         Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 
+    /// `Sim::evOnNewSession` (+0xc0) for the handlers the car's objects registered (the four
+    /// `TyreSmoke`, `EngineSmoke`, `DynamicCarEffects`), in their order.
+    pub unsafe fn fire_new_session(&self, c: &Car, event: *mut u8) {
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let (mut at, end): (*mut u8, *mut u8) = (rd(sim, 0xc0), rd(sim, 0xc8));
+        while at < end {
+            let object: *mut u8 = rd(at, 0x20);
+            let vtable: *const usize = rd(object, 0);
+            let call: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*vtable.add(2));
+            call(object, event);
+            at = at.add(0x28);
+        }
+    }
+
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
     /// nodes. The camera of the frame must be set already.
     /// The mirror's part of `Sim::renderScene` 0x14019e570.

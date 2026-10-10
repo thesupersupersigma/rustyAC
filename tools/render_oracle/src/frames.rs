@@ -112,11 +112,13 @@ pub struct Extra {
     /// `RaceManager::getTimeToSessionStart`, ms (`--set tts=…`: the start lights and the
     /// semaphore are built; the session starts that long after the frame)
     pub tts: f32,
+    /// `--set newsession=<n>@<frame>`: `Sim::evOnNewSession` fires when the number changes
+    pub new_session: i32,
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0 }
     }
 }
 
@@ -462,6 +464,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "pause" => x.pause = on(value)?,
         "ideal" => x.ideal = on(value)?,
         "tts" => x.tts = number(value)?,
+        "newsession" => x.new_session = number(value)? as i32,
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
@@ -483,7 +486,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }
