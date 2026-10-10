@@ -169,6 +169,9 @@ pub struct CarAvatar {
     pub engine_smoke: Option<EngineSmoke>,
     /// `RaceManager::carsToBeLoaded`
     pub cars_to_be_loaded: i32,
+    /// `car.ini [GRAPHICS] MIRROR_POSITION`, `CarMirrorManager`
+    pub mirror_position: [f32; 3],
+    pub mirrors: crate::mirror::CarMirrorManager,
     /// `CarAvatar::backfireParams`, `fuelInExhaust`, the `Flames` object, `aiState.isActive`
     pub backfire: Option<BackfireParams>,
     pub fuel_in_exhaust: f32,
@@ -295,6 +298,8 @@ impl CarAvatar {
             tyre_smoke: Vec::new(),
             engine_smoke: None,
             cars_to_be_loaded: 1,
+            mirror_position: car_ini.as_ref().and_then(|i| i.get_float3("GRAPHICS", "MIRROR_POSITION").ok()).unwrap_or([0.0; 3]),
+            mirrors: crate::mirror::CarMirrorManager::default(),
             backfire: None,
             fuel_in_exhaust: 0.0,
             flames: None,
@@ -368,6 +373,21 @@ impl CarAvatar {
         match &self.suspension {
             Suspension::Avatar(avatar) => vec![avatar.wheel_transforms[wheel]],
             Suspension::Animator(animator) => animator.wheel_transforms(wheel),
+        }
+    }
+
+    /// `CarAvatar::initMirrorMaterials` 0x1400d75f0: only when the game has a mirror texture.
+    pub fn init_mirror_materials(&mut self, graphics: &mut Graphics, scene: &mut Scene, texture: &crate::texture::Texture) -> Result<(), String> {
+        self.mirrors = crate::mirror::CarMirrorManager::new(graphics, scene, &self.folder, self.body_transform, texture)?;
+        Ok(())
+    }
+
+    /// The nodes `CarAvatar::setVisible` 0x1400dade0 switches besides the body's: the wheels'
+    /// and the suspensions'.
+    pub fn visibility_nodes(&self) -> Vec<NodeId> {
+        match &self.suspension {
+            Suspension::Avatar(avatar) => avatar.wheel_transforms.iter().chain(&avatar.sus_transforms).copied().collect(),
+            Suspension::Animator(animator) => (0..4).filter_map(|i| animator.wheel_transform(i)).collect(),
         }
     }
 
@@ -645,6 +665,7 @@ impl CarAvatar {
             scene.nodes[n].is_active = true;
         }
         if let Some(damage) = &mut self.damage {
+            self.mirrors.update(scene, self.guid == self.view.focused_car_index && crate::mirror::is_camera_on_board(self.view.camera_mode, self.view.drivable_mode));
             damage.update(graphics, scene, state, replay_dt, self.pause_menu);
         }
         self.rotating_objects.update(scene, state, replay_dt);

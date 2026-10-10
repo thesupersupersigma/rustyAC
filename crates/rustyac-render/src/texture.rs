@@ -234,6 +234,13 @@ impl ResourceStore {
         Some(TextureId(self.textures.len() as u32 - 1))
     }
 
+    /// `Texture::Texture(RenderTarget*)` 0x1401fde40 (`kglCreateTextureFromRT` 0x140018a90):
+    /// a texture that is a render target's picture.
+    pub fn texture_from_render_target(&mut self, target: &crate::kgl::KglRenderTarget) -> Texture {
+        self.textures.push(KglTexture { shader_resource_view: target.shader_resource_view.clone(), width: target.width, height: target.height });
+        Texture { kid: Some(TextureId(self.textures.len() as u32 - 1)), file_name: String::new() }
+    }
+
     /// `kglTextureGetWidth` / `kglTextureGetHeight` of a texture of the store.
     pub fn size(&self, texture: &Texture) -> Option<(u32, u32)> {
         let id = texture.kid?;

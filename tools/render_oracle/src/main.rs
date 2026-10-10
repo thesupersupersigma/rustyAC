@@ -206,7 +206,7 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.capture = text.parse().map_err(|_| "--capture <n>")?;
             }
-            "--shadow-size" | "--cubemap-size" | "--world-detail" | "--anisotropic" | "--cubemap-faces" | "--smoke" => {
+            "--shadow-size" | "--cubemap-size" | "--world-detail" | "--anisotropic" | "--cubemap-faces" | "--smoke" | "--mirror" => {
                 text = value()?;
                 let number: i32 = text.parse().map_err(|_| format!("{flag} <number>"))?;
                 match flag.as_str() {
@@ -214,6 +214,7 @@ fn parse() -> Result<Args, String> {
                     "--cubemap-size" => profile.cubemap_size = number,
                     "--world-detail" => profile.world_detail = number,
                     "--smoke" => profile.smoke = number,
+                    "--mirror" => profile.mirror_size = number,
                     // Sim::initCubemaps 0x1401997a0: 0 to 6
                     "--cubemap-faces" => profile.cubemap_faces_per_frame = number.clamp(0, 6),
                     _ => profile.anisotropic = number,
@@ -237,6 +238,12 @@ fn parse() -> Result<Args, String> {
             "--loose" => {
                 a.loose = true;
                 frame_option = false;
+            }
+            "--mirror-smoke" => {
+                profile.mirror_smoke = true;
+            }
+            "--virtual-mirror" => {
+                profile.virtual_mirror = true;
             }
             "--serial" => {
                 a.serial = true;

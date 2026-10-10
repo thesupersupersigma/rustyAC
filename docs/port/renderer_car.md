@@ -27,6 +27,7 @@ State after the last commit (kept up to date with every commit):
   - - Done: digital displays (DigitalInstruments: text items, shift lights, LED series), identical on F2004, 1M, E30, F40 dash sequences; the logger now zeroes a discarded buffer (the game leaves part of GLRenderer's buffer unwritten)
   - - Done: smoke (ParticleSystem, ParticleGenerator, TyreSmoke, EngineSmoke; rand() of the main thread), identical on the F2004 launch (119 frames, --smoke 3) and grass run (89 frames, --smoke 5); the oracle has --smoke
   - - Done: exhaust flames (Flames version 2, BackfireParams and the trigger at the head of CarAvatar::update), identical on the F2004 lift-off (149 frames) and an F40 sequence (299 frames)
+  - - Done: mirrors (MirrorTextureRenderer, CameraMirror, CarMirrorManager, VirtualMirrorRenderer; plain path, not HQ), identical on E30 cockpit, F2004 chase with the virtual mirror and smoke in the mirror (59 frames), 1M chase, F2004 dash; the oracle has --mirror <size> --mirror-smoke --virtual-mirror
 - Next: the specs of the nine items (`re/scratch/task21/spec_*.md`, written by reader agents from the
   disassembly), then port and prove item by item in this order: damage glass and damage meshes, blur meshes
   and `lods.ini` rules, lights and disc glow, the driver, `DIR_` nodes, instruments, ground shadows, skid

@@ -61,6 +61,12 @@ const VA_BACKFIRE_PARAMS_CTOR: usize = 0x1_400c_ccb0; // BackfireParams::Backfir
 const VA_BACKFIRE_PARAMS_CHECK: usize = 0x1_400d_26b0; // BackfireParams::checkBackfire(float)
 const VA_FLAMES_CTOR: usize = 0x1_400f_f990; // Flames::Flames(CarAvatar*)
 const VA_FLAMES_UPDATE: usize = 0x1_4010_46a0; // Flames::update(float)
+const VA_MIRROR_TEXTURE_RENDERER_CTOR: usize = 0x1_4011_3c40; // MirrorTextureRenderer::MirrorTextureRenderer(Sim*)
+const VA_MIRROR_TEXTURE_RENDERER_RENDER: usize = 0x1_4011_4410; // MirrorTextureRenderer::render(float)
+const VA_CAR_MIRROR_MANAGER_CTOR: usize = 0x1_400e_5f20; // CarMirrorManager::CarMirrorManager(CarAvatar*, Texture*)
+const VA_CAR_MIRROR_MANAGER_UPDATE: usize = 0x1_400e_6fc0; // CarMirrorManager::update(float)
+const VA_VIRTUAL_MIRROR_CTOR: usize = 0x1_401d_1ab0; // VirtualMirrorRenderer::VirtualMirrorRenderer(Sim*)
+const VA_VIRTUAL_MIRROR_RENDER: usize = 0x1_401d_1ea0; // VirtualMirrorRenderer::renderVirtualMirror(float)
 const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
 const VA_CAR_AVATAR_UPDATE_SKID_MARKS: usize = 0x1_400d_d780; // CarAvatar::updateSkidMarks(float)
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
@@ -276,6 +282,10 @@ pub struct Car {
     blurred_objects: *mut u8,
     digital_instruments: *mut u8,
     flames: *mut u8,
+    /// `MirrorTextureRenderer`, `VirtualMirrorRenderer`, `CarMirrorManager`: null without mirrors
+    mirror: *mut u8,
+    virtual_mirror: *mut u8,
+    mirror_manager: *mut u8,
     /// the four `TyreSmoke` and the `EngineSmoke`, each with its `update`
     smokes: Vec<(*mut u8, usize)>,
     brake_discs: *mut u8,
@@ -343,6 +353,26 @@ impl Game {
         wr(sim, 0x170, nodes.render_finished);
         wr(sim, 0x178, nodes.before_cars);
         let car = acs.alloc(0x12a8);
+        // Sim::Sim: the mirror texture and the virtual mirror, when video.ini asks for mirrors.
+        // A TrackAvatar of which only the ideal line's node is touched; the one car.
+        let (mut mirror, mut virtual_mirror) = (std::ptr::null_mut::<u8>(), std::ptr::null_mut::<u8>());
+        if crate::root::profile().mirror_size != 0 {
+            let track = acs.alloc(0x200);
+            wr(track, 0x58, acs.alloc(0xe0));
+            wr(sim, 0x150, track);
+            let cars = acs.alloc(0x10);
+            wr(cars, 0, car);
+            wr(sim, 0x208, cars);
+            wr(sim, 0x210, cars.add(8));
+            mirror = acs.alloc(0x68);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_MIRROR_TEXTURE_RENDERER_CTOR));
+            ctor(mirror, sim);
+            wr(sim, 0x180, mirror);
+            virtual_mirror = acs.alloc(0x78);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VIRTUAL_MIRROR_CTOR));
+            ctor(virtual_mirror, sim);
+            wr(sim, 0x280, virtual_mirror);
+        }
         wr(car, 0x0, acs.va(VA_CAR_AVATAR_VTABLE));
         wr(car, 0x8, game);
         wr(car, 0x130, sim);
@@ -430,6 +460,14 @@ impl Game {
                 }
             }
         }
+        // CarAvatar::initMirrorMaterials 0x1400d75f0
+        wr(car, 0x120, car_ini.get_float3("GRAPHICS", "MIRROR_POSITION").unwrap_or([0.0; 3]));
+        let mut mirror_manager = std::ptr::null_mut::<u8>();
+        if !mirror.is_null() {
+            mirror_manager = acs.alloc(0x78);
+            let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_MIRROR_MANAGER_CTOR));
+            ctor(mirror_manager, car, mirror);
+        }
         let visual_damage = acs.alloc(0xd0);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VISUAL_DAMAGE_CTOR));
         ctor(visual_damage, car);
@@ -507,11 +545,39 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
     /// nodes. The camera of the frame must be set already.
+    /// The mirror's part of `Sim::renderScene` 0x14019e570.
+    pub unsafe fn render_mirror(&self, c: &Car, camera: &crate::frames::CameraSpec, dt: f32) {
+        if c.mirror.is_null() {
+            return;
+        }
+        let on_board = camera.mode == 0 || (camera.mode == 2 && camera.drivable_mode == 4);
+        if !on_board && rd::<u8>(c.mirror, 0x29) != 0 {
+            let node: *mut u8 = rd(c.virtual_mirror, 0x58);
+            if rd::<u8>(node, 0xd8) == 0 || (camera.mode & !2) != 0 {
+                return;
+            }
+        }
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_MIRROR_TEXTURE_RENDERER_RENDER));
+        render(c.mirror, dt);
+    }
+
+    /// The handler of `Game::evOnPreGUI` of the virtual mirror.
+    pub unsafe fn render_virtual_mirror(&self, c: &Car, dt: f32) {
+        if c.virtual_mirror.is_null() {
+            return;
+        }
+        let node: *mut u8 = rd(c.virtual_mirror, 0x58);
+        if rd::<u8>(node, 0xd8) != 0 {
+            let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_VIRTUAL_MIRROR_RENDER));
+            render(c.virtual_mirror, dt);
+        }
+    }
+
     pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, dt: f32, now_ms: f64) {
         wr(c.game, 0x18, now_ms);
         // the camera manager of the frame
@@ -595,6 +661,10 @@ impl Game {
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE));
         update(c.lod_manager, dt);
+        if !c.mirror_manager.is_null() {
+            let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_MIRROR_MANAGER_UPDATE));
+            update(c.mirror_manager, dt);
+        }
         for (object, va) in [(c.visual_damage, VA_VISUAL_DAMAGE_UPDATE), (c.rotating_objects, VA_ROTATING_OBJECTS_UPDATE)].into_iter().chain(c.smokes.iter().copied()) {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);

@@ -517,10 +517,16 @@ impl Game {
             begin(self.graphics);
             // Sim::renderScene 0x14019e570
             traverse(traverser, root);
+            if let Some(car) = &car {
+                self.render_mirror(car, &step.camera, 1.0 / 60.0);
+            }
             let vtable = rd::<*const usize>(camera, 0);
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
             screen_space(self.graphics);
+            if let Some(car) = &car {
+                self.render_virtual_mirror(car, 1.0 / 60.0);
+            }
             if index >= frame.capture {
                 let capture = rustyac_render::gpulog::end_capture();
                 let (width, height, pixels) = self.read_back()?;

@@ -125,6 +125,16 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         None => None,
     };
 
+    // Sim::Sim: the mirror texture and the virtual mirror, when video.ini asks for mirrors
+    let profile = crate::root::profile();
+    let mut mirror = match profile.mirror_size {
+        0 => None,
+        size => Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, profile.mirror_smoke)?),
+    };
+    let mut virtual_mirror = mirror.as_ref().map(|_| rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, profile.virtual_mirror));
+    if let (Some(car), Some(mirror)) = (&mut car, &mirror) {
+        car.init_mirror_materials(&mut graphics, &mut scene, &mirror.texture)?;
+    }
     // Sim::onPostLoad: CarAvatar::onPostLoad
     if let Some(car) = &mut car {
         let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
@@ -167,8 +177,21 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         graphics.begin_scene();
         scene.traverse(root);
+        // Sim::renderScene: the mirror before the picture
+        if let (Some(mirror), Some(car)) = (&mut mirror, &car) {
+            let active = virtual_mirror.as_ref().is_some_and(|v| v.active);
+            if mirror.wants_render(step.camera.mode, step.camera.drivable_mode, active) {
+                let nodes = car.visibility_nodes();
+                let s = rustyac_render::mirror::MirrorScene { root, particles, before_cars, ideal_line: None, body_transform: car.body_transform, car_nodes: &nodes, mirror_position: car.mirror_position };
+                mirror.render(&mut graphics, &mut scene, camera.base.sky_box.as_mut(), &s);
+            }
+        }
         camera.render(&mut graphics, &mut scene, Some(blurred), root)?;
         graphics.set_screen_space_mode();
+        // Game::evOnPreGUI
+        if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {
+            v.render(&mut graphics, &mirror.texture, step.camera.mode);
+        }
         if index >= frame.capture {
             let capture = rustyac_render::gpulog::end_capture();
             let (width, height, pixels) = graphics.kgl.read_screen()?;

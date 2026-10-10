@@ -31,6 +31,7 @@ pub mod kgl;
 pub mod lighting;
 pub mod lights;
 pub mod material;
+pub mod mirror;
 pub mod model;
 pub mod particles;
 pub mod scene;

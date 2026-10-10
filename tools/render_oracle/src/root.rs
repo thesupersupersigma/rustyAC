@@ -22,9 +22,14 @@ pub struct Profile {
     pub cubemap_far_plane: f32,
     /// `[EFFECTS] SMOKE`: 0 (off) to 5
     pub smoke: i32,
+    /// `[MIRROR] SIZE` (0: no mirrors), `[EFFECTS] RENDER_SMOKE_IN_MIRROR`, and
+    /// `gameplay.ini [VIRTUAL_MIRROR] ACTIVE`
+    pub mirror_size: i32,
+    pub mirror_smoke: bool,
+    pub virtual_mirror: bool,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0 };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -50,7 +55,8 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _ } = profile();
+    let MIRROR_SMOKE = mirror_smoke as i32;
     let lines = [
         "[VIDEO]".to_string(),
         format!("WIDTH={width}"),
@@ -79,7 +85,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         String::new(),
         "[EFFECTS]".into(),
         "MOTION_BLUR=0".into(),
-        "RENDER_SMOKE_IN_MIRROR=0".into(),
+        format!("RENDER_SMOKE_IN_MIRROR={MIRROR_SMOKE}"),
         format!("SMOKE={SMOKE}"),
         "FXAA=0".into(),
         String::new(),
@@ -95,7 +101,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         String::new(),
         "[MIRROR]".into(),
         "HQ=0".into(),
-        "SIZE=0".into(),
+        format!("SIZE={MIRROR_SIZE}"),
         String::new(),
         "[CUBEMAP]".into(),
         format!("SIZE={CUBEMAP_SIZE}"),
@@ -155,6 +161,13 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     let video = video_ini(args.width, args.height);
     if !std::fs::read_to_string(documents_cfg.join("video.ini")).is_ok_and(|old| old == video) {
         std::fs::write(documents_cfg.join("video.ini"), video).map_err(|e| e.to_string())?;
+    }
+    let gameplay = format!("[VIRTUAL_MIRROR]\nACTIVE={}\n", profile().virtual_mirror as i32);
+    if !std::fs::read_to_string(documents_cfg.join("gameplay.ini")).is_ok_and(|old| old == gameplay) {
+        std::fs::write(documents_cfg.join("gameplay.ini"), &gameplay).map_err(|e| e.to_string())?;
+    }
+    if !std::fs::read_to_string(root.join("cfg/gameplay.ini")).is_ok_and(|old| old == gameplay) {
+        std::fs::write(root.join("cfg/gameplay.ini"), &gameplay).map_err(|e| e.to_string())?;
     }
     // what the game's SkyBox constructor reads (the clouds of the weather)
     let race = format!("[WEATHER]\nNAME={}\n\n[LIGHTING]\nSUN_ANGLE={}\nTIME_MULT=1\nCLOUD_SPEED=0.2\n", args.weather, args.sun_angle);
