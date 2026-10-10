@@ -108,6 +108,10 @@ pub struct Options {
     pub ideal_line: Option<bool>,
     /// `--start-lights <seconds>`: the track's start lights count down a race start
     pub start_lights: Option<f32>,
+    /// `--replay-script <key@seconds,…>`: the replay's keys pressed by the clock (for checks)
+    pub replay_script: Vec<(f64, String)>,
+    /// `--new-session-at <seconds>`: N pressed by the clock (for checks)
+    pub new_session_at: Option<f64>,
     /// `--spawn` was given (else race.ini's `[SESSION_0] SPAWN_SET` decides).
     pub spawn_given: bool,
     /// `--controls <ini>`: read the bindings from this file instead of AC's / rustyAC's.
@@ -231,6 +235,8 @@ impl Default for Options {
             auto_blip: None,
             ideal_line: None,
             start_lights: None,
+            replay_script: Vec::new(),
+            new_session_at: None,
             spawn_given: false,
             controls: None,
             default_controls: false,
@@ -314,7 +320,17 @@ usage: rustyac [options]
   --windowed            a window instead of borderless full screen
   --no-shm              do not publish acpmf_physics / acpmf_graphics / acpmf_static
   --record <file>       log the inputs of every physics step
-  --replay <file>       drive from a recorded input file
+  --replay <file>       drive from a recorded input file. In the window AC's replay keys work
+                        (those of controls.ini; Ctrl is the command key): Ctrl+Space (or P)
+                        play / pause, Ctrl+S slow motion on / off (half speed), Ctrl+F faster
+                        (2, 3, 4, 5 times; Ctrl+Space back to normal), Home stop: back to the
+                        start, stopped (rustyAC's own key: the game's Stop is a button).
+                        Not there: Ctrl+D rewind, Ctrl+N / Ctrl+P lap jumps, Ctrl+R instant
+                        replay (they need recorded frames to go back over)
+  --new-session-at <s>  in a window: N (a new session) pressed by the clock, for unattended checks
+  --replay-script <l>   with --replay in a window: press the replay's keys by the clock, for
+                        unattended checks: a list of key@seconds with the keys pause, slow,
+                        ffwd, stop (e.g. slow@2,pause@4,ffwd@5,stop@8,pause@9)
   --ffb                 force feedback to a DirectInput wheel, if one is found (low strength)
   --no-rumble           no rumble on the Xbox pad
   --auto-shifter        the automatic gearbox aid on (Alt+G or Ctrl+G toggles it); default:
@@ -475,6 +491,16 @@ impl Options {
                 "--no-auto-blip" => o.auto_blip = Some(false),
                 "--ideal-line" => o.ideal_line = Some(true),
                 "--no-ideal-line" => o.ideal_line = Some(false),
+                "--new-session-at" => o.new_session_at = Some(value("--new-session-at")?.parse().map_err(|_| "--new-session-at <seconds>")?),
+                "--replay-script" => {
+                    for item in value("--replay-script")?.split(',').filter(|s| !s.is_empty()) {
+                        let (name, at) = item.split_once('@').ok_or("--replay-script <key@seconds,…>")?;
+                        if !["pause", "slow", "ffwd", "stop"].contains(&name) {
+                            return Err(format!("--replay-script: {name} is not one of pause, slow, ffwd, stop"));
+                        }
+                        o.replay_script.push((at.parse().map_err(|_| "--replay-script <key@seconds,…>")?, name.to_string()));
+                    }
+                }
                 "--start-lights" => o.start_lights = Some(value("--start-lights")?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0).ok_or("--start-lights <seconds>")?),
                 "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,

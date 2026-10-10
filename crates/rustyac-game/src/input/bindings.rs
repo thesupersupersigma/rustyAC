@@ -125,6 +125,15 @@ pub struct Bindings {
     /// `[IDEAL_LINE] KEY`: with Ctrl, the ideal line on / off (`CommandManager`: I when the
     /// section is missing)
     pub key_ideal_line: i32,
+    /// The replay's keys (with Ctrl): `[FFWD]` F, `[REV]` D, `[SLOWMO]` S, `[PAUSE_REPLAY]`
+    /// Space, `[NEXT_LAP]` N, `[PREVIOUS_LAP]` P, `[START_REPLAY]` R when the section is missing
+    pub key_ffwd: i32,
+    pub key_rev: i32,
+    pub key_slowmo: i32,
+    pub key_pause_replay: i32,
+    pub key_next_lap: i32,
+    pub key_previous_lap: i32,
+    pub key_start_replay: i32,
     /// `[RUSTYAC] COMMAND_MODIFIER`.
     pub command_modifier: CommandModifier,
     /// The keys of the seven cockpit buttons of [`HYBRID_SECTIONS`]: AC's `KEY` of the section
@@ -305,6 +314,13 @@ impl Bindings {
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
             key_ideal_line: if ini.has_section("IDEAL_LINE") { ini.get_hex("IDEAL_LINE", "KEY") } else { 0x49 },
+            key_ffwd: if ini.has_section("FFWD") { ini.get_hex("FFWD", "KEY") } else { 0x46 },
+            key_rev: if ini.has_section("REV") { ini.get_hex("REV", "KEY") } else { 0x44 },
+            key_slowmo: if ini.has_section("SLOWMO") { ini.get_hex("SLOWMO", "KEY") } else { 0x53 },
+            key_pause_replay: if ini.has_section("PAUSE_REPLAY") { ini.get_hex("PAUSE_REPLAY", "KEY") } else { 0x20 },
+            key_next_lap: if ini.has_section("NEXT_LAP") { ini.get_hex("NEXT_LAP", "KEY") } else { 0x4e },
+            key_previous_lap: if ini.has_section("PREVIOUS_LAP") { ini.get_hex("PREVIOUS_LAP", "KEY") } else { 0x50 },
+            key_start_replay: if ini.has_section("START_REPLAY") { ini.get_hex("START_REPLAY", "KEY") } else { 0x52 },
             command_modifier: CommandModifier::from_name(ini.get_string("RUSTYAC", "COMMAND_MODIFIER")),
             hybrid_keys: HYBRID_SECTIONS.map(|section| [ini.get_hex(section, "KEY"), ini.get_hex("RUSTYAC_KEYS_2", section)]),
             ini,
@@ -452,6 +468,10 @@ impl Bindings {
         );
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         row("ideal line", "-", format!("{ctrl}+{}", key_name(self.key_ideal_line)));
+        row("replay: play / pause", "-", format!("{ctrl}+{} (or P)", key_name(self.key_pause_replay)));
+        row("replay: slow motion", "-", format!("{ctrl}+{}", key_name(self.key_slowmo)));
+        row("replay: faster", "-", format!("{ctrl}+{}", key_name(self.key_ffwd)));
+        row("replay: stop (to the start)", "-", "Home".to_string());
         // the hybrid system's cockpit: AC's sections for the pad, rustyAC's second keys, and
         // AC's fixed commands on the digits
         let keys_of = |index: usize| {

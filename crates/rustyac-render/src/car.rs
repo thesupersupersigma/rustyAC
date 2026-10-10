@@ -874,6 +874,26 @@ impl CarAvatar {
         }
     }
 
+    /// The car's handlers of `Sim::evOnNewSession`, in the order they were registered: the four
+    /// `TyreSmoke` (0x1401d09d0: smoke, grass and grass pieces go), `EngineSmoke` (0x140093510),
+    /// `DynamicCarEffects::resetDirt` 0x140091970. Skid marks, flames and damage have none.
+    pub fn on_new_session(&mut self, scene: &mut Scene) {
+        for smoke in &mut self.tyre_smoke {
+            smoke.clear();
+        }
+        if let Some(smoke) = &mut self.engine_smoke {
+            smoke.clear();
+        }
+        self.dynamic_effects.reset_dirt(scene);
+    }
+
+    /// The car's handler of `ReplayManager::evOnReplayRewind` (0x1400d0810): the skid marks go.
+    pub fn on_replay_rewind(&mut self) {
+        for buffer in self.skid_marks.buffers.iter().flatten() {
+            buffer.borrow_mut().reset();
+        }
+    }
+
     /// What runs after all updates and before the picture (the handlers of `evOnPostUpdate`):
     /// the animated suspensions, `ConstrainedObjectsManager::updateConstraints`, then
     /// `CarLodManager::updateLodVisibility` 0x1400e5810.

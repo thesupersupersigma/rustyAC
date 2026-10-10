@@ -600,6 +600,11 @@ fn run_window(options: &Options) -> Result<(), String> {
     let feed = audio_feed(options, false);
     let sinks = sinks(options, &setup, &feed)?;
     let shared = Shared::new();
+    // a replay waits for the picture: its first step runs when the first frame is drawn (the
+    // frame loop sets the transport's speed)
+    if replay.is_some() {
+        shared.replay_speed.store(0.0f32.to_bits(), Ordering::Relaxed);
+    }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
     let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true };
@@ -661,6 +666,11 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
     };
     let mut camera_toggles = 0;
+    // the replay's transport (ReplayManager): a recorded drive starts playing
+    let mut transport = replay.is_some().then(rustyac_game::replay_manager::ReplayManager::new);
+    let mut script = options.replay_script.clone();
+    let mut new_session_at = options.new_session_at;
+    script.sort_by(|a, b| a.0.total_cmp(&b.0));
     let started = Instant::now();
     let mut last = Instant::now();
     let (mut frames, mut fps, mut fps_frames, mut fps_since) = (0u64, 0.0f32, 0u32, Instant::now());
@@ -685,7 +695,25 @@ fn run_window(options: &Options) -> Result<(), String> {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
                     let key = key as i32;
-                    if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
+                    // Sim::onKeyDown 0x14019a940, the replay's commands: with Ctrl, whatever
+                    // Shift does; they come before rustyAC's own Ctrl+F
+                    let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
+                    if let (Some(rm), true) = (transport.as_mut(), ctrl && replay_keys.contains(&key)) {
+                        if key == bindings.key_ffwd {
+                            rm.fast_forward();
+                        } else if key == bindings.key_slowmo {
+                            rm.key_slow_motion();
+                        } else if key == bindings.key_pause_replay {
+                            rm.key_pause();
+                        } else {
+                            println!("REPLAY: rewind, the lap jumps and the instant replay need recorded frames to go back over; a rustyAC replay is the drive run again (Home: back to the start)");
+                        }
+                    } else if let (Some(rm), true) = (transport.as_mut(), !ctrl && !alt && key == 0x24) {
+                        // Home (rustyAC's own key; the game's Stop is a button of its replay bar):
+                        // ReplayManager::stop, back to the first frame
+                        rm.stop();
+                        shared.replay_restart.store(true, Ordering::Relaxed);
+                    } else if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
                         // Ctrl+F or F9: the frame-rate counter (rustyAC's own keys; AC has an
                         // app for it). F alone is the keyboard's second DRS key, hence F9 too
                         fps_counter = !fps_counter;
@@ -740,9 +768,13 @@ fn run_window(options: &Options) -> Result<(), String> {
                                 Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
                                 None => println!("VIRTUAL MIRROR: video.ini has no mirrors ([MIRROR] SIZE=0)"),
                             },
-                            0x50 | 0x13 => {
-                                shared.paused.fetch_xor(true, Ordering::Relaxed);
-                            }
+                            0x50 | 0x13 => match transport.as_mut() {
+                                // a replay: the transport's own pause
+                                Some(rm) => rm.key_pause(),
+                                None => {
+                                    shared.paused.fetch_xor(true, Ordering::Relaxed);
+                                }
+                            },
                             0x52 => request(if shift { event::TO_TRACK } else { event::RESET }),
                             0x4e => request(event::REBUILD),
                             _ => {}
@@ -767,6 +799,48 @@ fn run_window(options: &Options) -> Result<(), String> {
         let frame = camera.update(&view, &shape, view.acc_g, dt.as_secs_f32());
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);
+        // --new-session-at: N by the clock
+        if new_session_at.is_some_and(|at| started.elapsed().as_secs_f64() >= at) {
+            new_session_at = None;
+            shared.requests.fetch_or(event::REBUILD, Ordering::Relaxed);
+            println!("new session (N) at step {}", shared.steps.load(Ordering::Relaxed));
+        }
+        // --replay-script: the keys by the clock
+        if let Some(rm) = transport.as_mut() {
+            while let Some(at) = script.first().map(|(at, _)| *at).filter(|at| started.elapsed().as_secs_f64() >= *at) {
+                let (_, name) = script.remove(0);
+                match name.as_str() {
+                    "pause" => rm.key_pause(),
+                    "slow" => rm.key_slow_motion(),
+                    "ffwd" => rm.fast_forward(),
+                    _ => {
+                        rm.stop();
+                        shared.replay_restart.store(true, Ordering::Relaxed);
+                    }
+                }
+                println!("replay script at {at:.2} s: {name} -> status {}, speed {} (step {})", rm.status, rm.time_mult, shared.steps.load(Ordering::Relaxed));
+            }
+        }
+        // ReplayManager::updatePlayState, before the cars update: the speed of this frame
+        let (mut replay_events, mut replay_scale, mut replay_state, mut replay_sound) = (Vec::new(), 1.0f32, String::new(), true);
+        if let Some(rm) = transport.as_mut() {
+            use rustyac_game::replay_manager::{FAST_FORWARD, PAUSE, SLOW_MOTION, STOP};
+            // the replay pauses itself at its end
+            if replay_over && rm.status != PAUSE && rm.status != STOP {
+                rm.pause();
+            }
+            replay_scale = rm.update_play_state(dt.as_secs_f32());
+            shared.replay_speed.store(replay_scale.max(0.0).to_bits(), Ordering::Relaxed);
+            replay_events = rm.events.drain(..).map(|e| (e.status, e.time_mult, e.slow_mo_level)).collect();
+            replay_sound = rm.audio_on();
+            replay_state = match rm.status {
+                PAUSE if !replay_over => "REPLAY PAUSED".to_string(),
+                STOP => "REPLAY STOPPED (Ctrl+Space plays)".to_string(),
+                FAST_FORWARD => format!("FAST FORWARD x{replay_scale:.0}"),
+                SLOW_MOTION => format!("SLOW MOTION x{replay_scale:.2}"),
+                _ => String::new(),
+            };
+        }
         let mut info = HudInfo {
             fps,
             fps_counter,
@@ -777,6 +851,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             camera: camera.name(),
             replay: replay.is_some(),
             replay_over,
+            replay_events,
+            replay_scale,
+            replay_transport: transport.is_some(),
+            replay_state,
             notes: Vec::new(),
         };
         if replay_over {
@@ -793,7 +871,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                 sound.grid_frames(|_| (camera, frame.matrix));
             } else {
                 sound.set_picture_backfire(renderer.backfire_triggered());
-                sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused);
+                // (ReplayManager::updateReplayAudio: no sound outside half to double speed)
+                sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound);
             }
         }
         match renderer.present(&chain, options.vsync) {

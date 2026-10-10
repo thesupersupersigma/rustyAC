@@ -32,6 +32,14 @@ pub struct HudInfo {
     pub replay: bool,
     /// … and has come to its end.
     pub replay_over: bool,
+    /// The replay's transport: what `Sim::evOnReplayStatusChanged` was fired with since the last
+    /// frame (status, speed, slow-motion level), and the speed everything reads this frame.
+    pub replay_events: Vec<(i32, f32, f32)>,
+    pub replay_scale: f32,
+    /// The two above are filled in (the window's replay; not a screenshot or a benchmark).
+    pub replay_transport: bool,
+    /// The transport's state in words, for the display ("" while it plays).
+    pub replay_state: String,
     /// Extra lines (top left, under the numbers).
     pub notes: Vec<String>,
 }
@@ -404,12 +412,19 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.rect((width - w) * 0.5, y, w, gh * 1.2 * s + 14.0 * s, PANEL);
         hud.text_centred(width * 0.5, y + 7.0 * s, 1.2 * s, YELLOW, note);
     }
+    if info.replay && !info.replay_state.is_empty() {
+        let w = hud.width(&info.replay_state, 1.6 * s) + 40.0 * s;
+        hud.rect((width - w) * 0.5, height * 0.30, w, gh * 1.6 * s + 16.0 * s, PANEL);
+        hud.text_centred(width * 0.5, height * 0.30 + 8.0 * s, 1.6 * s, YELLOW, &info.replay_state);
+    }
     if info.paused {
         let w = hud.width("PAUSED", 2.5 * s) + 40.0 * s;
         hud.rect((width - w) * 0.5, height * 0.36, w, gh * 2.5 * s + 20.0 * s, PANEL);
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
-    let keys = if lap.on_track {
+    let keys = if info.replay {
+        "REPLAY  Ctrl+Space or P play / pause  Ctrl+S slow motion  Ctrl+F faster  Home stop (back to the start)  F1 view  F6 car cameras  Esc quit"
+    } else if lap.on_track {
         "F1 view  F6 car cameras  R to the start  Shift+R back on track  N new car  T / Y TC / ABS (Shift: down)  ] [ bias  P pause  Esc quit"
     } else {
         "F1 view  F6 car cameras  R reset  N new car  T / Y TC / ABS (Shift: down)  ] [ bias  P pause  Esc quit"

@@ -31,6 +31,7 @@ pub mod input_file;
 pub mod physics_thread;
 #[cfg(windows)]
 pub mod render;
+pub mod replay_manager;
 /// The part of the debug view that is plain maths and file parsing (no Direct3D).
 #[cfg(not(windows))]
 pub mod render {

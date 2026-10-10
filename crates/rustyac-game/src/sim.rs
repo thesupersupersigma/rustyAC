@@ -572,6 +572,9 @@ pub struct GameSim {
     pub lap_db: LapDb,
     /// Which session this is (0 at the start; a new car starts the next one).
     pub session_index: i32,
+    /// New sessions so far (N: a new car at the spawn point): the picture's handlers of the
+    /// game's new-session event run when it changes
+    pub new_sessions: u32,
     /// The last change of an aid or of the brake bias, for the displays. Never read by the
     /// physics and not part of any dump.
     pub aid_note: AidNote,
@@ -833,7 +836,7 @@ impl GameSim {
         let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, aid_note: AidNote::default() })
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, aid_note: AidNote::default() })
     }
 
     /// The physics clock after the last step, ms.
@@ -891,6 +894,7 @@ impl GameSim {
         self.physics_info = PhysicsInfo::of(&car);
         self.car = car;
         self.lap_db = LapDb::new(self.lap_db.sector_count);
+        self.new_sessions += 1;
         Ok(())
     }
 

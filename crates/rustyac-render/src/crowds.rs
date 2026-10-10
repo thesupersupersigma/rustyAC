@@ -511,6 +511,21 @@ pub fn init_dynamic_objects(graphics: &mut Graphics, scene: &mut Scene, track_fo
     objects
 }
 
+/// The handler `TrackAvatar::TrackAvatar` hangs on `Sim::evOnNewSession` (0x1401c6b70), the
+/// drifting objects' part: each goes to where it was first put, plus a new random offset, plus
+/// its speed times the seconds the game's clock shows (`now_ms`: `GameTime::now`; `start_ms`:
+/// the session's `startTime`, 0 offline). Three numbers of `rand()` an object. The nodes
+/// follow at the next [`update_dynamic_objects`].
+pub fn on_new_session(rand: &mut MsvcRand, objects: &mut [DynamicTrackObject], now_ms: f64, start_ms: f64) {
+    let v = now_ms - start_ms;
+    let t = ((if v > 0.0 { v } else { 0.0 }) * 0.001) as f32;
+    for o in objects {
+        let (a, b, c) = (t * o.vel[0], t * o.vel[1], t * o.vel[2]);
+        let r = rand_vec3(rand, o.pos_range);
+        o.pos = [(o.org_pos[0] + r[0]) + a, (o.org_pos[1] + r[1]) + b, (o.org_pos[2] + r[2]) + c];
+    }
+}
+
 /// `TrackAvatar::updateDynamicObjects` 0x1401ccb30.
 pub fn update_dynamic_objects(scene: &mut Scene, objects: &mut [DynamicTrackObject], dt: f32) {
     for o in objects {

@@ -29,6 +29,8 @@ pub struct Frames {
     pub curr: CarView,
     /// When `curr`'s step was due.
     pub curr_due: Instant,
+    /// How fast the steps follow each other (a replay's speed; 1 while driving)
+    pub speed: f32,
 }
 
 impl Frames {
@@ -36,7 +38,7 @@ impl Frames {
     /// the last two steps by how far `now` is past the newer one's due time.
     pub fn at(&self, now: Instant) -> CarView {
         let since = now.saturating_duration_since(self.curr_due).as_secs_f32();
-        CarView::between(&self.prev, &self.curr, since / DT)
+        CarView::between(&self.prev, &self.curr, since * self.speed / DT)
     }
 }
 
@@ -130,6 +132,10 @@ pub struct Shared {
     pub camera_toggles: AtomicU32,
     /// The car's unchanging facts, once it is built.
     pub car_info: Mutex<Option<crate::sim::CarInfo>>,
+    /// A replay's speed (the bits of an `f32`; 0: it stands): the steps are paced by it.
+    pub replay_speed: AtomicU32,
+    /// A replay goes back to its first step (the transport's Stop).
+    pub replay_restart: AtomicBool,
 }
 
 impl Shared {
@@ -142,7 +148,9 @@ impl Shared {
             requests: AtomicU32::new(0),
             bias_requests: AtomicI32::new(0),
             finished: AtomicBool::new(false),
-            frames: Mutex::new(Frames { prev: view, curr: view, curr_due: Instant::now() }),
+            frames: Mutex::new(Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 }),
+            replay_speed: AtomicU32::new(1.0f32.to_bits()),
+            replay_restart: AtomicBool::new(false),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -225,10 +233,13 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         }
         _ => (-3.0, 500.0),
     };
+    // a replay can go back to its start: the drive is built again from the same set-up
+    let initial_setup = config.replay.as_ref().map(|_| sim.setup.clone());
+    let mut last_speed = 1.0f32;
     let mut result = Ok(());
     {
         let view = CarView::capture(&sim, 0.0);
-        *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now() };
+        *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 };
         *shared.car_info.lock().unwrap() = Some(sim.car_info());
     }
     // closes the current stretch of paced steps: n steps own n periods of wall time from the
@@ -246,8 +257,27 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             shared.finished.store(true, Ordering::Relaxed);
             break;
         }
+        if let (Some(setup), true) = (&initial_setup, shared.replay_restart.swap(false, Ordering::Relaxed)) {
+            match GameSim::new(setup.clone(), Box::new(crate::sim::ReplaySource::default())) {
+                Ok(again) => sim = again,
+                Err(message) => {
+                    result = Err(message);
+                    break;
+                }
+            }
+            replay_at = 0;
+            drive_start = sim.steps;
+            close(&mut timing, n, origin);
+            n = 0;
+            fresh = true;
+            shared.finished.store(false, Ordering::Relaxed);
+            let view = CarView::capture(&sim, 0.0);
+            *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 };
+        }
+        let speed = if config.replay.is_some() { f32::from_bits(shared.replay_speed.load(Ordering::Relaxed)) } else { 1.0 };
         let replay_done = config.replay.as_ref().is_some_and(|steps| replay_at >= steps.len());
         let paused = shared.paused.load(Ordering::Relaxed)
+            || !(speed > 0.0)
             || (config.pause_unfocused && !shared.focused.load(Ordering::Relaxed))
             || crate::window::MODAL_LOOP.load(Ordering::Relaxed)
             || replay_done;
@@ -296,12 +326,18 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 fresh = true;
             }
         } else {
+            if speed != last_speed {
+                // a new speed: a new stretch of the schedule
+                close(&mut timing, n, origin);
+                last_speed = speed;
+                fresh = true;
+            }
             if fresh {
                 origin = Instant::now();
                 n = 0;
                 fresh = false;
             }
-            due = origin + STEP * n;
+            due = if speed == 1.0 { origin + STEP * n } else { origin + Duration::from_secs_f64(STEP.as_secs_f64() * n as f64 / speed as f64) };
             let now = Instant::now();
             if now < due {
                 sleeper.sleep_until(due);
@@ -369,6 +405,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             frames.prev = frames.curr;
             frames.curr = view;
             frames.curr_due = due;
+            frames.speed = speed;
             if burst {
                 // nothing to blend through while the car is put down
                 frames.prev = view;

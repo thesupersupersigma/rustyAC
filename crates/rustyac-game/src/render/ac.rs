@@ -445,6 +445,8 @@ pub struct AcRenderer {
     /// (-1: no replay yet)
     told_paused: bool,
     told_replay_status: i32,
+    /// `CarView::new_sessions` of the last frame
+    told_new_sessions: u32,
     /// `TrackAvatar::dynamicObjects`: balloons and aircraft that drift over the track
     dynamic_objects: Vec<rustyac_render::crowds::DynamicTrackObject>,
     track_folder: Option<String>,
@@ -574,7 +576,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -795,8 +797,15 @@ impl AcRenderer {
         // play), and the replay pauses itself at its end; no pause menu shows.
         let replay_status = match (info.replay, info.paused || info.replay_over) {
             (false, _) => -1,
+            // the window's replay: the transport's own state (playing at first)
+            (true, _) if info.replay_transport => info.replay_events.last().map(|e| e.0).unwrap_or(self.told_replay_status.max(0)),
             (true, false) => 0,
             (true, true) => 1,
+        };
+        let replay_scale = match (info.replay_transport, replay_status) {
+            (true, _) => info.replay_scale,
+            (false, 1) => 0.0,
+            (false, _) => 1.0,
         };
         // StartingLights' two handlers, and RaceManager::update: the countdown stands while the
         // pause menu shows and in a replay
@@ -821,8 +830,19 @@ impl AcRenderer {
                     car.on_replay_started_or_stopped(true);
                     car.on_replay_status_changed(&mut self.scene, 6, 1.0, 2.0);
                 }
-                if replay_status != self.told_replay_status {
-                    car.on_replay_status_changed(&mut self.scene, replay_status, if replay_status == 1 { 0.0 } else { 1.0 }, 2.0);
+                if info.replay_transport {
+                    for &(status, time_mult, slow_mo) in &info.replay_events {
+                        // ReplayManager::stop: evOnReplayRewind (the skid marks go), then the status
+                        if status == crate::replay_manager::STOP {
+                            car.on_replay_rewind();
+                        }
+                        car.on_replay_status_changed(&mut self.scene, status, time_mult, slow_mo);
+                        if let Some(grooves) = &mut self.grooves {
+                            grooves.reset_to_target = true;
+                        }
+                    }
+                } else if replay_status != self.told_replay_status {
+                    car.on_replay_status_changed(&mut self.scene, replay_status, replay_scale, 2.0);
                     if let Some(grooves) = &mut self.grooves {
                         grooves.reset_to_target = true;
                     }
@@ -836,9 +856,22 @@ impl AcRenderer {
         // SunAnimator::update: the sun, the lighting's clock, the clouds' drift. A rustyAC
         // replay is the drive run again, so its sun moves as it did; a paused replay's stands.
         if let Some(sun) = &mut self.sun {
-            if replay_status != 1 {
-                sun.update(&mut self.graphics, self.camera.base.sky_box.as_mut(), dt, self.told_paused, None);
+            // (the game takes the sun of a replay from its recorded frames: it moves at the
+            // replay's speed)
+            if replay_scale != 0.0 {
+                sun.update(&mut self.graphics, self.camera.base.sky_box.as_mut(), if info.replay { dt * replay_scale } else { dt }, self.told_paused, None);
             }
+        }
+        // Sim::evOnNewSession (N: a new car at the spawn point), its handlers in the order they
+        // were registered: the track's (the drifting objects are scattered again), the car's
+        // (smoke and dirt go); and the race start is counted down again
+        if view.new_sessions != self.told_new_sessions {
+            self.told_new_sessions = view.new_sessions;
+            rustyac_render::crowds::on_new_session(&mut self.graphics.crt_rand, &mut self.dynamic_objects, self.time_ms, 0.0);
+            if let Some(car) = &mut self.car {
+                car.on_new_session(&mut self.scene);
+            }
+            self.start_race();
         }
         let mut modes = (2, 0);
         if let Some(car) = &mut self.car {
@@ -877,7 +910,7 @@ impl AcRenderer {
             car.drivetrain = Some((view.total_torque, view.drive_ratio));
             car.pause_menu = self.told_paused;
             car.replay_mode = info.replay;
-            car.replay_scale = if replay_status == 1 { 0.0 } else { 1.0 };
+            car.replay_scale = replay_scale;
             // a session of one car: rustyAC's sessions are practice (hot lap from the line)
             car.session_type = 1;
             car.leaderboard_position = 1;

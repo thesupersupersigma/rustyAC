@@ -78,6 +78,8 @@ pub struct CarView {
     /// [`MOVED_OBJECTS`] are shown moved.
     pub moved_objects: [(u16, Mat); MOVED_OBJECTS],
     pub moved_object_count: u8,
+    /// New sessions so far (`GameSim::new_sessions`)
+    pub new_sessions: u32,
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
     /// in the order LF, RF, LR, RR.
     pub wheels: [Mat; 4],
@@ -256,6 +258,7 @@ impl Default for CarView {
             render: RenderState::default(),
             moved_objects: [(0, IDENTITY); MOVED_OBJECTS],
             moved_object_count: 0,
+            new_sessions: 0,
             steps: 0,
             sim_seconds: 0.0,
             drive_seconds: 0.0,
@@ -467,6 +470,7 @@ impl CarView {
             body: car.core.get_world_matrix(car.body).m,
             moved_objects,
             moved_object_count,
+            new_sessions: sim.new_sessions,
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
             gas: car.controls.gas,
