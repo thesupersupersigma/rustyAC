@@ -172,7 +172,7 @@ fn e30_at_magione_is_the_games() {
     skins.sort();
     let skin = skins.first().cloned().unwrap_or_default();
     let mut car = CarAvatar::init_3d(&mut graphics, &mut scene, cars, &path_text(&car_folder), &car_folder, &skin, Some(steer_lock), 0).expect("the car");
-    let mut mirror = MirrorTextureRenderer::new(&mut graphics, 512, false).expect("the mirror");
+    let mut mirror = MirrorTextureRenderer::new(&mut graphics, 512, false, None).expect("the mirror");
     car.init_mirror_materials(&mut graphics, &mut scene, &mirror.texture).expect("the mirror materials");
     let sim = SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
     car.init_common_post_physics(&mut graphics, &mut scene, &sim, tyre_width).expect("the objects of the car");

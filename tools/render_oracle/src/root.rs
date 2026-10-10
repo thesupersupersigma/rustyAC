@@ -27,9 +27,12 @@ pub struct Profile {
     pub mirror_size: i32,
     pub mirror_smoke: bool,
     pub virtual_mirror: bool,
+    /// `[MIRROR] HQ`: 0, or the sample count the mirror's multisampled target is made with (the
+    /// screen's `AASAMPLES` in the game; the oracle's screen stays at one sample)
+    pub mirror_hq: i32,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0 };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -55,7 +58,8 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _ } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq } = profile();
+    let MIRROR_HQ = (mirror_hq > 0) as i32;
     let MIRROR_SMOKE = mirror_smoke as i32;
     let lines = [
         "[VIDEO]".to_string(),
@@ -100,7 +104,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         "FXAA=0".into(),
         String::new(),
         "[MIRROR]".into(),
-        "HQ=0".into(),
+        format!("HQ={MIRROR_HQ}"),
         format!("SIZE={MIRROR_SIZE}"),
         String::new(),
         "[CUBEMAP]".into(),

@@ -9,8 +9,9 @@
 //! One texture for the whole game: the focused car's view backwards, drawn before the main
 //! picture without shadows, with the car itself hidden. Each car's mirror glass gets two
 //! materials that show it (one for the cockpit, one for outside), and the "virtual mirror"
-//! is a quad at the top of the screen. The high-quality path (`[MIRROR] HQ`, a multisampled
-//! target) is not ported: the plain one runs in its place.
+//! is a quad at the top of the screen. With `[MIRROR] HQ=1` the picture is drawn into a
+//! multisampled target (as many samples as the screen's `AASAMPLES`) with the whole
+//! transparent pass and a far plane of 800 m, and resolved into the texture.
 
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
@@ -58,13 +59,26 @@ pub struct MirrorTextureRenderer {
     pub camera: Camera,
     render_target: RenderTarget,
     null_shadow: RenderTarget,
+    /// `highQuality` and `renderTargetMS`: `[MIRROR] HQ`
+    pub high_quality: bool,
+    render_target_ms: Option<RenderTarget>,
 }
 
 impl MirrorTextureRenderer {
     /// `MirrorTextureRenderer::MirrorTextureRenderer` 0x140113c40. `size`: `[MIRROR] SIZE` of
     /// `video.ini` (the game makes no renderer when it is 0).
-    pub fn new(graphics: &mut Graphics, size: i32, render_smoke: bool) -> Result<MirrorTextureRenderer, String> {
+    /// `high_quality`: `[MIRROR] HQ` > 0, with `GraphicsManager::videoSettings.aaSamples`.
+    pub fn new(graphics: &mut Graphics, size: i32, render_smoke: bool, high_quality: Option<i32>) -> Result<MirrorTextureRenderer, String> {
         let height = size / 4;
+        // the multisampled target first
+        let render_target_ms = match high_quality {
+            Some(samples) => {
+                let color = graphics.kgl.create_render_target(DXGI_FORMAT_R16G16B16A16_FLOAT, size, height, samples, 1);
+                let depth = graphics.kgl.create_render_target_depth(size, height, samples)?;
+                Some(RenderTarget { kid_color: Some(color), kid_depth: Some(depth), width: size, height })
+            }
+            None => None,
+        };
         let color = graphics.kgl.create_render_target(DXGI_FORMAT_R16G16B16A16_FLOAT, size, height, 1, 1);
         let depth = graphics.kgl.create_render_target_depth(size, height, 1)?;
         let texture = graphics.resources.texture_from_render_target(&color);
@@ -82,7 +96,10 @@ impl MirrorTextureRenderer {
             }
         }
         camera.aspect_ratio = size as f32 / height as f32;
-        Ok(MirrorTextureRenderer { texture, render_smoke, has_been_rendered: false, camera, render_target, null_shadow })
+        if high_quality.is_some() {
+            camera.far_plane = 800.0;
+        }
+        Ok(MirrorTextureRenderer { texture, render_smoke, has_been_rendered: false, camera, render_target, null_shadow, high_quality: high_quality.is_some(), render_target_ms })
     }
 
     /// The test of `Sim::renderScene` 0x14019e570: the mirror is drawn for an on-board
@@ -103,8 +120,16 @@ impl MirrorTextureRenderer {
         for i in 0..3 {
             graphics.set_shadow_map_matrix(i, &Mat44f::IDENTITY);
         }
-        graphics.kgl.set_sampler_ps(&graphics.samplers.linear_simple, 0);
-        graphics.set_render_target(Some(&self.render_target));
+        match &self.render_target_ms {
+            None => {
+                graphics.kgl.set_sampler_ps(&graphics.samplers.linear_simple, 0);
+                graphics.set_render_target(Some(&self.render_target));
+            }
+            Some(ms) => {
+                graphics.kgl.set_sampler_ps(&graphics.samplers.aniso, 0);
+                graphics.set_render_target(Some(ms));
+            }
+        }
         graphics.set_viewport(0, 0, self.render_target.width, self.render_target.height);
         let body = scene.nodes[s.body_transform].matrix;
         let set_visible = |scene: &mut Scene, visible: bool| {
@@ -120,11 +145,21 @@ impl MirrorTextureRenderer {
         t.m[3][2] = s.mirror_position[2];
         self.camera.matrix = xm_matrix_multiply(&t, &body);
         self.render_opaque(graphics, scene, sky, s.root);
-        if self.render_smoke {
+        if self.high_quality {
+            // the whole scene's transparent pass, the smoke only when asked for
+            let old = std::mem::replace(&mut scene.nodes[s.particles].is_active, self.render_smoke);
+            self.render_transparent(graphics, scene, s.root);
+            scene.nodes[s.particles].is_active = old;
+        } else if self.render_smoke {
             self.render_transparent(graphics, scene, s.particles);
         }
         self.render_transparent(graphics, scene, s.before_cars);
         set_visible(scene, true);
+        if let Some(ms) = &self.render_target_ms {
+            if let (Some(from), Some(to)) = (&ms.kid_color, &self.render_target.kid_color) {
+                graphics.kgl.resolve_render_target(from, to, 1);
+            }
+        }
         graphics.kgl.set_sampler_ps(&graphics.samplers.aniso, 0);
         if let (Some(n), Some(saved)) = (s.ideal_line, saved_ideal) {
             scene.nodes[n].is_active = saved;

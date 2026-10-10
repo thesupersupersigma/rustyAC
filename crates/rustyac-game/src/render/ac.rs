@@ -227,12 +227,14 @@ pub struct AcOptions {
     pub sun_animation: Option<(f32, f32)>,
     /// race.ini `[GROOVE] MAX_LAPS` and `STARTING_LAPS`, when the file has the section
     pub groove: Option<(f32, f32)>,
+    /// `--mirror-hq <0|1>`: `[MIRROR] HQ` whatever `video.ini` says
+    pub mirror_hq: Option<bool>,
     /// what `rand()` starts from once the track is loaded
     pub render_seed: u32,
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
-fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, i32, f32, Vec<String>) {
+fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, i32, f32, bool, Vec<String>) {
     let mut video = VideoSettings { width: width as i32, height: height as i32, is_fullscreen: false, ..VideoSettings::default() };
     let mut notes = Vec::new();
     let (mut cube_size, mut cube_faces, mut cube_far) = (512, 0, 0.0f32);
@@ -242,7 +244,7 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
         video.world_detail = 5;
         // TyreSmoke / EngineSmoke without the file: the Normal level
         video.smoke = None;
-        return (video, cube_size, cube_faces, cube_far, notes);
+        return (video, cube_size, cube_faces, cube_far, false, notes);
     };
     let int = |section: &str, key: &str| ini.get_int(section, key).unwrap_or(0);
     video.anisotropic = int("VIDEO", "ANISOTROPIC");
@@ -267,9 +269,7 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     video.smoke = Some(int("EFFECTS", "SMOKE"));
     video.mirror_size = int("MIRROR", "SIZE");
     video.mirror_smoke = int("EFFECTS", "RENDER_SMOKE_IN_MIRROR") > 0;
-    if video.mirror_size != 0 && int("MIRROR", "HQ") > 0 {
-        notes.push("video.ini [MIRROR] HQ=1: the multisampled mirror is not ported, the plain mirror is drawn".to_string());
-    }
+    let mirror_hq = int("MIRROR", "HQ") > 0;
     // values Content Manager writes for Custom Shaders Patch: plain acs.exe cannot make a
     // shadow map or a cube map of such a size and then draws everything in shadow, without
     // reflections (checked with the game's own code in the render oracle)
@@ -289,7 +289,7 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
             cube_size = 512;
         }
     }
-    (video, cube_size, cube_faces, cube_far, notes)
+    (video, cube_size, cube_faces, cube_far, mirror_hq, notes)
 }
 
 /// The shadow ranges the game's camera of the moment asks for (`setShadowMapsSplits`).
@@ -353,7 +353,8 @@ pub struct AcRenderer {
 
 impl AcRenderer {
     pub fn new(width: u32, height: u32, options: AcOptions) -> Result<AcRenderer, String> {
-        let (mut video, cube_size, mut cube_faces, cube_far, notes) = video_settings(width, height, options.video_exact);
+        let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, notes) = video_settings(width, height, options.video_exact);
+        let mirror_hq = options.mirror_hq.unwrap_or(mirror_hq);
         if let Some(size) = options.mirror_size {
             video.mirror_size = size;
         }
@@ -430,7 +431,8 @@ impl AcRenderer {
             0 => None,
             size => {
                 let smoke = graphics.video.mirror_smoke;
-                Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, smoke)?)
+                let samples = graphics.video.aa_samples;
+                Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, smoke, mirror_hq.then_some(samples))?)
             }
         };
         let virtual_mirror = mirror.as_ref().map(|_| {

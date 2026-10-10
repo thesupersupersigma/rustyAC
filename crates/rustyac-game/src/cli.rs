@@ -48,6 +48,8 @@ pub struct Options {
     /// `--render-seed <n>`: what the picture's `rand()` starts from (default: the clock while
     /// driving, 1 for `--screenshot` and `--headless`, the recording's for `--replay`)
     pub render_seed: Option<u32>,
+    /// `--mirror-hq <0|1>`: `[MIRROR] HQ` whatever `video.ini` says
+    pub mirror_hq: Option<bool>,
     /// `--show-lights`, `--show-damage f,r,l,r,c`: with `--screenshot`, the picture is drawn
     /// with the headlights on / with these damage levels (km/h) whatever the physics says
     pub show_lights: bool,
@@ -188,6 +190,7 @@ impl Default for Options {
             weather: None,
             time_mult: None,
             render_seed: None,
+            mirror_hq: None,
             show_lights: false,
             show_damage: None,
             virtual_mirror: false,
@@ -365,6 +368,7 @@ impl Options {
                 "--mirror-size" => o.mirror_size = Some(value("--mirror-size")?.parse().map_err(|_| "--mirror-size <pixels, 0: no mirrors>".to_string())?),
                 "--sun" => o.sun = Some(value("--sun")?.parse().map_err(|e| format!("--sun: {e}"))?),
                 "--weather" => o.weather = Some(value("--weather")?),
+                "--mirror-hq" => o.mirror_hq = Some(value("--mirror-hq")? != "0"),
                 "--render-seed" => o.render_seed = Some(value("--render-seed")?.parse().map_err(|e| format!("--render-seed: {e}"))?),
                 "--time-mult" => o.time_mult = Some(value("--time-mult")?.parse().map_err(|e| format!("--time-mult: {e}"))?),
                 "--show-lights" => o.show_lights = true,

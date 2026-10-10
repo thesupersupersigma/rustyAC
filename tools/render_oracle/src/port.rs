@@ -146,7 +146,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let profile = crate::root::profile();
     let mut mirror = match profile.mirror_size {
         0 => None,
-        size => Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, profile.mirror_smoke)?),
+        size => Some(rustyac_render::mirror::MirrorTextureRenderer::new(&mut graphics, size, profile.mirror_smoke, (profile.mirror_hq > 0).then_some(profile.mirror_hq))?),
     };
     let mut virtual_mirror = mirror.as_ref().map(|_| rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, profile.virtual_mirror));
     if let (Some(car), Some(mirror)) = (&mut car, &mirror) {

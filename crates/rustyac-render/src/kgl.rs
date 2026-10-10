@@ -776,6 +776,20 @@ impl Kgl {
         self.active_depth_stencil_view = cube.dsv_depth.clone();
     }
 
+    /// `kglResolveRenderTarget` 0x140019650: the multisampled colour target into a plain one.
+    /// `code`: 0 R8G8B8A8, 1 R16G16B16A16F, 2 and 4 R32F, 3 R16F.
+    pub fn resolve_render_target(&self, source: &KglRenderTarget, target: &KglRenderTarget, code: i32) {
+        let format = match code {
+            0 => DXGI_FORMAT(0x1c),
+            1 => DXGI_FORMAT(0xa),
+            3 => DXGI_FORMAT(0x36),
+            _ => DXGI_FORMAT(0x29),
+        };
+        if let (Some(to), Some(from)) = (&target.texture, &source.texture) {
+            unsafe { self.context.ResolveSubresource(to, 0, from, 0, format) }
+        }
+    }
+
     /// `kglCubeMapGenerateMips` 0x140019310.
     pub fn cube_map_generate_mips(&self, cube: &KglCubeMap, face: i32) {
         if cube.mips > 1 && face == -1 {

@@ -446,7 +446,14 @@ impl Game {
             wr(sim, 0x210, cars.add(8));
             mirror = acs.alloc(0x68);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_MIRROR_TEXTURE_RENDERER_CTOR));
+            // (GraphicsManager::videoSettings.aaSamples, read here for the multisampled target of
+            // [MIRROR] HQ only: the oracle's screen has one sample)
+            let hq = crate::root::profile().mirror_hq;
+            if hq > 0 {
+                wr(self.graphics, 0x10, hq);
+            }
             ctor(mirror, sim);
+            wr(self.graphics, 0x10, 1i32);
             wr(sim, 0x180, mirror);
             virtual_mirror = acs.alloc(0x78);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VIRTUAL_MIRROR_CTOR));
