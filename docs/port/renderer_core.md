@@ -40,7 +40,8 @@ What is not there yet (Tasks 21 and 22): the driver, mirrors, tyre smoke, skid m
 the car, brake discs that glow, lights, the damage and blur meshes handled as the game does, anti-aliasing,
 post-processing. Options of `video.ini` that need those print one line and count as off.
 
-The old picture is still there: `--debug-view`. On this PC the new renderer makes 122 to 199 frames a second
+The old picture is still there, and stays: `--debug-view` (a fast picture for slow machines and a
+physics debugging aid). On this PC the new renderer makes 122 to 199 frames a second
 off screen (the debug view: about 400): it draws about three times more per frame (three shadow maps and the
 real materials).
 
@@ -290,7 +291,9 @@ Task 22 (the picture after the scene):
 - [ ] Post-processing (`[POST_PROCESS]`: the HDR target, filters, glare, depth of field, rays of god, heat
       shimmer), motion blur, saturation.
 - [ ] The game's own HUD and fonts drawn by its renderer (rustyAC's HUD is its own pass on top).
-- [ ] Removing the debug view and its options (`--boxes`, `--texture-size`, `--no-textures`).
+- [x] ~~Removing the debug view and its options~~ **The debug view stays** (decided for Task 22): it is kept
+      as a fast "potato" picture and a physics debugging aid behind `--debug-view`, with its options
+      (`--boxes`, `--texture-size`, `--no-textures`).
 - [ ] The own texture reader made bit-identical to D3DX (mip chains and their filter), if that is wanted.
 
 ## 8. Open questions (choices made without asking)

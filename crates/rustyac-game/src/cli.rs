@@ -60,7 +60,8 @@ pub struct Options {
     pub mirror_size: Option<i32>,
     /// `--virtual-mirror`: the F11 mirror on from the start
     pub virtual_mirror: bool,
-    /// `--debug-view`: the old debug view (own shader, flat colours) instead of AC's renderer.
+    /// `--debug-view`: the debug view (own shader, flat colours) instead of AC's renderer. It
+    /// stays: a fast picture for slow machines, and a physics debugging aid.
     pub debug_view: bool,
     /// `--warp`: AC's renderer on WARP, Microsoft's software rasteriser (slow; the same pixels
     /// on every machine).
@@ -306,6 +307,11 @@ usage: rustyac [options]
   --show-damage f,r,l,r,c   with --screenshot: the picture with these damage levels (km/h
                         of impact: front, rear, left, right, centre) whatever the physics says
   --mirror-size <n>     the mirror texture's width whatever video.ini says (0: no mirrors)
+  --mirror-hq <0|1>     the high-quality mirror ([MIRROR] HQ) whatever video.ini says
+  --weather <name>      a folder of content\weather whatever race.ini says (7_heavy_clouds ...)
+  --time-mult <n>       race.ini TIME_MULT: how fast the sun and the clouds move
+  --render-seed <n>     what the picture's rand() starts from (default: the clock while driving,
+                        1 for --screenshot and --headless, the recording's for --replay)
   --virtual-mirror      the virtual mirror on from the start (F11 switches it while driving;
                         it needs mirrors in video.ini: [MIRROR] SIZE above 0)
   --vsync <0|1>         wait for the display (default 1)
@@ -317,7 +323,7 @@ for checks, without anybody at the controls:
   --realtime            with --replay --headless: keep to the clock, publish shared memory
   --duration <s>        stop by itself after this many seconds
   --dump-states <file>  with --replay --headless: write the car's state after every step
-  --debug-view          the old debug view (own shader) instead of Assetto Corsa's renderer
+  --debug-view          the debug view (own shader, fast, shows the physics) instead of Assetto Corsa's renderer
   --warp                draw with WARP, Windows' software rasteriser (slow; no graphics card needed)
   --gpu-log <file>      write the Direct3D command log of the second frame
   --skin <folder>       the car's skin (default: race.ini's, else the first one)

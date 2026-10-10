@@ -296,7 +296,9 @@ Carried over from Task 20, with what this task leaves:
       not reachable yet).
 - [ ] The game's own HUD and fonts drawn by its renderer (rustyAC's HUD is its own pass on top). The fonts of
       the dashboard displays (`StringBlitter3D`) are already ported.
-- [ ] Removing the debug view and its options (`--boxes`, `--texture-size`, `--no-textures`).
+- [x] ~~Removing the debug view and its options~~ **The debug view stays** (decided for Task 22): it is kept
+      as a fast "potato" picture and a physics debugging aid behind `--debug-view`, with its options
+      (`--boxes`, `--texture-size`, `--no-textures`).
 - [ ] Track life: dynamic objects, pit crew, flags, clouds, crowds (`StaticParticleSystem`, which shares the
       particle shader), track grooves, the ideal line (the mirror hides it), more than one car (every car's
       mirror shows the focused car's rear view; the smoke caps at 4000 particles above 25 cars).

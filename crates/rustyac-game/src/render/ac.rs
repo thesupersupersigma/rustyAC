@@ -292,6 +292,25 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     (video, cube_size, cube_faces, cube_far, mirror_hq, notes)
 }
 
+/// The five pictures of `CarFakeShadow::generateFakeShadow` (four wheels of 64 x 64, the body of
+/// 512 x 512, RGBA) as the PNG files the game would have saved, in rustyAC's own folder:
+/// `<the program's folder>/rustyac_cache/shadows/<car>/`.
+fn save_generated_shadows(car: &str, pictures: &[Vec<u8>]) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let folder = exe.parent().ok_or("the program has no folder")?.join("rustyac_cache").join("shadows").join(car);
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    for (i, picture) in pictures.iter().enumerate() {
+        let (name, side) = if i < 4 { (format!("tyre_{i}_shadow.png"), 64u32) } else { ("body_shadow.png".to_string(), 512u32) };
+        let file = std::fs::File::create(folder.join(&name)).map_err(|e| format!("{name}: {e}"))?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), side, side);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+        writer.write_image_data(picture).map_err(|e| e.to_string())?;
+    }
+    Ok(folder)
+}
+
 /// The shadow ranges the game's camera of the moment asks for (`setShadowMapsSplits`).
 fn splits_of(camera: &DrivingCamera) -> [f32; 4] {
     match camera.mode {
@@ -515,10 +534,6 @@ impl AcRenderer {
     /// What follows the loading in the game: the sun (`RaceManager::initLighting`), the weather
     /// (`Sim::applyCustomWeather`) and the reflection cube map (`Sim::initStaticCubemap`).
     pub fn finish_loading(&mut self) -> Result<(), String> {
-        // Sim::onPostLoad: CarAvatar::onPostLoad
-        if let Some(car) = &mut self.car {
-            car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
-        }
         self.graphics.set_sun_angle(self.options.sun_angle);
         // RaceManager::initLighting 0x14013a3d0
         self.sun = self.options.sun_animation.map(|(time_mult, cloud_speed)| rustyac_render::sky::SunAnimator::new(self.options.sun_angle, time_mult, cloud_speed));
@@ -529,7 +544,29 @@ impl AcRenderer {
             }
             self.graphics.apply_custom_weather(&self.options.weather.clone());
         }
-        rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())
+        rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())?;
+        // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad (the flat ground shadows)
+        if let Some(car) = &mut self.car {
+            car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
+            // A car without body_shadow.png: the game draws the five pictures, saves them into
+            // the car's folder and shows them from its next start on. rustyAC never writes
+            // there: the pictures go into a folder of its own, next to the program, and are
+            // loaded from it at once (they are made again at every start: it takes a moment).
+            if let Some(shadow) = &car.fake_shadow {
+                let mut shadow = shadow.borrow_mut();
+                if let Some(pictures) = shadow.generated.take() {
+                    let name = car.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    match save_generated_shadows(&name, &pictures) {
+                        Ok(folder) => {
+                            println!("{name} has no body_shadow.png: its ground shadows were generated into {}", folder.display());
+                            shadow.load_shadows(&mut self.graphics, &path_text(&folder));
+                        }
+                        Err(message) => println!("WARNING: {name} has no body_shadow.png and the generated ones could not be kept ({message}): no ground shadow"),
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `CarAvatar::evOnBackfireTriggered` of the last frame; `None` without a car that tests.
