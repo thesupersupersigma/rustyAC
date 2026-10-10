@@ -57,6 +57,10 @@ const VA_TYRE_SMOKE_CTOR: usize = 0x1_401d_0000; // TyreSmoke::TyreSmoke(CarAvat
 const VA_TYRE_SMOKE_UPDATE: usize = 0x1_401d_0b80; // TyreSmoke::update(float)
 const VA_ENGINE_SMOKE_CTOR: usize = 0x1_4009_2de0; // EngineSmoke::EngineSmoke(CarAvatar*)
 const VA_ENGINE_SMOKE_UPDATE: usize = 0x1_4009_35e0; // EngineSmoke::update(float)
+const VA_BACKFIRE_PARAMS_CTOR: usize = 0x1_400c_ccb0; // BackfireParams::BackfireParams(CarAvatar*)
+const VA_BACKFIRE_PARAMS_CHECK: usize = 0x1_400d_26b0; // BackfireParams::checkBackfire(float)
+const VA_FLAMES_CTOR: usize = 0x1_400f_f990; // Flames::Flames(CarAvatar*)
+const VA_FLAMES_UPDATE: usize = 0x1_4010_46a0; // Flames::update(float)
 const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
 const VA_CAR_AVATAR_UPDATE_SKID_MARKS: usize = 0x1_400d_d780; // CarAvatar::updateSkidMarks(float)
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
@@ -109,7 +113,10 @@ fn copy_folder(from: &Path, to: &Path) -> Result<(), String> {
 }
 
 /// The data files the car's objects read.
-const DATA_FILES: [&str; 22] = [
+const DATA_FILES: [&str; 25] = [
+    "flames.ini",
+    "flame_presets.ini",
+    "sounds.ini",
     "car.ini",
     "lods.ini",
     "suspensions.ini",
@@ -212,6 +219,11 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
             copy_file(&game.join(name), &root.join(name))?;
         }
     }
+    // the flames' textures
+    let flames = format!("content/cars/{}/texture/flames", spec.name);
+    if game.join(&flames).is_dir() {
+        copy_folder(&game.join(&flames), &root.join(&flames))?;
+    }
     let skin = source.join("skins").join(&spec.skin);
     if let Ok(entries) = std::fs::read_dir(&skin) {
         for entry in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()) {
@@ -263,6 +275,7 @@ pub struct Car {
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
     digital_instruments: *mut u8,
+    flames: *mut u8,
     /// the four `TyreSmoke` and the `EngineSmoke`, each with its `update`
     smokes: Vec<(*mut u8, usize)>,
     brake_discs: *mut u8,
@@ -483,6 +496,9 @@ impl Game {
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BLURRED_OBJECTS_CTOR));
         ctor(blurred_objects, car);
         let digital_instruments = make(0xc8, VA_DIGITAL_INSTRUMENTS_CTOR);
+        let backfire = make(0x28, VA_BACKFIRE_PARAMS_CTOR);
+        wr(car, 0x1068, backfire);
+        let flames = make(0x158, VA_FLAMES_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
         // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
@@ -491,7 +507,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, brake_discs, dynamic_effects, smokes })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -510,6 +526,23 @@ impl Game {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), c.car.add(0x268), bytes.len());
         // CarAvatar::updateInPitlaneState 0x1400dd6d0
         wr(c.car, 0x129c, s.tyre_surface_def.iter().any(|d| d.is_pitlane) as u8);
+        // the head of CarAvatar::update 0x1400db830: the backfire test, then every handler of
+        // evOnBackfireTriggered (car+0xd0: records of 0x28 bytes, the function object at +0x20)
+        {
+            let params: *mut u8 = rd(c.car, 0x1068);
+            let check: extern "C" fn(*mut u8, f32) -> bool = std::mem::transmute(acs.va(VA_BACKFIRE_PARAMS_CHECK));
+            if !params.is_null() && 0.0 < s.engine_life_left && check(params, dt) {
+                let (mut at, end): (*mut u8, *mut u8) = (rd(c.car, 0xd0), rd(c.car, 0xd8));
+                let mut argument = 0u8;
+                while at < end {
+                    let object: *mut u8 = rd(at, 0x20);
+                    let vtable: *const usize = rd(object, 0);
+                    let call: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*vtable.add(2));
+                    call(object, &mut argument);
+                    at = at.add(0x28);
+                }
+            }
+        }
         // CarAvatar::update 0x1400db830: the body …
         let make_body_matrix: extern "C" fn(*mut u8, *const u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_MAKE_BODY_MATRIX));
         make_body_matrix(c.car, c.car.add(0x26c), c.car.add(0x224));
@@ -575,6 +608,7 @@ impl Game {
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
             (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
             (c.digital_instruments, VA_DIGITAL_INSTRUMENTS_UPDATE),
+            (c.flames, VA_FLAMES_UPDATE),
             (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),
             (c.dynamic_effects, VA_DYNAMIC_CAR_EFFECTS_UPDATE),
         ] {

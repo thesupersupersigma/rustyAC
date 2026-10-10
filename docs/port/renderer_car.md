@@ -26,6 +26,7 @@ State after the last commit (kept up to date with every commit):
   - `AnalogInstruments`, `GearShiftShake`, `CarAnimations`, `RotatingObjects` (`cockpit.rs`): proven on cockpit sequences of the E30 (rev, speed, fuel, water needles with LUTs), F40 (turbo), 1M, F2004; the game has no wiper code at all;
   - - Done: digital displays (DigitalInstruments: text items, shift lights, LED series), identical on F2004, 1M, E30, F40 dash sequences; the logger now zeroes a discarded buffer (the game leaves part of GLRenderer's buffer unwritten)
   - - Done: smoke (ParticleSystem, ParticleGenerator, TyreSmoke, EngineSmoke; rand() of the main thread), identical on the F2004 launch (119 frames, --smoke 3) and grass run (89 frames, --smoke 5); the oracle has --smoke
+  - - Done: exhaust flames (Flames version 2, BackfireParams and the trigger at the head of CarAvatar::update), identical on the F2004 lift-off (149 frames) and an F40 sequence (299 frames)
 - Next: the specs of the nine items (`re/scratch/task21/spec_*.md`, written by reader agents from the
   disassembly), then port and prove item by item in this order: damage glass and damage meshes, blur meshes
   and `lods.ini` rules, lights and disc glow, the driver, `DIR_` nodes, instruments, ground shadows, skid

@@ -30,6 +30,7 @@ use crate::graphics::Graphics;
 use crate::lights::{AnimatedLights, BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
+use crate::flames::{BackfireParams, Flames};
 use crate::particles::{EngineSmoke, SmokeFrame, TyreSmoke};
 use crate::skid::CarSkidMarks;
 
@@ -77,13 +78,15 @@ pub struct ViewState {
     pub focused_car_index: i32,
     /// the scene camera's position
     pub camera_position: [f32; 3],
+    /// the scene camera's matrix (`Sim::sceneCamera`)
+    pub camera_matrix: Mat44f,
     /// `Sim::useProView`
     pub use_pro_view: bool,
 }
 
 impl Default for ViewState {
     fn default() -> ViewState {
-        ViewState { camera_mode: 2, drivable_mode: 0, focused_car_index: 0, camera_position: [0.0; 3], use_pro_view: false }
+        ViewState { camera_mode: 2, drivable_mode: 0, focused_car_index: 0, camera_position: [0.0; 3], camera_matrix: Mat44f::IDENTITY, use_pro_view: false }
     }
 }
 
@@ -166,6 +169,13 @@ pub struct CarAvatar {
     pub engine_smoke: Option<EngineSmoke>,
     /// `RaceManager::carsToBeLoaded`
     pub cars_to_be_loaded: i32,
+    /// `CarAvatar::backfireParams`, `fuelInExhaust`, the `Flames` object, `aiState.isActive`
+    pub backfire: Option<BackfireParams>,
+    pub fuel_in_exhaust: f32,
+    pub flames: Option<Rc<RefCell<Flames>>>,
+    pub ai_active: bool,
+    /// a backfire fired in the last `update` (`evOnBackfireTriggered`)
+    pub backfire_triggered: bool,
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
     pub brake_lights: CarBrakeLights,
     pub animated_lights: AnimatedLights,
@@ -285,6 +295,11 @@ impl CarAvatar {
             tyre_smoke: Vec::new(),
             engine_smoke: None,
             cars_to_be_loaded: 1,
+            backfire: None,
+            fuel_in_exhaust: 0.0,
+            flames: None,
+            ai_active: false,
+            backfire_triggered: false,
             brake_lights: CarBrakeLights::default(),
             animated_lights: AnimatedLights::default(),
             brake_discs: BrakeDiscGraphics::default(),
@@ -342,6 +357,7 @@ impl CarAvatar {
         }
         car.damage = Some(VisualDamageManager::new(graphics, scene, folder, body_transform)?);
         car.rotating_objects = RotatingObjects::new(scene, folder, car_node);
+        car.backfire = Some(BackfireParams::new(folder));
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
     }
@@ -376,6 +392,14 @@ impl CarAvatar {
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
         self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder, self.body_transform)?;
+        // (the game stops on a car whose flames have no textures; here it has no flames)
+        self.flames = match Flames::new(graphics, scene, &self.folder, self.body_transform, sim.render_finished) {
+            Ok(flames) => Some(flames),
+            Err(e) => {
+                println!("WARNING: {e}");
+                None
+            }
+        };
         self.brake_discs = BrakeDiscGraphics::new(graphics, scene, &self.folder, self.car_node)?;
         self.dynamic_effects = DynamicCarEffects::new(graphics, scene, self.body_transform);
         Ok(())
@@ -525,6 +549,16 @@ impl CarAvatar {
     pub fn update(&mut self, graphics: &mut Graphics, scene: &mut Scene, state: &CarPhysicsState, dt: f32) {
         // CarAvatar::updateInPitlaneState 0x1400dd6d0
         self.in_pitlane = state.tyre_surface_def.iter().any(|s| s.is_pitlane);
+        // the backfire test and the handlers of evOnBackfireTriggered
+        self.backfire_triggered = false;
+        if let Some(backfire) = &mut self.backfire {
+            if 0.0 < state.engine_life_left && backfire.check(state, &mut self.fuel_in_exhaust, self.ai_active, dt) {
+                self.backfire_triggered = true;
+                if let Some(flames) = &self.flames {
+                    flames.borrow_mut().on_backfire(self.fuel_in_exhaust, &mut graphics.crt_rand);
+                }
+            }
+        }
         let replay_dt = if self.replay_mode { dt * self.replay_scale } else { dt };
         self.body_matrix = self.make_body_matrix(&state.world_matrix);
         scene.nodes[self.body_transform].matrix = self.body_matrix;
@@ -663,6 +697,14 @@ impl CarAvatar {
                 use_mph: self.use_mph,
             },
         );
+        if let Some(flames) = &self.flames {
+            let mut flames = flames.borrow_mut();
+            flames.scene_camera = self.view.camera_matrix;
+            let connected = scene.nodes[self.car_node].is_active;
+            if flames.update(dt, dt, connected, self.replay_mode.then_some(self.replay_scale)) {
+                self.fuel_in_exhaust = 0.0;
+            }
+        }
         self.brake_discs.update(scene, state, dt, self.replay_mode.then_some(self.replay_scale));
         if !self.replay_mode {
             self.dynamic_effects.update(scene, state);

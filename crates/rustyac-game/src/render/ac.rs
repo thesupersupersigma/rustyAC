@@ -493,7 +493,7 @@ impl AcRenderer {
                 ),
                 CameraMode::Car => (4, 0),
             };
-            car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], use_pro_view: false };
+            car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }

@@ -155,6 +155,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
                 drivable_mode: step.camera.drivable_mode,
                 focused_car_index: 0,
                 camera_position: [step.camera.matrix[12], step.camera.matrix[13], step.camera.matrix[14]],
+                camera_matrix: rustyac_physics::vecmath::Mat44f { m: std::array::from_fn(|r| std::array::from_fn(|c| step.camera.matrix[r * 4 + c])) },
                 use_pro_view: false,
             };
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);

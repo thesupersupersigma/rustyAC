@@ -23,6 +23,7 @@ pub mod digital;
 pub mod driver;
 pub mod fake_shadow;
 pub mod forward;
+pub mod flames;
 pub mod gl;
 pub mod gpulog;
 pub mod graphics;
