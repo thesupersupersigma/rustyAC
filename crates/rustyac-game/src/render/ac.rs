@@ -441,6 +441,13 @@ pub struct AcRenderer {
     lollipops: Vec<rustyac_render::pit_crew::LollipopCrew>,
     pit_marker: Option<rustyac_render::pit_crew::PitIndicator>,
     pit_setup: Option<(NodeId, PathBuf, Vec<Mat44f>, rustyac_physics::track::Track)>,
+    /// the gates of a time-attack session (`TimeAttack`), the time lines of the track, where
+    /// the car stood when the session began, and `TimeAttackGameStatus::mode == 1` (it runs
+    /// once the car has moved 3 m)
+    gates: Option<std::rc::Rc<std::cell::RefCell<rustyac_render::time_attack::TimeAttackGates>>>,
+    gate_sectors: usize,
+    gate_start: Option<[f32; 3]>,
+    gate_running: bool,
     start_lights: Option<rustyac_render::start_lights::StartingLights>,
     semaphore: Option<rustyac_render::start_lights::StartingTrackSemaphore>,
     race_start_ms: Option<f64>,
@@ -590,7 +597,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -638,6 +645,18 @@ impl AcRenderer {
                         self.ideal_line = Some(line);
                     }
                     Err(message) => println!("no ideal line: {message}"),
+                }
+                // TimeAttack::TimeAttack (a time-attack session): the gates of data/overlays.ini
+                if self.options.session_type == 5 {
+                    self.gate_sectors = track.sectors_normalized_positions.len();
+                    let overlays = rustyac_render::time_attack::read_overlays(&data, self.gate_sectors);
+                    if overlays.is_empty() {
+                        println!("time attack: this track has no data/overlays.ini (Assetto Corsa writes it at the first time-attack session there): no gates");
+                    } else {
+                        let gates = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::time_attack::TimeAttackGates::new(&mut self.graphics, overlays)));
+                        self.scene.add_event_handler(self.sim_nodes.before_cars, gates.clone());
+                        self.gates = Some(gates);
+                    }
                 }
                 let pits: Vec<Mat44f> = track.spawn_positions.get("PIT").map(|slots| slots.iter().map(|i| track.helper_nodes[*i].local).collect()).unwrap_or_default();
                 self.pit_setup = Some((model, data.clone(), pits, track));
@@ -925,6 +944,8 @@ impl AcRenderer {
                 car.on_new_session(&mut self.scene);
             }
             self.start_race();
+            self.gate_start = None;
+            self.gate_running = false;
         }
         // Game::update, the track's children: LollipopCrew::update (the player's man follows the
         // pit stop's state: up while the car is in the pit lane, down once it has stopped in its box)
@@ -978,6 +999,17 @@ impl AcRenderer {
             car.cars_count = 1;
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
+        }
+        // TimeAttack::update 0x1401be0b0: the mode runs once the car is 3 m from where it stood
+        if let (Some(gates), Some(car)) = (&self.gates, &self.car) {
+            gates.borrow_mut().in_replay = info.replay;
+            let b = self.scene.nodes[car.body_transform].matrix.m[3];
+            let start = *self.gate_start.get_or_insert([b[0], b[1], b[2]]);
+            let (dx, dy, dz) = (b[0] - start[0], b[1] - start[1], b[2] - start[2]);
+            let d2 = (dy * dy + dx * dx) + dz * dz;
+            if !self.gate_running && !self.told_paused && !info.replay && d2 != 0.0 && d2.sqrt() > 3.0 {
+                self.gate_running = true;
+            }
         }
         // PitStop::update, after the cars: the pit box marker
         let pit_inputs = self.car.as_ref().map(|car| {
@@ -1051,6 +1083,12 @@ impl AcRenderer {
         // Game::evOnPreGUI
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
+        }
+        // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
+        if let Some(gates) = &self.gates {
+            if !self.told_paused && !info.replay {
+                gates.borrow_mut().set_active(self.gate_running, view.lap.sector as usize, self.gate_sectors);
+            }
         }
         // Game::renderHUD: PitStop::renderHUD, the marker's part
         if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {

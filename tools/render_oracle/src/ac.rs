@@ -60,6 +60,8 @@ const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): sran
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70; // AISpline::AISpline()
 const VA_AI_SPLINE_LOAD_FAST: usize = 0x1_402a_83c0; // AISpline::loadFast(const std::wstring&)
+const VA_RESOURCE_STORE_GET_TEXTURE: usize = 0x1_4020_00d0; // ResourceStore::getTexture(Texture*, const std::wstring&, bool)
+const VA_TIME_ATTACK_RENDER_HANDLER_VTABLE: usize = 0x1_404d_cef8; // the std::function body of TimeAttack's node-render handler (0x1401b8dd0)
 const VA_INIT_RESPAWN_POSITION_SET: usize = 0x1_401c_b8c0; // TrackAvatar::initRespawnPositionSet(const std::wstring&)
 const VA_SPAWN_POSITIONS_HEAD: usize = 0x1_401c_6d80; // the head node of TrackAvatar::spawnPositions (std::map's _Buyheadnode)
 const VA_INIT_PIT_CREW: usize = 0x1_401c_a630; // TrackAvatar::initPitCrew()
@@ -678,6 +680,49 @@ impl Game {
             }
         }
 
+        // TimeAttack::TimeAttack 0x1401b7e20, the gates' part: the game's own render handler on
+        // BEFORE_CARS_NODE, on a TimeAttack block that holds the gates of the track's overlays.ini
+        // (read by the port's reader) and the texture the game's own store loads
+        let mut gates: Vec<*mut u8> = Vec::new();
+        let gate_replay = acs.alloc(0x198);
+        if let (true, Some(track)) = (frame.time_attack, &frame.track) {
+            copy_into_root(&self.game_folder, "content/texture/checkpoint.png")?;
+            let overlays = crate::frames::time_attack_overlays(&track.data_folder);
+            let block = acs.alloc(0x2e0);
+            let list = acs.alloc(overlays.len().max(1) * 0x30);
+            for (i, ov) in overlays.iter().enumerate() {
+                let p = list.add(i * 0x30);
+                wr(p, 0x4, ov.world_position);
+                wr(p, 0x10, ov.offset);
+                wr(p, 0x1c, ov.height);
+                wr(p, 0x20, ov.width);
+                wr(p, 0x24, ov.orientation);
+                gates.push(p);
+            }
+            wr(block, 0xc8, list);
+            wr(block, 0xd0, list.add(overlays.len() * 0x30));
+            let get_texture: extern "C" fn(*mut u8, *mut u8, *const u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_RESOURCE_STORE_GET_TEXTURE));
+            let texture = acs.alloc(0x28);
+            get_texture(rd(self.graphics, 0x180), texture, wstring(acs, "content/texture/checkpoint.png"), false);
+            std::ptr::copy_nonoverlapping(texture, block.add(0x208), 0x28);
+            let gate_car = acs.alloc(0x200);
+            wr(gate_car, 0x130, track_sim);
+            wr(track_sim, 0x1b0, gate_replay);
+            wr(block, 0x240, gate_car);
+            // the handler's record in the node's evOnRender (0x28 bytes, the function object at +0x20)
+            if rd::<usize>(before_cars, 0xe0) != rd::<usize>(before_cars, 0xe8) {
+                return Err("BEFORE_CARS_NODE has a render handler already".into());
+            }
+            let function = acs.alloc(0x20);
+            wr(function, 0x0, acs.va(VA_TIME_ATTACK_RENDER_HANDLER_VTABLE));
+            wr(function, 0x8, block);
+            let record = acs.alloc(0x28);
+            wr(record, 0x0, block);
+            wr(record, 0x20, function);
+            wr(before_cars, 0xe0, record);
+            wr(before_cars, 0xe8, record.add(0x28));
+            wr(before_cars, 0xf0, record.add(0x28));
+        }
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
         let camera = acs.alloc(SIZE_CAMERA_FORWARD);
         let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
@@ -894,6 +939,8 @@ impl Game {
             }
             let s = step.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
+            // the gates are not drawn in a replay
+            wr(gate_replay, 0x148, step.extra.replay as u8);
             // DrivingAssistManager::update 0x1400fcb20
             if !ideal_line.is_null() {
                 wr(ideal_line, 0xd8, step.extra.ideal as u8);
@@ -965,6 +1012,11 @@ impl Game {
                 rendered.width = width;
                 rendered.height = height;
                 rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            }
+            // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
+            for (i, gate) in gates.iter().enumerate() {
+                let active = step.extra.gate >= 0 && i == (step.extra.gate as usize + 1) % gates.len();
+                wr(*gate, 0, active as u8);
             }
             // Game::renderHUD: PitStop::renderHUD, the marker's part
             if let (Some((marker, rules_scene, rules)), Some(car)) = (&mut pit_marker, &car) {

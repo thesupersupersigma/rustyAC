@@ -130,6 +130,14 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         let semaphore = rustyac_render::start_lights::StartingTrackSemaphore::new(&mut graphics, &mut scene, track_node, data)?;
         start_lights = Some((lights, semaphore));
     }
+    // TimeAttack::TimeAttack, the gates' part
+    let mut gates = None;
+    if let (true, Some(track)) = (frame.time_attack, &frame.track) {
+        let overlays = crate::frames::time_attack_overlays(&track.data_folder);
+        let handler = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::time_attack::TimeAttackGates::new(&mut graphics, overlays)));
+        scene.add_event_handler(before_cars, handler.clone());
+        gates = Some(handler);
+    }
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -247,6 +255,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         let s = step.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
+        if let Some(gates) = &gates {
+            gates.borrow_mut().in_replay = step.extra.replay;
+        }
         // DrivingAssistManager::update
         if let Some(line) = ideal_line {
             scene.nodes[line].is_active = step.extra.ideal;
@@ -361,6 +372,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             rendered.width = width;
             rendered.height = height;
             rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+        }
+        // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
+        if let Some(gates) = &gates {
+            let mut gates = gates.borrow_mut();
+            let count = gates.overlays.len();
+            gates.set_active(step.extra.gate >= 0, step.extra.gate.max(0) as usize, count);
         }
         // Game::renderHUD: PitStop::renderHUD, the marker's part
         if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {

@@ -128,6 +128,9 @@ pub struct Extra {
     pub ratio: f64,
     pub drive: bool,
     pub session_laps: u32,
+    /// `--set gate=<n>`: the time-attack gates are built; `TimeAttackGameStatus::sectorIndex`
+    /// while the mode runs (the gate of the next time line shows), -1: not running
+    pub gate: i32,
 }
 
 impl Extra {
@@ -144,7 +147,7 @@ impl Extra {
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1 }
     }
 }
 
@@ -170,6 +173,14 @@ pub struct Frame {
     pub start_lights: bool,
     /// `--set pitstate=…`: the lollipop men, the static crews and the pit box marker are built
     pub pit_crew: bool,
+    /// `--set gate=…`: the time-attack gates are built
+    pub time_attack: bool,
+}
+
+/// The gates of the track's `data/overlays.ini`, one per time line of the port's track.
+pub fn time_attack_overlays(data_folder: &str) -> Vec<rustyac_render::time_attack::Overlay> {
+    let sectors = RAY_TRACK.with(|t| t.borrow().as_ref().map_or(0, |track| track.sectors_normalized_positions.len()));
+    rustyac_render::time_attack::read_overlays(Path::new(data_folder), sectors)
 }
 
 /// The matrices of the track's `AC_PIT_<n>` nodes as the port's physics has them (put on the
@@ -265,6 +276,8 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     let mut forward = [0.0f32, 0.0, 1.0];
     // the first pit box and the direction a car stands in it
     let mut pit_box: Option<([f32; 3], [f32; 3])> = None;
+    // the first time-attack gate: where it stands and the direction back along the line
+    let mut gate_box: Option<([f32; 3], [f32; 3])> = None;
     if let Some(name) = &args.track {
         let folder = args.game.join("content/tracks").join(name);
         if !folder.is_dir() {
@@ -291,6 +304,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         }
         pit_box = physical.spawn_pose("PIT", 0).map(|(position, tail)| ([position.x, position.y, position.z], [-tail.x, -tail.y, -tail.z]));
         RAY_TRACK.with(|t| *t.borrow_mut() = Some(physical));
+        gate_box = time_attack_overlays(&path_text(&data)).first().map(|ov| (ov.world_position, ov.orientation));
     }
     // the car, where its physics state has it
     let mut car = None;
@@ -380,6 +394,12 @@ pub fn build(args: &Args) -> Result<Frame, String> {
                 let target = [p[0] + f[0] * 3.0, p[1] + 1.0, p[2] + f[2] * 3.0];
                 return Ok(CameraSpec { matrix: look_from(eye, target), fov: 60.0, near: 0.1, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 });
             }
+            // on the road 25 m before the first time-attack gate, looking at it
+            "gate" => {
+                let (p, back) = gate_box.ok_or("the view gate: the track has no data/overlays.ini")?;
+                let eye = [p[0] + back[0] * 25.0, p[1] + 1.5, p[2] + back[2] * 25.0];
+                return Ok(CameraSpec { matrix: look_from(eye, [p[0], p[1] + 2.5, p[2]]), fov: 60.0, near: 0.1, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 });
+            }
             // looking ahead over the wheel
             "onboard" => return Ok(CameraSpec { matrix: look_from(seat(0.0, 0.0), seat(-0.12, 1.0)), fov: 56.0, near: 0.05, far: None, splits: [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0], mode: 0, drivable_mode: 0 }),
             // looking down at the dials and the hands
@@ -455,7 +475,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         _ => None,
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
-    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate") })
+    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
 }
 
 /// The picture frames `from .. from + count` of a tape written by `car_oracle run
@@ -539,6 +559,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
             x.drive = true;
         }
         "sessionlaps" => x.session_laps = number(value)? as u32,
+        "gate" => x.gate = number(value)? as i32,
         "turbolevel" => s.turbo_boost_level = number(value)?,
         "fuellaps" => s.fuel_laps = number(value)?,
         "accg" => {
@@ -571,7 +592,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate kmpl cars maxfuel torque ratio sessionlaps turbolevel fuellaps accg wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate kmpl cars maxfuel torque ratio sessionlaps gate turbolevel fuellaps accg wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

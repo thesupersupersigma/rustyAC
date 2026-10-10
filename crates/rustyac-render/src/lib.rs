@@ -46,4 +46,5 @@ pub mod start_lights;
 pub mod state;
 pub mod suspension_graphics;
 pub mod texture;
+pub mod time_attack;
 pub mod texture_fallback;
