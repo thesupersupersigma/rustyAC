@@ -42,5 +42,6 @@ pub mod shader;
 pub mod skid;
 pub mod sky;
 pub mod state;
+pub mod suspension_graphics;
 pub mod texture;
 pub mod texture_fallback;

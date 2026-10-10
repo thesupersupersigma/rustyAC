@@ -204,6 +204,8 @@ pub struct CarAvatar {
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
     pub brake_lights: CarBrakeLights,
     pub animated_lights: AnimatedLights,
+    /// the rods of `data/suspension_graphics.ini`
+    pub suspension_graphics: Vec<crate::suspension_graphics::SuspensionGraphics>,
     pub brake_discs: BrakeDiscGraphics,
     pub dynamic_effects: DynamicCarEffects,
     /// `CarAvatar::inPitlane`: a tyre stands on a pit-lane surface
@@ -345,6 +347,7 @@ impl CarAvatar {
             backfire_triggered: false,
             brake_lights: CarBrakeLights::default(),
             animated_lights: AnimatedLights::default(),
+            suspension_graphics: Vec::new(),
             brake_discs: BrakeDiscGraphics::default(),
             dynamic_effects: DynamicCarEffects::default(),
             in_pitlane: false,
@@ -447,6 +450,15 @@ impl CarAvatar {
         self.analog_instruments = AnalogInstruments::new(scene, &self.folder, self.car_node, self.body_transform)?;
         self.brake_lights = CarBrakeLights::new(graphics, scene, &self.folder, self.body_transform)?;
         self.animated_lights = AnimatedLights::new(scene, &self.folder, self.body_transform);
+        // (ReplayRecorder, CarColliderRenderer,) SuspensionGraphicsGenerator::generateConnections
+        {
+            let suspension = &self.suspension;
+            let sus_transform = |i: usize| match suspension {
+                Suspension::Avatar(avatar) => Some(avatar.sus_transforms[i]),
+                Suspension::Animator(animator) => animator.sus_transform(i),
+            };
+            self.suspension_graphics = crate::suspension_graphics::SuspensionGraphics::generate(scene, ini(&self.folder, "suspension_graphics.ini").as_ref(), self.body_transform, &sus_transform);
+        }
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
         self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder_text, &self.folder, self.body_transform)?;
@@ -756,6 +768,9 @@ impl CarAvatar {
         self.analog_instruments.update(scene, state, dt, self.guid == self.view.focused_car_index);
         self.brake_lights.update(scene, state, replay_dt, self.in_pitlane);
         self.animated_lights.update(scene, self.brake_lights.front_lights_on, dt);
+        for rod in &self.suspension_graphics {
+            rod.update(scene);
+        }
         let scale = if self.replay_mode && self.replay_scale != 0.0 && !self.replay_scale.is_nan() { self.replay_scale } else { 1.0 };
         self.tyre_blur.update(scene, state, scale);
         self.blurred_objects.update(scene, state, scale);

@@ -665,16 +665,17 @@ impl Game {
         let animated_lights = acs.alloc(0x88);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_ANIMATED_LIGHTS_CTOR));
         ctor(animated_lights, brake_lights);
-        // SuspensionGraphicsGenerator::generateConnections 0x1401b4280: the rods are the only
-        // objects here that the game's own addGameObject puts into the car's list (+0x40)
+        // SuspensionGraphicsGenerator::generateConnections 0x1401b4280: the rods are what the
+        // game's own addGameObject adds to the car's list (+0x40) during the call
         let rods: Vec<*mut u8> = {
+            let before = (rd::<usize>(car, 0x48) - rd::<usize>(car, 0x40)) / 8;
             let generator = acs.alloc(0x28);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SUS_GRAPHICS_GENERATOR_CTOR));
             ctor(generator, car);
             let generate: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_SUS_GRAPHICS_GENERATE));
             generate(generator);
             let (begin, end): (*const *mut u8, *const *mut u8) = (rd(car, 0x40), rd(car, 0x48));
-            if begin.is_null() { Vec::new() } else { std::slice::from_raw_parts(begin, end.offset_from(begin) as usize).to_vec() }
+            if begin.is_null() { Vec::new() } else { std::slice::from_raw_parts(begin, end.offset_from(begin) as usize)[before..].to_vec() }
         };
         let tyre_blur = acs.alloc(0x120);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_BLUR_CTOR));

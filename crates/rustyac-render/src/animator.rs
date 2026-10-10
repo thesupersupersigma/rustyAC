@@ -542,6 +542,11 @@ impl SuspensionAnimator {
         self.lods.iter().filter_map(|d| d.wheels[wheel]).collect()
     }
 
+    /// `SuspensionAnimator::getSusTransform` 0x1401b2430: the first level's hub node.
+    pub fn sus_transform(&self, wheel: usize) -> Option<NodeId> {
+        self.lods.first().and_then(|d| d.hubs[wheel])
+    }
+
     /// `ISuspensionAvatar::getWheelTransform` 0x1401b2460: the first level's wheel node.
     pub fn wheel_transform(&self, wheel: usize) -> Option<NodeId> {
         self.lods.first().and_then(|d| d.wheels[wheel])
