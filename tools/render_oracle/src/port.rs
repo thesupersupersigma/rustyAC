@@ -119,6 +119,15 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         _crowds = rustyac_render::crowds::camera_facing(&mut graphics, &mut scene, data, track_node, blurred, crate::frames::RAND_SEED_TRACK)?;
     }
 
+    // Sim::Sim: StartingLights (two numbers of rand()), StartingTrackSemaphore
+    let mut start_lights = None;
+    if let (Some(track), true) = (&frame.track, frame.start_lights) {
+        let data = std::path::Path::new(&track.data_folder);
+        graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED_TRACK);
+        let lights = rustyac_render::start_lights::StartingLights::new(&mut graphics, &mut scene, track_node, data)?;
+        let semaphore = rustyac_render::start_lights::StartingTrackSemaphore::new(&mut graphics, &mut scene, track_node, data)?;
+        start_lights = Some((lights, semaphore));
+    }
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
     let mut camera = CameraForward::new(&mut graphics)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
@@ -190,7 +199,21 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
 
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
     let (mut last_pause, mut last_status) = (false, -1);
+    let (mut lights_pause, mut lights_status) = (false, -1);
     for (index, step) in frame.steps.iter().enumerate() {
+        let (_, session_started, tts) = crate::frames::session_start(index, step.extra.tts);
+        if let Some((lights, semaphore)) = &mut start_lights {
+            if step.extra.pause != lights_pause {
+                lights_pause = step.extra.pause;
+                lights.on_pause_mode_changed(lights_pause);
+            }
+            if step.extra.replay_status != lights_status {
+                lights_status = step.extra.replay_status;
+                lights.on_replay_status_changed(lights_status);
+            }
+            // Game::update: StartingTrackSemaphore::update
+            semaphore.update(&mut scene, tts);
+        }
         camera.base.camera.fov = step.camera.fov;
         camera.base.camera.matrix = mat(&step.camera.matrix);
         camera.base.camera.near_plane = step.camera.near;
@@ -285,6 +308,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             rendered.width = width;
             rendered.height = height;
             rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
+        }
+        // Game::renderHUD, after the scene: StartingLights::renderHUD
+        if let Some((lights, _)) = &mut start_lights {
+            if lights.is_active {
+                lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts);
+            }
         }
         graphics.end_scene();
     }

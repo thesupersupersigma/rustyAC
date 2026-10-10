@@ -163,6 +163,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     // without a race.ini: the time runs at its own pace and the clouds drift
     let mut sun_animation = Some((1.0f32, 0.2f32));
     let mut groove = None;
+    let mut race_session = false;
     let race = match (&options.race_ini_file, options.race_ini) {
         (Some(file), _) => Some(file.clone()),
         (None, Some(false)) => None,
@@ -176,6 +177,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
         } else {
             sun_animation = None;
         }
+        race_session = ini.get_int("SESSION_0", "TYPE").unwrap_or(0) == 3;
         weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
         if ini.has_section("GROOVE") {
             groove = Some((ini.get_float("GROOVE", "MAX_LAPS").unwrap_or(0.0), ini.get_float("GROOVE", "STARTING_LAPS").unwrap_or(0.0)));
@@ -200,6 +202,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let Some(sun) = options.sun {
         sun_angle = sun;
     }
+    // a race start: --start-lights <seconds>, or the 20 s of RaceManager::startRace when
+    // race.ini's session is a race
+    let start_lights = options.start_lights.or(race_session.then_some(20.0));
     if let Some(name) = &options.weather {
         weather = name.clone();
     }
@@ -208,7 +213,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
     rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, start_lights, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
     for note in &renderer.notes {
         println!("{note}");
     }

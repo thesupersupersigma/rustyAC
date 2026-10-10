@@ -60,6 +60,11 @@ const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): sran
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70; // AISpline::AISpline()
 const VA_AI_SPLINE_LOAD_FAST: usize = 0x1_402a_83c0; // AISpline::loadFast(const std::wstring&)
+const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
+const VA_STARTING_LIGHTS_RENDER_HUD: usize = 0x1_401a_2e80; // StartingLights::renderHUD(float)
+const VA_STARTING_LIGHTS_RENDER_LIGHT: usize = 0x1_401a_3420; // StartingLights::renderLight(float, float, vec3f): the HUD's lamp
+const VA_SEMAPHORE_CTOR: usize = 0x1_401a_37a0; // StartingTrackSemaphore::StartingTrackSemaphore(Sim*)
+const VA_SEMAPHORE_UPDATE: usize = 0x1_401a_4cc0; // StartingTrackSemaphore::update(float)
 const VA_IDEAL_LINE_CTOR: usize = 0x1_4010_9d10; // IdealLine::IdealLine(AISpline*, GraphicsManager*, IRayTrackCollisionProvider*)
 
 /// In place of `Track::rayCast` 0x140278bb0 (slot 1 of the track's table): the port's ray on
@@ -491,9 +496,14 @@ impl Game {
         let mut grooves = std::ptr::null_mut::<u8>();
         let mut dynamic_track = std::ptr::null_mut::<u8>();
         let mut ideal_line = std::ptr::null_mut::<u8>();
+        let mut start_lights = std::ptr::null_mut::<u8>();
+        let mut semaphore = std::ptr::null_mut::<u8>();
+        let mut track_game = std::ptr::null_mut::<u8>();
+        let track_race_manager = acs.alloc(0x400);
         if let Some(track) = &frame.track {
             let game = acs.alloc(0x278);
             wr(game, 0x138, self.graphics);
+            track_game = game;
             wr(track_sim, 0x08, game);
             wr(track_sim, 0x120, root);
             wr(track_sim, 0x128, track_node);
@@ -584,6 +594,29 @@ impl Game {
             // (the constructor ends with srand(tick count): a number both sides have)
             let randomize: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KS_RANDOMIZE));
             randomize(crate::frames::RAND_SEED_TRACK);
+            // Sim::Sim: the game's own StartingLights and StartingTrackSemaphore, on a pause menu
+            // that does not show and a RaceManager that holds the session's kind and start time
+            if frame.start_lights {
+                let texture = std::path::Path::new("content/texture/off.png");
+                if !texture.is_file() {
+                    std::fs::create_dir_all("content/texture").map_err(|e| e.to_string())?;
+                    std::fs::copy(self.game_folder.join(texture), texture).map_err(|e| format!("off.png: {e}"))?;
+                }
+                // ret: the HUD's own lamps (2D, after the scene) are not drawn
+                acs.patch(acs.va(VA_STARTING_LIGHTS_RENDER_LIGHT), &[0xc3]);
+                wr(track_sim, 0x110, acs.alloc(0x200));
+                wr(track_race_manager, 0x8, game);
+                wr(track_race_manager, 0x168, track_sim);
+                write_wstring(acs, track_race_manager.add(0xe8 + 0x18), "");
+                write_wstring(acs, track_race_manager.add(0xe8 + 0x38), "");
+                wr(track_sim, 0x1a8, track_race_manager);
+                start_lights = acs.alloc(0xf0);
+                let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_CTOR));
+                ctor(start_lights, track_sim);
+                semaphore = acs.alloc(0x88);
+                let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SEMAPHORE_CTOR));
+                ctor(semaphore, track_sim);
+            }
         }
 
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
@@ -695,7 +728,41 @@ impl Game {
         let set_splits: extern "C" fn(*mut u8, f32, f32, f32, f32) = std::mem::transmute(acs.va(VA_CAMERA_SET_SHADOW_MAPS_SPLITS));
         let traverser = acs.alloc(0x40);
         let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
+        let (mut lights_pause, mut lights_status) = (false, -1);
         for (index, step) in frame.steps.iter().enumerate() {
+            // the session's clock, and the events the start lights listen to
+            if !start_lights.is_null() {
+                wr(track_game, 0x18, crate::frames::game_time_ms(index));
+                wr(track_race_manager, 0xe8, step.extra.session_type);
+                wr(track_race_manager, 0x140, crate::frames::session_start(index, step.extra.tts).0);
+                wr(rd::<*mut u8>(track_sim, 0x110), 0x150, step.extra.pause as u8);
+                let fire = |event: usize, payload: *mut u8| {
+                    let (mut at, end): (*mut u8, *mut u8) = (rd(track_sim, event), rd(track_sim, event + 8));
+                    while at < end {
+                        let object: *mut u8 = rd(at, 0x20);
+                        let vtable: *const usize = rd(object, 0);
+                        let call: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*vtable.add(2));
+                        call(object, payload);
+                        at = at.add(0x28);
+                    }
+                };
+                if step.extra.pause != lights_pause {
+                    lights_pause = step.extra.pause;
+                    let mut paused = lights_pause as u8;
+                    fire(0x90, &mut paused);
+                }
+                if step.extra.replay_status != lights_status {
+                    lights_status = step.extra.replay_status;
+                    let mut payload = [0u8; 12];
+                    payload[0..4].copy_from_slice(&lights_status.to_le_bytes());
+                    payload[4..8].copy_from_slice(&step.extra.replay_scale.to_le_bytes());
+                    payload[8..12].copy_from_slice(&2.0f32.to_le_bytes());
+                    fire(0x78, payload.as_mut_ptr());
+                }
+                // Game::update: StartingTrackSemaphore::update
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SEMAPHORE_UPDATE));
+                update(semaphore, crate::frames::DT);
+            }
             // the game camera's update: where it looks from, its lens and the shadow splits
             wr(camera, 0x8, step.camera.fov);
             wr(camera, 0xc, step.camera.matrix);
@@ -760,6 +827,12 @@ impl Game {
                 rendered.width = width;
                 rendered.height = height;
                 rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            }
+            // Game::renderHUD 0x140242e30, after the scene: StartingLights::renderHUD (an object
+            // that is not active is left out)
+            if !start_lights.is_null() && rd::<u8>(start_lights, 0x30) != 0 {
+                let render_hud: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_RENDER_HUD));
+                render_hud(start_lights, crate::frames::DT);
             }
             end(self.graphics);
         }

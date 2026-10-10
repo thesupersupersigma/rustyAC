@@ -109,11 +109,14 @@ pub struct Extra {
     pub ers_max: f32,
     /// `DrivingAssistManager::idealLine`: what its `update` writes into the line's node
     pub ideal: bool,
+    /// `RaceManager::getTimeToSessionStart`, ms (`--set tts=…`: the start lights and the
+    /// semaphore are built; the session starts that long after the frame)
+    pub tts: f32,
 }
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0 }
     }
 }
 
@@ -135,6 +138,16 @@ pub struct Frame {
     pub cubemap_model: String,
     /// `--set ideal=…`: the ideal line is built, from this file (`data/ideal_line.ai`)
     pub ideal_line: Option<String>,
+    /// `--set tts=…`: `StartingLights` and `StartingTrackSemaphore` are built
+    pub start_lights: bool,
+}
+
+/// `RaceManager::currentSession.startTime` of a frame, and what the game then computes from
+/// it: (`hasSessionStarted`, `getTimeToSessionStart` as the float the lights use).
+pub fn session_start(index: usize, tts: f32) -> (f64, bool, f32) {
+    let now = game_time_ms(index);
+    let start = now + tts as f64;
+    (start, start < now, (start - now) as f32)
 }
 
 thread_local! {
@@ -317,6 +330,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         for (name, value, from) in &args.set {
             if index >= *from {
                 apply_set(state, &mut extras[index], name, value)?;
+                count_down(&mut extras[index], name, index - *from);
             }
         }
     }
@@ -331,6 +345,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             for (name, value, from) in &args.set {
                 if index >= *from {
                     apply_set(&mut state, &mut extra, name, value)?;
+                    count_down(&mut extra, name, index - *from);
                 }
             }
             steps.push(Step { state: rustyac_render::car::CarPhysicsState::at_origin(), camera, extra });
@@ -377,7 +392,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         _ => None,
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
-    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line })
+    Ok(Frame { name, track, car, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts") })
 }
 
 /// The picture frames `from .. from + count` of a tape written by `car_oracle run
@@ -405,6 +420,13 @@ pub fn read_tape(path: &Path, from: usize, count: usize) -> Result<Vec<rustyac_r
         }
     }
     Ok(out)
+}
+
+/// `--set tts=<ms>@<frame>` is the time to the start at that frame: it runs down from there.
+fn count_down(x: &mut Extra, name: &str, frames: usize) {
+    if name == "tts" {
+        x.tts -= frames as f32 * (1000.0 / 60.0);
+    }
 }
 
 /// One `--set name=value`.
@@ -439,6 +461,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "rstatus" => x.replay_status = number(value)? as i32,
         "pause" => x.pause = on(value)?,
         "ideal" => x.ideal = on(value)?,
+        "tts" => x.tts = number(value)?,
         "wing" => x.wing = Some(number(value)?),
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
@@ -460,7 +483,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

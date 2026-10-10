@@ -106,6 +106,8 @@ pub struct Options {
     pub auto_blip: Option<bool>,
     /// `--ideal-line` / `--no-ideal-line`: the ideal line whatever assists.ini says
     pub ideal_line: Option<bool>,
+    /// `--start-lights <seconds>`: the track's start lights count down a race start
+    pub start_lights: Option<f32>,
     /// `--spawn` was given (else race.ini's `[SESSION_0] SPAWN_SET` decides).
     pub spawn_given: bool,
     /// `--controls <ini>`: read the bindings from this file instead of AC's / rustyAC's.
@@ -228,6 +230,7 @@ impl Default for Options {
             no_auto_shifter: false,
             auto_blip: None,
             ideal_line: None,
+            start_lights: None,
             spawn_given: false,
             controls: None,
             default_controls: false,
@@ -373,6 +376,10 @@ for checks, without anybody at the controls:
                         AC's ideal line (the coloured arrows on the road) on or off from the start,
                         whatever assists.ini [ASSISTS] IDEAL_LINE says; Ctrl+I switches it while
                         driving (the key of controls.ini [IDEAL_LINE])
+  --start-lights <s>    a race start for the picture: the track's start lights (and the drag strip's
+                        semaphore) count down, the start being <s> seconds away, give or take one
+                        (the game: 20). The car is not held on the grid (no races yet). A race.ini
+                        whose session is a race does the same with 20; N starts it again
   --show-fps            the frame-rate counter on from the start (Ctrl+F or F9 switches it while
                         driving: frame time, FPS, physics steps a second)
   --no-a2c              NOT Assetto Corsa, a diagnosis only: no alpha to coverage. It proves where
@@ -468,6 +475,7 @@ impl Options {
                 "--no-auto-blip" => o.auto_blip = Some(false),
                 "--ideal-line" => o.ideal_line = Some(true),
                 "--no-ideal-line" => o.ideal_line = Some(false),
+                "--start-lights" => o.start_lights = Some(value("--start-lights")?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0).ok_or("--start-lights <seconds>")?),
                 "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,
                 "--bench-render" => o.bench_render = true,

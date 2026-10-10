@@ -237,6 +237,9 @@ pub struct AcOptions {
     pub cube_size: Option<i32>,
     /// `assists.ini [ASSISTS] IDEAL_LINE` (or `--ideal-line`): the ideal line shows from the start
     pub ideal_line: bool,
+    /// a race start: the seconds the start lights count down from (`RaceManager::startRace`
+    /// gives 20, give or take one); `None`: a session that has started (no countdown)
+    pub start_lights: Option<f32>,
     /// `--video-ini <file>`: this file instead of `Documents/Assetto Corsa/cfg/video.ini`
     pub video_ini: Option<PathBuf>,
     /// `--graphics max|low`: a built-in `video.ini`; the player's file is not read
@@ -422,6 +425,11 @@ pub struct AcRenderer {
     /// `TrackAvatar::idealLine` and `DrivingAssistManager::idealLine`
     ideal_line: Option<NodeId>,
     ideal_on: bool,
+    /// `StartingLights`, `StartingTrackSemaphore`, and `RaceManager::currentSession.startTime`
+    /// on the picture's clock (`None`: no race start)
+    start_lights: Option<rustyac_render::start_lights::StartingLights>,
+    semaphore: Option<rustyac_render::start_lights::StartingTrackSemaphore>,
+    race_start_ms: Option<f64>,
     /// `Game::gameTime.now`, milliseconds
     time_ms: f64,
     /// `RaceManager::initLighting`'s `SunAnimator`
@@ -566,7 +574,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -620,6 +628,16 @@ impl AcRenderer {
             Ok(crowds) => self.crowds = crowds,
             Err(message) => println!("WARNING: no crowds: {message}"),
         }
+        // Sim::Sim: StartingLights and StartingTrackSemaphore
+        match rustyac_render::start_lights::StartingLights::new(&mut self.graphics, &mut self.scene, self.track_node, &data) {
+            Ok(lights) => self.start_lights = Some(lights),
+            Err(message) => println!("WARNING: no start lights: {message}"),
+        }
+        match rustyac_render::start_lights::StartingTrackSemaphore::new(&mut self.graphics, &mut self.scene, self.track_node, &data) {
+            Ok(semaphore) => self.semaphore = Some(semaphore),
+            Err(message) => println!("WARNING: no semaphore: {message}"),
+        }
+        self.start_race();
         Ok(format!("track models: {} files, {} textures, {} materials, loaded in {:.2} s", models.len(), self.graphics.resources.textures.len(), self.scene.materials.len(), started.elapsed().as_secs_f64()))
     }
 
@@ -644,6 +662,21 @@ impl AcRenderer {
         }
         let down = Vec3f::new(0.0, -1.0, 0.0);
         rustyac_render::ideal_line::build(&mut self.graphics, &mut self.scene, spline, &|from| track.ray_cast_hit(&Vec3f::new(from[0], from[1], from[2]), &down, 100.0).map(|hit| hit.contact.pos))
+    }
+
+    /// `RaceManager::startRace` 0x140141470 for a race: the start is `lead` seconds from now,
+    /// give or take a second (a number of `rand()`). Nothing without `--start-lights` (or a
+    /// race in race.ini).
+    pub fn start_race(&mut self) {
+        self.race_start_ms = self.options.start_lights.map(|lead| {
+            let jitter = (self.graphics.crt_rand.next() as f32 * f32::from_bits(0x3800_0100)) * 2000.0 - 1000.0;
+            (lead * 1000.0) as f64 + self.time_ms + jitter as f64
+        });
+    }
+
+    /// How many meshes of the track are start lights, and whether it has a semaphore.
+    pub fn start_lights_summary(&self) -> (usize, bool) {
+        (self.start_lights.as_ref().map_or(0, |l| l.track_light_count()), self.semaphore.as_ref().is_some_and(|s| !s.is_empty()))
     }
 
     /// `DrivingAssistManager::setIdealLine` 0x1400fcb00 from the key (Ctrl+I in the game): the
@@ -765,6 +798,22 @@ impl AcRenderer {
             (true, false) => 0,
             (true, true) => 1,
         };
+        // StartingLights' two handlers, and RaceManager::update: the countdown stands while the
+        // pause menu shows and in a replay
+        if let Some(lights) = &mut self.start_lights {
+            if info.replay {
+                if self.told_replay_status == -1 {
+                    lights.on_replay_status_changed(6);
+                }
+            } else if info.paused != self.told_paused {
+                lights.on_pause_mode_changed(info.paused);
+            }
+        }
+        if info.paused || info.replay {
+            if let Some(start) = &mut self.race_start_ms {
+                *start += dt as f64 * 1000.0;
+            }
+        }
         if let Some(car) = &mut self.car {
             if info.replay {
                 if self.told_replay_status == -1 {
@@ -863,6 +912,13 @@ impl AcRenderer {
         if let Some(line) = self.ideal_line {
             self.scene.nodes[line].is_active = self.ideal_on;
         }
+        // RaceManager::getTimeToSessionStart: a session without a race start began at 0
+        let session_start = self.race_start_ms.unwrap_or(0.0);
+        let tts = (session_start - self.time_ms) as f32;
+        // StartingTrackSemaphore::update (Game::update: before the scene)
+        if let Some(semaphore) = &mut self.semaphore {
+            semaphore.update(&mut self.scene, tts);
+        }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
         // Sim::renderScene: the mirror before the picture
@@ -891,6 +947,13 @@ impl AcRenderer {
         // Game::evOnPreGUI
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
+        }
+        // Game::renderHUD: StartingLights::renderHUD writes the lamps after the scene is drawn
+        // (they change in the next frame, as in the game)
+        if let Some(lights) = &mut self.start_lights {
+            if lights.is_active {
+                lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts);
+            }
         }
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
