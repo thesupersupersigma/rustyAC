@@ -175,6 +175,13 @@ fn parse_args() -> Result<Args, String> {
                 let levels: Vec<f32> = text.split(',').filter_map(|part| part.trim().parse().ok()).collect();
                 a.damage = Some(levels.try_into().map_err(|_| format!("--damage wants five numbers, got {text:?}"))?);
             }
+            "--pop" => {
+                // Task 22b: <wheel 0..3 (LF RF LR RR)>@<seconds>
+                let text = value()?;
+                let parsed = text.split_once('@').and_then(|(w, t)| Some((w.parse::<i64>().ok()?, t.parse::<f64>().ok()?)));
+                let (wheel, seconds) = parsed.filter(|(w, t)| (0..4).contains(w) && *t >= 0.0).ok_or(format!("--pop <wheel 0..3>@<seconds>, got {text:?}"))?;
+                game::POP.store(wheel << 32 | (seconds * 333.0).round() as i64, std::sync::atomic::Ordering::Relaxed);
+            }
             "--hash-only" => a.hash_only = true,
             "--audio-tape" => a.audio_tape = true,
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),

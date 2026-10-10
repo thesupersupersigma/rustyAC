@@ -451,6 +451,10 @@ impl Columns {
 /// way the oracle applied it: the car's own functions, called before the step (the clock
 /// still shows the last step). Only the whole-car recordings have such jobs.
 fn apply_jobs(chassis: &mut replay::Runner, recording: &Recording, step: usize) {
+    if recording.has("script.pop") && recording.i(step, "script.pop") != 0 {
+        // Task 22b: the oracle burst a tyre before this step (what Tyre::stepPuncture does)
+        chassis.tyres[recording.i(step, "script.pop") as usize - 1].status.inflation = 0.0;
+    }
     if recording.has("script.resetObjects") && recording.i(step, "script.resetObjects") != 0 {
         // the job of a new session: the loose objects back where the track has them
         chassis.core.reset_track_objects();

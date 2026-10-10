@@ -143,6 +143,31 @@ pub fn gear_label(gear: i32) -> String {
 /// The lines of a hybrid car: battery, what the motor gives now, the lap's allowance, and
 /// the cockpit's settings as the game's own messages name them. None for a car without a
 /// hybrid system and without an engine-brake control.
+/// What a crash left (rustyAC's own lines; the game shows it with the icons of its damage
+/// display): the damage zones in km/h of closing speed, the bent steering rods as a share of
+/// the car's most (`ISuspension::getDamage`), the tyres that burst.
+fn damage_lines(view: &CarView) -> Vec<String> {
+    const WHEEL: [&str; 4] = ["LF", "RF", "LR", "RR"];
+    let mut lines = Vec::new();
+    if view.damage.iter().any(|d| *d > 0.0) {
+        let d = &view.damage;
+        lines.push(format!("hit km/h: front {:.0} rear {:.0} left {:.0} right {:.0}", d[0], d[1], d[2], d[3]));
+    }
+    let bent: Vec<String> = WHEEL.iter().zip(&view.suspension_damage).filter(|(_, d)| **d > 0.0).map(|(w, d)| format!("{w} {:.0} %", d * 100.0)).collect();
+    if !bent.is_empty() {
+        lines.push(format!("bent steering: {}", bent.join("  ")));
+    }
+    // (before the car is put down every tyre's inflation is 0)
+    let inflation = &view.render.inflation;
+    if inflation.iter().any(|i| *i > 0.0) {
+        let burst: Vec<&str> = WHEEL.iter().zip(inflation).filter(|(_, i)| **i <= 0.0).map(|(w, _)| *w).collect();
+        if !burst.is_empty() {
+            lines.push(format!("tyre burst: {}", burst.join(" ")));
+        }
+    }
+    lines
+}
+
 fn hybrid_lines(view: &CarView) -> Vec<String> {
     let h = &view.hybrid;
     let mut lines = Vec::new();
@@ -188,7 +213,8 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
 
     // top left: timer, rates, who drives, the hybrid system
     let hybrid = hybrid_lines(view);
-    let rows = 8 + info.notes.len() + hybrid.len();
+    let damage = damage_lines(view);
+    let rows = 8 + info.notes.len() + hybrid.len() + damage.len();
     hud.rect(10.0 * s, 10.0 * s, 430.0 * s, line * rows as f32 + 16.0 * s, PANEL);
     let x = 20.0 * s;
     let mut y = 16.0 * s;
@@ -214,6 +240,10 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     }
     for text in &hybrid {
         hud.text(x, y, 0.75 * s, WHITE, text);
+        y += line;
+    }
+    for text in &damage {
+        hud.text(x, y, 0.75 * s, YELLOW, text);
         y += line;
     }
     for note in &info.notes {

@@ -614,6 +614,9 @@ struct Global(UnsafeCell<Option<State>>);
 unsafe impl Sync for Global {}
 static STATE: Global = Global(UnsafeCell::new(None));
 
+/// `--pop <wheel>@<seconds>`: wheel << 32 | step, or -1.
+pub static POP: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
 fn state() -> &'static mut State {
     unsafe { (*STATE.0.get()).as_mut().expect("the game called a hook before the world was built") }
 }
@@ -2396,6 +2399,14 @@ impl<'a> World<'a> {
                 }
             }
         }
+        // Task 22b, `--pop <wheel>@<seconds>`: the tyre bursts before this step, the way
+        // Tyre::stepPuncture does it (TyreStatus::inflation = 0; it takes 350 degrees to get
+        // there by driving)
+        let pop = POP.load(std::sync::atomic::Ordering::Relaxed);
+        let popped = if pop >= 0 && (pop & 0xffff_ffff) as usize == self.step_index { Some((pop >> 32) as usize) } else { None };
+        if let Some(wheel) = popped {
+            unsafe { wr(self.car, CAR_TYRES + wheel * TYRE_SIZE + T_STATUS + 0x90, 0.0f32) };
+        }
         if controls.reset_objects {
             // the job a new session queues for the start of the next step
             unsafe { crate::track::reset_objects(self.acs, &self.game_objects) };
@@ -2511,6 +2522,9 @@ impl<'a> World<'a> {
         row.d("time_ms", time_ms);
         unsafe {
             self.emit(&mut row, &controls);
+            if pop >= 0 {
+                row.i("script.pop", popped.map_or(0, |wheel| wheel as i32 + 1));
+            }
             if let Some(track) = state().game_track {
                 if !self.game_objects.is_empty() {
                     row.i("script.resetObjects", controls.reset_objects as i32);
