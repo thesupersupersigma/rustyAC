@@ -50,6 +50,9 @@ pub struct Options {
     pub render_seed: Option<u32>,
     /// `--mirror-hq <0|1>`: `[MIRROR] HQ` whatever `video.ini` says
     pub mirror_hq: Option<bool>,
+    /// `--world-detail <0..5>`: `[ASSETTOCORSA] WORLD_DETAIL` whatever `video.ini` says (clouds
+    /// need 1, crowds 3 to 5, skid marks 1)
+    pub world_detail: Option<i32>,
     /// `--show-lights`, `--show-damage f,r,l,r,c`: with `--screenshot`, the picture is drawn
     /// with the headlights on / with these damage levels (km/h) whatever the physics says
     pub show_lights: bool,
@@ -192,6 +195,7 @@ impl Default for Options {
             time_mult: None,
             render_seed: None,
             mirror_hq: None,
+            world_detail: None,
             show_lights: false,
             show_damage: None,
             virtual_mirror: false,
@@ -308,6 +312,8 @@ usage: rustyac [options]
                         of impact: front, rear, left, right, centre) whatever the physics says
   --mirror-size <n>     the mirror texture's width whatever video.ini says (0: no mirrors)
   --mirror-hq <0|1>     the high-quality mirror ([MIRROR] HQ) whatever video.ini says
+  --world-detail <0..5> WORLD_DETAIL whatever video.ini says (clouds and skid marks need 1,
+                        crowds 3 to 5)
   --weather <name>      a folder of content/weather whatever race.ini says (7_heavy_clouds ...)
   --time-mult <n>       race.ini TIME_MULT: how fast the sun and the clouds move
   --render-seed <n>     what the picture's rand() starts from (default: the clock while driving,
@@ -375,6 +381,7 @@ impl Options {
                 "--sun" => o.sun = Some(value("--sun")?.parse().map_err(|e| format!("--sun: {e}"))?),
                 "--weather" => o.weather = Some(value("--weather")?),
                 "--mirror-hq" => o.mirror_hq = Some(value("--mirror-hq")? != "0"),
+                "--world-detail" => o.world_detail = Some(value("--world-detail")?.parse().map_err(|e| format!("--world-detail: {e}"))?),
                 "--render-seed" => o.render_seed = Some(value("--render-seed")?.parse().map_err(|e| format!("--render-seed: {e}"))?),
                 "--time-mult" => o.time_mult = Some(value("--time-mult")?.parse().map_err(|e| format!("--time-mult: {e}"))?),
                 "--show-lights" => o.show_lights = true,

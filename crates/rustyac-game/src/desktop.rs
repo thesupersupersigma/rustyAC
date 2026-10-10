@@ -195,7 +195,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let (Some(mult), Some((time_mult, _))) = (options.time_mult, &mut sun_animation) {
         *time_mult = mult;
     }
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, render_seed: info.render_seed })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed })?;
     for note in &renderer.notes {
         println!("{note}");
     }

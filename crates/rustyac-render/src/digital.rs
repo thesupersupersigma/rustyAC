@@ -1414,13 +1414,7 @@ impl DigitalItem {
                     if self.decimals == 0 {
                         v = 100.0 - v;
                     }
-                    let v = if v > 100.0 {
-                        100.0
-                    } else if v < 0.0 {
-                        0.0
-                    } else {
-                        v
-                    };
+                    let v = v.clamp(0.0, 100.0);
                     format!("{:.0}{}", v as f64, self.post_fix)
                 } else {
                     String::new()
@@ -1445,13 +1439,7 @@ impl DigitalItem {
             }
             ItemType::FuelPerc => {
                 let x = s.fuel as f64 / f.max_fuel;
-                let x = if x > 1.0 {
-                    1.0
-                } else if x < 0.0 {
-                    0.0
-                } else {
-                    x
-                };
+                let x = x.clamp(0.0, 1.0);
                 let n = (x * 100.0) as i32;
                 format!("{}{:.*}{}", self.pre_fix, self.decimals.max(0) as usize, n as f64, self.post_fix)
             }

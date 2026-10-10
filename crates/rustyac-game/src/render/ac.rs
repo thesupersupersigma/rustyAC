@@ -229,6 +229,8 @@ pub struct AcOptions {
     pub groove: Option<(f32, f32)>,
     /// `--mirror-hq <0|1>`: `[MIRROR] HQ` whatever `video.ini` says
     pub mirror_hq: Option<bool>,
+    /// `--world-detail <0..5>`: `[ASSETTOCORSA] WORLD_DETAIL` whatever `video.ini` says
+    pub world_detail: Option<i32>,
     /// what `rand()` starts from once the track is loaded
     pub render_seed: u32,
 }
@@ -380,6 +382,9 @@ impl AcRenderer {
         let mirror_hq = options.mirror_hq.unwrap_or(mirror_hq);
         if let Some(size) = options.mirror_size {
             video.mirror_size = size;
+        }
+        if let Some(detail) = options.world_detail {
+            video.world_detail = detail.clamp(0, 5);
         }
         if let Some(faces) = options.cube_faces {
             cube_faces = faces.clamp(0, 6);
