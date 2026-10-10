@@ -38,6 +38,17 @@ pub struct Options {
     /// `--lead-in <s>`: with `--screenshot`, the seconds before it that are drawn frame by
     /// frame first (smoke, skid marks and flames need the frames before them)
     pub lead_in: f64,
+    /// `--sun <angle>`: `SUN_ANGLE` whatever race.ini says (-80 sunrise, 0 one o'clock, 80
+    /// sunset)
+    pub sun: Option<f32>,
+    /// `--show-lights`, `--show-damage f,r,l,r,c`: with `--screenshot`, the picture is drawn
+    /// with the headlights on / with these damage levels (km/h) whatever the physics says
+    pub show_lights: bool,
+    pub show_damage: Option<[f32; 5]>,
+    /// `--flat-out`: with `--screenshot`, nobody steers and the throttle is held down
+    pub flat_out: bool,
+    /// `--mirror-size <n>`: `[MIRROR] SIZE` whatever `video.ini` says (0: no mirrors)
+    pub mirror_size: Option<i32>,
     /// `--virtual-mirror`: the F11 mirror on from the start
     pub virtual_mirror: bool,
     /// `--debug-view`: the old debug view (own shader, flat colours) instead of AC's renderer.
@@ -164,6 +175,11 @@ impl Default for Options {
             cube_faces: None,
             at: None,
             lead_in: 0.0,
+            mirror_size: None,
+            flat_out: false,
+            sun: None,
+            show_lights: false,
+            show_damage: None,
             virtual_mirror: false,
             camera: "chase".to_string(),
             auto_shifter: false,
@@ -267,6 +283,16 @@ usage: rustyac [options]
   --camera <name>       the view to start in: chase (default), chase2, bonnet, bumper, dash,
                         cockpit, or car0, car1 ... (the cameras of the car's cameras.ini);
                         F1 goes through the first six while driving, F6 through the car's
+  --sun <angle>         the sun's angle whatever race.ini says: -80 sunrise, 0 one o'clock,
+                        80 sunset, beyond that night
+  --lead-in <s>         with --screenshot: draw the last seconds frame by frame first, so
+                        that smoke, skid marks and flames are in the picture
+  --flat-out            with --screenshot: nobody steers, the throttle is held down from the
+                        start (a launch with wheelspin)
+  --show-lights         with --screenshot: the headlights on in the picture
+  --show-damage f,r,l,r,c   with --screenshot: the picture with these damage levels (km/h
+                        of impact: front, rear, left, right, centre) whatever the physics says
+  --mirror-size <n>     the mirror texture's width whatever video.ini says (0: no mirrors)
   --virtual-mirror      the virtual mirror on from the start (F11 switches it while driving;
                         it needs mirrors in video.ini: [MIRROR] SIZE above 0)
   --vsync <0|1>         wait for the display (default 1)
@@ -326,6 +352,15 @@ impl Options {
                 "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
                 "--lead-in" => o.lead_in = value("--lead-in")?.parse().map_err(|e| format!("--lead-in: {e}"))?,
                 "--virtual-mirror" => o.virtual_mirror = true,
+                "--mirror-size" => o.mirror_size = Some(value("--mirror-size")?.parse().map_err(|_| "--mirror-size <pixels, 0: no mirrors>".to_string())?),
+                "--sun" => o.sun = Some(value("--sun")?.parse().map_err(|e| format!("--sun: {e}"))?),
+                "--show-lights" => o.show_lights = true,
+                "--flat-out" => o.flat_out = true,
+                "--show-damage" => {
+                    let text = value("--show-damage")?;
+                    let levels: Vec<f32> = text.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                    o.show_damage = Some(<[f32; 5]>::try_from(levels).map_err(|_| "--show-damage front,rear,left,right,centre (km/h)".to_string())?);
+                }
                 "--debug-view" => o.debug_view = true,
                 "--warp" => o.warp = true,
                 "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),

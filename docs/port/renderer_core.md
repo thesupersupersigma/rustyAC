@@ -260,6 +260,9 @@ cost of exactness.
 
 ## 7. What Task 21 and Task 22 still need
 
+**Task 21 is done: `docs/port/renderer_car.md` has what it ported and the list that is current.** The list
+below is as Task 20 left it.
+
 Task 21 (the rest of the scene):
 
 - [ ] The driver (`DriverModel`, its animations, hiding arms and steering wheel by `video.ini`): the same

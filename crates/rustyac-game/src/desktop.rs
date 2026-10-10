@@ -173,7 +173,10 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if !weather.is_empty() && weather != "3_clear" && game.join("content/weather").join(&weather).join("weather.ini").is_file() {
         println!("weather {weather}: its fog and colours are used; its clouds come in Task 21");
     }
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces })?;
+    if let Some(sun) = options.sun {
+        sun_angle = sun;
+    }
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -779,6 +782,8 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         Box::new(ReplaySource::default())
     } else if options.autodrive {
         Box::new(SpawnSequence::new(AutoDriver::new(), true))
+    } else if options.flat_out {
+        Box::new(SpawnSequence::new(rustyac_game::sim::FlatOutSource::default(), true))
     } else {
         Box::new(SpawnSequence::new(NobodySource, true))
     };
@@ -829,7 +834,16 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
             }
         }
     }
-    let view = CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003);
+    let mut view = CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003);
+    // --show-lights, --show-damage: the picture's own switches
+    let dress = |v: &mut CarView| {
+        v.lights |= options.show_lights;
+        if let Some(damage) = options.show_damage {
+            v.damage = damage;
+        }
+    };
+    dress(&mut view);
+    lead.iter_mut().for_each(dress);
     if let Some(pose) = &options.pose_out {
         std::fs::write(pose, view.physics_state().to_bytes()).map_err(|e| format!("{}: {e}", pose.display()))?;
         println!("{}: the car's state after {} steps", pose.display(), sim.steps);

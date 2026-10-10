@@ -130,6 +130,8 @@ bindings, the second is added by rustyAC):
                                ] and [ are the two keys right of P on a US
                                keyboard.)
     F1, or C                   next view: chase, chase 2, bonnet, bumper, dash, cockpit
+    F11                        the virtual mirror on or off (needs mirrors in AC's
+                               video settings; cockpit and chase views)
     F6                         the car's own cameras (the F2004's first one is above
                                the driver's helmet, looking down the nose); F1 goes back
     R                          reset the car to the spawn point

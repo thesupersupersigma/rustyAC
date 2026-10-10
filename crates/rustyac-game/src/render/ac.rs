@@ -220,6 +220,8 @@ pub struct AcOptions {
     pub video_exact: bool,
     /// `--cube-faces <n>`: `[CUBEMAP] FACES_PER_FRAME` whatever `video.ini` says.
     pub cube_faces: Option<i32>,
+    /// `--mirror-size <n>`: `[MIRROR] SIZE` whatever `video.ini` says.
+    pub mirror_size: Option<i32>,
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
@@ -335,7 +337,10 @@ pub struct AcRenderer {
 
 impl AcRenderer {
     pub fn new(width: u32, height: u32, options: AcOptions) -> Result<AcRenderer, String> {
-        let (video, cube_size, mut cube_faces, cube_far, notes) = video_settings(width, height, options.video_exact);
+        let (mut video, cube_size, mut cube_faces, cube_far, notes) = video_settings(width, height, options.video_exact);
+        if let Some(size) = options.mirror_size {
+            video.mirror_size = size;
+        }
         if let Some(faces) = options.cube_faces {
             cube_faces = faces.clamp(0, 6);
         }

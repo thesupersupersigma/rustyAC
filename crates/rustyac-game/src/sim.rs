@@ -173,6 +173,22 @@ impl DriverSource for NobodySource {
     }
 }
 
+/// Nobody steers and the throttle is held to the floor (`--flat-out`): a second of revving
+/// with the clutch pedal down, then the clutch is dropped. A launch with all the wheelspin
+/// the car has, for pictures of smoke and skid marks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FlatOutSource {
+    steps: u32,
+}
+
+impl DriverSource for FlatOutSource {
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        self.steps += 1;
+        let clutch = if self.steps < 333 { 0.0 } else { 1.0 };
+        *controls = CarControls { clutch, gas: 1.0, ..CarControls::default() };
+    }
+}
+
 /// Steps of rest after a spawn, as the oracle's scenarios wait (1.2 s): the car drops onto
 /// its wheels and comes to rest.
 pub const SPAWN_REST_STEPS: u32 = 400;
