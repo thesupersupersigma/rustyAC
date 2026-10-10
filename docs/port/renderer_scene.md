@@ -391,6 +391,10 @@ Carried over, with what this task found:
 
 ## 8. Not done
 
+**Task 22c took this list: see `renderer_leftovers.md`.** Done and measured there: items 1 (but for the pit
+stop mechanics), 2, 3, 4 (the gates), 5, 6, 7, 8 (but for rewind and the lap jumps) and 9. Still open: the
+mechanics, the ghost car, item 10.
+
 1. **The pit crew's visuals.** The lollipop men (`LollipopCrew` 0x140112bf0: a model and three animations per
    car in the pits), the static crew meshes (`AC_CREW_<n>*`, which stay hidden), the pit box marker
    (`pit_indicator.kn5`) and the mechanics (`PitStop` 0x1400a55d0, `PitCrew` 0x1400a0b80). Brief:

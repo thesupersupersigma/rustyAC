@@ -101,6 +101,8 @@ Rumble follows AC's rule: the right motor with tyre slip, the left one on kerbs 
 | F6 | the car's own cameras (`data/cameras.ini`, up to six, each with its own field of view): the first press shows the one last used, each further press the next; F1 goes back to the driving view |
 | R | reset the car to the spawn point (N: a brand-new car, cold tyres and all; since Task 12 Shift+R is "back onto the track where the car is", see `docs/port/track.md`) |
 | P or Pause | pause |
+| Ctrl+I | the ideal line on / off (Task 22c; the key of `controls.ini [IDEAL_LINE]`) |
+| in a `--replay` window: Ctrl+Space or P, Ctrl+S, Ctrl+F, Home | play / pause, slow motion, faster, back to the start (Task 22c: `docs/port/renderer_leftovers.md` section 5) |
 | Esc | quit |
 
 The three commands are AC's own (Ctrl+T, Ctrl+A, Ctrl+G). Of the Ctrl keys only the **right** one makes them
