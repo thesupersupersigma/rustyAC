@@ -37,6 +37,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         shadow_map_size: crate::root::profile().shadow_map_size,
         fps_cap_ms: 0.0,
         world_detail: crate::root::profile().world_detail,
+        smoke: Some(crate::root::profile().smoke),
         pp_hdr_enabled: false,
         triple_buffer: false,
     };

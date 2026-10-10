@@ -31,6 +31,7 @@ pub mod lighting;
 pub mod lights;
 pub mod material;
 pub mod model;
+pub mod particles;
 pub mod scene;
 pub mod shader;
 pub mod skid;

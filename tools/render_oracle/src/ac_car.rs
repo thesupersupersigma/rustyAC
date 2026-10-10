@@ -53,6 +53,10 @@ const VA_ANALOG_INSTRUMENTS_CTOR: usize = 0x1_4005_6480; // AnalogInstruments::A
 const VA_ANALOG_INSTRUMENTS_UPDATE: usize = 0x1_4005_9770; // AnalogInstruments::update(float)
 const VA_CAR_AVATAR_INIT_DRIVER: usize = 0x1_400d_7380; // CarAvatar::initDriver()
 const VA_DRIVER_MODEL_UPDATE: usize = 0x1_400f_b5d0; // DriverModel::update(float)
+const VA_TYRE_SMOKE_CTOR: usize = 0x1_401d_0000; // TyreSmoke::TyreSmoke(CarAvatar*, int)
+const VA_TYRE_SMOKE_UPDATE: usize = 0x1_401d_0b80; // TyreSmoke::update(float)
+const VA_ENGINE_SMOKE_CTOR: usize = 0x1_4009_2de0; // EngineSmoke::EngineSmoke(CarAvatar*)
+const VA_ENGINE_SMOKE_UPDATE: usize = 0x1_4009_35e0; // EngineSmoke::update(float)
 const VA_SKID_MARK_BUFFER_CTOR: usize = 0x1_4018_f2d0; // SkidMarkBuffer::SkidMarkBuffer(GraphicsManager*, unsigned int)
 const VA_CAR_AVATAR_UPDATE_SKID_MARKS: usize = 0x1_400d_d780; // CarAvatar::updateSkidMarks(float)
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
@@ -203,7 +207,7 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
         }
     }
     // textures the car's objects open by a path under the game's folder
-    for name in ["content/texture/DAMAGE_GLASS.dds", "content/texture/skids.dds"] {
+    for name in ["content/texture/DAMAGE_GLASS.dds", "content/texture/skids.dds", "content/texture/smoke_0.png", "content/texture/grass.png"] {
         if game.join(name).is_file() {
             copy_file(&game.join(name), &root.join(name))?;
         }
@@ -259,6 +263,8 @@ pub struct Car {
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
     digital_instruments: *mut u8,
+    /// the four `TyreSmoke` and the `EngineSmoke`, each with its `update`
+    smokes: Vec<(*mut u8, usize)>,
     brake_discs: *mut u8,
     dynamic_effects: *mut u8,
 }
@@ -426,6 +432,7 @@ impl Game {
         // CarAvatar::initCommonPostPhysics 0x1400d6190: the objects of the picture
         // (the skid marks: world detail above 0; 6000 vertices x QUANTITY_MULT, 12000 from detail 3)
         wr(car, 0xe5c, spec.tyre_width);
+        let mut smokes: Vec<(*mut u8, usize)> = Vec::new();
         {
             let mut mult = 1.0f32;
             if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new("system/cfg/skidmarks.ini")) {
@@ -435,6 +442,7 @@ impl Game {
             }
             let detail = crate::root::profile().world_detail;
             for i in 0..4 {
+                let _ = &mut smokes;
                 if detail > 0 && mult != 0.0 {
                     let size = if detail >= 3 { (mult * 12000.0) as i32 } else { (mult * 6000.0) as i32 };
                     let buffer = acs.alloc(0x198);
@@ -443,7 +451,15 @@ impl Game {
                     wr(car, 0xe20 + 8 * i, buffer);
                     self.add_child(nodes.skid_marks, buffer);
                 }
+                let smoke = acs.alloc(0xa8);
+                let ctor: extern "C" fn(*mut u8, *mut u8, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_TYRE_SMOKE_CTOR));
+                smokes.push((ctor(smoke, car, i as i32), VA_TYRE_SMOKE_UPDATE));
             }
+        }
+        {
+            let smoke = acs.alloc(0x90);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_ENGINE_SMOKE_CTOR));
+            smokes.push((ctor(smoke, car), VA_ENGINE_SMOKE_UPDATE));
         }
         let make = |size: usize, va: usize| -> *mut u8 {
             let object = acs.alloc(size);
@@ -475,7 +491,7 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, brake_discs, dynamic_effects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, brake_discs, dynamic_effects, smokes })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
@@ -546,9 +562,11 @@ impl Game {
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_LOD_MANAGER_UPDATE));
         update(c.lod_manager, dt);
+        for (object, va) in [(c.visual_damage, VA_VISUAL_DAMAGE_UPDATE), (c.rotating_objects, VA_ROTATING_OBJECTS_UPDATE)].into_iter().chain(c.smokes.iter().copied()) {
+            let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
+            update(object, dt);
+        }
         for (object, va) in [
-            (c.visual_damage, VA_VISUAL_DAMAGE_UPDATE),
-            (c.rotating_objects, VA_ROTATING_OBJECTS_UPDATE),
             (c.car_animations, VA_CAR_ANIMATIONS_UPDATE),
             (c.gear_shift_shake, VA_GEAR_SHIFT_SHAKE_UPDATE),
             (c.analog_instruments, VA_ANALOG_INSTRUMENTS_UPDATE),

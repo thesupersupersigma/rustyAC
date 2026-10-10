@@ -30,6 +30,7 @@ use crate::graphics::Graphics;
 use crate::lights::{AnimatedLights, BrakeDiscGraphics, CarBrakeLights, DynamicCarEffects};
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
+use crate::particles::{EngineSmoke, SmokeFrame, TyreSmoke};
 use crate::skid::CarSkidMarks;
 
 pub use crate::state::CarPhysicsState;
@@ -160,6 +161,11 @@ pub struct CarAvatar {
     pub wing_angles: Vec<f32>,
     /// the skid marks: `CarAvatar::skidMarkBuffers`
     pub skid_marks: CarSkidMarks,
+    /// `TyreSmoke` of each wheel, `EngineSmoke`
+    pub tyre_smoke: Vec<TyreSmoke>,
+    pub engine_smoke: Option<EngineSmoke>,
+    /// `RaceManager::carsToBeLoaded`
+    pub cars_to_be_loaded: i32,
     /// `CarBrakeLights`, `BrakeDiscGraphics`, `DynamicCarEffects`
     pub brake_lights: CarBrakeLights,
     pub animated_lights: AnimatedLights,
@@ -276,6 +282,9 @@ impl CarAvatar {
             driver_eyes_position: car_ini.as_ref().and_then(|i| i.get_float3("GRAPHICS", "DRIVEREYES").ok()).unwrap_or([0.0; 3]),
             wing_angles: Vec::new(),
             skid_marks: CarSkidMarks::default(),
+            tyre_smoke: Vec::new(),
+            engine_smoke: None,
+            cars_to_be_loaded: 1,
             brake_lights: CarBrakeLights::default(),
             animated_lights: AnimatedLights::default(),
             brake_discs: BrakeDiscGraphics::default(),
@@ -350,9 +359,13 @@ impl CarAvatar {
     /// game's order.
     pub fn init_common_post_physics(&mut self, graphics: &mut Graphics, scene: &mut Scene, sim: &SimNodes, tyre_width: [f32; 4]) -> Result<(), String> {
         self.skid_marks.tyre_width = tyre_width;
+        self.tyre_smoke.clear();
+        let smoke = graphics.video.smoke;
         for i in 0..4 {
             self.skid_marks.make_buffer(graphics, scene, sim.skid_marks, i)?;
+            self.tyre_smoke.push(TyreSmoke::new(graphics, scene, sim.particles, i, smoke, self.cars_to_be_loaded));
         }
+        self.engine_smoke = Some(EngineSmoke::new(graphics, scene, sim.particles, smoke));
         let wheels: [Vec<NodeId>; 4] = std::array::from_fn(|w| self.wheel_transforms(w));
         let wheel_nodes = |w: usize| wheels[w].clone();
         self.car_animations = CarAnimations::new(scene, &self.folder, self.body_transform, self.driver_eyes_position[0]);
@@ -601,6 +614,20 @@ impl CarAvatar {
             damage.update(graphics, scene, state, replay_dt, self.pause_menu);
         }
         self.rotating_objects.update(scene, state, replay_dt);
+        {
+            let frame = SmokeFrame {
+                dt,
+                now_ms: self.game_time_ms,
+                connected: scene.nodes[self.car_node].is_active,
+                replay_time_mult: self.replay_mode.then_some(self.replay_scale),
+            };
+            for smoke in &mut self.tyre_smoke {
+                smoke.update(scene, state, &frame, &mut graphics.crt_rand);
+            }
+            if let Some(smoke) = &mut self.engine_smoke {
+                smoke.update(state, &frame, &mut graphics.crt_rand);
+            }
+        }
         {
             // CarAvatar::getActiveDriverModel 0x1400d30b0
             let driver = if self.is_driver_hr { &self.driver_hr } else { &self.driver_lr };
