@@ -357,9 +357,17 @@ fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>,
 /// The five pictures of `CarFakeShadow::generateFakeShadow` (four wheels of 64 x 64, the body of
 /// 512 x 512, RGBA) as the PNG files the game would have saved, in rustyAC's own folder:
 /// `<the program's folder>/rustyac_cache/shadows/<car>/`.
-fn save_generated_shadows(car: &str, pictures: &[Vec<u8>]) -> Result<PathBuf, String> {
+fn shadow_cache_folder() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let folder = exe.parent().ok_or("the program has no folder")?.join("rustyac_cache").join("shadows").join(car);
+    Ok(exe.parent().ok_or("the program has no folder")?.join("rustyac_cache").join("shadows"))
+}
+
+/// … with a stamp of the car's files beside them, so that the next start finds them and makes
+/// them again only when the car changed.
+fn save_generated_shadows(car: &str, car_folder: &std::path::Path, pictures: &[Vec<u8>]) -> Result<PathBuf, String> {
+    let folder = shadow_cache_folder()?.join(car);
+    // (the stamp goes last: a half-written set is never taken for a whole one)
+    let _ = std::fs::remove_file(folder.join(rustyac_render::fake_shadow::STAMP_FILE));
     std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     for (i, picture) in pictures.iter().enumerate() {
         let (name, side) = if i < 4 { (format!("tyre_{i}_shadow.png"), 64u32) } else { ("body_shadow.png".to_string(), 512u32) };
@@ -370,6 +378,7 @@ fn save_generated_shadows(car: &str, pictures: &[Vec<u8>]) -> Result<PathBuf, St
         let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
         writer.write_image_data(picture).map_err(|e| e.to_string())?;
     }
+    std::fs::write(folder.join(rustyac_render::fake_shadow::STAMP_FILE), rustyac_render::fake_shadow::car_files_stamp(car_folder)).map_err(|e| e.to_string())?;
     Ok(folder)
 }
 
@@ -634,16 +643,21 @@ impl AcRenderer {
         rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())?;
         // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad (the flat ground shadows)
         if let Some(car) = &mut self.car {
+            self.graphics.shadow_cache = shadow_cache_folder().ok();
             car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
             // A car without body_shadow.png: the game draws the five pictures, saves them into
             // the car's folder and shows them from its next start on. rustyAC never writes
             // there: the pictures go into a folder of its own, next to the program, and are
-            // loaded from it at once (they are made again at every start: it takes a moment).
+            // loaded from it at once. At the next start they are taken from that folder, and
+            // made again only when the car's files changed.
             if let Some(shadow) = &car.fake_shadow {
                 let mut shadow = shadow.borrow_mut();
+                if shadow.from_cache {
+                    println!("{} has no body_shadow.png: its ground shadows come from rustyac_cache (made at an earlier start)", car.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                }
                 if let Some(pictures) = shadow.generated.take() {
                     let name = car.folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    match save_generated_shadows(&name, &pictures) {
+                    match save_generated_shadows(&name, &car.folder, &pictures) {
                         Ok(folder) => {
                             println!("{name} has no body_shadow.png: its ground shadows were generated into {}", folder.display());
                             shadow.load_shadows(&mut self.graphics, &path_text(&folder));

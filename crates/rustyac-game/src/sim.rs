@@ -490,6 +490,10 @@ pub fn find_car_model(_car: &str, data_path: &Path) -> Option<PathBuf> {
         if line.starts_with('[') {
             in_first = line == "[LOD_0]";
         } else if let (true, Some(("FILE", file))) = (in_first, line.split_once('=').map(|(k, v)| (k.trim(), v.trim()))) {
+            // a car given by its folder (`--car <folder>`): the models beside its data
+            if let Some(own) = data_path.parent().map(|p| p.join(file)).filter(|p| data_path.file_name().is_some_and(|n| n == "data") && p.vfs_is_file()) {
+                return Some(own);
+            }
             let path = folder.join(file);
             if path.vfs_is_file() {
                 return Some(path);

@@ -44,6 +44,45 @@ pub struct CarFakeShadow {
     /// what `generateFakeShadow` drew: the four wheels (64 x 64) and the body (512 x 512), as
     /// RGBA bytes with the rows from the top, in the order the game saves them
     pub generated: Option<Vec<Vec<u8>>>,
+    /// the pictures came from rustyAC's own cache folder (not the game's behaviour: see
+    /// [`cached_shadows`])
+    pub from_cache: bool,
+}
+
+/// The name of the file in a car's cache folder that says which state of the car's files
+/// its pictures were made from.
+pub const STAMP_FILE: &str = "stamp.txt";
+
+/// What the generated pictures depend on: the names, sizes and times of the files of the
+/// car's folder (its models, `data.acd`) and of its `data` folder. Not Assetto Corsa: the game
+/// never looks, it generates only when `body_shadow.png` is missing.
+pub fn car_files_stamp(folder: &Path) -> String {
+    let mut lines = Vec::new();
+    for (label, dir) in [("", folder.to_path_buf()), ("data/", folder.join("data"))] {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let Ok(meta) = entry.metadata() else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            let time = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+            lines.push(format!("{label}{} {} {time}", entry.file_name().to_string_lossy(), meta.len()));
+        }
+    }
+    lines.sort();
+    lines.join("\n")
+}
+
+/// The cache folder of a car when its five pictures are there and were made from the car's
+/// files as they are now.
+pub fn cached_shadows(cache: &Path, folder: &Path) -> Option<std::path::PathBuf> {
+    let own = cache.join(folder.file_name()?);
+    let names = ["body_shadow.png", "tyre_0_shadow.png", "tyre_1_shadow.png", "tyre_2_shadow.png", "tyre_3_shadow.png"];
+    if !names.iter().all(|n| own.join(n).is_file()) {
+        return None;
+    }
+    let stamp = std::fs::read_to_string(own.join(STAMP_FILE)).ok()?;
+    (stamp == car_files_stamp(folder)).then_some(own)
 }
 
 /// `mat44f::setFromHeadingUp` 0x1400602f0: the three rows of the rotation; the rest of the
@@ -97,8 +136,16 @@ impl CarFakeShadow {
             body_transform,
             state: CarPhysicsState::at_origin(),
             generated: None,
+            from_cache: false,
         };
-        if folder.join("body_shadow.png").is_file() {
+        let cached = match &graphics.shadow_cache {
+            Some(cache) if !folder.join("body_shadow.png").is_file() => cached_shadows(cache, folder),
+            _ => None,
+        };
+        if let Some(own) = cached {
+            shadow.load_shadows(graphics, &crate::model::path_text(&own));
+            shadow.from_cache = true;
+        } else if folder.join("body_shadow.png").is_file() {
             // loadShadows 0x1400e1eb0
             shadow.tx_body = graphics.resources.get_texture(&graphics.kgl, &format!("{folder_text}/body_shadow.png"));
             for i in 0..4 {
