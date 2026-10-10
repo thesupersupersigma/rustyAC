@@ -1391,6 +1391,8 @@ fn compare(
         let mut trace = replay::powertrain_trace(&chassis);
         // on a real track: the rays, the lap timer, the place along the AI line
         trace.extend(replay::track_trace(&chassis));
+        // Task 22b: the steering-rod shift of every corner and its direction (crash recordings)
+        trace.extend(replay::damage_trace(&chassis));
         let game_values = game_trace(recording, step, &trace)?;
         outcome.powertrain_values = game_values.iter().flatten().count();
         let mut trace_differences = Vec::new();
@@ -2035,6 +2037,9 @@ fn write_excerpt(
             return Err(format!("step {first}: contact joints are alive; an excerpt has to start at a moment without any"));
         }
         trace_names.extend(replay::collision_trace(&chassis));
+        // an excerpt is replayed in a world without the track's loose objects (asleep, they
+        // change nothing: `Golden::attach_track`), so their values are not part of its hash
+        trace_names.retain(|value| !value.name.starts_with("objects."));
     }
     let state = if first == 0 { Vec::new() } else { chassis.save_state() };
     let mut steps = Vec::with_capacity(count);
@@ -2103,7 +2108,49 @@ fn write_excerpt(
     if parsed != golden {
         return Err("the golden file does not read back as written".to_string());
     }
-    parsed.check(data)?;
+    if let Err(message) = parsed.check(data) {
+        // which value it is: the same replay, value by value against the recording
+        let mut chassis = parsed.setup.build_runner(data)?;
+        if !parsed.state.is_empty() {
+            let mut manager = std::mem::take(&mut chassis.setup_manager);
+            manager.step(&mut chassis);
+            chassis.setup_manager = manager;
+            chassis.load_state(&parsed.state)?;
+        }
+        'steps: for (index, golden_step) in parsed.steps.iter().enumerate() {
+            let step = first + index;
+            chassis.step_recorded(parsed.setup.time_of_step(step), &golden_step.feed);
+            let mut trace = replay::powertrain_trace(&chassis);
+            trace.extend(replay::track_trace(&chassis));
+            let mut shown = 0;
+            let (rust, game) = (replay::snapshot(&chassis), columns.game(recording, step));
+            for (k, field) in columns.fields.iter().enumerate() {
+                if !replay::same_value(field.kind, game[k], rust[k]) {
+                    eprintln!("  step {step}: {} is {:#x} in the replay of the excerpt, {:#x} in the game", field.name, rust[k], game[k]);
+                    shown += 1;
+                }
+            }
+            if let Err(text) = compare_tape(recording, step, &chassis) {
+                eprintln!("  step {step}: the force calls: {text}");
+                shown += 1;
+            }
+            for value in &trace {
+                if let Some(game) = game_trace_word(recording, step, value) {
+                    if !replay::same_value(value.kind, game, value.word) {
+                        eprintln!("  step {step}: {} is {:#x} in the replay of the excerpt, {game:#x} in the game", value.name, value.word);
+                        shown += 1;
+                        if shown == 12 {
+                            break 'steps;
+                        }
+                    }
+                }
+            }
+            if shown > 0 {
+                break;
+            }
+        }
+        return Err(message);
+    }
     // and the free run itself must still agree at the end of the excerpt
     for step in first..first + count {
         let feed = recorded_step(recording, step)?;
@@ -2225,11 +2272,22 @@ fn excerpt18_command() -> Result<(), String> {
 /// `excerpt-collide`: the golden files of the car touching things, from the recordings in
 /// `oracle/collide` (`car_oracle run --track spa --collide --scenario ...`).
 fn excerpt_collide_command() -> Result<(), String> {
+    excerpt_collide(&[("oracle/collide", "spa_wall_low", 30, 200), ("oracle/collide", "spa_wall_high", 30, 200), ("oracle/collide", "spa_rollover", 20, 340)])
+}
+
+/// `excerpt22b`: the crash that bends two corners of the F2004 (Task 22b), from
+/// `oracle/t22b_f2004/spa_crash.carrec`: the barrier, the rod shifts, and the first second of
+/// the car going where its bent toe points.
+fn excerpt22b_command() -> Result<(), String> {
+    excerpt_collide(&[("oracle/t22b_f2004", "spa_crash", 30, 420)])
+}
+
+fn excerpt_collide(list: &[(&str, &str, usize, usize)]) -> Result<(), String> {
     let repo = repo_root();
     let out = repo.join("crates/rustyac-physics/tests/golden");
-    // (scenario, steps before the collider mesh first touches something, steps)
-    for (scenario, before, count) in [("spa_wall_low", 30usize, 200usize), ("spa_wall_high", 30, 200), ("spa_rollover", 20, 340)] {
-        let recording = Recording::read(&repo.join(format!("oracle/collide/{scenario}.carrec")))?;
+    // (folder, scenario, steps before the collider mesh first touches something, steps)
+    for &(folder, scenario, before, count) in list {
+        let recording = Recording::read(&repo.join(format!("{folder}/{scenario}.carrec")))?;
         let data = car_data(&recording)?;
         let steps = recording.steps.len();
         // the car's collider mesh is geom 2000 among the contact joints a recording lists
@@ -2318,7 +2376,23 @@ fn excerpt_command() -> Result<(), String> {
 /// (three differentials), `awd2` (the coupling), `kers`, `ers`, `front` (an ERS with front
 /// motors). The battery's rates are changed by a small part, not by one bit: one bit of a
 /// rate is lost when the step's share is added to a charge near 1.
-const TASK16_FAULTS: [(&str, &str, &str, Fault); 16] = [
+const TASK16_FAULTS: [(&str, &str, &str, Fault); 19] = [
+    // Task 22b: the crash recordings (the bend of the corner that is hit hardest)
+    ("damage", "damage_gain", "the damage gain of the most bent corner's suspension one bit up", |c| {
+        if let Some(d) = c.suspensions[FAULT_WHEEL.load(std::sync::atomic::Ordering::Relaxed)].damage_data_mut() {
+            d.damage_gain = nudge(d.damage_gain);
+        }
+    }),
+    ("damage", "damage_min_velocity", "its MIN_VELOCITY higher by a ten-thousandth (one bit is lost in the rounding of the subtraction)", |c| {
+        if let Some(d) = c.suspensions[FAULT_WHEEL.load(std::sync::atomic::Ordering::Relaxed)].damage_data_mut() {
+            d.min_velocity *= 1.0001;
+        }
+    }),
+    ("damage", "damage_direction", "its drawn direction the other way round", |c| {
+        if let Some(d) = c.suspensions[FAULT_WHEEL.load(std::sync::atomic::Ordering::Relaxed)].damage_data_mut() {
+            d.damage_direction = -d.damage_direction;
+        }
+    }),
     ("awd", "awd_front_share", "the front axle's torque share one bit up", |c| {
         let base = c.drivetrain.as_mut().unwrap().base_mut();
         base.awd_front_share = nudge(base.awd_front_share);
@@ -2385,6 +2459,9 @@ const TASK16_FAULTS: [(&str, &str, &str, Fault); 16] = [
     }),
 ];
 
+/// The wheel the damage faults are put on: the one the recording bends most.
+static FAULT_WHEEL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// `faults16 <scenario> --dir <folder>`: the faults of [`TASK16_FAULTS`] that fit the
 /// recording's car, each of which the comparison must notice.
 fn faults16_command(names: &[String], dir: Option<&Path>) -> Result<(), String> {
@@ -2402,8 +2479,14 @@ fn faults16_command(names: &[String], dir: Option<&Path>) -> Result<(), String> 
         "ers" => recording.has("ers.charge"),
         // the front motors' map has stages
         "front" => recording.has("ers.controllerFront.stages") && recording.i(0, "ers.controllerFront.stages") > 0,
+        "damage" => recording.has("sus.lf.damageAmount"),
         _ => false,
     };
+    if fits("damage") {
+        let last = recording.steps.len() - 1;
+        let most = (0..4).max_by(|a, b| recording.f(last, &format!("sus.{}.damageAmount", WHEELS[*a])).total_cmp(&recording.f(last, &format!("sus.{}.damageAmount", WHEELS[*b])))).unwrap_or(0);
+        FAULT_WHEEL.store(most, std::sync::atomic::Ordering::Relaxed);
+    }
     let clean = compare(&recording, &data, Systems::ALL, false, None, None)?;
     if clean.first.is_some() {
         return Err("the run without a fault already differs".to_string());
@@ -3135,7 +3218,7 @@ fn write_test_car_from(base: &str, name: &str, patches: &[(&str, &str, &str, &st
 
 fn usage() -> String {
     "usage: chassis_compare run [<scenario> ...] [--dir <folder>] [--feed brakes,drivetrain] [--verbose] [--stop-after <steps>]\n       \
-     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare excerpt18\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
+     chassis_compare excerpt\n       chassis_compare excerpt-track\n       chassis_compare excerpt-collide\n       chassis_compare excerpt18\n       chassis_compare excerpt22b\n       chassis_compare faults [<scenario>] [--dir <folder>] [--feed brakes,drivetrain]\n       chassis_compare faults16 <scenario> --dir <folder>\n       \
      chassis_compare test-car\n       \
      chassis_compare game-replay [<scenario> ...] [--dir <folder>] [--exe <rustyac.exe>]\n\
      --feed names the ported systems to take from the recording instead of computing them in Rust (default: none)"
@@ -3192,6 +3275,7 @@ fn main() {
         "excerpt-collide" => excerpt_collide_command(),
         "faults" => faults_command(&names, dir.as_deref(), systems),
         "faults16" => faults16_command(&names, dir.as_deref()),
+        "excerpt22b" => excerpt22b_command(),
         "excerpt16" => excerpt16_command(),
         "excerpt17" => excerpt17_command(),
         "excerpt18" => excerpt18_command(),

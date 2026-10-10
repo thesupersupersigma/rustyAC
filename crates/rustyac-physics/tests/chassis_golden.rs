@@ -314,10 +314,16 @@ fn the_car_on_spa_matches_the_game() {
 // car's collider mesh are read from the game's own folder; without it the tests print a notice
 // and pass without testing anything.
 
-const COLLIDE_GOLDEN: [(&str, &[u8]); 3] = [
+const COLLIDE_GOLDEN: [(&str, &[u8]); 4] = [
     ("spa_wall_low", include_bytes!("golden/collide_spa_wall_low_3993_200.chgold")),
     ("spa_wall_high", include_bytes!("golden/collide_spa_wall_high_4213_200.chgold")),
     ("spa_rollover", include_bytes!("golden/collide_spa_rollover_745_340.chgold")),
+    // Task 22b (`chassis_compare excerpt22b`), steps 4343 to 4762: over the run-off and into
+    // the barrier before Blanchimont, the right front corner first. A front zone of 190 km/h
+    // and a right zone of 2.2 km/h bend the right front steering rod by 39.67 mm (18.5 degrees
+    // of toe) and the right rear one by 32.54 mm; the engine is blown up; then a second with
+    // nobody at the wheel, the car turning where the bent wheel points.
+    ("spa_crash", include_bytes!("golden/collide_spa_crash_4343_420.chgold")),
 ];
 
 /// The car's collider mesh out of the game's folder, if it is there.

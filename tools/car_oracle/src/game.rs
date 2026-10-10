@@ -213,6 +213,8 @@ struct SusClass {
     status: usize,
     steer_torque: Option<usize>,
     steer_angle: Option<usize>,
+    /// `damageData` (`SusDamageDef`: damageAmount, damageDirection, ...); the axle has none
+    damage: Option<usize>,
     joints: SusJoints,
 }
 
@@ -234,6 +236,7 @@ const SUS_CLASSES: [SusClass; 4] = [
         status: 0x1c0,
         steer_torque: Some(0x1dc),
         steer_angle: Some(0x1ec),
+        damage: Some(0x1f0),
         // each rod runs from a point on the car body (anchor 1) to a point on the hub (anchor 2)
         joints: SusJoints::Array(0x68, ["top_rear", "top_front", "bottom_rear", "bottom_front", "steer_rod"]),
     },
@@ -245,6 +248,7 @@ const SUS_CLASSES: [SusClass; 4] = [
         status: 0x180,
         steer_torque: Some(0x19c),
         steer_angle: Some(0x1ac),
+        damage: Some(0x1c4),
         joints: SusJoints::Array(0x58, ["bottom_rear", "bottom_front", "steer_rod", "slider", "ball"]),
     },
     SusClass {
@@ -255,6 +259,7 @@ const SUS_CLASSES: [SusClass; 4] = [
         status: 0x68,
         steer_torque: None,
         steer_angle: None,
+        damage: None,
         joints: SusJoints::Vector(0x88, 0x40, 0x38, "link"),
     },
     SusClass {
@@ -265,6 +270,7 @@ const SUS_CLASSES: [SusClass; 4] = [
         status: 0x40,
         steer_torque: Some(0x98),
         steer_angle: None,
+        damage: Some(0x9c),
         joints: SusJoints::Vector(0x70, 0x38, 0x30, "joint"),
     },
 ];
@@ -2262,6 +2268,13 @@ impl<'a> World<'a> {
             let st = state();
             let get_damage: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(*st.suspension_vtables[w].add(17));
             row.f(&format!("sus.{wheel}.damage"), get_damage(st.suspensions[w]));
+            // Task 22b: SusDamageDef itself, the rod shift in metres and its drawn direction
+            let (amount, direction): (f32, f32) = match SUS_CLASSES[st.suspension_classes[w]].damage {
+                Some(offset) => (rd(st.suspensions[w], offset), rd(st.suspensions[w], offset + 4)),
+                None => (0.0, 0.0),
+            };
+            row.f(&format!("sus.{wheel}.damageAmount"), amount);
+            row.f(&format!("sus.{wheel}.damageDirection"), direction);
         }
     }
 
@@ -2347,6 +2360,7 @@ impl<'a> World<'a> {
                 gear: rd(car, CAR_DRIVETRAIN + 0x584),
                 yaw_rate: -(w[0] * up[0] + w[1] * up[1] + w[2] * up[2]),
                 laps: rd(car.add(CAR_TRANSPONDER), 0x0c),
+                damaged: rd::<[f32; 5]>(car, CAR_DAMAGE_ZONE_LEVEL)[4] > 0.0,
             }
         }
     }

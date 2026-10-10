@@ -405,6 +405,14 @@ impl SuspensionModel for VanillaStrut {
         self.damage_data.damage_amount
     }
 
+    fn damage_direction(&self) -> f32 {
+        self.damage_data.damage_direction
+    }
+
+    fn damage_data_mut(&mut self) -> Option<&mut SusDamageDef> {
+        Some(&mut self.damage_data)
+    }
+
     fn set_damage_amount(&mut self, amount: f32) {
         self.damage_data.damage_amount = amount;
     }

@@ -2401,6 +2401,18 @@ pub fn collision_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
     out
 }
 
+/// Task 22b. `damageData.damageAmount` (metres of steering-rod shift) and `damageDirection` of
+/// every corner, under the names of the recordings that hold them (the crash scenarios). Not
+/// part of [`collision_trace`]: the older recordings and the golden excerpts do not have them.
+pub fn damage_trace(chassis: &RollingChassis) -> Vec<TraceValue> {
+    let mut out = Vec::new();
+    for (wheel, suspension) in ["lf", "rf", "lr", "rr"].iter().zip(&chassis.suspensions) {
+        out.push(TraceValue::f(&format!("sus.{wheel}.damageAmount"), suspension.damage_amount()).extra());
+        out.push(TraceValue::f(&format!("sus.{wheel}.damageDirection"), suspension.damage_direction()).extra());
+    }
+    out
+}
+
 /// The collision events of a step (the `ACPhysicsEvent`s `Car::onCollisionCallBack` pushed on
 /// the engine's queue, in order) as the recordings hold them: how many, a hash over every
 /// field of every event, and the closing speed and the other shape's group of the first and

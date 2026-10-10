@@ -216,6 +216,15 @@ pub trait SuspensionModel {
     fn get_damage(&self) -> f32;
     /// `damageData.damageAmount` itself, metres of steering-rod shift (for saving a car's state).
     fn damage_amount(&self) -> f32;
+    /// `damageData.damageDirection`: +1 or -1, which way the rod end is shifted (0 for the
+    /// rigid axle, which has no damage data).
+    fn damage_direction(&self) -> f32 {
+        0.0
+    }
+    /// `damageData` itself (the comparison tool's fault tests change it); the axle has none.
+    fn damage_data_mut(&mut self) -> Option<&mut SusDamageDef> {
+        None
+    }
     fn set_damage_amount(&mut self, amount: f32);
     /// +0x90 `getMass`: the mass of the hub body.
     fn get_mass(&self, core: &PhysicsCore) -> f32;
@@ -631,6 +640,14 @@ impl SuspensionModel for VanillaDwb {
 
     fn damage_amount(&self) -> f32 {
         self.damage_data.damage_amount
+    }
+
+    fn damage_direction(&self) -> f32 {
+        self.damage_data.damage_direction
+    }
+
+    fn damage_data_mut(&mut self) -> Option<&mut SusDamageDef> {
+        Some(&mut self.damage_data)
     }
 
     fn set_damage_amount(&mut self, amount: f32) {

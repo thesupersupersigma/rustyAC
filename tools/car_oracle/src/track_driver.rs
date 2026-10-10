@@ -38,6 +38,10 @@ pub enum TrackKind {
     WallGravel,
     /// Steered off the road at a shallow angle and along the wall.
     WallSlide,
+    /// Task 22b. `WallGravel`'s crash (it bends the suspension of two corners), and what the
+    /// car does afterwards: twelve seconds with nobody at the wheel and a little throttle (the
+    /// bent toe decides where it goes), then the driver follows the line again, then brakes.
+    Crash,
     /// As `EauRouge`: the floor meets the road in the compression.
     Bottoming,
     /// The last chicane much too fast, deep over its kerbs.
@@ -145,6 +149,7 @@ impl TrackKind {
                 | TrackKind::WallHigh
                 | TrackKind::WallGravel
                 | TrackKind::WallSlide
+                | TrackKind::Crash
                 | TrackKind::KerbStrike
                 | TrackKind::Rollover
                 | TrackKind::ObjectHit
@@ -191,7 +196,7 @@ pub fn spawn(kind: TrackKind, track: &mut Track) -> Result<(Vec3f, Vec3f, bool, 
             let corner = tightest_point(spline, 0.005, 0.07);
             on_line(track, corner - 110.0, "110 m before the tightest point of the first corner")
         }
-        TrackKind::WallHigh | TrackKind::WallGravel => {
+        TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::Crash => {
             let spline = track.ai_spline.as_ref().ok_or("the track has no AI line")?;
             let bend = tightest_point(spline, 0.80, 0.885);
             on_line(track, bend - 560.0, "560 m before the tightest point of the fast bend at 80 to 88 % of the lap")
@@ -291,6 +296,10 @@ fn tightest_point(spline: &AiSpline, from: f32, to: f32) -> f32 {
     }
     best.1
 }
+
+/// The crash scenario, seconds since the crash: until when nobody holds the wheel, and until
+/// when the driver follows the line again (then the brakes are on).
+const CRASH_AFTER: (f32, f32) = (6.0, 14.0);
 
 /// What the line follower keeps between steps.
 #[derive(Clone, Copy, Debug, Default)]
@@ -507,7 +516,7 @@ impl Follower {
             }
             return;
         }
-        if matches!(kind, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel) {
+        if matches!(kind, TrackKind::WallLow | TrackKind::WallHigh | TrackKind::WallGravel | TrackKind::Crash) {
             // follow the line up to a place before the bend, then hold the wheel straight
             let release_at = *self.release_at.get_or_insert_with(|| match kind {
                 TrackKind::WallLow => tightest_point(spline, 0.005, 0.07) - 45.0,
@@ -594,6 +603,16 @@ impl Follower {
         // positive turns right
         c.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
 
+        // the crash scenario: seconds since the body first hit something hard
+        let since_crash = if kind == TrackKind::Crash {
+            if car.damaged && self.done_at.is_none() {
+                self.done_at = Some(t);
+            }
+            self.done_at.map(|at| t - at)
+        } else {
+            None
+        };
+
         // the pedals
         let (pace, limit) = match kind {
             TrackKind::Launch => (0.80, 95.0),
@@ -604,6 +623,8 @@ impl Follower {
             TrackKind::EauRouge | TrackKind::Bottoming => (10.0, 200.0),
             TrackKind::WallLow => (0.8, 16.7),
             TrackKind::WallHigh | TrackKind::WallGravel => (10.0, 200.0),
+            // (after the crash: back along the line at no more than 80 km/h)
+            TrackKind::Crash => (if since_crash.is_none() { 10.0 } else { 0.6 }, if since_crash.is_none() { 200.0 } else { 22.0 }),
             TrackKind::WallSlide => (0.8, 28.0),
             TrackKind::KerbStrike => (1.15, 52.0),
             TrackKind::Rollover => (0.0, 0.0),
@@ -614,14 +635,20 @@ impl Follower {
         };
         let target = allowed_speed(spline, index, pace, &self.grip).min(limit);
         let error = target - car.speed;
-        if self.released {
+        if self.released && !since_crash.is_some_and(|s| s >= CRASH_AFTER.0) {
             // straight on: the wheel is let go; the low-speed run keeps its 60 km/h, the fast
             // one stays flat out for two seconds and then brakes
             c.steer = self.release_steer;
         }
         let fast_wall = matches!(kind, TrackKind::WallHigh | TrackKind::WallGravel);
-        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (fast_wall && t < 14.0) {
+        if matches!(kind, TrackKind::EauRouge | TrackKind::Bottoming) || (fast_wall && t < 14.0) || (kind == TrackKind::Crash && since_crash.is_none()) {
             c.gas = 1.0;
+        } else if since_crash.is_some_and(|s| s < CRASH_AFTER.0) {
+            // nobody holds the wheel (it stays where it was let go): a little throttle, and
+            // the car goes where its bent toe points
+            c.gas = 0.25;
+        } else if since_crash.is_some_and(|s| s >= CRASH_AFTER.1) {
+            c.brake = 1.0;
         } else if fast_wall {
             c.brake = 1.0;
         } else if kind == TrackKind::WallLow && self.released {

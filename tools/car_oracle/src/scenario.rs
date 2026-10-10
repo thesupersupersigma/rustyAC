@@ -180,6 +180,8 @@ pub struct CarView {
     pub max_wheel_angle: f32,
     /// Laps the game's own timer has counted (`TimeTransponder::lapCount`).
     pub laps: i32,
+    /// Task 22b: the body has hit something hard (`Car::damageZoneLevel[4]` is above 0).
+    pub damaged: bool,
 }
 
 impl CarView {
@@ -634,6 +636,7 @@ pub fn track() -> Vec<Scenario> {
         on_track("spa_wall_high", "flat out towards Blanchimont, then a little wheel to the outside: off the road and into the barrier at more than 280 km/h", 20.0, TrackKind::WallHigh),
         on_track("spa_wall_gravel", "flat out towards Blanchimont and straight on: over the run-off and into the barrier at about 195 km/h, the right front corner first (suspension damage)", 20.0, TrackKind::WallGravel),
         on_track("spa_wall_slide", "from the hot-lap start at 100 km/h, steered further and further to the left: off the road and along the wall", 18.0, TrackKind::WallSlide),
+        on_track("spa_crash", "Task 22b, suspension damage: spa_wall_gravel's crash (flat out towards Blanchimont and straight on into the barrier, the right front corner first), then six seconds with nobody at the wheel and a little throttle, eight seconds of the driver following the line again, and the brakes", 36.0, TrackKind::Crash),
         on_track("spa_bottoming", "from 300 m before the bottom of Eau Rouge flat out through the compression: the floor on the road", 16.0, TrackKind::Bottoming),
         on_track("spa_kerb_strike", "at the Bus Stop chicane much too fast and deep over its inner kerbs", 16.0, TrackKind::KerbStrike),
         // Task 18: every track. These are written for any track (and any car: the driver's
