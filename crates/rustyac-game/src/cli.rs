@@ -88,6 +88,8 @@ pub struct Options {
     /// `--cube-faces <n>`: how many faces of the reflection cube map are drawn again every
     /// frame (`[CUBEMAP] FACES_PER_FRAME` of `video.ini`), 0 to 6.
     pub cube_faces: Option<i32>,
+    /// `--cube-size <n>`: `[CUBEMAP] SIZE` whatever the video settings say
+    pub cube_size: Option<i32>,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -153,6 +155,9 @@ pub struct Options {
     pub setup: Option<String>,
     /// `--air-density`: kg/m^3 instead of the game's formula (an experiment, not AC).
     pub air_density: Option<f32>,
+    /// `--damage <percent>`: assists.ini `DAMAGE` (the game's mechanical damage rate) whatever
+    /// the file says.
+    pub damage: Option<i32>,
     /// `--pressure-law <psi at 26 C>,<psi per C>`: another tyre pressure law (an experiment,
     /// not AC).
     pub pressure_law: Option<(f32, f32)>,
@@ -173,6 +178,7 @@ impl Default for Options {
             wind_from_log: false,
             setup: None,
             air_density: None,
+            damage: None,
             pressure_law: None,
             car: "ks_ferrari_f2004".to_string(),
             width: 1280,
@@ -195,6 +201,7 @@ impl Default for Options {
             skin: None,
             video_ini_exact: false,
             cube_faces: None,
+            cube_size: None,
             video_ini: None,
             graphics: None,
             no_a2c: false,
@@ -285,6 +292,9 @@ usage: rustyac [options]
                         lap in the same wind as the lap just driven in the game
   --setup <name|file>   a saved setup: a file, or a name in Documents\\Assetto Corsa\\setups\\
                         <car>\\<track> (then ...\\generic), loaded as the game's setup screen does
+  --damage <percent>    mechanical damage whatever assists.ini says (its DAMAGE: 0 off, 100 full).
+                        At 0 a crash bends no suspension, wears no engine and no tyre can burst;
+                        Content Manager and the launcher write the file anew for every session
   --air-density <kg/m3> NOT Assetto Corsa: a fixed air density instead of the game's
                         1.2922 - 0.0041 x air temperature, to try what Custom Shaders Patch's
                         thinner air at altitude does (about 1.165 at Spa at 14 C)
@@ -362,6 +372,8 @@ for checks, without anybody at the controls:
                         the dotted trees and fences of a picture without anti-aliasing come from
                         (plain acs.exe with AASAMPLES=1 draws the same dots); the price is that
                         trees and fences turn into solid cards
+  --cube-size <n>       the side of the reflection cube map ([CUBEMAP] SIZE: 512, 1024, 2048) whatever
+                        the video settings say. 2048 is costly: its mip levels are made every frame
   --cube-faces <n>      faces of the reflection cube map drawn again every frame, 0 to 6
                         (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
@@ -438,6 +450,7 @@ impl Options {
                 }
                 "--no-a2c" => o.no_a2c = true,
                 "--show-fps" => o.show_fps = true,
+                "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().map_err(|_| "--cube-size <pixels: 512, 1024 or 2048>".to_string())?),
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,
@@ -486,6 +499,13 @@ impl Options {
                 "--wind-dir" => o.wind_dir = Some(value("--wind-dir")?.parse().map_err(|e| format!("--wind-dir: {e}"))?),
                 "--setup" => o.setup = Some(value("--setup")?),
                 "--wind-from-log" => o.wind_from_log = true,
+                "--damage" => {
+                    let percent: i32 = value("--damage")?.parse().map_err(|_| "--damage <percent>: 0 (off) to 100".to_string())?;
+                    if !(0..=100).contains(&percent) {
+                        return Err("--damage <percent>: 0 (off) to 100".to_string());
+                    }
+                    o.damage = Some(percent);
+                }
                 "--air-density" => o.air_density = Some(value("--air-density")?.parse().map_err(|e| format!("--air-density: {e}"))?),
                 "--pressure-law" => {
                     let text = value("--pressure-law")?;
@@ -516,9 +536,9 @@ impl Options {
         if o.wind_from_log && (o.wind.is_some() || o.wind_dir.is_some()) {
             return Err("--wind-from-log cannot be used with --wind or --wind-dir".to_string());
         }
-        let session_options = o.wind_from_log || o.air_density.is_some() || o.pressure_law.is_some() || o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
+        let session_options = o.wind_from_log || o.damage.is_some() || o.air_density.is_some() || o.pressure_law.is_some() || o.race_ini.is_some() || o.air.is_some() || o.road.is_some() || o.grip.is_some() || o.wind.is_some() || o.wind_dir.is_some() || o.setup.is_some();
         if session_options && o.replay.is_some() {
-            return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir, --wind-from-log, --setup, --air-density and --pressure-law cannot be used with it".to_string());
+            return Err("--replay drives in the conditions stored in the file: --race-ini, --no-race-ini, --air, --road, --grip, --wind, --wind-dir, --wind-from-log, --setup, --damage, --air-density and --pressure-law cannot be used with it".to_string());
         }
         if o.layout.is_some() && o.track.is_none() {
             return Err("--layout needs --track <name>".to_string());

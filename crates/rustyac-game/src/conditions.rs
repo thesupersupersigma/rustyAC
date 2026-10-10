@@ -299,6 +299,13 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             }
         ));
     }
+    if let Some(percent) = options.damage {
+        // DrivingAssistManager::DrivingAssistManager 0x1400fbd90: (float)DAMAGE * 0.01
+        setup.env.mechanical_damage_rate = percent as f32 * 0.01;
+        overrides.push(format!("mechanical damage {percent} % (--damage)"));
+    } else if setup.env.mechanical_damage_rate <= 0.0 {
+        notes.push("  mechanical damage is OFF (assists.ini DAMAGE=0), as in your last Assetto Corsa session: a crash bends no suspension and no tyre can burst. --damage 100 turns it on".to_string());
+    }
     if let Some(density) = options.air_density {
         setup.env.air_density_override = Some(density);
         overrides.push(format!(

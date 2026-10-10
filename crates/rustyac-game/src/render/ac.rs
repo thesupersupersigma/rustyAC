@@ -233,6 +233,8 @@ pub struct AcOptions {
     pub world_detail: Option<i32>,
     /// what `rand()` starts from once the track is loaded
     pub render_seed: u32,
+    /// `--cube-size <n>`: `[CUBEMAP] SIZE` whatever the video settings say
+    pub cube_size: Option<i32>,
     /// `--video-ini <file>`: this file instead of `Documents/Assetto Corsa/cfg/video.ini`
     pub video_ini: Option<PathBuf>,
     /// `--graphics max|low`: a built-in `video.ini`; the player's file is not read
@@ -442,6 +444,7 @@ impl AcRenderer {
         // a preset is followed to the letter: the launcher's "None" for reflections is SIZE=0
         let exact = options.video_exact || options.preset.is_some();
         let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, mut notes) = video_settings(width, height, exact, video_ini.as_ref(), &video_name);
+        let cube_size = options.cube_size.filter(|size| *size > 0).unwrap_or(cube_size);
         if options.preset.is_some() {
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
             notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));

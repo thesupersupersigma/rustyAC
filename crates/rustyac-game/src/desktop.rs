@@ -197,7 +197,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
     rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -402,6 +402,10 @@ fn run_headless(options: &Options) -> Result<(), String> {
     let started = Instant::now();
     let mut headless_audio: Option<GameAudio> = None;
     let mut bench_stats = None;
+    // --bench-render: the frames are counted from the first one (the loading of the picture,
+    // which a preset can make long, is not part of the rate)
+    let mut bench_from: Option<Instant> = None;
+    let mut bench_seconds = 0.0f64;
     if options.bench_render {
         let mut renderer: Option<Picture> = None;
         let mut camera = None;
@@ -428,6 +432,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
                     shape = Some(car_shape);
                     // the loading is not part of the timing
                     last = Instant::now();
+                    bench_from = Some(last);
                 }
             }
             let (Some(shape), Some(renderer), Some(camera)) = (&shape, &mut renderer, &mut camera) else {
@@ -443,6 +448,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             renderer.finish();
             bench_stats = renderer.frame_stats();
             frames += 1;
+            bench_seconds = bench_from.map_or(0.0, |from| from.elapsed().as_secs_f64());
             if frames > 10 {
                 frame_max = frame_max.max(now - last);
             }
@@ -488,7 +494,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    let seconds = started.elapsed().as_secs_f64();
+    let _seconds = started.elapsed().as_secs_f64();
     shared.quit.store(true, Ordering::Relaxed);
     let (view, timing) = thread.join().map_err(|_| "the physics thread panicked".to_string())??;
     report(&view, &timing);
@@ -497,8 +503,9 @@ fn run_headless(options: &Options) -> Result<(), String> {
     }
     if options.bench_render {
         println!(
-            "render (off screen, not waiting for a display): {frames} frames in {seconds:.1} s = {:.0} FPS, slowest frame {:.1} ms",
-            frames as f64 / seconds,
+            "render (off screen, not waiting for a display): {frames} frames in {bench_seconds:.1} s = {:.0} FPS (average frame {:.2} ms), slowest frame {:.1} ms",
+            frames as f64 / bench_seconds.max(1e-9),
+            bench_seconds * 1000.0 / (frames.max(1)) as f64,
             frame_max.as_secs_f64() * 1000.0
         );
         if let Some(stats) = bench_stats {
