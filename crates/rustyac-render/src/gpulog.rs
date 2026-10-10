@@ -877,6 +877,13 @@ unsafe extern "system" fn ctx_map(this: P, resource: P, sub: u32, kind: u32, fla
     if let Some(mut state) = enter() {
         let is_buffer = state.buffers.contains_key(&(resource as usize));
         if result >= 0 && !out.is_null() && is_buffer {
+            // a discarded buffer comes back with whatever the driver has in that memory, and
+            // the game does not always write all of it (GLRenderer fills 18 of 24 vertices):
+            // start from zeros, so that the logged bytes are the same in every run
+            if kind == D3D11_MAP_WRITE_DISCARD.0 as u32 && !(*out).pData.is_null() {
+                let size = state.buffers[&(resource as usize)].size as usize;
+                std::ptr::write_bytes((*out).pData as *mut u8, 0, size);
+            }
             state.mapped.insert((resource as usize, sub), ((*out).pData as usize, kind));
         }
         if state.capturing {

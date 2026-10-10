@@ -19,6 +19,7 @@ pub mod cockpit;
 pub mod constrained;
 pub mod cubemap;
 pub mod damage;
+pub mod digital;
 pub mod driver;
 pub mod fake_shadow;
 pub mod forward;

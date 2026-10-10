@@ -199,6 +199,11 @@ pub enum NodeKind {
 /// `render`. Returns whether `Node::render` follows (the world matrix, the children).
 pub trait RenderableObject {
     fn render(&mut self, scene: &mut Scene, graphics: &mut Graphics, event: &OnNodeRenderEvent) -> bool;
+
+    /// The object ends its `render` with `MaterialFilter::resetMaterialCache` (a `TextNode`).
+    fn resets_material_cache(&self) -> bool {
+        false
+    }
 }
 
 /// `OnNodeRenderEvent`: the node and what the handlers read of the `RenderContext`.
@@ -280,6 +285,12 @@ impl Scene {
     /// with [`Scene::set_renderable_object`].
     pub fn renderable_object(&mut self, name: &str) -> NodeId {
         self.push(name, NodeKind::Object { object: None }, Some(Renderable::new()), true)
+    }
+
+    /// A plain node (not a `Renderable`) whose `render` is the game's own code for its class
+    /// (a `TextNode`).
+    pub fn object_node(&mut self, name: &str) -> NodeId {
+        self.push(name, NodeKind::Object { object: None }, None, true)
     }
 
     pub fn set_renderable_object(&mut self, node: NodeId, value: std::rc::Rc<std::cell::RefCell<dyn RenderableObject>>) {
@@ -536,7 +547,13 @@ impl Scene {
             NodeKind::Object { object } => {
                 let event = OnNodeRenderEvent { node: n, pass_id: rc.pass_id, max_layer: rc.max_layer, camera: rc.camera };
                 let follow = match object.clone() {
-                    Some(object) => object.borrow_mut().render(self, graphics, &event),
+                    Some(object) => {
+                        let follow = object.borrow_mut().render(self, graphics, &event);
+                        if object.borrow().resets_material_cache() {
+                            rc.material_filter.reset_material_cache();
+                        }
+                        follow
+                    }
                     None => true,
                 };
                 if follow {

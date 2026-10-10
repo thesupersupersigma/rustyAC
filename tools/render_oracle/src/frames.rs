@@ -14,6 +14,11 @@ use crate::Args;
 /// What both sides seed the C runtime's `rand()` with before the car is loaded.
 pub const RAND_SEED: u32 = 21;
 
+/// `Game::gameTime.now` of a frame, milliseconds: what both sides blink by.
+pub fn game_time_ms(index: usize) -> f64 {
+    index as f64 * (1000.0 / 60.0)
+}
+
 /// The frame time both sides run with.
 pub const DT: f32 = 1.0 / 60.0;
 

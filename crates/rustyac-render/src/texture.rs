@@ -234,6 +234,12 @@ impl ResourceStore {
         Some(TextureId(self.textures.len() as u32 - 1))
     }
 
+    /// `kglTextureGetWidth` / `kglTextureGetHeight` of a texture of the store.
+    pub fn size(&self, texture: &Texture) -> Option<(u32, u32)> {
+        let id = texture.kid?;
+        self.textures[id.0 as usize].describe().map(|(w, h, _, _)| (w, h))
+    }
+
     /// `ResourceStore::hasTexture` 0x1402003c0.
     pub fn has_texture(&self, name: &str) -> bool {
         self.by_name.contains_key(name)

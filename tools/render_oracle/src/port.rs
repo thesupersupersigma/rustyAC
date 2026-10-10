@@ -148,6 +148,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let Some(car) = &mut car {
             car.max_gear = frame.car.as_ref().map(|c| c.max_gear).unwrap_or(0);
+            car.game_time_ms = crate::frames::game_time_ms(index);
             car.view = rustyac_render::car::ViewState {
                 camera_mode: step.camera.mode,
                 drivable_mode: step.camera.drivable_mode,

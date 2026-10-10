@@ -40,6 +40,9 @@ const VA_CAR_LOD_MANAGER_UPDATE_LOD_VISIBILITY: usize = 0x1_400e_5810; // CarLod
 const VA_CAR_AVATAR_MAKE_BODY_MATRIX: usize = 0x1_400d_8ec0; // CarAvatar::makeBodyMatrix(const mat44f&, mat44f&)
 const VA_MAKE_TYRES_DOUBLE_FACED_SHADOWS: usize = 0x1_400d_9020; // makeTyresDoubleFacedShadows(Node*)
 const VA_CREATE_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0; // static mat44f mat44f::createFromAxisAngle(const vec3f&, float)
+const VA_DIGITAL_INSTRUMENTS_CTOR: usize = 0x1_400e_b030; // DigitalInstruments::DigitalInstruments(CarAvatar*)
+const VA_DIGITAL_INSTRUMENTS_UPDATE: usize = 0x1_400f_0520; // DigitalInstruments::update(float)
+const VA_GEARS_INITIALISER: usize = 0x1_4000_7cd0; // the gear letters R N 1 … 9 of DigitalItem.obj
 const VA_ROTATING_OBJECTS_CTOR: usize = 0x1_400b_a560; // RotatingObjects::RotatingObjects(CarAvatar*)
 const VA_ROTATING_OBJECTS_UPDATE: usize = 0x1_400b_ae20; // RotatingObjects::update(float)
 const VA_CAR_ANIMATIONS_CTOR: usize = 0x1_4006_0ba0; // CarAnimations::CarAnimations(CarAvatar*)
@@ -71,7 +74,7 @@ const VA_KN5IO_ADD_DLC_KEY: usize = 0x1_4021_4de0; // static void KN5IO::addDLCK
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
 /// SuspensionAvatar.obj and SuspensionAnimator.obj.
-const VA_NAME_TABLE_INITIALISERS: [usize; 11] = [0x1_4000_75c0, 0x1_4000_74b0, 0x1_4000_7220, 0x1_4000_e2e0, 0x1_4000_e1d0, 0x1_4000_e0c0, 0x1_4000_dc10, 0x1_4000_dd20, 0x1_4000_dfb0, 0x1_4000_db00, VA_GLASS_DAMAGE_NAMES_INITIALISER];
+const VA_NAME_TABLE_INITIALISERS: [usize; 12] = [VA_GEARS_INITIALISER, 0x1_4000_75c0, 0x1_4000_74b0, 0x1_4000_7220, 0x1_4000_e2e0, 0x1_4000_e1d0, 0x1_4000_e0c0, 0x1_4000_dc10, 0x1_4000_dd20, 0x1_4000_dfb0, 0x1_4000_db00, VA_GLASS_DAMAGE_NAMES_INITIALISER];
 const VA_GLASS_DAMAGE_NAMES_INITIALISER: usize = 0x1_4000_fc00; // the names DAMAGE_GLASS_FRONT … of VisualDamageManager.obj
 const VA_VISUAL_DAMAGE_CTOR: usize = 0x1_401d_2890; // VisualDamageManager::VisualDamageManager(CarAvatar*)
 const VA_VISUAL_DAMAGE_UPDATE: usize = 0x1_401d_56f0; // VisualDamageManager::update(float)
@@ -170,6 +173,8 @@ pub fn prepare_root(root: &Path, game: &Path, repo: &Path, spec: &CarSpec) -> Re
             copy_file(&source.join(name), &target.join(name))?;
         }
     }
+    // the fonts of the dashboard's displays
+    copy_folder(&game.join("content/fonts"), &root.join("content/fonts"))?;
     // the driver: its two models, and the texture folders the skin names
     if let Ok(driver) = rustyac_physics::data::ini::IniReader::load(&data.join("driver3d.ini")) {
         let model = driver.get_string("MODEL", "NAME");
@@ -253,6 +258,7 @@ pub struct Car {
     animated_lights: *mut u8,
     tyre_blur: *mut u8,
     blurred_objects: *mut u8,
+    digital_instruments: *mut u8,
     brake_discs: *mut u8,
     dynamic_effects: *mut u8,
 }
@@ -301,6 +307,12 @@ impl Game {
         wr(sim, 0x1b0, replay_manager);
         wr(sim, 0x238, camera);
         wr(sim, 0x110, acs.alloc(0x200)); // pauseMenu: not visible
+        // a RaceManager with no client and no timing service (the lap count is the car's own),
+        // a PhysicsAvatar whose engine has an air temperature of 0
+        let race_manager = acs.alloc(0x400);
+        wr(race_manager, 0x168, sim);
+        wr(sim, 0x1a8, race_manager);
+        wr(sim, 0x1b8, acs.alloc(0x400));
         wr(sim, 0x228, console);
         wr(sim, 0x120, nodes.root);
         wr(sim, 0x130, nodes.cars);
@@ -454,6 +466,7 @@ impl Game {
         let blurred_objects = acs.alloc(0x78);
         let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BLURRED_OBJECTS_CTOR));
         ctor(blurred_objects, car);
+        let digital_instruments = make(0xc8, VA_DIGITAL_INSTRUMENTS_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
         // CarAvatar::onPostLoad 0x1400d92b0: the flat ground shadows
@@ -462,12 +475,13 @@ impl Game {
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_FAKE_SHADOW_CTOR));
             ctor(shadow, car);
         }
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, brake_discs, dynamic_effects })
+        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, brake_discs, dynamic_effects })
     }
 
     /// One frame of the car: what `Game::update` and the handlers of `evOnPostUpdate` do to its
     /// nodes. The camera of the frame must be set already.
-    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, dt: f32) {
+    pub unsafe fn update_car(&self, c: &Car, s: &rustyac_render::car::CarPhysicsState, camera: &crate::frames::CameraSpec, dt: f32, now_ms: f64) {
+        wr(c.game, 0x18, now_ms);
         // the camera manager of the frame
         let sim: *mut u8 = rd(c.car, 0x130);
         let camera_manager: *mut u8 = rd(sim, 0x188);
@@ -542,6 +556,7 @@ impl Game {
             (c.animated_lights, VA_ANIMATED_LIGHTS_UPDATE),
             (c.tyre_blur, VA_TYRE_BLUR_UPDATE),
             (c.blurred_objects, VA_BLURRED_OBJECTS_UPDATE),
+            (c.digital_instruments, VA_DIGITAL_INSTRUMENTS_UPDATE),
             (c.brake_discs, VA_BRAKE_DISC_GRAPHICS_UPDATE),
             (c.dynamic_effects, VA_DYNAMIC_CAR_EFFECTS_UPDATE),
         ] {

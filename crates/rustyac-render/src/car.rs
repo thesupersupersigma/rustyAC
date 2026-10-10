@@ -23,6 +23,7 @@ use crate::camera::DEG_TO_RAD;
 use crate::cockpit::{AnalogInstruments, CarAnimations, DriverShiftPositions, GearShiftShake, RotatingObjects};
 use crate::constrained::ConstrainedObjectsManager;
 use crate::damage::VisualDamageManager;
+use crate::digital::{DigitalFrame, DigitalInstruments};
 use crate::driver::{DriverFrame, DriverModel};
 use crate::fake_shadow::CarFakeShadow;
 use crate::graphics::Graphics;
@@ -144,6 +145,15 @@ pub struct CarAvatar {
     pub car_animations: CarAnimations,
     pub gear_shift_shake: Option<GearShiftShake>,
     pub analog_instruments: AnalogInstruments,
+    /// `DigitalInstruments`
+    pub digital_instruments: DigitalInstruments,
+    /// `Game::gameTime.now`, milliseconds: the clock the dashboard's lights blink by
+    pub game_time_ms: f64,
+    /// the aids' levels as the displays show them, the air's temperature, miles for km
+    pub tc_level: u32,
+    pub abs_level: u32,
+    pub ambient_temperature: f32,
+    pub use_mph: bool,
     /// `car.ini [GRAPHICS] DRIVEREYES`
     pub driver_eyes_position: [f32; 3],
     /// `CarAvatar::wingsStatus[i].angle`: each wing's angle, degrees
@@ -257,6 +267,12 @@ impl CarAvatar {
             car_animations: CarAnimations::default(),
             gear_shift_shake: None,
             analog_instruments: AnalogInstruments::default(),
+            digital_instruments: DigitalInstruments::default(),
+            game_time_ms: 0.0,
+            tc_level: 0,
+            abs_level: 0,
+            ambient_temperature: 0.0,
+            use_mph: false,
             driver_eyes_position: car_ini.as_ref().and_then(|i| i.get_float3("GRAPHICS", "DRIVEREYES").ok()).unwrap_or([0.0; 3]),
             wing_angles: Vec::new(),
             skid_marks: CarSkidMarks::default(),
@@ -346,6 +362,7 @@ impl CarAvatar {
         self.animated_lights = AnimatedLights::new(scene, &self.folder, self.body_transform);
         self.tyre_blur = TyreBlur::new(graphics, scene, &wheel_nodes)?;
         self.blurred_objects = BlurredObjects::new(scene, &self.folder, &wheel_nodes)?;
+        self.digital_instruments = DigitalInstruments::new(graphics, scene, &self.folder, self.body_transform)?;
         self.brake_discs = BrakeDiscGraphics::new(graphics, scene, &self.folder, self.car_node)?;
         self.dynamic_effects = DynamicCarEffects::new(graphics, scene, self.body_transform);
         Ok(())
@@ -603,6 +620,22 @@ impl CarAvatar {
         let scale = if self.replay_mode && self.replay_scale != 0.0 { self.replay_scale } else { 1.0 };
         self.tyre_blur.update(scene, state, scale);
         self.blurred_objects.update(scene, state, scale);
+        self.digital_instruments.update(
+            scene,
+            state,
+            &DigitalFrame {
+                dt,
+                game_time_ms: self.game_time_ms,
+                focused: self.guid == self.view.focused_car_index,
+                pause_menu: self.pause_menu,
+                tc_level: self.tc_level,
+                abs_level: self.abs_level,
+                ambient_temperature: self.ambient_temperature,
+                lap_count: state.lap_count,
+                sun_angle: graphics.lighting.angle,
+                use_mph: self.use_mph,
+            },
+        );
         self.brake_discs.update(scene, state, dt, self.replay_mode.then_some(self.replay_scale));
         if !self.replay_mode {
             self.dynamic_effects.update(scene, state);
