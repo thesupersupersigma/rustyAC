@@ -76,6 +76,15 @@ pub struct Options {
     /// `--video-ini-exact`: follow `video.ini` also where plain acs.exe cannot make a proper
     /// picture with it (a shadow map or cube map size of 0 or less).
     pub video_ini_exact: bool,
+    /// `--video-ini <file>`: the video settings from this file instead of
+    /// `Documents/Assetto Corsa/cfg/video.ini`; `--graphics max|low`: built-in settings (every
+    /// one at the highest / lowest value AC's launcher offers), no file is read
+    pub video_ini: Option<PathBuf>,
+    pub graphics: Option<String>,
+    /// `--no-a2c`: NOT Assetto Corsa, an experiment: no alpha to coverage (see kgl.rs)
+    pub no_a2c: bool,
+    /// `--show-fps`: the frame-rate counter (Ctrl+F) on from the start
+    pub show_fps: bool,
     /// `--cube-faces <n>`: how many faces of the reflection cube map are drawn again every
     /// frame (`[CUBEMAP] FACES_PER_FRAME` of `video.ini`), 0 to 6.
     pub cube_faces: Option<i32>,
@@ -186,6 +195,10 @@ impl Default for Options {
             skin: None,
             video_ini_exact: false,
             cube_faces: None,
+            video_ini: None,
+            graphics: None,
+            no_a2c: false,
+            show_fps: false,
             at: None,
             lead_in: 0.0,
             mirror_size: None,
@@ -336,6 +349,19 @@ for checks, without anybody at the controls:
   --video-ini-exact     follow video.ini also where plain acs.exe cannot make a proper picture with
                         it (SHADOW_MAP_SIZE=-1 and [CUBEMAP] SIZE=0, which Content Manager writes
                         for Custom Shaders Patch: everything in shadow, no reflections)
+  --video-ini <file>    the video settings from this file instead of Documents\\Assetto Corsa\\cfg\\
+                        video.ini (which is only ever read, never written)
+  --graphics max|low    built-in video settings, your video.ini is not read. max: everything this
+                        renderer does at the highest value Assetto Corsa's launcher offers (shadows
+                        4096, world detail 5, anisotropic 16, reflections 2048 with 6 faces a frame,
+                        mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5); low:
+                        everything off or at the lowest value. The options above still win.
+  --show-fps            the frame-rate counter on from the start (Ctrl+F switches it while driving:
+                        frame time, FPS, physics steps a second)
+  --no-a2c              NOT Assetto Corsa, a diagnosis only: no alpha to coverage. It proves where
+                        the dotted trees and fences of a picture without anti-aliasing come from
+                        (plain acs.exe with AASAMPLES=1 draws the same dots); the price is that
+                        trees and fences turn into solid cards
   --cube-faces <n>      faces of the reflection cube map drawn again every frame, 0 to 6
                         (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
@@ -396,6 +422,22 @@ impl Options {
                 "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),
                 "--skin" => o.skin = Some(value("--skin")?),
                 "--video-ini-exact" => o.video_ini_exact = true,
+                "--video-ini" => {
+                    let file = PathBuf::from(value("--video-ini")?);
+                    if !file.is_file() {
+                        return Err(format!("--video-ini {}: no such file", file.display()));
+                    }
+                    o.video_ini = Some(file);
+                }
+                "--graphics" => {
+                    let name = value("--graphics")?;
+                    if name != "max" && name != "low" {
+                        return Err(format!("--graphics {name}: max or low"));
+                    }
+                    o.graphics = Some(name);
+                }
+                "--no-a2c" => o.no_a2c = true,
+                "--show-fps" => o.show_fps = true,
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
                 "--auto-shifter" => o.auto_shifter = true,

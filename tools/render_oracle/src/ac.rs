@@ -140,7 +140,7 @@ unsafe extern "system" fn create_device_and_swap_chain(
     const D3D_DRIVER_TYPE_WARP: i32 = 5;
     let module = LoadLibraryW(w!("d3d11.dll")).expect("d3d11.dll");
     let real: CreateDeviceAndSwapChain = std::mem::transmute(GetProcAddress(module, windows::core::s!("D3D11CreateDeviceAndSwapChain")).expect("D3D11CreateDeviceAndSwapChain"));
-    let result = real(std::ptr::null_mut(), D3D_DRIVER_TYPE_WARP, software, flags, levels, level_count, sdk, swap_chain_desc, swap_chain, device, level, context);
+    let result = real(std::ptr::null_mut(), driver_type(D3D_DRIVER_TYPE_WARP), software, flags, levels, level_count, sdk, swap_chain_desc, swap_chain, device, level, context);
     if result >= 0 {
         DEVICE.store(*device as usize, Ordering::SeqCst);
         CONTEXT.store(*context as usize, Ordering::SeqCst);
@@ -155,6 +155,22 @@ unsafe extern "system" fn create_device_and_swap_chain(
     result
 }
 
+/// `RENDER_ORACLE_HARDWARE=1` (Task 22b, the white sparkles): both sides draw on the graphics
+/// card instead of WARP, to see what the game's own renderer does on this PC's driver. The
+/// proofs never set it.
+pub fn hardware() -> bool {
+    std::env::var_os("RENDER_ORACLE_HARDWARE").is_some_and(|v| v == "1")
+}
+
+fn driver_type(warp: i32) -> i32 {
+    const D3D_DRIVER_TYPE_HARDWARE: i32 = 1;
+    if hardware() {
+        D3D_DRIVER_TYPE_HARDWARE
+    } else {
+        warp
+    }
+}
+
 type CreateDevice = unsafe extern "system" fn(*mut c_void, i32, *mut c_void, u32, *const i32, u32, u32, *mut *mut c_void, *mut i32, *mut *mut c_void) -> i32;
 
 /// In place of `D3D11CreateDevice` (the game's throw-away first device, made to learn the
@@ -163,7 +179,7 @@ unsafe extern "system" fn create_device(_adapter: *mut c_void, _driver_type: i32
     const D3D_DRIVER_TYPE_WARP: i32 = 5;
     let module = LoadLibraryW(w!("d3d11.dll")).expect("d3d11.dll");
     let real: CreateDevice = std::mem::transmute(GetProcAddress(module, windows::core::s!("D3D11CreateDevice")).expect("D3D11CreateDevice"));
-    real(std::ptr::null_mut(), D3D_DRIVER_TYPE_WARP, software, flags, levels, level_count, sdk, device, level, context)
+    real(std::ptr::null_mut(), driver_type(D3D_DRIVER_TYPE_WARP), software, flags, levels, level_count, sdk, device, level, context)
 }
 
 /// In place of `SHGetFolderPathW` (the game asks for the Documents folder): a folder of the

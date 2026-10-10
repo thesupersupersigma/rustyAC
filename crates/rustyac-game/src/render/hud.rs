@@ -20,6 +20,11 @@ pub struct HudVertex {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HudInfo {
     pub fps: f32,
+    /// The frame-rate counter (Ctrl+F, `--show-fps`): the average and the longest frame time of
+    /// the last half second, in milliseconds.
+    pub fps_counter: bool,
+    pub frame_ms: f32,
+    pub frame_max_ms: f32,
     pub timing: Timing,
     pub paused: bool,
     pub camera: String,
@@ -170,6 +175,16 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
     let s = (height / 720.0).max(0.5);
     let (_, gh) = font.glyph();
     let line = gh * 0.75 * s + 3.0 * s;
+
+    // Ctrl+F: the frame-rate counter, top right under the tyres (the virtual mirror has the middle)
+    if info.fps_counter {
+        let w = 450.0 * s;
+        let (x, y) = (width - 10.0 * s - w, 120.0 * s);
+        hud.rect(x, y, w, gh * s + 12.0 * s + line, PANEL);
+        hud.text(x + 14.0 * s, y + 6.0 * s, 1.0 * s, if info.fps >= 59.0 { GREEN } else { YELLOW }, &format!("{:.0} FPS", info.fps));
+        hud.text_right(x + w - 14.0 * s, y + 10.0 * s, 0.75 * s, WHITE, &format!("frame {:.2} ms  longest {:.1} ms", info.frame_ms, info.frame_max_ms));
+        hud.text(x + 14.0 * s, y + gh * s + 8.0 * s, 0.75 * s, DIM, &format!("physics {:.1} steps/s  step {:.3} ms  (Ctrl+F)", info.timing.rate_hz(), info.timing.step_avg_us() / 1000.0));
+    }
 
     // top left: timer, rates, who drives, the hybrid system
     let hybrid = hybrid_lines(view);

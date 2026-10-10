@@ -233,15 +233,69 @@ pub struct AcOptions {
     pub world_detail: Option<i32>,
     /// what `rand()` starts from once the track is loaded
     pub render_seed: u32,
+    /// `--video-ini <file>`: this file instead of `Documents/Assetto Corsa/cfg/video.ini`
+    pub video_ini: Option<PathBuf>,
+    /// `--graphics max|low`: a built-in `video.ini`; the player's file is not read
+    pub preset: Option<GraphicsPreset>,
+}
+
+/// `--graphics max|low`: every setting of `video.ini` this renderer knows at the highest / the
+/// lowest value Assetto Corsa's own launcher offers for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphicsPreset {
+    Max,
+    Low,
+}
+
+impl GraphicsPreset {
+    pub fn from_name(name: &str) -> Result<GraphicsPreset, String> {
+        match name {
+            "max" => Ok(GraphicsPreset::Max),
+            "low" => Ok(GraphicsPreset::Low),
+            other => Err(format!("--graphics {other}: max or low")),
+        }
+    }
+
+    /// The `video.ini` the launcher would write with every slider at its end. The lines of what
+    /// comes in Task 23 (multisampling, FXAA, post-processing, motion blur) are there too, so
+    /// that each one is reported.
+    fn video_ini(self) -> &'static str {
+        match self {
+            GraphicsPreset::Max => {
+                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=2048\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=6\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=1\nFXAA=1\n"
+            }
+            GraphicsPreset::Low => {
+                "[VIDEO]\nANISOTROPIC=0\nAASAMPLES=1\nSHADOW_MAP_SIZE=512\n[ASSETTOCORSA]\nWORLD_DETAIL=0\n[CUBEMAP]\nSIZE=0\nFACES_PER_FRAME=0\n[EFFECTS]\nSMOKE=0\nRENDER_SMOKE_IN_MIRROR=0\nMOTION_BLUR=0\n[MIRROR]\nSIZE=0\nHQ=0\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"
+            }
+        }
+    }
+}
+
+/// The `video.ini` of this run and what to call it: `--graphics`' built-in one, `--video-ini`'s
+/// file, or the player's own (which is only ever read).
+fn video_ini_of(options: &AcOptions) -> Result<(Option<IniReader>, String), String> {
+    if let Some(preset) = options.preset {
+        let name = if preset == GraphicsPreset::Max { "--graphics max" } else { "--graphics low" };
+        return Ok((Some(IniReader::from_text(Path::new("video.ini"), preset.video_ini())), name.to_string()));
+    }
+    if let Some(file) = &options.video_ini {
+        // (IniReader::load of a missing file is an empty file, not an error)
+        if !file.is_file() {
+            return Err(format!("--video-ini {}: no such file", file.display()));
+        }
+        let ini = IniReader::load(file).map_err(|e| format!("--video-ini {}: {e}", file.display()))?;
+        return Ok((Some(ini), file.display().to_string()));
+    }
+    let documents = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini"));
+    Ok((documents.and_then(|p| IniReader::load(&p).ok()), "video.ini".to_string()))
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
-fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, i32, f32, (bool, i32), Vec<String>) {
+fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>, name: &str) -> (VideoSettings, i32, i32, f32, (bool, i32), Vec<String>) {
     let mut video = VideoSettings { width: width as i32, height: height as i32, is_fullscreen: false, ..VideoSettings::default() };
     let mut notes = Vec::new();
     let (mut cube_size, mut cube_faces, mut cube_far) = (512, 0, 0.0f32);
-    let documents = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini"));
-    let Some(ini) = documents.and_then(|p| IniReader::load(&p).ok()) else {
+    let Some(ini) = ini else {
         notes.push("no Documents/Assetto Corsa/cfg/video.ini: the game's defaults are used".to_string());
         video.world_detail = 5;
         // TyreSmoke / EngineSmoke without the file: the Normal level
@@ -260,13 +314,16 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     cube_faces = int("CUBEMAP", "FACES_PER_FRAME").clamp(0, 6);
     cube_far = ini.get_float("CUBEMAP", "FARPLANE").unwrap_or(0.0);
     if int("VIDEO", "AASAMPLES") > 1 {
-        notes.push(format!("video.ini AASAMPLES={}: multisampling comes in Task 23, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
+        notes.push(format!("{name} AASAMPLES={}: multisampling comes in Task 23, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
+    }
+    if int("POST_PROCESS", "ENABLED") != 0 && int("POST_PROCESS", "FXAA") != 0 {
+        notes.push(format!("{name} [POST_PROCESS] FXAA=1: FXAA comes in Task 23, the picture is not smoothed"));
     }
     if int("POST_PROCESS", "ENABLED") != 0 {
-        notes.push("video.ini [POST_PROCESS] ENABLED=1: post-processing comes in Task 23, the plain picture is drawn".to_string());
+        notes.push(format!("{name} [POST_PROCESS] ENABLED=1: post-processing comes in Task 23, the plain picture is drawn"));
     }
     if ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0) > 0.0 {
-        notes.push("video.ini MOTION_BLUR: motion blur comes in Task 23, treated as off".to_string());
+        notes.push(format!("{name} MOTION_BLUR: motion blur comes in Task 23, treated as off"));
     }
     video.smoke = Some(int("EFFECTS", "SMOKE"));
     video.mirror_size = int("MIRROR", "SIZE");
@@ -278,17 +335,17 @@ fn video_settings(width: u32, height: u32, exact: bool) -> (VideoSettings, i32, 
     // reflections (checked with the game's own code in the render oracle)
     if video.shadow_map_size < 0 {
         if exact {
-            notes.push(format!("video.ini SHADOW_MAP_SIZE={}: no shadow map of that size can be made: everything is drawn in shadow, as plain acs.exe does", video.shadow_map_size));
+            notes.push(format!("{name} SHADOW_MAP_SIZE={}: no shadow map of that size can be made: everything is drawn in shadow, as plain acs.exe does", video.shadow_map_size));
         } else {
-            notes.push(format!("video.ini SHADOW_MAP_SIZE={} is a Custom Shaders Patch value; plain acs.exe would draw everything in shadow with it. 2048 is used (--video-ini-exact: follow the file)", video.shadow_map_size));
+            notes.push(format!("{name} SHADOW_MAP_SIZE={} is a Custom Shaders Patch value; plain acs.exe would draw everything in shadow with it. 2048 is used (--video-ini-exact: follow the file)", video.shadow_map_size));
             video.shadow_map_size = 2048;
         }
     }
     if cube_size <= 0 {
         if exact {
-            notes.push(format!("video.ini [CUBEMAP] SIZE={cube_size}: no cube map of that size can be made: nothing is reflected, as in plain acs.exe"));
+            notes.push(format!("{name} [CUBEMAP] SIZE={cube_size}: no cube map of that size can be made: nothing is reflected, as in plain acs.exe"));
         } else {
-            notes.push(format!("video.ini [CUBEMAP] SIZE={cube_size} is a Custom Shaders Patch value; plain acs.exe would reflect nothing with it. 512 is used (--video-ini-exact: follow the file)"));
+            notes.push(format!("{name} [CUBEMAP] SIZE={cube_size} is a Custom Shaders Patch value; plain acs.exe would reflect nothing with it. 512 is used (--video-ini-exact: follow the file)"));
             cube_size = 512;
         }
     }
@@ -381,7 +438,16 @@ pub struct AcRenderer {
 
 impl AcRenderer {
     pub fn new(width: u32, height: u32, options: AcOptions) -> Result<AcRenderer, String> {
-        let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, notes) = video_settings(width, height, options.video_exact);
+        let (video_ini, video_name) = video_ini_of(&options)?;
+        // a preset is followed to the letter: the launcher's "None" for reflections is SIZE=0
+        let exact = options.video_exact || options.preset.is_some();
+        let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, mut notes) = video_settings(width, height, exact, video_ini.as_ref(), &video_name);
+        if options.preset.is_some() {
+            notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
+            notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));
+        } else if options.video_ini.is_some() {
+            notes.insert(0, format!("the video settings of {video_name}"));
+        }
         let mirror_hq = (options.mirror_hq.unwrap_or(mirror_hq.0), mirror_hq.1);
         if let Some(size) = options.mirror_size {
             video.mirror_size = size;
@@ -453,7 +519,7 @@ impl AcRenderer {
         let hud = HudPass::new(&graphics.kgl.device)?;
         // CarAvatar::initCommonPostPhysics: the cockpit switches of video.ini
         let cockpit_flags = {
-            let ini = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini")).and_then(|p| IniReader::load(&p).ok());
+            let ini = &video_ini;
             let flag = |key: &str| ini.as_ref().is_some_and(|i| i.has_section("ASSETTOCORSA") && i.get_int("ASSETTOCORSA", key).unwrap_or(0) != 0);
             (flag("LOCK_STEER"), flag("HIDE_ARMS"), flag("HIDE_STEER"))
         };
@@ -467,7 +533,11 @@ impl AcRenderer {
         };
         let virtual_mirror = mirror.as_ref().map(|_| {
             let ini = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/gameplay.ini")).and_then(|p| IniReader::load(&p).ok());
-            let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
+            let active = match options.preset {
+                // every picture there is / the fewest
+                Some(preset) => preset == GraphicsPreset::Max,
+                None => ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0),
+            };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
         Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })

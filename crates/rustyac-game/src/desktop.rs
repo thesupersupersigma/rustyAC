@@ -20,7 +20,7 @@ use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink,
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::scene::{CarShape, DrivingCamera};
-use rustyac_game::render::ac::{AcOptions, AcRenderer};
+use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::render::{write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
@@ -195,7 +195,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let (Some(mult), Some((time_mult, _))) = (options.time_mult, &mut sun_animation) {
         *time_mult = mult;
     }
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed })?;
+    // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
+    rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()? })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -641,6 +643,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     let started = Instant::now();
     let mut last = Instant::now();
     let (mut frames, mut fps, mut fps_frames, mut fps_since) = (0u64, 0.0f32, 0u32, Instant::now());
+    // Ctrl+F / --show-fps: the frame-rate counter; the frame times of the running half second
+    let (mut fps_counter, mut frame_ms, mut frame_max_ms, mut running_max) = (options.show_fps, 0.0f32, 0.0f32, Duration::ZERO);
     let mut frame_max = Duration::ZERO;
     let mut result = Ok(());
     'frames: loop {
@@ -660,7 +664,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
                     let key = key as i32;
-                    if ctrl && key == bindings.key_traction_control {
+                    if ctrl && key == 0x46 {
+                        // Ctrl+F: the frame-rate counter (rustyAC's own key; AC has an app for it)
+                        fps_counter = !fps_counter;
+                    } else if ctrl && key == bindings.key_traction_control {
                         request(if shift { event::TC_DN } else { event::TC_UP });
                     } else if ctrl && key == bindings.key_abs {
                         request(if shift { event::ABS_DN } else { event::ABS_UP });
@@ -731,6 +738,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);
         let mut info = HudInfo {
             fps,
+            fps_counter,
+            frame_ms,
+            frame_max_ms,
             timing: shared.timing(),
             paused: shared.paused.load(Ordering::Relaxed) || unfocused,
             camera: camera.name(),
@@ -769,8 +779,12 @@ fn run_window(options: &Options) -> Result<(), String> {
         if frames > 30 {
             frame_max = frame_max.max(dt);
         }
+        running_max = running_max.max(dt);
         if fps_since.elapsed() >= Duration::from_millis(500) {
             fps = fps_frames as f32 / fps_since.elapsed().as_secs_f32();
+            frame_ms = 1000.0 / fps.max(1e-3);
+            frame_max_ms = running_max.as_secs_f32() * 1000.0;
+            running_max = Duration::ZERO;
             fps_frames = 0;
             fps_since = Instant::now();
         }
@@ -877,7 +891,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     if options.virtual_mirror {
         renderer.set_virtual_mirror(true);
     }
-    let lead_info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
+    let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
     for old in &lead {
         let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
         renderer.draw(old, &shape, &camera, &frame, &lead_info, 1.0 / 60.0);
@@ -885,7 +899,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
-    let info = HudInfo { fps: 0.0, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
+    let info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
     // two frames: the second is a frame as the game draws them one after the other (the first
     // after loading still uploads and binds everything)
     let dt = if lead.is_empty() { 0.0 } else { 1.0 / 60.0 };

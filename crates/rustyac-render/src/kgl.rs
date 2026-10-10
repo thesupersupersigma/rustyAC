@@ -25,6 +25,11 @@ pub struct KglVideoSettings {
     pub triple_buffer: bool,
 }
 
+/// NOT Assetto Corsa (`rustyac.exe --no-a2c`, Task 22b): blend state 2 is made without alpha to
+/// coverage. An experiment for the "white sparkles": on a target with one sample per pixel some
+/// drivers dither alpha to coverage into a screen-door pattern. Set before the device is made.
+pub static EXPERIMENT_NO_ALPHA_TO_COVERAGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Where the device comes from and what it draws into.
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceOptions {
@@ -297,7 +302,7 @@ impl Kgl {
             (3, false, true, D3D11_BLEND_OP_MAX, 0x00),
         ] {
             let mut desc: D3D11_BLEND_DESC = std::mem::zeroed();
-            desc.AlphaToCoverageEnable = a2c.into();
+            desc.AlphaToCoverageEnable = (a2c && !EXPERIMENT_NO_ALPHA_TO_COVERAGE.load(std::sync::atomic::Ordering::Relaxed)).into();
             desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
                 BlendEnable: enable.into(),
                 SrcBlend: D3D11_BLEND_SRC_ALPHA,

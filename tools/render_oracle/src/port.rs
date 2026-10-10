@@ -44,7 +44,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         triple_buffer: false,
     };
     rustyac_render::gpulog::capture_from_install(true);
-    let mut graphics = Graphics::new(video, DeviceOptions { warp: true, window: Some(window), log: true }, &args.game)?;
+    let mut graphics = Graphics::new(video, DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: true }, &args.game)?;
     let init = rustyac_render::gpulog::end_capture();
 
     // the splash screen's frame (see the game's side)
