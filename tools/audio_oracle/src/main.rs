@@ -313,6 +313,16 @@ fn apart(a: &[i16], b: &[i16]) -> (f64, f64) {
     ((squares / count.max(1) as f64).sqrt(), worst)
 }
 
+/// How many whole mixer blocks of silence a mix starts with. FMOD's clock-less WAV writer mixes
+/// a block whenever one of its calls waits for the loader thread, so the number of blocks it
+/// has written before the first frame of the drive differs from run to run (5 to 12 here, also
+/// between two runs of the game's own code); from the first audible block on every run of a
+/// drive is equally long (Task 22b).
+fn pre_roll(samples: &[i16]) -> usize {
+    let block = drive::BLOCK as usize * 2;
+    samples.chunks(block).take_while(|b| b.iter().all(|s| *s == 0)).count()
+}
+
 /// Both sides of a drive, compared.
 fn compare(args: &Args) -> Result<(), String> {
     let tape = args.tape.as_ref().ok_or("compare needs --tape <file.audiotape>")?;
@@ -344,6 +354,10 @@ fn compare(args: &Args) -> Result<(), String> {
     let wav_repeat = ac_wav == ac_wav2;
     let wav_same = ac_wav == port_wav;
     let (sa, sa2, sp) = (samples(&ac_wav), samples(&ac_wav2), samples(&port_wav));
+    // the mixes from their first audible block on: what the drive itself made FMOD write
+    let block = drive::BLOCK as usize * 2;
+    let rolls = [pre_roll(&sa), pre_roll(&sa2), pre_roll(&sp)];
+    let (sa, sa2, sp) = (&sa[(rolls[0] * block).min(sa.len())..], &sa2[(rolls[1] * block).min(sa2.len())..], &sp[(rolls[2] * block).min(sp.len())..]);
     let describe = |same: bool, a: &[i16], b: &[i16]| {
         if same {
             "identical".to_string()
@@ -353,8 +367,10 @@ fn compare(args: &Args) -> Result<(), String> {
         }
     };
     // the port's mix is as far from the game's as the game's own second run is (within twice
-    // that, or half a dB), and as long
-    let wav_ok = wav_same || (!wav_repeat && ac_wav.len() == port_wav.len() && apart(&sa, &sp).0 <= (apart(&sa, &sa2).0 * 2.0).max(0.5));
+    // that, or half a dB), and as long: to the block, counted from the first audible one (the
+    // silent blocks before it are FMOD's start-up, see `pre_roll`)
+    let length_ok = sa.len() == sp.len();
+    let wav_ok = wav_same || (!wav_repeat && length_ok && apart(sa, sp).0 <= (apart(sa, sa2).0 * 2.0).max(0.5));
     let word = |same: bool| if same { "identical" } else { "differs" };
     println!(
         "{} | {} | {} | {} | {} | {} | {} | {} | {} | {:.1} s | {} | {} | {}",
@@ -368,8 +384,8 @@ fn compare(args: &Args) -> Result<(), String> {
         word(log_repeat),
         word(free_same),
         sa.len() as f64 / 2.0 / drive::SAMPLE_RATE as f64,
-        describe(wav_repeat, &sa, &sa2),
-        describe(wav_same, &sa, &sp),
+        describe(wav_repeat, sa, sa2),
+        describe(wav_same, sa, sp),
         match (log_same && wav_ok, FMOD_CRASHES.load(std::sync::atomic::Ordering::Relaxed)) {
             (true, 0) => "ok".to_string(),
             (true, n) => format!("ok ({n} run(s) repeated: FMOD crashed)"),
@@ -381,8 +397,22 @@ fn compare(args: &Args) -> Result<(), String> {
             println!("{text}");
         }
     } else if !wav_ok {
-        println!("the WAVs: {} / {} / {} bytes (game, game again, port); levels {:?} against {:?}", ac_wav.len(), ac_wav2.len(), port_wav.len(), apart(&sa, &sa2), apart(&sa, &sp));
+        println!("the WAVs: {} / {} / {} bytes (game, game again, port); levels {:?} against {:?}", ac_wav.len(), ac_wav2.len(), port_wav.len(), apart(sa, sa2), apart(sa, sp));
     }
+    // (a line of its own: the rows keep their columns)
+    println!(
+        "  blocks: {} / {} / {} written (game, game again, port), of them {} / {} / {} silent start-up blocks; from the first audible block: {} / {} / {}{}",
+        ac_wav.len().saturating_sub(44) / (block * 2),
+        ac_wav2.len().saturating_sub(44) / (block * 2),
+        port_wav.len().saturating_sub(44) / (block * 2),
+        rolls[0],
+        rolls[1],
+        rolls[2],
+        sa.len() / block,
+        sa2.len() / block,
+        sp.len() / block,
+        if sa.len() == sa2.len() && length_ok { "" } else { "  <-- NOT EQUAL" },
+    );
     // the recordings and logs are big: only a failing drive keeps its files
     if log_same && wav_ok && std::env::var_os("AUDIO_ORACLE_KEEP").is_none() {
         for side in ["ac", "port", "scripted"] {
