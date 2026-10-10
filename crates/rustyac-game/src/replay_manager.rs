@@ -9,6 +9,9 @@
 //! again from its recorded inputs, so the speed here paces the physics. What needs frames to
 //! go back over (rewind, the lap jumps, an instant replay while driving) is not here.
 
+// The comparisons and limits are written as the machine code has them (what a NaN does).
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp)]
+
 /// `ReplayManager::status`.
 pub const PLAY: i32 = 0;
 pub const PAUSE: i32 = 1;

@@ -27,6 +27,9 @@ use crate::material::MaterialId;
 use crate::model::Kn5Io;
 use crate::scene::{NodeId, NodeKind, Scene};
 
+/// `Track::rayCast` straight down from a point, for so many metres: where it hits.
+pub type RayDown<'a> = &'a dyn Fn(&[f32; 3], f32) -> Option<[f32; 3]>;
+
 /// What the pit crew reads of a car.
 pub struct CrewCar {
     /// the car's folder (`content/cars/<car>`), as text and on disk
@@ -85,7 +88,7 @@ fn set_mesh_properties(scene: &mut Scene, node: NodeId) {
 impl LollipopCrew {
     /// `LollipopCrew::LollipopCrew` 0x140112bf0. `matrix`: the pit box's node matrix (after it
     /// was put on the road); `ray(from, down for 10 m)`: where the track is under a point.
-    pub fn new(graphics: &mut Graphics, scene: &mut Scene, car: &CrewCar, matrix: &Mat44f, side: f32, ray: &dyn Fn(&[f32; 3], f32) -> Option<[f32; 3]>) -> Result<LollipopCrew, String> {
+    pub fn new(graphics: &mut Graphics, scene: &mut Scene, car: &CrewCar, matrix: &Mat44f, side: f32, ray: RayDown) -> Result<LollipopCrew, String> {
         let game = crate::model::path_text(&graphics.game_folder);
         let mut io = Kn5Io::new();
         let skin_folder = car.folder.join("skins").join(&car.skin);
@@ -119,9 +122,7 @@ impl LollipopCrew {
         if let Some(hit) = ray(&[pos[0], pos[1] + 1.0, pos[2]], 10.0) {
             pos[1] = hit[1];
         }
-        for k in 0..3 {
-            scene.nodes[node].matrix.m[3][k] = pos[k];
-        }
+        scene.nodes[node].matrix.m[3][..3].copy_from_slice(&pos);
         // turned round, about his own up axis (the literal is not quite pi)
         let n = scene.nodes[node].matrix;
         let r = Mat44f::create_from_axis_angle(&Vec3f::new(n.m[1][0], n.m[1][1], n.m[1][2]), f32::from_bits(0x4049_0efe));
@@ -181,7 +182,7 @@ pub fn is_in_pit(car_position: &[f32; 3], pit_position: &[f32; 3]) -> bool {
 /// folder that holds the track's (or its layout's) `data`; `pit_matrices`: the matrices of the
 /// `AC_PIT_<n>` nodes as `initRespawnPositionSet` left them (on the road); `cars`: the cars, by
 /// pit box. The answer: the lollipop men, by pit box.
-pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, data_folder: &Path, pit_matrices: &[Mat44f], cars: &[CrewCar], ray: &dyn Fn(&[f32; 3], f32) -> Option<[f32; 3]>) -> Result<Vec<LollipopCrew>, String> {
+pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, data_folder: &Path, pit_matrices: &[Mat44f], cars: &[CrewCar], ray: RayDown) -> Result<Vec<LollipopCrew>, String> {
     let game = crate::model::path_text(&graphics.game_folder);
     let mut side = -1.0f32;
     let crew_ini = data_folder.join("data/crew.ini");

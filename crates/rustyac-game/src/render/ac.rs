@@ -700,7 +700,7 @@ impl AcRenderer {
         } else {
             track.ai_spline.as_ref().ok_or("the track has neither data/ideal_line.ai nor an AI line")?
         };
-        if spline.point_count() == 0 || !(spline.length() > 0.0) {
+        if spline.point_count() == 0 || spline.length() <= 0.0 || spline.length().is_nan() {
             return Err("the line has no points".into());
         }
         let down = Vec3f::new(0.0, -1.0, 0.0);

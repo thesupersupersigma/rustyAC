@@ -277,7 +277,8 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         let speed = if config.replay.is_some() { f32::from_bits(shared.replay_speed.load(Ordering::Relaxed)) } else { 1.0 };
         let replay_done = config.replay.as_ref().is_some_and(|steps| replay_at >= steps.len());
         let paused = shared.paused.load(Ordering::Relaxed)
-            || !(speed > 0.0)
+            || speed <= 0.0
+            || speed.is_nan()
             || (config.pause_unfocused && !shared.focused.load(Ordering::Relaxed))
             || crate::window::MODAL_LOOP.load(Ordering::Relaxed)
             || replay_done;
