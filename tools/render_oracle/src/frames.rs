@@ -13,6 +13,8 @@ use crate::Args;
 
 /// What both sides seed the C runtime's `rand()` with before the car is loaded.
 pub const RAND_SEED: u32 = 21;
+/// What both sides seed it with after the track's crowds are made (the game: the tick count).
+pub const RAND_SEED_TRACK: u32 = 22;
 
 /// `Game::gameTime.now` of a frame, milliseconds: what both sides blink by.
 pub fn game_time_ms(index: usize) -> f64 {
@@ -38,6 +40,8 @@ pub struct TrackSpec {
     /// `data/lighting.ini` of the track (or of its layout): the sun's pitch and heading
     pub sun_pitch: Option<f32>,
     pub sun_heading: Option<f32>,
+    /// the folder that holds the track's (or its layout's) `data`
+    pub data_folder: String,
 }
 
 pub struct CarSpec {
@@ -184,7 +188,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             sun_pitch = Some(ini.get_float("LIGHTING", "SUN_PITCH_ANGLE").unwrap_or(0.0));
             sun_heading = Some(ini.get_float("LIGHTING", "SUN_HEADING_ANGLE").unwrap_or(0.0));
         }
-        track = Some(TrackSpec { name: name.clone(), folder: path_text(&folder), models: files, sun_pitch, sun_heading });
+        track = Some(TrackSpec { name: name.clone(), folder: path_text(&folder), models: files, sun_pitch, sun_heading, data_folder: path_text(&data) });
         let (physical, _) = loader::load_track(&folder, &args.layout)?;
         let pose = ["START", "HOTLAP_START", "PIT"].iter().find_map(|set| physical.spawn_pose(set, 0));
         if let Some((position, tail)) = pose {
@@ -387,6 +391,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "kerskj" => s.kers_current_kj = number(value)?,
         "kerscharge" => s.kers_charge = number(value)?,
         "perf" => s.performance_meter = number(value)?,
+        "laps" => s.lap_count = number(value)? as u32,
         "pit" => s.tyre_surface_def.iter_mut().for_each(|d| d.is_pitlane = value != "0"),
         "dirt" => {
             let k = number(value)?;
@@ -401,7 +406,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause wing kersmax ersmax kerskj kerscharge perf pit dirt damage")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay pause wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage")),
     }
     Ok(())
 }

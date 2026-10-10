@@ -1807,6 +1807,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
         let setup = input_file::SimSetup {
             car: recording.get("car").ok_or("the recording's header has no car")?.to_string(),
             seed: run.seed,
+            render_seed: 1,
             clock_start_ms: run.clock_start_ms,
             env: run.env,
             auto_clutch: run.auto_clutch,

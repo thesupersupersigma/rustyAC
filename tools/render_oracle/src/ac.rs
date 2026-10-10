@@ -48,6 +48,13 @@ const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGener
 const VA_CUBE_MAP_RENDERER_RENDER: usize = 0x1_4021_edb0; // CubeMapRenderer::render(CubeMap*, Node*, Camera*)
 const VA_CUBE_MAP_RENDERER_SET_PLANES: usize = 0x1_4021_f110; // CubeMapRenderer::setCameraNearFarPlanes(float, float)
 const VA_SKYBOX_UPDATE_CLOUDS: usize = 0x1_4021_db00; // SkyBox::updateCloudsGeneration(const std::wstring&)
+const VA_DYNAMIC_TRACK_MANAGER_CTOR: usize = 0x1_401c_cc20; // DynamicTrackManager::DynamicTrackManager(Sim*, const std::wstring&)
+const VA_DYNAMIC_TRACK_MANAGER_UPDATE: usize = 0x1_401c_dba0; // DynamicTrackManager::update(float)
+const VA_CAMERA_FACING_CTOR: usize = 0x1_4005_e640; // CameraFacing::CameraFacing(TrackAvatar*, Sim*)
+const VA_GROOVE_HIDE_HANDLER: usize = 0x1_4019_69f0; // Sim::initCubemaps' handler of evOnRenderBegin
+const VA_GROOVE_SHOW_HANDLER: usize = 0x1_4019_6bc0; // … and of evOnRenderEnd
+const VA_MESH_VTABLE: usize = 0x1_404e_da28; // const Mesh::`vftable'
+const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
 
 /// Start-up initialisers of static objects the renderer uses (the program's entry point, which
@@ -357,8 +364,12 @@ impl Game {
     /// `TrackAvatar::processPhysicsNode` 0x1401cc5e0, the part the picture sees: every node
     /// whose name starts with `AC_` (spawn points, timing gates, loose objects …) is switched off.
     unsafe fn hide_helpers(&self, node: *mut u8) {
-        if self.node_name(node).starts_with("AC_") {
-            wr(node, 0xd8, 0u8);
+        let name = self.node_name(node);
+        if name.starts_with("AC_") {
+            // … and TrackAvatar::TrackAvatar switches a loose object's node (AC_POBJECT with a
+            // mesh as its first child) on again
+            let object = name.starts_with("AC_POBJECT") && self.children(node).first().is_some_and(|c| rd::<usize>(*c, 0) == self.acs.va(VA_MESH_VTABLE));
+            wr(node, 0xd8, object as u8);
         }
         for child in self.children(node) {
             self.hide_helpers(child);
@@ -417,6 +428,39 @@ impl Game {
             self.add_child(track_node, model);
             self.hide_helpers(model);
         }
+        // TrackAvatar::TrackAvatar 0x1401c5250: the game's own DynamicTrackManager (grooves) and
+        // CameraFacing (crowds), on a Sim and a TrackAvatar that hold what those two read
+        let console = self.prepare_cars();
+        let track_sim = acs.alloc(0x2d0);
+        let mut grooves = std::ptr::null_mut::<u8>();
+        if let Some(track) = &frame.track {
+            let game = acs.alloc(0x278);
+            wr(game, 0x138, self.graphics);
+            wr(track_sim, 0x08, game);
+            wr(track_sim, 0x120, root);
+            wr(track_sim, 0x128, track_node);
+            wr(track_sim, 0x158, blurred);
+            wr(track_sim, 0x160, unblurred);
+            wr(track_sim, 0x228, console);
+            // PhysicsAvatar::engine.track: a Track whose grip does not change
+            let physics_avatar = acs.alloc(0x600);
+            wr(physics_avatar, 0x58 + 0x198, acs.alloc(0x400));
+            wr(track_sim, 0x1b8, physics_avatar);
+            let track_avatar = acs.alloc(0x308);
+            wr(track_avatar, 0xe8, track_sim);
+            write_wstring(acs, track_avatar.add(0x200), &track.data_folder);
+            wr(track_sim, 0x150, track_avatar);
+            grooves = acs.alloc(0x90);
+            let ctor: extern "C" fn(*mut u8, *mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_DYNAMIC_TRACK_MANAGER_CTOR));
+            ctor(grooves, track_sim, wstring(acs, &track.data_folder));
+            wr(track_avatar, 0x2e8, grooves);
+            let facing = acs.alloc(0x58);
+            let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FACING_CTOR));
+            ctor(facing, track_avatar, track_sim);
+            // (the constructor ends with srand(tick count): a number both sides have)
+            let randomize: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KS_RANDOMIZE));
+            randomize(crate::frames::RAND_SEED_TRACK);
+        }
 
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
         let camera = acs.alloc(SIZE_CAMERA_FORWARD);
@@ -470,11 +514,34 @@ impl Game {
         }
         let set_cubemap_size: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_SET_CUBEMAP_SIZE));
         set_cubemap_size(camera, crate::root::profile().cubemap_size);
+        // … and its two handlers on the cube map's events (records of 0x28 bytes, the function
+        // object at +0x20): the game's own, which hide the grooves while the faces are drawn
+        if !grooves.is_null() {
+            for (event, handler) in [(0x10usize, VA_GROOVE_HIDE_HANDLER), (0x28, VA_GROOVE_SHOW_HANDLER)] {
+                let vtable = acs.alloc(0x40);
+                wr(vtable, 0x10, acs.va(handler));
+                let object = acs.alloc(0x20);
+                wr(object, 0x0, vtable);
+                wr(object, 0x8, track_sim);
+                let record = acs.alloc(0x28);
+                wr(record, 0x20, object);
+                wr(camera, 0x2b0 + event, record);
+                wr(camera, 0x2b0 + event + 8, record.add(0x28));
+                wr(camera, 0x2b0 + event + 0x10, record.add(0x28));
+            }
+        }
         // Sim::addCar: the car's models and its objects
         let car = match &frame.car {
-            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred }, camera)?),
+            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred }, camera, console)?),
             None => None,
         };
+        // Sim::cars, for the grooves
+        if let Some(car) = &car {
+            let list = acs.alloc(0x10);
+            wr(list, 0, car.avatar());
+            wr(track_sim, 0x208, list);
+            wr(track_sim, 0x210, list.add(8));
+        }
 
         let cube_log;
         // Sim::initStaticCubemap 0x14019a2a0, from Sim::onPostLoad: the small model and the sky
@@ -514,6 +581,11 @@ impl Game {
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
                 self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
+            }
+            // DynamicTrackManager::update 0x1401cdba0 (Game::update skips an object that is not active)
+            if !grooves.is_null() && rd::<u8>(grooves, 0x30) != 0 {
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_DYNAMIC_TRACK_MANAGER_UPDATE));
+                update(grooves, crate::frames::DT);
             }
 
             if index >= frame.capture {

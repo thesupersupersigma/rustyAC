@@ -17,6 +17,7 @@ pub mod camera;
 pub mod car;
 pub mod cockpit;
 pub mod constrained;
+pub mod crowds;
 pub mod cubemap;
 pub mod damage;
 pub mod digital;

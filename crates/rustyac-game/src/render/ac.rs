@@ -225,6 +225,10 @@ pub struct AcOptions {
     /// race.ini `[LIGHTING] TIME_MULT` and `CLOUD_SPEED`; `None`: the file has no `[LIGHTING]`
     /// (the game then makes no `SunAnimator`: the sun and the clouds stand still)
     pub sun_animation: Option<(f32, f32)>,
+    /// race.ini `[GROOVE] MAX_LAPS` and `STARTING_LAPS`, when the file has the section
+    pub groove: Option<(f32, f32)>,
+    /// what `rand()` starts from once the track is loaded
+    pub render_seed: u32,
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
@@ -327,6 +331,13 @@ pub struct AcRenderer {
     time_ms: f64,
     /// `RaceManager::initLighting`'s `SunAnimator`
     sun: Option<rustyac_render::sky::SunAnimator>,
+    /// `TrackAvatar`'s `DynamicTrackManager` (the grooves) and the crowds of `CameraFacing`
+    grooves: Option<rustyac_render::crowds::DynamicTrackManager>,
+    crowds: Vec<std::rc::Rc<std::cell::RefCell<rustyac_render::crowds::StaticParticleSystem>>>,
+    /// the nodes of the track's loose objects (`TrackObject::root`) in the physics' order, each
+    /// with the matrix of the file; and the ones that are not at home
+    object_nodes: Vec<(NodeId, Mat44f)>,
+    moved_objects: Vec<usize>,
     track_folder: Option<String>,
     options: AcOptions,
     hud: HudPass,
@@ -350,6 +361,8 @@ impl AcRenderer {
             cube_faces = faces.clamp(0, 6);
         }
         let mut graphics = Graphics::new(video, DeviceOptions { warp: options.warp, window: None, log: options.gpu_log.is_some() }, &options.game)?;
+        // Sim::Sim: srand(the time in milliseconds)
+        graphics.crt_rand = rustyac_physics::session::MsvcRand(options.render_seed);
         // SAFETY: COM calls on the live device.
         let adapter = unsafe {
             graphics
@@ -425,7 +438,7 @@ impl AcRenderer {
             let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -454,9 +467,19 @@ impl AcRenderer {
         self.scene.compile(&self.graphics, model);
         self.scene.add_child(self.track_node, model);
         self.scene.hide_helpers(model);
+        // TrackAvatar::TrackAvatar: a TrackObject per AC_POBJECT node, which is switched on again
+        self.object_nodes = self.scene.show_track_objects(model);
         self.track_folder = Some(path_text(folder));
         let data = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
         self.graphics.load_track_lighting(&data.join("data/lighting.ini"));
+        // TrackAvatar::TrackAvatar: the grooves, then the crowds (which leave rand() seeded)
+        let grooves = rustyac_render::crowds::DynamicTrackManager::new(&mut self.scene, &data, self.track_node, self.options.groove);
+        self.graphics.cube_map_hidden = grooves.meshes();
+        self.grooves = Some(grooves);
+        match rustyac_render::crowds::camera_facing(&mut self.graphics, &mut self.scene, &data, self.track_node, self.blurred, self.options.render_seed) {
+            Ok(crowds) => self.crowds = crowds,
+            Err(message) => println!("WARNING: no crowds: {message}"),
+        }
         Ok(format!("track models: {} files, {} textures, {} materials, loaded in {:.2} s", models.len(), self.graphics.resources.textures.len(), self.scene.materials.len(), started.elapsed().as_secs_f64()))
     }
 
@@ -583,6 +606,21 @@ impl AcRenderer {
             car.cars_count = 1;
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
+        }
+        // TrackObject::update 0x1401cf720: the node takes its body's matrix
+        for number in self.moved_objects.drain(..) {
+            let (node, home) = self.object_nodes[number];
+            self.scene.nodes[node].matrix = home;
+        }
+        for &(number, matrix) in &view.moved_objects[..view.moved_object_count as usize] {
+            if let Some(&(node, _)) = self.object_nodes.get(number as usize) {
+                self.scene.nodes[node].matrix = Mat44f { m: matrix };
+                self.moved_objects.push(number as usize);
+            }
+        }
+        // DynamicTrackManager::update
+        if let Some(grooves) = &mut self.grooves {
+            grooves.update(&mut self.scene, dt, view.dynamic_track.then_some(view.grip), &[view.lap.laps]);
         }
         self.frames += 1;
         let logging = self.options.gpu_log.is_some() && self.frames == 2;

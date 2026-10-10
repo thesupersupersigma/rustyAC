@@ -248,6 +248,10 @@ pub struct SimSetup {
     pub car: String,
     /// `srand` seed of the C runtime when the car is built.
     pub seed: u32,
+    /// What the picture's `rand()` starts from once the track is loaded (smoke, flames, clouds,
+    /// the blinking of the displays): the game takes the tick count; a recording carries the
+    /// number so that its replay draws the same. 1 in files recorded before.
+    pub render_seed: u32,
     /// The physics clock before the first step, ms; step `n` runs at `clock + 3 * (n + 1)`.
     pub clock_start_ms: f64,
     /// The session's values. Only the ones written to the header can differ from the default.
@@ -294,6 +298,7 @@ impl Default for SimSetup {
         SimSetup {
             car: "ks_ferrari_f2004".to_string(),
             seed: 1,
+            render_seed: 1,
             clock_start_ms: 60_000.0,
             env: ChassisEnvironment::default(),
             auto_clutch: true,
@@ -368,6 +373,9 @@ impl SimSetup {
         put("car", self.car.clone());
         put("dt", "0.003".to_string());
         put("seed", self.seed.to_string());
+        if self.render_seed != 1 {
+            put("render_seed", self.render_seed.to_string());
+        }
         put("clock_start_ms", format!("{:?}", self.clock_start_ms));
         put("ambient_temperature", format!("{:?}", e.ambient_temperature));
         put("road_temperature", format!("{:?}", e.road_temperature));
@@ -528,6 +536,7 @@ impl SimSetup {
                     }
                 }
                 "seed" => setup.seed = value.parse().map_err(|e| format!("seed: {e}"))?,
+                "render_seed" => setup.render_seed = value.parse().map_err(|e| format!("render_seed: {e}"))?,
                 "clock_start_ms" => setup.clock_start_ms = value.parse().map_err(|e| format!("clock_start_ms: {e}"))?,
                 "ambient_temperature" => e.ambient_temperature = float()?,
                 "road_temperature" => e.road_temperature = float()?,

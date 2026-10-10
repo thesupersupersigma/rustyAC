@@ -357,9 +357,16 @@ pub struct Car {
     wings: *mut u8,
 }
 
+impl Car {
+    /// The fake `CarAvatar`.
+    pub fn avatar(&self) -> *mut u8 {
+        self.car
+    }
+}
+
 impl Game {
     /// What has to be there once before any car: patches, the tables of node names, a console.
-    unsafe fn prepare_cars(&self) -> *mut u8 {
+    pub(crate) unsafe fn prepare_cars(&self) -> *mut u8 {
         let acs = &self.acs;
         // mov rax, rcx; ret: a Font that is never used (the level-of-detail manager's debug text)
         acs.patch(acs.va(VA_FONT_CTOR), &[0x48, 0x89, 0xc8, 0xc3]);
@@ -378,10 +385,9 @@ impl Game {
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90 by hand around the game's own constructors.
-    pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8) -> Result<Car, String> {
+    pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8, console: *mut u8) -> Result<Car, String> {
         let cars_node = nodes.cars;
         let acs = &self.acs;
-        let console = self.prepare_cars();
         // the C runtime's rand() of this thread: the same start as the port's
         let randomize: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KS_RANDOMIZE));
         randomize(crate::frames::RAND_SEED);

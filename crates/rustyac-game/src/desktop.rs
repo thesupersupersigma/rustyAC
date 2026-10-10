@@ -79,6 +79,13 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         drs_zones: true,
         ..SimSetup::default()
     };
+    // normal play: the picture's rand() starts from the clock, as the game's does (Sim::Sim
+    // and CameraFacing seed it from the time); pictures and unattended runs keep a fixed start
+    if let Some(seed) = options.render_seed {
+        setup.render_seed = seed;
+    } else if options.screenshot.is_none() && !options.headless {
+        setup.render_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
+    }
     // the device the bindings name decides one aid (a pad has no clutch pedal)
     let input_method = Bindings::load(options, &mut Vec::new()).input_method;
     for note in rustyac_game::conditions::apply(options, &mut setup, &input_method)? {
@@ -155,6 +162,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     let (mut sun_angle, mut weather, mut skin) = (-16.0f32, "3_clear".to_string(), options.skin.clone());
     // without a race.ini: the time runs at its own pace and the clouds drift
     let mut sun_animation = Some((1.0f32, 0.2f32));
+    let mut groove = None;
     let race = match (&options.race_ini_file, options.race_ini) {
         (Some(file), _) => Some(file.clone()),
         (None, Some(false)) => None,
@@ -168,6 +176,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             sun_animation = None;
         }
         weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
+        if ini.has_section("GROOVE") {
+            groove = Some((ini.get_float("GROOVE", "MAX_LAPS").unwrap_or(0.0), ini.get_float("GROOVE", "STARTING_LAPS").unwrap_or(0.0)));
+        }
         if skin.is_none() {
             let name = ini.get_string("CAR_0", "SKIN");
             if !name.is_empty() {
@@ -184,7 +195,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let (Some(mult), Some((time_mult, _))) = (options.time_mult, &mut sun_animation) {
         *time_mult = mult;
     }
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, render_seed: info.render_seed })?;
     for note in &renderer.notes {
         println!("{note}");
     }

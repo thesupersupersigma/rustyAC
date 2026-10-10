@@ -522,6 +522,8 @@ pub struct CarInfo {
     pub track_folder: Option<PathBuf>,
     /// Its layout ("" for none).
     pub track_layout: String,
+    /// The setup's `render_seed`.
+    pub render_seed: u32,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -844,7 +846,7 @@ impl GameSim {
     pub fn car_info(&self) -> CarInfo {
         let car = &self.car.car;
         let mut info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), ..CarInfo::default() };
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), ..CarInfo::default() };
         for index in 0..4.min(car.tyres.len()) {
             let p = car.suspensions[index].get_base_position();
             info.wheel_positions[index] = [p.x, p.y, p.z];

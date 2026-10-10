@@ -93,6 +93,17 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.compile(&graphics, model);
         scene.add_child(track_node, model);
         scene.hide_helpers(model);
+        scene.show_track_objects(model);
+    }
+    // TrackAvatar::TrackAvatar: DynamicTrackManager, then CameraFacing
+    let mut grooves = None;
+    let mut _crowds = Vec::new();
+    if let Some(track) = &frame.track {
+        let data = std::path::Path::new(&track.data_folder);
+        let manager = rustyac_render::crowds::DynamicTrackManager::new(&mut scene, data, track_node, None);
+        graphics.cube_map_hidden = manager.meshes();
+        grooves = Some(manager);
+        _crowds = rustyac_render::crowds::camera_facing(&mut graphics, &mut scene, data, track_node, blurred, crate::frames::RAND_SEED_TRACK)?;
     }
 
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
@@ -193,6 +204,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             car.has_kers = step.extra.kers_max > 0.0;
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
+        }
+        // DynamicTrackManager::update
+        if let Some(grooves) = &mut grooves {
+            let laps: Vec<u32> = car.iter().map(|_| step.state.lap_count).collect();
+            grooves.update(&mut scene, crate::frames::DT, None, &laps);
         }
 
         if index >= frame.capture {

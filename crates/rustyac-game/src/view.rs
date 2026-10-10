@@ -164,6 +164,8 @@ pub struct CarView {
     /// joules (0: none), the drivetrain's display torque and its ratio.
     pub wing_angles: [f32; 8],
     pub wing_count: u8,
+    /// The track's grip changes with the session (`Track::dynamicTrack.enabled`).
+    pub dynamic_track: bool,
     pub max_fuel: f64,
     pub kers_max_j: f32,
     pub ers_max_j: f32,
@@ -310,6 +312,7 @@ impl Default for CarView {
             hybrid: HybridView::default(),
             wing_angles: [0.0; 8],
             wing_count: 0,
+            dynamic_track: false,
             max_fuel: 0.0,
             kers_max_j: 0.0,
             ers_max_j: 0.0,
@@ -628,6 +631,7 @@ impl CarView {
             };
         }
         view.max_fuel = car.max_fuel;
+        view.dynamic_track = car.dynamic_track.is_some();
         if let Some(aero) = &car.aero {
             let wings = &aero.base().wings;
             view.wing_count = wings.len().min(8) as u8;

@@ -42,6 +42,13 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
     graphics.state.override_no_ms = true;
     graphics.kgl.set_sampler_ps(&graphics.samplers.linear_simple, 0);
     graphics.clear_texture_slot(10);
+    graphics.current_cube_map = false;
+    // evOnRenderBegin
+    if renderer.faces_per_frame > 0 {
+        for &mesh in &graphics.cube_map_hidden {
+            scene.nodes[mesh].is_active = false;
+        }
+    }
     let mut n = 0;
     while n < renderer.faces_per_frame {
         let face = renderer.current_face as usize;
@@ -59,7 +66,14 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
     }
     graphics.kgl.set_render_targets(None, None);
     graphics.kgl.cube_map_generate_mips(cube, -1);
+    // evOnRenderEnd
+    if renderer.faces_per_frame > 0 {
+        for &mesh in &graphics.cube_map_hidden {
+            scene.nodes[mesh].is_active = true;
+        }
+    }
     graphics.kgl.set_texture_cube_map(Some(cube), 10);
+    graphics.current_cube_map = true;
     graphics.kgl.set_sampler_ps(&graphics.samplers.aniso, 0);
     graphics.state.override_no_ms = false;
 }

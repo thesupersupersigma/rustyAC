@@ -369,6 +369,26 @@ impl Scene {
         }
     }
 
+    /// `TrackAvatar::TrackAvatar` 0x1401c5250, after the helpers were hidden: every node whose
+    /// name starts with `AC_POBJECT` and whose first child is a mesh becomes a `TrackObject`
+    /// and is switched on again. The answer lists them in the order of the files, each with
+    /// its matrix.
+    pub fn show_track_objects(&mut self, model: NodeId) -> Vec<(NodeId, Mat44f)> {
+        let mut found = Vec::new();
+        let mut stack = vec![model];
+        while let Some(node) = stack.pop() {
+            let n = &self.nodes[node];
+            if n.name.starts_with("AC_POBJECT") && n.children.first().is_some_and(|c| matches!(self.nodes[*c].kind, NodeKind::Mesh(_))) {
+                found.push((node, n.matrix));
+            }
+            stack.extend(self.nodes[node].children.iter().rev().copied());
+        }
+        for &(node, _) in &found {
+            self.nodes[node].is_active = true;
+        }
+        found
+    }
+
     /// `Node::findChildrenByName` 0x14020df50: the node itself and everything below it, each
     /// node before its children.
     pub fn find_children_by_name(&self, node: NodeId, name: &str, out: &mut Vec<NodeId>) {

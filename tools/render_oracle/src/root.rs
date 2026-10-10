@@ -149,6 +149,17 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
     copy_dir(&game.join("content/weather"), &root.join("content/weather"), true)?;
+    // the crowds' textures
+    for name in ["people_sit.dds", "people_stand.dds"] {
+        let from = game.join("content/texture").join(name);
+        if from.is_file() {
+            std::fs::create_dir_all(root.join("content/texture")).map_err(|e| e.to_string())?;
+            let to = root.join("content/texture").join(name);
+            if !to.is_file() {
+                std::fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+            }
+        }
+    }
     // the clouds' textures: the files of the folder itself
     copy_dir(&game.join("content/texture/clouds"), &root.join("content/texture/clouds"), false)?;
     std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;

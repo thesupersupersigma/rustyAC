@@ -132,6 +132,11 @@ pub struct Graphics {
     /// `GraphicsManager::gl` (+0x380): the manager's own immediate-mode drawer, 32 vertices
     /// (taken out while it draws)
     pub gl: Option<crate::gl::GlRenderer>,
+    /// `GraphicsManager::currentCubeMap` is set: no cube map is being drawn (and one has been)
+    pub current_cube_map: bool,
+    /// the groove meshes, which `Sim::initCubemaps`' handlers switch off while the faces of a
+    /// cube map are drawn (`TrackAvatar::setDynamicGrooveVisibility`)
+    pub cube_map_hidden: Vec<crate::scene::NodeId>,
 }
 
 fn ini_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
@@ -239,6 +244,8 @@ impl Graphics {
             resources: ResourceStore::new(),
             custom_sun_direction: rustyac_physics::vecmath::Vec3f::default(),
             gl: None,
+            current_cube_map: false,
+            cube_map_hidden: Vec::new(),
         };
         graphics.gl = Some(crate::gl::GlRenderer::new(&graphics, 0x20));
         graphics.set_sampler_state();
