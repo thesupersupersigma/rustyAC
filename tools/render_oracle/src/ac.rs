@@ -53,6 +53,8 @@ const VA_DYNAMIC_TRACK_MANAGER_UPDATE: usize = 0x1_401c_dba0; // DynamicTrackMan
 const VA_CAMERA_FACING_CTOR: usize = 0x1_4005_e640; // CameraFacing::CameraFacing(TrackAvatar*, Sim*)
 const VA_GROOVE_HIDE_HANDLER: usize = 0x1_4019_69f0; // Sim::initCubemaps' handler of evOnRenderBegin
 const VA_GROOVE_SHOW_HANDLER: usize = 0x1_4019_6bc0; // … and of evOnRenderEnd
+const VA_INIT_DYNAMIC_OBJECTS: usize = 0x1_401c_9840; // TrackAvatar::initDynamicObjects()
+const VA_UPDATE_DYNAMIC_OBJECTS: usize = 0x1_401c_cb30; // TrackAvatar::updateDynamicObjects(float)
 const VA_MESH_VTABLE: usize = 0x1_404e_da28; // const Mesh::`vftable'
 const VA_KS_RANDOMIZE: usize = 0x1_4004_b290; // ksRandomize(unsigned int): srand
 const VA_SKYBOX_UPDATE_CLOUDS_ANIMATION: usize = 0x1_4021_dad0; // SkyBox::updateCloudsAnimation(float)
@@ -412,6 +414,7 @@ impl Game {
 
         let compile: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_COMPILE));
         // TrackAvatar::init3D 0x1401c8740: one importer, the files of models.ini in order
+        let mut track_model = std::ptr::null_mut::<u8>();
         if let Some(track) = &frame.track {
             let model = self.node(&format!("TRACK {}", track.name));
             let io = self.kn5io();
@@ -427,12 +430,14 @@ impl Game {
             compile(self.graphics, model);
             self.add_child(track_node, model);
             self.hide_helpers(model);
+            track_model = model;
         }
         // TrackAvatar::TrackAvatar 0x1401c5250: the game's own DynamicTrackManager (grooves) and
         // CameraFacing (crowds), on a Sim and a TrackAvatar that hold what those two read
         let console = self.prepare_cars();
         let track_sim = acs.alloc(0x2d0);
         let mut grooves = std::ptr::null_mut::<u8>();
+        let mut dynamic_track = std::ptr::null_mut::<u8>();
         if let Some(track) = &frame.track {
             let game = acs.alloc(0x278);
             wr(game, 0x138, self.graphics);
@@ -450,6 +455,51 @@ impl Game {
             wr(track_avatar, 0xe8, track_sim);
             write_wstring(acs, track_avatar.add(0x200), &track.data_folder);
             wr(track_sim, 0x150, track_avatar);
+            // TrackAvatar::initDynamicObjects 0x1401c9840: the game's own, on the files of the
+            // scratch root (models.ini and the models its [DYNAMIC_OBJECT_n] sections name)
+            {
+                let ini_name = if track.layout.is_empty() { "models.ini".to_string() } else { format!("models_{}.ini", track.layout) };
+                let from = std::path::Path::new(&track.folder);
+                let to = std::path::PathBuf::from(format!("content/tracks/{}", track.name));
+                if let Ok(text) = std::fs::read_to_string(from.join(&ini_name)) {
+                    if text.contains("[DYNAMIC_OBJECT_") {
+                        std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+                        std::fs::write(to.join(&ini_name), &text).map_err(|e| e.to_string())?;
+                        let mut in_object = false;
+                        for line in text.lines() {
+                            let line = line.trim();
+                            if line.starts_with('[') {
+                                in_object = line.starts_with("[DYNAMIC_OBJECT_");
+                            } else if let (true, Some(file)) = (in_object, line.strip_prefix("FILE=")) {
+                                let file = file.split(';').next().unwrap_or("").trim();
+                                if from.join(file).is_file() {
+                                    if !to.join(file).is_file() {
+                                        std::fs::copy(from.join(file), to.join(file)).map_err(|e| e.to_string())?;
+                                    }
+                                    // (a version 6 file's number, as load_kn5 tells it)
+                                    let mut head = [0u8; 14];
+                                    if let Ok(mut f) = std::fs::File::open(from.join(file)) {
+                                        if std::io::Read::read_exact(&mut f, &mut head).is_ok() && i32::from_le_bytes(head[6..10].try_into().unwrap()) >= 6 {
+                                            let key = u32::from_le_bytes(head[10..14].try_into().unwrap());
+                                            if key != 0 {
+                                                let add: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KN5IO_ADD_DLC_KEY));
+                                                add(key);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        wr(track_avatar, 0x08, game);
+                        write_wstring(acs, track_avatar.add(0x10), &track.name);
+                        write_wstring(acs, track_avatar.add(0xa0), &track.layout);
+                        wr(track_avatar, 0xf0, track_model);
+                        let init: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_INIT_DYNAMIC_OBJECTS));
+                        init(track_avatar);
+                        dynamic_track = track_avatar;
+                    }
+                }
+            }
             grooves = acs.alloc(0x90);
             let ctor: extern "C" fn(*mut u8, *mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_DYNAMIC_TRACK_MANAGER_CTOR));
             ctor(grooves, track_sim, wstring(acs, &track.data_folder));
@@ -581,6 +631,11 @@ impl Game {
             }
             let s = step.camera.splits;
             set_splits(camera, s[0], s[1], s[2], s[3]);
+            // TrackAvatar::update 0x1401cca10: updateDynamicObjects
+            if !dynamic_track.is_null() {
+                let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_UPDATE_DYNAMIC_OBJECTS));
+                update(dynamic_track, crate::frames::DT);
+            }
             // SunAnimator::update 0x1401adc10, the clouds' part
             {
                 let animate: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SKYBOX_UPDATE_CLOUDS_ANIMATION));

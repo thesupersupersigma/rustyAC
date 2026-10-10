@@ -6,6 +6,9 @@
 //! `StaticParticleSystem` (0x1b8 bytes; constructor 0x14025e8b0, `finalize` 0x14025efb0,
 //! `render` 0x14025f550) per section. `Triangle::computeArea` 0x14020bcb0.
 //!
+//! Also here: the grooves (`DynamicTrackManager`) and the track's drifting objects
+//! (`TrackAvatar::initDynamicObjects` 0x1401c9840, `updateDynamicObjects` 0x1401ccb30).
+//!
 //! The places are drawn from `rand()` after `srand(0)`: the same crowd every time. The
 //! billboards stand upright (their up is the world's) and turn to the camera about that axis.
 
@@ -429,5 +432,91 @@ impl DynamicTrackManager {
     /// The meshes `setGrooveMeshVisibility` switches off while a cube map's faces are drawn.
     pub fn meshes(&self) -> Vec<NodeId> {
         self.grooves.iter().filter_map(|g| g.mesh).collect()
+    }
+}
+
+/// `DynamicTrackObject` (0x38 bytes): a model that drifts over the track (a balloon, an
+/// aircraft).
+pub struct DynamicTrackObject {
+    pub node: NodeId,
+    pub pos: [f32; 3],
+    pub pos_range: [f32; 3],
+    pub vel: [f32; 3],
+    pub org_pos: [f32; 3],
+}
+
+/// `ksRandVec3f` 0x1401cc4e0: a number in -range .. range for each axis, drawn z, y, x.
+fn rand_vec3(rand: &mut MsvcRand, range: [f32; 3]) -> [f32; 3] {
+    let c = f32::from_bits(0x3800_0100);
+    let mut out = [0.0f32; 3];
+    for k in [2usize, 1, 0] {
+        let r = range[k];
+        out[k] = (rand.next() as f32 * c) * (r - (-r)) + (-r);
+    }
+    out
+}
+
+/// `TrackAvatar::initDynamicObjects` 0x1401c9840: the `[DYNAMIC_OBJECT_n]` sections of the
+/// track's `models.ini` (`models_<layout>.ini`). Each is there with its `PROBABILITY`, as many
+/// times as `MULT` draws, at a random place with a random speed, all from the main thread's
+/// `rand()`. The models become children of the track's model.
+pub fn init_dynamic_objects(graphics: &mut Graphics, scene: &mut Scene, track_folder: &Path, layout: &str, model: NodeId) -> Vec<DynamicTrackObject> {
+    let mut objects = Vec::new();
+    let file = if layout.is_empty() { track_folder.join("models.ini") } else { track_folder.join(format!("models_{layout}.ini")) };
+    let Ok(ini) = IniReader::load(&file) else { return objects };
+    let c = f32::from_bits(0x3800_0100);
+    let io = crate::model::Kn5Io::new();
+    let mut i = 0;
+    loop {
+        let section = format!("DYNAMIC_OBJECT_{i}");
+        if !ini.has_section(&section) {
+            break;
+        }
+        i += 1;
+        let probability = ini.get_int(&section, "PROBABILITY").unwrap_or(0);
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        if !((graphics.crt_rand.next() as f32 * c) * 100.0 < probability as f32) {
+            continue;
+        }
+        let mult: Vec<f32> = ini.get_string(&section, "MULT").split(',').map(|p| p.trim().parse::<f64>().unwrap_or(0.0) as f32).collect();
+        let (x, y) = (mult.first().copied().unwrap_or(0.0), mult.get(1).copied().unwrap_or(0.0));
+        let n = ((graphics.crt_rand.next() as f32 * c) * ((y + 1.0) - x) + x) as i32;
+        for _ in 0..n.max(0) {
+            let name = ini.get_string(&section, "FILE");
+            let path = track_folder.join(&name);
+            let filename = crate::model::path_text(&path);
+            // (a file that is not there: the game goes on with an empty node)
+            let node = match io.load(graphics, scene, &filename, &path) {
+                Ok(node) => node,
+                Err(_) => scene.node(&format!("KN5: {filename}")),
+            };
+            let get3 = |key: &str| ini.get_float3(&section, key).unwrap_or([0.0; 3]);
+            let (mut pos, mut pos_range, mut vel) = ([0.0f32; 3], [0.0f32; 3], [0.0f32; 3]);
+            if ini.get_string(&section, "POS_MODE") == "RANDOM" {
+                let center = get3("RND_POS_CENTER");
+                pos_range = get3("RND_POS_RANGE");
+                let r = rand_vec3(&mut graphics.crt_rand, pos_range);
+                pos = [center[0] + r[0], r[1] + center[1], r[2] + center[2]];
+            }
+            if ini.get_string(&section, "VEL_MODE") == "RANDOM" {
+                let base = get3("RND_VEL_BASE");
+                let r = rand_vec3(&mut graphics.crt_rand, get3("RND_VEL_RANGE"));
+                vel = [r[0] + base[0], r[1] + base[1], r[2] + base[2]];
+            }
+            scene.compile(graphics, node);
+            scene.add_child(model, node);
+            objects.push(DynamicTrackObject { node, pos, pos_range, vel, org_pos: pos });
+        }
+    }
+    objects
+}
+
+/// `TrackAvatar::updateDynamicObjects` 0x1401ccb30.
+pub fn update_dynamic_objects(scene: &mut Scene, objects: &mut [DynamicTrackObject], dt: f32) {
+    for o in objects {
+        for k in 0..3 {
+            o.pos[k] = dt * o.vel[k] + o.pos[k];
+            scene.nodes[o.node].matrix.m[3][k] = o.pos[k];
+        }
     }
 }

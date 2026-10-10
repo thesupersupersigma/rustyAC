@@ -75,6 +75,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     scene.add_child(unblurred, render_finished);
 
     // TrackAvatar::init3D
+    let mut dynamic_objects = Vec::new();
     if let Some(track) = &frame.track {
         let model = scene.node(&format!("TRACK {}", track.name));
         let mut io = Kn5Io::new();
@@ -94,6 +95,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.add_child(track_node, model);
         scene.hide_helpers(model);
         scene.show_track_objects(model);
+        // TrackAvatar::initDynamicObjects
+        dynamic_objects = rustyac_render::crowds::init_dynamic_objects(&mut graphics, &mut scene, std::path::Path::new(&track.folder), &track.layout, model);
     }
     // TrackAvatar::TrackAvatar: DynamicTrackManager, then CameraFacing
     let mut grooves = None;
@@ -186,6 +189,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         let s = step.camera.splits;
         camera.base.set_shadow_maps_splits(&mut graphics, s[0], s[1], s[2], s[3]);
+        // TrackAvatar::update
+        rustyac_render::crowds::update_dynamic_objects(&mut scene, &mut dynamic_objects, crate::frames::DT);
         // SunAnimator::update, the clouds' part
         if let Some(sky) = &mut camera.base.sky_box {
             sky.update_clouds_animation(crate::frames::DT * args.time_mult);

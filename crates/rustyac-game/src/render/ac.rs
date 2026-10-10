@@ -363,6 +363,8 @@ pub struct AcRenderer {
     /// (-1: no replay yet)
     told_paused: bool,
     told_replay_status: i32,
+    /// `TrackAvatar::dynamicObjects`: balloons and aircraft that drift over the track
+    dynamic_objects: Vec<rustyac_render::crowds::DynamicTrackObject>,
     track_folder: Option<String>,
     options: AcOptions,
     hud: HudPass,
@@ -468,7 +470,7 @@ impl AcRenderer {
             let active = ini.is_some_and(|i| i.has_section("VIRTUAL_MIRROR") && i.get_int("VIRTUAL_MIRROR", "ACTIVE").unwrap_or(0) != 0);
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -499,6 +501,8 @@ impl AcRenderer {
         self.scene.hide_helpers(model);
         // TrackAvatar::TrackAvatar: a TrackObject per AC_POBJECT node, which is switched on again
         self.object_nodes = self.scene.show_track_objects(model);
+        // TrackAvatar::initDynamicObjects
+        self.dynamic_objects = rustyac_render::crowds::init_dynamic_objects(&mut self.graphics, &mut self.scene, folder, layout, model);
         self.track_folder = Some(path_text(folder));
         let data = if layout.is_empty() { folder.to_path_buf() } else { folder.join(layout) };
         self.graphics.load_track_lighting(&data.join("data/lighting.ini"));
@@ -691,6 +695,8 @@ impl AcRenderer {
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }
+        // TrackAvatar::update: the drifting objects (the pause menu does not stop them)
+        rustyac_render::crowds::update_dynamic_objects(&mut self.scene, &mut self.dynamic_objects, dt);
         // TrackObject::update 0x1401cf720: the node takes its body's matrix
         for number in self.moved_objects.drain(..) {
             let (node, home) = self.object_nodes[number];

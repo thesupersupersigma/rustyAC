@@ -42,6 +42,8 @@ pub struct TrackSpec {
     pub sun_heading: Option<f32>,
     /// the folder that holds the track's (or its layout's) `data`
     pub data_folder: String,
+    /// the layout (`CONFIG_TRACK`), empty for none
+    pub layout: String,
 }
 
 pub struct CarSpec {
@@ -193,7 +195,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             sun_pitch = Some(ini.get_float("LIGHTING", "SUN_PITCH_ANGLE").unwrap_or(0.0));
             sun_heading = Some(ini.get_float("LIGHTING", "SUN_HEADING_ANGLE").unwrap_or(0.0));
         }
-        track = Some(TrackSpec { name: name.clone(), folder: path_text(&folder), models: files, sun_pitch, sun_heading, data_folder: path_text(&data) });
+        track = Some(TrackSpec { name: name.clone(), folder: path_text(&folder), models: files, sun_pitch, sun_heading, data_folder: path_text(&data), layout: args.layout.clone() });
         let (physical, _) = loader::load_track(&folder, &args.layout)?;
         let pose = ["START", "HOTLAP_START", "PIT"].iter().find_map(|set| physical.spawn_pose(set, 0));
         if let Some((position, tail)) = pose {
@@ -436,6 +438,8 @@ fn camera_for(view: &str, at: Point, eye_point: &dyn Fn(f32) -> [f32; 3], sun_fr
             let look = [eye[0] + sun_from[0], eye[1] + sun_from[1], eye[2] + sun_from[2]];
             CameraSpec { matrix: look_from(eye, look), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 }
         }
+        // from 3.5 km above the world's origin, looking down: what drifts over the track
+        "sky" => CameraSpec { matrix: look_from([0.0, 3500.0, -10.0], [0.0, 0.0, 0.0]), fov: 90.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
         // far enough for the second level of detail
         "far" => CameraSpec { matrix: look_from(at(-25.0, 4.0), at(0.0, 1.0)), fov: 60.0, near: 1.0, far: None, splits: [10.0, 50.0, 150.0, 500.0], mode: 2, drivable_mode: 0 },
         // beside the car, low: the wheels, the discs, the ground under the car
