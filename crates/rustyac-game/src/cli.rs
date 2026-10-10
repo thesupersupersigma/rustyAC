@@ -308,7 +308,7 @@ usage: rustyac [options]
                         of impact: front, rear, left, right, centre) whatever the physics says
   --mirror-size <n>     the mirror texture's width whatever video.ini says (0: no mirrors)
   --mirror-hq <0|1>     the high-quality mirror ([MIRROR] HQ) whatever video.ini says
-  --weather <name>      a folder of content\weather whatever race.ini says (7_heavy_clouds ...)
+  --weather <name>      a folder of content/weather whatever race.ini says (7_heavy_clouds ...)
   --time-mult <n>       race.ini TIME_MULT: how fast the sun and the clouds move
   --render-seed <n>     what the picture's rand() starts from (default: the clock while driving,
                         1 for --screenshot and --headless, the recording's for --replay)
