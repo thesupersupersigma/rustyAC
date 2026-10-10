@@ -266,10 +266,15 @@ impl GraphicsPreset {
     /// The `video.ini` the launcher would write with every slider at its end. The lines of what
     /// comes in Task 23 (multisampling, FXAA, post-processing, motion blur) are there too, so
     /// that each one is reported.
+    ///
+    /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
+    /// faces drawn again every frame a 2048 map costs 13 to 50 ms a frame on the PC this was
+    /// measured on (plain `acs.exe` pays the same: its own renderer was timed beside the port's),
+    /// 1024 costs 3 ms more than 512 or nothing. `--cube-size 2048` gives the launcher's.
     fn video_ini(self) -> &'static str {
         match self {
             GraphicsPreset::Max => {
-                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=2048\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=6\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=1\nFXAA=1\n"
+                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=1024\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=6\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=1\nFXAA=1\n"
             }
             GraphicsPreset::Low => {
                 "[VIDEO]\nANISOTROPIC=0\nAASAMPLES=1\nSHADOW_MAP_SIZE=512\n[ASSETTOCORSA]\nWORLD_DETAIL=0\n[CUBEMAP]\nSIZE=0\nFACES_PER_FRAME=0\n[EFFECTS]\nSMOKE=0\nRENDER_SMOKE_IN_MIRROR=0\nMOTION_BLUR=0\n[MIRROR]\nSIZE=0\nHQ=0\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"

@@ -385,7 +385,8 @@ for checks, without anybody at the controls:
                         video.ini (which is only ever read, never written)
   --graphics max|low    built-in video settings, your video.ini is not read. max: everything this
                         renderer does at the highest value Assetto Corsa's launcher offers (shadows
-                        4096, world detail 5, anisotropic 16, reflections 2048 with 6 faces a frame,
+                        4096, world detail 5, anisotropic 16, reflections 1024 with 6 faces a frame (the
+                        launcher's highest, 2048, costs too many frames: --cube-size 2048 has it),
                         mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5); low:
                         everything off or at the lowest value. The options above still win.
   --ideal-line, --no-ideal-line
@@ -403,7 +404,8 @@ for checks, without anybody at the controls:
                         (plain acs.exe with AASAMPLES=1 draws the same dots); the price is that
                         trees and fences turn into solid cards
   --cube-size <n>       the side of the reflection cube map ([CUBEMAP] SIZE: 512, 1024, 2048) whatever
-                        the video settings say. 2048 is costly: its mip levels are made every frame
+                        the video settings say. 2048 is costly, in the game too: every face drawn again
+                        fills four times the pixels, and the mip levels are made every frame
   --cube-faces <n>      faces of the reflection cube map drawn again every frame, 0 to 6
                         (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
