@@ -1299,12 +1299,19 @@ impl AcRenderer {
             context.End(&query);
             context.Flush();
             let mut done: i32 = 0;
+            // RUSTYAC_DIAG_FINISH_SPIN=1 (a diagnosis switch): wait without giving the processor
+            // away between two looks
+            let spin = std::env::var_os("RUSTYAC_DIAG_FINISH_SPIN").is_some_and(|v| v == "1");
             for _ in 0..200_000 {
                 let hr = context.GetData(&query, Some(&mut done as *mut i32 as *mut _), 4, 0);
                 if hr.is_ok() && done != 0 {
                     break;
                 }
-                std::thread::yield_now();
+                if spin {
+                    std::hint::spin_loop();
+                } else {
+                    std::thread::yield_now();
+                }
             }
         }
     }

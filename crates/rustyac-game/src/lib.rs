@@ -25,6 +25,7 @@ pub mod cli;
 pub mod conditions;
 pub mod crt;
 pub mod dump;
+pub mod focus;
 pub mod input;
 pub mod input_file;
 #[cfg(windows)]

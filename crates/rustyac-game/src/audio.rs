@@ -501,7 +501,7 @@ impl GameAudio {
         let listener = match &mut self.oracle {
             Some((oracle, first)) => {
                 let first = first.get_or_insert_with(|| state.clone());
-                oracle.listener(&state, first)
+                oracle.listener(state, first)
             }
             // the cameras of the focused car hand over their matrix and that car's velocity
             None => (std::array::from_fn(|i| camera_matrix[i / 4][i % 4]), state.velocity),

@@ -24,6 +24,7 @@ use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
+use rustyac_game::focus::{Focus, FocusCommand};
 use rustyac_game::view::CarView;
 use rustyac_game::window::{Event, Window};
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
@@ -250,6 +251,15 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let Some(folder) = &info.track_folder {
         println!("{}", renderer.load_track(folder, &info.track_layout)?);
     }
+    // RUSTYAC_DIAG_DRAW_ONE_CAR=1 (a diagnosis switch, NOT Assetto Corsa): the other cars are in
+    // the physics but not in the picture, to tell what their physics costs the frame rate from
+    // what drawing them costs
+    let others: &[rustyac_game::sim::CarInfo] = if std::env::var_os("RUSTYAC_DIAG_DRAW_ONE_CAR").is_some_and(|v| v == "1") {
+        println!("RUSTYAC_DIAG_DRAW_ONE_CAR=1: NOT Assetto Corsa, a diagnosis switch: only your car is drawn");
+        &[]
+    } else {
+        others
+    };
     // RaceManager::carsToBeLoaded, before the first car is made
     renderer.set_cars_to_be_loaded(1 + others.len());
     // Sim::addCar for every car in the order of the physics: the player's first. A car's folder
@@ -291,116 +301,6 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     renderer.finish_loading()?;
     Ok(renderer)
-}
-
-/// `Sim::nextCar` 0x14019a740 / `Sim::previousCar` 0x14019e180: the car just ahead of (behind)
-/// the focused one along the lap, by `physicsState.normalizedSplinePosition` of every car. Not
-/// the next number: with nobody ahead the answer is car 0.
-fn neighbour_car(world: &[CarView], current: usize, ahead: bool) -> usize {
-    if world.len() <= 1 {
-        return current;
-    }
-    let reference = world[current].lap.position;
-    let (mut best, mut index) = (1.0f32, 0usize);
-    for (i, view) in world.iter().enumerate() {
-        if i == current {
-            continue;
-        }
-        let position = view.lap.position;
-        let mut d = if ahead { position - reference } else { reference - position };
-        if !(d >= 0.0) {
-            d = if ahead { (1.0 - reference) + position } else { (1.0 - position) + reference };
-        }
-        if d < best {
-            best = d;
-            index = i;
-        }
-    }
-    index
-}
-
-/// The three commands of `Sim::onKeyDown` 0x14019a940 that move the focus (Ctrl + numpad 3, 1
-/// and 2 unless `controls.ini` says otherwise).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum FocusCommand {
-    Next,
-    Previous,
-    Player,
-}
-
-/// The focused car (`Sim::focusedCarIndex`) and the fade a change of it goes through
-/// (`ACCameraManager::fadeIn` with `Sim::cameraFadeTime`): the picture goes black over the fade
-/// time, the focus changes at the black frame, and the picture comes back over the same time.
-struct Focus {
-    index: usize,
-    /// `system/cfg/fades.ini [CHANGE_CAMERA_FADE] MS`, seconds (0 when the file is not there)
-    fade_time: f32,
-    /// seconds since the fade began
-    fade: Option<f32>,
-    pending: Option<FocusCommand>,
-}
-
-impl Focus {
-    fn new(index: usize) -> Focus {
-        let mut fade_time = 0.0f32;
-        if let Some(ac) = rustyac_content::install::ac_root() {
-            let file = ac.join("system/cfg/fades.ini");
-            if file.is_file() {
-                if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&file) {
-                    fade_time = ini.get_float("CHANGE_CAMERA_FADE", "MS").unwrap_or(0.0) * f32::from_bits(0x3a83_126f);
-                }
-            }
-        }
-        Focus { index, fade_time, fade: None, pending: None }
-    }
-
-    fn apply(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
-        self.index = match command {
-            FocusCommand::Next => neighbour_car(world, self.index.min(world.len() - 1), true),
-            FocusCommand::Previous => neighbour_car(world, self.index.min(world.len() - 1), false),
-            FocusCommand::Player => 0,
-        };
-        // (SystemMessage::addCarMessage: the game names the car on the screen)
-        println!("FOCUSED CAR: {} ({})", self.index, names.get(self.index).map_or("", String::as_str));
-    }
-
-    /// A command: `ACCameraManager::registerToFadeInEvent` (a change that still waits for its
-    /// black frame happens at once), then the fade begins.
-    fn command(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
-        if world.len() <= 1 {
-            return;
-        }
-        if let Some(waiting) = self.pending.take() {
-            self.apply(waiting, world, names);
-        }
-        self.pending = Some(command);
-        self.fade = Some(0.0);
-    }
-
-    /// The fade as the frame's picture shows it: (`fadeTime`, `fadeTotalTime`).
-    fn for_picture(&self) -> Option<(f32, f32)> {
-        self.fade.map(|t| (t, self.fade_time))
-    }
-
-    /// The camera manager's handler of `Game::evOnPostGui` (the lambda 0x140032770), after the
-    /// frame is drawn: from the black frame on (`fadeTime >= fadeTotalTime`) the waiting change
-    /// happens, so the next frame is the new car's; then the frame's time is added.
-    fn post_gui(&mut self, dt: f32, world: &[CarView], names: &[String]) {
-        let Some(t) = self.fade else { return };
-        if t >= self.fade_time * 2.0 {
-            if let Some(command) = self.pending.take() {
-                self.apply(command, world, names);
-            }
-            self.fade = None;
-            return;
-        }
-        if !(t < self.fade_time) {
-            if let Some(command) = self.pending.take() {
-                self.apply(command, world, names);
-            }
-        }
-        self.fade = Some(t + dt);
-    }
 }
 
 /// The picture: AC's renderer, or the debug view when it was asked for or when AC's renderer
