@@ -383,10 +383,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         // Game::renderHUD, after the scene: StartingLights::renderHUD
         if let Some((lights, _)) = &mut start_lights {
-            if lights.is_active {
-                if lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
-                    lights.render_lamps(&mut graphics);
-                }
+            if lights.is_active && lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
+                lights.render_lamps(&mut graphics);
             }
         }
         if index >= frame.capture {

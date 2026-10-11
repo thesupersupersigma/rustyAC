@@ -1164,10 +1164,8 @@ impl AcRenderer {
         // Game::renderHUD: StartingLights::renderHUD writes the lamps after the scene is drawn
         // (they change in the next frame, as in the game)
         if let Some(lights) = &mut self.start_lights {
-            if lights.is_active {
-                if lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts) {
-                    lights.render_lamps(&mut self.graphics);
-                }
+            if lights.is_active && lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts) {
+                lights.render_lamps(&mut self.graphics);
             }
         }
         if logging {
