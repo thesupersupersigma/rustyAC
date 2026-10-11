@@ -205,7 +205,7 @@ impl Kgl {
                         MipLevels: 1,
                         ArraySize: 1,
                         Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                        SampleDesc: DXGI_SAMPLE_DESC { Count: if video.hdr_post_processing { 1 } else { video.aa_samples as u32 }, Quality: 0 },
                         Usage: D3D11_USAGE_DEFAULT,
                         BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                         CPUAccessFlags: 0,
@@ -693,10 +693,24 @@ impl Kgl {
             desc.BindFlags = 0;
             desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
             desc.MiscFlags = 0;
+            // a multisampled screen is resolved first, as Present does
+            let samples = desc.SampleDesc.Count;
+            desc.SampleDesc.Count = 1;
             let mut staging = None;
             err("CreateTexture2D", self.device.CreateTexture2D(&desc, None, Some(&mut staging)))?;
             let staging = staging.ok_or("no staging texture")?;
-            self.context.CopyResource(&staging, &source);
+            if samples > 1 {
+                let mut plain = desc;
+                plain.Usage = D3D11_USAGE_DEFAULT;
+                plain.CPUAccessFlags = 0;
+                let mut resolved = None;
+                err("CreateTexture2D", self.device.CreateTexture2D(&plain, None, Some(&mut resolved)))?;
+                let resolved = resolved.ok_or("no resolve texture")?;
+                self.context.ResolveSubresource(&resolved, 0, &source, 0, desc.Format);
+                self.context.CopyResource(&staging, &resolved);
+            } else {
+                self.context.CopyResource(&staging, &source);
+            }
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             err("Map", self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)))?;
             let mut pixels = Vec::with_capacity((desc.Width * desc.Height * 4) as usize);
@@ -852,7 +866,7 @@ impl Kgl {
                 MipLevels: 1,
                 ArraySize: 1,
                 Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                SampleDesc: DXGI_SAMPLE_DESC { Count: if self.video.hdr_post_processing { 1 } else { self.video.aa_samples as u32 }, Quality: 0 },
                 Usage: D3D11_USAGE_DEFAULT,
                 BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
                 CPUAccessFlags: 0,

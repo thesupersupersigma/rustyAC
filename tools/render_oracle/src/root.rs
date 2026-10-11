@@ -30,9 +30,11 @@ pub struct Profile {
     /// `[MIRROR] HQ`: 0, or the sample count the mirror's multisampled target is made with (the
     /// screen's `AASAMPLES` in the game; the oracle's screen stays at one sample)
     pub mirror_hq: i32,
+    /// `[VIDEO] AASAMPLES`: samples per pixel of the screen (Task 23)
+    pub aa_samples: i32,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0 };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1 };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -58,7 +60,7 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES } = profile();
     let MIRROR_HQ = (mirror_hq > 0) as i32;
     let MIRROR_SMOKE = mirror_smoke as i32;
     let lines = [
@@ -68,7 +70,7 @@ pub fn video_ini(width: u32, height: u32) -> String {
         "REFRESH=60".into(),
         "FULLSCREEN=0".into(),
         "VSYNC=0".into(),
-        "AASAMPLES=1".into(),
+        format!("AASAMPLES={AASAMPLES}"),
         "AAQUALITY=0".into(),
         format!("ANISOTROPIC={ANISOTROPIC}"),
         format!("SHADOW_MAP_SIZE={SHADOW_MAP_SIZE}"),

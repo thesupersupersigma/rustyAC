@@ -90,6 +90,8 @@ pub struct Options {
     pub cube_faces: Option<i32>,
     /// `--cube-size <n>`: `[CUBEMAP] SIZE` whatever the video settings say
     pub cube_size: Option<i32>,
+    /// `--aa <1|2|4|8>`: `[VIDEO] AASAMPLES` whatever the video settings say
+    pub aa_samples: Option<i32>,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -210,6 +212,7 @@ impl Default for Options {
             video_ini_exact: false,
             cube_faces: None,
             cube_size: None,
+            aa_samples: None,
             video_ini: None,
             graphics: None,
             no_a2c: false,
@@ -403,6 +406,9 @@ for checks, without anybody at the controls:
                         the dotted trees and fences of a picture without anti-aliasing come from
                         (plain acs.exe with AASAMPLES=1 draws the same dots); the price is that
                         trees and fences turn into solid cards
+  --aa <n>              samples per pixel ([VIDEO] AASAMPLES: 1, 2, 4 or 8) whatever the video
+                        settings say. With more than one, alpha to coverage has steps to work
+                        with and the dots on trees, fences and crowds go
   --cube-size <n>       the side of the reflection cube map ([CUBEMAP] SIZE: 512, 1024, 2048) whatever
                         the video settings say. 2048 is costly, in the game too: every face drawn again
                         fills four times the pixels, and the mip levels are made every frame
@@ -481,6 +487,7 @@ impl Options {
                     o.graphics = Some(name);
                 }
                 "--no-a2c" => o.no_a2c = true,
+                "--aa" => o.aa_samples = Some(value("--aa")?.parse().ok().filter(|n| [1, 2, 4, 8].contains(n)).ok_or("--aa <samples per pixel: 1, 2, 4 or 8>")?),
                 "--show-fps" => o.show_fps = true,
                 "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().ok().filter(|size| (16..=4096).contains(size)).ok_or("--cube-size <pixels: 512, 1024 or 2048>")?),
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),

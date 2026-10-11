@@ -27,7 +27,7 @@ fn mat(flat: &[f32; 16]) -> Mat44f {
 pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String> {
     let window = unsafe { crate::ac::hidden_window(args.width, args.height)? };
     let video = VideoSettings {
-        aa_samples: 1,
+        aa_samples: crate::root::profile().aa_samples,
         width: args.width as i32,
         height: args.height as i32,
         is_fullscreen: false,

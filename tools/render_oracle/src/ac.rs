@@ -352,7 +352,7 @@ impl Game {
             let window = hidden_window(args.width, args.height)?;
             // VideoSettings (0x50 bytes), as loadVideoSettings fills it from the profile's video.ini
             let settings = acs.alloc(0x50);
-            wr(settings, 0x00, 1i32); // aaSamples
+            wr(settings, 0x00, crate::root::profile().aa_samples); // aaSamples
             wr(settings, 0x04, args.width as i32);
             wr(settings, 0x08, args.height as i32);
             wr(settings, 0x10, window.0 as usize);
@@ -1050,10 +1050,24 @@ impl Game {
         desc.BindFlags = 0;
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
         desc.MiscFlags = 0;
+        // a multisampled back buffer is resolved first, as Present does
+        let samples = desc.SampleDesc.Count;
+        desc.SampleDesc.Count = 1;
         let mut staging = None;
         device.CreateTexture2D(&desc, None, Some(&mut staging)).map_err(|e| e.to_string())?;
         let staging = staging.ok_or("no staging texture")?;
-        context.CopyResource(&staging, &back);
+        if samples > 1 {
+            let mut plain = desc;
+            plain.Usage = D3D11_USAGE_DEFAULT;
+            plain.CPUAccessFlags = 0;
+            let mut resolved = None;
+            device.CreateTexture2D(&plain, None, Some(&mut resolved)).map_err(|e| e.to_string())?;
+            let resolved = resolved.ok_or("no resolve texture")?;
+            context.ResolveSubresource(&resolved, 0, &back, 0, desc.Format);
+            context.CopyResource(&staging, &resolved);
+        } else {
+            context.CopyResource(&staging, &back);
+        }
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)).map_err(|e| e.to_string())?;
         let mut pixels = Vec::with_capacity((desc.Width * desc.Height * 4) as usize);

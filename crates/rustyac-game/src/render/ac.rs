@@ -247,6 +247,8 @@ pub struct AcOptions {
     pub video_ini: Option<PathBuf>,
     /// `--graphics max|low`: a built-in `video.ini`; the player's file is not read
     pub preset: Option<GraphicsPreset>,
+    /// `--aa <1|2|4|8>`: `[VIDEO] AASAMPLES` whatever the video settings say
+    pub aa_samples: Option<i32>,
 }
 
 /// `--graphics max|low`: every setting of `video.ini` this renderer knows at the highest / the
@@ -328,9 +330,8 @@ fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>,
     // Sim::initCubemaps 0x1401997a0
     cube_faces = int("CUBEMAP", "FACES_PER_FRAME").clamp(0, 6);
     cube_far = ini.get_float("CUBEMAP", "FARPLANE").unwrap_or(0.0);
-    if int("VIDEO", "AASAMPLES") > 1 {
-        notes.push(format!("{name} AASAMPLES={}: multisampling comes in Task 23, the picture has one sample per pixel", int("VIDEO", "AASAMPLES")));
-    }
+    // loadVideoSettings 0x1400c18d0: anything below 1 is 1 (AAQUALITY is not read by acs.exe)
+    video.aa_samples = int("VIDEO", "AASAMPLES").max(1);
     if int("POST_PROCESS", "ENABLED") != 0 && int("POST_PROCESS", "FXAA") != 0 {
         notes.push(format!("{name} [POST_PROCESS] FXAA=1: FXAA comes in Task 23, the picture is not smoothed"));
     }
@@ -501,7 +502,12 @@ impl AcRenderer {
         } else if options.video_ini.is_some() {
             notes.insert(0, format!("the video settings of {video_name}"));
         }
-        let mirror_hq = (options.mirror_hq.unwrap_or(mirror_hq.0), mirror_hq.1);
+        if let Some(samples) = options.aa_samples {
+            video.aa_samples = samples;
+            notes.push(format!("--aa {samples}: samples per pixel"));
+        }
+        // the high-quality mirror's target has the screen's samples
+        let mirror_hq = (options.mirror_hq.unwrap_or(mirror_hq.0), video.aa_samples);
         if let Some(size) = options.mirror_size {
             video.mirror_size = size;
         }
@@ -1189,7 +1195,13 @@ impl AcRenderer {
         unsafe {
             let back: ID3D11Texture2D = chain.GetBuffer(0).map_err(err("back buffer"))?;
             if let Some(screen) = &self.graphics.kgl.screen_render_target.texture {
-                self.graphics.kgl.context.CopyResource(&back, screen);
+                // (the game's own swap chain is multisampled and Present resolves it; here the
+                // screen is a texture and the window's flip-model chain cannot be multisampled)
+                if self.graphics.video.aa_samples != 1 && !self.graphics.video.pp_hdr_enabled {
+                    self.graphics.kgl.context.ResolveSubresource(&back, 0, screen, 0, DXGI_FORMAT_R8G8B8A8_UNORM);
+                } else {
+                    self.graphics.kgl.context.CopyResource(&back, screen);
+                }
             }
             let status = chain.Present(vsync as u32, DXGI_PRESENT(0));
             status.ok().map_err(err("present"))?;

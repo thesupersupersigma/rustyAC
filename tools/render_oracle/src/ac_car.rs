@@ -527,7 +527,7 @@ impl Game {
                 wr(self.graphics, 0x10, hq);
             }
             ctor(mirror, sim);
-            wr(self.graphics, 0x10, 1i32);
+            wr(self.graphics, 0x10, crate::root::profile().aa_samples);
             wr(sim, 0x180, mirror);
             virtual_mirror = acs.alloc(0x78);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_VIRTUAL_MIRROR_CTOR));
