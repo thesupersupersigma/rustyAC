@@ -1856,6 +1856,7 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             opponents: Vec::new(),
             physics_threads: None,
             player_place: None,
+            player_skin: None,
         };
         let mut steps = Vec::with_capacity(count);
         for step in 0..count {

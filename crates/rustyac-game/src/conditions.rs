@@ -114,6 +114,10 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
     for car in &grid.cars {
         if car.index == 0 {
             setup.player_place = Some(place(car));
+            // (the skin of the file, or the game's pick: only when the car is the file's car)
+            if !car.skin.is_empty() && last_name(&setup.car) == car.model {
+                setup.player_skin = Some(car.skin.clone());
+            }
             if !car.model.is_empty() && last_name(&setup.car) != car.model {
                 lines.push(format!("  (race.ini's first car is {}; yours is the one of --car, {})", car.model, last_name(&setup.car)));
             }
@@ -139,6 +143,7 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
     }
     if others.is_empty() {
         setup.player_place = None;
+        setup.player_skin = None;
         return Ok(lines);
     }
     lines.insert(

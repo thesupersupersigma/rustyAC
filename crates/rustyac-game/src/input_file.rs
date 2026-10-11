@@ -397,6 +397,9 @@ pub struct SimSetup {
     /// The player's place in a session of race.ini with other cars (the pit box and the grid
     /// slot of `[CAR_0]`); `None`: the first slot of the spawn set, as before.
     pub player_place: Option<GridPlace>,
+    /// The skin race.ini gives the player's car in a session with other cars (the file's, or
+    /// the one the game picks when the file's is not a skin of the car). Looks only.
+    pub player_skin: Option<String>,
 }
 
 impl Default for SimSetup {
@@ -425,6 +428,7 @@ impl Default for SimSetup {
             opponents: Vec::new(),
             physics_threads: None,
             player_place: None,
+            player_skin: None,
         }
     }
 }
@@ -554,6 +558,9 @@ impl SimSetup {
         if let Some(place) = self.player_place {
             put("player_place", place.to_text());
         }
+        if let Some(skin) = &self.player_skin {
+            put("player_skin", skin.clone());
+        }
         for opponent in &self.opponents {
             put("opponent", opponent.to_text());
             if let Some(place) = opponent.place {
@@ -681,6 +688,7 @@ impl SimSetup {
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),
                 "opponent_place" => setup.opponents.last_mut().ok_or("opponent_place before any opponent")?.place = Some(GridPlace::parse(value)?),
                 "player_place" => setup.player_place = Some(GridPlace::parse(value)?),
+                "player_skin" => setup.player_skin = Some(value.to_string()),
                 "track" => setup.track = value.to_string(),
                 "layout" => setup.layout = value.to_string(),
                 "track_objects" => setup.track_objects = flag(),

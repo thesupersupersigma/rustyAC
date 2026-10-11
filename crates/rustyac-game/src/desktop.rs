@@ -233,6 +233,10 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let Some(sun) = options.sun {
         sun_angle = sun;
     }
+    // a session of race.ini with other cars: the player's skin as the game makes it
+    if options.skin.is_none() && info.skin.is_some() {
+        skin = info.skin.clone();
+    }
     // a race start: --start-lights <seconds>, or the 20 s of RaceManager::startRace when
     // race.ini's session is a race
     let start_lights = options.start_lights.or(race_session.then_some(20.0));

@@ -1160,7 +1160,7 @@ impl GameSim {
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
         let info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), ..CarInfo::default() };
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
         Self::with_wheels(info, &self.car.car)
     }
 
