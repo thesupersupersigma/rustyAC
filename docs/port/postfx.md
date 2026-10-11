@@ -4,14 +4,11 @@
 
 State after the last commit (kept up to date with every commit):
 
-- **In progress** (not tagged yet). Ported, wired into `rustyac.exe` and committed: multisampling, the
-  post-processing camera's frame without YEBIS (FXAA, motion blur, the resolves), the HDR levels, the HUD pass
-  of the start lights, the golden test, the YEBIS map. Still to do at this point: the final runs of the older
-  proof batches with the final oracle, the sound drives, the version number and the tag.
+- **The task is finished** but for the points of section 9 ("Not done"). Version 0.23.0, tag `v0.23.0`.
 - The task text is `prompts/23_msaa_fxaa_blur.md`. Its six items: multisampling, FXAA, motion blur, the HDR
   path, the start lights in the HUD pass, the YEBIS map. What is not done is in section 9.
 - To pick the work up again: section 11 has the checks. `sh re/scratch/task23/batch_msaa.sh` and
-  `sh re/scratch/task23/batch_post.sh` run the 22 new proof sequences (about 15 minutes); `batch20.sh`,
+  `sh re/scratch/task23/batch_post.sh` run the 24 new proof sequences (about 15 minutes); `batch20.sh`,
   `batch21.sh`, `batch22.sh`, `batch22c.sh` in the same folder run the older ones with this task's oracle.
 - Task 23b (YEBIS itself) starts from `docs/map/yebis.md`, section 6 (the plan) and section 7 (what is ready).
 - On disk, git-ignored: `re/scratch/task23/` (the eight reader briefs `spec_*.md` and `yebis_*.md` with their
@@ -56,7 +53,7 @@ game itself never draws (the game has either everything or nothing), and it is s
 **How it was proven.** As before: the game's own code and the port draw the same frame, and the Direct3D
 command logs and the pictures are compared. New here: the oracle runs the game's own post-processing camera
 with YEBIS taken out (its start-up returns at once, and its one call per frame is replaced by the same plain
-copy the port draws). **22 new sequences, 720 frames**: every call and every pixel
+copy the port draws). **24 new sequences, 818 frames**: every call and every pixel
 identical, on the software rasteriser (which does 2, 4 and 8 samples the same way every time). On your
 Radeon, the game's renderer against the port: identical with 1, 2, 4 and 8 samples, with FXAA, with motion
 blur, and with the HUD lamps (section 4). All older proofs were run again and hold (section 4).
@@ -134,30 +131,32 @@ Things found on the way (all confirmed in the disassembly, most also by the orac
 
 | # | Sequence | Frames | Calls (per frame) | Draws | Command log | Pixels |
 |---|---|---|---|---|---|---|
-| 1 | monza, no car, chase, 2 samples: the trees and crowds through alpha to coverage | 1 | 2,046 (2046 to 2046) | 397 | identical | identical |
-| 2 | monza, 1M lap, side camera, 4 samples: trees, crowds, grooves (10 laps) | 59 | 311,162 (5259 to 5397) | 46,783 | identical | identical |
-| 3 | monza, no car, far camera, 8 samples | 1 | 2,047 (2047 to 2047) | 398 | identical | identical |
-| 4 | spa, F2004 lap, chase, 4 samples: crowds, HQ mirror 512 (4 samples), virtual mirror, smoke, cube map 2 faces a frame | 59 | 435,027 (7122 to 7681) | 67,516 | identical | identical |
-| 5 | spa, F2004 over the grass, onboard, 8 samples: smoke and grass pieces | 59 | 271,627 (4576 to 4636) | 37,447 | identical | identical |
-| 6 | laguna seca, mid clouds, no car, chase, 4 samples: fences, cones, crowds | 1 | 2,951 (2951 to 2951) | 575 | identical | identical |
-| 7 | imola, 488 GT3 lap, far camera, 2 samples, WORLD_DETAIL 3 | 39 | 139,594 (3549 to 3620) | 21,547 | identical | identical |
-| 8 | spa, no car, chase, 4 samples: the start lights counting down, the ideal line | 59 | 145,494 (2466 to 2466) | 29,028 | identical | identical |
-| 9 | spa, no car, chase, post-processing frame, 1 sample (HDR levels) | 1 | 2,474 (2474 to 2474) | 492 | identical | identical |
-| 10 | spa, no car, chase, post-processing frame, 4 samples: the resolve and the depth resolve (HDR levels) | 1 | 2,486 (2486 to 2486) | 493 | identical | identical |
-| 11 | spa, F2004 lap, chase, HDR levels: mirror 512 and the virtual mirror (0.3), smoke, FXAA | 39 | 233,128 (5967 to 5991) | 34,298 | identical | identical |
-| 12 | monza, F40 lap, chase, HDR levels, 4 samples: flames (no clamp), smoke, HQ mirror 256 (4 samples), mid-clear clouds (no HDR_OFF_MULT) | 59 | 365,296 (6140 to 6240) | 53,037 | identical | identical |
-| 13 | imola, 488 GT3 lap, dash camera, HDR levels: the displays and shift lights (no getLDRColor), lights on, mid clouds | 39 | 261,793 (6649 to 6749) | 36,982 | identical | identical |
-| 14 | spa, no car, chase, HDR levels: the start lights counting down (red 510) and the ideal line (colours to 3.0) | 59 | 147,736 (2504 to 2504) | 29,087 | identical | identical |
-| 15 | spa, no car, 25 m before the finish line, HDR levels, 2 samples: a time-attack gate (colour 1.5) | 5 | 13,732 (2746 to 2748) | 2,800 | identical | identical |
-| 16 | monza, no car, chase, light levels of post-processing off: FXAA off | 1 | 2,084 (2084 to 2084) | 398 | identical | identical |
-| 17 | monza, no car, chase, light levels of post-processing off: FXAA on | 1 | 2,092 (2092 to 2092) | 399 | identical | identical |
-| 18 | laguna seca, mid clouds, no car, chase, 4 samples and FXAA (light levels of off) | 1 | 3,009 (3009 to 3009) | 578 | identical | identical |
-| 19 | spa, F2004 lap, chase: motion blur 6 at speed (HDR levels) | 59 | 324,893 (5399 to 5623) | 49,227 | identical | identical |
-| 20 | monza, 1M lap, side camera, 4 samples (the _MS blur shader), motion blur 12, FXAA, light levels of off: crowds, grooves | 59 | 316,059 (5342 to 5480) | 47,019 | identical | identical |
-| 21 | imola, E30 lap, onboard, motion blur 4, light levels of off: mirror 512, virtual mirror, cube map 2 faces a frame | 59 | 387,069 (6241 to 6915) | 59,819 | identical | identical |
-| 22 | spa, F2004 over the grass, far camera, motion blur 1 (quality 2), 8 samples, smoke (light levels of off) | 59 | 207,645 (3447 to 3583) | 27,431 | identical | identical |
+| 1 | monza, no car, chase, 2 samples: the trees and crowds through alpha to coverage | 1 | 2,052 (2052 to 2052) | 397 | identical | identical |
+| 2 | monza, 1M lap, side camera, 4 samples: trees, crowds, grooves (10 laps) | 59 | 311,516 (5265 to 5403) | 46,783 | identical | identical |
+| 3 | monza, no car, far camera, 8 samples | 1 | 2,053 (2053 to 2053) | 398 | identical | identical |
+| 4 | spa, F2004 lap, chase, 4 samples: crowds, HQ mirror 512 (4 samples), virtual mirror, smoke, cube map 2 faces a frame | 59 | 435,440 (7129 to 7688) | 67,516 | identical | identical |
+| 5 | spa, F2004 over the grass, onboard, 8 samples: smoke and grass pieces | 59 | 271,981 (4582 to 4642) | 37,447 | identical | identical |
+| 6 | laguna seca, mid clouds, no car, chase, 4 samples: fences, cones, crowds | 1 | 2,956 (2956 to 2956) | 575 | identical | identical |
+| 7 | imola, 488 GT3 lap, far camera, 2 samples, WORLD_DETAIL 3 | 39 | 139,828 (3555 to 3626) | 21,547 | identical | identical |
+| 8 | spa, no car, chase, 4 samples: the start lights counting down, the ideal line | 59 | 150,627 (2553 to 2553) | 29,736 | identical | identical |
+| 9 | spa, no car, chase, post-processing frame, 1 sample (HDR levels) | 1 | 2,480 (2480 to 2480) | 492 | identical | identical |
+| 10 | spa, no car, chase, post-processing frame, 4 samples: the resolve and the depth resolve (HDR levels) | 1 | 2,492 (2492 to 2492) | 493 | identical | identical |
+| 11 | spa, F2004 lap, chase, HDR levels: mirror 512 and the virtual mirror (0.3), smoke, FXAA | 39 | 233,362 (5973 to 5997) | 34,298 | identical | identical |
+| 12 | monza, F40 lap, chase, HDR levels, 4 samples: flames (no clamp), smoke, HQ mirror 256 (4 samples), mid-clear clouds (no HDR_OFF_MULT) | 59 | 365,650 (6146 to 6246) | 53,037 | identical | identical |
+| 13 | imola, 488 GT3 lap, dash camera, HDR levels: the displays and shift lights (no getLDRColor), lights on, mid clouds | 39 | 262,027 (6655 to 6755) | 36,982 | identical | identical |
+| 14 | spa, no car, chase, HDR levels: the start lights counting down (red 510) and the ideal line (colours to 3.0) | 59 | 152,987 (2593 to 2593) | 29,795 | identical | identical |
+| 15 | spa, no car, 25 m before the finish line, HDR levels, 2 samples: a time-attack gate (colour 1.5) | 5 | 13,762 (2752 to 2754) | 2,800 | identical | identical |
+| 16 | monza, no car, chase, light levels of post-processing off: FXAA off | 1 | 2,090 (2090 to 2090) | 398 | identical | identical |
+| 17 | monza, no car, chase, light levels of post-processing off: FXAA on | 1 | 2,098 (2098 to 2098) | 399 | identical | identical |
+| 18 | laguna seca, mid clouds, no car, chase, 4 samples and FXAA (light levels of off) | 1 | 3,015 (3015 to 3015) | 578 | identical | identical |
+| 19 | spa, F2004 lap, chase: motion blur 6 at speed (HDR levels) | 59 | 325,247 (5405 to 5629) | 49,227 | identical | identical |
+| 20 | monza, 1M lap, side camera, 4 samples (the _MS blur shader), motion blur 12, FXAA, light levels of off: crowds, grooves | 59 | 316,413 (5348 to 5486) | 47,019 | identical | identical |
+| 21 | imola, E30 lap, onboard, motion blur 4, light levels of off: mirror 512, virtual mirror, cube map 2 faces a frame | 59 | 387,423 (6247 to 6921) | 59,819 | identical | identical |
+| 22 | spa, F2004 over the grass, far camera, motion blur 1 (quality 2), 8 samples, smoke (light levels of off) | 59 | 207,999 (3453 to 3589) | 27,431 | identical | identical |
+| 23 | spa, no car, chase: the HUD pass with the six start lamps (grey, then red one by one) and the track's five lights a frame later, the start | 59 | 149,074 (2458 to 2544) | 29,533 | identical | identical |
+| 24 | laguna seca (six lights), no car, chase, post-processing frame, 4 samples, FXAA, light levels of off: the lamps on top of the FXAA picture | 39 | 105,105 (2695 to 2695) | 21,372 | identical | identical |
 
-**22 of 22 identical in command log and pixels, 720 frames in all.** Rows 1 to 8: multisampling. 9 to 15: the post-processing frame with the engine's HDR levels (what the game hands to YEBIS). 16 to 18: FXAA. 19 to 22: motion blur. 23, 24: the HUD pass.
+**24 of 24 identical in command log and pixels, 818 frames in all.** Rows 1 to 8: multisampling. 9 to 15: the post-processing frame with the engine's HDR levels (what the game hands to YEBIS). 16 to 18: FXAA. 19 to 22: motion blur. 23, 24: the HUD pass.
 
 ### On the graphics card (AMD Radeon Pro 5500M): the game's renderer against the port
 
@@ -165,15 +164,15 @@ Things found on the way (all confirmed in the disassembly, most also by the orac
 
 | Frame or sequence | Command log | Pixels |
 |---|---|---|
-| monza, no car, chase, 1 samples | identical | identical |
-| monza, no car, chase, 2 samples | identical | identical |
-| monza, no car, chase, 4 samples | identical | identical |
-| monza, no car, chase, 8 samples | identical | identical |
-| spa, no car, chase, 4 samples | identical | identical |
-| laguna seca, no car, chase, 4 samples | identical | identical |
-| monza, no car, chase, post-processing frame, 4 samples, FXAA (light levels of off) | identical | identical |
-| spa, F2004 lap, chase, 4 samples, motion blur 6, FXAA, 20 frames (light levels of off) | identical | identical |
-| spa, no car, chase, 4 samples: the start lights and the HUD's lamps, 30 frames | identical | identical |
+| Monza, no car, chase, 1 sample | identical | identical |
+| Monza, no car, chase, 2 samples | identical | identical |
+| Monza, no car, chase, 4 samples | identical | identical |
+| Monza, no car, chase, 8 samples | identical | identical |
+| Spa, no car, chase, 4 samples | identical | identical |
+| Laguna seca, no car, chase, 4 samples | identical | identical |
+| Monza, no car, chase, post-processing frame, 4 samples, FXAA (light levels of off) | identical | identical |
+| Spa, F2004 lap, chase, 4 samples, motion blur 6, FXAA, 20 frames (light levels of off) | identical | identical |
+| Spa, no car, chase, 4 samples: the start lights and the HUD's lamps, 30 frames | identical | identical |
 
 **9 of 9 identical on the card.**
 
@@ -193,45 +192,150 @@ not change.
 Every frame of them now also holds the HUD pass's state calls (and, in the start-light sequences of Task 22c,
 the lamps). With `AASAMPLES=1` and post-processing off nothing else of the frame changed.
 
-**The sequences of Task 22c: 0 of 0 identical, 0 frames.**
+**The sequences of Task 22c: 18 of 18 identical, 922 frames.**
 
 <details><summary>the rows</summary>
 
 | # | Sequence | Frames | Calls (per frame) | Draws | Command log | Pixels |
 |---|---|---|---|---|---|---|
+| 1 | spa, no car, chase: the ideal line on (frames 1, 2), then off | 3 | 7,344 (2442 to 2451) | 1,475 | identical | identical |
+| 2 | imola (ideal_line.ai of version 2), 488 GT3 lap, chase: the ideal line, HQ mirror (4 samples, the line hidden in it), virtual mirror | 39 | 234,722 (5768 to 6778) | 32,333 | identical | identical |
+| 3 | mugello (ideal_line.ai of version 3), no car, free camera: the ideal line | 1 | 2,275 (2275 to 2275) | 484 | identical | identical |
+| 4 | vallelunga extended (ideal_line.ai of version 6), no car, chase: the ideal line | 1 | 2,530 (2530 to 2530) | 557 | identical | identical |
+| 5 | spa, Lotus 49 with a made-up suspension_graphics.ini (four rods aimed at the hubs, one with an unknown source name, one whose node is missing), kerb strike, front camera | 59 | 207,333 (3490 to 3536) | 32,191 | identical | identical |
+| 6 | spa, Ferrari 312T as installed (its file names a node the model does not have: no rod), front camera, the Lotus 49's drive | 9 | 37,650 (4179 to 4185) | 5,359 | identical | identical |
+| 7 | spa, no car, chase: the five start lights of a race counting down (16 s, then 8.2 s to the start in jumps), the pause menu for five frames, the start | 159 | 402,439 (2458 to 2544) | 79,689 | identical | identical |
+| 8 | laguna seca (six lights), no car, chase: the countdown, replay mode begun at frame 30 (the lights stand) and ended at 45, a practice session from frame 70 (lights out) | 89 | 231,530 (2548 to 2636) | 48,085 | identical | identical |
+| 9 | drag strip (drag400), no car, chase: the semaphore's three ready steps and the start | 61 | 90,646 (1486 to 1486) | 19,581 | identical | identical |
+| 10 | trento-bondone, no car, chase: the hill climb's semaphore | 41 | 105,985 (2585 to 2585) | 25,707 | identical | identical |
+| 11 | nordschleife, no car, from 3.5 km above: the drifting balloons scattered again by two new sessions (frames 6 and 10) | 13 | 15,509 (1193 to 1193) | 2,717 | identical | identical |
+| 12 | spa, F2004 over the grass with smoke, grass pieces and dirt: a new session at frame 60 (all of them cleared) | 99 | 443,587 (4002 to 4615) | 58,960 | identical | identical |
+| 13 | spa (crew on the right), F2004, from the pit lane: the lollipop man raising his lollipop, lowering it from frame 70, his idle loops; the static crew in the car's colours | 149 | 583,790 (3909 to 3940) | 116,022 | identical | identical |
+| 14 | magione (crew on the left), E30, from the side: the pit box marker hidden, shown in the pit lane (frames 20 to 70), the lollipop up from frame 30 | 99 | 183,354 (1833 to 1870) | 33,120 | identical | identical |
+| 15 | imola, 488 GT3, from the pit lane at WORLD_DETAIL 4: no lollipop man (layer 5), the static crew stays; a hot-lap session (no marker) | 19 | 44,095 (2320 to 2335) | 7,828 | identical | identical |
+| 16 | imola, 488 GT3 with a made-up digital_instruments.ini, dash camera: DELTA_GRAPH, TURBO_LEVEL, TOTAL_LAPS (practice, then a race of 12), EST_LAPS, FUEL_CONS in all four units, GFORCES x / y / z, KERS_LOAD both ways, POSITION_COUNT, FUEL_PERC, POWER_918, KERS_RECHARGE_SERIE, every input changing | 49 | 311,683 (6286 to 6436) | 47,271 | identical | identical |
+| 17 | spa, no car, 25 m before the finish line: the time-attack gate of the next time line (the finish's, then line 1, none, the finish's again), hidden in a replay | 13 | 35,076 (2689 to 2704) | 7,250 | identical | identical |
+| 18 | imola, 488 GT3 lap, chase, HQ mirror (4 samples) and virtual mirror: a gate in the main pass and in the mirror's | 19 | 119,101 (5796 to 6806) | 16,403 | identical | identical |
 
 </details>
 
-**The 23 sequences of Task 22: 0 of 0 identical, 0 frames.**
+**The 23 sequences of Task 22: 23 of 23 identical, 1,413 frames.**
 
 <details><summary>the rows</summary>
 
 | # | Sequence | Frames | Calls (per frame) | Draws | Command log | Pixels |
 |---|---|---|---|---|---|---|
+| 1 | spa, heavy clouds drifting (TIME_MULT 400), F2004 lap, chase, mirror 512 + virtual mirror, cube map 2 faces a frame | 179 | 1,587,149 (8368 to 9244) | 246,736 | identical | identical |
+| 2 | monza, light clouds drifting (TIME_MULT 2000), WORLD_DETAIL 3, 1M lap, far camera | 119 | 364,023 (2871 to 3486) | 50,702 | identical | identical |
+| 3 | spa, mid clouds, no car, far camera (one frame) | 1 | 2911 | 538 | identical | identical |
+| 4 | spa, crowds and grooves (laps 0, 4, 30), F2004 lap, chase, mirror 512 + virtual mirror, cube map 2 faces | 119 | 846,210 (6835 to 7468) | 126,939 | identical | identical |
+| 5 | imola, crowds at WORLD_DETAIL 3, grooves (2 laps), E30 lap, far camera | 89 | 303,384 (3404 to 3418) | 46,181 | identical | identical |
+| 6 | monza, crowds, grooves (10 laps), mid-clear clouds drifting, 1M lap, side camera | 89 | 486,338 (5394 to 5605) | 71,966 | identical | identical |
+| 7 | laguna seca, loose objects (cones) shown, crowds, mid clouds, no car (one frame) | 1 | 2956 | 575 | identical | identical |
+| 8 | magione, Formula Lithium with a made-up digital_panels.ini (race position, push-to-pass digits and light, P2P_DASH, POSITION_CAR), pause at frame 30 | 39 | 243,932 (6229 to 6272) | 32,273 | identical | identical |
+| 9 | imola, 488 GT3, dash camera: RPM_GRAPH through its range, TC level 3, ABS level 5, air 12.7 | 29 | 181,330 (6190 to 6312) | 26,152 | identical | identical |
+| 10 | spa, F2004, dash camera: TC_LEVEL 4 then 0 (off), air 31 | 29 | 188,634 (5960 to 6585) | 31,143 | identical | identical |
+| 11 | magione, Aventador SV, dash camera: GEAR_TX through R, N, 1, 4 (the neutral delay) | 49 | 235,922 (4765 to 4863) | 30,800 | identical | identical |
+| 12 | magione, McLaren P1, cockpit: DRS_SERIE with the wing at 5, 18, 27, 33 degrees, AMBIENT_TEMP 5.5 | 39 | 176,134 (4485 to 4544) | 22,802 | identical | identical |
+| 13 | spa, F138, dash camera: KERS_LOAD_SERIE from empty to full, wing 3 then 20 | 39 | 254,521 (5845 to 6679) | 41,774 | identical | identical |
+| 14 | spa, SF70H, dash camera: KERS_LOAD_SERIE inverted (ERS), from full to empty | 39 | 267,626 (6324 to 7069) | 43,866 | identical | identical |
+| 15 | spa, F2004 launch, chase: HQ mirror (4 samples) with smoke in it, virtual mirror | 59 | 368,600 (6182 to 6340) | 56,847 | identical | identical |
+| 16 | magione, E30 lap, cockpit: HQ mirror (4 samples), light clouds | 39 | 272,107 (6965 to 6996) | 45,826 | identical | identical |
+| 17 | monza, F40 lap, chase: HQ mirror 256 (2 samples), smoke, flames, virtual mirror | 59 | 353,564 (5932 to 6044) | 52,035 | identical | identical |
+| 18 | spa, F2004 without flame_presets.ini (flames version 1, three png textures) lifting off, rear camera | 149 | 811,394 (5293 to 5564) | 123,491 | identical | identical |
+| 19 | magione, E30 without body_shadow.png: the five generated pictures and the frames after (first run: no shadow yet) | 9 | 50,055 (5550 to 5578) | 8,520 | identical | identical |
+| 20 | spa, F2004 (animated suspension) without body_shadow.png: the five generated pictures and the frames after | 9 | 51,635 (5718 to 5751) | 8,135 | identical | identical |
+| 21 | spa, F2004 launch with smoke: pause menu (40..60), replay mode begun (80), playing, paused (100), slow motion (115), ended (135) | 159 | 847,389 (5258 to 5449) | 125,428 | identical | identical |
+| 22 | monza, 1M hard stops, side camera: replay mode, paused (20..40: discs' glow gate, blur), fast forward x2 (40..60) | 69 | 372,246 (5276 to 5492) | 56,635 | identical | identical |
+| 23 | nordschleife, no car, from 3.5 km above: a hot-air balloon of [DYNAMIC_OBJECT_n] drifting (one frame after three updates) | 1 | 1193 | 209 | identical | identical |
 
 </details>
 
-**The 27 sequences of Task 21: 0 of 0 identical, 0 frames.**
+**The 27 sequences of Task 21: 27 of 27 identical, 2,353 frames.**
 
 <details><summary>the rows</summary>
 
 | # | Sequence | Frames | Calls (per frame) | Draws | Command log | Pixels |
 |---|---|---|---|---|---|---|
+| 1 | spa, F2004 lap, dash camera, mirrors 512 (driver, wheel display, shift lights) | 59 | 428,065 (6656 to 7315) | 70,534 | identical | identical |
+| 2 | magione, E30 lap, cockpit camera, mirrors 512 (driver, needles, three mirrors) | 59 | 376,946 (6358 to 6411) | 65,500 | identical | identical |
+| 3 | monza, 1M lap, cockpit camera (driver, needles, digital items) | 59 | 280,662 (4731 to 4781) | 39,471 | identical | identical |
+| 4 | monza, F40 lap, dash camera (needles, .ksanim v1 car) | 39 | 187,852 (4807 to 4839) | 26,056 | identical | identical |
+| 5 | spa at night (SUN_ANGLE 84), 1M, headlights + brake lights + reverse gear, rear camera | 29 | 196,205 (6758 to 6778) | 32,070 | identical | identical |
+| 6 | spa at night (SUN_ANGLE 84), 1M, headlights, front camera | 29 | 203,440 (7003 to 7043) | 33,611 | identical | identical |
+| 7 | monza at night (SUN_ANGLE 84), F40, pop-up headlights coming out (.ksanim v1) | 49 | 326,467 (6658 to 6735) | 54,267 | identical | identical |
+| 8 | spa, E30, lights flashing and brake lights by day, rear camera | 29 | 169,399 (5789 to 5928) | 27,171 | identical | identical |
+| 9 | spa, 1M hard stops, side camera (glowing discs, brake lights) | 89 | 542,254 (5823 to 6260) | 80,800 | identical | identical |
+| 10 | magione, E30 hard stops, side camera (glowing discs) | 69 | 375,084 (5341 to 5670) | 63,205 | identical | identical |
+| 11 | spa, F2004 into the wall, chase (damage, hanging parts) | 59 | 304,862 (5095 to 5221) | 44,166 | identical | identical |
+| 12 | spa, 1M along the wall, front camera (scratches, broken glass) | 59 | 310,336 (5250 to 5269) | 46,164 | identical | identical |
+| 13 | spa, E30 along the wall, chase (scratches, broken glass) | 59 | 344,082 (5793 to 5973) | 54,353 | identical | identical |
+| 14 | spa, 1M fully damaged at rest, front camera | 9 | 39,204 (4356 to 4356) | 5,544 | identical | identical |
+| 15 | spa, F2004 launch, 7 s, chase (tyre smoke Normal, skid marks, virtual mirror, smoke in the mirror) | 419 | 2,558,081 (5886 to 6352) | 379,650 | identical | identical |
+| 16 | spa, 1M launch, 6 s, side camera (tyre smoke Ultra, skid marks) | 359 | 1,863,437 (5009 to 5380) | 273,190 | identical | identical |
+| 17 | spa, F2004 over the grass, chase (grass smoke and pieces, dirt on the tyres) | 119 | 532,058 (4002 to 4615) | 70,428 | identical | identical |
+| 18 | spa, F2004 lifting off, rear camera (backfire flames) | 149 | 813,460 (5293 to 5632) | 123,717 | identical | identical |
+| 19 | monza, F40 lap, rear camera (flames, smoke Normal) | 299 | 1,477,388 (4900 to 5103) | 204,398 | identical | identical |
+| 20 | monza, 1M lap, chase, mirrors 512 and the virtual mirror | 39 | 208,707 (5327 to 5380) | 28,464 | identical | identical |
+| 21 | magione, E30 lap, dash camera, mirrors 256 | 39 | 245,001 (6210 to 6323) | 41,809 | identical | identical |
+| 22 | spa, F2004 lap, chase, cube map following the car (6 faces a frame) | 29 | 302,327 (10371 to 10479) | 48,869 | identical | identical |
+| 23 | monza, 1M lap, chase, cube map following the car (2 faces a frame) | 29 | 164,293 (5552 to 5735) | 22,758 | identical | identical |
+| 24 | magione, E30 lap, far camera (ground shadows, wheel blur, DIR_ nodes) | 39 | 134,061 (3410 to 3477) | 23,827 | identical | identical |
+| 25 | spa, F2004 kerb strike, side camera (suspension, DIR_ nodes, ground shadows) | 59 | 295,701 (4952 to 5113) | 42,767 | identical | identical |
+| 26 | imola, 488 GT3 lap, dash camera (digital display, driver) | 39 | 243,932 (6190 to 6293) | 35,270 | identical | identical |
+| 27 | magione, 250 GTO over a kerb, cockpit camera (needles, driver) | 39 | 200,496 (5090 to 5238) | 31,081 | identical | identical |
 
 </details>
 
-**The 21 frames of Task 20: 0 of 0 identical, 0 frames.**
+**The 21 frames of Task 20: 21 of 21 identical, 21 frames.**
 
 <details><summary>the rows</summary>
 
 | # | Sequence | Frames | Calls (per frame) | Draws | Command log | Pixels |
 |---|---|---|---|---|---|---|
+| 1 | spa, no car, chase | 1 | 2442 | 491 | identical | identical |
+| 2 | monza, no car, chase | 1 | 2052 | 397 | identical | identical |
+| 3 | magione, no car, chase | 1 | 1681 | 362 | identical | identical |
+| 4 | laguna seca, no car, chase | 1 | 2538 | 533 | identical | identical |
+| 5 | spa, F2004 at rest, chase | 1 | 5462 | 841 | identical | identical |
+| 6 | spa, F2004 turning (92 deg, 64 km/h), cockpit | 1 | 5899 | 963 | identical | identical |
+| 7 | spa, F2004 at 227 km/h, chase, sun 40 | 1 | 6376 | 1,080 | identical | identical |
+| 8 | spa, F2004 at 227 km/h, into the sun | 1 | 6094 | 954 | identical | identical |
+| 9 | monza, 1M at rest, chase | 1 | 4689 | 650 | identical | identical |
+| 10 | monza, 1M turning (-286 deg, 38 km/h), cockpit | 1 | 5621 | 886 | identical | identical |
+| 11 | monza, 1M at 168 km/h, far camera | 1 | 3708 | 624 | identical | identical |
+| 12 | monza, 1M turning, chase, sun 40 | 1 | 6450 | 1,030 | identical | identical |
+| 13 | magione, E30 at rest, chase | 1 | 5265 | 863 | identical | identical |
+| 14 | magione, E30 turning (-88 deg, 51 km/h), cockpit | 1 | 5915 | 1,045 | identical | identical |
+| 15 | magione, E30 at 131 km/h, into the sun | 1 | 6185 | 1,049 | identical | identical |
+| 16 | magione, E30 turning, chase, sun 40 | 1 | 6067 | 1,074 | identical | identical |
+| 17 | laguna seca, E30 at rest, chase | 1 | 5392 | 819 | identical | identical |
+| 18 | laguna seca, E30 turning (-311 deg, 38 km/h), cockpit | 1 | 5981 | 968 | identical | identical |
+| 19 | laguna seca, F2004 at 113 km/h (-19 deg), chase, sun 40 | 1 | 5954 | 967 | identical | identical |
+| 20 | laguna seca, F2004 at 243 km/h, into the sun, sun 40 | 1 | 6072 | 950 | identical | identical |
+| 21 | magione, E30 at rest, chase, shadows -1, cube map 0, world detail 0 (the video.ini of this PC) | 1 | 5154 | 845 | identical | identical |
 
 </details>
 
 ### Tests and lint
 
-(to be run at the end)
+Run at the end, at version 0.23.0:
+
+- `cargo clippy --workspace --locked -- -D warnings`: clean; the two wasm clippy runs (`rustyac-web` for
+  `wasm32-unknown-unknown`; math, ode, content, physics, game for `wasm32-wasip1`): clean; the oracle's own
+  clippy: clean.
+- `cargo test --release --workspace --locked`: 214 tests pass (the five golden frames among them; new:
+  `golden_post` and one of the exposure pair).
+- `cargo build --release --locked` for the workspace, and every tool builds with its updated lock file.
+- The browser preview's site builds (`python web/build.py`).
+- **The car oracle**: `chassis_compare run` (the whole Rust car against the twelve recordings of the game's own
+  physics): bit-exact, 100 % in every one.
+- **The 18 sound drives of Task 19** (`sh re/scratch/task19/compare_all.sh`): in all 18 the port's FMOD call log
+  with the game's answers is identical to the game's (16,704,341 calls), and all 18 level verdicts are ok (one
+  drive repeated once after FMOD's own known crash).
+
+The render batches ran with the oracle as built from commit `0a04abf` (three exe copies, three scratch roots,
+at the same time); after that only texts and the version number changed.
 
 ## 5. The sparkles
 
@@ -240,7 +344,7 @@ the Radeon and with `--warp`, 1280 x 720, `--no-race-ini --autodrive --at 12`; a
 brighter on the card than on WARP and than its own neighbours by more than 150 of 765. The second number
 counts pixels of which one colour channel differs by more than 96 of 255.
 
-| Frame | 1 sample: sparkles (differ by more than 96) | 2 samples: sparkles (differ by more than 96) | 4 samples: sparkles (differ by more than 96) | 8 samples: sparkles (differ by more than 96) |
+| Frame: sparkles (pixels that differ by more than 96) | 1 sample | 2 samples | 4 samples | 8 samples |
 |---|---|---|---|---|
 | Monza, F2004, chase | 1,632 (1,439) | 693 (2,005) | 165 (37) | 2 (0) |
 | Spa, F2004, chase | 234 (259) |  | 0 (0) |  |
@@ -276,7 +380,7 @@ All twelve one-sample numbers are Task 22b's, reproduced to the pixel.
 - **The game's own renderer on the card** (the oracle's Monza frame from the grid, the game's side, card
   against WARP): 543 with 1 sample, 358 with 2 samples, 7 with 4 samples, 0 with 8 samples. And the game's picture and the port's are identical on the card with every
   sample count (section 4).
-- FXAA does not cure the dots (it smooths what is there); multisampling does.
+- FXAA was not counted: it works on the finished picture and can only smooth what is there.
 
 ![The trees at Monza on the Radeon: one sample (Task 22b's dots) and four samples](postfx_trees.png)
 
@@ -321,15 +425,34 @@ this PC (AMD Radeon Pro 5500M), with this PC's `video.ini` of the moment plus th
 
 | Settings (on top of this PC's `video.ini`) | 1280 x 720: FPS (ms a frame) | 1920 x 1080: FPS (ms a frame) |
 |---|---|---|
-| 1 sample | 198 (5.05) | ? (?) |
-| 2 samples | 191 (5.23) | ? (?) |
-| 4 samples | 195 (5.13) | ? (?) |
-| 8 samples | 187 (5.34) | ? (?) |
-| 4 samples, the post-processing frame alone | 169 (5.93) | ? (?) |
-| 4 samples, FXAA | 163 (6.13) | ? (?) |
-| 4 samples, motion blur 6 | 139 (7.17) | ? (?) |
+| 1 sample | 198 (5.05) | 199 (5.04) |
+| 2 samples | 191 (5.23) | 191 (5.24) |
+| 4 samples | 195 (5.13) | 190 (5.26) |
+| 8 samples | 187 (5.34) | 190 (5.26) |
+| 4 samples, the post-processing frame alone | 169 (5.93) | 181 (5.52) |
+| 4 samples, FXAA | 163 (6.13) | 170 (5.90) |
+| 4 samples, motion blur 6 | 139 (7.17) | 118 (8.47) |
+| 4 samples, FXAA, motion blur 6 | 118 (8.46) | 105 (9.53) |
+| 1 sample, FXAA, motion blur 6 | 142 (7.05) | 154 (6.49) |
+| `--graphics max` (4 samples, FXAA, motion blur 6, everything else at its highest) | 89 (11.29) | 69 (14.50) |
+| `--graphics max --post 0` (4 samples, no FXAA, no blur) | 90 (11.06) | 94 (10.64) |
+| `--graphics low` | 204 (4.90) | 181 (5.51) |
 
-%PERFNOTES%
+- **Multisampling is almost free on this card**: 198, 191, 195, 187 FPS for 1, 2, 4, 8 samples at 720p and
+  199, 191, 190, 190 at 1080p. At these settings the frame is limited by the processor (about 650 draw
+  calls), not by the card.
+- **The post-processing frame alone** (a 16-bit target, the resolve, the depth resolve, the copy): 0.3 to
+  0.8 ms a frame. **FXAA**: 0.2 to 0.4 ms more.
+- **Motion blur is the expensive one**: 2 ms a frame at 720p and 3.2 ms at 1080p with 4 samples, because the
+  solve's shader runs once per sample and the scene is drawn into two multisampled 16-bit targets. With one
+  sample, blur and FXAA together cost 2 ms at 720p and 1.5 ms at 1080p.
+- **`--graphics max`**: 89 FPS at 720p and 69 at 1080p (it was 90 and 94 without the post-processing frame:
+  the row below it). At 1080p the motion blur with 4 samples is what the 25 FPS go to.
+- The runs scatter by a few per cent (`--graphics low` came out slower at 1080p than one sample did): read
+  differences below 0.3 ms as nothing.
+- One run (4 samples, FXAA, blur, 720p) had a single frame of 268 ms; the others had none above 61 ms.
+- Not measured: `acs.exe` itself with these settings (the oracle's timing mode could do it; with YEBIS in
+  the frame the comparison belongs to Task 23b).
 
 
 ## 8. The YEBIS plan in short
@@ -412,8 +535,9 @@ The whole map is `docs/map/yebis.md`.
    post-processing camera from my own reading of the disassembly before their briefs arrived, and used the
    briefs as a second reading; they agreed, and added what I had not looked for (the dead HDR class settled
    by a scan of every store into the camera's `hdr` member, the lamps' double draw, the FXAA target's resize
-   bug, the wall clock). Nothing in them was found wrong by the oracle.
-10. **The time budget.** (still running)
+   bug, the wall clock). Nothing in them was found wrong by the oracle. One reader reported that it had written a
+   scratch file into the system's temp folder by mistake and deleted it at once (rule 3 says never to).
+10. **The time budget.** The task ran about 2 hours 15 minutes on the clock (20:20 to 22:35), about 40 minutes of it the final proof runs and the sound drives. The readers took 85 minutes for their eight briefs; the port did not wait for them.
 11. `README.md`: no uncommitted change was there at the start; it was not touched.
 
 ## 11. Checks to run again

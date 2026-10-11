@@ -231,9 +231,9 @@ and `QUALITY` lines of those sections in a filter file are read by nothing.
 | Section | Keys | The YEBIS call they end in |
 |---|---|---|
 | `[TONEMAPPING]` | `HDR`, `EXPOSURE`, `GAMMA`, `FUNCTION`, `MAPPING_FACTOR`, `SCALE_WIDTH`, `SCALE_HEIGHT`, `OFFSET_X`, `OFFSET_Y` | `SetTonemapParameters(exposure, gamma, function, mapping factor, ...)` 0x14039c1f0 (the exposure is the automatic one when that is on; with `HDR` not 1 the function is fixed), `SetTonemapViewportScale` 0x14039cce0 |
-| `[AUTO_EXPOSURE]` | `ENABLED`, `DELAY`, `MIN`, `MAX`, `TARGET`, `INFLUENCED_BY_GLARE` | `SetAutoExposureEnable`, `...Delay`, `...Range(MIN, MAX)`, `...MiddleGray(camera exposure / 30 x TARGET x the manager's multiplier, influenced by glare)` 0x14039beb0 to 0x14039bfd0. The camera's exposure is the car's `onBoardExposure` / `dashBoardExposure` / `outBoardExposure` (30 for the track cameras) |
-| `[COLOR]` | `HUE`, `SATURATION`, `BRIGHTNESS`, `CONTRAST`, `SEPIA`, `COLOR_TEMP`, `WHITE_BALANCE` | `InitializeMatrix`, then one `MultiplyMatrixColor...` each when it is not the neutral value (hue in degrees to radians; 6500 K is neutral) 0x14039d780 to 0x14039dad0. Saturation is multiplied by `[SATURATION] LEVEL` of the lighting |
-| `[GLARE]` | `SHAPE`, `GHOST`, `GHOST_CONCENTRIC_DISTORTION`, `AFTER_IMAGE`, `ANAMORPHIC`, `LUMINANCE`, `THRESHOLD`, `BRIGHT_PASS`, `PRECISION`, `BLUR`, `BLOOM_*` (4), `GENERATION_RANGE_SCALE`, `STAR_*` (3), `USE_CUSTOM_SHAPE` and 19 `SHAPE_*` keys | `SetGlareShape` (a preset number, or a preset's definition with its luminances and lengths multiplied by the `SHAPE_*` values), `SetGlareParameters`, and ten tuning setters 0x14039b550 to 0x14039d4c0; `GHOST`, `AFTER_IMAGE`, `PRECISION` and `ANAMORPHIC` go into `Initialize` (a change restarts YEBIS) |
+| `[AUTO_EXPOSURE]` | `ENABLED`, `DELAY`, `MIN`, `MAX`, `TARGET`, `INFLUENCED_BY_GLARE` | `SetAutoExposureEnable`, `...Delay`, `...Range(MIN, MAX)`, `...MiddleGray(camera exposure / 30 x TARGET x the exposure multiplier, influenced by glare)` 0x14039beb0 to 0x14039bfd0. The multiplier is `Documents/Assetto Corsa/cfg/exposure.ini [EXPOSURE] VALUE` (the photo mode's and the replay's exposure buttons change it). The camera's exposure is the car's `onBoardExposure` / `dashBoardExposure` / `outBoardExposure` (30 for the track cameras) |
+| `[COLOR]` | `HUE`, `SATURATION`, `BRIGHTNESS`, `CONTRAST`, `SEPIA`, `COLOR_TEMP`, `WHITE_BALANCE` | `InitializeMatrix`, then one `MultiplyMatrixColor...` each when it is not the neutral value (hue in degrees to radians; 6500 K is neutral) 0x14039d780 to 0x14039dad0. Saturation is multiplied by `video.ini [SATURATION] LEVEL` / 100 |
+| `[GLARE]` | `SHAPE`, `GHOST`, `GHOST_CONCENTRIC_DISTORTION`, `AFTER_IMAGE`, `ANAMORPHIC`, `LUMINANCE`, `THRESHOLD`, `BRIGHT_PASS`, `PRECISION`, `BLUR`, `BLOOM_*` (4), `GENERATION_RANGE_SCALE`, `STAR_*` (3), `USE_CUSTOM_SHAPE` and 19 `SHAPE_*` keys | `SetGlareShape` (a preset number, or a preset's definition with its luminances and lengths multiplied by the `SHAPE_*` values), `SetGlareParameters`, and ten tuning setters 0x14039b550 to 0x14039d4c0 (`STAR_LENGTH_FOV_DEPENDENCE` is read and then lost: the setter is fed a member nothing writes, always 0); `GHOST`, `AFTER_IMAGE`, `PRECISION` and `ANAMORPHIC` go into `Initialize` (a change restarts YEBIS) |
 | `[DOF]` | `APERTURE_PARAMETER`, `APERTURE_F_NUMBER`, `IMAGE_SENSOR_HEIGHT`, `BASE_FOV`, `ADAPTIVE_APERTURE_FACTOR`, `APERTURE_FRONT_LEVELS_NUMBER`, `APERTURE_BACK_LEVELS_NUMBER`, `EDGE_QUALITY`, `BACKGROUND_MASK_THRESHOLD`, `APERTURE_SHAPE` | `SetDepthOfFieldParameters(focus distance, f-number, ...)` 0x14039b6d0 and three more; the focus distance and whether it is active come from the game's camera of the moment (`Camera::dofFocus`, `dofFactor`) |
 | `[GODRAYS]` | `USE_SUN_LIGHT`, `LENGTH`, `GLARE_RATIO`, `ANGLE_ATTENUATION`, `NOISE_MASK`, `NOISE_FREQUENCY`, `DEPTH_MASK_THRESHOLD`, `DIFFRACTION_RING` and four more of it | `SetLightShaftParameters`, `SetLightShaftDiffractionRing`, `SetLightShaftPosition` 0x14039b630 to 0x14039b670; the position is the sun on the screen, the colour the sun's (both computed every frame by `updateYebisParameters`), and it is off when the sun is behind the camera |
 | `[HEAT_SHIMMER]` | 14 `HEAT_PARTICLE_*` keys | `SetHeatShimmerParticleParameters`, `...FractalOctave`, `...FalloffDistance`, `...Color`, `...Array` 0x14039ca40 to 0x14039cb60; the particles themselves are the game's (`KGLYebisParticle*`, `rand()`), one volume 2 m behind each car, switched off above 25 km/h (`PostProcessEffectsUpdater::update` 0x1400abc20) |
@@ -247,10 +247,20 @@ In the files and read by nothing: `[YEBIS] ENABLED`, `[OPTIMIZATIONS] FIXED_WIDT
 
 **`PostProcessEffectsUpdater`** (0x1400ab880, a game object made with the camera; 2,102 bytes) does two
 things and never calls the library: it loads the filter named in `video.ini [POST_PROCESS] FILTER` (and
-again when the filter app or the photo mode picks another: `loadConfigurationFile` 0x1400abb70 ->
+again when the filter app `PostProcessFilterSelector` picks another: `loadConfigurationFile` 0x1400abb70 ->
 `loadPPSet`), and every frame it fills the heat-shimmer volumes behind the cars. How the cars' state would
 reach other parameters was an open question of the atlas: it does not; exposure comes from the camera
 definition, focus from the camera of the moment.
+
+Traps for a port (all confirmed): a key that is missing from a section reads as 0, not as a default; a
+section that is missing keeps the values of the filter loaded before; text that is not a number ends the
+game; `sepia.ini` and `vintage.ini` say `SHAPE_GHOST_HALO_LUMINANCE=05`, which is 5; three angles are
+turned into radians with a single-precision constant and one multiply.
+
+With this PC's `video.ini` of the moment and only `ENABLED` switched to 1 (`QUALITY`, `GLARE`, `DOF`,
+`RAYS_OF_GOD`, `HEAT_SHIMMER` all 0), YEBIS would do: tone map, automatic exposure, the colour matrix,
+chromatic aberration and the vignette of `default.ini`, in effect buffers 640 wide. That is stage 3 of the
+plan below.
 
 The exact conversion of every key (defaults, units, which member of the block) is in the brief
 `re/scratch/task23/yebis_3_params.md` and in `yebis_2_frame.md` section 9.
