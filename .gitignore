@@ -24,3 +24,6 @@ brainstorm.md
 
 # The browser build: the site and the preview pack (the pack is Assetto Corsa content)
 dist-web/
+
+# The server pack (server/make_server_pack.py): Kunos acServer and content, never commit
+dist-server/

@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# rustyAC server kit: two Kunos acServer instances, one per preview track.
+#
+#   AC_PACK_DIR=/srv/rustyac/dist-server AC_ADMIN_PASSWORD=... docker compose -f server/docker-compose.yml up -d
+#
+# AC_PACK_DIR is the folder server/make_server_pack.py made (copied to the host). It holds
+# Kunos' files and is only mounted, never built into the image.
+#
+# Ports (each instance: one game port for TCP and UDP, one HTTP port for the server's own
+# info pages /INFO and /JSON|<guid>):
+#   spa           9600/tcp 9600/udp   8081/tcp
+#   laguna_seca   9610/tcp 9610/udp   8082/tcp
+# They are published on the host directly ("ports"), not through Traefik or a Cloudflare
+# Tunnel: those carry HTTP only, and the cars' positions travel over UDP.
+
+x-acserver: &acserver
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: rustyac-acserver
+  restart: unless-stopped
+  volumes:
+    - ${AC_PACK_DIR:-/srv/rustyac/dist-server}:/pack:ro
+  stop_grace_period: 5s
+
+services:
+  acserver-spa:
+    <<: *acserver
+    environment:
+      AC_SERVER: spa
+      AC_ADMIN_PASSWORD: ${AC_ADMIN_PASSWORD:-}
+      AC_PASSWORD: ${AC_PASSWORD:-}
+    ports:
+      - "9600:9600/tcp"
+      - "9600:9600/udp"
+      - "8081:8081/tcp"
+
+  acserver-laguna-seca:
+    <<: *acserver
+    environment:
+      AC_SERVER: laguna_seca
+      AC_ADMIN_PASSWORD: ${AC_ADMIN_PASSWORD:-}
+      AC_PASSWORD: ${AC_PASSWORD:-}
+    ports:
+      - "9610:9610/tcp"
+      - "9610:9610/udp"
+      - "8082:8082/tcp"
