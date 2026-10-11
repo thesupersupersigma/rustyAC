@@ -264,31 +264,38 @@ pub struct Opponent {
 
 impl Opponent {
     /// `<car>[:<skin>]:<parked | auto | file.ryin>` (the command line's and the header's form).
+    /// The parts are split from the right; the colon after a drive letter (`C:\...`) is not
+    /// a separator, so the car and the file may both be paths.
     pub fn parse(text: &str) -> Result<Opponent, String> {
         let wrong = || format!("{text:?}: an opponent is <car>[:<skin>]:<parked | auto | file.ryin>");
-        let (car, rest) = text.split_once(':').ok_or_else(wrong)?;
-        let drive_of = |spec: &str| -> Option<OpponentDrive> {
-            match spec {
-                "parked" => Some(OpponentDrive::Parked),
-                "auto" => Some(OpponentDrive::Auto),
-                file if file.to_ascii_lowercase().ends_with(".ryin") => Some(OpponentDrive::Recorded(std::path::PathBuf::from(file))),
-                _ => None,
+        // the last colon that does not belong to a drive letter
+        fn split_last(text: &str) -> Option<(&str, &str)> {
+            let bytes = text.as_bytes();
+            let mut end = text.len();
+            while let Some(at) = text[..end].rfind(':') {
+                let drive = at >= 1
+                    && bytes[at - 1].is_ascii_alphabetic()
+                    && (at == 1 || bytes[at - 2] == b':')
+                    && matches!(bytes.get(at + 1), Some(b'\\') | Some(b'/'));
+                if !drive {
+                    return Some((&text[..at], &text[at + 1..]));
+                }
+                end = at;
             }
+            None
+        }
+        let (head, spec) = split_last(text).ok_or_else(wrong)?;
+        let drive = match spec.to_ascii_lowercase().as_str() {
+            "parked" => OpponentDrive::Parked,
+            "auto" => OpponentDrive::Auto,
+            file if file.ends_with(".ryin") => OpponentDrive::Recorded(std::path::PathBuf::from(spec)),
+            _ => return Err(wrong()),
         };
-        // (a file's path may have a colon of its own: `C:\...`)
-        let (skin, drive) = match drive_of(rest) {
-            Some(drive) if !matches!(&drive, OpponentDrive::Recorded(file) if !file.is_file() && rest.split_once(':').is_some_and(|(_, tail)| drive_of(tail).is_some_and(|d| matches!(d, OpponentDrive::Recorded(f) if f.is_file())))) => {
-                (String::new(), drive)
-            }
-            _ => {
-                let (skin, spec) = rest.split_once(':').ok_or_else(wrong)?;
-                (skin.to_string(), drive_of(spec).ok_or_else(wrong)?)
-            }
-        };
+        let (car, skin) = split_last(head).unwrap_or((head, ""));
         if car.is_empty() {
             return Err(wrong());
         }
-        Ok(Opponent { car: car.to_string(), skin, drive })
+        Ok(Opponent { car: car.to_string(), skin: skin.to_string(), drive })
     }
 
     pub fn to_text(&self) -> String {

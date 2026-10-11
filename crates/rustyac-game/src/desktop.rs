@@ -94,7 +94,15 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         }
     }
     for text in &options.opponents {
-        setup.opponents.push(rustyac_game::input_file::Opponent::parse(text)?);
+        let mut opponent = rustyac_game::input_file::Opponent::parse(text)?;
+        if let rustyac_game::input_file::OpponentDrive::Recorded(file) = &mut opponent.drive {
+            // (the whole path goes into a recording's header: a replay finds the file from anywhere)
+            if !file.is_file() {
+                return Err(format!("--opponent {text}: {} is not a file", file.display()));
+            }
+            *file = std::path::absolute(&*file).map_err(|e| e.to_string())?;
+        }
+        setup.opponents.push(opponent);
     }
     setup.physics_threads = options.physics_threads;
     if !setup.opponents.is_empty() {

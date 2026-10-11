@@ -512,7 +512,7 @@ impl CarView {
             fuel: car.fuel as f32,
             device: sim.car.device.source.device_id(),
             damage: car.damage_zone_level,
-            contacts: car.core.contact_joints().len() as u32,
+            contacts: sim.world_core().contact_joints().len() as u32,
             engine_life: 1000.0,
             air: car.env.ambient_temperature,
             air_density: car.air_density,
@@ -662,7 +662,7 @@ impl CarView {
         view.max_fuel = car.max_fuel;
         view.km_per_liter = sim.fuel_evaluator.km_per_liter();
         view.fuel_laps = sim.fuel_evaluator.fuel_laps(car.fuel);
-        view.dynamic_track = car.dynamic_track.is_some();
+        view.dynamic_track = sim.dynamic_track().is_some();
         if let Some(aero) = &car.aero {
             let wings = &aero.base().wings;
             view.wing_count = wings.len().min(8) as u8;

@@ -84,7 +84,8 @@ struct CarParts {
 /// with `THREADS=0`; half the processors with -1 (the game's file: "automatic"); else the
 /// number as it is. (A file without the section reads as -1, a section without the key as
 /// 0. The game itself cannot run with `THREADS=1`: its split `cars / workers + 1` then asks
-/// for a negative number of tasks and throws; here one worker works.)
+/// for a negative number of tasks and throws. Here the same split leaves the one worker
+/// nothing to do: every car is stepped on the calling thread.)
 pub fn worker_threads(threads_key: i32, logical_cpus: usize) -> usize {
     if logical_cpus < 4 || threads_key == 0 {
         0
@@ -124,6 +125,9 @@ pub struct PhysicsEngine {
     parts: Vec<CarParts>,
     /// The core is out, in a car that is being built.
     building: bool,
+    /// A step has run: no more cars (a new car's joints could land in slots that contact
+    /// joints left free, which the bookkeeping of [`PhysicsEngine::build_car`] does not follow).
+    stepped: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pool: Option<pool::ThreadPool>,
 }
@@ -165,6 +169,37 @@ impl Clock {
     }
 }
 
+/// The control bits of MXCSR (rounding, flush-to-zero, denormals-are-zero, the exception
+/// masks) of this thread; 0 where there is no such register.
+#[cfg(not(target_arch = "wasm32"))]
+fn float_modes() -> u32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut value = 0u32;
+        // SAFETY: `stmxcsr` stores the register into the four bytes given.
+        unsafe { std::arch::asm!("stmxcsr [{}]", in(reg) &mut value, options(nostack, preserves_flags)) };
+        value & 0xffc0
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        0
+    }
+}
+
+/// Sets the control bits of MXCSR of this thread (the sticky exception flags are cleared).
+#[cfg(not(target_arch = "wasm32"))]
+fn set_float_modes(modes: u32) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let value = modes & 0xffc0;
+        // SAFETY: `ldmxcsr` loads the register from the four bytes given; only control bits
+        // a thread of this process already runs with are ever passed.
+        unsafe { std::arch::asm!("ldmxcsr [{}]", in(reg) &value, options(nostack, preserves_flags, readonly)) };
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = modes;
+}
+
 #[allow(dead_code)]
 fn chassis_is_send() {
     fn is_send<T: Send>() {}
@@ -195,6 +230,7 @@ impl PhysicsEngine {
             seconds: [0.0; 4],
             parts: Vec::new(),
             building: false,
+            stepped: false,
             #[cfg(not(target_arch = "wasm32"))]
             pool: (threads > 0).then(|| pool::ThreadPool::new(threads)),
         }
@@ -258,9 +294,11 @@ impl PhysicsEngine {
     /// the session start, a setup, damage) can be done on the returned car at any time: it
     /// reaches the one world with the next step.
     ///
-    /// An error leaves the engine without its world: it cannot be used any more.
+    /// Every car is built before the first step. An error leaves the engine without its
+    /// world: it cannot be used any more.
     pub fn build_car(&mut self, build: impl FnOnce(PhysicsCore, u32) -> Result<RollingChassis, String>) -> Result<RollingChassis, String> {
         assert!(!self.building, "a car that failed to build has taken the engine's world with it");
+        assert!(!self.stepped, "the cars of an engine are built before its first step");
         let guid = self.parts.len() as u32;
         let core = std::mem::take(&mut self.core);
         let bodies_before = core.bodies().count();
@@ -281,6 +319,7 @@ impl PhysicsEngine {
         self.parts.push(parts);
         // the car's own tape and callbacks are its own business
         car.core.contact_log = None;
+        car.in_engine = true;
         Ok(car)
     }
 
@@ -336,7 +375,18 @@ impl PhysicsEngine {
     /// them when the clock shows the new step's time).
     pub fn step(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
         assert_eq!(cars.len(), self.parts.len(), "a step takes every car of the engine, in creation order");
+        self.stepped = true;
+        // PhysicsEngine::stepCounter is one number for all cars (the lap timer takes the
+        // step's place in a frame of three from it); each car counts on from it in its step
+        for slot in cars.iter_mut() {
+            slot.car.step_counter = self.step_counter;
+        }
         self.step_counter = self.step_counter.wrapping_add(1);
+        // PhysicsEngine::evOnPreStep: the jobs queued for the physics thread, before anything
+        // else of the step (a teleported car is seen where it now is by the others)
+        for slot in cars.iter_mut() {
+            slot.car.run_pre_step_jobs(physics_time);
+        }
 
         // Track::step @ 0x140278d20: the laps of all cars rubber the track in
         if let Some(track) = &mut self.dynamic_track {
@@ -441,7 +491,7 @@ impl PhysicsEngine {
     /// `Car::stepPreCacheValues` and `Car::step` of every car.
     fn step_cars(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(pool) = &self.pool {
+        if let Some(pool) = &mut self.pool {
             // the game's split: the first `cars / workers + 1` cars on the calling thread,
             // one task for each of the others. A car whose device must stay here stays here.
             let count = cars.len();
@@ -450,11 +500,22 @@ impl PhysicsEngine {
             let shared = SharedSlots(cars.as_mut_ptr(), std::marker::PhantomData);
             let shared = &shared;
             let pooled_ref = &pooled;
+            // a worker computes as the calling thread does: with its rounding and denormal
+            // modes (they are the processor's defaults everywhere unless some library changed
+            // them on one thread)
+            let modes = float_modes();
             let task = move |item: usize| {
                 // SAFETY: `SharedSlots`: this index is this thread's alone, and it is in
                 // bounds (`pooled` holds indices below `count`).
                 let slot = unsafe { &mut *shared.0.add(pooled_ref[item]) };
+                let own = float_modes();
+                if own != modes {
+                    set_float_modes(modes);
+                }
                 step_one(slot, dt, physics_time);
+                if own != modes {
+                    set_float_modes(own);
+                }
             };
             let before = || {
                 for index in 0..count {

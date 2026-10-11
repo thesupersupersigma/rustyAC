@@ -51,16 +51,15 @@ impl ThreadPool {
             work: Condvar::new(),
             done: Condvar::new(),
         });
-        let workers = (0..threads)
-            .map(|index| {
-                let shared = shared.clone();
-                std::thread::Builder::new()
-                    .name(format!("physics worker {index}"))
-                    .spawn(move || worker(&shared))
-                    .expect("a physics worker thread")
-            })
-            .collect();
-        ThreadPool { shared, workers }
+        // (the pool exists before its threads: if one cannot be started, dropping the pool
+        // ends the ones that were)
+        let mut pool = ThreadPool { shared, workers: Vec::with_capacity(threads) };
+        for index in 0..threads {
+            let shared = pool.shared.clone();
+            let handle = std::thread::Builder::new().name(format!("physics worker {index}")).spawn(move || worker(&shared)).expect("a physics worker thread");
+            pool.workers.push(handle);
+        }
+        pool
     }
 
     /// The number of worker threads.
@@ -69,14 +68,15 @@ impl ThreadPool {
     }
 
     /// Calls `f(0)`, `f(1)`, ... `f(count - 1)`, each exactly once, on the workers and on
-    /// this thread, and returns when all calls have returned.
-    pub fn run(&self, count: usize, f: &(dyn Fn(usize) + Sync)) {
+    /// this thread, and returns when all calls have returned. (`&mut self`: one run at a time;
+    /// two at once would share the one job slot.)
+    pub fn run(&mut self, count: usize, f: &(dyn Fn(usize) + Sync)) {
         self.run_with(count, f, || {});
     }
 
     /// [`ThreadPool::run`], and this thread first does `before` (work that must stay on it)
     /// while the workers have already started.
-    pub fn run_with(&self, count: usize, f: &(dyn Fn(usize) + Sync), before: impl FnOnce()) {
+    pub fn run_with(&mut self, count: usize, f: &(dyn Fn(usize) + Sync), before: impl FnOnce()) {
         if count == 0 {
             before();
             return;
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn every_item_once() {
-        let pool = ThreadPool::new(3);
+        let mut pool = ThreadPool::new(3);
         for round in 0..200usize {
             let count = round % 9;
             let hits: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn no_workers_is_a_plain_loop() {
-        let pool = ThreadPool::new(0);
+        let mut pool = ThreadPool::new(0);
         let sum = AtomicU32::new(0);
         pool.run(5, &|i| {
             sum.fetch_add(i as u32, Ordering::Relaxed);

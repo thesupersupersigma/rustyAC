@@ -567,6 +567,14 @@ pub fn replay(recording: &Recording, paths: &ReplayPaths, threads: usize, fault:
 
 /// [`replay`] on a track that is loaded already.
 pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, threads: usize, fault: Option<(usize, usize)>) -> Result<ReplayReport, String> {
+    if recording.rows.is_empty() {
+        return Err("the recording has no steps".to_string());
+    }
+    if let Some((_, car)) = fault {
+        if car >= recording.cars.len() {
+            return Err(format!("the fault's car {car}: the recording has {} cars", recording.cars.len()));
+        }
+    }
     let mut world = ReplayWorld::build(recording, paths, track, threads)?;
     for (n, (car, meta)) in world.cars.iter().zip(&recording.cars).enumerate() {
         let bodies = world.engine.bodies_of(n).len();
@@ -721,8 +729,11 @@ impl Golden {
     /// the game's hash; else the first step that does not.
     pub fn replay(&self, paths: &ReplayPaths, track: Arc<Track>, threads: usize) -> Result<Option<usize>, String> {
         let recording = self.recording()?;
-        let mut world = ReplayWorld::build(&recording, paths, track, threads)?;
         let width = INPUT_COLUMNS.len();
+        if self.inputs.is_empty() || self.inputs.iter().any(|inputs| inputs.len() != width * recording.cars.len()) {
+            return Err("the golden file has no steps, or its inputs do not fit its cars".to_string());
+        }
+        let mut world = ReplayWorld::build(&recording, paths, track, threads)?;
         for (step, (inputs, hash)) in self.inputs.iter().zip(&self.hashes).enumerate() {
             let per_car: Vec<&[u32]> = inputs.chunks_exact(width).collect();
             world.step(&per_car);

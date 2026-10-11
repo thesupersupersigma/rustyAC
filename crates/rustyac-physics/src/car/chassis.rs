@@ -383,6 +383,9 @@ pub struct RollingChassis {
     pub core: PhysicsCore,
     /// `Car::physicsGUID`: the number of cars the engine had when this one was built.
     pub physics_guid: u32,
+    /// The car is one of a [`crate::engine::PhysicsEngine`]'s: `core` is its working copy, and
+    /// what belongs to the one world (new shapes, the contact groups) is the engine's to change.
+    pub in_engine: bool,
     pub env: ChassisEnvironment,
     /// The road under the wheels (`Track` as an `IRayTrackCollisionProvider`).
     pub ground: Box<dyn RayTrackCollisionProvider + Send>,
@@ -922,6 +925,7 @@ impl RollingChassis {
         let mut chassis = RollingChassis {
             core,
             physics_guid,
+            in_engine: false,
             env,
             ground,
             body,
@@ -1612,9 +1616,7 @@ impl RollingChassis {
         // PhysicsEngine::step counts its steps first of all
         self.step_counter = self.step_counter.wrapping_add(1);
         // PhysicsEngine::evOnPreStep: the queued jobs see the new step's clock
-        for job in std::mem::take(&mut self.pre_step_jobs) {
-            job(self);
-        }
+        self.run_pre_step_jobs(physics_time);
         if let Some(tape) = &mut self.core.tape {
             tape.clear();
         }
@@ -1971,6 +1973,20 @@ impl RollingChassis {
         self.update_collider_status();
         if self.env.is_first_car {
             self.step_jump_start();
+        }
+    }
+
+    /// `PhysicsEngine::evOnPreStep` for this car: what the game's main thread queued for the
+    /// physics thread ([`RollingChassis::queue`]) runs now, with the clock at the new step's
+    /// time. With several cars the engine calls this for every car before anything else of
+    /// the step, as the game drains its one queue before `Track::step`.
+    pub fn run_pre_step_jobs(&mut self, physics_time: f64) {
+        if self.pre_step_jobs.is_empty() {
+            return;
+        }
+        self.physics_time = physics_time;
+        for job in std::mem::take(&mut self.pre_step_jobs) {
+            job(self);
         }
     }
 
@@ -2576,6 +2592,7 @@ impl RollingChassis {
     /// `colliders.ini` on the car's body, category 4, colliding with category 1 (track
     /// surfaces) only, in the car's own sub-space.
     fn install_box_colliders(&mut self) -> Result<(), String> {
+        debug_assert!(!self.in_engine, "a car of an engine gets its shapes while it is built (PhysicsEngine::build_car)");
         let boxes = super::colliders::load_boxes(&self.data_path)?;
         for def in &boxes {
             self.core.add_box_collider(self.body, &def.centre, &def.size, super::body::category::CAR, super::body::category::SURFACE, self.physics_guid + 1);
@@ -2588,6 +2605,7 @@ impl RollingChassis {
     /// when the car has a `collider.kn5`): the car's bounds, and the mesh on the body with
     /// category 4 and the collide bits 0x1e (walls, cars, loose objects).
     pub fn init_collider_mesh(&mut self, mesh: ColliderMesh) {
+        debug_assert!(!self.in_engine, "a car of an engine gets its collider mesh while it is built (PhysicsEngine::build_car)");
         self.bounds = super::colliders::bounds(&mesh);
         self.core.add_mesh_collider(self.body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, self.physics_guid + 1);
         self.colliders.mesh = Some(mesh);
@@ -2611,6 +2629,7 @@ impl RollingChassis {
     /// of a session the contacts are thrown away and no new ones are looked for during 250
     /// steps (0.75 s).
     pub fn reset_collisions_for_new_session(&mut self) {
+        debug_assert!(!self.in_engine, "with several cars the contacts are the engine's (PhysicsEngine::reset_collisions_for_new_session)");
         self.core.reset_collisions();
         self.core.set_no_collision_steps(250);
     }

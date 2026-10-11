@@ -399,9 +399,10 @@ usage: rustyac [options]
   --opponent <car>[:<skin>]:<parked|auto|file.ryin>
                         another car (repeat it for more): parked on its brakes, driven by the
                         line follower, or by the inputs of a recorded drive
-  --physics-threads <n> worker threads that step the cars (0: none). Default: as the game,
-                        [PHYSICS_THREADING] THREADS of its assetto_corsa.ini (half the logical
-                        processors; none below four). The result never depends on it
+  --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split
+                        leaves the worker nothing). Default: as the game, [PHYSICS_THREADING]
+                        THREADS of its assetto_corsa.ini (half the logical processors; none
+                        below four). The result never depends on it
   --state-hash          with --replay --headless: print a hash over every car's state of
                         every step, and how long a step took
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's

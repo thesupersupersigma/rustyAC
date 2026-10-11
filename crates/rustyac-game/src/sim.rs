@@ -751,20 +751,28 @@ fn spawn_first(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
     Err(format!("the track {} has no spawn point for {spawn:?} (no AC_{}_0 node)", track.name, sets[0]))
 }
 
-/// The settings of the session's engine and of every car in it.
+/// The settings of a session: of its one car, or of the engine and every car in it.
 fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool) -> rustyac_physics::car::ChassisEnvironment {
     let mut env = setup.env;
     let session = &setup.session;
     if session.wind_speed != 0.0 {
+        // RaceManager::generateWind's job: PhysicsEngine::setWind
         env.set_wind(session.wind_speed, session.wind_direction_deg);
     }
     if on_track {
+        // RaceManager::setCurrentSession for a session that is not a race: leaving the track
+        // costs the lap (penalty mode 1); `[RACE] PENALTIES` on: two tyres may be off, off:
+        // any number (-1)
         env.penalty_mode = 1;
         env.allowed_tyres_out = if session.penalties { 2 } else { -1 };
+        // the session of race.ini; without one, a hot-lap session from the hot-lap start
         env.session_type = session.session_type.unwrap_or(if setup.spawn == "hotlap" { 4 } else { 1 });
     }
+    // the track's DRS zones (files recorded before they were ported have the wing free everywhere)
     env.track_drs_zones = setup.drs_zones;
     if setup.session_starts_at_spawn {
+        // RaceManager::setCurrentSession: the session starts now (the wind's slow swing and
+        // the automatic gearbox's 300 ms count from here)
         env.session_start_time_ms = physics_time;
     }
     env
@@ -810,28 +818,10 @@ fn build_car(
         Some(track) => Box::new(TrackGround(Arc::clone(track))),
         None => Box::new(Ground::Flat),
     };
-    let mut env = setup.env;
+    // the session's settings (the wind, the rules of a session on a track, the DRS zones, the
+    // session's start): `session_env`
+    let env = session_env(setup, physics_time, track.is_some());
     let session = &setup.session;
-    if session.wind_speed != 0.0 {
-        // RaceManager::generateWind's job: PhysicsEngine::setWind
-        env.set_wind(session.wind_speed, session.wind_direction_deg);
-    }
-    if track.is_some() {
-        // RaceManager::setCurrentSession for a session that is not a race: leaving the track
-        // costs the lap (penalty mode 1); `[RACE] PENALTIES` on: two tyres may be off, off:
-        // any number (-1)
-        env.penalty_mode = 1;
-        env.allowed_tyres_out = if session.penalties { 2 } else { -1 };
-        // the session of race.ini; without one, a hot-lap session from the hot-lap start
-        env.session_type = session.session_type.unwrap_or(if setup.spawn == "hotlap" { 4 } else { 1 });
-    }
-    // the track's DRS zones (files recorded before they were ported have the wing free everywhere)
-    env.track_drs_zones = setup.drs_zones;
-    if setup.session_starts_at_spawn {
-        // RaceManager::setCurrentSession: the session starts now (the wind's slow swing and
-        // the automatic gearbox's 300 ms count from here)
-        env.session_start_time_ms = physics_time;
-    }
     // RaceManager::initOffline: a file with a hot-lap session arms the first lap
     let arm_first_lap = session.arm_first_lap.unwrap_or(env.session_type == 4);
     // the track's loose objects are made with the track, before the car
@@ -977,6 +967,9 @@ fn build_world(
     if setup.oracle.is_some() {
         return Err("an oracle set-up has one car".to_string());
     }
+    if ac_root().is_none() {
+        eprintln!("WARNING: Assetto Corsa's folder was not found (set AC_ROOT): without their collider meshes the cars drive through each other");
+    }
     let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     let threads = setup.physics_threads.unwrap_or_else(|| rustyac_physics::engine::worker_threads(physics_threading_key(), cpus));
     let mut engine = PhysicsEngine::new(session_env(setup, physics_time, track.is_some()), threads);
@@ -1005,6 +998,16 @@ fn build_world(
         other.session.ballast_kg = 0.0;
         other.session.restrictor = 0.0;
         other.session.setup_file = None;
+        // (assists.ini is the player's: DrivingAssistManager changes car 0 only; the others
+        // keep the ABS and traction control of their own files)
+        other.session.assists = None;
+        if let OpponentDrive::Recorded(file) = &opponent.drive {
+            // a recorded drive is replayed with the aids it was driven with
+            let recorded = crate::input_file::InputFile::read(file)?.setup;
+            other.auto_clutch = recorded.auto_clutch;
+            other.auto_shifter = recorded.auto_shifter;
+            other.auto_blip = recorded.auto_blip;
+        }
         let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), slot)?;
         opponents.push(OpponentCar { car: built, setup: opponent.clone(), data_path: opponent_data, spawn: pose });
     }
@@ -1078,6 +1081,15 @@ impl GameSim {
         }
     }
 
+    /// The track's grip of the session (`Track::dynamicTrack`), when race.ini has the section:
+    /// the engine's with several cars, else the car's own.
+    pub fn dynamic_track(&self) -> Option<rustyac_physics::track::DynamicTrack> {
+        match &self.engine {
+            Some(engine) => engine.dynamic_track,
+            None => self.car.car.dynamic_track,
+        }
+    }
+
     /// All cars of the session in creation order: the driver's first.
     pub fn cars(&self) -> impl Iterator<Item = &rustyac_physics::car::RollingChassis> {
         std::iter::once(&self.car.car).chain(self.opponents.iter().map(|o| &o.car.car))
@@ -1137,7 +1149,7 @@ impl GameSim {
             // the handler `Track` hangs on a new session (lambda @ 0x140277740): the next
             // session starts from the session's start grip plus SESSION_TRANSFER of what
             // this one gained, with its own random part
-            if let Some(mut track) = self.car.car.dynamic_track {
+            if let Some(mut track) = self.dynamic_track() {
                 self.session_index += 1;
                 let mut rand = rustyac_physics::session::MsvcRand(self.setup.seed.wrapping_add(self.session_index as u32));
                 track.on_new_session(self.session_index, rand.next());
@@ -1154,6 +1166,9 @@ impl GameSim {
         std::mem::swap(&mut car.device, &mut self.car.device);
         // the engine's step count goes on (lap times carry its remainder of three)
         car.car.step_counter = self.car.car.step_counter;
+        if let Some(engine) = &mut self.engine {
+            engine.step_counter = self.car.car.step_counter;
+        }
         self.physics_info = PhysicsInfo::of(&car);
         self.car = car;
         self.lap_db = LapDb::new(self.lap_db.sector_count);
@@ -1327,6 +1342,10 @@ impl GameSim {
                     slots.push(CarSlot { car: &mut opponent.car.car, device: DeviceRef::Anywhere(&mut opponent.car.device) });
                 }
                 engine.step(DT, time, &mut slots);
+                // (nobody lists the other cars' laps yet: their timers' events are dropped)
+                for opponent in &mut self.opponents {
+                    let _ = opponent.car.car.transponder.take_events();
+                }
             }
         }
         self.steps += 1;
