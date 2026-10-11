@@ -31,7 +31,8 @@
 //! 5.5,1.2,-2.5: 6 m away, beside and a little behind), moving with the car. There is no
 //! track sound: no ambience, no crowd, no reverb. `--volume` is the master level (FMOD's
 //! writer clips, so keep it low and raise all clips by one gain afterwards); `--engine-level`
-//! and `--tyres-level` are `[LEVELS] ENGINE` and `TYRES` of the audio.ini the run is given.
+//! and `--tyres-level` are `[LEVELS] ENGINE` and `TYRES` of the audio.ini the run is given,
+//! `--wind-level` its `WIND` (default 0: no wind noise).
 
 #[cfg(not(windows))]
 fn main() {
@@ -173,9 +174,10 @@ mod clips {
         // the levels of this run: an audio.ini of its own beside the WAV
         let ini = out.with_extension("audio.ini");
         let levels = format!(
-            "[LEVELS]\nMASTER=1\nENGINE={}\nTYRES={}\nSURFACES=1\nWIND=1\nDIRT_BOTTOM=1\nOPPONENTS=1\n\n[SKIDS]\nENTRY_POINT=100\n",
+            "[LEVELS]\nMASTER=1\nENGINE={}\nTYRES={}\nSURFACES=1\nWIND={}\nDIRT_BOTTOM=1\nOPPONENTS=1\n\n[SKIDS]\nENTRY_POINT=100\n",
             args.number("engine-level", 1.0)?,
-            args.number("tyres-level", 1.0)?
+            args.number("tyres-level", 1.0)?,
+            args.number("wind-level", 0.0)?
         );
         std::fs::write(&ini, levels).map_err(|e| format!("{}: {e}", ini.display()))?;
 
