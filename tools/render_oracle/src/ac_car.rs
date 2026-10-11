@@ -91,6 +91,11 @@ const VA_CAR_AVATAR_UPDATE_ERS_CHARGE: usize = 0x1_400d_d330; // CarAvatar::upda
 const VA_SUS_GRAPHICS_GENERATOR_CTOR: usize = 0x1_401b_4120; // SuspensionGraphicsGenerator::SuspensionGraphicsGenerator(CarAvatar*)
 const VA_SUS_GRAPHICS_GENERATE: usize = 0x1_401b_4280; // SuspensionGraphicsGenerator::generateConnections()
 const VA_SUS_GRAPHICS_UPDATE: usize = 0x1_401b_3ca0; // SuspensionGraphics::update(float)
+pub const VA_CAR_NODE_SORTER_CTOR: usize = 0x1_4006_bb60; // CarNodeSorter::CarNodeSorter(const std::wstring&, Sim*)
+const VA_CAR_NODE_SORTER_ADD_CAR: usize = 0x1_4006_bdf0; // CarNodeSorter::addCar(Node*, CarAvatar*)
+const VA_CAR_NODE_SORTER_SORT: usize = 0x1_4006_be30; // CarNodeSorter::sort()
+const VA_SIM_UNLOAD_MESH_RESOURCES: usize = 0x1_4019_edd0; // Sim::unloadMeshResources(Node*)
+pub const VA_CARS_TO_BE_LOADED: usize = 0x1_4155_9b00; // static int RaceManager::carsToBeLoaded
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
 /// SuspensionAvatar.obj and SuspensionAnimator.obj.
@@ -372,6 +377,9 @@ pub struct Car {
     /// the pause and the replay status of the last frame
     last_pause: std::cell::Cell<bool>,
     last_status: std::cell::Cell<i32>,
+    /// the car's number among the cars of the `Sim` (its guid), and how many there are
+    index: usize,
+    count: usize,
 }
 
 impl Car {
@@ -449,14 +457,22 @@ impl Game {
     }
 
     /// `CarAvatar::init3D` 0x1400d3b90 by hand around the game's own constructors.
-    pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8, console: *mut u8) -> Result<Car, String> {
+    ///
+    /// Several cars (`count` > 1, Task 24b): the first car's call makes the `Sim` and what
+    /// hangs on it; every later one (`first`: the first car) joins that `Sim` as
+    /// `Sim::addCar` does: its number is its guid, it goes into `Sim::cars`, and its node into
+    /// the game's own `CarNodeSorter` (`nodes.cars` is one then).
+    pub unsafe fn load_car(&self, spec: &CarSpec, nodes: &SimNodes, camera: *mut u8, console: *mut u8, first: Option<&Car>, index: usize, count: usize) -> Result<Car, String> {
         let cars_node = nodes.cars;
         let acs = &self.acs;
+        let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
+        let car_ini = rustyac_physics::data::ini::IniReader::load(&data.join("car.ini"))?;
+        if let Some(first) = first {
+            return self.load_car_into(spec, nodes, &car_ini, first, index, count);
+        }
         // the C runtime's rand() of this thread: the same start as the port's
         let randomize: extern "C" fn(u32) = std::mem::transmute(acs.va(VA_KS_RANDOMIZE));
         randomize(crate::frames::RAND_SEED);
-        let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
-        let car_ini = rustyac_physics::data::ini::IniReader::load(&data.join("car.ini"))?;
 
         let game = acs.alloc(0x278);
         wr(game, 0x138, self.graphics);
@@ -508,16 +524,26 @@ impl Game {
         // Sim::Sim: the mirror texture and the virtual mirror, when video.ini asks for mirrors.
         // A TrackAvatar of which only the ideal line's node is touched; the one car.
         let (mut mirror, mut virtual_mirror) = (std::ptr::null_mut::<u8>(), std::ptr::null_mut::<u8>());
+        if count > 1 {
+            // Sim::cars with room for every car; the sorter's Sim
+            let cars = acs.alloc(8 * count);
+            wr(cars, 0, car);
+            wr(sim, 0x208, cars);
+            wr(sim, 0x210, cars.add(8));
+            wr(cars_node, 0xf0, sim);
+        }
         if crate::root::profile().mirror_size != 0 {
             if nodes.track_avatar.is_null() {
                 let track = acs.alloc(0x200);
                 wr(track, 0x58, if nodes.ideal_line.is_null() { acs.alloc(0xe0) } else { nodes.ideal_line });
                 wr(sim, 0x150, track);
             }
-            let cars = acs.alloc(0x10);
-            wr(cars, 0, car);
-            wr(sim, 0x208, cars);
-            wr(sim, 0x210, cars.add(8));
+            if count == 1 {
+                let cars = acs.alloc(0x10);
+                wr(cars, 0, car);
+                wr(sim, 0x208, cars);
+                wr(sim, 0x210, cars.add(8));
+            }
             mirror = acs.alloc(0x68);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_MIRROR_TEXTURE_RENDERER_CTOR));
             // (GraphicsManager::videoSettings.aaSamples, read here for the multisampled target of
@@ -550,11 +576,48 @@ impl Game {
         wr(car, 0x1058, car_ini.get_float("BASIC", "GRAPHICS_PITCH_ROTATION").unwrap_or(0.0) * DEG);
         write_wstring(acs, car.add(0x1138), &spec.skin);
         wr(car, 0x1158, 0i32);
+        self.build_car(spec, nodes, &car_ini, car, game, mirror, virtual_mirror, race_manager, other_cars, sessions, 0, count)
+    }
+
+    /// A car after the first: it joins the first car's `Sim`.
+    unsafe fn load_car_into(&self, spec: &CarSpec, nodes: &SimNodes, car_ini: &rustyac_physics::data::ini::IniReader, first: &Car, index: usize, count: usize) -> Result<Car, String> {
+        let acs = &self.acs;
+        let sim: *mut u8 = rd(first.car, 0x130);
+        let car = acs.alloc(0x12a8);
+        // Sim::addCar: cars.push_back
+        let cars: *mut u8 = rd(sim, 0x208);
+        wr(cars, 8 * index, car);
+        wr(sim, 0x210, cars.add(8 * (index + 1)));
+        wr(car, 0x128c, 0x0000_0000_3f80_0000u64);
+        wr(car, 0x0, acs.va(VA_CAR_AVATAR_VTABLE));
+        wr(car, 0x8, first.game);
+        wr(car, 0x130, sim);
+        write_wstring(acs, car.add(0x138), &spec.name);
+        wr(car, 0x1d0, [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+        let offset = car_ini.get_float3("BASIC", "GRAPHICS_OFFSET").unwrap_or([0.0; 3]);
+        wr(car, 0x104c, offset);
+        wr(car, 0x1058, car_ini.get_float("BASIC", "GRAPHICS_PITCH_ROTATION").unwrap_or(0.0) * DEG);
+        write_wstring(acs, car.add(0x1138), &spec.skin);
+        wr(car, 0x1158, index as i32);
+        self.build_car(spec, nodes, car_ini, car, first.game, first.mirror, first.virtual_mirror, first.race_manager, first.other_cars, first.sessions, index, count)
+    }
+
+    /// `CarAvatar::init3D` and `initCommonPostPhysics` on a car whose block and `Sim` are there.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn build_car(&self, spec: &CarSpec, nodes: &SimNodes, car_ini: &rustyac_physics::data::ini::IniReader, car: *mut u8, game: *mut u8, mirror: *mut u8, virtual_mirror: *mut u8, race_manager: *mut u8, other_cars: *mut u8, sessions: *mut u8, car_index: usize, count: usize) -> Result<Car, String> {
+        let acs = &self.acs;
+        let cars_node = nodes.cars;
+        let data = std::path::PathBuf::from(format!("content/cars/{}/data", spec.name));
 
         let car_node = acs.alloc(0x110);
         let sphere_ctor: extern "C" fn(*mut u8, *mut u8, f32) -> *mut u8 = std::mem::transmute(acs.va(VA_NODE_BOUNDING_SPHERE_CTOR));
         sphere_ctor(car_node, wstring(acs, "CARNODE"), 4.0);
-        self.add_child(cars_node, car_node);
+        if count > 1 {
+            let add_car: extern "C" fn(*mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_NODE_SORTER_ADD_CAR));
+            add_car(cars_node, car_node, car);
+        } else {
+            self.add_child(cars_node, car_node);
+        }
         wr(car, 0x210, car_node);
         let body_transform = self.node("BODYTR");
         wr(car, 0x1b8, body_transform);
@@ -718,7 +781,13 @@ impl Game {
         let flames = make(0x158, VA_FLAMES_CTOR);
         let brake_discs = make(0x148, VA_BRAKE_DISC_GRAPHICS_CTOR);
         let dynamic_effects = make(0x88, VA_DYNAMIC_CAR_EFFECTS_CTOR);
-        Ok(Car { car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, sessions, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
+        // CarAvatar::CarAvatar, for every car but the first: Sim::unloadMeshResources (the
+        // meshes' own copies of their vertices are freed)
+        if car_index != 0 {
+            let unload: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_SIM_UNLOAD_MESH_RESOURCES));
+            unload(rd::<*mut u8>(car, 0x130), car_node);
+        }
+        Ok(Car { index: car_index, count, car, game, suspension, animated, lod_manager, body_transform, steer_transform, steer_lock: spec.steer_lock, constrained, visual_damage, rotating_objects, car_animations, gear_shift_shake, analog_instruments, brake_lights, animated_lights, tyre_blur, blurred_objects, digital_instruments, flames, brake_discs, dynamic_effects, smokes, mirror, virtual_mirror, mirror_manager, digital_panels, race_manager, other_cars, wings: acs.alloc(0x44 * 8), rods, sessions, last_pause: std::cell::Cell::new(false), last_status: std::cell::Cell::new(-1) })
     }
 
     /// `Sim::evOnNewSession` (+0xc0) for the handlers the car's objects registered (the four
@@ -790,12 +859,13 @@ impl Game {
                     at = at.add(0x28);
                 }
             };
-            if extra.pause != c.last_pause.get() {
+            // (the handlers of every car are in the one Sim's lists: fired with the first car)
+            if c.index == 0 && extra.pause != c.last_pause.get() {
                 c.last_pause.set(extra.pause);
                 let mut paused = extra.pause as u8;
                 fire(0x90, &mut paused);
             }
-            if extra.replay_status != c.last_status.get() {
+            if c.index == 0 && extra.replay_status != c.last_status.get() {
                 c.last_status.set(extra.replay_status);
                 wr(replay, 0xbc, extra.replay_status);
                 let mut payload = [0u8; 12];
@@ -828,7 +898,7 @@ impl Game {
             // the cars of the Sim; the physics car's fuel use, drivetrain, KERS / ERS
             wr(c.car, 0xec8, extra.max_fuel);
             wr(c.sessions, 0x8, extra.session_laps);
-            if extra.cars > 0 {
+            if extra.cars > 0 && c.count == 1 {
                 let list = self.acs.alloc(8 * extra.cars as usize);
                 for i in 0..extra.cars as usize {
                     wr(list, 8 * i, c.car);
@@ -865,6 +935,8 @@ impl Game {
         let camera_manager: *mut u8 = rd(sim, 0x188);
         wr(camera_manager, 0x120, camera.mode);
         wr(rd::<*mut u8>(camera_manager, 0xc0), 0x58, camera.drivable_mode);
+        // Sim::focusedCarIndex
+        wr(sim, 0x220, extra.focus as u32);
         let acs = &self.acs;
         let flat = |m: &Mat44f| -> [f32; 16] { std::array::from_fn(|i| m.m[i / 4][i % 4]) };
         // CarAvatar::setNewPhysicsState: the state the physics handed over
@@ -925,7 +997,7 @@ impl Game {
             }
         }
         // … CarAvatar::updateERSCharge (the first car, with a physics car)
-        if extra.drive {
+        if extra.drive && c.index == 0 {
             let update_ers_charge: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CAR_AVATAR_UPDATE_ERS_CHARGE));
             update_ers_charge(c.car);
         }
@@ -980,7 +1052,23 @@ impl Game {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(va));
             update(object, dt);
         }
-        // the handlers of evOnPostUpdate, in the order they were registered
+    }
+
+    /// `Sim::update` 0x14019ef90, the sorter's part (before the cars update):
+    /// `CarNodeSorter::sort`, with `ACCameraManager::currentGlobalCameraIndex` (+0xdc) as
+    /// `setMode` 0x1400340d0 leaves it: 0 in the cockpit, the drivable view's number + 1.
+    pub unsafe fn sort_cars(&self, c: &Car, sorter: *mut u8, camera: &crate::frames::CameraSpec) {
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let camera_manager: *mut u8 = rd(sim, 0x188);
+        wr(camera_manager, 0xdc, crate::frames::global_camera_index(camera));
+        let sort: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_CAR_NODE_SORTER_SORT));
+        sort(sorter);
+    }
+
+    /// The handlers of `Game::evOnPostUpdate` of one car, in the order they were registered
+    /// (after every car's `update`).
+    pub unsafe fn post_update_car(&self, c: &Car, dt: f32) {
+        let acs = &self.acs;
         if c.animated && rd::<u8>(c.suspension, 0x30) != 0 {
             let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SUSPENSION_ANIMATOR_UPDATE));
             update(c.suspension, dt);

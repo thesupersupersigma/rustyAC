@@ -23,6 +23,52 @@ fn mat(flat: &[f32; 16]) -> Mat44f {
     m
 }
 
+/// What a frame hands a car's avatar beside its physics state (the game's side: the fields of
+/// the fake `Sim`, `RaceManager` and physics car that `update_car` writes).
+fn feed(car: &mut rustyac_render::car::CarAvatar, spec: &crate::frames::CarSpec, step: &crate::frames::Step, index: usize, count: usize) {
+    car.max_gear = spec.max_gear;
+    car.game_time_ms = crate::frames::game_time_ms(index);
+    car.view = rustyac_render::car::ViewState {
+        camera_mode: step.camera.mode,
+        drivable_mode: step.camera.drivable_mode,
+        focused_car_index: step.extra.focus,
+        camera_position: [step.camera.matrix[12], step.camera.matrix[13], step.camera.matrix[14]],
+        camera_matrix: rustyac_physics::vecmath::Mat44f { m: std::array::from_fn(|r| std::array::from_fn(|c| step.camera.matrix[r * 4 + c])) },
+        use_pro_view: false,
+    };
+    car.session_type = step.extra.session_type;
+    car.real_time_position = step.extra.position;
+    car.leaderboard_position = -1;
+    car.tc_level = step.extra.tc;
+    car.abs_level = step.extra.abs;
+    car.ambient_temperature = step.extra.air;
+    car.replay_mode = step.extra.replay;
+    car.replay_scale = step.extra.replay_scale;
+    car.pause_menu = step.extra.pause;
+    car.wing_angles = step.extra.wing.map(|a| vec![a; 8]).unwrap_or_default();
+    car.kers_max_j = step.extra.kers_max;
+    car.ers_max_j = step.extra.ers_max;
+    car.has_kers = step.extra.kers_max > 0.0;
+    car.max_fuel = step.extra.max_fuel;
+    car.session_laps = step.extra.session_laps;
+    // (the game's side: the Sim's list of cars has the one car only with mirrors; with several
+    // cars it has them all)
+    car.cars_count = if count > 1 {
+        count as i32
+    } else if step.extra.cars > 0 {
+        step.extra.cars
+    } else if crate::root::profile().mirror_size != 0 {
+        1
+    } else {
+        0
+    };
+    car.km_per_liter = step.extra.fuel_use().2;
+    if step.extra.drive {
+        car.drivetrain = Some((step.extra.torque, step.extra.ratio));
+        car.has_energy_store = step.extra.kers_max > 0.0 || step.extra.ers_max > 0.0;
+    }
+}
+
 pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String> {
     let window = unsafe { crate::ac::hidden_window(args.width, args.height)? };
     let video = VideoSettings {
@@ -178,10 +224,14 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
     }
     // Sim::addCar: CarAvatar::init3D
+    let count = 1 + frame.others.len();
     let mut car = match &frame.car {
         Some(spec) => Some(rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock), 0)?),
         None => None,
     };
+    if let (Some(car), true) = (&mut car, count > 1) {
+        car.cars_to_be_loaded = frame.cars_to_be_loaded;
+    }
 
     // Sim::Sim: TrackAvatar::initPitCrew, then the pit box marker of PitStop::PitStop
     let mut lollipops = Vec::new();
@@ -209,6 +259,18 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
         car.init_common_post_physics(&mut graphics, &mut scene, &sim, frame.car.as_ref().map(|c| c.tyre_width).unwrap_or([0.0; 4]))?;
     }
+    // Sim::addCar for the cars after the first: guid 1, 2, …
+    let mut others: Vec<rustyac_render::car::CarAvatar> = Vec::new();
+    for (i, spec) in frame.others.iter().enumerate() {
+        let mut other = rustyac_render::car::CarAvatar::init_3d(&mut graphics, &mut scene, cars, &spec.folder, std::path::Path::new(&spec.folder), &spec.skin, Some(spec.steer_lock), i as i32 + 1)?;
+        other.cars_to_be_loaded = frame.cars_to_be_loaded;
+        if let Some(mirror) = &mirror {
+            other.init_mirror_materials(&mut graphics, &mut scene, &mirror.texture)?;
+        }
+        let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
+        other.init_common_post_physics(&mut graphics, &mut scene, &sim, spec.tyre_width)?;
+        others.push(other);
+    }
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
@@ -226,6 +288,16 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             }
         }
     }
+    for other in &mut others {
+        rustyac_render::gpulog::begin_capture("car shadows");
+        other.on_post_load(&mut graphics, &mut scene, car_shadows);
+        cube_log.extend_from_slice(&rustyac_render::gpulog::end_capture().text);
+        if let Some(pictures) = other.fake_shadow.as_ref().and_then(|s| s.borrow().generated.clone()) {
+            for (i, picture) in pictures.iter().enumerate() {
+                cube_log.extend_from_slice(format!("generated shadow {i}: {} bytes {:016x}\n", picture.len(), crate::ac::hash(picture)).as_bytes());
+            }
+        }
+    }
 
     let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
     let (mut last_pause, mut last_status) = (false, -1);
@@ -238,6 +310,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             rustyac_render::crowds::on_new_session(&mut graphics.crt_rand, &mut dynamic_objects, crate::frames::game_time_ms(index), 0.0);
             if let Some(car) = &mut car {
                 car.on_new_session(&mut scene);
+            }
+            for other in &mut others {
+                other.on_new_session(&mut scene);
             }
         }
         let (_, session_started, tts) = crate::frames::session_start(index, step.extra.tts);
@@ -279,56 +354,39 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             crew.update(&mut scene, crate::frames::DT, Some(step.extra.pit_state), false);
         }
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
-        if let Some(car) = &mut car {
-            car.max_gear = frame.car.as_ref().map(|c| c.max_gear).unwrap_or(0);
-            car.game_time_ms = crate::frames::game_time_ms(index);
-            car.view = rustyac_render::car::ViewState {
-                camera_mode: step.camera.mode,
-                drivable_mode: step.camera.drivable_mode,
-                focused_car_index: 0,
-                camera_position: [step.camera.matrix[12], step.camera.matrix[13], step.camera.matrix[14]],
-                camera_matrix: rustyac_physics::vecmath::Mat44f { m: std::array::from_fn(|r| std::array::from_fn(|c| step.camera.matrix[r * 4 + c])) },
-                use_pro_view: false,
-            };
-            car.session_type = step.extra.session_type;
-            car.real_time_position = step.extra.position;
-            car.leaderboard_position = -1;
-            car.tc_level = step.extra.tc;
-            car.abs_level = step.extra.abs;
-            car.ambient_temperature = step.extra.air;
-            car.replay_mode = step.extra.replay;
-            car.replay_scale = step.extra.replay_scale;
-            car.pause_menu = step.extra.pause;
-            // Sim::setPauseMode and the replay's transport: the events, before the updates
+        if let (Some(car), Some(spec)) = (&mut car, &frame.car) {
+            // Sim::update: CarNodeSorter::sort
+            if count > 1 {
+                let list: Vec<(rustyac_render::scene::NodeId, i32)> = std::iter::once((car.car_node, 0)).chain(others.iter().map(|o| (o.car_node, o.guid))).collect();
+                scene.sort_cars(cars, &list, crate::frames::global_camera_index(&step.camera));
+            }
+            // Sim::setPauseMode and the replay's transport: the events (every car's handlers, in
+            // the order the cars were made), before the updates
             if step.extra.pause != last_pause {
                 last_pause = step.extra.pause;
                 car.on_pause_mode_changed(last_pause);
+                for other in &mut others {
+                    other.on_pause_mode_changed(last_pause);
+                }
             }
             if step.extra.replay_status != last_status {
                 last_status = step.extra.replay_status;
                 car.on_replay_status_changed(&mut scene, last_status, step.extra.replay_scale, 2.0);
+                for other in &mut others {
+                    other.on_replay_status_changed(&mut scene, last_status, step.extra.replay_scale, 2.0);
+                }
             }
-            car.wing_angles = step.extra.wing.map(|a| vec![a; 8]).unwrap_or_default();
-            car.kers_max_j = step.extra.kers_max;
-            car.ers_max_j = step.extra.ers_max;
-            car.has_kers = step.extra.kers_max > 0.0;
-            car.max_fuel = step.extra.max_fuel;
-            car.session_laps = step.extra.session_laps;
-            // (the game's side: the Sim's list of cars has the one car only with mirrors)
-            car.cars_count = if step.extra.cars > 0 {
-                step.extra.cars
-            } else if crate::root::profile().mirror_size != 0 {
-                1
-            } else {
-                0
-            };
-            car.km_per_liter = step.extra.fuel_use().2;
-            if step.extra.drive {
-                car.drivetrain = Some((step.extra.torque, step.extra.ratio));
-                car.has_energy_store = step.extra.kers_max > 0.0 || step.extra.ers_max > 0.0;
-            }
+            // the cars' updates in the order they were made, then every handler of evOnPostUpdate
+            feed(car, spec, step, index, count);
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
+            for ((other, spec), state) in others.iter_mut().zip(&frame.others).zip(&step.others) {
+                feed(other, spec, step, index, count);
+                other.update(&mut graphics, &mut scene, state, crate::frames::DT);
+            }
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
+            for (other, state) in others.iter_mut().zip(&step.others) {
+                other.post_update(&mut scene, state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
+            }
         }
         // PitStop::update (after the cars): the marker
         if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
@@ -341,7 +399,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         }
         // DynamicTrackManager::update
         if let Some(grooves) = &mut grooves {
-            let laps: Vec<u32> = car.iter().map(|_| step.state.lap_count).collect();
+            let laps: Vec<u32> = car.iter().map(|_| step.state.lap_count).chain(step.others.iter().map(|s| s.lap_count)).collect();
             grooves.update(&mut scene, crate::frames::DT, None, &laps);
         }
 
@@ -352,7 +410,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         graphics.begin_scene();
         scene.traverse(root);
         // Sim::renderScene: the mirror before the picture
-        if let (Some(mirror), Some(car)) = (&mut mirror, &car) {
+        // (MirrorTextureRenderer::render: the focused car's rear view)
+        let focused = match step.extra.focus {
+            0 => car.as_ref(),
+            n => others.get(n as usize - 1),
+        };
+        if let (Some(mirror), Some(car)) = (&mut mirror, focused) {
             let active = virtual_mirror.as_ref().is_some_and(|v| v.active);
             if mirror.wants_render(step.camera.mode, step.camera.drivable_mode, active) {
                 let nodes = car.visibility_nodes();

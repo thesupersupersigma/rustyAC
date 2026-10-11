@@ -183,6 +183,23 @@ pub fn scenarios() -> Vec<MultiScenario> {
             default_cars: &[F2004, "bmw_m3_e30", "ks_lamborghini_sesto_elemento", "ks_ferrari_250_gto"],
             cars: |track, cars| grid(track, cars, &[F2004, "bmw_m3_e30", "ks_lamborghini_sesto_elemento", "ks_ferrari_250_gto"], 4, 0.72, 0.0),
         },
+        MultiScenario {
+            name: "mc_train",
+            about: "Task 24b: as many cars as `--cars` names (26 by default) in two columns along the line after the start, 9 m apart, each following the line; more cars than any grid has slots",
+            seconds: 12.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let count = if cars.is_empty() { 26 } else { cars.len() };
+                let mut out = Vec::new();
+                for i in 0..count {
+                    let side = if i % 2 == 0 { 2.2 } else { -2.2 };
+                    let (position, tail) = line_pose(track, 0.06, 9.0 * i as f32, side)?;
+                    out.push(MultiCar { name: name_of(cars, i, &[F2004]), position, tail, drive: Drive::Follow { lateral: vec![(0.0, side)], pace: 0.70 - 0.012 * i as f32, limit: 95.0, brake_at: f32::MAX } });
+                }
+                Ok(out)
+            },
+        },
     ]
 }
 
@@ -263,6 +280,13 @@ pub struct MultiWorld<'a> {
     objects: Vec<*mut u8>,
     pub step_index: usize,
     pub recording: Recording,
+    /// Task 24b: the engine's physics events of the steps since they were last taken (only
+    /// kept while `taping`), for the tapes of the picture and the sound
+    pub taping: bool,
+    pub tape_events: Vec<[u8; 0x48]>,
+    state_buffer: *mut u8,
+    /// each car's folder name
+    pub names: Vec<String>,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -475,7 +499,7 @@ impl<'a> MultiWorld<'a> {
             recording.set("mesh_geom_high", geom_high.iter().map(|h| format!("{h:08x}")).collect::<Vec<_>>().join(","));
             recording.set("mesh_bounce_vel", format!("{:08x}", geom_high[0]));
             recording.set_cars(&metas);
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording })
+            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect() })
         }
     }
 
@@ -594,7 +618,11 @@ impl<'a> MultiWorld<'a> {
             let pop: unsafe extern "system" fn(*mut u8, *mut u8) -> bool =
                 std::mem::transmute(self.acs.msvcp_function(c"?_Internal_pop_if_present@_Concurrent_queue_base_v4@details@Concurrency@@IEAA_NPEAX@Z"));
             let mut raw = [0u8; 0x48];
-            while pop(self.engine.add(0x30), raw.as_mut_ptr()) {}
+            while pop(self.engine.add(0x30), raw.as_mut_ptr()) {
+                if self.taping {
+                    self.tape_events.push(raw);
+                }
+            }
 
             let core: *const u8 = rd(self.engine, PE_CORE);
             let mut row: Vec<u32> = Vec::with_capacity(self.recording.row_words());
@@ -643,6 +671,18 @@ impl<'a> MultiWorld<'a> {
             self.step_index += 1;
         }
     }
+
+    /// Task 24b: the `CarPhysicsState` the game's own `Car::getPhysicsState` fills for a car
+    /// (what the main thread's `CarAvatar` reads), and its `tractionControl.isInAction`.
+    pub fn physics_state(&self, index: usize) -> (Vec<u8>, u8) {
+        unsafe {
+            std::ptr::write_bytes(self.state_buffer, 0, 0xb70);
+            let get_physics_state: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(self.acs.va(VA_CAR_GET_PHYSICS_STATE));
+            get_physics_state(self.cars[index].car, self.state_buffer);
+            (std::slice::from_raw_parts(self.state_buffer, 0xb70).to_vec(), rd::<u8>(self.cars[index].car, CAR_TRACTION_CONTROL + 8))
+        }
+    }
+
 
     /// A line about each car for the console.
     pub fn summary(&self) -> Vec<String> {

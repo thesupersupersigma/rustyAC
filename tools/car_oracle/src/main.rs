@@ -326,8 +326,42 @@ fn multi(args: &Args) -> Result<(), String> {
     let mut world = game::multi::MultiWorld::build(&acs, scenario, &args.cars, &folder, &args.layout, &colliders, args.seed as u32)?;
     let steps = args.steps.unwrap_or((scenario.seconds / scenario::DT) as usize);
     let start = std::time::Instant::now();
-    for _ in 0..steps {
+    // Task 24b: a tape per car (`<scenario>.car<n>.audiotape`, the format of `run --audio-tape`):
+    // the game's own `CarPhysicsState` of every car 60 times a second. The engine's physics
+    // events (every car's, in the engine's order; `param1` of a collision is the car) are in
+    // the first car's tape.
+    let mut tapes = Vec::new();
+    if args.audio_tape {
+        use std::io::Write as _;
+        world.taping = true;
+        for (index, name) in world.names.clone().iter().enumerate() {
+            let tape_path = out.join(format!("{}.car{index}.audiotape", scenario.name));
+            let mut file = std::io::BufWriter::new(std::fs::File::create(&tape_path).map_err(|e| format!("{}: {e}", tape_path.display()))?);
+            let header = format!("audiotape=1\nscenario={}\ncar={name}\nframe_hz=60\nstep_ms=3\ncars={}\ncar_index={index}\ntrack={}\ntrack_layout={}\n\n", scenario.name, world.names.len(), track.display(), args.layout);
+            file.write_all(header.as_bytes()).map_err(|e| e.to_string())?;
+            tapes.push(file);
+        }
+    }
+    let mut next_frame = 1usize;
+    for i in 0..steps {
         world.step();
+        if !tapes.is_empty() {
+            use std::io::Write as _;
+            for event in world.tape_events.drain(..) {
+                tapes[0].write_all(&[1]).and_then(|_| tapes[0].write_all(&event)).map_err(|e| e.to_string())?;
+            }
+            if next_frame * 50 / 9 <= i + 1 {
+                next_frame += 1;
+                for (index, file) in tapes.iter_mut().enumerate() {
+                    let (state, tc) = world.physics_state(index);
+                    file.write_all(&[2]).and_then(|_| file.write_all(&(i as u32 + 1).to_le_bytes())).and_then(|_| file.write_all(&state)).and_then(|_| file.write_all(&[tc])).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
+    for mut file in tapes {
+        use std::io::Write as _;
+        file.flush().map_err(|e| e.to_string())?;
     }
     let seconds = start.elapsed().as_secs_f64();
     world.recording.set("steps", steps.to_string());

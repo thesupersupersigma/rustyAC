@@ -562,7 +562,14 @@ impl Game {
         self.add_child(blurred, car_shadows);
         let before_cars = self.node_event("BEFORE_CARS_NODE");
         self.add_child(unblurred, before_cars);
-        let cars = self.node("CARS");
+        // (several cars: the game's own CarNodeSorter; its Sim is set when the first car is loaded)
+        let cars = if frame.others.is_empty() {
+            self.node("CARS")
+        } else {
+            let sorter = self.acs.alloc(0xf8);
+            let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(self.acs.va(crate::ac_car::VA_CAR_NODE_SORTER_CTOR));
+            ctor(sorter, wstring(&self.acs, "CARS"), std::ptr::null_mut())
+        };
         self.add_child(unblurred, cars);
         let particles = self.node("PARTICLES_NODE");
         self.add_child(unblurred, particles);
@@ -892,16 +899,31 @@ impl Game {
             }
         }
         // Sim::addCar: the car's models and its objects
+        let sim_nodes = crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred, ideal_line, track_avatar: pit_track, pit_stop };
+        let count = 1 + frame.others.len();
+        if count > 1 {
+            acs.set_global::<i32>(crate::ac_car::VA_CARS_TO_BE_LOADED, frame.cars_to_be_loaded);
+        }
         let car = match &frame.car {
-            Some(spec) => Some(self.load_car(spec, &crate::ac_car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished, blurred, unblurred, ideal_line, track_avatar: pit_track, pit_stop }, camera, console)?),
+            Some(spec) => Some(self.load_car(spec, &sim_nodes, camera, console, None, 0, count)?),
             None => None,
         };
+        // the cars after the first, into the same Sim
+        let mut others: Vec<crate::ac_car::Car> = Vec::new();
+        if let Some(first) = &car {
+            for (i, spec) in frame.others.iter().enumerate() {
+                others.push(self.load_car(spec, &sim_nodes, camera, console, Some(first), i + 1, count)?);
+            }
+        }
         // Sim::cars, for the grooves
         if let Some(car) = &car {
-            let list = acs.alloc(0x10);
+            let list = acs.alloc(8 * count);
             wr(list, 0, car.avatar());
+            for (i, other) in others.iter().enumerate() {
+                wr(list, 8 * (i + 1), other.avatar());
+            }
             wr(track_sim, 0x208, list);
-            wr(track_sim, 0x210, list.add(8));
+            wr(track_sim, 0x210, list.add(8 * count));
         }
         // Sim::Sim: TrackAvatar::initPitCrew (the lollipop men, the track's crew meshes), the
         // game's own; then the pit box marker of PitStop::PitStop, its model by hand
@@ -973,6 +995,12 @@ impl Game {
             let lines = self.post_load_car(car, &spec.name);
             cube_log.extend_from_slice(&rustyac_render::gpulog::end_capture().text);
             cube_log.extend_from_slice(&lines?);
+            for (other, spec) in others.iter().zip(&frame.others) {
+                rustyac_render::gpulog::begin_capture("car shadows");
+                let lines = self.post_load_car(other, &spec.name);
+                cube_log.extend_from_slice(&rustyac_render::gpulog::end_capture().text);
+                cube_log.extend_from_slice(&lines?);
+            }
         }
 
         let traverse: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_WORLD_MATRIX_TRAVERSE));
@@ -1063,7 +1091,18 @@ impl Game {
             }
             // Game::update: the car's objects, then the handlers of evOnPostUpdate
             if let Some(car) = &car {
+                // Sim::update: CarNodeSorter::sort, then the cars in the order they were made
+                if count > 1 {
+                    self.sort_cars(car, cars, &step.camera);
+                }
                 self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
+                for (other, state) in others.iter().zip(&step.others) {
+                    self.update_car(other, state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
+                }
+                self.post_update_car(car, crate::frames::DT);
+                for other in &others {
+                    self.post_update_car(other, crate::frames::DT);
+                }
             }
             // PitStop::update (after the cars): the marker's rules; the number Car::getPitstopTime
             // draws comes from the game's own rand()

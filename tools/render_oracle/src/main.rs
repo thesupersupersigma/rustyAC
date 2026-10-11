@@ -27,6 +27,9 @@ const USAGE: &str = "usage:
                     frame from --capture on is compared; --dump <i,j> also writes those frames whole)
                     [--set name=value[@frame],…] writes over the car's state (lights flash brake gas gear rpm kmh
                     damage=f:r:l:r:c pit kers dirt fuel turbo water limiter)
+                    several cars: --tapes <prefix> (<prefix>.car<n>.audiotape of `car_oracle multi --audio-tape`)
+                    [--max-cars <n>] [--loaded <RaceManager::carsToBeLoaded>] [--set focus=<car>[@frame]] (the camera,
+                    the mirror and the dashboard follow the focused car) [--set alllights=1] (every car's headlights)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
                     [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur <0..12>] [--ldr-levels]]: [POST_PROCESS] ENABLED=1, the game's
@@ -55,6 +58,12 @@ pub struct Args {
     /// a tape of `car_oracle run --audio-tape`: the game's own car states, 60 a second
     pub tape: Option<PathBuf>,
     pub tape_from: usize,
+    /// `--tapes <prefix>`: several cars, `<prefix>.car<n>.audiotape` of `car_oracle multi
+    /// --audio-tape` (each tape's header names its car); `--max-cars <n>` takes the first n,
+    /// `--loaded <n>` is `RaceManager::carsToBeLoaded` when it is not the number of cars
+    pub tapes: Option<PathBuf>,
+    pub max_cars: usize,
+    pub loaded: i32,
     /// how many frames of the tape
     pub frames: usize,
     /// `--frames` was given (without a car: that many frames of the track alone)
@@ -108,6 +117,9 @@ fn parse() -> Result<Args, String> {
         pose: None,
         tape: None,
         tape_from: 0,
+        tapes: None,
+        max_cars: usize::MAX,
+        loaded: 0,
         frames: 60,
         frames_given: false,
         dump: Vec::new(),
@@ -179,6 +191,20 @@ fn parse() -> Result<Args, String> {
                 let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
                 text = absolute.to_string_lossy().into_owned();
                 a.tape = Some(absolute);
+            }
+            "--tapes" => {
+                let given = PathBuf::from(value()?);
+                let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
+                text = absolute.to_string_lossy().into_owned();
+                a.tapes = Some(absolute);
+            }
+            "--max-cars" => {
+                text = value()?;
+                a.max_cars = text.parse().map_err(|_| "--max-cars <n>")?;
+            }
+            "--loaded" => {
+                text = value()?;
+                a.loaded = text.parse().map_err(|_| "--loaded <n>")?;
             }
             "--car-data" => {
                 let given = PathBuf::from(value()?);
@@ -344,6 +370,13 @@ fn run_side(args: &Args) -> Result<(), String> {
             root::prepare(args)?;
             if let Some(car) = &frame.car {
                 ac_car::prepare_root(&args.root, &args.game, &repo_root(), car, args.car_data.as_deref())?;
+            }
+            for (i, other) in frame.others.iter().enumerate() {
+                // (the same car twice: its files are there already)
+                if frame.car.as_ref().is_some_and(|c| c.name == other.name && c.skin == other.skin) || frame.others[..i].iter().any(|o| o.name == other.name && o.skin == other.skin) {
+                    continue;
+                }
+                ac_car::prepare_root(&args.root, &args.game, &repo_root(), other, None)?;
             }
             std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
             let game = ac::Game::start(args)?;

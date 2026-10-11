@@ -346,6 +346,25 @@ impl Scene {
         self.nodes[child].parent = None;
     }
 
+    /// `CarNodeSorter::sort` 0x14006be30, run by `Sim::update` before the cars update: the
+    /// children of the cars' node are put in the order of their `priority`, which is 10 for the
+    /// car whose guid equals `ACCameraManager::currentGlobalCameraIndex` (the number of the
+    /// camera in use, not the focused car: the game's own quirk) and 0 for every other. `cars`
+    /// is the sorter's map: each car's node and guid. Up to 32 cars the game's `std::sort` is an
+    /// insertion sort, which keeps the order of equal priorities; above that this keeps it too
+    /// (the game's introsort may not).
+    pub fn sort_cars(&mut self, sorter: NodeId, cars: &[(NodeId, i32)], current_global_camera_index: i32) {
+        let priority = |node: NodeId| -> i32 {
+            match cars.iter().find(|c| c.0 == node) {
+                Some(&(_, guid)) if guid == current_global_camera_index => 10,
+                _ => 0,
+            }
+        };
+        let mut children = std::mem::take(&mut self.nodes[sorter].children);
+        children.sort_by_key(|&child| priority(child));
+        self.nodes[sorter].children = children;
+    }
+
     /// `Node::findChildByName` 0x14020de40: the children first to last, each with its own
     /// sub-tree when `recursive`.
     pub fn find_child_by_name(&self, node: NodeId, name: &str, recursive: bool) -> Option<NodeId> {
