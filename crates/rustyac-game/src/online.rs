@@ -14,18 +14,16 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use rustyac_net::car_update::LocalCarState;
-use rustyac_net::client::{Client, CollisionReport, Event};
+use rustyac_net::client::{Client, Event};
 use rustyac_net::handshake::{session_type, Accepted, CarEntry};
 use rustyac_net::messages::Message;
-use rustyac_net::net_car::{NetCarGeometry, NetCarStateProvider, StepWorld};
+use rustyac_net::net_car::{NetCarGeometry, NetCarStateProvider};
+use rustyac_net::session::NetSession;
 use rustyac_net::transport::Transport;
 use rustyac_physics::car::{PhysicsCore, RollingChassis};
 use rustyac_physics::engine::{CarSlot, StepHooks};
-use rustyac_physics::track::{Track, TrackGround};
-use rustyac_physics::vecmath::{Mat44f, Vec3f};
+use rustyac_physics::vecmath::Mat44f;
 
 /// The transport of a session: any, behind a box.
 pub type BoxedTransport = Box<dyn Transport + Send>;
@@ -101,18 +99,19 @@ pub struct RosterEntry {
     pub best_lap_ms: u32,
 }
 
-/// Another player's car.
+/// Another player's car: what the game keeps beside its `NetCarStateProvider`
+/// (`net.cars`, same index).
 pub struct RemoteCar {
     pub entry: CarEntry,
     pub data_path: PathBuf,
-    pub provider: NetCarStateProvider,
     /// `Car::damageZoneLevel` as the server tells it.
     pub damage: [f32; 5],
 }
 
 /// The online session of a [`crate::sim::GameSim`].
 pub struct OnlineSession {
-    pub client: Client<BoxedTransport>,
+    /// The client and the other players' cars: the engine's step-completed handlers.
+    pub net: NetSession<BoxedTransport>,
     /// The other slots' cars in the order of the server's list (spectators left out).
     pub remote: Vec<RemoteCar>,
     pub roster: Vec<RosterEntry>,
@@ -122,11 +121,8 @@ pub struct OnlineSession {
     pub console: Vec<String>,
     /// What the game has to act on, in arrival order.
     pub pending: Vec<Event>,
-    pub track: Option<Arc<Track>>,
     /// The cars that become remote cars when the world is built (then empty).
     pub remote_entries: Vec<CarEntry>,
-    /// The driver's horn (sent with the car update).
-    pub horn: bool,
     /// `damageReport`: the damage the server was last told of, and when (ms).
     damage_sent: [f32; 5],
     damage_sent_at: f64,
@@ -134,82 +130,10 @@ pub struct OnlineSession {
     jump_starts_sent: u32,
     /// The local car's tyre compound the server was told of.
     compound_sent: Option<String>,
-    /// Steps so far (the tape's clock).
-    steps: u64,
 }
 
 /// How many chat lines are kept.
 const CHAT_LINES: usize = 6;
-
-/// `Car::getFrontWheelAngle` @ 0x140270990: the mean of the two front hubs' turn about the
-/// body's vertical, radians.
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-pub fn front_wheel_angle(car: &RollingChassis) -> f32 {
-    if car.suspensions.len() < 2 {
-        return 0.0;
-    }
-    let turn = |wheel: usize| -> (f32, f32) {
-        let hub = car.suspensions[wheel].get_hub_world_matrix(&car.core);
-        let forward = Vec3f::new(-hub.m[2][0], -hub.m[2][1], -hub.m[2][2]);
-        let local = car.core.world_to_local_normal(car.body, &forward);
-        let (mut x, mut z) = (local.x, local.z);
-        let length = rustyac_math::sqrtf(x * x + z * z);
-        if length < 0.0 || length > 0.0 {
-            let inv = 1.0f32 / length;
-            x *= inv;
-            z *= inv;
-        }
-        (x, z)
-    };
-    let angle = |x: f32, z: f32| -> f32 {
-        let cosine = -z;
-        let angle = if cosine > -1.0 && cosine < 1.0 { rustyac_math::acosf(cosine) } else { 0.0 };
-        let sign = if x > 0.0 {
-            1.0f32
-        } else if x == 0.0 {
-            0.0
-        } else {
-            -1.0
-        };
-        sign * angle
-    };
-    let (x0, z0) = turn(0);
-    let (x1, z1) = turn(1);
-    let first = angle(x0, z0);
-    (angle(x1, z1) + first) * 0.5
-}
-
-/// What `ACClient::sendCarPosition` reads of the local car.
-pub fn local_car_state(car: &RollingChassis, horn: bool) -> LocalCarState {
-    let velocity = car.core.get_velocity(car.body);
-    let mut state = LocalCarState {
-        body_matrix: car.core.get_world_matrix(car.body),
-        velocity: [velocity.x, velocity.y, velocity.z],
-        speed: car.speed,
-        steer: car.controls.steer,
-        steer_lock: car.steer_lock,
-        front_wheel_angle: front_wheel_angle(car),
-        gas: car.controls.gas,
-        brake: car.controls.brake,
-        lights_on: car.lights_on,
-        horn,
-        penalty_time: car.get_penalty_time(),
-        ers_is_charging: car.ers.as_ref().is_some_and(|ers| ers.is_charging),
-        drs_open: car.aero.as_ref().is_some_and(|aero| aero.base().drs.is_present && aero.base().drs.is_active),
-        performance_split: car.performance_split,
-        normalized_position: car.spline_locator_data.npos,
-        ..LocalCarState::default()
-    };
-    for (wheel, tyre) in car.tyres.iter().take(4).enumerate() {
-        state.wheel_angular_velocity[wheel] = tyre.status.angular_velocity;
-        state.wheel_slip_ratio[wheel] = tyre.status.slip_ratio;
-    }
-    if let Some(drivetrain) = &car.drivetrain {
-        state.engine_rpm = drivetrain.get_engine_rpm();
-        state.current_gear = drivetrain.base().current_gear;
-    }
-    state
-}
 
 impl OnlineSession {
     /// A session after the handshake and the car list (`cars`: every entry of the list).
@@ -230,7 +154,7 @@ impl OnlineSession {
             })
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
-        OnlineSession { client, remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), track: None, remote_entries, horn: false, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, steps: 0 }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -246,7 +170,8 @@ impl OnlineSession {
         let geometry = NetCarGeometry::load(&data_path);
         let provider = NetCarStateProvider::new(core, entry.session_id, guid, &entry.model, geometry, mesh, pit_box);
         let damage = entry.damage_zone_level;
-        self.remote.push(RemoteCar { entry, data_path, provider, damage });
+        self.net.cars.push(provider);
+        self.remote.push(RemoteCar { entry, data_path, damage });
     }
 
     fn say(&mut self, line: String) {
@@ -264,22 +189,22 @@ impl OnlineSession {
     pub fn report_local_car(&mut self, car: &RollingChassis, laps: &[rustyac_physics::track::timing::OnLapCompletedEvent], splits: &[rustyac_physics::track::timing::OnSectorSplitEvent], physics_time: f64) {
         use rustyac_net::messages::ClientEvent;
         for split in splits {
-            self.client.send_event(&ClientEvent::SectorSplit { sector: split.sector_index as u8, time: split.sector_time, cuts: split.cuts.max(0) as u32 });
+            self.net.client.send_event(&ClientEvent::SectorSplit { sector: split.sector_index as u8, time: split.sector_time, cuts: split.cuts.max(0) as u32 });
         }
         for lap in laps.iter().filter(|lap| lap.is_valid) {
-            self.client.send_event(&ClientEvent::LapCompleted { physics_time, lap_time: lap.lap_time, splits: lap.splits.clone(), cuts: lap.cuts, lap_count: car.transponder.lap_count as u8 });
+            self.net.client.send_event(&ClientEvent::LapCompleted { physics_time, lap_time: lap.lap_time, splits: lap.splits.clone(), cuts: lap.cuts, lap_count: car.transponder.lap_count as u8 });
             self.console.push(format!("online: lap {} of {} told to the server{}", car.transponder.lap_count, lap_text(lap.lap_time), if lap.cuts > 0 { format!(" ({} cuts)", lap.cuts) } else { String::new() }));
         }
         if car.jump_start_events != self.jump_starts_sent {
             self.jump_starts_sent = car.jump_start_events;
-            self.client.send_event(&ClientEvent::JumpStart);
+            self.net.client.send_event(&ClientEvent::JumpStart);
         }
         let compound = car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map(|def| def.short_name.clone());
         if let Some(compound) = compound {
             if self.compound_sent.as_ref() != Some(&compound) {
                 // (the first one is the compound the car starts on: nothing to tell)
                 if self.compound_sent.is_some() {
-                    self.client.send_event(&ClientEvent::TyreCompound(compound.clone()));
+                    self.net.client.send_event(&ClientEvent::TyreCompound(compound.clone()));
                 }
                 self.compound_sent = Some(compound);
             }
@@ -287,7 +212,7 @@ impl OnlineSession {
         if physics_time - self.damage_sent_at > 2000.0 && car.damage_zone_level != self.damage_sent {
             self.damage_sent = car.damage_zone_level;
             self.damage_sent_at = physics_time;
-            self.client.send_event(&ClientEvent::Damage(self.damage_sent));
+            self.net.client.send_event(&ClientEvent::Damage(self.damage_sent));
         }
     }
 
@@ -300,7 +225,7 @@ impl OnlineSession {
 
     /// What arrived, for the displays; what the game must act on is left in `pending`.
     fn digest(&mut self) {
-        for event in self.client.take_events() {
+        for event in std::mem::take(&mut self.net.events) {
             match &event {
                 Event::Message(Message::Chat { slot, text }) => {
                     let who = self.driver_of(*slot);
@@ -316,7 +241,7 @@ impl OnlineSession {
                 }
                 Event::Message(Message::LapCompleted { slot, lap_time, cuts, standings, .. }) => {
                     // the standings: laps and (in practice and qualifying) the best lap
-                    let race = self.client.current_session.kind == session_type::RACE;
+                    let race = self.net.client.current_session.kind == session_type::RACE;
                     for row in standings {
                         if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == row.slot) {
                             entry.laps = row.laps as u32;
@@ -338,9 +263,6 @@ impl OnlineSession {
                 }
                 Event::Message(Message::ClientDisconnected { slot }) => {
                     let who = self.driver_of(*slot);
-                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
-                        remote.provider.mark_disconnected();
-                    }
                     if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
                         entry.connected = false;
                         entry.driver.clear();
@@ -352,7 +274,7 @@ impl OnlineSession {
                         entry.driver = name.clone();
                         entry.connected = true;
                     }
-                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
+                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.entry.session_id == *slot) {
                         remote.damage = [0.0; 5];
                     }
                     self.say(format!("Car {slot} is now driven by {name}"));
@@ -368,7 +290,7 @@ impl OnlineSession {
                     }
                 }
                 Event::Message(Message::Damage { slot, levels }) => {
-                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
+                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.entry.session_id == *slot) {
                         remote.damage = *levels;
                     }
                 }
@@ -419,14 +341,14 @@ impl OnlineSession {
     pub fn summary(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for entry in self.roster.iter().filter(|entry| entry.connected) {
-            let remote = self.remote.iter().find(|remote| remote.provider.session_id == entry.slot);
+            let remote = self.net.cars.iter().find(|car| car.session_id == entry.slot);
             let packets = match remote {
-                Some(remote) => format!(
+                Some(car) => format!(
                     ", states taken {} in order + {} out of order, ping {} ms, {}",
-                    remote.provider.qos_good_packets,
-                    remote.provider.qos_bad_packets,
-                    remote.provider.ping,
-                    if remote.provider.is_disconnected { "not there at the end" } else { "there at the end" }
+                    car.qos_good_packets,
+                    car.qos_bad_packets,
+                    car.ping,
+                    if car.is_disconnected { "not there at the end" } else { "there at the end" }
                 ),
                 None => String::new(),
             };
@@ -447,8 +369,8 @@ impl OnlineSession {
     /// The lines of the player list and the chat, for the HUD.
     pub fn hud_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
-        let session = &self.client.current_session;
-        lines.push(format!("ONLINE  {}  ({})  ping {} ms", self.client.accepted.server_name, session.name, self.client.ping));
+        let session = &self.net.client.current_session;
+        lines.push(format!("ONLINE  {}  ({})  ping {} ms", self.net.client.accepted.server_name, session.name, self.net.client.ping));
         for entry in self.roster.iter().filter(|entry| entry.connected) {
             let best = if entry.best_lap_ms > 0 { crate::online::lap_text(entry.best_lap_ms) } else { "-:--.---".to_string() };
             let name = if entry.driver.is_empty() { "?" } else { &entry.driver };
@@ -464,78 +386,28 @@ pub fn lap_text(ms: u32) -> String {
     format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
 }
 
-/// The session's work in the step-completed phase of a physics step.
+/// The session's work in the step-completed phase of a physics step: the shared
+/// [`NetSession`]'s, and after it what the displays keep.
 pub struct OnlineHooks<'a> {
     pub session: &'a mut OnlineSession,
 }
 
 impl StepHooks for OnlineHooks<'_> {
-    /// `ACClient::onPhysicsStep`: the client was the first to hang a handler on the engine.
-    fn before_cars(&mut self, _core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64) {
-        let session = &mut *self.session;
-        session.client.transport.set_tick(session.steps);
-        session.steps += 1;
-        let Some(slot) = cars.first() else {
-            return;
-        };
-        let car = &*slot.car;
-        let horn = session.horn;
-        // the wall clock of the pong and of the frame's work is the physics clock here: the
-        // two run alike, and a session then repeats exactly from a tape
-        session.client.on_physics_step(physics_time, physics_time, &mut || local_car_state(car, horn));
-        session.client.update(physics_time);
-        let send_interval = session.client.send_interval;
-        for (slot, state) in session.client.take_car_states() {
-            // (the first car of the list with that slot; the player's own slot has none)
-            if let Some(remote) = session.remote.iter_mut().find(|remote| remote.provider.session_id == slot) {
-                remote.provider.on_remote_state_received(state, physics_time, send_interval);
-            }
-        }
-        session.digest();
+    fn before_cars(&mut self, core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64) {
+        self.session.net.before_cars(core, cars, physics_time);
+        self.session.digest();
     }
 
-    /// `NetCarStateProvider::step` of every remote car, in the order they were made.
     fn after_cars(&mut self, core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64) {
         let session = &mut *self.session;
-        let Some(slot) = cars.first() else {
-            return;
-        };
-        let car = &*slot.car;
-        // the handler ACClient hangs on the local car's collision event: the remote car that
-        // was hit keeps part of the solver's velocity for a second, and the hit is reported
-        for event in &car.collision_events {
-            let other = event.body.and_then(|body| session.remote.iter_mut().find(|remote| remote.provider.body == body));
-            let other_slot = match other {
-                Some(remote) => {
-                    remote.provider.on_local_collision();
-                    Some(remote.provider.session_id)
-                }
-                None => None,
-            };
-            // (a hit of anything that is no remote car goes in as a hit of the surroundings)
-            session.client.add_collision(CollisionReport {
-                other_slot,
-                speed: event.rel_speed,
-                world_pos: [event.world_pos.x, event.world_pos.y, event.world_pos.z],
-                rel_pos: [event.rel_pos.x, event.rel_pos.y, event.rel_pos.z],
-            });
-        }
-        let Some(track) = session.track.clone() else {
-            return;
-        };
-        let ground = TrackGround(track);
-        let local_in_pit_lane = car.is_in_pit_lane();
-        let local_body = Some(car.body);
-        let remote_factor = session.client.remote_factor;
-        for remote in &mut session.remote {
-            let mut world = StepWorld { core, ground: &ground, remote_factor, local_in_pit_lane, local_body };
-            remote.provider.step(physics_time, &mut world);
-        }
+        session.net.after_cars(core, cars, physics_time);
+        // NetCarStateProvider::update (the game: once a frame)
+        session.net.update_cars(physics_time);
         // the displays: who is there
         for entry in &mut session.roster {
-            if let Some(remote) = session.remote.iter().find(|remote| remote.provider.session_id == entry.slot) {
-                entry.ping = remote.provider.ping;
-                if !remote.provider.is_disconnected {
+            if let Some(car) = session.net.cars.iter().find(|car| car.session_id == entry.slot) {
+                entry.ping = car.ping;
+                if !car.is_disconnected {
                     entry.connected = true;
                 }
             }

@@ -22,4 +22,5 @@ pub mod messages;
 pub mod native;
 pub mod net_car;
 pub mod packet;
+pub mod session;
 pub mod transport;

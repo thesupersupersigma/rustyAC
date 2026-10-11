@@ -313,7 +313,8 @@ impl NetCarStateProvider {
             geometry,
             tyre_local_rotation: [Mat44f::IDENTITY; 4],
             pit_position,
-            slip_stream: SlipStream { speed_factor: 0.25, ..SlipStream::default() },
+            // (the constructor's 0.25 is replaced by SlipStream::init's 0.5 before any step)
+            slip_stream: SlipStream::default(),
             last_step_speed_kmh: 0.0,
             last_step_gas: 0.0,
             last_integration_time: 0.0,
@@ -793,10 +794,15 @@ impl NetCarStateProvider {
         world.core.set_angular_velocity(self.body, &Vec3f::new(0.0, 0.0, 0.0));
     }
 
-    /// `NetCarStateProvider::update` @ 0x14011d950, the part the physics side needs: a car
-    /// whose newest state is older than five seconds of the frame clock is disconnected
-    /// until a state arrives.
+    /// The server said the driver left (`ACP_CLIENT_DISCONNECTED`).
     pub fn mark_disconnected(&mut self) {
         self.is_disconnected = true;
+    }
+
+    /// `NetCarStateProvider::update` @ 0x14011d950, once a frame with the frame's clock
+    /// (`now`, ms, on the scale of the physics clock): a car whose newest state is older
+    /// than five seconds is disconnected until a state arrives (and is not drawn).
+    pub fn update(&mut self, now: f64) {
+        self.is_disconnected = (now - self.net_states[0].rcv_time > 5000.0) || self.is_disconnected;
     }
 }

@@ -476,13 +476,13 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 println!("{line}");
             }
             while chat_at < config.chat.len() && seconds >= config.chat[chat_at].1 {
-                session.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
+                session.net.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
                 chat_at += 1;
             }
             if steps.is_multiple_of(64) {
                 *shared.online_hud.lock().unwrap() = session.hud_lines();
             }
-            if session.client.is_lost() {
+            if session.net.client.is_lost() {
                 result = Err("the connection to the server is gone".to_string());
                 break;
             }
@@ -497,16 +497,16 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     close(&mut timing, n, origin);
     if let Some(session) = &mut sim.online {
         // ACClient::shutdown: tell the server
-        session.client.shutdown();
+        session.net.client.shutdown();
         println!(
             "online: left the server after {} steps ({} datagrams in, {} out, {} messages in)",
-            sim.steps, session.client.datagrams_in, session.client.datagrams_out, session.client.messages_in
+            sim.steps, session.net.client.datagrams_in, session.net.client.datagrams_out, session.net.client.messages_in
         );
         for line in session.summary() {
             println!("{line}");
         }
         if let Some(path) = &config.net_tape {
-            match crate::join::save_tape(&session.client.transport, path) {
+            match crate::join::save_tape(&session.net.client.transport, path) {
                 Ok(entries) => println!("online: the session's tape ({entries} messages) is in {}", path.display()),
                 Err(message) => eprintln!("WARNING: {message}"),
             }

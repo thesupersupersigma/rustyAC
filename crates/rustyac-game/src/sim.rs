@@ -1144,7 +1144,7 @@ impl GameSim {
     }
 
     fn build(setup: SimSetup, source: Box<dyn DriverSource>, online: Option<OnlineSession>) -> Result<GameSim, String> {
-        let rules = online.as_ref().map(|session| ServerRules::of(&session.client.accepted));
+        let rules = online.as_ref().map(|session| ServerRules::of(&session.net.client.accepted));
         let data_path = find_car_data(&setup.car)?;
         let driver = Driver::new(source, setup.ff_gain);
         let (mut track, mut track_folder, mut spawn, mut track_summary) = (None, None, FLAT_SPAWN, String::new());
@@ -1188,12 +1188,12 @@ impl GameSim {
         let physics_info = PhysicsInfo::of(&car);
         let mut online = online.map(Box::new);
         if let (Some(session), Some(engine)) = (&mut online, &mut engine) {
-            session.track = track.clone();
+            session.net.track = track.clone();
             add_remote_cars(session, engine, track.as_ref(), 1 + opponents.len())?;
-            session.client.set_cars_in_session(1 + session.remote.len());
+            session.net.client.set_cars_in_session(1 + session.remote.len());
             // the session has run for a while already: its start on this machine's clock
-            let started = setup.clock_start_ms - session.client.accepted.current_session.start as f64;
-            session.client.begin_update_mode(started)?;
+            let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
+            session.net.client.begin_update_mode(started)?;
         }
         Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules })
     }
@@ -1281,8 +1281,9 @@ impl GameSim {
         session
             .remote
             .iter()
-            .map(|remote| {
-                let geometry = &remote.provider.geometry;
+            .enumerate()
+            .map(|(number, remote)| {
+                let geometry = &session.net.cars[number].geometry;
                 let mut info = CarInfo {
                     data_path: remote.data_path.clone(),
                     name: remote.entry.model.clone(),
@@ -1343,9 +1344,9 @@ impl GameSim {
         if let (Some(session), Some(engine)) = (&mut self.online, &mut engine) {
             // the other players' cars get bodies in the new world; what is known of them stays
             let root = ac_root();
-            for remote in &mut session.remote {
+            for (remote, car) in session.remote.iter().zip(&mut session.net.cars) {
                 let mesh = remote_collider(&remote.data_path, root.as_deref(), &remote.entry.model);
-                remote.provider.body = NetCarStateProvider::create_body(&mut engine.core, remote.provider.guid, &remote.entry.model, mesh.as_ref());
+                car.body = NetCarStateProvider::create_body(&mut engine.core, car.guid, &remote.entry.model, mesh.as_ref());
             }
         }
         self.opponents = opponents;
@@ -1533,7 +1534,7 @@ impl GameSim {
                         engine.step_with(DT, time, &mut slots, &mut OnlineHooks { session });
                         // the other players' wakes, for the next step's slipstream
                         engine.extra_wakes.clear();
-                        engine.extra_wakes.extend(session.remote.iter().filter(|remote| !remote.provider.is_disconnected).map(|remote| remote.provider.slip_stream));
+                        engine.extra_wakes.extend(session.net.cars.iter().filter(|car| !car.is_disconnected).map(|car| car.slip_stream));
                     }
                     None => engine.step(DT, time, &mut slots),
                 }
@@ -1582,7 +1583,7 @@ impl GameSim {
         let Some(session) = &mut self.online else {
             return;
         };
-        let me = session.client.session_id;
+        let me = session.net.client.session_id;
         for event in std::mem::take(&mut session.pending) {
             match event {
                 Event::Message(Message::Weather { ambient, road, wind_speed_kmh, wind_direction_deg, .. }) => {

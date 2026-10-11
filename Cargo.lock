@@ -595,6 +595,7 @@ dependencies = [
  "rustyac-audio",
  "rustyac-content",
  "rustyac-math",
+ "rustyac-net",
  "rustyac-physics",
  "rustyac-render",
  "windows",

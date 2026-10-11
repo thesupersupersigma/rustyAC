@@ -485,10 +485,9 @@ impl CarView {
     /// `NetCarStateProvider` makes it up after the last step: the `CarPhysicsState` the
     /// game's avatar and sound of a remote car read.
     pub fn capture_remote(sim: &GameSim, index: usize) -> CarView {
-        let Some(remote) = sim.online.as_ref().and_then(|session| session.remote.get(index)) else {
+        let Some((remote, provider)) = sim.online.as_ref().and_then(|session| Some((session.remote.get(index)?, session.net.cars.get(index)?))) else {
             return CarView { disconnected: true, ..CarView::default() };
         };
-        let provider = &remote.provider;
         let state = &provider.state;
         let own = &sim.car.car;
         let net_status = provider.net_states[0].status_bytes;
@@ -509,6 +508,8 @@ impl CarView {
             drs: net_status & rustyac_net::net_car::status::DRS != 0,
             acc_g: state.acc_g,
             damage: remote.damage,
+            // (… and 20 l of fuel)
+            fuel: 20.0,
             air: own.env.ambient_temperature,
             air_density: own.air_density,
             road: own.env.road_temperature,
@@ -525,7 +526,8 @@ impl CarView {
             // NetCarStateProvider::setCarAvatar: every tyre of a remote car is 0.2 m wide
             view.tyre_width[wheel] = 0.2;
             view.rim_radius[wheel] = provider.geometry.tyre_radius[wheel] * 0.5;
-            view.wheel_load[wheel] = state.load[wheel];
+            // (NetCarStateProvider::getPhysicsState hands every tyre out with a load of 100 N)
+            view.wheel_load[wheel] = 100.0;
             view.wheel_slip[wheel] = state.nd_slip[wheel];
             let r = &mut view.render;
             r.slip_ratio[wheel] = state.slip_ratio[wheel];

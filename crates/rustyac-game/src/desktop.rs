@@ -398,7 +398,7 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
     for note in &joined.notes {
         println!("{note}");
     }
-    let accepted = &joined.session.client.accepted;
+    let accepted = &joined.session.net.client.accepted;
     let mut online = options.clone();
     online.car = accepted.model.clone();
     online.skin = Some(accepted.skin.clone());
@@ -423,7 +423,7 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
 /// pit box of the player's slot.
 fn online_setup(options: &Options, session: &rustyac_game::online::OnlineSession) -> Result<SimSetup, String> {
     let mut setup = live_setup(options)?;
-    let accepted = &session.client.accepted;
+    let accepted = &session.net.client.accepted;
     setup.opponents.clear();
     setup.player_skin = Some(accepted.skin.clone());
     // CarAvatar::setSpawnPositionIndex("PIT", sessionID) / ("START", handshakeCarPosition)

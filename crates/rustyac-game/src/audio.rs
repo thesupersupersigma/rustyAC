@@ -63,8 +63,7 @@ pub fn capture_all(sim: &GameSim, sticky: &mut Vec<[StickySurface; 4]>) -> Vec<C
 /// `NetCarStateProvider` makes up. A car that is not connected is silent (`node_active`).
 fn capture_remote(sim: &GameSim, index: usize) -> CarFrame {
     let flat = |m: &Mat| -> [f32; 16] { std::array::from_fn(|i| m[i / 4][i % 4]) };
-    let remote = &sim.online.as_ref().expect("a remote car has a session").remote[index];
-    let provider = &remote.provider;
+    let provider = &sim.online.as_ref().expect("a remote car has a session").net.cars[index];
     let state = &provider.state;
     let world = &state.world_matrix.m;
     let mut frame = CarFrame {
@@ -80,7 +79,8 @@ fn capture_remote(sim: &GameSim, index: usize) -> CarFrame {
         velocity: state.velocity,
         slip_ratio: state.slip_ratio,
         nd_slip: state.nd_slip,
-        load: state.load,
+        // (NetCarStateProvider::getPhysicsState: 100 N on every tyre, 20 l of fuel)
+        load: [100.0; 4],
         tyre_dirty_level: [0.0; 4],
         surface_wav: Default::default(),
         surface_grip_mod: [0.0; 4],
@@ -89,7 +89,7 @@ fn capture_remote(sim: &GameSim, index: usize) -> CarFrame {
         is_gear_grinding: false,
         body_work_volume: 0.0,
         air_density: sim.car.car.air_density,
-        fuel: 0.0,
+        fuel: 20.0,
         engine_life_left: 1000.0,
         turbo_bov: 0.0,
         actions_state: state.actions_state,
