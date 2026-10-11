@@ -491,8 +491,9 @@ for checks, without anybody at the controls:
                         4096, world detail 5, anisotropic 16, reflections 1024 with 6 faces a frame (the
                         launcher's highest, 2048, costs too many frames: --cube-size 2048 has it),
                         mirrors 1024 in high quality with smoke, the virtual mirror, smoke 5, 4 samples
-                        per pixel, FXAA and motion blur 6 with the post-processing frame); low:
-                        everything off or at the lowest value. The options above still win.
+                        per pixel; post-processing off until YEBIS is ported: --post 1 --fxaa 1
+                        --motion-blur 6 switch its frame on); low: everything off or at the lowest
+                        value. The options above still win.
   --ideal-line, --no-ideal-line
                         AC's ideal line (the coloured arrows on the road) on or off from the start,
                         whatever assists.ini [ASSISTS] IDEAL_LINE says; Ctrl+I switches it while

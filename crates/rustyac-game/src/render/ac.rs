@@ -276,8 +276,11 @@ impl GraphicsPreset {
         }
     }
 
-    /// The `video.ini` the launcher would write with every slider at its end (four samples,
-    /// FXAA and motion blur with the post-processing frame; YEBIS' own effects are Task 23b).
+    /// The `video.ini` the launcher would write with every slider at its end, four samples per
+    /// pixel, and post-processing off: `[POST_PROCESS] ENABLED=0` until YEBIS is ported (Task
+    /// 23b). The post-processing frame without YEBIS' tone mapping is a picture the game never
+    /// draws (Task 23), so the preset does not switch it on; with it off, FXAA and motion blur
+    /// do not exist in acs.exe either. `--post 1 --fxaa 1 --motion-blur 6` ask for that frame.
     ///
     /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
     /// faces drawn again every frame a 2048 map costs 13 to 50 ms a frame on the PC this was
@@ -286,7 +289,7 @@ impl GraphicsPreset {
     fn video_ini(self) -> &'static str {
         match self {
             GraphicsPreset::Max => {
-                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=1024\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=6\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=1\nFXAA=1\n"
+                "[VIDEO]\nANISOTROPIC=16\nAASAMPLES=4\nSHADOW_MAP_SIZE=4096\n[ASSETTOCORSA]\nWORLD_DETAIL=5\n[CUBEMAP]\nSIZE=1024\nFACES_PER_FRAME=6\n[EFFECTS]\nSMOKE=5\nRENDER_SMOKE_IN_MIRROR=1\nMOTION_BLUR=0\n[MIRROR]\nSIZE=1024\nHQ=1\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"
             }
             GraphicsPreset::Low => {
                 "[VIDEO]\nANISOTROPIC=0\nAASAMPLES=1\nSHADOW_MAP_SIZE=512\n[ASSETTOCORSA]\nWORLD_DETAIL=0\n[CUBEMAP]\nSIZE=0\nFACES_PER_FRAME=0\n[EFFECTS]\nSMOKE=0\nRENDER_SMOKE_IN_MIRROR=0\nMOTION_BLUR=0\n[MIRROR]\nSIZE=0\nHQ=0\n[POST_PROCESS]\nENABLED=0\nFXAA=0\n"
@@ -522,6 +525,9 @@ impl AcRenderer {
         if options.preset.is_some() {
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE=0"));
             notes.insert(0, format!("{video_name}: the built-in settings, your video.ini is not read"));
+            if options.preset == Some(GraphicsPreset::Max) {
+                notes.insert(1, "  (4 samples per pixel; post-processing stays off until YEBIS is ported: --post 1 --fxaa 1 --motion-blur 6 switch its frame on)".to_string());
+            }
         } else if options.video_ini.is_some() {
             notes.insert(0, format!("the video settings of {video_name}"));
         }
