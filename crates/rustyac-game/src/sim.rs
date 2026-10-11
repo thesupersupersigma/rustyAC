@@ -1550,6 +1550,9 @@ impl GameSim {
         // Car::evOnSectorSplit / evOnLapCompleted -> the lap list
         if self.track.is_some() {
             let (laps, splits) = self.car.car.transponder.take_events();
+            if let Some(session) = &mut self.online {
+                session.report_local_car(&self.car.car, &laps, &splits, time);
+            }
             for split in &splits {
                 self.lap_db.on_sector_split(split);
             }
@@ -1557,6 +1560,9 @@ impl GameSim {
                 self.lap_db.on_lap_completed(lap);
                 self.fuel_evaluator.on_lap_completed(fuel, in_pit_lane);
             }
+        }
+        if self.online.is_some() {
+            self.apply_server_events();
         }
         let device = &self.car.device;
         Ok(StepInput {
@@ -1566,6 +1572,89 @@ impl GameSim {
             bias_clicks,
             device: device.source.device_id(),
         })
+    }
+
+    /// What the server said that changes the physics: the weather, the track's grip, a new
+    /// session, ballast and restrictor, the race's start.
+    fn apply_server_events(&mut self) {
+        use rustyac_net::client::Event;
+        use rustyac_net::messages::Message;
+        let Some(session) = &mut self.online else {
+            return;
+        };
+        let me = session.client.session_id;
+        for event in std::mem::take(&mut session.pending) {
+            match event {
+                Event::Message(Message::Weather { ambient, road, wind_speed_kmh, wind_direction_deg, .. }) => {
+                    // ACP_WEATHER_UPDATE: the temperatures as whole degrees; the wind at most 40 km/h
+                    let kmh = (wind_speed_kmh as f32).clamp(0.0, 40.0);
+                    let speed = rustyac_physics::session::wind_from_kmh(kmh);
+                    for env in self.engine.iter_mut().map(|engine| &mut engine.env).chain([&mut self.car.car.env, &mut self.setup.env]) {
+                        env.ambient_temperature = ambient as f32;
+                        env.road_temperature = road as f32;
+                    }
+                    if let Some(engine) = &mut self.engine {
+                        engine.set_wind(speed, wind_direction_deg as f32);
+                    }
+                    self.setup.session.wind_speed = speed;
+                    self.setup.session.wind_direction_deg = wind_direction_deg as f32;
+                }
+                // Track::setGripLevelExternal: every lap message carries the grip
+                Event::Message(Message::LapCompleted { grip, .. }) => self.set_server_grip(grip),
+                Event::Message(Message::NewSession(info)) => {
+                    // the job ACClient::onNewSession queues for the physics thread, and
+                    // PhysicsEngine::setSessionInfo
+                    if let Some(rules) = &mut self.rules {
+                        rules.session_type = info.kind as i32;
+                        rules.grip = info.grip;
+                        let (kind, mode) = (rules.session_type, rules.penalty_mode());
+                        for env in self.engine.iter_mut().map(|engine| &mut engine.env).chain([&mut self.car.car.env]) {
+                            env.session_type = kind;
+                            env.penalty_mode = mode;
+                            env.session_start_time_ms = info.start as f64;
+                        }
+                    }
+                    self.set_server_grip(info.grip);
+                    if let Some(engine) = &mut self.engine {
+                        engine.reset_collisions_for_new_session();
+                    }
+                    // the grid of a race: the slot the server gives this car
+                    if info.kind == rustyac_net::handshake::session_type::RACE {
+                        if let (Some(place), Some(track)) = (info.grid.iter().position(|slot| *slot == me), &self.track) {
+                            if let Some((position, tail)) = track.spawn_pose("START", place) {
+                                self.spawn = SpawnPose { position, tail };
+                            }
+                        }
+                    }
+                    self.new_sessions += 1;
+                    self.car.device.source.request(event::RESET);
+                }
+                Event::Message(Message::Bop(entries)) => {
+                    for (slot, ballast, restrictor) in entries {
+                        if slot == me {
+                            // Car::setBallastKG / setRestrictor, when the value is another
+                            if self.car.car.ballast_kg != ballast {
+                                self.car.car.ballast_kg = ballast;
+                            }
+                            self.car.car.set_restrictor(restrictor);
+                        }
+                    }
+                }
+                Event::RaceStart(start) => {
+                    // PhysicsEngine::setCurrentSessionStartTime
+                    for env in self.engine.iter_mut().map(|engine| &mut engine.env).chain([&mut self.car.car.env]) {
+                        env.session_start_time_ms = start;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn set_server_grip(&mut self, grip: f32) {
+        for env in self.engine.iter_mut().map(|engine| &mut engine.env).chain([&mut self.car.car.env, &mut self.setup.env]) {
+            env.dynamic_grip_level = grip;
+        }
     }
 
     /// One step of a recorded drive.

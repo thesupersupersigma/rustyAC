@@ -285,8 +285,11 @@ impl NetCarStateProvider {
         let front = -(geometry.wheel_base_pos_ls[0].m[3][1] - geometry.tyre_radius[0]);
         let rear = -(geometry.wheel_base_pos_ls[2].m[3][1] - geometry.tyre_radius[2]);
         let lift = if rear <= front { front } else { rear };
+        // (along the pit box's own up axis)
         let mut pit_position = pit_box;
-        pit_position.m[3][1] += lift;
+        pit_position.m[3][0] += pit_box.m[1][0] * lift;
+        pit_position.m[3][1] += pit_box.m[1][1] * lift;
+        pit_position.m[3][2] = pit_box.m[1][2] * lift + pit_box.m[3][2];
         let state = NetCarPhysicsState { limiter_rpm: geometry.limiter_rpm, physics_guid: guid as u8, ..NetCarPhysicsState::default() };
         let provider = NetCarStateProvider {
             session_id,

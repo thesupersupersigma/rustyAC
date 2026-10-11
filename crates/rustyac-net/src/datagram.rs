@@ -7,7 +7,7 @@
 //!
 //! | id | way | what |
 //! |---|---|---|
-//! | 0x46 | in | one car's state (59 bytes after the id; several may follow each other) |
+//! | 0x46 | in | one car's state (60 bytes after the id; several may follow each other) |
 //! | 0x48 | in | "mega packet": `u32` server time, `u16` ping, `u8` count, then that many states of 57 bytes (no performance delta, no gas) |
 //! | 0x4e | both | association: the client sends `4e <slot>` until the server echoes a bare `4e` |
 //! | 0x4f | out | session check: `4f <session type>` |
@@ -32,7 +32,7 @@ pub mod id {
 
 /// The size of one car's state in a mega packet, and in message 0x46 (after the id).
 const MEGA_RECORD: usize = 57;
-const SINGLE_RECORD: usize = 59;
+const SINGLE_RECORD: usize = 60;
 
 /// What a datagram from the server says.
 #[derive(Clone, Debug, PartialEq)]

@@ -404,8 +404,12 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
     online.skin = Some(accepted.skin.clone());
     online.track = Some(accepted.track.clone());
     online.layout = Some(if accepted.track_config.is_empty() { "-".to_string() } else { accepted.track_config.clone() });
-    online.spawn = "pit".to_string();
-    online.spawn_given = true;
+    // (--spawn start puts the car on the grid slot instead: for checks with the line
+    // follower, which does not know the way out of the pits)
+    if !options.spawn_given {
+        online.spawn = "pit".to_string();
+        online.spawn_given = true;
+    }
     online.no_race_cars = true;
     online.cars = None;
     online.opponents.clear();

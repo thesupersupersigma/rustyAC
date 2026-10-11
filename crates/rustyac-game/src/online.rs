@@ -127,6 +127,13 @@ pub struct OnlineSession {
     pub remote_entries: Vec<CarEntry>,
     /// The driver's horn (sent with the car update).
     pub horn: bool,
+    /// `damageReport`: the damage the server was last told of, and when (ms).
+    damage_sent: [f32; 5],
+    damage_sent_at: f64,
+    /// The local car's jump starts the server was told of.
+    jump_starts_sent: u32,
+    /// The local car's tyre compound the server was told of.
+    compound_sent: Option<String>,
     /// Steps so far (the tape's clock).
     steps: u64,
 }
@@ -223,7 +230,7 @@ impl OnlineSession {
             })
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
-        OnlineSession { client, remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), track: None, remote_entries, horn: false, steps: 0 }
+        OnlineSession { client, remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), track: None, remote_entries, horn: false, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, steps: 0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -250,6 +257,40 @@ impl OnlineSession {
         }
     }
 
+    /// What the server is told of the local car right after a step: its sector times and
+    /// laps (`ACClient::onSectorSplit`, `onLapCompleted`: laps that crossed every sector),
+    /// a jump start, a change of tyres, and its damage when that changed
+    /// (`ACClient::updateDamageReport`: at most every two seconds).
+    pub fn report_local_car(&mut self, car: &RollingChassis, laps: &[rustyac_physics::track::timing::OnLapCompletedEvent], splits: &[rustyac_physics::track::timing::OnSectorSplitEvent], physics_time: f64) {
+        use rustyac_net::messages::ClientEvent;
+        for split in splits {
+            self.client.send_event(&ClientEvent::SectorSplit { sector: split.sector_index as u8, time: split.sector_time, cuts: split.cuts.max(0) as u32 });
+        }
+        for lap in laps.iter().filter(|lap| lap.is_valid) {
+            self.client.send_event(&ClientEvent::LapCompleted { physics_time, lap_time: lap.lap_time, splits: lap.splits.clone(), cuts: lap.cuts, lap_count: car.transponder.lap_count as u8 });
+            self.console.push(format!("online: lap {} of {} told to the server{}", car.transponder.lap_count, lap_text(lap.lap_time), if lap.cuts > 0 { format!(" ({} cuts)", lap.cuts) } else { String::new() }));
+        }
+        if car.jump_start_events != self.jump_starts_sent {
+            self.jump_starts_sent = car.jump_start_events;
+            self.client.send_event(&ClientEvent::JumpStart);
+        }
+        let compound = car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map(|def| def.short_name.clone());
+        if let Some(compound) = compound {
+            if self.compound_sent.as_ref() != Some(&compound) {
+                // (the first one is the compound the car starts on: nothing to tell)
+                if self.compound_sent.is_some() {
+                    self.client.send_event(&ClientEvent::TyreCompound(compound.clone()));
+                }
+                self.compound_sent = Some(compound);
+            }
+        }
+        if physics_time - self.damage_sent_at > 2000.0 && car.damage_zone_level != self.damage_sent {
+            self.damage_sent = car.damage_zone_level;
+            self.damage_sent_at = physics_time;
+            self.client.send_event(&ClientEvent::Damage(self.damage_sent));
+        }
+    }
+
     fn driver_of(&self, slot: u8) -> String {
         match self.roster.iter().find(|entry| entry.slot == slot) {
             Some(entry) if !entry.driver.is_empty() => entry.driver.clone(),
@@ -273,6 +314,98 @@ impl OnlineSession {
                         entry.best_lap_ms = 0;
                     }
                 }
+                Event::Message(Message::LapCompleted { slot, lap_time, cuts, standings, .. }) => {
+                    // the standings: laps and (in practice and qualifying) the best lap
+                    let race = self.client.current_session.kind == session_type::RACE;
+                    for row in standings {
+                        if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == row.slot) {
+                            entry.laps = row.laps as u32;
+                            if !race {
+                                entry.best_lap_ms = if row.time == rustyac_net::messages::NO_TIME { 0 } else { row.time };
+                            }
+                        }
+                    }
+                    if *slot != 0xff {
+                        if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
+                            entry.last_lap_ms = *lap_time;
+                            if race && *cuts == 0 && (entry.best_lap_ms == 0 || *lap_time < entry.best_lap_ms) {
+                                entry.best_lap_ms = *lap_time;
+                            }
+                        }
+                        let who = self.driver_of(*slot);
+                        self.console.push(format!("online: the server counts a lap of {who}: {}{}", lap_text(*lap_time), if *cuts > 0 { format!(" ({cuts} cuts)") } else { String::new() }));
+                    }
+                }
+                Event::Message(Message::ClientDisconnected { slot }) => {
+                    let who = self.driver_of(*slot);
+                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
+                        remote.provider.mark_disconnected();
+                    }
+                    if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
+                        entry.connected = false;
+                        entry.driver.clear();
+                    }
+                    self.say(format!("Player {who} disconnected from the server"));
+                }
+                Event::Message(Message::DriverConnected { name, slot, .. }) => {
+                    if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
+                        entry.driver = name.clone();
+                        entry.connected = true;
+                    }
+                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
+                        remote.damage = [0.0; 5];
+                    }
+                    self.say(format!("Car {slot} is now driven by {name}"));
+                }
+                Event::Message(Message::DriverNames(names)) => {
+                    for (slot, name) in names {
+                        if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
+                            entry.driver = name.clone();
+                            if entry.me || !name.is_empty() {
+                                entry.connected = true;
+                            }
+                        }
+                    }
+                }
+                Event::Message(Message::Damage { slot, levels }) => {
+                    if let Some(remote) = self.remote.iter_mut().find(|remote| remote.provider.session_id == *slot) {
+                        remote.damage = *levels;
+                    }
+                }
+                Event::Message(Message::WelcomeMessage(text)) => {
+                    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                        self.console.push(format!("server: {line}"));
+                    }
+                }
+                Event::Message(Message::Kicked { slot, reason }) => {
+                    let who = self.driver_of(*slot);
+                    let why = match reason {
+                        0 => "voted out",
+                        1 => "banned until the server restarts",
+                        2 => "blacklisted",
+                        3 => "checksum failed",
+                        _ => "kicked by the admin",
+                    };
+                    self.say(format!("{who} was removed from the server: {why}"));
+                }
+                Event::Message(Message::RaceOver { standings, .. }) => {
+                    self.say("The race is over".to_string());
+                    for (place, row) in standings.iter().enumerate() {
+                        let who = self.driver_of(row.slot);
+                        if self.roster.iter().any(|entry| entry.slot == row.slot && entry.connected) {
+                            self.console.push(format!("online:   {}. {who}  {}  {} laps", place + 1, lap_text(row.time), row.laps));
+                        }
+                    }
+                }
+                Event::Message(Message::Weather { ambient, road, graphics, wind_speed_kmh, wind_direction_deg }) => {
+                    self.console.push(format!("online: the server's weather: air {ambient} C, road {road} C, {graphics}, wind {wind_speed_kmh} km/h from {wind_direction_deg} deg"));
+                }
+                Event::Message(Message::JumpStart { slot }) => {
+                    let who = self.driver_of(*slot);
+                    self.say(format!("[SERVER] Jumpstart detected for {who}"));
+                }
+                Event::Message(Message::VoteNotPassed) => self.say("Voting ended. Not passed".to_string()),
+                Event::RaceStart(start) => self.console.push(format!("online: the race starts at {:.1} s of the session clock", start / 1000.0)),
                 Event::Associated => self.console.push("online: the server answers on UDP, car updates flow".to_string()),
                 Event::ServerSilent => self.say("The server seems to be unavailable.".to_string()),
                 Event::ConnectionLost(message) => self.say(format!("Connection lost: {message}")),
