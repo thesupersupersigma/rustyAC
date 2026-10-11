@@ -611,9 +611,13 @@ impl AcRenderer {
         // Sim::createCamera 0x1401982e0: the plain camera, or the post-processing one (the same
         // thing when post-processing is off); blur only with post-processing. Sim::Sim: the
         // solve's quality is twice the setting.
+        // Sim::initHDRLevels 0x140199b00 (the camera managers hand the pair to the camera)
+        let hdr_levels = rustyac_render::post::init_hdr_levels(&options.game);
         let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled;
         let mut camera = CameraForwardYebis::new(&mut graphics, use_blur)?;
         camera.blur_quality = motion_blur * 2.0;
+        camera.base.camera.min_exposure = hdr_levels.min_exposure;
+        camera.base.camera.max_exposure = hdr_levels.max_exposure;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
         camera.base.camera.max_layer = graphics.video.world_detail as f32;
         // SkyBox::SkyBox: race.ini [WEATHER] NAME makes the clouds a first time
@@ -949,7 +953,7 @@ impl AcRenderer {
         }
         if info.paused || info.replay {
             if let Some(start) = &mut self.race_start_ms {
-                *start += dt as f64 * 1000.0;
+                *start += (dt * 1000.0) as f64;
             }
         }
         if let Some(car) = &mut self.car {
@@ -1143,6 +1147,10 @@ impl AcRenderer {
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
         }
+        // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
+        self.graphics.reset_render_states();
+        self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+        self.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
         // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
         if let Some(gates) = &self.gates {
             if !self.told_paused && !info.replay {
@@ -1157,7 +1165,9 @@ impl AcRenderer {
         // (they change in the next frame, as in the game)
         if let Some(lights) = &mut self.start_lights {
             if lights.is_active {
-                lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts);
+                if lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts) {
+                    lights.render_lamps(&mut self.graphics);
+                }
             }
         }
         if logging {

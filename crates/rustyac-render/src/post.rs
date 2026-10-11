@@ -110,14 +110,15 @@ impl CameraForwardYebis {
         Ok(())
     }
 
-    /// `CameraForwardYebis::onResize` 0x140029da0.
+    /// `CameraForwardYebis::onResize` 0x140029da0. NOT as the game in one point: the game
+    /// keeps the FXAA target at the size it was made with (the picture of a resized window is
+    /// then a cut-out or has a border); here it is made again at the new size.
     pub fn on_resize(&mut self, graphics: &mut Graphics) -> Result<(), String> {
         self.forward.on_resize(graphics)?;
         self.width = graphics.video.width;
         self.height = graphics.video.height;
         if graphics.video.pp_hdr_enabled {
             if self.fxaa_temp_rt.is_some() {
-                // (the game's handler of evWindowPreResize deletes it; the next frame needs one)
                 self.fxaa_temp_rt = Some(color_target(graphics, DXGI_FORMAT_R8G8B8A8_UNORM, self.width, self.height));
             }
             self.init_render_targets(graphics)?;
@@ -226,4 +227,40 @@ pub fn stand_in_apply_effects(graphics: &mut Graphics, shader: ShaderId, source:
     graphics.kgl.set_texture(0, &source.shader_resource_view);
     crate::gl::full_screen_quad(graphics, Some(shader));
     graphics.kgl.set_texture(0, &None);
+}
+
+/// `HDRLevels` (`Sim::hdrLevels`): `Sim::Sim` 0x140192070 starts them at 0 and 10000.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdrLevels {
+    pub min_exposure: f32,
+    pub max_exposure: f32,
+}
+
+/// `Sim::initHDRLevels` 0x140199b00: `system/cfg/lighting.ini [HDR] MIN_EXPOSURE` and
+/// `MAX_EXPOSURE` (a missing key reads as 0; a missing file leaves the defaults). The game's
+/// camera managers copy the pair into the scene camera every frame
+/// ([`crate::camera::Camera::min_exposure`]) and nothing ever reads it there: YEBIS takes its
+/// exposure limits from the filter file (`[AUTO_EXPOSURE]`), not from here.
+pub fn init_hdr_levels(game_folder: &std::path::Path) -> HdrLevels {
+    let mut levels = HdrLevels { min_exposure: 0.0, max_exposure: 10000.0 };
+    let path = game_folder.join("system/cfg/lighting.ini");
+    if path.is_file() {
+        if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&path) {
+            levels.min_exposure = ini.get_float("HDR", "MIN_EXPOSURE").unwrap_or(0.0);
+            levels.max_exposure = ini.get_float("HDR", "MAX_EXPOSURE").unwrap_or(0.0);
+        }
+    }
+    levels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hdr_levels_of_a_made_up_file() {
+        let folder = std::env::temp_dir().join(format!("rustyac_hdr_levels_{}", std::process::id()));
+        // (no file: the constructor's values)
+        assert_eq!(init_hdr_levels(&folder), HdrLevels { min_exposure: 0.0, max_exposure: 10000.0 });
+    }
 }

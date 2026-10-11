@@ -109,6 +109,10 @@ pub struct Camera {
     pub clear_depth: f32,
     pub frustum: BoundingFrustum,
     pub exposure: f32,
+    /// `minExposure`, `maxExposure` (+0x1a0, +0x1a4): `Sim::hdrLevels`, which the game's camera
+    /// managers copy in every frame. Nothing in `acs.exe` reads them.
+    pub min_exposure: f32,
+    pub max_exposure: f32,
     /// -1: the screen's
     pub aspect_ratio: f32,
     pub max_layer: f32,
@@ -132,6 +136,8 @@ impl Camera {
             clear_depth: 1.0,
             frustum,
             exposure: 40.0,
+            min_exposure: 0.0,
+            max_exposure: 0.0,
             aspect_ratio: -1.0,
             max_layer: 5.0,
             is_mirror: false,

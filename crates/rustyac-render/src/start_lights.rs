@@ -38,6 +38,8 @@ pub struct StartingLights {
     pub random_time_offset_red_wait: f32,
     track_lights: Vec<TrackStartingLight>,
     lights_on: bool,
+    /// `texOFF`: `content/texture/off.png`, the picture of one of the HUD's lamps
+    tex_off: crate::texture::Texture,
 }
 
 fn is_mesh(scene: &Scene, n: NodeId) -> bool {
@@ -87,11 +89,12 @@ impl StartingLights {
     /// `StartingLights::StartingLights` 0x1401a1a20. `data_folder`: the folder that holds the
     /// track's (or its layout's) `data`. Two numbers are drawn from `rand()`.
     pub fn new(graphics: &mut Graphics, scene: &mut Scene, track_node: NodeId, data_folder: &Path) -> Result<StartingLights, String> {
-        // (content/texture/off.png: the HUD's lamp, not part of the 3D scene)
+        let game = crate::model::path_text(&graphics.game_folder);
+        let tex_off = graphics.resources.get_texture(&graphics.kgl, &format!("{game}/content/texture/off.png"));
         let k = f32::from_bits(0x3800_0100);
         let random_time_offset_start = (graphics.crt_rand.next() as f32 * k) * 1000.0 - 500.0;
         let random_time_offset_red_wait = (graphics.crt_rand.next() as f32 * k) * 1000.0 - 500.0;
-        let mut lights = StartingLights { is_active: true, lights: [0; 6], random_time_offset_start, random_time_offset_red_wait, track_lights: Vec::new(), lights_on: false };
+        let mut lights = StartingLights { is_active: true, lights: [0; 6], random_time_offset_start, random_time_offset_red_wait, track_lights: Vec::new(), lights_on: false, tex_off };
         let file = data_folder.join("data/startinglights.ini");
         if !rustyac_physics::data::exists(&file) {
             return Ok(lights);
@@ -144,9 +147,39 @@ impl StartingLights {
     /// scene is drawn, when `is_active` (`Game::renderHUD` leaves an inactive object out).
     /// `pause_menu`: the pause menu shows. `started`: `RaceManager::hasSessionStarted`;
     /// `race`: the session is a race; `tts`: `RaceManager::getTimeToSessionStart`, ms.
-    pub fn render_hud(&mut self, scene: &mut Scene, pause_menu: bool, started: bool, race: bool, tts: f32) {
+    ///
+    /// Returns whether the HUD's six lamps show in this frame ([`StartingLights::render_lamps`]
+    /// draws them; in the game that is the middle of this function, and it touches nothing the
+    /// rest of it uses). What is written to the track's lamps here is seen in the next frame's
+    /// scene: the game draws the scene before `Game::renderHUD`.
+    pub fn render_hud(&mut self, scene: &mut Scene, pause_menu: bool, started: bool, race: bool, tts: f32) -> bool {
+        self.render_hud_inner(scene, pause_menu, started, race, tts).is_some()
+    }
+
+    /// The 2D part of `StartingLights::renderHUD`: six lamps in a row, centred, 225 pixels from
+    /// the top, grey or red, each through `StartingLights::renderLight` 0x1401a3420 (which ends
+    /// its quad twice: every lamp is drawn two times over).
+    pub fn render_lamps(&self, graphics: &mut Graphics) {
+        let (width, height) = graphics.resources.size(&self.tex_off).unwrap_or((0, 0));
+        let (w, h) = (width as f32, height as f32);
+        let n = self.lights.len() as f32;
+        let mut x = (graphics.video.width as f32 * 0.5) - ((w * n) * 0.5);
+        let Some(mut gl) = graphics.gl.take() else { return };
+        for light in self.lights {
+            let colour = if light == 1 { [3.0, 0.0, 0.0] } else { [0.5, 0.5, 0.5] };
+            gl.color3f(colour[0], colour[1], colour[2]);
+            graphics.set_texture(0, &self.tex_off);
+            gl.begin(crate::gl::GL_QUADS, None);
+            gl.quad(graphics, x, 225.0, w, h, true, None);
+            gl.end(graphics);
+            x = w + x;
+        }
+        graphics.gl = Some(gl);
+    }
+
+    fn render_hud_inner(&mut self, scene: &mut Scene, pause_menu: bool, started: bool, race: bool, tts: f32) -> Option<()> {
         if pause_menu {
-            return;
+            return None;
         }
         let active = !started && race;
         if !active {
@@ -157,11 +190,11 @@ impl StartingLights {
                     set_emissive(scene, material, var, [0.0; 3]);
                 }
             }
-            return;
+            return None;
         }
         let t0 = self.random_time_offset_start;
         if tts >= t0 + 15000.0 {
-            return;
+            return None;
         }
         let t1 = (t0 + 3000.0) + self.random_time_offset_red_wait;
         let t2 = t0 + 4000.0;
@@ -181,7 +214,7 @@ impl StartingLights {
         // the track's
         let m = self.track_lights.len() as f32;
         if !(m > 0.0) {
-            return;
+            return Some(());
         }
         let per = t2 / m;
         let d = tts - t1;
@@ -192,6 +225,7 @@ impl StartingLights {
             set_emissive(scene, material, var, value);
             k += -1.0;
         }
+        Some(())
     }
 }
 

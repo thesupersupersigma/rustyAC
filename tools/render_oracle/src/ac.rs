@@ -70,7 +70,7 @@ const VA_TRACK_NEW_SESSION_HANDLER: usize = 0x1_401c_6b70; // the handler TrackA
 const VA_FUNCTION_QUEUE_VTABLE: usize = 0x1_404c_7b30; // Concurrency::concurrent_queue<std::function<void(void)>>::`vftable'
 const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
 const VA_STARTING_LIGHTS_RENDER_HUD: usize = 0x1_401a_2e80; // StartingLights::renderHUD(float)
-const VA_STARTING_LIGHTS_RENDER_LIGHT: usize = 0x1_401a_3420; // StartingLights::renderLight(float, float, vec3f): the HUD's lamp
+const VA_GRAPHICS_RESET_RENDER_STATES: usize = 0x1_4020_4440; // GraphicsManager::resetRenderStates()
 const VA_SEMAPHORE_CTOR: usize = 0x1_401a_37a0; // StartingTrackSemaphore::StartingTrackSemaphore(Sim*)
 const VA_SEMAPHORE_UPDATE: usize = 0x1_401a_4cc0; // StartingTrackSemaphore::update(float)
 const VA_IDEAL_LINE_CTOR: usize = 0x1_4010_9d10; // IdealLine::IdealLine(AISpline*, GraphicsManager*, IRayTrackCollisionProvider*)
@@ -730,8 +730,6 @@ impl Game {
                     std::fs::create_dir_all("content/texture").map_err(|e| e.to_string())?;
                     std::fs::copy(self.game_folder.join(texture), texture).map_err(|e| format!("off.png: {e}"))?;
                 }
-                // ret: the HUD's own lamps (2D, after the scene) are not drawn
-                acs.patch(acs.va(VA_STARTING_LIGHTS_RENDER_LIGHT), &[0xc3]);
                 wr(track_sim, 0x110, acs.alloc(0x200));
                 wr(track_race_manager, 0x8, game);
                 wr(track_race_manager, 0x168, track_sim);
@@ -1105,19 +1103,14 @@ impl Game {
             if let Some(car) = &car {
                 self.render_virtual_mirror(car, 1.0 / 60.0);
             }
-            if index >= frame.capture {
-                // (a timing run keeps no log: the logger costs far more than the frame)
-                let (text, draws) = if crate::timing() {
-                    (Vec::new(), 0)
-                } else {
-                    let capture = rustyac_render::gpulog::end_capture();
-                    (capture.text, capture.draws)
-                };
-                let (width, height, pixels) = self.read_back()?;
-                crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
-                rendered.width = width;
-                rendered.height = height;
-                rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
+            // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
+            {
+                let reset: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_GRAPHICS_RESET_RENDER_STATES));
+                reset(self.graphics);
+                let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_DEPTH_MODE));
+                set_mode(self.graphics, 2);
+                let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_GRAPHICS_SET_BLEND_MODE));
+                set_mode(self.graphics, 1);
             }
             // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
             for (i, gate) in gates.iter().enumerate() {
@@ -1135,6 +1128,20 @@ impl Game {
             if !start_lights.is_null() && rd::<u8>(start_lights, 0x30) != 0 {
                 let render_hud: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_RENDER_HUD));
                 render_hud(start_lights, crate::frames::DT);
+            }
+            if index >= frame.capture {
+                // (a timing run keeps no log: the logger costs far more than the frame)
+                let (text, draws) = if crate::timing() {
+                    (Vec::new(), 0)
+                } else {
+                    let capture = rustyac_render::gpulog::end_capture();
+                    (capture.text, capture.draws)
+                };
+                let (width, height, pixels) = self.read_back()?;
+                crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
+                rendered.width = width;
+                rendered.height = height;
+                rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || dump.contains(&index)));
             }
             end(self.graphics);
         }

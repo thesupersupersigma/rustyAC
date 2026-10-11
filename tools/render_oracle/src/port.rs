@@ -366,19 +366,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {
             v.render(&mut graphics, &mirror.texture, step.camera.mode);
         }
-        if index >= frame.capture {
-            let (text, draws) = if crate::timing() {
-                (Vec::new(), 0)
-            } else {
-                let capture = rustyac_render::gpulog::end_capture();
-                (capture.text, capture.draws)
-            };
-            let (width, height, pixels) = graphics.kgl.read_screen()?;
-            crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
-            rendered.width = width;
-            rendered.height = height;
-            rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
-        }
+        // ksgui::GUI::render -> doRender2D 0x1402539d0 (no form shows): the states of the 2D pass
+        graphics.reset_render_states();
+        graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+        graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
         // Game::renderHUD: TimeAttack::renderGuiStatus, the gates' flags
         if let Some(gates) = &gates {
             let mut gates = gates.borrow_mut();
@@ -393,8 +384,23 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         // Game::renderHUD, after the scene: StartingLights::renderHUD
         if let Some((lights, _)) = &mut start_lights {
             if lights.is_active {
-                lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts);
+                if lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
+                    lights.render_lamps(&mut graphics);
+                }
             }
+        }
+        if index >= frame.capture {
+            let (text, draws) = if crate::timing() {
+                (Vec::new(), 0)
+            } else {
+                let capture = rustyac_render::gpulog::end_capture();
+                (capture.text, capture.draws)
+            };
+            let (width, height, pixels) = graphics.kgl.read_screen()?;
+            crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
+            rendered.width = width;
+            rendered.height = height;
+            rendered.frames.push(Captured::new(index, text, draws, pixels, !frame.sequence || args.dump.contains(&index)));
         }
         graphics.end_scene();
     }
