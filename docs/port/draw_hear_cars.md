@@ -2,12 +2,11 @@
 
 ## Resume here
 
-**The task stopped early at a usage limit: NOT released, no tag, version still 0.24.0.** Items 1 to 6 are written, committed and proven (sections 3 to 7). Nothing is half-wired. Left to do:
+**Task 24b is finished at v0.24.1** but for the points of section 10 ("Not done"). Nothing is half-wired.
 
-- **Performance (section 9) is not measured.** `sh re/scratch/task24b/perf.sh` on a quiet machine writes the rows (1, 6, 12, 24 cars, and the runs that tell what limits the frame rate).
-- **The older picture batches of Tasks 21 and 22 were still running** (`re/scratch/task24b/old/batch21_result.txt`, `batch22_result.txt`: 18 of 27 identical so far, none different). Tasks 20, 22c and 23 are done, all identical.
-- **Three code reviews** (`re/scratch/task24b/review_*.md`): the first is in and not acted on yet. Its points: the other cars' lollipop men never rise (`in_pit = false` for every crew); a `--screenshot` of several cars without `--lead-in` draws the other cars with wheel and pedals at 0 (frame time 0); the player's lap count comes from the lap list and the others' from the transponder (mixed in the real-time order and the grooves); rustyAC's own HUD is not under the fade. Reviews 2 and 3 were still being written.
-- Then: section 9, the version `0.24.1`, the lock files, the tag (`docs/release.md`).
+- Done and proven against the game: every car drawn, the focused car with its keys and its fade, every car
+  heard, race.ini's `[CAR_n]` cars, the events of every car's collisions to the sound, `--graphics max`
+  without post-processing; the golden test of three cars; the performance numbers (section 9).
 
 - The task text is `prompts/24b_draw_hear_cars.md`: draw every car, the focused car and its keys, hear every
   car, race.ini's `[CAR_n]` cars, collision events for every car, `--graphics max` without post-processing.
@@ -15,7 +14,7 @@
 - To run a proof again:
   - picture: `sh re/scratch/task24b/batch.sh` (19 sequences of several cars, about 25 minutes; needs the tapes
     of `oracle/t24b/`, see section 12);
-  - sound: `sh re/scratch/task24b/audio_batch.sh` (14 drives, about 12 minutes);
+  - sound: `sh re/scratch/task24b/audio_batch.sh` (16 drives, about 15 minutes);
   - race.ini: `car_oracle race-ini re/scratch/task24b/race/race6.ini --root re/scratch/task24b/race_root`;
   - without the game: `cargo test --release -p rustyac-render --test golden_cars`.
 - On disk, git-ignored: `re/scratch/task24b/` (three reader briefs `spec_*.md`, three reviews `review_*.md`,
@@ -61,10 +60,10 @@ what they do is compared call by call.
 - **Picture:** the game's own renderer with 2 to 26 of its own cars against the port, **19 sequences, 581
   frames, 8.4 million Direct3D calls: every call and every pixel identical.** The cars' states come from
   the game's own physics with several cars (Task 24's oracle now writes them down 60 times a second).
-- **Sound:** 2 to 26 of the game's own car sound objects against the port, **14 drives, 10.4 million FMOD
+- **Sound:** 2 to 26 of the game's own car sound objects against the port, **16 drives, 11.1 million FMOD
   calls: identical.**
 - **race.ini:** the game's own start-up function (`RaceManager::initOffline`) is run on a file and writes down
-  the cars it makes; the port reads the same file: **9 readings, identical**. This check found a mistake in what
+  the cars it makes; the port reads the same file: **10 readings, identical**. This check found a mistake in what
   had been read from the machine code before (section 6).
 - **Nothing old broke:** a one-car session gives the same bytes as v0.24.0 (12 replays, three pictures); the
   several-car physics gives the same numbers as v0.24.0; all older picture and sound proofs were run again
@@ -199,20 +198,22 @@ differ from run to run: that is why the game's own two runs can differ).
 
 | Drive | Cars | Listener | Frames | FMOD calls | Call log: game against port | Call log: the game run twice | Mix levels: game twice / game against port | Verdict |
 |---|---|---|---|---|---|---|---|---|
-| two cars passing: heard from the standing car's cockpit | 2 x F2004 | cockpit | 780 | 456,841 | identical | differs | 0.04 dB rms, 0.16 dB at most / 0.24 dB rms, 0.88 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| two cars passing: heard from beside the track | 2 x F2004 | trackside | 780 | 457,616 | identical | differs | 0.03 dB rms, 0.11 dB at most / 0.03 dB rms, 0.10 dB at most | ok |
-| two cars passing: the camera on the passing car (chase) | 2 x F2004 | chase | 780 | 457,632 | identical | identical | 0.11 dB rms, 0.29 dB at most / 0.14 dB rms, 0.38 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| rear-end crash of two cars, chase view of the car that is hit | 2 x F2004 | chase | 400 | 238,539 | identical | identical | 0.11 dB rms, 0.30 dB at most / 0.07 dB rms, 0.16 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| rear-end crash of two cars, cockpit of the car that hits | 2 x F2004 | cockpit | 400 | 238,213 | identical | identical | 0.11 dB rms, 0.26 dB at most / 0.08 dB rms, 0.18 dB at most | ok (2 run(s) done again: FMOD itself crashed) |
-| a field of 6 from the grid, cockpit of the first car | 6 x F2004 | cockpit | 600 | 860,247 | identical | differs | 0.15 dB rms, 0.45 dB at most / 0.14 dB rms, 0.31 dB at most | ok |
-| a field of 6 from the grid, chase view of the fourth car | 6 x F2004 | chase | 600 | 862,708 | identical | differs | 0.19 dB rms, 0.58 dB at most / 0.18 dB rms, 0.55 dB at most | ok |
-| a field of 6 from the grid, beside the track | 6 x F2004 | trackside | 600 | 862,359 | identical | differs | 0.12 dB rms, 0.40 dB at most / 0.04 dB rms, 0.10 dB at most | ok |
-| a field of 6: the focus goes 0, 3, 5, 0 (cockpit) | 6 x F2004 | cockpit | 600 | 861,245 | identical | differs | 0.15 dB rms, 0.40 dB at most / 0.12 dB rms, 0.32 dB at most | ok |
-| a field of 6: the focus goes 0, 2, 4 (chase) | 6 x F2004 | chase | 400 | 570,970 | identical | differs | 0.07 dB rms, 0.14 dB at most / 0.07 dB rms, 0.12 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| 4 different cars (F2004, M3 E30, Sesto Elemento, 250 GTO), cockpit of the last | F2004, M3 E30, Sesto Elemento, 250 GTO | cockpit | 600 | 596,624 | identical | differs | 0.13 dB rms, 0.27 dB at most / 0.14 dB rms, 0.41 dB at most | ok |
-| 4 cars: the pile-up, chase view of the last car | 4 x F2004 | chase | 500 | 525,053 | identical | differs | 0.07 dB rms, 0.18 dB at most / 0.07 dB rms, 0.15 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| 26 cars (more than the 7 engines the game plays), cockpit of the car in the middle | 26 x F2004 | cockpit | 300 | 1,707,014 | identical | identical | 0.11 dB rms, 0.27 dB at most / 0.09 dB rms, 0.23 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
-| 26 cars, beside the track | 26 x F2004 | trackside | 300 | 1,703,199 | identical | identical | 0.09 dB rms, 0.23 dB at most / 0.08 dB rms, 0.15 dB at most | ok |
+| two cars passing: heard from the standing car's cockpit | 2 x F2004 | cockpit | 780 | 456,841 | identical | identical | 0.04 dB rms, 0.16 dB at most / 0.05 dB rms, 0.17 dB at most | ok |
+| two cars passing: heard from beside the track | 2 x F2004 | trackside | 780 | 457,620 | identical | differs | 0.08 dB rms, 0.29 dB at most / 0.04 dB rms, 0.15 dB at most | ok |
+| two cars passing: the camera on the passing car (chase) | 2 x F2004 | chase | 780 | 457,632 | identical | identical | 0.11 dB rms, 0.35 dB at most / 0.10 dB rms, 0.27 dB at most | ok |
+| rear-end crash of two cars, chase view of the car that is hit | 2 x F2004 | chase | 400 | 238,539 | identical | identical | 0.13 dB rms, 0.37 dB at most / 0.13 dB rms, 0.27 dB at most | ok |
+| rear-end crash of two cars, cockpit of the car that hits | 2 x F2004 | cockpit | 400 | 238,213 | identical | identical | 0.18 dB rms, 0.46 dB at most / 0.14 dB rms, 0.27 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
+| a field of 6 from the grid, cockpit of the first car | 6 x F2004 | cockpit | 600 | 860,247 | identical | identical | 0.06 dB rms, 0.14 dB at most / 0.07 dB rms, 0.14 dB at most | ok |
+| a field of 6 from the grid, chase view of the fourth car | 6 x F2004 | chase | 600 | 862,693 | identical | differs | 0.26 dB rms, 0.71 dB at most / 0.20 dB rms, 0.53 dB at most | ok |
+| a field of 6 from the grid, beside the track | 6 x F2004 | trackside | 600 | 862,359 | identical | differs | 0.07 dB rms, 0.17 dB at most / 0.04 dB rms, 0.10 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
+| a field of 6: the focus goes 0, 3, 5, 0 (cockpit) | 6 x F2004 | cockpit | 600 | 861,260 | identical | differs | 0.11 dB rms, 0.26 dB at most / 0.09 dB rms, 0.20 dB at most | ok |
+| a field of 6: the focus goes 0, 2, 4 (chase) | 6 x F2004 | chase | 400 | 570,970 | identical | identical | 0.08 dB rms, 0.20 dB at most / 0.06 dB rms, 0.14 dB at most | ok |
+| 4 different cars (F2004, M3 E30, Sesto Elemento, 250 GTO), cockpit of the last | F2004, M3 E30, Sesto Elemento, 250 GTO | cockpit | 600 | 596,624 | identical | identical | 0.13 dB rms, 0.43 dB at most / 0.26 dB rms, 0.84 dB at most | ok |
+| 4 cars: the pile-up, chase view of the last car | 4 x F2004 | chase | 500 | 525,043 | identical | differs | 0.07 dB rms, 0.20 dB at most / 0.07 dB rms, 0.13 dB at most | ok (2 run(s) done again: FMOD itself crashed) |
+| 26 cars (more than the 7 engines the game plays), cockpit of the car in the middle | 26 x F2004 | cockpit | 300 | 1,707,014 | identical | identical | 0.09 dB rms, 0.16 dB at most / 0.11 dB rms, 0.25 dB at most | ok |
+| 26 cars, beside the track | 26 x F2004 | trackside | 300 | 1,703,199 | identical | identical | 0.06 dB rms, 0.13 dB at most / 0.07 dB rms, 0.13 dB at most | ok (1 run(s) done again: FMOD itself crashed) |
+| a car standing in its pit box takes no rank: the standing car of the pass, heard from beside the track | 2 x F2004 | trackside | 780 | 457,616 | identical | identical | 0.02 dB rms, 0.05 dB at most / 0.01 dB rms, 0.02 dB at most | ok |
+| a field of 6 with the first car held in its pit box for the ranking (cockpit of the fourth) | 6 x F2004 | cockpit | 200 | 288,103 | identical | identical | 0.07 dB rms, 0.15 dB at most / 0.10 dB rms, 0.27 dB at most | ok |
 
 - **Two cars passing:** a standing car and one that passes it at 200 km/h, heard from the standing car, from
   beside the track, and with the camera on the passing car.
@@ -221,6 +222,7 @@ differ from run to run: that is why the game's own two runs can differ).
 - **Crashes** (rear-end, pile-up): the hit and scrape sounds at the car each event names.
 - **Different cars** in one session (four sound banks).
 - **26 cars:** more cars than the seven engines the game plays; ranks, gaps and the fades of ranks 5 and 6.
+- **A car in its pit box** takes no rank (the last two drives).
 
 In `rustyac.exe`: a headless three-car session with the sound logged (`--audio-null --audio-log`): three cars'
 sounds, "2 other car(s) with their own sounds, [LEVELS] OPPONENTS 0.8", 234,525 FMOD calls in 295 frames.
@@ -263,6 +265,7 @@ car, config, skin, ballast, restrictor, driver name, nation, the AI's level and 
 | `drag.ini`: a drag session, two cars | 2 | 9 | 2 | identical |
 | `none.ini`: `CARS=3` with only `[CAR_0]` | 24 | 1 | 3 | identical |
 | the same on a track without pit boxes ("CANNOT HAVE 0 CARS IN RACE.INI") | 0 | 1 | 0 | identical |
+| `odd.ini`: a skin written as `C:\Windows`, one as `..\..\bmw_1m\skins`, one in other letter case, aggression 250 and -40, ballast 0.5, `AI_LEVEL=1e2` | 24 | 11 | 4 | identical |
 
 What the game does, in short (all of it is in `race_grid`):
 
@@ -315,16 +318,16 @@ program built from the tag `v0.24.0` against the new one):
 | screenshot: debug view, F2004 on Spa, 6 s of the line follower | car state a06ef70c21bb1d84 / a06ef70c21bb1d84, picture 396554cbe8e1a4e0 / 396554cbe8e1a4e0 | identical, same picture |
 | screenshot: AC renderer on WARP, F2004 on Spa, 6 s of the line follower | car state a06ef70c21bb1d84 / a06ef70c21bb1d84, picture e2232f5ac5f592b7 / e2232f5ac5f592b7 | identical, same picture |
 | screenshot: AC renderer on WARP, cockpit, BMW M3 E30 on Magione, 9 s, mirrors and smoke | car state a54e3c60de7eea1c / a54e3c60de7eea1c, picture 7243aac84029fcc8 / 7243aac84029fcc8 | identical, same picture |
-| 6 cars: a 12 s drive recorded by v0.24.0, replayed by both with 0 and 8 worker threads | hash over every car of every step: ca8c2e889c923e1e / ca8c2e889c923e1e / ca8c2e889c923e1e / ca8c2e889c923e1e | identical |
-| 12 cars: a 12 s drive recorded by v0.24.0, replayed by both with 0 and 8 worker threads | hash over every car of every step: 7dd340641b56394b / 7dd340641b56394b / 7dd340641b56394b / 7dd340641b56394b | identical |
+| 6 cars: a 12 s drive recorded by v0.24.0, replayed by both with 0 and 8 worker threads | hash over every car of every step: 5b7bcdf68505ba28 / 5b7bcdf68505ba28 / 5b7bcdf68505ba28 / 5b7bcdf68505ba28 | identical |
+| 12 cars: a 12 s drive recorded by v0.24.0, replayed by both with 0 and 8 worker threads | hash over every car of every step: b999ee2bd54e95ff / b999ee2bd54e95ff / b999ee2bd54e95ff / b999ee2bd54e95ff | identical |
 
 **The older proofs, run again with this task's code:**
 
 | Proof | Runs | Result |
 |---|---|---|
 | Picture, Task 20: the track and one car (single frames) | 21 | all identical (log and pixels) |
-| Picture, Task 21: the whole car (sequences) | 18 | all identical |
-| Picture, Task 22: the scene | 0 of 0 identical (**see the result file**) | all identical |
+| Picture, Task 21: the whole car (sequences) | 27 | all identical |
+| Picture, Task 22: the scene | 23 | all identical |
 | Picture, Task 22c: the leftovers | 18 | all identical |
 | Picture, Task 23: multisampling | 8 | all identical |
 | Picture, Task 23: the post-processing frame | 16 | all identical |
@@ -377,7 +380,65 @@ rustyac.exe --car ks_ferrari_f2004 --track spa --no-race-ini --spawn start --car
 
 ## 9. Performance
 
-Still to come.
+This PC: Intel Core i9-9980HK (8 cores, 16 logical processors), Radeon Pro 5500M. Spa, F2004s, your
+`video.ini` (4 samples per pixel, mirrors 512, smoke 5, world detail 0), drawn off screen at 1280 x 720 as
+fast as the card goes (`--headless --bench-render --duration 25 --camera chase`), the physics on the default
+pool (8 workers), nothing else running (`acs.exe` was not running). `sh re/scratch/task24b/perf.sh`.
+
+### 9.1 Drawn cars
+
+**Standing on the grid, the camera behind the last car** (every car in the picture, the same picture for the
+whole run: the cleanest number for "N drawn cars"):
+
+| Cars drawn | Frames per second | Time of a frame | Draw calls a frame | Physics step, average | Physics in real time |
+|---|---|---|---|---|---|
+| 1 | 203 | 4.9 ms | 647 | 0.13 ms | yes |
+| 6 | 99 | 10.1 ms | 2,234 | 0.48 ms | yes |
+| 12 | 76 | 13.1 ms | 3,102 | 0.80 ms | yes |
+| 24 | 54 | 18.4 ms | 4,343 | 1.41 ms | yes |
+
+**Driving off from the grid with the line follower** (25 s: the field strings out, and with 12 and 24 cars
+it piles up at the first corners, so the picture and the physics load change during the run):
+
+| Cars | Camera behind the last car | Camera behind the first car | Physics step, average / longest | Physics in real time |
+|---|---|---|---|---|
+| 1 | 203 FPS | - | 0.13 / 0.6 ms | yes |
+| 6 | 128 FPS | 116 FPS | 0.60 / 3.3 ms | yes |
+| 12 | 94 FPS | 101 FPS | 1.24 / 28 ms | nearly: 316 of 333 steps a second |
+| 24 | 46 FPS | 94 FPS | 2.9 / 59 ms | no: 249 to 280 steps a second (a 24-car pile-up) |
+
+### 9.2 What limits the frame rate
+
+**Drawing the cars, on the one thread that draws.** The runs that tell:
+
+| Run | 6 cars | 12 cars | 24 cars |
+|---|---|---|---|
+| all cars in the physics **and** drawn (camera behind the last) | 128 FPS | 94 FPS | 46 FPS |
+| all cars in the physics, **only your car drawn** (`RUSTYAC_DIAG_DRAW_ONE_CAR=1`) | 197 FPS | 191 FPS | 188 FPS |
+| the same without worker threads (`--physics-threads 0`) | - | 197 FPS | 191 FPS |
+| the same, the benchmark's wait for the card spinning instead of yielding | - | 192 FPS | 190 FPS |
+| v0.24.0 (which never drew the others), measured today | - | 186 FPS | 184 FPS |
+| one car alone | 203 FPS | | |
+
+- **The other cars' physics costs the picture 3 to 7 %** (203 FPS alone, 188 with 24 cars in a pile-up whose
+  physics no longer keeps real time). It makes no difference whether the physics uses its worker threads,
+  and none how the benchmark waits for the graphics card.
+- **Drawing is what costs.** A car in view adds 150 to 300 draw calls (its model at the level of detail of
+  its distance, its driver, wheels, lights, shadow, smoke) and its per-frame updates; the 23 other cars of
+  the standing grid add 13.5 ms a frame, about 0.6 ms a car. Like Assetto Corsa's, the renderer hands its
+  draw calls to Direct3D 11 from one thread, so this is processor time of that one thread, not the card's.
+- **Task 24's open question** ("the frame rate falls with more cars although they are not drawn": 124 FPS
+  alone, 80 with 12 cars, 33 with 24) **could not be repeated.** The same program (built from the tag
+  v0.24.0) measured today gives 197, 186 and 184 FPS with 1, 12 and 24 cars. Most likely the numbers of
+  Task 24 were taken while something else loaded the PC (its oracle batches use every core; that cannot be
+  checked any more). On a quiet machine the fall is not there: it was the measurement, not the program.
+- With 24 cars the **physics** is the other limit, as Task 24 found: a pile-up of 24 cars needs more than
+  the 3 ms a step has (2.5 to 2.9 ms on average with peaks of 55 ms), a field that does not touch needs half.
+
+### 9.3 The sound
+
+Three cars with every FMOD call logged: 2.7 ms a frame; four cars in a window without the log (no-sound
+output): 0.28 ms a frame on the display thread; FMOD's own threads: mixer 8 %, studio 4 % of one core.
 
 ## 10. Not done
 
@@ -430,7 +491,46 @@ Still to come.
    `[CAR_n]` section skips the car; the fade handler takes the frame time by pointer). Both were caught by an
    oracle run, not by reading. Where this report says "the game does X" for something an oracle run covers, it
    was seen; the list of what was only read is section 2's "does not do" list.
+9. **From the three code reviews** (`re/scratch/task24b/review_*.md`; three Sonnet readers went through the
+   new code against the machine code; none found a fault in what the oracles prove). Fixed:
+   - the other cars' lollipop men now rise while their car stands in its pit box (they never did);
+   - a still picture of several cars (`--screenshot` without `--lead-in`) drew the other cars with the wheel
+     straight and the pedals up, because a frame without time blended nothing: a still now takes the state
+     as it is;
+   - in a window that writes its sound to a WAV file the sound stayed on car 0 when the camera changed car;
+   - a file without any `[SESSION_n]` gets the game's default session, which starts in the pits and so
+     doubles the pit boxes the game counts (`CARS=30` on Spa: 30 cars in the game, 24 here before the fix);
+   - a race of one car with `STARTING_POSITION` above 1 now starts on that grid slot;
+   - `AI_AGGRESSION` that is not a number stays not a number, as the game's `saturate` leaves it; a skin
+     written as a path of its own is "not a skin of the car", as in the game; the list of skins is in the
+     file system's own order (no sorting of rustyAC's own);
+   - a race.ini car that rustyAC cannot load, or that has no 3D model, is left out with a line on the
+     console (it used to end the session, or to put every car into the debug view);
+   - a hot-lap session on a track without a hot-lap start falls back to the grid, as with one car;
+   - the sound's rule "a car in its pit box takes no rank" was never run: two drives for it were added
+     (section 4).
 
+   Left as they are:
+   - **Positions.** The oracle gives every car the same position number, and rustyAC's own number (by laps
+     and place along the lap) is not the game's (best lap in practice, 0 in a replay): only dashboards that
+     show a position are affected.
+   - **Lap counts** come from the lap list for your car and from each other car's own counter for the others.
+   - **rustyAC's own HUD is drawn over the fade**, not under it (the game's fade covers its HUD).
+   - **The game's hand-over to the sound in `rustyac.exe`** (each car's model offset, the listener's speed,
+     the events of every car) is not under the sound oracle, which drives the ported sound code directly.
+     It was run (section 4) and is the same code path as with one car, per car.
+   - **What the race.ini oracle cannot see:** the pit box and the first grid slot are set inside
+     `Sim::addCar`, which the oracle replaces; the reviewer confirmed in the machine code (0x1401979be,
+     0x140197a11) that both are the car's number, as the port has it. The real `Sim::addCar` also draws
+     random numbers (lights, suspension), so in the real game the skin picked for a later car depends on
+     the cars before it; with the clock as the seed that cannot be told from any other pick.
+   - **A number the file has as text that is not a number** (`AI_LEVEL=abc`) makes the game throw; rustyAC
+     reads 0.
+   - **The sound's focus in the frame of a change** is the new car's, as in the game (its sound runs after
+     the fade's handler); the "outside view is louder" setting stays where the last change of the camera
+     mode put it.
+   - With more than one of these in play at once, turbo cars, the horn and the car cameras among several
+     cars were not in any drive.
 
 ## 12. Tools
 
