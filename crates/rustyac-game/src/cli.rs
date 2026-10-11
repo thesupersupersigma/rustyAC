@@ -114,6 +114,11 @@ pub struct Options {
     pub pose_out: Option<PathBuf>,
     /// `--camera chase|cockpit`: the camera at start.
     pub camera: String,
+    /// `--focus <n>`: the car the camera is on at the start (0: yours; `Sim::focusedCarIndex`).
+    pub focus: usize,
+    /// `--focus-script next@2,previous@4,player@6`: the focus keys by the clock (for unattended
+    /// checks; seconds since the window opened)
+    pub focus_script: Vec<(f64, String)>,
     /// `--auto-shifter`: the automatic gearbox aid on at start.
     pub auto_shifter: bool,
     /// `--no-auto-clutch`: the automatic clutch aid off.
@@ -267,6 +272,8 @@ impl Default for Options {
             show_damage: None,
             virtual_mirror: false,
             camera: "chase".to_string(),
+            focus: 0,
+            focus_script: Vec::new(),
             auto_shifter: false,
             no_auto_clutch: false,
             auto_clutch: false,
@@ -611,6 +618,16 @@ impl Options {
                 "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().ok().filter(|size| (16..=4096).contains(size)).ok_or("--cube-size <pixels: 512, 1024 or 2048>")?),
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
+                "--focus" => o.focus = value("--focus")?.parse().map_err(|_| "--focus <car number, 0 = yours>".to_string())?,
+                "--focus-script" => {
+                    for item in value("--focus-script")?.split(',').filter(|s| !s.is_empty()) {
+                        let (name, at) = item.split_once('@').ok_or("--focus-script next@2,previous@4,player@6")?;
+                        if !matches!(name, "next" | "previous" | "player") {
+                            return Err(format!("--focus-script: {name:?} is not next, previous or player"));
+                        }
+                        o.focus_script.push((at.parse().map_err(|_| format!("--focus-script {name}@<seconds>"))?, name.to_string()));
+                    }
+                }
                 "--auto-shifter" => o.auto_shifter = true,
                 "--no-auto-shifter" => o.no_auto_shifter = true,
                 "--no-auto-clutch" => o.no_auto_clutch = true,

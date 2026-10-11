@@ -181,7 +181,7 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
 }
 
 /// AC's own renderer with the track and the car loaded.
-fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo) -> Result<AcRenderer, String> {
+fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<AcRenderer, String> {
     let game = rustyac_content::install::ac_root().ok_or_else(rustyac_content::install::not_found_hint)?;
     // the sun and the weather of race.ini; without one, midday and clear
     let (mut sun_angle, mut weather, mut skin) = (-16.0f32, "3_clear".to_string(), options.skin.clone());
@@ -247,36 +247,154 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if let Some(folder) = &info.track_folder {
         println!("{}", renderer.load_track(folder, &info.track_layout)?);
     }
-    // the car's folder in the game (its data may come from elsewhere)
-    let car_folder = rustyac_game::sim::find_car_model(&info.name, &info.data_path).and_then(|kn5| kn5.parent().map(|p| p.to_path_buf()));
-    match car_folder {
-        Some(folder) => {
-            // a skin that the car does not have: the first one
-            let skin = skin.filter(|s| folder.join("skins").join(s).is_dir());
-            renderer.set_skin(skin);
-            let steer_lock = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
-            // CarPhysicsInfo::tyreWidth
-            let mut tyre_width = [0.0f32; 4];
-            if let Ok(tyres) = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("tyres.ini")) {
-                let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
-                let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
-                tyre_width = [front, front, rear, rear];
-            }
-            // CarPhysicsInfo::maxGear
-            let max_gear = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("drivetrain.ini")).ok().and_then(|ini| ini.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
-            println!("{}", renderer.load_car(&folder, steer_lock, tyre_width, max_gear)?);
+    // RaceManager::carsToBeLoaded, before the first car is made
+    renderer.set_cars_to_be_loaded(1 + others.len());
+    // Sim::addCar for every car in the order of the physics: the player's first. A car's folder
+    // in the game holds its models (its data may come from elsewhere).
+    let load = |renderer: &mut AcRenderer, info: &rustyac_game::sim::CarInfo, skin: Option<String>| -> Result<bool, String> {
+        let Some(folder) = rustyac_game::sim::find_car_model(&info.name, &info.data_path).and_then(|kn5| kn5.parent().map(|p| p.to_path_buf())) else {
+            return Ok(false);
+        };
+        // a skin that the car does not have: the first one
+        let skin = skin.filter(|s| folder.join("skins").join(s).is_dir());
+        renderer.set_skin(skin);
+        let steer_lock = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
+        // CarPhysicsInfo::tyreWidth
+        let mut tyre_width = [0.0f32; 4];
+        if let Ok(tyres) = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("tyres.ini")) {
+            let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
+            let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
+            tyre_width = [front, front, rear, rear];
         }
-        None => println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name),
+        // CarPhysicsInfo::maxGear
+        let max_gear = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("drivetrain.ini")).ok().and_then(|ini| ini.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
+        println!("{}", renderer.load_car(&folder, steer_lock, tyre_width, max_gear)?);
+        Ok(true)
+    };
+    if load(&mut renderer, info, skin)? {
+        for (number, other) in others.iter().enumerate() {
+            // (the cars of the picture are numbered as the cars of the physics: one that cannot
+            // be drawn would put every later one on the wrong car)
+            if !load(&mut renderer, other, other.skin.clone())? {
+                return Err(format!("no 3D model of {} (car {}) in Assetto Corsa's folder", other.name, number + 1));
+            }
+        }
+        let crew = renderer.init_pit_crew();
+        if !crew.is_empty() {
+            println!("{crew}");
+        }
+    } else {
+        println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name);
     }
     renderer.finish_loading()?;
     Ok(renderer)
 }
 
+/// `Sim::nextCar` 0x14019a740 / `Sim::previousCar` 0x14019e180: the car just ahead of (behind)
+/// the focused one along the lap, by `physicsState.normalizedSplinePosition` of every car. Not
+/// the next number: with nobody ahead the answer is car 0.
+fn neighbour_car(world: &[CarView], current: usize, ahead: bool) -> usize {
+    if world.len() <= 1 {
+        return current;
+    }
+    let reference = world[current].lap.position;
+    let (mut best, mut index) = (1.0f32, 0usize);
+    for (i, view) in world.iter().enumerate() {
+        if i == current {
+            continue;
+        }
+        let position = view.lap.position;
+        let mut d = if ahead { position - reference } else { reference - position };
+        if !(d >= 0.0) {
+            d = if ahead { (1.0 - reference) + position } else { (1.0 - position) + reference };
+        }
+        if d < best {
+            best = d;
+            index = i;
+        }
+    }
+    index
+}
+
+/// The three commands of `Sim::onKeyDown` 0x14019a940 that move the focus (Ctrl + numpad 3, 1
+/// and 2 unless `controls.ini` says otherwise).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FocusCommand {
+    Next,
+    Previous,
+    Player,
+}
+
+/// The focused car (`Sim::focusedCarIndex`) and the fade a change of it goes through
+/// (`ACCameraManager::fadeIn` with `Sim::cameraFadeTime`): the picture goes black over the fade
+/// time, the focus changes at the black frame, and the picture comes back over the same time.
+struct Focus {
+    index: usize,
+    /// `system/cfg/fades.ini [CHANGE_CAMERA_FADE] MS`, seconds (0 when the file is not there)
+    fade_time: f32,
+    /// seconds since the fade began
+    fade: Option<f32>,
+    pending: Option<FocusCommand>,
+}
+
+impl Focus {
+    fn new(index: usize) -> Focus {
+        let mut fade_time = 0.0f32;
+        if let Some(ac) = rustyac_content::install::ac_root() {
+            let file = ac.join("system/cfg/fades.ini");
+            if file.is_file() {
+                if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&file) {
+                    fade_time = ini.get_float("CHANGE_CAMERA_FADE", "MS").unwrap_or(0.0) * f32::from_bits(0x3a83_126f);
+                }
+            }
+        }
+        Focus { index, fade_time, fade: None, pending: None }
+    }
+
+    fn apply(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
+        self.index = match command {
+            FocusCommand::Next => neighbour_car(world, self.index.min(world.len() - 1), true),
+            FocusCommand::Previous => neighbour_car(world, self.index.min(world.len() - 1), false),
+            FocusCommand::Player => 0,
+        };
+        // (SystemMessage::addCarMessage: the game names the car on the screen)
+        println!("FOCUSED CAR: {} ({})", self.index, names.get(self.index).map_or("", String::as_str));
+    }
+
+    /// A command: `ACCameraManager::registerToFadeInEvent` (a change that still waits for its
+    /// black frame happens at once), then the fade begins.
+    fn command(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
+        if world.len() <= 1 {
+            return;
+        }
+        if let Some(waiting) = self.pending.take() {
+            self.apply(waiting, world, names);
+        }
+        self.pending = Some(command);
+        self.fade = Some(0.0);
+    }
+
+    /// One frame on. The answer is the fade for the picture: (seconds since it began, its length).
+    fn update(&mut self, dt: f32, world: &[CarView], names: &[String]) -> Option<(f32, f32)> {
+        let t = self.fade? + dt;
+        self.fade = Some(t);
+        if self.pending.is_some() && t >= self.fade_time {
+            let command = self.pending.take().unwrap();
+            self.apply(command, world, names);
+        }
+        if self.pending.is_none() && t >= self.fade_time * 2.0 {
+            self.fade = None;
+            return None;
+        }
+        Some((t, self.fade_time))
+    }
+}
+
 /// The picture: AC's renderer, or the debug view when it was asked for or when AC's renderer
 /// cannot start (no Assetto Corsa folder, no Direct3D 11 …).
-fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo) -> Result<Picture, String> {
+fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<Picture, String> {
     if !options.debug_view {
-        match make_ac(options, width, height, info) {
+        match make_ac(options, width, height, info, others) {
             Ok(renderer) => return Ok(Picture::Ac(Box::new(renderer))),
             Err(message) => eprintln!("WARNING: Assetto Corsa's renderer could not start ({message}); the debug view is drawn instead"),
         }
@@ -457,7 +575,10 @@ fn run_headless(options: &Options) -> Result<(), String> {
             if shape.is_none() {
                 let info = shared.car_info.lock().unwrap().clone();
                 if let Some(info) = info {
-                    match make_picture(options, options.width, options.height, &info) {
+                    let others = shared.other_infos.lock().unwrap().clone();
+                    // the camera's car (--focus)
+                    let focused = if options.focus == 0 { info.clone() } else { others.get(options.focus - 1).cloned().unwrap_or_else(|| info.clone()) };
+                    match make_picture(options, options.width, options.height, &info, &others) {
                         Ok(picture) => {
                             println!("drawing {} x {} off screen: {}", options.width, options.height, picture.describe());
                             renderer = Some(picture);
@@ -469,7 +590,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
                             return Err(message);
                         }
                     }
-                    let car_shape = CarShape::of(&info);
+                    let car_shape = CarShape::of(&focused);
                     camera = Some(DrivingCamera::from_name(&options.camera, &car_shape).unwrap_or_else(|_| DrivingCamera::chase()));
                     shape = Some(car_shape);
                     // the loading is not part of the timing
@@ -482,11 +603,13 @@ fn run_headless(options: &Options) -> Result<(), String> {
                 continue;
             };
             let now = Instant::now();
-            let view = shared.frames().at(now);
+            let world = shared.world_at(now);
+            let focus = options.focus.min(world.len() - 1);
+            let view = world[focus];
             let dt = (now - last).as_secs_f32();
             let frame = camera.update(&view, shape, view.acc_g, dt);
             let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, ..HudInfo::default() };
-            renderer.draw(&view, shape, camera, &frame, &info, dt);
+            renderer.draw_world(&world, focus, shape, camera, &frame, &info, dt);
             renderer.finish();
             bench_stats = renderer.frame_stats();
             frames += 1;
@@ -663,9 +786,16 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(2));
     };
-    let shape = CarShape::of(&car_info);
+    let other_infos = shared.other_infos.lock().unwrap().clone();
+    // every car's shape (its eye point and its cameras), the player's first
+    let shapes: Vec<CarShape> = std::iter::once(&car_info).chain(&other_infos).map(CarShape::of).collect();
+    let car_names: Vec<String> = std::iter::once(&car_info).chain(&other_infos).map(|info| Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone())).collect();
+    let mut focus = Focus::new(options.focus.min(other_infos.len()));
+    let mut focus_script = options.focus_script.clone();
+    focus_script.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let shape = shapes[focus.index].clone();
     let (width, height) = window.client_size();
-    let graphics = make_picture(options, width, height, &car_info).and_then(|renderer| {
+    let graphics = make_picture(options, width, height, &car_info, &other_infos).and_then(|renderer| {
         let chain = renderer.swap_chain(window.handle)?;
         Ok((renderer, chain))
     });
@@ -705,6 +835,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     let (mut fps_counter, mut frame_ms, mut frame_max_ms, mut running_max) = (options.show_fps, 0.0f32, 0.0f32, Duration::ZERO);
     let mut frame_max = Duration::ZERO;
     let mut result = Ok(());
+    let mut world = shared.world_at(Instant::now());
     'frames: loop {
         for event in window.pump() {
             match event {
@@ -740,6 +871,17 @@ fn run_window(options: &Options) -> Result<(), String> {
                         // ReplayManager::stop, back to the first frame
                         rm.stop();
                         shared.replay_restart.store(true, Ordering::Relaxed);
+                    } else if ctrl && !shared.paused.load(Ordering::Relaxed) && world.len() > 1 && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) {
+                        // Sim::onKeyDown 0x14019a940: with Ctrl, not while the pause menu shows,
+                        // only with more than one car; tested in the game's order
+                        let command = if key == bindings.key_previous_car {
+                            FocusCommand::Previous
+                        } else if key == bindings.key_player_car {
+                            FocusCommand::Player
+                        } else {
+                            FocusCommand::Next
+                        };
+                        focus.command(command, &world, &car_names);
                     } else if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
                         // Ctrl+F or F9: the frame-rate counter (rustyAC's own keys; AC has an
                         // app for it). F alone is the keyboard's second DRS key, hence F9 too
@@ -789,7 +931,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // F1 (and C, as before): AC's driving views in turn; F6: the
                             // cameras of the car's cameras.ini
                             0x70 | 0x43 => camera.f1(),
-                            0x75 => camera.f6(shape.car_cameras.len()),
+                            0x75 => camera.f6(shapes[focus.index].car_cameras.len()),
                             // F11: AC's virtual mirror
                             0x7a => match renderer.toggle_virtual_mirror() {
                                 Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
@@ -822,8 +964,25 @@ fn run_window(options: &Options) -> Result<(), String> {
         let now = Instant::now();
         let dt = now - last;
         last = now;
-        let view = shared.frames().at(now);
-        let frame = camera.update(&view, &shape, view.acc_g, dt.as_secs_f32());
+        world = shared.world_at(now);
+        // --focus-script: the focus keys by the clock
+        while let Some(at) = focus_script.first().map(|(at, _)| *at).filter(|at| started.elapsed().as_secs_f64() >= *at) {
+            let (_, name) = focus_script.remove(0);
+            let command = match name.as_str() {
+                "next" => FocusCommand::Next,
+                "previous" => FocusCommand::Previous,
+                _ => FocusCommand::Player,
+            };
+            println!("focus script at {at:.2} s: {name}");
+            focus.command(command, &world, &car_names);
+        }
+        // the fade of a change of the focused car; the focus changes at its black frame
+        let focus_fade = focus.update(dt.as_secs_f32(), &world, &car_names);
+        if focus.index >= world.len() {
+            focus.index = 0;
+        }
+        let view = world[focus.index];
+        let frame = camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32());
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);
         // --new-session-at: N by the clock
@@ -884,7 +1043,11 @@ fn run_window(options: &Options) -> Result<(), String> {
             replay_state,
             notes: Vec::new(),
             hidden: false,
+            focus_fade,
         };
+        if focus.index != 0 {
+            info.notes.push(format!("camera on car {} ({}): Ctrl+{} is your car", focus.index, car_names[focus.index], rustyac_game::input::bindings::key_name(bindings.key_player_car)));
+        }
         if replay_over {
             info.notes.push("the replay is over (Esc)".to_string());
         } else if unfocused {
@@ -892,7 +1055,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         // Game::update: the car's one backfire test (CarAvatar::update), whose event the sound
         // and the flames both hear; the flames empty its counter
-        renderer.draw(&view, &shape, &camera, &frame, &info, dt.as_secs_f32());
+        renderer.draw_world(&world, focus.index, &shapes[focus.index], &camera, &frame, &info, dt.as_secs_f32());
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
             if options.audio.clockless() {
@@ -975,7 +1138,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     // --lead-in: the car as it was every 1/60 s over the last seconds
     let total = wanted.unwrap_or(1000);
     let lead_from = total.saturating_sub((options.lead_in / 0.003).round() as usize);
-    let mut lead: Vec<CarView> = Vec::new();
+    let mut lead: Vec<Vec<CarView>> = Vec::new();
     let mut lead_due = 0.0f64;
     let mut drive_start = 0;
     let mut previous = CarView::capture(&sim, 0.0);
@@ -996,7 +1159,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
                     lead_due += 0.003;
                     if lead_due >= 1.0 / 60.0 {
                         lead_due -= 1.0 / 60.0;
-                        lead.push(CarView::capture(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003));
+                        lead.push(CarView::capture_world(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003));
                     }
                 }
                 let input = sim.step()?;
@@ -1018,15 +1181,22 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         }
     };
     dress(&mut view);
-    lead.iter_mut().for_each(dress);
+    lead.iter_mut().flatten().for_each(dress);
     if let Some(pose) = &options.pose_out {
         std::fs::write(pose, view.physics_state().to_bytes()).map_err(|e| format!("{}: {e}", pose.display()))?;
         println!("{}: the car's state after {} steps", pose.display(), sim.steps);
     }
-    let shape = CarShape::of(&sim.car_info());
+    // the cars of the picture and the one the camera is on (--focus)
+    let other_infos = sim.opponent_infos();
+    let focus = options.focus.min(other_infos.len());
+    let mut world = CarView::capture_world(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003);
+    world.iter_mut().for_each(dress);
+    let previous = if focus == 0 { previous } else { world[focus] };
+    let view = world[focus];
+    let shape = CarShape::of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() });
     // --supersample: the picture is drawn larger and averaged down at the end
     let supersample = options.supersample.max(1);
-    let mut renderer = make_picture(options, options.width * supersample, options.height * supersample, &sim.car_info())?;
+    let mut renderer = make_picture(options, options.width * supersample, options.height * supersample, &sim.car_info(), &other_infos)?;
     let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
     // --free-camera: it stands where the car of the picture puts it, in the lead-in frames too
     let free = options.free_camera.map(|free| CameraFrame { matrix: free_camera(&view.body, free.eye, free.look), fov: free.fov, near: 0.1 });
@@ -1038,10 +1208,11 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         renderer.set_virtual_mirror(false);
     }
     let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: options.no_hud, ..HudInfo::default() };
-    for old in &lead {
+    for old_world in &lead {
+        let old = &old_world[focus.min(old_world.len() - 1)];
         let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
         let frame = free.unwrap_or(frame);
-        renderer.draw(old, &shape, &camera, &frame, &lead_info, 1.0 / 60.0);
+        renderer.draw_world(old_world, focus, &shape, &camera, &frame, &lead_info, 1.0 / 60.0);
     }
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
@@ -1054,9 +1225,9 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     // (the motion blur smears by the camera's movement since the frame before: the second draw
     // starts from the same "frame before" as the first)
     let blur = renderer.blur_history();
-    renderer.draw(&view, &shape, &camera, &frame, &info, dt);
+    renderer.draw_world(&world, focus, &shape, &camera, &frame, &info, dt);
     renderer.set_blur_history(blur);
-    renderer.draw(&view, &shape, &camera, &frame, &info, dt);
+    renderer.draw_world(&world, focus, &shape, &camera, &frame, &info, dt);
     let mut pixels = renderer.read_pixels()?;
     let (mut width, mut height) = renderer.size();
     if supersample > 1 {

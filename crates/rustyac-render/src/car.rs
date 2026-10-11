@@ -221,6 +221,9 @@ pub struct CarAvatar {
     pub fake_shadow: Option<Rc<RefCell<CarFakeShadow>>>,
     /// the car's folder as its textures are named by
     pub folder_text: String,
+    /// `physicsState.steer`, `gas` and `brake` as the last frame left them (what
+    /// `setNewPhysicsState` blends from)
+    pub last_controls: [f32; 3],
 }
 
 fn ini(folder: &Path, name: &str) -> Option<IniReader> {
@@ -357,6 +360,7 @@ impl CarAvatar {
             replay_scale: 1.0,
             fake_shadow: None,
             folder_text: folder_text.to_string(),
+            last_controls: [0.0; 3],
         };
 
         // CarLodManager::CarLodManager 0x1400e2f80
@@ -406,6 +410,26 @@ impl CarAvatar {
         car.backfire = Some(BackfireParams::new(folder));
         car.make_tyres_double_faced_shadows(graphics, scene, car_node);
         Ok(car)
+    }
+
+    /// `CarAvatar::setNewPhysicsState` 0x1400da420, called by `PhysicsAvatar::update` for
+    /// every car before the cars update: the newest physics state becomes the avatar's. For
+    /// every car but the first (guid 0, the player's) the steering angle, the throttle and the
+    /// brake follow the new values at ten times the frame's time a frame (all at once from a
+    /// tenth of a second on): the game's cars driven by the AI or from the network turn their
+    /// wheel and work their pedals softly. The answer is the state the avatar keeps.
+    pub fn set_new_physics_state(&mut self, state: &CarPhysicsState, dt: f32) -> CarPhysicsState {
+        let mut state = *state;
+        if self.guid != 0 {
+            let x = dt * 10.0;
+            let k = |x: f32| if x > 1.0 { 1.0 } else if x >= 0.0 { x } else { 0.0 };
+            let [steer, gas, brake] = self.last_controls;
+            state.steer = (state.steer - steer) * k(x) + steer;
+            state.gas = (state.gas - gas) * k(x) + gas;
+            state.brake = (state.brake - brake) * k(x) + brake;
+        }
+        self.last_controls = [state.steer, state.gas, state.brake];
+        state
     }
 
     /// The nodes `ISuspensionAvatar::getWheelTransform` gives for a wheel: the transform that

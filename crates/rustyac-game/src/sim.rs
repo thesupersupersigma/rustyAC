@@ -582,6 +582,10 @@ pub struct CarInfo {
     pub track_layout: String,
     /// The setup's `render_seed`.
     pub render_seed: u32,
+    /// Another car of the session: the skin it was asked for (`None`: the car's first)
+    pub skin: Option<String>,
+    /// How many cars the session has (`RaceManager::carsToBeLoaded`)
+    pub cars: usize,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -1123,9 +1127,23 @@ impl GameSim {
     /// What the display needs to know of the car once: where its data is and where its
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
-        let car = &self.car.car;
-        let mut info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), ..CarInfo::default() };
+        let info =
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), ..CarInfo::default() };
+        Self::with_wheels(info, &self.car.car)
+    }
+
+    /// The same of the session's other cars, in creation order.
+    pub fn opponent_infos(&self) -> Vec<CarInfo> {
+        self.opponents
+            .iter()
+            .map(|other| {
+                let info = CarInfo { data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), ..CarInfo::default() };
+                Self::with_wheels(info, &other.car.car)
+            })
+            .collect()
+    }
+
+    fn with_wheels(mut info: CarInfo, car: &rustyac_physics::car::RollingChassis) -> CarInfo {
         for index in 0..4.min(car.tyres.len()) {
             let p = car.suspensions[index].get_base_position();
             info.wheel_positions[index] = [p.x, p.y, p.z];

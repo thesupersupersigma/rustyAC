@@ -19,6 +19,9 @@ pub struct HudVertex {
 /// What the HUD shows besides the car.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HudInfo {
+    /// the fade of a change of the focused car: seconds since it began and its length
+    /// (`ACCameraManager::fadeIn`)
+    pub focus_fade: Option<(f32, f32)>,
     pub fps: f32,
     /// The frame-rate counter (Ctrl+F, `--show-fps`): the average and the longest frame time of
     /// the last half second, in milliseconds.

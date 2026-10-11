@@ -125,6 +125,12 @@ pub struct Bindings {
     /// `[IDEAL_LINE] KEY`: with Ctrl, the ideal line on / off (`CommandManager`: I when the
     /// section is missing)
     pub key_ideal_line: i32,
+    /// `[NEXT_CAR]`, `[PREVIOUS_CAR]`, `[PLAYER_CAR]` `KEY`: with Ctrl, the camera goes to the
+    /// car ahead on the track, to the one behind, back to yours (`CommandManager`: numpad 3, 1
+    /// and 2 when the section is missing)
+    pub key_next_car: i32,
+    pub key_previous_car: i32,
+    pub key_player_car: i32,
     /// The replay's keys (with Ctrl): `[FFWD]` F, `[REV]` D, `[SLOWMO]` S, `[PAUSE_REPLAY]`
     /// Space, `[NEXT_LAP]` N, `[PREVIOUS_LAP]` P, `[START_REPLAY]` R when the section is missing
     pub key_ffwd: i32,
@@ -314,6 +320,9 @@ impl Bindings {
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
             key_ideal_line: if ini.has_section("IDEAL_LINE") { ini.get_hex("IDEAL_LINE", "KEY") } else { 0x49 },
+            key_next_car: if ini.has_section("NEXT_CAR") { ini.get_hex("NEXT_CAR", "KEY") } else { 0x63 },
+            key_previous_car: if ini.has_section("PREVIOUS_CAR") { ini.get_hex("PREVIOUS_CAR", "KEY") } else { 0x61 },
+            key_player_car: if ini.has_section("PLAYER_CAR") { ini.get_hex("PLAYER_CAR", "KEY") } else { 0x62 },
             key_ffwd: if ini.has_section("FFWD") { ini.get_hex("FFWD", "KEY") } else { 0x46 },
             key_rev: if ini.has_section("REV") { ini.get_hex("REV", "KEY") } else { 0x44 },
             key_slowmo: if ini.has_section("SLOWMO") { ini.get_hex("SLOWMO", "KEY") } else { 0x53 },
@@ -468,6 +477,7 @@ impl Bindings {
         );
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         row("ideal line", "-", format!("{ctrl}+{}", key_name(self.key_ideal_line)));
+        row("camera to the car ahead / behind / yours", "-", format!("{ctrl}+{} / {} / {}", key_name(self.key_next_car), key_name(self.key_previous_car), key_name(self.key_player_car)));
         row("replay: play / pause", "-", format!("{ctrl}+{} (or P)", key_name(self.key_pause_replay)));
         row("replay: slow motion", "-", format!("{ctrl}+{}", key_name(self.key_slowmo)));
         row("replay: faster", "-", format!("{ctrl}+{}", key_name(self.key_ffwd)));

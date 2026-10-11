@@ -379,12 +379,14 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             // the cars' updates in the order they were made, then every handler of evOnPostUpdate
             feed(car, spec, step, index, count);
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
-            for ((other, spec), state) in others.iter_mut().zip(&frame.others).zip(&step.others) {
+            // (PhysicsAvatar::update: CarAvatar::setNewPhysicsState of every car, before the cars update)
+            let other_states: Vec<rustyac_render::car::CarPhysicsState> = others.iter_mut().zip(&step.others).map(|(other, state)| other.set_new_physics_state(state, crate::frames::DT)).collect();
+            for ((other, spec), state) in others.iter_mut().zip(&frame.others).zip(&other_states) {
                 feed(other, spec, step, index, count);
                 other.update(&mut graphics, &mut scene, state, crate::frames::DT);
             }
             car.post_update(&mut scene, &step.state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
-            for (other, state) in others.iter_mut().zip(&step.others) {
+            for (other, state) in others.iter_mut().zip(&other_states) {
                 other.post_update(&mut scene, state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
             }
         }

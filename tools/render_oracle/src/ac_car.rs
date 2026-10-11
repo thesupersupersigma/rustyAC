@@ -95,6 +95,7 @@ pub const VA_CAR_NODE_SORTER_CTOR: usize = 0x1_4006_bb60; // CarNodeSorter::CarN
 const VA_CAR_NODE_SORTER_ADD_CAR: usize = 0x1_4006_bdf0; // CarNodeSorter::addCar(Node*, CarAvatar*)
 const VA_CAR_NODE_SORTER_SORT: usize = 0x1_4006_be30; // CarNodeSorter::sort()
 const VA_SIM_UNLOAD_MESH_RESOURCES: usize = 0x1_4019_edd0; // Sim::unloadMeshResources(Node*)
+const VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE: usize = 0x1_400d_a420; // CarAvatar::setNewPhysicsState(CarPhysicsState&, float)
 pub const VA_CARS_TO_BE_LOADED: usize = 0x1_4155_9b00; // static int RaceManager::carsToBeLoaded
 
 /// The start-up initialisers of the tables of node names (`WHEEL_LF` …) of CarLodManager.obj,
@@ -939,9 +940,15 @@ impl Game {
         wr(sim, 0x220, extra.focus as u32);
         let acs = &self.acs;
         let flat = |m: &Mat44f| -> [f32; 16] { std::array::from_fn(|i| m.m[i / 4][i % 4]) };
-        // CarAvatar::setNewPhysicsState: the state the physics handed over
-        let bytes = s.to_game_bytes();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), c.car.add(0x268), bytes.len());
+        // CarAvatar::setNewPhysicsState 0x1400da420: the state the physics handed over (the
+        // game's own for the cars after the first: it blends their wheel and pedals)
+        let mut bytes = s.to_game_bytes();
+        if c.index == 0 {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), c.car.add(0x268), bytes.len());
+        } else {
+            let set: extern "C" fn(*mut u8, *mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE));
+            set(c.car, bytes.as_mut_ptr(), dt);
+        }
         // CarAvatar::updateInPitlaneState 0x1400dd6d0
         wr(c.car, 0x129c, s.tyre_surface_def.iter().any(|d| d.is_pitlane) as u8);
         // the head of CarAvatar::update 0x1400db830: the backfire test, then every handler of
@@ -967,7 +974,9 @@ impl Game {
         wr(c.body_transform, 8, rd::<[f32; 16]>(c.car, 0x224));
         // … and the steering wheel
         let org: [f32; 16] = rd(c.car, 0x1d0);
-        let a = ((s.steer / c.steer_lock) * c.steer_lock) * DEG;
+        // (physicsState.steer as the avatar holds it: blended for the cars after the first)
+        let steer: f32 = rd(c.car, 0x268 + 0x25c);
+        let a = ((steer / c.steer_lock) * c.steer_lock) * DEG;
         let axis = [0.0f32, 0.0, 1.0];
         let mut r = [0.0f32; 16];
         let create_from_axis_angle: extern "C" fn(*mut [f32; 16], *const [f32; 3], f32) -> *mut [f32; 16] = std::mem::transmute(acs.va(VA_CREATE_FROM_AXIS_ANGLE));

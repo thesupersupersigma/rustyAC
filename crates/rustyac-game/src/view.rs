@@ -466,12 +466,32 @@ impl CarView {
 
     /// The car as it is after the last step.
     pub fn capture(sim: &GameSim, drive_seconds: f64) -> CarView {
-        let car = &sim.car.car;
+        CarView::capture_car(sim, None, drive_seconds)
+    }
+
+    /// Every car of the session after the last step, the player's first.
+    pub fn capture_world(sim: &GameSim, drive_seconds: f64) -> Vec<CarView> {
+        std::iter::once(CarView::capture(sim, drive_seconds)).chain((0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, drive_seconds))).collect()
+    }
+
+    /// Another car of the session (`sim.opponents[index]`) as it is after the last step: what
+    /// its avatar and its sound read. What belongs to the player alone (the lap list, the fuel
+    /// use, the notes, the loose objects) stays empty.
+    pub fn capture_opponent(sim: &GameSim, index: usize, drive_seconds: f64) -> CarView {
+        CarView::capture_car(sim, Some(index), drive_seconds)
+    }
+
+    fn capture_car(sim: &GameSim, opponent: Option<usize>, drive_seconds: f64) -> CarView {
+        let player = opponent.is_none();
+        let (car, device) = match opponent {
+            None => (&sim.car.car, &sim.car.device),
+            Some(index) => (&sim.opponents[index].car.car, &sim.opponents[index].car.device),
+        };
         // TrackObject::update: the picture's node takes the body's matrix
         let mut moved_objects = [(0u16, IDENTITY); MOVED_OBJECTS];
         let mut moved_object_count = 0u8;
         let world = sim.world_core();
-        for (number, object) in world.track_objects.iter().enumerate() {
+        for (number, object) in world.track_objects.iter().enumerate().filter(|_| player) {
             let matrix = world.get_world_matrix(object.body).m;
             let home = object.org_matrix.m[3];
             let away = (0..3).any(|k| matrix[3][k] != home[k]);
@@ -489,12 +509,14 @@ impl CarView {
             moved_object_count,
             other_cars: {
                 let mut others = [IDENTITY; OTHER_CARS];
-                for (slot, other) in others.iter_mut().zip(&sim.opponents) {
-                    *slot = other.car.car.core.get_world_matrix(other.car.car.body).m;
+                if player {
+                    for (slot, other) in others.iter_mut().zip(&sim.opponents) {
+                        *slot = other.car.car.core.get_world_matrix(other.car.car.body).m;
+                    }
                 }
                 others
             },
-            other_car_count: sim.opponents.len().min(OTHER_CARS) as u8,
+            other_car_count: if player { sim.opponents.len().min(OTHER_CARS) as u8 } else { 0 },
             new_sessions: sim.new_sessions,
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
@@ -510,7 +532,7 @@ impl CarView {
             acc_g: [car.acc_g.x, car.acc_g.y, car.acc_g.z],
             ff: car.last_ff,
             fuel: car.fuel as f32,
-            device: sim.car.device.source.device_id(),
+            device: device.source.device_id(),
             damage: car.damage_zone_level,
             contacts: sim.world_core().contact_joints().len() as u32,
             engine_life: 1000.0,
@@ -523,7 +545,7 @@ impl CarView {
             compound: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.name.as_str())),
             setup: SurfaceName::new(&car.setup_name),
             brake_bias: car.brake_system.as_deref().map_or(-1.0, |brakes| brakes.get_front_bias()),
-            note: sim.aid_note,
+            note: if player { sim.aid_note } else { AidNote::default() },
             ..CarView::default()
         };
         for index in 0..4.min(car.tyres.len()) {
@@ -611,7 +633,9 @@ impl CarView {
                 }
             }
             let tp = &car.transponder;
-            let db = &sim.lap_db;
+            // (the lap list is the player's; another car shows its own running lap only)
+            let empty = rustyac_physics::track::LapDb::default();
+            let db = if player { &sim.lap_db } else { &empty };
             let mut sector_ms = [0u32; 4];
             for (slot, split) in sector_ms.iter_mut().zip(&db.current_splits) {
                 *slot = *split;
@@ -660,8 +684,10 @@ impl CarView {
             };
         }
         view.max_fuel = car.max_fuel;
-        view.km_per_liter = sim.fuel_evaluator.km_per_liter();
-        view.fuel_laps = sim.fuel_evaluator.fuel_laps(car.fuel);
+        if player {
+            view.km_per_liter = sim.fuel_evaluator.km_per_liter();
+            view.fuel_laps = sim.fuel_evaluator.fuel_laps(car.fuel);
+        }
         view.dynamic_track = sim.dynamic_track().is_some();
         if let Some(aero) = &car.aero {
             let wings = &aero.base().wings;

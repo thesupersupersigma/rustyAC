@@ -369,7 +369,7 @@ fn multi(args: &Args) -> Result<(), String> {
     let suffix = if args.game_threads != 0 { format!("_gt{}", args.game_threads) } else { String::new() };
     let path = out.join(format!("{}{suffix}.mcrec", scenario.name));
     world.recording.save(&path)?;
-    println!("{}: {} cars, {steps} steps in {seconds:.1} s ({:.1}x real time), {} loose objects, {} values a step", scenario.name, names.len(), steps as f64 * 0.003 / seconds, world.object_count(), world.recording.row_words());
+    println!("{}: {} cars, {steps} steps in {seconds:.1} s ({:.1}x real time), {} loose objects, {} values a step", scenario.name, world.names.len(), steps as f64 * 0.003 / seconds, world.object_count(), world.recording.row_words());
     for line in world.summary() {
         println!("  {line}");
     }

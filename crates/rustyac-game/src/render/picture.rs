@@ -41,10 +41,27 @@ impl Picture {
         }
     }
 
+    /// One frame of the one car (a session without other cars, or a caller that only knows
+    /// the player's).
     pub fn draw(&mut self, view: &CarView, shape: &CarShape, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
+        self.draw_world(std::slice::from_ref(view), 0, shape, driving, frame, info, dt);
+    }
+
+    /// One frame of every car of the session (`world`: the player's first) with the camera on
+    /// the car `focus`. The debug view draws the player's car and the others as boxes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_world(&mut self, world: &[CarView], focus: usize, shape: &CarShape, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         match self {
-            Picture::Debug(r) => r.draw(view, shape, frame, info),
-            Picture::Ac(r) => r.draw(view, driving, frame, info, dt),
+            Picture::Debug(r) => r.draw(&world[0], shape, frame, info),
+            Picture::Ac(r) => r.draw(world, focus, driving, frame, info, dt),
+        }
+    }
+
+    /// Whether each car's backfire test of the last frame fired, in the order of the cars.
+    pub fn backfires_triggered(&self) -> Vec<Option<bool>> {
+        match self {
+            Picture::Debug(_) => Vec::new(),
+            Picture::Ac(renderer) => renderer.backfires_triggered(),
         }
     }
 

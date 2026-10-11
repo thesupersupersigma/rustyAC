@@ -42,6 +42,18 @@ impl Frames {
     }
 }
 
+/// The last two steps of the session's other cars (car 1, 2, …), for the display.
+#[derive(Clone, Debug, Default)]
+pub struct OtherFrames {
+    pub prev: Vec<CarView>,
+    pub curr: Vec<CarView>,
+}
+
+/// The other cars after the last step.
+fn capture_others(sim: &GameSim) -> Vec<CarView> {
+    (0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, 0.0)).collect()
+}
+
 /// How well the thread kept its schedule.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Timing {
@@ -123,6 +135,9 @@ pub struct Shared {
     /// The replay or the duration has run out.
     pub finished: AtomicBool,
     pub frames: Mutex<Frames>,
+    /// The other cars' last two steps: written and read while `frames` is held, so that every
+    /// car of a picture is of the same step.
+    pub others: Mutex<OtherFrames>,
     pub timing: Mutex<Timing>,
     /// Steps done (for anyone who only wants to know that it lives).
     pub steps: AtomicU64,
@@ -132,6 +147,8 @@ pub struct Shared {
     pub camera_toggles: AtomicU32,
     /// The car's unchanging facts, once it is built.
     pub car_info: Mutex<Option<crate::sim::CarInfo>>,
+    /// The same of the session's other cars (car 1, 2, …), set before `car_info`.
+    pub other_infos: Mutex<Vec<crate::sim::CarInfo>>,
     /// A replay's speed (the bits of an `f32`; 0: it stands): the steps are paced by it.
     pub replay_speed: AtomicU32,
     /// A replay goes back to its first step (the transport's Stop).
@@ -149,6 +166,8 @@ impl Shared {
             bias_requests: AtomicI32::new(0),
             finished: AtomicBool::new(false),
             frames: Mutex::new(Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 }),
+            others: Mutex::new(OtherFrames::default()),
+            other_infos: Mutex::new(Vec::new()),
             replay_speed: AtomicU32::new(1.0f32.to_bits()),
             replay_restart: AtomicBool::new(false),
             timing: Mutex::new(Timing::default()),
@@ -161,6 +180,29 @@ impl Shared {
 
     pub fn frames(&self) -> Frames {
         *self.frames.lock().unwrap()
+    }
+
+    /// Every car of the session as it should be drawn at `now`: the player's first.
+    pub fn world_at(&self, now: Instant) -> Vec<CarView> {
+        let frames = self.frames.lock().unwrap();
+        let others = self.others.lock().unwrap();
+        let since = now.saturating_duration_since(frames.curr_due).as_secs_f32();
+        let t = since * frames.speed / DT;
+        let mut world = Vec::with_capacity(1 + others.curr.len());
+        world.push(CarView::between(&frames.prev, &frames.curr, t));
+        for (prev, curr) in others.prev.iter().zip(&others.curr) {
+            world.push(CarView::between(prev, curr, t));
+        }
+        world
+    }
+
+    /// Puts a fresh start of the session before the display: nothing to blend through.
+    fn publish_start(&self, sim: &GameSim) {
+        let view = CarView::capture(sim, 0.0);
+        let others = capture_others(sim);
+        let mut frames = self.frames.lock().unwrap();
+        *frames = Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 };
+        *self.others.lock().unwrap() = OtherFrames { prev: others.clone(), curr: others };
     }
 
     pub fn timing(&self) -> Timing {
@@ -238,8 +280,8 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     let mut last_speed = 1.0f32;
     let mut result = Ok(());
     {
-        let view = CarView::capture(&sim, 0.0);
-        *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 };
+        shared.publish_start(&sim);
+        *shared.other_infos.lock().unwrap() = sim.opponent_infos();
         *shared.car_info.lock().unwrap() = Some(sim.car_info());
     }
     // closes the current stretch of paced steps: n steps own n periods of wall time from the
@@ -271,8 +313,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             n = 0;
             fresh = true;
             shared.finished.store(false, Ordering::Relaxed);
-            let view = CarView::capture(&sim, 0.0);
-            *shared.frames.lock().unwrap() = Frames { prev: view, curr: view, curr_due: Instant::now(), speed: 1.0 };
+            shared.publish_start(&sim);
         }
         let speed = if config.replay.is_some() { f32::from_bits(shared.replay_speed.load(Ordering::Relaxed)) } else { 1.0 };
         let replay_done = config.replay.as_ref().is_some_and(|steps| replay_at >= steps.len());
@@ -401,6 +442,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         }
         let view = CarView::capture(&sim, (sim.steps - drive_start) as f64 * DT as f64);
+        let other_views = capture_others(&sim);
         {
             let mut frames = shared.frames.lock().unwrap();
             frames.prev = frames.curr;
@@ -410,6 +452,15 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             if burst {
                 // nothing to blend through while the car is put down
                 frames.prev = view;
+            }
+            if !other_views.is_empty() {
+                let mut others = shared.others.lock().unwrap();
+                let others = &mut *others;
+                std::mem::swap(&mut others.prev, &mut others.curr);
+                others.curr = other_views;
+                if burst || others.prev.len() != others.curr.len() {
+                    others.prev.clone_from(&others.curr);
+                }
             }
         }
         shared.steps.store(sim.steps, Ordering::Relaxed);

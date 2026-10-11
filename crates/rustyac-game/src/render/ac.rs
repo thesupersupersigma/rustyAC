@@ -437,12 +437,23 @@ pub struct AcRenderer {
     blurred: NodeId,
     unblurred: NodeId,
     track_node: NodeId,
-    cars: NodeId,
+    cars_node: NodeId,
     car_shadows: NodeId,
     sim_nodes: rustyac_render::car::SimNodes,
     /// `video.ini [ASSETTOCORSA] LOCK_STEER`, `HIDE_ARMS`, `HIDE_STEER`
     cockpit_flags: (bool, bool, bool),
-    car: Option<CarAvatar>,
+    /// `Sim::cars`: every car of the session in the order they were made (the index is the
+    /// car's guid; 0 is the player's)
+    cars: Vec<CarAvatar>,
+    /// each car's folder and skin, for the pit crews
+    crew_cars: Vec<rustyac_render::pit_crew::CrewCar>,
+    /// `RaceManager::carsToBeLoaded`
+    cars_to_be_loaded: i32,
+    /// `ACCameraManager::currentGlobalCameraIndex`: what `CarNodeSorter::sort` reads
+    global_camera_index: i32,
+    /// `Sim::focusedCarIndex` of the last frame, and the fade of a change of the focused car
+    /// (`ACCameraManager::fadeIn`): seconds since it began, its length
+    pub focus_fade: Option<(f32, f32)>,
     /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
     mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
     virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
@@ -658,7 +669,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), cars_to_be_loaded: 1, global_camera_index: 0, focus_fade: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -791,7 +802,20 @@ impl AcRenderer {
         Some(self.ideal_on)
     }
 
-    /// `CarAvatar::init3D` 0x1400d3b90. `folder` is the car's folder in the game.
+    /// `RaceManager::carsToBeLoaded`: how many cars the session has. To be said before the
+    /// first car is loaded (the tyre smoke's size depends on it).
+    pub fn set_cars_to_be_loaded(&mut self, count: usize) {
+        self.cars_to_be_loaded = count as i32;
+    }
+
+    /// How many cars are loaded.
+    pub fn car_count(&self) -> usize {
+        self.cars.len()
+    }
+
+    /// `Sim::addCar` 0x1401978a0, the picture's part: `CarAvatar::init3D` 0x1400d3b90 and
+    /// `initCommonPostPhysics`. `folder` is the car's folder in the game. The first car loaded
+    /// is the player's (guid 0), the next ones get guid 1, 2, … as the game counts them.
     pub fn load_car(&mut self, folder: &Path, steer_lock: f32, tyre_width: [f32; 4], max_gear: i32) -> Result<String, String> {
         let started = std::time::Instant::now();
         let skin = match &self.options.skin {
@@ -802,22 +826,34 @@ impl AcRenderer {
                 skins.first().cloned().unwrap_or_default()
             }
         };
-        let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars, &path_text(folder), folder, &skin, Some(steer_lock), 0)?;
+        let guid = self.cars.len() as i32;
+        let mut car = CarAvatar::init_3d(&mut self.graphics, &mut self.scene, self.cars_node, &path_text(folder), folder, &skin, Some(steer_lock), guid)?;
         car.max_gear = max_gear;
+        car.cars_to_be_loaded = self.cars_to_be_loaded;
         if let Some(mirror) = &self.mirror {
             car.init_mirror_materials(&mut self.graphics, &mut self.scene, &mirror.texture)?;
         }
         (car.lock_virtual_steer, car.hide_arms_in_cockpit, car.hide_steer) = self.cockpit_flags;
         car.init_common_post_physics(&mut self.graphics, &mut self.scene, &self.sim_nodes, tyre_width)?;
-        let mut summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
-        self.car = Some(car);
-        // Sim::Sim, once the cars are there: TrackAvatar::initPitCrew, then PitStop::PitStop's marker
+        let summary = format!("car model {}: {} levels of detail, skin {skin}, loaded in {:.2} s", folder.display(), car.lods.len(), started.elapsed().as_secs_f64());
+        self.cars.push(car);
+        self.crew_cars.push(rustyac_render::pit_crew::CrewCar { folder_text: path_text(folder), folder: folder.to_path_buf(), skin: skin.clone(), guid });
+        Ok(summary)
+    }
+
+    /// `Sim::Sim`, once the cars are there: `TrackAvatar::initPitCrew` (a lollipop man for every
+    /// car that has a pit box), then the marker of `PitStop::PitStop` at the player's box.
+    pub fn init_pit_crew(&mut self) -> String {
+        let mut summary = String::new();
+        if self.crew_cars.is_empty() {
+            return summary;
+        }
         if let Some((model, data, pits, track)) = &self.pit_setup {
             use rustyac_physics::vecmath::Vec3f;
-            let cars = [rustyac_render::pit_crew::CrewCar { folder_text: path_text(folder), folder: folder.to_path_buf(), skin: skin.clone(), guid: 0 }];
+            let cars = &self.crew_cars;
             let down = Vec3f::new(0.0, -1.0, 0.0);
             let ray = |from: &[f32; 3], length: f32| track.ray_cast_hit(&Vec3f::new(from[0], from[1], from[2]), &down, length).map(|hit| hit.contact.pos);
-            match rustyac_render::pit_crew::init_pit_crew(&mut self.graphics, &mut self.scene, *model, data, pits, &cars, &ray) {
+            match rustyac_render::pit_crew::init_pit_crew(&mut self.graphics, &mut self.scene, *model, data, pits, cars, &ray) {
                 Ok(crews) => self.lollipops = crews,
                 Err(message) => println!("WARNING: no pit crew: {message}"),
             }
@@ -837,12 +873,12 @@ impl AcRenderer {
                     Err(message) => println!("WARNING: no pit box marker: {message}"),
                 }
             }
-            summary.push_str(&format!("; pit crew: {} lollipop man, the marker {}", self.lollipops.len(), if self.pit_marker.is_some() { "loaded" } else { "missing" }));
+            summary.push_str(&format!("pit crew: {} lollipop man, the marker {}", self.lollipops.len(), if self.pit_marker.is_some() { "loaded" } else { "missing" }));
             if !self.lollipops.is_empty() && self.graphics.video.world_detail < 5 {
                 summary.push_str(" (the lollipop man only shows with WORLD_DETAIL 5, as in the game)");
             }
         }
-        Ok(summary)
+        summary
     }
 
     /// What follows the loading in the game: the sun (`RaceManager::initLighting`), the weather
@@ -859,8 +895,9 @@ impl AcRenderer {
             self.graphics.apply_custom_weather(&self.options.weather.clone());
         }
         rustyac_render::cubemap::init_static_cubemap(&mut self.camera, &mut self.graphics, &mut self.scene, self.track_folder.as_deref())?;
-        // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad (the flat ground shadows)
-        if let Some(car) = &mut self.car {
+        // Sim::onPostLoad, after the cube map: CarAvatar::onPostLoad of every car in the order
+        // they were made (the flat ground shadows)
+        for car in &mut self.cars {
             self.graphics.shadow_cache = shadow_cache_folder().ok();
             car.on_post_load(&mut self.graphics, &mut self.scene, self.car_shadows);
             // A car without body_shadow.png: the game draws the five pictures, saves them into
@@ -890,7 +927,12 @@ impl AcRenderer {
 
     /// `CarAvatar::evOnBackfireTriggered` of the last frame; `None` without a car that tests.
     pub fn backfire_triggered(&self) -> Option<bool> {
-        self.car.as_ref().filter(|car| car.backfire.is_some()).map(|car| car.backfire_triggered)
+        self.cars.first().filter(|car| car.backfire.is_some()).map(|car| car.backfire_triggered)
+    }
+
+    /// The same of every car, in the order they were made.
+    pub fn backfires_triggered(&self) -> Vec<Option<bool>> {
+        self.cars.iter().map(|car| car.backfire.is_some().then_some(car.backfire_triggered)).collect()
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -913,7 +955,12 @@ impl AcRenderer {
     }
 
     /// One frame: `Game::onIdle` 0x140242730 as far as the picture goes, then the HUD.
-    pub fn draw(&mut self, view: &CarView, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
+    /// `world` is every car of the session (the player's first), `focus` the focused car
+    /// (`Sim::focusedCarIndex`): the camera is its, and so are the mirror, the dashboard that
+    /// lives and the HUD.
+    pub fn draw(&mut self, world: &[CarView], focus: usize, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
+        let view = &world[0];
+        let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
         // the game camera of the moment
         let cam = &mut self.camera.base.camera;
         cam.fov = frame.fov;
@@ -956,7 +1003,8 @@ impl AcRenderer {
                 *start += (dt * 1000.0) as f64;
             }
         }
-        if let Some(car) = &mut self.car {
+        // (every car's handlers, in the order the cars were made)
+        for car in &mut self.cars {
             if info.replay {
                 if self.told_replay_status == -1 {
                     // ReplayManager::startReplayMode: evOnReplayStarted, then status 6
@@ -1001,7 +1049,7 @@ impl AcRenderer {
         if view.new_sessions != self.told_new_sessions {
             self.told_new_sessions = view.new_sessions;
             rustyac_render::crowds::on_new_session(&mut self.graphics.crt_rand, &mut self.dynamic_objects, self.time_ms, 0.0);
-            if let Some(car) = &mut self.car {
+            for car in &mut self.cars {
                 car.on_new_session(&mut self.scene);
             }
             self.start_race();
@@ -1014,27 +1062,46 @@ impl AcRenderer {
         for crew in &mut self.lollipops {
             crew.update(&mut self.scene, dt, pit_state, false);
         }
-        let mut modes = (2, 0);
-        if let Some(car) = &mut self.car {
+        // ACCameraManager::mode and CameraDrivableManager::currentMode
+        let modes = match driving.mode {
+            CameraMode::Cockpit => (0, 0),
+            CameraMode::Drivable => (
+                2,
+                match driving.drivable {
+                    Drivable::Chase => 0,
+                    Drivable::Chase2 => 1,
+                    Drivable::Bonnet => 2,
+                    Drivable::Bumper => 3,
+                    Drivable::Dash => 4,
+                },
+            ),
+            // (eCar is 1: ACCameraManager::update's jump table)
+            CameraMode::Car => (1, 0),
+        };
+        // ACCameraManager::setMode 0x1400340d0 / setDrivableCarIndex: currentGlobalCameraIndex
+        // is 0 in the cockpit and the drivable view's number + 1; the car cameras leave it
+        match modes {
+            (0, _) => self.global_camera_index = 0,
+            (2, drivable) => self.global_camera_index = drivable + 1,
+            _ => {}
+        }
+        // Sim::update 0x14019ef90: CarNodeSorter::sort, before the cars update
+        if self.cars.len() > 1 {
+            let list: Vec<(NodeId, i32)> = self.cars.iter().map(|car| (car.car_node, car.guid)).collect();
+            self.scene.sort_cars(self.cars_node, &list, self.global_camera_index);
+        }
+        // where each car stands in real time (RaceManager::carsRealTimePosition): by laps, then
+        // by the place along the lap
+        let mut order: Vec<usize> = (0..world.len()).collect();
+        order.sort_by(|a, b| (world[*b].lap.laps, world[*b].lap.position).partial_cmp(&(world[*a].lap.laps, world[*a].lap.position)).unwrap_or(std::cmp::Ordering::Equal));
+        let cars_count = self.cars.len().min(world.len());
+        let mut states = Vec::with_capacity(cars_count);
+        for (index, (car, view)) in self.cars.iter_mut().zip(world).enumerate() {
+            let (camera_mode, drivable_mode) = modes;
             car.game_time_ms = self.time_ms;
-            let state = view.physics_state();
-            // ACCameraManager::mode and CameraDrivableManager::currentMode
-            let (camera_mode, drivable_mode) = match driving.mode {
-                CameraMode::Cockpit => (0, 0),
-                CameraMode::Drivable => (
-                    2,
-                    match driving.drivable {
-                        Drivable::Chase => 0,
-                        Drivable::Chase2 => 1,
-                        Drivable::Bonnet => 2,
-                        Drivable::Bumper => 3,
-                        Drivable::Dash => 4,
-                    },
-                ),
-                CameraMode::Car => (4, 0),
-            };
-            modes = (camera_mode, drivable_mode);
-            car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: 0, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
+            // PhysicsAvatar::update: CarAvatar::setNewPhysicsState
+            let state = car.set_new_physics_state(&view.physics_state(), dt);
+            car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: focus as i32, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
             // what the car's objects read beside the physics state: the aids' levels and the air
             // (CarAvatar::getTCMode, getABSMode, PhysicsEngine::ambientTemperature), the wings
             // (CarAvatar::wingsStatus), CarPhysicsInfo, the session, the pause menu and the replay
@@ -1053,16 +1120,22 @@ impl AcRenderer {
             car.pause_menu = self.told_paused;
             car.replay_mode = info.replay;
             car.replay_scale = replay_scale;
-            // a session of one car: rustyAC's sessions are practice (hot lap from the line)
+            // rustyAC's sessions are practice (hot lap from the line)
             car.session_type = 1;
-            car.leaderboard_position = 1;
-            car.real_time_position = 0;
-            car.cars_count = 1;
+            let place = order.iter().position(|i| *i == index).unwrap_or(0) as i32;
+            car.leaderboard_position = place + 1;
+            car.real_time_position = place;
+            car.cars_count = cars_count as i32;
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
-            car.post_update(&mut self.scene, &state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
+            states.push(state);
+        }
+        // Game::evOnPostUpdate, after every car's update: each car's handlers in the order the
+        // cars were made
+        for (car, state) in self.cars.iter_mut().zip(&states) {
+            car.post_update(&mut self.scene, state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }
         // TimeAttack::update 0x1401be0b0: the mode runs once the car is 3 m from where it stood
-        if let (Some(gates), Some(car)) = (&self.gates, &self.car) {
+        if let (Some(gates), Some(car)) = (&self.gates, self.cars.first()) {
             gates.borrow_mut().in_replay = info.replay;
             let b = self.scene.nodes[car.body_transform].matrix.m[3];
             let start = *self.gate_start.get_or_insert([b[0], b[1], b[2]]);
@@ -1073,7 +1146,7 @@ impl AcRenderer {
             }
         }
         // PitStop::update, after the cars: the pit box marker
-        let pit_inputs = self.car.as_ref().map(|car| {
+        let pit_inputs = self.cars.first().map(|car| {
             let b = self.scene.nodes[car.body_transform].matrix.m[3];
             rustyac_render::pit_crew::PitInputs { car_position: [b[0], b[1], b[2]], speed: view.speed_ms, in_pitlane: view.lap.in_pit_lane, session_type: self.options.session_type, pause_menu: self.told_paused, replay: info.replay }
         });
@@ -1098,7 +1171,8 @@ impl AcRenderer {
         }
         // DynamicTrackManager::update
         if let Some(grooves) = &mut self.grooves {
-            grooves.update(&mut self.scene, dt, view.dynamic_track.then_some(view.grip), &[view.lap.laps]);
+            let laps: Vec<u32> = world.iter().map(|v| v.lap.laps).collect();
+            grooves.update(&mut self.scene, dt, view.dynamic_track.then_some(view.grip), &laps);
         }
         self.frames += 1;
         let logging = self.options.gpu_log.is_some() && self.frames == 2;
@@ -1118,8 +1192,9 @@ impl AcRenderer {
         }
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
-        // Sim::renderScene: the mirror before the picture
-        if let (Some(mirror), Some(car)) = (&mut self.mirror, &self.car) {
+        // Sim::renderScene: the mirror before the picture (MirrorTextureRenderer::render
+        // 0x140114410: the focused car's rear view, with that car hidden)
+        if let (Some(mirror), Some(car)) = (&mut self.mirror, self.cars.get(focus)) {
             let active = self.virtual_mirror.as_ref().is_some_and(|v| v.active);
             if mirror.wants_render(modes.0, modes.1, active) {
                 let nodes = car.visibility_nodes();
@@ -1181,7 +1256,7 @@ impl AcRenderer {
         self.graphics.reset_render_states();
         self.graphics.kgl.set_screen_render_targets(true);
         let (width, height) = self.size();
-        self.hud.draw(&self.graphics.kgl.context, view, info, width, height);
+        self.hud.draw(&self.graphics.kgl.context, &world[focus], info, width, height);
     }
 
     /// What the motion blur remembers of the last frame (`lastWorldMatrix`, `currentBlurAngle`).
