@@ -275,7 +275,7 @@ impl ThermalObject {
 }
 
 /// A change the game's main thread has queued for the physics thread.
-pub type PreStepJob = Box<dyn FnOnce(&mut RollingChassis)>;
+pub type PreStepJob = Box<dyn FnOnce(&mut RollingChassis) + Send>;
 
 /// AC's `PenaltyManager` as far as a jump start writes it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -377,11 +377,15 @@ pub struct StepTrace {
 
 /// The rolling chassis of one car.
 pub struct RollingChassis {
-    /// The rigid-body world with this car's bodies and joints.
+    /// The rigid-body world with this car's bodies and joints. With several cars
+    /// ([`crate::engine::PhysicsEngine`]) it is the car's working copy of the one world all
+    /// cars share: the car's own bodies, joints and shapes in it are current, the rest is not.
     pub core: PhysicsCore,
+    /// `Car::physicsGUID`: the number of cars the engine had when this one was built.
+    pub physics_guid: u32,
     pub env: ChassisEnvironment,
     /// The road under the wheels (`Track` as an `IRayTrackCollisionProvider`).
-    pub ground: Box<dyn RayTrackCollisionProvider>,
+    pub ground: Box<dyn RayTrackCollisionProvider + Send>,
     /// `Car::body`
     pub body: RigidBody,
     /// `Car::fuelTankBody`
@@ -820,7 +824,7 @@ impl RollingChassis {
     pub fn new(
         data_path: &Path,
         env: ChassisEnvironment,
-        ground: Box<dyn RayTrackCollisionProvider>,
+        ground: Box<dyn RayTrackCollisionProvider + Send>,
         rand_seed: u32,
         physics_time: f64,
     ) -> Result<RollingChassis, String> {
@@ -833,7 +837,7 @@ impl RollingChassis {
     pub fn new_with_objects(
         data_path: &Path,
         env: ChassisEnvironment,
-        ground: Box<dyn RayTrackCollisionProvider>,
+        ground: Box<dyn RayTrackCollisionProvider + Send>,
         rand_seed: u32,
         physics_time: f64,
         objects: &[crate::track::TrackObjectDef],
@@ -842,6 +846,21 @@ impl RollingChassis {
         for object in objects {
             core.create_track_object(&object.matrix, object.vertices.clone(), object.indices.clone());
         }
+        RollingChassis::new_in_core(core, 0, data_path, env, ground, rand_seed, physics_time)
+    }
+
+    /// [`RollingChassis::new`] for a car that is built into a world that exists: the world of
+    /// a [`crate::engine::PhysicsEngine`], which may hold the track's loose objects and the
+    /// cars made before this one. `physics_guid` is the number of those cars.
+    pub fn new_in_core(
+        mut core: PhysicsCore,
+        physics_guid: u32,
+        data_path: &Path,
+        env: ChassisEnvironment,
+        ground: Box<dyn RayTrackCollisionProvider + Send>,
+        rand_seed: u32,
+        physics_time: f64,
+    ) -> Result<RollingChassis, String> {
         let body = core.create_rigid_body();
         let fuel_tank_body = core.create_rigid_body();
 
@@ -902,6 +921,7 @@ impl RollingChassis {
 
         let mut chassis = RollingChassis {
             core,
+            physics_guid,
             env,
             ground,
             body,
@@ -1568,8 +1588,26 @@ impl RollingChassis {
     /// for one car.
     ///
     /// `physics_time` is the engine's clock for this step, ms (it advances by `dt * 1000`).
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
+        self.step_car(dt, physics_time, feed);
+
+        // --- PhysicsCore::step ---------------------------------------------------------------
+        let pre: Vec<BodyTrace> = match self.trace {
+            Some(_) => self.core.bodies().map(|body| self.body_trace(body)).collect(),
+            None => Vec::new(),
+        };
+        if let Some(trace) = &mut self.trace {
+            trace.pre = pre;
+        }
+        self.step_core(dt);
+        self.step_completed(dt, feed);
+    }
+
+    /// The first half of [`RollingChassis::step`], what belongs to this car alone:
+    /// `Car::stepPreCacheValues` and `Car::step`. The game runs it for every car, on its
+    /// thread pool when it has one, before the one rigid-body step all cars share.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn step_car(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
         self.physics_time = physics_time;
         // PhysicsEngine::step counts its steps first of all
         self.step_counter = self.step_counter.wrapping_add(1);
@@ -1934,16 +1972,11 @@ impl RollingChassis {
         if self.env.is_first_car {
             self.step_jump_start();
         }
+    }
 
-        // --- PhysicsCore::step ---------------------------------------------------------------
-        let pre: Vec<BodyTrace> = match self.trace {
-            Some(_) => self.core.bodies().map(|body| self.body_trace(body)).collect(),
-            None => Vec::new(),
-        };
-        if let Some(trace) = &mut self.trace {
-            trace.pre = pre;
-        }
-        self.step_core(dt);
+    /// The last part of [`RollingChassis::step`], after the rigid-body step: `Car::postStep`
+    /// and what the game's physics thread does for the car right after the engine's step.
+    pub fn step_completed(&mut self, dt: f32, feed: &mut dyn ChassisFeed) {
         self.post_step(dt);
 
         // what the game's physics thread does after each step: the state snapshot, then the
@@ -2112,7 +2145,7 @@ impl RollingChassis {
     /// Queues a change for the start of the next step, as the game's main thread does with
     /// everything it asks of the physics thread (locks, a gentle stop, a black flag, cockpit
     /// clicks, teleports). The job runs when the clock already shows that step's time.
-    pub fn queue(&mut self, job: impl FnOnce(&mut RollingChassis) + 'static) {
+    pub fn queue(&mut self, job: impl FnOnce(&mut RollingChassis) + Send + 'static) {
         self.pre_step_jobs.push(Box::new(job));
     }
 
@@ -2497,9 +2530,46 @@ pub struct OnCollisionEvent {
     pub collider_group: u32,
 }
 
-/// `Car::physicsGUID`: the number of cars the engine had when this one was built. The port
-/// has one car.
-const PHYSICS_GUID: u32 = 0;
+/// `PhysicsEngine::onCollisionCallBack` @ 0x140264020, its first half: when the first body
+/// of a new contact is no car's body and the second one is, the pair is turned round (bodies
+/// and shapes; the normal stays). `car_bodies` are the bodies of the engine's cars.
+pub fn turn_to_car(event: &CollisionEvent, car_bodies: &[RigidBody]) -> CollisionEvent {
+    let is_car = |body: Option<RigidBody>| body.is_some_and(|b| car_bodies.contains(&b));
+    let mut event = *event;
+    if !is_car(event.body_a) && is_car(event.body_b) {
+        std::mem::swap(&mut event.body_a, &mut event.body_b);
+        std::mem::swap(&mut event.shape_a, &mut event.shape_b);
+    }
+    event
+}
+
+/// What `Car::onCollisionCallBack` reads of the rigid bodies, in its order: the contact
+/// point in the car body's frame, the other body's velocity at the point (zero for the
+/// track), the car body's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollisionInputs {
+    pub local: Vec3f,
+    pub v_other: Vec3f,
+    pub v_mine: Vec3f,
+}
+
+impl CollisionInputs {
+    /// `None` when neither body of the contact is `body` (the car's): the callback then does
+    /// nothing. `core` is the world the contact was found in.
+    pub fn read(core: &PhysicsCore, body: RigidBody, event: &CollisionEvent) -> Option<CollisionInputs> {
+        if event.body_a != Some(body) && event.body_b != Some(body) {
+            return None;
+        }
+        let other = if event.body_a == Some(body) { event.body_b } else { event.body_a };
+        let local = core.world_to_local(body, &event.pos);
+        let v_other = match other {
+            Some(other) => core.get_point_velocity(other, &event.pos),
+            None => Vec3f::new(0.0, 0.0, 0.0),
+        };
+        let v_mine = core.get_point_velocity(body, &event.pos);
+        Some(CollisionInputs { local, v_other, v_mine })
+    }
+}
 
 impl RollingChassis {
     /// `CarColliderManager::init` -> `loadINI` @ 0x1402a37a0: the floor boxes of
@@ -2508,7 +2578,7 @@ impl RollingChassis {
     fn install_box_colliders(&mut self) -> Result<(), String> {
         let boxes = super::colliders::load_boxes(&self.data_path)?;
         for def in &boxes {
-            self.core.add_box_collider(self.body, &def.centre, &def.size, super::body::category::CAR, super::body::category::SURFACE, PHYSICS_GUID + 1);
+            self.core.add_box_collider(self.body, &def.centre, &def.size, super::body::category::CAR, super::body::category::SURFACE, self.physics_guid + 1);
         }
         self.colliders.boxes = boxes;
         Ok(())
@@ -2519,7 +2589,7 @@ impl RollingChassis {
     /// category 4 and the collide bits 0x1e (walls, cars, loose objects).
     pub fn init_collider_mesh(&mut self, mesh: ColliderMesh) {
         self.bounds = super::colliders::bounds(&mesh);
-        self.core.add_mesh_collider(self.body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, PHYSICS_GUID + 1);
+        self.core.add_mesh_collider(self.body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, super::body::category::CAR, 0x1e, self.physics_guid + 1);
         self.colliders.mesh = Some(mesh);
     }
 
@@ -2561,7 +2631,10 @@ impl RollingChassis {
             let events = self.core.collision_step(statics);
             self.contact_callbacks = events.len() as u32;
             for event in &events {
-                self.on_collision_callback(event);
+                // PhysicsEngine::onCollisionCallBack with its one car
+                let event = turn_to_car(event, &[self.body]);
+                let inputs = CollisionInputs::read(&self.core, self.body, &event);
+                self.on_collision_callback(&event, inputs.as_ref());
             }
         }
         self.step_stats = self.core.world_step(dt);
@@ -2569,32 +2642,29 @@ impl RollingChassis {
         self.core.step_track_objects();
     }
 
-    /// `PhysicsEngine::onCollisionCallBack` @ 0x140264020 (the pair is turned round when only
-    /// the second body is a car's) and `Car::onCollisionCallBack` @ 0x140274650: the closing
+    /// `Car::onCollisionCallBack` @ 0x140274650, which the engine calls on every car for
+    /// every new contact joint (`event` as [`turn_to_car`] left it; `inputs` from
+    /// [`CollisionInputs::read`], `None` when the contact is not this car's): the closing
     /// speed at the contact point, in km/h, is the damage; a zone keeps the largest it saw.
     /// Contacts with the ground (a track surface, a loose object) do not damage.
+    ///
+    /// Between two cars both are called with the same normal, so the speed one of them sees
+    /// as closing the other sees as parting: only one of the two is damaged by a contact.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    fn on_collision_callback(&mut self, event: &CollisionEvent) {
-        let (mut body_a, mut shape_a, mut body_b, mut shape_b) = (event.body_a, event.shape_a, event.body_b, event.shape_b);
-        if body_a != Some(self.body) && body_b == Some(self.body) {
-            std::mem::swap(&mut body_a, &mut body_b);
-            std::mem::swap(&mut shape_a, &mut shape_b);
-        }
+    pub fn on_collision_callback(&mut self, event: &CollisionEvent, inputs: Option<&CollisionInputs>) {
+        let (body_a, shape_a, body_b, shape_b) = (event.body_a, event.shape_a, event.body_b, event.shape_b);
         // not this car's body: nothing (hubs and the fuel tank have no shapes)
-        if body_a != Some(self.body) {
+        let Some(inputs) = inputs else {
             return;
-        }
-        let other = body_b;
+        };
+        let other = if body_a == Some(self.body) { body_b } else { body_a };
         let is_ground = |shape: Option<Shape>| shape.is_some_and(|s| s.group == 1 || s.group == 0x10);
         let ground_a = is_ground(shape_a);
         let ground_b = is_ground(shape_b);
         self.last_collision_time = self.physics_time;
-        let local = self.core.world_to_local(self.body, &event.pos);
-        let v_other = match other {
-            Some(other) => self.core.get_point_velocity(other, &event.pos),
-            None => Vec3f::new(0.0, 0.0, 0.0),
-        };
-        let v_mine = self.core.get_point_velocity(self.body, &event.pos);
+        let local = inputs.local;
+        let v_other = inputs.v_other;
+        let v_mine = inputs.v_mine;
         let n = &event.normal;
         let rel_speed = -((((v_mine.y - v_other.y) * n.y + (v_mine.x - v_other.x) * n.x) + (v_mine.z - v_other.z) * n.z) * 3.6);
         if body_a.is_some() && body_b.is_some() && !ground_a && !ground_b {
@@ -2653,7 +2723,7 @@ impl RollingChassis {
         let group = shape_b.map_or(0, |s| s.group);
         self.physics_events.push(PhysicsEvent {
             kind: 0,
-            param1: PHYSICS_GUID as f32,
+            param1: self.physics_guid as f32,
             param2: event.depth,
             param3: -1.0,
             param4: rel_speed,

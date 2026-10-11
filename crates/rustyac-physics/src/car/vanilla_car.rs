@@ -112,9 +112,9 @@ impl ControlsProvider for ScriptedDevice {
 
 /// The feed of a whole car: only the device is left. Every other hook belongs to a system
 /// the car has itself, so being asked is a bug.
-struct DeviceFeed<'a> {
-    device: &'a mut dyn ControlsProvider,
-    dt: f32,
+pub(crate) struct DeviceFeed<'a> {
+    pub(crate) device: &'a mut dyn ControlsProvider,
+    pub(crate) dt: f32,
 }
 
 impl ChassisFeed for DeviceFeed<'_> {
@@ -201,7 +201,7 @@ impl<P: ControlsProvider> VanillaCar<P> {
     pub fn new(
         data_path: &Path,
         env: ChassisEnvironment,
-        ground: Box<dyn RayTrackCollisionProvider>,
+        ground: Box<dyn RayTrackCollisionProvider + Send>,
         rand_seed: u32,
         physics_time: f64,
         device: P,
@@ -213,7 +213,7 @@ impl<P: ControlsProvider> VanillaCar<P> {
     pub fn new_with_objects(
         data_path: &Path,
         env: ChassisEnvironment,
-        ground: Box<dyn RayTrackCollisionProvider>,
+        ground: Box<dyn RayTrackCollisionProvider + Send>,
         rand_seed: u32,
         physics_time: f64,
         device: P,

@@ -66,6 +66,9 @@ fn usage() -> String {
      car_oracle rays --track <track folder or name> [--count <n>] [--seed <n>]\n       \
      car_oracle collide --track <track folder or name> [--count <n>] [--mesh-count <n>] [--seed <n>] [--kind <n>]\n       \
      car_oracle collide-worlds [--steps <n>] [--seed <n>] [--only <world,world>]\n       \
+     car_oracle multi --scenario <mc_...> --track <track> [--cars <car,car,...>] [--steps <n>] [--out <dir>] [--game-threads <n>] [--threads <n,n>]\n       \
+     car_oracle multi-check <recording.mcrec> [--threads <n,n,...>] [--fault <step>:<car>]\n       \
+     car_oracle multi-list\n       \
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--car <folder under cardata/>] [--verbose]"
         .to_string()
 }
@@ -119,6 +122,13 @@ struct Args {
     boxes_only: bool,
     collide: bool,
     seed: u64,
+    /// Task 24, `multi`: the cars (`--cars a,b,c`), the worker threads of the port's replays
+    /// (`--threads 0,4`), `[PHYSICS_THREADING] THREADS` of the game's own engine
+    /// (`--game-threads`), a one-bit fault (`--fault <step>:<car>`).
+    cars: Vec<String>,
+    threads: Vec<usize>,
+    game_threads: i32,
+    fault: Option<(usize, usize)>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -160,6 +170,10 @@ fn parse_args() -> Result<Args, String> {
         boxes_only: false,
         collide: false,
         seed: 12,
+        cars: Vec::new(),
+        threads: Vec::new(),
+        game_threads: 0,
+        fault: None,
     };
     while let Some(flag) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{flag} needs a value\n{}", usage()));
@@ -215,6 +229,19 @@ fn parse_args() -> Result<Args, String> {
             "--boxes-only" => a.boxes_only = true,
             "--collide" => a.collide = true,
             "--seed" => a.seed = number(value()?)? as u64,
+            "--cars" => a.cars = value()?.split(',').map(str::to_string).collect(),
+            "--threads" => {
+                let text = value()?;
+                a.threads = text.split(',').map(|part| part.parse::<usize>().map_err(|_| format!("--threads {text}: not numbers"))).collect::<Result<_, _>>()?;
+            }
+            "--game-threads" => {
+                let text = value()?;
+                a.game_threads = text.parse().map_err(|_| format!("--game-threads {text}: not a number"))?;
+            }
+            "--fault" => {
+                let text = value()?;
+                a.fault = Some(text.split_once(':').and_then(|(s, c)| Some((s.parse().ok()?, c.parse().ok()?))).ok_or(format!("--fault <step>:<car>, got {text:?}"))?);
+            }
             other if !other.starts_with("--") && a.file.is_none() => a.file = Some(PathBuf::from(other)),
             other if !other.starts_with("--") && a.file2.is_none() => a.file2 = Some(PathBuf::from(other)),
             _ => return Err(format!("unknown argument {flag}\n{}", usage())),
@@ -241,6 +268,14 @@ fn main() {
         "collide" => collide_poses(&args),
         "collide-worlds" => collide_worlds(&args),
         "sus-micro" => sus_micro(&args),
+        "multi" => multi(&args),
+        "multi-check" => multi_check(&args),
+        "multi-list" => {
+            for s in game::multi::scenarios() {
+                println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
+            }
+            Ok(())
+        }
         _ => Err(usage()),
     });
     if let Err(message) = result {
@@ -256,6 +291,114 @@ fn track_folder(args: &Args, track: &Path) -> PathBuf {
     }
     let game = args.acs.parent().unwrap_or(Path::new("."));
     game.join("content").join("tracks").join(track)
+}
+
+/// Task 24: several cars in the game's own engine, recorded; then the port's replays.
+fn multi(args: &Args) -> Result<(), String> {
+    let scenarios = game::multi::scenarios();
+    let scenario = scenarios.iter().find(|s| s.name == args.scenario).ok_or_else(|| format!("no several-car scenario {:?} (see `car_oracle multi-list`)", args.scenario))?;
+    let repo = repo_root();
+    let out = std::path::absolute(if args.out == repo.join("oracle/car") { repo.join("oracle/multi") } else { args.out.clone() }).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let track = args.track.as_ref().ok_or("multi needs --track <folder or name> (for example --track spa)")?;
+    let folder = track_folder(args, track);
+    let names: Vec<String> = if args.cars.is_empty() { scenario.default_cars.iter().map(|s| s.to_string()).collect() } else { args.cars.clone() };
+    for name in &names {
+        game::prepare_root(&repo, &args.root, name)?;
+    }
+    track::prepare_root(&args.root, &folder, &args.layout)?;
+    if args.game_threads != 0 {
+        // the game's own thread pool (the default file of the scratch root has THREADS=0)
+        let ini = args.root.join("system/cfg/assetto_corsa.ini");
+        let text = std::fs::read_to_string(&ini).map_err(|e| e.to_string())?;
+        std::fs::write(&ini, text.replace("THREADS=0", &format!("THREADS={}", args.game_threads))).map_err(|e| e.to_string())?;
+    }
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let game_root = args.acs.parent().map(Path::to_path_buf);
+    let cardata = repo.join("cardata");
+    let colliders = |name: &str| rustyac_physics::car::colliders::load(&cardata.join(name), game_root.as_deref(), name);
+    let mut world = game::multi::MultiWorld::build(&acs, scenario, &args.cars, &folder, &args.layout, &colliders, args.seed as u32)?;
+    let steps = args.steps.unwrap_or((scenario.seconds / scenario::DT) as usize);
+    let start = std::time::Instant::now();
+    for _ in 0..steps {
+        world.step();
+    }
+    let seconds = start.elapsed().as_secs_f64();
+    world.recording.set("steps", steps.to_string());
+    world.recording.set("game_threads", args.game_threads.to_string());
+    let suffix = if args.game_threads != 0 { format!("_gt{}", args.game_threads) } else { String::new() };
+    let path = out.join(format!("{}{suffix}.mcrec", scenario.name));
+    world.recording.save(&path)?;
+    println!("{}: {} cars, {steps} steps in {seconds:.1} s ({:.1}x real time), {} loose objects, {} values a step", scenario.name, names.len(), steps as f64 * 0.003 / seconds, world.object_count(), world.recording.row_words());
+    for line in world.summary() {
+        println!("  {line}");
+    }
+    println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
+    let recording = world.recording.clone();
+    multi_compare(args, &recording, &path)
+}
+
+fn multi_check(args: &Args) -> Result<(), String> {
+    let path = args.file.as_ref().ok_or("multi-check <recording.mcrec>")?;
+    let recording = rustyac_physics::engine::record::Recording::load(path)?;
+    multi_compare(args, &recording, path)
+}
+
+/// Replays a several-car recording through the port, once per thread count, and holds every
+/// value against the game's.
+fn multi_compare(args: &Args, recording: &rustyac_physics::engine::record::Recording, path: &Path) -> Result<(), String> {
+    use rustyac_physics::engine::record::{load_track, replay_on, ReplayPaths};
+    let repo = repo_root();
+    let paths = ReplayPaths { cardata: repo.join("cardata"), game_root: args.acs.parent().map(Path::to_path_buf) };
+    let track = load_track(recording, &paths)?;
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = if args.threads.is_empty() { vec![0, rustyac_physics::engine::worker_threads(-1, cpus).max(2)] } else { args.threads.clone() };
+    let mut ok = true;
+    let mut hashes = Vec::new();
+    let mut lines = Vec::new();
+    for &count in &threads {
+        let report = replay_on(recording, &paths, std::sync::Arc::clone(&track), count, args.fault)?;
+        let verdict = match &report.mismatch {
+            None => "IDENTICAL".to_string(),
+            Some(m) => format!("DIFFERENT at {m}"),
+        };
+        let line = format!(
+            "{} threads {count}: {verdict}; {} steps, {} values, contact steps {}, most contacts {}, damage {:?}, pit ghost steps {:?}, hash {:016x}, {:.1} s",
+            recording.get("scenario").unwrap_or("?"),
+            report.steps,
+            report.values,
+            report.contact_steps,
+            report.max_contacts,
+            report.damage,
+            report.ghost_steps,
+            report.hash,
+            report.seconds
+        );
+        println!("{line}");
+        for also in &report.also {
+            println!("    also {also}");
+        }
+        ok &= report.mismatch.is_none();
+        hashes.push(report.hash);
+        lines.push(line);
+    }
+    let same = hashes.windows(2).all(|w| w[0] == w[1]);
+    println!("thread counts {threads:?}: {}", if same { "the port's rows are the same for all" } else { "THE PORT'S ROWS DIFFER BETWEEN THREAD COUNTS" });
+    let _ = std::fs::write(path.with_extension("result.txt"), lines.join("\n") + &format!("\nthreads {threads:?} same: {same}\n"));
+    if ok && same && args.fault.is_none() {
+        Ok(())
+    } else if args.fault.is_some() && !ok {
+        println!("(a fault was injected: the difference is the expected result)");
+        Ok(())
+    } else {
+        Err("the game and the port do not agree".to_string())
+    }
 }
 
 /// The ray micro-oracle.

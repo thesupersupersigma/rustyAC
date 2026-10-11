@@ -654,3 +654,67 @@ pub(crate) fn get_point_vel(body: &Body, p: &[f32]) -> [f32; 3] {
     let c = cross3(&body.avel, &q);
     [c[0] + body.lvel[0], c[1] + body.lvel[1], c[2] + body.lvel[2]]
 }
+
+// --- not ODE's: two worlds with the same bodies and joints ---------------------------------
+
+impl World {
+    /// Not ODE's. Copies everything a body *is* (state, mass, flags, accumulators) from the
+    /// body with the same handle in `from`, a world that was cloned from this one or that
+    /// this one was cloned from. What ties the body into its world (the body list, its joint
+    /// and geom lists, the island tag) stays. Returns true when the body's place or attitude
+    /// changed by a bit: its geoms then have to hear of it ([`World::body_geoms_moved`]).
+    pub fn copy_body_state_from(&mut self, from: &World, b: BodyId) -> bool {
+        let src = &from.bodies[b.0 as usize];
+        let dst = &mut self.bodies[b.0 as usize];
+        let bits = |a: &[f32], b: &[f32]| a.iter().zip(b).any(|(x, y)| x.to_bits() != y.to_bits());
+        let moved = bits(&src.pos, &dst.pos) || bits(&src.r, &dst.r) || bits(&src.q, &dst.q);
+        dst.flags = src.flags;
+        dst.mass = src.mass;
+        dst.inv_i = src.inv_i;
+        dst.inv_mass = src.inv_mass;
+        dst.pos = src.pos;
+        dst.r = src.r;
+        dst.q = src.q;
+        dst.lvel = src.lvel;
+        dst.avel = src.avel;
+        dst.facc = src.facc;
+        dst.tacc = src.tacc;
+        dst.finite_rot_axis = src.finite_rot_axis;
+        dst.adis = src.adis;
+        dst.adis_timeleft = src.adis_timeleft;
+        dst.adis_stepsleft = src.adis_stepsleft;
+        if !src.average_lvel_buffer.is_empty() || !dst.average_lvel_buffer.is_empty() {
+            dst.average_lvel_buffer.clone_from(&src.average_lvel_buffer);
+        }
+        if !src.average_avel_buffer.is_empty() || !dst.average_avel_buffer.is_empty() {
+            dst.average_avel_buffer.clone_from(&src.average_avel_buffer);
+        }
+        dst.average_counter = src.average_counter;
+        dst.average_ready = src.average_ready;
+        dst.dampingp = src.dampingp;
+        dst.max_angular_speed = src.max_angular_speed;
+        moved
+    }
+
+    /// Not ODE's. What `dBodySetPosition` / `dBodySetRotation` do after writing: every geom
+    /// of the body is told that it moved.
+    pub fn body_geoms_moved(&mut self, b: BodyId) {
+        let first_geom = self.bodies[b.0 as usize].first_geom;
+        self.collision.body_moved(first_geom);
+    }
+
+    /// Not ODE's. Copies what a joint *is* (its kind with anchors, lengths, ERP and CFM, its
+    /// flags) from the joint with the same handle in `from`; its place in the world's lists
+    /// and its bodies stay.
+    pub fn copy_joint_state_from(&mut self, from: &World, j: JointId) {
+        let src = &from.joints[j.0 as usize];
+        let dst = &mut self.joints[j.0 as usize];
+        dst.flags = src.flags;
+        dst.kind = src.kind;
+    }
+
+    /// Not ODE's. The number of body and joint slots (handles are slot numbers).
+    pub fn slot_counts(&self) -> (u32, u32) {
+        (self.bodies.len() as u32, self.joints.len() as u32)
+    }
+}

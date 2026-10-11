@@ -34,7 +34,7 @@ pub struct BrakeBase {
 }
 
 /// The brake slot: AC's `BrakeSystem` as the rest of the car sees it.
-pub trait BrakeModel {
+pub trait BrakeModel: Send {
     /// `BrakeSystem::step` @ 0x14028e640: writes the brake and handbrake torques into the four
     /// tyres. First component of `Car::stepComponents`.
     fn step(&mut self, car: &mut RollingChassis, dt: f32);

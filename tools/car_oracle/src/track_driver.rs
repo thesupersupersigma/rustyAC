@@ -673,3 +673,63 @@ impl Follower {
         }
     }
 }
+
+/// Task 24, the driver of the several-car scenarios: along the AI line, `lateral` metres to
+/// its left, as fast as `pace` (a share of what the driver thinks the car can do) and `limit`
+/// (m/s) allow. `t` is the time since the start (the launch is careful for five seconds).
+pub fn follow_line(track: &Track, car: &CarView, lateral: f32, pace: f32, limit: f32, grip: &Grip, t: f32, c: &mut Controls) {
+    let Some(spline) = &track.ai_spline else { return };
+    let length = spline.length();
+    let position = [car.position[0], car.position[1], car.position[2]];
+    let npos = if car.npos >= 0.0 { car.npos } else { spline.spline.world_to_spline(&position, -1) };
+    let index = spline.spline.closest_point_index(&position) as usize;
+    let look = (5.0 + 0.22 * car.speed).clamp(6.0, 26.0);
+    let ahead = spline.spline.wrap_position(npos + look / length);
+    let p = spline.spline.spline_to_world(ahead);
+    let f = spline.payload_at_position(ahead).forward_vector;
+    let (lx, lz) = {
+        let l = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+        (f[2] / l, -f[0] / l)
+    };
+    let aim = [p[0] + lx * lateral, p[1], p[2] + lz * lateral];
+    let d = [aim[0] - position[0], aim[1] - position[1], aim[2] - position[2]];
+    let to_left = d[0] * car.left[0] + d[1] * car.left[1] + d[2] * car.left[2];
+    let to_front = d[0] * car.forward[0] + d[1] * car.forward[1] + d[2] * car.forward[2];
+    let alpha = to_left.atan2(to_front.max(0.5));
+    let distance = (to_left * to_left + to_front * to_front).sqrt().max(1.0);
+    let wheel_angle = (2.0 * 3.05 * alpha.sin() / distance).atan();
+    c.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
+    let target = allowed_speed(spline, index, pace, grip).min(limit);
+    let error = target - car.speed;
+    if error >= 0.0 {
+        c.gas = (0.25 + error * 0.4).clamp(0.0, 1.0);
+    } else {
+        c.brake = (-error * 0.25).clamp(0.0, 1.0);
+    }
+    if t < 5.0 {
+        c.gas = c.gas.min(0.3 + 0.14 * t);
+    }
+}
+
+/// Task 24: along the pit lane's own line (flat out: the limiter holds the car at 80 km/h on
+/// a pit surface). False once the line has ended.
+pub fn follow_pit_lane(track: &Track, car: &CarView, c: &mut Controls) -> bool {
+    let Some(pit) = &track.pit_lane_spline else { return false };
+    let length = pit.length();
+    let position = [car.position[0], car.position[1], car.position[2]];
+    let n = pit.spline.world_to_spline(&position, -1);
+    if n > 0.96 {
+        return false;
+    }
+    let ahead = (n + (6.0 + 0.3 * car.speed) / length).min(1.0);
+    let p = pit.spline.spline_to_world(ahead);
+    let d = [p[0] - position[0], p[1] - position[1], p[2] - position[2]];
+    let to_left = d[0] * car.left[0] + d[1] * car.left[1] + d[2] * car.left[2];
+    let to_front = d[0] * car.forward[0] + d[1] * car.forward[1] + d[2] * car.forward[2];
+    let alpha = to_left.atan2(to_front.max(0.5));
+    let distance = (to_left * to_left + to_front * to_front).sqrt().max(1.0);
+    let wheel_angle = (2.0 * 3.05 * alpha.sin() / distance).atan();
+    c.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
+    c.gas = 1.0;
+    true
+}

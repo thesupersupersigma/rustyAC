@@ -215,7 +215,7 @@ pub struct DrivetrainBase {
 }
 
 /// The drivetrain slot: AC's `Drivetrain` as the rest of the car sees it.
-pub trait DrivetrainModel {
+pub trait DrivetrainModel: Send {
     /// `Drivetrain::step` @ 0x14026b130: the engine runs inside it; leaves the speed and the
     /// spin matrix of the driven wheels in the tyres.
     fn step(&mut self, car: &mut RollingChassis, dt: f32);

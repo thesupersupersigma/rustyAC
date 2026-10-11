@@ -1195,7 +1195,7 @@ impl RunSetup {
     /// Builds the F2004-style chassis of a recording the way the oracle built the game's car:
     /// `Car::Car`, the spawn at the origin facing +z, then the session start.
     pub fn build(&self, data_path: &Path) -> Result<RollingChassis, String> {
-        let ground: Box<dyn RayTrackCollisionProvider> = match &self.track {
+        let ground: Box<dyn RayTrackCollisionProvider + Send> = match &self.track {
             Some(run) => Box::new(crate::track::TrackGround(std::sync::Arc::clone(&run.track))),
             None if self.pitlane => Box::new(PitLane(self.ground)),
             None => Box::new(self.ground),

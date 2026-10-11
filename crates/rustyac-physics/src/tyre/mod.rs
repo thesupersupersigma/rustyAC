@@ -84,7 +84,7 @@ pub struct TyreModelOutput {
 }
 
 /// The tyre force model slot (AC's `ITyreModel`).
-pub trait TyreModel {
+pub trait TyreModel: Send {
     /// `ITyreModel::solve` (vtable slot 1).
     fn solve(&self, input: &TyreModelInput) -> TyreModelOutput;
 

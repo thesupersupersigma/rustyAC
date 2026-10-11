@@ -6,6 +6,7 @@
 //! Addresses are Ghidra addresses of acs.exe 1.16.4; member offsets are from acs.pdb
 //! (`re/types/*.txt`), ODE offsets from the disassembly of ODE's own accessors.
 
+pub mod multi;
 pub mod sus_micro;
 
 use std::cell::UnsafeCell;

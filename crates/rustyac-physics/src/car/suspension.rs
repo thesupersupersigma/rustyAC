@@ -173,7 +173,7 @@ pub enum SuspensionType {
 /// DWB, 0x1404ffc80 STRUT, 0x1404ffe90 AXLE, 0x1405001a0 ML). Method names are the PDB's in
 /// snake_case. The rigid bodies live in the [`PhysicsCore`], which every method that touches
 /// one is handed.
-pub trait SuspensionModel {
+pub trait SuspensionModel: Send {
     /// +0x08 `getHubWorldMatrix`: the hub's world matrix with the static camber applied.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f;
     /// +0x10 `getPointVelocity`: velocity of the hub body at a world point.

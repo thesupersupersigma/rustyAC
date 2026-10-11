@@ -79,7 +79,7 @@ pub struct EngineBase {
 }
 
 /// The engine slot: AC's `Engine` as the drivetrain and the rest of the car see it.
-pub trait EngineModel {
+pub trait EngineModel: Send {
     /// `Engine::step` @ 0x1402880e0. `car` supplies what the engine reads through its `Car`
     /// and `PhysicsEngine` pointers (air temperature, damage rate, clock, the KERS button,
     /// the inputs of the turbo controllers).

@@ -705,7 +705,7 @@ fn build_car(
         return VanillaCar::from_chassis(run.build(data_path)?, driver);
     }
     // `Car::Car`, the spawn (the game's own, with its drop onto the wheels), the session start
-    let ground: Box<dyn RayTrackCollisionProvider> = match track {
+    let ground: Box<dyn RayTrackCollisionProvider + Send> = match track {
         Some(track) => Box::new(TrackGround(Arc::clone(track))),
         None => Box::new(Ground::Flat),
     };

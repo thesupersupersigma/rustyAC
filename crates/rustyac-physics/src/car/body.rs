@@ -153,6 +153,7 @@ fn a3(v: &Vec3f) -> [f32; 3] {
 /// its numbered sub-spaces (one per car), the two groups of contact joints, and what the
 /// game does with every contact. The static space (the track's meshes) belongs to the track
 /// and is handed in when a step looks for contacts.
+#[derive(Clone)]
 pub struct PhysicsCore {
     pub world: World,
     bodies: Vec<BodyId>,

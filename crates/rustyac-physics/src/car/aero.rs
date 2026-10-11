@@ -715,7 +715,7 @@ pub fn get_point_front_share(car: &RollingChassis, p: &Vec3f) -> f32 {
 
 /// The aero slot: everything between "the air and the car's motion" and "forces on the car
 /// body".
-pub trait AeroModel {
+pub trait AeroModel: Send {
     /// `Car::stepComponents` positions 6 and 7: `DRS::step` @ 0x1402b4e60, then
     /// `AeroMap::step` @ 0x1402b7150 (each wing's two force calls on the car body).
     fn step(&mut self, car: &mut RollingChassis, dt: f32);

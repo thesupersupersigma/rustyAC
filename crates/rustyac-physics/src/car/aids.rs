@@ -694,7 +694,7 @@ impl AidsBase {
 }
 
 /// The aids slot.
-pub trait AidsModel {
+pub trait AidsModel: Send {
     /// `Car::stepComponents` position 2: `EDL::step` @ 0x1402bb460, right after the brakes.
     fn step_edl(&mut self, car: &mut RollingChassis, dt: f32);
     /// Positions 16 to 18: `ABS::step` @ 0x14028f610, `TractionControl::step` @ 0x140290200,
