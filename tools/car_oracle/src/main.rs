@@ -67,6 +67,7 @@ fn usage() -> String {
      car_oracle collide --track <track folder or name> [--count <n>] [--mesh-count <n>] [--seed <n>] [--kind <n>]\n       \
      car_oracle collide-worlds [--steps <n>] [--seed <n>] [--only <world,world>]\n       \
      car_oracle multi --scenario <mc_...> --track <track> [--cars <car,car,...>] [--steps <n>] [--out <dir>] [--game-threads <n>] [--threads <n,n>]\n       \
+     car_oracle net <tape.nettape> --scenario net_watch|net_block|net_drive|net_pit --track <track> [--steps <n>] [--fault <step>:<kind>] [--csv-out <golden>]\n       \
      car_oracle multi-check <recording.mcrec> [--threads <n,n,...>] [--fault <step>:<car>]\n       \
      car_oracle multi-list\n       \
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--car <folder under cardata/>] [--verbose]"
@@ -273,6 +274,7 @@ fn main() {
         "collide-worlds" => collide_worlds(&args),
         "sus-micro" => sus_micro(&args),
         "multi" => multi(&args),
+        "net" => net(&args),
         "multi-check" => multi_check(&args),
         "race-ini" => race_ini(&args),
         "multi-list" => {
@@ -498,6 +500,196 @@ fn multi(args: &Args) -> Result<(), String> {
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
     let recording = world.recording.clone();
     multi_compare(args, &recording, &path)
+}
+
+/// Task 25: `car_oracle net <tape> --scenario net_... --track <track> [--steps n]
+/// [--csv-out <golden file> --count <steps>]`: the game's own `ACClient::onPhysicsStep` and
+/// `NetCarStateProvider::step` against the port, both fed the tape's incoming messages.
+fn net(args: &Args) -> Result<(), String> {
+    use rustyac_net::handshake::HandshakeReply;
+    use rustyac_net::replay::{comparable, remote_columns, step_hash, NetGolden, NetReplay};
+    use rustyac_net::transport::{Lane, Tape, TapeEntry};
+    use rustyac_physics::engine::record::{ReplayPaths, INPUT_COLUMNS};
+
+    let tape_path = args.file.as_ref().ok_or("net needs a tape: car_oracle net <file.nettape> --scenario net_watch --track <track>")?;
+    let tape_path = std::path::absolute(tape_path).map_err(|e| e.to_string())?;
+    let tape = Tape::from_bytes(&std::fs::read(&tape_path).map_err(|e| format!("{}: {e}", tape_path.display()))?)?;
+    let scenarios = game::multi::scenarios();
+    let scenario = scenarios.iter().find(|s| s.name == args.scenario).ok_or_else(|| format!("no scenario {:?}: net_watch, net_block, net_drive, net_pit", args.scenario))?;
+    let repo = repo_root();
+    let out = std::path::absolute(if args.out == repo.join("oracle/car") { repo.join("oracle/net") } else { args.out.clone() }).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let track_name = args.track.as_ref().ok_or("net needs --track <folder or name> (the tape's track)")?;
+    let folder = track_folder(args, track_name);
+    // the tape's handshake: the slot, the send interval, the session's kind; and its car list
+    let accepted = match tape.of(Lane::ReliableIn).next().map(|entry| HandshakeReply::decode(&entry.data)) {
+        Some(HandshakeReply::Accepted(accepted)) => accepted,
+        _ => return Err("the tape does not start with an accepted handshake".to_string()),
+    };
+    let names: Vec<String> = if args.cars.is_empty() { scenario.default_cars.iter().map(|s| s.to_string()).collect() } else { args.cars.clone() };
+    let mut models: Vec<String> = names.clone();
+    for entry in tape.of(Lane::ReliableIn).filter(|entry| entry.data.first() == Some(&0x40)) {
+        for car in rustyac_net::handshake::decode_car_list(&entry.data, entry.data[1])? {
+            models.push(car.model);
+        }
+    }
+    models.sort();
+    models.dedup();
+    for name in &models {
+        game::prepare_root(&repo, &args.root, name)?;
+    }
+    track::prepare_root(&args.root, &folder, &args.layout)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    acs::set_extra_overrides(game::net::socket_overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let game_root = args.acs.parent().map(Path::to_path_buf);
+    let cardata = repo.join("cardata");
+    let colliders = |name: &str| rustyac_physics::car::colliders::load(&cardata.join(name), game_root.as_deref(), name);
+    let world = game::multi::MultiWorld::build(&acs, scenario, &args.cars, &folder, &args.layout, &colliders, args.seed as u32)?;
+
+    // the port: the same local car, the tape's session
+    let paths = ReplayPaths { cardata: cardata.clone(), game_root: game_root.clone() };
+    let recording = world.recording.clone();
+    let track = rustyac_physics::engine::record::load_track(&recording, &paths)?;
+    // `--fault <step>:<kind>`: the port alone gets a damaged tape, to show that the compare can
+    // fail. Kind 0: one bit of the first car state arriving from that step on; 1: the first
+    // ping from that step on is lost; 2: the first car state from that step on is lost.
+    let mut port_tape = tape.clone();
+    if let Some((step, kind)) = args.fault {
+        let wanted: &[u8] = if kind == 1 { &[0xf9] } else { &[0x46, 0x48] };
+        let at = port_tape
+            .entries
+            .iter()
+            .position(|entry| entry.lane == Lane::DatagramIn && entry.tick >= step as u64 && entry.data.first().is_some_and(|id| wanted.contains(id)) && (kind != 0 || entry.data.len() > 12))
+            .ok_or(format!("--fault {step}:{kind}: the tape has no such message from step {step} on"))?;
+        println!("  fault {kind}: the port's incoming message {:#04x} of step {} is {}", port_tape.entries[at].data[0], port_tape.entries[at].tick, if kind == 0 { "changed by one bit" } else { "lost" });
+        if kind == 0 {
+            port_tape.entries[at].data[12] ^= 1;
+        } else {
+            port_tape.entries.remove(at);
+        }
+    }
+    let mut port = NetReplay::build(&recording, &paths, track, &port_tape)?;
+    let slots = port.remote_slots();
+    let columns = remote_columns(&slots);
+    let mut remote = Vec::new();
+    for (entry, car) in port.cars.iter().filter(|car| slots.contains(&car.session_id)).zip(&port.session.cars) {
+        remote.push((entry.clone(), car.clone(), colliders(&entry.model)?.mesh));
+    }
+    let mut game = game::net::NetGame::build(&acs, world, &tape, &remote, accepted.session_id, accepted.send_interval_ms(), accepted.current_session.kind)?;
+    println!(
+        "{}: the tape of slot {} at {} ({} messages), {} remote cars, send interval {} ms; local car {}",
+        scenario.name,
+        accepted.session_id,
+        accepted.track,
+        tape.entries.len(),
+        slots.len(),
+        accepted.send_interval_ms(),
+        names[0]
+    );
+
+    let mut counts = std::collections::BTreeMap::<(u8, u8), u64>::new();
+    let same_messages = |game_sent: &[(Lane, Vec<u8>)], port_sent: &[(Lane, Vec<u8>)], step: usize, counts: &mut std::collections::BTreeMap<(u8, u8), u64>| -> Result<(), String> {
+        let list = |sent: &[(Lane, Vec<u8>)]| -> Vec<(Lane, Vec<u8>)> { sent.iter().filter_map(|(lane, data)| comparable(*lane, data).map(|data| (*lane, data))).collect() };
+        let (g, p) = (list(game_sent), list(port_sent));
+        if g != p {
+            let show = |sent: &[(Lane, Vec<u8>)]| sent.iter().map(|(lane, data)| format!("{lane:?} {data:02x?}")).collect::<Vec<_>>().join("\n      ");
+            return Err(format!("step {step}: the outgoing messages differ\n  game: {}\n  port: {}", show(&g), show(&p)));
+        }
+        for (lane, data) in &g {
+            *counts.entry((*lane as u8, data.first().copied().unwrap_or(0))).or_default() += 1;
+        }
+        Ok(())
+    };
+    // before the first step: the push-to-pass question (the join's own messages are the port's)
+    let before: Vec<(Lane, Vec<u8>)> = port.take_sent().into_iter().filter(|(_, data)| !matches!(data.first(), Some(0x3d | 0x3f))).collect();
+    same_messages(&game.ask_p2p(), &before, 0, &mut counts)?;
+
+    let steps = args.steps.unwrap_or((scenario.seconds / scenario::DT) as usize);
+    let width = INPUT_COLUMNS.len();
+    let input_at = recording.input_offset(0);
+    let local_columns = recording.columns();
+    let mut values = 0u64;
+    let mut hashes = Vec::new();
+    // what happened, for the table: per remote car steps solid / ghost / gone / hit
+    let words = rustyac_net::replay::remote_words();
+    let mut seen = vec![[0u64; 5]; slots.len()];
+    let mut contact_steps = 0u64;
+    let mut failure = None;
+    let start = std::time::Instant::now();
+    'steps: for step in 0..steps {
+        let game_sent = game.step();
+        let game_local = game.world.recording.rows.last().expect("a step leaves a row").clone();
+        let inputs: Vec<&[u32]> = vec![&game_local[input_at..input_at + width]];
+        let port_sent = port.step(&inputs);
+        let port_local = port.world.row(&inputs);
+        let (game_remote, port_remote) = (game.remote_row(), port.remote_row());
+        let same = |a: u32, b: u32| a == b || (f32::from_bits(a).is_nan() && f32::from_bits(b).is_nan());
+        for (i, (a, b)) in game_local.iter().zip(&port_local).enumerate() {
+            if !same(*a, *b) {
+                failure = Some(format!("step {step}: the local car's {} differs: game {a:08x} ({:e}), port {b:08x} ({:e})", local_columns[i], f32::from_bits(*a), f32::from_bits(*b)));
+                break 'steps;
+            }
+        }
+        for (i, (a, b)) in game_remote.iter().zip(&port_remote).enumerate() {
+            if !same(*a, *b) {
+                let also: Vec<String> = game_remote.iter().zip(&port_remote).enumerate().filter(|(_, (a, b))| !same(**a, **b)).skip(1).take(8).map(|(i, _)| columns[i].clone()).collect();
+                failure = Some(format!("step {step}: {} differs: game {a:08x} ({:e}), port {b:08x} ({:e}); also {also:?}", columns[i], f32::from_bits(*a), f32::from_bits(*b)));
+                break 'steps;
+            }
+        }
+        if let Err(message) = same_messages(&game_sent, &port_sent, step, &mut counts) {
+            failure = Some(message);
+            break;
+        }
+        values += (game_local.len() + game_remote.len()) as u64;
+        hashes.push(step_hash(&game_local, &game_remote, &game_sent));
+        contact_steps += (game_local[0] > 0) as u64;
+        for (car, row) in game_remote.chunks(words).enumerate() {
+            let (category, k, gone) = (row[13], f32::from_bits(row[39]), row[40]);
+            seen[car][0] += (category == 8) as u64;
+            seen[car][1] += (category == 0 && gone == 0) as u64;
+            seen[car][2] += (gone != 0) as u64;
+            seen[car][3] += (k > 0.0) as u64;
+            seen[car][4] += (f32::from_bits(row[44]) > 0.0) as u64;
+        }
+    }
+    let seconds = start.elapsed().as_secs_f64();
+    let done = hashes.len();
+    println!("  {done} steps in {seconds:.1} s; {values} values compared ({} of the local car + {} of the remote cars a step)", local_columns.len(), columns.len());
+    for (car, slot) in slots.iter().enumerate() {
+        let s = seen[car];
+        if s[0] + s[1] > 0 {
+            println!("  slot {slot:2} ({}): solid {} steps, ghost {} steps, gone {} steps, moving {} steps, pushed by the local car (velocity blend) {} steps", remote[car].0.model, s[0], s[1], s[2], s[4], s[3]);
+        }
+    }
+    println!("  steps with contact joints in the world: {contact_steps}; reliable messages given to the game's own handlers: {}", game.game_reliable);
+    for ((lane, id), count) in &counts {
+        println!("  outgoing {} id {id:#04x}: {count} messages identical", if *lane == Lane::ReliableOut as u8 { "TCP" } else { "UDP" });
+    }
+    let verdict = match &failure {
+        None => format!("{}: IDENTICAL over {done} steps ({values} values, {} outgoing messages)", scenario.name, counts.values().sum::<u64>()),
+        Some(message) => format!("{}: DIFFERENT\n  {message}", scenario.name),
+    };
+    println!("{verdict}");
+    std::fs::write(out.join(format!("{}.result.txt", scenario.name)), format!("{verdict}\n")).map_err(|e| e.to_string())?;
+    if let (Some(path), None) = (&args.csv_out, &failure) {
+        // a golden excerpt: the first --count steps
+        let count = if args.count_given { args.count.min(done) } else { done.min(1500) };
+        let entries: Vec<TapeEntry> = tape.entries.iter().filter(|entry| entry.tick < count as u64 || matches!(entry.data.first(), Some(0x3e | 0x40))).cloned().collect();
+        let golden = NetGolden { local: game.world.recording.golden(count).to_bytes(), tape: Tape { entries }, hashes: hashes[..count].to_vec() };
+        std::fs::write(path, golden.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("wrote the golden excerpt {} ({count} steps, {} bytes)", path.display(), golden.to_bytes().len());
+    }
+    match failure {
+        None => Ok(()),
+        Some(message) => Err(message),
+    }
 }
 
 fn multi_check(args: &Args) -> Result<(), String> {

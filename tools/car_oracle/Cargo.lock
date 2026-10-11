@@ -6,6 +6,7 @@ version = 4
 name = "car_oracle"
 version = "0.1.0"
 dependencies = [
+ "rustyac-net",
  "rustyac-physics",
 ]
 
@@ -16,6 +17,14 @@ version = "0.24.1"
 [[package]]
 name = "rustyac-math"
 version = "0.24.1"
+
+[[package]]
+name = "rustyac-net"
+version = "0.24.1"
+dependencies = [
+ "rustyac-math",
+ "rustyac-physics",
+]
 
 [[package]]
 name = "rustyac-ode"

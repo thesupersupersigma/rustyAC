@@ -79,6 +79,51 @@ const STRAIGHT: f32 = 0.20;
 
 pub fn scenarios() -> Vec<MultiScenario> {
     vec![
+        // Task 25: the local car of an online session played from a tape (`car_oracle net`)
+        MultiScenario {
+            name: "net_watch",
+            about: "online: the local car stands beside the racing line a little after the start line; the tape's cars pass",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let (position, tail) = line_pose(track, 0.03, 0.0, 4.5)?;
+                Ok(vec![MultiCar { name: name_of(cars, 0, &[F2004]), position, tail, drive: Drive::Parked }])
+            },
+        },
+        MultiScenario {
+            name: "net_block",
+            about: "online: the local car stands on the racing line a little after the start line; the tape's cars run into it",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let (position, tail) = line_pose(track, 0.03, 0.0, 0.0)?;
+                Ok(vec![MultiCar { name: name_of(cars, 0, &[F2004]), position, tail, drive: Drive::Parked }])
+            },
+        },
+        MultiScenario {
+            name: "net_drive",
+            about: "online: the local car drives the racing line from a little after the start line, among the tape's cars",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let (position, tail) = line_pose(track, 0.03, 0.0, 0.0)?;
+                Ok(vec![MultiCar { name: name_of(cars, 0, &[F2004]), position, tail, drive: Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 10.0, limit: 200.0, brake_at: 50.0 } }])
+            },
+        },
+        MultiScenario {
+            name: "net_pit",
+            about: "online: the local car stands in the pit lane: every remote car is a ghost",
+            seconds: 20.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let (position, tail) = track.spawn_pose("PIT", 5).ok_or("the track has no pit box 5")?;
+                Ok(vec![MultiCar { name: name_of(cars, 0, &[F2004]), position: [position.x, position.y, position.z], tail: [tail.x, tail.y, tail.z], drive: Drive::Parked }])
+            },
+        },
         MultiScenario {
             name: "mc_side_by_side",
             about: "two cars side by side down a straight, flat out, then on the brakes",
@@ -617,6 +662,11 @@ impl<'a> MultiWorld<'a> {
             joint = rd(joint, 0x10);
         }
         out
+    }
+
+    /// The game's `Car` object of car `index`.
+    pub fn car_ptr(&self, index: usize) -> *mut u8 {
+        self.cars[index].car
     }
 
     /// One step of the game's engine; the row goes into the recording.

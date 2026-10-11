@@ -609,6 +609,7 @@ version = "0.24.1"
 name = "rustyac-net"
 version = "0.24.1"
 dependencies = [
+ "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
 ]

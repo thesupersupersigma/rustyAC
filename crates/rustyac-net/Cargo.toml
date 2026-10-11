@@ -10,3 +10,6 @@ license = "GPL-3.0-or-later"
 [dependencies]
 rustyac-math = { path = "../rustyac-math" }
 rustyac-physics = { path = "../rustyac-physics" }
+
+[dev-dependencies]
+rustyac-content = { path = "../rustyac-content" }

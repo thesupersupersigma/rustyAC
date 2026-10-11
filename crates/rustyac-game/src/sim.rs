@@ -1534,7 +1534,8 @@ impl GameSim {
                         engine.step_with(DT, time, &mut slots, &mut OnlineHooks { session });
                         // the other players' wakes, for the next step's slipstream
                         engine.extra_wakes.clear();
-                        engine.extra_wakes.extend(session.net.cars.iter().filter(|car| !car.is_disconnected).map(|car| car.slip_stream));
+                        // (PhysicsEngine::slipStreams lists every remote car's, there or not)
+                        engine.extra_wakes.extend(session.net.cars.iter().map(|car| car.slip_stream));
                     }
                     None => engine.step(DT, time, &mut slots),
                 }

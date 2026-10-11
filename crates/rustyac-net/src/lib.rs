@@ -22,5 +22,7 @@ pub mod messages;
 pub mod native;
 pub mod net_car;
 pub mod packet;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod replay;
 pub mod session;
 pub mod transport;

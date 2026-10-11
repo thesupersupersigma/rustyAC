@@ -444,6 +444,12 @@ impl ReplayWorld {
 
     /// One step with these controls (a car's [`INPUT_COLUMNS`] words each).
     pub fn step(&mut self, inputs: &[&[u32]]) {
+        self.step_with(inputs, &mut super::NoHooks);
+    }
+
+    /// [`ReplayWorld::step`] with the game's other step-completed handlers (an online
+    /// session: its client and the other players' cars).
+    pub fn step_with(&mut self, inputs: &[&[u32]], hooks: &mut dyn super::StepHooks) {
         for (device, words) in self.devices.iter_mut().zip(inputs) {
             let c = &mut device.controls;
             c.gas = f32::from_bits(words[0]);
@@ -460,7 +466,7 @@ impl ReplayWorld {
         let time = self.clock_start_ms + (self.steps as f64 + 1.0) * 3.0;
         let mut slots: Vec<CarSlot<'_>> =
             self.cars.iter_mut().zip(self.devices.iter_mut()).map(|(car, device)| CarSlot { car, device: DeviceRef::Anywhere(device) }).collect();
-        self.engine.step(0.003, time, &mut slots);
+        self.engine.step_with(0.003, time, &mut slots, hooks);
         self.steps += 1;
     }
 
