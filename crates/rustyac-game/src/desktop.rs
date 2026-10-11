@@ -384,6 +384,53 @@ fn drive(options: &Options) -> Result<(SimSetup, Option<Vec<StepInput>>), String
     }
 }
 
+/// Task 25: joins the server the command line or race.ini names, if any. Returns the
+/// session and the options of the drive on it: the server's car, skin and track, the pit
+/// box of the player's slot.
+fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::online::OnlineSession)>, String> {
+    let Some(target) = rustyac_game::join::target(options)? else {
+        return Ok(None);
+    };
+    if options.join.is_none() {
+        println!("race.ini has [REMOTE] ACTIVE=1 and the command line names no car and no track: joining that server (--offline: drive alone)");
+    }
+    let joined = rustyac_game::join::join(options, &target)?;
+    for note in &joined.notes {
+        println!("{note}");
+    }
+    let accepted = &joined.session.client.accepted;
+    let mut online = options.clone();
+    online.car = accepted.model.clone();
+    online.skin = Some(accepted.skin.clone());
+    online.track = Some(accepted.track.clone());
+    online.layout = Some(if accepted.track_config.is_empty() { "-".to_string() } else { accepted.track_config.clone() });
+    online.spawn = "pit".to_string();
+    online.spawn_given = true;
+    online.no_race_cars = true;
+    online.cars = None;
+    online.opponents.clear();
+    if online.sun.is_none() {
+        online.sun = Some(accepted.sun_angle);
+    }
+    Ok(Some((online, joined.session)))
+}
+
+/// The set-up of a drive on a server: [`live_setup`] of the server's car and track, in the
+/// pit box of the player's slot.
+fn online_setup(options: &Options, session: &rustyac_game::online::OnlineSession) -> Result<SimSetup, String> {
+    let mut setup = live_setup(options)?;
+    let accepted = &session.client.accepted;
+    setup.opponents.clear();
+    setup.player_skin = Some(accepted.skin.clone());
+    // CarAvatar::setSpawnPositionIndex("PIT", sessionID) / ("START", handshakeCarPosition)
+    setup.player_place = Some(rustyac_game::input_file::GridPlace { pit: accepted.session_id as usize, start: accepted.current_session.handshake_position.map_or(-1, |p| p as i32), ballast_kg: 0.0, restrictor: 0.0 });
+    // the server's weather comes with its first weather message; its grip with the session
+    setup.session.dynamic_track = None;
+    setup.session.ballast_kg = 0.0;
+    setup.session.restrictor = 0.0;
+    Ok(setup)
+}
+
 /// What the physics thread hands back when it ends.
 type Outcome = Result<(CarView, Timing), String>;
 
@@ -395,12 +442,17 @@ fn start_physics(
     shared: &Arc<Shared>,
     sinks: Vec<Box<dyn StepSink>>,
     config: LoopConfig,
+    online: Option<rustyac_game::online::OnlineSession>,
 ) -> Result<std::thread::JoinHandle<Outcome>, String> {
     let shared = Arc::clone(shared);
     std::thread::Builder::new()
         .name("physics".to_string())
         .spawn(move || {
-            let outcome = GameSim::new(setup, make_source()).and_then(|sim| physics_thread::run(sim, &shared, sinks, config));
+            let built = match online {
+                Some(session) => GameSim::new_online(setup, make_source(), session),
+                None => GameSim::new(setup, make_source()),
+            };
+            let outcome = built.and_then(|sim| physics_thread::run(sim, &shared, sinks, config));
             shared.finished.store(true, Ordering::Relaxed);
             outcome.map(|(sim, timing)| (CarView::capture(&sim, 0.0), timing))
         })
@@ -454,7 +506,16 @@ fn report(view: &CarView, timing: &Timing) {
 /// nobody at the controls, until `--duration` is over or the drive ends. With
 /// `--bench-render` frames are drawn off screen meanwhile, as fast as the card goes.
 fn run_headless(options: &Options) -> Result<(), String> {
-    let (setup, replay) = drive(options)?;
+    let joined = join_server(options)?;
+    let (options, online) = match joined {
+        Some((online_options, session)) => (online_options, Some(session)),
+        None => (options.clone(), None),
+    };
+    let options = &options;
+    let (setup, replay) = match &online {
+        Some(session) => (online_setup(options, session)?, None),
+        None => drive(options)?,
+    };
     let feed = audio_feed(options, true);
     let sinks = sinks(options, &setup, &feed)?;
     let shared = Shared::new();
@@ -464,6 +525,8 @@ fn run_headless(options: &Options) -> Result<(), String> {
         max_steps: None,
         pause_unfocused: false,
         auto_reset: true,
+        net_tape: options.net_tape.clone(),
+        chat: options.chat.clone(),
     };
     if options.duration.is_none() && options.replay.is_none() {
         println!("no --duration: running until Ctrl+C");
@@ -479,7 +542,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             Box::new(SpawnSequence::new(NobodySource, true))
         }
     };
-    let thread = start_physics(setup, source, &shared, sinks, config)?;
+    let thread = start_physics(setup, source, &shared, sinks, config, online)?;
     let mut frames = 0u64;
     let mut frame_max = Duration::ZERO;
     let mut headless_audio: Option<GameAudio> = None;
@@ -530,7 +593,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let view = world[focus];
             let dt = (now - last).as_secs_f32();
             let frame = camera.update(&view, shape, view.acc_g, dt);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, dt);
             renderer.finish();
             bench_stats = renderer.frame_stats();
@@ -639,7 +702,16 @@ fn list_devices(bindings: &Bindings, wheel: &Option<WheelDevice>) -> String {
 
 /// The normal way to run: a window, the live devices (or a recorded drive to watch).
 fn run_window(options: &Options) -> Result<(), String> {
-    let (mut setup, replay) = drive(options)?;
+    let joined = join_server(options)?;
+    let (options, online) = match joined {
+        Some((online_options, session)) => (online_options, Some(session)),
+        None => (options.clone(), None),
+    };
+    let options = &options;
+    let (mut setup, replay) = match &online {
+        Some(session) => (online_setup(options, session)?, None),
+        None => drive(options)?,
+    };
     let mut notes = Vec::new();
     let bindings = Bindings::load(options, &mut notes);
     for note in &notes {
@@ -682,7 +754,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
-    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true };
+    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone() };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
         let autodrive = options.autodrive;
@@ -698,7 +770,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             Box::new(SpawnSequence::new(LiveSource::new(bindings, shared, rumble, wheel), true))
         }
     };
-    let thread = start_physics(setup, source, &shared, sinks, config)?;
+    let thread = start_physics(setup, source, &shared, sinks, config, online)?;
 
     // the car is built on the physics thread: wait for it (or for its refusal)
     let car_info = loop {
@@ -968,7 +1040,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             replay_scale,
             replay_transport: transport.is_some(),
             replay_state,
-            notes: Vec::new(),
+            notes: shared.online_hud.lock().unwrap().clone(),
             hidden: false,
             focus_fade,
         };

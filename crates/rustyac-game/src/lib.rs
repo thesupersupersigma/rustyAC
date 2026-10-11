@@ -31,6 +31,9 @@ pub mod identity;
 pub mod input;
 pub mod input_file;
 #[cfg(windows)]
+pub mod join;
+pub mod online;
+#[cfg(windows)]
 pub mod physics_thread;
 #[cfg(windows)]
 pub mod render;

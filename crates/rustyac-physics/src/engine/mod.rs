@@ -142,6 +142,10 @@ pub struct PhysicsEngine {
     pub step_stats: rustyac_ode::StepStats,
     /// How often the collision callback ran in the last step (= new contact joints).
     pub contact_callbacks: u32,
+    /// Wakes that are no car's of this engine (`PhysicsEngine::slipStreams` holds every
+    /// `SlipStream` that was made, a remote car's too): every car reads them after the
+    /// other cars' wakes. Whoever owns such wakes sets them between steps.
+    pub extra_wakes: Vec<SlipStream>,
     /// The collision callbacks of the last step, as the cars were told (for the oracles).
     pub last_events: Vec<crate::car::CollisionEvent>,
     /// Seconds spent so far in the cars' steps (`physicsCPUTimes.carStep`), in the collision
@@ -253,6 +257,7 @@ impl PhysicsEngine {
             step_stats: rustyac_ode::StepStats::default(),
             contact_callbacks: 0,
             last_events: Vec::new(),
+            extra_wakes: Vec::new(),
             seconds: [0.0; 4],
             parts: Vec::new(),
             building: false,
@@ -450,6 +455,7 @@ impl PhysicsEngine {
                     car.other_wakes.push(wakes[other]);
                 }
             }
+            car.other_wakes.extend_from_slice(&self.extra_wakes);
         }
 
         // Car::stepPreCacheValues and Car::step

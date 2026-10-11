@@ -279,12 +279,7 @@ impl NetCarStateProvider {
     /// ghost until the first state arrives. `core` is the engine's one world; `pit_box`
     /// the world matrix of the car's pit box (`TrackAvatar::getSpawnPosition("PIT", slot)`).
     pub fn new(core: &mut PhysicsCore, session_id: u8, guid: u32, unix_name: &str, geometry: NetCarGeometry, mesh: Option<&ColliderMesh>, pit_box: Mat44f) -> NetCarStateProvider {
-        let body = core.create_rigid_body();
-        core.set_mass_box(body, 1000.0, f32::from_bits(0x3fb3_3333), 1.0, 4.0);
-        if let Some(mesh) = mesh {
-            let mask = if unix_name == "spectator" { 0 } else { 4 };
-            core.add_mesh_collider(body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, category::REMOTE_CAR, mask, guid + 1);
-        }
+        let body = NetCarStateProvider::create_body(core, guid, unix_name, mesh);
         // the pit box, lifted by the larger of the two axles' "wheel centre above its
         // lowest point" (what puts the body on its wheels there)
         let front = -(geometry.wheel_base_pos_ls[0].m[3][1] - geometry.tyre_radius[0]);
@@ -325,9 +320,21 @@ impl NetCarStateProvider {
             current_aoa: 0.0,
             body,
         };
-        // (the constructor's last act: a new remote car is disconnected)
-        core.set_mesh_collide_category(body, 0, 0);
         provider
+    }
+
+    /// The body of a remote car in `core`: 1000 kg with a box's inertia (1.4 x 1.0 x 4.0 m),
+    /// the collider mesh in sub-space `guid + 1` (category 8; mask 4, or 0 for a car named
+    /// `spectator`), and a ghost to begin with (a new remote car is disconnected).
+    pub fn create_body(core: &mut PhysicsCore, guid: u32, unix_name: &str, mesh: Option<&ColliderMesh>) -> RigidBody {
+        let body = core.create_rigid_body();
+        core.set_mass_box(body, 1000.0, f32::from_bits(0x3fb3_3333), 1.0, 4.0);
+        if let Some(mesh) = mesh {
+            let mask = if unix_name == "spectator" { 0 } else { 4 };
+            core.add_mesh_collider(body, mesh.vertices.clone(), mesh.indices.clone(), &mesh.matrix, category::REMOTE_CAR, mask, guid + 1);
+        }
+        core.set_mesh_collide_category(body, 0, 0);
+        body
     }
 
     /// `NetCarStateProvider::onRemoteStateReceived` @ 0x14011b1e0. `physics_time` is the

@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use rustyac_content::vfs::PathExt;
 use rustyac_physics::car::replay::Ground;
+use rustyac_net::net_car::NetCarStateProvider;
 use rustyac_physics::track::{load_track, LapDb, Track, TrackGround};
+
+use crate::online::{OnlineHooks, OnlineSession, ServerRules};
 use rustyac_physics::tyre::RayTrackCollisionProvider;
 use rustyac_physics::car::{CarControls, CarControlsInput, ControlsProvider, VanillaCar, VibrationDef};
 use rustyac_physics::vecmath::Vec3f;
@@ -643,6 +646,10 @@ pub struct GameSim {
     /// The engine all cars are stepped by; `None` with one car, which steps itself exactly
     /// as it did before there were several.
     pub engine: Option<PhysicsEngine>,
+    /// Task 25: the online session (the client of a server and the other players' cars).
+    pub online: Option<Box<OnlineSession>>,
+    /// The server's rules of that session.
+    pub rules: Option<ServerRules>,
 }
 
 /// Another car of the session with its driver.
@@ -784,7 +791,7 @@ fn spawn_first(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
 }
 
 /// The settings of a session: of its one car, or of the engine and every car in it.
-fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool) -> rustyac_physics::car::ChassisEnvironment {
+fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool, rules: Option<&ServerRules>) -> rustyac_physics::car::ChassisEnvironment {
     let mut env = setup.env;
     let session = &setup.session;
     if session.wind_speed != 0.0 {
@@ -807,6 +814,23 @@ fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool) -> rustyac_p
         // the automatic gearbox's 300 ms count from here)
         env.session_start_time_ms = physics_time;
     }
+    if let Some(rules) = rules {
+        // an online session: the server's rules (ACClient::handshakeTCP writes them into the
+        // engine), the session's kind, and the grip the server gives the track
+        env.allowed_tyres_out = rules.allowed_tyres_out;
+        env.allow_tyre_blankets = rules.tyre_blankets;
+        if (0..=2).contains(&rules.jump_start_mode) {
+            env.jump_start_penalty_mode = rules.jump_start_mode;
+        }
+        env.mechanical_damage_rate = rules.damage_rate;
+        env.fuel_consumption_rate = rules.fuel_rate;
+        env.tyre_consumption_rate = rules.tyre_wear_rate;
+        env.session_type = rules.session_type;
+        env.penalty_mode = rules.penalty_mode();
+        env.dynamic_grip_level = rules.grip;
+        // RaceManager::initOnline: the gearbox is locked from 12 s before a start
+        env.lock_gearbox_at_start_time_ms = 12000.0;
+    }
     env
 }
 
@@ -820,6 +844,7 @@ fn build_car(
     spawn: &SpawnPose,
     mut engine: Option<&mut PhysicsEngine>,
     slot: usize,
+    rules: Option<&ServerRules>,
 ) -> Result<VanillaCar<Driver>, String> {
     if let Some(run) = setup.run_setup() {
         // exactly the car `tools/chassis_compare` holds against a recording of the game
@@ -852,7 +877,7 @@ fn build_car(
     };
     // the session's settings (the wind, the rules of a session on a track, the DRS zones, the
     // session's start): `session_env`
-    let env = session_env(setup, physics_time, track.is_some());
+    let env = session_env(setup, physics_time, track.is_some(), rules);
     let session = &setup.session;
     // RaceManager::initOffline: a file with a hot-lap session arms the first lap
     let arm_first_lap = session.arm_first_lap.unwrap_or(env.session_type == 4);
@@ -890,6 +915,8 @@ fn build_car(
     // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
     match engine.as_deref_mut() {
         None => car.car.dynamic_track = session.dynamic_track,
+        // (online the server gives the grip: Track::setGripLevelExternal)
+        Some(_) if rules.is_some() => {}
         // (the track's grip is the engine's: the laps of all cars count)
         Some(engine) if slot == 0 => engine.dynamic_track = session.dynamic_track,
         Some(_) => {}
@@ -902,6 +929,12 @@ fn build_car(
     }
     if let (Some((abs, traction_control, stability)), Some(aids)) = (session.assists, &mut car.car.aids) {
         aids.base_mut().apply_driving_assists(abs, traction_control, stability);
+    }
+    if let (Some(rules), Some(aids)) = (rules, &mut car.car.aids) {
+        // DrivingAssistManager with a client: the server's ABS and traction control, and
+        // no stability control where the server does not allow it
+        let stability = if rules.stability { session.assists.map_or(0.0, |assists| assists.2) } else { 0.0 };
+        aids.base_mut().apply_driving_assists(rules.abs, rules.tc, stability);
     }
     // CarAvatar::initPhysics: the car's collider mesh, when the game's folder has one for it
     // (without it the car has only its floor boxes: walls do not stop it)
@@ -928,8 +961,10 @@ fn build_car(
     }
     // `CarAvatar::setAutoClutchEnabled`: the aid switches the automatic clutch at the start,
     // and with it the one on shifts
-    car.car.autoclutch.use_auto_on_start = setup.auto_clutch;
-    if setup.auto_clutch {
+    // ("AUTO CLUTCH TURNED OFF BY THE SERVER")
+    let auto_clutch = setup.auto_clutch && rules.is_none_or(|rules| rules.auto_clutch);
+    car.car.autoclutch.use_auto_on_start = auto_clutch;
+    if auto_clutch {
         car.car.autoclutch.use_auto_on_change = true;
     }
     car.car.auto_shifter.is_active = setup.auto_shifter;
@@ -965,6 +1000,35 @@ fn build_car(
     Ok(car)
 }
 
+/// A remote car's collider mesh from the game's folder (`content/cars/<model>/collider.kn5`).
+fn remote_collider(data_path: &Path, root: Option<&Path>, model: &str) -> Option<rustyac_physics::car::ColliderMesh> {
+    match rustyac_physics::car::colliders::load(data_path, root, model) {
+        Ok(colliders) => colliders.mesh,
+        Err(message) => {
+            eprintln!("collider mesh of {model}: {message}");
+            None
+        }
+    }
+}
+
+/// `Sim::addNetCar` for every other slot of the server, in the order of its car list: a body
+/// with the car's collider mesh in the engine's world, a ghost until its first state arrives.
+/// `first_guid`: the number of the first remote car among the session's cars.
+fn add_remote_cars(session: &mut OnlineSession, engine: &mut PhysicsEngine, track: Option<&Arc<Track>>, first_guid: usize) -> Result<(), String> {
+    let root = ac_root();
+    let entries = std::mem::take(&mut session.remote_entries);
+    for (number, entry) in entries.into_iter().enumerate() {
+        let data_path = find_car_data(&entry.model).map_err(|e| format!("the server has a {} (slot {}): {e}", entry.model, entry.session_id))?;
+        let mesh = remote_collider(&data_path, root.as_deref(), &entry.model);
+        // TrackAvatar::getSpawnPosition("PIT", slot): the slot's pit box
+        let pit_box = track
+            .and_then(|track| track.spawn_positions.get("PIT").and_then(|slots| slots.get(entry.session_id as usize).or(slots.first())).map(|node| track.helper_nodes[*node].local))
+            .unwrap_or(rustyac_physics::vecmath::Mat44f::IDENTITY);
+        session.add_remote_car(&mut engine.core, entry, data_path, (first_guid + number) as u32, mesh.as_ref(), pit_box);
+    }
+    Ok(())
+}
+
 /// The driver of another car.
 fn opponent_driver(opponent: &Opponent, track: Option<&Arc<Track>>) -> Result<Driver, String> {
     let mut source: Box<dyn DriverSource> = match &opponent.drive {
@@ -992,9 +1056,11 @@ fn build_world(
     driver: Driver,
     track: Option<&Arc<Track>>,
     spawn: &SpawnPose,
+    rules: Option<&ServerRules>,
 ) -> Result<(VanillaCar<Driver>, Vec<OpponentCar>, Option<PhysicsEngine>), String> {
-    if setup.opponents.is_empty() {
-        return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0)?, Vec::new(), None));
+    // (an online session always has the engine: the other players' cars are bodies in it)
+    if setup.opponents.is_empty() && rules.is_none() {
+        return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0, None)?, Vec::new(), None));
     }
     if setup.oracle.is_some() {
         return Err("an oracle set-up has one car".to_string());
@@ -1004,11 +1070,11 @@ fn build_world(
     }
     let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     let threads = setup.physics_threads.unwrap_or_else(|| rustyac_physics::engine::worker_threads(physics_threading_key(), cpus));
-    let mut engine = PhysicsEngine::new(session_env(setup, physics_time, track.is_some()), threads);
+    let mut engine = PhysicsEngine::new(session_env(setup, physics_time, track.is_some(), rules), threads);
     if let Some(track) = track {
         engine.set_track(Arc::clone(track), setup.track_objects);
     }
-    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit))?;
+    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
     let mut opponents = Vec::new();
     for (index, opponent) in setup.opponents.iter().enumerate() {
         let slot = index + 1;
@@ -1044,7 +1110,7 @@ fn build_world(
             other.auto_blip = recorded.auto_blip;
         }
         let pit_box = opponent.place.map_or(slot, |place| place.pit);
-        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), pit_box)?;
+        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), pit_box, None)?;
         opponents.push(OpponentCar { car: built, setup: opponent.clone(), data_path: opponent_data, spawn: pose });
     }
     Ok((car, opponents, Some(engine)))
@@ -1068,6 +1134,17 @@ pub fn physics_threading_key() -> i32 {
 
 impl GameSim {
     pub fn new(setup: SimSetup, source: Box<dyn DriverSource>) -> Result<GameSim, String> {
+        GameSim::build(setup, source, None)
+    }
+
+    /// A session on a server: `setup` as the server's handshake has it (its car, its track,
+    /// the pit box of the player's slot), `online` the client after the car list.
+    pub fn new_online(setup: SimSetup, source: Box<dyn DriverSource>, online: OnlineSession) -> Result<GameSim, String> {
+        GameSim::build(setup, source, Some(online))
+    }
+
+    fn build(setup: SimSetup, source: Box<dyn DriverSource>, online: Option<OnlineSession>) -> Result<GameSim, String> {
+        let rules = online.as_ref().map(|session| ServerRules::of(&session.client.accepted));
         let data_path = find_car_data(&setup.car)?;
         let driver = Driver::new(source, setup.ff_gain);
         let (mut track, mut track_folder, mut spawn, mut track_summary) = (None, None, FLAT_SPAWN, String::new());
@@ -1106,10 +1183,19 @@ impl GameSim {
         if let Some(track) = &track {
             driver.source.set_track(track);
         }
-        let (car, opponents, engine) = build_world(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
+        let (car, opponents, mut engine) = build_world(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn, rules.as_ref())?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine })
+        let mut online = online.map(Box::new);
+        if let (Some(session), Some(engine)) = (&mut online, &mut engine) {
+            session.track = track.clone();
+            add_remote_cars(session, engine, track.as_ref(), 1 + opponents.len())?;
+            session.client.set_cars_in_session(1 + session.remote.len());
+            // the session has run for a while already: its start on this machine's clock
+            let started = setup.clock_start_ms - session.client.accepted.current_session.start as f64;
+            session.client.begin_update_mode(started)?;
+        }
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules })
     }
 
     /// The world the track's loose objects and every contact live in: the engine's with
@@ -1164,17 +1250,56 @@ impl GameSim {
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
         let info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
+            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len() + self.remote_count(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
         Self::with_wheels(info, &self.car.car)
     }
 
     /// The same of the session's other cars, in creation order.
     pub fn opponent_infos(&self) -> Vec<CarInfo> {
+        let cars = 1 + self.opponents.len() + self.remote_count();
         self.opponents
             .iter()
             .map(|other| {
-                let info = CarInfo { data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len(), ..CarInfo::default() };
+                let info = CarInfo { data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars, ..CarInfo::default() };
                 Self::with_wheels(info, &other.car.car)
+            })
+            .chain(self.remote_infos())
+            .collect()
+    }
+
+    /// How many cars of other players the session has (their slots, taken or not).
+    pub fn remote_count(&self) -> usize {
+        self.online.as_ref().map_or(0, |session| session.remote.len())
+    }
+
+    /// The unchanging facts of the other players' cars, in their order.
+    pub fn remote_infos(&self) -> Vec<CarInfo> {
+        let Some(session) = &self.online else {
+            return Vec::new();
+        };
+        let cars = 1 + self.opponents.len() + session.remote.len();
+        session
+            .remote
+            .iter()
+            .map(|remote| {
+                let geometry = &remote.provider.geometry;
+                let mut info = CarInfo {
+                    data_path: remote.data_path.clone(),
+                    name: remote.entry.model.clone(),
+                    skin: (!remote.entry.skin.is_empty()).then(|| remote.entry.skin.clone()),
+                    render_seed: self.setup.render_seed,
+                    track_folder: self.track_folder.clone(),
+                    track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(),
+                    cars,
+                    ..CarInfo::default()
+                };
+                for wheel in 0..4 {
+                    let p = geometry.wheel_base_pos_ls[wheel].m[3];
+                    info.wheel_positions[wheel] = [p[0], p[1], p[2]];
+                    info.tyre_width[wheel] = 0.2;
+                    info.tyre_radius[wheel] = geometry.tyre_radius[wheel];
+                }
+                info
             })
             .collect()
     }
@@ -1214,7 +1339,15 @@ impl GameSim {
         }
         let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
         // (with other cars: all of them anew, in a new engine; their drivers start again)
-        let (mut car, opponents, engine) = build_world(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
+        let (mut car, opponents, mut engine) = build_world(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn, self.rules.as_ref())?;
+        if let (Some(session), Some(engine)) = (&mut self.online, &mut engine) {
+            // the other players' cars get bodies in the new world; what is known of them stays
+            let root = ac_root();
+            for remote in &mut session.remote {
+                let mesh = remote_collider(&remote.data_path, root.as_deref(), &remote.entry.model);
+                remote.provider.body = NetCarStateProvider::create_body(&mut engine.core, remote.provider.guid, &remote.entry.model, mesh.as_ref());
+            }
+        }
         self.opponents = opponents;
         self.engine = engine;
         std::mem::swap(&mut car.device, &mut self.car.device);
@@ -1395,7 +1528,15 @@ impl GameSim {
                 for opponent in &mut self.opponents {
                     slots.push(CarSlot { car: &mut opponent.car.car, device: DeviceRef::Anywhere(&mut opponent.car.device) });
                 }
-                engine.step(DT, time, &mut slots);
+                match &mut self.online {
+                    Some(session) => {
+                        engine.step_with(DT, time, &mut slots, &mut OnlineHooks { session });
+                        // the other players' wakes, for the next step's slipstream
+                        engine.extra_wakes.clear();
+                        engine.extra_wakes.extend(session.remote.iter().filter(|remote| !remote.provider.is_disconnected).map(|remote| remote.provider.slip_stream));
+                    }
+                    None => engine.step(DT, time, &mut slots),
+                }
                 // (nobody lists the other cars' laps yet: their timers' events are dropped)
                 for opponent in &mut self.opponents {
                     let _ = opponent.car.car.transponder.take_events();

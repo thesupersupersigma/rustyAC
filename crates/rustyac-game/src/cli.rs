@@ -197,6 +197,27 @@ pub struct Options {
     pub pressure_law: Option<(f32, f32)>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
+    /// Task 25. `--join <host:port>`: the server to join (its TCP port).
+    pub join: Option<String>,
+    /// `--offline`: no server, whatever race.ini's `[REMOTE]` says.
+    pub offline: bool,
+    /// `--name`, `--team`, `--password`: who joins.
+    pub driver_name: Option<String>,
+    pub team: Option<String>,
+    pub password: Option<String>,
+    /// `--guid`: the player id to send (else Steam's, else rustyAC's own).
+    pub guid: Option<String>,
+    /// `--net-identity <file>`: rustyAC's own player id from this file (made there if it
+    /// has none), Steam not asked.
+    pub net_identity: Option<PathBuf>,
+    /// `--no-steam`: Steam is not asked for the player id.
+    pub no_steam: bool,
+    /// `--net-tape <file>`: every message of the session, written there at its end.
+    pub net_tape: Option<PathBuf>,
+    /// `--chat <text>@<seconds>` (repeatable): lines sent to the chat, for checks.
+    pub chat: Vec<(String, f64)>,
+    /// `--car` was given.
+    pub car_given: bool,
     /// Task 24. `--cars <n>`: n cars in all; the others are the driver's car again, driven
     /// by the line follower on a track and parked on the flat road.
     pub cars: Option<usize>,
@@ -302,6 +323,17 @@ impl Default for Options {
             no_textures: false,
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
+            join: None,
+            offline: false,
+            driver_name: None,
+            team: None,
+            password: None,
+            guid: None,
+            net_identity: None,
+            no_steam: false,
+            net_tape: None,
+            chat: Vec::new(),
+            car_given: false,
             cars: None,
             opponents: Vec::new(),
             physics_threads: None,
@@ -402,6 +434,18 @@ usage: rustyac [options]
                         what Custom Shaders Patch's pressures do (the F2004 at 14 C: 10.97,0.084)
   --autodrive           on a track: nobody at the controls, a simple driver follows the
                         track's AI line (automatic gearbox on); for checks and for watching
+  --join <host:port>    multiplayer: join a Kunos acServer (its TCP port), as Assetto Corsa
+                        does. The server names the track and gives you a car: --car asks for
+                        a model, --name is your driver name (default: your Windows user
+                        name), --password the server's, --team your team. Without --join, a
+                        start without --car and --track follows race.ini's [REMOTE] section
+                        when it has ACTIVE=1 (what Content Manager writes when you join a server)
+  --offline             never join a server, whatever race.ini says
+  --no-steam            do not ask Steam for your player id (rustyAC's own id is used: a
+                        random number made once, kept in rustyac_net.ini next to the program)
+  --net-identity <file> take rustyAC's own player id from this file (a second player on one PC)
+  --net-tape <file>     write every message of the online session to this file at its end
+  --chat <text>@<s>     send a chat line after s seconds (repeat it for more)
   --cars <n>            n cars in all: the others are copies of the driver's car on the next
                         grid (or pit) slots, driven by the line follower (parked on the flat
                         road). Their physics is the game's; AC's renderer and the sound do
@@ -557,7 +601,24 @@ impl Options {
             }
             let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
             match arg.as_str() {
-                "--car" => o.car = value("--car")?,
+                "--car" => {
+                    o.car = value("--car")?;
+                    o.car_given = true;
+                }
+                "--join" => o.join = Some(value("--join")?),
+                "--offline" => o.offline = true,
+                "--name" => o.driver_name = Some(value("--name")?),
+                "--team" => o.team = Some(value("--team")?),
+                "--password" => o.password = Some(value("--password")?),
+                "--guid" => o.guid = Some(value("--guid")?),
+                "--net-identity" => o.net_identity = Some(PathBuf::from(value("--net-identity")?)),
+                "--no-steam" => o.no_steam = true,
+                "--net-tape" => o.net_tape = Some(PathBuf::from(value("--net-tape")?)),
+                "--chat" => {
+                    let text = value("--chat")?;
+                    let (line, at) = text.rsplit_once('@').ok_or("--chat <text>@<seconds>")?;
+                    o.chat.push((line.to_string(), at.parse().map_err(|_| "--chat <text>@<seconds>".to_string())?));
+                }
                 "--width" => o.width = value("--width")?.parse().map_err(|e| format!("--width: {e}"))?,
                 "--height" => o.height = value("--height")?.parse().map_err(|e| format!("--height: {e}"))?,
                 "--windowed" => o.windowed = true,
@@ -752,7 +813,7 @@ impl Options {
         if o.layout.is_some() && o.track.is_none() {
             return Err("--layout needs --track <name>".to_string());
         }
-        if o.autodrive && o.track.is_none() {
+        if o.autodrive && o.track.is_none() && o.join.is_none() {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());
         }
         if o.cars.is_some_and(|n| n == 0 || n > 64) {

@@ -184,6 +184,9 @@ pub struct CarView {
     pub ers_max_j: f32,
     pub total_torque: f32,
     pub drive_ratio: f64,
+    /// Task 25: another player's car that is not there (its slot is empty, or nothing has
+    /// been heard of it for five seconds): not drawn, not heard (`carNode->isActive`).
+    pub disconnected: bool,
 }
 
 /// What the displays show of a KERS or an ERS and of the cockpit's engine-brake setting.
@@ -336,6 +339,7 @@ impl Default for CarView {
             ers_max_j: 0.0,
             total_torque: 0.0,
             drive_ratio: 0.0,
+            disconnected: false,
         }
     }
 }
@@ -471,7 +475,79 @@ impl CarView {
 
     /// Every car of the session after the last step, the player's first.
     pub fn capture_world(sim: &GameSim, drive_seconds: f64) -> Vec<CarView> {
-        std::iter::once(CarView::capture(sim, drive_seconds)).chain((0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, drive_seconds))).collect()
+        std::iter::once(CarView::capture(sim, drive_seconds))
+            .chain((0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, drive_seconds)))
+            .chain((0..sim.remote_count()).map(|index| CarView::capture_remote(sim, index)))
+            .collect()
+    }
+
+    /// Another player's car (`sim.online`'s remote car `index`) as its
+    /// `NetCarStateProvider` makes it up after the last step: the `CarPhysicsState` the
+    /// game's avatar and sound of a remote car read.
+    pub fn capture_remote(sim: &GameSim, index: usize) -> CarView {
+        let Some(remote) = sim.online.as_ref().and_then(|session| session.remote.get(index)) else {
+            return CarView { disconnected: true, ..CarView::default() };
+        };
+        let provider = &remote.provider;
+        let state = &provider.state;
+        let own = &sim.car.car;
+        let net_status = provider.net_states[0].status_bytes;
+        let mut view = CarView {
+            steps: sim.steps,
+            sim_seconds: sim.sim_seconds(),
+            body: state.world_matrix.m,
+            new_sessions: sim.new_sessions,
+            speed_ms: state.speed,
+            speed_kmh: state.speed * 3.6,
+            rpm: state.engine_rpm,
+            rpm_limit: if state.limiter_rpm > 0 { state.limiter_rpm as f32 } else { 10_000.0 },
+            gear: state.gear,
+            gas: state.gas,
+            brake: state.brake,
+            steer_deg: state.steer,
+            lights: state.status_bytes & 1 != 0,
+            drs: net_status & rustyac_net::net_car::status::DRS != 0,
+            acc_g: state.acc_g,
+            damage: remote.damage,
+            air: own.env.ambient_temperature,
+            air_density: own.air_density,
+            road: own.env.road_temperature,
+            grip: own.env.dynamic_grip_level,
+            disconnected: provider.is_disconnected,
+            ..CarView::default()
+        };
+        for wheel in 0..4 {
+            view.hubs[wheel] = state.suspension_matrix[wheel].m;
+            view.tyre_matrix[wheel] = state.tyre_matrix[wheel].m;
+            view.wheels[wheel] = state.tyre_matrix[wheel].m;
+            view.wheel_angular_speed[wheel] = state.wheel_angular_speed[wheel];
+            view.tyre_radius[wheel] = provider.geometry.tyre_radius[wheel];
+            // NetCarStateProvider::setCarAvatar: every tyre of a remote car is 0.2 m wide
+            view.tyre_width[wheel] = 0.2;
+            view.rim_radius[wheel] = provider.geometry.tyre_radius[wheel] * 0.5;
+            view.wheel_load[wheel] = state.load[wheel];
+            view.wheel_slip[wheel] = state.nd_slip[wheel];
+            let r = &mut view.render;
+            r.slip_ratio[wheel] = state.slip_ratio[wheel];
+            r.slip_angle[wheel] = state.slip_angle[wheel];
+            r.loaded_radius[wheel] = provider.geometry.tyre_radius[wheel];
+            r.contact_point[wheel] = state.tyre_contact_point[wheel];
+            r.contact_normal[wheel] = state.tyre_contact_normal[wheel];
+            r.inflation[wheel] = 1.0;
+            if let Some(surface) = &state.tyre_surface_def[wheel] {
+                r.surface_grip_mod[wheel] = surface.grip_mod;
+                r.surface_dirt_additive_k[wheel] = surface.dirt_additive_k;
+                r.surface_is_valid_track[wheel] = surface.is_valid_track;
+                r.surface_is_pitlane[wheel] = surface.is_pitlane;
+            }
+        }
+        view.render.velocity = state.velocity;
+        view.render.ground_plane = state.ground_plane;
+        view.render.drivetrain_speed = state.drivetrain_speed;
+        view.render.time_stamp = state.time_stamp;
+        view.lap.on_track = sim.track.is_some();
+        view.lap.position = state.normalized_spline_position;
+        view
     }
 
     /// Another car of the session (`sim.opponents[index]`) as it is after the last step: what

@@ -51,7 +51,7 @@ pub struct OtherFrames {
 
 /// The other cars after the last step.
 fn capture_others(sim: &GameSim) -> Vec<CarView> {
-    (0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, 0.0)).collect()
+    (0..sim.opponents.len()).map(|index| CarView::capture_opponent(sim, index, 0.0)).chain((0..sim.remote_count()).map(|index| CarView::capture_remote(sim, index))).collect()
 }
 
 /// How well the thread kept its schedule.
@@ -153,6 +153,8 @@ pub struct Shared {
     pub replay_speed: AtomicU32,
     /// A replay goes back to its first step (the transport's Stop).
     pub replay_restart: AtomicBool,
+    /// Task 25: an online session's lines for the HUD (the player list, the chat).
+    pub online_hud: Mutex<Vec<String>>,
 }
 
 impl Shared {
@@ -170,6 +172,7 @@ impl Shared {
             other_infos: Mutex::new(Vec::new()),
             replay_speed: AtomicU32::new(1.0f32.to_bits()),
             replay_restart: AtomicBool::new(false),
+            online_hud: Mutex::new(Vec::new()),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -233,6 +236,10 @@ pub struct LoopConfig {
     pub pause_unfocused: bool,
     /// Put a car that fell over or off the world back on the spawn point.
     pub auto_reset: bool,
+    /// Task 25, an online session: where its tape goes at the end (`--net-tape`), and the
+    /// chat lines to send at given times (`--chat`).
+    pub net_tape: Option<std::path::PathBuf>,
+    pub chat: Vec<(String, f64)>,
 }
 
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
@@ -278,6 +285,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     // a replay can go back to its start: the drive is built again from the same set-up
     let initial_setup = config.replay.as_ref().map(|_| sim.setup.clone());
     let mut last_speed = 1.0f32;
+    let mut chat_at = 0;
     let mut result = Ok(());
     {
         shared.publish_start(&sim);
@@ -317,11 +325,10 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         }
         let speed = if config.replay.is_some() { f32::from_bits(shared.replay_speed.load(Ordering::Relaxed)) } else { 1.0 };
         let replay_done = config.replay.as_ref().is_some_and(|steps| replay_at >= steps.len());
-        let paused = shared.paused.load(Ordering::Relaxed)
-            || speed <= 0.0
-            || speed.is_nan()
-            || (config.pause_unfocused && !shared.focused.load(Ordering::Relaxed))
-            || crate::window::MODAL_LOOP.load(Ordering::Relaxed)
+        // (an online session never pauses: the server and the others go on)
+        let online = sim.online.is_some();
+        let paused = (!online
+            && (shared.paused.load(Ordering::Relaxed) || speed <= 0.0 || speed.is_nan() || (config.pause_unfocused && !shared.focused.load(Ordering::Relaxed)) || crate::window::MODAL_LOOP.load(Ordering::Relaxed)))
             || replay_done;
         if paused {
             if !was_paused {
@@ -463,6 +470,23 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 }
             }
         }
+        let (steps, seconds) = (sim.steps, sim.sim_seconds());
+        if let Some(session) = &mut sim.online {
+            for line in session.console.drain(..) {
+                println!("{line}");
+            }
+            while chat_at < config.chat.len() && seconds >= config.chat[chat_at].1 {
+                session.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
+                chat_at += 1;
+            }
+            if steps.is_multiple_of(64) {
+                *shared.online_hud.lock().unwrap() = session.hud_lines();
+            }
+            if session.client.is_lost() {
+                result = Err("the connection to the server is gone".to_string());
+                break;
+            }
+        }
         shared.steps.store(sim.steps, Ordering::Relaxed);
         if sim.steps.is_multiple_of(32) {
             let mut live = timing;
@@ -471,6 +495,23 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         }
     }
     close(&mut timing, n, origin);
+    if let Some(session) = &mut sim.online {
+        // ACClient::shutdown: tell the server
+        session.client.shutdown();
+        println!(
+            "online: left the server after {} steps ({} datagrams in, {} out, {} messages in)",
+            sim.steps, session.client.datagrams_in, session.client.datagrams_out, session.client.messages_in
+        );
+        for line in session.summary() {
+            println!("{line}");
+        }
+        if let Some(path) = &config.net_tape {
+            match crate::join::save_tape(&session.client.transport, path) {
+                Ok(entries) => println!("online: the session's tape ({entries} messages) is in {}", path.display()),
+                Err(message) => eprintln!("WARNING: {message}"),
+            }
+        }
+    }
     if timing.step_min_us == f64::MAX {
         timing.step_min_us = 0.0;
     }

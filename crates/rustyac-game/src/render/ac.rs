@@ -1140,6 +1140,10 @@ impl AcRenderer {
             car.leaderboard_position = place + 1;
             car.real_time_position = place;
             car.cars_count = cars_count as i32;
+            // NetCarStateProvider::update: a remote car nobody drives is not there
+            if index > 0 {
+                self.scene.nodes[car.car_node].is_active = !view.disconnected;
+            }
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
             states.push(state);
         }

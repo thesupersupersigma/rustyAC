@@ -44,11 +44,6 @@ impl NativeTransport {
         Ok(NativeTransport { tcp, udp, udp_target: address, framer: Framer::new(), closed: false })
     }
 
-    /// The server's UDP port (told in the handshake's reply).
-    pub fn set_datagram_port(&mut self, port: u16) {
-        self.udp_target.set_port(port);
-    }
-
     pub fn server(&self) -> SocketAddr {
         self.udp_target
     }
@@ -120,6 +115,10 @@ impl Transport for NativeTransport {
                 Err(e) => return Err(format!("receiving a datagram: {e}")),
             }
         }
+    }
+
+    fn set_datagram_port(&mut self, port: u16) {
+        self.udp_target.set_port(port);
     }
 
     fn wait_reliable(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {

@@ -54,7 +54,62 @@ pub fn capture(sim: &GameSim, sticky: &mut [StickySurface; 4]) -> CarFrame {
 /// surfaces per car.
 pub fn capture_all(sim: &GameSim, sticky: &mut Vec<[StickySurface; 4]>) -> Vec<CarFrame> {
     sticky.resize_with(1 + sim.opponents.len(), Default::default);
-    sim.cars().zip(sticky.iter_mut()).map(|(car, sticky)| capture_car(sim, car, sticky)).collect()
+    let mut frames: Vec<CarFrame> = sim.cars().zip(sticky.iter_mut()).map(|(car, sticky)| capture_car(sim, car, sticky)).collect();
+    frames.extend((0..sim.remote_count()).map(|index| capture_remote(sim, index)));
+    frames
+}
+
+/// The sound's inputs of another player's car: the audio part of the `CarPhysicsState` its
+/// `NetCarStateProvider` makes up. A car that is not connected is silent (`node_active`).
+fn capture_remote(sim: &GameSim, index: usize) -> CarFrame {
+    let flat = |m: &Mat| -> [f32; 16] { std::array::from_fn(|i| m[i / 4][i % 4]) };
+    let remote = &sim.online.as_ref().expect("a remote car has a session").remote[index];
+    let provider = &remote.provider;
+    let state = &provider.state;
+    let world = &state.world_matrix.m;
+    let mut frame = CarFrame {
+        world_matrix: flat(world),
+        tyre_matrix: std::array::from_fn(|i| flat(&state.tyre_matrix[i].m)),
+        engine_rpm: if state.engine_rpm >= 0.0 { state.engine_rpm } else { 0.0 },
+        is_engine_limiter_on: false,
+        wheel_angular_speed: state.wheel_angular_speed,
+        gas: state.gas,
+        brake: state.brake,
+        gear: state.gear,
+        speed: state.speed,
+        velocity: state.velocity,
+        slip_ratio: state.slip_ratio,
+        nd_slip: state.nd_slip,
+        load: state.load,
+        tyre_dirty_level: [0.0; 4],
+        surface_wav: Default::default(),
+        surface_grip_mod: [0.0; 4],
+        drivetrain_speed: state.drivetrain_speed,
+        turbo_boost: 0.0,
+        is_gear_grinding: false,
+        body_work_volume: 0.0,
+        air_density: sim.car.car.air_density,
+        fuel: 0.0,
+        engine_life_left: 1000.0,
+        turbo_bov: 0.0,
+        actions_state: state.actions_state,
+        tyre_inflation: [1.0; 4],
+        sus_damage: [0.0; 4],
+        node_active: !provider.is_disconnected,
+        tc_in_action: false,
+        body_position: [world[3][0], world[3][1], world[3][2]],
+        pit_position: [provider.pit_position.m[3][0], provider.pit_position.m[3][1], provider.pit_position.m[3][2]],
+    };
+    for wheel in 0..4 {
+        if let Some(surface) = &state.tyre_surface_def[wheel] {
+            frame.surface_grip_mod[wheel] = surface.grip_mod;
+            frame.surface_wav[wheel] = match sim.track.as_ref().and_then(|track| track.surfaces.get(surface.user_pointer as usize)) {
+                Some(track_surface) => track_surface.wav.clone(),
+                None => String::new(),
+            };
+        }
+    }
+    frame
 }
 
 #[allow(clippy::needless_range_loop)] // one loop over the wheels, as the game's

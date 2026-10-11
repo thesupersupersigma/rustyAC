@@ -37,6 +37,47 @@ pub trait Transport {
         let _ = timeout_ms;
         self.poll_reliable()
     }
+    /// The port the server takes datagrams on (its handshake reply names it). A
+    /// transport that does not send datagrams itself (through a gateway) has no use for it.
+    fn set_datagram_port(&mut self, port: u16) {
+        let _ = port;
+    }
+    /// The caller's clock (the number of the physics step), for transports that keep a
+    /// tape or play one.
+    fn set_tick(&mut self, tick: u64) {
+        let _ = tick;
+    }
+    /// What crossed so far, when the transport keeps a tape.
+    fn tape(&self) -> Option<&Tape> {
+        None
+    }
+}
+
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn send_reliable(&mut self, message: &[u8]) -> Result<(), String> {
+        (**self).send_reliable(message)
+    }
+    fn send_datagram(&mut self, message: &[u8]) -> Result<(), String> {
+        (**self).send_datagram(message)
+    }
+    fn poll_reliable(&mut self) -> Result<Option<Vec<u8>>, String> {
+        (**self).poll_reliable()
+    }
+    fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
+        (**self).poll_datagram()
+    }
+    fn wait_reliable(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+        (**self).wait_reliable(timeout_ms)
+    }
+    fn set_datagram_port(&mut self, port: u16) {
+        (**self).set_datagram_port(port)
+    }
+    fn set_tick(&mut self, tick: u64) {
+        (**self).set_tick(tick)
+    }
+    fn tape(&self) -> Option<&Tape> {
+        (**self).tape()
+    }
 }
 
 /// The reliable channel's framing: `u16` length (of the message alone), then the message.
@@ -223,6 +264,19 @@ impl<T: Transport> Transport for Taped<T> {
         }
         Ok(message)
     }
+
+    fn set_datagram_port(&mut self, port: u16) {
+        self.inner.set_datagram_port(port);
+    }
+
+    fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+        self.inner.set_tick(tick);
+    }
+
+    fn tape(&self) -> Option<&Tape> {
+        Some(&self.tape)
+    }
 }
 
 /// A transport that plays a tape's incoming messages back: each is handed out once the
@@ -278,6 +332,19 @@ impl Transport for TapePlayer {
 
     fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
         Ok(TapePlayer::next(&mut self.datagrams, self.tick))
+    }
+
+    /// (the handshake and the car list wait: on a tape the answer is always there)
+    fn wait_reliable(&mut self, _timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.reliable.pop_front().map(|entry| entry.data))
+    }
+
+    fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+
+    fn tape(&self) -> Option<&Tape> {
+        Some(&self.sent)
     }
 }
 

@@ -82,6 +82,7 @@ struct Crt {
     atanf: F1,
     atan2f: F2,
     powf: F2,
+    log10f: F1,
     sin: D1,
     cos: D1,
     /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
@@ -114,6 +115,9 @@ unsafe extern "C" fn std_atan2f(y: f32, x: f32) -> f32 {
 }
 unsafe extern "C" fn std_powf(x: f32, y: f32) -> f32 {
     x.powf(y)
+}
+unsafe extern "C" fn std_log10f(x: f32) -> f32 {
+    x.log10()
 }
 unsafe extern "C" fn std_sin(x: f64) -> f64 {
     x.sin()
@@ -166,6 +170,9 @@ const PURE: Crt = Crt {
     atanf: pure_atanf,
     atan2f: pure_atan2f,
     powf: pure_powf,
+    // (the DLL's log10f is not rewritten: its one reader rounds the result to a whole
+    // number, the wheel speeds of a multiplayer car update)
+    log10f: std_log10f,
     sin: pure_sin,
     // (the DLL's double-precision cosine is not rewritten: only the version 1 flames' wobble
     // reads it, on a desktop that has the DLL)
@@ -184,6 +191,7 @@ const STD: Crt = Crt {
     atanf: std_atanf,
     atan2f: std_atan2f,
     powf: std_powf,
+    log10f: std_log10f,
     sin: std_sin,
     cos: std_cos,
     parse: None,
@@ -223,6 +231,7 @@ mod msvcr120 {
                 atanf: std::mem::transmute::<*mut c_void, super::F1>(get(c"atanf")?),
                 atan2f: std::mem::transmute::<*mut c_void, super::F2>(get(c"atan2f")?),
                 powf: std::mem::transmute::<*mut c_void, super::F2>(get(c"powf")?),
+                log10f: std::mem::transmute::<*mut c_void, super::F1>(get(c"log10f")?),
                 sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
                 cos: std::mem::transmute::<*mut c_void, super::D1>(get(c"cos")?),
                 parse: Some((
@@ -351,6 +360,14 @@ pub fn atan2f(y: f32, x: f32) -> f32 {
 pub fn powf(x: f32, y: f32) -> f32 {
     // SAFETY: as `sinf`.
     unsafe { (crt().powf)(x, y) }
+}
+
+/// `log10f` (MSVCR120). Without the DLL: Rust's own (the one use rounds the result to a
+/// whole number, so a last-bit difference shows only on an exact half).
+#[inline]
+pub fn log10f(x: f32) -> f32 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().log10f)(x) }
 }
 
 /// `sin` (MSVCR120), double precision.

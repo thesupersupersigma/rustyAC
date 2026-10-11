@@ -23,6 +23,7 @@ rustyac-physics = { path = "../rustyac-physics" }
 rustyac-math = { path = "../rustyac-math" }
 # kn5 models: the track and the car of the debug view
 rustyac-content = { path = "../rustyac-content" }
+rustyac-net = { path = "../rustyac-net" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 
