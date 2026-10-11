@@ -776,8 +776,8 @@ impl Options {
         if o.record.is_some() && o.replay.is_some() {
             return Err("--record and --replay cannot be used together".to_string());
         }
-        if o.record.is_some() && o.screenshot.is_some() && !o.autodrive {
-            return Err("--record with --screenshot needs --autodrive (otherwise nobody drives)".to_string());
+        if o.record.is_some() && o.screenshot.is_some() && !o.autodrive && !o.flat_out {
+            return Err("--record with --screenshot needs --autodrive or --flat-out (otherwise nobody drives)".to_string());
         }
         if o.dump_states.is_some() && !(o.replay.is_some() && o.headless) {
             return Err("--dump-states needs --replay and --headless".to_string());

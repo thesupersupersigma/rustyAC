@@ -1165,6 +1165,25 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     if let Some(stats) = renderer.frame_stats() {
         println!("  {stats}");
     }
+    // the cars of the picture: where each is and how hard it has been hit
+    if world.len() > 1 {
+        for (number, car) in world.iter().enumerate() {
+            println!(
+                "  car {number}{}: at {:.1} {:.1} {:.1} heading {:.0} deg, {:.1} km/h, {:.1} % round the lap, damage front / rear / left / right {:.0} / {:.0} / {:.0} / {:.0}",
+                if number == focus { " (the camera's)" } else { "" },
+                car.body[3][0],
+                car.body[3][1],
+                car.body[3][2],
+                car.body[2][0].atan2(car.body[2][2]).to_degrees(),
+                car.speed_kmh,
+                car.lap.position.clamp(0.0, 1.0) * 100.0,
+                car.damage[0],
+                car.damage[1],
+                car.damage[2],
+                car.damage[3]
+            );
+        }
+    }
     lap_report(&view);
     Ok(())
 }
