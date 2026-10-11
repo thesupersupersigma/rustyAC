@@ -177,7 +177,7 @@ Not counted here: RenderWindow / kglWindow / GraphicsManager (renderer), AudioEn
 
 - `Sim::Sim` order above is the order of first call sites in the binary (`re_query.py callees`). Branches (online vs offline, VR, dev apps enabled) were not followed, so which objects are conditional is not recorded.
 - `USE_TIMER_PROCESS = -1` being "timer for dual cores only" is taken from the comment in `assetto_corsa.ini` and the `ksGetNumberOfProcessors` call in the constructor; the exact threshold was not read.
-- The pool size rule for `[PHYSICS_THREADING] THREADS = -1` was not decoded (the constant 3 and a `< 4 cores` cut-off are visible).
+- The pool size rule for `[PHYSICS_THREADING] THREADS = -1` was not decoded (the constant 3 and a `< 4 cores` cut-off are visible). **Decoded in Task 24** (`docs/port/several_cars.md` 1.1): no pool below 4 logical processors or with 0; half the logical processors with -1; else the number itself.
 - "FMOD/Steam run their own threads" and "sockets are polled" are interpretations from the absence of thread creation in hand-written code; the network area should confirm where `UDPSocket::receive` is called from.
 - Who calls `Game::shutdown` was not resolved by the caller index (probably called through lambdas in ESC/pause menus).
 - `GameTime::useStabilizer`: no writer other than the constructor was found by name; it may be set through a raw offset.

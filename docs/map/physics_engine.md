@@ -369,6 +369,12 @@ source order, `_dFactorLDLT` too except for the sign of one zero), question 2 (i
 every replayed step) and question 3 (single-threaded, islands in the order they are found).
 The text of the three questions is kept below as it was written.
 
+Answered by Task 24 (`docs/port/several_cars.md`, section 1.1): question 4 (the swapped contact
+groups are copied as they are and run with several cars), question 6 (`bounce_vel` of a mesh contact
+is the upper 32 bits of the address of the first shape's geom, 6e-43 to 9e-43 read as a float: it
+acts as 0; measured in every several-car recording) and question 8 (`physicsGUID` 0 is the player's
+car, `[CAR_0]`; the other cars keep ERP 0.3 at all speeds).
+
 1. **Float mode of the ODE build.** Checked on one function only: `_dDot` @ `0x140390530` is
    plain scalar SSE (`mulss`/`addss`), not vectorised, and adds the products in exactly the order
    of ODE's `fastdot.c` (the compiler only unrolled the tail loop by four, keeping the order).

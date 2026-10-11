@@ -618,6 +618,15 @@ been run against the live game.
 
 ---
 
+### Several cars (Task 24)
+
+`car_oracle multi --scenario <mc_...> --track <track> [--cars a,b,...] [--steps n] [--game-threads n]
+[--threads 0,1,8]` builds 2 to 12 cars with the game's own `Car::Car` in one `PhysicsEngine` (each
+with its collider mesh and a scripted device of its own), records every step into `oracle/multi/
+<scenario>.mcrec`, and replays the port from step 0 once per thread count. `multi-list` lists the
+scenarios, `multi-check <file.mcrec>` replays a recording without `acs.exe`. Report, scenarios and
+results: `docs/port/several_cars.md`.
+
 ## 7. Open questions
 
 ### 7.1 Choices made while working unattended
