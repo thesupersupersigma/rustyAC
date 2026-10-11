@@ -34,7 +34,7 @@ no. i have SAT's and shit to stufy for, plus i need some tokens to study.
 
 ## Contributing
 
-idk make a pull request, claude is 100% gonna review it so idk if it works, it works.
+idk make a pull request, claude is 100% gonna review (i will too) it so idk if it works, it works.
 
 ## License
 
