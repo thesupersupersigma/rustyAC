@@ -24,7 +24,7 @@ fn main() {
         std::process::exit(2);
     };
     let dump = value("--dump-states").map(std::path::Path::new);
-    match rustyac_game::run_replay_headless(std::path::Path::new(replay), dump) {
+    match rustyac_game::run_replay_headless(std::path::Path::new(replay), dump, false, None) {
         Ok(steps) => println!("replayed {steps} steps (maths: {:?})", rustyac_math::backend()),
         Err(message) => {
             eprintln!("rustyac: {message}");

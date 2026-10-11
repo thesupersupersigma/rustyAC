@@ -461,11 +461,12 @@ impl CarView {
         // TrackObject::update: the picture's node takes the body's matrix
         let mut moved_objects = [(0u16, IDENTITY); MOVED_OBJECTS];
         let mut moved_object_count = 0u8;
-        for (number, object) in car.core.track_objects.iter().enumerate() {
-            let matrix = car.core.get_world_matrix(object.body).m;
+        let world = sim.world_core();
+        for (number, object) in world.track_objects.iter().enumerate() {
+            let matrix = world.get_world_matrix(object.body).m;
             let home = object.org_matrix.m[3];
             let away = (0..3).any(|k| matrix[3][k] != home[k]);
-            if (away || car.core.is_enabled(object.body)) && (moved_object_count as usize) < MOVED_OBJECTS {
+            if (away || world.is_enabled(object.body)) && (moved_object_count as usize) < MOVED_OBJECTS {
                 moved_objects[moved_object_count as usize] = (number as u16, matrix);
                 moved_object_count += 1;
             }

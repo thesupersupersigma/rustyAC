@@ -389,6 +389,9 @@ impl PhysicsEngine {
                 slot.car.core.world.copy_body_state_from(&self.core.world, body);
             }
             slot.car.step_stats = self.step_stats;
+            // (the collision pass's clock and parity, for whoever reads them off the car)
+            slot.car.core.current_frame = self.core.current_frame;
+            slot.car.core.no_collision_counter = self.core.no_collision_counter;
             let mut feed = DeviceFeed { device: slot.device.get(), dt };
             slot.car.step_completed(dt, &mut feed);
         }

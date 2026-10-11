@@ -241,6 +241,70 @@ fn hex_floats(key: &str, text: &str) -> Result<Vec<f32>, String> {
     rustyac_physics::car::replay::Conditions::parse_hex(text).map_err(|e| format!("{key}: {e}"))
 }
 
+/// How another car of the session is driven until AI drivers exist (Task 25).
+#[derive(Clone, Debug, PartialEq)]
+pub enum OpponentDrive {
+    /// Stands on its brakes.
+    Parked,
+    /// rustyAC's line follower (`--autodrive`'s driver).
+    Auto,
+    /// The inputs of a recorded drive (`.ryin`), step by step; on the brakes when it ends.
+    Recorded(std::path::PathBuf),
+}
+
+/// Another car of the session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opponent {
+    /// The car, as [`SimSetup::car`].
+    pub car: String,
+    /// The skin's folder name (empty: the car's first).
+    pub skin: String,
+    pub drive: OpponentDrive,
+}
+
+impl Opponent {
+    /// `<car>[:<skin>]:<parked | auto | file.ryin>` (the command line's and the header's form).
+    pub fn parse(text: &str) -> Result<Opponent, String> {
+        let wrong = || format!("{text:?}: an opponent is <car>[:<skin>]:<parked | auto | file.ryin>");
+        let (car, rest) = text.split_once(':').ok_or_else(wrong)?;
+        let drive_of = |spec: &str| -> Option<OpponentDrive> {
+            match spec {
+                "parked" => Some(OpponentDrive::Parked),
+                "auto" => Some(OpponentDrive::Auto),
+                file if file.to_ascii_lowercase().ends_with(".ryin") => Some(OpponentDrive::Recorded(std::path::PathBuf::from(file))),
+                _ => None,
+            }
+        };
+        // (a file's path may have a colon of its own: `C:\...`)
+        let (skin, drive) = match drive_of(rest) {
+            Some(drive) if !matches!(&drive, OpponentDrive::Recorded(file) if !file.is_file() && rest.split_once(':').is_some_and(|(_, tail)| drive_of(tail).is_some_and(|d| matches!(d, OpponentDrive::Recorded(f) if f.is_file())))) => {
+                (String::new(), drive)
+            }
+            _ => {
+                let (skin, spec) = rest.split_once(':').ok_or_else(wrong)?;
+                (skin.to_string(), drive_of(spec).ok_or_else(wrong)?)
+            }
+        };
+        if car.is_empty() {
+            return Err(wrong());
+        }
+        Ok(Opponent { car: car.to_string(), skin, drive })
+    }
+
+    pub fn to_text(&self) -> String {
+        let drive = match &self.drive {
+            OpponentDrive::Parked => "parked".to_string(),
+            OpponentDrive::Auto => "auto".to_string(),
+            OpponentDrive::Recorded(file) => file.display().to_string(),
+        };
+        if self.skin.is_empty() {
+            format!("{}:{drive}", self.car)
+        } else {
+            format!("{}:{}:{drive}", self.car, self.skin)
+        }
+    }
+}
+
 /// Everything that decides what car is built and how its session starts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimSetup {
@@ -289,6 +353,12 @@ pub struct SimSetup {
     pub spawn: String,
     /// The session's wind, track grip, ballast, aids and saved setup.
     pub session: Session,
+    /// The other cars of the session, in creation order (the driver's car is car 0). Empty:
+    /// one car, stepped exactly as before there were several.
+    pub opponents: Vec<Opponent>,
+    /// Worker threads of the physics engine with several cars (`--physics-threads`); `None`:
+    /// as the game decides it. Never in a file: the result does not depend on it.
+    pub physics_threads: Option<usize>,
 }
 
 impl Default for SimSetup {
@@ -314,6 +384,8 @@ impl Default for SimSetup {
             session_transfer: false,
             spawn: "hotlap".to_string(),
             session: Session::default(),
+            opponents: Vec::new(),
+            physics_threads: None,
         }
     }
 }
@@ -440,6 +512,9 @@ impl SimSetup {
         if let Some(armed) = s.arm_first_lap {
             put("arm_first_lap", (armed as u32).to_string());
         }
+        for opponent in &self.opponents {
+            put("opponent", opponent.to_text());
+        }
         if !self.track.is_empty() {
             put("track", self.track.clone());
             if !self.layout.is_empty() {
@@ -558,6 +633,7 @@ impl SimSetup {
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,
+                "opponent" => setup.opponents.push(Opponent::parse(value)?),
                 "track" => setup.track = value.to_string(),
                 "layout" => setup.layout = value.to_string(),
                 "track_objects" => setup.track_objects = flag(),

@@ -51,21 +51,46 @@ use std::path::Path;
 
 /// `--replay <file> --headless`: runs a recorded drive as fast as it goes, optionally writing
 /// the car's state after every step. Returns the number of steps.
-pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>) -> Result<u64, String> {
+///
+/// `state_hash`: also print a hash over every car's rigid-body state of every step and the
+/// time a step took (stderr). `physics_threads`: the worker threads of a drive with several
+/// cars (`None`: as the game decides).
+pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>) -> Result<u64, String> {
     let file = input_file::InputFile::read(replay)?;
-    let mut sim = sim::GameSim::new(file.setup.clone(), Box::new(sim::ReplaySource::default()))?;
+    let mut setup = file.setup.clone();
+    setup.physics_threads = physics_threads;
+    let mut sim = sim::GameSim::new(setup, Box::new(sim::ReplaySource::default()))?;
     let mut writer = match dump_states {
         Some(path) => Some(dump::DumpWriter::create(path)?),
         None => None,
     };
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    #[cfg(not(target_arch = "wasm32"))]
+    let started = std::time::Instant::now();
     for step in &file.steps {
         sim.step_recorded(step)?;
         if let Some(writer) = &mut writer {
             writer.push(&dump::StepDump::capture(&sim.car.car))?;
         }
+        if state_hash {
+            hash = sim.state_hash(hash);
+        }
     }
     if let Some(writer) = writer {
         writer.finish()?;
+    }
+    if state_hash {
+        #[cfg(not(target_arch = "wasm32"))]
+        let per_step = started.elapsed().as_secs_f64() * 1000.0 / sim.steps.max(1) as f64;
+        #[cfg(target_arch = "wasm32")]
+        let per_step = 0.0;
+        eprintln!(
+            "state hash {hash:016x}: {} cars, {} steps, {} worker threads, {per_step:.4} ms a step ({:.0} % of the 3 ms a step lasts)",
+            1 + sim.opponents.len(),
+            sim.steps,
+            sim.engine.as_ref().map_or(0, |engine| engine.threads()),
+            per_step / 3.0 * 100.0
+        );
     }
     Ok(sim.steps)
 }

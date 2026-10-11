@@ -194,7 +194,7 @@ fn a_replay_by_the_game_is_the_car_stepped_directly() {
     assert_eq!(InputFile::read(&input).unwrap().steps, steps, "the input file reads back as written");
 
     // through the library
-    let count = rustyac_game::run_replay_headless(&input, Some(&states)).unwrap();
+    let count = rustyac_game::run_replay_headless(&input, Some(&states), false, None).unwrap();
     assert_eq!(count as usize, steps.len());
     assert_same(&direct, &dump::read(&states).unwrap(), "run_replay_headless");
     std::fs::remove_file(&states).unwrap();
@@ -358,7 +358,7 @@ fn a_recorded_live_drive_replays_to_the_same_car() {
     let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let (input, states) = (folder.join("live_drive.ryin"), folder.join("live_drive.rystate"));
     InputFile { setup, steps: records }.write(&input).unwrap();
-    rustyac_game::run_replay_headless(&input, Some(&states)).unwrap();
+    rustyac_game::run_replay_headless(&input, Some(&states), false, None).unwrap();
     assert_same(&dumps, &dump::read(&states).unwrap(), "replay of the written file");
 }
 

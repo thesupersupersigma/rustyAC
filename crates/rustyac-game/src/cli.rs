@@ -190,6 +190,17 @@ pub struct Options {
     pub pressure_law: Option<(f32, f32)>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
+    /// Task 24. `--cars <n>`: n cars in all; the others are the driver's car again, driven
+    /// by the line follower on a track and parked on the flat road.
+    pub cars: Option<usize>,
+    /// `--opponent <car>[:<skin>]:<parked | auto | file.ryin>`, once per other car.
+    pub opponents: Vec<String>,
+    /// `--physics-threads <n>`: worker threads of the physics engine with several cars
+    /// (0: none); without it, as the game decides (`[PHYSICS_THREADING] THREADS`).
+    pub physics_threads: Option<usize>,
+    /// `--state-hash`: with `--replay --headless`, print a hash over every car's rigid-body
+    /// state of every step, and the time a step took.
+    pub state_hash: bool,
 }
 
 impl Default for Options {
@@ -281,6 +292,10 @@ impl Default for Options {
             no_textures: false,
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
+            cars: None,
+            opponents: Vec::new(),
+            physics_threads: None,
+            state_hash: false,
         }
     }
 }
@@ -377,6 +392,17 @@ usage: rustyac [options]
                         what Custom Shaders Patch's pressures do (the F2004 at 14 C: 10.97,0.084)
   --autodrive           on a track: nobody at the controls, a simple driver follows the
                         track's AI line (automatic gearbox on); for checks and for watching
+  --cars <n>            n cars in all: the others are copies of the driver's car on the next
+                        grid (or pit) slots, driven by the line follower (parked on the flat
+                        road). Their physics is the game's; they are NOT drawn or heard yet
+  --opponent <car>[:<skin>]:<parked|auto|file.ryin>
+                        another car (repeat it for more): parked on its brakes, driven by the
+                        line follower, or by the inputs of a recorded drive
+  --physics-threads <n> worker threads that step the cars (0: none). Default: as the game,
+                        [PHYSICS_THREADING] THREADS of its assetto_corsa.ini (half the logical
+                        processors; none below four). The result never depends on it
+  --state-hash          with --replay --headless: print a hash over every car's state of
+                        every step, and how long a step took
   --width <px>          size of the picture (default 1280 x 720; with --windowed the window's
   --height <px>         client area, otherwise the off-screen picture of --screenshot)
   --windowed            a window instead of borderless full screen
@@ -634,6 +660,10 @@ impl Options {
                 "--audio-oracle-camera" => o.audio.oracle_camera = Some(value("--audio-oracle-camera")?),
                 "--audio-script" => o.audio.script = Some(PathBuf::from(value("--audio-script")?)),
                 "--autodrive" => o.autodrive = true,
+                "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
+                "--opponent" => o.opponents.push(value("--opponent")?),
+                "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),
+                "--state-hash" => o.state_hash = true,
                 "--no-race-ini" => o.race_ini = Some(false),
                 "--air" => o.air = Some(value("--air")?.parse().map_err(|e| format!("--air: {e}"))?),
                 "--road" => o.road = Some(value("--road")?.parse().map_err(|e| format!("--road: {e}"))?),
@@ -700,6 +730,18 @@ impl Options {
         }
         if o.autodrive && o.track.is_none() {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());
+        }
+        if o.cars.is_some_and(|n| n == 0 || n > 64) {
+            return Err("--cars: 1 to 64 cars".to_string());
+        }
+        if o.cars.is_some() && !o.opponents.is_empty() {
+            return Err("--cars and --opponent cannot be used together: name every other car with --opponent".to_string());
+        }
+        if (o.cars.is_some_and(|n| n > 1) || !o.opponents.is_empty()) && o.replay.is_some() {
+            return Err("a recorded drive names its own other cars: --cars and --opponent cannot be used with --replay".to_string());
+        }
+        if o.state_hash && !(o.replay.is_some() && o.headless) {
+            return Err("--state-hash needs --replay and --headless".to_string());
         }
         if o.autodrive && o.replay.is_some() {
             return Err("--autodrive and --replay cannot be used together".to_string());

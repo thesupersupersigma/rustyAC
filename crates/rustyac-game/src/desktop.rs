@@ -86,6 +86,20 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     } else if options.screenshot.is_none() && !options.headless {
         setup.render_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
     }
+    // Task 24: the other cars
+    if let Some(count) = options.cars {
+        let drive = if setup.track.is_empty() { rustyac_game::input_file::OpponentDrive::Parked } else { rustyac_game::input_file::OpponentDrive::Auto };
+        for _ in 1..count {
+            setup.opponents.push(rustyac_game::input_file::Opponent { car: options.car.clone(), skin: String::new(), drive: drive.clone() });
+        }
+    }
+    for text in &options.opponents {
+        setup.opponents.push(rustyac_game::input_file::Opponent::parse(text)?);
+    }
+    setup.physics_threads = options.physics_threads;
+    if !setup.opponents.is_empty() {
+        println!("{} other cars (their physics only: they are not drawn or heard yet)", setup.opponents.len());
+    }
     // the device the bindings name decides one aid (a pad has no clutch pedal)
     let input_method = Bindings::load(options, &mut Vec::new()).input_method;
     for note in rustyac_game::conditions::apply(options, &mut setup, &input_method)? {
@@ -1111,7 +1125,7 @@ fn run(options: &Options) -> Result<(), String> {
             }
             // as fast as it goes
             let started = Instant::now();
-            let steps = rustyac_game::run_replay_headless(replay, options.dump_states.as_deref())?;
+            let steps = rustyac_game::run_replay_headless(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads)?;
             let seconds = started.elapsed().as_secs_f64();
             // the dump may be going to the standard output
             eprintln!(

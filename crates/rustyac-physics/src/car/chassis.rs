@@ -2736,6 +2736,23 @@ impl RollingChassis {
         }
     }
 
+    /// The handles of this car's own rigid bodies, in creation order: body, fuel tank, the
+    /// rigid axle if it has one, then each wheel's.
+    pub fn own_bodies(&self) -> Vec<rustyac_ode::BodyId> {
+        let mut out = vec![self.body.id, self.fuel_tank_body.id];
+        if let Some(axle) = self.rigid_axle {
+            out.push(axle.id);
+        }
+        for suspension in &self.suspensions {
+            for body in suspension.bodies() {
+                if !out.contains(&body.id) {
+                    out.push(body.id);
+                }
+            }
+        }
+        out
+    }
+
     /// `Car::setDamageLevel` @ 0x140275b20: all five zones.
     pub fn set_damage_level(&mut self, level: f32) {
         self.damage_zone_level = [level; 5];

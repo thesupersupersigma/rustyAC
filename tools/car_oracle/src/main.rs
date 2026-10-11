@@ -347,6 +347,13 @@ fn multi(args: &Args) -> Result<(), String> {
 fn multi_check(args: &Args) -> Result<(), String> {
     let path = args.file.as_ref().ok_or("multi-check <recording.mcrec>")?;
     let recording = rustyac_physics::engine::record::Recording::load(path)?;
+    if let (Some(steps), Some(out)) = (args.steps, args.csv_out.as_ref()) {
+        // `multi-check <recording> --steps <n> --csv-out <file.mcgold>`: the golden excerpt
+        let golden = recording.golden(steps);
+        std::fs::write(out, golden.to_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
+        println!("wrote {} ({} steps)", out.display(), golden.hashes.len());
+        return Ok(());
+    }
     multi_compare(args, &recording, path)
 }
 

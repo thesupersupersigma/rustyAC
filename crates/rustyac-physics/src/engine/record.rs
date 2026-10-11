@@ -620,3 +620,116 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
     report.hash = hash;
     Ok(report)
 }
+
+// --- golden excerpts ---------------------------------------------------------------------------
+
+pub const GOLDEN_MAGIC: &[u8; 8] = b"RYMCGLD1";
+
+/// A small stand-in for a recording, for `cargo test`: the header, what every device
+/// reported in every step, and one hash per step over the game's whole row.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Golden {
+    pub header: Vec<(String, String)>,
+    /// Per step: the cars' [`INPUT_COLUMNS`] words, car after car.
+    pub inputs: Vec<Vec<u32>>,
+    /// Per step: FNV-1a over the game's row.
+    pub hashes: Vec<u64>,
+}
+
+fn row_hash(row: &[u32]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for word in row {
+        for byte in word.to_le_bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+impl Recording {
+    /// The first `count` steps as a golden excerpt.
+    pub fn golden(&self, count: usize) -> Golden {
+        let offsets: Vec<usize> = (0..self.cars.len()).map(|n| self.input_offset(n)).collect();
+        let rows = &self.rows[..count.min(self.rows.len())];
+        let mut header = self.header.clone();
+        if let Some(entry) = header.iter_mut().find(|(k, _)| k == "steps") {
+            entry.1 = rows.len().to_string();
+        }
+        Golden {
+            header,
+            inputs: rows.iter().map(|row| offsets.iter().flat_map(|&at| row[at..at + INPUT_COLUMNS.len()].iter().copied()).collect()).collect(),
+            hashes: rows.iter().map(|row| row_hash(row)).collect(),
+        }
+    }
+}
+
+impl Golden {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let text: String = self.header.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        let words = self.inputs.first().map_or(0, Vec::len);
+        let mut out = Vec::new();
+        out.extend_from_slice(GOLDEN_MAGIC);
+        out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        out.extend_from_slice(text.as_bytes());
+        out.extend_from_slice(&(words as u32).to_le_bytes());
+        out.extend_from_slice(&(self.inputs.len() as u32).to_le_bytes());
+        for (inputs, hash) in self.inputs.iter().zip(&self.hashes) {
+            for word in inputs {
+                out.extend_from_slice(&word.to_le_bytes());
+            }
+            out.extend_from_slice(&hash.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Golden, String> {
+        let short = || "the golden file is cut short".to_string();
+        if bytes.len() < 12 || &bytes[..8] != GOLDEN_MAGIC {
+            return Err("not a several-car golden file".to_string());
+        }
+        let u32_at = |at: usize| -> Result<usize, String> { Ok(u32::from_le_bytes(bytes.get(at..at + 4).ok_or_else(short)?.try_into().unwrap()) as usize) };
+        let text_len = u32_at(8)?;
+        let text = std::str::from_utf8(bytes.get(12..12 + text_len).ok_or_else(short)?).map_err(|e| e.to_string())?;
+        let mut golden = Golden::default();
+        for line in text.lines() {
+            if let Some((key, value)) = line.split_once('=') {
+                golden.header.push((key.to_string(), value.to_string()));
+            }
+        }
+        let mut at = 12 + text_len;
+        let words = u32_at(at)?;
+        let count = u32_at(at + 4)?;
+        at += 8;
+        for _ in 0..count {
+            let row = bytes.get(at..at + words * 4 + 8).ok_or_else(short)?;
+            golden.inputs.push(row[..words * 4].chunks_exact(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect());
+            golden.hashes.push(u64::from_le_bytes(row[words * 4..].try_into().unwrap()));
+            at += words * 4 + 8;
+        }
+        Ok(golden)
+    }
+
+    /// The recording's header and cars, without rows.
+    pub fn recording(&self) -> Result<Recording, String> {
+        let mut recording = Recording { header: self.header.clone(), ..Recording::default() };
+        recording.cars = recording.cars_from_header()?;
+        Ok(recording)
+    }
+
+    /// Replays the excerpt with `threads` worker threads. `Ok(None)`: every step's row has
+    /// the game's hash; else the first step that does not.
+    pub fn replay(&self, paths: &ReplayPaths, track: Arc<Track>, threads: usize) -> Result<Option<usize>, String> {
+        let recording = self.recording()?;
+        let mut world = ReplayWorld::build(&recording, paths, track, threads)?;
+        let width = INPUT_COLUMNS.len();
+        for (step, (inputs, hash)) in self.inputs.iter().zip(&self.hashes).enumerate() {
+            let per_car: Vec<&[u32]> = inputs.chunks_exact(width).collect();
+            world.step(&per_car);
+            if row_hash(&world.row(&per_car)) != *hash {
+                return Ok(Some(step));
+            }
+        }
+        Ok(None)
+    }
+}

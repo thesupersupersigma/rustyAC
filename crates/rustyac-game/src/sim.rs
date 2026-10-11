@@ -15,7 +15,8 @@ use rustyac_physics::tyre::RayTrackCollisionProvider;
 use rustyac_physics::car::{CarControls, CarControlsInput, ControlsProvider, VanillaCar, VibrationDef};
 use rustyac_physics::vecmath::Vec3f;
 
-use crate::input_file::{event, SimSetup, StepInput};
+use crate::input_file::{event, Opponent, OpponentDrive, SimSetup, StepInput};
+use rustyac_physics::engine::{CarSlot, DeviceRef, PhysicsEngine};
 
 /// AC's physics step, s (333.33 Hz).
 pub const DT: f32 = 0.003;
@@ -159,6 +160,49 @@ impl DriverSource for ReplaySource {
 
     fn in_spawn_sequence(&self) -> bool {
         self.step.device == DEVICE_SPAWN
+    }
+}
+
+/// A parked car: on its brakes (Task 24).
+pub struct ParkedSource;
+
+impl DriverSource for ParkedSource {
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        *controls = CarControls { brake: 1.0, clutch: 1.0, ..CarControls::default() };
+    }
+}
+
+/// The inputs of a recorded drive, one step of the file per step of the session; on the
+/// brakes when the file ends (Task 24).
+pub struct RecordedSource {
+    pub steps: Vec<StepInput>,
+    pub at: usize,
+    current: Option<StepInput>,
+}
+
+impl RecordedSource {
+    pub fn new(steps: Vec<StepInput>) -> RecordedSource {
+        RecordedSource { steps, at: 0, current: None }
+    }
+}
+
+impl DriverSource for RecordedSource {
+    fn take_events(&mut self) -> (u32, i32) {
+        // (the file's teleports and new sessions were its own session's: not this one's)
+        self.current = self.steps.get(self.at).copied();
+        self.at += 1;
+        (0, 0)
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        match &self.current {
+            Some(step) => *controls = step.controls,
+            None => *controls = CarControls { brake: 1.0, clutch: 1.0, ..CarControls::default() },
+        }
+    }
+
+    fn headlights(&mut self) -> bool {
+        self.current.is_some_and(|step| step.headlights)
     }
 }
 
@@ -590,6 +634,19 @@ pub struct GameSim {
     /// The last change of an aid or of the brake bias, for the displays. Never read by the
     /// physics and not part of any dump.
     pub aid_note: AidNote,
+    /// Task 24: the other cars of the session, in creation order (car 1, 2, ...).
+    pub opponents: Vec<OpponentCar>,
+    /// The engine all cars are stepped by; `None` with one car, which steps itself exactly
+    /// as it did before there were several.
+    pub engine: Option<PhysicsEngine>,
+}
+
+/// Another car of the session with its driver.
+pub struct OpponentCar {
+    pub car: VanillaCar<Driver>,
+    pub setup: Opponent,
+    pub data_path: PathBuf,
+    pub spawn: SpawnPose,
 }
 
 /// A short on-screen note about the traction control, the ABS or the brake bias: what the
@@ -658,6 +715,28 @@ const FLAT_SPAWN: SpawnPose = SpawnPose { position: SPAWN_POSITION, tail: SPAWN_
 /// The spawn point a set-up asks for on a track: `hotlap` (the track's hot-lap start, or the
 /// first grid slot where it has none), `pit` (the first pit box) or `start` (the first grid slot).
 fn spawn_on(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
+    spawn_slot(track, spawn, 0)
+}
+
+/// [`spawn_on`] for car `index` of the session: the slot with its number (`AC_PIT_<n>`,
+/// `AC_START_<n>`). A hot-lap start has one slot: the other cars stand on the grid's.
+fn spawn_slot(track: &Track, spawn: &str, index: usize) -> Result<SpawnPose, String> {
+    if index > 0 {
+        let sets: &[&str] = match spawn {
+            "pit" => &["PIT"],
+            _ => &["START", "PIT"],
+        };
+        for set in sets {
+            if let Some((position, tail)) = track.spawn_pose(set, index) {
+                return Ok(SpawnPose { position, tail });
+            }
+        }
+        return Err(format!("the track {} has no slot {index} for another car (it has {} grid and {} pit slots)", track.name, track.spawn_slots("START"), track.spawn_slots("PIT")));
+    }
+    spawn_first(track, spawn)
+}
+
+fn spawn_first(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
     let sets: &[&str] = match spawn {
         "hotlap" => &["HOTLAP_START", "START", "PIT"],
         "pit" => &["PIT"],
@@ -672,6 +751,26 @@ fn spawn_on(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
     Err(format!("the track {} has no spawn point for {spawn:?} (no AC_{}_0 node)", track.name, sets[0]))
 }
 
+/// The settings of the session's engine and of every car in it.
+fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool) -> rustyac_physics::car::ChassisEnvironment {
+    let mut env = setup.env;
+    let session = &setup.session;
+    if session.wind_speed != 0.0 {
+        env.set_wind(session.wind_speed, session.wind_direction_deg);
+    }
+    if on_track {
+        env.penalty_mode = 1;
+        env.allowed_tyres_out = if session.penalties { 2 } else { -1 };
+        env.session_type = session.session_type.unwrap_or(if setup.spawn == "hotlap" { 4 } else { 1 });
+    }
+    env.track_drs_zones = setup.drs_zones;
+    if setup.session_starts_at_spawn {
+        env.session_start_time_ms = physics_time;
+    }
+    env
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_car(
     setup: &SimSetup,
     data_path: &Path,
@@ -679,6 +778,8 @@ fn build_car(
     driver: Driver,
     track: Option<&Arc<Track>>,
     spawn: &SpawnPose,
+    mut engine: Option<&mut PhysicsEngine>,
+    slot: usize,
 ) -> Result<VanillaCar<Driver>, String> {
     if let Some(run) = setup.run_setup() {
         // exactly the car `tools/chassis_compare` holds against a recording of the game
@@ -739,10 +840,38 @@ fn build_car(
         Some(track) if with_objects => &track.objects,
         _ => &[],
     };
-    let mut car = VanillaCar::new_with_objects(data_path, env, ground, setup.seed, physics_time, driver, objects)?;
+    let mut car = match engine.as_deref_mut() {
+        None => VanillaCar::new_with_objects(data_path, env, ground, setup.seed, physics_time, driver, objects)?,
+        Some(engine) => {
+            // several cars: built into the engine's one world (which holds the track's
+            // objects already), everything that makes bodies or shapes in one go
+            let env = rustyac_physics::car::ChassisEnvironment { is_first_car: engine.car_count() == 0, ..env };
+            let root = ac_root();
+            let chassis = engine.build_car(|core, guid| {
+                let mut chassis = rustyac_physics::car::RollingChassis::new_in_core(core, guid, data_path, env, ground, setup.seed, physics_time)?;
+                chassis.install_aero()?;
+                chassis.install_brakes()?;
+                chassis.install_drivetrain()?;
+                chassis.install_aids()?;
+                chassis.install_telemetry()?;
+                if let Some(root) = &root {
+                    if let Err(message) = chassis.load_collider_mesh(root) {
+                        eprintln!("collider mesh: {message}");
+                    }
+                }
+                Ok(chassis)
+            })?;
+            VanillaCar::from_chassis(chassis, driver)?
+        }
+    };
     // the session of race.ini and assists.ini: the track's grip, ballast and restrictor
     // (CarAvatar::setBallastKG, setRestrictor), the aids (DrivingAssistManager)
-    car.car.dynamic_track = session.dynamic_track;
+    match engine.as_deref_mut() {
+        None => car.car.dynamic_track = session.dynamic_track,
+        // (the track's grip is the engine's: the laps of all cars count)
+        Some(engine) if slot == 0 => engine.dynamic_track = session.dynamic_track,
+        Some(_) => {}
+    }
     if session.ballast_kg > 0.0 {
         car.car.ballast_kg = session.ballast_kg;
     }
@@ -754,14 +883,16 @@ fn build_car(
     }
     // CarAvatar::initPhysics: the car's collider mesh, when the game's folder has one for it
     // (without it the car has only its floor boxes: walls do not stop it)
-    if let Some(root) = ac_root() {
-        if let Err(message) = car.car.load_collider_mesh(&root) {
-            eprintln!("collider mesh: {message}");
+    if engine.is_none() {
+        if let Some(root) = ac_root() {
+            if let Err(message) = car.car.load_collider_mesh(&root) {
+                eprintln!("collider mesh: {message}");
+            }
         }
     }
     if let Some(track) = track {
-        // CarAvatar::setSpawnPositionIndex("PIT", 0): the car's pit box
-        if let Some(&node) = track.spawn_positions.get("PIT").and_then(|slots| slots.first()) {
+        // CarAvatar::setSpawnPositionIndex("PIT", n): the car's pit box
+        if let Some(&node) = track.spawn_positions.get("PIT").and_then(|slots| slots.get(slot).or(slots.first())) {
             car.car.pit_position = track.helper_nodes[node].local;
         }
         car.car.set_track(Arc::clone(track));
@@ -805,8 +936,95 @@ fn build_car(
         car.car.load_setup(&saved, &name).map_err(|e| format!("{}: {e}", file.display()))?;
     }
     // PhysicsEngine::setSessionInfo: no contacts are looked for during the first 0.75 s
-    car.car.reset_collisions_for_new_session();
+    match engine {
+        None => car.car.reset_collisions_for_new_session(),
+        Some(engine) => engine.reset_collisions_for_new_session(),
+    }
     Ok(car)
+}
+
+/// The driver of another car.
+fn opponent_driver(opponent: &Opponent, track: Option<&Arc<Track>>) -> Result<Driver, String> {
+    let mut source: Box<dyn DriverSource> = match &opponent.drive {
+        OpponentDrive::Parked => Box::new(ParkedSource),
+        OpponentDrive::Auto => {
+            if track.is_none() {
+                return Err(format!("the opponent {}: the line follower needs a track", opponent.car));
+            }
+            Box::new(SpawnSequence::new(crate::autodrive::AutoDriver::new(), true))
+        }
+        OpponentDrive::Recorded(file) => Box::new(RecordedSource::new(crate::input_file::InputFile::read(file)?.steps)),
+    };
+    if let Some(track) = track {
+        source.set_track(track);
+    }
+    Ok(Driver::new(source, 1.0))
+}
+
+/// The session's cars: the driver's, and with other cars the engine that steps them all.
+#[allow(clippy::type_complexity)]
+fn build_world(
+    setup: &SimSetup,
+    data_path: &Path,
+    physics_time: f64,
+    driver: Driver,
+    track: Option<&Arc<Track>>,
+    spawn: &SpawnPose,
+) -> Result<(VanillaCar<Driver>, Vec<OpponentCar>, Option<PhysicsEngine>), String> {
+    if setup.opponents.is_empty() {
+        return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0)?, Vec::new(), None));
+    }
+    if setup.oracle.is_some() {
+        return Err("an oracle set-up has one car".to_string());
+    }
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = setup.physics_threads.unwrap_or_else(|| rustyac_physics::engine::worker_threads(physics_threading_key(), cpus));
+    let mut engine = PhysicsEngine::new(session_env(setup, physics_time, track.is_some()), threads);
+    if let Some(track) = track {
+        engine.set_track(Arc::clone(track), setup.track_objects);
+    }
+    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), 0)?;
+    let mut opponents = Vec::new();
+    for (index, opponent) in setup.opponents.iter().enumerate() {
+        let slot = index + 1;
+        let opponent_data = find_car_data(&opponent.car)?;
+        let pose = match track {
+            Some(track) => spawn_slot(track, &setup.spawn, slot)?,
+            // the flat road: in a row behind the driver's car
+            None => SpawnPose { position: Vec3f::new(0.0, 0.0, -8.0 * slot as f32), tail: SPAWN_TAIL },
+        };
+        // the other cars have the session's weather and rules, not the driver's own ballast,
+        // restrictor or setup; until they have drivers of their own (AI) the gearbox and the
+        // clutch work by themselves
+        let mut other = setup.clone();
+        other.car = opponent.car.clone();
+        other.seed = setup.seed.wrapping_add(1000 * slot as u32);
+        other.auto_clutch = true;
+        other.auto_shifter = true;
+        other.auto_blip = None;
+        other.session.ballast_kg = 0.0;
+        other.session.restrictor = 0.0;
+        other.session.setup_file = None;
+        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), slot)?;
+        opponents.push(OpponentCar { car: built, setup: opponent.clone(), data_path: opponent_data, spawn: pose });
+    }
+    Ok((car, opponents, Some(engine)))
+}
+
+/// `[PHYSICS_THREADING] THREADS` of the game's own `system/cfg/assetto_corsa.ini` (-1 when
+/// the game's folder or the file is not there, 0 when the section is there without the key:
+/// the game's reading).
+pub fn physics_threading_key() -> i32 {
+    let Some(file) = ac_root().map(|root| root.join("system").join("cfg").join("assetto_corsa.ini")) else {
+        return -1;
+    };
+    if !file.is_file() {
+        return -1;
+    }
+    match rustyac_physics::data::ini::IniReader::load(&file) {
+        Ok(ini) if ini.has_section("PHYSICS_THREADING") => ini.get_int("PHYSICS_THREADING", "THREADS").unwrap_or(0),
+        _ => -1,
+    }
 }
 
 impl GameSim {
@@ -845,10 +1063,40 @@ impl GameSim {
         if let Some(track) = &track {
             driver.source.set_track(track);
         }
-        let car = build_car(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
+        let (car, opponents, engine) = build_world(&setup, &data_path, setup.clock_start_ms, driver, track.as_ref(), &spawn)?;
         let lap_db = LapDb::new(track.as_ref().map(|t| t.sectors_normalized_positions.len()).unwrap_or(0));
         let physics_info = PhysicsInfo::of(&car);
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default() })
+        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine })
+    }
+
+    /// The world the track's loose objects and every contact live in: the engine's with
+    /// several cars, else the car's own.
+    pub fn world_core(&self) -> &rustyac_physics::car::PhysicsCore {
+        match &self.engine {
+            Some(engine) => &engine.core,
+            None => &self.car.car.core,
+        }
+    }
+
+    /// All cars of the session in creation order: the driver's first.
+    pub fn cars(&self) -> impl Iterator<Item = &rustyac_physics::car::RollingChassis> {
+        std::iter::once(&self.car.car).chain(self.opponents.iter().map(|o| &o.car.car))
+    }
+
+    /// FNV-1a over the rigid-body state of every car (for checks that two runs are the same).
+    pub fn state_hash(&self, mut hash: u64) -> u64 {
+        for car in self.cars() {
+            for body in car.own_bodies() {
+                let b = car.core.world.body(body);
+                for word in b.pos[..3].iter().chain(&b.q).chain(&b.lvel[..3]).chain(&b.avel[..3]) {
+                    for byte in word.to_bits().to_le_bytes() {
+                        hash ^= byte as u64;
+                        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                    }
+                }
+            }
+        }
+        hash
     }
 
     /// The physics clock after the last step, ms.
@@ -899,7 +1147,10 @@ impl GameSim {
             }
         }
         let placeholder = Driver::new(Box::new(ReplaySource::default()), self.setup.ff_gain);
-        let mut car = build_car(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
+        // (with other cars: all of them anew, in a new engine; their drivers start again)
+        let (mut car, opponents, engine) = build_world(&self.setup, &self.data_path, self.clock_ms(), placeholder, self.track.as_ref(), &self.spawn)?;
+        self.opponents = opponents;
+        self.engine = engine;
         std::mem::swap(&mut car.device, &mut self.car.device);
         // the engine's step count goes on (lap times carry its remainder of three)
         car.car.step_counter = self.car.car.step_counter;
@@ -918,8 +1169,13 @@ impl GameSim {
         }
         // a new session's jobs in the order the game queues them: the track's handler (the
         // loose objects go home) was registered before the car's
-        if events & (event::OBJECTS_HOME | event::RESET) != 0 && !self.car.car.core.track_objects.is_empty() {
-            self.car.car.queue(|car| car.core.reset_track_objects());
+        if events & (event::OBJECTS_HOME | event::RESET) != 0 {
+            match &mut self.engine {
+                // (the job runs at the start of the step; no car reads the objects before then)
+                Some(engine) => engine.core.reset_track_objects(),
+                None if !self.car.car.core.track_objects.is_empty() => self.car.car.queue(|car| car.core.reset_track_objects()),
+                None => {}
+            }
         }
         if events & event::RESET != 0 {
             // CarAvatar::goToSpawnPosition 0x1400d3ae0: the lap under way does not count for the fuel
@@ -1052,7 +1308,27 @@ impl GameSim {
             self.car.device.source.set_probe(&probe);
         }
         self.car.device.polled = false;
-        self.car.step(DT, self.setup.time_of_step(self.steps));
+        let time = self.setup.time_of_step(self.steps);
+        match &mut self.engine {
+            None => self.car.step(DT, time),
+            Some(engine) => {
+                for opponent in &mut self.opponents {
+                    let _ = opponent.car.device.source.take_events();
+                    if opponent.car.device.source.wants_probe() {
+                        let probe = CarProbe::capture(&mut opponent.car.car);
+                        opponent.car.device.source.set_probe(&probe);
+                    }
+                    opponent.car.device.polled = false;
+                }
+                // the driver's device stays on this thread (a real wheel is polled here)
+                let mut slots = Vec::with_capacity(1 + self.opponents.len());
+                slots.push(CarSlot { car: &mut self.car.car, device: DeviceRef::Here(&mut self.car.device) });
+                for opponent in &mut self.opponents {
+                    slots.push(CarSlot { car: &mut opponent.car.car, device: DeviceRef::Anywhere(&mut opponent.car.device) });
+                }
+                engine.step(DT, time, &mut slots);
+            }
+        }
         self.steps += 1;
         // FuelLapEvaluator::step (the end of Car::stepComponents)
         let (speed, fuel, in_pit_lane) = (self.car.car.speed, self.car.car.fuel, self.car.car.is_in_pit_lane());
