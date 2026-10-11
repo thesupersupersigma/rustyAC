@@ -11,8 +11,11 @@
 //! Nothing in this crate is platform code: it builds for `wasm32-unknown-unknown`, where
 //! the transport will be a WebSocket to a gateway next to the server (M2).
 
+pub mod dxmath;
+pub mod handshake;
 pub mod md5;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
+pub mod net_car;
 pub mod packet;
 pub mod transport;
