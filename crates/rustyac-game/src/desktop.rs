@@ -19,9 +19,9 @@ use rustyac_game::audio::{AudioSink, Feed, GameAudio};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
-use rustyac_game::render::scene::{CarShape, DrivingCamera};
+use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
-use rustyac_game::render::{write_png, DebugRenderer, Picture};
+use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
 use rustyac_game::view::CarView;
@@ -858,6 +858,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             replay_transport: transport.is_some(),
             replay_state,
             notes: Vec::new(),
+            hidden: false,
         };
         if replay_over {
             info.notes.push("the replay is over (Esc)".to_string());
@@ -932,7 +933,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     } else if options.autodrive {
         Box::new(SpawnSequence::new(AutoDriver::new(), true))
     } else if options.flat_out {
-        Box::new(SpawnSequence::new(rustyac_game::sim::FlatOutSource::default(), true))
+        Box::new(SpawnSequence::new(rustyac_game::sim::FlatOutSource::with_brake(options.flat_out_brake), true))
     } else {
         Box::new(SpawnSequence::new(NobodySource, true))
     };
@@ -998,20 +999,30 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         println!("{}: the car's state after {} steps", pose.display(), sim.steps);
     }
     let shape = CarShape::of(&sim.car_info());
-    let mut renderer = make_picture(options, options.width, options.height, &sim.car_info())?;
+    // --supersample: the picture is drawn larger and averaged down at the end
+    let supersample = options.supersample.max(1);
+    let mut renderer = make_picture(options, options.width * supersample, options.height * supersample, &sim.car_info())?;
     let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
+    // --free-camera: it stands where the car of the picture puts it, in the lead-in frames too
+    let free = options.free_camera.map(|free| CameraFrame { matrix: free_camera(&view.body, free.eye, free.look), fov: free.fov, near: 0.1 });
     if options.virtual_mirror {
         renderer.set_virtual_mirror(true);
     }
-    let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
+    // --no-hud: the virtual mirror is part of the display (a preset may have switched it on)
+    if options.no_hud {
+        renderer.set_virtual_mirror(false);
+    }
+    let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: options.no_hud, ..HudInfo::default() };
     for old in &lead {
         let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
+        let frame = free.unwrap_or(frame);
         renderer.draw(old, &shape, &camera, &frame, &lead_info, 1.0 / 60.0);
     }
     // two frames, so that the chase camera has leaned into the car's acceleration
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
-    let info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), ..HudInfo::default() };
+    let frame = free.unwrap_or(frame);
+    let info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: options.no_hud, ..HudInfo::default() };
     // two frames: the second is a frame as the game draws them one after the other (the first
     // after loading still uploads and binds everything)
     let dt = if lead.is_empty() { 0.0 } else { 1.0 / 60.0 };
@@ -1021,8 +1032,12 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     renderer.draw(&view, &shape, &camera, &frame, &info, dt);
     renderer.set_blur_history(blur);
     renderer.draw(&view, &shape, &camera, &frame, &info, dt);
-    let pixels = renderer.read_pixels()?;
-    let (width, height) = renderer.size();
+    let mut pixels = renderer.read_pixels()?;
+    let (mut width, mut height) = renderer.size();
+    if supersample > 1 {
+        (width, height) = (width / supersample, height / supersample);
+        pixels = box_downscale(&pixels, width, height, supersample);
+    }
     write_png(path, width, height, &pixels)?;
     println!("{}: {width} x {height}, drawn by {} after {} steps ({:.1} km/h, gear {})", path.display(), renderer.describe(), sim.steps, view.speed_kmh, view.gear - 1);
     if let Some(stats) = renderer.frame_stats() {

@@ -1072,6 +1072,32 @@ impl DebugRenderer {
     }
 }
 
+/// `--supersample <n>`: a picture drawn `n` times wider and higher, averaged down (every pixel
+/// is the rounded mean of its `n` x `n` block, channel by channel). `width` and `height` are
+/// the size of the result.
+pub fn box_downscale(rgba: &[u8], width: u32, height: u32, n: u32) -> Vec<u8> {
+    let (w, h, n) = (width as usize, height as usize, n as usize);
+    assert_eq!(rgba.len(), w * n * h * n * 4, "the picture is not {n} times {width} x {height}");
+    let stride = w * n * 4;
+    let area = (n * n) as u32;
+    let mut out = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 4];
+            for row in 0..n {
+                let at = (y * n + row) * stride + x * n * 4;
+                for pixel in rgba[at..at + n * 4].chunks_exact(4) {
+                    for (total, value) in sum.iter_mut().zip(pixel) {
+                        *total += *value as u32;
+                    }
+                }
+            }
+            out.extend(sum.map(|total| ((total + area / 2) / area) as u8));
+        }
+    }
+    out
+}
+
 /// Writes RGBA pixels as a PNG.
 pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1083,4 +1109,28 @@ pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -
     writer.write_image_data(rgba).map_err(|e| format!("{}: {e}", path.display()))?;
     // the end of the file is written here, not when the writer is dropped (which could not say that it failed)
     writer.finish().map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn box_downscale_averages_each_block() {
+        // 4 x 2 pixels drawn for a 2 x 1 picture: the left block is 10, 20, 30, 41 in red
+        let mut big = vec![0u8; 4 * 2 * 4];
+        for (pixel, red) in [(0, 10), (1, 20), (4, 30), (5, 41)] {
+            big[pixel * 4] = red;
+            big[pixel * 4 + 3] = 255;
+        }
+        for pixel in [2, 3, 6, 7] {
+            big[pixel * 4..pixel * 4 + 4].copy_from_slice(&[1, 2, 3, 255]);
+        }
+        // 101 / 4 = 25.25; a block of one colour keeps it
+        assert_eq!(super::box_downscale(&big, 2, 1, 2), [25, 0, 0, 255, 1, 2, 3, 255]);
+        // 1: the picture as it is
+        assert_eq!(super::box_downscale(&big, 4, 2, 1), big);
+        // rounded to nearest: 0, 0, 0, 255 over three by three gives 255 / 9 = 28.3
+        let mut nine = vec![0u8; 9 * 4];
+        nine[4 * 4 + 1] = 255;
+        assert_eq!(super::box_downscale(&nine, 1, 1, 3), [0, 28, 0, 0]);
+    }
 }

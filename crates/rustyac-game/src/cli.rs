@@ -59,6 +59,9 @@ pub struct Options {
     pub show_damage: Option<[f32; 5]>,
     /// `--flat-out`: with `--screenshot`, nobody steers and the throttle is held down
     pub flat_out: bool,
+    /// `--flat-out-brake <0..1>`: with `--flat-out`, the brake pedal is held this far as well
+    /// (the front wheels hold the car back while the rear ones spin: a burnout nearly on the spot)
+    pub flat_out_brake: f32,
     /// `--mirror-size <n>`: `[MIRROR] SIZE` whatever `video.ini` says (0: no mirrors)
     pub mirror_size: Option<i32>,
     /// `--virtual-mirror`: the F11 mirror on from the start
@@ -97,6 +100,15 @@ pub struct Options {
     pub fxaa: Option<bool>,
     pub motion_blur: Option<f32>,
     pub hdr_levels: bool,
+    /// `--supersample <1..4>`: with `--screenshot`, the picture is drawn this many times wider
+    /// and higher and averaged down to `--width` x `--height` (1: as it is drawn)
+    pub supersample: u32,
+    /// `--free-camera <right,up,ahead>[/<right,up,ahead>[/<fov>]]`: with `--screenshot`, a camera
+    /// that stands still beside the car of the picture and looks at a point of it
+    pub free_camera: Option<FreeCamera>,
+    /// `--no-hud`: with `--screenshot`, the picture without rustyAC's own panels and numbers and
+    /// without the virtual mirror
+    pub no_hud: bool,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -210,6 +222,9 @@ impl Default for Options {
             dump_states: None,
             screenshot: None,
             pose_out: None,
+            supersample: 1,
+            no_hud: false,
+            free_camera: None,
             debug_view: false,
             warp: false,
             gpu_log: None,
@@ -230,6 +245,7 @@ impl Default for Options {
             lead_in: 0.0,
             mirror_size: None,
             flat_out: false,
+            flat_out_brake: 0.0,
             sun: None,
             weather: None,
             time_mult: None,
@@ -266,6 +282,40 @@ impl Default for Options {
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
         }
+    }
+}
+
+/// `--free-camera`: where the camera stands and what it looks at, in metres to the right of,
+/// above and ahead of the car's body, on axes that stay level (the car's heading on the
+/// ground and the world's up); the vertical field of view in degrees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FreeCamera {
+    pub eye: [f32; 3],
+    pub look: [f32; 3],
+    pub fov: f32,
+}
+
+impl FreeCamera {
+    pub fn parse(text: &str) -> Result<FreeCamera, String> {
+        let usage = || format!("--free-camera {text}: <right,up,ahead>[/<right,up,ahead>[/<fov>]] is expected, in metres from the car, for example -4,0.6,-5/0,0.4,0/45");
+        let triple = |part: &str| -> Result<[f32; 3], String> {
+            let numbers: Vec<f32> = part.split(',').map(|n| n.trim().parse::<f32>()).collect::<Result<_, _>>().map_err(|_| usage())?;
+            <[f32; 3]>::try_from(numbers).map_err(|_| usage())
+        };
+        let mut parts = text.split('/');
+        let eye = triple(parts.next().unwrap_or(""))?;
+        let look = match parts.next() {
+            Some(part) => triple(part)?,
+            None => [0.0, 0.4, 0.0],
+        };
+        let fov = match parts.next() {
+            Some(part) => part.trim().parse::<f32>().ok().filter(|fov| *fov > 1.0 && *fov < 170.0).ok_or_else(usage)?,
+            None => 60.0,
+        };
+        if parts.next().is_some() || eye == look || eye.iter().chain(&look).any(|n| !n.is_finite()) {
+            return Err(usage());
+        }
+        Ok(FreeCamera { eye, look, fov })
     }
 }
 
@@ -364,6 +414,9 @@ usage: rustyac [options]
                         that smoke, skid marks and flames are in the picture
   --flat-out            with --screenshot: nobody steers, the throttle is held down from the
                         start (a launch with wheelspin)
+  --flat-out-brake <b>  with --flat-out: the brake pedal held too (0 to 1). Around 0.6 the F2004's
+                        front wheels hold it back while the rear ones spin: a burnout that hardly
+                        leaves the spot (more stalls the engine, less lets the car go)
   --show-lights         with --screenshot: the headlights on in the picture
   --show-damage f,r,l,r,c   with --screenshot: the picture with these damage levels (km/h
                         of impact: front, rear, left, right, centre) whatever the physics says
@@ -436,6 +489,16 @@ for checks, without anybody at the controls:
                         (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
   --at <s>              with --screenshot: seconds into the drive (default: the end of the replay, or 3)
+  --no-hud              with --screenshot: the picture alone, without rustyAC's panels and numbers
+                        and without the virtual mirror
+  --supersample <n>     with --screenshot: draw the picture n times wider and higher (2, 3 or 4) and
+                        average it down to --width x --height: smoother edges and finer detail than
+                        the samples of --aa alone (the drawn picture may be 7680 x 4320 at most)
+  --free-camera <r,u,a>[/<r,u,a>[/<fov>]]
+                        with --screenshot: a camera that stands still beside the car of the picture:
+                        its place in metres to the right of, above and ahead of the car (level axes),
+                        then the point it looks at (default 0,0.4,0) and its field of view in degrees
+                        (default 60). -4,0.6,-5/0,0.4,0/45 is low, behind and to the left
   --bench-render        with --headless: also draw frames off screen and report their rate
   --no-focus            show the window without activating it and keep running unfocused
 ";
@@ -470,6 +533,9 @@ impl Options {
                 "--dump-states" => o.dump_states = Some(PathBuf::from(value("--dump-states")?)),
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
+                "--no-hud" => o.no_hud = true,
+                "--supersample" => o.supersample = value("--supersample")?.parse().ok().filter(|n| (1..=4).contains(n)).ok_or("--supersample <1 to 4>")?,
+                "--free-camera" => o.free_camera = Some(FreeCamera::parse(&value("--free-camera")?)?),
                 "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
                 "--lead-in" => o.lead_in = value("--lead-in")?.parse().map_err(|e| format!("--lead-in: {e}"))?,
                 "--virtual-mirror" => o.virtual_mirror = true,
@@ -482,6 +548,7 @@ impl Options {
                 "--time-mult" => o.time_mult = Some(value("--time-mult")?.parse().map_err(|e| format!("--time-mult: {e}"))?),
                 "--show-lights" => o.show_lights = true,
                 "--flat-out" => o.flat_out = true,
+                "--flat-out-brake" => o.flat_out_brake = value("--flat-out-brake")?.parse().ok().filter(|b| (0.0..=1.0).contains(b)).ok_or("--flat-out-brake <0 to 1>")?,
                 "--show-damage" => {
                     let text = value("--show-damage")?;
                     let levels: Vec<f32> = text.split(',').filter_map(|t| t.trim().parse().ok()).collect();
@@ -596,6 +663,15 @@ impl Options {
         if o.width < 320 || o.height < 200 || o.width > 7680 || o.height > 4320 {
             return Err(format!("--width / --height: {} x {} is out of range", o.width, o.height));
         }
+        if o.width * o.supersample > 7680 || o.height * o.supersample > 4320 {
+            return Err(format!("--supersample {}: the picture would be drawn at {} x {}, more than 7680 x 4320", o.supersample, o.width * o.supersample, o.height * o.supersample));
+        }
+        if (o.supersample > 1 || o.free_camera.is_some() || o.no_hud) && o.screenshot.is_none() {
+            return Err("--supersample, --free-camera and --no-hud need --screenshot".to_string());
+        }
+        if o.flat_out_brake > 0.0 && !o.flat_out {
+            return Err("--flat-out-brake needs --flat-out".to_string());
+        }
         let car_camera = o.camera.strip_prefix("car").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
         if !["cockpit", "chase", "chase2", "bonnet", "bumper", "dash"].contains(&o.camera.as_str()) && !car_camera {
             return Err(crate::render::scene::camera_name_error(&o.camera));
@@ -649,5 +725,38 @@ impl Options {
             }
         }
         Ok(o)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(line: &str) -> Result<Options, String> {
+        Options::parse(line.split_whitespace().map(str::to_string))
+    }
+
+    #[test]
+    fn the_screenshot_options_of_the_site_pictures() {
+        // without them nothing changes
+        let plain = parse("--screenshot a.png").unwrap();
+        assert_eq!((plain.supersample, plain.free_camera, plain.no_hud), (1, None, false));
+        assert!(parse("--screenshot a.png --no-hud").unwrap().no_hud && parse("--no-hud").is_err());
+        let o = parse("--screenshot a.png --width 2560 --height 1440 --supersample 2 --free-camera -4,0.6,-5").unwrap();
+        assert_eq!(o.supersample, 2);
+        assert_eq!(o.free_camera, Some(FreeCamera { eye: [-4.0, 0.6, -5.0], look: [0.0, 0.4, 0.0], fov: 60.0 }));
+        let o = parse("--screenshot a.png --free-camera 3,1,2/0,0.5,1/35").unwrap();
+        assert_eq!(o.free_camera, Some(FreeCamera { eye: [3.0, 1.0, 2.0], look: [0.0, 0.5, 1.0], fov: 35.0 }));
+        // the drawn picture has a largest size, and both options are a screenshot's
+        assert!(parse("--screenshot a.png --width 2560 --height 1440 --supersample 4").unwrap_err().contains("10240 x 5760"));
+        assert!(parse("--screenshot a.png --supersample 5").is_err());
+        assert!(parse("--supersample 2").unwrap_err().contains("need --screenshot"));
+        assert!(parse("--free-camera 1,2,3").unwrap_err().contains("need --screenshot"));
+        assert_eq!(parse("--screenshot a.png --flat-out").unwrap().flat_out_brake, 0.0);
+        assert_eq!(parse("--screenshot a.png --flat-out --flat-out-brake 0.6").unwrap().flat_out_brake, 0.6);
+        assert!(parse("--screenshot a.png --flat-out-brake 0.6").is_err() && parse("--screenshot a.png --flat-out --flat-out-brake 2").is_err());
+        for bad in ["1,2", "1,2,3/4,5", "1,2,3/1,2,3", "1,2,3/0,0,0/0", "1,2,3/0,0,0/60/1", "a,b,c"] {
+            assert!(parse(&format!("--screenshot a.png --free-camera {bad}")).is_err(), "{bad}");
+        }
     }
 }

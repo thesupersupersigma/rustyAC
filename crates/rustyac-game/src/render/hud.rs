@@ -42,6 +42,8 @@ pub struct HudInfo {
     pub replay_state: String,
     /// Extra lines (top left, under the numbers).
     pub notes: Vec<String>,
+    /// `--no-hud`: nothing of this display is drawn.
+    pub hidden: bool,
 }
 
 type Color = [f32; 4];
@@ -191,6 +193,9 @@ fn hybrid_lines(view: &CarView) -> Vec<String> {
 }
 
 pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, height: f32) -> Vec<HudVertex> {
+    if info.hidden {
+        return Vec::new();
+    }
     let mut hud = Hud::new(font);
     let s = (height / 720.0).max(0.5);
     let (_, gh) = font.glyph();

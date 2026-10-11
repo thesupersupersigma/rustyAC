@@ -179,13 +179,23 @@ impl DriverSource for NobodySource {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FlatOutSource {
     steps: u32,
+    /// The brake pedal, held as well (`--flat-out-brake`): the front wheels hold the car
+    /// while the engine spins the rear ones, a burnout on the spot. 0: a launch.
+    pub brake: f32,
+}
+
+impl FlatOutSource {
+    /// With the brake pedal held at `brake` (0..1) as well.
+    pub fn with_brake(brake: f32) -> FlatOutSource {
+        FlatOutSource { steps: 0, brake }
+    }
 }
 
 impl DriverSource for FlatOutSource {
     fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
         self.steps += 1;
         let clutch = if self.steps < 333 { 0.0 } else { 1.0 };
-        *controls = CarControls { clutch, gas: 1.0, ..CarControls::default() };
+        *controls = CarControls { clutch, gas: 1.0, brake: self.brake, ..CarControls::default() };
     }
 }
 

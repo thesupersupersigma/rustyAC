@@ -91,6 +91,24 @@ pub fn create_target(position: [f32; 3], target: [f32; 3]) -> Mat {
     set_from_heading_up(f, u, position)
 }
 
+/// rustyAC's own camera of `--free-camera` (not one of AC's): it stands `eye` metres to the
+/// right of, above and ahead of the body's origin and looks at the point `look`, both on axes
+/// that stay level (the body's heading laid on the ground, the world's up).
+pub fn free_camera(body: &Mat, eye: [f32; 3], look: [f32; 3]) -> Mat {
+    let heading = row(body, 2);
+    let mut ahead = normalized([heading[0], 0.0, heading[2]]);
+    if !ahead.iter().all(|n| n.is_finite()) || dot(ahead, ahead) < 0.5 {
+        // a car standing on its nose has no heading on the ground
+        ahead = [0.0, 0.0, 1.0];
+    }
+    let up = [0.0, 1.0, 0.0];
+    // the car's +x is its left
+    let right = cross(ahead, up);
+    let origin = row(body, 3);
+    let place = |p: [f32; 3]| add(add(add(times(right, p[0]), times(up, p[1])), times(ahead, p[2])), origin);
+    create_target(place(eye), place(look))
+}
+
 /// `Camera::rotatePitch` @ 0x14020fa80: a turn about the camera's own x axis (positive = up).
 pub fn rotate_pitch(camera: &Mat, angle: f32) -> Mat {
     let turn = Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), angle);
@@ -626,6 +644,25 @@ pub fn cylinder(segments: usize) -> Vec<Vertex> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn free_camera_stands_level_beside_the_car() {
+        // a car at (10, 2, 30) heading along +x, nose up a little: its left is then -z
+        let body: super::Mat = [[0.0, 0.0, -1.0, 0.0], [-0.1, 0.995, 0.0, 0.0], [0.995, 0.1, 0.0, 0.0], [10.0, 2.0, 30.0, 1.0]];
+        let m = super::free_camera(&body, [4.0, 0.5, -6.0], [0.0, 0.5, 0.0]);
+        // 4 m to the right (+z here), 6 m behind (-x), half a metre up, whatever the pitch
+        let place = [m[3][0], m[3][1], m[3][2]];
+        for (got, want) in place.iter().zip([4.0f32, 2.5, 34.0]) {
+            assert!((got - want).abs() < 1e-4, "{place:?}");
+        }
+        // it looks at the car (a camera looks along minus its row 2), level, and does not roll
+        let view = [-m[2][0], -m[2][1], -m[2][2]];
+        let to_car = [6.0f32 / 52.0f32.sqrt(), 0.0, -4.0 / 52.0f32.sqrt()];
+        for (got, want) in view.iter().zip(to_car) {
+            assert!((got - want).abs() < 1e-4, "{view:?}");
+        }
+        assert!((m[1][1] - 1.0).abs() < 1e-5 && m[0][1].abs() < 1e-5);
+    }
+
     use super::*;
 
     fn close(a: [f32; 3], b: [f32; 3]) -> bool {
