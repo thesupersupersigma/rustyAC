@@ -391,6 +391,16 @@ impl PhysicsCore {
         self.world.body_set_rotation(body.id, &r);
     }
 
+    /// `RigidBodyODE::setVelocity` @ 0x1402ceab0: `dBodySetLinearVel`.
+    pub fn set_velocity(&mut self, body: RigidBody, v: &Vec3f) {
+        self.world.body_set_linear_vel(body.id, v.x, v.y, v.z);
+    }
+
+    /// `RigidBodyODE::setAngularVelocity` @ 0x1402ce820: `dBodySetAngularVel`.
+    pub fn set_angular_velocity(&mut self, body: RigidBody, w: &Vec3f) {
+        self.world.body_set_angular_vel(body.id, w.x, w.y, w.z);
+    }
+
     /// `RigidBodyODE::setMassBox` @ 0x1402ce890: `dMassSetBoxTotal(mass, x, y, z)`, then
     /// `dBodySetMass`.
     pub fn set_mass_box(&mut self, body: RigidBody, mass: f32, x: f32, y: f32, z: f32) {
@@ -733,6 +743,21 @@ impl PhysicsCore {
         if let Some(&geom) = self.colliders.get(body.index as usize).and_then(|c| c.meshes.get(index)) {
             self.world.collision.set_collide_bits(geom, mask);
         }
+    }
+
+    /// `RigidBodyODE::setMeshCollideCategory` @ 0x1402ce9a0: `dGeomSetCategoryBits` of the
+    /// body's mesh `index` (a remote car's mesh is switched between 8 and 0, a ghost, with
+    /// it). The mesh's own group, which damage and sounds read, stays what it was made with.
+    pub fn set_mesh_collide_category(&mut self, body: RigidBody, index: usize, category: u32) {
+        if let Some(&geom) = self.colliders.get(body.index as usize).and_then(|c| c.meshes.get(index)) {
+            self.world.collision.set_category_bits(geom, category);
+        }
+    }
+
+    /// `RigidBodyODE::getMeshCollideCategory` @ 0x1402ce5a0.
+    pub fn get_mesh_collide_category(&self, body: RigidBody, index: usize) -> Option<u32> {
+        let geom = *self.colliders.get(body.index as usize)?.meshes.get(index)?;
+        Some(self.world.collision.geom(geom).category_bits)
     }
 
     /// `RigidBodyODE::getMeshCollideMask` @ 0x1402ce5d0.

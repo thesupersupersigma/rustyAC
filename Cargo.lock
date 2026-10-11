@@ -605,6 +605,14 @@ name = "rustyac-math"
 version = "0.24.1"
 
 [[package]]
+name = "rustyac-net"
+version = "0.24.1"
+dependencies = [
+ "rustyac-math",
+ "rustyac-physics",
+]
+
+[[package]]
 name = "rustyac-ode"
 version = "0.24.1"
 dependencies = [

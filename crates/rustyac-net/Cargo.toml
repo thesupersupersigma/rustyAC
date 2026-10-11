@@ -1,0 +1,12 @@
+[package]
+name = "rustyac-net"
+description = "rustyAC multiplayer: Assetto Corsa's online protocol (the client of a Kunos acServer), its session logic and the remote cars' dead reckoning, behind a transport trait; no platform code, builds for wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[dependencies]
+rustyac-math = { path = "../rustyac-math" }
+rustyac-physics = { path = "../rustyac-physics" }

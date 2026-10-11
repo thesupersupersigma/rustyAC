@@ -69,6 +69,32 @@ pub struct CarSlot<'a> {
     pub device: DeviceRef<'a>,
 }
 
+/// AC's other `PhysicsEngine::evOnStepCompleted` handlers: what runs after `dWorldStep`
+/// besides the loose objects and the cars' `Car::postStep`, in the order the game registered
+/// them. Online that is the client (`ACClient::onPhysicsStep` @ 0x14004f1d0: registered in
+/// its constructor, before the track is loaded and before any car exists) and every remote
+/// car (`NetCarStateProvider::step` @ 0x14011bd00: registered when the remote car is made,
+/// after the player's car).
+///
+/// Both get the one world: a remote car is a body of its own there, in no car's list
+/// (made with [`PhysicsCore::create_rigid_body`] on [`PhysicsEngine::core`] after the
+/// cars), which its handler puts where the network says after every step.
+pub trait StepHooks {
+    /// The handlers registered before the track and the cars. Every car has its bodies'
+    /// new state already; no `Car::postStep` has run.
+    fn before_cars(&mut self, core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64);
+    /// The handlers registered after the cars: every `Car::postStep` has run.
+    fn after_cars(&mut self, core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64);
+}
+
+/// No other handlers.
+pub struct NoHooks;
+
+impl StepHooks for NoHooks {
+    fn before_cars(&mut self, _core: &mut PhysicsCore, _cars: &mut [CarSlot<'_>], _physics_time: f64) {}
+    fn after_cars(&mut self, _core: &mut PhysicsCore, _cars: &mut [CarSlot<'_>], _physics_time: f64) {}
+}
+
 /// What of the one world is a car's.
 #[derive(Clone, Debug, Default)]
 struct CarParts {
@@ -374,6 +400,11 @@ impl PhysicsEngine {
     /// changes on the cars between two calls (or with [`RollingChassis::queue`], which runs
     /// them when the clock shows the new step's time).
     pub fn step(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
+        self.step_with(dt, physics_time, cars, &mut NoHooks);
+    }
+
+    /// [`PhysicsEngine::step`] with the game's other step-completed handlers ([`StepHooks`]).
+    pub fn step_with(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>], hooks: &mut dyn StepHooks) {
         assert_eq!(cars.len(), self.parts.len(), "a step takes every car of the engine, in creation order");
         self.stepped = true;
         // PhysicsEngine::stepCounter is one number for all cars (the lap timer takes the
@@ -469,11 +500,7 @@ impl PhysicsEngine {
         self.step_stats = self.core.world_step(dt);
         self.seconds[2] += clock.seconds();
         let clock = Clock::start();
-        // PhysicsEngine::evOnStepCompleted: each loose object's handler (they were
-        // registered with the track, before any car's)
-        self.core.step_track_objects();
-
-        // every car gets its bodies back, then Car::postStep in creation order
+        // every car gets its bodies back (plain copies: in the game there is one world)
         for (index, slot) in cars.iter_mut().enumerate() {
             for &body in &self.parts[index].bodies {
                 slot.car.core.world.copy_body_state_from(&self.core.world, body);
@@ -482,9 +509,19 @@ impl PhysicsEngine {
             // (the collision pass's clock and parity, for whoever reads them off the car)
             slot.car.core.current_frame = self.core.current_frame;
             slot.car.core.no_collision_counter = self.core.no_collision_counter;
+        }
+        // PhysicsEngine::evOnStepCompleted, in registration order: the handlers that were
+        // there before the track (online: the client), ...
+        hooks.before_cars(&mut self.core, cars, physics_time);
+        // ... each loose object's handler (registered with the track, before any car's), ...
+        self.core.step_track_objects();
+        // ... Car::postStep in creation order, ...
+        for slot in cars.iter_mut() {
             let mut feed = DeviceFeed { device: slot.device.get(), dt };
             slot.car.step_completed(dt, &mut feed);
         }
+        // ... and the handlers registered after the cars (online: every remote car)
+        hooks.after_cars(&mut self.core, cars, physics_time);
         self.seconds[3] += clock.seconds();
     }
 
