@@ -451,9 +451,6 @@ pub struct AcRenderer {
     cars_to_be_loaded: i32,
     /// `ACCameraManager::currentGlobalCameraIndex`: what `CarNodeSorter::sort` reads
     global_camera_index: i32,
-    /// `Sim::focusedCarIndex` of the last frame, and the fade of a change of the focused car
-    /// (`ACCameraManager::fadeIn`): seconds since it began, its length
-    pub focus_fade: Option<(f32, f32)>,
     /// `Sim::mirrorTextureRenderer` and `Sim::virtualMirrorRenderer`: only with mirrors on
     mirror: Option<rustyac_render::mirror::MirrorTextureRenderer>,
     virtual_mirror: Option<rustyac_render::mirror::VirtualMirrorRenderer>,
@@ -669,7 +666,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), cars_to_be_loaded: 1, global_camera_index: 0, focus_fade: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -1242,6 +1239,10 @@ impl AcRenderer {
             if lights.is_active && lights.render_hud(&mut self.scene, self.told_paused, session_start < self.time_ms, self.race_start_ms.is_some(), tts) {
                 lights.render_lamps(&mut self.graphics);
             }
+        }
+        // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
+        if let Some((time, total)) = info.focus_fade {
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
         }
         if logging {
             let capture = rustyac_render::gpulog::end_capture();

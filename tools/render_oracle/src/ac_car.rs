@@ -95,6 +95,7 @@ pub const VA_CAR_NODE_SORTER_CTOR: usize = 0x1_4006_bb60; // CarNodeSorter::CarN
 const VA_CAR_NODE_SORTER_ADD_CAR: usize = 0x1_4006_bdf0; // CarNodeSorter::addCar(Node*, CarAvatar*)
 const VA_CAR_NODE_SORTER_SORT: usize = 0x1_4006_be30; // CarNodeSorter::sort()
 const VA_SIM_UNLOAD_MESH_RESOURCES: usize = 0x1_4019_edd0; // Sim::unloadMeshResources(Node*)
+const VA_CAMERA_MANAGER_FADE_HANDLER: usize = 0x1_4003_2770; // ACCameraManager's handler of Game::evOnPostGui (a lambda [this])
 const VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE: usize = 0x1_400d_a420; // CarAvatar::setNewPhysicsState(CarPhysicsState&, float)
 pub const VA_CARS_TO_BE_LOADED: usize = 0x1_4155_9b00; // static int RaceManager::carsToBeLoaded
 
@@ -1072,6 +1073,28 @@ impl Game {
         wr(camera_manager, 0xdc, crate::frames::global_camera_index(camera));
         let sort: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_CAR_NODE_SORTER_SORT));
         sort(sorter);
+    }
+
+    /// `ACCameraManager::fadeIn` 0x140033690 with a fade of `total` seconds: `fadeMode` is
+    /// {mode 0, fadeTime 0, fadeTotalTime, sender}.
+    pub unsafe fn fade_in(&self, c: &Car, total: f32) {
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let camera_manager: *mut u8 = rd(sim, 0x188);
+        wr(camera_manager, 0x8, c.game);
+        wr(camera_manager, 0x128, 0i32);
+        wr(camera_manager, 0x12c, 0.0f32);
+        wr(camera_manager, 0x130, total);
+    }
+
+    /// The camera manager's handler of `Game::evOnPostGui` (the game's own lambda): the fade's
+    /// overlay, the last thing of the frame's 2D pass.
+    pub unsafe fn post_gui_fade(&self, c: &Car, dt: f32) {
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let mut closure: *mut u8 = rd(sim, 0x188);
+        wr(closure, 0x8, c.game);
+        // (the frame's time by value, in xmm1)
+        let handler: extern "C" fn(*mut *mut u8, f32) = std::mem::transmute(self.acs.va(VA_CAMERA_MANAGER_FADE_HANDLER));
+        handler(&mut closure, dt);
     }
 
     /// The handlers of `Game::evOnPostUpdate` of one car, in the order they were registered

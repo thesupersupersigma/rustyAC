@@ -64,6 +64,9 @@ pub struct Args {
     pub tapes: Option<PathBuf>,
     pub max_cars: usize,
     pub loaded: i32,
+    /// `--fade-at <frame>`: `ACCameraManager::fadeIn` with `Sim::cameraFadeTime` (the fade of a
+    /// change of the focused car) begins at that frame
+    pub fade_at: Option<usize>,
     /// how many frames of the tape
     pub frames: usize,
     /// `--frames` was given (without a car: that many frames of the track alone)
@@ -120,6 +123,7 @@ fn parse() -> Result<Args, String> {
         tapes: None,
         max_cars: usize::MAX,
         loaded: 0,
+        fade_at: None,
         frames: 60,
         frames_given: false,
         dump: Vec::new(),
@@ -201,6 +205,10 @@ fn parse() -> Result<Args, String> {
             "--max-cars" => {
                 text = value()?;
                 a.max_cars = text.parse().map_err(|_| "--max-cars <n>")?;
+            }
+            "--fade-at" => {
+                text = value()?;
+                a.fade_at = Some(text.parse().map_err(|_| "--fade-at <frame>")?);
             }
             "--loaded" => {
                 text = value()?;

@@ -2,7 +2,7 @@
 
 //! `rustyac.exe`: see `docs/game/first_drive.md`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -374,19 +374,29 @@ impl Focus {
         self.fade = Some(0.0);
     }
 
-    /// One frame on. The answer is the fade for the picture: (seconds since it began, its length).
-    fn update(&mut self, dt: f32, world: &[CarView], names: &[String]) -> Option<(f32, f32)> {
-        let t = self.fade? + dt;
-        self.fade = Some(t);
-        if self.pending.is_some() && t >= self.fade_time {
-            let command = self.pending.take().unwrap();
-            self.apply(command, world, names);
-        }
-        if self.pending.is_none() && t >= self.fade_time * 2.0 {
+    /// The fade as the frame's picture shows it: (`fadeTime`, `fadeTotalTime`).
+    fn for_picture(&self) -> Option<(f32, f32)> {
+        self.fade.map(|t| (t, self.fade_time))
+    }
+
+    /// The camera manager's handler of `Game::evOnPostGui` (the lambda 0x140032770), after the
+    /// frame is drawn: from the black frame on (`fadeTime >= fadeTotalTime`) the waiting change
+    /// happens, so the next frame is the new car's; then the frame's time is added.
+    fn post_gui(&mut self, dt: f32, world: &[CarView], names: &[String]) {
+        let Some(t) = self.fade else { return };
+        if t >= self.fade_time * 2.0 {
+            if let Some(command) = self.pending.take() {
+                self.apply(command, world, names);
+            }
             self.fade = None;
-            return None;
+            return;
         }
-        Some((t, self.fade_time))
+        if !(t < self.fade_time) {
+            if let Some(command) = self.pending.take() {
+                self.apply(command, world, names);
+            }
+        }
+        self.fade = Some(t + dt);
     }
 }
 
@@ -417,12 +427,17 @@ fn audio_feed(options: &Options, headless: bool) -> Option<Arc<Mutex<Feed>>> {
 }
 
 /// The sound of the car that was built (the engine, the track's sounds, the car's).
-fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, shape: &CarShape) -> Option<GameAudio> {
+fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Option<GameAudio> {
     let feed = feed.as_ref()?;
-    // the car's folder name is its name in the game
-    let name = Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone());
+    // a car's folder name is its name in the game
+    let cars: Vec<(String, PathBuf, CarShape)> = std::iter::once(info)
+        .chain(others)
+        .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
+        .collect();
     let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
-    GameAudio::start(&options.audio, Arc::clone(feed), &name, &info.data_path, track, shape)
+    let mut audio = GameAudio::start(&options.audio, Arc::clone(feed), &cars, track)?;
+    audio.set_focus(options.focus.min(others.len()));
+    Some(audio)
 }
 
 fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
@@ -628,9 +643,11 @@ fn run_headless(options: &Options) -> Result<(), String> {
             if audio.is_none() && !failed {
                 let info = shared.car_info.lock().unwrap().clone();
                 if let Some(info) = info {
-                    let shape = CarShape::of(&info);
+                    let others = shared.other_infos.lock().unwrap().clone();
+                    let focused = if options.focus == 0 { info.clone() } else { others.get(options.focus - 1).cloned().unwrap_or_else(|| info.clone()) };
+                    let shape = CarShape::of(&focused);
                     let camera = DrivingCamera::from_name(&options.camera, &shape).unwrap_or_else(|_| DrivingCamera::chase());
-                    match start_audio(options, &feed, &info, &shape) {
+                    match start_audio(options, &feed, &info, &others) {
                         Some(sound) => audio = Some((sound, shape, camera)),
                         None => failed = true,
                     }
@@ -639,7 +656,8 @@ fn run_headless(options: &Options) -> Result<(), String> {
             }
             if let Some((sound, shape, camera)) = audio.as_mut() {
                 let now = Instant::now();
-                let view = shared.frames().at(now);
+                let world = shared.world_at(now);
+                let view = world[options.focus.min(world.len() - 1)];
                 let frame = camera.update(&view, shape, view.acc_g, (now - last).as_secs_f32());
                 if options.audio.clockless() {
                     sound.grid_frames(|_| (*camera, frame.matrix));
@@ -812,7 +830,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     if options.virtual_mirror {
         renderer.set_virtual_mirror(true);
     }
-    let mut audio = start_audio(options, &feed, &car_info, &shape);
+    let mut audio = start_audio(options, &feed, &car_info, &other_infos);
     let mut camera = match DrivingCamera::from_name(&options.camera, &shape) {
         Ok(camera) => camera,
         Err(message) => {
@@ -931,6 +949,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // F1 (and C, as before): AC's driving views in turn; F6: the
                             // cameras of the car's cameras.ini
                             0x70 | 0x43 => camera.f1(),
+                            // F4: back to your car (with other cars only; through the fade)
+                            0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                             0x75 => camera.f6(shapes[focus.index].car_cameras.len()),
                             // F11: AC's virtual mirror
                             0x7a => match renderer.toggle_virtual_mirror() {
@@ -976,8 +996,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             println!("focus script at {at:.2} s: {name}");
             focus.command(command, &world, &car_names);
         }
-        // the fade of a change of the focused car; the focus changes at its black frame
-        let focus_fade = focus.update(dt.as_secs_f32(), &world, &car_names);
+        // the fade of a change of the focused car, as this frame shows it
+        let focus_fade = focus.for_picture();
         if focus.index >= world.len() {
             focus.index = 0;
         }
@@ -1056,12 +1076,15 @@ fn run_window(options: &Options) -> Result<(), String> {
         // Game::update: the car's one backfire test (CarAvatar::update), whose event the sound
         // and the flames both hear; the flames empty its counter
         renderer.draw_world(&world, focus.index, &shapes[focus.index], &camera, &frame, &info, dt.as_secs_f32());
+        // Game::evOnPostGui: the focus changes at the fade's black frame
+        focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
             if options.audio.clockless() {
                 sound.grid_frames(|_| (camera, frame.matrix));
             } else {
-                sound.set_picture_backfire(renderer.backfire_triggered());
+                sound.set_picture_backfires(&renderer.backfires_triggered());
+                sound.set_focus(focus.index);
                 // (ReplayManager::updateReplayAudio: no sound outside half to double speed)
                 sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound);
             }
@@ -1250,11 +1273,13 @@ fn run_replay_audio(options: &Options, replay: &Path) -> Result<(), String> {
     let file = rustyac_game::input_file::InputFile::read(replay)?;
     let mut sim = GameSim::new(file.setup.clone(), Box::new(ReplaySource::default()))?;
     let info = sim.car_info();
-    let shape = CarShape::of(&info);
+    let others = sim.opponent_infos();
+    let focus = options.focus.min(others.len());
+    let shape = CarShape::of(if focus == 0 { &info } else { &others[focus - 1] });
     let feed = Some(Arc::new(Mutex::new(Feed::with_grid())));
-    let mut audio = start_audio(options, &feed, &info, &shape).ok_or("there is no sound to write")?;
+    let mut audio = start_audio(options, &feed, &info, &others).ok_or("there is no sound to write")?;
     let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
-    let mut sticky = Default::default();
+    let mut sticky = Vec::new();
     let started = Instant::now();
     for step in &file.steps {
         sim.step_recorded(step)?;
@@ -1264,7 +1289,7 @@ fn run_replay_audio(options: &Options, replay: &Path) -> Result<(), String> {
             !feed.grid.is_empty()
         };
         if waiting {
-            let view = CarView::capture(&sim, 0.0);
+            let view = if focus == 0 { CarView::capture(&sim, 0.0) } else { CarView::capture_opponent(&sim, focus - 1, 0.0) };
             let frame = camera.update(&view, &shape, view.acc_g, rustyac_game::audio::NRT_DT);
             audio.grid_frames(|_| (camera, frame.matrix));
         }

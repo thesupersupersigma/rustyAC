@@ -303,7 +303,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     let (mut last_pause, mut last_status) = (false, -1);
     let (mut lights_pause, mut lights_status) = (false, -1);
     let mut told_new_session = 0;
+    // ACCameraManager::fadeMode: fadeTime and fadeTotalTime (nothing fades before --fade-at)
+    let (mut fade_time, mut fade_total) = (0.0f32, 0.0f32);
     for (index, step) in frame.steps.iter().enumerate() {
+        if frame.fade_at == Some(index) {
+            (fade_time, fade_total) = (0.0, crate::frames::camera_fade_time());
+        }
         // Sim::evOnNewSession: the track's handler, then the car's objects'
         if step.extra.new_session != told_new_session {
             told_new_session = step.extra.new_session;
@@ -451,6 +456,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             if lights.is_active && lights.render_hud(&mut scene, step.extra.pause, session_started, step.extra.session_type == 3, tts) {
                 lights.render_lamps(&mut graphics);
             }
+        }
+        // Game::evOnPostGui: the camera manager's fade
+        if frame.fade_at.is_some() && !(fade_time >= fade_total * 2.0) {
+            rustyac_render::gl::fade_overlay(&mut graphics, fade_time, fade_total);
+            fade_time += crate::frames::DT;
         }
         if index >= frame.capture {
             let (text, draws) = if crate::timing() {

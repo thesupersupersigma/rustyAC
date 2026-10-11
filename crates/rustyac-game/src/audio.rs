@@ -47,7 +47,18 @@ pub struct StickySurface {
 /// and `CarAvatar::isTcInAction`. `sticky` carries the tyres' last surfaces from step to step.
 #[allow(clippy::needless_range_loop)] // one loop over the wheels, as the game's
 pub fn capture(sim: &GameSim, sticky: &mut [StickySurface; 4]) -> CarFrame {
-    let car = &sim.car.car;
+    capture_car(sim, &sim.car.car, sticky)
+}
+
+/// The same of every car of the session, the player's first. `sticky` grows to one set of
+/// surfaces per car.
+pub fn capture_all(sim: &GameSim, sticky: &mut Vec<[StickySurface; 4]>) -> Vec<CarFrame> {
+    sticky.resize_with(1 + sim.opponents.len(), Default::default);
+    sim.cars().zip(sticky.iter_mut()).map(|(car, sticky)| capture_car(sim, car, sticky)).collect()
+}
+
+#[allow(clippy::needless_range_loop)] // one loop over the wheels, as the game's
+fn capture_car(sim: &GameSim, car: &rustyac_physics::car::RollingChassis, sticky: &mut [StickySurface; 4]) -> CarFrame {
     let flat = |m: &Mat| -> [f32; 16] { std::array::from_fn(|i| m[i / 4][i % 4]) };
     let world = car.core.get_world_matrix(car.body);
     let body_velocity = car.core.get_velocity(car.body);
@@ -145,9 +156,10 @@ pub fn capture(sim: &GameSim, sticky: &mut [StickySurface; 4]) -> CarFrame {
     frame
 }
 
-/// The physics thread's `ACPhysicsEvent`s for the sound.
+/// The physics thread's `ACPhysicsEvent`s for the sound: every car's (`param1` names the car
+/// that was hit; `Sim::stepPhysicsEvent` hands each to that car's sound), car after car.
 fn events_of(sim: &GameSim, out: &mut Vec<PhysicsEvent>) {
-    for e in &sim.car.car.physics_events {
+    for e in sim.cars().flat_map(|car| &car.physics_events) {
         out.push(PhysicsEvent {
             kind: e.kind,
             param1: e.param1,
@@ -163,16 +175,17 @@ fn events_of(sim: &GameSim, out: &mut Vec<PhysicsEvent>) {
 
 /// One frame for the sound, cut on the grid of a clock-less WAV.
 pub struct GridFrame {
-    pub state: CarFrame,
+    /// every car's state, the player's first
+    pub state: Vec<CarFrame>,
     pub events: Vec<PhysicsEvent>,
 }
 
 /// What the physics thread leaves for the display thread.
 #[derive(Default)]
 pub struct Feed {
-    /// The newest step's state (the game's `PhysicsAvatar::update` copies the newest finished
-    /// step, unblended).
-    pub state: Option<CarFrame>,
+    /// The newest step's state of every car, the player's first (the game's
+    /// `PhysicsAvatar::update` copies the newest finished step, unblended).
+    pub state: Option<Vec<CarFrame>>,
     /// The physics events since the display thread last looked.
     pub events: Vec<PhysicsEvent>,
     /// Clock-less mode: a frame after every `floor(n * 50 / 9)` steps (60 a second of 3 ms steps).
@@ -190,8 +203,8 @@ impl Feed {
     }
 
     /// After a physics step.
-    pub fn push(&mut self, sim: &GameSim, sticky: &mut [StickySurface; 4]) {
-        let state = capture(sim, sticky);
+    pub fn push(&mut self, sim: &GameSim, sticky: &mut Vec<[StickySurface; 4]>) {
+        let state = capture_all(sim, sticky);
         self.steps += 1;
         if self.grid_on {
             events_of(sim, &mut self.pending);
@@ -209,7 +222,7 @@ impl Feed {
 /// The physics thread's end: after every step the sound's inputs go into the feed.
 pub struct AudioSink {
     feed: Arc<Mutex<Feed>>,
-    sticky: [StickySurface; 4],
+    sticky: Vec<[StickySurface; 4]>,
 }
 
 impl AudioSink {
@@ -222,7 +235,7 @@ impl StepSink for AudioSink {
     fn after_step(&mut self, sim: &GameSim, _input: &StepInput) -> Result<(), String> {
         // the copy is made outside the lock; the lock is held for a move
         let mut local = Feed::default();
-        let state = capture(sim, &mut self.sticky);
+        let state = capture_all(sim, &mut self.sticky);
         events_of(sim, &mut local.events);
         let mut feed = self.feed.lock().unwrap();
         feed.steps += 1;
@@ -285,16 +298,18 @@ pub struct AudioTiming {
 pub struct GameAudio {
     world: AudioWorld,
     feed: Arc<Mutex<Feed>>,
-    last: Option<CarFrame>,
+    last: Option<Vec<CarFrame>>,
     camera: Option<(i32, i32)>,
     bonnet_external: bool,
     bumper_external: bool,
     paused: bool,
-    graphics_offset: [f32; 3],
+    /// `car.ini [BASIC] GRAPHICS_OFFSET` of every car
+    graphics_offsets: Vec<[f32; 3]>,
     oracle: Option<(OracleCamera, Option<CarFrame>)>,
     pub timing: AudioTiming,
     logging: bool,
     frame_number: u64,
+    focus: usize,
 }
 
 /// Documents `Assetto Corsa`, where the game keeps `cfg/audio.ini`.
@@ -305,11 +320,13 @@ fn documents() -> Option<PathBuf> {
 impl GameAudio {
     /// Starts the sound for a car on a track (or on the flat road). `Ok(None)` with a line on
     /// the console when there is none to be had: no Assetto Corsa folder, no FMOD in it.
-    pub fn start(options: &AudioOptions, feed: Arc<Mutex<Feed>>, car_name: &str, car_data: &Path, track: Option<(&Path, &str)>, shape: &CarShape) -> Option<GameAudio> {
+    /// `cars`: every car of the session, the player's first: its name in the game, its data
+    /// folder and its shape.
+    pub fn start(options: &AudioOptions, feed: Arc<Mutex<Feed>>, cars: &[(String, PathBuf, CarShape)], track: Option<(&Path, &str)>) -> Option<GameAudio> {
         if options.off {
             return None;
         }
-        match Self::try_start(options, feed, car_name, car_data, track, shape) {
+        match Self::try_start(options, feed, cars, track) {
             Ok(audio) => Some(audio),
             Err(message) => {
                 println!("audio: no sound ({message})");
@@ -318,7 +335,7 @@ impl GameAudio {
         }
     }
 
-    fn try_start(options: &AudioOptions, feed: Arc<Mutex<Feed>>, car_name: &str, car_data: &Path, track: Option<(&Path, &str)>, shape: &CarShape) -> Result<GameAudio, String> {
+    fn try_start(options: &AudioOptions, feed: Arc<Mutex<Feed>>, cars: &[(String, PathBuf, CarShape)], track: Option<(&Path, &str)>) -> Result<GameAudio, String> {
         let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found: its FMOD DLLs and sound banks are needed")?;
         // Game::Game makes the sound engine only when the game's own switch is on
         let switch = IniReader::load(&ac.join("system/cfg/audio_engine.ini"))?;
@@ -367,19 +384,24 @@ impl GameAudio {
             let surfaces: Vec<(String, String)> = manager.surfaces.iter().map(|(key, surface)| (key.clone(), surface.wav.clone())).collect();
             cache_surface_sounds(&mut engine, &surfaces);
         }
-        // CameraCarDefinition: `EXTERNAL_SOUND` of each of the car's own cameras (default: yes)
-        let cameras = IniReader::load(&append_path(car_data, "cameras.ini"))?;
-        let mut external = Vec::new();
-        for n in 0.. {
-            let section = format!("CAMERA_{n}");
-            if !cameras.has_section(&section) {
-                break;
+        // Sim::addCar: the sound of every car in the order they are made (the number is the guid)
+        let mut sounds = Vec::new();
+        for (guid, (car_name, car_data, _)) in cars.iter().enumerate() {
+            // CameraCarDefinition: `EXTERNAL_SOUND` of each of the car's own cameras (default: yes)
+            let cameras = IniReader::load(&append_path(car_data, "cameras.ini"))?;
+            let mut external = Vec::new();
+            for n in 0.. {
+                let section = format!("CAMERA_{n}");
+                if !cameras.has_section(&section) {
+                    break;
+                }
+                external.push(if cameras.has_key(&section, "EXTERNAL_SOUND") { cameras.get_int(&section, "EXTERNAL_SOUND").unwrap_or(0) != 0 } else { true });
             }
-            external.push(if cameras.has_key(&section, "EXTERNAL_SOUND") { cameras.get_int(&section, "EXTERNAL_SOUND").unwrap_or(0) != 0 } else { true });
+            let info = SoundInfo { unix_name: car_name.clone(), guid: guid as i32, data_folder: car_data.clone(), car_cameras_external_sound: external };
+            sounds.push(CarSound::new(&mut engine, info)?);
         }
-        let info = SoundInfo { unix_name: car_name.to_string(), guid: 0, data_folder: car_data.to_path_buf(), car_cameras_external_sound: external };
-        let car = CarSound::new(&mut engine, info)?;
-        let has_bank = car.audio.is_some();
+        let has_bank = sounds.first().is_some_and(|car| car.audio.is_some());
+        let silent: Vec<&str> = cars.iter().zip(&sounds).skip(1).filter(|(_, sound)| sound.audio.is_none()).map(|(car, _)| car.0.as_str()).collect();
         // CameraDrivableManager: the bonnet's and the bumper's view may count as outside
         let manager = match documents() {
             Some(d) => IniReader::load(&d.join("cfg/camera_manager.ini"))?,
@@ -406,19 +428,28 @@ impl GameAudio {
                 None => "none".to_string(),
             }
         );
+        if sounds.len() > 1 {
+            println!(
+                "audio: {} other car(s) with their own sounds, [LEVELS] OPPONENTS {}{}",
+                sounds.len() - 1,
+                sounds.iter().skip(1).find_map(|car| car.audio.as_ref()).map_or("-".to_string(), |audio| format!("{}", audio.mix_volumes.opponents)),
+                if silent.is_empty() { String::new() } else { format!("; no sound bank for {}", silent.join(", ")) }
+            );
+        }
         Ok(GameAudio {
-            world: AudioWorld::new(engine, track_audio, vec![car]),
+            world: AudioWorld::new(engine, track_audio, sounds),
             feed,
             last: None,
             camera: None,
             bonnet_external: flag("BONNET_EXTERNAL"),
             bumper_external: flag("BUMPER_EXTERNAL"),
             paused: false,
-            graphics_offset: shape.graphics_offset,
+            graphics_offsets: cars.iter().map(|car| car.2.graphics_offset).collect(),
             oracle,
             timing: AudioTiming::default(),
             logging,
             frame_number: 0,
+            focus: 0,
         })
     }
 
@@ -442,8 +473,8 @@ impl GameAudio {
 
     /// `CarAvatar::makeBodyMatrix` @ 0x1400d8ec0, the position: the body's place with the
     /// model's offset (`car.ini [GRAPHICS] GRAPHICS_OFFSET`).
-    fn body_position(&self, w: &[f32; 16]) -> [f32; 3] {
-        let g = self.graphics_offset;
+    fn body_position(&self, car: usize, w: &[f32; 16]) -> [f32; 3] {
+        let g = self.graphics_offsets.get(car).copied().unwrap_or([0.0; 3]);
         [
             (((g[1] * w[4]) + (g[0] * w[0])) + (g[2] * w[8])) + w[12],
             (((g[0] * w[1]) + (g[1] * w[5])) + (g[2] * w[9])) + w[13],
@@ -451,11 +482,16 @@ impl GameAudio {
         ]
     }
 
-    fn one_frame(&mut self, mut state: CarFrame, events: &[PhysicsEvent], camera: &DrivingCamera, camera_matrix: &Mat, dt: f32) {
+    fn one_frame(&mut self, mut states: Vec<CarFrame>, events: &[PhysicsEvent], camera: &DrivingCamera, camera_matrix: &Mat, dt: f32) {
         let started = Instant::now();
-        state.body_position = self.body_position(&state.world_matrix);
+        for (car, state) in states.iter_mut().enumerate() {
+            state.body_position = self.body_position(car, &state.world_matrix);
+        }
+        // Sim::focusedCarIndex: the car the camera is on
+        let focus = self.focus.min(states.len().saturating_sub(1));
+        let state = &states[focus];
         let view = self.camera_view(camera);
-        let sim = SimView { focused_car_index: 0, camera: Some(view) };
+        let sim = SimView { focused_car_index: focus as u32, camera: Some(view) };
         // ACCameraManager::setMode ends in setAudioDistanceScale; F6 inside the car cameras
         // (only the index changes) does not
         if self.camera != Some((view.mode, view.drivable_mode)) {
@@ -467,15 +503,15 @@ impl GameAudio {
                 let first = first.get_or_insert_with(|| state.clone());
                 oracle.listener(&state, first)
             }
-            // the cameras of the driven car hand over their matrix and the body's velocity
+            // the cameras of the focused car hand over their matrix and that car's velocity
             None => (std::array::from_fn(|i| camera_matrix[i / 4][i % 4]), state.velocity),
         };
         if self.logging {
             log::mark(&format!("frame {}", self.frame_number));
         }
         self.frame_number += 1;
-        self.world.frame(&FrameInput { cars: std::slice::from_ref(&state), events, sim, listener: Some(listener), dt });
-        self.last = Some(state);
+        self.world.frame(&FrameInput { cars: &states, events, sim, listener: Some(listener), dt });
+        self.last = Some(states);
         let took = started.elapsed();
         self.timing.frames += 1;
         self.timing.sum += took;
@@ -489,6 +525,22 @@ impl GameAudio {
         if let Some(car) = self.world.cars.first_mut() {
             car.picture_backfire = fired;
         }
+    }
+
+    /// The same for every car, in the cars' order.
+    pub fn set_picture_backfires(&mut self, fired: &[Option<bool>]) {
+        for (car, fired) in self.world.cars.iter_mut().zip(fired) {
+            car.picture_backfire = *fired;
+        }
+    }
+
+    /// `Sim::focusedCarIndex`: the car the camera is on. Its sounds are the full set (inside
+    /// or outside), the others' the opponents' set; the listener's velocity is its. As in the
+    /// game, the louder tyres and engine of an outside view stay with the car that was focused
+    /// when the camera mode last changed (`ACCameraManager::setAudioDistanceScale` is not
+    /// called for a change of the focus).
+    pub fn set_focus(&mut self, focus: usize) {
+        self.focus = focus;
     }
 
     /// One picture frame against the clock: the newest physics state, the events since the
@@ -517,12 +569,18 @@ impl GameAudio {
         self.one_frame(state, &events, camera, camera_matrix, dt);
     }
 
+    /// How many cars have sounds.
+    pub fn car_count(&self) -> usize {
+        self.world.cars.len()
+    }
+
     /// The frames of the 60 Hz grid that are waiting (a WAV written without a clock): each is
     /// one block of the mix. `camera` gives each frame's listener from the frame's own state.
     pub fn grid_frames(&mut self, mut camera: impl FnMut(&CarFrame) -> (DrivingCamera, Mat)) {
         loop {
             let Some(frame) = self.feed.lock().unwrap().grid.pop_front() else { break };
-            let (driving, matrix) = camera(&frame.state);
+            let Some(focused) = frame.state.get(self.focus.min(frame.state.len().saturating_sub(1))) else { continue };
+            let (driving, matrix) = camera(focused);
             self.one_frame(frame.state, &frame.events, &driving, &matrix, NRT_DT);
         }
     }

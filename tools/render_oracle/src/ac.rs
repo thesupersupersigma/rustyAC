@@ -1058,6 +1058,9 @@ impl Game {
                 let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_SEMAPHORE_UPDATE));
                 update(semaphore, crate::frames::DT);
             }
+            if let (Some(car), true) = (&car, frame.fade_at == Some(index)) {
+                self.fade_in(car, crate::frames::camera_fade_time());
+            }
             // the game camera's update: where it looks from, its lens and the shadow splits
             wr(camera, 0x8, step.camera.fov);
             wr(camera, 0xc, step.camera.matrix);
@@ -1167,6 +1170,10 @@ impl Game {
             if !start_lights.is_null() && rd::<u8>(start_lights, 0x30) != 0 {
                 let render_hud: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_STARTING_LIGHTS_RENDER_HUD));
                 render_hud(start_lights, crate::frames::DT);
+            }
+            // Game::evOnPostGui: the camera manager's fade (the game's own handler)
+            if let (Some(car), Some(_)) = (&car, frame.fade_at) {
+                self.post_gui_fade(car, crate::frames::DT);
             }
             if index >= frame.capture {
                 // (a timing run keeps no log: the logger costs far more than the frame)

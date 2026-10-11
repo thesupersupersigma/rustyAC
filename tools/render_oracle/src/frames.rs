@@ -24,6 +24,12 @@ pub fn game_time_ms(index: usize) -> f64 {
 /// The frame time both sides run with.
 pub const DT: f32 = 1.0 / 60.0;
 
+/// `Sim::cameraFadeTime`: `system/cfg/fades.ini [CHANGE_CAMERA_FADE] MS` (100 in the game's
+/// file) times 0.001f.
+pub fn camera_fade_time() -> f32 {
+    100.0 * f32::from_bits(0x3a83_126f)
+}
+
 pub struct ModelFile {
     /// the path the model is opened by, on both sides
     pub filename: String,
@@ -176,6 +182,8 @@ pub struct Frame {
     pub others: Vec<CarSpec>,
     /// `RaceManager::carsToBeLoaded`
     pub cars_to_be_loaded: i32,
+    /// `--fade-at`: the frame at which the camera manager's fade begins
+    pub fade_at: Option<usize>,
     /// the frames, in order; every one is updated and rendered
     pub steps: Vec<Step>,
     /// the first frame that is logged and read back (0 = the first one rendered)
@@ -526,7 +534,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
     let cars_to_be_loaded = if args.loaded > 0 { args.loaded } else { others.len() as i32 + 1 };
-    Ok(Frame { name, track, car, others, cars_to_be_loaded, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
+    Ok(Frame { name, track, car, others, cars_to_be_loaded, fade_at: args.fade_at, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
 }
 
 /// `<prefix>.car<n>.audiotape`.

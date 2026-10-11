@@ -273,3 +273,22 @@ pub fn full_screen_quad(graphics: &mut Graphics, shader: Option<ShaderId>) {
     gl.full_screen_quad(graphics, shader);
     graphics.gl = Some(gl);
 }
+
+/// The overlay of `ACCameraManager`'s fade: its handler of `Game::evOnPostGui` (the lambda
+/// 0x140032770), the last thing drawn on the screen, over the GUI and the HUD. `time` is
+/// `fadeMode.fadeTime` and `total` `fadeTotalTime`: the screen goes to the fade colour (black)
+/// over `total` seconds and comes back over the same time. Nothing is drawn once the fade is
+/// over (`time >= total * 2`). The handler sets no state of its own: the quad is drawn with
+/// what the 2D pass left. The caller adds the frame's time to `time` afterwards, as the handler
+/// does.
+pub fn fade_overlay(graphics: &mut Graphics, time: f32, total: f32) {
+    if time >= total * 2.0 {
+        return;
+    }
+    let alpha = if time < total { time / total } else { 2.0 - time / total };
+    let Some(mut gl) = graphics.gl.take() else { return };
+    gl.color4f(0.0, 0.0, 0.0, alpha);
+    let (width, height) = (graphics.video.width as f32, graphics.video.height as f32);
+    gl.quad(graphics, 0.0, 0.0, width, height, false, None);
+    graphics.gl = Some(gl);
+}
