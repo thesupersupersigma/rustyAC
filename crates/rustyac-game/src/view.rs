@@ -657,6 +657,12 @@ impl CarView {
                 position: car.spline_locator_data.npos,
                 in_pit_lane: car.is_in_pit_lane(),
             };
+            if !player {
+                // another car: what its own transponder counted
+                view.lap.laps = tp.lap_count;
+                view.lap.last_ms = tp.last_lap;
+                view.lap.best_ms = tp.best_lap;
+            }
         }
         view.hybrid = HybridView {
             engine_brake: car.cockpit.engine_brake,
