@@ -345,17 +345,19 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         (None, Some(prefix)) => Some(tape_of(prefix, 0)),
         (None, None) => None,
     };
-    let first_car = match (&args.car, &args.tapes) {
-        (Some(name), _) => Some(name.clone()),
-        (None, Some(prefix)) => Some(tape_car(&tape_of(prefix, 0))?),
-        (None, None) => None,
+    let first_car = match (&args.car, &args.tapes, args.poses.first()) {
+        (Some(name), _, _) => Some(name.clone()),
+        (None, Some(prefix), _) => Some(tape_car(&tape_of(prefix, 0))?),
+        (None, None, Some((name, _))) => Some(name.clone()),
+        (None, None, None) => None,
     };
+    let first_pose = args.pose.clone().or_else(|| args.poses.first().map(|p| p.1.clone()));
     if let Some(name) = &first_car {
         let folder = args.game.join("content/cars").join(name);
         if !folder.is_dir() {
             return Err(format!("no car folder {}", folder.display()));
         }
-        states = match (&first_tape, &args.pose) {
+        states = match (&first_tape, &first_pose) {
             (Some(tape), _) => read_tape(tape, args.tape_from, args.frames)?,
             (None, Some(file)) => vec![rustyac_render::car::CarPhysicsState::from_bytes(&std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?)?; args.capture + 1],
             (None, None) => return Err("--car needs --pose <file> (rustyac.exe --screenshot … --pose-out <file> writes one) or --tape <file>".into()),
@@ -390,6 +392,14 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             seats.push((e, g));
             index += 1;
         }
+    }
+    // … or each from its pose file
+    for (index, (name, file)) in args.poses.iter().enumerate().skip(1) {
+        let (spec, e, g) = car_spec(args, name, index)?;
+        let pose = rustyac_render::car::CarPhysicsState::from_bytes(&std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?)?;
+        others.push(spec);
+        other_states.push(vec![pose; states.len()]);
+        seats.push((e, g));
     }
     // where the sun is seen from the car (for the view into the sun): the same angles the
     // lighting uses, to the precision a camera needs
@@ -502,7 +512,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
         Some(t) => format!("{t}_{}", args.view),
         None => format!("empty_{}", args.view),
     };
-    let name = match (&car, &first_tape, &args.pose) {
+    let name = match (&car, &first_tape, &first_pose) {
         (Some(c), Some(tape), _) => format!("{name}_{}_{}_{}_{}", c.name, tape.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), args.tape_from, args.frames),
         (Some(c), None, Some(pose)) => format!("{name}_{}_{}", c.name, pose.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()),
         _ => name,

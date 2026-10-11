@@ -361,7 +361,11 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         // Game::update: the car's objects, then the handlers of evOnPostUpdate
         if let (Some(car), Some(spec)) = (&mut car, &frame.car) {
             // Sim::update: CarNodeSorter::sort
-            if count > 1 {
+            // RENDER_ORACLE_FAULT=nosort | nosmooth | focus0: the port leaves out the sorter, the
+            // blend of the other cars' controls, or takes car 0 for the focused one: to show
+            // that the comparison notices
+            let fault = std::env::var("RENDER_ORACLE_FAULT").unwrap_or_default();
+            if count > 1 && fault != "nosort" {
                 let list: Vec<(rustyac_render::scene::NodeId, i32)> = std::iter::once((car.car_node, 0)).chain(others.iter().map(|o| (o.car_node, o.guid))).collect();
                 scene.sort_cars(cars, &list, crate::frames::global_camera_index(&step.camera));
             }
@@ -385,7 +389,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             feed(car, spec, step, index, count);
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             // (PhysicsAvatar::update: CarAvatar::setNewPhysicsState of every car, before the cars update)
-            let other_states: Vec<rustyac_render::car::CarPhysicsState> = others.iter_mut().zip(&step.others).map(|(other, state)| other.set_new_physics_state(state, crate::frames::DT)).collect();
+            let other_states: Vec<rustyac_render::car::CarPhysicsState> = others.iter_mut().zip(&step.others).map(|(other, state)| if fault == "nosmooth" { *state } else { other.set_new_physics_state(state, crate::frames::DT) }).collect();
             for ((other, spec), state) in others.iter_mut().zip(&frame.others).zip(&other_states) {
                 feed(other, spec, step, index, count);
                 other.update(&mut graphics, &mut scene, state, crate::frames::DT);
@@ -418,7 +422,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         scene.traverse(root);
         // Sim::renderScene: the mirror before the picture
         // (MirrorTextureRenderer::render: the focused car's rear view)
-        let focused = match step.extra.focus {
+        let focused = match if std::env::var("RENDER_ORACLE_FAULT").is_ok_and(|f| f == "focus0") { 0 } else { step.extra.focus } {
             0 => car.as_ref(),
             n => others.get(n as usize - 1),
         };

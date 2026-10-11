@@ -62,6 +62,9 @@ pub struct Args {
     /// --audio-tape` (each tape's header names its car); `--max-cars <n>` takes the first n,
     /// `--loaded <n>` is `RaceManager::carsToBeLoaded` when it is not the number of cars
     pub tapes: Option<PathBuf>,
+    /// `--poses <car>=<file.pose>,<car>=<file.pose>,…`: several cars, each standing as its pose
+    /// file has it (`render_oracle pose-of` cuts one out of a tape) in every frame
+    pub poses: Vec<(String, PathBuf)>,
     pub max_cars: usize,
     pub loaded: i32,
     /// `--fade-at <frame>`: `ACCameraManager::fadeIn` with `Sim::cameraFadeTime` (the fade of a
@@ -121,6 +124,7 @@ fn parse() -> Result<Args, String> {
         tape: None,
         tape_from: 0,
         tapes: None,
+        poses: Vec::new(),
         max_cars: usize::MAX,
         loaded: 0,
         fade_at: None,
@@ -201,6 +205,18 @@ fn parse() -> Result<Args, String> {
                 let absolute = if given.is_absolute() { given } else { std::env::current_dir().map_err(|e| e.to_string())?.join(given) };
                 text = absolute.to_string_lossy().into_owned();
                 a.tapes = Some(absolute);
+            }
+            "--poses" => {
+                let list = value()?;
+                let mut absolute = Vec::new();
+                for item in list.split(',').filter(|s| !s.is_empty()) {
+                    let (car, file) = item.split_once('=').ok_or("--poses <car>=<file.pose>,…")?;
+                    let file = PathBuf::from(file);
+                    let file = if file.is_absolute() { file } else { std::env::current_dir().map_err(|e| e.to_string())?.join(file) };
+                    absolute.push(format!("{car}={}", file.to_string_lossy()));
+                    a.poses.push((car.to_string(), file));
+                }
+                text = absolute.join(",");
             }
             "--max-cars" => {
                 text = value()?;
@@ -432,6 +448,16 @@ fn run_side(args: &Args) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let args = parse()?;
     match args.command.as_str() {
+        // `pose-of --tape <file.audiotape> --tape-from <frame> --pose <out.pose>`: one frame of a
+        // tape as a pose file (the part of the state the picture reads)
+        "pose-of" => {
+            let tape = args.tape.as_ref().ok_or("pose-of --tape <file.audiotape> --tape-from <frame> --pose <out.pose>")?;
+            let out = args.pose.as_ref().ok_or("pose-of … --pose <out.pose>")?;
+            let state = frames::read_tape(tape, args.tape_from, 1)?.into_iter().next().ok_or("the tape has no such frame")?;
+            std::fs::write(out, state.to_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
+            println!("{}: frame {} of {}", out.display(), args.tape_from, tape.display());
+            Ok(())
+        }
         "run" => run_side(&args),
         "compare" => compare::compare(&args),
         _ => Err(USAGE.into()),
