@@ -17,6 +17,9 @@ pub const IDENTITY: Mat = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0
 /// How many loose objects the picture follows at a time.
 pub const MOVED_OBJECTS: usize = 8;
 
+/// How many other cars a [`CarView`] can show (Task 24: the debug view's boxes).
+pub const OTHER_CARS: usize = 31;
+
 /// What the game's `Car::getPhysicsState` @ 0x140270d70 hands the car's picture beyond the
 /// members of [`CarView`]: the values the car's visual helpers read (ground shadows, skid
 /// marks, smoke, disc glow, instruments).
@@ -78,6 +81,10 @@ pub struct CarView {
     /// [`MOVED_OBJECTS`] are shown moved.
     pub moved_objects: [(u16, Mat); MOVED_OBJECTS],
     pub moved_object_count: u8,
+    /// Task 24: the body matrices of the session's other cars (the first [`OTHER_CARS`]).
+    /// Only the debug view draws them, as boxes; AC's renderer does not draw other cars yet.
+    pub other_cars: [Mat; OTHER_CARS],
+    pub other_car_count: u8,
     /// New sessions so far (`GameSim::new_sessions`)
     pub new_sessions: u32,
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
@@ -262,6 +269,8 @@ impl Default for CarView {
             render: RenderState::default(),
             moved_objects: [(0, IDENTITY); MOVED_OBJECTS],
             moved_object_count: 0,
+            other_cars: [IDENTITY; OTHER_CARS],
+            other_car_count: 0,
             new_sessions: 0,
             steps: 0,
             sim_seconds: 0.0,
@@ -478,6 +487,14 @@ impl CarView {
             body: car.core.get_world_matrix(car.body).m,
             moved_objects,
             moved_object_count,
+            other_cars: {
+                let mut others = [IDENTITY; OTHER_CARS];
+                for (slot, other) in others.iter_mut().zip(&sim.opponents) {
+                    *slot = other.car.car.core.get_world_matrix(other.car.car.body).m;
+                }
+                others
+            },
+            other_car_count: sim.opponents.len().min(OTHER_CARS) as u8,
             new_sessions: sim.new_sessions,
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
@@ -710,6 +727,9 @@ impl CarView {
         }
         let mut out = *b;
         out.body = lerp_pose(&a.body, &b.body, t);
+        for k in 0..(b.other_car_count as usize).min(a.other_car_count as usize) {
+            out.other_cars[k] = lerp_pose(&a.other_cars[k], &b.other_cars[k], t);
+        }
         for k in 0..4 {
             out.wheels[k] = lerp_pose(&a.wheels[k], &b.wheels[k], t);
             out.tyre_matrix[k] = lerp_pose(&a.tyre_matrix[k], &b.tyre_matrix[k], t);

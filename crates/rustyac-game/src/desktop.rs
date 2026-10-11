@@ -98,7 +98,10 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     }
     setup.physics_threads = options.physics_threads;
     if !setup.opponents.is_empty() {
-        println!("{} other cars (their physics only: they are not drawn or heard yet)", setup.opponents.len());
+        println!(
+            "{} other cars: their physics is the game's, but AC's renderer and the sound do not have them yet. To see them (as blue boxes), add --debug-view",
+            setup.opponents.len()
+        );
     }
     // the device the bindings name decides one aid (a pad has no clutch pedal)
     let input_method = Bindings::load(options, &mut Vec::new()).input_method;

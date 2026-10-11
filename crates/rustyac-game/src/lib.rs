@@ -91,6 +91,16 @@ pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash
             sim.engine.as_ref().map_or(0, |engine| engine.threads()),
             per_step / 3.0 * 100.0
         );
+        if let Some(engine) = &sim.engine {
+            let ms = |seconds: f64| seconds * 1000.0 / sim.steps.max(1) as f64;
+            eprintln!(
+                "  of a step: the cars {:.4} ms, the collision pass {:.4} ms, dWorldStep {:.4} ms, the rest {:.4} ms",
+                ms(engine.seconds[0]),
+                ms(engine.seconds[1]),
+                ms(engine.seconds[2]),
+                ms(engine.seconds[3])
+            );
+        }
     }
     Ok(sim.steps)
 }

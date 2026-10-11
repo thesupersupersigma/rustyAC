@@ -117,6 +117,10 @@ pub struct PhysicsEngine {
     pub contact_callbacks: u32,
     /// The collision callbacks of the last step, as the cars were told (for the oracles).
     pub last_events: Vec<crate::car::CollisionEvent>,
+    /// Seconds spent so far in the cars' steps (`physicsCPUTimes.carStep`), in the collision
+    /// pass, in `dWorldStep`, and in the rest of the step (copies, `Car::postStep`). Wall
+    /// time; always 0 where there is no clock (wasm).
+    pub seconds: [f64; 4],
     parts: Vec<CarParts>,
     /// The core is out, in a car that is being built.
     building: bool,
@@ -134,6 +138,32 @@ struct SharedSlots<'a, 'b>(*mut CarSlot<'b>, std::marker::PhantomData<&'a mut [C
 // of the slots a worker steps.
 #[cfg(not(target_arch = "wasm32"))]
 unsafe impl Sync for SharedSlots<'_, '_> {}
+
+/// A stopwatch for [`PhysicsEngine::seconds`] (nothing where there is no clock).
+struct Clock {
+    #[cfg(not(target_arch = "wasm32"))]
+    start: std::time::Instant,
+}
+
+impl Clock {
+    fn start() -> Clock {
+        Clock {
+            #[cfg(not(target_arch = "wasm32"))]
+            start: std::time::Instant::now(),
+        }
+    }
+
+    fn seconds(&self) -> f64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed().as_secs_f64()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            0.0
+        }
+    }
+}
 
 #[allow(dead_code)]
 fn chassis_is_send() {
@@ -162,6 +192,7 @@ impl PhysicsEngine {
             step_stats: rustyac_ode::StepStats::default(),
             contact_callbacks: 0,
             last_events: Vec::new(),
+            seconds: [0.0; 4],
             parts: Vec::new(),
             building: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -341,7 +372,10 @@ impl PhysicsEngine {
         }
 
         // Car::stepPreCacheValues and Car::step
+        let clock = Clock::start();
         self.step_cars(dt, physics_time, cars);
+        self.seconds[0] += clock.seconds();
+        let clock = Clock::start();
 
         // every car's part goes into the one world
         for (index, slot) in cars.iter_mut().enumerate() {
@@ -355,6 +389,8 @@ impl PhysicsEngine {
         // after every new contact joint, then dWorldStep
         self.last_events.clear();
         self.contact_callbacks = 0;
+        self.seconds[3] += clock.seconds();
+        let clock = Clock::start();
         if self.collisions_enabled {
             let track = self.track.clone();
             let own = self.core.statics.clone();
@@ -378,7 +414,11 @@ impl PhysicsEngine {
                 self.last_events.push(event);
             }
         }
+        self.seconds[1] += clock.seconds();
+        let clock = Clock::start();
         self.step_stats = self.core.world_step(dt);
+        self.seconds[2] += clock.seconds();
+        let clock = Clock::start();
         // PhysicsEngine::evOnStepCompleted: each loose object's handler (they were
         // registered with the track, before any car's)
         self.core.step_track_objects();
@@ -395,6 +435,7 @@ impl PhysicsEngine {
             let mut feed = DeviceFeed { device: slot.device.get(), dt };
             slot.car.step_completed(dt, &mut feed);
         }
+        self.seconds[3] += clock.seconds();
     }
 
     /// `Car::stepPreCacheValues` and `Car::step` of every car.

@@ -394,7 +394,8 @@ usage: rustyac [options]
                         track's AI line (automatic gearbox on); for checks and for watching
   --cars <n>            n cars in all: the others are copies of the driver's car on the next
                         grid (or pit) slots, driven by the line follower (parked on the flat
-                        road). Their physics is the game's; they are NOT drawn or heard yet
+                        road). Their physics is the game's; AC's renderer and the sound do
+                        not have them yet: --debug-view shows them as blue boxes
   --opponent <car>[:<skin>]:<parked|auto|file.ryin>
                         another car (repeat it for more): parked on its brakes, driven by the
                         line follower, or by the inputs of a recorded drive

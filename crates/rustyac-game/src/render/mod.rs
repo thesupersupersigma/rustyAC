@@ -928,6 +928,14 @@ impl DebugRenderer {
                     drawn.triangles += stats.triangles;
                 }
             }
+            // Task 24, the other cars of the session: this car's boxes again in another colour,
+            // at each of their bodies (a stand-in: AC's renderer does not draw other cars yet)
+            for other in &view.other_cars[..view.other_car_count as usize] {
+                for b in &shape.boxes {
+                    let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), other);
+                    self.solid(&self.cube, &DrawConstants { world, color: [0.10, 0.32, 0.78, 1.0], ..base });
+                }
+            }
             // the body
             for b in shape.boxes.iter().filter(|_| !use_car_model) {
                 let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), body);
