@@ -2,7 +2,7 @@
 
 ## Resume here
 
-All steps but step 5 are done and committed; the version and the tag are the last step. Nothing is half-way.
+**Task 24 is finished at v0.24.0** (steps 1 to 4, 6 and 7; step 5 was left for a Task 24b, see "Not done"). Nothing is half-way.
 
 - **Done and proven against the game:** several cars in one world (`crates/rustyac-physics/src/engine/`),
   car-vs-car contacts and damage, the pit-lane rule, the physics thread pool, the other cars' drivers
@@ -429,5 +429,6 @@ or into `Documents\Assetto Corsa`.
 - `cargo test --release -p rustyac-physics --test several_cars`: the golden replay (two F2004s, the
   rear-end hit, 1,900 steps, 0 and 3 workers; NOT TESTED without Assetto Corsa's folder) and the
   one-car equivalence.
-- Recordings are in `oracle/multi/` (git-ignored; the big ones were deleted at the end, the
-  `.result.txt` files stay).
+- Recordings are in `oracle/multi/` (git-ignored). The four small ones were kept (`mc_rear_end`,
+  `mc_side_by_side`, `mc_side_swipe`, `mc_pile_up`: 19 MB together); the others were deleted at the
+  end (their `.result.txt` files stay) and are recorded again in one to two minutes each.
