@@ -64,6 +64,20 @@ impl Picture {
         }
     }
 
+    /// What the motion blur remembers of the last frame, to draw one frame twice.
+    pub fn blur_history(&self) -> Option<(rustyac_physics::vecmath::Mat44f, f32)> {
+        match self {
+            Picture::Ac(r) => Some(r.blur_history()),
+            Picture::Debug(_) => None,
+        }
+    }
+
+    pub fn set_blur_history(&mut self, history: Option<(rustyac_physics::vecmath::Mat44f, f32)>) {
+        if let (Picture::Ac(r), Some(history)) = (self, history) {
+            r.set_blur_history(history);
+        }
+    }
+
     pub fn set_virtual_mirror(&mut self, active: bool) {
         if let Picture::Ac(r) = self {
             r.set_virtual_mirror(active);

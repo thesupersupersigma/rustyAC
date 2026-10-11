@@ -304,7 +304,7 @@ impl VirtualMirrorRenderer {
         graphics.set_cull_mode(2);
         graphics.clear_texture_slot(0);
         graphics.set_texture(0, texture);
-        let c = if graphics.video.pp_hdr_enabled { f32::from_bits(0x3e99_999a) } else { 1.0 };
+        let c = if graphics.hdr_levels() { f32::from_bits(0x3e99_999a) } else { 1.0 };
         let gl = &mut self.gl;
         gl.color3f(c, c, c);
         gl.begin(GL_QUADS, None);

@@ -41,6 +41,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         mirror_smoke: crate::root::profile().mirror_smoke,
         pp_hdr_enabled: crate::root::profile().post,
         pp_fxaa: crate::root::profile().fxaa,
+        ldr_levels: crate::root::profile().ldr_levels,
         triple_buffer: false,
     };
     rustyac_render::gpulog::capture_from_install(true);
@@ -142,7 +143,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
     // Sim::createCamera 0x1401982e0: the plain camera, or the post-processing one (which is the
     // plain one when post-processing is off); blur only with post-processing
     let profile = crate::root::profile();
-    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur)?;
+    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur > 0)?;
+    // Sim::Sim 0x140192070 (no VR): the solve's quality is twice the setting
+    camera.blur_quality = profile.motion_blur as f32 * 2.0;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = crate::root::profile().world_detail as f32;
     // (the oracle's race.ini has [WEATHER]: the clouds are made a first time in the constructor)

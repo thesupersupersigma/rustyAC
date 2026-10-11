@@ -29,7 +29,7 @@ const USAGE: &str = "usage:
                     damage=f:r:l:r:c pit kers dirt fuel turbo water limiter)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
-                    [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur]]: [POST_PROCESS] ENABLED=1, the game's
+                    [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur <0..12>] [--ldr-levels]]: [POST_PROCESS] ENABLED=1, the game's
                     CameraForwardYebis with YEBIS' ApplyEffects replaced by a plain copy on both sides
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
@@ -279,7 +279,12 @@ fn parse() -> Result<Args, String> {
                 profile.fxaa = true;
             }
             "--motion-blur" => {
-                profile.motion_blur = true;
+                text = value()?;
+                // Sim::Sim 0x140192070: 0 to 12
+                profile.motion_blur = text.parse::<i32>().map_err(|_| "--motion-blur <0..12>")?.clamp(0, 12);
+            }
+            "--ldr-levels" => {
+                profile.ldr_levels = true;
             }
             "--serial" => {
                 a.serial = true;

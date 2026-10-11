@@ -92,6 +92,11 @@ pub struct Options {
     pub cube_size: Option<i32>,
     /// `--aa <1|2|4|8>`: `[VIDEO] AASAMPLES` whatever the video settings say
     pub aa_samples: Option<i32>,
+    /// `--post <0|1>`, `--fxaa <0|1>`, `--motion-blur <0..12>`, `--hdr-levels`
+    pub post: Option<bool>,
+    pub fxaa: Option<bool>,
+    pub motion_blur: Option<f32>,
+    pub hdr_levels: bool,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -213,6 +218,10 @@ impl Default for Options {
             cube_faces: None,
             cube_size: None,
             aa_samples: None,
+            post: None,
+            fxaa: None,
+            motion_blur: None,
+            hdr_levels: false,
             video_ini: None,
             graphics: None,
             no_a2c: false,
@@ -409,6 +418,16 @@ for checks, without anybody at the controls:
   --aa <n>              samples per pixel ([VIDEO] AASAMPLES: 1, 2, 4 or 8) whatever the video
                         settings say. With more than one, alpha to coverage has steps to work
                         with and the dots on trees, fences and crowds go
+  --post <0|1>          the post-processing frame ([POST_PROCESS] ENABLED) whatever the video
+                        settings say: the scene goes through a 16-bit target as in the game. YEBIS
+                        itself (filter, tone mapping, glare, depth of field) is not there yet, so
+                        the picture is the plain one plus what the two options below add
+  --fxaa <0|1>          AC's FXAA pass ([POST_PROCESS] FXAA); 1 switches the post-processing frame
+                        on too (acs.exe has FXAA nowhere else)
+  --motion-blur <n>     AC's motion blur ([EFFECTS] MOTION_BLUR, 0 to 12); above 0 it switches the
+                        post-processing frame on too (the same in acs.exe)
+  --hdr-levels          with the post-processing frame: the engine's HDR light levels as the game
+                        sets them. Washed out: only YEBIS' tone mapper brings them back
   --cube-size <n>       the side of the reflection cube map ([CUBEMAP] SIZE: 512, 1024, 2048) whatever
                         the video settings say. 2048 is costly, in the game too: every face drawn again
                         fills four times the pixels, and the mip levels are made every frame
@@ -487,6 +506,10 @@ impl Options {
                     o.graphics = Some(name);
                 }
                 "--no-a2c" => o.no_a2c = true,
+                "--post" => o.post = Some(value("--post")? != "0"),
+                "--fxaa" => o.fxaa = Some(value("--fxaa")? != "0"),
+                "--motion-blur" => o.motion_blur = Some(value("--motion-blur")?.parse::<f32>().ok().filter(|n| (0.0..=12.0).contains(n)).ok_or("--motion-blur <0 to 12>")?),
+                "--hdr-levels" => o.hdr_levels = true,
                 "--aa" => o.aa_samples = Some(value("--aa")?.parse().ok().filter(|n| [1, 2, 4, 8].contains(n)).ok_or("--aa <samples per pixel: 1, 2, 4 or 8>")?),
                 "--show-fps" => o.show_fps = true,
                 "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().ok().filter(|size| (16..=4096).contains(size)).ok_or("--cube-size <pixels: 512, 1024 or 2048>")?),

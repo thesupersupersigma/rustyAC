@@ -215,7 +215,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     }
     // --no-a2c (NOT Assetto Corsa): before the device makes its blend states
     rustyac_render::kgl::EXPERIMENT_NO_ALPHA_TO_COVERAGE.store(options.no_a2c, Ordering::Relaxed);
-    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, start_lights, session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }), video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()?, aa_samples: options.aa_samples })?;
+    let mut renderer = AcRenderer::new(width, height, AcOptions { warp: options.warp, gpu_log: options.gpu_log.clone(), game: game.clone(), sun_angle, weather, skin: None, video_exact: options.video_ini_exact, cube_faces: options.cube_faces, mirror_size: options.mirror_size, sun_animation, groove, mirror_hq: options.mirror_hq, world_detail: options.world_detail, render_seed: info.render_seed, cube_size: options.cube_size, ideal_line, start_lights, session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }), video_ini: options.video_ini.clone(), preset: options.graphics.as_deref().map(GraphicsPreset::from_name).transpose()?, aa_samples: options.aa_samples, post: options.post, fxaa: options.fxaa, motion_blur: options.motion_blur, hdr_levels: options.hdr_levels })?;
     for note in &renderer.notes {
         println!("{note}");
     }
@@ -1015,7 +1015,11 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     // two frames: the second is a frame as the game draws them one after the other (the first
     // after loading still uploads and binds everything)
     let dt = if lead.is_empty() { 0.0 } else { 1.0 / 60.0 };
+    // (the motion blur smears by the camera's movement since the frame before: the second draw
+    // starts from the same "frame before" as the first)
+    let blur = renderer.blur_history();
     renderer.draw(&view, &shape, &camera, &frame, &info, dt);
+    renderer.set_blur_history(blur);
     renderer.draw(&view, &shape, &camera, &frame, &info, dt);
     let pixels = renderer.read_pixels()?;
     let (width, height) = renderer.size();

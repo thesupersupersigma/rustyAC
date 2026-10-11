@@ -428,6 +428,9 @@ impl Game {
             rustyac_render::gpulog::capture_from_install(true);
             ctor(graphics, settings);
             let init = rustyac_render::gpulog::end_capture();
+            if crate::root::profile().post && crate::root::profile().ldr_levels {
+                wr(graphics, 0x48, 0u8);
+            }
             Ok(Game {
                 acs,
                 graphics,
@@ -437,6 +440,15 @@ impl Game {
                 init_log: init.text,
                 game_folder: args.game.clone(),
             })
+        }
+    }
+
+    /// `--ldr-levels`: `GraphicsManager::videoSettings.ppHDREnabled` is on only around the
+    /// camera's own calls (`on`), and off for every other reader of the flag.
+    unsafe fn hdr_flag(&self, on: bool) {
+        let profile = crate::root::profile();
+        if profile.post && profile.ldr_levels {
+            wr(self.graphics, 0x48, on as u8);
         }
     }
 
@@ -531,9 +543,11 @@ impl Game {
         // the splash screen: in the game frames are drawn before the Sim exists (the loading
         // screen), so the default state of beginScene is there when the Sim loads and draws
         // its static cube map. One frame with nothing in it stands for them.
+        self.hdr_flag(true);
         begin(self.graphics);
         screen_space(self.graphics);
         end(self.graphics);
+        self.hdr_flag(false);
         // Sim::initSceneGraph 0x140199d70
         let root = self.node("ROOT");
         let blurred = self.node("BLURRED");
@@ -801,7 +815,10 @@ impl Game {
             })), std::sync::atomic::Ordering::SeqCst);
             let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
             let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
-            ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur, false, 1);
+            self.hdr_flag(true);
+            ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur > 0, false, 1);
+            self.hdr_flag(false);
+            wr(camera, 0x2a0, profile.motion_blur as f32 * 2.0); // blurQuality (Sim::Sim)
             camera
         } else {
             let camera = acs.alloc(SIZE_CAMERA_FORWARD);
@@ -836,7 +853,7 @@ impl Game {
             let curves_ini = format!("content/weather/{}/colorCurves.ini", frame.weather);
             let mut m = 1.0f32;
             // (WeatherManager::applyCustomWeather reads it only with post-processing off)
-            if !profile.post {
+            if !profile.post || profile.ldr_levels {
                 if let Ok(c) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new(&curves_ini)) {
                     m = c.get_float("HEADER", "HDR_OFF_MULT").unwrap_or(0.0);
                 }
@@ -1071,7 +1088,9 @@ impl Game {
             }
             // Game::onIdle 0x140242730
             let started = std::time::Instant::now();
+            self.hdr_flag(true);
             begin(self.graphics);
+            self.hdr_flag(false);
             // Sim::renderScene 0x14019e570
             traverse(traverser, root);
             if let Some(car) = &car {
@@ -1079,8 +1098,10 @@ impl Game {
             }
             let vtable = rd::<*const usize>(camera, 0);
             let render: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8, f32) = std::mem::transmute(*vtable.add(7));
+            self.hdr_flag(true);
             render(camera, blurred, unblurred, root, 1.0 / 60.0);
             screen_space(self.graphics);
+            self.hdr_flag(false);
             if let Some(car) = &car {
                 self.render_virtual_mirror(car, 1.0 / 60.0);
             }

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::Mat44f;
 use rustyac_render::car::CarAvatar;
-use rustyac_render::forward::CameraForward;
+use rustyac_render::post::CameraForwardYebis;
 use rustyac_render::graphics::{Graphics, VideoSettings};
 use rustyac_render::kgl::DeviceOptions;
 use rustyac_render::model::{path_text, Kn5Io};
@@ -249,6 +249,14 @@ pub struct AcOptions {
     pub preset: Option<GraphicsPreset>,
     /// `--aa <1|2|4|8>`: `[VIDEO] AASAMPLES` whatever the video settings say
     pub aa_samples: Option<i32>,
+    /// `--post <0|1>`, `--fxaa <0|1>`, `--motion-blur <0..12>`: `[POST_PROCESS] ENABLED`, `FXAA`
+    /// and `[EFFECTS] MOTION_BLUR` whatever the video settings say
+    pub post: Option<bool>,
+    pub fxaa: Option<bool>,
+    pub motion_blur: Option<f32>,
+    /// `--hdr-levels`: with post-processing on, the engine's HDR light levels as in the game
+    /// (washed out until YEBIS is there to map them)
+    pub hdr_levels: bool,
 }
 
 /// `--graphics max|low`: every setting of `video.ini` this renderer knows at the highest / the
@@ -268,9 +276,8 @@ impl GraphicsPreset {
         }
     }
 
-    /// The `video.ini` the launcher would write with every slider at its end. The lines of what
-    /// comes in Task 23 (multisampling, FXAA, post-processing, motion blur) are there too, so
-    /// that each one is reported.
+    /// The `video.ini` the launcher would write with every slider at its end (four samples,
+    /// FXAA and motion blur with the post-processing frame; YEBIS' own effects are Task 23b).
     ///
     /// The reflection cube map is 1024, not the launcher's highest 2048 (Task 22c): with six
     /// faces drawn again every frame a 2048 map costs 13 to 50 ms a frame on the PC this was
@@ -308,7 +315,7 @@ fn video_ini_of(options: &AcOptions) -> Result<(Option<IniReader>, String), Stri
 }
 
 /// What `cfg/video.ini` asks for that this renderer does not do yet: one line each.
-fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>, name: &str) -> (VideoSettings, i32, i32, f32, (bool, i32), Vec<String>) {
+fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>, name: &str) -> (VideoSettings, i32, i32, f32, (bool, i32), f32, Vec<String>) {
     let mut video = VideoSettings { width: width as i32, height: height as i32, is_fullscreen: false, ..VideoSettings::default() };
     let mut notes = Vec::new();
     let (mut cube_size, mut cube_faces, mut cube_far) = (512, 0, 0.0f32);
@@ -317,7 +324,7 @@ fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>,
         video.world_detail = 5;
         // TyreSmoke / EngineSmoke without the file: the Normal level
         video.smoke = None;
-        return (video, cube_size, cube_faces, cube_far, (false, 1), notes);
+        return (video, cube_size, cube_faces, cube_far, (false, 1), 0.0, notes);
     };
     let int = |section: &str, key: &str| ini.get_int(section, key).unwrap_or(0);
     video.anisotropic = int("VIDEO", "ANISOTROPIC");
@@ -332,14 +339,21 @@ fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>,
     cube_far = ini.get_float("CUBEMAP", "FARPLANE").unwrap_or(0.0);
     // loadVideoSettings 0x1400c18d0: anything below 1 is 1 (AAQUALITY is not read by acs.exe)
     video.aa_samples = int("VIDEO", "AASAMPLES").max(1);
-    if int("POST_PROCESS", "ENABLED") != 0 && int("POST_PROCESS", "FXAA") != 0 {
-        notes.push(format!("{name} [POST_PROCESS] FXAA=1: FXAA comes in Task 23, the picture is not smoothed"));
-    }
-    if int("POST_PROCESS", "ENABLED") != 0 {
-        notes.push(format!("{name} [POST_PROCESS] ENABLED=1: post-processing comes in Task 23, the plain picture is drawn"));
-    }
-    if ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0) > 0.0 {
-        notes.push(format!("{name} MOTION_BLUR: motion blur comes in Task 23, treated as off"));
+    // loadVideoSettings: [POST_PROCESS] ENABLED and FXAA; Sim::Sim 0x140192070: [EFFECTS]
+    // MOTION_BLUR, 0 to 12. In acs.exe FXAA and motion blur only exist in the post-processing
+    // camera's frame ([EFFECTS] FXAA is read by nothing).
+    video.pp_hdr_enabled = int("POST_PROCESS", "ENABLED") != 0;
+    video.pp_fxaa = int("POST_PROCESS", "FXAA") != 0;
+    let blur = ini.get_float("EFFECTS", "MOTION_BLUR").unwrap_or(0.0);
+    let motion_blur = if blur > 12.0 {
+        12.0
+    } else if blur >= 0.0 {
+        blur
+    } else {
+        0.0
+    };
+    if !video.pp_hdr_enabled && (video.pp_fxaa || motion_blur > 0.0) {
+        notes.push(format!("{name} [POST_PROCESS] ENABLED=0: FXAA and MOTION_BLUR do nothing then, as in acs.exe (--fxaa 1 / --motion-blur <n> switch them on with the post-processing frame)"));
     }
     video.smoke = Some(int("EFFECTS", "SMOKE"));
     video.mirror_size = int("MIRROR", "SIZE");
@@ -365,7 +379,7 @@ fn video_settings(width: u32, height: u32, exact: bool, ini: Option<&IniReader>,
             cube_size = 512;
         }
     }
-    (video, cube_size, cube_faces, cube_far, mirror_hq, notes)
+    (video, cube_size, cube_faces, cube_far, mirror_hq, motion_blur, notes)
 }
 
 /// The five pictures of `CarFakeShadow::generateFakeShadow` (four wheels of 64 x 64, the body of
@@ -418,9 +432,10 @@ fn splits_of(camera: &DrivingCamera) -> [f32; 4] {
 pub struct AcRenderer {
     graphics: Graphics,
     scene: Scene,
-    camera: CameraForward,
+    camera: CameraForwardYebis,
     root: NodeId,
     blurred: NodeId,
+    unblurred: NodeId,
     track_node: NodeId,
     cars: NodeId,
     car_shadows: NodeId,
@@ -489,7 +504,7 @@ impl AcRenderer {
         let (video_ini, video_name) = video_ini_of(&options)?;
         // a preset is followed to the letter: the launcher's "None" for reflections is SIZE=0
         let exact = options.video_exact || options.preset.is_some();
-        let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, mut notes) = video_settings(width, height, exact, video_ini.as_ref(), &video_name);
+        let (mut video, cube_size, mut cube_faces, cube_far, mirror_hq, mut motion_blur, mut notes) = video_settings(width, height, exact, video_ini.as_ref(), &video_name);
         if let Some(size) = options.cube_size {
             // (what the file's own size would have been is no longer of interest)
             notes.retain(|n| !n.contains("[CUBEMAP] SIZE="));
@@ -505,6 +520,37 @@ impl AcRenderer {
         if let Some(samples) = options.aa_samples {
             video.aa_samples = samples;
             notes.push(format!("--aa {samples}: samples per pixel"));
+        }
+        // --post / --fxaa / --motion-blur: the settings of the post-processing frame whatever
+        // the video settings say (FXAA and blur bring the frame with them: they live in it)
+        if let Some(on) = options.post {
+            video.pp_hdr_enabled = on;
+        }
+        if let Some(on) = options.fxaa {
+            video.pp_fxaa = on;
+            video.pp_hdr_enabled |= on;
+        }
+        if let Some(amount) = options.motion_blur {
+            motion_blur = amount;
+            video.pp_hdr_enabled |= amount > 0.0;
+        }
+        if video.pp_hdr_enabled {
+            notes.retain(|n| !n.contains("do nothing then"));
+            // YEBIS is Task 23b: without its tone mapper the engine's HDR levels wash the picture
+            // out, so everything outside the camera's frame keeps the levels of "off"
+            video.ldr_levels = !options.hdr_levels;
+            let mut parts = vec![format!("{} samples", video.aa_samples)];
+            if video.pp_fxaa {
+                parts.push("FXAA".to_string());
+            }
+            if motion_blur > 0.0 {
+                parts.push(format!("motion blur {motion_blur}"));
+            }
+            notes.push(format!(
+                "post-processing on: the game's post-processing frame ({}) without YEBIS itself (its filter, tone mapping, glare, depth of field come in Task 23b){}",
+                parts.join(", "),
+                if options.hdr_levels { "; --hdr-levels: the engine's HDR light levels, which only YEBIS brings back into range" } else { "; the light levels stay those of post-processing off" }
+            ));
         }
         // the high-quality mirror's target has the screen's samples
         let mirror_hq = (options.mirror_hq.unwrap_or(mirror_hq.0), video.aa_samples);
@@ -562,7 +608,12 @@ impl AcRenderer {
         scene.add_child(unblurred, render_finished);
 
         // Sim::createCamera 0x1401982e0, Sim::Sim, Sim::initCubemaps 0x1401997a0
-        let mut camera = CameraForward::new(&mut graphics, false)?;
+        // Sim::createCamera 0x1401982e0: the plain camera, or the post-processing one (the same
+        // thing when post-processing is off); blur only with post-processing. Sim::Sim: the
+        // solve's quality is twice the setting.
+        let use_blur = motion_blur > 0.0 && graphics.video.pp_hdr_enabled;
+        let mut camera = CameraForwardYebis::new(&mut graphics, use_blur)?;
+        camera.blur_quality = motion_blur * 2.0;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
         camera.base.camera.max_layer = graphics.video.world_detail as f32;
         // SkyBox::SkyBox: race.ini [WEATHER] NAME makes the clouds a first time
@@ -603,7 +654,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, car: None, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -1080,7 +1131,9 @@ impl AcRenderer {
                 mirror.render(&mut self.graphics, &mut self.scene, self.camera.base.sky_box.as_mut(), &s);
             }
         }
-        if let Err(message) = self.camera.render(&mut self.graphics, &mut self.scene, Some(self.blurred), self.root) {
+        // (a frame without time, a screenshot's first: the blur solve divides by it)
+        let blur_dt = if dt > 0.0 { dt } else { 1.0 / 60.0 };
+        if let Err(message) = self.camera.render(&mut self.graphics, &mut self.scene, Some(self.blurred), self.unblurred, self.root, blur_dt) {
             eprintln!("WARNING: the frame was not drawn: {message}");
         }
         self.draw_calls = self.graphics.stats.dip_calls;
@@ -1121,6 +1174,16 @@ impl AcRenderer {
         self.graphics.kgl.set_screen_render_targets(true);
         let (width, height) = self.size();
         self.hud.draw(&self.graphics.kgl.context, view, info, width, height);
+    }
+
+    /// What the motion blur remembers of the last frame (`lastWorldMatrix`, `currentBlurAngle`).
+    pub fn blur_history(&self) -> (rustyac_physics::vecmath::Mat44f, f32) {
+        (self.camera.last_world_matrix, self.camera.current_blur_angle)
+    }
+
+    pub fn set_blur_history(&mut self, history: (rustyac_physics::vecmath::Mat44f, f32)) {
+        self.camera.last_world_matrix = history.0;
+        self.camera.current_blur_angle = history.1;
     }
 
     /// The last picture as RGBA bytes, rows from the top.
@@ -1186,7 +1249,8 @@ impl AcRenderer {
             self.graphics.kgl.context.OMSetRenderTargets(None, None);
             chain.ResizeBuffers(0, width.max(16), height.max(16), DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0)).map_err(err("resizing the swap chain"))?;
         }
-        self.graphics.on_resize(width.max(16) as i32, height.max(16) as i32)
+        self.graphics.on_resize(width.max(16) as i32, height.max(16) as i32)?;
+        self.camera.on_resize(&mut self.graphics)
     }
 
     /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised.

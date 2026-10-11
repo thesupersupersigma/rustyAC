@@ -90,6 +90,7 @@ fn the_leftovers_at_magione_are_the_games() {
         world_detail: 5,
         pp_hdr_enabled: false,
         pp_fxaa: false,
+        ldr_levels: false,
         triple_buffer: false,
         smoke: Some(3),
         mirror_size: 512,

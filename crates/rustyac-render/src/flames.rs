@@ -281,7 +281,7 @@ impl Flames {
             scene_camera: Mat44f::IDENTITY,
         };
         flames.load_textures(graphics, &folder.join("texture/flames"));
-        flames.load_flames(folder, graphics.video.pp_hdr_enabled)?;
+        flames.load_flames(folder, graphics.hdr_levels())?;
         let flames = Rc::new(RefCell::new(flames));
         scene.add_event_handler(render_finished, flames.clone());
         Ok(flames)

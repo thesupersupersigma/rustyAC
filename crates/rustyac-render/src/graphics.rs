@@ -32,6 +32,11 @@ pub struct VideoSettings {
     pub pp_hdr_enabled: bool,
     /// `[POST_PROCESS] FXAA` (`ppFXAA`): only read by the post-processing camera
     pub pp_fxaa: bool,
+    /// NOT Assetto Corsa: with `pp_hdr_enabled`, everything that is not the camera's frame
+    /// (sky and light colours, display and lamp colours, flames, the virtual mirror) still takes
+    /// the values of post-processing off. The engine's HDR levels are made for YEBIS' tone
+    /// mapper; without YEBIS (Task 23b) they give a washed-out picture.
+    pub ldr_levels: bool,
     pub triple_buffer: bool,
     /// `[EFFECTS] SMOKE` as `TyreSmoke` and `EngineSmoke` read it themselves; `None`: no
     /// `video.ini` (the game then runs its Normal level)
@@ -44,7 +49,7 @@ pub struct VideoSettings {
 impl Default for VideoSettings {
     /// The defaults of the `GraphicsManager` constructor.
     fn default() -> VideoSettings {
-        VideoSettings { aa_samples: 1, width: 1680, height: 1050, is_fullscreen: true, v_sync: false, anisotropic: 4, aa_quality: 0, shadow_map_size: 2048, fps_cap_ms: 0.0, world_detail: 5, pp_hdr_enabled: false, pp_fxaa: false, triple_buffer: false, smoke: Some(0), mirror_size: 0, mirror_smoke: false }
+        VideoSettings { aa_samples: 1, width: 1680, height: 1050, is_fullscreen: true, v_sync: false, anisotropic: 4, aa_quality: 0, shadow_map_size: 2048, fps_cap_ms: 0.0, world_detail: 5, pp_hdr_enabled: false, pp_fxaa: false, ldr_levels: false, triple_buffer: false, smoke: Some(0), mirror_size: 0, mirror_smoke: false }
     }
 }
 
@@ -518,6 +523,13 @@ impl Graphics {
 }
 
 impl Graphics {
+    /// What the readers of `videoSettings.ppHDREnabled` outside the camera's frame get
+    /// (`getLDRColor`, `getLDRScale`, `HDR_OFF_MULT`, the flames' clamp, the virtual mirror's
+    /// 0.3): the game's flag, unless [`VideoSettings::ldr_levels`] keeps them at "off".
+    pub fn hdr_levels(&self) -> bool {
+        self.video.pp_hdr_enabled && !self.video.ldr_levels
+    }
+
     /// `GraphicsManager::setScreenRenderTargets` 0x140204880.
     pub fn set_screen_render_targets(&mut self) {
         let with_depth = !(self.video.aa_samples != 1 && self.video.pp_hdr_enabled);

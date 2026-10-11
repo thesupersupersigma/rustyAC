@@ -93,7 +93,7 @@ pub struct CarBrakeLights {
 
 /// `GraphicsManager::getLDRScale` 0x140202bb0.
 fn get_ldr_scale(graphics: &Graphics, v: &[f32; 3]) -> f32 {
-    if graphics.video.pp_hdr_enabled {
+    if graphics.hdr_levels() {
         return 1.0;
     }
     let m = if v[1] > v[2] { v[1] } else { v[2] };

@@ -121,7 +121,7 @@ impl Graphics {
         };
         let version = ini.get_int("HEADER", "VERSION").unwrap_or(0);
         let mut m = 1.0f32;
-        if !self.video.pp_hdr_enabled {
+        if !self.hdr_levels() {
             m = get_float(&ini, "HEADER", "HDR_OFF_MULT");
         }
         let k = f32::from_bits(0x3b80_8081); // a multiply by this, not a division by 255
@@ -253,7 +253,7 @@ impl Graphics {
         let weather_ini = folder.join("weather.ini");
         let curves_ini = folder.join("colorCurves.ini");
         let mut m = 1.0f32;
-        if !self.video.pp_hdr_enabled {
+        if !self.hdr_levels() {
             if let Ok(c) = IniReader::load(&curves_ini) {
                 m = get_float(&c, "HEADER", "HDR_OFF_MULT");
             }

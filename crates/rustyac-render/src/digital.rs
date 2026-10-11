@@ -389,7 +389,7 @@ pub(crate) fn clone_material(graphics: &mut Graphics, scene: &mut Scene, n: Node
 
 /// `GraphicsManager::getLDRColor` 0x140202a70.
 fn get_ldr_color(graphics: &Graphics, c: [f32; 3]) -> [f32; 3] {
-    if graphics.video.pp_hdr_enabled {
+    if graphics.hdr_levels() {
         return c;
     }
     let t = if c[1] > c[2] { c[1] } else { c[2] };
@@ -1052,7 +1052,7 @@ impl DigitalInstruments {
             }
         }
         // with the HDR post-processing off the colours are brought down to 1
-        if !graphics.video.pp_hdr_enabled {
+        if !graphics.hdr_levels() {
             for led in &mut d.leds {
                 led.emissive = get_ldr_color(graphics, led.emissive);
                 led.emissive2 = get_ldr_color(graphics, led.emissive2);
