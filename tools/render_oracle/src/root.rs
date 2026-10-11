@@ -32,9 +32,16 @@ pub struct Profile {
     pub mirror_hq: i32,
     /// `[VIDEO] AASAMPLES`: samples per pixel of the screen (Task 23)
     pub aa_samples: i32,
+    /// `[POST_PROCESS] ENABLED`: the game's post-processing camera (`CameraForwardYebis`) with
+    /// YEBIS itself replaced by a plain copy on both sides, and the engine's HDR levels
+    pub post: bool,
+    /// `[POST_PROCESS] FXAA` (only with `post`)
+    pub fxaa: bool,
+    /// `[EFFECTS] MOTION_BLUR` > 0 (only with `post`)
+    pub motion_blur: bool,
 }
 
-pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1 };
+pub const TASK_20: Profile = Profile { anisotropic: 8, shadow_map_size: 2048, world_detail: 5, cubemap_size: 512, cubemap_faces_per_frame: 0, cubemap_far_plane: 0.0, smoke: 0, mirror_size: 0, mirror_smoke: false, virtual_mirror: false, mirror_hq: 0, aa_samples: 1, post: false, fxaa: false, motion_blur: false };
 
 static PROFILE: std::sync::OnceLock<Profile> = std::sync::OnceLock::new();
 static DOCUMENTS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
@@ -60,7 +67,8 @@ pub fn profile() -> Profile {
 /// smoke, a cube map that renders no faces per frame, shadows on at a fixed size.
 #[allow(non_snake_case)]
 pub fn video_ini(width: u32, height: u32) -> String {
-    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES } = profile();
+    let Profile { anisotropic: ANISOTROPIC, shadow_map_size: SHADOW_MAP_SIZE, world_detail: WORLD_DETAIL, cubemap_size: CUBEMAP_SIZE, cubemap_faces_per_frame: CUBEMAP_FACES_PER_FRAME, cubemap_far_plane: CUBEMAP_FARPLANE, smoke: SMOKE, mirror_size: MIRROR_SIZE, mirror_smoke, virtual_mirror: _, mirror_hq, aa_samples: AASAMPLES, post, fxaa, motion_blur } = profile();
+    let (POST, PP_FXAA, MOTION_BLUR) = (post as i32, fxaa as i32, if motion_blur { 6 } else { 0 });
     let MIRROR_HQ = (mirror_hq > 0) as i32;
     let MIRROR_SMOKE = mirror_smoke as i32;
     let lines = [
@@ -90,20 +98,20 @@ pub fn video_ini(width: u32, height: u32) -> String {
         format!("WORLD_DETAIL={WORLD_DETAIL}"),
         String::new(),
         "[EFFECTS]".into(),
-        "MOTION_BLUR=0".into(),
+        format!("MOTION_BLUR={MOTION_BLUR}"),
         format!("RENDER_SMOKE_IN_MIRROR={MIRROR_SMOKE}"),
         format!("SMOKE={SMOKE}"),
         "FXAA=0".into(),
         String::new(),
         "[POST_PROCESS]".into(),
-        "ENABLED=0".into(),
+        format!("ENABLED={POST}"),
         "QUALITY=0".into(),
         "FILTER=default".into(),
         "GLARE=0".into(),
         "DOF=0".into(),
         "RAYS_OF_GOD=0".into(),
         "HEAT_SHIMMER=0".into(),
-        "FXAA=0".into(),
+        format!("FXAA={PP_FXAA}"),
         String::new(),
         "[MIRROR]".into(),
         format!("HQ={MIRROR_HQ}"),
@@ -153,6 +161,8 @@ pub fn prepare(args: &Args) -> Result<(), String> {
     }
     let game = &args.game;
     copy_dir(&game.join("system/cfg"), &root.join("system/cfg"), false)?;
+    // CameraForwardYebis::readPPSetOptions reads the default filter
+    copy_dir(&game.join("system/cfg/ppfilters"), &root.join("system/cfg/ppfilters"), false)?;
     copy_dir(&game.join("system/shaders/win"), &root.join("system/shaders/win"), false)?;
     copy_dir(&game.join("content/weather"), &root.join("content/weather"), true)?;
     // the crowds' textures

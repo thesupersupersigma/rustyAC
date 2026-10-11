@@ -562,7 +562,7 @@ impl AcRenderer {
         scene.add_child(unblurred, render_finished);
 
         // Sim::createCamera 0x1401982e0, Sim::Sim, Sim::initCubemaps 0x1401997a0
-        let mut camera = CameraForward::new(&mut graphics)?;
+        let mut camera = CameraForward::new(&mut graphics, false)?;
         camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
         camera.base.camera.max_layer = graphics.video.world_detail as f32;
         // SkyBox::SkyBox: race.ini [WEATHER] NAME makes the clouds a first time

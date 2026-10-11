@@ -38,6 +38,8 @@ pub struct GlRenderer {
     temp_vertices: [[u8; STRIDE]; 3],
     temp_buffer: Vec<u8>,
     max_vertices: u32,
+    /// `fullQuadVB` / `fullQuadIB`: four corners at -1..1 with texture coordinates, six indices
+    full_quad: Option<(KglVertexBuffer, crate::kgl::KglIndexBuffer)>,
 }
 
 impl GlRenderer {
@@ -72,7 +74,52 @@ impl GlRenderer {
             temp_vertices: [[0u8; STRIDE]; 3],
             temp_buffer: vec![0u8; max_vertices as usize * STRIDE],
             max_vertices,
+            full_quad: None,
         }
+    }
+
+    /// `GLRenderer::initFullScreenQuad` 0x1401feb30 (the manager's own drawer has it).
+    pub fn init_full_screen_quad(&mut self, graphics: &Graphics) {
+        // position, normal (0, 1, 0), texture coordinate, tangent (0, 0, 0)
+        let corners: [([f32; 2], [f32; 2]); 4] = [([-1.0, -1.0], [0.0, 1.0]), ([1.0, -1.0], [1.0, 1.0]), ([1.0, 1.0], [1.0, 0.0]), ([-1.0, 1.0], [0.0, 0.0])];
+        let mut bytes = Vec::with_capacity(4 * STRIDE);
+        for (p, uv) in corners {
+            for v in [p[0], p[1], 0.0, 0.0, 1.0, 0.0, uv[0], uv[1], 0.0, 0.0, 0.0] {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        let vb = graphics.kgl.create_vertex_buffer(&bytes, bytes.len(), STRIDE as u32, false);
+        let ib = graphics.kgl.create_index_buffer(&[0, 1, 2, 0, 2, 3]);
+        self.full_quad = Some((vb, ib));
+    }
+
+    /// `GLRenderer::fullScreenQuad` 0x1401feaa0.
+    pub fn full_screen_quad(&mut self, graphics: &mut Graphics, shader: Option<ShaderId>) {
+        graphics.kgl.set_primitive_type(0);
+        let shader = match shader {
+            Some(shader) => Some(shader),
+            None if self.use_texture => {
+                if self.gl_shader_tex.is_none() {
+                    self.gl_shader_tex = graphics.shaders.get_shader(&graphics.kgl, "GLTextured").ok();
+                }
+                self.gl_shader_tex
+            }
+            None => {
+                if self.gl_shader.is_none() {
+                    self.gl_shader = graphics.shaders.get_shader(&graphics.kgl, "GL").ok();
+                }
+                self.gl_shader
+            }
+        };
+        if let Some(shader) = shader {
+            graphics.set_shader(shader);
+        }
+        if let Some((vb, ib)) = &self.full_quad {
+            graphics.set_vb(vb);
+            graphics.set_ib(ib);
+        }
+        graphics.commit_shader_changes();
+        graphics.kgl.draw_indexed(6, 0, 0);
     }
 
     /// `GLRenderer::begin` 0x1401fe800.
@@ -201,4 +248,11 @@ impl GlRenderer {
         graphics.kgl.draw(self.current_index, 0);
         graphics.kgl.set_primitive_type(0);
     }
+}
+
+/// `graphics->gl->fullScreenQuad(shader)`: the manager's own drawer, taken out while it draws.
+pub fn full_screen_quad(graphics: &mut Graphics, shader: Option<ShaderId>) {
+    let Some(mut gl) = graphics.gl.take() else { return };
+    gl.full_screen_quad(graphics, shader);
+    graphics.gl = Some(gl);
 }

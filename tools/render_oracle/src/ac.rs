@@ -136,6 +136,57 @@ const SIZE_GRAPHICS_MANAGER: usize = 0x4e0;
 const SIZE_NODE: usize = 0xe0;
 const SIZE_KN5IO: usize = 0xc0;
 const SIZE_CAMERA_FORWARD: usize = 0x788;
+const SIZE_CAMERA_FORWARD_YEBIS: usize = 0xe80;
+const VA_CAMERA_FORWARD_YEBIS_CTOR: usize = 0x1_4002_5db0; // CameraForwardYebis::CameraForwardYebis(const std::wstring&, GraphicsManager*, bool, bool, int)
+const VA_YEBIS_INIT_POST_PROCESSING: usize = 0x1_4002_4ca0; // CameraForwardYebis::initPostProcessing()
+const VA_YEBIS_APPLY_POST_PROCESSING: usize = 0x1_4002_5c30; // CameraForwardYebis::applyPostProcessing()
+const VA_GRAPHICS_GET_SHADER: usize = 0x1_4020_2c60; // GraphicsManager::getShader(const std::wstring&)
+const VA_GRAPHICS_SET_BLEND_MODE: usize = 0x1_4020_44e0; // GraphicsManager::setBlendMode(BlendMode)
+const VA_GRAPHICS_SET_DEPTH_MODE: usize = 0x1_4020_4580; // GraphicsManager::setDepthMode(DepthMode)
+const VA_KGL_SET_RENDER_TARGETS: usize = 0x1_4001_8e40; // kglSetRenderTargets(void*, void*)
+const VA_KGL_SET_VIEWPORT: usize = 0x1_4001_8ee0; // kglSetViewport(float, float, float, float)
+const VA_KGL_SET_TEXTURE_RT: usize = 0x1_4001_8ec0; // kglSetTextureRT(int, void*)
+const VA_GL_FULL_SCREEN_QUAD: usize = 0x1_401f_eaa0; // GLRenderer::fullScreenQuad(Shader*)
+
+/// What the stand-in for YEBIS needs of the game (see `rustyac_render::post`).
+struct StandIn {
+    graphics: *mut u8,
+    shader: *mut u8,
+    /// a KGLRenderTarget with no views: binds "no texture"
+    no_texture: *mut u8,
+    set_blend_mode: usize,
+    set_depth_mode: usize,
+    set_render_targets: usize,
+    set_viewport: usize,
+    set_texture_rt: usize,
+    full_screen_quad: usize,
+}
+
+static STAND_IN: std::sync::atomic::AtomicPtr<StandIn> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// NOT Assetto Corsa: runs where the game would call YEBIS
+/// (`CameraForwardYebis::applyPostProcessing` 0x140025c30 is patched to jump here). The same
+/// plain copy as `rustyac_render::post::stand_in_apply_effects`, made of the game's own calls:
+/// `pp.sourceRenderTarget` into `pp.destinationRenderTarget` with `ksPostCopy`.
+unsafe extern "C" fn stand_in_apply_post_processing(camera: *mut u8) {
+    let s = &*STAND_IN.load(std::sync::atomic::Ordering::SeqCst);
+    let source: *mut u8 = rd(camera, 0x828);
+    let destination: *mut u8 = rd(camera, 0x838);
+    let (width, height): (i32, i32) = (rd(camera, 0xe70), rd(camera, 0xe74));
+    let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(s.set_blend_mode);
+    set_mode(s.graphics, 0);
+    let set_mode: extern "C" fn(*mut u8, i32) = std::mem::transmute(s.set_depth_mode);
+    set_mode(s.graphics, 2);
+    let set_render_targets: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(s.set_render_targets);
+    set_render_targets(destination, std::ptr::null_mut());
+    let set_viewport: extern "C" fn(f32, f32, f32, f32) = std::mem::transmute(s.set_viewport);
+    set_viewport(0.0, 0.0, width as f32, height as f32);
+    let set_texture_rt: extern "C" fn(i32, *mut u8) = std::mem::transmute(s.set_texture_rt);
+    set_texture_rt(0, source);
+    let quad: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(s.full_screen_quad);
+    quad(rd(s.graphics, 0x380), s.shader);
+    set_texture_rt(0, s.no_texture);
+}
 const SIZE_SKYBOX: usize = 0x80;
 
 pub unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
@@ -364,6 +415,8 @@ impl Game {
             wr(settings, 0x28, 0f64); // fpsCapMS
             wr(settings, 0x30, 0i32); // dxgiModeIndex
             wr(settings, 0x34, crate::root::profile().world_detail); // worldDetail
+            wr(settings, 0x38, crate::root::profile().post as u8); // ppHDREnabled
+            wr(settings, 0x3a, (crate::root::profile().post && crate::root::profile().fxaa) as u8); // ppFXAA
             wr(settings, 0x3c, 0i32); // ppQuality
             wr(settings, 0x40, 0i32); // ppGlare
             wr(settings, 0x44, 0i32); // ppDof
@@ -724,9 +777,38 @@ impl Game {
             wr(before_cars, 0xf0, record.add(0x28));
         }
         // Sim::createCamera 0x1401982e0 and what Sim::Sim sets on the camera afterwards
-        let camera = acs.alloc(SIZE_CAMERA_FORWARD);
-        let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
-        ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false);
+        let profile = crate::root::profile();
+        let camera = if profile.post {
+            // the game's own post-processing camera, without YEBIS: its start-up returns at once
+            // (g_pPfxContext stays null, so every YEBIS call of the frame is skipped by the game's
+            // own tests) and applyPostProcessing is the stand-in the port draws too
+            acs.patch(acs.va(VA_YEBIS_INIT_POST_PROCESSING), &[0xc3]);
+            let mut jump = vec![0x48u8, 0xb8];
+            jump.extend_from_slice(&(stand_in_apply_post_processing as *const () as usize).to_le_bytes());
+            jump.extend_from_slice(&[0xff, 0xe0]);
+            acs.patch(acs.va(VA_YEBIS_APPLY_POST_PROCESSING), &jump);
+            let get_shader: extern "C" fn(*mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GRAPHICS_GET_SHADER));
+            STAND_IN.store(Box::into_raw(Box::new(StandIn {
+                graphics: self.graphics,
+                shader: get_shader(self.graphics, wstring(acs, "ksPostCopy")),
+                no_texture: acs.alloc(0x30),
+                set_blend_mode: acs.va(VA_GRAPHICS_SET_BLEND_MODE),
+                set_depth_mode: acs.va(VA_GRAPHICS_SET_DEPTH_MODE),
+                set_render_targets: acs.va(VA_KGL_SET_RENDER_TARGETS),
+                set_viewport: acs.va(VA_KGL_SET_VIEWPORT),
+                set_texture_rt: acs.va(VA_KGL_SET_TEXTURE_RT),
+                full_screen_quad: acs.va(VA_GL_FULL_SCREEN_QUAD),
+            })), std::sync::atomic::Ordering::SeqCst);
+            let camera = acs.alloc(SIZE_CAMERA_FORWARD_YEBIS);
+            let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool, bool, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_YEBIS_CTOR));
+            ctor(camera, wstring(acs, "MAIN_CAMERA_YEBIS"), self.graphics, profile.motion_blur, false, 1);
+            camera
+        } else {
+            let camera = acs.alloc(SIZE_CAMERA_FORWARD);
+            let ctor: extern "C" fn(*mut u8, *const u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_FORWARD_CTOR));
+            ctor(camera, wstring(acs, "MAIN_CAMERA"), self.graphics, false);
+            camera
+        };
         wr(camera, 0x80, [0.3f32, 0.25, 0.25, 1.0]); // clearColor
         wr(camera, 0x1ac, crate::root::profile().world_detail as f32); // maxLayer
         let sky = acs.alloc(SIZE_SKYBOX);
@@ -753,8 +835,11 @@ impl Game {
             let weather_ini = format!("content/weather/{}/weather.ini", frame.weather);
             let curves_ini = format!("content/weather/{}/colorCurves.ini", frame.weather);
             let mut m = 1.0f32;
-            if let Ok(c) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new(&curves_ini)) {
-                m = c.get_float("HEADER", "HDR_OFF_MULT").unwrap_or(0.0);
+            // (WeatherManager::applyCustomWeather reads it only with post-processing off)
+            if !profile.post {
+                if let Ok(c) = rustyac_physics::data::ini::IniReader::load(std::path::Path::new(&curves_ini)) {
+                    m = c.get_float("HEADER", "HDR_OFF_MULT").unwrap_or(0.0);
+                }
             }
             if std::path::Path::new(&weather_ini).is_file() {
                 let load_preset: extern "C" fn(*const u8, *mut u8, f32) -> bool = std::mem::transmute(acs.va(VA_WEATHER_LOAD_PRESET));

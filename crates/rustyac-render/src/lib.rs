@@ -38,6 +38,7 @@ pub mod model;
 pub mod panels;
 pub mod particles;
 pub mod pit_crew;
+pub mod post;
 pub mod scene;
 pub mod shader;
 pub mod skid;

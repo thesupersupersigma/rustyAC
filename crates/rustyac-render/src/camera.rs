@@ -367,9 +367,18 @@ impl CameraShadowMapped {
 
     /// `CameraShadowMapped::renderPass` 0x14020cf20: sky, opaque meshes, transparent meshes.
     pub fn render_pass(&mut self, graphics: &mut Graphics, scene: &mut Scene, node: NodeId) {
+        self.render_pass_into(graphics, scene, node, None)
+    }
+
+    /// The same with `Camera::renderTarget` set (the post-processing camera sets it to its
+    /// scene target): the target is bound again, with its viewport.
+    pub fn render_pass_into(&mut self, graphics: &mut Graphics, scene: &mut Scene, node: NodeId, render_target: Option<&RenderTarget>) {
         graphics.set_depth_mode(DEPTH_NORMAL);
         let max_layer = self.camera.max_layer as i32;
         let mut filter = MaterialFilter::plain();
+        if render_target.is_some() {
+            graphics.set_render_target(render_target);
+        }
         graphics.set_cull_mode(CULL_FRONT);
         self.camera.render_camera(graphics);
         self.camera.clear_buffers(graphics);

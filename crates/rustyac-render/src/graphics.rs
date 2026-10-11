@@ -30,6 +30,8 @@ pub struct VideoSettings {
     pub fps_cap_ms: f64,
     pub world_detail: i32,
     pub pp_hdr_enabled: bool,
+    /// `[POST_PROCESS] FXAA` (`ppFXAA`): only read by the post-processing camera
+    pub pp_fxaa: bool,
     pub triple_buffer: bool,
     /// `[EFFECTS] SMOKE` as `TyreSmoke` and `EngineSmoke` read it themselves; `None`: no
     /// `video.ini` (the game then runs its Normal level)
@@ -42,7 +44,7 @@ pub struct VideoSettings {
 impl Default for VideoSettings {
     /// The defaults of the `GraphicsManager` constructor.
     fn default() -> VideoSettings {
-        VideoSettings { aa_samples: 1, width: 1680, height: 1050, is_fullscreen: true, v_sync: false, anisotropic: 4, aa_quality: 0, shadow_map_size: 2048, fps_cap_ms: 0.0, world_detail: 5, pp_hdr_enabled: false, triple_buffer: false, smoke: Some(0), mirror_size: 0, mirror_smoke: false }
+        VideoSettings { aa_samples: 1, width: 1680, height: 1050, is_fullscreen: true, v_sync: false, anisotropic: 4, aa_quality: 0, shadow_map_size: 2048, fps_cap_ms: 0.0, world_detail: 5, pp_hdr_enabled: false, pp_fxaa: false, triple_buffer: false, smoke: Some(0), mirror_size: 0, mirror_smoke: false }
     }
 }
 
@@ -252,7 +254,9 @@ impl Graphics {
             current_cube_map: false,
             cube_map_hidden: Vec::new(),
         };
-        graphics.gl = Some(crate::gl::GlRenderer::new(&graphics, 0x20));
+        let mut gl = crate::gl::GlRenderer::new(&graphics, 0x20);
+        gl.init_full_screen_quad(&graphics);
+        graphics.gl = Some(gl);
         graphics.set_sampler_state();
         graphics.set_viewport(0, 0, video.width, video.height);
         graphics.load_lighting_settings(&game_folder.join("system/cfg/colorCurves.ini"));

@@ -29,6 +29,8 @@ const USAGE: &str = "usage:
                     damage=f:r:l:r:c pit kers dirt fuel turbo water limiter)
                     other video.ini values than the Task 20 profile's: [--shadow-size <n>] [--cubemap-size <n>]
                     [--world-detail <n>] [--anisotropic <n>] [--cubemap-faces <0..6>] [--cubemap-far <m>]
+                    [--aa <AASAMPLES>] [--post [--fxaa] [--motion-blur]]: [POST_PROCESS] ENABLED=1, the game's
+                    CameraForwardYebis with YEBIS' ApplyEffects replaced by a plain copy on both sides
                     [--sun <SUN_ANGLE, degrees; default -16>] [--weather <folder of content/weather; default 3_clear>]
      common: [--acs <path to acs.exe>] [--root <scratch game folder>] [--out <folder>] [--size WxH] [--verbose]";
 
@@ -269,6 +271,15 @@ fn parse() -> Result<Args, String> {
             }
             "--virtual-mirror" => {
                 profile.virtual_mirror = true;
+            }
+            "--post" => {
+                profile.post = true;
+            }
+            "--fxaa" => {
+                profile.fxaa = true;
+            }
+            "--motion-blur" => {
+                profile.motion_blur = true;
             }
             "--serial" => {
                 a.serial = true;

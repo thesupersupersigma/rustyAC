@@ -88,6 +88,7 @@ fn the_scene_at_magione_is_the_games() {
         fps_cap_ms: 0.0,
         world_detail: 5,
         pp_hdr_enabled: false,
+        pp_fxaa: false,
         triple_buffer: false,
         smoke: Some(3),
         mirror_size: 512,
@@ -147,7 +148,7 @@ fn the_scene_at_magione_is_the_games() {
     let _crowds = rustyac_render::crowds::camera_facing(&mut graphics, &mut scene, &folder, track_node, blurred, 22).expect("the crowds");
 
     // Sim::createCamera, RaceManager::initLighting, TrackAvatar::TrackAvatar, the weather
-    let mut camera = CameraForward::new(&mut graphics).expect("the camera");
+    let mut camera = CameraForward::new(&mut graphics, false).expect("the camera");
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = 5.0;
     camera.base.sky_box = Some(rustyac_render::sky::SkyBox::new(&mut graphics, Some("7_heavy_clouds")).expect("the sky"));

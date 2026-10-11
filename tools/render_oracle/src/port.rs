@@ -4,7 +4,6 @@
 //! a swap chain on a window that is never shown), through the same command log.
 
 use rustyac_physics::vecmath::Mat44f;
-use rustyac_render::forward::CameraForward;
 use rustyac_render::graphics::{Graphics, VideoSettings};
 use rustyac_render::kgl::DeviceOptions;
 use rustyac_render::model::Kn5Io;
@@ -40,7 +39,8 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         smoke: Some(crate::root::profile().smoke),
         mirror_size: crate::root::profile().mirror_size,
         mirror_smoke: crate::root::profile().mirror_smoke,
-        pp_hdr_enabled: false,
+        pp_hdr_enabled: crate::root::profile().post,
+        pp_fxaa: crate::root::profile().fxaa,
         triple_buffer: false,
     };
     rustyac_render::gpulog::capture_from_install(true);
@@ -139,7 +139,10 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         gates = Some(handler);
     }
     // Sim::createCamera, Sim::Sim, Sim::initCubemaps
-    let mut camera = CameraForward::new(&mut graphics)?;
+    // Sim::createCamera 0x1401982e0: the plain camera, or the post-processing one (which is the
+    // plain one when post-processing is off); blur only with post-processing
+    let profile = crate::root::profile();
+    let mut camera = rustyac_render::post::CameraForwardYebis::new(&mut graphics, profile.post && profile.motion_blur)?;
     camera.base.camera.clear_color = [0.3, 0.25, 0.25, 1.0];
     camera.base.camera.max_layer = crate::root::profile().world_detail as f32;
     // (the oracle's race.ini has [WEATHER]: the clouds are made a first time in the constructor)
@@ -354,7 +357,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
                 mirror.render(&mut graphics, &mut scene, camera.base.sky_box.as_mut(), &s);
             }
         }
-        camera.render(&mut graphics, &mut scene, Some(blurred), root)?;
+        camera.render(&mut graphics, &mut scene, Some(blurred), unblurred, root, 1.0 / 60.0)?;
         graphics.set_screen_space_mode();
         // Game::evOnPreGUI
         if let (Some(mirror), Some(v)) = (&mirror, &mut virtual_mirror) {
