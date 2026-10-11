@@ -67,7 +67,7 @@ impl Drive {
     /// A drive of several cars: `<prefix>.car<n>.audiotape` of `car_oracle multi --audio-tape`
     /// (the first car's tape holds the physics events of all). `focus` is the focused car over
     /// the frames: (car, from this frame on), the listener is the camera on that car.
-    pub fn load_field(prefix: &Path, camera: Camera, limit: Option<usize>, max_cars: usize, focus: &[(u32, usize)]) -> Result<Drive, String> {
+    pub fn load_field(prefix: &Path, camera: Camera, limit: Option<usize>, max_cars: usize, focus: &[(u32, usize)], in_pit: Option<usize>) -> Result<Drive, String> {
         let tape_of = |index: usize| PathBuf::from(format!("{}.car{index}.audiotape", prefix.display()));
         let mut drive = Drive::load(&tape_of(0), camera, limit)?;
         // (a tape of `car_oracle multi` names the track, not its folder)
@@ -106,6 +106,23 @@ impl Drive {
             frame.listener = camera.listener(followed, first);
         }
         drive.label = format!("{cars}cars{}", focus.iter().map(|(car, from)| format!("_f{car}at{from}")).collect::<String>());
+        // `--in-pit <car>`: that car's pit box is where it stands in the first frame (a car
+        // within 1.5 m of its box takes no rank among the cars the microphone hears)
+        if let Some(car) = in_pit {
+            if car >= cars {
+                return Err(format!("--in-pit {car}: there are {cars} cars"));
+            }
+            let first = firsts[car].as_ref().unwrap();
+            let pit = [first.world_matrix[12], first.world_matrix[13], first.world_matrix[14]];
+            for frame in drive.frames.iter_mut() {
+                if car == 0 {
+                    frame.car.pit_position = pit;
+                } else {
+                    frame.others[car - 1].1.pit_position = pit;
+                }
+            }
+            drive.label.push_str(&format!("_pit{car}"));
+        }
         Ok(drive)
     }
 

@@ -354,8 +354,7 @@ pub fn ks_rand_unit(rand: &mut dyn FnMut() -> i32) -> f32 {
 ///
 /// * `pit_slots`: `TrackAvatar::getMaxSlotsAvailable("PIT")`.
 /// * `skins`: `RaceManager::getModelSkins` @ 0x140138c20, the folders of
-///   `content/cars/<model>/skins` in the order the file system lists them (on NTFS: by name,
-///   upper case first compared).
+///   `content/cars/<model>/skins` in the order the file system lists them (on NTFS: by name).
 /// * `skin_exists`: `RaceManager::isSkinAvailable` @ 0x14013ebc0.
 /// * `rand`: the `rand()` of the C runtime where the loop finds it (the game has drawn the wind
 ///   and the time of the gearbox lock before; a car without a valid skin draws one number, the
@@ -408,13 +407,14 @@ pub fn race_grid(ini: &IniReader, pit_slots: usize, skins: &dyn Fn(&str) -> Vec<
             }
             ai_aggression = if ini.has_key(&section, "AI_AGGRESSION") {
                 let x = float(&section, "AI_AGGRESSION") * 0.01;
-                // saturate @ 0x1400244b0
+                // saturate @ 0x1400244b0 (`ja` then `jbe`: a value that is not a number stays)
+                #[allow(clippy::manual_clamp)] // the game's two compares, in its order
                 let x = if x > 1.0 {
                     1.0
-                } else if x >= 0.0 {
-                    x
-                } else {
+                } else if 0.0 > x {
                     0.0
+                } else {
+                    x
                 };
                 x * 0.95
             } else {
@@ -503,14 +503,33 @@ pub fn draws_before_the_cars(ini: &IniReader, rand: &mut dyn FnMut() -> i32) {
 }
 
 /// The folders of `content/cars/<model>/skins` as `Path::getFolders` @ 0x140231260 lists
-/// them: in the order of the file system, which on NTFS is by name with upper-cased letters.
+/// them: in the order of the file system (on NTFS: by name).
 pub fn model_skins(cars_folder: &std::path::Path, model: &str) -> Vec<String> {
-    let mut skins: Vec<String> = match std::fs::read_dir(cars_folder.join(model).join("skins")) {
+    // (no sorting: `read_dir` lists a folder with the same system call as the game's
+    // `_wfindfirst`, so the order is the game's on any file system)
+    match std::fs::read_dir(cars_folder.join(model).join("skins")) {
         Ok(entries) => entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
         Err(_) => Vec::new(),
-    };
-    skins.sort_by_key(|name| name.to_uppercase().encode_utf16().collect::<Vec<u16>>());
-    skins
+    }
+}
+
+/// `RaceManager::isSkinAvailable` @ 0x14013ebc0: is `content/cars/<model>/skins/<skin>` a
+/// folder. The game glues the text together, so a skin written as a path of its own
+/// (`C:\…`) is not found.
+pub fn skin_available(cars_folder: &std::path::Path, model: &str, skin: &str) -> bool {
+    let mut text = cars_folder.as_os_str().to_os_string();
+    text.push(format!("/{model}/skins/{skin}"));
+    std::path::Path::new(&text).is_dir()
+}
+
+/// `TrackAvatar::getMaxSlotsAvailable("PIT")` as `RaceManager::initOffline` finds it: the pit
+/// boxes of the track are listed once by the track itself and once more for every session
+/// whose `SPAWN_SET` is `PIT` (`initRespawnPositionSet` @ 0x1401cb8c0 adds to the list without
+/// emptying it). A file without any `[SESSION_n]` gets one session, which starts in the pits.
+pub fn pit_slots_listed(ini: &IniReader, pit_boxes: usize) -> usize {
+    let sessions: Vec<String> = (0..).map(|n| format!("SESSION_{n}")).take_while(|section| ini.has_section(section)).collect();
+    let pit_sessions = if sessions.is_empty() { 1 } else { sessions.iter().filter(|section| ini.get_string(section, "SPAWN_SET") == "PIT").count() };
+    pit_boxes * (1 + pit_sessions)
 }
 
 #[cfg(test)]

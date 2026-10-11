@@ -753,6 +753,10 @@ fn spawn_place(track: &Track, spawn: &str, place: &crate::input_file::GridPlace,
         other => return Err(format!("the spawn point {other:?} is not one of hotlap, pit, start")),
     };
     let slots = track.spawn_slots(set);
+    if slots == 0 && spawn == "hotlap" {
+        // (a track without a hot-lap start: the grid, as for a session of one car)
+        return spawn_first(track, spawn);
+    }
     if slots == 0 {
         return Err(format!("the track {} has no AC_{set}_0 node: no place for {car}", track.name));
     }

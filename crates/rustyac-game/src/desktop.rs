@@ -987,11 +987,11 @@ fn run_window(options: &Options) -> Result<(), String> {
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
+            sound.set_focus(focus.index);
             if options.audio.clockless() {
                 sound.grid_frames(|_| (camera, frame.matrix));
             } else {
                 sound.set_picture_backfires(&renderer.backfires_triggered());
-                sound.set_focus(focus.index);
                 // (ReplayManager::updateReplayAudio: no sound outside half to double speed)
                 sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound);
             }

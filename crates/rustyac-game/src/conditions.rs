@@ -105,9 +105,8 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
     // the track itself and once more for every session that starts in the pits
     let track_folder = crate::sim::find_track(&setup.track)?;
     let (track, _) = rustyac_physics::track::load_track(&track_folder, &setup.layout)?;
-    let pit_sessions = (0..).map(|n| format!("SESSION_{n}")).take_while(|section| ini.has_section(section)).filter(|section| ini.get_string(section, "SPAWN_SET") == "PIT").count();
-    let pit_slots = track.spawn_slots("PIT") * (1 + pit_sessions);
-    let grid = session::race_grid(ini, pit_slots, &|model| session::model_skins(&cars_folder, model), &|model, skin| cars_folder.join(model).join("skins").join(skin).is_dir(), rand)?;
+    let pit_slots = session::pit_slots_listed(ini, track.spawn_slots("PIT"));
+    let grid = session::race_grid(ini, pit_slots, &|model| session::model_skins(&cars_folder, model), &|model, skin| session::skin_available(&cars_folder, model, skin), rand)?;
     let mut lines = Vec::new();
     let place = |car: &session::RaceCar| GridPlace { pit: car.index, start: car.start_index, ballast_kg: car.ballast_kg, restrictor: car.restrictor };
     let mut others = Vec::new();
@@ -127,6 +126,18 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
             lines.push(format!("  car {}: race.ini names no car for it (the game would stop there): left out", car.index));
             continue;
         }
+        // a car rustyAC cannot load or draw would end the session or the picture: left out
+        match crate::sim::find_car_data(&car.model) {
+            Ok(data) if crate::sim::find_car_model(&car.model, &data).is_some() => {}
+            Ok(_) => {
+                lines.push(format!("  car {}: {} has no 3D model in Assetto Corsa's folder: left out", car.index, car.model));
+                continue;
+            }
+            Err(message) => {
+                lines.push(format!("  car {}: {} cannot be loaded ({message}): left out", car.index, car.model));
+                continue;
+            }
+        }
         lines.push(format!(
             "  car {}: {}, skin {}{}, pit box {}, grid slot {}{}{}{}",
             car.index,
@@ -142,8 +153,11 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
         others.push(Opponent { car: car.model.clone(), skin: car.skin.clone(), drive: OpponentDrive::Auto, place: Some(place(car)) });
     }
     if others.is_empty() {
-        setup.player_place = None;
+        // alone after all: the first slot as before, but a race's grid place stays
         setup.player_skin = None;
+        if !(grid.first_session_type == 3 && setup.player_place.is_some_and(|place| place.start > 0)) {
+            setup.player_place = None;
+        }
         return Ok(lines);
     }
     lines.insert(
@@ -251,7 +265,9 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             // RaceManager::initOffline: the time the gearbox stays locked before a race start
             // (drawn, not used yet), then the cars of the file
             rand.next();
-            let wanted = !options.no_race_cars && options.cars.is_none() && options.opponents.is_empty() && !setup.track.is_empty() && ini.get_int("RACE", "CARS").unwrap_or(0) > 1;
+            // (also for a race of one car whose file gives it a grid place of its own)
+            let alone_on_a_grid = ini.get_int("SESSION_0", "TYPE").unwrap_or(0) == 3 && ini.get_int("SESSION_0", "STARTING_POSITION").unwrap_or(0) > 1;
+            let wanted = !options.no_race_cars && options.cars.is_none() && options.opponents.is_empty() && !setup.track.is_empty() && (ini.get_int("RACE", "CARS").unwrap_or(0) > 1 || alone_on_a_grid);
             let mut car_notes = Vec::new();
             if wanted {
                 match race_cars(&ini, setup, &mut || rand.next()) {

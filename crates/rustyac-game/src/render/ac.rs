@@ -1063,7 +1063,17 @@ impl AcRenderer {
         // pit stop's state: up while the car is in the pit lane, down once it has stopped in its box)
         let pit_state = self.pit_marker.as_ref().map(|m| m.state);
         for crew in &mut self.lollipops {
-            crew.update(&mut self.scene, dt, pit_state, false);
+            // (another car's man is up while that car stands in its pit box: CarAvatar::isInPit
+            // 0x1400d8bd0, the car within 1.5 m of its pit position)
+            let in_pit = match (world.get(crew.guid as usize), self.pit_setup.as_ref().and_then(|setup| setup.2.get(crew.guid as usize))) {
+                (Some(car), Some(pit)) => {
+                    let (dx, dy, dz) = (car.body[3][0] - pit.m[3][0], car.body[3][1] - pit.m[3][1], car.body[3][2] - pit.m[3][2]);
+                    let squared = (dy * dy + dx * dx) + dz * dz;
+                    (if squared != 0.0 { squared.sqrt() } else { 0.0 }) < 1.5
+                }
+                _ => false,
+            };
+            crew.update(&mut self.scene, dt, pit_state, in_pit);
         }
         // ACCameraManager::mode and CameraDrivableManager::currentMode
         let modes = match driving.mode {
@@ -1102,8 +1112,9 @@ impl AcRenderer {
         for (index, (car, view)) in self.cars.iter_mut().zip(world).enumerate() {
             let (camera_mode, drivable_mode) = modes;
             car.game_time_ms = self.time_ms;
-            // PhysicsAvatar::update: CarAvatar::setNewPhysicsState
-            let state = car.set_new_physics_state(&view.physics_state(), dt);
+            // PhysicsAvatar::update: CarAvatar::setNewPhysicsState (a frame without time is a
+            // still: the car is shown as its state has it, not as the frame before left it)
+            let state = car.set_new_physics_state(&view.physics_state(), if dt > 0.0 { dt } else { 1.0 });
             car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: focus as i32, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
             // what the car's objects read beside the physics state: the aids' levels and the air
             // (CarAvatar::getTCMode, getABSMode, PhysicsEngine::ambientTemperature), the wings

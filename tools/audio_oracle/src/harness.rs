@@ -222,8 +222,8 @@ impl<'a> Harness<'a> {
             wr::<i32>(car, 0x1158, index as i32);
             let physics_car = acs.alloc(0x1000);
             wr(car, 0x1168, physics_car);
-            // far from the pit box
-            wr::<[f32; 3]>(car, 0x10a8, [0.0, -1000.0, 0.0]);
+            // the pit box: far away, unless the drive puts the car in it
+            wr::<[f32; 3]>(car, 0x10a8, first.map_or([0.0, -1000.0, 0.0], |(_, frame)| frame.pit_position));
             if let Some((state, _)) = first {
                 std::ptr::copy_nonoverlapping(state.as_ptr(), car.add(0x268), state.len());
             }

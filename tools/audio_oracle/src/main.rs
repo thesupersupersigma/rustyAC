@@ -56,6 +56,8 @@ pub struct Args {
     max_cars: usize,
     focus: Vec<(u32, usize)>,
     focus_text: String,
+    /// `--in-pit <car>`: that car stands in its pit box
+    in_pit: Option<usize>,
     camera: Camera,
     out: PathBuf,
     frames: Option<usize>,
@@ -82,6 +84,7 @@ fn parse() -> Result<Args, String> {
         max_cars: usize::MAX,
         focus: Vec::new(),
         focus_text: String::new(),
+        in_pit: None,
         camera: Camera::Cockpit,
         out: repo.join("oracle/audio"),
         frames: None,
@@ -100,6 +103,7 @@ fn parse() -> Result<Args, String> {
             "--side" => a.side = value()?,
             "--tape" => a.tape = Some(PathBuf::from(value()?)),
             "--tapes" => a.tapes = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
+            "--in-pit" => a.in_pit = Some(value()?.parse().map_err(|_| "--in-pit needs a car number")?),
             "--max-cars" => a.max_cars = value()?.parse().map_err(|_| "--max-cars needs a number")?,
             "--focus" => {
                 a.focus_text = value()?;
@@ -156,7 +160,7 @@ fn file_stem(drive: &Drive, side: &str) -> String {
 fn load_drive(args: &Args) -> Result<Drive, String> {
     match (&args.tapes, &args.tape) {
         (Some(prefix), _) => {
-            let mut drive = Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus)?;
+            let mut drive = Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus, args.in_pit)?;
             // (a track given by its name: its folder in the game)
             if let Some(track) = drive.track_folder.clone().filter(|t| !t.is_dir()) {
                 drive.track_folder = Some(ac_folder(args).join("content/tracks").join(track));
@@ -284,6 +288,9 @@ fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<S
             command.arg("--tapes").arg(prefix).arg("--max-cars").arg(args.max_cars.to_string());
             if !args.focus_text.is_empty() {
                 command.arg("--focus").arg(&args.focus_text);
+            }
+            if let Some(car) = args.in_pit {
+                command.arg("--in-pit").arg(car.to_string());
             }
         }
         (None, Some(tape)) => {

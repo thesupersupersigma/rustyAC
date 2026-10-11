@@ -350,7 +350,7 @@ fn race_ini(args: &Args) -> Result<(), String> {
     let mut draw = || rand.next();
     session::draws_before_the_cars(&ini, &mut draw);
     let cars_folder = root.join("content/cars");
-    let port = session::race_grid(&ini, args.pit_slots.max(0) as usize, &|model| session::model_skins(&cars_folder, model), &|model, skin| cars_folder.join(model).join("skins").join(skin).is_dir(), &mut draw);
+    let port = session::race_grid(&ini, args.pit_slots.max(0) as usize, &|model| session::model_skins(&cars_folder, model), &|model, skin| session::skin_available(&cars_folder, model, skin), &mut draw);
 
     let bits = |x: f32| format!("{x} ({:08x})", x.to_bits());
     let mut game_lines = vec![format!("cars to be loaded: {}", game.cars_to_be_loaded)];
