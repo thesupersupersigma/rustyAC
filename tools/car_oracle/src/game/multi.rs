@@ -184,6 +184,21 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| grid(track, cars, &[F2004, "bmw_m3_e30", "ks_lamborghini_sesto_elemento", "ks_ferrari_250_gto"], 4, 0.72, 0.0),
         },
         MultiScenario {
+            name: "mc_pass",
+            about: "Task 24b: one car stands on the straight, a second comes from 300 m behind and passes it 3.5 m to its side at speed",
+            seconds: 14.0,
+            no_collision_steps: 0,
+            default_cars: &[F2004, F2004],
+            cars: |track, cars| {
+                let (p0, t0) = line_pose(track, STRAIGHT, 0.0, 0.0)?;
+                let (p1, t1) = line_pose(track, STRAIGHT, 300.0, 3.5)?;
+                Ok(vec![
+                    MultiCar { name: name_of(cars, 0, &[F2004]), position: p0, tail: t0, drive: Drive::Parked },
+                    MultiCar { name: name_of(cars, 1, &[F2004]), position: p1, tail: t1, drive: Drive::Follow { lateral: vec![(0.0, 3.5)], pace: 0.9, limit: 95.0, brake_at: 11.0 } },
+                ])
+            },
+        },
+        MultiScenario {
             name: "mc_train",
             about: "Task 24b: as many cars as `--cars` names (26 by default) in two columns along the line after the start, 9 m apart, each following the line; more cars than any grid has slots",
             seconds: 12.0,

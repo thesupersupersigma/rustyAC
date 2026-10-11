@@ -81,6 +81,8 @@ fn repo_root() -> PathBuf {
 struct Args {
     command: String,
     file: Option<PathBuf>,
+    /// `race-ini --pit-slots <n>`: what `TrackAvatar::getMaxSlotsAvailable("PIT")` answers
+    pit_slots: i32,
     file2: Option<PathBuf>,
     scenario: String,
     out: PathBuf,
@@ -137,6 +139,7 @@ fn parse_args() -> Result<Args, String> {
     let mut a = Args {
         command: it.next().ok_or_else(usage)?,
         file: None,
+        pit_slots: 24,
         file2: None,
         scenario: String::new(),
         out: repo.join("oracle/car"),
@@ -229,6 +232,7 @@ fn parse_args() -> Result<Args, String> {
             "--boxes-only" => a.boxes_only = true,
             "--collide" => a.collide = true,
             "--seed" => a.seed = number(value()?)? as u64,
+            "--pit-slots" => a.pit_slots = number(value()?)? as i32,
             "--cars" => a.cars = value()?.split(',').map(str::to_string).collect(),
             "--threads" => {
                 let text = value()?;
@@ -270,6 +274,7 @@ fn main() {
         "sus-micro" => sus_micro(&args),
         "multi" => multi(&args),
         "multi-check" => multi_check(&args),
+        "race-ini" => race_ini(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -291,6 +296,123 @@ fn track_folder(args: &Args, track: &Path) -> PathBuf {
     }
     let game = args.acs.parent().unwrap_or(Path::new("."));
     game.join("content").join("tracks").join(track)
+}
+
+/// Task 24b: `car_oracle race-ini <file.ini> [--pit-slots <n>] [--seed <n>] [--root <dir>]`: the
+/// cars of a race.ini as the game's own `RaceManager::initOffline` makes them (its callees that
+/// need the rest of the game write down what they are given) against
+/// `rustyac_physics::session::race_grid`.
+fn race_ini(args: &Args) -> Result<(), String> {
+    use rustyac_physics::data::ini::IniReader;
+    use rustyac_physics::session;
+    let file = args.file.as_ref().ok_or("race-ini <file.ini>")?;
+    let file = std::path::absolute(file).map_err(|e| e.to_string())?;
+    let game_folder = args.acs.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    // the skins of every car the file names: empty folders with the game's names, which is
+    // all `isSkinAvailable` and `getModelSkins` look at
+    let ini = IniReader::load(&file)?;
+    let mut models: Vec<String> = vec![ini.get_string("RACE", "MODEL")];
+    let mut n = 0;
+    while n < 256 {
+        if ini.has_section(&format!("CAR_{n}")) {
+            models.push(ini.get_string(&format!("CAR_{n}"), "MODEL"));
+        }
+        n += 1;
+    }
+    models.sort();
+    models.dedup();
+    let _ = std::fs::remove_dir_all(root.join("content/cars"));
+    for model in models.iter().filter(|m| !m.is_empty() && m.as_str() != "-") {
+        std::fs::create_dir_all(root.join("content/cars").join(model).join("skins")).map_err(|e| e.to_string())?;
+        for skin in session::model_skins(&game_folder.join("content/cars"), model) {
+            std::fs::create_dir_all(root.join("content/cars").join(model).join("skins").join(skin)).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
+    let copy = root.join("cfg/race_under_test.ini");
+    std::fs::copy(&file, &copy).map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let seed = args.seed as u32;
+    let game = unsafe { game::race_ini::read(&acs, &copy, args.pit_slots, seed)? };
+
+    // the port, on the same file, the same skin folders and the same start of rand()
+    let mut rand = session::MsvcRand(seed);
+    let mut draw = || rand.next();
+    session::draws_before_the_cars(&ini, &mut draw);
+    let cars_folder = root.join("content/cars");
+    let port = session::race_grid(&ini, args.pit_slots.max(0) as usize, &|model| session::model_skins(&cars_folder, model), &|model, skin| cars_folder.join(model).join("skins").join(skin).is_dir(), &mut draw);
+
+    let bits = |x: f32| format!("{x} ({:08x})", x.to_bits());
+    let mut game_lines = vec![format!("cars to be loaded: {}", game.cars_to_be_loaded)];
+    game_lines.push(format!("first session: type {}, forced position {}", game.sessions.first().map_or(1, |s| s.0), game.sessions.first().map_or(-1, |s| s.1)));
+    for (n, car) in game.cars.iter().enumerate() {
+        let ai = match car.ai {
+            // (a drag session: AIDriverDrag, whose push is the car's level as read)
+            Some((level, race, _)) if race.is_nan() => format!("drag driver, push {}", bits(level)),
+            Some((level, race, aggression)) => format!("AI level {} of {}, aggression {}", bits(level), bits(race), bits(aggression)),
+            None => "no AI".to_string(),
+        };
+        game_lines.push(format!("car {n}: {} | config {:?} | skin {} | ballast {} | restrictor {} | driver {:?} | nation {:?} | {ai} | pit box {n} | grid slot {}", car.model, car.config, car.skin, bits(car.ballast_kg), bits(car.restrictor), car.driver_name, car.nation_code, car.start_index));
+    }
+    let mut port_lines = Vec::new();
+    match &port {
+        Ok(grid) => {
+            port_lines.push(format!("cars to be loaded: {}", grid.cars_to_be_loaded));
+            port_lines.push(format!("first session: type {}, forced position {}", grid.first_session_type, grid.forced_position));
+            for car in &grid.cars {
+                let ai = match (car.section > 0, grid.first_session_type) {
+                    (false, _) => "no AI".to_string(),
+                    (true, 7) => format!("drag driver, push {}", bits(car.ai_level)),
+                    (true, _) => format!("AI level {} of {}, aggression {}", bits(car.ai_level), bits(grid.ai_level), bits(car.ai_aggression)),
+                };
+                port_lines.push(format!(
+                    "car {}: {} | config {:?} | skin {} | ballast {} | restrictor {} | driver {:?} | nation {:?} | {ai} | pit box {} | grid slot {}",
+                    car.index,
+                    car.model,
+                    car.config,
+                    car.skin,
+                    bits(car.ballast_kg),
+                    bits(car.restrictor),
+                    car.driver_name,
+                    car.nation_code.clone().unwrap_or_default(),
+                    car.index,
+                    car.start_index
+                ));
+            }
+        }
+        Err(message) => {
+            port_lines.push("cars to be loaded: 0".to_string());
+            port_lines.push(format!("first session: type {}, forced position {}", game.sessions.first().map_or(1, |s| s.0), game.sessions.first().map_or(-1, |s| s.1)));
+            println!("the port: {message}");
+        }
+    }
+    println!("{} (pit slots {}, seed {seed}):", file.display(), args.pit_slots);
+    for note in &game.notes {
+        println!("  the game: {note}");
+    }
+    for line in &game_lines {
+        println!("  {line}");
+    }
+    if game_lines == port_lines {
+        println!("race.ini reading: IDENTICAL ({} cars, {} of them with a skin the game picked)", game.cars.len(), port.as_ref().map_or(0, |g| g.cars.iter().filter(|c| c.skin_was_picked).count()));
+        Ok(())
+    } else {
+        println!("race.ini reading: DIFFERENT; the port's:");
+        for line in &port_lines {
+            println!("  {line}");
+        }
+        Err("the game and the port read the file differently".to_string())
+    }
 }
 
 /// Task 24: several cars in the game's own engine, recorded; then the port's replays.

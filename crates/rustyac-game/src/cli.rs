@@ -114,6 +114,8 @@ pub struct Options {
     pub pose_out: Option<PathBuf>,
     /// `--camera chase|cockpit`: the camera at start.
     pub camera: String,
+    /// `--no-race-cars`: the other cars of race.ini (`[CAR_1]` …) are left out
+    pub no_race_cars: bool,
     /// `--focus <n>`: the car the camera is on at the start (0: yours; `Sim::focusedCarIndex`).
     pub focus: usize,
     /// `--focus-script next@2,previous@4,player@6`: the focus keys by the clock (for unattended
@@ -272,6 +274,7 @@ impl Default for Options {
             show_damage: None,
             virtual_mirror: false,
             camera: "chase".to_string(),
+            no_race_cars: false,
             focus: 0,
             focus_script: Vec::new(),
             auto_shifter: false,
@@ -618,6 +621,7 @@ impl Options {
                 "--cube-size" => o.cube_size = Some(value("--cube-size")?.parse().ok().filter(|size| (16..=4096).contains(size)).ok_or("--cube-size <pixels: 512, 1024 or 2048>")?),
                 "--cube-faces" => o.cube_faces = Some(value("--cube-faces")?.parse().map_err(|_| "--cube-faces <0..6>".to_string())?),
                 "--camera" => o.camera = value("--camera")?,
+                "--no-race-cars" => o.no_race_cars = true,
                 "--focus" => o.focus = value("--focus")?.parse().map_err(|_| "--focus <car number, 0 = yours>".to_string())?,
                 "--focus-script" => {
                     for item in value("--focus-script")?.split(',').filter(|s| !s.is_empty()) {

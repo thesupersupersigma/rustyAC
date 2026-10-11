@@ -740,6 +740,30 @@ fn spawn_slot(track: &Track, spawn: &str, index: usize) -> Result<SpawnPose, Str
     spawn_first(track, spawn)
 }
 
+/// Where a car of race.ini stands (`CarAvatar::goToSpawnPosition` of the session's spawn set):
+/// the slot of its own number of the set (`place.pit` in the pits, `place.start` on the grid;
+/// the hot-lap start has one slot, on which the game puts every car). A number the set has no
+/// slot for: the game takes a node again when the set was listed twice and else puts the car
+/// at the origin of the world; here the slots go round again, with a line on the console.
+fn spawn_place(track: &Track, spawn: &str, place: &crate::input_file::GridPlace, car: &str) -> Result<SpawnPose, String> {
+    let (set, index) = match spawn {
+        "pit" => ("PIT", place.pit as i64),
+        "start" => ("START", place.start as i64),
+        "hotlap" => ("HOTLAP_START", 0),
+        other => return Err(format!("the spawn point {other:?} is not one of hotlap, pit, start")),
+    };
+    let slots = track.spawn_slots(set);
+    if slots == 0 {
+        return Err(format!("the track {} has no AC_{set}_0 node: no place for {car}", track.name));
+    }
+    let wrapped = index.rem_euclid(slots as i64) as usize;
+    if wrapped as i64 != index {
+        eprintln!("WARNING: {car} has slot {index} of {set}, the track has {slots}: it stands on slot {wrapped} (Assetto Corsa would put it at the origin of the world, or on a slot that is taken)");
+    }
+    let (position, tail) = track.spawn_pose(set, wrapped).ok_or_else(|| format!("no slot {wrapped} of {set}"))?;
+    Ok(SpawnPose { position, tail })
+}
+
 fn spawn_first(track: &Track, spawn: &str) -> Result<SpawnPose, String> {
     let sets: &[&str] = match spawn {
         "hotlap" => &["HOTLAP_START", "START", "PIT"],
@@ -980,15 +1004,17 @@ fn build_world(
     if let Some(track) = track {
         engine.set_track(Arc::clone(track), setup.track_objects);
     }
-    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), 0)?;
+    let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit))?;
     let mut opponents = Vec::new();
     for (index, opponent) in setup.opponents.iter().enumerate() {
         let slot = index + 1;
         let opponent_data = find_car_data(&opponent.car)?;
-        let pose = match track {
-            Some(track) => spawn_slot(track, &setup.spawn, slot)?,
+        let pose = match (track, &opponent.place) {
+            // a car of race.ini: the slot the game gives it
+            (Some(track), Some(place)) => spawn_place(track, &setup.spawn, place, &opponent.car)?,
+            (Some(track), None) => spawn_slot(track, &setup.spawn, slot)?,
             // the flat road: in a row behind the driver's car
-            None => SpawnPose { position: Vec3f::new(0.0, 0.0, -8.0 * slot as f32), tail: SPAWN_TAIL },
+            (None, _) => SpawnPose { position: Vec3f::new(0.0, 0.0, -8.0 * slot as f32), tail: SPAWN_TAIL },
         };
         // the other cars have the session's weather and rules, not the driver's own ballast,
         // restrictor or setup; until they have drivers of their own (AI) the gearbox and the
@@ -999,8 +1025,9 @@ fn build_world(
         other.auto_clutch = true;
         other.auto_shifter = true;
         other.auto_blip = None;
-        other.session.ballast_kg = 0.0;
-        other.session.restrictor = 0.0;
+        // (a car of race.ini has the ballast and the restrictor of its own section)
+        other.session.ballast_kg = opponent.place.map_or(0.0, |place| place.ballast_kg);
+        other.session.restrictor = opponent.place.map_or(0.0, |place| place.restrictor);
         other.session.setup_file = None;
         // (assists.ini is the player's: DrivingAssistManager changes car 0 only; the others
         // keep the ABS and traction control of their own files)
@@ -1012,7 +1039,8 @@ fn build_world(
             other.auto_shifter = recorded.auto_shifter;
             other.auto_blip = recorded.auto_blip;
         }
-        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), slot)?;
+        let pit_box = opponent.place.map_or(slot, |place| place.pit);
+        let built = build_car(&other, &opponent_data, physics_time, opponent_driver(opponent, track)?, track, &pose, Some(&mut engine), pit_box)?;
         opponents.push(OpponentCar { car: built, setup: opponent.clone(), data_path: opponent_data, spawn: pose });
     }
     Ok((car, opponents, Some(engine)))
@@ -1052,7 +1080,11 @@ impl GameSim {
                 _ => "HOTLAP_START",
             };
             rustyac_physics::track::init_respawn_position_set(&mut loaded, set);
-            spawn = spawn_on(&loaded, &setup.spawn)?;
+            spawn = match &setup.player_place {
+                // a session of race.ini with other cars: the slot of [CAR_0]
+                Some(place) => spawn_place(&loaded, &setup.spawn, place, &setup.car)?,
+                None => spawn_on(&loaded, &setup.spawn)?,
+            };
             track_summary = report.summary(&loaded);
             track = Some(Arc::new(loaded));
             track_folder = Some(folder);

@@ -37,6 +37,8 @@ const VA_EVENT_TRIGGER_UPDATE: usize = 0x1_400d_aef0; // EventTriggerOnChange<in
 const VA_TRACK_AUDIO_CTOR: usize = 0x1_401c_24c0; // TrackAudio::TrackAudio(TrackAvatar*, Sim*)
 const VA_TRACK_AUDIO_DELETING_DTOR: usize = 0x1_401c_3bd0; // TrackAudio::`scalar deleting destructor'(unsigned int)
 const VA_TRACK_AUDIO_RENDER: usize = 0x1_401c_42a0; // TrackAudio::render(float)
+const VA_CAR_AVATAR_IS_IN_PIT: usize = 0x1_400d_8bd0; // bool CarAvatar::isInPit()
+const VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE: usize = 0x1_400d_a420; // CarAvatar::setNewPhysicsState(CarPhysicsState&, float)
 const VA_PRESET_NAMES_INIT: usize = 0x1_4001_0980; // dynamic initialiser of AudioReverb's presetNames
 const VA_ATEXIT: usize = 0x1_4039_9754; // atexit (the program's own, statically linked)
 const VA_NODE_VTABLE: usize = 0x1_404e_b558; // Node
@@ -83,14 +85,21 @@ unsafe fn write_vector(at: *mut u8, data: *mut u8, bytes: usize) {
     wr(at, 0x10, data.add(bytes));
 }
 
+/// One car of the harness: the fake `CarAvatar` and what hangs on it.
+struct HarnessCar {
+    car: *mut u8,
+    physics_car: *mut u8,
+    /// the game's own `CarAudioFMOD` (null: the car has no bank)
+    car_audio: *mut u8,
+    backfire: *mut u8,
+}
+
 pub struct Harness<'a> {
     acs: &'a Acs,
     engine: *mut u8,
     sim: *mut u8,
-    car: *mut u8,
-    physics_car: *mut u8,
-    car_audio: *mut u8,
-    backfire: *mut u8,
+    /// every car in the order `Sim::addCar` makes them: the index is the guid
+    cars: Vec<HarnessCar>,
     track_audio: *mut u8,
 }
 
@@ -130,10 +139,15 @@ impl<'a> Harness<'a> {
         let camera_drivable = acs.alloc(0x200);
         wr(camera_drivable, 0x58, view.drivable_mode);
         wr(camera_drivable, 0x78, sim);
-        let positions = acs.alloc(0x38);
-        wr(positions, 0x34, view.bumper_external_sound as u8);
-        wr(positions, 0x35, view.bonnet_external_sound as u8);
-        write_vector(camera_drivable.add(0x88), positions, 0x38);
+        // (one `DrivableCameraDef` per car, read by the focused car's number: all hold the
+        // same flags of camera_manager.ini)
+        let car_count = 1 + drive.other_cars.len();
+        let positions = acs.alloc(0x38 * car_count);
+        for i in 0..car_count {
+            wr(positions, 0x38 * i + 0x34, view.bumper_external_sound as u8);
+            wr(positions, 0x38 * i + 0x35, view.bonnet_external_sound as u8);
+        }
+        write_vector(camera_drivable.add(0x88), positions, 0x38 * car_count);
         wr(cm, 0xc0, camera_drivable);
         let objects = acs.alloc(8);
         wr(objects, 0, cm);
@@ -190,109 +204,152 @@ impl<'a> Harness<'a> {
             add_cache(engine, wstring(acs, path));
         }
 
-        // the car: a CarAvatar laid out by hand
-        let car = acs.alloc(0x12a8);
-        wr(car, 0x8, game);
-        wr(car, 0x130, sim);
-        write_wstring(acs, car.add(0x138), &drive.car);
-        write_wstring(acs, car.add(0x158), "");
-        let car_node = acs.alloc(0xe0);
-        wr::<u8>(car_node, 0xd8, 1);
-        wr(car, 0x210, car_node);
-        wr::<i32>(car, 0x1158, 0);
-        let physics_car = acs.alloc(0x1000);
-        wr(car, 0x1168, physics_car);
-        // far from the pit box
-        wr::<[f32; 3]>(car, 0x10a8, [0.0, -1000.0, 0.0]);
-        if let Some(first) = drive.frames.first() {
-            std::ptr::copy_nonoverlapping(first.state.as_ptr(), car.add(0x268), first.state.len());
-        }
-        let backfire = acs.alloc(0x28);
-        let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BACKFIRE_PARAMS_CTOR));
-        ctor(backfire, car);
-        wr(car, 0x1068, backfire);
-        let cars = acs.alloc(8);
-        wr(cars, 0, car);
-        write_vector(sim.add(0x208), cars, 8);
-
-        // CarAvatar::initCommonPostPhysics: the car's own GUIDs, then the sound object
-        let mut car_audio = std::ptr::null_mut();
-        if ac.join(rustyac_audio::car::CarAudio::bank_path(&drive.car)).is_file() {
-            let guids = format!("content/cars/{}/sfx/GUIDs.txt", drive.car);
-            if Path::new(&guids).is_file() {
-                let parse: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_PARSE_GUIDS));
-                parse(engine, wstring(acs, &guids));
+        // the cars, as Sim::addCar makes them one after the other: each a CarAvatar laid out by
+        // hand (the first: guid 0, the player's)
+        let list = acs.alloc(8 * car_count);
+        write_vector(sim.add(0x208), list, 0);
+        let mut cars: Vec<HarnessCar> = Vec::new();
+        for (index, name) in drive.cars().into_iter().enumerate() {
+            let first = drive.frames.first().map(|f| if index == 0 { (&f.state, &f.car) } else { (&f.others[index - 1].0, &f.others[index - 1].1) });
+            let car = acs.alloc(0x12a8);
+            wr(car, 0x8, game);
+            wr(car, 0x130, sim);
+            write_wstring(acs, car.add(0x138), name);
+            write_wstring(acs, car.add(0x158), "");
+            let car_node = acs.alloc(0xe0);
+            wr::<u8>(car_node, 0xd8, 1);
+            wr(car, 0x210, car_node);
+            wr::<i32>(car, 0x1158, index as i32);
+            let physics_car = acs.alloc(0x1000);
+            wr(car, 0x1168, physics_car);
+            // far from the pit box
+            wr::<[f32; 3]>(car, 0x10a8, [0.0, -1000.0, 0.0]);
+            if let Some((state, _)) = first {
+                std::ptr::copy_nonoverlapping(state.as_ptr(), car.add(0x268), state.len());
             }
-            car_audio = acs.alloc(0x4b8);
-            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_AUDIO_CTOR));
-            ctor(car_audio, car);
-            wr(car, 0xe18, car_audio);
+            let backfire = acs.alloc(0x28);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_BACKFIRE_PARAMS_CTOR));
+            ctor(backfire, car);
+            wr(car, 0x1068, backfire);
+            // Sim::cars.push_back
+            wr(list, 8 * index, car);
+            write_vector(sim.add(0x208), list, 8 * (index + 1));
+
+            // CarAvatar::initCommonPostPhysics: the car's own GUIDs, then the sound object
+            let mut car_audio = std::ptr::null_mut();
+            if ac.join(rustyac_audio::car::CarAudio::bank_path(name)).is_file() {
+                let guids = format!("content/cars/{name}/sfx/GUIDs.txt");
+                if Path::new(&guids).is_file() {
+                    let parse: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_PARSE_GUIDS));
+                    parse(engine, wstring(acs, &guids));
+                }
+                car_audio = acs.alloc(0x4b8);
+                let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_AUDIO_CTOR));
+                ctor(car_audio, car);
+                wr(car, 0xe18, car_audio);
+            }
+            // the gear trigger watches physicsState.gear
+            wr(car, 0x78, car.add(0x4d4));
+            // the body stands where the first state has it
+            if let Some((_, frame)) = first {
+                wr::<[f32; 3]>(car, 0x254, frame.body_position);
+            }
+            cars.push(HarnessCar { car, physics_car, car_audio, backfire });
         }
-        // the gear trigger watches physicsState.gear
-        wr(car, 0x78, car.add(0x4d4));
-        // the body stands where the first state has it
-        if let Some(first) = drive.frames.first() {
-            wr::<[f32; 3]>(car, 0x254, first.car.body_position);
-        }
-        // ACCameraManager::setAudioDistanceScale for the session's camera: the multipliers of
-        // the car's MixVolumes (tyresMult +0x134, engineMult +0x138), then the roll-off scale
+        // ACCameraManager::setAudioDistanceScale for the session's camera (the first car is the
+        // focused one then): the multipliers of every car's MixVolumes (tyresMult +0x134,
+        // engineMult +0x138) are 1, the focused car's 1.5 in an outside view of it; then the
+        // roll-off scale
         let boost = match view.mode {
             2 => (view.drivable_mode as u32) <= 3,
             _ => false,
         };
-        if !car_audio.is_null() {
-            let k: f32 = if boost { 1.5 } else { 1.0 };
-            wr(car_audio, 0x134, k);
-            wr(car_audio, 0x138, k);
+        for (index, c) in cars.iter().enumerate() {
+            if !c.car_audio.is_null() {
+                let k: f32 = if boost && index == 0 { 1.5 } else { 1.0 };
+                wr(c.car_audio, 0x134, k);
+                wr(c.car_audio, 0x138, k);
+            }
         }
         let set_distance_scale: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_DISTANCE_SCALE));
         set_distance_scale(engine, 1.0);
-        Harness { acs, engine, sim, car, physics_car, car_audio, backfire, track_audio }
+        Harness { acs, engine, sim, cars, track_audio }
     }
 
     /// One frame, in the order of `rustyac_audio::sim::AudioWorld::frame`.
     pub unsafe fn frame(&mut self, frame: &crate::drive::Frame) {
         let acs = self.acs;
-        let car = self.car;
-        // Sim::update, before the cars take their new state: Sim::stepPhysicsEvent ...
-        if !self.car_audio.is_null() {
-            let on_car_hit: extern "C" fn(*mut u8, f32, *const f32, *const f32, f32, f32, u32) = std::mem::transmute(acs.va(VA_CAR_AUDIO_ON_CAR_HIT));
-            for raw in &frame.events {
-                let p = raw.as_ptr();
-                if rd::<i32>(p, 0) != 0 {
-                    continue;
-                }
-                if rd::<f32>(p, 4) as i32 != 0 {
-                    continue;
-                }
-                on_car_hit(self.car_audio, rd(p, 0x08), p.add(0x14).cast(), p.add(0x20).cast(), rd(p, 0x0c), rd(p, 0x10), rd(p, 0x40));
+        // Sim::focusedCarIndex (a change of it happened at the end of the frame before)
+        wr::<u32>(self.sim, 0x220, frame.focus);
+        // Sim::update, before the cars take their new state: Sim::stepPhysicsEvent 0x14019ebd0:
+        // a collision goes to the sound of the car its event names (an event for a car that is
+        // not there, or that has no sound, is dropped) ...
+        let on_car_hit: extern "C" fn(*mut u8, f32, *const f32, *const f32, f32, f32, u32) = std::mem::transmute(acs.va(VA_CAR_AUDIO_ON_CAR_HIT));
+        for raw in &frame.events {
+            let p = raw.as_ptr();
+            if rd::<i32>(p, 0) != 0 {
+                continue;
             }
+            let index = rd::<f32>(p, 4) as i32;
+            let Some(c) = usize::try_from(index).ok().and_then(|i| self.cars.get(i)) else { continue };
+            if c.car_audio.is_null() {
+                continue;
+            }
+            on_car_hit(c.car_audio, rd(p, 0x08), p.add(0x14).cast(), p.add(0x20).cast(), rd(p, 0x0c), rd(p, 0x10), rd(p, 0x40));
         }
-        // ... and the cars ranked by distance to the listener (one car: rank 0), from the body
-        // matrix and the listener of the frame before
+        // ... and the cars ranked by distance to the listener (the block at 0x14019f39d of
+        // Sim::update), from the body matrices, the states and the listener of the frame
+        // before: the game's own listenerDistance per car in the cars' order, an ascending sort
+        // that keeps the order of equals, then rank and gap; a car in its pit box takes no rank
         let distance: extern "C" fn(*mut u8, *const f32) -> f32 = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_LISTENER_DISTANCE));
-        let d = distance(self.engine, car.add(0x254).cast());
-        if !self.car_audio.is_null() {
-            wr::<i32>(self.car_audio, 0x4a8, 0);
-            wr::<f32>(self.car_audio, 0x4ac, d - 0.0);
-        }
-        // PhysicsAvatar::update: the main thread's copy of the newest physics state
-        std::ptr::copy_nonoverlapping(frame.state.as_ptr(), car.add(0x268), frame.state.len());
-        wr::<u8>(self.physics_car, 0xa08, frame.car.tc_in_action as u8);
-        // CarAvatar::update: the backfire test, the drawn body's matrix (its position is all the
-        // sound reads), then the event triggers
-        let engine_life: f32 = rd(car, 0xa10);
-        #[allow(clippy::neg_cmp_op_on_partial_ord)]
-        if !(0.0 >= engine_life) {
-            let check: extern "C" fn(*mut u8, f32) -> u8 = std::mem::transmute(acs.va(VA_BACKFIRE_CHECK));
-            if check(self.backfire, DT) != 0 {
-                let arg = 0u8;
-                self.fire(car.add(0xd0), &arg as *const u8);
+        let is_in_pit: extern "C" fn(*mut u8) -> u8 = std::mem::transmute(acs.va(VA_CAR_AVATAR_IS_IN_PIT));
+        let mut ranked: Vec<(usize, f32)> = self.cars.iter().enumerate().map(|(i, c)| (i, distance(self.engine, c.car.add(0x254).cast()))).collect();
+        ranked.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let (mut rank, mut previous) = (0i32, 0.0f32);
+        for (i, d) in ranked {
+            let c = &self.cars[i];
+            if !c.car_audio.is_null() {
+                wr::<i32>(c.car_audio, 0x4a8, rank);
+                wr::<f32>(c.car_audio, 0x4ac, d - previous);
+            }
+            previous = d;
+            if self.cars.len() > 1 && is_in_pit(c.car) == 0 {
+                rank += 1;
             }
         }
-        wr::<[f32; 3]>(car, 0x254, frame.car.body_position);
-        let trigger: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_EVENT_TRIGGER_UPDATE));
-        trigger(car.add(0x58));
+        // PhysicsAvatar::update: the main thread's copy of the newest physics state of every
+        // car (CarAvatar::setNewPhysicsState 0x1400da420: the game's own for the cars after
+        // the first, whose wheel and pedals it blends)
+        for (index, c) in self.cars.iter().enumerate() {
+            if index == 0 {
+                std::ptr::copy_nonoverlapping(frame.state.as_ptr(), c.car.add(0x268), frame.state.len());
+                wr::<u8>(c.physics_car, 0xa08, frame.car.tc_in_action as u8);
+            } else {
+                let (state, port) = &frame.others[index - 1];
+                let mut bytes = state.clone();
+                let set: extern "C" fn(*mut u8, *mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE));
+                set(c.car, bytes.as_mut_ptr(), DT);
+                wr::<u8>(c.physics_car, 0xa08, port.tc_in_action as u8);
+            }
+        }
+        // CarAvatar::update of every car in order: the backfire test, the drawn body's matrix
+        // (its position is all the sound reads), then the event triggers
+        for (index, c) in self.cars.iter().enumerate() {
+            let car = c.car;
+            let engine_life: f32 = rd(car, 0xa10);
+            #[allow(clippy::neg_cmp_op_on_partial_ord)]
+            if !(0.0 >= engine_life) {
+                let check: extern "C" fn(*mut u8, f32) -> u8 = std::mem::transmute(acs.va(VA_BACKFIRE_CHECK));
+                if check(c.backfire, DT) != 0 {
+                    let arg = 0u8;
+                    self.fire(car.add(0xd0), &arg as *const u8);
+                }
+            }
+            let body = if index == 0 { frame.car.body_position } else { frame.others[index - 1].1.body_position };
+            wr::<[f32; 3]>(car, 0x254, body);
+            let trigger: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_EVENT_TRIGGER_UPDATE));
+            trigger(car.add(0x58));
+        }
         // the camera
         let set_listener: extern "C" fn(*mut u8, *const f32, *const f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_LISTENER));
         set_listener(self.engine, frame.listener.0.as_ptr(), frame.listener.1.as_ptr());
@@ -301,9 +358,11 @@ impl<'a> Harness<'a> {
             let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_TRACK_AUDIO_RENDER));
             render(self.track_audio, DT);
         }
-        if !self.car_audio.is_null() {
-            let render_audio: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AUDIO_RENDER_AUDIO));
-            render_audio(self.car_audio, DT);
+        for c in &self.cars {
+            if !c.car_audio.is_null() {
+                let render_audio: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_CAR_AUDIO_RENDER_AUDIO));
+                render_audio(c.car_audio, DT);
+            }
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_UPDATE));
         update(self.engine, DT);
@@ -326,9 +385,11 @@ impl<'a> Harness<'a> {
     /// The destructors, in the order the port tears its world down.
     pub unsafe fn teardown(self) {
         let acs = self.acs;
-        if !self.car_audio.is_null() {
-            let dtor: extern "C" fn(*mut u8, u32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_AUDIO_DELETING_DTOR));
-            dtor(self.car_audio, 0);
+        for c in &self.cars {
+            if !c.car_audio.is_null() {
+                let dtor: extern "C" fn(*mut u8, u32) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_AUDIO_DELETING_DTOR));
+                dtor(c.car_audio, 0);
+            }
         }
         if !self.track_audio.is_null() {
             let dtor: extern "C" fn(*mut u8, u32) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_AUDIO_DELETING_DTOR));

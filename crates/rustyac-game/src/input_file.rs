@@ -252,6 +252,31 @@ pub enum OpponentDrive {
     Recorded(std::path::PathBuf),
 }
 
+/// Where race.ini puts a car and what it loads it with (`RaceManager::initOffline`): its pit
+/// box (`AC_PIT_<n>`), its grid slot (`AC_START_<n>`), `BALLAST` (kg) and `RESTRICTOR`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GridPlace {
+    pub pit: usize,
+    pub start: i32,
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+}
+
+impl GridPlace {
+    fn to_text(self) -> String {
+        format!("{}:{}:{}:{}", self.pit, self.start, self.ballast_kg, self.restrictor)
+    }
+
+    fn parse(text: &str) -> Result<GridPlace, String> {
+        let wrong = || format!("{text:?}: a car's place is <pit box>:<grid slot>:<ballast>:<restrictor>");
+        let parts: Vec<&str> = text.split(':').collect();
+        if parts.len() != 4 {
+            return Err(wrong());
+        }
+        Ok(GridPlace { pit: parts[0].parse().map_err(|_| wrong())?, start: parts[1].parse().map_err(|_| wrong())?, ballast_kg: parts[2].parse().map_err(|_| wrong())?, restrictor: parts[3].parse().map_err(|_| wrong())? })
+    }
+}
+
 /// Another car of the session.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Opponent {
@@ -260,6 +285,9 @@ pub struct Opponent {
     /// The skin's folder name (empty: the car's first).
     pub skin: String,
     pub drive: OpponentDrive,
+    /// A car of race.ini: its place and its load. `None` (`--cars`, `--opponent`): the next
+    /// slot of the session's spawn set, no ballast.
+    pub place: Option<GridPlace>,
 }
 
 impl Opponent {
@@ -295,7 +323,7 @@ impl Opponent {
         if car.is_empty() {
             return Err(wrong());
         }
-        Ok(Opponent { car: car.to_string(), skin: skin.to_string(), drive })
+        Ok(Opponent { car: car.to_string(), skin: skin.to_string(), drive, place: None })
     }
 
     pub fn to_text(&self) -> String {
@@ -366,6 +394,9 @@ pub struct SimSetup {
     /// Worker threads of the physics engine with several cars (`--physics-threads`); `None`:
     /// as the game decides it. Never in a file: the result does not depend on it.
     pub physics_threads: Option<usize>,
+    /// The player's place in a session of race.ini with other cars (the pit box and the grid
+    /// slot of `[CAR_0]`); `None`: the first slot of the spawn set, as before.
+    pub player_place: Option<GridPlace>,
 }
 
 impl Default for SimSetup {
@@ -393,6 +424,7 @@ impl Default for SimSetup {
             session: Session::default(),
             opponents: Vec::new(),
             physics_threads: None,
+            player_place: None,
         }
     }
 }
@@ -519,8 +551,14 @@ impl SimSetup {
         if let Some(armed) = s.arm_first_lap {
             put("arm_first_lap", (armed as u32).to_string());
         }
+        if let Some(place) = self.player_place {
+            put("player_place", place.to_text());
+        }
         for opponent in &self.opponents {
             put("opponent", opponent.to_text());
+            if let Some(place) = opponent.place {
+                put("opponent_place", place.to_text());
+            }
         }
         if !self.track.is_empty() {
             put("track", self.track.clone());
@@ -641,6 +679,8 @@ impl SimSetup {
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),
+                "opponent_place" => setup.opponents.last_mut().ok_or("opponent_place before any opponent")?.place = Some(GridPlace::parse(value)?),
+                "player_place" => setup.player_place = Some(GridPlace::parse(value)?),
                 "track" => setup.track = value.to_string(),
                 "layout" => setup.layout = value.to_string(),
                 "track_objects" => setup.track_objects = flag(),

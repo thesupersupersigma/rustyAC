@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use rustyac_game::input_file::{Opponent, OpponentDrive, SimSetup};
 
 fn opponent(car: &str, skin: &str, drive: OpponentDrive) -> Opponent {
-    Opponent { car: car.to_string(), skin: skin.to_string(), drive }
+    Opponent { car: car.to_string(), skin: skin.to_string(), drive, place: None }
 }
 
 #[test]

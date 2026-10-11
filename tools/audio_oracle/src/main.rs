@@ -49,6 +49,13 @@ pub struct Args {
     command: String,
     side: String,
     tape: Option<PathBuf>,
+    /// `--tapes <prefix>`: several cars (`<prefix>.car<n>.audiotape` of `car_oracle multi
+    /// --audio-tape`), `--max-cars <n>` the first n of them, `--focus 0,2@120`: the focused car
+    /// (the camera's) over the frames
+    tapes: Option<PathBuf>,
+    max_cars: usize,
+    focus: Vec<(u32, usize)>,
+    focus_text: String,
     camera: Camera,
     out: PathBuf,
     frames: Option<usize>,
@@ -71,6 +78,10 @@ fn parse() -> Result<Args, String> {
         command,
         side: "port".to_string(),
         tape: None,
+        tapes: None,
+        max_cars: usize::MAX,
+        focus: Vec::new(),
+        focus_text: String::new(),
         camera: Camera::Cockpit,
         out: repo.join("oracle/audio"),
         frames: None,
@@ -88,6 +99,15 @@ fn parse() -> Result<Args, String> {
         match arg.as_str() {
             "--side" => a.side = value()?,
             "--tape" => a.tape = Some(PathBuf::from(value()?)),
+            "--tapes" => a.tapes = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
+            "--max-cars" => a.max_cars = value()?.parse().map_err(|_| "--max-cars needs a number")?,
+            "--focus" => {
+                a.focus_text = value()?;
+                for item in a.focus_text.split(',').filter(|s| !s.is_empty()) {
+                    let (car, from) = item.split_once('@').unwrap_or((item, "0"));
+                    a.focus.push((car.parse().map_err(|_| "--focus <car>[@<frame>],…")?, from.parse().map_err(|_| "--focus <car>[@<frame>],…")?));
+                }
+            }
             "--camera" => a.camera = Camera::parse(&value()?)?,
             "--out" => a.out = PathBuf::from(value()?),
             "--frames" => a.frames = Some(value()?.parse().map_err(|_| "--frames needs a number")?),
@@ -125,14 +145,32 @@ pub fn ac_folder(args: &Args) -> PathBuf {
 }
 
 fn file_stem(drive: &Drive, side: &str) -> String {
-    format!("{}_{}_{}_{side}", drive.car, drive.name, drive.camera.name())
+    if drive.label.is_empty() {
+        format!("{}_{}_{}_{side}", drive.car, drive.name, drive.camera.name())
+    } else {
+        format!("{}_{}_{}_{}_{side}", drive.car, drive.name, drive.label, drive.camera.name())
+    }
+}
+
+/// The drive the command line names: one car's tape, or the tapes of a field.
+fn load_drive(args: &Args) -> Result<Drive, String> {
+    match (&args.tapes, &args.tape) {
+        (Some(prefix), _) => {
+            let mut drive = Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus)?;
+            // (a track given by its name: its folder in the game)
+            if let Some(track) = drive.track_folder.clone().filter(|t| !t.is_dir()) {
+                drive.track_folder = Some(ac_folder(args).join("content/tracks").join(track));
+            }
+            Ok(drive)
+        }
+        (None, Some(tape)) => Drive::load(&std::path::absolute(tape).map_err(|e| e.to_string())?, args.camera, args.frames),
+        (None, None) => Err("a drive is --tape <file.audiotape> or --tapes <prefix>".to_string()),
+    }
 }
 
 /// One side of a drive.
 fn run(args: &Args) -> Result<(), String> {
-    let tape = args.tape.as_ref().ok_or("run needs --tape <file.audiotape>")?;
-    let tape = std::path::absolute(tape).map_err(|e| e.to_string())?;
-    let mut drive = Drive::load(&tape, args.camera, args.frames)?;
+    let mut drive = load_drive(args)?;
     if args.no_track {
         drive.track_folder = None;
     }
@@ -196,7 +234,12 @@ fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfac
     let car = CarInfo { unix_name: drive.car.clone(), guid: 0, data_folder: root.join("content/cars").join(&drive.car).join("data"), car_cameras_external_sound: Vec::new() };
     let session = Session { files, master, track, surfaces, car, camera: drive.camera.view(), dt: DT };
     let events: Vec<Vec<PhysicsEvent>> = drive.frames.iter().map(|f| f.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect()).collect();
-    run_session(session, drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener }))
+    if drive.other_cars.is_empty() {
+        return run_session(session, drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener }));
+    }
+    let others: Vec<CarInfo> = drive.other_cars.iter().enumerate().map(|(i, name)| CarInfo { unix_name: name.clone(), guid: i as i32 + 1, data_folder: root.join("content/cars").join(name).join("data"), car_cameras_external_sound: Vec::new() }).collect();
+    let fields: Vec<Vec<rustyac_audio::car::CarFrame>> = drive.frames.iter().map(|f| std::iter::once(f.car.clone()).chain(f.others.iter().map(|o| o.1.clone())).collect()).collect();
+    rustyac_audio::golden::run_field(session, others, drive.frames.iter().zip(&events).zip(&fields).map(|((frame, events), cars)| rustyac_audio::golden::FieldFrame { cars, events, listener: frame.listener, focus: frame.focus }))
 }
 
 /// `audio_oracle golden --tape <file> --camera <c> --frames <n> --out-file <file.augold>`: the
@@ -235,7 +278,19 @@ static FMOD_CRASHES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32
 fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut command = std::process::Command::new(exe);
-    command.arg("run").arg("--side").arg(side).arg("--tape").arg(args.tape.as_ref().unwrap());
+    command.arg("run").arg("--side").arg(side);
+    match (&args.tapes, &args.tape) {
+        (Some(prefix), _) => {
+            command.arg("--tapes").arg(prefix).arg("--max-cars").arg(args.max_cars.to_string());
+            if !args.focus_text.is_empty() {
+                command.arg("--focus").arg(&args.focus_text);
+            }
+        }
+        (None, Some(tape)) => {
+            command.arg("--tape").arg(tape);
+        }
+        (None, None) => return Err("a drive is --tape <file.audiotape> or --tapes <prefix>".to_string()),
+    }
     command.arg("--camera").arg(args.camera.name()).arg("--out").arg(out).arg("--acs").arg(&args.acs);
     command.arg("--root").arg(&args.root);
     if let Some(frames) = args.frames {
@@ -325,8 +380,7 @@ fn pre_roll(samples: &[i16]) -> usize {
 
 /// Both sides of a drive, compared.
 fn compare(args: &Args) -> Result<(), String> {
-    let tape = args.tape.as_ref().ok_or("compare needs --tape <file.audiotape>")?;
-    let mut drive = Drive::load(tape, args.camera, args.frames)?;
+    let mut drive = load_drive(args)?;
     if args.no_track {
         drive.track_folder = None;
     }
@@ -377,7 +431,7 @@ fn compare(args: &Args) -> Result<(), String> {
     let word = |same: bool| if same { "identical" } else { "differs" };
     println!(
         "{} | {} | {} | {} | {} | {} | {} | {} | {} | {:.1} s | {} | {} | {}",
-        drive.car,
+        if drive.other_cars.is_empty() { drive.car.clone() } else { format!("{} ({})", drive.cars().join(", "), drive.label) },
         drive.track_folder.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "-".to_string()),
         drive.name,
         drive.camera.name(),

@@ -296,6 +296,223 @@ impl Assists {
     }
 }
 
+/// One car of race.ini as `RaceManager::initOffline` @ 0x14013a6c0 makes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaceCar {
+    /// The number of its section (`[CAR_<n>]`), and whether the file has that section. A car
+    /// without one is made all the same: with the model, the skin and the driver level of the
+    /// car before it (the game skips the reads, not the car).
+    pub section: usize,
+    pub has_section: bool,
+    /// `MODEL` and `MODEL_CONFIG` (a `-` keeps those of the car before), and the skin the car gets.
+    pub model: String,
+    pub config: String,
+    pub skin: String,
+    /// The skin is not the one of the file: that one is empty or not a folder of the car.
+    pub skin_was_picked: bool,
+    /// `BALLAST` (kg) and `RESTRICTOR`: 0 unless `[HEADER] VERSION` is 2 or more and the value
+    /// is above 0.
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    /// `DRIVER_NAME`, and `NATION_CODE` when the key is there.
+    pub driver_name: String,
+    pub nation_code: Option<String>,
+    /// What the driver of the car is made from (every car but the first gets the AI of the
+    /// game): `[CAR_n] AI_LEVEL` as read (0 without the key), and `AI_AGGRESSION` as the game
+    /// keeps it (`saturate(value * 0.01) * 0.95`; 0 without the key).
+    pub ai_level: f32,
+    pub ai_aggression: f32,
+    /// The number of the car among the cars that were made (`Sim::cars`): its guid, and its
+    /// pit box (`AC_PIT_<n>`).
+    pub index: usize,
+    /// Its slot of the `START` set (`AC_START_<n>`). -1 or a number the track has no slot for
+    /// puts the car at the origin of the world in the game.
+    pub start_index: i32,
+}
+
+/// The cars of a race.ini.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaceGrid {
+    /// `RaceManager::carsToBeLoaded`: `[RACE] CARS` (at least 1), at most the pit boxes.
+    pub cars_to_be_loaded: i32,
+    pub cars: Vec<RaceCar>,
+    /// `[RACE] AI_LEVEL`
+    pub ai_level: f32,
+    /// `[SESSION_0] TYPE` (1 without any session) and what a race takes as the place of the
+    /// player on the grid: `STARTING_POSITION` of the session, or `[RACE] CARS` as written.
+    pub first_session_type: i32,
+    pub forced_position: i32,
+}
+
+/// `ksRand()` @ 0x1400337c0: `rand()` as a number from 0 to just under 1.
+pub fn ks_rand_unit(rand: &mut dyn FnMut() -> i32) -> f32 {
+    rand() as f32 * RAND_TO_UNIT
+}
+
+/// The `[CAR_n]` loop of `RaceManager::initOffline` @ 0x14013a6c0 (0x14013c1a0 to 0x14013cc8f)
+/// with what it takes from the lines before it.
+///
+/// * `pit_slots`: `TrackAvatar::getMaxSlotsAvailable("PIT")`.
+/// * `skins`: `RaceManager::getModelSkins` @ 0x140138c20, the folders of
+///   `content/cars/<model>/skins` in the order the file system lists them (on NTFS: by name,
+///   upper case first compared).
+/// * `skin_exists`: `RaceManager::isSkinAvailable` @ 0x14013ebc0.
+/// * `rand`: the `rand()` of the C runtime where the loop finds it (the game has drawn the wind
+///   and the time of the gearbox lock before; a car without a valid skin draws one number, the
+///   first time its model has none).
+///
+/// A count of 0 cars is the "CANNOT HAVE 0 CARS IN RACE.INI" of the game.
+pub fn race_grid(ini: &IniReader, pit_slots: usize, skins: &dyn Fn(&str) -> Vec<String>, skin_exists: &dyn Fn(&str, &str) -> bool, rand: &mut dyn FnMut() -> i32) -> Result<RaceGrid, String> {
+    let float = |section: &str, key: &str| ini.get_float(section, key).unwrap_or(0.0);
+    let int = |section: &str, key: &str| ini.get_int(section, key).unwrap_or(0);
+    let race_ai = float("RACE", "AI_LEVEL");
+    let version = if ini.has_section("HEADER") { int("HEADER", "VERSION") } else { 1 };
+    // the first session: its type, and the grid place of a race
+    let raw_cars = int("RACE", "CARS");
+    let (mut first_session_type, mut forced_position) = (1, -1);
+    if ini.has_section("SESSION_0") {
+        first_session_type = int("SESSION_0", "TYPE");
+        if first_session_type == 3 {
+            forced_position = if ini.has_key("SESSION_0", "STARTING_POSITION") { int("SESSION_0", "STARTING_POSITION") } else { raw_cars };
+        }
+    }
+    let cars_to_be_loaded = raw_cars.max(1).min(pit_slots.min(i32::MAX as usize) as i32);
+    if cars_to_be_loaded == 0 {
+        return Err("CANNOT HAVE 0 CARS IN RACE.INI".to_string());
+    }
+    let mut model = ini.get_string("RACE", "MODEL");
+    let mut config = ini.get_string("RACE", "MODEL_CONFIG");
+    // where the next car without a skin of its own goes on in the list of its model
+    let mut next_skin: Vec<(String, usize)> = Vec::new();
+    let mut car_ai = 1.0f32;
+    let mut ai_aggression = 0.0f32;
+    let mut skin = String::new();
+    let mut cars: Vec<RaceCar> = Vec::new();
+    for i in 0..cars_to_be_loaded as usize {
+        let section = format!("CAR_{i}");
+        // (a section that is not there: the five reads are jumped over at 0x14013c208, and the
+        // car is made from what the car before left in these variables)
+        let has_section = ini.has_section(&section);
+        if has_section {
+            let m = ini.get_string(&section, "MODEL");
+            if m != "-" {
+                model = m;
+            }
+            let c = ini.get_string(&section, "MODEL_CONFIG");
+            if c != "-" {
+                config = c;
+            }
+            skin = ini.get_string(&section, "SKIN");
+            if i > 0 {
+                car_ai = float(&section, "AI_LEVEL");
+            }
+            ai_aggression = if ini.has_key(&section, "AI_AGGRESSION") {
+                let x = float(&section, "AI_AGGRESSION") * 0.01;
+                // saturate @ 0x1400244b0
+                let x = if x > 1.0 {
+                    1.0
+                } else if x >= 0.0 {
+                    x
+                } else {
+                    0.0
+                };
+                x * 0.95
+            } else {
+                0.0
+            };
+        }
+        let mut skin_was_picked = false;
+        if skin.is_empty() || !skin_exists(&model, &skin) {
+            let list = skins(&model);
+            if !list.is_empty() {
+                let at = match next_skin.iter().position(|(name, _)| *name == model) {
+                    Some(at) => at,
+                    None => {
+                        next_skin.push((model.clone(), (list.len() as f32 * ks_rand_unit(rand)) as i32 as usize));
+                        next_skin.len() - 1
+                    }
+                };
+                let k = &mut next_skin[at].1;
+                // (the game reads the list without looking at its length; the number is below it)
+                skin = list.get(*k).cloned().unwrap_or_default();
+                skin_was_picked = true;
+                *k += 1;
+                if *k >= list.len() {
+                    *k = 0;
+                }
+            }
+        }
+        let (mut ballast_kg, mut restrictor) = (0.0, 0.0);
+        if version >= 2 {
+            let b = float(&section, "BALLAST");
+            if 0.0 < b {
+                ballast_kg = b;
+            }
+            let r = float(&section, "RESTRICTOR");
+            if 0.0 < r {
+                restrictor = r;
+            }
+        }
+        // Sim::addCar: the pit box and the grid slot with the number of the car among the cars
+        let index = cars.len();
+        let mut start_index = index as i32;
+        match first_session_type {
+            3 => {
+                let f = if i == 0 { forced_position } else { i as i32 };
+                start_index = f - 1;
+                if i != 0 && forced_position <= f {
+                    start_index = f;
+                }
+            }
+            7 => start_index = i as i32,
+            _ => {}
+        }
+        cars.push(RaceCar {
+            section: i,
+            has_section,
+            model: model.clone(),
+            config: config.clone(),
+            skin: skin.clone(),
+            skin_was_picked,
+            ballast_kg,
+            restrictor,
+            driver_name: ini.get_string(&section, "DRIVER_NAME"),
+            nation_code: ini.has_key(&section, "NATION_CODE").then(|| ini.get_string(&section, "NATION_CODE")),
+            ai_level: car_ai,
+            ai_aggression,
+            index,
+            start_index,
+        });
+    }
+    Ok(RaceGrid { cars_to_be_loaded, cars, ai_level: race_ai, first_session_type, forced_position })
+}
+
+/// The numbers of `rand()` `RaceManager::initOffline` draws before its `[CAR_n]` loop: one
+/// for the speed of the wind (only with a `[WIND]` section), one more for its direction when
+/// the one of the file is below 0, and one for the time the gearbox stays locked before a
+/// race start.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+pub fn draws_before_the_cars(ini: &IniReader, rand: &mut dyn FnMut() -> i32) {
+    if ini.has_section("WIND") {
+        rand();
+        if !(ini.get_float("WIND", "DIRECTION_DEG").unwrap_or(0.0) >= 0.0) {
+            rand();
+        }
+    }
+    rand();
+}
+
+/// The folders of `content/cars/<model>/skins` as `Path::getFolders` @ 0x140231260 lists
+/// them: in the order of the file system, which on NTFS is by name with upper-cased letters.
+pub fn model_skins(cars_folder: &std::path::Path, model: &str) -> Vec<String> {
+    let mut skins: Vec<String> = match std::fs::read_dir(cars_folder.join(model).join("skins")) {
+        Ok(entries) => entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect(),
+        Err(_) => Vec::new(),
+    };
+    skins.sort_by_key(|name| name.to_uppercase().encode_utf16().collect::<Vec<u16>>());
+    skins
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

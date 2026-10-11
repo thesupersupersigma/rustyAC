@@ -90,7 +90,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     if let Some(count) = options.cars {
         let drive = if setup.track.is_empty() { rustyac_game::input_file::OpponentDrive::Parked } else { rustyac_game::input_file::OpponentDrive::Auto };
         for _ in 1..count {
-            setup.opponents.push(rustyac_game::input_file::Opponent { car: options.car.clone(), skin: String::new(), drive: drive.clone() });
+            setup.opponents.push(rustyac_game::input_file::Opponent { car: options.car.clone(), skin: String::new(), drive: drive.clone(), place: None });
         }
     }
     for text in &options.opponents {
@@ -105,16 +105,19 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         setup.opponents.push(opponent);
     }
     setup.physics_threads = options.physics_threads;
-    if !setup.opponents.is_empty() {
-        println!(
-            "{} other cars: their physics is the game's, but AC's renderer and the sound do not have them yet. To see them (as blue boxes), add --debug-view",
-            setup.opponents.len()
-        );
-    }
     // the device the bindings name decides one aid (a pad has no clutch pedal)
     let input_method = Bindings::load(options, &mut Vec::new()).input_method;
     for note in rustyac_game::conditions::apply(options, &mut setup, &input_method)? {
         println!("{note}");
+    }
+    if !setup.opponents.is_empty() {
+        println!(
+            "{} other car(s), drawn and heard as the game draws and plays them. Ctrl+{} / Ctrl+{}: the camera to the car ahead / behind on the track, Ctrl+{} or F4: back to yours",
+            setup.opponents.len(),
+            rustyac_game::input::bindings::key_name(0x63),
+            rustyac_game::input::bindings::key_name(0x61),
+            rustyac_game::input::bindings::key_name(0x62)
+        );
     }
     Ok(setup)
 }

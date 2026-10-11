@@ -7,6 +7,7 @@
 //! (`re/types/*.txt`), ODE offsets from the disassembly of ODE's own accessors.
 
 pub mod multi;
+pub mod race_ini;
 pub mod sus_micro;
 
 use std::cell::UnsafeCell;

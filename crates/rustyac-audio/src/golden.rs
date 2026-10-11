@@ -62,6 +62,43 @@ pub fn run_session<'a>(session: Session, frames: impl Iterator<Item = SessionFra
     Ok(())
 }
 
+/// One frame of a session of several cars: every car's state in the cars' order, the physics
+/// events of all of them, the listener, and the focused car (`Sim::focusedCarIndex`).
+pub struct FieldFrame<'a> {
+    pub cars: &'a [CarFrame],
+    pub events: &'a [PhysicsEvent],
+    pub listener: (Mat, Vec3),
+    pub focus: u32,
+}
+
+/// [`run_session`] with more cars: `session.car` is the first (guid 0), `others` follow in
+/// the order the game makes them (guid 1, 2, …).
+pub fn run_field<'a>(session: Session, others: Vec<CarInfo>, frames: impl Iterator<Item = FieldFrame<'a>>) -> Result<(), String> {
+    log::mark("setup");
+    let mut engine = AudioEngine::new(session.files)?;
+    engine.set_volume(session.master);
+    let track = match session.track {
+        Some((scene, data_folder)) => Some(TrackAudio::new(&mut engine, scene, &data_folder)?),
+        None => None,
+    };
+    cache_surface_sounds(&mut engine, session.surfaces);
+    let mut cars = vec![CarSound::new(&mut engine, session.car)?];
+    for info in others {
+        cars.push(CarSound::new(&mut engine, info)?);
+    }
+    let mut world = AudioWorld::new(engine, track, cars);
+    // the session's camera is set up with the first car focused: ACCameraManager::setAudioDistanceScale
+    world.set_audio_distance_scale(&SimView { focused_car_index: 0, camera: Some(session.camera) }, 1.0);
+    for (i, frame) in frames.enumerate() {
+        log::mark(&format!("frame {i}"));
+        let sim = SimView { focused_car_index: frame.focus, camera: Some(session.camera) };
+        world.frame(&FrameInput { cars: frame.cars, events: frame.events, sim, listener: Some(frame.listener), dt: session.dt });
+    }
+    log::mark("teardown");
+    world.destroy();
+    Ok(())
+}
+
 /// The levels the oracle's runs and the golden test use (the game reads them from Documents
 /// `cfg/audio.ini`).
 pub const AUDIO_INI: &str = "[LEVELS]\nBRAKES=0.8\nDIRT_BOTTOM=1\nENGINE=1\nMASTER=1\nOPPONENTS=0.8\nSURFACES=0.9\nTYRES=1\nWIND=0.3\nTRANSMISSION=0.33333334\n\n[SETTINGS]\nDRIVER_NAME=no such device\n\n[SKIDS]\nENTRY_POINT=100\n";

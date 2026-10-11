@@ -25,6 +25,10 @@ pub struct Frame {
     pub events: Vec<[u8; 0x48]>,
     pub car: CarFrame,
     pub listener: (Mat, Vec3),
+    /// the cars after the first (`--tapes`): each one's raw state and what the port reads of it
+    pub others: Vec<(Vec<u8>, CarFrame)>,
+    /// `Sim::focusedCarIndex` of the frame
+    pub focus: u32,
 }
 
 /// A drive and everything about its session.
@@ -35,6 +39,10 @@ pub struct Drive {
     pub layout: String,
     pub camera: Camera,
     pub frames: Vec<Frame>,
+    /// the cars after the first, in the order the game makes them (guid 1, 2, …)
+    pub other_cars: Vec<String>,
+    /// a word for the files' names when the drive is not the plain one-car one
+    pub label: String,
 }
 
 impl Drive {
@@ -51,9 +59,59 @@ impl Drive {
             frame.tc_in_action = f.tc_in_action;
             let first = first.get_or_insert_with(|| frame.clone());
             let listener = camera.listener(&frame, first);
-            frames.push(Frame { state: f.state, events: f.events, car: frame, listener });
+            frames.push(Frame { state: f.state, events: f.events, car: frame, listener, others: Vec::new(), focus: 0 });
         }
-        Ok(Drive { name, car, track_folder, layout, camera, frames })
+        Ok(Drive { name, car, track_folder, layout, camera, frames, other_cars: Vec::new(), label: String::new() })
+    }
+
+    /// A drive of several cars: `<prefix>.car<n>.audiotape` of `car_oracle multi --audio-tape`
+    /// (the first car's tape holds the physics events of all). `focus` is the focused car over
+    /// the frames: (car, from this frame on), the listener is the camera on that car.
+    pub fn load_field(prefix: &Path, camera: Camera, limit: Option<usize>, max_cars: usize, focus: &[(u32, usize)]) -> Result<Drive, String> {
+        let tape_of = |index: usize| PathBuf::from(format!("{}.car{index}.audiotape", prefix.display()));
+        let mut drive = Drive::load(&tape_of(0), camera, limit)?;
+        // (a tape of `car_oracle multi` names the track, not its folder)
+        if drive.track_folder.is_none() {
+            let first = Tape::read(&tape_of(0))?;
+            drive.track_folder = first.get("track").filter(|t| !t.is_empty()).map(PathBuf::from);
+        }
+        let mut firsts = vec![drive.frames.first().map(|f| f.car.clone())];
+        let mut index = 1;
+        while index < max_cars && tape_of(index).is_file() {
+            let t = Tape::read(&tape_of(index))?;
+            drive.other_cars.push(t.get("car").ok_or("a tape names no car")?.to_string());
+            if t.frames.len() < drive.frames.len() {
+                return Err(format!("{}: {} frames, the first car's tape has {}", tape_of(index).display(), t.frames.len(), drive.frames.len()));
+            }
+            for (frame, f) in drive.frames.iter_mut().zip(t.frames) {
+                let mut car = CarFrame::from_physics_state(&f.state);
+                car.tc_in_action = f.tc_in_action;
+                if frame.others.len() + 1 == index && firsts.len() == index {
+                    firsts.push(Some(car.clone()));
+                }
+                frame.others.push((f.state, car));
+            }
+            index += 1;
+        }
+        let cars = 1 + drive.other_cars.len();
+        for (i, frame) in drive.frames.iter_mut().enumerate() {
+            let focused = focus.iter().rev().find(|(_, from)| *from <= i).map_or(0, |(car, _)| *car);
+            if focused as usize >= cars {
+                return Err(format!("--focus {focused}: there are {cars} cars"));
+            }
+            frame.focus = focused;
+            // the camera is on the focused car (the trackside one stands by the first car's start)
+            let followed = if focused == 0 { &frame.car } else { &frame.others[focused as usize - 1].1 };
+            let first = firsts[0].as_ref().unwrap();
+            frame.listener = camera.listener(followed, first);
+        }
+        drive.label = format!("{cars}cars{}", focus.iter().map(|(car, from)| format!("_f{car}at{from}")).collect::<String>());
+        Ok(drive)
+    }
+
+    /// Every car's name, the first car's first.
+    pub fn cars(&self) -> Vec<&str> {
+        std::iter::once(self.car.as_str()).chain(self.other_cars.iter().map(String::as_str)).collect()
     }
 
     /// The track's name and where its `data` folder is under `content/tracks`.
@@ -84,22 +142,27 @@ pub fn prepare_root(root: &Path, repo: &Path, ac: &Path, drive: &Drive) -> Resul
     std::fs::write(root.join("cfg/audio.ini"), AUDIO_INI).map_err(io)?;
     copy(&ac.join("system/cfg/audio_engine.ini"), &root.join("system/cfg/audio_engine.ini"))?;
     copy(&ac.join("content/sfx/GUIDs.txt"), &root.join("content/sfx/GUIDs.txt"))?;
-    let car = &drive.car;
-    let car_root = root.join("content/cars").join(car);
-    let _ = std::fs::remove_dir_all(&car_root);
-    let car_guids = ac.join("content/cars").join(car).join("sfx/GUIDs.txt");
-    if car_guids.is_file() {
-        copy(&car_guids, &car_root.join("sfx/GUIDs.txt"))?;
-    }
-    // the car's data: the extracted folder of the repository, else out of the game's data.acd
-    for name in ["engine.ini", "sounds.ini"] {
-        let extracted = repo.join("cardata").join(car).join(name);
-        let to = car_root.join("data").join(name);
-        if extracted.is_file() {
-            copy(&extracted, &to)?;
-        } else if let Some(bytes) = rustyac_physics::data::read(&ac.join("content/cars").join(car).join("data").join(name))? {
-            std::fs::create_dir_all(to.parent().unwrap()).map_err(io)?;
-            std::fs::write(&to, bytes).map_err(io)?;
+    // every car model of the drive, once
+    let mut models = drive.cars();
+    models.sort();
+    models.dedup();
+    for car in models {
+        let car_root = root.join("content/cars").join(car);
+        let _ = std::fs::remove_dir_all(&car_root);
+        let car_guids = ac.join("content/cars").join(car).join("sfx/GUIDs.txt");
+        if car_guids.is_file() {
+            copy(&car_guids, &car_root.join("sfx/GUIDs.txt"))?;
+        }
+        // the car's data: the extracted folder of the repository, else out of the game's data.acd
+        for name in ["engine.ini", "sounds.ini"] {
+            let extracted = repo.join("cardata").join(car).join(name);
+            let to = car_root.join("data").join(name);
+            if extracted.is_file() {
+                copy(&extracted, &to)?;
+            } else if let Some(bytes) = rustyac_physics::data::read(&ac.join("content/cars").join(car).join("data").join(name))? {
+                std::fs::create_dir_all(to.parent().unwrap()).map_err(io)?;
+                std::fs::write(&to, bytes).map_err(io)?;
+            }
         }
     }
     if let (Some(folder), Some(relative)) = (&drive.track_folder, drive.track_data_relative()) {

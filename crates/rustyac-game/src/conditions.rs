@@ -90,6 +90,70 @@ fn last_name(text: &str) -> String {
     Path::new(text).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The cars of race.ini as `RaceManager::initOffline` makes them
+/// (`rustyac_physics::session::race_grid`): every car but the first becomes another car of the
+/// session, with the model, the skin, the ballast, the restrictor, the pit box and the grid
+/// slot the game gives it. The first is the player's: its car stays the one of `--car`, its
+/// place is the file's. Until there are AI drivers (Task 25) every other car is driven by the
+/// line follower. Returns the lines for the console.
+fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i32) -> Result<Vec<String>, String> {
+    use crate::input_file::{GridPlace, Opponent, OpponentDrive};
+    use rustyac_physics::session;
+    let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found")?;
+    let cars_folder = ac.join("content").join("cars");
+    // TrackAvatar::getMaxSlotsAvailable("PIT"): the pit boxes of the track, counted once by
+    // the track itself and once more for every session that starts in the pits
+    let track_folder = crate::sim::find_track(&setup.track)?;
+    let (track, _) = rustyac_physics::track::load_track(&track_folder, &setup.layout)?;
+    let pit_sessions = (0..).map(|n| format!("SESSION_{n}")).take_while(|section| ini.has_section(section)).filter(|section| ini.get_string(section, "SPAWN_SET") == "PIT").count();
+    let pit_slots = track.spawn_slots("PIT") * (1 + pit_sessions);
+    let grid = session::race_grid(ini, pit_slots, &|model| session::model_skins(&cars_folder, model), &|model, skin| cars_folder.join(model).join("skins").join(skin).is_dir(), rand)?;
+    let mut lines = Vec::new();
+    let place = |car: &session::RaceCar| GridPlace { pit: car.index, start: car.start_index, ballast_kg: car.ballast_kg, restrictor: car.restrictor };
+    let mut others = Vec::new();
+    for car in &grid.cars {
+        if car.index == 0 {
+            setup.player_place = Some(place(car));
+            if !car.model.is_empty() && last_name(&setup.car) != car.model {
+                lines.push(format!("  (race.ini's first car is {}; yours is the one of --car, {})", car.model, last_name(&setup.car)));
+            }
+            continue;
+        }
+        if car.model.is_empty() {
+            lines.push(format!("  car {}: race.ini names no car for it (the game would stop there): left out", car.index));
+            continue;
+        }
+        lines.push(format!(
+            "  car {}: {}, skin {}{}, pit box {}, grid slot {}{}{}{}",
+            car.index,
+            car.model,
+            if car.skin.is_empty() { "-" } else { &car.skin },
+            if car.skin_was_picked { " (picked as the game picks one: the file's is not a skin of the car)" } else { "" },
+            car.index,
+            car.start_index,
+            if car.ballast_kg > 0.0 { format!(", ballast {} kg", car.ballast_kg) } else { String::new() },
+            if car.restrictor > 0.0 { format!(", restrictor {}", car.restrictor) } else { String::new() },
+            if car.driver_name.is_empty() { String::new() } else { format!(", {}", car.driver_name) }
+        ));
+        others.push(Opponent { car: car.model.clone(), skin: car.skin.clone(), drive: OpponentDrive::Auto, place: Some(place(car)) });
+    }
+    if others.is_empty() {
+        setup.player_place = None;
+        return Ok(lines);
+    }
+    lines.insert(
+        0,
+        format!(
+            "{} other car(s) from race.ini ([RACE] CARS={}, {} pit boxes). Assetto Corsa gives each an AI driver; rustyAC has none yet (Task 25), so each is driven by the stand-in line follower (\"auto\"), which follows the racing line and knows nothing of other cars. --no-race-cars leaves them out; --opponent names cars of your own",
+            others.len(),
+            ini.get_int("RACE", "CARS").unwrap_or(0),
+            pit_slots
+        ),
+    );
+    setup.opponents = others;
+    Ok(lines)
+}
+
 /// Fills the session of a live drive. Returns what was done, for the console.
 ///
 /// `input_method`: `[HEADER] INPUT_METHOD` of the bindings in use (`X360`, `KEYBOARD`, `WHEEL`).
@@ -179,10 +243,22 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             if race.ballast_kg > 0.0 || race.restrictor > 0.0 {
                 line.push_str(&format!("; ballast {} kg, restrictor {}", race.ballast_kg, race.restrictor));
             }
+            // RaceManager::initOffline: the time the gearbox stays locked before a race start
+            // (drawn, not used yet), then the cars of the file
+            rand.next();
+            let wanted = !options.no_race_cars && options.cars.is_none() && options.opponents.is_empty() && !setup.track.is_empty() && ini.get_int("RACE", "CARS").unwrap_or(0) > 1;
+            let mut car_notes = Vec::new();
+            if wanted {
+                match race_cars(&ini, setup, &mut || rand.next()) {
+                    Ok(lines) => car_notes = lines,
+                    Err(message) => car_notes.push(format!("WARNING: the other cars of race.ini are left out: {message}")),
+                }
+            }
             if !race.penalties {
                 line.push_str("; penalties off (any number of tyres may leave the track)");
             }
             notes.push(line);
+            notes.append(&mut car_notes);
             let last = format!("{} at {}{}", race.model, race.track, if race.track_config.is_empty() { String::new() } else { format!(" ({})", race.track_config) });
             notes.push(format!("  (that session was {last}, weather {:?}: the weather changes the looks only; car and track are still chosen with --car and --track)", race.weather));
             // the driving aids of the same folder
@@ -191,7 +267,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                 let assists_ini = IniReader::load(&assists_path)?;
                 let assists = Assists::from_ini(&assists_ini);
                 assists.apply_to_env(&mut setup.env);
-                session.assists = Some((assists.abs, assists.traction_control, assists.stability_control));
+                setup.session.assists = Some((assists.abs, assists.traction_control, assists.stability_control));
                 shift_aids = Some((assists.auto_clutch, assists.auto_blip, assists.auto_shifter));
                 let level = |v: i32| ["off", "as the car has it", "on"].get(v as usize).copied().unwrap_or("?");
                 notes.push(format!(
