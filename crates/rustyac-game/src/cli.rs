@@ -146,6 +146,8 @@ pub struct Options {
     pub default_controls: bool,
     /// `--bench-render`: with `--headless`, also draw frames off screen and report their rate.
     pub bench_render: bool,
+    /// `--bench-shot <png>`: with `--headless --bench-render`, the last frame drawn, as a PNG.
+    pub bench_shot: Option<PathBuf>,
     /// `--no-focus`: show the window without activating it and keep running unfocused
     /// (for automatic checks, so the window never takes the keyboard away).
     pub no_focus: bool,
@@ -311,6 +313,7 @@ impl Default for Options {
             controls: None,
             default_controls: false,
             bench_render: false,
+            bench_shot: None,
             no_focus: false,
             vsync: true,
             list_devices: false,
@@ -445,6 +448,8 @@ usage: rustyac [options]
                         random number made once, kept in rustyac_net.ini next to the program)
   --net-identity <file> take rustyAC's own player id from this file (a second player on one PC)
   --net-tape <file>     write every message of the online session to this file at its end
+                        (your player id and the server's password are blanked in it;
+                        names and chat lines of everybody are in it)
   --chat <text>@<s>     send a chat line after s seconds (repeat it for more)
   --cars <n>            n cars in all: the others are copies of the driver's car on the next
                         grid (or pit) slots, driven by the line follower (parked on the flat
@@ -583,6 +588,7 @@ for checks, without anybody at the controls:
                         then the point it looks at (default 0,0.4,0) and its field of view in degrees
                         (default 60). -4,0.6,-5/0,0.4,0/45 is low, behind and to the left
   --bench-render        with --headless: also draw frames off screen and report their rate
+  --bench-shot <png>    with --headless --bench-render: write the last frame drawn to a PNG
   --no-focus            show the window without activating it and keep running unfocused
 ";
 
@@ -716,6 +722,7 @@ impl Options {
                 "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,
                 "--bench-render" => o.bench_render = true,
+                "--bench-shot" => o.bench_shot = Some(PathBuf::from(value("--bench-shot")?)),
                 "--no-focus" => o.no_focus = true,
                 "--vsync" => o.vsync = value("--vsync")? != "0",
                 "--list-devices" => o.list_devices = true,

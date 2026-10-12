@@ -1633,7 +1633,8 @@ impl GameSim {
                 }
                 Event::Message(Message::Bop(entries)) => {
                     for (slot, ballast, restrictor) in entries {
-                        if slot == me {
+                        // (kilograms and a restrictor that are numbers, as race.ini's)
+                        if slot == me && ballast.is_finite() && restrictor.is_finite() && ballast >= 0.0 && restrictor >= 0.0 {
                             // Car::setBallastKG / setRestrictor, when the value is another
                             if self.car.car.ballast_kg != ballast {
                                 self.car.car.ballast_kg = ballast;
@@ -1654,6 +1655,10 @@ impl GameSim {
     }
 
     fn set_server_grip(&mut self, grip: f32) {
+        // (a grip that is no number, or none at all, is not taken)
+        if !(grip.is_finite() && grip > 0.0) {
+            return;
+        }
         for env in self.engine.iter_mut().map(|engine| &mut engine.env).chain([&mut self.car.car.env, &mut self.setup.env]) {
             env.dynamic_grip_level = grip;
         }

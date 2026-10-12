@@ -15,6 +15,9 @@
 //! | 0xf9 | in | ping: bytes 1..4 to echo, `u16` the client's ping as the server measured it |
 //! | 0xf8 | out | pong: the ping with id 0xf8 and the client's clock (`u32` ms) at offset 5, two bytes longer than the ping |
 
+// Comparisons are spelled the way the original branches so NaN takes the same path.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
+
 use rustyac_math::powf;
 
 use crate::net_car::NetCarState;

@@ -681,7 +681,11 @@ fn net(args: &Args) -> Result<(), String> {
     if let (Some(path), None) = (&args.csv_out, &failure) {
         // a golden excerpt: the first --count steps
         let count = if args.count_given { args.count.min(done) } else { done.min(1500) };
-        let entries: Vec<TapeEntry> = tape.entries.iter().filter(|entry| entry.tick < count as u64 || matches!(entry.data.first(), Some(0x3e | 0x40))).cloned().collect();
+        let entries: Vec<TapeEntry> = tape.entries.iter().filter(|entry| entry.tick < count as u64 || matches!(entry.data.first(), Some(0x3e | 0x40))).cloned().map(|mut entry| {
+            // (tapes of before the blanking: no player id, no password in a golden file)
+            entry.data = rustyac_net::handshake::without_secrets(&entry.data);
+            entry
+        }).collect();
         let golden = NetGolden { local: game.world.recording.golden(count).to_bytes(), tape: Tape { entries }, hashes: hashes[..count].to_vec() };
         std::fs::write(path, golden.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
         println!("wrote the golden excerpt {} ({count} steps, {} bytes)", path.display(), golden.to_bytes().len());

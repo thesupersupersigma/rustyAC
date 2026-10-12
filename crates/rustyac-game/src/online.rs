@@ -130,6 +130,8 @@ pub struct OnlineSession {
     jump_starts_sent: u32,
     /// The local car's tyre compound the server was told of.
     compound_sent: Option<String>,
+    /// The last session-start line said (the server repeats the message).
+    last_start_line: String,
 }
 
 /// How many chat lines are kept.
@@ -154,7 +156,7 @@ impl OnlineSession {
             })
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new() }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -327,7 +329,14 @@ impl OnlineSession {
                     self.say(format!("[SERVER] Jumpstart detected for {who}"));
                 }
                 Event::Message(Message::VoteNotPassed) => self.say("Voting ended. Not passed".to_string()),
-                Event::RaceStart(start) => self.console.push(format!("online: the race starts at {:.1} s of the session clock", start / 1000.0)),
+                Event::RaceStart(start) => {
+                    // (the server repeats it to make sure it arrives)
+                    let line = format!("online: the session starts at {:.1} s of the server's clock", start / 1000.0);
+                    if self.last_start_line != line {
+                        self.last_start_line = line.clone();
+                        self.console.push(line);
+                    }
+                }
                 Event::Associated => self.console.push("online: the server answers on UDP, car updates flow".to_string()),
                 Event::ServerSilent => self.say("The server seems to be unavailable.".to_string()),
                 Event::ConnectionLost(message) => self.say(format!("Connection lost: {message}")),
@@ -383,6 +392,9 @@ impl OnlineSession {
 
 /// A lap time as `m:ss.mmm`.
 pub fn lap_text(ms: u32) -> String {
+    if ms >= rustyac_net::messages::NO_TIME {
+        return "no time".to_string();
+    }
     format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
 }
 

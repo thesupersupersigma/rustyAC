@@ -20,6 +20,9 @@
 //! The game ([`rustyac-game`]) and the oracle (`tools/car_oracle net`, which runs the game's
 //! own `ACClient` and `NetCarStateProvider` beside this) both step this.
 
+// Comparisons are spelled the way the original branches so NaN takes the same path.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
+
 use std::sync::Arc;
 
 use rustyac_physics::car::{PhysicsCore, RollingChassis};

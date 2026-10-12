@@ -96,8 +96,8 @@ jobs:
 
       - name: Clippy (wasm)
         run: |
-          cargo clippy -p rustyac-web --lib --target wasm32-unknown-unknown --locked -- -D warnings
-          cargo clippy -p rustyac-math -p rustyac-ode -p rustyac-content -p rustyac-physics -p rustyac-game --target wasm32-wasip1 --locked -- -D warnings
+          cargo clippy -p rustyac-web -p rustyac-net --lib --target wasm32-unknown-unknown --locked -- -D warnings
+          cargo clippy -p rustyac-math -p rustyac-ode -p rustyac-content -p rustyac-physics -p rustyac-net -p rustyac-game --target wasm32-wasip1 --locked -- -D warnings
 
       # the replay runner of the wasm-against-desktop proof (docs/port/web.md); running it needs
       # the game's folder, building it does not

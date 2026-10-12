@@ -21,6 +21,9 @@
 //! handed out per step ([`Client::take_car_states`]) for their
 //! [`crate::net_car::NetCarStateProvider`]s.
 
+// Comparisons are spelled the way the original branches so NaN takes the same path.
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
+
 use crate::car_update::{self, LocalCarState};
 use crate::datagram::{self, Incoming};
 use crate::handshake::{car_list_request, decode_car_list, Accepted, CarEntry, HandshakeReply, JoinRequest, Refusal, SessionInfo};
@@ -183,6 +186,10 @@ impl<T: Transport> Client<T> {
             };
             let count = entries.len();
             cars.extend(entries);
+            // (a slot is one byte: a server cannot have more cars than that)
+            if cars.len() > 256 {
+                return Err("the server's car list does not end".to_string());
+            }
             // a full page: there may be more (a page that is not full ends the list)
             if count != 10 {
                 return Ok(cars);
@@ -295,7 +302,13 @@ impl<T: Transport> Client<T> {
                     }
                     self.is_associated = true;
                 }
-                Incoming::CarState { slot, state } => self.car_states.push((slot, state)),
+                // (a state that is no number is dropped: the game would put it into the
+                // world, where the local car can touch it)
+                Incoming::CarState { slot, state } => {
+                    if state.pos.iter().chain(&state.rotation).chain(&state.velocity).all(|v| v.is_finite()) {
+                        self.car_states.push((slot, state));
+                    }
+                }
                 Incoming::RaceStart { start, real, ping } => {
                     // fresh when the server's idea of this client's clock is within two pings
                     let fresh = (physics_time - real as f64).abs() < (2 * ping as i32) as f64;
@@ -317,6 +330,10 @@ impl<T: Transport> Client<T> {
                 self.current_session = info.clone();
                 self.session_start_time = info.start as f64;
                 self.end_session = false;
+            }
+            // isConnectionFinished: the server goes on without this client
+            if let Message::RaceOver { stay: false, .. } = &decoded {
+                self.end_session = true;
             }
             self.events.push(Event::Message(decoded));
         }
@@ -401,13 +418,18 @@ impl<T: Transport> Client<T> {
     /// What the local car did that the server hears of at once (laps, splits, tyres ...).
     pub fn send_event(&mut self, event: &ClientEvent) {
         let message = messages::encode(self.session_id, event);
-        self.send(&message);
+        // (a vote without its target, an unknown vote: the game sends nothing)
+        if !message.is_empty() {
+            self.send(&message);
+        }
     }
 
     /// `ACClient::sendChat` @ 0x140052a90: at most one message a second (`now`: the wall
     /// clock, ms). Returns whether it went out.
     pub fn send_chat(&mut self, text: &str, now: f64) -> bool {
-        if now - self.last_chat_time < 1000.0 || text.is_empty() {
+        // (`/client_list` is the game's own command: the game prints its list and sends
+        // nothing; the caller prints rustyAC's)
+        if !(now - self.last_chat_time > 1000.0) || text.is_empty() || text == "/client_list" {
             return false;
         }
         self.last_chat_time = now;

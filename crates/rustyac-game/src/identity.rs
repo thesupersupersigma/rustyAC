@@ -118,7 +118,8 @@ fn is_own_guid(text: &str) -> bool {
 /// rustyAC's own id from `file` (`[IDENTITY] GUID=`), made and written there when the file
 /// has none yet.
 pub fn own_guid(file: &Path) -> Result<String, String> {
-    if let Ok(text) = std::fs::read_to_string(file) {
+    if file.exists() {
+        let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
         for line in text.lines() {
             if let Some(value) = line.trim().strip_prefix("GUID=") {
                 if is_own_guid(value.trim()) {
@@ -126,6 +127,8 @@ pub fn own_guid(file: &Path) -> Result<String, String> {
                 }
             }
         }
+        // (a file that is there is never replaced: it may be another file, or an id by hand)
+        return Err(format!("{}: no GUID= line with one of rustyAC's own player ids (8 and sixteen digits); delete the file to have a new one made, or name another with --net-identity", file.display()));
     }
     let guid = format!("8{:016}", random_u64() % 10_000_000_000_000_000);
     let text = format!("; rustyAC's own player id for online servers, made once from random bits.\n; It is used when Steam is not running. Delete this file to get a new one.\n[IDENTITY]\nGUID={guid}\n");

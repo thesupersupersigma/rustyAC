@@ -476,7 +476,14 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 println!("{line}");
             }
             while chat_at < config.chat.len() && seconds >= config.chat[chat_at].1 {
-                session.net.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
+                // (`/client_list` stays here, as in the game: the list is printed, nothing is sent)
+                if config.chat[chat_at].0 == "/client_list" {
+                    for line in session.hud_lines() {
+                        println!("online: {line}");
+                    }
+                } else {
+                    session.net.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
+                }
                 chat_at += 1;
             }
             if steps.is_multiple_of(64) {

@@ -197,11 +197,13 @@ impl<'a> Reader<'a> {
     pub fn bytes(&mut self, count: usize) -> Vec<u8> {
         let mut out = vec![0u8; count];
         let have = count.min(self.remaining());
-        out[..have].copy_from_slice(&self.data[self.pos..self.pos + have]);
+        if have > 0 {
+            out[..have].copy_from_slice(&self.data[self.pos..self.pos + have]);
+        }
         if have < count {
             self.overrun = true;
         }
-        self.pos += count;
+        self.pos = self.pos.saturating_add(count);
         out
     }
 
@@ -240,6 +242,17 @@ impl<'a> Reader<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reads_past_the_end_give_zeros_and_never_panic() {
+        let mut r = super::Reader::new(&[3]);
+        assert_eq!(r.u8(), 3);
+        assert_eq!(r.u32(), 0);
+        assert_eq!(r.string(), "");
+        assert_eq!(r.bytes(4), vec![0; 4]);
+        assert_eq!(r.wide(), "");
+        assert!(r.overrun);
+    }
+
     use super::*;
 
     #[test]

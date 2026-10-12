@@ -26,7 +26,7 @@
 //! (with the car's slot in front and its own idea of each client's clock).
 
 // Comparisons are spelled the way the original branches so NaN takes the same path.
-#![allow(clippy::neg_cmp_op_on_partial_ord)]
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
 
 use rustyac_math::{asinf, atan2f, log10f};
 use rustyac_physics::vecmath::Mat44f;

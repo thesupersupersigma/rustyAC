@@ -22,7 +22,7 @@
 //! Every float expression below is in the order of the game's machine code.
 
 // Comparisons are spelled the way the original branches so NaN takes the same path.
-#![allow(clippy::neg_cmp_op_on_partial_ord)]
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::double_comparisons, clippy::manual_clamp, clippy::needless_range_loop)]
 
 use rustyac_math::{acosf, sqrtf};
 use rustyac_physics::car::aero::plane4f;
@@ -291,7 +291,7 @@ impl NetCarStateProvider {
         pit_position.m[3][1] += pit_box.m[1][1] * lift;
         pit_position.m[3][2] = pit_box.m[1][2] * lift + pit_box.m[3][2];
         let state = NetCarPhysicsState { limiter_rpm: geometry.limiter_rpm, physics_guid: guid as u8, ..NetCarPhysicsState::default() };
-        let provider = NetCarStateProvider {
+        NetCarStateProvider {
             session_id,
             guid,
             unix_name: unix_name.to_string(),
@@ -323,8 +323,7 @@ impl NetCarStateProvider {
             last_time: 0.0,
             current_aoa: 0.0,
             body,
-        };
-        provider
+        }
     }
 
     /// The body of a remote car in `core`: 1000 kg with a box's inertia (1.4 x 1.0 x 4.0 m),

@@ -102,7 +102,7 @@ impl Transport for NativeTransport {
     }
 
     fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
-        let mut buffer = [0u8; 0x800];
+        let mut buffer = vec![0u8; 0x10000];
         loop {
             match self.udp.recv_from(&mut buffer) {
                 // (only the server's datagrams count)

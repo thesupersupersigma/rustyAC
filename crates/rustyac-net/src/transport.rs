@@ -191,14 +191,14 @@ impl Tape {
         let mut pos = 12;
         let mut entries = Vec::with_capacity(count.min(1 << 20));
         for _ in 0..count {
-            if pos + 13 > bytes.len() {
+            if bytes.len() - pos < 13 {
                 return Err("the network tape is cut short".to_string());
             }
             let tick = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
             let lane = Lane::from_u8(bytes[pos + 8]).ok_or("the network tape has an unknown lane")?;
             let length = u32::from_le_bytes(bytes[pos + 9..pos + 13].try_into().unwrap()) as usize;
             pos += 13;
-            if pos + length > bytes.len() {
+            if bytes.len() - pos < length {
                 return Err("the network tape is cut short".to_string());
             }
             entries.push(TapeEntry { tick, lane, data: bytes[pos..pos + length].to_vec() });
@@ -232,7 +232,8 @@ impl<T: Transport> Taped<T> {
 
 impl<T: Transport> Transport for Taped<T> {
     fn send_reliable(&mut self, message: &[u8]) -> Result<(), String> {
-        self.note(Lane::ReliableOut, message);
+        // (the tape never holds the player's id or the server's password)
+        self.note(Lane::ReliableOut, &crate::handshake::without_secrets(message));
         self.inner.send_reliable(message)
     }
 

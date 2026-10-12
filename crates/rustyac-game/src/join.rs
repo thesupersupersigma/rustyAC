@@ -115,9 +115,16 @@ pub fn target(options: &Options) -> Result<Option<JoinTarget>, String> {
     Ok(target)
 }
 
+/// A name a server sent that becomes part of a path: one folder's name, nothing that leaves
+/// the folder it is joined to.
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0']) && !name.bytes().any(|b| b < 0x20)
+}
+
 fn read_game_file(root: &Path, path: &str) -> Option<Vec<u8>> {
-    // (the server's paths have forward slashes and never leave the game's folder)
-    if path.split(['/', '\\']).any(|part| part == "..") || Path::new(path).is_absolute() {
+    // the server's paths have forward slashes and never leave the game's folder: every
+    // part is a plain name (no drive, no root, no "..")
+    if path.is_empty() || !path.split(['/', '\\']).all(is_plain_name) {
         return None;
     }
     std::fs::read(root.join(path)).ok()
@@ -199,15 +206,36 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
         accepted.allowed_tyres_out,
         accepted.current_session.grip * 100.0
     ));
-    let cars = client.car_list()?;
-    // the checksums: every file the server names must be there ("Problems during checksum")
-    let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;
-    let mut digests = Vec::new();
-    for file in &accepted.checksum_files {
-        let bytes = read_game_file(&root, file).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
-        digests.push(rustyac_net::md5::digest(&bytes));
-    }
-    client.set_checksums(digests, car_md5(&root, &accepted.model));
+    // from here on the server holds a slot for this player: a failure says goodbye (0x43)
+    let rest = (|| -> Result<Vec<CarEntry>, String> {
+        let cars = client.car_list()?;
+        // what becomes a folder's name is a plain name
+        let named = [("track", &accepted.track), ("car", &accepted.model)].into_iter().chain(cars.iter().map(|car| ("car", &car.model)));
+        for (what, name) in named {
+            if !is_plain_name(name) {
+                return Err(format!("the server names a {what} {name:?}: that is no folder's name"));
+            }
+        }
+        if !accepted.track_config.is_empty() && !is_plain_name(&accepted.track_config) {
+            return Err(format!("the server names a track layout {:?}: that is no folder's name", accepted.track_config));
+        }
+        // the checksums: every file the server names must be there ("Problems during checksum")
+        let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;
+        let mut digests = Vec::new();
+        for file in &accepted.checksum_files {
+            let bytes = read_game_file(&root, file).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
+            digests.push(rustyac_net::md5::digest(&bytes));
+        }
+        client.set_checksums(digests, car_md5(&root, &accepted.model));
+        Ok(cars)
+    })();
+    let cars = match rest {
+        Ok(cars) => cars,
+        Err(message) => {
+            client.shutdown();
+            return Err(message);
+        }
+    };
     let session = OnlineSession::new(client, &cars);
     let others = session.remote_entries.iter().filter(|car| !car.driver_name.is_empty()).count();
     notes.push(format!("online: {} cars on the server, {} other driver(s) there now", cars.len(), others));

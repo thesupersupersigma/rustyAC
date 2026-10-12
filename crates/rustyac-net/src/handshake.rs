@@ -48,6 +48,31 @@ impl JoinRequest {
     }
 }
 
+/// A join request (0x3d) with the player's id overwritten by `0`s and the password by `*`s,
+/// lengths kept; any other message as it is. This is what a tape keeps of it.
+pub fn without_secrets(message: &[u8]) -> Vec<u8> {
+    let mut out = message.to_vec();
+    if out.first() != Some(&id::HANDSHAKE) || out.len() < 4 {
+        return out;
+    }
+    // id, version, then: guid (narrow), name (wide), team, nation, car, password (narrow)
+    let mut pos = 3;
+    for (field, mask) in [(1usize, Some(b'0')), (4, None), (1, None), (1, None), (1, None), (1, Some(b'*'))] {
+        let Some(&count) = out.get(pos) else {
+            return out;
+        };
+        let end = pos + 1 + count as usize * field;
+        if end > out.len() {
+            return out;
+        }
+        if let Some(mask) = mask {
+            out[pos + 1..end].fill(mask);
+        }
+        pos = end;
+    }
+    out
+}
+
 /// Why a server did not let the player in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -356,6 +381,12 @@ mod tests {
         let request = JoinRequest { guid: "81234567890123456".into(), name: "ab".into(), team: "t".into(), nation_code: "ITA".into(), car: "bmw_z4_gt3".into(), password: String::new() };
         let bytes = request.encode();
         assert_eq!(&bytes[..3], &[0x3d, 0xca, 0x00]);
+        // what a tape keeps: the same lengths, no id and no password
+        let kept = without_secrets(&bytes);
+        assert_eq!(kept.len(), bytes.len());
+        let again = JoinRequest { guid: "0".repeat(request.guid.len()), password: "*".repeat(request.password.len()), ..request.clone() };
+        assert_eq!(kept, again.encode());
+        assert_eq!(without_secrets(&[0x3d, 0xca]), vec![0x3d, 0xca]);
         assert_eq!(bytes[3], 17);
         assert_eq!(&bytes[4..21], b"81234567890123456");
         // the name: two characters of four bytes

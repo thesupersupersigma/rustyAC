@@ -608,6 +608,20 @@ fn run_headless(options: &Options) -> Result<(), String> {
             }
             last = now;
         }
+        // --bench-shot: the picture as it is at the end (an online session cannot be redone
+        // for a --screenshot: this is its picture)
+        if let (Some(path), Some(shape), Some(renderer), Some(camera)) = (&options.bench_shot, &shape, &mut renderer, &mut camera) {
+            let world = shared.world_at(Instant::now());
+            let focus = options.focus.min(world.len() - 1);
+            let view = world[focus];
+            let frame = camera.update(&view, shape, view.acc_g, 1.0 / 60.0);
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            renderer.draw_world(&world, focus, shape, camera, &frame, &info, 1.0 / 60.0);
+            let pixels = renderer.read_pixels()?;
+            let (width, height) = renderer.size();
+            write_png(path, width, height, &pixels)?;
+            println!("{}: {width} x {height}, the last frame drawn off screen", path.display());
+        }
     } else if feed.is_some() {
         // no picture, but sound: its frames at about 60 a second, the listener at the camera
         let mut audio: Option<(GameAudio, CarShape, DrivingCamera)> = None;
