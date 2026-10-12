@@ -27,6 +27,9 @@ pub enum Drive {
     /// eased; `pace` and `limit` (m/s) as the track scenarios have them; from `brake_at` on
     /// the car stops.
     Follow { lateral: Vec<(f32, f32)>, pace: f32, limit: f32, brake_at: f32 },
+    /// Task 28: along the AI line, and off it sideways by `zones`' metres (to the left)
+    /// while the car is between two places round the lap (from, to, metres).
+    FollowZones { zones: Vec<(f32, f32, f32)>, pace: f32, limit: f32 },
     /// Along the pit lane's line from `from` on, then straight on with this throttle until
     /// `brake_at`.
     PitLane { from: f32, then_gas: f32, brake_at: f32 },
@@ -149,6 +152,50 @@ fn line_pose(track: &Track, n: f32, back: f32, left: f32) -> Result<(V3, V3), St
     use rustyac_physics::tyre::RayTrackCollisionProvider;
     let ground = track.ray_cast(&moved, &rustyac_physics::vecmath::Vec3f::new(0.0, -1.0, 0.0), 20.0).map(|hit| hit.pos.y).unwrap_or(p.y);
     Ok(([moved.x, ground, moved.z], [tail.x, tail.y, tail.z]))
+}
+
+/// Task 28: where a car that follows the AI line can leave the track over a surface with a
+/// penalty (`BLACK_FLAG_TIME` above 0 in the track's surfaces.ini): up to `count` stretches of
+/// the lap, each with the metres to the left of the line at which the surface lies.
+fn penalty_zones(track: &Track, count: usize) -> Vec<(f32, f32, f32)> {
+    let mut zones: Vec<(f32, f32, f32)> = Vec::new();
+    let Some(spline) = track.ai_spline.as_ref() else {
+        return zones;
+    };
+    let steps = (spline.length() / 2.0) as usize;
+    let mut open: Option<(f32, f32)> = None;
+    for i in 0..steps {
+        let n = 0.08 + 0.9 * i as f32 / steps as f32;
+        let mut found = None;
+        for side in [6.0f32, -6.0, 8.0, -8.0, 10.0, -10.0, 12.0, -12.0, 15.0, -15.0, 18.0, -18.0] {
+            if open.is_some_and(|zone| zone.1 != side) {
+                continue;
+            }
+            let Some((p, tail)) = track.pose_on_ai_line_at(n) else { continue };
+            let (fx, fz) = (-tail.x, -tail.z);
+            let l = (fx * fx + fz * fz).sqrt().max(1e-6);
+            let point = rustyac_physics::vecmath::Vec3f::new(p.x + fz / l * side, p.y + 3.0, p.z - fx / l * side);
+            if track.ray_cast_hit(&point, &rustyac_physics::vecmath::Vec3f::new(0.0, -1.0, 0.0), 20.0).is_some_and(|hit| hit.surface_def.black_flag_time > 0.0) {
+                found = Some(side);
+                break;
+            }
+        }
+        match (open, found) {
+            (None, Some(side)) => open = Some((n, side)),
+            (Some((from, side)), None) => {
+                // (a stretch of at least 40 m, entered a little before and left a little after)
+                if (n - from) * spline.length() >= 12.0 {
+                    zones.push((from - 15.0 / spline.length(), n - 10.0 / spline.length(), side));
+                    if zones.len() == count {
+                        break;
+                    }
+                }
+                open = None;
+            }
+            _ => {}
+        }
+    }
+    zones
 }
 
 fn name_of(cars: &[String], index: usize, default: &[&str]) -> String {
@@ -452,7 +499,11 @@ pub fn scenarios() -> Vec<MultiScenario> {
                 out[2].position = last.position;
                 out[2].tail = last.tail;
                 out[2].drive = out[1].drive.clone();
-                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 7.0), (24.5, 0.0), (48.0, -7.0), (50.5, 0.0), (120.0, 7.0), (122.5, 0.0), (150.0, -7.0), (152.5, 0.0)], pace: 0.6, limit: 40.0, brake_at: 1.0e9 };
+                let zones = penalty_zones(track, 2);
+                if zones.is_empty() {
+                    return Err("the track has no surface with a penalty beside its AI line".to_string());
+                }
+                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0 };
                 Ok(out)
             },
         },
@@ -464,7 +515,11 @@ pub fn scenarios() -> Vec<MultiScenario> {
             default_cars: &[F2004],
             cars: |track, cars| {
                 let mut out = ai_grid(track, cars, &[F2004], 2, |_| 0.9, |_| 0.1)?;
-                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 7.0), (24.5, 0.0), (48.0, -7.0), (50.5, 0.0), (120.0, 7.0), (122.5, 0.0), (150.0, -7.0), (152.5, 0.0)], pace: 0.6, limit: 40.0, brake_at: 1.0e9 };
+                let zones = penalty_zones(track, 2);
+                if zones.is_empty() {
+                    return Err("the track has no surface with a penalty beside its AI line".to_string());
+                }
+                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0 };
                 Ok(out)
             },
         },
@@ -620,6 +675,9 @@ pub struct MultiWorld<'a> {
     handover: Option<usize>,
     /// Task 28: the game's referee of the scenario
     pub referee: Option<super::race::WholeReferee<'a>>,
+    /// Task 28: the first car jumps the start (the `rc_jump*` scenarios)
+    jump_start: bool,
+    shift_wait: u32,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -787,7 +845,9 @@ impl<'a> MultiWorld<'a> {
                 // the automatic clutch and gearbox (CarAvatar::setAutoClutchEnabled, the assist option)
                 wr(car, CAR_AUTOCLUTCH + 0xc, 1u8);
                 wr(car, CAR_AUTOCLUTCH + 0xd, 1u8);
-                wr(car, CAR_AUTO_SHIFT, 1u8);
+                // (the car that jumps the start shifts by hand: the H-shifter's first gear)
+                let auto_shifter = !(scenario.name.starts_with("rc_jump") && index == 0);
+                wr(car, CAR_AUTO_SHIFT, auto_shifter as u8);
 
                 force_rotation(car, &planned.tail);
                 force_position(car, &planned.position, 1);
@@ -811,7 +871,7 @@ impl<'a> MultiWorld<'a> {
                     position: planned.position,
                     tail: planned.tail,
                     auto_clutch: true,
-                    auto_shifter: true,
+                    auto_shifter,
                     collider_mesh: true,
                     ai: None,
                     pit: None,
@@ -1002,7 +1062,7 @@ impl<'a> MultiWorld<'a> {
                 }
                 referee = Some(super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, &compounds, CLOCK_START_MS));
             }
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee })
+            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee, jump_start: scenario.name.starts_with("rc_jump"), shift_wait: 0 })
         }
     }
 
@@ -1056,6 +1116,11 @@ impl<'a> MultiWorld<'a> {
                         c.brake = 1.0;
                     }
                 }
+                Drive::FollowZones { zones, pace, limit } => {
+                    let target = zones.iter().find(|zone| view.npos >= zone.0 && view.npos < zone.1).map_or(0.0, |zone| zone.2);
+                    car.lateral += (target - car.lateral) * (DT / 0.35).min(1.0);
+                    crate::track_driver::follow_line(&track, &view, car.lateral, *pace, *limit, &car.grip, t, &mut c);
+                }
                 Drive::PitLane { from, then_gas, brake_at } => {
                     if t < *from {
                         c.brake = 1.0;
@@ -1064,6 +1129,30 @@ impl<'a> MultiWorld<'a> {
                     } else if car.pit_done || !crate::track_driver::follow_pit_lane(&track, &view, &mut c) {
                         car.pit_done = true;
                         c.gas = *then_gas;
+                    }
+                }
+            }
+            // Task 28, the jump start: the first car has first gear in (the H-shifter's slot)
+            // from 1 s on and drives off; the window before the start finds it rolling
+            if self.jump_start && index == 0 {
+                // (it shifts by hand, by its speed: the automatic gearbox would wait for the green light)
+                const UP: [f32; 4] = [12.0, 20.0, 29.0, 38.0];
+                const DOWN: [f32; 4] = [8.0, 15.0, 23.0, 31.0];
+                if (8.1..11.0).contains(&t) {
+                    c.gas = 0.5;
+                    c.brake = 0.0;
+                }
+                let gear = view.gear;
+                if self.shift_wait > 0 {
+                    self.shift_wait -= 1;
+                } else if t >= 8.0 {
+                    let slot = (gear - 2).clamp(0, 3) as usize;
+                    if gear <= 1 || (gear <= 5 && view.speed > UP[slot]) {
+                        c.gear_up = true;
+                        self.shift_wait = 150;
+                    } else if gear > 2 && view.speed < DOWN[(gear - 3).clamp(0, 3) as usize] {
+                        c.gear_dn = true;
+                        self.shift_wait = 150;
                     }
                 }
             }
@@ -1173,7 +1262,9 @@ impl<'a> MultiWorld<'a> {
                     row.extend(pedals);
                     row.push(rd(car.device, DEV_BUTTONS));
                     row.push(rd(car.device, DEV_REQUESTED_GEAR));
-                    assert_eq!(rd::<u32>(car.device, DEV_POLLED), 1, "a car's device was not asked exactly once");
+                    // (a car the referee has locked or black-flagged is not asked)
+                    let polled = rd::<u32>(car.device, DEV_POLLED);
+                    assert!(polled == 1 || (polled == 0 && self.referee.is_some()), "a car's device was not asked exactly once");
                 } else {
                     // an AI driver's inputs: what it left in the car's controls
                     let c = car.car.add(CAR_CONTROLS);
