@@ -233,8 +233,26 @@ pub struct Options {
     /// Task 24. `--cars <n>`: n cars in all; the others are the driver's car again, driven
     /// by the line follower on a track and parked on the flat road.
     pub cars: Option<usize>,
-    /// `--opponent <car>[:<skin>]:<parked | auto | file.ryin>`, once per other car.
+    /// `--opponent <car>[:<skin>]:<ai | parked | auto | file.ryin>`, once per other car.
     pub opponents: Vec<String>,
+    /// Task 27. `--ai-cars <n>`: n cars in all; the others are the driver's car again, each
+    /// with AC's AI driver.
+    pub ai_cars: Option<usize>,
+    /// `--ai-level <0..100>`, `--ai-aggression <0..100>`: for every AI driver (without them:
+    /// race.ini's, else 100 and 0).
+    pub ai_level: Option<f32>,
+    pub ai_aggression: Option<f32>,
+    /// `--ai-drive`: an AI driver drives your car from the start (as `INPUT_METHOD=AI`);
+    /// `--ai-at <s>`: it takes over after s seconds.
+    pub ai_drive: bool,
+    pub ai_at: Option<f64>,
+    /// `--ai-laps <n>`: the race's laps as the drivers are told (their fuel); `--race-start-in
+    /// <s>`: the green light s seconds after the start of a race; `--ai-seed <n>`.
+    pub ai_laps: Option<i32>,
+    pub race_start_in: Option<f64>,
+    pub ai_seed: Option<u32>,
+    /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
+    pub stand_in_drivers: bool,
     /// `--physics-threads <n>`: worker threads of the physics engine with several cars
     /// (0: none); without it, as the game decides (`[PHYSICS_THREADING] THREADS`).
     pub physics_threads: Option<usize>,
@@ -352,6 +370,15 @@ impl Default for Options {
             car_given: false,
             cars: None,
             opponents: Vec::new(),
+            ai_cars: None,
+            ai_level: None,
+            ai_aggression: None,
+            ai_drive: false,
+            ai_at: None,
+            ai_laps: None,
+            race_start_in: None,
+            ai_seed: None,
+            stand_in_drivers: false,
             physics_threads: None,
             state_hash: false,
         }
@@ -479,9 +506,27 @@ usage: rustyac [options]
                         grid (or pit) slots, driven by the line follower (parked on the flat
                         road). Their physics is the game's; AC's renderer and the sound do
                         not have them yet: --debug-view shows them as blue boxes
-  --opponent <car>[:<skin>]:<parked|auto|file.ryin>
-                        another car (repeat it for more): parked on its brakes, driven by the
-                        line follower, or by the inputs of a recorded drive
+  --opponent <car>[:<skin>]:<ai|parked|auto|file.ryin>
+                        another car (repeat it for more): driven by Assetto Corsa's own AI
+                        driver, parked on its brakes, driven by the line follower, or by the
+                        inputs of a recorded drive
+  --ai-cars <n>         n cars in all: the others are copies of the driver's car, each with
+                        Assetto Corsa's AI driver. With AI cars and no session of race.ini
+                        the session is a race from the grid (practice with --spawn pit)
+  --ai-level <0..100>   the AI drivers' level (AI_LEVEL; default: race.ini's, else 100)
+  --ai-aggression <0..100>
+                        the AI drivers' aggression (AI_AGGRESSION; default: race.ini's, else 0)
+  --ai-drive            an AI driver drives your car from the start (as controls.ini
+                        INPUT_METHOD=AI); while driving, Ctrl+C hands your car to one
+                        (AC's command Activate AI; there is no way back but a new session)
+  --ai-at <s>           hand your car to an AI driver after s seconds (for unattended runs)
+  --ai-laps <n>         the race's laps as the AI drivers are told them (they fuel for
+                        them); default: race.ini's, else 5
+  --race-start-in <s>   the green light of a race comes s seconds after the session's start
+                        (the AI drivers rev and wait for it; your gearbox is free)
+  --ai-seed <n>         what the AI drivers' random numbers start from (a live session
+                        takes the clock; pictures and unattended runs 0)
+  --stand-in-drivers    race.ini's other cars with rustyAC's line follower, not the AI
   --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split
                         leaves the worker nothing). Default: as the game, [PHYSICS_THREADING]
                         THREADS of its assetto_corsa.ini (half the logical processors; none
@@ -785,6 +830,15 @@ impl Options {
                 "--autodrive" => o.autodrive = true,
                 "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
                 "--opponent" => o.opponents.push(value("--opponent")?),
+                "--ai-cars" => o.ai_cars = Some(value("--ai-cars")?.parse().map_err(|e| format!("--ai-cars: {e}"))?),
+                "--ai-level" => o.ai_level = Some(value("--ai-level")?.parse().map_err(|e| format!("--ai-level: {e}"))?),
+                "--ai-aggression" => o.ai_aggression = Some(value("--ai-aggression")?.parse().map_err(|e| format!("--ai-aggression: {e}"))?),
+                "--ai-drive" => o.ai_drive = true,
+                "--ai-at" => o.ai_at = Some(value("--ai-at")?.parse().map_err(|e| format!("--ai-at: {e}"))?),
+                "--ai-laps" => o.ai_laps = Some(value("--ai-laps")?.parse().map_err(|e| format!("--ai-laps: {e}"))?),
+                "--race-start-in" => o.race_start_in = Some(value("--race-start-in")?.parse().map_err(|e| format!("--race-start-in: {e}"))?),
+                "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
+                "--stand-in-drivers" => o.stand_in_drivers = true,
                 "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),
                 "--state-hash" => o.state_hash = true,
                 "--no-race-ini" => o.race_ini = Some(false),

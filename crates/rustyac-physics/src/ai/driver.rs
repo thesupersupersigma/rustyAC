@@ -252,7 +252,8 @@ impl AiDriver {
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn new(car: &mut RollingChassis, session: &SessionInfo, rand: &mut MsvcRand, files: &AiFiles<'_>) -> Result<AiDriver, String> {
         let track = car.track.clone().ok_or("an AI driver needs a track")?;
-        let recorder = track.ai.as_ref().ok_or("the track has no AI line")?;
+        track.init_ai()?;
+        let recorder = track.ai().ok_or("the track has no AI line")?;
         let mut sin_offset_data = AiSinOffsetData::default();
         // AISinOffsetData::AISinOffsetData @ 0x14029abd0 (a member: before the body)
         sin_offset_data.phase = ((ks(rand)) * 10.0) as f64;
@@ -669,7 +670,7 @@ impl AiDriver {
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn acquire(&mut self, car: &mut RollingChassis, dt: f32) {
         let Some(track) = car.track.clone() else { return };
-        let Some(recorder) = track.ai.as_ref() else { return };
+        let Some(recorder) = track.ai() else { return };
         let mut input = std::mem::take(&mut car.ai_input);
         let time = car.physics_time;
 
@@ -993,7 +994,7 @@ impl AiDriver {
 
     /// `AIDriver::updateCurrentSplinePos` @ 0x1402a3200
     fn update_current_spline_pos(&mut self, car: &RollingChassis, track: &Track) {
-        let Some(recorder) = track.ai.as_ref() else { return };
+        let Some(recorder) = track.ai() else { return };
         if self.spline_selection == SplineSelection::FastLane {
             self.loc_npos = car.spline_locator_data.npos;
         } else {

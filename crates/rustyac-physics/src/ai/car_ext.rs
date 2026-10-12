@@ -4,7 +4,7 @@
 //! The parts of AC's `Car` only the AI drivers (and the pit stops they make) use.
 
 // (the comparisons and the order of the operations are the machine code's)
-#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop, clippy::field_reassign_with_default, clippy::if_same_then_else, clippy::too_many_arguments)]
+#![allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop, clippy::field_reassign_with_default, clippy::if_same_then_else, clippy::too_many_arguments)]
 
 use super::SessionInfo;
 use crate::car::aero::Drs;

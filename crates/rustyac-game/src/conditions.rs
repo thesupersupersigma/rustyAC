@@ -96,7 +96,7 @@ fn last_name(text: &str) -> String {
 /// slot the game gives it. The first is the player's: its car stays the one of `--car`, its
 /// place is the file's. Until there are AI drivers (Task 25) every other car is driven by the
 /// line follower. Returns the lines for the console.
-fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i32) -> Result<Vec<String>, String> {
+fn race_cars(ini: &IniReader, setup: &mut SimSetup, options: &Options, rand: &mut dyn FnMut() -> i32) -> Result<Vec<String>, String> {
     use crate::input_file::{GridPlace, Opponent, OpponentDrive};
     use rustyac_physics::session;
     let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found")?;
@@ -150,7 +150,27 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
             if car.restrictor > 0.0 { format!(", restrictor {}", car.restrictor) } else { String::new() },
             if car.driver_name.is_empty() { String::new() } else { format!(", {}", car.driver_name) }
         ));
-        others.push(Opponent { car: car.model.clone(), skin: car.skin.clone(), drive: OpponentDrive::Auto, place: Some(place(car)) });
+        // RaceManager::initOffline's closure @ 0x140133e00: the driver's level from the
+        // file's [RACE] AI_LEVEL and the car's own AI_LEVEL, its aggression from AI_AGGRESSION
+        let drive = if options.stand_in_drivers {
+            OpponentDrive::Auto
+        } else {
+            let race_level = options.ai_level.unwrap_or(grid.ai_level);
+            let level = if car.ai_level != 0.0 { (car.ai_level * 0.01) * race_level } else { race_level } * 0.01;
+            let push = if level > 1.0 {
+                1.0
+            } else if level >= 0.0 {
+                level
+            } else {
+                0.0
+            };
+            let aggression = match options.ai_aggression {
+                Some(percent) => (percent * 0.01).clamp(0.0, 1.0) * 0.95,
+                None => car.ai_aggression,
+            };
+            OpponentDrive::Ai { push, aggression }
+        };
+        others.push(Opponent { car: car.model.clone(), skin: car.skin.clone(), drive, place: Some(place(car)) });
     }
     if others.is_empty() {
         // alone after all: the first slot as before, but a race's grid place stays
@@ -163,12 +183,21 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
     lines.insert(
         0,
         format!(
-            "{} other car(s) from race.ini ([RACE] CARS={}, {} pit boxes). Assetto Corsa gives each an AI driver; rustyAC has none yet (Task 25), so each is driven by the stand-in line follower (\"auto\"), which follows the racing line and knows nothing of other cars. --no-race-cars leaves them out; --opponent names cars of your own",
+            "{} other car(s) from race.ini ([RACE] CARS={}, {} pit boxes), each with {}. --no-race-cars leaves them out; --opponent names cars of your own",
             others.len(),
             ini.get_int("RACE", "CARS").unwrap_or(0),
-            pit_slots
+            pit_slots,
+            if options.stand_in_drivers {
+                "rustyAC's stand-in line follower (--stand-in-drivers), which knows nothing of other cars".to_string()
+            } else {
+                format!("Assetto Corsa's AI driver ([RACE] AI_LEVEL={}; --ai-level and --ai-aggression change them, --stand-in-drivers gives the old line follower)", options.ai_level.unwrap_or(grid.ai_level))
+            }
         ),
     );
+    // the session's length as the AI drivers are told it
+    let laps = ini.get_int("SESSION_0", "LAPS").unwrap_or(0);
+    setup.ai.laps = if laps > 0 { laps } else { ini.get_int("RACE", "RACE_LAPS").unwrap_or(0) };
+    setup.ai.time_secs = (ini.get_float("SESSION_0", "DURATION_MINUTES").unwrap_or(0.0) * 60.0) as f64;
     setup.opponents = others;
     Ok(lines)
 }
@@ -178,6 +207,12 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, rand: &mut dyn FnMut() -> i3
 /// `input_method`: `[HEADER] INPUT_METHOD` of the bindings in use (`X360`, `KEYBOARD`, `WHEEL`).
 pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Result<Vec<String>, String> {
     let mut notes = Vec::new();
+    // Task 27: CarAvatar::initControls @ 0x1400d6f30: INPUT_METHOD=AI gives the player's car
+    // an AI driver
+    if options.ai_drive || input_method == "AI" {
+        setup.ai.player = true;
+        notes.push(format!("an AI driver drives your car ({})", if options.ai_drive { "--ai-drive" } else { "controls.ini INPUT_METHOD=AI" }));
+    }
     let race_path = match (&options.race_ini_file, options.race_ini) {
         (Some(path), _) => Some(path.clone()),
         (None, Some(false)) => None,
@@ -270,7 +305,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             let wanted = !options.no_race_cars && options.cars.is_none() && options.opponents.is_empty() && !setup.track.is_empty() && (ini.get_int("RACE", "CARS").unwrap_or(0) > 1 || alone_on_a_grid);
             let mut car_notes = Vec::new();
             if wanted {
-                match race_cars(&ini, setup, &mut || rand.next()) {
+                match race_cars(&ini, setup, options, &mut || rand.next()) {
                     Ok(lines) => car_notes = lines,
                     Err(message) => car_notes.push(format!("WARNING: the other cars of race.ini are left out: {message}")),
                 }

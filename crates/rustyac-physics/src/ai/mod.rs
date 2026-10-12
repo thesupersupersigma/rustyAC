@@ -184,6 +184,27 @@ impl AiStepInput {
     }
 }
 
+/// One car with an AI driver that is stepped on its own, without a
+/// [`crate::engine::PhysicsEngine`]: the drivers' random stream and the session, handed to
+/// the car before its step (and before its driver is told of anything) and taken back after.
+#[derive(Clone, Copy, Debug)]
+pub struct SoloAi {
+    pub rand: MsvcRand,
+    pub session: SessionInfo,
+}
+
+impl SoloAi {
+    pub fn give(&self, car: &mut RollingChassis) {
+        car.step_pre_cache_values();
+        let view = CarView::of(car);
+        car.ai_input = AiStepInput { cars: vec![view], me: 0, rand: self.rand, session: self.session };
+    }
+
+    pub fn take(&mut self, car: &mut RollingChassis) {
+        self.rand = car.ai_input.rand;
+    }
+}
+
 /// `ksClamp`-style saturation as the compiler wrote it: `hi` for a NaN.
 #[inline]
 pub(crate) fn sat(x: f32, lo: f32, hi: f32) -> f32 {

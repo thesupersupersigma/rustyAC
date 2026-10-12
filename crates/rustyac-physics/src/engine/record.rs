@@ -444,7 +444,7 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
         let name = text.rsplit(['/', '\\']).find(|part| !part.is_empty()).ok_or("track_folder has no name")?;
         paths.game_root.as_ref().ok_or("the recording's track folder is not here and no game folder was given")?.join("content").join("tracks").join(name)
     };
-    let (mut track, _report) = crate::track::load_track(&folder, layout)?;
+    let (track, _report) = crate::track::load_track(&folder, layout)?;
     if recording.cars.iter().any(|car| car.ai.is_some() || car.handover) {
         // the lines as the AI drivers need them
         track.init_ai()?;
@@ -693,7 +693,7 @@ impl ReplayWorld {
             row.push(car.spline_locator_data.npos.to_bits());
             match &self.ai[n] {
                 Some(driver) => row.extend(driver.oracle_words()),
-                None if n == 0 && self.handover.is_some() => row.extend(std::iter::repeat(0u32).take(crate::ai::oracle::column_names().len())),
+                None if n == 0 && self.handover.is_some() => row.extend(std::iter::repeat_n(0u32, crate::ai::oracle::column_names().len())),
                 None => {}
             }
         }

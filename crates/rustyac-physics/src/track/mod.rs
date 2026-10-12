@@ -83,8 +83,9 @@ pub struct Track {
     /// `aiSplineRecorder->pitLaneSpline`
     pub pit_lane_spline: Option<AiSpline>,
     /// `aiSplineRecorder` as the AI drivers need it: both lines finished as the game finishes
-    /// them at load, and the track's hints ([`Track::init_ai`]; `None` until then)
-    pub ai: Option<ai_line::AiSplineRecorder>,
+    /// them at load, and the track's hints. Worked out when it is first asked for
+    /// ([`Track::ai`]), or with the track when its line is older than version 7.
+    pub ai_recorder: std::sync::OnceLock<Result<ai_line::AiSplineRecorder, String>>,
     /// The layout's `ai` folder
     pub ai_folder: PathBuf,
     /// `startingBounds` (`data/starting_bounds.ini`): ranges of AI-line point indices
@@ -177,14 +178,20 @@ impl Track {
     /// finished as the game finishes them when it loads a track (every point's radius,
     /// grade and corner distances worked out again, normals, camber and grip from the track
     /// under the line, the straights, the pit lane's line and where it meets the fast lane)
-    /// and `data/ai_hints.ini`. It takes a few seconds, so only a session with an AI driver
-    /// asks for it; nothing else reads [`Track::ai`].
-    pub fn init_ai(&mut self) -> Result<(), String> {
-        if self.ai.is_none() {
-            let recorder = ai_line::AiSplineRecorder::load(self, &self.ai_folder, &self.data_folder.join("data"))?;
-            self.ai = Some(recorder);
+    /// and `data/ai_hints.ini`. It takes a moment, so it is done when a driver first asks;
+    /// nothing else reads it. `None`: the lines could not be finished ([`Track::init_ai`]
+    /// says why).
+    pub fn ai(&self) -> Option<&ai_line::AiSplineRecorder> {
+        self.ai_recorder.get_or_init(|| ai_line::AiSplineRecorder::load(self, &self.ai_folder, &self.data_folder.join("data"))).as_ref().ok()
+    }
+
+    /// [`Track::ai`] now, with the reason when it fails.
+    pub fn init_ai(&self) -> Result<(), String> {
+        self.ai();
+        match self.ai_recorder.get() {
+            Some(Err(message)) => Err(message.clone()),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// The name of the surface type a `SurfaceDef` of this track came from, for the display.

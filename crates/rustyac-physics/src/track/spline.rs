@@ -1342,7 +1342,7 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
                     ));
                     track.ai_spline = Some(recorder.best_lap.clone());
                 }
-                track.ai = Some(recorder);
+                let _ = track.ai_recorder.set(Ok(recorder));
             }
             Err(e) => messages.push(format!("the AI line was not read ({e}): no position along the lap")),
         }

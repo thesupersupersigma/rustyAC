@@ -94,8 +94,20 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
             setup.opponents.push(rustyac_game::input_file::Opponent { car: options.car.clone(), skin: String::new(), drive: drive.clone(), place: None });
         }
     }
+    // Task 27: AC's AI drivers. `--ai-level` / `--ai-aggression` as race.ini's AI_LEVEL /
+    // AI_AGGRESSION become a driver's basePush and aggression
+    let ai_push = (options.ai_level.unwrap_or(100.0) * 0.01).clamp(0.0, 1.0);
+    let ai_aggression = (options.ai_aggression.unwrap_or(0.0) * 0.01).clamp(0.0, 1.0) * 0.95;
+    if let Some(count) = options.ai_cars {
+        for _ in 1..count {
+            setup.opponents.push(rustyac_game::input_file::Opponent { car: options.car.clone(), skin: String::new(), drive: rustyac_game::input_file::OpponentDrive::Ai { push: ai_push, aggression: ai_aggression }, place: None });
+        }
+    }
     for text in &options.opponents {
         let mut opponent = rustyac_game::input_file::Opponent::parse(text)?;
+        if text.to_ascii_lowercase().ends_with(":ai") {
+            opponent.drive = rustyac_game::input_file::OpponentDrive::Ai { push: ai_push, aggression: ai_aggression };
+        }
         if let rustyac_game::input_file::OpponentDrive::Recorded(file) = &mut opponent.drive {
             // (the whole path goes into a recording's header: a replay finds the file from anywhere)
             if !file.is_file() {
@@ -108,7 +120,34 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     setup.physics_threads = options.physics_threads;
     // the device the bindings name decides one aid (a pad has no clutch pedal)
     let input_method = Bindings::load(options, &mut Vec::new()).input_method;
-    for note in rustyac_game::conditions::apply(options, &mut setup, &input_method)? {
+    let notes = rustyac_game::conditions::apply(options, &mut setup, &input_method)?;
+    // Task 27: the AI drivers' session
+    let ai_cars = setup.opponents.iter().any(|opponent| matches!(opponent.drive, rustyac_game::input_file::OpponentDrive::Ai { .. }));
+    if ai_cars && setup.session.session_type.is_none() && !setup.track.is_empty() {
+        // no session of race.ini: a race from the grid, or practice from the pit boxes
+        if !options.spawn_given {
+            setup.spawn = "start".to_string();
+        }
+        setup.session.session_type = Some(if setup.spawn == "pit" { 1 } else { 3 });
+    }
+    if let Some(laps) = options.ai_laps {
+        setup.ai.laps = laps;
+    }
+    if let Some(seconds) = options.race_start_in {
+        setup.ai.start_delay_ms = seconds * 1000.0;
+    }
+    if let Some(seconds) = options.ai_at {
+        setup.ai.hand_over_step = (seconds / 0.003).round() as i64;
+    }
+    // (a live drive draws anew every time, as the game's rand() starts from the clock)
+    setup.ai.seed = match options.ai_seed {
+        Some(seed) => seed,
+        None if (ai_cars || setup.ai.player || options.ai_at.is_some()) && options.screenshot.is_none() && !options.headless => {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(0)
+        }
+        None => 0,
+    };
+    for note in notes {
         println!("{note}");
     }
     if !setup.opponents.is_empty() {
@@ -907,6 +946,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                         request(if shift { event::ABS_DN } else { event::ABS_UP });
                     } else if ctrl && key == bindings.key_auto_shifter {
                         request(event::AUTO_SHIFTER);
+                    } else if ctrl && key == bindings.key_activate_ai {
+                        // Sim::onKeyDown 0x14019a940, the command "Activate AI": an AI driver
+                        // takes the car
+                        request(event::AI_ON);
                     } else if ctrl && key == bindings.key_ideal_line {
                         // Sim::onKeyDown 0x14019a940: no text on the screen in the game; a line here
                         match renderer.toggle_ideal_line() {

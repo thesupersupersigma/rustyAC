@@ -57,8 +57,11 @@ pub mod event {
     /// (`TrackObject::resetOrgMatrix`). Position and rotation only; a cone that is still
     /// flying flies on from there.
     pub const OBJECTS_HOME: u32 = 1 << 16;
+    /// Task 27: the driver hands the car to an AI driver (AC's "Activate AI" command): a
+    /// new `AIDriver` for the car as it is, from this step on.
+    pub const AI_ON: u32 = 1 << 17;
 
-    pub const NAMES: [(u32, &str); 17] = [
+    pub const NAMES: [(u32, &str); 18] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -76,6 +79,7 @@ pub mod event {
         (MGUK_RECOVERY_DN, "mgu-k recovery-"),
         (MGUH_MODE, "mgu-h mode"),
         (OBJECTS_HOME, "objects home"),
+        (AI_ON, "ai on"),
     ];
 }
 
@@ -250,6 +254,33 @@ pub enum OpponentDrive {
     Auto,
     /// The inputs of a recorded drive (`.ryin`), step by step; on the brakes when it ends.
     Recorded(std::path::PathBuf),
+    /// Task 27: AC's own AI driver, with its `basePush` (the AI level, 0..1) and `aggression`
+    /// (0..0.95) as the game sets them after it made the driver.
+    Ai { push: f32, aggression: f32 },
+}
+
+/// Task 27: what the AI drivers of a session are told and whether one drives the player's car.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AiSetup {
+    /// An AI driver drives the player's car from the start (`controls.ini INPUT_METHOD=AI`).
+    pub player: bool,
+    /// The session's laps and its seconds (`[SESSION_0] LAPS`, `DURATION_MINUTES` x 60): a
+    /// race's laps decide the fuel the drivers start with.
+    pub laps: i32,
+    pub time_secs: f64,
+    /// Milliseconds from the session's start to the green light of a race.
+    pub start_delay_ms: f64,
+    /// What the drivers' random numbers start from (with the car's seed): every draw of
+    /// every AI driver of the session follows from it.
+    pub seed: u32,
+    /// The step before which the player's car is handed to an AI driver (`--ai-at`); -1: never.
+    pub hand_over_step: i64,
+}
+
+impl Default for AiSetup {
+    fn default() -> AiSetup {
+        AiSetup { player: false, laps: 5, time_secs: 0.0, start_delay_ms: 0.0, seed: 0, hand_over_step: -1 }
+    }
 }
 
 /// Where race.ini puts a car and what it loads it with (`RaceManager::initOffline`): its pit
@@ -295,7 +326,7 @@ impl Opponent {
     /// The parts are split from the right; the colon after a drive letter (`C:\...`) is not
     /// a separator, so the car and the file may both be paths.
     pub fn parse(text: &str) -> Result<Opponent, String> {
-        let wrong = || format!("{text:?}: an opponent is <car>[:<skin>]:<parked | auto | file.ryin>");
+        let wrong = || format!("{text:?}: an opponent is <car>[:<skin>]:<ai | parked | auto | file.ryin>");
         // the last colon that does not belong to a drive letter
         fn split_last(text: &str) -> Option<(&str, &str)> {
             let bytes = text.as_bytes();
@@ -316,6 +347,11 @@ impl Opponent {
         let drive = match spec.to_ascii_lowercase().as_str() {
             "parked" => OpponentDrive::Parked,
             "auto" => OpponentDrive::Auto,
+            "ai" => OpponentDrive::Ai { push: 1.0, aggression: 0.0 },
+            ai if ai.starts_with("ai=") => {
+                let (push, aggression) = ai[3..].split_once(',').ok_or_else(wrong)?;
+                OpponentDrive::Ai { push: push.parse().map_err(|_| wrong())?, aggression: aggression.parse().map_err(|_| wrong())? }
+            }
             file if file.ends_with(".ryin") => OpponentDrive::Recorded(std::path::PathBuf::from(spec)),
             _ => return Err(wrong()),
         };
@@ -331,6 +367,7 @@ impl Opponent {
             OpponentDrive::Parked => "parked".to_string(),
             OpponentDrive::Auto => "auto".to_string(),
             OpponentDrive::Recorded(file) => file.display().to_string(),
+            OpponentDrive::Ai { push, aggression } => format!("ai={push},{aggression}"),
         };
         if self.skin.is_empty() {
             format!("{}:{drive}", self.car)
@@ -400,6 +437,8 @@ pub struct SimSetup {
     /// The skin race.ini gives the player's car in a session with other cars (the file's, or
     /// the one the game picks when the file's is not a skin of the car). Looks only.
     pub player_skin: Option<String>,
+    /// Task 27: the AI drivers' session.
+    pub ai: AiSetup,
 }
 
 impl Default for SimSetup {
@@ -429,6 +468,7 @@ impl Default for SimSetup {
             physics_threads: None,
             player_place: None,
             player_skin: None,
+            ai: AiSetup::default(),
         }
     }
 }
@@ -561,6 +601,10 @@ impl SimSetup {
         if let Some(skin) = &self.player_skin {
             put("player_skin", skin.clone());
         }
+        if self.ai != AiSetup::default() {
+            // (only a session with AI drivers has the key: older files read as before)
+            put("ai", format!("{},{},{},{},{},{}", self.ai.player as u32, self.ai.laps, self.ai.time_secs, self.ai.start_delay_ms, self.ai.seed, self.ai.hand_over_step));
+        }
         for opponent in &self.opponents {
             put("opponent", opponent.to_text());
             if let Some(place) = opponent.place {
@@ -685,6 +729,19 @@ impl SimSetup {
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,
+                "ai" => {
+                    let parts: Vec<&str> = value.split(',').collect();
+                    let [player, laps, time_secs, start_delay_ms, seed, hand_over_step] = parts[..] else { return Err(format!("ai: six numbers expected, got {value:?}")) };
+                    let wrong = |e: String| format!("ai: {e}");
+                    setup.ai = AiSetup {
+                        player: player == "1",
+                        laps: laps.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
+                        time_secs: time_secs.parse().map_err(|e: std::num::ParseFloatError| wrong(e.to_string()))?,
+                        start_delay_ms: start_delay_ms.parse().map_err(|e: std::num::ParseFloatError| wrong(e.to_string()))?,
+                        seed: seed.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
+                        hand_over_step: hand_over_step.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
+                    };
+                }
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),
                 "opponent_place" => setup.opponents.last_mut().ok_or("opponent_place before any opponent")?.place = Some(GridPlace::parse(value)?),
                 "player_place" => setup.player_place = Some(GridPlace::parse(value)?),

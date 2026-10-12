@@ -372,11 +372,15 @@ pub struct Driver {
     pub last_ff: f32,
     pub last_damper: f32,
     pub last_vibrations: VibrationDef,
+    /// Task 27: AC's AI driver of the car. While there is one the source is not asked for
+    /// the controls: the driver writes them.
+    pub ai: Option<Box<rustyac_physics::ai::AiDriver>>,
 }
 
 impl Driver {
     pub fn new(source: Box<dyn DriverSource>, ff_gain: f32) -> Driver {
         Driver {
+            ai: None,
             source,
             ff_gain,
             reported: CarControls::default(),
@@ -422,6 +426,42 @@ impl ControlsProvider for Driver {
 
     fn set_engine_rpm(&mut self, rpm: f32, low: f32, high: f32) {
         self.source.set_engine_rpm(rpm, low, high);
+    }
+
+    fn acquire_controls_car(&mut self, car: &mut rustyac_physics::car::RollingChassis, dt: f32) {
+        match &mut self.ai {
+            Some(ai) => {
+                ai.acquire(car, dt);
+                self.reported = car.controls;
+                self.polled = true;
+            }
+            None => {
+                let input = CarControlsInput { steer_lock: car.steer_lock, speed: car.speed };
+                self.acquire_controls(&mut car.controls, dt, &input);
+            }
+        }
+    }
+
+    fn is_ai(&self) -> bool {
+        self.ai.is_some()
+    }
+
+    fn on_forced_position(&mut self, car: &mut rustyac_physics::car::RollingChassis) {
+        if let Some(ai) = &mut self.ai {
+            ControlsProvider::on_forced_position(&mut **ai, car);
+        }
+    }
+
+    fn on_lap_completed(&mut self, valid: bool) {
+        if let Some(ai) = &mut self.ai {
+            ControlsProvider::on_lap_completed(&mut **ai, valid);
+        }
+    }
+
+    fn on_new_session(&mut self, car: &mut rustyac_physics::car::RollingChassis, info: &rustyac_physics::ai::SessionInfo) {
+        if let Some(ai) = &mut self.ai {
+            ControlsProvider::on_new_session(&mut **ai, car, info);
+        }
     }
 }
 
@@ -650,6 +690,9 @@ pub struct GameSim {
     pub online: Option<Box<OnlineSession>>,
     /// The server's rules of that session.
     pub rules: Option<ServerRules>,
+    /// Task 27: the AI drivers' random stream and session while one car is stepped alone
+    /// (with other cars the engine has both).
+    pub solo_ai: rustyac_physics::ai::SoloAi,
 }
 
 /// Another car of the session with its driver.
@@ -811,8 +854,9 @@ fn session_env(setup: &SimSetup, physics_time: f64, on_track: bool, rules: Optio
     env.track_drs_zones = setup.drs_zones;
     if setup.session_starts_at_spawn {
         // RaceManager::setCurrentSession: the session starts now (the wind's slow swing and
-        // the automatic gearbox's 300 ms count from here)
-        env.session_start_time_ms = physics_time;
+        // the automatic gearbox's 300 ms count from here); a race with AI drivers may have
+        // its green light a little later (`--race-start-in`)
+        env.session_start_time_ms = physics_time + setup.ai.start_delay_ms;
     }
     if let Some(rules) = rules {
         // an online session: the server's rules (ACClient::handshakeTCP writes them into the
@@ -1040,11 +1084,22 @@ fn opponent_driver(opponent: &Opponent, track: Option<&Arc<Track>>) -> Result<Dr
             Box::new(SpawnSequence::new(crate::autodrive::AutoDriver::new(), true))
         }
         OpponentDrive::Recorded(file) => Box::new(RecordedSource::new(crate::input_file::InputFile::read(file)?.steps)),
+        // (the AI driver is made once all cars are there: `GameSim::start_ai`)
+        OpponentDrive::Ai { .. } => Box::new(ParkedSource),
     };
     if let Some(track) = track {
         source.set_track(track);
     }
     Ok(Driver::new(source, 1.0))
+}
+
+/// `new AIDriver(car)` for a car of the session: its pit-stop times and the fuel a lap is
+/// expected to take first (`Car::Car` works both out for every car; only a driver reads them).
+fn make_ai_driver(car: &mut rustyac_physics::car::RollingChassis, session: &rustyac_physics::ai::SessionInfo, rand: &mut rustyac_physics::session::MsvcRand, setup_file: Option<&Path>) -> Result<rustyac_physics::ai::AiDriver, String> {
+    car.init_pitstop_timings()?;
+    car.init_expected_fuel_per_lap()?;
+    car.ai_input.session = *session;
+    rustyac_physics::ai::AiDriver::new(car, session, rand, &rustyac_physics::ai::driver::AiFiles { ai_setup: setup_file })
 }
 
 /// The session's cars: the driver's, and with other cars the engine that steps them all.
@@ -1195,7 +1250,9 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        Ok(GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules })
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() } };
+        sim.start_ai()?;
+        Ok(sim)
     }
 
     /// The world the track's loose objects and every contact live in: the engine's with
@@ -1363,12 +1420,138 @@ impl GameSim {
         self.new_sessions += 1;
         // (a new Car: a new evaluator)
         self.fuel_evaluator = rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new();
+        // (new cars: new AI drivers; a driver the player's car had goes with the old car)
+        self.car.device.ai = None;
+        self.start_ai()?;
+        Ok(())
+    }
+
+    /// The session as the AI drivers are told it (`PhysicsEngine::sessionInfo`).
+    fn ai_session(&self) -> rustyac_physics::ai::SessionInfo {
+        let env = &self.car.car.env;
+        rustyac_physics::ai::SessionInfo { session_type: env.session_type, start_time_ms: env.session_start_time_ms, time_secs: self.setup.ai.time_secs, laps: self.setup.ai.laps, index: self.session_index }
+    }
+
+    /// Where AC looks for an AI setup of a car on the track (`AIDriver::initSetup`
+    /// @ 0x14029e250): the user's `setups/<car>/<track>/ai_default.ini`, else the game's
+    /// `system/setups/<car>/<track>/ai_default.ini`. Both are only read.
+    fn ai_setup_file(&self, car: &rustyac_physics::car::RollingChassis) -> Option<PathBuf> {
+        let track = self.track.as_ref()?;
+        let relative = Path::new(&car.unix_name).join(&track.name).join("ai_default.ini");
+        let own = crate::conditions::documents_folder().map(|folder| folder.join("setups").join(&relative)).filter(|file| file.is_file());
+        own.or_else(|| ac_root().map(|root| root.join("system").join("setups").join(&relative)).filter(|file| file.is_file()))
+    }
+
+    /// Task 27: makes the session's AI drivers as the game does once all cars are there, in
+    /// the cars' order: `new AIDriver(car)` each (the player's when `INPUT_METHOD=AI`), then
+    /// the session, which every driver is told, and every car's place on the grid or in its
+    /// pit box (the game's teleport at a session's start, which a driver hears of too).
+    fn start_ai(&mut self) -> Result<(), String> {
+        // (new for every session of a run, and written into recordings with the seed)
+        let seed = rustyac_physics::session::MsvcRand(self.setup.seed.wrapping_add(27_000).wrapping_add(self.setup.ai.seed).wrapping_add(self.new_sessions));
+        self.solo_ai = rustyac_physics::ai::SoloAi { rand: seed, session: rustyac_physics::ai::SessionInfo { session_type: rustyac_physics::ai::SESSION_UNDEFINED, start_time_ms: 0.0, time_secs: 0.0, laps: 0, index: 0 } };
+        if let Some(engine) = &mut self.engine {
+            engine.ai_rand = seed;
+        }
+        let wanted: Vec<Option<(f32, f32)>> = std::iter::once(self.setup.ai.player.then_some((1.0, 0.0)))
+            .chain(self.opponents.iter().map(|opponent| match opponent.setup.drive {
+                OpponentDrive::Ai { push, aggression } => Some((push, aggression)),
+                _ => None,
+            }))
+            .collect();
+        if wanted.iter().all(Option::is_none) {
+            return Ok(());
+        }
+        if self.track.is_none() {
+            return Err("an AI driver needs a track (--track)".to_string());
+        }
+        for (index, wanted) in wanted.iter().enumerate() {
+            let Some((push, aggression)) = *wanted else { continue };
+            let setup_file = {
+                let car = if index == 0 { &self.car.car } else { &self.opponents[index - 1].car.car };
+                self.ai_setup_file(car)
+            };
+            let mut rand = match &self.engine {
+                Some(engine) => engine.ai_rand,
+                None => self.solo_ai.rand,
+            };
+            let session = self.solo_ai.session;
+            let slot = if index == 0 { &mut self.car } else { &mut self.opponents[index - 1].car };
+            slot.car.forced_position_events = 0;
+            let mut driver = make_ai_driver(&mut slot.car, &session, &mut rand, setup_file.as_deref())?;
+            driver.base_push = push;
+            driver.aggression = aggression;
+            slot.device.ai = Some(Box::new(driver));
+            match &mut self.engine {
+                Some(engine) => engine.ai_rand = rand,
+                None => self.solo_ai.rand = rand,
+            }
+        }
+        // the session, and the cars on their places
+        let info = self.ai_session();
+        match &mut self.engine {
+            Some(engine) => {
+                let mut slots = Vec::with_capacity(1 + self.opponents.len());
+                slots.push(CarSlot { car: &mut self.car.car, device: DeviceRef::Here(&mut self.car.device) });
+                for opponent in &mut self.opponents {
+                    slots.push(CarSlot { car: &mut opponent.car.car, device: DeviceRef::Anywhere(&mut opponent.car.device) });
+                }
+                engine.set_session(info, &mut slots);
+                for index in 0..slots.len() {
+                    slots[index].car.forced_position_events = wanted[index].is_some() as u32;
+                    engine.deliver_forced_positions(&mut slots);
+                }
+            }
+            None => {
+                self.solo_ai.session = info;
+                self.solo_ai.give(&mut self.car.car);
+                self.car.device.on_new_session(&mut self.car.car, &info);
+                self.car.car.forced_position_events = 1;
+                self.car.device.on_forced_position(&mut self.car.car);
+                self.car.car.forced_position_events = 0;
+                self.solo_ai.take(&mut self.car.car);
+            }
+        }
+        Ok(())
+    }
+
+    /// Task 27: AC's "Activate AI" (`Sim::onKeyDown` -> the closure @ 0x140195b40): a new
+    /// `AIDriver` for the player's car as it is now, with the constructor's level (100 %)
+    /// and no aggression. Nothing happens when the car has one already.
+    fn hand_over(&mut self) -> Result<(), String> {
+        if self.car.device.ai.is_some() {
+            return Ok(());
+        }
+        if self.track.is_none() {
+            return Err("an AI driver needs a track".to_string());
+        }
+        let setup_file = self.ai_setup_file(&self.car.car);
+        let info = self.ai_session();
+        let (mut rand, session) = match &self.engine {
+            Some(engine) => (engine.ai_rand, engine.session),
+            None => {
+                self.solo_ai.session = info;
+                (self.solo_ai.rand, info)
+            }
+        };
+        let events = self.car.car.forced_position_events;
+        let driver = make_ai_driver(&mut self.car.car, &session, &mut rand, setup_file.as_deref())?;
+        self.car.car.forced_position_events = events;
+        self.car.device.ai = Some(Box::new(driver));
+        match &mut self.engine {
+            Some(engine) => engine.ai_rand = rand,
+            None => self.solo_ai.rand = rand,
+        }
+        self.aid_note = AidNote::new("AI DRIVER: ON", self.steps);
         Ok(())
     }
 
     fn apply(&mut self, events: u32, bias_clicks: i32) -> Result<(), String> {
         if events & event::REBUILD != 0 {
             self.rebuild()?;
+        }
+        if events & event::AI_ON != 0 {
+            self.hand_over()?;
         }
         // a new session's jobs in the order the game queues them: the track's handler (the
         // loose objects go home) was registered before the car's
@@ -1504,7 +1687,10 @@ impl GameSim {
     /// One physics step with whatever the driver's source says; returns what it said (the
     /// step's line in an input file).
     pub fn step(&mut self) -> Result<StepInput, String> {
-        let (events, bias_clicks) = self.car.device.source.take_events();
+        let (mut events, bias_clicks) = self.car.device.source.take_events();
+        if self.setup.ai.hand_over_step == self.steps as i64 {
+            events |= event::AI_ON;
+        }
         self.apply(events, bias_clicks)?;
         if self.car.device.source.wants_probe() {
             let probe = CarProbe::capture(&mut self.car.car);
@@ -1513,6 +1699,16 @@ impl GameSim {
         self.car.device.polled = false;
         let time = self.setup.time_of_step(self.steps);
         match &mut self.engine {
+            None if self.car.device.ai.is_some() => {
+                // one car with an AI driver: what the engine hands such a car
+                self.solo_ai.give(&mut self.car.car);
+                self.car.step(DT, time);
+                if self.car.car.forced_position_events != 0 {
+                    self.car.device.on_forced_position(&mut self.car.car);
+                    self.car.car.forced_position_events = 0;
+                }
+                self.solo_ai.take(&mut self.car.car);
+            }
             None => self.car.step(DT, time),
             Some(engine) => {
                 for opponent in &mut self.opponents {

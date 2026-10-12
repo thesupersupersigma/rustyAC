@@ -125,6 +125,9 @@ pub struct Bindings {
     /// `[IDEAL_LINE] KEY`: with Ctrl, the ideal line on / off (`CommandManager`: I when the
     /// section is missing)
     pub key_ideal_line: i32,
+    /// `[ACTIVATE_AI] KEY`: with Ctrl, an AI driver takes the car (`CommandManager`: C when
+    /// the key is missing)
+    pub key_activate_ai: i32,
     /// `[NEXT_CAR]`, `[PREVIOUS_CAR]`, `[PLAYER_CAR]` `KEY`: with Ctrl, the camera goes to the
     /// car ahead on the track, to the one behind, back to yours (`CommandManager`: numpad 3, 1
     /// and 2 when the section is missing)
@@ -320,6 +323,8 @@ impl Bindings {
             key_traction_control: ini.get_hex("TRACTION_CONTROL", "KEY"),
             key_auto_shifter: ini.get_hex("AUTO_SHIFTER", "KEY"),
             key_ideal_line: if ini.has_section("IDEAL_LINE") { ini.get_hex("IDEAL_LINE", "KEY") } else { 0x49 },
+            // (AC's own default for "Activate AI" is Ctrl+C)
+            key_activate_ai: if ini.has_key("ACTIVATE_AI", "KEY") { ini.get_hex("ACTIVATE_AI", "KEY") } else { 0x43 },
             key_next_car: if ini.has_section("NEXT_CAR") { ini.get_hex("NEXT_CAR", "KEY") } else { 0x63 },
             key_previous_car: if ini.has_section("PREVIOUS_CAR") { ini.get_hex("PREVIOUS_CAR", "KEY") } else { 0x61 },
             key_player_car: if ini.has_section("PLAYER_CAR") { ini.get_hex("PLAYER_CAR", "KEY") } else { 0x62 },

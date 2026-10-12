@@ -964,7 +964,7 @@ impl<'a> MultiWorld<'a> {
                 row.push(rd(car.car, CAR_SPLINE_LOCATOR_DATA));
                 if car.ai.is_null() && self.handover.is_some() && std::ptr::eq(car, &self.cars[0]) {
                     // the columns of the driver to come
-                    row.extend(std::iter::repeat(0u32).take(rustyac_physics::ai::oracle::column_names().len()));
+                    row.extend(std::iter::repeat_n(0u32, rustyac_physics::ai::oracle::column_names().len()));
                 }
                 if !car.ai.is_null() {
                     use rustyac_physics::ai::oracle::{Kind, COLUMNS};
