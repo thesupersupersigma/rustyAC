@@ -43,6 +43,7 @@ pub fn ai_session(scenario: &str) -> Option<(i32, f64, f64, i32)> {
         "ai_solo" | "ai_solo_level" => Some((3, 3000.0, 0.0, 3)),
         "ai_race" | "ai_race_levels" | "ai_field" => Some((3, 6000.0, 0.0, 3)),
         "ai_practice" => Some((1, 0.0, 1800.0, 0)),
+        "ai_handover" => Some((4, 0.0, 0.0, 0)),
         "ai_qualify" => Some((2, 0.0, 600.0, 0)),
         _ => None,
     }
@@ -52,7 +53,18 @@ const VA_AIDRIVER_CTOR: usize = 0x1_4029_8c60; // AIDriver::AIDriver(Car*)
 const VA_SET_SESSION_INFO: usize = 0x1_4026_4560; // PhysicsEngine::setSessionInfo(const SessionInfo&)
 const PE_EV_ON_NEW_SESSION_PHYSICS: usize = 0xa0;
 const CAR_EXPECTED_FUEL_PER_LAP: usize = 0x3d38;
+const CAR_PIT_POSITION: usize = 0x3a90;
 const AI_BASE_PUSH: usize = 0x28;
+
+/// Task 27: the step at which a scenario's first car, driven by the line follower until
+/// then, is handed to the game's `AIDriver` (the game's "AI drives my car" switch: a new
+/// driver with the constructor's `basePush` 1 and no aggression).
+pub fn ai_handover(scenario: &str) -> Option<usize> {
+    match scenario {
+        "ai_handover" => Some(2400),
+        _ => None,
+    }
+}
 const AI_AGGRESSION: usize = 0x1c;
 
 /// `SHGetFolderPathW` for the game's `Path::getDocumentPath` (`AIDriver::initSetup` looks for
@@ -327,6 +339,33 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| 1.0 - 0.015 * (i % 5) as f32, |i| 0.19 * (i % 4) as f32),
         },
         MultiScenario {
+            name: "ai_practice",
+            about: "Task 27: a practice session: AI drivers in the first pit boxes (as many as --cars names, 2 by default); each waits, drives out along the pit lane's line, does its laps and comes in again",
+            seconds: 240.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let count = if cars.is_empty() { 2 } else { cars.len() };
+                let mut out = Vec::new();
+                for i in 0..count {
+                    let (p, tail) = track.spawn_pose("PIT", i).ok_or_else(|| format!("the track has no pit box {i}"))?;
+                    out.push(MultiCar { name: name_of(cars, i, &[F2004]), position: [p.x, p.y, p.z], tail: [tail.x, tail.y, tail.z], drive: Drive::Ai { push: 1.0 - 0.03 * i as f32, aggression: 0.1 * i as f32 } });
+                }
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "ai_handover",
+            about: "Task 27: one car from the hot-lap start, driven by the oracle's line follower; after 7.2 s it is handed to the game's AIDriver (the game's \"AI drives my car\" switch)",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let (position, tail) = line_pose(track, 0.02, 0.0, 0.0)?;
+                Ok(vec![MultiCar { name: name_of(cars, 0, &[F2004]), position, tail, drive: Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 0.8, limit: 70.0, brake_at: f32::MAX } }])
+            },
+        },
+        MultiScenario {
             name: "ai_race_levels",
             about: "Task 27: as ai_race with slow drivers in front (level 80 to 100 from the pole back) and aggression up to 95 %: overtakes",
             seconds: 90.0,
@@ -431,6 +470,8 @@ pub struct MultiWorld<'a> {
     state_buffer: *mut u8,
     /// each car's folder name
     pub names: Vec<String>,
+    /// Task 27: the step at which car 0 gets the game's `AIDriver`
+    handover: Option<usize>,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -614,6 +655,8 @@ impl<'a> MultiWorld<'a> {
                     auto_shifter: true,
                     collider_mesh: true,
                     ai: None,
+                    pit: None,
+                    handover: index == 0 && ai_handover(scenario.name).is_some(),
                 });
                 let lateral = match &planned.drive {
                     Drive::Follow { lateral, .. } => lateral.first().map_or(0.0, |l| l.1),
@@ -626,7 +669,22 @@ impl<'a> MultiWorld<'a> {
             // rand(): `new AIDriver(car)` as the game's own code does it (its closure sets
             // basePush and aggression after the constructor and makes it the car's provider)
             let ai_seed = seed.wrapping_add(27_000);
-            if cars.iter().any(|car| matches!(car.drive, Drive::Ai { .. })) {
+            let with_ai = cars.iter().any(|car| matches!(car.drive, Drive::Ai { .. })) || ai_handover(scenario.name).is_some();
+            if with_ai {
+                // every car's pit box (CarAvatar gives the physics car its `AC_PIT_<n>`)
+                for (index, car) in cars.iter().enumerate() {
+                    if let Some(node) = track.spawn_positions.get("PIT").and_then(|slots| slots.get(index)) {
+                        let m = track.helper_nodes[*node].local.m;
+                        let mut flat = [0f32; 16];
+                        for r in 0..4 {
+                            flat[4 * r..4 * r + 4].copy_from_slice(&m[r]);
+                        }
+                        wr(car.car, CAR_PIT_POSITION, flat);
+                        metas[index].pit = Some(flat);
+                    }
+                }
+            }
+            if with_ai {
                 srand(ai_seed);
                 let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z"));
                 let ai_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AIDRIVER_CTOR));
@@ -695,13 +753,17 @@ impl<'a> MultiWorld<'a> {
             recording.set("mesh_geom_high", geom_high.iter().map(|h| format!("{h:08x}")).collect::<Vec<_>>().join(","));
             recording.set("mesh_bounce_vel", format!("{:08x}", geom_high[0]));
             recording.set_cars(&metas);
-            if metas.iter().any(|meta| meta.ai.is_some()) {
+            if with_ai {
                 recording.set("ai_seed", ai_seed.to_string());
+                if let Some(step) = ai_handover(scenario.name) {
+                    recording.set("ai_handover", step.to_string());
+                    recording.set("ai_handover_expected_fuel", format!("{:08x}", rd::<u32>(cars[0].car, CAR_EXPECTED_FUEL_PER_LAP)));
+                }
                 if let Some((kind, start_ms, time_secs, laps)) = session {
                     recording.set("ai_session", format!("{kind},{start_ms},{time_secs},{laps}"));
                 }
             }
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect() })
+            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name) })
         }
     }
 
@@ -816,6 +878,18 @@ impl<'a> MultiWorld<'a> {
     /// One step of the game's engine; the row goes into the recording.
     pub fn step(&mut self) {
         unsafe {
+            if self.handover == Some(self.step_index) {
+                // the game's "AI drives my car" job (a closure in `Sim`, run from the physics
+                // thread's queue before the step): `new AIDriver(car)`, made the car's provider
+                let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(self.acs.crt_function(c"??2@YAPEAX_K@Z"));
+                let ai_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(self.acs.va(VA_AIDRIVER_CTOR));
+                let ai = new(1000);
+                std::ptr::write_bytes(ai, 0, 1000);
+                ai_ctor(ai, self.cars[0].car);
+                wr(self.cars[0].car, CAR_CONTROLS_PROVIDER, ai);
+                self.cars[0].ai = ai;
+                self.cars[0].drive = Drive::Ai { push: 1.0, aggression: 0.0 };
+            }
             self.drive();
             for car in &self.cars {
                 wr(car.device, DEV_POLLED, 0u32);
@@ -839,7 +913,13 @@ impl<'a> MultiWorld<'a> {
             row.push(rd::<i32>(core, 0x60) as u32);
             row.push(rd::<u32>(core, 0xa0));
             for car in &self.cars {
-                if car.ai.is_null() {
+                if car.ai.is_null() && self.handover.is_some() && std::ptr::eq(car, &self.cars[0]) {
+                    // (before the hand-over: the device's inputs, and no driver yet)
+                    let pedals: [u32; 5] = rd(car.device, DEV_GAS);
+                    row.extend(pedals);
+                    row.push(rd(car.device, DEV_BUTTONS));
+                    row.push(rd(car.device, DEV_REQUESTED_GEAR));
+                } else if car.ai.is_null() {
                     let pedals: [u32; 5] = rd(car.device, DEV_GAS);
                     row.extend(pedals);
                     row.push(rd(car.device, DEV_BUTTONS));
@@ -882,6 +962,10 @@ impl<'a> MultiWorld<'a> {
                 row.extend(rd::<[u32; 2]>(car.car, 0x3c30));
                 row.push(rd(car.car.add(CAR_TRANSPONDER), 0x0c));
                 row.push(rd(car.car, CAR_SPLINE_LOCATOR_DATA));
+                if car.ai.is_null() && self.handover.is_some() && std::ptr::eq(car, &self.cars[0]) {
+                    // the columns of the driver to come
+                    row.extend(std::iter::repeat(0u32).take(rustyac_physics::ai::oracle::column_names().len()));
+                }
                 if !car.ai.is_null() {
                     use rustyac_physics::ai::oracle::{Kind, COLUMNS};
                     for &(_, offset, kind) in COLUMNS {

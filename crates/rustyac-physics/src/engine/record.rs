@@ -47,6 +47,11 @@ pub struct CarMeta {
     /// inputs in a row are what the driver left in `Car::controls`, and its row has the
     /// driver's members ([`crate::ai::oracle`]).
     pub ai: Option<AiMeta>,
+    /// Task 27: `Car::pitPosition` (the car's pit box), row by row
+    pub pit: Option<[f32; 16]>,
+    /// Task 27: the car gets its AI driver during the run (`ai_handover`: the recording's
+    /// first car): its row has the driver's columns from the start, zero until then
+    pub handover: bool,
 }
 
 /// An AI driver of a recording.
@@ -62,7 +67,7 @@ pub struct AiMeta {
 /// A car's columns after its inputs: its state, and an AI driver's members.
 pub fn car_columns(car: &CarMeta) -> Vec<String> {
     let mut out = state_columns(car.bodies);
-    if car.ai.is_some() {
+    if car.ai.is_some() || car.handover {
         out.extend(crate::ai::oracle::column_names());
     }
     out
@@ -224,6 +229,9 @@ impl Recording {
             if let Some(ai) = &car.ai {
                 self.set(&format!("car.{n}.ai"), hex3(&[ai.base_push, ai.aggression, ai.expected_fuel_per_lap]));
             }
+            if let Some(pit) = &car.pit {
+                self.set(&format!("car.{n}.pit"), pit.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(","));
+            }
         }
     }
 
@@ -249,6 +257,21 @@ impl Recording {
                     }
                     None => None,
                 },
+                pit: match self.get(&key("pit")) {
+                    Some(text) => {
+                        let mut pit = [0.0f32; 16];
+                        let parts: Vec<&str> = text.split(',').collect();
+                        if parts.len() != 16 {
+                            return Err(format!("car.{n}.pit: sixteen values"));
+                        }
+                        for (slot, part) in pit.iter_mut().zip(parts) {
+                            *slot = f32::from_bits(u32::from_str_radix(part, 16).map_err(|e| format!("car.{n}.pit: {e}"))?);
+                        }
+                        Some(pit)
+                    }
+                    None => None,
+                },
+                handover: n == 0 && self.get("ai_handover").is_some(),
             });
         }
         Ok(cars)
@@ -401,6 +424,8 @@ pub struct ReplayWorld {
     pub devices: Vec<ScriptedDevice>,
     /// Task 27: the cars' AI drivers (a car without one is driven by its scripted device)
     pub ai: Vec<Option<Box<crate::ai::AiDriver>>>,
+    /// Task 27: the step before which the first car gets its AI driver
+    pub handover: Option<usize>,
     pub clock_start_ms: f64,
     pub steps: usize,
 }
@@ -420,7 +445,7 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
         paths.game_root.as_ref().ok_or("the recording's track folder is not here and no game folder was given")?.join("content").join("tracks").join(name)
     };
     let (mut track, _report) = crate::track::load_track(&folder, layout)?;
-    if recording.cars.iter().any(|car| car.ai.is_some()) {
+    if recording.cars.iter().any(|car| car.ai.is_some() || car.handover) {
         // the lines as the AI drivers need them
         track.init_ai()?;
     }
@@ -481,9 +506,13 @@ impl ReplayWorld {
         }
         engine.core.set_no_collision_steps(number("no_collision_steps")? as i32);
         let devices = vec![ScriptedDevice::default(); cars.len()];
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), clock_start_ms, steps: 0 };
+        let handover = match recording.get("ai_handover") {
+            Some(text) => Some(text.parse::<usize>().map_err(|e| format!("ai_handover: {e}"))?),
+            None => None,
+        };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), handover, clock_start_ms, steps: 0 };
         world.ai.resize_with(world.cars.len(), || None);
-        if recording.cars.iter().any(|meta| meta.ai.is_some()) {
+        if recording.cars.iter().any(|meta| meta.ai.is_some()) || handover.is_some() {
             world.build_ai(recording, clock_start_ms)?;
         }
         Ok(world)
@@ -501,6 +530,19 @@ impl ReplayWorld {
             let car = &mut self.cars[n];
             car.forced_position_events = 0;
             car.init_pitstop_timings()?;
+            if let Some(pit) = &meta.pit {
+                for r in 0..4 {
+                    car.pit_position.m[r].copy_from_slice(&pit[4 * r..4 * r + 4]);
+                }
+            }
+            if meta.handover {
+                // (the driver comes later; the car's estimate is checked now)
+                car.init_expected_fuel_per_lap()?;
+                let game = u32::from_str_radix(recording.need("ai_handover_expected_fuel")?, 16).map_err(|e| e.to_string())?;
+                if car.expected_fuel_per_lap.to_bits() != game {
+                    return Err(format!("car {n}: the fuel a lap is expected to take is {} here and {} in the game", car.expected_fuel_per_lap, f32::from_bits(game)));
+                }
+            }
             let Some(ai) = &meta.ai else { continue };
             // Car::Car's estimate of the fuel a lap takes: the game's own number is in the recording
             car.init_expected_fuel_per_lap()?;
@@ -555,6 +597,17 @@ impl ReplayWorld {
             c.requested_gear_index = words[6] as i32;
         }
         let time = self.clock_start_ms + (self.steps as f64 + 1.0) * 3.0;
+        if self.handover == Some(self.steps) {
+            // the game's "AI drives my car": a new driver for the first car, as it is now
+            let session = self.engine.session;
+            let mut rand = self.engine.ai_rand;
+            self.cars[0].ai_input.session = session;
+            match crate::ai::AiDriver::new(&mut self.cars[0], &session, &mut rand, &crate::ai::driver::AiFiles::default()) {
+                Ok(driver) => self.ai[0] = Some(Box::new(driver)),
+                Err(message) => panic!("the hand-over: {message}"),
+            }
+            self.engine.ai_rand = rand;
+        }
         let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
         self.engine.step_with(0.003, time, &mut slots, hooks);
         self.steps += 1;
@@ -638,8 +691,10 @@ impl ReplayWorld {
             row.extend(double(car.last_collision_with_car_time));
             row.push(car.transponder.lap_count);
             row.push(car.spline_locator_data.npos.to_bits());
-            if let Some(driver) = &self.ai[n] {
-                row.extend(driver.oracle_words());
+            match &self.ai[n] {
+                Some(driver) => row.extend(driver.oracle_words()),
+                None if n == 0 && self.handover.is_some() => row.extend(std::iter::repeat(0u32).take(crate::ai::oracle::column_names().len())),
+                None => {}
             }
         }
         row
