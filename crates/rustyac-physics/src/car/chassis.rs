@@ -277,15 +277,97 @@ impl ThermalObject {
 /// A change the game's main thread has queued for the physics thread.
 pub type PreStepJob = Box<dyn FnOnce(&mut RollingChassis) + Send>;
 
-/// AC's `PenaltyManager` as far as a jump start writes it.
+/// AC's `PenaltyManager` (0x48 bytes, `Car::penaltyManager`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PenaltyManager {
     /// `pendingPenaltyType`: 5 = drive-through
     pub pending_penalty_type: i32,
-    /// `pitPenaltyLaps`
+    /// `isServingPitPenalty`: the car has been in the pit lane since the penalty was given
+    pub is_serving_pit_penalty: bool,
+    /// `rearmPitPenalty`: set by a pit stop made during the drive-through (Task 28b)
+    pub rearm_pit_penalty: bool,
+    /// `pitPenaltyLaps`: the laps left to serve it in
     pub pit_penalty_laps: i16,
     /// How many `PenaltyRecord`s were pushed.
     pub penalty_records: u32,
+    /// `inPitMeterCounter`: metres driven in the pit lane
+    pub in_pit_meter_counter: f32,
+}
+
+/// What [`PenaltyManager::step`] asks of the car.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PenaltyStep {
+    Nothing,
+    /// `Car::setBlackFlag(true, 1)`: the pit lane was left during the last lap to serve in
+    BlackFlag,
+}
+
+impl PenaltyManager {
+    /// `PenaltyManager::step` @ 0x140265e10.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn step(&mut self, dt: f32, in_pit_lane: bool, speed: f32) -> PenaltyStep {
+        if self.pit_penalty_laps <= 0 {
+            return PenaltyStep::Nothing;
+        }
+        if in_pit_lane {
+            self.in_pit_meter_counter = dt * speed + self.in_pit_meter_counter;
+            self.is_serving_pit_penalty = true;
+            return PenaltyStep::Nothing;
+        }
+        if !self.is_serving_pit_penalty {
+            return PenaltyStep::Nothing;
+        }
+        let mut action = PenaltyStep::Nothing;
+        if self.pending_penalty_type == 5 {
+            if !self.rearm_pit_penalty {
+                // comiss 160, counter; ja: a lane shorter than 160 m does not count
+                if !(160.0 > self.in_pit_meter_counter) {
+                    self.pit_penalty_laps = 0;
+                }
+            } else if self.pit_penalty_laps == 1 {
+                action = PenaltyStep::BlackFlag;
+            } else {
+                self.pit_penalty_laps -= 1;
+            }
+        }
+        self.is_serving_pit_penalty = false;
+        self.rearm_pit_penalty = false;
+        self.in_pit_meter_counter = 0.0;
+        action
+    }
+
+    /// `PenaltyManager::checkBlackFlag` @ 0x140265c10.
+    pub fn check_black_flag(&self) -> bool {
+        self.pending_penalty_type == 5 && self.pit_penalty_laps == 1 && !self.is_serving_pit_penalty
+    }
+
+    /// `PenaltyManager::decreasePitPenaltyLaps` @ 0x140265c30.
+    pub fn decrease_pit_penalty_laps(&mut self, lap_counted: bool) {
+        if self.pit_penalty_laps > 0 && !self.is_serving_pit_penalty && lap_counted {
+            self.pit_penalty_laps -= 1;
+        }
+    }
+
+    /// `PenaltyManager::reset` @ 0x140265d40 (a new session). `pendingPenaltyType` stays.
+    pub fn reset(&mut self) {
+        self.pit_penalty_laps = 0;
+        self.penalty_records = 0;
+        self.is_serving_pit_penalty = false;
+        self.rearm_pit_penalty = false;
+        self.in_pit_meter_counter = 0.0;
+    }
+
+    /// `PenaltyManager::resetPenalty` @ 0x140265d90 (`evOnPenalty` with type 0 follows).
+    pub fn reset_penalty(&mut self) {
+        if self.pending_penalty_type == 5 {
+            // (one 32-bit store over the two flags and the lap count)
+            self.is_serving_pit_penalty = false;
+            self.rearm_pit_penalty = false;
+            self.pit_penalty_laps = 0;
+            self.in_pit_meter_counter = 0.0;
+        }
+        self.pending_penalty_type = 0;
+    }
 }
 
 /// The three-way clamp of the machine code to 0..1: above 1: 1; at least 0: itself; else 0.
@@ -482,6 +564,8 @@ pub struct RollingChassis {
     pub last_ligth_switch_state: bool,
     /// `Car::blackFlagged`: the controls are dead and the car is put into its pit box
     pub black_flagged: bool,
+    /// the `PenaltyDescription` of the last `Car::setBlackFlag`
+    pub black_flag_description: i32,
     /// `Car::pitPosition`: the pit box (rows: side, up, the direction the car faces, position)
     pub pit_position: Mat44f,
     /// `Car::penaltyTime`, s
@@ -1010,6 +1094,7 @@ impl RollingChassis {
             lights_on: false,
             last_ligth_switch_state: false,
             black_flagged: false,
+            black_flag_description: 0,
             pit_position: Mat44f { m: [[0.0; 4]; 4] },
             penalty_time: 0.0,
             penalty_time_accumulator: 0.0,
@@ -1997,6 +2082,13 @@ impl RollingChassis {
                 None => {}
             }
         }
+        // 25: PenaltyManager::step, the player's car only
+        if self.env.is_first_car {
+            let (in_pit_lane, speed) = (self.is_in_pit_lane(), self.speed);
+            if self.penalty_manager.step(dt, in_pit_lane, speed) == PenaltyStep::BlackFlag {
+                self.set_black_flag_for(true, 1);
+            }
+        }
         // 26: SplineLocator::step, from where the body is before this step moves it
         if let Some(track) = self.track.clone() {
             // a track without an AI line has an empty one in the game, and the locator runs on it
@@ -2018,7 +2110,7 @@ impl RollingChassis {
             let probe = self.tyres[0].world_position;
             let finish = FinishContext {
                 penalty_time: self.get_penalty_time(),
-                check_black_flag: self.penalty_manager.pending_penalty_type == 5 && self.penalty_manager.pit_penalty_laps == 1,
+                check_black_flag: self.penalty_manager.check_black_flag(),
             };
             let not_started = self.env.session_type == 3 && (self.env.session_start_time_ms - physics_time) > 0.0;
             let actions = self.transponder.step(&track, &probe, self.step_counter, physics_time, not_started, &finish);
@@ -2028,11 +2120,11 @@ impl RollingChassis {
                 self.fuel_lap_evaluator.on_lap_completed(self.fuel, in_pit_lane);
                 feed.on_lap_completed(self.transponder.lap_events.last().is_some_and(|lap| lap.is_valid));
             }
-            if actions.black_flag.is_some() {
-                self.set_black_flag(true);
+            if let Some(description) = actions.black_flag {
+                self.set_black_flag_for(true, description);
             }
-            if actions.decrease_pit_penalty_laps == Some(true) && self.penalty_manager.pit_penalty_laps > 0 {
-                self.penalty_manager.pit_penalty_laps -= 1;
+            if let Some(counted) = actions.decrease_pit_penalty_laps {
+                self.penalty_manager.decrease_pit_penalty_laps(counted);
             }
             // the hybrid system: a full battery at the first line of a hot lap; the lap's
             // energy count starts again with every lap that is reported
@@ -2284,9 +2376,17 @@ impl RollingChassis {
         }
     }
 
-    /// `Car::setBlackFlag` @ 0x1402759f0 (the flag event of the engine is not ported).
+    /// `Car::setBlackFlag(flag, 0)`.
     pub fn set_black_flag(&mut self, flag: bool) {
+        self.set_black_flag_for(flag, 0);
+    }
+
+    /// `Car::setBlackFlag` @ 0x1402759f0. `description`: 1 the jump start's drive-through was
+    /// not served, 3 no mandatory pit stop, 4 a cut's time penalty was not served (what the
+    /// engine's flag event carries; the referee reads it from the car).
+    pub fn set_black_flag_for(&mut self, flag: bool, description: i32) {
         self.black_flagged = flag;
+        self.black_flag_description = description;
     }
 
     /// `Car::isInPits` @ 0x140274530: the body is within 3 m of the pit box.
