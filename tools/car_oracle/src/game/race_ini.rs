@@ -273,6 +273,8 @@ pub struct GameReading {
     pub notes: Vec<String>,
     /// the sessions it listed: (type, forced position)
     pub sessions: Vec<(i32, i32)>,
+    /// Task 28: every session in full, and the rules the manager and the engine were given
+    pub session_lines: Vec<String>,
 }
 
 /// Runs the game's `RaceManager::initOffline` on `ini` (a path the game's code can open). The
@@ -313,6 +315,10 @@ pub unsafe fn read(acs: &Acs, ini: &Path, pit_slots: i32, seed: u32) -> Result<G
     let manager = zeroed(0x218);
     let sim = zeroed(0x2d0);
     let physics_avatar = zeroed(0x498);
+    // PhysicsEngine::penaltyRules as the engine's constructor leaves them: teleport to the
+    // pits for a jump start, three laps to serve a drive-through
+    wr(physics_avatar, 0x130, 1i32);
+    wr(physics_avatar, 0x134, 3i16);
     wr(manager, 0x168, sim);
     wr(sim, 0x1b8, physics_avatar);
     // Sim::cars: room for more cars than any track has boxes
@@ -343,12 +349,32 @@ pub unsafe fn read(acs: &Acs, ini: &Path, pit_slots: i32, seed: u32) -> Result<G
     // RaceManager::sessions (+0x188): records of 0x70 bytes, the type at +0, forcedPosition at +0x60
     let (begin, end): (*const u8, *const u8) = (rd(manager, 0x188), rd(manager, 0x190));
     let mut sessions = Vec::new();
+    let mut session_lines = Vec::new();
     let mut at = begin;
     while !at.is_null() && at < end {
         sessions.push((rd::<i32>(at, 0), rd::<i32>(at, 0x60)));
+        session_lines.push(format!(
+            "session: type {} timed {} laps {} minutes {:08x} overtime {:08x} spawn {:?} name {:?} forced {}",
+            rd::<i32>(at, 0),
+            rd::<u8>(at, 4),
+            rd::<i32>(at, 8),
+            rd::<u32>(at, 0xc),
+            rd::<u32>(at, 0x10),
+            text(at.add(0x18)),
+            text(at.add(0x38)),
+            rd::<i32>(at, 0x60)
+        ));
         at = at.add(0x70);
     }
+    session_lines.push(format!(
+        "rules: penalties {} fixed setup {} additional lap {} allowed tyres out {} jump start mode {}",
+        rd::<u8>(manager, 0xa0),
+        rd::<u8>(manager, 0xa2),
+        rd::<u8>(manager, 0xae),
+        rd::<i32>(physics_avatar, 0x128),
+        rd::<i32>(physics_avatar, 0x130)
+    ));
     let seen = SEEN.with(|s| std::mem::take(&mut *s.borrow_mut()));
     let _ = seen.sim;
-    Ok(GameReading { cars_to_be_loaded: acs.global::<i32>(VA_CARS_TO_BE_LOADED), cars: seen.cars, notes: seen.notes, sessions })
+    Ok(GameReading { cars_to_be_loaded: acs.global::<i32>(VA_CARS_TO_BE_LOADED), cars: seen.cars, notes: seen.notes, sessions, session_lines })
 }

@@ -406,6 +406,22 @@ fn race_ini(args: &Args) -> Result<(), String> {
             println!("the port: {message}");
         }
     }
+    // Task 28: the session list and the rules
+    game_lines.extend(game.session_lines.iter().cloned());
+    {
+        let sessions = rustyac_physics::race::SessionsIni::from_ini(&ini, 3);
+        for s in &sessions.sessions {
+            port_lines.push(format!("session: type {} timed {} laps {} minutes {:08x} overtime {:08x} spawn {:?} name {:?} forced {}", s.session_type, s.is_timed_race as u8, s.laps, s.duration_minutes.to_bits(), s.overtime_ms.to_bits(), s.spawn_set, s.name, s.forced_position));
+        }
+        port_lines.push(format!(
+            "rules: penalties {} fixed setup {} additional lap {} allowed tyres out {} jump start mode {}",
+            sessions.penalties_enabled as u8,
+            sessions.fixed_setup as u8,
+            sessions.has_additional_lap as u8,
+            sessions.allowed_tyres_out(),
+            sessions.jump_start_penalty_mode.unwrap_or(1)
+        ));
+    }
     println!("{} (pit slots {}, seed {seed}):", file.display(), args.pit_slots);
     for note in &game.notes {
         println!("  the game: {note}");
