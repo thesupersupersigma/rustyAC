@@ -355,7 +355,7 @@ mod tests {
     fn the_grip_level_is_kept_between_85_and_100_percent() {
         let mut track = DynamicTrack::from_race_ini(96.0, 0.0, 10.0, 50.0, 0);
         let start = 96.0f32 * 0.01;
-        assert_eq!((track.session_start_grip, track.grip_per_lap, track.base_grip), (start, 0.01f32 / 10.0, -1.0f32 * 0.0 + start));
+        assert_eq!((track.session_start_grip, track.grip_per_lap, track.base_grip), (start, 0.01f32 / 10.0, -0.0f32 + start));
         track.step(0);
         assert_eq!(track.dynamic_grip_level, track.base_grip);
         track.step(10);
@@ -375,8 +375,7 @@ mod tests {
 
     #[test]
     fn without_the_section_the_grip_is_full_and_a_server_can_own_it() {
-        let mut track = DynamicTrack::default();
-        track.dynamic_grip_level = 0.9;
+        let mut track = DynamicTrack { dynamic_grip_level: 0.9, ..Default::default() };
         track.step(5);
         assert_eq!(track.dynamic_grip_level, 1.0);
         track.set_grip_level_external(0.93);
@@ -393,8 +392,8 @@ mod tests {
         let level = track.dynamic_grip_level;
         assert!(level > start);
         track.on_new_session(1, 0);
-        assert_eq!(track.base_grip, -1.0f32 * 0.0 + ((level - start) * 0.5 + start));
+        assert_eq!(track.base_grip, -0.0f32 + ((level - start) * 0.5 + start));
         track.on_new_session(0, 0);
-        assert_eq!(track.base_grip, -1.0f32 * 0.0 + start);
+        assert_eq!(track.base_grip, -0.0f32 + start);
     }
 }

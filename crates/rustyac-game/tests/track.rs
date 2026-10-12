@@ -114,6 +114,6 @@ fn on_magione_a_lap_adds_grip_and_a_new_session_carries_part_of_it_over() {
     steps(&mut sim, 3);
     assert_eq!(sim.session_index, 1);
     let carried = (after_lap - start) * (50.0f32 * 0.01) + start;
-    assert_eq!(sim.car.car.env.dynamic_grip_level, -1.0f32 * 0.0 + carried, "half of the gain is carried over");
+    assert_eq!(sim.car.car.env.dynamic_grip_level, -0.0f32 + carried, "half of the gain is carried over");
     assert_eq!(CarView::capture(&sim, 0.0).lap.laps, 0, "a new session, a new lap list");
 }

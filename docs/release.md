@@ -55,7 +55,7 @@ so the tests compute with `MSVCR120.dll`, the game's own maths.
 
 1. `cargo build --release --workspace`
 2. `cargo test --release --workspace`
-3. `cargo clippy --workspace -- -D warnings`: a warning fails the run. Where clippy's rewrite would change
+3. `cargo clippy --workspace --all-targets -- -D warnings`: a warning fails the run. Where clippy's rewrite would change
    what bit-exact code computes (a comparison a NaN must fall through the game's way, an operand order),
    the code carries an `#[allow]` with its reason instead
 4. builds every tool in `tools/*/` (they are not run: they need `acs.exe`)

@@ -484,6 +484,24 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
     Ok(notes)
 }
 
+/// `system/cfg/assetto_corsa.ini [RACE] OVER_TIME_MULT` of the installed game (only read):
+/// 1.5 without the file or its section, as `RaceManager::RaceManager` has it.
+pub fn over_time_mult() -> f32 {
+    let Some(root) = rustyac_content::install::ac_root() else {
+        return 1.5;
+    };
+    let path = root.join("system").join("cfg").join("assetto_corsa.ini");
+    match IniReader::load(&path) {
+        Ok(ini) if path.is_file() && ini.has_section("RACE") => ini.get_float("RACE", "OVER_TIME_MULT").unwrap_or(0.0),
+        _ => 1.5,
+    }
+}
+
+/// `--sessions p10,q5,r3,rt20+`: a session list as race.ini would give it.
+pub fn sessions_from_list(list: &str, cars: usize, penalties: bool, jump_start: Option<i32>, base_pit_penalty_laps: i16) -> Result<rustyac_physics::race::SessionsIni, String> {
+    rustyac_physics::race::SessionsIni::from_list(list, cars, penalties, jump_start, base_pit_penalty_laps).map_err(|e| format!("--sessions: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,22 +523,4 @@ mod tests {
         let file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert_eq!(find_setup(file.to_str().unwrap(), "any", "").unwrap().file_name(), file.file_name());
     }
-}
-
-/// `system/cfg/assetto_corsa.ini [RACE] OVER_TIME_MULT` of the installed game (only read):
-/// 1.5 without the file or its section, as `RaceManager::RaceManager` has it.
-pub fn over_time_mult() -> f32 {
-    let Some(root) = rustyac_content::install::ac_root() else {
-        return 1.5;
-    };
-    let path = root.join("system").join("cfg").join("assetto_corsa.ini");
-    match IniReader::load(&path) {
-        Ok(ini) if path.is_file() && ini.has_section("RACE") => ini.get_float("RACE", "OVER_TIME_MULT").unwrap_or(0.0),
-        _ => 1.5,
-    }
-}
-
-/// `--sessions p10,q5,r3,rt20+`: a session list as race.ini would give it.
-pub fn sessions_from_list(list: &str, cars: usize, penalties: bool, jump_start: Option<i32>, base_pit_penalty_laps: i16) -> Result<rustyac_physics::race::SessionsIni, String> {
-    rustyac_physics::race::SessionsIni::from_list(list, cars, penalties, jump_start, base_pit_penalty_laps).map_err(|e| format!("--sessions: {e}"))
 }

@@ -77,7 +77,7 @@ jobs:
       # a warning fails the run. Where clippy's rewrite would change what bit-exact code computes,
       # the code has an #[allow] with its reason instead.
       - name: Clippy
-        run: cargo clippy --workspace --locked -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
       # build only: they need acs.exe to run
       - name: Build the tools
