@@ -9,6 +9,9 @@
 //! referee is every third physics step (9 ms), whatever is drawn: the same session gives the
 //! same result on every machine, with any number of worker threads, and in a replay.
 
+// (a NaN falls through the game's `ucomiss` + `je` as it does here)
+#![allow(clippy::double_comparisons)]
+
 use std::sync::Arc;
 
 use super::flags::{FlagCar, FlagManager, PlayerPenalty, Shown};
@@ -300,6 +303,12 @@ impl Referee {
                     car.penalty_manager.reset();
                 }),
                 Action::NewSession { session, index } => {
+                    // (the results panel's own button, which the game's player presses to go
+                    // on, takes the panel down: EndSessionDisplayer::hide)
+                    if self.manager.results_displayed {
+                        self.manager.results_displayed = false;
+                        world.car_mut(0).queue(|car| car.lock_controls(false));
+                    }
                     self.flags.clear_flag();
                     world.set_session_info(SessionInfo { session_type: session.session_type, start_time_ms: session.start_time, time_secs: (session.duration_minutes * 60.0) as f64, laps: session.laps, index });
                     // CarAvatar::onNewSession of every car
@@ -316,15 +325,17 @@ impl Referee {
                 }
                 Action::SessionStartTime(ms) => world.set_session_start_time(ms),
                 Action::RetirePlayer => world.car_mut(0).is_retired = true,
-                Action::SessionEnd(event) => {
+                Action::SessionEnd { event, index } => {
                     let cars = world.car_count();
-                    self.json.end_session(self.manager.current_session_index.max(0) as usize, &event, cars, None);
+                    self.json.end_session(index, &event, cars, None);
                     self.log.push(format!("{} over", event.current_session.name));
                     self.last_results = Some(event);
                 }
                 Action::Message { text, description } => self.log.push(format!("{text} {description}")),
                 Action::GenerateWind => world.generate_wind(),
-                Action::DisplayResults | Action::HideResults | Action::FadeStarted => {}
+                Action::DisplayResults => world.car_mut(0).queue(|car| car.lock_controls(true)),
+                Action::HideResults => world.car_mut(0).queue(|car| car.lock_controls(false)),
+                Action::FadeStarted => {}
             }
         }
     }

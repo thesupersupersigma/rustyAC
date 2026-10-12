@@ -79,16 +79,16 @@ thread_local! {
     static SEEN: RefCell<Seen> = RefCell::new(Seen::default());
 }
 
-unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
+pub unsafe fn rd<T: Copy>(base: *const u8, offset: usize) -> T {
     std::ptr::read_unaligned(base.add(offset) as *const T)
 }
 
-unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
+pub unsafe fn wr<T>(base: *mut u8, offset: usize, value: T) {
     std::ptr::write_unaligned(base.add(offset) as *mut T, value);
 }
 
 /// An MSVC `std::wstring` as text.
-unsafe fn text(s: *const u8) -> String {
+pub unsafe fn text(s: *const u8) -> String {
     if s.is_null() {
         return String::new();
     }
@@ -97,7 +97,7 @@ unsafe fn text(s: *const u8) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(data, size))
 }
 
-unsafe fn write_wstring(at: *mut u8, value: &str) {
+pub unsafe fn write_wstring(at: *mut u8, value: &str) {
     let units: Vec<u16> = value.encode_utf16().collect();
     if units.len() < 8 {
         std::ptr::write_bytes(at, 0, 0x10);
@@ -113,7 +113,7 @@ unsafe fn write_wstring(at: *mut u8, value: &str) {
     }
 }
 
-fn zeroed(size: usize) -> *mut u8 {
+pub fn zeroed(size: usize) -> *mut u8 {
     Box::leak(vec![0u64; size.div_ceil(8)].into_boxed_slice()).as_mut_ptr().cast()
 }
 

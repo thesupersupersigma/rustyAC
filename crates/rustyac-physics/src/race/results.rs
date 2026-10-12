@@ -214,7 +214,7 @@ fn disqualify_car(car: i32, positions: &mut Vec<i32>) {
 fn process_race_results(manager: &RaceManager, cars: &[CarView], res: &mut SessionResult, rand: &mut dyn FnMut() -> i32) {
     fetch_basic_results(manager, cars, res);
     let n = manager.car_count();
-    let retired = |car: usize| cars[car].is_retired == Some(true);
+    let retired = |car: usize| manager.car_retired(car, cars) == Some(true);
     for car in 0..n {
         if !manager.is_race_over(car, cars) {
             let place = manager.car_real_time_position(car, cars);

@@ -259,15 +259,16 @@ pub enum Action {
     SessionStartTime(f64),
     /// the player quit a race before its end: `Car::isRetired = true` of car 0
     RetirePlayer,
-    /// `RaceManager::evOnSessionEnd`
-    SessionEnd(OnSessionEndEvent),
+    /// `RaceManager::evOnSessionEnd` (`index`: `getCurrentSessionIndex()` as the handlers
+    /// see it)
+    SessionEnd { event: OnSessionEndEvent, index: usize },
     /// `SystemMessage::addMessage(text, description)`
     Message { text: String, description: String },
     /// `RaceManager::generateWind`: new wind for the new session
     GenerateWind,
-    /// `EndSessionDisplayer::displayResults`
+    /// `EndSessionDisplayer::displayResults` (it locks the player's controls)
     DisplayResults,
-    /// `EndSessionDisplayer::hide`
+    /// `EndSessionDisplayer::hide` (it frees the player's controls)
     HideResults,
     /// `ACCameraManager::fadeIn`: the picture goes black over [`FADE_SECONDS`]
     FadeStarted,
@@ -309,6 +310,9 @@ pub struct RaceManager {
     pub start_index: Vec<i32>,
     /// the global `SessionResult` the result processor works on (0x141559b70)
     pub processor_result: SessionResult,
+    /// the player was retired for leaving a race early in this very frame: `Car::isRetired`
+    /// is set already, the views of the frame do not show it yet
+    pub player_retired_now: bool,
 }
 
 impl RaceManager {
@@ -341,6 +345,7 @@ impl RaceManager {
             autoflip_recovery: false,
             start_index: (0..cars as i32).collect(),
             processor_result: SessionResult::default(),
+            player_retired_now: false,
         }
     }
 
@@ -385,7 +390,6 @@ impl RaceManager {
         }
         self.pit_window_start_time = 0.0;
         self.pit_window_end_time = 0.0;
-        self.results_displayed = false;
         self.finalized = false;
     }
 
@@ -428,6 +432,15 @@ impl RaceManager {
     /// `getSessionTimeLeft` @ 0x140139e60, ms.
     pub fn session_time_left(&self) -> f64 {
         self.current_session.duration_minutes as f64 * 60.0 * 1000.0 + self.current_session.start_time - self.now
+    }
+
+    /// `Car::isRetired` of a car as the game's code reads it right now.
+    pub fn car_retired(&self, car: usize, cars: &[CarView]) -> Option<bool> {
+        if car == 0 && self.player_retired_now && cars[car].is_retired.is_some() {
+            Some(true)
+        } else {
+            cars[car].is_retired
+        }
     }
 
     /// `getLapCount` @ 0x140138570.
@@ -534,6 +547,7 @@ impl RaceManager {
     /// `rand`: the C runtime's `rand()` (drawn when a session's results are made up).
     pub fn update(&mut self, dt: f32, now: f64, cars: &[CarView], rand: &mut dyn FnMut() -> i32, actions: &mut Vec<Action>) {
         self.now = now;
+        self.player_retired_now = false;
         // the camera's fade, which the game's camera manager counts
         if let Some((left, job)) = self.fade {
             let left = left - dt;
@@ -643,7 +657,11 @@ impl RaceManager {
                 actions.push(Action::GenerateWind);
             }
             FadeJob::Restart => {
-                actions.push(Action::HideResults);
+                // EndSessionDisplayer::hide @ 0x14010b380: only a panel that is up
+                if self.results_displayed {
+                    self.results_displayed = false;
+                    actions.push(Action::HideResults);
+                }
                 let index = self.current_session_index as u32;
                 self.set_current_session(index, self.now, actions);
             }
@@ -696,10 +714,12 @@ impl RaceManager {
             }
         }
         let timing = &self.timing;
+        let retired_now = self.player_retired_now;
+        let retired = |car: usize| if car == 0 && retired_now && cars[car].is_retired.is_some() { Some(true) } else { cars[car].is_retired };
         // the comparator @ 0x140134bf0
         let before = |a: &RealTimeCarDesc, b: &RealTimeCarDesc| -> bool {
             let (ca, cb) = (&cars[a.car], &cars[b.car]);
-            if let (Some(ra), Some(rb)) = (ca.is_retired, cb.is_retired) {
+            if let (Some(ra), Some(rb)) = (retired(a.car), retired(b.car)) {
                 if !ra && rb {
                     return true;
                 }
@@ -781,6 +801,7 @@ impl RaceManager {
         let session = self.current_session.clone();
         if session.session_type == SESSION_RACE && !self.is_race_over(0, cars) {
             actions.push(Action::RetirePlayer);
+            self.player_retired_now = true;
         }
         let mut scratch = std::mem::take(&mut self.processor_result);
         let complete = results::get_complete_ai_results(self, cars, &mut scratch, rand);
@@ -811,7 +832,8 @@ impl RaceManager {
             self.leaderboard_history[index].push(LeaderboardEntry {
                 car,
                 total_time: result.total.get(car).copied().unwrap_or(0.0) as f64,
-                best_lap: result.best_laps.get(car).map_or(0, |lap| lap.time) as f64,
+                // (through a float: a lap time above 2^24 ms is rounded)
+                best_lap: result.best_laps.get(car).map_or(0, |lap| lap.time) as f32 as f64,
                 laps: result.lap_count.get(car).copied().unwrap_or(0),
                 is_race_mode: session.session_type == SESSION_RACE,
                 is_black_flagged: cars[car].is_black_flagged,
@@ -833,6 +855,6 @@ impl RaceManager {
                 }
             }
         }
-        actions.push(Action::SessionEnd(event));
+        actions.push(Action::SessionEnd { event, index });
     }
 }

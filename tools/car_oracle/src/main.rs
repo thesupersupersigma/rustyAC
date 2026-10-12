@@ -284,6 +284,7 @@ fn main() {
         "net" => net(&args),
         "multi-check" => multi_check(&args),
         "race-ini" => race_ini(&args),
+        "race-micro" => race_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -421,6 +422,42 @@ fn race_ini(args: &Args) -> Result<(), String> {
             println!("  {line}");
         }
         Err("the game and the port read the file differently".to_string())
+    }
+}
+
+/// Task 28: `car_oracle race-micro [--seed <n>] [--kind <session list 0..7>] [--count <cars>]
+/// [--steps <frames>] [--fault 1:0] [--root <dir>]`: the game's own referee and the port's on
+/// the same made-up drive, compared after every frame (`game::race`). One drive per process.
+fn race_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    acs::set_extra_overrides(vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)]);
+    let acs = acs::Acs::load(&args.acs)?;
+    if args.verbose {
+        acs.unbuffer_game_stdout();
+    } else {
+        acs.silence_game_stdout();
+    }
+    let variant = args.kind.unwrap_or(0);
+    let cars = if args.count_given { args.count } else { 6 };
+    let frames = args.steps.unwrap_or(40_000);
+    let report = unsafe { game::race::micro(&acs, args.seed as u32, variant, cars, frames, args.fault.is_some())? };
+    let jobs: Vec<String> = report.jobs_seen.iter().map(|(address, name)| format!("{name} @ {:#x}", 0x1_4000_0000usize + address)).collect();
+    println!("race-micro seed {} list {variant} cars {cars}: {} frames, {} laps, {} sessions ended, {} values compared, race_out.json {} bytes", args.seed, report.frames, report.laps, report.sessions_ended, report.values, report.json_bytes);
+    println!("  jobs for the physics thread: {}", jobs.join(", "));
+    match report.mismatch {
+        None => {
+            println!("referee: IDENTICAL");
+            Ok(())
+        }
+        Some(what) => {
+            println!("referee: DIFFERENT at {what}");
+            Err("the game's referee and the port's differ".to_string())
+        }
     }
 }
 

@@ -1,0 +1,1261 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Task 28: the game's own referee, in-process.
+//!
+//! `RaceManager` is a main-thread object tied to `Sim`, so it is built by hand here: a
+//! zeroed block with the members its constructor and `loadSessions` would set, a session list
+//! of records made by the game's own `Session::Session`, and around it just enough of `Sim`
+//! for the manager's code to run: a `Game` with the clock, the car list, a `TrackAvatar` with
+//! the sector list, a camera manager and an end-of-session panel that are only their flags.
+//! `RaceTimingServices`, `CarRaceInfo` (each car's grid slot) and `JsonOutputFile` are made by
+//! the game's own constructors. Every car is a `CarAvatar`-sized block holding what the
+//! manager reads of one.
+//!
+//! What then runs is the game's own code, by address: `setCurrentSession`, `startRace`,
+//! `update` (with `resetInvalidStateCarsToPits`, `updateCarsRealTimePositions`,
+//! `updateCarsEndRace`, `isRaceOver`), `onLapCompleted`, `RaceTimingServices::onLapCompleted`
+//! / `onSectorSplit` / `updateLeaderboard`, `skipCurrentSession`, `restartCurrentSession`,
+//! `finalizeCurrentSession` with the whole `SessionResultProcessor`, the fade lambdas, the
+//! session-end handler of `CarRaceInfo`, `JsonOutputFile::endSession` and `writeOutputFile`.
+//! What the manager hands on to the rest of the game (the camera's fade, the system message,
+//! the results panel, a car's teleport, the queue of the physics thread) is written down.
+
+use std::cell::RefCell;
+
+use rustyac_physics::race::flags::Flag;
+use rustyac_physics::race::manager::{filter_speed, Action, CarView, RaceManager, Session, SessionsIni, SESSION_RACE};
+use rustyac_physics::race::output::{JsonOutputFile, Player};
+use rustyac_physics::session::MsvcRand;
+use rustyac_physics::track::timing::{OnLapCompletedEvent, OnSectorSplitEvent};
+
+use super::race_ini::{rd, text, wr, write_wstring, zeroed};
+use crate::acs::Acs;
+
+const VA_RM_VTABLE: usize = 0x1_404c_af48;
+const VA_CAR_AVATAR_VTABLE: usize = 0x1_404b_e5e8;
+const VA_SIM_VTABLE: usize = 0x1_404d_8010;
+const VA_SESSION_CTOR: usize = 0x1_4009_4f70; // Session::Session()
+const VA_RM_SET_CURRENT_SESSION: usize = 0x1_4014_0df0;
+const VA_RM_START_RACE: usize = 0x1_4014_1470; // void RaceManager::startRace(float)
+const VA_RM_UPDATE: usize = 0x1_4014_1550; // void RaceManager::update(float)
+const VA_RM_ON_LAP_COMPLETED: usize = 0x1_4013_f380;
+const VA_RM_SKIP: usize = 0x1_4014_1350;
+const VA_RM_RESTART: usize = 0x1_4014_0d00;
+const VA_RM_RESET_CURRENT_LAPS: usize = 0x1_4014_0300;
+const VA_RM_RESET_MANDATORY_PIT: usize = 0x1_4014_0600;
+const VA_RM_SHUTDOWN: usize = 0x1_4014_1320;
+const VA_RTS_CTOR: usize = 0x1_4014_3c60; // RaceTimingServices::RaceTimingServices(Sim*)
+const VA_RTS_ON_SECTOR_SPLIT: usize = 0x1_4014_5940;
+const VA_RTS_UPDATE_LEADERBOARD: usize = 0x1_4014_6660;
+const VA_CAR_RACE_INFO_CTOR: usize = 0x1_400e_78e0;
+const VA_CAR_RACE_INFO_INIT: usize = 0x1_400e_8070; // CarRaceInfo::init(CarAvatar*)
+const VA_CAR_RACE_INFO_SET: usize = 0x1_400e_84a0; // setSpawnPositionIndex(const wstring&, int)
+const VA_CAR_GET_SPAWN_INDEX: usize = 0x1_400e_8050; // int CarRaceInfo::getSpawnPositionIndex(const wstring&)
+const VA_CAR_SET_CONTROLS_LOCK: usize = 0x1_400d_9f00; // CarAvatar::setControlsLock(bool)
+const VA_JSON_CTOR: usize = 0x1_4010_c0e0; // JsonOutputFile::JsonOutputFile(Sim*)
+const VA_JSON_WRITE: usize = 0x1_4010_ecc0; // JsonOutputFile::writeOutputFile()
+// replaced by functions of this file
+const VA_KS_GET_TIME: usize = 0x1_4023_8a30;
+const VA_REGISTER_TO_FADE_IN: usize = 0x1_4003_3ce0; // ACCameraManager::registerToFadeInEvent(function, void*)
+const VA_FADE_IN: usize = 0x1_4003_3690; // ACCameraManager::fadeIn(const FadeModeDef&)
+const VA_ADD_MESSAGE: usize = 0x1_401b_61c0; // SystemMessage::addMessage(wstring, wstring, type)
+const VA_DISPLAY_RESULTS: usize = 0x1_4010_b260;
+const VA_HIDE_RESULTS: usize = 0x1_4010_b380;
+const VA_GET_COMPOUND: usize = 0x1_400d_3200; // wstring CarAvatar::getCurrentCompoundShortName()
+const VA_EXECUTE_ON_PHYSICS_THREAD: usize = 0x1_4012_1f20;
+const VA_GO_TO_SPAWN: usize = 0x1_400d_3ae0; // CarAvatar::goToSpawnPosition(const wstring&)
+
+// offsets (acs.pdb)
+const RM_SIM: usize = 0x168;
+const RM_RTS: usize = 0x170;
+const RM_SESSIONS: usize = 0x188;
+const RM_REAL_TIME: usize = 0x1a0;
+const RM_RACE_STATUS: usize = 0x1b8;
+const RM_LEADERBOARD_HISTORY: usize = 0x1e8;
+const RM_SESSION_HISTORY: usize = 0x200;
+const RM_CURRENT_SESSION: usize = 0xe8;
+const RM_EV_ON_SESSION_END: usize = 0x70;
+const SIM_EV_ON_NEW_SESSION: usize = 0xc0;
+const SIM_OPTIONS_MAP: usize = 0xf8;
+const SIM_TRACK: usize = 0x150;
+const SIM_CAMERA_MANAGER: usize = 0x188;
+const SIM_SYSTEM_MESSAGE: usize = 0x198;
+const SIM_RACE_MANAGER: usize = 0x1a8;
+const SIM_REPLAY_MANAGER: usize = 0x1b0;
+const SIM_PHYSICS_AVATAR: usize = 0x1b8;
+const SIM_CARS: usize = 0x208;
+const SIM_END_SESSION_DISPLAYER: usize = 0x260;
+const CM_EV_ON_FADE_IN_FINISHED: usize = 0x178;
+const TA_LENGTH: usize = 0x78;
+const TA_CONFIG: usize = 0xa0;
+const TA_SECTORS: usize = 0xf8 + 0x130;
+const PA_PENALTY_MODE: usize = 0x12c;
+const CA_SIM: usize = 0x130;
+const CA_UNIX_NAME: usize = 0x138;
+const CA_GUI_NAME: usize = 0x178;
+const CA_NET: usize = 0x210; // what isConnected() asks
+const CA_POSITION: usize = 0x29c;
+const CA_SPEED: usize = 0x4d8;
+const CA_NPOS: usize = 0x984;
+const CA_STATE_RETIRED: usize = 0xa0c;
+const CA_RACE_ENGINEER: usize = 0xf80;
+const CA_IS_BLACK_FLAGGED: usize = 0x1000;
+const CA_PIT_POSITION: usize = 0x1078;
+const CA_DRIVER_NAME: usize = 0x10b8;
+const CA_CURRENT_SKIN: usize = 0x1138;
+const CA_GUID: usize = 0x1158;
+const CA_PHYSICS: usize = 0x1168;
+const CA_RACE_INFO: usize = 0x11c8;
+const CA_FILTERED_SPEED: usize = 0x1278;
+const CAR_IS_RETIRED: usize = 0xf0;
+
+/// What the stand-ins for the rest of the game were told, and the clock they answer with.
+#[derive(Default)]
+struct Told {
+    now: f64,
+    log: Vec<String>,
+    jobs: Vec<usize>,
+    avatars: Vec<usize>,
+    compounds: Vec<String>,
+    /// the callable of a fade that was registered (a `std::function`'s `_Func_impl`, copied)
+    fade_callable: Option<[u64; 3]>,
+    fade_left: Option<f32>,
+    camera: usize,
+    image_base: usize,
+    new_session: bool,
+    set_controls_lock: usize,
+    /// whole sessions: the posted jobs are kept to be run before the next physics step
+    keep_jobs: bool,
+    kept: Vec<Vec<u64>>,
+    /// whole sessions: `goToSpawnPosition` calls, (car, set)
+    spawns: Vec<(usize, String)>,
+}
+
+thread_local! {
+    static TOLD: RefCell<Told> = RefCell::new(Told::default());
+}
+
+fn car_index(avatar: *const u8) -> usize {
+    TOLD.with(|t| t.borrow().avatars.iter().position(|a| *a == avatar as usize).unwrap_or(usize::MAX))
+}
+
+extern "C" fn ks_get_time() -> f64 {
+    TOLD.with(|t| t.borrow().now)
+}
+
+extern "C" fn register_to_fade_in(_camera: *mut u8, function: *const u8, _owner: *mut u8) {
+    unsafe {
+        // std::function: three pointers of room, then the implementation's address
+        let implementation: *const u64 = rd(function, 0x18);
+        if implementation.is_null() {
+            return;
+        }
+        let copy = [*implementation, *implementation.add(1), *implementation.add(2)];
+        TOLD.with(|t| t.borrow_mut().fade_callable = Some(copy));
+    }
+}
+
+extern "C" fn fade_in(camera: *mut u8, def: *const u8) {
+    unsafe {
+        let seconds: f32 = rd(def, 8);
+        // the handler list is not empty while a fade runs
+        wr(camera, CM_EV_ON_FADE_IN_FINISHED, 0x1000usize);
+        wr(camera, CM_EV_ON_FADE_IN_FINISHED + 8, 0x1028usize);
+        TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            t.fade_left = Some(seconds);
+            t.log.push("FadeStarted".to_string());
+        });
+    }
+}
+
+extern "C" fn add_message(_messages: *mut u8, message: *const u8, description: *const u8, _kind: i32) {
+    let line = unsafe { format!("Message({} | {})", text(message), text(description)) };
+    TOLD.with(|t| t.borrow_mut().log.push(line));
+}
+
+extern "C" fn display_results(panel: *mut u8) {
+    unsafe {
+        if rd::<u8>(panel, 0x30) != 0 {
+            return;
+        }
+        wr(panel, 0x30, 1u8);
+    }
+    let (first, lock) = TOLD.with(|t| {
+        let mut t = t.borrow_mut();
+        t.log.push("DisplayResults".to_string());
+        (t.avatars.first().copied(), t.set_controls_lock)
+    });
+    if let Some(avatar) = first {
+        let set_controls_lock: extern "C" fn(*mut u8, u8) = unsafe { std::mem::transmute(lock) };
+        set_controls_lock(avatar as *mut u8, 1);
+    }
+}
+
+extern "C" fn hide_results(panel: *mut u8) {
+    unsafe {
+        if rd::<u8>(panel, 0x30) == 0 {
+            return;
+        }
+        wr(panel, 0x30, 0u8);
+    }
+    let (first, lock) = TOLD.with(|t| {
+        let mut t = t.borrow_mut();
+        t.log.push("HideResults".to_string());
+        (t.avatars.first().copied(), t.set_controls_lock)
+    });
+    if let Some(avatar) = first {
+        let set_controls_lock: extern "C" fn(*mut u8, u8) = unsafe { std::mem::transmute(lock) };
+        set_controls_lock(avatar as *mut u8, 0);
+    }
+}
+
+extern "C" fn get_compound(avatar: *const u8, out: *mut u8) -> *mut u8 {
+    let index = car_index(avatar);
+    let name = TOLD.with(|t| t.borrow().compounds.get(index).cloned().unwrap_or_default());
+    unsafe { write_wstring(out, &name) };
+    out
+}
+
+extern "C" fn execute_on_physics_thread(_physics_avatar: *mut u8, function: *const u8) {
+    unsafe {
+        let implementation: *const u64 = rd(function, 0x18);
+        if implementation.is_null() {
+            return;
+        }
+        let vtable = *implementation as usize;
+        TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            let rva = vtable.wrapping_sub(t.image_base);
+            t.jobs.push(rva);
+            if t.keep_jobs {
+                // (the callables of these jobs are at most six words)
+                t.kept.push((0..6).map(|i| *implementation.add(i)).collect());
+            }
+        });
+    }
+}
+
+extern "C" fn go_to_spawn(avatar: *mut u8, set: *const u8) {
+    let index = car_index(avatar);
+    let set = unsafe { text(set) };
+    TOLD.with(|t| {
+        let mut t = t.borrow_mut();
+        t.log.push(format!("GoToSpawn({index}, {set})"));
+        t.spawns.push((index, set));
+    });
+}
+
+/// `Sim::evOnNewSession`, heard by this file.
+extern "C" fn on_new_session(_this: *mut u8, event: *const u8) {
+    let line = unsafe { format!("NewSession({}, type {}, {:?})", rd::<i16>(event, 0x70), rd::<i32>(event, 0), text(event.add(0x38))) };
+    TOLD.with(|t| {
+        let mut t = t.borrow_mut();
+        t.log.push(line);
+        t.new_session = true;
+    });
+}
+
+unsafe fn vec_i32(at: *const u8) -> Vec<i32> {
+    let (begin, end): (*const i32, *const i32) = (rd(at, 0), rd(at, 8));
+    if begin.is_null() {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(begin, end.offset_from(begin) as usize).to_vec()
+}
+
+unsafe fn vec_u32(at: *const u8) -> Vec<u32> {
+    vec_i32(at).into_iter().map(|v| v as u32).collect()
+}
+
+/// A `Lap` (0x48 bytes) as text.
+unsafe fn lap_text(lap: *const u8) -> String {
+    format!("{}/{:?}/{}/{}/{}", rd::<u32>(lap, 0), vec_u32(lap.add(8)), rd::<u32>(lap, 0x20), rd::<u8>(lap, 0x24), text(lap.add(0x28)))
+}
+
+fn port_lap_text(lap: &rustyac_physics::race::Lap) -> String {
+    format!("{}/{:?}/{}/{}/{}", lap.time, lap.splits, lap.cuts, lap.is_valid as u8, lap.compound)
+}
+
+unsafe fn laps_text(at: *const u8) -> String {
+    let (begin, end): (*const u8, *const u8) = (rd(at, 0), rd(at, 8));
+    let mut out = Vec::new();
+    let mut lap = begin;
+    while !lap.is_null() && lap < end {
+        out.push(lap_text(lap));
+        lap = lap.add(0x48);
+    }
+    out.join(" ")
+}
+
+/// `RaceManager::evOnSessionEnd`, heard by this file (after the game's own handlers).
+extern "C" fn on_session_end(_this: *mut u8, event: *const u8) {
+    let line = unsafe { format!("SessionEnd({})", session_end_text(event)) };
+    TOLD.with(|t| t.borrow_mut().log.push(line));
+}
+
+unsafe fn session_end_text(event: *const u8) -> String {
+    let result = event.add(0x70);
+    let (begin, end): (*const u8, *const u8) = (rd(result, 0), rd(result, 8));
+    let mut laps = Vec::new();
+    let mut car = begin;
+    while !car.is_null() && car < end {
+        laps.push(format!("[{}]", laps_text(car)));
+        car = car.add(0x18);
+    }
+    let total: Vec<String> = vec_u32(result.add(0x60)).iter().map(|bits| format!("{bits:08x}")).collect();
+    format!("type {} positions {:?} lapCount {:?} total {:?} best [{}] laps {}", rd::<i32>(event, 0), vec_i32(result.add(0x30)), vec_i32(result.add(0x48)), total, laps_text(result.add(0x18)), laps.join(""))
+}
+
+fn port_session_end_text(event: &rustyac_physics::race::OnSessionEndEvent) -> String {
+    let laps: Vec<String> = event.result.laps.iter().map(|laps| format!("[{}]", laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" "))).collect();
+    let total: Vec<String> = event.result.total.iter().map(|t| format!("{:08x}", t.to_bits())).collect();
+    format!(
+        "type {} positions {:?} lapCount {:?} total {:?} best [{}] laps {}",
+        event.current_session.session_type,
+        event.result.positions,
+        event.result.lap_count,
+        total,
+        event.result.best_laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" "),
+        laps.join("")
+    )
+}
+
+/// The game's referee and what it stands in.
+pub struct GameReferee<'a> {
+    acs: &'a Acs,
+    pub game: *mut u8,
+    pub sim: *mut u8,
+    pub manager: *mut u8,
+    pub timing: *mut u8,
+    pub avatars: Vec<*mut u8>,
+    /// the physics car of every avatar (a zeroed block unless real cars are given)
+    pub cars: Vec<*mut u8>,
+    camera: *mut u8,
+    panel: *mut u8,
+    physics_avatar: *mut u8,
+    json: *mut u8,
+    start_key: *mut u8,
+}
+
+/// One car as the referee's harness is told it.
+#[derive(Clone, Debug)]
+pub struct CarSetup {
+    pub name: String,
+    pub car: String,
+    pub skin: String,
+    pub compound: String,
+    /// its slot of the grid at the beginning
+    pub start_index: i32,
+}
+
+impl<'a> GameReferee<'a> {
+    /// `real_cars`: the game's `Car` of every car (whole sessions), else blocks of zeros.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn build(acs: &'a Acs, ini: &SessionsIni, cars: &[CarSetup], track_name: &str, track_config: &str, track_length: f32, sectors: usize, over_time_mult: f32, now: f64, real_cars: Option<&[*mut u8]>) -> GameReferee<'a> {
+        let stub = |va: usize, target: usize| {
+            let mut code = vec![0x48, 0xb8];
+            code.extend_from_slice(&(target as u64).to_le_bytes());
+            code.extend_from_slice(&[0xff, 0xe0]);
+            acs.patch(acs.va(va), &code);
+        };
+        stub(VA_KS_GET_TIME, ks_get_time as *const () as usize);
+        stub(VA_REGISTER_TO_FADE_IN, register_to_fade_in as *const () as usize);
+        stub(VA_FADE_IN, fade_in as *const () as usize);
+        stub(VA_ADD_MESSAGE, add_message as *const () as usize);
+        stub(VA_DISPLAY_RESULTS, display_results as *const () as usize);
+        stub(VA_HIDE_RESULTS, hide_results as *const () as usize);
+        stub(VA_GET_COMPOUND, get_compound as *const () as usize);
+        stub(VA_EXECUTE_ON_PHYSICS_THREAD, execute_on_physics_thread as *const () as usize);
+        stub(VA_GO_TO_SPAWN, go_to_spawn as *const () as usize);
+        let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z"));
+
+        let game = zeroed(0x278);
+        wr(game, 0x18, now);
+        let sim = zeroed(0x2d0);
+        wr(sim, 0, acs.va(VA_SIM_VTABLE));
+        wr(sim, 8, game);
+        let manager = zeroed(0x218);
+        wr(manager, 0, acs.va(VA_RM_VTABLE));
+        wr(manager, 8, game);
+        wr(manager, 0x30, 1u8);
+        let track = zeroed(0x308);
+        write_wstring(track.add(0x10), track_name);
+        write_wstring(track.add(TA_CONFIG), track_config);
+        wr(track, TA_LENGTH, track_length);
+        let sector_list = Box::leak(vec![0f32; sectors.max(1)].into_boxed_slice()).as_mut_ptr();
+        wr(track, TA_SECTORS, sector_list);
+        wr(track, TA_SECTORS + 8, sector_list.add(sectors));
+        wr(track, TA_SECTORS + 16, sector_list.add(sectors));
+        let camera = zeroed(0x198);
+        let panel = zeroed(0x130);
+        let physics_avatar = zeroed(0x8000);
+        wr(sim, SIM_TRACK, track);
+        wr(sim, SIM_CAMERA_MANAGER, camera);
+        wr(sim, SIM_SYSTEM_MESSAGE, zeroed(0x100));
+        wr(sim, SIM_RACE_MANAGER, manager);
+        wr(sim, SIM_REPLAY_MANAGER, zeroed(0x198));
+        wr(sim, SIM_PHYSICS_AVATAR, physics_avatar);
+        wr(sim, SIM_END_SESSION_DISPLAYER, panel);
+        // OptionsManager::options: an empty std::map (its head node, from the game's heap)
+        let head = new(0x48);
+        std::ptr::write_bytes(head, 0, 0x48);
+        wr(head, 0, head);
+        wr(head, 8, head);
+        wr(head, 0x10, head);
+        wr(head, 0x18, 1u8);
+        wr(head, 0x19, 1u8);
+        wr(sim, SIM_OPTIONS_MAP, head);
+
+        // the manager as its constructor and loadSessions leave it
+        wr(manager, 0xa0, ini.penalties_enabled as u8);
+        wr(manager, 0xa2, ini.fixed_setup as u8);
+        wr(manager, 0xa4, -1i32);
+        wr(manager, 0xa8, over_time_mult);
+        wr(manager, 0xae, ini.has_additional_lap as u8);
+        wr(manager, RM_SIM, sim);
+        let session_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SESSION_CTOR));
+        session_ctor(manager.add(RM_CURRENT_SESSION));
+        let count = ini.sessions.len();
+        let records = zeroed(0x70 * count);
+        for (i, session) in ini.sessions.iter().enumerate() {
+            let record = records.add(0x70 * i);
+            session_ctor(record);
+            wr(record, 0, session.session_type);
+            wr(record, 4, session.is_timed_race as u8);
+            wr(record, 5, session.has_additional_lap as u8);
+            wr(record, 8, session.laps);
+            wr(record, 0xc, session.duration_minutes);
+            wr(record, 0x10, session.overtime_ms);
+            write_wstring(record.add(0x18), &session.spawn_set);
+            write_wstring(record.add(0x38), &session.name);
+            wr(record, 0x58, session.start_time);
+            wr(record, 0x60, session.forced_position);
+        }
+        wr(manager, RM_SESSIONS, records);
+        wr(manager, RM_SESSIONS + 8, records.add(0x70 * count));
+        wr(manager, RM_SESSIONS + 16, records.add(0x70 * count));
+
+        // the cars
+        let n = cars.len();
+        let list = zeroed(8 * n);
+        wr(sim, SIM_CARS, list);
+        wr(sim, SIM_CARS + 8, list.add(8 * n));
+        wr(sim, SIM_CARS + 16, list.add(8 * n));
+        let start_key = zeroed(0x20);
+        write_wstring(start_key, "START");
+        let info_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_RACE_INFO_CTOR));
+        let info_init: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_RACE_INFO_INIT));
+        let info_set: extern "C" fn(*mut u8, *const u8, i32) = std::mem::transmute(acs.va(VA_CAR_RACE_INFO_SET));
+        let mut avatars = Vec::new();
+        let mut physics = Vec::new();
+        let connected = zeroed(0x100);
+        wr(connected, 0xd8, 1u8);
+        for (i, setup) in cars.iter().enumerate() {
+            let avatar = zeroed(0x12a8);
+            wr(avatar, 0, acs.va(VA_CAR_AVATAR_VTABLE));
+            wr(avatar, 8, game);
+            wr(avatar, CA_SIM, sim);
+            wr(avatar, CA_GUID, i as i32);
+            wr(avatar, CA_NET, connected);
+            write_wstring(avatar.add(CA_UNIX_NAME), &setup.car);
+            write_wstring(avatar.add(CA_GUI_NAME), &setup.car);
+            write_wstring(avatar.add(CA_DRIVER_NAME), &setup.name);
+            write_wstring(avatar.add(CA_CURRENT_SKIN), &setup.skin);
+            let car = match real_cars {
+                Some(real) => real[i],
+                None => zeroed(0x4800),
+            };
+            let engineer = zeroed(0x40);
+            wr(engineer, 8, car);
+            wr(avatar, CA_RACE_ENGINEER, engineer);
+            wr(avatar, CA_PHYSICS, car);
+            wr(list, 8 * i, avatar);
+            avatars.push(avatar);
+            physics.push(car);
+        }
+        TOLD.with(|t| {
+            *t.borrow_mut() = Told {
+                now,
+                avatars: avatars.iter().map(|a| *a as usize).collect(),
+                compounds: cars.iter().map(|c| c.compound.clone()).collect(),
+                camera: camera as usize,
+                image_base: acs.va(0x1_4000_0000),
+                set_controls_lock: acs.va(VA_CAR_SET_CONTROLS_LOCK),
+                keep_jobs: real_cars.is_some(),
+                ..Told::default()
+            };
+        });
+        for (i, avatar) in avatars.iter().enumerate() {
+            let info = avatar.add(CA_RACE_INFO);
+            info_ctor(info);
+            info_init(info, *avatar);
+            info_set(info, start_key, cars[i].start_index);
+        }
+        // loadSessions: one record per car in both lists, one leaderboard per session
+        let status = zeroed(0x18 * n);
+        let real_time = zeroed(0x10 * n);
+        for (i, avatar) in avatars.iter().enumerate() {
+            let s = status.add(0x18 * i);
+            wr(s, 0, *avatar);
+            wr(s, 8, 5.0f32);
+            wr(s, 0x14, 5.0f32);
+            let r = real_time.add(0x10 * i);
+            wr(r, 0, *avatar);
+            wr(r, 0xc, -1.0f32);
+        }
+        wr(manager, RM_RACE_STATUS, status);
+        wr(manager, RM_RACE_STATUS + 8, status.add(0x18 * n));
+        wr(manager, RM_RACE_STATUS + 16, status.add(0x18 * n));
+        wr(manager, RM_REAL_TIME, real_time);
+        wr(manager, RM_REAL_TIME + 8, real_time.add(0x10 * n));
+        wr(manager, RM_REAL_TIME + 16, real_time.add(0x10 * n));
+        let history = zeroed(0x18 * count);
+        wr(manager, RM_LEADERBOARD_HISTORY, history);
+        wr(manager, RM_LEADERBOARD_HISTORY + 8, history.add(0x18 * count));
+        wr(manager, RM_LEADERBOARD_HISTORY + 16, history.add(0x18 * count));
+
+        // initOffline from the timing services on
+        let timing = new(0xc0);
+        std::ptr::write_bytes(timing, 0, 0xc0);
+        let timing_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_RTS_CTOR));
+        timing_ctor(timing, sim);
+        wr(manager, RM_RTS, timing);
+        let json = new(0xc0);
+        std::ptr::write_bytes(json, 0, 0xc0);
+        let json_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_JSON_CTOR));
+        json_ctor(json, sim);
+        let referee = GameReferee { acs, game, sim, manager, timing, avatars, cars: physics, camera, panel, physics_avatar, json, start_key };
+        referee.add_handler(sim.add(SIM_EV_ON_NEW_SESSION), on_new_session as *const () as usize);
+        referee.add_handler(manager.add(RM_EV_ON_SESSION_END), on_session_end as *const () as usize);
+        let set_current_session: extern "C" fn(*mut u8, u32) = std::mem::transmute(acs.va(VA_RM_SET_CURRENT_SESSION));
+        set_current_session(manager, 0);
+        let reset_laps: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_RM_RESET_CURRENT_LAPS));
+        reset_laps(manager);
+        let reset_pit: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_RM_RESET_MANDATORY_PIT));
+        reset_pit(manager);
+        referee
+    }
+
+    /// One more handler at the end of an `Event<T>` (a vector of 0x28-byte records: an owner
+    /// and a `std::function`, whose implementation's `_Do_call` is the third virtual).
+    unsafe fn add_handler(&self, event: *mut u8, handler: usize) {
+        let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(self.acs.crt_function(c"??2@YAPEAX_K@Z"));
+        let delete: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.crt_function(c"??3@YAXPEAX@Z"));
+        let (begin, end): (*mut u8, *mut u8) = (rd(event, 0), rd(event, 8));
+        let count = if begin.is_null() { 0 } else { end.offset_from(begin) as usize / 0x28 };
+        let buffer = new(0x28 * (count + 4));
+        std::ptr::write_bytes(buffer, 0, 0x28 * (count + 4));
+        for i in 0..count {
+            let (from, to) = (begin.add(0x28 * i), buffer.add(0x28 * i));
+            std::ptr::copy_nonoverlapping(from, to, 0x28);
+            // an implementation that lives in the function's own room moves with it
+            if rd::<usize>(from, 0x20) == from as usize + 8 {
+                wr(to, 0x20, to as usize + 8);
+            }
+        }
+        let table = Box::leak(vec![0usize; 6].into_boxed_slice());
+        table[2] = handler;
+        let implementation = Box::leak(vec![table.as_ptr() as usize; 2].into_boxed_slice());
+        let record = buffer.add(0x28 * count);
+        wr(record, 0x20, implementation.as_ptr());
+        if !begin.is_null() {
+            delete(begin);
+        }
+        wr(event, 0, buffer);
+        wr(event, 8, buffer.add(0x28 * (count + 1)));
+        wr(event, 16, buffer.add(0x28 * (count + 4)));
+    }
+
+    pub unsafe fn set_now(&self, now: f64) {
+        wr(self.game, 0x18, now);
+        TOLD.with(|t| t.borrow_mut().now = now);
+    }
+
+    pub unsafe fn start_race(&self, delay_ms: f32) {
+        let start_race: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_RM_START_RACE));
+        start_race(self.manager, delay_ms);
+    }
+
+    /// What the manager reads of a car, written into its avatar.
+    pub unsafe fn set_car(&self, index: usize, view: &CarView, speed: f32) {
+        let avatar = self.avatars[index];
+        wr(avatar, CA_NPOS, view.normalized_spline_position);
+        // CarAvatar::isInPit: the distance to the pit box (the origin here)
+        wr(avatar, CA_POSITION, [if view.is_in_pit { 0.0f32 } else { 100.0 }, 0.0, 0.0]);
+        wr(avatar, CA_PIT_POSITION + 0x30, [0.0f32; 3]);
+        wr(avatar, CA_SPEED, speed);
+        wr(avatar, CA_FILTERED_SPEED, view.filtered_speed);
+        wr(avatar, CA_STATE_RETIRED, view.is_retired.unwrap_or(false) as u8);
+        wr(avatar, CA_IS_BLACK_FLAGGED, view.is_black_flagged as u8);
+    }
+
+    /// The same for a made-up car: its "physics" is retired or not.
+    pub unsafe fn set_fake_car(&self, index: usize, view: &CarView) {
+        wr(self.cars[index], CAR_IS_RETIRED, view.is_retired.unwrap_or(false) as u8);
+    }
+
+    pub unsafe fn sector_split(&self, event: &OnSectorSplitEvent) {
+        let raw = [event.car_index, event.sector_index as u32, event.sector_time, event.cuts as u32];
+        let on_sector_split: extern "C" fn(*mut u8, *const u32) = std::mem::transmute(self.acs.va(VA_RTS_ON_SECTOR_SPLIT));
+        on_sector_split(self.timing, raw.as_ptr());
+    }
+
+    pub unsafe fn lap_completed(&self, event: &OnLapCompletedEvent) {
+        let raw = zeroed(0x38);
+        wr(raw, 0, event.car_index);
+        wr(raw, 4, event.lap_time);
+        wr(raw, 8, event.lap_count);
+        wr(raw, 0x28, event.event_time);
+        wr(raw, 0x30, event.is_valid as u8);
+        wr(raw, 0x34, event.cuts);
+        let on_lap_completed: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(self.acs.va(VA_RM_ON_LAP_COMPLETED));
+        on_lap_completed(self.manager, raw);
+    }
+
+    /// One frame of the main thread: the camera's fade (counted here as the port counts
+    /// it), `RaceTimingServices::update`, `RaceManager::update`.
+    pub unsafe fn update(&self, dt: f32) {
+        let due = TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            match t.fade_left {
+                Some(left) if left - dt <= 0.0 => {
+                    t.fade_left = None;
+                    t.fade_callable.take()
+                }
+                Some(left) => {
+                    t.fade_left = Some(left - dt);
+                    None
+                }
+                None => None,
+            }
+        });
+        if let Some(mut callable) = due {
+            wr(self.camera, CM_EV_ON_FADE_IN_FINISHED, 0usize);
+            wr(self.camera, CM_EV_ON_FADE_IN_FINISHED + 8, 0usize);
+            let vtable = callable[0] as *const usize;
+            let do_call: extern "C" fn(*mut u64, *const u8) = std::mem::transmute(*vtable.add(2));
+            let flag = 0u8;
+            do_call(callable.as_mut_ptr(), &flag);
+        }
+        let update_leaderboard: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_RTS_UPDATE_LEADERBOARD));
+        update_leaderboard(self.timing);
+        let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_RM_UPDATE));
+        update(self.manager, dt);
+    }
+
+    pub unsafe fn skip(&self) {
+        let skip: extern "C" fn(*mut u8) -> u8 = std::mem::transmute(self.acs.va(VA_RM_SKIP));
+        skip(self.manager);
+    }
+
+    pub unsafe fn restart(&self) {
+        let restart: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_RM_RESTART));
+        restart(self.manager);
+    }
+
+    /// `RaceManager::shutdown` (the last session's results) and `Sim::writeOutputJson`: the
+    /// bytes of the `race_out.json` the game's own writer leaves in the scratch root.
+    pub unsafe fn shutdown(&self) -> Result<Vec<u8>, String> {
+        let shutdown: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_RM_SHUTDOWN));
+        shutdown(self.manager);
+        let folder = std::path::Path::new("oracle_no_documents/Assetto Corsa/out");
+        std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+        let file = folder.join("race_out.json");
+        let _ = std::fs::remove_file(&file);
+        let write: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_JSON_WRITE));
+        write(self.json);
+        std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))
+    }
+
+    /// What the stand-ins were told since the last call, and the posted jobs (the address of
+    /// each job's implementation table).
+    pub fn take_told(&self) -> (Vec<String>, Vec<usize>, bool) {
+        TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            (std::mem::take(&mut t.log), std::mem::take(&mut t.jobs), std::mem::take(&mut t.new_session))
+        })
+    }
+
+    /// Whole sessions: the jobs posted for the physics thread, and the cars sent to a spawn set.
+    pub fn take_work(&self) -> (Vec<Vec<u64>>, Vec<(usize, String)>) {
+        TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            (std::mem::take(&mut t.kept), std::mem::take(&mut t.spawns))
+        })
+    }
+
+    pub fn physics_avatar(&self) -> *mut u8 {
+        self.physics_avatar
+    }
+
+    pub unsafe fn results_displayed(&self) -> bool {
+        rd::<u8>(self.panel, 0x30) != 0
+    }
+
+    unsafe fn guid(&self, avatar: *const u8) -> i32 {
+        if avatar.is_null() {
+            -1
+        } else {
+            rd(avatar, CA_GUID)
+        }
+    }
+
+    /// Every field of the referee's state, named.
+    pub unsafe fn dump(&self) -> Vec<(String, String)> {
+        let m = self.manager;
+        let mut out = Vec::new();
+        let mut put = |key: &str, value: String| out.push((key.to_string(), value));
+        put("currentSessionIndex", rd::<i32>(m, 0xa4).to_string());
+        put("flags", format!("{} {} {}", rd::<u8>(m, 0xac), rd::<u8>(m, 0xad), rd::<u8>(m, 0xae)));
+        put("pitWindow", format!("{:08x} {:08x}", rd::<u32>(m, 0xb0), rd::<u32>(m, 0xb4)));
+        let s = m.add(RM_CURRENT_SESSION);
+        put(
+            "session",
+            format!(
+                "type {} timed {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
+                rd::<i32>(s, 0),
+                rd::<u8>(s, 4),
+                rd::<i32>(s, 8),
+                rd::<u32>(s, 0xc),
+                rd::<u32>(s, 0x10),
+                text(s.add(0x18)),
+                text(s.add(0x38)),
+                rd::<u64>(s, 0x58),
+                rd::<i32>(s, 0x60),
+                rd::<u8>(s, 0x64),
+                rd::<u32>(s, 0x68)
+            ),
+        );
+        put("penaltyMode", rd::<i32>(self.physics_avatar, PA_PENALTY_MODE).to_string());
+        let (begin, end): (*const u8, *const u8) = (rd(m, RM_REAL_TIME), rd(m, RM_REAL_TIME + 8));
+        let mut list = Vec::new();
+        let mut at = begin;
+        while at < end {
+            list.push(format!("{}:{}:{:08x}", self.guid(rd(at, 0)), rd::<u8>(at, 8), rd::<u32>(at, 0xc)));
+            at = at.add(0x10);
+        }
+        put("realTime", list.join(" "));
+        let (begin, end): (*const u8, *const u8) = (rd(m, RM_RACE_STATUS), rd(m, RM_RACE_STATUS + 8));
+        let mut list = Vec::new();
+        let mut at = begin;
+        while at < end {
+            list.push(format!("{}:{:08x}:{}:{:08x}", self.guid(rd(at, 0)), rd::<u32>(at, 8), rd::<u8>(at, 0xc), rd::<u32>(at, 0x10)));
+            at = at.add(0x18);
+        }
+        put("raceStatus", list.join(" "));
+        let t = self.timing;
+        let (begin, end): (*const *const u8, *const *const u8) = (rd(t, 0x58), rd(t, 0x60));
+        let count = if begin.is_null() { 0 } else { end.offset_from(begin) as usize };
+        for i in 0..count {
+            let db = *begin.add(i);
+            let car = self.guid(rd(db, 0x68));
+            put(
+                &format!("lapDB {car}"),
+                format!(
+                    "total {:016x} best {} lastStart {} current {:?} personal {:?} bestLapSplit {} completed {} laps {}",
+                    rd::<u64>(db, 0),
+                    lap_text(db.add(0x20)),
+                    rd::<u32>(db, 0x70),
+                    vec_u32(db.add(0x78)),
+                    vec_u32(db.add(0x90)),
+                    rd::<i32>(db, 0xa8),
+                    rd::<u8>(db, 0xac),
+                    laps_text(db.add(8))
+                ),
+            );
+        }
+        put("bestSplits", format!("{:?} global {}", vec_u32(t.add(0xa0)), rd::<u32>(t, 0xb8)));
+        let (begin, end): (*const u8, *const u8) = (rd(t, 0x70), rd(t, 0x78));
+        let mut list = Vec::new();
+        let mut at = begin;
+        while !at.is_null() && at < end {
+            list.push(format!("{}:{:016x}:{:016x}:{}:{}{}{}", self.guid(rd(at, 0)), rd::<u64>(at, 8), rd::<u64>(at, 0x10), rd::<i32>(at, 0x18), rd::<u8>(at, 0x1c), rd::<u8>(at, 0x1d), rd::<u8>(at, 0x1e)));
+            at = at.add(0x20);
+        }
+        put("leaderboard", list.join(" "));
+        let get_spawn_index: extern "C" fn(*mut u8, *const u8) -> i32 = std::mem::transmute(self.acs.va(VA_CAR_GET_SPAWN_INDEX));
+        put("grid", self.avatars.iter().map(|avatar| get_spawn_index(avatar.add(CA_RACE_INFO), self.start_key).to_string()).collect::<Vec<_>>().join(" "));
+        put("resultsDisplayed", (rd::<u8>(self.panel, 0x30)).to_string());
+        let (begin, end): (*const u8, *const u8) = (rd(m, RM_SESSION_HISTORY), rd(m, RM_SESSION_HISTORY + 8));
+        let mut at = begin;
+        let mut i = 0;
+        while !at.is_null() && at < end {
+            put(&format!("history {i}"), session_end_text(at));
+            at = at.add(0xe8);
+            i += 1;
+        }
+        let (begin, end): (*const u8, *const u8) = (rd(m, RM_LEADERBOARD_HISTORY), rd(m, RM_LEADERBOARD_HISTORY + 8));
+        let mut board = begin;
+        let mut i = 0;
+        while !board.is_null() && board < end {
+            let (first, last): (*const u8, *const u8) = (rd(board, 0), rd(board, 8));
+            let mut list = Vec::new();
+            let mut at = first;
+            while !at.is_null() && at < last {
+                list.push(format!("{}:{:016x}:{:016x}:{}:{}{}{}", self.guid(rd(at, 0)), rd::<u64>(at, 8), rd::<u64>(at, 0x10), rd::<i32>(at, 0x18), rd::<u8>(at, 0x1c), rd::<u8>(at, 0x1d), rd::<u8>(at, 0x1e)));
+                at = at.add(0x20);
+            }
+            put(&format!("leaderboardHistory {i}"), list.join(" "));
+            board = board.add(0x18);
+            i += 1;
+        }
+        out
+    }
+}
+
+/// The port's state under the same names.
+pub fn dump_port(manager: &RaceManager, penalty_mode: i32) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut put = |key: &str, value: String| out.push((key.to_string(), value));
+    put("currentSessionIndex", manager.current_session_index.to_string());
+    put("flags", format!("{} {} {}", manager.time_race_ended as u8, manager.is_timed_last_lap as u8, manager.has_additional_lap as u8));
+    put("pitWindow", format!("{:08x} {:08x}", manager.pit_window_start_time.to_bits(), manager.pit_window_end_time.to_bits()));
+    let s = &manager.current_session;
+    put(
+        "session",
+        format!(
+            "type {} timed {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
+            s.session_type,
+            s.is_timed_race as u8,
+            s.laps,
+            s.duration_minutes.to_bits(),
+            s.overtime_ms.to_bits(),
+            s.spawn_set,
+            s.name,
+            s.start_time.to_bits(),
+            s.forced_position,
+            s.is_over as u8,
+            s.leader_completed_laps
+        ),
+    );
+    put("penaltyMode", penalty_mode.to_string());
+    put("realTime", manager.cars_real_time_position.iter().map(|d| format!("{}:{}:{:08x}", d.car, d.crossed_for_the_first_time as u8, d.approx_pos.to_bits())).collect::<Vec<_>>().join(" "));
+    put("raceStatus", manager.cars_race_status.iter().map(|d| format!("{}:{:08x}:{}:{:08x}", d.car, d.reset_timer.to_bits(), d.retired as u8, d.invalid_state_timer.to_bits())).collect::<Vec<_>>().join(" "));
+    for (car, db) in manager.timing.lap_dbs.iter().enumerate() {
+        put(
+            &format!("lapDB {car}"),
+            format!(
+                "total {:016x} best {} lastStart {} current {:?} personal {:?} bestLapSplit {} completed {} laps {}",
+                db.total_time.to_bits(),
+                port_lap_text(&db.best_lap),
+                db.last_lap_start_time,
+                db.current_splits,
+                db.personal_best_splits,
+                db.best_lap_split,
+                db.has_completed_last_lap as u8,
+                db.laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" ")
+            ),
+        );
+    }
+    put("bestSplits", format!("{:?} global {}", manager.timing.best_splits, manager.timing.global_best_lap));
+    let entry = |e: &rustyac_physics::race::LeaderboardEntry| format!("{}:{:016x}:{:016x}:{}:{}{}{}", e.car, e.total_time.to_bits(), e.best_lap.to_bits(), e.laps, e.is_race_mode as u8, e.is_black_flagged as u8, e.has_completed_last_lap as u8);
+    put("leaderboard", manager.timing.leaderboard.iter().map(entry).collect::<Vec<_>>().join(" "));
+    put("grid", manager.start_index.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" "));
+    put("resultsDisplayed", (manager.results_displayed as u8).to_string());
+    for (i, event) in manager.session_history_list.iter().enumerate() {
+        put(&format!("history {i}"), port_session_end_text(event));
+    }
+    for (i, board) in manager.leaderboard_history.iter().enumerate() {
+        put(&format!("leaderboardHistory {i}"), board.iter().map(entry).collect::<Vec<_>>().join(" "));
+    }
+    out
+}
+
+/// The port's actions as the stand-ins of the game's side write them down.
+pub fn told_by_port(actions: &[Action]) -> Vec<String> {
+    let mut out = Vec::new();
+    for action in actions {
+        match action {
+            Action::NewSession { session, index } => out.push(format!("NewSession({index}, type {}, {:?})", session.session_type, session.name)),
+            Action::GoToPit(car) => out.push(format!("GoToSpawn({car}, PIT)")),
+            Action::SessionEnd { event, .. } => out.push(format!("SessionEnd({})", port_session_end_text(event))),
+            Action::Message { text, description } => out.push(format!("Message({text} | {description})")),
+            Action::DisplayResults => out.push("DisplayResults".to_string()),
+            Action::HideResults => out.push("HideResults".to_string()),
+            Action::FadeStarted => out.push("FadeStarted".to_string()),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The jobs for the physics thread that the port's actions stand for, by what they are.
+pub fn jobs_by_port(actions: &[Action]) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for action in actions {
+        match action {
+            Action::ResetCar(_) => out.extend(["lockControlsUntilTime", "resetPenalty"]),
+            Action::ControlsLock { .. } => out.push("setControlsLock"),
+            Action::SessionStartTime(_) => out.push("setCurrentSessionStartTime"),
+            Action::GenerateWind => out.push("generateWind"),
+            // (the results panel locks and frees the player's controls)
+            Action::DisplayResults | Action::HideResults => out.push("setControlsLock"),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The session lists the made-up drives run through.
+pub fn micro_sessions(variant: usize, cars: usize) -> SessionsIni {
+    let session = |kind: i32, name: &str, laps: i32, minutes: f32, spawn: &str| Session {
+        session_type: kind,
+        name: name.to_string(),
+        laps,
+        duration_minutes: minutes,
+        is_timed_race: kind == SESSION_RACE && laps == 0,
+        spawn_set: spawn.to_string(),
+        forced_position: if kind == SESSION_RACE { cars as i32 } else { -1 },
+        ..Session::default()
+    };
+    let (sessions, additional): (Vec<Session>, bool) = match variant % 8 {
+        0 => (vec![session(1, "Practice", 0, 1.0, "PIT"), session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 3, 0.0, "START")], false),
+        1 => (vec![session(3, "Race", 0, 1.0, "START")], true),
+        2 => (vec![session(3, "Race", 0, 1.0, "START")], false),
+        3 => (vec![session(3, "Quick Race", 5, 0.0, "START")], false),
+        4 => (vec![session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 2, 0.0, "START")], false),
+        5 => (vec![session(1, "Practice", 0, 0.0, "PIT"), session(3, "Race", 0, 1.0, "START"), session(1, "Practice", 0, 1.0, "PIT")], true),
+        6 => (vec![session(2, "Qualify", 0, 2.0, "PIT"), session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 4, 0.0, "START"), session(3, "Race", 1, 0.0, "START")], false),
+        _ => (vec![session(4, "Hotlap", 0, 0.0, "HOTLAP_START"), session(1, "Practice", 0, 1.0, "PIT"), session(3, "Race", 2, 0.0, "START")], false),
+    };
+    SessionsIni { sessions, has_additional_lap: additional, fixed_setup: false, penalties_enabled: variant % 2 == 0, jump_start_penalty_mode: None, has_hotlap: variant % 8 == 7 }
+}
+
+/// A made-up car of a made-up drive.
+struct ToyCar {
+    lap_seconds: f32,
+    position: f32,
+    lap_start: f64,
+    sector_start: f64,
+    sector: usize,
+    laps: u32,
+    in_pit_until: f64,
+    parked: bool,
+    retired: bool,
+    retire_at: Option<f64>,
+    black: bool,
+    speed: f32,
+    filtered: f32,
+    cuts: i32,
+}
+
+/// What a made-up drive found.
+pub struct MicroReport {
+    pub frames: usize,
+    pub laps: usize,
+    pub sessions_ended: usize,
+    pub values: usize,
+    pub jobs_seen: Vec<(usize, &'static str)>,
+    pub json_bytes: usize,
+    pub mismatch: Option<String>,
+}
+
+/// Where two values part: the words around the first one that differs.
+fn first_difference(key: &str, game: &str, port: &str) -> String {
+    let (g, p): (Vec<&str>, Vec<&str>) = (game.split(' ').collect(), port.split(' ').collect());
+    let at = g.iter().zip(&p).position(|(x, y)| x != y).unwrap_or(g.len().min(p.len()));
+    let from = at.saturating_sub(3);
+    format!("{key}, word {at}\n  the game: {}\n  the port: {}", g[from.min(g.len())..(at + 6).min(g.len())].join(" "), p[from.min(p.len())..(at + 6).min(p.len())].join(" "))
+}
+
+/// One made-up drive: `frames` frames of the game's referee and of the port's, fed the same
+/// cars, compared after every frame; the results and `race_out.json` at the end.
+pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, frames: usize, fault: bool) -> Result<MicroReport, String> {
+    const DT: f32 = 0.009;
+    const SECTORS: usize = 3;
+    let ini = micro_sessions(variant, car_count);
+    let models = ["car_a", "car_a", "car_b", "car_c"];
+    let setups: Vec<CarSetup> = (0..car_count).map(|i| CarSetup { name: format!("Driver {i}"), car: models[(i + variant) % models.len()].to_string(), skin: format!("skin_{i}"), compound: ["S", "M", "H", "SM"][i % 4].to_string(), start_index: i as i32 }).collect();
+    let over_time_mult = 1.2f32;
+    let mut now = 100_000.0f64;
+    let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
+    srand(seed);
+    let game = GameReferee::build(acs, &ini, &setups, "toy_track", if variant % 3 == 0 { "layout" } else { "" }, 3000.0, SECTORS, over_time_mult, now, None);
+    let (mut game_log, mut game_jobs, _) = game.take_told();
+
+    // the port
+    let mut referee_rand = MsvcRand(seed);
+    let mut manager = RaceManager::new(&ini, car_count, SECTORS, over_time_mult);
+    manager.autoflip_recovery = false;
+    for (slot, setup) in manager.start_index.iter_mut().zip(&setups) {
+        *slot = setup.start_index;
+    }
+    let mut json = JsonOutputFile::new("toy_track", if variant % 3 == 0 { "layout" } else { "" }, ini.sessions.len() as i32);
+    let players: Vec<Player> = setups.iter().map(|s| Player { name: s.name.clone(), car: s.car.clone(), skin: s.skin.clone() }).collect();
+    let mut actions = Vec::new();
+    manager.set_current_session(0, now, &mut actions);
+    manager.reset_current_laps_and_mandatory_pit(&mut actions);
+    let mut penalty_mode = 0;
+    let mut port_log = told_by_port(&actions);
+    let mut port_jobs = jobs_by_port(&actions);
+    let mut pending: Vec<Action> = actions;
+
+    // Sim::Sim's startRace
+    let draws = manager.start_race_draws();
+    let mut start_actions = Vec::new();
+    manager.start_race(20000.0, if draws { referee_rand.next() } else { 0 }, &mut start_actions);
+    game.start_race(20000.0);
+    port_log.extend(told_by_port(&start_actions));
+    port_jobs.extend(jobs_by_port(&start_actions));
+    pending.extend(start_actions);
+
+    let mut script = MsvcRand(seed ^ 0x5eed_0028);
+    let mut unit = move || script.next() as f32 / 32768.0;
+    let mut cars: Vec<ToyCar> = (0..car_count)
+        .map(|_| ToyCar { lap_seconds: 7.0 + 6.0 * unit(), position: 0.0, lap_start: now, sector_start: now, sector: 0, laps: 0, in_pit_until: now + 1500.0, parked: false, retired: false, retire_at: None, black: false, speed: 0.0, filtered: 0.0, cuts: 0 })
+        .collect();
+    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None };
+    let mut job_names: std::collections::BTreeMap<usize, &'static str> = std::collections::BTreeMap::new();
+
+    for frame in 0..frames {
+        // what the port's actions of the last frame do to the made-up cars
+        for action in pending.drain(..) {
+            match action {
+                Action::PenaltyMode(mode) => penalty_mode = mode,
+                Action::NewSession { session, .. } => {
+                    for car in cars.iter_mut() {
+                        car.position = 0.0;
+                        car.lap_start = now;
+                        car.sector_start = now;
+                        car.sector = 0;
+                        car.laps = 0;
+                        car.cuts = 0;
+                        car.parked = false;
+                        car.retired = false;
+                        car.speed = 0.0;
+                        car.in_pit_until = if session.spawn_set == "PIT" { now + 1000.0 + 3000.0 * unit() as f64 } else { 0.0 };
+                        car.retire_at = (unit() < 0.15).then(|| now + 20000.0 + 60000.0 * unit() as f64);
+                    }
+                }
+                Action::GoToPit(car) => {
+                    cars[car].parked = true;
+                    cars[car].speed = 0.0;
+                }
+                Action::RetirePlayer => cars[0].retired = true,
+                Action::SessionEnd { event, index } => {
+                    json.end_session(index, &event, car_count, None);
+                    report.sessions_ended += 1;
+                }
+                _ => {}
+            }
+        }
+        now += (DT * 1000.0) as f64;
+        manager.now = now;
+        game.set_now(now);
+
+        // the made-up cars drive
+        let started = manager.has_session_started();
+        let mut splits = Vec::new();
+        let mut laps = Vec::new();
+        for (index, car) in cars.iter_mut().enumerate() {
+            if let Some(at) = car.retire_at {
+                if now >= at && !car.retired {
+                    car.retired = true;
+                    car.retire_at = None;
+                }
+            }
+            if !car.parked && !car.retired && unit() < 0.0004 {
+                car.in_pit_until = now + 2000.0 + 4000.0 * unit() as f64;
+            }
+            if index == 0 && unit() < 0.00005 {
+                car.black = !car.black;
+            }
+            let in_pit = car.parked || now < car.in_pit_until;
+            let driving = started && !in_pit && !car.retired;
+            car.speed = if driving { 3000.0 / car.lap_seconds } else { 0.0 };
+            if driving {
+                if unit() < 0.0006 {
+                    car.cuts += 1;
+                }
+                let before = car.position;
+                car.position += DT / car.lap_seconds;
+                let line = (car.sector + 1) as f32 / SECTORS as f32;
+                if before < line && car.position >= line && car.sector + 1 < SECTORS {
+                    splits.push(OnSectorSplitEvent { car_index: index as u32, sector_index: car.sector as i32, sector_time: (now - car.sector_start) as u32, cuts: car.cuts });
+                    car.sector += 1;
+                    car.sector_start = now;
+                }
+                if car.position >= 1.0 {
+                    car.position -= 1.0;
+                    let valid = unit() >= 0.03;
+                    if valid {
+                        car.laps += 1;
+                    }
+                    laps.push(OnLapCompletedEvent { car_index: index as u32, lap_time: (now - car.lap_start) as u32, lap_count: car.laps, splits: Vec::new(), event_time: now, is_valid: valid, cuts: car.cuts });
+                    car.lap_start = now;
+                    car.sector_start = now;
+                    car.sector = 0;
+                    car.cuts = 0;
+                }
+            }
+            car.filtered = filter_speed(car.filtered, car.speed, DT);
+        }
+        let views: Vec<CarView> = cars
+            .iter()
+            .enumerate()
+            .map(|(index, car)| CarView {
+                normalized_spline_position: car.position,
+                is_in_pit: car.parked || now < car.in_pit_until,
+                filtered_speed: car.filtered,
+                is_retired: Some(car.retired),
+                is_connected: true,
+                is_black_flagged: car.black,
+                loaded_tyres: Some(4),
+                compound: setups[index].compound.clone(),
+                driver_name: setups[index].name.clone(),
+                gui_name: setups[index].car.clone(),
+            })
+            .collect();
+        for (index, view) in views.iter().enumerate() {
+            game.set_car(index, view, cars[index].speed);
+            game.set_fake_car(index, view);
+        }
+        report.laps += laps.len();
+
+        // the frame, the game's and the port's
+        for split in &splits {
+            game.sector_split(split);
+            manager.on_sector_split(split);
+        }
+        for lap in &laps {
+            game.lap_completed(lap);
+            manager.on_lap_completed(lap, &views);
+        }
+        game.update(DT);
+        let mut actions = Vec::new();
+        let mut rand = referee_rand;
+        // (the fault: the port's frame is a microsecond longer)
+        manager.update(if fault { DT + 1.0e-6 } else { DT }, now, &views, &mut || rand.next(), &mut actions);
+        referee_rand = rand;
+        let (log, jobs, new_session) = game.take_told();
+        game_log.extend(log);
+        game_jobs.extend(jobs);
+        let port_new_session = actions.iter().any(|a| matches!(a, Action::NewSession { .. }));
+        if new_session != port_new_session {
+            report.mismatch = Some(format!("frame {frame}: a new session on one side only (the game: {new_session})"));
+            break;
+        }
+        if port_new_session && manager.current_session.session_type == SESSION_RACE {
+            let draws = manager.start_race_draws();
+            manager.start_race(10000.0, if draws { referee_rand.next() } else { 0 }, &mut actions);
+            game.start_race(10000.0);
+        }
+        // the player's buttons, now and then
+        let button = unit();
+        if button < 0.00012 {
+            manager.skip_current_session(&mut actions);
+            game.skip();
+        } else if button < 0.00018 {
+            manager.restart_current_session(&mut actions);
+            game.restart();
+        }
+        let (log, jobs, _) = game.take_told();
+        game_log.extend(log);
+        game_jobs.extend(jobs);
+        port_log.extend(told_by_port(&actions));
+        port_jobs.extend(jobs_by_port(&actions));
+        for action in &actions {
+            if let Action::PenaltyMode(mode) = action {
+                penalty_mode = *mode;
+            }
+        }
+        pending = actions;
+
+        if game_log != port_log {
+            let at = game_log.iter().zip(&port_log).position(|(a, b)| a != b).unwrap_or(game_log.len().min(port_log.len()));
+            report.mismatch = Some(format!("frame {frame}: told differently\n  the game: {:?}\n  the port: {:?}", game_log.get(at), port_log.get(at)));
+            break;
+        }
+        game_log.clear();
+        port_log.clear();
+        if game_jobs.len() != port_jobs.len() {
+            report.mismatch = Some(format!("frame {frame}: {} jobs for the physics thread in the game, {} in the port ({:x?} / {:?})", game_jobs.len(), port_jobs.len(), game_jobs, port_jobs));
+            break;
+        }
+        for (address, name) in game_jobs.drain(..).zip(port_jobs.drain(..)) {
+            match job_names.get(&address) {
+                Some(known) if *known != name => {
+                    report.mismatch = Some(format!("frame {frame}: the job at {address:#x} is {known} and {name}"));
+                }
+                Some(_) => {}
+                None => {
+                    if job_names.values().any(|known| *known == name) {
+                        report.mismatch = Some(format!("frame {frame}: the job {name} has two addresses"));
+                    }
+                    job_names.insert(address, name);
+                }
+            }
+        }
+        if report.mismatch.is_some() {
+            break;
+        }
+        let (a, b) = (game.dump(), dump_port(&manager, penalty_mode));
+        report.values += a.len();
+        if a != b {
+            let line = a.iter().zip(&b).find(|(x, y)| x != y).map(|(x, y)| first_difference(&x.0, &x.1, &y.1)).unwrap_or_else(|| format!("{} values in the game, {} in the port", a.len(), b.len()));
+            report.mismatch = Some(format!("frame {frame}: {line}"));
+            break;
+        }
+        report.frames += 1;
+    }
+    report.jobs_seen = job_names.into_iter().collect();
+    if report.mismatch.is_some() {
+        return Ok(report);
+    }
+    // the end of the program: the last session's results, the file
+    let game_file = game.shutdown()?;
+    let views: Vec<CarView> = cars
+        .iter()
+        .enumerate()
+        .map(|(index, car)| CarView {
+            normalized_spline_position: car.position,
+            is_in_pit: car.parked || now < car.in_pit_until,
+            filtered_speed: car.filtered,
+            is_retired: Some(car.retired),
+            is_connected: true,
+            is_black_flagged: car.black,
+            loaded_tyres: Some(4),
+            compound: setups[index].compound.clone(),
+            driver_name: setups[index].name.clone(),
+            gui_name: setups[index].car.clone(),
+        })
+        .collect();
+    let mut actions = Vec::new();
+    let mut rand = referee_rand;
+    manager.finalize_current_session(&views, &mut || rand.next(), &mut actions);
+    for action in &actions {
+        if let Action::SessionEnd { event, index } = action {
+            json.end_session(*index, event, car_count, None);
+            report.sessions_ended += 1;
+        }
+    }
+    let (log, _, _) = game.take_told();
+    let port_log = told_by_port(&actions);
+    if log != port_log {
+        report.mismatch = Some(format!("the end: told differently\n  the game: {log:?}\n  the port: {port_log:?}"));
+        return Ok(report);
+    }
+    let (a, b) = (game.dump(), dump_port(&manager, penalty_mode));
+    if a != b {
+        let line = a.iter().zip(&b).find(|(x, y)| x != y).map(|(x, y)| first_difference(&x.0, &x.1, &y.1)).unwrap_or_default();
+        report.mismatch = Some(format!("the end: {line}"));
+        return Ok(report);
+    }
+    let best = manager.timing.instance_best_times.first().map_or(0, |lap| lap.time as i32);
+    let port_file = json.file(&players, best);
+    report.json_bytes = game_file.len();
+    if game_file != port_file {
+        let at = game_file.iter().zip(&port_file).position(|(x, y)| x != y).unwrap_or(game_file.len().min(port_file.len()));
+        let from = at.saturating_sub(60);
+        report.mismatch = Some(format!(
+            "race_out.json differs at byte {at} ({} bytes in the game's, {} in the port's)\n  the game: {:?}\n  the port: {:?}",
+            game_file.len(),
+            port_file.len(),
+            String::from_utf8_lossy(&game_file[from..(at + 60).min(game_file.len())]),
+            String::from_utf8_lossy(&port_file[from..(at + 60).min(port_file.len())])
+        ));
+    }
+    let _ = Flag::None;
+    Ok(report)
+}

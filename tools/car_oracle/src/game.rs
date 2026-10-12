@@ -8,6 +8,7 @@
 
 pub mod multi;
 pub mod net;
+pub mod race;
 pub mod race_ini;
 pub mod sus_micro;
 
