@@ -103,6 +103,20 @@ pub struct Referee {
     /// a hash of the whole state ([`Referee::dump`]) is taken at the end of every frame
     pub hash_frames: bool,
     pub state_hash: u64,
+    /// what the main thread posted for the engine on the physics thread: it runs at the
+    /// start of the next step, in this order, before the cars' own queued jobs
+    pending: Vec<EngineJob>,
+}
+
+/// A job for the physics thread that is the engine's, not a car's.
+#[derive(Clone, Copy, Debug)]
+enum EngineJob {
+    /// `PhysicsEngine::setSessionInfo` and its handlers (lambda @ 0x1401213f0)
+    Session(SessionInfo),
+    /// `PhysicsEngine::setCurrentSessionStartTime` (lambda @ 0x140135220)
+    StartTime(f64),
+    /// the new session's wind (lambda @ 0x140133ac0)
+    Wind,
 }
 
 impl Referee {
@@ -139,6 +153,7 @@ impl Referee {
             trace: None,
             hash_frames: false,
             state_hash: 0,
+            pending: Vec::new(),
             manager,
         };
         let mut actions = Vec::new();
@@ -218,6 +233,17 @@ impl Referee {
             pit_penalty_laps: car.penalty_manager.pit_penalty_laps,
             current_lap_valid: car.transponder.cuts == 0,
             is_black_flagged: car.black_flagged,
+        }
+    }
+
+    /// Before every physics step: the engine's jobs the main thread posted since the last one.
+    pub fn before_step(&mut self, world: &mut dyn World) {
+        for job in std::mem::take(&mut self.pending) {
+            match job {
+                EngineJob::Session(info) => world.set_session_info(info),
+                EngineJob::StartTime(ms) => world.set_session_start_time(ms),
+                EngineJob::Wind => world.generate_wind(),
+            }
         }
     }
 
@@ -317,7 +343,7 @@ impl Referee {
                         world.car_mut(0).queue(|car| car.lock_controls(false));
                     }
                     self.flags.clear_flag();
-                    world.set_session_info(SessionInfo { session_type: session.session_type, start_time_ms: session.start_time, time_secs: (session.duration_minutes * 60.0) as f64, laps: session.laps, index });
+                    self.pending.push(EngineJob::Session(SessionInfo { session_type: session.session_type, start_time_ms: session.start_time, time_secs: (session.duration_minutes * 60.0) as f64, laps: session.laps, index }));
                     // CarAvatar::onNewSession of every car
                     for car in 0..world.car_count() {
                         let slot = if session.spawn_set == "START" { self.manager.start_index[car] } else { self.pit_index.get(car).copied().unwrap_or(car as i32) };
@@ -330,7 +356,7 @@ impl Referee {
                     let slot = self.pit_index.get(car).copied().unwrap_or(car as i32);
                     self.teleport(world, car, "PIT", slot, None);
                 }
-                Action::SessionStartTime(ms) => world.set_session_start_time(ms),
+                Action::SessionStartTime(ms) => self.pending.push(EngineJob::StartTime(ms)),
                 Action::RetirePlayer => world.car_mut(0).is_retired = true,
                 Action::SessionEnd { event, index } => {
                     let cars = world.car_count();
@@ -339,7 +365,7 @@ impl Referee {
                     self.last_results = Some(event);
                 }
                 Action::Message { text, description } => self.log.push(format!("{text} {description}")),
-                Action::GenerateWind => world.generate_wind(),
+                Action::GenerateWind => self.pending.push(EngineJob::Wind),
                 Action::DisplayResults => world.car_mut(0).queue(|car| car.lock_controls(true)),
                 Action::HideResults => world.car_mut(0).queue(|car| car.lock_controls(false)),
                 Action::FadeStarted => {}

@@ -152,6 +152,10 @@ footer { border-top: 1px solid var(--line); padding-top: 10px; color: var(--dim)
 #hud-note[hidden] { display: none; }
 #hud-online { position: absolute; left: 18px; top: 92px; white-space: pre; font-size: 13px; line-height: 1.35; background: rgba(0, 0, 0, 0.35); padding: 6px 10px; border-radius: 4px; }
 #hud-online[hidden], #chat[hidden] { display: none; }
+#hud-referee { position: absolute; left: 50%; top: 64px; transform: translateX(-50%); white-space: pre; text-align: center; font-size: 14px; line-height: 1.35; background: rgba(0, 0, 0, 0.4); padding: 6px 12px; border-radius: 4px; }
+#hud-referee-centre { position: absolute; left: 50%; top: 42%; transform: translateX(-50%); white-space: pre; text-align: center; font-size: 20px; color: #f33; background: rgba(0, 0, 0, 0.5); padding: 6px 16px; border-radius: 4px; }
+#hud-referee-results { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); white-space: pre; font-size: 14px; line-height: 1.4; background: rgba(0, 0, 0, 0.85); padding: 14px 20px; border-radius: 4px; }
+#hud-referee[hidden], #hud-referee-centre[hidden], #hud-referee-results[hidden] { display: none; }
 #chat { position: fixed; left: 18px; bottom: 60px; width: min(480px, 60vw); font: inherit; font-size: 15px; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: rgba(0, 0, 0, 0.7); color: #fff; z-index: 5; }
 #hud-perf { position: absolute; left: 18px; bottom: 14px; color: #d8dde3; white-space: pre; font-size: 12px; }
 

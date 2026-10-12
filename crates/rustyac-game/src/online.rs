@@ -227,6 +227,30 @@ pub struct OnlineSession {
     compound_sent: Option<String>,
     /// The last session-start line said (the server repeats the message).
     last_start_line: String,
+    /// Task 28: the server's session as the game's manager mirrors it
+    /// (`RaceManager::convertRemoteSession`), the server's standings (with every lap
+    /// message), and its results once the race is over (message 0x4b).
+    pub session: rustyac_physics::race::Session,
+    pub standings: Vec<rustyac_net::messages::LeaderboardRow>,
+    pub results: Option<Vec<rustyac_net::messages::LeaderboardRow>>,
+    /// the clock of the last step, ms
+    pub now: f64,
+}
+
+/// `RaceManager::convertRemoteSession` for a session as the server's messages carry it
+/// (`start`: its start on this machine's clock, ms).
+fn mirror_session(info: &rustyac_net::handshake::SessionInfo, start: f64) -> rustyac_physics::race::Session {
+    rustyac_physics::race::convert_remote_session(&rustyac_physics::race::RemoteSession {
+        name: info.name.clone(),
+        session_type: info.kind as i32,
+        index: info.index as i32,
+        time: info.time as i32,
+        laps: info.laps as i32,
+        start_time: start,
+        is_spectator: false,
+        is_timed_race: info.kind == session_type::RACE && info.laps == 0,
+        has_extra_lap: false,
+    })
 }
 
 /// How many chat lines are kept.
@@ -251,7 +275,8 @@ impl OnlineSession {
             })
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new() }
+        let session = mirror_session(&client.current_session, client.session_start_time);
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -329,6 +354,11 @@ impl OnlineSession {
                     self.say(format!("{who}: {text}"));
                 }
                 Event::Message(Message::NewSession(info)) => {
+                    // the handler of the client's new-session event (lambda @ 0x1401337d0):
+                    // the manager's session is a copy of the server's
+                    self.session = mirror_session(info, info.start as f64);
+                    self.standings.clear();
+                    self.results = None;
                     self.say(format!("New Session : {}", info.name));
                     for entry in &mut self.roster {
                         entry.laps = 0;
@@ -338,6 +368,7 @@ impl OnlineSession {
                 }
                 Event::Message(Message::LapCompleted { slot, lap_time, cuts, standings, .. }) => {
                     // the standings: laps and (in practice and qualifying) the best lap
+                    self.standings = standings.clone();
                     let race = self.net.client.current_session.kind == session_type::RACE;
                     for row in standings {
                         if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == row.slot) {
@@ -408,6 +439,9 @@ impl OnlineSession {
                     self.say(format!("{who} was removed from the server: {why}"));
                 }
                 Event::Message(Message::RaceOver { standings, .. }) => {
+                    // the server's results of the race (RemoteSessionResume: what the game's
+                    // end-of-session screen is made from online)
+                    self.results = Some(standings.clone());
                     self.say("The race is over".to_string());
                     for (place, row) in standings.iter().enumerate() {
                         let who = self.driver_of(row.slot);
@@ -475,12 +509,53 @@ impl OnlineSession {
         let mut lines = Vec::new();
         let session = &self.net.client.current_session;
         lines.push(format!("ONLINE  {}  ({})  ping {} ms", self.net.client.accepted.server_name, session.name, self.net.client.ping));
+        lines.extend(self.referee_lines());
         for entry in self.roster.iter().filter(|entry| entry.connected) {
             let best = if entry.best_lap_ms > 0 { crate::online::lap_text(entry.best_lap_ms) } else { "-:--.---".to_string() };
             let name = if entry.driver.is_empty() { "?" } else { &entry.driver };
             lines.push(format!("{} {:<20} {:<18} laps {:<3} best {}{}", if entry.me { ">" } else { " " }, name, entry.model, entry.laps, best, if entry.me { String::new() } else { format!("  {} ms", entry.ping) }));
         }
         lines.extend(self.chat.iter().cloned());
+        lines
+    }
+
+    /// Task 28: the server's session as the referee's banner words it, its standings, and
+    /// its results when the race is over.
+    pub fn referee_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mirrored = &self.session;
+        let race = mirrored.session_type == session_type::RACE as i32;
+        let left = mirrored.duration_minutes as f64 * 60.0 * 1000.0 + mirrored.start_time - self.now;
+        let leader_laps = self.standings.iter().map(|row| row.laps).max().unwrap_or(0);
+        let state = if race && !mirrored.is_timed_race {
+            if self.results.is_some() {
+                "RACE OVER".to_string()
+            } else if mirrored.start_time > self.now {
+                format!("start in {}", rustyac_physics::race::hud::time_to_wstring((mirrored.start_time - self.now) as i32))
+            } else {
+                format!("{} / {}", (leader_laps as i32 + 1).min(mirrored.laps.max(1)), mirrored.laps)
+            }
+        } else if mirrored.duration_minutes > 0.0 {
+            if left >= 0.0 {
+                rustyac_physics::race::hud::time_to_wstring(left as i32)
+            } else if race {
+                "RACE OVER".to_string()
+            } else {
+                "OVERTIME".to_string()
+            }
+        } else {
+            String::new()
+        };
+        lines.push(format!("{}  {state}", if mirrored.name.is_empty() { "SESSION" } else { &mirrored.name }));
+        let table = self.results.as_ref().map(|rows| ("RESULTS", rows)).or((!self.standings.is_empty()).then_some(("STANDINGS", &self.standings)));
+        if let Some((title, rows)) = table {
+            lines.push(title.to_string());
+            for (place, row) in rows.iter().enumerate() {
+                let who = self.driver_of(row.slot);
+                let time = if row.time == rustyac_net::messages::NO_TIME || row.time == 0 { "-:--.---".to_string() } else { lap_text(row.time) };
+                lines.push(format!("{:>2}  {:<20} laps {:<3} {} {time}", place + 1, who, row.laps, if race { "total" } else { "best" }));
+            }
+        }
         lines
     }
 }
@@ -508,6 +583,7 @@ impl StepHooks for OnlineHooks<'_> {
     fn after_cars(&mut self, core: &mut PhysicsCore, cars: &mut [CarSlot<'_>], physics_time: f64) {
         let session = &mut *self.session;
         session.net.after_cars(core, cars, physics_time);
+        session.now = physics_time;
         // NetCarStateProvider::update (the game: once a frame)
         session.net.update_cars(physics_time);
         // the displays: who is there

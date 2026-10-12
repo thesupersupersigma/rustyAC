@@ -1761,6 +1761,12 @@ impl GameSim {
             self.car.device.source.set_probe(&probe);
         }
         self.car.device.polled = false;
+        // Task 28: the engine's jobs the referee posted (the new session, the start time)
+        if let Some(mut referee) = self.referee.take() {
+            let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+            referee.before_step(&mut world);
+            self.referee = Some(referee);
+        }
         let time = self.setup.time_of_step(self.steps);
         match &mut self.engine {
             None if self.car.device.ai.is_some() => {

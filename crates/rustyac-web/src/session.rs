@@ -74,7 +74,22 @@ impl Session {
     /// Builds the car on the track and puts it down (the spawn sequence runs to its end here:
     /// 470 steps of settling and selecting first gear, unpaced as on the desktop).
     pub fn new(car: &str, track: &str, layout: &str, auto_shifter: bool, spawn: &str) -> Result<Session, String> {
-        Session::build(crate::content::setup(car, track, layout, auto_shifter, spawn), None)
+        Session::with_sessions(car, track, layout, auto_shifter, spawn, None)
+    }
+
+    /// Task 28: the same with the referee and a session list (`p10,q5,r3`, as
+    /// `rustyac.exe --sessions`): the first session decides where the car starts.
+    pub fn with_sessions(car: &str, track: &str, layout: &str, auto_shifter: bool, spawn: &str, sessions: Option<&str>) -> Result<Session, String> {
+        let mut setup = crate::content::setup(car, track, layout, auto_shifter, spawn);
+        if let Some(list) = sessions.filter(|list| !list.is_empty()) {
+            let sessions = rustyac_physics::race::SessionsIni::from_list(list, 1, true, None, setup.env.base_pit_penalty_laps).map_err(|e| format!("sessions: {e}"))?;
+            setup.session.session_type = Some(sessions.sessions[0].session_type);
+            setup.spawn = if sessions.sessions[0].spawn_set == "START" { "start" } else { "pit" }.to_string();
+            setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
+            // (OVER_TIME_MULT as the game ships it)
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new() });
+        }
+        Session::build(setup, None)
     }
 
     /// The same on a server: the server's car and track, in the pit box of the player's
@@ -260,6 +275,9 @@ impl Session {
             "BracketLeft" => self.request_bias(-1),
             "KeyR" => self.request(if shift { event::TO_TRACK } else { event::RESET }),
             "KeyN" => self.request(event::REBUILD),
+            // Task 28: the referee's two buttons
+            "F7" => self.request(event::NEXT_SESSION),
+            "F8" => self.request(event::RESTART_SESSION),
             "KeyG" => self.request(event::AUTO_SHIFTER),
             _ => return false,
         }

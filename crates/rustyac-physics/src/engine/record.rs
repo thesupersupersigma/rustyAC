@@ -761,6 +761,11 @@ impl ReplayWorld {
             }
             self.engine.ai_rand = rand;
         }
+        // Task 28: the engine's jobs the referee posted
+        if let Some(mut referee) = self.referee.take() {
+            referee.before_step(self);
+            self.referee = Some(referee);
+        }
         let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
         for (slot, drag) in slots.iter_mut().zip(self.drag.iter_mut()) {
             if let Some(driver) = drag {

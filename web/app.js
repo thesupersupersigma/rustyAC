@@ -554,6 +554,8 @@ async function drive() {
       const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
       if (!adapter) backend = 'webgl';
     }
+    // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart)
+    if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
     const game = await rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
     rac.fs_forget_models();
     state.game = game;
@@ -896,6 +898,17 @@ function leaveServer(reload) {
 
 window.addEventListener('pagehide', () => leaveServer(false));
 
+// Task 28: what the referee says (the session, flags, penalties, results), in words.
+function showReferee(referee) {
+  window.rustyac.referee = referee;
+  const boxes = [['hud-referee', 'top'], ['hud-referee-centre', 'centre'], ['hud-referee-results', 'results']];
+  for (const [id, key] of boxes) {
+    const lines = referee && !state.online ? referee[key] : [];
+    $(id).hidden = lines.length === 0;
+    $(id).textContent = lines.join('\n');
+  }
+}
+
 function showOnline(online) {
   window.rustyac.online = online;
   const box = $('hud-online');
@@ -905,6 +918,7 @@ function showOnline(online) {
   for (const d of online.drivers) {
     lines.push(`${d.me ? '>' : ' '} ${(d.name || '?').padEnd(18).slice(0, 18)} ${d.car.padEnd(17).slice(0, 17)} laps ${String(d.laps).padEnd(3)} best ${time(d.best_ms)}${d.me ? '' : `  ${d.ping} ms`}`);
   }
+  if (window.rustyac.referee) lines.push(...window.rustyac.referee.top);
   lines.push(...online.chat);
   lines.push('Enter: chat   Esc: leave');
   box.textContent = lines.join('\n');
@@ -1260,6 +1274,7 @@ function showHud(hud) {
   $('hud-bias').textContent = hud.bias_text;
   $('hud-note').textContent = hud.note;
   $('hud-note').hidden = !hud.note;
+  showReferee(hud.referee);
   showOnline(hud.online);
 }
 

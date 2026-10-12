@@ -450,6 +450,7 @@ fn race_micro(args: &Args) -> Result<(), String> {
     println!("race-micro seed {} list {variant} cars {cars}: {} frames, {} laps, {} sessions ended, {} values compared, race_out.json {} bytes", args.seed, report.frames, report.laps, report.sessions_ended, report.values, report.json_bytes);
     println!("  jobs for the physics thread: {}", jobs.join(", "));
     println!("  frames by flag (none, blue, black, chequered, yellow, white, penalty): {:?}", report.flag_frames);
+    println!("  convertRemoteSession: {} made-up server sessions, all the same", report.remote_sessions);
     match report.mismatch {
         None => {
             println!("referee: IDENTICAL");

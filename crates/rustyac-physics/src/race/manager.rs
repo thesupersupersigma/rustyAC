@@ -66,6 +66,37 @@ impl Default for Session {
     }
 }
 
+/// `RemoteSession` (0x40 bytes): a session as the server describes it (`ACClient`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RemoteSession {
+    pub name: String,
+    pub session_type: i32,
+    pub index: i32,
+    /// minutes
+    pub time: i32,
+    pub laps: i32,
+    /// ms on the clock the server and the clients share
+    pub start_time: f64,
+    pub is_spectator: bool,
+    pub is_timed_race: bool,
+    pub has_extra_lap: bool,
+}
+
+/// `RaceManager::convertRemoteSession` @ 0x140136a50: online the server owns the sessions
+/// and the manager's session is this copy.
+pub fn convert_remote_session(remote: &RemoteSession) -> Session {
+    Session {
+        duration_minutes: remote.time as f32,
+        laps: remote.laps,
+        name: remote.name.clone(),
+        session_type: remote.session_type,
+        is_timed_race: remote.is_timed_race,
+        spawn_set: if remote.session_type == SESSION_RACE && !remote.is_spectator { "START".to_string() } else { "PIT".to_string() },
+        start_time: remote.start_time,
+        ..Session::default()
+    }
+}
+
 /// `SessionResult` (0x78 bytes); everything by car.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionResult {

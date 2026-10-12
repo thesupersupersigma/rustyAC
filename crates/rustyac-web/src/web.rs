@@ -21,6 +21,17 @@ use wasm_bindgen::prelude::*;
 
 use crate::content;
 use crate::controls;
+
+thread_local! {
+    /// Task 28: the session list the next offline drive runs with the referee (`?sessions=`).
+    static SESSIONS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Task 28: the session list of the next [`Game::create`] (`p10,q5,r3`; empty: no referee).
+#[wasm_bindgen]
+pub fn set_sessions(list: String) {
+    SESSIONS.with(|s| *s.borrow_mut() = Some(list));
+}
 use crate::gpu::{Gpu, OtherCar};
 use crate::session::Session;
 
@@ -306,7 +317,8 @@ impl Game {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(canvas: web_sys::HtmlCanvasElement, car: String, track: String, layout: String, spawn: String, auto_shifter: bool, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
         let gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
-        let session = Session::new(&car, &track, &layout, auto_shifter, &spawn)?;
+        let sessions = SESSIONS.with(|s| s.borrow_mut().take());
+        let session = Session::with_sessions(&car, &track, &layout, auto_shifter, &spawn, sessions.as_deref())?;
         Ok(Game::finish(gpu, session, texture_size, None))
     }
 
@@ -512,7 +524,7 @@ impl Game {
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
              \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
-             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}}}",
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -548,8 +560,28 @@ impl Game {
             v.abs_present,
             n(v.brake_bias),
             json_text(v.aid_note().unwrap_or("")),
-            self.online_json()
+            self.online_json(),
+            self.referee_json()
         )
+    }
+
+    /// Task 28: what the referee says, as JSON (`null` without one): the lines at the top
+    /// (session, banner, position and laps, flags), the messages in the middle, the results.
+    fn referee_json(&self) -> String {
+        let list = |lines: &[String]| lines.iter().map(|line| json_text(line)).collect::<Vec<_>>().join(", ");
+        if let Some(session) = &self.session.sim.online {
+            return format!("{{\"top\": [{}], \"centre\": [], \"results\": [], \"fade\": 0}}", list(&session.referee_lines()));
+        }
+        let Some(hud) = self.session.sim.referee_hud() else {
+            return "null".to_string();
+        };
+        let mut top = vec![if hud.banner.is_empty() { hud.session.clone() } else { format!("{}   {}", hud.session, hud.banner) }];
+        top.extend(hud.lines.iter().cloned());
+        top.extend(hud.flags.iter().cloned());
+        if !hud.caption.is_empty() {
+            top.push(hud.caption.clone());
+        }
+        format!("{{\"top\": [{}], \"centre\": [{}], \"results\": [{}], \"fade\": {:.3}}}", list(&top), list(&hud.centre), list(&hud.results), hud.fade)
     }
 
     /// Online: the server, the session, the drivers and the chat, as JSON (`null` offline).

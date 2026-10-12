@@ -1383,6 +1383,8 @@ pub struct MicroReport {
     pub mismatch: Option<String>,
     /// frames with each flag as the current one (none, blue, black, chequered, yellow, white, penalty)
     pub flag_frames: [usize; 7],
+    /// server sessions through `convertRemoteSession`, all the same
+    pub remote_sessions: usize,
 }
 
 /// Where two values part: the words around the first one that differs.
@@ -1391,6 +1393,77 @@ fn first_difference(key: &str, game: &str, port: &str) -> String {
     let at = g.iter().zip(&p).position(|(x, y)| x != y).unwrap_or(g.len().min(p.len()));
     let from = at.saturating_sub(3);
     format!("{key}, word {at}\n  the game: {}\n  the port: {}", g[from.min(g.len())..(at + 6).min(g.len())].join(" "), p[from.min(p.len())..(at + 6).min(p.len())].join(" "))
+}
+
+const VA_RM_CONVERT_REMOTE_SESSION: usize = 0x1_4013_6a50; // Session RaceManager::convertRemoteSession(const RemoteSession&)
+
+/// `count` made-up server sessions through the game's `convertRemoteSession` and the port's:
+/// how many came out the same.
+pub unsafe fn remote_sessions(acs: &Acs, manager: *mut u8, seed: u32, count: usize) -> Result<usize, String> {
+    use rustyac_physics::race::{convert_remote_session, RemoteSession};
+    let convert: extern "C" fn(*mut u8, *mut u8, *const u8) -> *mut u8 = std::mem::transmute(acs.va(VA_RM_CONVERT_REMOTE_SESSION));
+    let mut rand = MsvcRand(seed ^ 0x0e28);
+    let names = ["Practice", "Qualify", "Race", "Q", "", "A much longer session name"];
+    for n in 0..count {
+        let remote = RemoteSession {
+            name: names[rand.next() as usize % names.len()].to_string(),
+            session_type: rand.next() % 5,
+            index: rand.next() % 4,
+            time: rand.next() % 90,
+            laps: rand.next() % 40,
+            start_time: rand.next() as f64 * 37.5 - 1000.0,
+            is_spectator: rand.next() % 4 == 0,
+            is_timed_race: rand.next() % 2 == 0,
+            has_extra_lap: rand.next() % 2 == 0,
+        };
+        let raw = zeroed(0x40);
+        write_wstring(raw, &remote.name);
+        wr(raw, 0x20, remote.session_type);
+        wr(raw, 0x24, remote.index);
+        wr(raw, 0x28, remote.time);
+        wr(raw, 0x2c, remote.laps);
+        wr(raw, 0x30, remote.start_time);
+        wr(raw, 0x38, remote.is_spectator as u8);
+        wr(raw, 0x39, remote.is_timed_race as u8);
+        wr(raw, 0x3a, remote.has_extra_lap as u8);
+        let out = zeroed(0x70);
+        let s = convert(manager, out, raw);
+        let game = format!(
+            "type {} timed {} extra {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
+            rd::<i32>(s, 0),
+            rd::<u8>(s, 4),
+            rd::<u8>(s, 5),
+            rd::<i32>(s, 8),
+            rd::<u32>(s, 0xc),
+            rd::<u32>(s, 0x10),
+            text(s.add(0x18)),
+            text(s.add(0x38)),
+            rd::<u64>(s, 0x58),
+            rd::<i32>(s, 0x60),
+            rd::<u8>(s, 0x64),
+            rd::<u32>(s, 0x68)
+        );
+        let p = convert_remote_session(&remote);
+        let port = format!(
+            "type {} timed {} extra {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
+            p.session_type,
+            p.is_timed_race as u8,
+            p.has_additional_lap as u8,
+            p.laps,
+            p.duration_minutes.to_bits(),
+            p.overtime_ms.to_bits(),
+            p.spawn_set,
+            p.name,
+            p.start_time.to_bits(),
+            p.forced_position,
+            p.is_over as u8,
+            p.leader_completed_laps
+        );
+        if game != port {
+            return Err(format!("remote session {n} ({remote:?})\n  the game: {game}\n  the port: {port}"));
+        }
+    }
+    Ok(count)
 }
 
 /// One made-up drive: `frames` frames of the game's referee and of the port's, fed the same
@@ -1407,6 +1480,8 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
     srand(seed);
     let game = GameReferee::build(acs, &ini, &setups, "toy_track", if variant % 3 == 0 { "layout" } else { "" }, 3000.0, SECTORS, over_time_mult, now, None);
     let (mut game_log, mut game_jobs, _) = game.take_told();
+    // (online the manager's session is a copy of the server's: the conversion alone)
+    let converted = remote_sessions(acs, game.manager, seed, 300)?;
 
     // the port
     let mut referee_rand = MsvcRand(seed);
@@ -1439,7 +1514,7 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
     let mut cars: Vec<ToyCar> = (0..car_count)
         .map(|_| ToyCar { lap_seconds: 7.0 + 6.0 * unit(), position: 0.0, lap_start: now, sector_start: now, sector: 0, laps: 0, in_pit_until: now + 1500.0, parked: false, retired: false, retire_at: None, black: false, speed: 0.0, filtered: 0.0, cuts: 0, off_until: 0.0, reverse_until: 0.0, against_until: 0.0 })
         .collect();
-    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None, flag_frames: [0; 7] };
+    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None, flag_frames: [0; 7], remote_sessions: converted };
     // the flags: the game's FlagManager and the port's
     let game_flags = GameFlags::build(acs, &game, 700.0);
     let mut flags = rustyac_physics::race::flags::FlagManager::new(car_count, 3000.0, None);
