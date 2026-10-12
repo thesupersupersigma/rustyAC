@@ -943,6 +943,7 @@ $('chat').addEventListener('keyup', (event) => event.stopPropagation());
 // built again from every change, at once: nothing is reloaded.
 const CONTROLS_KEY = 'rustyac.controls';
 let controlsNow = null; // what `rac.controls_json()` said last
+let controlsStored = true; // false once the browser refused to keep the settings
 const controlRows = new Map(); // "SECTION.KEY" -> { box, inputs }
 
 function controlsKept() {
@@ -975,8 +976,9 @@ function takeControls(json, keep) {
     state.game.controls_changed();
     window.rustyac.bindings = state.game.bindings();
   }
-  const kept = keep ? keepControls() : true;
-  showControls(kept);
+  if (keep) controlsStored = keepControls();
+  showControls();
+  if (!$('keys').hidden) $('keys').textContent = keyList();
 }
 
 function controlsError(text) {
@@ -1020,7 +1022,12 @@ function buildControls() {
       // the slider works while it is dragged; the keys go back to the car when it is let go
       slider.addEventListener('input', () => changeControl(setting, slider.value));
       slider.addEventListener('change', () => slider.blur());
-      exact.addEventListener('change', () => exact.value !== '' && changeControl(setting, exact.value));
+      exact.addEventListener('change', () => {
+        if (exact.value === '') return;
+        const typed = exact.value;
+        exact.blur();
+        changeControl(setting, typed);
+      });
       row.append(slider, exact);
     } else if (setting.kind === 'choice') {
       const select = document.createElement('select');
@@ -1055,7 +1062,7 @@ function buildControls() {
   }
 }
 
-function showControls(kept) {
+function showControls() {
   if (!controlsNow) return;
   if (controlRows.size !== controlsNow.settings.length) buildControls();
   for (const setting of controlsNow.settings) {
@@ -1068,7 +1075,7 @@ function showControls(kept) {
     }
   }
   const from = controlsNow.custom ? `In use: ${controlsNow.origin}.` : "In use: the built-in layout (AC's default keys plus WASD, the pad numbers below).";
-  $('controls-origin').textContent = from + (kept === false ? ' This browser lets the page keep nothing: the settings last until the page is closed.' : controlsNow.custom ? ' Kept in this browser.' : '');
+  $('controls-origin').textContent = from + (!controlsStored ? ' This browser lets the page keep nothing: the settings last until the page is closed.' : controlsNow.custom ? ' Kept in this browser.' : '');
   $('controls-line').textContent = controlsNow.custom ? controlsNow.origin : 'the built-in layout';
   $('controls-layout').replaceChildren(
     ...[{ what: '', keys: 'keyboard', pad: 'Xbox pad' }, ...controlsNow.layout].map((line) => {

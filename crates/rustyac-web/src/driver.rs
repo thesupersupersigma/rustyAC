@@ -503,7 +503,8 @@ mod tests {
         same_as_the_desktop(file.as_bytes(), "a changed file");
         same_as_the_desktop(&file.replace("USE_LEGACY_GAMEPAD_CODE=1", "USE_LEGACY_GAMEPAD_CODE=0").into_bytes(), "a changed file, the newer speed rule");
         // and the player's own file where this machine has one (only ever read)
-        if let Some(bytes) = rustyac_game::input::bindings::ac_controls_path().and_then(|path| std::fs::read(path).ok()) {
+        // (a file there that is no controls.ini says nothing about this code)
+        if let Some(bytes) = rustyac_game::input::bindings::ac_controls_path().and_then(|path| std::fs::read(path).ok()).filter(|bytes| crate::controls::from_file(bytes).is_ok()) {
             same_as_the_desktop(&bytes, "this machine's Documents\\Assetto Corsa\\cfg\\controls.ini");
         }
     }

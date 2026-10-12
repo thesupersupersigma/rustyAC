@@ -139,6 +139,8 @@ fn value_json(ini: &ControlsIni, setting: &Setting) -> String {
             }
         }
         Kind::Choice(_) => json_text(if ini.get_string(setting.section, setting.key) == "LEFT" { "LEFT" } else { "RIGHT" }),
+        // (the pad's class takes the legacy rule for any number but 0, the keyboard keys for one above 0)
+        Kind::Toggle if setting.section == "RUSTYAC" => (ini.get_int(setting.section, setting.key) != 0).to_string(),
         Kind::Toggle => (ini.get_int(setting.section, setting.key) > 0).to_string(),
     }
 }

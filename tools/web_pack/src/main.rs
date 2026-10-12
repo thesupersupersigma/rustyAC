@@ -122,6 +122,18 @@ fn copy_hashed(from: &Path, to: &Path) -> Result<(u64, String), String> {
     Ok((size, hash.finish()))
 }
 
+/// Runs the look at one car or track; a loader that gives up anywhere on the way (a mod's
+/// file it cannot make sense of) is a reason to leave that one out, not the end of the build.
+fn guarded<T>(look: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(look)) {
+        Ok(result) => result,
+        Err(panic) => {
+            let why = panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            Err(format!("the loader gave up on it: {why}"))
+        }
+    }
+}
+
 /// A car or track that goes into the pack: what a load of it read.
 struct Item {
     /// The car's folder, or the track's.
@@ -223,7 +235,7 @@ fn run(args: &[String]) -> Result<(), String> {
     for (n, car) in cars.iter().enumerate() {
         eprint!("\rchecking car {} of {}: {car:40}", n + 1, cars.len());
         let folder = cars_folder.join(car);
-        let probe = (|| -> Result<Item, String> {
+        let probe = guarded(|| -> Result<Item, String> {
             if !folder.is_dir() {
                 return Err("not installed: no such folder under content/cars".to_string());
             }
@@ -247,7 +259,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 None => content::car_is_mod(&root, car),
             };
             Ok(Item { id: car.clone(), layout: String::new(), name: content::car_name(&root, car), is_mod, pinned: named_cars.contains(&car.to_ascii_lowercase()), files })
-        })();
+        });
         match probe {
             Ok(item) => car_items.push(item),
             Err(why) => skipped.push(("car", car.clone(), one_line(&why, &root))),
@@ -267,8 +279,8 @@ fn run(args: &[String]) -> Result<(), String> {
     for (n, (track, layout)) in tracks.iter().enumerate() {
         let label = if layout.is_empty() { track.clone() } else { format!("{track}/{layout}") };
         eprint!("\rchecking track {} of {}: {label:50}", n + 1, tracks.len());
-        let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
-        let probe = (|| -> Result<Item, String> {
+        let probe = guarded(|| -> Result<Item, String> {
+            let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
             catalog::check(&entry).map_err(|refusal| refusal.to_string())?;
             let read = content::files_read_by_drive(&root, &probe_car, track, layout)?;
             let own = format!("content/tracks/{}/", track.to_ascii_lowercase());
@@ -288,7 +300,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             let name = if entry.ui_name.is_empty() { track.clone() } else { entry.ui_name.clone() };
             Ok(Item { id: track.clone(), layout: layout.clone(), name, is_mod: entry.maker == Maker::Mod, pinned: named_tracks.contains(&label.to_ascii_lowercase()), files })
-        })();
+        });
         match probe {
             Ok(item) => track_items.push(item),
             Err(why) => skipped.push(("track", label, one_line(&why, &root))),

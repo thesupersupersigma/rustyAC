@@ -9,8 +9,7 @@
   2. the pack: `tools/web_pack` (no limit, `web/my_pack.toml`, `"*"`, left-out content with
      reasons, `--dry-run` sizes), `pack.rs` `pinned`, the page's ordered lists and search boxes
   3. the "Open it as a file list" button, `check.mjs --menu / --script / --pick-folder`
-- **Left:** the version (`0.26.1`: root `Cargo.toml`, `crates/rustyac-gateway/Cargo.toml`, the
-  lock files), the release commit and the tag. See "Not done" for what was not rerun.
+- **Version:** `0.26.1`, tagged `v0.26.1` (not pushed). See "Not done" for what was not rerun.
 - Scratch: `re/scratch/task26b/` (`controls_web.sh` = the browser-against-desktop check,
   `panel_test.js` / `panel_test2.js` / `drive_panel.js` / `lists_test.js` = the page's own
   buttons through `check.mjs --script`, `base_v0260.txt` = v0.26.0's selftest hashes,
@@ -180,7 +179,20 @@ after the classes, so it plays back the same whatever the panel says.
 6. The whole test suite, clippy for the desktop and both wasm targets, and `--locked` builds:
    see the last lines of this section.
 
-(The whole test suite is being rerun at the time of this commit; its result is filled in with the release commit.)
+`cargo test --release --workspace --locked`: 265 passed, 0 failed, 1 ignored (54 test
+programs). `cargo clippy --locked -- -D warnings`: clean for the workspace, for
+`wasm32-unknown-unknown` (`rustyac-web`, `rustyac-net`), for `wasm32-wasip1` (the six crates
+CI checks) and for `tools/web_pack`. (The suite ran in a second target folder,
+`target/t26b`: `rustyac.exe` was running out of `target/release` at the time, and cargo
+cannot replace a program that runs.)
+
+**What proof 2 does not cover** (found by an independent read of the diff): it compares
+`CarControls` and the driving device, not the extra buttons' events (traction control, ABS,
+brake bias, hybrid keys), the headlights or the rumble; `STEER_GAIN` and `LOOKAHEAD_POINTS`
+have no effect, so no test can see them; both sides read the file through the same
+`from_file`, so the desktop's own file search (`Bindings::load`: which file is picked) is not
+part of it; and the desktop side is the classes plus a copy of the few lines that pick the
+device, not `LiveSource` itself.
 
 ## How to build your own pack
 
@@ -358,11 +370,22 @@ the three refused VRC cars are in the pack.
   `controls.ini`. A file that binds plain Shift, Ctrl or Alt (virtual keys `0x10` to `0x12`,
   not the left / right ones) to an action will not see that key in the page, which only sends
   the left / right codes.
+- **The page's own keys against a loaded file.** T, Y, `[`, `]` and O give way to a file that
+  drives with them. H, P, R, N, G, C, F1 and Enter do not: a file that binds one of them (AC's
+  usual headlights key is H) gets both jobs on that key. The panel's layout table always
+  names T and `]` / `[` for the traction control and the brake bias, also when the file took
+  those keys for something else.
 - **Wheels** (`[STEER]`, force feedback) are not in the panel: the browser build has no wheel.
 - **Removing files of an earlier pack** is left to you (`rm -rf` as above); the tool never
   deletes anything.
 
 ## Open questions
+
+0. **Can a car need a file only on a real track, or only on some tracks?** The tool loads each
+   car alone on the flat road and each track with one car. For the default four that gives the
+   very same file list as loading every pair, and three other pairs drove without a missing
+   file, but it is not proven for every mod. If a drive from a big pack ever says a file is
+   not in the pack, that is the place to look.
 
 1. **Which numbers should "Reset to AC's defaults" give for the pad?** The built-in layout
    (now), the install's `cfg/controls.ini`, or `cfg/controllers/presets/Default.ini`? They
