@@ -286,7 +286,7 @@ impl InterpolatingSpline {
 
     /// `Spline::closestPointIndex` @ 0x1401ed900: through every point; the first of equal
     /// distances wins.
-    fn closest_point_index_brute(&self, pos: &P3) -> u32 {
+    pub(crate) fn closest_point_index_brute(&self, pos: &P3) -> u32 {
         if self.points.is_empty() || !pos.iter().all(|c| c.is_finite()) {
             return 0;
         }
@@ -1389,14 +1389,12 @@ pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut 
     }
     // AISplineRecorder::load @ 0x1402952c0: when the side files are both there and one of
     // them was written after the AI line, the game works the track limits out again from
-    // them (and writes the line back). Not ported: the limits of the file are used
-    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-    if let (Some(left), Some(right), Some(line)) = (modified(&data.join("side_l.csv")), modified(&data.join("side_r.csv")), modified(&fast_lane)) {
-        if left > line || right > line {
-            messages.push(format!(
-                "{}: side_l.csv / side_r.csv are newer than the AI line: the game recomputes the track limits from them at load and saves the line again (not ported). The limits the line stores are used; they are the game's unless the side files were edited after the game last saved the line",
-                data.display()
-            ));
+    // them (and writes the line back; here they are worked out at every load). A line older
+    // than version 7 was just written by the game at this point, so it is never older
+    if version.is_none_or(|version| version >= 7) {
+        if let (Some((left, right)), Some(line)) = (super::ai_line::newer_side_files(data, &fast_lane), &mut track.ai_spline) {
+            super::ai_line::recompute_sides_from_csv(line, &left, &right)?;
+            messages.push(format!("{}: side_l.csv / side_r.csv are newer than the AI line: the track limits are worked out again from them, as the game does at load (it then saves the line; rustyAC writes nothing)", data.display()));
         }
     }
     let pit_lane = ai.join("pit_lane.ai");

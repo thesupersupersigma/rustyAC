@@ -650,6 +650,128 @@ fn nth_bezier(control: &[P3], t: f32) -> P3 {
     out
 }
 
+/// `data/side_l.csv` and `side_r.csv` when both are there and one of them was written after
+/// the fast lane's file: the game then works the track limits out again from them.
+pub fn newer_side_files(data: &Path, fast_lane: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+    let (left, right) = (data.join("side_l.csv"), data.join("side_r.csv"));
+    let line = modified(fast_lane)?;
+    (modified(&left)? > line || modified(&right)? > line).then_some((left, right))
+}
+
+/// `Spline::loadFromCSV` @ 0x1401ee3c0: a point per line, `x,y,z` (or with blanks when the
+/// first line has no comma). A file that ends with a line break gets its last point twice,
+/// as the game's reader reads one more, empty, line.
+fn spline_from_csv(text: &str) -> InterpolatingSpline {
+    let mut spline = InterpolatingSpline::default();
+    let mut blanks = None;
+    let mut values = [0.0f32; 3];
+    let mut rest = text;
+    loop {
+        let (line, after, ended) = match rest.find('\n') {
+            Some(at) => (&rest[..at], &rest[at + 1..], false),
+            None => (rest, "", true),
+        };
+        let blanks = *blanks.get_or_insert_with(|| !line.contains(','));
+        // swscanf: every number it gets to before the text stops fitting
+        let mut fields = if blanks { line.split_whitespace().collect::<Vec<_>>() } else { line.split(',').collect::<Vec<_>>() };
+        fields.truncate(3);
+        for (slot, field) in values.iter_mut().zip(fields) {
+            let parsed = crate::math::wcstod(field.trim_start());
+            if parsed.consumed == 0 {
+                break;
+            }
+            *slot = parsed.value as f32;
+        }
+        let point_length = match spline.points.last() {
+            Some(last) => last.point_length + distance(&values, &last.point),
+            None => 0.0,
+        };
+        spline.m_length = point_length;
+        spline.points.push(super::spline::SplinePoint { point: values, point_length, tag: 0 });
+        if ended {
+            break;
+        }
+        rest = after;
+    }
+    spline
+}
+
+/// `AISplineRecorder::loadSideSpline` @ 0x140296480: an edge of the track from its file,
+/// in the world's axes and running the way the fast lane runs.
+fn load_side_spline(path: &Path, fast_lane: &AiSpline) -> Result<InterpolatingSpline, String> {
+    let bytes = vfs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut side = spline_from_csv(&String::from_utf8_lossy(&bytes));
+    side.linear = true;
+    // (filterPointsTooClose throws its result away: only the lengths are worked out again)
+    side.compute_spline_length();
+    for point in &mut side.points {
+        point.point[2] = -point.point[2];
+    }
+    if fast_lane.spline.points.len() >= 2 && !side.points.is_empty() {
+        let unit = |d: P3| -> P3 {
+            let n = sqrtf((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]);
+            if !is_zero(n) {
+                let inv = 1.0 / n;
+                [d[0] * inv, d[1] * inv, d[2] * inv]
+            } else {
+                d
+            }
+        };
+        let first = fast_lane.spline.points[0].point;
+        let da = unit(sub(&fast_lane.spline.points[1].point, &first));
+        let k = side.closest_point_index_brute(&first) as i32;
+        let db = unit(sub(&side.point_at(side.wrap_index(k + 1) as u32), &side.point_at(k as u32)));
+        if (db[1] * da[1] + db[0] * da[0]) + db[2] * da[2] < 0.0 {
+            side.points.reverse();
+        }
+    }
+    Ok(side)
+}
+
+/// `InterpolatingSpline::linearProjection` @ 0x1401f3040: the foot of a point on the line
+/// through a spline's point `index` and the next (`index` < 0: the nearest point).
+fn linear_projection(spline: &InterpolatingSpline, p: &P3, index: i32) -> P3 {
+    let index = if index < 0 {
+        if spline.points.is_empty() {
+            0
+        } else {
+            spline.closest_point_index_brute(p) as i32
+        }
+    } else {
+        index
+    };
+    let a = spline.point_at(index as u32);
+    let b = spline.point_at(spline.wrap_index(index + 1) as u32);
+    let (mut vx, mut vz) = (b[0] - a[0], b[2] - a[2]);
+    let n = sqrtf(vz * vz + vx * vx);
+    let mut vy = 0.0f32;
+    if !is_zero(n) {
+        let inv = 1.0 / n;
+        vx *= inv;
+        vz *= inv;
+        vy = inv * 0.0;
+    }
+    let s = (vx * (p[0] - a[0]) + vy * 0.0) + vz * (p[2] - a[2]);
+    [vx * s + a[0], s * vy + a[1], vz * s + a[2]]
+}
+
+/// `AISplineRecorder::recomputeSidesFromCsv` @ 0x140296870: every point's room to the
+/// track's two edges from `side_l.csv` and `side_r.csv`.
+pub fn recompute_sides_from_csv(line: &mut AiSpline, left_csv: &Path, right_csv: &Path) -> Result<(), String> {
+    let left = load_side_spline(left_csv, line)?;
+    let right = load_side_spline(right_csv, line)?;
+    for i in 0..line.spline.points.len() as i32 {
+        let p = line.spline.points[i as usize].point;
+        let mut payload = line.payload_at_spline_index(i);
+        let k = left.closest_point_index_brute(&p) as i32;
+        payload.sides[0] = distance(&linear_projection(&left, &p, k), &p);
+        payload.sides[1] = distance(&linear_projection(&right, &p, -1), &p);
+        line.set_payload_at_spline_index(i, payload);
+    }
+    Ok(())
+}
+
 /// AC's `AISplineRecorder` as far as it loads: the fast lane, the pit lane's line and the
 /// track's hints for the drivers.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -733,6 +855,11 @@ impl AiSplineRecorder {
                 }
             }
             line.calculate_normals(track)?;
+            if line.version >= 7 {
+                if let Some((left, right)) = newer_side_files(data, &fast_lane) {
+                    recompute_sides_from_csv(&mut line, &left, &right)?;
+                }
+            }
             recorder.best_lap = line;
         }
         // AISplineRecorder::loadPitLaneSpline @ 0x140296200
