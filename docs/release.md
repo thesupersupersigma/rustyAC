@@ -15,7 +15,9 @@
 
 ## How to release
 
-1. Set the version in the root `Cargo.toml`.
+1. Set the version in the root `Cargo.toml`, and the same number in
+   `crates/rustyac-gateway/Cargo.toml` (the gateway's manifest does not inherit it: its
+   Docker image is built from that folder alone, where there is no workspace).
 2. Build once, so the lock files follow (the tools have their own, and CI builds with `--locked`):
 
    ```

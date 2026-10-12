@@ -14,7 +14,7 @@ Copyright (c) 2026 thesupersupersigma.
 | The browser preview: the wasm build, its page and its server image | `crates/rustyac-web/`<br>`web/`<br>`.dockerignore` | `GPL-3.0-or-later` |
 | Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
-| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`; no Kunos file) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 
 **What the licenses mean in short:**

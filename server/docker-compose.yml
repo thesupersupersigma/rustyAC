@@ -1,18 +1,37 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 #
-# rustyAC server kit: two Kunos acServer instances, one per preview track.
+# rustyAC server kit: two Kunos acServer instances, one per preview track, and a WebSocket
+# gateway in front of each (for browsers, and for desktop players who reach the server only
+# through an HTTPS tunnel).
 #
-#   AC_PACK_DIR=/srv/rustyac/dist-server AC_ADMIN_PASSWORD=... docker compose -f server/docker-compose.yml up -d
+#   AC_PACK_DIR=/srv/rustyac/dist-server AC_ADMIN_PASSWORD=... \
+#   GATEWAY_ORIGINS=https://rustyac.example.com \
+#       docker compose -f server/docker-compose.yml up -d --build
 #
 # AC_PACK_DIR is the folder server/make_server_pack.py made (copied to the host). It holds
-# Kunos' files and is only mounted, never built into the image.
+# Kunos' files and is only mounted, never built into an image. The gateway image is built
+# from crates/rustyac-gateway (GATEWAY_SRC names another place for that folder) and holds
+# no Kunos file either.
 #
-# Ports (each instance: one game port for TCP and UDP, one HTTP port for the server's own
-# info pages /INFO and /JSON|<guid>):
-#   spa           9600/tcp 9600/udp   8081/tcp
-#   laguna_seca   9610/tcp 9610/udp   8082/tcp
-# They are published on the host directly ("ports"), not through Traefik or a Cloudflare
-# Tunnel: those carry HTTP only, and the cars' positions travel over UDP.
+# Every port on the HOST is a variable; the defaults are the numbers the configs use inside
+# the containers. Set a variable (in the shell, or in a file named .env next to this one)
+# where the host has the port taken already: SPA_HTTP_PORT=8091 on a host whose 8081 is
+# another program's.
+#
+#   server        game (TCP + UDP)            info pages (HTTP)          gateway (WebSocket)
+#   spa           SPA_GAME_PORT     9600      SPA_HTTP_PORT     8081     SPA_GATEWAY_PORT     9601
+#   laguna_seca   LAGUNA_GAME_PORT  9610      LAGUNA_HTTP_PORT  8082     LAGUNA_GATEWAY_PORT  9611
+#
+# The game and info ports are published on every address of the host (players on the LAN
+# or the tailnet join them directly). A gateway's port is published on GATEWAY_BIND only,
+# by default 127.0.0.1: it is for the tunnel that runs on the same host. Set
+# GATEWAY_BIND=0.0.0.0 to reach the gateways from the LAN too (ws://<host>:9601), or when
+# the tunnel's program runs in a container and has to come in over the Docker bridge.
+#
+# Game ports: if you change a game port's HOST number, clients join that number, but
+# Content Manager and the Kunos launcher read the port out of the server's own info page,
+# which still names the number of the config: change it in server/<name>/server_cfg.ini
+# too in that case. The HTTP and gateway ports can be moved freely.
 
 x-acserver: &acserver
   build:
@@ -24,6 +43,13 @@ x-acserver: &acserver
     - ${AC_PACK_DIR:-/srv/rustyac/dist-server}:/pack:ro
   stop_grace_period: 5s
 
+x-gateway: &gateway
+  build:
+    context: ${GATEWAY_SRC:-../crates/rustyac-gateway}
+  image: rustyac-gateway
+  restart: unless-stopped
+  stop_grace_period: 5s
+
 services:
   acserver-spa:
     <<: *acserver
@@ -32,9 +58,9 @@ services:
       AC_ADMIN_PASSWORD: ${AC_ADMIN_PASSWORD:-}
       AC_PASSWORD: ${AC_PASSWORD:-}
     ports:
-      - "9600:9600/tcp"
-      - "9600:9600/udp"
-      - "8081:8081/tcp"
+      - "${SPA_GAME_PORT:-9600}:9600/tcp"
+      - "${SPA_GAME_PORT:-9600}:9600/udp"
+      - "${SPA_HTTP_PORT:-8081}:8081/tcp"
 
   acserver-laguna-seca:
     <<: *acserver
@@ -43,6 +69,37 @@ services:
       AC_ADMIN_PASSWORD: ${AC_ADMIN_PASSWORD:-}
       AC_PASSWORD: ${AC_PASSWORD:-}
     ports:
-      - "9610:9610/tcp"
-      - "9610:9610/udp"
-      - "8082:8082/tcp"
+      - "${LAGUNA_GAME_PORT:-9610}:9610/tcp"
+      - "${LAGUNA_GAME_PORT:-9610}:9610/udp"
+      - "${LAGUNA_HTTP_PORT:-8082}:8082/tcp"
+
+  # One gateway per server. It reaches its acServer by the service's name on this file's
+  # own network (TCP and UDP, the port of the config), so it does not care which host ports
+  # the server was given. GATEWAY_ORIGINS: the address(es) of the site whose pages may
+  # connect, comma-separated (a browser from anywhere else is refused; a desktop client
+  # sends no origin and is let in).
+  gateway-spa:
+    <<: *gateway
+    depends_on:
+      - acserver-spa
+    environment:
+      GATEWAY_NAME: spa
+      GATEWAY_LISTEN: 0.0.0.0:9601
+      GATEWAY_SERVER: acserver-spa:9600
+      GATEWAY_ORIGINS: ${GATEWAY_ORIGINS:-https://rustyac.example.com}
+      GATEWAY_MAX_CLIENTS: ${GATEWAY_MAX_CLIENTS:-12}
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${SPA_GATEWAY_PORT:-9601}:9601/tcp"
+
+  gateway-laguna-seca:
+    <<: *gateway
+    depends_on:
+      - acserver-laguna-seca
+    environment:
+      GATEWAY_NAME: laguna_seca
+      GATEWAY_LISTEN: 0.0.0.0:9601
+      GATEWAY_SERVER: acserver-laguna-seca:9610
+      GATEWAY_ORIGINS: ${GATEWAY_ORIGINS:-https://rustyac.example.com}
+      GATEWAY_MAX_CLIENTS: ${GATEWAY_MAX_CLIENTS:-12}
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${LAGUNA_GATEWAY_PORT:-9611}:9601/tcp"

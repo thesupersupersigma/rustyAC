@@ -7,6 +7,8 @@
 target/
 **/target/
 dist-web/
+# the server pack (server/make_server_pack.py): Kunos' acServer and content
+dist-server/
 
 # reverse-engineering scratch, recordings, extracted game data, local notes
 re/

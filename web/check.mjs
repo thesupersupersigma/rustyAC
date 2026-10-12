@@ -97,7 +97,8 @@ browser.on('exit', () => {
 
 async function close(code) {
   try {
-    await send('Browser.close');
+    // (a browser that was killed never answers)
+    if (!closed) await Promise.race([send('Browser.close'), sleep(5000)]);
   } catch {
     // already gone
   }

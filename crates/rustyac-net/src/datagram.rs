@@ -96,6 +96,20 @@ fn decode_state(r: &mut Reader<'_>, single: bool) -> (u8, NetCarState) {
     (slot, state)
 }
 
+/// The car states of a datagram as (slot, sequence number, the position's three floats as
+/// bits): what tells one state from another on every client that gets it (the time stamp
+/// and the ping in it are each recipient's own). For measuring when the same state reaches
+/// two clients.
+pub fn car_state_keys(datagram: &[u8]) -> Vec<(u8, u8, [u32; 3])> {
+    decode(datagram)
+        .into_iter()
+        .filter_map(|incoming| match incoming {
+            Incoming::CarState { slot, state } => Some((slot, state.pak_sequence_id, [state.pos[0].to_bits(), state.pos[1].to_bits(), state.pos[2].to_bits()])),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A datagram from the server, taken apart in the order the game walks it.
 pub fn decode(datagram: &[u8]) -> Vec<Incoming> {
     let mut out = Vec::new();

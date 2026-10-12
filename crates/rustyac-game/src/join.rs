@@ -151,6 +151,10 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
         None => Box::new(NativeTransport::connect(&target.host, target.port, 8000)?),
     };
     let transport: BoxedTransport = if options.net_tape.is_some() { Box::new(Taped::new(transport)) } else { transport };
+    let transport: BoxedTransport = match &options.net_arrivals {
+        Some(file) => Box::new(Arrivals { inner: transport, file: file.clone(), rows: Vec::new() }),
+        None => transport,
+    };
     // the handshake and the car list: the same state machine the browser steps, here
     // waiting for each answer
     let mut join = Join::start(transport, &request).map_err(|e| e.to_string())?;
@@ -186,6 +190,61 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
     let others = session.remote_entries.iter().filter(|car| !car.driver_name.is_empty()).count();
     notes.push(format!("online: {} cars on the server, {} other driver(s) there now", cars.len(), others));
     Ok(Joined { session, cars, notes })
+}
+
+/// `--net-arrivals <file.csv>`: a transport that notes when every state of another car
+/// arrived (the wall clock, milliseconds since 1970) and writes the list when the session
+/// ends. With the same list of another client of the same session it tells how much later
+/// one transport delivers than the other (`docs/port/multiplayer_web.md`).
+struct Arrivals {
+    inner: BoxedTransport,
+    file: std::path::PathBuf,
+    rows: Vec<(f64, u8, u8, [u32; 3])>,
+}
+
+impl Transport for Arrivals {
+    fn send_reliable(&mut self, message: &[u8]) -> Result<(), String> {
+        self.inner.send_reliable(message)
+    }
+    fn send_datagram(&mut self, message: &[u8]) -> Result<(), String> {
+        self.inner.send_datagram(message)
+    }
+    fn poll_reliable(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.inner.poll_reliable()
+    }
+    fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
+        let datagram = self.inner.poll_datagram()?;
+        if let Some(datagram) = datagram.as_ref().filter(|d| matches!(d.first(), Some(0x46 | 0x48)) && self.rows.len() < 2_000_000) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            self.rows.extend(rustyac_net::datagram::car_state_keys(datagram).into_iter().map(|(slot, sequence, position)| (now, slot, sequence, position)));
+        }
+        Ok(datagram)
+    }
+    fn wait_reliable(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+        self.inner.wait_reliable(timeout_ms)
+    }
+    fn set_datagram_port(&mut self, port: u16) {
+        self.inner.set_datagram_port(port)
+    }
+    fn set_tick(&mut self, tick: u64) {
+        self.inner.set_tick(tick)
+    }
+    fn tape(&self) -> Option<&rustyac_net::transport::Tape> {
+        self.inner.tape()
+    }
+}
+
+impl Drop for Arrivals {
+    fn drop(&mut self) {
+        let mut text = String::from("arrived_ms,taken_ms,slot,sequence,x,y,z\n");
+        for (at, slot, sequence, position) in &self.rows {
+            text.push_str(&format!("{at:.3},{at:.3},{slot},{sequence},{:08x},{:08x},{:08x}\n", position[0], position[1], position[2]));
+        }
+        match std::fs::write(&self.file, text) {
+            Ok(()) => println!("online: {} arrivals of car states are in {}", self.rows.len(), self.file.display()),
+            Err(e) => eprintln!("WARNING: {}: {e}", self.file.display()),
+        }
+    }
 }
 
 /// Writes the tape of a session (`--net-tape`).

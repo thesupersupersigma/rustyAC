@@ -118,27 +118,11 @@ impl NetLink {
     pub fn arrivals(&self) -> String {
         let mut out = String::from("arrived_ms,taken_ms,slot,sequence,x,y,z\n");
         for arrival in self.link.arrivals.borrow().iter() {
-            for (slot, sequence, position) in car_states(&arrival.head) {
+            for (slot, sequence, position) in rustyac_net::datagram::car_state_keys(&arrival.head) {
                 out.push_str(&format!("{:.3},{:.3},{slot},{sequence},{:08x},{:08x},{:08x}\n", arrival.arrived, arrival.taken, position[0], position[1], position[2]));
             }
         }
         out
-    }
-}
-
-/// The car states of a datagram, as (slot, sequence number, the position's three floats as
-/// bits): what tells one state from another on every client that gets it.
-pub fn car_states(datagram: &[u8]) -> Vec<(u8, u8, [u32; 3])> {
-    let state = |bytes: &[u8]| -> Option<(u8, u8, [u32; 3])> {
-        // slot, sequence, the time stamp (4 bytes), the position
-        let word = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
-        Some((*bytes.first()?, *bytes.get(1)?, [word(6)?, word(10)?, word(14)?]))
-    };
-    match datagram.first() {
-        Some(0x46) => state(&datagram[1..]).into_iter().collect(),
-        // the "mega packet": the server's time, a ping, a count, then 57 bytes a car
-        Some(0x48) => datagram.get(8..).map(|cars| cars.chunks_exact(57).filter_map(state).collect()).unwrap_or_default(),
-        _ => Vec::new(),
     }
 }
 
