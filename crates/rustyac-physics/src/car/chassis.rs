@@ -636,6 +636,15 @@ pub struct RollingChassis {
     pub expected_fuel_per_lap: f32,
     /// `Car::pitTimings`
     pub pit_timings: crate::ai::car_ext::PitStopTimings,
+    /// The engine asked the car's AI driver for this step's controls already (in the cars'
+    /// order, before the cars are stepped on the workers): `Car::pollControls` does not ask
+    /// again
+    pub ai_controls_ready: bool,
+    /// The lock of the controls as [`RollingChassis::step_car_begin`] sampled it then
+    pub ai_locked: bool,
+    /// This step's rays of the four wheels, cast ahead of the tyres' steps
+    /// ([`RollingChassis::pit_lane_after_step`])
+    pub(crate) tyre_rays: [Option<TyreRay>; 4],
     /// `Car::forcePosition` calls an AI driver has not been told of yet
     /// (`Car::evOnForcedPositionCompleted`), and the place the event carries: where the
     /// body was put
@@ -801,7 +810,13 @@ impl TyreCar for CarPort<'_, '_> {
 struct GroundPort<'a> {
     ground: &'a dyn RayTrackCollisionProvider,
     trace: Option<&'a RefCell<TyreTrace>>,
+    /// The answer to this wheel's ray of this step, when it was asked for already
+    /// ([`RollingChassis::pit_lane_after_step`])
+    cached: Option<&'a TyreRay>,
 }
+
+/// A wheel's ray of a step and the road's answer: the origin, the length, the hit.
+pub(crate) type TyreRay = (Vec3f, f32, Option<RayCastResult>);
 
 impl RayTrackCollisionProvider for GroundPort<'_> {
     fn has_ray_caster(&self) -> bool {
@@ -809,7 +824,11 @@ impl RayTrackCollisionProvider for GroundPort<'_> {
     }
 
     fn ray_cast(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<RayCastResult> {
-        let hit = self.ground.ray_cast(org, dir, length);
+        let hit = match self.cached {
+            // (the same ray: the same answer)
+            Some((from, long, hit)) if from.x.to_bits() == org.x.to_bits() && from.y.to_bits() == org.y.to_bits() && from.z.to_bits() == org.z.to_bits() && long.to_bits() == length.to_bits() => *hit,
+            _ => self.ground.ray_cast(org, dir, length),
+        };
         if let Some(trace) = self.trace {
             let mut trace = trace.borrow_mut();
             if let Some(hit) = &hit {
@@ -1059,6 +1078,9 @@ impl RollingChassis {
             fuel_lap_evaluator: super::fuel_lap_evaluator::FuelLapEvaluator::new(),
             expected_fuel_per_lap: 0.0,
             pit_timings: crate::ai::car_ext::PitStopTimings::default(),
+            ai_controls_ready: false,
+            ai_locked: false,
+            tyre_rays: [None; 4],
             forced_position_events: 0,
             forced_position: Vec3f::new(0.0, 0.0, 0.0),
             speed: 0.0,
@@ -1391,7 +1413,7 @@ impl RollingChassis {
             speed: self.speed,
             calls: Vec::new(),
         };
-        let ground = GroundPort { ground: self.ground.as_ref(), trace };
+        let ground = GroundPort { ground: self.ground.as_ref(), trace, cached: self.tyre_rays.get(index).and_then(Option::as_ref) };
         let result = f(&mut hub, &ground, &mut car);
         (result, car.calls)
     }
@@ -1665,8 +1687,17 @@ impl RollingChassis {
     /// The first half of [`RollingChassis::step`], what belongs to this car alone:
     /// `Car::stepPreCacheValues` and `Car::step`. The game runs it for every car, on its
     /// thread pool when it has one, before the one rigid-body step all cars share.
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn step_car(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
+        // (a car whose AI driver the engine asked already, in the cars' order, has begun)
+        let locked = if self.ai_controls_ready { self.ai_locked } else { self.step_car_begin(physics_time) };
+        self.step_car_rest(dt, physics_time, locked, feed);
+    }
+
+    /// What `Car::step` does before it asks for the controls (with `Car::stepPreCacheValues`
+    /// before it): the clock, the speed, the first car's softer joints. Returns whether the
+    /// controls are locked, which the game samples here too.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn step_car_begin(&mut self, physics_time: f64) -> bool {
         self.physics_time = physics_time;
         // PhysicsEngine::step counts its steps first of all
         self.step_counter = self.step_counter.wrapping_add(1);
@@ -1704,7 +1735,11 @@ impl RollingChassis {
         }
 
         // the lock is sampled before the controls are polled
-        let locked = self.is_controls_locked || self.lock_controls_time > physics_time;
+        self.is_controls_locked || self.lock_controls_time > physics_time
+    }
+
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_car_rest(&mut self, dt: f32, physics_time: f64, locked: bool, feed: &mut dyn ChassisFeed) {
         self.poll_controls(dt, feed);
 
         // the headlight switch: a press toggles
@@ -2020,6 +2055,8 @@ impl RollingChassis {
         }
 
         // --- the end of Car::step ------------------------------------------------------------
+        // (the rays of this step are used up)
+        self.tyre_rays = [None; 4];
         // 29: FuelLapEvaluator::step
         let in_pit_lane = self.is_in_pit_lane();
         self.fuel_lap_evaluator.step(dt, self.speed, self.fuel, in_pit_lane);
@@ -2079,7 +2116,12 @@ impl RollingChassis {
             feed.set_engine_rpm(0.0, 1000.0, limiter.unwrap_or(0) as f32);
             return;
         }
-        feed.poll_controls(self);
+        if self.ai_controls_ready {
+            // (the car's AI driver was asked already, in the cars' order)
+            self.ai_controls_ready = false;
+        } else {
+            feed.poll_controls(self);
+        }
         if let (Some(limiter), Some(drivetrain)) = (limiter, &self.drivetrain) {
             let limiter = limiter as f32;
             let high = limiter * 0.95;
@@ -2255,6 +2297,30 @@ impl RollingChassis {
         let (dx, dy, dz) = (p.x - m[3][0], p.y - m[3][1], p.z - m[3][2]);
         // `comiss` + `setbe`: true for a NaN
         !((dy * dy + dx * dx) + dz * dz > 9.0)
+    }
+
+    /// What [`RollingChassis::is_in_pit_lane`] will answer once this step's tyre steps have
+    /// run: each wheel's ray of the step is cast now, from where its hub is (no hub moves
+    /// before the rigid-body step), and kept for the tyre's step, which then does not cast
+    /// it again. The engine asks this for a car before the AI drivers of the cars after it
+    /// are asked: in the game, without its thread pool, they see this car already stepped.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn pit_lane_after_step(&mut self) -> bool {
+        let length = if self.ground.has_ray_caster() { 3.0 } else { 2.0 };
+        let mut pit_lane = false;
+        for index in 0..self.tyres.len().min(4) {
+            let m = self.suspensions[index].get_hub_world_matrix(&self.core).m;
+            let org = Vec3f::new(m[3][0], m[3][1] + 2.0, m[3][2]);
+            let hit = self.ground.ray_cast(&org, &Vec3f::new(0.0, -1.0, 0.0), length);
+            // (Tyre::step: a wheel on its side touches nothing)
+            if let Some(hit) = &hit {
+                if !(0.35 >= m[1][1]) && hit.surface_def.is_pitlane {
+                    pit_lane = true;
+                }
+            }
+            self.tyre_rays[index] = Some((org, length, hit));
+        }
+        pit_lane
     }
 
     /// `Car::isInPitLane` @ 0x1402744e0: a tyre stands on a pit-lane surface.

@@ -675,6 +675,7 @@ impl ReplayWorld {
             }
         }
         self.engine.step_with(0.003, time, &mut slots, hooks);
+        assert_eq!(self.engine.pit_lane_mispredictions, 0, "a car's pit-lane flag was not what the AI drivers were shown (step {})", self.steps);
         self.steps += 1;
     }
 

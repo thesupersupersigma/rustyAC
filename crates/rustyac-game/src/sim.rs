@@ -1438,7 +1438,10 @@ impl GameSim {
     fn ai_setup_file(&self, car: &rustyac_physics::car::RollingChassis) -> Option<PathBuf> {
         let track = self.track.as_ref()?;
         let relative = Path::new(&car.unix_name).join(&track.name).join("ai_default.ini");
+        #[cfg(windows)]
         let own = crate::conditions::documents_folder().map(|folder| folder.join("setups").join(&relative)).filter(|file| file.is_file());
+        #[cfg(not(windows))]
+        let own: Option<PathBuf> = None;
         own.or_else(|| ac_root().map(|root| root.join("system").join("setups").join(&relative)).filter(|file| file.is_file()))
     }
 

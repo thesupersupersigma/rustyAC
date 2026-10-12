@@ -167,6 +167,10 @@ pub struct PhysicsEngine {
     /// The physics thread's `rand()` as the AI drivers draw from it: one stream for all of
     /// them, in the order the game draws without a thread pool. A recording stores it.
     pub ai_rand: MsvcRand,
+    /// How often a car's pit-lane flag, worked out ahead of its step for the AI drivers of
+    /// the cars after it, was not what its step then left. It never happens (the same rays
+    /// from the same hubs); the proofs check that it is 0.
+    pub pit_lane_mispredictions: u64,
     parts: Vec<CarParts>,
     /// The core is out, in a car that is being built.
     building: bool,
@@ -276,6 +280,7 @@ impl PhysicsEngine {
             seconds: [0.0; 4],
             session: SessionInfo { session_type: crate::ai::SESSION_UNDEFINED, start_time_ms: 0.0, time_secs: 0.0, laps: 0, index: 0 },
             ai_rand: MsvcRand(1),
+            pit_lane_mispredictions: 0,
             parts: Vec::new(),
             building: false,
             stepped: false,
@@ -599,11 +604,51 @@ impl PhysicsEngine {
 
     /// `Car::stepPreCacheValues` and `Car::step` of every car.
     fn step_cars(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
-        if cars.iter().any(|slot| slot.device.is_ai()) {
+        let mut flags: Vec<Option<bool>> = Vec::new();
+        if cars.iter().any(|slot| slot.device.is_ai()) && !cars.iter().any(|slot| slot.car.black_flagged) {
             // An AI driver reads the other cars as they are when its own car is stepped (the
             // ones before it stepped already, the ones after it not yet) and draws from the
-            // one `rand()` of the physics thread: the game without its thread pool. So the
-            // cars are stepped in creation order here, with any number of workers.
+            // one `rand()` of the physics thread: the game without its thread pool. Of what a
+            // driver reads of another car, a car's own step changes one thing only: whether a
+            // tyre stands on a pit-lane surface. So the drivers are asked here first, in
+            // creation order, each seeing the cars before it with that flag as their step
+            // will leave it; the cars are then stepped as always, on the workers when there
+            // are any. Nothing here depends on the number of workers.
+            for slot in cars.iter_mut() {
+                slot.car.step_pre_cache_values();
+            }
+            let last_ai = cars.iter().rposition(|slot| slot.device.is_ai()).unwrap_or(0);
+            flags = vec![None; cars.len()];
+            for index in 0..cars.len() {
+                let car = &cars[index].car;
+                if cars[index].device.is_ai() && !car.is_controls_locked {
+                    let views: Vec<CarView> = cars
+                        .iter()
+                        .zip(&flags)
+                        .map(|(slot, flag)| {
+                            let mut view = CarView::of(slot.car);
+                            if let Some(flag) = flag {
+                                view.is_in_pit_lane = *flag;
+                            }
+                            view
+                        })
+                        .collect();
+                    let slot = &mut cars[index];
+                    slot.car.ai_input = AiStepInput { cars: views, me: index, rand: self.ai_rand, session: self.session };
+                    // Car::step up to Car::pollControls, then the driver
+                    slot.car.ai_locked = slot.car.step_car_begin(physics_time);
+                    slot.device.get().acquire_controls_car(slot.car, dt);
+                    self.ai_rand = slot.car.ai_input.rand;
+                    slot.car.ai_controls_ready = true;
+                }
+                if index < last_ai {
+                    flags[index] = Some(cars[index].car.pit_lane_after_step());
+                }
+            }
+        } else if cars.iter().any(|slot| slot.device.is_ai()) {
+            // A black-flagged car is put into its pit box in the middle of its own step,
+            // which the drivers of the cars after it see (and its own driver is told): the
+            // cars are stepped one after the other, as the game steps them without its pool.
             for slot in cars.iter_mut() {
                 slot.car.step_pre_cache_values();
             }
@@ -663,10 +708,20 @@ impl PhysicsEngine {
                 }
             };
             pool.run_with(pooled.len(), &task, before);
+            self.check_pit_lane_flags(&flags, cars);
             return;
         }
         for slot in cars.iter_mut() {
             step_one(slot, dt, physics_time);
+        }
+        self.check_pit_lane_flags(&flags, cars);
+    }
+
+    fn check_pit_lane_flags(&mut self, flags: &[Option<bool>], cars: &[CarSlot<'_>]) {
+        for (flag, slot) in flags.iter().zip(cars) {
+            if flag.is_some_and(|flag| flag != slot.car.is_in_pit_lane()) {
+                self.pit_lane_mispredictions += 1;
+            }
         }
     }
 }
