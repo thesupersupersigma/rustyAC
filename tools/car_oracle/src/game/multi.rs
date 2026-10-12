@@ -77,6 +77,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         "rc_timed" => spec("rt2+", true, None),
         "rc_timed_plain" => spec("rt2", false, None),
         "rc_weekend" => spec("p1,q1,r2", true, None),
+        "rc_weekend_q" => spec("p1,q4,r2", true, None),
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
@@ -443,6 +444,22 @@ pub fn scenarios() -> Vec<MultiScenario> {
             no_collision_steps: 250,
             default_cars: &[F2004],
             cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |_| 0.1),
+        },
+        MultiScenario {
+            name: "rc_weekend_q",
+            about: "Task 28: practice (1 min), qualifying (4 min: every car sets a time) and a race of 2 laps; the quicker drivers are in the later pit boxes, so the race's grid is not the entry list's order",
+            seconds: 650.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let count = if cars.is_empty() { 4 } else { cars.len() };
+                let mut out = Vec::new();
+                for i in 0..count {
+                    let (p, tail) = track.spawn_pose("PIT", i).ok_or_else(|| format!("the track has no pit box {i}"))?;
+                    out.push(MultiCar { name: name_of(cars, i, &[F2004]), position: [p.x, p.y, p.z], tail: [tail.x, tail.y, tail.z], drive: Drive::Ai { push: 0.88 + 0.04 * i as f32, aggression: 0.1 * i as f32 } });
+                }
+                Ok(out)
+            },
         },
         MultiScenario {
             name: "rc_weekend",
