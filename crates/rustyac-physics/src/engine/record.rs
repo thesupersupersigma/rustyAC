@@ -668,6 +668,10 @@ impl ReplayWorld {
                 }
                 referee.enable_pit_stop(menu, &world);
                 referee.pit_window = (start, end);
+                // (proofs: made-up states for the stop, header key `pit_feed`: the seed)
+                if let Some(seed) = recording.get("pit_feed") {
+                    referee.pit_feed = Some(crate::race::pitstop::PitFeed::new(seed.parse().map_err(|_| format!("pit_feed: a seed expected, got {seed:?}"))?));
+                }
             }
             referee.hash_frames = true;
             world.referee = Some(Box::new(referee));

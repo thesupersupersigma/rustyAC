@@ -602,6 +602,9 @@ fn multi(args: &Args) -> Result<(), String> {
         let _ = std::fs::write(path.with_extension("referee.txt"), format!("{}\n\n{}\n", log.join("\n"), state.join("\n")));
         println!("the game's referee: {} frames, race_out.json {} bytes; what it said is in {}", referee.frames, file.len(), path.with_extension("referee.txt").display());
         println!("  the first car: {} frames with a time penalty, {} with a drive-through pending, {} with its controls locked for a time, {} black-flagged; most cuts in a lap {}", referee.seen[0], referee.seen[1], referee.seen[2], referee.seen[3], referee.seen[4]);
+        if referee.pit.is_some() {
+            println!("  the first car's pit stop: {} begun, {} finished (the choices applied), {} frames counting down, {} waiting in the box; {} frames with the mandatory stop done", referee.pit_seen[2], referee.pit_seen[3], referee.pit_seen[0], referee.pit_seen[4], referee.pit_seen[1]);
+        }
         for (frame, line) in referee.log.iter().filter(|(_, line)| !line.starts_with("SessionEnd")) {
             println!("  frame {frame} ({:.1} s): {line}", *frame as f64 * 0.009);
         }

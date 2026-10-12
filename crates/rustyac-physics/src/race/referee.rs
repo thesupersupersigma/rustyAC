@@ -122,6 +122,8 @@ pub struct Referee {
     pub pit_over: bool,
     /// the player's stop was counted as the mandatory one in the last frame (a server is told)
     pub mandatory_pit_now: bool,
+    /// proofs only: the stop is fed made-up states instead of the car's
+    pub pit_feed: Option<pitstop::PitFeed>,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -198,6 +200,7 @@ impl Referee {
             pit_began: None,
             pit_over: false,
             mandatory_pit_now: false,
+            pit_feed: None,
             manager,
         };
         let mut actions = Vec::new();
@@ -492,7 +495,26 @@ impl Referee {
         let car = PitCarView::of(world.car(0));
         // (the avatar's flag is the flag manager's, a frame behind the car's)
         let car = PitCarView { is_black_flagged: self.was_black_flagged, ..car };
-        let frame = PitFrame { dt: FRAME_DT, session_type: self.manager.current_session.session_type, race_over: self.manager.is_race_over(0, views), in_replay: false, pause_menu: false, esc_menu: false };
+        let mut frame = PitFrame { dt: FRAME_DT, session_type: self.manager.current_session.session_type, race_over: self.manager.is_race_over(0, views), in_replay: false, pause_menu: false, esc_menu: false };
+        let mut car = car;
+        if let Some(feed) = &mut self.pit_feed {
+            let fed = feed.next(pit.pit_position, &menu, world.car(0).max_fuel as f32);
+            car = fed.car;
+            frame.dt = fed.dt;
+            if let Some((preset, values)) = fed.menu {
+                menu.current_preset = preset;
+                if let Some(slot) = menu.presets.get_mut(preset as usize) {
+                    *slot = values;
+                }
+            }
+            if let Some((zones, life)) = fed.damage {
+                let chassis = world.car_mut(0);
+                chassis.damage_zone_level = zones;
+                if let Some(drivetrain) = &mut chassis.drivetrain {
+                    drivetrain.engine_mut().base_mut().life_left = life;
+                }
+            }
+        }
         let mut out = Vec::new();
         let mut rand = self.rand;
         pit.update(&frame, &car, &mut menu, world.car(0), &mut rand, &mut out);

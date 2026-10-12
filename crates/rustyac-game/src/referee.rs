@@ -217,6 +217,16 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
     let mut lines = table;
     let hash = |bytes: &[u8]| bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3));
     lines.push(format!("referee: race_out.json {} bytes (hash {:016x}), laps.ini {} bytes (hash {:016x})", json.len(), hash(&json), laps.len(), hash(&laps)));
+    // Task 28b: the player's pit stops, and the mandatory one
+    if let Some(referee) = sim.referee.as_ref().filter(|referee| referee.pit.is_some()) {
+        let stops: Vec<&str> = referee.log.iter().filter_map(|line| line.strip_prefix("Pit stop: ")).collect();
+        let car = &sim.car.car;
+        let compound = car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index.max(0) as usize)).map(|def| def.short_name.clone()).unwrap_or_default();
+        lines.push(format!("pit stops of your car: {}{}; now {:.1} l of fuel, tyres {compound}", stops.len(), if stops.is_empty() { String::new() } else { format!(" ({})", stops.join(", ")) }, car.fuel));
+        if referee.pit_window.1 != 0 {
+            lines.push(format!("mandatory pit stop: {}", if referee.pit_avatar.mandatory_pitstop_done { "done" } else if car.black_flagged { "not done: black flag" } else { "not done" }));
+        }
+    }
     if let Some(out) = out {
         let written = std::fs::create_dir_all(out).and_then(|()| std::fs::write(out.join("race_out.json"), &json)).and_then(|()| std::fs::write(out.join("laps.ini"), &laps));
         match written {

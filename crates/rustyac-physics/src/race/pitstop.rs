@@ -848,6 +848,98 @@ impl PitStop {
     }
 }
 
+/// Made-up states for the pit stop's state machine, for proofs: what `PitStop::update` reads
+/// of the player's car and of the menu, drawn frame by frame from a seed. `tools/car_oracle`
+/// feeds the game's own `PitStop` from the same stream (the `pit_feed` scenarios).
+#[derive(Clone, Debug)]
+pub struct PitFeed {
+    rand: MsvcRand,
+    /// frames left of the current spell, and what it is: 0 in the box, 1 away, 2 anything
+    left: u32,
+    spell: u32,
+    dt: f32,
+    black: bool,
+}
+
+/// One frame of a [`PitFeed`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fed {
+    pub car: PitCarView,
+    pub dt: f32,
+    /// a new preset and its values, at the start of a spell
+    pub menu: Option<(i32, Vec<f32>)>,
+    /// new damage: the five zone levels and the engine's life left
+    pub damage: Option<([f32; 5], f64)>,
+}
+
+impl PitFeed {
+    pub fn new(seed: u32) -> PitFeed {
+        PitFeed { rand: MsvcRand(seed), left: 0, spell: 0, dt: 0.009, black: false }
+    }
+
+    fn unit(&mut self) -> f32 {
+        self.rand.next() as f32 / 32767.0
+    }
+
+    fn pick(&mut self, count: u32) -> u32 {
+        self.rand.next() as u32 % count.max(1)
+    }
+
+    /// The next frame's state, for the pit box at `pit_position` and this menu.
+    pub fn next(&mut self, pit_position: [f32; 3], menu: &QuickMenu, max_fuel: f32) -> Fed {
+        let mut fed_menu = None;
+        let mut damage = None;
+        if self.left == 0 {
+            self.left = 40 + self.pick(700);
+            self.spell = [0, 0, 0, 1, 2][self.pick(5) as usize];
+            self.dt = [0.009, 0.009, 0.05, 0.25, 0.003, 1.5][self.pick(6) as usize];
+            self.black = self.pick(40) == 0;
+            // what the menu asks for
+            let preset = self.pick(menu.presets_count.max(1) as u32) as i32;
+            let mut values = Vec::new();
+            for item in &menu.items {
+                let value = match item.kind {
+                    ITEM_FUEL => [0.0, 0.0, 1.0, 5.0, 30.0, 500.0][self.pick(6) as usize] + (self.pick(3) as f32) * self.unit() * item.max_value,
+                    ITEM_TYRE_COMPOUND => (self.pick(item.max_value.max(0.0) as u32 + 2) as i32 - 1).min(item.max_value as i32 - 1) as f32,
+                    ITEM_TYRE_PRESSURE => (item.min_value - 6.0 + self.unit() * (item.max_value - item.min_value + 12.0)).floor(),
+                    ITEM_WING => (self.pick(7) as i32 - 3) as f32,
+                    _ => (self.pick(3) == 0) as u32 as f32,
+                };
+                values.push(value);
+            }
+            fed_menu = Some((preset, values));
+            if self.pick(2) == 0 {
+                let mut zones = [0.0f32; 5];
+                for zone in &mut zones {
+                    *zone = [0.0, 0.0, 3.0, 40.0, 99.0, 250.0][self.pick(6) as usize] * self.unit();
+                }
+                let life = [1000.0, 1000.0, 999.0, 700.0, 0.0, -50.0][self.pick(6) as usize];
+                damage = Some((zones, life));
+            }
+        }
+        self.left -= 1;
+        // where the car is, how fast, and the rest
+        let reach = match self.spell {
+            0 => [0.0, 0.5, 2.0, 2.99][self.pick(4) as usize],
+            1 => [3.01, 4.0, 30.0][self.pick(3) as usize],
+            _ => self.unit() * 6.0,
+        };
+        let turn = self.unit() * 6.283_185_5;
+        let position = [pit_position[0] + reach * turn.cos(), pit_position[1] + 0.1 * (self.unit() - 0.5), pit_position[2] + reach * turn.sin()];
+        let speed = match self.pick(if self.spell == 0 { 12 } else { 4 }) {
+            0 => 0.41,
+            1 => 0.42,
+            2 => 0.55,
+            3 => 0.56 + self.unit() * 20.0,
+            _ => self.unit() * 0.4,
+        };
+        let fuel = [0.0, 1.0, 0.5 * max_fuel, max_fuel, max_fuel + 3.0][self.pick(5) as usize] + self.unit();
+        let is_in_pitlane = self.pick(if self.spell == 1 { 3 } else { 60 }) != 0;
+        let dt = if self.pick(25) == 0 { self.unit() * 0.1 } else { self.dt };
+        Fed { car: PitCarView { is_black_flagged: self.black && self.pick(3) == 0, is_in_pitlane, position, speed, fuel }, dt, menu: fed_menu, damage }
+    }
+}
+
 /// The lambda @ 0x1400a7da0, on the physics thread: the stop's choices go into the car.
 pub fn apply(car: &mut RollingChassis, choices: &PitApply) {
     if choices.new_compound != -1 {

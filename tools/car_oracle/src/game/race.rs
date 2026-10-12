@@ -925,8 +925,10 @@ pub struct WholeReferee<'a> {
     pub seen: [u64; 5],
     /// Task 28b: the game's pit stop of the first car
     pub pit: Option<super::pit::GamePit<'a>>,
-    /// frames in which the stop's countdown ran, and in which the mandatory stop was done
-    pub pit_seen: [u64; 2],
+    /// frames in which the stop's countdown ran, and in which the mandatory stop was done;
+    /// stops begun, stops finished (the choices applied), frames waiting in the box
+    pub pit_seen: [u64; 5],
+    pit_state: i32,
 }
 
 impl<'a> WholeReferee<'a> {
@@ -951,7 +953,7 @@ impl<'a> WholeReferee<'a> {
         }
         game.start_race(setup.first_start_delay_ms);
         REFEREE_RAND_ON.with(|on| on.set(false));
-        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 2] };
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 5], pit_state: 5 };
         referee.note();
         referee
     }
@@ -1071,9 +1073,17 @@ impl<'a> WholeReferee<'a> {
             self.game.start_race(self.next_start_delay_ms);
         }
         if let Some(pit) = &self.pit {
-            pit.update(DT, now);
-            self.pit_seen[0] += (rd::<i32>(pit.pit, 0x120) == 3) as u64;
+            // (a proof that the comparison can fail: from PIT_FAULT=<frame> on the game's stop
+            // is given frames one float step longer)
+            let fault = std::env::var("PIT_FAULT").ok().and_then(|frame| frame.parse::<u64>().ok()).is_some_and(|frame| self.frames >= frame);
+            pit.update(if fault { f32::from_bits(DT.to_bits() + 1) } else { DT }, now, fault);
+            let state = rd::<i32>(pit.pit, 0x120);
+            self.pit_seen[0] += (state == 3) as u64;
             self.pit_seen[1] += rd::<u8>(self.game.avatars[0], 0x1295) as u64;
+            self.pit_seen[2] += (state == 3 && self.pit_state != 3) as u64;
+            self.pit_seen[3] += (state == 4 && self.pit_state == 3) as u64;
+            self.pit_seen[4] += (state == 1) as u64;
+            self.pit_state = state;
         }
         REFEREE_RAND_ON.with(|on| on.set(false));
         self.note();

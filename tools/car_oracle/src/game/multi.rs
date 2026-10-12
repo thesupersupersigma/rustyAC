@@ -86,7 +86,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
         "rc_pass_front" | "rc_pass_rev" => spec("r3", true, Some(1)),
-        "pit_box" | "pit_box_repair" | "pit_box_none" => spec("p20", true, None),
+        "pit_box" | "pit_box_repair" | "pit_box_none" | "pit_feed" => spec("p20", true, None),
         "pit_ai_race" | "pit_window_served" | "pit_window_missed" | "pit_window_early" => spec("r4", true, None),
         "pit_window_timed" => spec("rt5", true, None),
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
@@ -511,6 +511,14 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| pit_boxes(track, cars, 3, 34.0),
         },
         MultiScenario {
+            name: "pit_feed",
+            about: "Task 28b: the pit stop's state machine on made-up states: as pit_box, but what the game's PitStop reads of the car (place, speed, fuel, pit lane, black flag), the frame's length, the menu's values and the car's damage are drawn from the seed (--seed), frame by frame; whatever the stops then do to the car is real",
+            seconds: 120.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 2, 20.0),
+        },
+        MultiScenario {
             name: "pit_box_repair",
             about: "Task 28b: as pit_box with a car that starts damaged (four body zones, the engine, a bent suspension): a repair stop (body, suspension, engine), no fuel, the tyres stay",
             seconds: 125.0,
@@ -772,7 +780,7 @@ pub fn pit_of(scenario: &str) -> Option<PitSpec> {
     const REPAIRS: &[u32] = &[DOWN, RIGHT, DOWN, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, UP, RIGHT, UP, RIGHT];
     const NOTHING: &[u32] = &[DOWN, DOWN];
     match scenario {
-        "pit_box" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
+        "pit_box" | "pit_feed" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
         "pit_box_repair" => Some(PitSpec { window: (0, 0), keys: REPAIRS, damage: true, calls: &[] }),
         "pit_box_none" => Some(PitSpec { window: (0, 0), keys: NOTHING, damage: false, calls: &[] }),
         "pit_ai_race" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[(0, 20.0), (1, 20.0)] }),
@@ -1309,6 +1317,12 @@ impl<'a> MultiWorld<'a> {
                     }
                     let place: [f32; 3] = rd(car, CAR_PIT_POSITION + 0x30);
                     whole.enable_pit(place, &menu, pit.window);
+                    if scenario.name == "pit_feed" {
+                        recording.set("pit_feed", seed.to_string());
+                        if let Some(game_pit) = &mut whole.pit {
+                            game_pit.feed = Some(std::cell::RefCell::new(rustyac_physics::race::pitstop::PitFeed::new(seed)));
+                        }
+                    }
                 }
                 referee = Some(whole);
             }

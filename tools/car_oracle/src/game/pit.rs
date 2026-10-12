@@ -133,6 +133,10 @@ pub struct GamePit<'a> {
     items: usize,
     /// the mandatory pit window (0, 0: none)
     pub window: (u16, u16),
+    /// proofs: made-up states for the stop, and the port's menu for the items' limits
+    pub feed: Option<std::cell::RefCell<rustyac_physics::race::pitstop::PitFeed>>,
+    port_menu: QuickMenu,
+    pit_position: [f32; 3],
 }
 
 impl<'a> GamePit<'a> {
@@ -214,7 +218,7 @@ impl<'a> GamePit<'a> {
         let client = zeroed(0x10818);
         write_wstring(client.add(CLIENT_CURRENT_SESSION), "");
         PIT.with(|p| p.set((pit as usize, acs.va(VA_PITSTOP_NEW_SESSION))));
-        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window }
+        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window, feed: None, port_menu: port.clone(), pit_position }
     }
 
     /// The handler `PitStop::PitStop` adds to `Sim::evOnNewSession`.
@@ -240,7 +244,7 @@ impl<'a> GamePit<'a> {
     /// The part of `RaceManager::update` @ 0x140141550 that keeps the mandatory pit
     /// window, written out from the listing (see the head of this file), then
     /// `PitStop::update`.
-    pub unsafe fn update(&self, dt: f32, now: f64) {
+    pub unsafe fn update(&self, dt: f32, now: f64, fault: bool) {
         if self.window.1 != 0 && rd::<i32>(self.manager, RM_CURRENT_SESSION) == 3 {
             let elapsed = now - rd::<f64>(self.manager, RM_CURRENT_SESSION + 0x58);
             if rd::<f32>(self.manager, RM_PIT_WINDOW_END) == 0.0 {
@@ -268,7 +272,33 @@ impl<'a> GamePit<'a> {
             }
         }
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_PITSTOP_UPDATE));
-        update(self.pit, dt);
+        let Some(feed) = &self.feed else {
+            update(self.pit, dt);
+            return;
+        };
+        // what PitStop::update reads of the avatar, made up for this one call
+        let fed = feed.borrow_mut().next(self.pit_position, &self.port_menu, rd::<f64>(self.car, CAR_MAX_FUEL) as f32);
+        if let Some((preset, values)) = &fed.menu {
+            wr(self.menu, 0xf0, *preset);
+            for (i, value) in values.iter().enumerate() {
+                *self.presets[*preset as usize].add(i) = *value;
+            }
+        }
+        if let Some((zones, life)) = fed.damage {
+            wr(self.car, 0x3de0, zones);
+            wr(self.car, 0x710, life);
+        }
+        let kept: (f32, f32, u8, u8) = (rd(self.avatar, 0x4d8), rd(self.avatar, 0x9fc), rd(self.avatar, CA_IN_PITLANE), rd(self.avatar, 0x1000));
+        wr(self.avatar, CA_BODY_MATRIX + 0x30, fed.car.position);
+        wr(self.avatar, 0x4d8, fed.car.speed);
+        wr(self.avatar, 0x9fc, fed.car.fuel);
+        wr(self.avatar, CA_IN_PITLANE, fed.car.is_in_pitlane as u8);
+        wr(self.avatar, 0x1000, fed.car.is_black_flagged as u8);
+        update(self.pit, if fault { f32::from_bits(fed.dt.to_bits() + 1) } else { fed.dt });
+        wr(self.avatar, 0x4d8, kept.0);
+        wr(self.avatar, 0x9fc, kept.1);
+        wr(self.avatar, CA_IN_PITLANE, kept.2);
+        wr(self.avatar, 0x1000, kept.3);
     }
 
     /// The three lines the port's `Referee::dump` has for the stop, out of the game's blocks.
