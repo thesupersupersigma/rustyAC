@@ -30,6 +30,40 @@ pub enum Drive {
     /// Along the pit lane's line from `from` on, then straight on with this throttle until
     /// `brake_at`.
     PitLane { from: f32, then_gas: f32, brake_at: f32 },
+    /// Task 27: by the game's own `AIDriver`, with this `basePush` (the AI level, 0..1) and
+    /// `aggression`.
+    Ai { push: f32, aggression: f32 },
+}
+
+/// Task 27: the session an AI scenario runs in (`None`: the engine's "undefined" session, in
+/// which a driver just drives): (type, milliseconds from the clock's start to the green
+/// light, the session's seconds, laps).
+pub fn ai_session(scenario: &str) -> Option<(i32, f64, f64, i32)> {
+    match scenario {
+        "ai_solo" | "ai_solo_level" => Some((3, 3000.0, 0.0, 3)),
+        "ai_race" | "ai_race_levels" | "ai_field" => Some((3, 6000.0, 0.0, 3)),
+        "ai_practice" => Some((1, 0.0, 1800.0, 0)),
+        "ai_qualify" => Some((2, 0.0, 600.0, 0)),
+        _ => None,
+    }
+}
+
+const VA_AIDRIVER_CTOR: usize = 0x1_4029_8c60; // AIDriver::AIDriver(Car*)
+const VA_SET_SESSION_INFO: usize = 0x1_4026_4560; // PhysicsEngine::setSessionInfo(const SessionInfo&)
+const PE_EV_ON_NEW_SESSION_PHYSICS: usize = 0xa0;
+const CAR_EXPECTED_FUEL_PER_LAP: usize = 0x3d38;
+const AI_BASE_PUSH: usize = 0x28;
+const AI_AGGRESSION: usize = 0x1c;
+
+/// `SHGetFolderPathW` for the game's `Path::getDocumentPath` (`AIDriver::initSetup` looks for
+/// an AI setup there): an empty folder name, so nothing of the user's Documents is read.
+pub extern "system" fn sh_get_folder_path_w(_window: usize, _folder: i32, _token: usize, _flags: u32, path: *mut u16) -> i32 {
+    unsafe {
+        for (i, c) in "oracle_no_documents".encode_utf16().chain(std::iter::once(0)).enumerate() {
+            *path.add(i) = c;
+        }
+    }
+    0
 }
 
 /// One car of a scenario.
@@ -260,11 +294,59 @@ pub fn scenarios() -> Vec<MultiScenario> {
                 Ok(out)
             },
         },
+        MultiScenario {
+            name: "ai_solo",
+            about: "Task 27: one car on the first grid slot, driven by the game's AIDriver at level 100 in a race of its own (green light after 3 s); give --steps for a whole lap",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 1, |_| 1.0, |_| 0.0),
+        },
+        MultiScenario {
+            name: "ai_solo_level",
+            about: "Task 27: as ai_solo with AI_LEVEL 82 and AI_AGGRESSION 60 (basePush 0.82, aggression 0.57)",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 1, |_| 0.82, |_| 0.6 * 0.95),
+        },
+        MultiScenario {
+            name: "ai_field",
+            about: "Task 27: AI drivers on the first grid slots (as many as --cars names, 12 by default), a race with the green light after 6 s",
+            seconds: 60.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 12, |i| 1.0 - 0.02 * (i % 4) as f32, |i| 0.2 * (i % 3) as f32),
+        },
+        MultiScenario {
+            name: "ai_race",
+            about: "Task 27: a race from the grid: AI drivers on the first slots (as many as --cars names, 6 by default), the lights go green after 6 s",
+            seconds: 90.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| 1.0 - 0.015 * (i % 5) as f32, |i| 0.19 * (i % 4) as f32),
+        },
+        MultiScenario {
+            name: "ai_race_levels",
+            about: "Task 27: as ai_race with slow drivers in front (level 80 to 100 from the pole back) and aggression up to 95 %: overtakes",
+            seconds: 90.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| (0.80 + 0.04 * i as f32).min(1.0), |i| (0.19 * i as f32).min(0.95)),
+        },
     ]
 }
 
 /// `count` cars on the first grid slots, each following the line at its own pace (the car in
 /// front the fastest).
+fn ai_grid(track: &Track, cars: &[String], default: &[&str], count: usize, push: fn(usize) -> f32, aggression: fn(usize) -> f32) -> Result<Vec<MultiCar>, String> {
+    let mut out = grid(track, cars, default, count, 0.9, 0.0)?;
+    for (index, car) in out.iter_mut().enumerate() {
+        car.drive = Drive::Ai { push: push(index), aggression: aggression(index) };
+    }
+    Ok(out)
+}
+
 fn grid(track: &Track, cars: &[String], default: &[&str], count: usize, pace: f32, pace_step: f32) -> Result<Vec<MultiCar>, String> {
     let count = if cars.is_empty() { count } else { cars.len() };
     let spline = track.ai_spline.as_ref().ok_or("the track has no AI line")?;
@@ -329,6 +411,8 @@ struct GameCar {
     lateral: f32,
     pit_done: bool,
     grip: Grip,
+    /// Task 27: the game's `AIDriver` of the car (null: none)
+    ai: *mut u8,
 }
 
 /// The game's world with several cars.
@@ -529,12 +613,64 @@ impl<'a> MultiWorld<'a> {
                     auto_clutch: true,
                     auto_shifter: true,
                     collider_mesh: true,
+                    ai: None,
                 });
                 let lateral = match &planned.drive {
                     Drive::Follow { lateral, .. } => lateral.first().map_or(0.0, |l| l.1),
                     _ => 0.0,
                 };
-                cars.push(GameCar { car, device, bodies, suspensions, mesh_geom, drive: planned.drive.clone(), lateral, pit_done: false, grip: Grip::of(&planned.name) });
+                cars.push(GameCar { car, device, bodies, suspensions, mesh_geom, drive: planned.drive.clone(), lateral, pit_done: false, grip: Grip::of(&planned.name), ai: std::ptr::null_mut() });
+            }
+
+            // Task 27: the AI drivers, after all cars, in creation order, from a known point of
+            // rand(): `new AIDriver(car)` as the game's own code does it (its closure sets
+            // basePush and aggression after the constructor and makes it the car's provider)
+            let ai_seed = seed.wrapping_add(27_000);
+            if cars.iter().any(|car| matches!(car.drive, Drive::Ai { .. })) {
+                srand(ai_seed);
+                let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z"));
+                let ai_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AIDRIVER_CTOR));
+                for (index, car) in cars.iter_mut().enumerate() {
+                    let Drive::Ai { push, aggression } = car.drive else { continue };
+                    let ai = new(1000);
+                    std::ptr::write_bytes(ai, 0, 1000);
+                    ai_ctor(ai, car.car);
+                    wr(ai, AI_BASE_PUSH, push);
+                    wr(ai, AI_AGGRESSION, aggression);
+                    wr(car.car, CAR_CONTROLS_PROVIDER, ai);
+                    car.ai = ai;
+                    metas[index].ai = Some(rustyac_physics::engine::record::AiMeta { base_push: push, aggression, expected_fuel_per_lap: rd(car.car, CAR_EXPECTED_FUEL_PER_LAP) });
+                }
+            }
+            let session = ai_session(scenario.name);
+            if let Some((kind, start_ms, time_secs, laps)) = session {
+                // the game's new-session job: PhysicsEngine::setSessionInfo, then every handler
+                // of evOnNewSessionPhysics in the order they were registered (the cars', the
+                // track's, the drivers'); then every car is put on its place once more, which
+                // tells its driver (Car::evOnForcedPositionCompleted)
+                let mut info = [0u8; 32];
+                info[0..4].copy_from_slice(&kind.to_le_bytes());
+                info[8..16].copy_from_slice(&(CLOCK_START_MS + start_ms).to_le_bytes());
+                info[16..24].copy_from_slice(&time_secs.to_le_bytes());
+                info[24..28].copy_from_slice(&laps.to_le_bytes());
+                let set_session_info: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_SET_SESSION_INFO));
+                set_session_info(engine, info.as_ptr());
+                let begin: *const u8 = rd(engine, PE_EV_ON_NEW_SESSION_PHYSICS);
+                let end: *const u8 = rd(engine, PE_EV_ON_NEW_SESSION_PHYSICS + 8);
+                let mut handler = begin;
+                while handler < end {
+                    let function: *mut u8 = rd(handler, 0x20);
+                    if !function.is_null() {
+                        let vtable: *const usize = rd(function, 0);
+                        let do_call: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(*vtable.add(2));
+                        do_call(function, info.as_ptr());
+                    }
+                    handler = handler.add(0x28);
+                }
+                for (index, planned) in plan.iter().enumerate() {
+                    force_rotation(cars[index].car, &planned.tail);
+                    force_position(cars[index].car, &planned.position, 1);
+                }
             }
             let core: *mut u8 = rd(engine, PE_CORE);
             wr(core, 0x60, scenario.no_collision_steps);
@@ -559,6 +695,12 @@ impl<'a> MultiWorld<'a> {
             recording.set("mesh_geom_high", geom_high.iter().map(|h| format!("{h:08x}")).collect::<Vec<_>>().join(","));
             recording.set("mesh_bounce_vel", format!("{:08x}", geom_high[0]));
             recording.set_cars(&metas);
+            if metas.iter().any(|meta| meta.ai.is_some()) {
+                recording.set("ai_seed", ai_seed.to_string());
+                if let Some((kind, start_ms, time_secs, laps)) = session {
+                    recording.set("ai_session", format!("{kind},{start_ms},{time_secs},{laps}"));
+                }
+            }
             Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect() })
         }
     }
@@ -594,6 +736,8 @@ impl<'a> MultiWorld<'a> {
             let track = std::sync::Arc::clone(&self.track);
             let car = &mut self.cars[index];
             match &car.drive {
+                // (the game's driver is the car's provider: this device is never asked)
+                Drive::Ai { .. } => continue,
                 Drive::Parked => c.brake = 1.0,
                 Drive::Script(segments) => {
                     if let Some(&(_, gas, brake, steer)) = segments.iter().rev().find(|segment| t >= segment.0) {
@@ -695,11 +839,19 @@ impl<'a> MultiWorld<'a> {
             row.push(rd::<i32>(core, 0x60) as u32);
             row.push(rd::<u32>(core, 0xa0));
             for car in &self.cars {
-                let pedals: [u32; 5] = rd(car.device, DEV_GAS);
-                row.extend(pedals);
-                row.push(rd(car.device, DEV_BUTTONS));
-                row.push(rd(car.device, DEV_REQUESTED_GEAR));
-                assert_eq!(rd::<u32>(car.device, DEV_POLLED), 1, "a car's device was not asked exactly once");
+                if car.ai.is_null() {
+                    let pedals: [u32; 5] = rd(car.device, DEV_GAS);
+                    row.extend(pedals);
+                    row.push(rd(car.device, DEV_BUTTONS));
+                    row.push(rd(car.device, DEV_REQUESTED_GEAR));
+                    assert_eq!(rd::<u32>(car.device, DEV_POLLED), 1, "a car's device was not asked exactly once");
+                } else {
+                    // an AI driver's inputs: what it left in the car's controls
+                    let c = car.car.add(CAR_CONTROLS);
+                    row.extend([rd::<u32>(c, CC_GAS), rd(c, CC_BRAKE), rd(c, CC_STEER), rd(c, CC_CLUTCH), rd(c, CC_HAND_BRAKE)]);
+                    row.push(rd::<u8>(c, CC_GEAR_UP) as u32 | (rd::<u8>(c, CC_GEAR_DN) as u32) << 1 | (rd::<u8>(c, CC_DRS) as u32) << 2 | (rd::<u8>(c, CC_KERS) as u32) << 3);
+                    row.push(rd(c, CC_REQUESTED_GEAR_INDEX));
+                }
                 for &body in &car.bodies {
                     row.extend(rd::<[u32; 3]>(body, B_POS));
                     row.extend(rd::<[u32; 4]>(body, B_Q));
@@ -730,6 +882,16 @@ impl<'a> MultiWorld<'a> {
                 row.extend(rd::<[u32; 2]>(car.car, 0x3c30));
                 row.push(rd(car.car.add(CAR_TRANSPONDER), 0x0c));
                 row.push(rd(car.car, CAR_SPLINE_LOCATOR_DATA));
+                if !car.ai.is_null() {
+                    use rustyac_physics::ai::oracle::{Kind, COLUMNS};
+                    for &(_, offset, kind) in COLUMNS {
+                        match kind {
+                            Kind::F32 | Kind::I32 => row.push(rd(car.ai, offset)),
+                            Kind::F64 => row.extend(rd::<[u32; 2]>(car.ai, offset)),
+                            Kind::U8 => row.push(rd::<u8>(car.ai, offset) as u32),
+                        }
+                    }
+                }
             }
             assert_eq!(row.len(), self.recording.row_words(), "a row of the wrong length");
             self.recording.rows.push(row);

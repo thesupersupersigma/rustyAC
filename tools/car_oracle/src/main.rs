@@ -438,6 +438,8 @@ fn multi(args: &Args) -> Result<(), String> {
         std::fs::write(&ini, text.replace("THREADS=0", &format!("THREADS={}", args.game_threads))).map_err(|e| e.to_string())?;
     }
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    // Task 27: the one import of the AI drivers this loader does not bind
+    acs::set_extra_overrides(vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)]);
     let acs = acs::Acs::load(&args.acs)?;
     if args.verbose {
         acs.unbuffer_game_stdout();
