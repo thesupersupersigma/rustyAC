@@ -264,6 +264,9 @@ pub struct LapView {
     /// The place along the lap, 0..1 (`normalizedCarPosition`).
     pub position: f32,
     pub in_pit_lane: bool,
+    /// Task 28b: the player's pit stop, when there is one: `PitStop::state` and whether the
+    /// pit box marker shows (the lollipop man and the marker follow them)
+    pub pit_stop: Option<(i32, bool)>,
 }
 
 impl Default for CarView {
@@ -734,6 +737,7 @@ impl CarView {
                 tyres_out: car.lap_invalidator.current_tyres_out,
                 position: car.spline_locator_data.npos,
                 in_pit_lane: car.is_in_pit_lane(),
+                pit_stop: if player { sim.pit_stop_view() } else { None },
             };
             if !player {
                 // another car: what its own transponder counted

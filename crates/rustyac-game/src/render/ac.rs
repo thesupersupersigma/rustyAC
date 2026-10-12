@@ -1174,10 +1174,22 @@ impl AcRenderer {
             rustyac_render::pit_crew::PitInputs { car_position: [b[0], b[1], b[2]], speed: view.speed_ms, in_pitlane: view.lap.in_pit_lane, session_type: self.options.session_type, pause_menu: self.told_paused, replay: info.replay }
         });
         if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {
-            let rand = &mut self.graphics.crt_rand;
-            marker.update(&mut self.scene, &mut || {
-                rand.next();
-            }, inputs);
+            match view.lap.pit_stop {
+                // Task 28b: the pit stop itself runs with the referee: the marker follows it
+                Some((state, visible)) => {
+                    let rand = &mut self.graphics.crt_rand;
+                    marker.follow(&mut self.scene, &mut || {
+                        rand.next();
+                    }, state, visible)
+                }
+                // (a session without one: the marker's own walk through the states)
+                None => {
+                    let rand = &mut self.graphics.crt_rand;
+                    marker.update(&mut self.scene, &mut || {
+                        rand.next();
+                    }, inputs);
+                }
+            }
         }
         // TrackAvatar::update: the drifting objects (the pause menu does not stop them)
         rustyac_render::crowds::update_dynamic_objects(&mut self.scene, &mut self.dynamic_objects, dt);

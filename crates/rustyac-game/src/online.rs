@@ -627,9 +627,20 @@ impl OnlineSession {
             }
         }
         // the window, and the black flag for a car that missed it
+        let (opened, closed) = (pit.manager.pit_window_start_time, pit.manager.pit_window_end_time);
+        let mut said = Vec::new();
         if pit.window.1 != 0 && pit.manager.update_pit_window(pit.window.0, pit.window.1, now, pit.avatar.mandatory_pitstop_done, pit.avatar.in_pitlane) {
+            if !car.black_flagged && !car.is_retired {
+                said.push("online: black flag: You have been disqualified for not doing the Mandatory Pit".to_string());
+            }
             car.queue(|car| car.set_black_flag_for(true, 3));
             car.is_retired = true;
+        }
+        if opened == 0.0 && pit.manager.pit_window_start_time != 0.0 {
+            said.push(format!("online: the pit window is open ({:.1} s into the race)", pit.manager.pit_window_start_time / 1000.0));
+        }
+        if closed == 0.0 && pit.manager.pit_window_end_time != 0.0 {
+            said.push(format!("online: the pit window is closed ({:.1} s into the race)", pit.manager.pit_window_end_time / 1000.0));
         }
         // PitStop::update
         let view = PitCarView::of(car);
@@ -643,7 +654,6 @@ impl OnlineSession {
         }
         let allowed = (1..=3).contains(&frame.session_type) && pit.pit.app_interaction_enabled;
         pit.menu.frame(dt, view.is_in_pitlane, allowed);
-        let mut said = Vec::new();
         for action in actions {
             match action {
                 PitAction::ControlsLock(locked) => car.queue(move |car| car.lock_controls(locked)),

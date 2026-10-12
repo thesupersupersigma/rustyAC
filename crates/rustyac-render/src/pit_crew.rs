@@ -371,6 +371,19 @@ impl PitIndicator {
         }
     }
 
+    /// The marker with the pit stop itself at work (`rustyac_physics::race::PitStop`, which
+    /// is `PitStop::update` whole): its state, for the lollipop man, and the visibility it
+    /// gave the marker. `rand`: the picture's `rand()`, of which the game's stop draws one
+    /// number when it is timed (`Car::getPitstopTime`, as the driver stops in the box): the
+    /// stop here has the referee's stream, and the picture's stays in step with the game's.
+    pub fn follow(&mut self, scene: &mut Scene, rand: &mut dyn FnMut(), state: i32, visible: bool) {
+        if self.state == 1 && (state == 3 || state == 4) {
+            rand();
+        }
+        self.state = state;
+        scene.nodes[self.node].is_active = visible;
+    }
+
     /// The marker's part of `PitStop::renderHUD` 0x1400aa300, after the scene is drawn.
     pub fn render_hud(&mut self, scene: &mut Scene, i: &PitInputs) {
         if i.pause_menu || i.replay {

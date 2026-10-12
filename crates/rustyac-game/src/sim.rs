@@ -1496,6 +1496,17 @@ impl GameSim {
         self.referee = Some(Box::new(referee));
     }
 
+    /// Task 28b: the player's pit stop for the picture: `PitStop::state` and the marker's
+    /// visibility (`None`: no pit stop in this session).
+    pub fn pit_stop_view(&self) -> Option<(i32, bool)> {
+        let pit = match (&self.referee, &self.online) {
+            (Some(referee), _) => referee.pit.as_ref(),
+            (None, Some(session)) => session.pit.as_ref().map(|pit| &pit.pit),
+            (None, None) => None,
+        };
+        pit.map(|pit| (pit.state, pit.indicator_visible))
+    }
+
     /// Task 28: what the referee says, for the display.
     pub fn referee_hud(&self) -> Option<crate::referee::RefereeHud> {
         self.referee.as_ref().map(|referee| crate::referee::hud_of(referee, &self.car.car))
