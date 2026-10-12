@@ -47,6 +47,8 @@ pub struct HudInfo {
     pub notes: Vec<String>,
     /// `--no-hud`: nothing of this display is drawn.
     pub hidden: bool,
+    /// Task 28: what the referee says (the session, the flags, penalties, results).
+    pub referee: Option<crate::referee::RefereeHud>,
 }
 
 type Color = [f32; 4];
@@ -406,6 +408,52 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
             notes.push("PIT LANE".to_string());
         }
         hud.text_right(px + pw - 14.0 * s, row, 0.7 * s, if lap.tyres_out > 2 { RED } else { DIM }, &notes.join("  "));
+    }
+
+    // Task 28: the referee, in words (AC's own displays come with the UI): the session's
+    // banner at the top, the flags under it, messages in the middle, the results as a table
+    if let Some(referee) = &info.referee {
+        if referee.fade > 0.0 {
+            hud.rect(0.0, 0.0, width, height, [0.0, 0.0, 0.0, referee.fade]);
+        }
+        let mut y = 150.0 * s;
+        let title = if referee.banner.is_empty() { referee.session.clone() } else { format!("{}   {}", referee.session, referee.banner) };
+        let w = hud.width(&title, 1.0 * s) + 28.0 * s;
+        hud.rect((width - w) * 0.5, y - 4.0 * s, w, gh * s + 8.0 * s, PANEL);
+        hud.text_centred(width * 0.5, y, 1.0 * s, WHITE, &title);
+        y += gh * s + 10.0 * s;
+        for text in &referee.lines {
+            hud.text_centred(width * 0.5, y, 0.75 * s, DIM, text);
+            y += line;
+        }
+        for flag in &referee.flags {
+            let color = if flag.starts_with("BLACK") || flag.starts_with("PENALTY") { RED } else { YELLOW };
+            let w = hud.width(flag, 1.2 * s) + 28.0 * s;
+            hud.rect((width - w) * 0.5, y, w, gh * 1.2 * s + 10.0 * s, PANEL);
+            hud.text_centred(width * 0.5, y + 5.0 * s, 1.2 * s, color, flag);
+            y += gh * 1.2 * s + 14.0 * s;
+        }
+        if !referee.caption.is_empty() {
+            hud.text_centred(width * 0.5, y, 0.75 * s, RED, &referee.caption);
+        }
+        let mut y = height * 0.42;
+        for text in &referee.centre {
+            let w = hud.width(text, 1.2 * s) + 32.0 * s;
+            hud.rect((width - w) * 0.5, y, w, gh * 1.2 * s + 10.0 * s, PANEL);
+            hud.text_centred(width * 0.5, y + 5.0 * s, 1.2 * s, RED, text);
+            y += gh * 1.2 * s + 12.0 * s;
+        }
+        if !referee.results.is_empty() {
+            let w = referee.results.iter().map(|text| hud.width(text, 0.8 * s)).fold(0.0f32, f32::max) + 40.0 * s;
+            let h = (gh * 0.8 * s + 4.0 * s) * referee.results.len() as f32 + 24.0 * s;
+            let (x, mut y) = ((width - w) * 0.5, (height - h) * 0.5);
+            hud.rect(x, y, w, h, [0.02, 0.02, 0.03, 0.88]);
+            y += 12.0 * s;
+            for (row, text) in referee.results.iter().enumerate() {
+                hud.text(x + 20.0 * s, y, 0.8 * s, if row == 0 { YELLOW } else { WHITE }, text);
+                y += gh * 0.8 * s + 4.0 * s;
+            }
+        }
     }
 
     if info.replay {

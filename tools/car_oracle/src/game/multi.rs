@@ -56,6 +56,32 @@ pub fn ai_session(scenario: &str) -> Option<(i32, f64, f64, i32)> {
     }
 }
 
+/// Task 28: the referee of a scenario (`rc_*`): the session list in short
+/// (`SessionsIni::from_list`), `[RACE] PENALTIES`, `JUMP_START_PENALTY`, and `startRace`'s
+/// delay for the first session and for a later race, ms.
+pub struct RefereeSpec {
+    pub list: &'static str,
+    pub penalties: bool,
+    pub jump_start: Option<i32>,
+    pub first_delay_ms: f32,
+    pub next_delay_ms: f32,
+}
+
+pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
+    let spec = |list: &'static str, penalties: bool, jump_start: Option<i32>| Some(RefereeSpec { list, penalties, jump_start, first_delay_ms: 5000.0, next_delay_ms: 4000.0 });
+    match scenario {
+        "rc_race" => spec("r3", true, None),
+        "rc_timed" => spec("rt2+", true, None),
+        "rc_timed_plain" => spec("rt2", false, None),
+        "rc_weekend" => spec("p1,q1,r2", true, None),
+        "rc_jump" => spec("r3", true, Some(1)),
+        "rc_jump_dt" => spec("r5", true, Some(2)),
+        "rc_cut" => spec("r3", true, None),
+        "rc_cut_practice" => spec("p3", true, None),
+        _ => None,
+    }
+}
+
 const VA_AIDRIVER_CTOR: usize = 0x1_4029_8c60; // AIDriver::AIDriver(Car*)
 const VA_SET_SESSION_INFO: usize = 0x1_4026_4560; // PhysicsEngine::setSessionInfo(const SessionInfo&)
 const PE_EV_ON_NEW_SESSION_PHYSICS: usize = 0xa0;
@@ -346,6 +372,101 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| 1.0 - 0.015 * (i % 5) as f32, |i| 0.19 * (i % 4) as f32),
         },
         MultiScenario {
+            name: "rc_race",
+            about: "Task 28: a race of 3 laps with the game's referee: AI drivers on the grid (6 by default), the start 5 s after the session's, race over, results, race_out.json",
+            seconds: 330.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| 1.0 - 0.015 * (i % 5) as f32, |i| 0.19 * (i % 4) as f32),
+        },
+        MultiScenario {
+            name: "rc_timed",
+            about: "Task 28: a race of 2 minutes and the lap after (ADDITITIONAL_LAP), 4 AI drivers",
+            seconds: 330.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 4, |i| 1.0 - 0.02 * i as f32, |i| 0.2 * (i % 3) as f32),
+        },
+        MultiScenario {
+            name: "rc_timed_plain",
+            about: "Task 28: a race of 2 minutes without the extra lap, 3 AI drivers",
+            seconds: 300.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |_| 0.1),
+        },
+        MultiScenario {
+            name: "rc_weekend",
+            about: "Task 28: practice (1 min), qualifying (1 min) and a race of 2 laps with the grid from qualifying; AI drivers from the pit boxes (4 by default)",
+            seconds: 480.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let count = if cars.is_empty() { 4 } else { cars.len() };
+                let mut out = Vec::new();
+                for i in 0..count {
+                    let (p, tail) = track.spawn_pose("PIT", i).ok_or_else(|| format!("the track has no pit box {i}"))?;
+                    out.push(MultiCar { name: name_of(cars, i, &[F2004]), position: [p.x, p.y, p.z], tail: [tail.x, tail.y, tail.z], drive: Drive::Ai { push: 1.0 - 0.03 * i as f32, aggression: 0.1 * i as f32 } });
+                }
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_jump",
+            about: "Task 28: a race of 3 laps; the first car (the line follower) drives off before the green light: back to its pit box, controls locked for 20 s (JUMP_START_PENALTY=1); 3 AI drivers",
+            seconds: 120.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |_| 0.95, |_| 0.1)?;
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 0.75, limit: 55.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_jump_dt",
+            about: "Task 28: a race of 5 laps; the first car jumps the start and gets a drive-through (JUMP_START_PENALTY=2) it never serves: black flag at the line with one lap left to serve; 2 AI drivers",
+            seconds: 420.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 3, |_| 0.9, |_| 0.1)?;
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 0.75, limit: 55.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_cut",
+            about: "Task 28: a race of 3 laps with penalties; the first car (the line follower) leaves the track with all four wheels now and then: time penalties, a black flag when one is still unserved at the line; 2 AI drivers",
+            seconds: 300.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 3, |_| 0.9, |_| 0.1)?;
+                out.swap(0, 2);
+                let (first, last) = (out[2].clone(), out[0].clone());
+                out[0].position = first.position;
+                out[0].tail = first.tail;
+                out[2].position = last.position;
+                out[2].tail = last.tail;
+                out[2].drive = out[1].drive.clone();
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 9.0), (25.0, 0.0), (48.0, -9.0), (51.0, 0.0), (120.0, 9.0), (123.0, 0.0)], pace: 0.7, limit: 50.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_cut_practice",
+            about: "Task 28: a practice of 3 minutes with penalties; the first car (the line follower, from the grid) cuts now and then: laps with cuts that do not count; 1 AI driver from its pit box",
+            seconds: 200.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 2, |_| 0.9, |_| 0.1)?;
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 9.0), (25.0, 0.0), (48.0, -9.0), (51.0, 0.0), (120.0, 9.0), (123.0, 0.0)], pace: 0.7, limit: 50.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
             name: "ai_practice",
             about: "Task 27: a practice session: AI drivers in the first pit boxes (as many as --cars names, 2 by default); each waits, drives out along the pit lane's line, does its laps and comes in again",
             seconds: 240.0,
@@ -495,6 +616,8 @@ pub struct MultiWorld<'a> {
     pub names: Vec<String>,
     /// Task 27: the step at which car 0 gets the game's `AIDriver`
     handover: Option<usize>,
+    /// Task 28: the game's referee of the scenario
+    pub referee: Option<super::race::WholeReferee<'a>>,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -836,7 +959,40 @@ impl<'a> MultiWorld<'a> {
                     recording.set("ai_session", format!("{kind},{start_ms},{time_secs},{laps}"));
                 }
             }
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name) })
+            // Task 28: the referee, made once every car and driver is there
+            let mut referee = None;
+            if let Some(spec) = referee_of(scenario.name) {
+                let count = cars.len();
+                let sessions = rustyac_physics::race::SessionsIni::from_list(spec.list, count, spec.penalties, spec.jump_start, 3)?;
+                let referee_seed = seed.wrapping_add(28_000);
+                let setup = rustyac_physics::race::RefereeSetup {
+                    over_time_mult: 1.2,
+                    start_index: (0..count as i32).collect(),
+                    pit_index: (0..count as i32).collect(),
+                    players: metas.iter().enumerate().map(|(n, meta)| rustyac_physics::race::output::Player { name: format!("Driver {n}"), car: meta.name.clone(), skin: format!("skin_{n}") }).collect(),
+                    seed: referee_seed,
+                    first_start_delay_ms: spec.first_delay_ms,
+                    next_start_delay_ms: spec.next_delay_ms,
+                    yellow_flag_distance: None,
+                    layout: layout.to_string(),
+                    sessions,
+                };
+                // RaceManager::initOffline: how long before the start the gearbox is locked
+                // (ksRand() x 1000 + 5000 in the game)
+                wr(engine, 0xc0, 5500.0f64);
+                recording.set("lock_gearbox_ms", "5500");
+                recording.set("allowed_tyres_out", setup.sessions.allowed_tyres_out().to_string());
+                if let Some(mode) = setup.sessions.jump_start_penalty_mode {
+                    recording.set("jump_start_penalty_mode", mode.to_string());
+                }
+                recording.set(
+                    "referee",
+                    format!("{};{};{};{:08x};{:08x};{:08x};{referee_seed}", spec.list, spec.penalties as u8, spec.jump_start.map_or("-".to_string(), |mode| mode.to_string()), setup.over_time_mult.to_bits(), spec.first_delay_ms.to_bits(), spec.next_delay_ms.to_bits()),
+                );
+                let car_pointers: Vec<*mut u8> = cars.iter().map(|car| car.car).collect();
+                referee = Some(super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, CLOCK_START_MS));
+            }
+            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee })
         }
     }
 
@@ -968,8 +1124,18 @@ impl<'a> MultiWorld<'a> {
                 wr(car.device, DEV_POLLED, 0u32);
             }
             let time_ms = CLOCK_START_MS + (self.step_index + 1) as f64 * 3.0;
+            // Task 28: what the referee queued for the physics thread runs first, with the
+            // clock at this step's time
+            if let Some(referee) = &mut self.referee {
+                wr(self.engine, PE_PHYSICS_TIME, time_ms);
+                referee.before_step();
+            }
             let step: extern "C" fn(*mut u8, f32, f64, f64) = std::mem::transmute(self.acs.va(VA_PHYSICS_ENGINE_STEP));
             step(self.engine, DT, time_ms, time_ms);
+            // (and the referee's frame, every third step)
+            if let Some(referee) = &mut self.referee {
+                referee.after_step(time_ms);
+            }
             // the sounds' queue is not read by anybody here: emptied as the game's main thread does
             let pop: unsafe extern "system" fn(*mut u8, *mut u8) -> bool =
                 std::mem::transmute(self.acs.msvcp_function(c"?_Internal_pop_if_present@_Concurrent_queue_base_v4@details@Concurrency@@IEAA_NPEAX@Z"));
@@ -1049,6 +1215,9 @@ impl<'a> MultiWorld<'a> {
                         }
                     }
                 }
+            }
+            if let Some(referee) = &self.referee {
+                row.extend([referee.state_hash as u32, (referee.state_hash >> 32) as u32]);
             }
             assert_eq!(row.len(), self.recording.row_words(), "a row of the wrong length");
             self.recording.rows.push(row);

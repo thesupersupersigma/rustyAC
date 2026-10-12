@@ -155,6 +155,8 @@ pub struct Shared {
     pub replay_restart: AtomicBool,
     /// Task 25: an online session's lines for the HUD (the player list, the chat).
     pub online_hud: Mutex<Vec<String>>,
+    /// Task 28: what the referee says, for the HUD.
+    pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
 }
 
 impl Shared {
@@ -173,6 +175,7 @@ impl Shared {
             replay_speed: AtomicU32::new(1.0f32.to_bits()),
             replay_restart: AtomicBool::new(false),
             online_hud: Mutex::new(Vec::new()),
+            referee_hud: Mutex::new(None),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -240,6 +243,10 @@ pub struct LoopConfig {
     /// chat lines to send at given times (`--chat`).
     pub net_tape: Option<std::path::PathBuf>,
     pub chat: Vec<(String, f64)>,
+    /// Task 28: where the referee's `race_out.json` and `laps.ini` go at the end, and its
+    /// buttons pressed at given seconds of the run (`--next-session-at`).
+    pub referee_out: Option<std::path::PathBuf>,
+    pub session_script: Vec<(f64, u32)>,
 }
 
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
@@ -403,6 +410,11 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             timing.late_over_1ms += (late > 1000.0) as u64;
             timing.late_over_3ms += (late > 3000.0) as u64;
         }
+        for (at, bits) in &config.session_script {
+            if (at / 0.003).round() as u64 == sim.steps {
+                sim.car.device.source.request(*bits);
+            }
+        }
         let begin = Instant::now();
         let input = match sim.step() {
             Ok(input) => input,
@@ -494,6 +506,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 break;
             }
         }
+        if sim.referee.is_some() && sim.steps.is_multiple_of(9) {
+            *shared.referee_hud.lock().unwrap() = sim.referee_hud();
+        }
         shared.steps.store(sim.steps, Ordering::Relaxed);
         if sim.steps.is_multiple_of(32) {
             let mut live = timing;
@@ -527,6 +542,14 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         let finished = sink.finish();
         if result.is_ok() {
             result = finished;
+        }
+    }
+    // Task 28: the end of the program for the referee: the results, the two files
+    if result.is_ok() {
+        if let Some(lines) = crate::referee::finish(&mut sim, config.referee_out.as_deref()) {
+            for line in lines {
+                println!("{line}");
+            }
         }
     }
     shared.finished.store(true, Ordering::Relaxed);

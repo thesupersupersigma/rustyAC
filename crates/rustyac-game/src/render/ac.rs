@@ -792,6 +792,11 @@ impl AcRenderer {
         });
     }
 
+    /// Task 28: the referee's race start, `ms` from now (`None`: no race, or none set yet).
+    pub fn set_race_start_in(&mut self, ms: Option<f64>) {
+        self.race_start_ms = ms.filter(|ms| ms.abs() < 1.0e9).map(|ms| self.time_ms + ms);
+    }
+
     /// How many meshes of the track are start lights, and whether it has a semaphore.
     pub fn start_lights_summary(&self) -> (usize, bool) {
         (self.start_lights.as_ref().map_or(0, |l| l.track_light_count()), self.semaphore.as_ref().is_some_and(|s| !s.is_empty()))

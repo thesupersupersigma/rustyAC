@@ -25,6 +25,10 @@ pub const MAGIC: &[u8; 8] = b"RYMCREC1";
 /// The values of the world in a row, before the cars'.
 pub const WORLD_COLUMNS: [&str; 5] = ["world.contactJoints", "world.contactHash", "world.meshBounceVel", "world.noCollisionCounter", "world.currentFrame"];
 
+/// Task 28: the referee's state after the step, at the end of a row: a hash over every field
+/// of the game's `RaceManager` and `RaceTimingServices` and of what its jobs leave in the cars.
+pub const REFEREE_COLUMNS: [&str; 2] = ["world.referee.lo", "world.referee.hi"];
+
 /// What a car's device reported in a step, in a row.
 pub const INPUT_COLUMNS: [&str; 7] = ["in.gas", "in.brake", "in.steer", "in.clutch", "in.handBrake", "in.buttons", "in.requestedGear"];
 
@@ -293,7 +297,34 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>()
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 }
+    }
+
+    /// Task 28: the referee of the recording (header key `referee`:
+    /// `<session list>;<penalties>;<jump start mode or ->;<OVER_TIME_MULT>;<first start
+    /// delay ms>;<next start delay ms>;<seed>`, the two floats as bits).
+    pub fn referee_setup(&self) -> Result<Option<crate::race::RefereeSetup>, String> {
+        let Some(text) = self.get("referee") else {
+            return Ok(None);
+        };
+        let wrong = || format!("referee: seven values expected, got {text:?}");
+        let parts: Vec<&str> = text.split(';').collect();
+        let [list, penalties, jump, mult, first, next, seed] = parts[..] else { return Err(wrong()) };
+        let float = |text: &str| u32::from_str_radix(text, 16).map(f32::from_bits).map_err(|_| wrong());
+        let cars = self.cars.len();
+        let sessions = crate::race::SessionsIni::from_list(list, cars, penalties == "1", jump.parse().ok(), 3)?;
+        Ok(Some(crate::race::RefereeSetup {
+            sessions,
+            over_time_mult: float(mult)?,
+            start_index: (0..cars as i32).collect(),
+            pit_index: (0..cars as i32).collect(),
+            players: self.cars.iter().enumerate().map(|(n, car)| crate::race::output::Player { name: format!("Driver {n}"), car: car.name.clone(), skin: format!("skin_{n}") }).collect(),
+            seed: seed.parse().map_err(|_| wrong())?,
+            first_start_delay_ms: float(first)?,
+            next_start_delay_ms: float(next)?,
+            yellow_flag_distance: None,
+            layout: self.get("track_layout").unwrap_or("").to_string(),
+        }))
     }
 
     /// The name of every word of a row.
@@ -302,6 +333,9 @@ impl Recording {
         for (n, car) in self.cars.iter().enumerate() {
             out.extend(INPUT_COLUMNS.iter().map(|name| format!("car{n}.{name}")));
             out.extend(car_columns(car).into_iter().map(|name| format!("car{n}.{name}")));
+        }
+        if self.get("referee").is_some() {
+            out.extend(REFEREE_COLUMNS.iter().map(|s| s.to_string()));
         }
         out
     }
@@ -429,6 +463,10 @@ pub struct ReplayReport {
     pub ghost_steps: Vec<usize>,
     /// Seconds the replay's steps took.
     pub seconds: f64,
+    /// Task 28: `race_out.json` and `laps.ini` as the referee leaves them at the end
+    pub referee_files: Option<(Vec<u8>, Vec<u8>)>,
+    /// and its state in words when the replay stopped (for a look at a difference)
+    pub referee_dump: Vec<(String, String)>,
 }
 
 /// A replay being built: the engine and its cars.
@@ -444,6 +482,45 @@ pub struct ReplayWorld {
     pub handover: Option<usize>,
     pub clock_start_ms: f64,
     pub steps: usize,
+    /// Task 28: the referee of a recording that has one
+    pub referee: Option<Box<crate::race::Referee>>,
+}
+
+impl crate::race::World for ReplayWorld {
+    fn car_count(&self) -> usize {
+        self.cars.len()
+    }
+
+    fn car(&self, index: usize) -> &RollingChassis {
+        &self.cars[index]
+    }
+
+    fn car_mut(&mut self, index: usize) -> &mut RollingChassis {
+        &mut self.cars[index]
+    }
+
+    fn set_session_info(&mut self, info: crate::ai::SessionInfo) {
+        let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
+        self.engine.set_session(info, &mut slots);
+        self.engine.reset_collisions_for_new_session();
+    }
+
+    fn set_session_start_time(&mut self, ms: f64) {
+        self.engine.env.session_start_time_ms = ms;
+        self.engine.session.start_time_ms = ms;
+        for car in &mut self.cars {
+            car.env.session_start_time_ms = ms;
+        }
+    }
+
+    fn set_penalty_mode(&mut self, mode: i32) {
+        self.engine.env.penalty_mode = mode;
+        for car in &mut self.cars {
+            car.env.penalty_mode = mode;
+        }
+    }
+
+    fn generate_wind(&mut self) {}
 }
 
 /// The track of a recording.
@@ -484,6 +561,15 @@ impl ReplayWorld {
             ambient_temperature: number("ambient")? as f32,
             road_temperature: number("road")? as f32,
             penalty_mode: number("penalty_mode")? as i32,
+            // Task 28: the rules a referee's session list brings (absent in older recordings)
+            jump_start_penalty_mode: match recording.get("jump_start_penalty_mode") {
+                Some(text) => text.parse().map_err(|e| format!("jump_start_penalty_mode: {e}"))?,
+                None => ChassisEnvironment::default().jump_start_penalty_mode,
+            },
+            lock_gearbox_at_start_time_ms: match recording.get("lock_gearbox_ms") {
+                Some(text) => text.parse().map_err(|e| format!("lock_gearbox_ms: {e}"))?,
+                None => ChassisEnvironment::default().lock_gearbox_at_start_time_ms,
+            },
             allowed_tyres_out: number("allowed_tyres_out")? as i32,
             ..ChassisEnvironment::default()
         };
@@ -532,7 +618,7 @@ impl ReplayWorld {
             Some(text) => Some(text.parse::<usize>().map_err(|e| format!("ai_handover: {e}"))?),
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0 };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         if recording.cars.iter().any(|meta| meta.drag.is_some()) {
@@ -540,6 +626,13 @@ impl ReplayWorld {
         }
         if recording.cars.iter().any(|meta| meta.ai.is_some()) || handover.is_some() {
             world.build_ai(recording, clock_start_ms)?;
+        }
+        // Task 28: the referee, made once every car and driver is there
+        if let Some(setup) = recording.referee_setup()? {
+            let track = world.cars[0].track.clone().ok_or("a referee needs a track")?;
+            let mut referee = crate::race::Referee::new(setup, track, &mut world, clock_start_ms);
+            referee.hash_frames = true;
+            world.referee = Some(Box::new(referee));
         }
         Ok(world)
     }
@@ -676,7 +769,17 @@ impl ReplayWorld {
         }
         self.engine.step_with(0.003, time, &mut slots, hooks);
         assert_eq!(self.engine.pit_lane_mispredictions, 0, "a car's pit-lane flag was not what the AI drivers were shown (step {})", self.steps);
+        drop(slots);
         self.steps += 1;
+        // Task 28: the cars' lap events, and the referee's frame every third step
+        if let Some(mut referee) = self.referee.take() {
+            for index in 0..self.cars.len() {
+                let (laps, splits) = self.cars[index].transponder.take_events();
+                referee.events(index, &laps, &splits);
+            }
+            referee.after_step(self, time);
+            self.referee = Some(referee);
+        }
     }
 
     /// The contact joints of the world, newest first.
@@ -762,6 +865,9 @@ impl ReplayWorld {
                 None if n == 0 && self.handover.is_some() => row.extend(std::iter::repeat_n(0u32, crate::ai::oracle::column_names().len())),
                 None => {}
             }
+        }
+        if let Some(referee) = &self.referee {
+            row.extend([referee.state_hash as u32, (referee.state_hash >> 32) as u32]);
         }
         row
     }
@@ -869,6 +975,12 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
     }
     report.seconds = start.elapsed().as_secs_f64();
     report.hash = hash;
+    if let Some(mut referee) = world.referee.take() {
+        report.referee_dump = referee.dump(&world);
+        if report.mismatch.is_none() {
+            report.referee_files = Some(referee.shutdown(&mut world));
+        }
+    }
     Ok(report)
 }
 

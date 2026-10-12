@@ -693,6 +693,8 @@ pub struct GameSim {
     /// Task 27: the AI drivers' random stream and session while one car is stepped alone
     /// (with other cars the engine has both).
     pub solo_ai: rustyac_physics::ai::SoloAi,
+    /// Task 28: the referee (AC's `RaceManager` and what hangs on it); `None`: no race rules.
+    pub referee: Option<Box<rustyac_physics::race::Referee>>,
 }
 
 /// Another car of the session with its driver.
@@ -1250,8 +1252,9 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() } };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None };
         sim.start_ai()?;
+        sim.start_referee();
         Ok(sim)
     }
 
@@ -1423,7 +1426,65 @@ impl GameSim {
         // (new cars: new AI drivers; a driver the player's car had goes with the old car)
         self.car.device.ai = None;
         self.start_ai()?;
+        // (and a new referee: the session list from its start)
+        self.referee = None;
+        self.start_referee();
         Ok(())
+    }
+
+    /// Task 28: the referee of the session list, when the set-up has one: the manager with
+    /// its first session, as `RaceManager::initOffline` leaves it, and `Sim::Sim`'s
+    /// `startRace`.
+    fn start_referee(&mut self) {
+        let (Some(header), Some(track)) = (self.setup.referee.clone(), self.track.clone()) else {
+            return;
+        };
+        if self.online.is_some() || self.setup.oracle.is_some() {
+            return;
+        }
+        let cars = 1 + self.opponents.len();
+        let places: Vec<Option<crate::input_file::GridPlace>> = std::iter::once(self.setup.player_place).chain(self.opponents.iter().map(|opponent| opponent.setup.place)).collect();
+        let skins: Vec<String> = std::iter::once(self.setup.player_skin.clone().unwrap_or_default()).chain(self.opponents.iter().map(|opponent| opponent.setup.skin.clone())).collect();
+        let players = (0..cars)
+            .map(|index| rustyac_physics::race::output::Player {
+                name: header.driver_names.get(index).filter(|name| !name.is_empty()).cloned().unwrap_or_else(|| if index == 0 { "Player".to_string() } else { format!("Driver {index}") }),
+                car: if index == 0 { self.car.car.unix_name.clone() } else { self.opponents[index - 1].car.car.unix_name.clone() },
+                skin: skins[index].clone(),
+            })
+            .collect();
+        let setup = rustyac_physics::race::RefereeSetup {
+            sessions: header.sessions.clone(),
+            over_time_mult: header.over_time_mult,
+            start_index: places.iter().enumerate().map(|(index, place)| place.map_or(index as i32, |place| place.start)).collect(),
+            pit_index: places.iter().enumerate().map(|(index, place)| place.map_or(index as i32, |place| place.pit as i32)).collect(),
+            players,
+            seed: header.seed,
+            first_start_delay_ms: header.first_start_delay_ms,
+            next_start_delay_ms: header.next_start_delay_ms,
+            yellow_flag_distance: None,
+            layout: self.setup.layout.clone(),
+        };
+        let now = self.clock_ms();
+        let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+        let referee = rustyac_physics::race::Referee::new(setup, track, &mut world, now);
+        self.referee = Some(Box::new(referee));
+    }
+
+    /// Task 28: what the referee says, for the display.
+    pub fn referee_hud(&self) -> Option<crate::referee::RefereeHud> {
+        self.referee.as_ref().map(|referee| crate::referee::hud_of(referee, &self.car.car))
+    }
+
+    /// Task 28: the end of the program (`RaceManager::shutdown`, `Sim::writeOutputJson`,
+    /// `RaceTimingServices::shutdown`): the last session's results are made, and the bytes
+    /// of `race_out.json` and `laps.ini` are returned with the results as a table.
+    pub fn finish_referee(&mut self) -> Option<(Vec<u8>, Vec<u8>, Vec<String>)> {
+        let mut referee = self.referee.take()?;
+        let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+        let (json, laps) = referee.shutdown(&mut world);
+        let table = referee.last_results.as_ref().map(|event| crate::referee::results_table(&referee, event)).unwrap_or_default();
+        self.referee = Some(referee);
+        Some((json, laps, table))
     }
 
     /// The session as the AI drivers are told it (`PhysicsEngine::sessionInfo`).
@@ -1738,9 +1799,13 @@ impl GameSim {
                     }
                     None => engine.step(DT, time, &mut slots),
                 }
-                // (nobody lists the other cars' laps yet: their timers' events are dropped)
-                for opponent in &mut self.opponents {
-                    let _ = opponent.car.car.transponder.take_events();
+                // the other cars' laps: the referee's lists (without one their timers' events
+                // are dropped)
+                for (index, opponent) in self.opponents.iter_mut().enumerate() {
+                    let (laps, splits) = opponent.car.car.transponder.take_events();
+                    if let Some(referee) = &mut self.referee {
+                        referee.events(index + 1, &laps, &splits);
+                    }
                 }
             }
         }
@@ -1754,6 +1819,9 @@ impl GameSim {
             if let Some(session) = &mut self.online {
                 session.report_local_car(&self.car.car, &laps, &splits, time);
             }
+            if let Some(referee) = &mut self.referee {
+                referee.events(0, &laps, &splits);
+            }
             for split in &splits {
                 self.lap_db.on_sector_split(split);
             }
@@ -1764,6 +1832,24 @@ impl GameSim {
         }
         if self.online.is_some() {
             self.apply_server_events();
+        }
+        // Task 28: the referee's frame (the game's main thread), every third step
+        if let Some(mut referee) = self.referee.take() {
+            let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+            if events & event::NEXT_SESSION != 0 {
+                referee.skip_session(&mut world);
+            }
+            if events & event::RESTART_SESSION != 0 {
+                referee.restart_session(&mut world);
+            }
+            let sessions_before = referee.manager.current_session_index;
+            referee.after_step(&mut world, time);
+            if referee.manager.current_session_index != sessions_before {
+                // the picture's handlers of the game's new-session event
+                self.new_sessions += 1;
+                self.lap_db = LapDb::new(self.lap_db.sector_count);
+            }
+            self.referee = Some(referee);
         }
         let device = &self.car.device;
         Ok(StepInput {

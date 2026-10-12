@@ -111,6 +111,46 @@ impl SessionsIni {
         }
     }
 
+    /// A session list in short: `p10,q5,r3` (practice 10 min, qualifying 5 min, a race of 3
+    /// laps), `rt20` (a race of 20 minutes), `rt20+` (and the lap after), as race.ini would
+    /// give it (`cars`: `[RACE] CARS`, the player's grid slot without `STARTING_POSITION`).
+    pub fn from_list(list: &str, cars: usize, penalties: bool, jump_start: Option<i32>, base_pit_penalty_laps: i16) -> Result<SessionsIni, String> {
+        let wrong = |part: &str| format!("{part:?} is not p<minutes>, q<minutes>, r<laps>, rt<minutes> or rt<minutes>+");
+        let mut sessions = Vec::new();
+        let mut additional = false;
+        let mut last_race_laps = 0;
+        for part in list.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+            let lower = part.to_ascii_lowercase();
+            let session = if let Some(rest) = lower.strip_prefix("rt") {
+                let plus = rest.ends_with('+');
+                let minutes: i32 = rest.trim_end_matches('+').parse().map_err(|_| wrong(part))?;
+                additional = plus;
+                last_race_laps = 0;
+                Session { session_type: SESSION_RACE, name: "Race".to_string(), laps: 0, duration_minutes: minutes as f32, is_timed_race: true, spawn_set: "START".to_string(), forced_position: cars as i32, ..Session::default() }
+            } else if let Some(rest) = lower.strip_prefix('r') {
+                let laps: i32 = rest.parse().map_err(|_| wrong(part))?;
+                if laps < 1 {
+                    return Err(wrong(part));
+                }
+                additional = false;
+                last_race_laps = laps;
+                Session { session_type: SESSION_RACE, name: "Race".to_string(), laps, duration_minutes: 0.0, spawn_set: "START".to_string(), forced_position: cars as i32, ..Session::default() }
+            } else if let Some(rest) = lower.strip_prefix('p') {
+                Session { session_type: SESSION_PRACTICE, name: "Practice".to_string(), duration_minutes: rest.parse::<i32>().map_err(|_| wrong(part))? as f32, spawn_set: "PIT".to_string(), ..Session::default() }
+            } else if let Some(rest) = lower.strip_prefix('q') {
+                Session { session_type: SESSION_QUALIFY, name: "Qualify".to_string(), duration_minutes: rest.parse::<i32>().map_err(|_| wrong(part))? as f32, spawn_set: "PIT".to_string(), ..Session::default() }
+            } else {
+                return Err(wrong(part));
+            };
+            sessions.push(session);
+        }
+        if sessions.is_empty() {
+            return Err("the session list is empty".to_string());
+        }
+        let jump_start_penalty_mode = jump_start.map(|mode| if mode == 2 && base_pit_penalty_laps as i32 >= last_race_laps && last_race_laps != 0 { 1 } else { mode });
+        Ok(SessionsIni { sessions, has_additional_lap: additional, fixed_setup: false, penalties_enabled: penalties, jump_start_penalty_mode, has_hotlap: false })
+    }
+
     /// `base_pit_penalty_laps`: `PhysicsAvatar::getBasePitPenaltyLaps()`.
     pub fn from_ini(ini: &IniReader, base_pit_penalty_laps: i16) -> SessionsIni {
         // (INIReader::getInt of a key that is not there, or is no number, is 0)

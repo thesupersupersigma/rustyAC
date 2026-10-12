@@ -100,6 +100,9 @@ pub struct Referee {
     pub frames: u64,
     /// every action of the manager with the frame it came in (kept for proofs)
     pub trace: Option<Vec<(u64, Action)>>,
+    /// a hash of the whole state ([`Referee::dump`]) is taken at the end of every frame
+    pub hash_frames: bool,
+    pub state_hash: u64,
 }
 
 impl Referee {
@@ -134,6 +137,8 @@ impl Referee {
             was_black_flagged: false,
             frames: 0,
             trace: None,
+            hash_frames: false,
+            state_hash: 0,
             manager,
         };
         let mut actions = Vec::new();
@@ -216,21 +221,20 @@ impl Referee {
         }
     }
 
-    /// After every physics step, at the step's clock: the cars' lap and sector events are
-    /// taken (`laps_of`: the events of car `index` since the last call), and every
-    /// [`FRAME_STEPS`] steps a frame of the game's main thread runs.
+    /// A car's lap and sector events of the last step (`Car::evOnLapCompleted` /
+    /// `evOnSectorSplit`, which `CarAvatar` queues for the main thread).
+    pub fn events(&mut self, car: usize, laps: &[OnLapCompletedEvent], splits: &[OnSectorSplitEvent]) {
+        self.laps.extend(laps.iter().cloned().map(|mut lap| {
+            lap.car_index = car as u32;
+            lap
+        }));
+        self.splits.extend(splits.iter().map(|split| OnSectorSplitEvent { car_index: car as u32, ..*split }));
+    }
+
+    /// After every physics step, at the step's clock, once the cars' events of the step were
+    /// handed in ([`Referee::events`]): every [`FRAME_STEPS`] steps a frame of the game's
+    /// main thread runs.
     pub fn after_step(&mut self, world: &mut dyn World, now: f64) {
-        for index in 0..world.car_count() {
-            let (laps, splits) = world.car_mut(index).transponder.take_events();
-            self.laps.extend(laps.into_iter().map(|mut lap| {
-                lap.car_index = index as u32;
-                lap
-            }));
-            self.splits.extend(splits.into_iter().map(|mut split| {
-                split.car_index = index as u32;
-                split
-            }));
-        }
         self.step_in_frame += 1;
         if self.step_in_frame < FRAME_STEPS {
             return;
@@ -287,6 +291,9 @@ impl Referee {
             self.message_lines = self.messages.frame(FRAME_DT, self.manager.current_session.session_type, &player, false);
         }
         self.views = views;
+        if self.hash_frames {
+            self.state_hash = dump_hash(&self.dump(world));
+        }
     }
 
     fn apply(&mut self, actions: Vec<Action>, world: &mut dyn World) {
@@ -399,5 +406,127 @@ impl Referee {
         }
         let best = self.manager.timing.instance_best_times.first().map_or(0, |lap| lap.time as i32);
         (self.json.file(&self.players, best), self.manager.timing.laps_ini().into_bytes())
+    }
+}
+
+/// A `Lap` in words.
+pub fn lap_text(lap: &super::timing::Lap) -> String {
+    format!("{}/{:?}/{}/{}/{}", lap.time, lap.splits, lap.cuts, lap.is_valid as u8, lap.compound)
+}
+
+/// A session's end in words.
+pub fn session_end_text(event: &OnSessionEndEvent) -> String {
+    let laps: Vec<String> = event.result.laps.iter().map(|laps| format!("[{}]", laps.iter().map(lap_text).collect::<Vec<_>>().join(" "))).collect();
+    let total: Vec<String> = event.result.total.iter().map(|t| format!("{:08x}", t.to_bits())).collect();
+    format!(
+        "type {} positions {:?} lapCount {:?} total {:?} best [{}] laps {}",
+        event.current_session.session_type,
+        event.result.positions,
+        event.result.lap_count,
+        total,
+        event.result.best_laps.iter().map(lap_text).collect::<Vec<_>>().join(" "),
+        laps.join("")
+    )
+}
+
+/// Every field of the manager's state under a name, as text: what `tools/car_oracle` reads
+/// out of the game's own `RaceManager` and `RaceTimingServices` under the same names
+/// (`penalty_mode`: `PhysicsEngine::penaltyMode`).
+pub fn dump(manager: &RaceManager, penalty_mode: i32) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut put = |key: &str, value: String| out.push((key.to_string(), value));
+    put("currentSessionIndex", manager.current_session_index.to_string());
+    put("flags", format!("{} {} {}", manager.time_race_ended as u8, manager.is_timed_last_lap as u8, manager.has_additional_lap as u8));
+    put("pitWindow", format!("{:08x} {:08x}", manager.pit_window_start_time.to_bits(), manager.pit_window_end_time.to_bits()));
+    let s = &manager.current_session;
+    put(
+        "session",
+        format!(
+            "type {} timed {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
+            s.session_type,
+            s.is_timed_race as u8,
+            s.laps,
+            s.duration_minutes.to_bits(),
+            s.overtime_ms.to_bits(),
+            s.spawn_set,
+            s.name,
+            s.start_time.to_bits(),
+            s.forced_position,
+            s.is_over as u8,
+            s.leader_completed_laps
+        ),
+    );
+    put("penaltyMode", penalty_mode.to_string());
+    put("realTime", manager.cars_real_time_position.iter().map(|d| format!("{}:{}:{:08x}", d.car, d.crossed_for_the_first_time as u8, d.approx_pos.to_bits())).collect::<Vec<_>>().join(" "));
+    put("raceStatus", manager.cars_race_status.iter().map(|d| format!("{}:{:08x}:{}:{:08x}", d.car, d.reset_timer.to_bits(), d.retired as u8, d.invalid_state_timer.to_bits())).collect::<Vec<_>>().join(" "));
+    for (car, db) in manager.timing.lap_dbs.iter().enumerate() {
+        put(
+            &format!("lapDB {car}"),
+            format!(
+                "total {:016x} best {} lastStart {} current {:?} personal {:?} bestLapSplit {} completed {} laps {}",
+                db.total_time.to_bits(),
+                lap_text(&db.best_lap),
+                db.last_lap_start_time,
+                db.current_splits,
+                db.personal_best_splits,
+                db.best_lap_split,
+                db.has_completed_last_lap as u8,
+                db.laps.iter().map(lap_text).collect::<Vec<_>>().join(" ")
+            ),
+        );
+    }
+    put("bestSplits", format!("{:?} global {}", manager.timing.best_splits, manager.timing.global_best_lap));
+    let entry = |e: &super::timing::LeaderboardEntry| format!("{}:{:016x}:{:016x}:{}:{}{}{}", e.car, e.total_time.to_bits(), e.best_lap.to_bits(), e.laps, e.is_race_mode as u8, e.is_black_flagged as u8, e.has_completed_last_lap as u8);
+    put("leaderboard", manager.timing.leaderboard.iter().map(entry).collect::<Vec<_>>().join(" "));
+    put("grid", manager.start_index.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" "));
+    put("resultsDisplayed", (manager.results_displayed as u8).to_string());
+    for (i, event) in manager.session_history_list.iter().enumerate() {
+        put(&format!("history {i}"), session_end_text(event));
+    }
+    for (i, board) in manager.leaderboard_history.iter().enumerate() {
+        put(&format!("leaderboardHistory {i}"), board.iter().map(entry).collect::<Vec<_>>().join(" "));
+    }
+    out
+}
+
+/// What the referee's jobs leave in a car's physics, in words (`Car::lockControlsTime`,
+/// `isControlsLocked`, `blackFlagged`, `isRetired`, the penalty manager, the lap's cuts).
+pub fn car_text(car: &RollingChassis) -> String {
+    let p = &car.penalty_manager;
+    format!(
+        "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {}",
+        car.lock_controls_time.to_bits(),
+        car.is_controls_locked as u8,
+        car.black_flagged as u8,
+        car.is_retired as u8,
+        p.pending_penalty_type,
+        p.is_serving_pit_penalty as u8,
+        p.rearm_pit_penalty as u8,
+        p.pit_penalty_laps,
+        p.in_pit_meter_counter.to_bits(),
+        car.transponder.cuts
+    )
+}
+
+/// One number for a state in words (FNV-1a).
+pub fn dump_hash(dump: &[(String, String)]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for (key, value) in dump {
+        for byte in key.bytes().chain([0]).chain(value.bytes()).chain([10]) {
+            hash = (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+impl Referee {
+    /// The referee's whole state among these cars, in words.
+    pub fn dump(&self, world: &dyn World) -> Vec<(String, String)> {
+        let penalty_mode = if world.car_count() > 0 { world.car(0).env.penalty_mode } else { 0 };
+        let mut out = dump(&self.manager, penalty_mode);
+        for index in 0..world.car_count() {
+            out.push((format!("car {index}"), car_text(world.car(index))));
+        }
+        out
     }
 }

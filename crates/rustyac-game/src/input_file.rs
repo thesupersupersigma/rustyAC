@@ -60,8 +60,12 @@ pub mod event {
     /// Task 27: the driver hands the car to an AI driver (AC's "Activate AI" command): a
     /// new `AIDriver` for the car as it is, from this step on.
     pub const AI_ON: u32 = 1 << 17;
+    /// Task 28: the referee's "next session" (`RaceManager::skipCurrentSession`).
+    pub const NEXT_SESSION: u32 = 1 << 18;
+    /// Task 28: the referee's "restart session" (`RaceManager::restartCurrentSession`).
+    pub const RESTART_SESSION: u32 = 1 << 19;
 
-    pub const NAMES: [(u32, &str); 18] = [
+    pub const NAMES: [(u32, &str); 20] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -80,6 +84,8 @@ pub mod event {
         (MGUH_MODE, "mgu-h mode"),
         (OBJECTS_HOME, "objects home"),
         (AI_ON, "ai on"),
+        (NEXT_SESSION, "next session"),
+        (RESTART_SESSION, "restart session"),
     ];
 }
 
@@ -377,6 +383,92 @@ impl Opponent {
     }
 }
 
+/// Task 28: the referee of a session: race.ini's session list and rules, and what its own
+/// random numbers and the race's start begin from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RefereeHeader {
+    pub sessions: rustyac_physics::race::SessionsIni,
+    /// `system/cfg/assetto_corsa.ini [RACE] OVER_TIME_MULT`
+    pub over_time_mult: f32,
+    /// `RaceManager::startRace`'s delay: for the first session, and for a later race, ms
+    pub first_start_delay_ms: f32,
+    pub next_start_delay_ms: f32,
+    pub seed: u32,
+    /// the base of the wind (km/h, degrees) every new session draws its wind from
+    pub wind_base: Option<(f32, f32)>,
+    /// the drivers' names, the player's first (`[CAR_n] DRIVER_NAME`); a car without one is
+    /// "Driver <n>"
+    pub driver_names: Vec<String>,
+}
+
+impl RefereeHeader {
+    fn to_text(&self) -> String {
+        let s = &self.sessions;
+        let wind = self.wind_base.map_or("-".to_string(), |(speed, direction)| format!("{:08x}:{:08x}", speed.to_bits(), direction.to_bits()));
+        format!(
+            "{},{},{},{},{},{:08x},{:08x},{:08x},{},{wind}",
+            s.has_additional_lap as u32,
+            s.fixed_setup as u32,
+            s.penalties_enabled as u32,
+            s.jump_start_penalty_mode.map_or("-".to_string(), |mode| mode.to_string()),
+            s.has_hotlap as u32,
+            self.over_time_mult.to_bits(),
+            self.first_start_delay_ms.to_bits(),
+            self.next_start_delay_ms.to_bits(),
+            self.seed
+        )
+    }
+
+    fn session_text(session: &rustyac_physics::race::Session) -> String {
+        format!("{},{},{:08x},{},{},{}", session.session_type, session.laps, session.duration_minutes.to_bits(), session.forced_position, session.spawn_set, session.name)
+    }
+
+    fn parse(value: &str) -> Result<RefereeHeader, String> {
+        let wrong = || format!("referee: ten values expected, got {value:?}");
+        let parts: Vec<&str> = value.split(',').collect();
+        let [additional, fixed, penalties, jump, hotlap, mult, first, next, seed, wind] = parts[..] else { return Err(wrong()) };
+        let float = |text: &str| u32::from_str_radix(text, 16).map(f32::from_bits).map_err(|_| wrong());
+        let wind_base = match wind.split_once(':') {
+            Some((speed, direction)) => Some((float(speed)?, float(direction)?)),
+            None => None,
+        };
+        Ok(RefereeHeader {
+            sessions: rustyac_physics::race::SessionsIni {
+                sessions: Vec::new(),
+                has_additional_lap: additional == "1",
+                fixed_setup: fixed == "1",
+                penalties_enabled: penalties == "1",
+                jump_start_penalty_mode: jump.parse().ok(),
+                has_hotlap: hotlap == "1",
+            },
+            over_time_mult: float(mult)?,
+            first_start_delay_ms: float(first)?,
+            next_start_delay_ms: float(next)?,
+            seed: seed.parse().map_err(|_| wrong())?,
+            wind_base,
+            driver_names: Vec::new(),
+        })
+    }
+
+    fn parse_session(value: &str) -> Result<rustyac_physics::race::Session, String> {
+        let wrong = || format!("referee_session: six values expected, got {value:?}");
+        let parts: Vec<&str> = value.splitn(6, ',').collect();
+        let [kind, laps, minutes, forced, spawn, name] = parts[..] else { return Err(wrong()) };
+        let session_type: i32 = kind.parse().map_err(|_| wrong())?;
+        let laps: i32 = laps.parse().map_err(|_| wrong())?;
+        Ok(rustyac_physics::race::Session {
+            session_type,
+            laps,
+            duration_minutes: u32::from_str_radix(minutes, 16).map(f32::from_bits).map_err(|_| wrong())?,
+            is_timed_race: session_type == 3 && laps == 0,
+            forced_position: forced.parse().map_err(|_| wrong())?,
+            spawn_set: spawn.to_string(),
+            name: name.to_string(),
+            ..rustyac_physics::race::Session::default()
+        })
+    }
+}
+
 /// Everything that decides what car is built and how its session starts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SimSetup {
@@ -439,6 +531,8 @@ pub struct SimSetup {
     pub player_skin: Option<String>,
     /// Task 27: the AI drivers' session.
     pub ai: AiSetup,
+    /// Task 28: the referee; `None`: no race rules (and files recorded before there were any).
+    pub referee: Option<RefereeHeader>,
 }
 
 impl Default for SimSetup {
@@ -469,6 +563,7 @@ impl Default for SimSetup {
             player_place: None,
             player_skin: None,
             ai: AiSetup::default(),
+            referee: None,
         }
     }
 }
@@ -604,6 +699,15 @@ impl SimSetup {
         if self.ai != AiSetup::default() {
             // (only a session with AI drivers has the key: older files read as before)
             put("ai", format!("{},{},{},{},{},{}", self.ai.player as u32, self.ai.laps, self.ai.time_secs, self.ai.start_delay_ms, self.ai.seed, self.ai.hand_over_step));
+        }
+        if let Some(referee) = &self.referee {
+            put("referee", referee.to_text());
+            for session in &referee.sessions.sessions {
+                put("referee_session", RefereeHeader::session_text(session));
+            }
+            for name in &referee.driver_names {
+                put("referee_driver", name.clone());
+            }
         }
         for opponent in &self.opponents {
             put("opponent", opponent.to_text());
@@ -742,6 +846,9 @@ impl SimSetup {
                         hand_over_step: hand_over_step.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
                     };
                 }
+                "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
+                "referee_driver" => setup.referee.as_mut().ok_or("referee_driver before referee")?.driver_names.push(value.to_string()),
+                "referee_session" => setup.referee.as_mut().ok_or("referee_session before referee")?.sessions.sessions.push(RefereeHeader::parse_session(value)?),
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),
                 "opponent_place" => setup.opponents.last_mut().ok_or("opponent_place before any opponent")?.place = Some(GridPlace::parse(value)?),
                 "player_place" => setup.player_place = Some(GridPlace::parse(value)?),

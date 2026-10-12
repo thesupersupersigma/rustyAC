@@ -29,6 +29,7 @@ use rustyac_physics::session::MsvcRand;
 use rustyac_physics::track::timing::{OnLapCompletedEvent, OnSectorSplitEvent};
 
 use super::race_ini::{rd, text, wr, write_wstring, zeroed};
+use super::*;
 use crate::acs::Acs;
 
 const VA_RM_VTABLE: usize = 0x1_404c_af48;
@@ -129,6 +130,21 @@ struct Told {
     kept: Vec<Vec<u64>>,
     /// whole sessions: `goToSpawnPosition` calls, (car, set)
     spawns: Vec<(usize, String)>,
+    /// whole sessions: the spawn sets' places and the game's functions the stand-ins call
+    whole: Option<WholeContext>,
+    /// whole sessions: the lap and sector events the cars raised
+    laps: Vec<OnLapCompletedEvent>,
+    splits: Vec<OnSectorSplitEvent>,
+}
+
+/// What the stand-ins need to act on the game's real cars.
+#[derive(Clone, Default)]
+struct WholeContext {
+    /// a spawn set's slots as `mat44f`
+    spawn_sets: Vec<(String, Vec<[f32; 16]>)>,
+    get_spawn_index: usize,
+    force_position: usize,
+    on_new_session: usize,
 }
 
 thread_local! {
@@ -238,22 +254,65 @@ extern "C" fn execute_on_physics_thread(_physics_avatar: *mut u8, function: *con
 
 extern "C" fn go_to_spawn(avatar: *mut u8, set: *const u8) {
     let index = car_index(avatar);
-    let set = unsafe { text(set) };
-    TOLD.with(|t| {
+    let name = unsafe { text(set) };
+    let whole = TOLD.with(|t| {
         let mut t = t.borrow_mut();
-        t.log.push(format!("GoToSpawn({index}, {set})"));
-        t.spawns.push((index, set));
+        t.log.push(format!("GoToSpawn({index}, {name})"));
+        t.spawns.push((index, name.clone()));
+        t.whole.clone()
     });
+    // whole sessions: CarAvatar::goToSpawnPosition itself, with the port's reading of the
+    // track's spawn nodes for TrackAvatar::getSpawnPosition
+    if let Some(whole) = whole {
+        unsafe {
+            let get_spawn_index: extern "C" fn(*mut u8, *const u8) -> i32 = std::mem::transmute(whole.get_spawn_index);
+            let slot = get_spawn_index(avatar.add(CA_RACE_INFO), set);
+            let Some(matrix) = whole.spawn_sets.iter().find(|(set, _)| *set == name).and_then(|(_, slots)| slots.get(slot.max(0) as usize)) else {
+                return;
+            };
+            let car: *mut u8 = rd(avatar, CA_PHYSICS);
+            // FuelLapEvaluator::setIgnoreLap(true)
+            wr(car, 0x3af8 + 0x40, 1u8);
+            let force_position: extern "C" fn(*mut u8, *const [f32; 16]) = std::mem::transmute(whole.force_position);
+            force_position(avatar, matrix);
+        }
+    }
+}
+
+/// `Car::evOnLapCompleted` and `Car::evOnSectorSplit`, heard by this file (whole sessions).
+extern "C" fn on_car_lap(_this: *mut u8, event: *const u8) {
+    let event = unsafe { OnLapCompletedEvent { car_index: rd(event, 0), lap_time: rd(event, 4), lap_count: rd(event, 8), splits: Vec::new(), event_time: rd(event, 0x28), is_valid: rd::<u8>(event, 0x30) != 0, cuts: rd(event, 0x34) } };
+    TOLD.with(|t| t.borrow_mut().laps.push(event));
+}
+
+extern "C" fn on_car_split(_this: *mut u8, event: *const u8) {
+    let event = unsafe { OnSectorSplitEvent { car_index: rd(event, 0), sector_index: rd(event, 4), sector_time: rd(event, 8), cuts: rd(event, 0xc) } };
+    TOLD.with(|t| t.borrow_mut().splits.push(event));
 }
 
 /// `Sim::evOnNewSession`, heard by this file.
 extern "C" fn on_new_session(_this: *mut u8, event: *const u8) {
     let line = unsafe { format!("NewSession({}, type {}, {:?})", rd::<i16>(event, 0x70), rd::<i32>(event, 0), text(event.add(0x38))) };
-    TOLD.with(|t| {
+    let whole = TOLD.with(|t| {
         let mut t = t.borrow_mut();
         t.log.push(line);
         t.new_session = true;
+        if t.whole.is_some() {
+            // PhysicsAvatar's handler: a job for the physics thread with the session's
+            // numbers (lambda @ 0x1401213f0); the first word 0 marks it among the kept jobs
+            let (kind, start, minutes, laps, index): (i32, f64, f32, i32, i16) = unsafe { (rd(event, 0), rd(event, 0x58), rd(event, 0xc), rd(event, 8), rd(event, 0x70)) };
+            let seconds = (minutes * 60.0) as f64;
+            t.kept.push(vec![0, kind as u32 as u64, start.to_bits(), seconds.to_bits(), laps as u32 as u64, index as i32 as u32 as u64]);
+        }
+        t.whole.clone().map(|whole| (whole, t.avatars.clone()))
     });
+    // every car's own handler (CarAvatar::onNewSession): to its place, the lap timer reset
+    if let Some((whole, avatars)) = whole {
+        let car_on_new_session: extern "C" fn(*mut u8) = unsafe { std::mem::transmute(whole.on_new_session) };
+        for avatar in avatars {
+            car_on_new_session(avatar as *mut u8);
+        }
+    }
 }
 
 unsafe fn vec_i32(at: *const u8) -> Vec<i32> {
@@ -323,7 +382,7 @@ fn port_session_end_text(event: &rustyac_physics::race::OnSessionEndEvent) -> St
 
 /// The game's referee and what it stands in.
 pub struct GameReferee<'a> {
-    acs: &'a Acs,
+    pub acs: &'a Acs,
     pub game: *mut u8,
     pub sim: *mut u8,
     pub manager: *mut u8,
@@ -352,7 +411,7 @@ pub struct CarSetup {
 impl<'a> GameReferee<'a> {
     /// `real_cars`: the game's `Car` of every car (whole sessions), else blocks of zeros.
     #[allow(clippy::too_many_arguments)]
-    pub unsafe fn build(acs: &'a Acs, ini: &SessionsIni, cars: &[CarSetup], track_name: &str, track_config: &str, track_length: f32, sectors: usize, over_time_mult: f32, now: f64, real_cars: Option<&[*mut u8]>) -> GameReferee<'a> {
+    pub unsafe fn build(acs: &'a Acs, ini: &SessionsIni, cars: &[CarSetup], track_name: &str, track_config: &str, track_length: f32, sectors: usize, over_time_mult: f32, now: f64, real_cars: Option<(&[*mut u8], &rustyac_physics::track::Track)>) -> GameReferee<'a> {
         let stub = |va: usize, target: usize| {
             let mut code = vec![0x48, 0xb8];
             code.extend_from_slice(&(target as u64).to_le_bytes());
@@ -463,7 +522,13 @@ impl<'a> GameReferee<'a> {
             write_wstring(avatar.add(CA_DRIVER_NAME), &setup.name);
             write_wstring(avatar.add(CA_CURRENT_SKIN), &setup.skin);
             let car = match real_cars {
-                Some(real) => real[i],
+                Some((real, track)) => {
+                    // the car's pit box (CarAvatar::pitPosition: its slot of the PIT set)
+                    if let Some(node) = track.spawn_positions.get("PIT").and_then(|slots| slots.get(i)) {
+                        wr(avatar, CA_PIT_POSITION, flat(&track.helper_nodes[*node].local.m));
+                    }
+                    real[i]
+                }
                 None => zeroed(0x4800),
             };
             let engineer = zeroed(0x40);
@@ -483,6 +548,12 @@ impl<'a> GameReferee<'a> {
                 image_base: acs.va(0x1_4000_0000),
                 set_controls_lock: acs.va(VA_CAR_SET_CONTROLS_LOCK),
                 keep_jobs: real_cars.is_some(),
+                whole: real_cars.map(|(_, track)| WholeContext {
+                    spawn_sets: track.spawn_positions.iter().map(|(set, slots)| (set.clone(), slots.iter().map(|node| flat(&track.helper_nodes[*node].local.m)).collect())).collect(),
+                    get_spawn_index: acs.va(VA_CAR_GET_SPAWN_INDEX),
+                    force_position: acs.va(VA_CAR_AVATAR_FORCE_POSITION),
+                    on_new_session: acs.va(VA_CAR_AVATAR_ON_NEW_SESSION),
+                }),
                 ..Told::default()
             };
         });
@@ -491,6 +562,10 @@ impl<'a> GameReferee<'a> {
             info_ctor(info);
             info_init(info, *avatar);
             info_set(info, start_key, cars[i].start_index);
+            // (Sim::addCar: the car's own number in the pits)
+            let pit_key = zeroed(0x20);
+            write_wstring(pit_key, "PIT");
+            info_set(info, pit_key, i as i32);
         }
         // loadSessions: one record per car in both lists, one leaderboard per session
         let status = zeroed(0x18 * n);
@@ -801,6 +876,240 @@ impl<'a> GameReferee<'a> {
             i += 1;
         }
         out
+    }
+}
+
+fn flat(m: &[[f32; 4]; 4]) -> [f32; 16] {
+    let mut out = [0f32; 16];
+    for r in 0..4 {
+        out[4 * r..4 * r + 4].copy_from_slice(&m[r]);
+    }
+    out
+}
+
+const VA_CAR_AVATAR_FORCE_POSITION: usize = 0x1_400d_2f30; // CarAvatar::forcePosition(const mat44f&)
+const VA_CAR_AVATAR_ON_NEW_SESSION: usize = 0x1_400d_91c0; // CarAvatar::onNewSession()
+const VA_PE_SET_SESSION_START_TIME: usize = 0x1_4026_4590; // PhysicsEngine::setCurrentSessionStartTime(double)
+const VA_PE_SET_SESSION_INFO: usize = 0x1_4026_4560; // PhysicsEngine::setSessionInfo(const SessionInfo&)
+/// the implementation tables of two jobs that act on the engine inside `PhysicsAvatar`
+const VA_JOB_SESSION_START_TIME: usize = 0x1_404c_bf78; // lambda @ 0x140135220
+const CAR_EV_ON_LAP_COMPLETED: usize = 0x40;
+const CAR_EV_ON_SECTOR_SPLIT: usize = 0x58;
+const PE_EV_ON_NEW_SESSION_PHYSICS: usize = 0xa0;
+const PE_JUMP_START_PENALTY_MODE: usize = 0xd8;
+const PE_LOCK_GEARBOX_MS: usize = 0xc0;
+
+std::thread_local! {
+    /// The referee's own `rand()` (the game's main thread has one of its own; here both
+    /// threads' code runs on one, so the game's `rand` import is answered from this stream
+    /// while the referee's code runs).
+    static REFEREE_RAND: std::cell::Cell<Option<MsvcRand>> = const { std::cell::Cell::new(None) };
+    static REFEREE_RAND_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static CRT_RAND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Where the C runtime's own `rand` is: asked once the game is loaded, before any of its
+/// code runs.
+pub fn init_rand(acs: &Acs) {
+    CRT_RAND.with(|c| c.set(acs.crt_function(c"rand")));
+}
+
+/// The game's `rand` import in a whole session (see [`REFEREE_RAND`]).
+pub extern "C" fn game_rand() -> i32 {
+    if REFEREE_RAND_ON.with(|on| on.get()) {
+        if let Some(mut rand) = REFEREE_RAND.with(|r| r.get()) {
+            let value = rand.next();
+            REFEREE_RAND.with(|r| r.set(Some(rand)));
+            return value;
+        }
+    }
+    let crt: extern "C" fn() -> i32 = unsafe { std::mem::transmute(CRT_RAND.with(|c| c.get())) };
+    crt()
+}
+
+/// The game's referee among the game's real cars.
+pub struct WholeReferee<'a> {
+    pub game: GameReferee<'a>,
+    engine: *mut u8,
+    step_in_frame: u32,
+    filtered: Vec<f32>,
+    next_start_delay_ms: f32,
+    /// the hash of the referee's state after its last frame
+    pub state_hash: u64,
+    pub state: Vec<(String, String)>,
+    pub frames: u64,
+    /// what the stand-ins were told, frame by frame (for a look)
+    pub log: Vec<(u64, String)>,
+}
+
+impl<'a> WholeReferee<'a> {
+    /// The referee of `setup` for the cars of `engine`, as `RaceManager::initOffline` and
+    /// `Sim::Sim` leave it. The first jobs run before the first step.
+    pub unsafe fn build(acs: &'a Acs, engine: *mut u8, cars: &[*mut u8], track: &rustyac_physics::track::Track, setup: &rustyac_physics::race::RefereeSetup, now: f64) -> WholeReferee<'a> {
+        CRT_RAND.with(|c| c.set(acs.crt_function(c"rand")));
+        REFEREE_RAND.with(|r| r.set(Some(MsvcRand(setup.seed))));
+        // the rules race.ini gives the engine
+        wr(engine, PE_ALLOWED_TYRES_OUT, setup.sessions.allowed_tyres_out());
+        if let Some(mode) = setup.sessions.jump_start_penalty_mode {
+            wr(engine, PE_JUMP_START_PENALTY_MODE, mode);
+        }
+        let car_setups: Vec<CarSetup> = setup.players.iter().enumerate().map(|(i, p)| CarSetup { name: p.name.clone(), car: p.car.clone(), skin: p.skin.clone(), compound: String::new(), start_index: setup.start_index[i] }).collect();
+        let length = track.ai_spline.as_ref().map_or(0.0, |spline| spline.length());
+        REFEREE_RAND_ON.with(|on| on.set(true));
+        let game = GameReferee::build(acs, &setup.sessions, &car_setups, &track.name, &setup.layout, length, track.sectors_normalized_positions.len(), setup.over_time_mult, now, Some((cars, track)));
+        // every car's lap and sector events come to this file
+        for car in cars {
+            game.add_handler(car.add(CAR_EV_ON_LAP_COMPLETED), on_car_lap as *const () as usize);
+            game.add_handler(car.add(CAR_EV_ON_SECTOR_SPLIT), on_car_split as *const () as usize);
+        }
+        game.start_race(setup.first_start_delay_ms);
+        REFEREE_RAND_ON.with(|on| on.set(false));
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new() };
+        referee.note();
+        referee
+    }
+
+    fn note(&mut self) {
+        let (log, _, _) = self.game.take_told();
+        let frame = self.frames;
+        self.log.extend(log.into_iter().map(|line| (frame, line)));
+    }
+
+    /// The jobs the main thread posted, at the start of a physics step, in their order.
+    pub unsafe fn before_step(&mut self) {
+        let (jobs, _) = self.game.take_work();
+        let acs = self.game.acs;
+        for mut job in jobs {
+            if job[0] == 0 {
+                // the new session: PhysicsEngine::setSessionInfo, the engine's handlers of
+                // its new-session event, and no contacts for 250 steps
+                let mut info = [0u8; 32];
+                info[0..4].copy_from_slice(&(job[1] as u32).to_le_bytes());
+                info[8..16].copy_from_slice(&job[2].to_le_bytes());
+                info[16..24].copy_from_slice(&job[3].to_le_bytes());
+                info[24..28].copy_from_slice(&(job[4] as u32).to_le_bytes());
+                info[28..32].copy_from_slice(&(job[5] as u32).to_le_bytes());
+                let set_session_info: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_PE_SET_SESSION_INFO));
+                set_session_info(self.engine, info.as_ptr());
+                let begin: *const u8 = rd(self.engine, PE_EV_ON_NEW_SESSION_PHYSICS);
+                let end: *const u8 = rd(self.engine, PE_EV_ON_NEW_SESSION_PHYSICS + 8);
+                let mut handler = begin;
+                while handler < end {
+                    let function: *mut u8 = rd(handler, 0x20);
+                    if !function.is_null() {
+                        let vtable: *const usize = rd(function, 0);
+                        let do_call: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(*vtable.add(2));
+                        do_call(function, info.as_ptr());
+                    }
+                    handler = handler.add(0x28);
+                }
+                let core: *mut u8 = rd(self.engine, PE_CORE);
+                let vtable: *const usize = rd(core, 0);
+                let set_no_collision: extern "C" fn(*mut u8, i32) = std::mem::transmute(*vtable.add(0x98 / 8));
+                set_no_collision(core, 0xfa);
+            } else if job[0] as usize == acs.va(VA_JOB_SESSION_START_TIME) {
+                // (its own body would write into the stand-in for PhysicsAvatar's engine)
+                let start: f64 = rd(self.game.manager, RM_CURRENT_SESSION + 0x58);
+                let set_start: extern "C" fn(*mut u8, f64) = std::mem::transmute(acs.va(VA_PE_SET_SESSION_START_TIME));
+                set_start(self.engine, start);
+            } else {
+                let vtable = job[0] as *const usize;
+                let do_call: extern "C" fn(*mut u64) = std::mem::transmute(*vtable.add(2));
+                do_call(job.as_mut_ptr());
+            }
+        }
+        // RaceManager::setCurrentSession writes the mode straight into the engine
+        wr(self.engine, PE_PENALTY_MODE, rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE));
+    }
+
+    /// After a physics step at clock `now`: every third step a frame of the main thread.
+    pub unsafe fn after_step(&mut self, now: f64) {
+        self.step_in_frame += 1;
+        if self.step_in_frame < 3 {
+            return;
+        }
+        self.step_in_frame = 0;
+        self.frames += 1;
+        const DT: f32 = 0.009;
+        let acs = self.game.acs;
+        self.game.set_now(now);
+        let get_physics_state: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_CAR_GET_PHYSICS_STATE));
+        for (index, avatar) in self.game.avatars.iter().enumerate() {
+            let car = self.game.cars[index];
+            // CarAvatar::update: the car's state, its filtered speed
+            get_physics_state(car, avatar.add(0x268));
+            let speed: f32 = rd(*avatar, CA_SPEED);
+            self.filtered[index] = filter_speed(self.filtered[index], speed, DT);
+            wr(*avatar, CA_FILTERED_SPEED, self.filtered[index]);
+            if index == 0 {
+                // (FlagManager's handler of the engine's flag event, for the player's car)
+                wr(*avatar, CA_IS_BLACK_FLAGGED, rd::<u8>(car, 0x3d20));
+            }
+        }
+        let (laps, splits) = TOLD.with(|t| {
+            let mut t = t.borrow_mut();
+            (std::mem::take(&mut t.laps), std::mem::take(&mut t.splits))
+        });
+        REFEREE_RAND_ON.with(|on| on.set(true));
+        for split in &splits {
+            self.game.sector_split(split);
+        }
+        for lap in &laps {
+            self.game.lap_completed(lap);
+        }
+        self.game.update(DT);
+        let (log, _, new_session) = self.game.take_told();
+        let frame = self.frames;
+        self.log.extend(log.into_iter().map(|line| (frame, line)));
+        if new_session && rd::<i32>(self.game.manager, RM_CURRENT_SESSION) == SESSION_RACE {
+            self.game.start_race(self.next_start_delay_ms);
+        }
+        REFEREE_RAND_ON.with(|on| on.set(false));
+        self.note();
+        self.state = self.dump();
+        self.state_hash = rustyac_physics::race::referee::dump_hash(&self.state);
+    }
+
+    /// The state as the port's `Referee::dump` words it: the manager, then every car.
+    pub unsafe fn dump(&self) -> Vec<(String, String)> {
+        let mut out = self.game.dump();
+        // (the port's penalty mode is the engine's)
+        if let Some(entry) = out.iter_mut().find(|(key, _)| key == "penaltyMode") {
+            entry.1 = rd::<i32>(self.engine, PE_PENALTY_MODE).to_string();
+        }
+        for (index, car) in self.game.cars.iter().enumerate() {
+            let p = car.add(0x3a38);
+            out.push((
+                format!("car {index}"),
+                format!(
+                    "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {}",
+                    rd::<u64>(*car, 0x3d18),
+                    rd::<u8>(*car, 0x3d14),
+                    rd::<u8>(*car, 0x3d20),
+                    rd::<u8>(*car, CAR_IS_RETIRED),
+                    rd::<i32>(p, 0x20),
+                    rd::<u8>(p, 0x24),
+                    rd::<u8>(p, 0x25),
+                    rd::<i16>(p, 0x26),
+                    rd::<u32>(p, 0x44),
+                    rd::<i32>(car.add(CAR_TRANSPONDER), 0x84)
+                ),
+            ));
+        }
+        out
+    }
+
+    /// The end: the last session's results and the game's own `race_out.json`.
+    pub unsafe fn shutdown(&mut self) -> Result<Vec<u8>, String> {
+        REFEREE_RAND_ON.with(|on| on.set(true));
+        let file = self.game.shutdown();
+        REFEREE_RAND_ON.with(|on| on.set(false));
+        self.note();
+        file
+    }
+
+    pub fn lock_gearbox_ms(&self) -> f64 {
+        unsafe { rd(self.engine, PE_LOCK_GEARBOX_MS) }
     }
 }
 

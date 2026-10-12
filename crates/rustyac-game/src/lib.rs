@@ -37,6 +37,7 @@ pub mod join;
 pub mod online;
 #[cfg(windows)]
 pub mod physics_thread;
+pub mod referee;
 #[cfg(windows)]
 pub mod render;
 pub mod replay_manager;
@@ -86,6 +87,12 @@ pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash
     }
     if let Some(writer) = writer {
         writer.finish()?;
+    }
+    // Task 28: the referee's files of a replay are not written, their hashes are said
+    if let Some(lines) = referee::finish(&mut sim, None) {
+        for line in lines {
+            eprintln!("{line}");
+        }
     }
     if state_hash {
         #[cfg(not(target_arch = "wasm32"))]

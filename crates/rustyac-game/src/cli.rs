@@ -250,6 +250,22 @@ pub struct Options {
     /// <s>`: the green light s seconds after the start of a race; `--ai-seed <n>`.
     pub ai_laps: Option<i32>,
     pub race_start_in: Option<f64>,
+    /// Task 28, `--sessions <list>`: the referee's session list without a race.ini, e.g.
+    /// `p10,q5,r3` (practice 10 min, qualifying 5 min, a race of 3 laps), `rt20` (a race of
+    /// 20 minutes), `rt20+` (and the lap after)
+    pub sessions: Option<String>,
+    /// `--no-referee`: no race rules, as before v0.28
+    pub no_referee: bool,
+    /// `--penalties <0|1>`, `--jump-start <0|1|2>`: race.ini's `PENALTIES` and `JUMP_START_PENALTY`
+    pub penalties: Option<bool>,
+    pub jump_start: Option<i32>,
+    /// `--next-session-at <s>`, `--restart-session-at <s>` (repeatable): the referee's two
+    /// buttons, pressed at a time of the run (unattended checks)
+    pub next_session_at: Vec<f64>,
+    pub restart_session_at: Vec<f64>,
+    /// `--out-dir <folder>`: where `race_out.json` and `laps.ini` go (default: `out` beside
+    /// rustyac.exe; never Assetto Corsa's own folders)
+    pub out_dir: Option<PathBuf>,
     pub ai_seed: Option<u32>,
     /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
     pub stand_in_drivers: bool,
@@ -377,6 +393,13 @@ impl Default for Options {
             ai_at: None,
             ai_laps: None,
             race_start_in: None,
+            sessions: None,
+            no_referee: false,
+            penalties: None,
+            jump_start: None,
+            next_session_at: Vec::new(),
+            restart_session_at: Vec::new(),
+            out_dir: None,
             ai_seed: None,
             stand_in_drivers: false,
             physics_threads: None,
@@ -837,6 +860,13 @@ impl Options {
                 "--ai-at" => o.ai_at = Some(value("--ai-at")?.parse().map_err(|e| format!("--ai-at: {e}"))?),
                 "--ai-laps" => o.ai_laps = Some(value("--ai-laps")?.parse().map_err(|e| format!("--ai-laps: {e}"))?),
                 "--race-start-in" => o.race_start_in = Some(value("--race-start-in")?.parse().map_err(|e| format!("--race-start-in: {e}"))?),
+                "--sessions" => o.sessions = Some(value("--sessions")?),
+                "--no-referee" => o.no_referee = true,
+                "--penalties" => o.penalties = Some(value("--penalties")? != "0"),
+                "--jump-start" => o.jump_start = Some(value("--jump-start")?.parse().map_err(|e| format!("--jump-start: {e}"))?),
+                "--next-session-at" => o.next_session_at.push(value("--next-session-at")?.parse().map_err(|e| format!("--next-session-at: {e}"))?),
+                "--restart-session-at" => o.restart_session_at.push(value("--restart-session-at")?.parse().map_err(|e| format!("--restart-session-at: {e}"))?),
+                "--out-dir" => o.out_dir = Some(PathBuf::from(value("--out-dir")?)),
                 "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
                 "--stand-in-drivers" => o.stand_in_drivers = true,
                 "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),

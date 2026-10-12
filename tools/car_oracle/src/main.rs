@@ -502,8 +502,14 @@ fn multi(args: &Args) -> Result<(), String> {
     }
     std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
     // Task 27: the one import of the AI drivers this loader does not bind
-    acs::set_extra_overrides(vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)]);
+    let mut overrides = vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)];
+    if game::multi::referee_of(scenario.name).is_some() {
+        // Task 28: the referee's code draws from a rand() of its own (the main thread's)
+        overrides.push(("msvcr120.dll", "rand", game::race::game_rand as *const () as usize));
+    }
+    acs::set_extra_overrides(overrides);
     let acs = acs::Acs::load(&args.acs)?;
+    game::race::init_rand(&acs);
     if args.verbose {
         acs.unbuffer_game_stdout();
     } else {
@@ -567,7 +573,21 @@ fn multi(args: &Args) -> Result<(), String> {
     }
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
     let recording = world.recording.clone();
-    multi_compare(args, &recording, &path)
+    // Task 28: the end of the program for the game's referee: its results, its race_out.json
+    let mut game_file = None;
+    if let Some(referee) = &mut world.referee {
+        let file = unsafe { referee.shutdown()? };
+        let state: Vec<String> = unsafe { referee.dump() }.into_iter().map(|(key, value)| format!("{key}: {value}")).collect();
+        let log: Vec<String> = referee.log.iter().map(|(frame, line)| format!("frame {frame}: {line}")).collect();
+        let _ = std::fs::write(path.with_extension("race_out.json"), &file);
+        let _ = std::fs::write(path.with_extension("referee.txt"), format!("{}\n\n{}\n", log.join("\n"), state.join("\n")));
+        println!("the game's referee: {} frames, race_out.json {} bytes; what it said is in {}", referee.frames, file.len(), path.with_extension("referee.txt").display());
+        for (frame, line) in referee.log.iter().filter(|(_, line)| !line.starts_with("SessionEnd")) {
+            println!("  frame {frame} ({:.1} s): {line}", *frame as f64 * 0.009);
+        }
+        game_file = Some(file);
+    }
+    multi_compare(args, &recording, &path, game_file.as_deref())
 }
 
 /// Task 25: `car_oracle net <tape> --scenario net_... --track <track> [--steps n]
@@ -774,12 +794,14 @@ fn multi_check(args: &Args) -> Result<(), String> {
         println!("wrote {} ({} steps)", out.display(), golden.hashes.len());
         return Ok(());
     }
-    multi_compare(args, &recording, path)
+    // Task 28: the game's race_out.json of a recording with a referee lies beside it
+    let game_file = std::fs::read(path.with_extension("race_out.json")).ok();
+    multi_compare(args, &recording, path, game_file.as_deref())
 }
 
 /// Replays a several-car recording through the port, once per thread count, and holds every
 /// value against the game's.
-fn multi_compare(args: &Args, recording: &rustyac_physics::engine::record::Recording, path: &Path) -> Result<(), String> {
+fn multi_compare(args: &Args, recording: &rustyac_physics::engine::record::Recording, path: &Path, game_file: Option<&[u8]>) -> Result<(), String> {
     use rustyac_physics::engine::record::{load_track, replay_on, ReplayPaths};
     let repo = repo_root();
     let paths = ReplayPaths { cardata: repo.join("cardata"), game_root: args.acs.parent().map(Path::to_path_buf) };
@@ -810,6 +832,25 @@ fn multi_compare(args: &Args, recording: &rustyac_physics::engine::record::Recor
         println!("{line}");
         for also in &report.also {
             println!("    also {also}");
+        }
+        // Task 28: the referee's files at the end
+        if let (Some((json, laps_ini)), Some(game)) = (&report.referee_files, game_file) {
+            let same = json.as_slice() == game;
+            println!("    race_out.json: {} ({} bytes in the game's, {} in the port's); laps.ini {} bytes", if same { "IDENTICAL" } else { "DIFFERENT" }, game.len(), json.len(), laps_ini.len());
+            if !same {
+                let at = json.iter().zip(game).position(|(a, b)| a != b).unwrap_or(json.len().min(game.len()));
+                let from = at.saturating_sub(80);
+                println!("      the game: {:?}", String::from_utf8_lossy(&game[from..(at + 80).min(game.len())]));
+                println!("      the port: {:?}", String::from_utf8_lossy(&json[from..(at + 80).min(json.len())]));
+                let _ = std::fs::write(path.with_extension("port_race_out.json"), json);
+            }
+            let _ = std::fs::write(path.with_extension("laps.ini"), laps_ini);
+            ok &= same;
+        }
+        if report.mismatch.as_ref().is_some_and(|m| m.column.starts_with("world.referee")) || args.verbose {
+            let state: Vec<String> = report.referee_dump.iter().map(|(key, value)| format!("{key}: {value}")).collect();
+            let _ = std::fs::write(path.with_extension(format!("port_referee_t{count}.txt")), state.join("\n") + "\n");
+            println!("    the port's referee at that step: {}", path.with_extension(format!("port_referee_t{count}.txt")).display());
         }
         ok &= report.mismatch.is_none();
         hashes.push(report.hash);

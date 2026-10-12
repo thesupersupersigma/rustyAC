@@ -139,6 +139,48 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     if let Some(seconds) = options.ai_at {
         setup.ai.hand_over_step = (seconds / 0.003).round() as i64;
     }
+    // Task 28: the referee. race.ini's sessions (conditions::apply), or --sessions, or a race
+    // of --ai-laps laps when AI drivers race without a race.ini session
+    if options.no_referee {
+        setup.referee = None;
+    } else if !setup.track.is_empty() {
+        let cars = 1 + setup.opponents.len();
+        let penalties = options.penalties.unwrap_or(setup.session.penalties);
+        let made = match &options.sessions {
+            Some(list) => Some(rustyac_game::conditions::sessions_from_list(list, cars, penalties, options.jump_start, setup.env.base_pit_penalty_laps)?),
+            None if setup.referee.is_none() && ai_cars && setup.session.session_type == Some(3) => Some(rustyac_game::conditions::sessions_from_list(&format!("r{}", setup.ai.laps.max(1)), cars, penalties, options.jump_start, setup.env.base_pit_penalty_laps)?),
+            None => None,
+        };
+        if let Some(sessions) = made {
+            let first = &sessions.sessions[0];
+            setup.session.session_type = Some(first.session_type);
+            if !options.spawn_given {
+                setup.spawn = if first.spawn_set == "START" { "start" } else { "pit" }.to_string();
+            }
+            if let Some(mode) = sessions.jump_start_penalty_mode {
+                setup.env.jump_start_penalty_mode = mode;
+            }
+            setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
+            let wind_base = setup.referee.as_ref().and_then(|referee| referee.wind_base);
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new() });
+        }
+        if let Some(referee) = &mut setup.referee {
+            if let Some(penalties) = options.penalties {
+                referee.sessions.penalties_enabled = penalties;
+                setup.env.allowed_tyres_out = referee.sessions.allowed_tyres_out();
+            }
+            if let Some(seconds) = options.race_start_in {
+                referee.first_start_delay_ms = (seconds * 1000.0) as f32;
+                referee.next_start_delay_ms = (seconds * 1000.0) as f32;
+            }
+            // (a live drive draws anew every time; pictures and unattended runs do not)
+            referee.seed = match options.ai_seed {
+                Some(seed) => seed.wrapping_add(28_000),
+                None if options.screenshot.is_none() && !options.headless => std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(0),
+                None => 28_000,
+            };
+        }
+    }
     // (a live drive draws anew every time, as the game's rand() starts from the clock)
     setup.ai.seed = match options.ai_seed {
         Some(seed) => seed,
@@ -412,6 +454,20 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>) -
 }
 
 /// The car's set-up, and the recorded drive if one is to be played.
+/// Task 28: where the referee's files go: `--out-dir`, else `out` beside rustyac.exe (never
+/// one of Assetto Corsa's folders).
+fn referee_out(options: &Options) -> Option<PathBuf> {
+    if let Some(folder) = &options.out_dir {
+        return Some(folder.clone());
+    }
+    std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("out")))
+}
+
+/// Task 28: the referee's buttons pressed at given seconds of the run.
+fn session_script(options: &Options) -> Vec<(f64, u32)> {
+    options.next_session_at.iter().map(|at| (*at, event::NEXT_SESSION)).chain(options.restart_session_at.iter().map(|at| (*at, event::RESTART_SESSION))).collect()
+}
+
 fn drive(options: &Options) -> Result<(SimSetup, Option<Vec<StepInput>>), String> {
     match &options.replay {
         Some(path) => {
@@ -570,6 +626,8 @@ fn run_headless(options: &Options) -> Result<(), String> {
         auto_reset: true,
         net_tape: options.net_tape.clone(),
         chat: options.chat.clone(),
+        referee_out: referee_out(options),
+        session_script: session_script(options),
     };
     if options.duration.is_none() && options.replay.is_none() {
         println!("no --duration: running until Ctrl+C");
@@ -636,7 +694,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let view = world[focus];
             let dt = (now - last).as_secs_f32();
             let frame = camera.update(&view, shape, view.acc_g, dt);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, dt);
             renderer.finish();
             bench_stats = renderer.frame_stats();
@@ -654,7 +712,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
             let focus = options.focus.min(world.len() - 1);
             let view = world[focus];
             let frame = camera.update(&view, shape, view.acc_g, 1.0 / 60.0);
-            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), ..HudInfo::default() };
+            let info = HudInfo { fps: 0.0, timing: shared.timing(), camera: camera.name(), replay: replaying, notes: shared.online_hud.lock().unwrap().clone(), referee: shared.referee_hud.lock().unwrap().clone(), ..HudInfo::default() };
             renderer.draw_world(&world, focus, shape, camera, &frame, &info, 1.0 / 60.0);
             let pixels = renderer.read_pixels()?;
             let (width, height) = renderer.size();
@@ -811,7 +869,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
-    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone() };
+    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options) };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
         let autodrive = options.autodrive;
@@ -1006,6 +1064,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                             },
                             0x52 => request(if shift { event::TO_TRACK } else { event::RESET }),
                             0x4e => request(event::REBUILD),
+                            // Task 28: the referee's two buttons (F7 next session, F8 restart)
+                            0x76 => request(event::NEXT_SESSION),
+                            0x77 => request(event::RESTART_SESSION),
                             _ => {}
                         }
                     }
@@ -1104,7 +1165,12 @@ fn run_window(options: &Options) -> Result<(), String> {
             notes: shared.online_hud.lock().unwrap().clone(),
             hidden: false,
             focus_fade,
+            referee: shared.referee_hud.lock().unwrap().clone(),
         };
+        // Task 28: the start lights count down to the referee's race start
+        if let Some(referee) = &info.referee {
+            renderer.set_race_start_in(referee.time_to_start_ms);
+        }
         if focus.index != 0 {
             info.notes.push(format!("camera on car {} ({}): Ctrl+{} is your car", focus.index, car_names[focus.index], rustyac_game::input::bindings::key_name(bindings.key_player_car)));
         }
