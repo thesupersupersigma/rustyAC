@@ -13,6 +13,7 @@ pub mod output;
 pub mod referee;
 pub mod results;
 pub mod timing;
+pub mod toy;
 
 pub use manager::{convert_remote_session, Action, CarView, FadeJob, OnSessionEndEvent, RaceManager, RemoteSession, Session, SessionResult, SessionsIni};
 pub use referee::{Referee, RefereeSetup, World};

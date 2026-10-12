@@ -74,8 +74,10 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         "rc_timed" => spec("rt2+", true, None),
         "rc_timed_plain" => spec("rt2", false, None),
         "rc_weekend" => spec("p1,q1,r2", true, None),
-        "rc_jump" => spec("r3", true, Some(1)),
-        "rc_jump_dt" => spec("r5", true, Some(2)),
+        // (the start 12 s after the session's: the car is already rolling when the window
+        // before the start opens, in which the gearbox is locked and nobody may move)
+        "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
+        "rc_jump_dt" => Some(RefereeSpec { list: "r5", penalties: true, jump_start: Some(2), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_cut" => spec("r3", true, None),
         "rc_cut_practice" => spec("p3", true, None),
         _ => None,
@@ -450,7 +452,7 @@ pub fn scenarios() -> Vec<MultiScenario> {
                 out[2].position = last.position;
                 out[2].tail = last.tail;
                 out[2].drive = out[1].drive.clone();
-                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 9.0), (25.0, 0.0), (48.0, -9.0), (51.0, 0.0), (120.0, 9.0), (123.0, 0.0)], pace: 0.7, limit: 50.0, brake_at: 1.0e9 };
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 7.0), (24.5, 0.0), (48.0, -7.0), (50.5, 0.0), (120.0, 7.0), (122.5, 0.0), (150.0, -7.0), (152.5, 0.0)], pace: 0.6, limit: 40.0, brake_at: 1.0e9 };
                 Ok(out)
             },
         },
@@ -462,7 +464,7 @@ pub fn scenarios() -> Vec<MultiScenario> {
             default_cars: &[F2004],
             cars: |track, cars| {
                 let mut out = ai_grid(track, cars, &[F2004], 2, |_| 0.9, |_| 0.1)?;
-                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 9.0), (25.0, 0.0), (48.0, -9.0), (51.0, 0.0), (120.0, 9.0), (123.0, 0.0)], pace: 0.7, limit: 50.0, brake_at: 1.0e9 };
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0), (22.0, 7.0), (24.5, 0.0), (48.0, -7.0), (50.5, 0.0), (120.0, 7.0), (122.5, 0.0), (150.0, -7.0), (152.5, 0.0)], pace: 0.6, limit: 40.0, brake_at: 1.0e9 };
                 Ok(out)
             },
         },

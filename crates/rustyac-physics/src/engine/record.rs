@@ -942,6 +942,10 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
     let mut report = ReplayReport { damage: vec![(0.0, 0.0); recording.cars.len()], ghost_steps: vec![0; recording.cars.len()], ..ReplayReport::default() };
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let start = std::time::Instant::now();
+    let row_dump: Option<(usize, usize, Vec<String>)> = std::env::var("RUSTYAC_ROW_DUMP").ok().and_then(|text| {
+        let mut parts = text.splitn(3, ':');
+        Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.split(',').map(str::to_string).collect()))
+    });
     for (step, game) in recording.rows.iter().enumerate() {
         if let Some((at, car)) = fault {
             if at == step {
@@ -959,6 +963,14 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
                 hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
             }
         }
+        // RUSTYAC_ROW_DUMP=<from>:<to>:<part of a column's name>,...: the port's and the game's
+        // values of those columns in those steps, for a look at a difference
+        if let Some((from, to, parts)) = row_dump.as_ref() {
+            if (*from..*to).contains(&step) {
+                let line: Vec<String> = columns.iter().enumerate().filter(|(_, name)| parts.iter().any(|part| name.contains(part.as_str()))).map(|(i, name)| format!("{name} {:08x}/{:08x}", game[i], port[i])).collect();
+                eprintln!("step {step} (game/port): {}", line.join("  "));
+            }
+        }
         report.steps = step + 1;
         report.values += port.len() as u64;
         if port[0] > 0 {
@@ -974,7 +986,7 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
         let mut differing = (0..port.len()).filter(|&i| !same_word(game[i], port[i], floats[i]));
         if let Some(first) = differing.next() {
             report.mismatch = Some(Mismatch { step, column: columns[first].clone(), game: game[first], port: port[first] });
-            report.also = differing.take(12).map(|i| format!("{} game {:08x} port {:08x}", columns[i], game[i], port[i])).collect();
+            report.also = differing.take(std::env::var("RUSTYAC_ALSO").ok().and_then(|n| n.parse().ok()).unwrap_or(12)).map(|i| format!("{} game {:08x} port {:08x}", columns[i], game[i], port[i])).collect();
             break;
         }
     }

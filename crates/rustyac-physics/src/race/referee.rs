@@ -520,7 +520,7 @@ pub fn dump(manager: &RaceManager, penalty_mode: i32) -> Vec<(String, String)> {
 pub fn car_text(car: &RollingChassis) -> String {
     let p = &car.penalty_manager;
     format!(
-        "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {}",
+        "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {} time {:016x} {:016x}",
         car.lock_controls_time.to_bits(),
         car.is_controls_locked as u8,
         car.black_flagged as u8,
@@ -530,7 +530,9 @@ pub fn car_text(car: &RollingChassis) -> String {
         p.rearm_pit_penalty as u8,
         p.pit_penalty_laps,
         p.in_pit_meter_counter.to_bits(),
-        car.transponder.cuts
+        car.transponder.cuts,
+        car.penalty_time.to_bits(),
+        car.penalty_time_accumulator.to_bits()
     )
 }
 

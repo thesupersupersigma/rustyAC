@@ -1265,8 +1265,9 @@ impl AiDriver {
         let mut winner = -1i32;
         let mut best = 0.0f32;
         for def in &car.tyres[0].compound_defs {
-            // (the game's map makes an entry of 0 for a compound without a strategy)
-            let max_km = self.tyre_strategies.get(&def.short_name).copied().unwrap_or(0.0);
+            // (the game's map makes an entry for a compound without a strategy: a
+            // `TyreCompoundStrategy` starts with `maxKm` 100000, node maker @ 0x1402974e0)
+            let max_km = self.tyre_strategies.get(&def.short_name).copied().unwrap_or(100_000.0);
             let dy = engineer::get_compound_dy(def, 3000.0);
             if length * 2.5 < max_km && best < dy {
                 winner = def.index as i32;

@@ -590,7 +590,11 @@ impl PhysicsEngine {
         for slot in cars.iter_mut() {
             slot.car.env.session_type = info.session_type;
             slot.car.env.session_start_time_ms = info.start_time_ms;
+            // Car::onNewSession @ 0x140274c30: not retired, and a black flag is taken back
             slot.car.is_retired = false;
+            if slot.car.black_flagged {
+                slot.car.set_black_flag_for(false, 0);
+            }
             slot.car.fuel_lap_evaluator.on_new_session();
         }
         self.env.session_type = info.session_type;

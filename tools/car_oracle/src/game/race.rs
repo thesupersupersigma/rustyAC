@@ -22,9 +22,7 @@
 
 use std::cell::RefCell;
 
-use rustyac_physics::race::flags::Flag;
-use rustyac_physics::race::manager::{filter_speed, Action, CarView, RaceManager, Session, SessionsIni, SESSION_RACE};
-use rustyac_physics::race::output::{JsonOutputFile, Player};
+use rustyac_physics::race::manager::{filter_speed, Action, CarView, SessionsIni, SESSION_RACE};
 use rustyac_physics::session::MsvcRand;
 use rustyac_physics::track::timing::{OnLapCompletedEvent, OnSectorSplitEvent};
 
@@ -332,10 +330,6 @@ unsafe fn lap_text(lap: *const u8) -> String {
     format!("{}/{:?}/{}/{}/{}", rd::<u32>(lap, 0), vec_u32(lap.add(8)), rd::<u32>(lap, 0x20), rd::<u8>(lap, 0x24), text(lap.add(0x28)))
 }
 
-fn port_lap_text(lap: &rustyac_physics::race::Lap) -> String {
-    format!("{}/{:?}/{}/{}/{}", lap.time, lap.splits, lap.cuts, lap.is_valid as u8, lap.compound)
-}
-
 unsafe fn laps_text(at: *const u8) -> String {
     let (begin, end): (*const u8, *const u8) = (rd(at, 0), rd(at, 8));
     let mut out = Vec::new();
@@ -364,20 +358,6 @@ unsafe fn session_end_text(event: *const u8) -> String {
     }
     let total: Vec<String> = vec_u32(result.add(0x60)).iter().map(|bits| format!("{bits:08x}")).collect();
     format!("type {} positions {:?} lapCount {:?} total {:?} best [{}] laps {}", rd::<i32>(event, 0), vec_i32(result.add(0x30)), vec_i32(result.add(0x48)), total, laps_text(result.add(0x18)), laps.join(""))
-}
-
-fn port_session_end_text(event: &rustyac_physics::race::OnSessionEndEvent) -> String {
-    let laps: Vec<String> = event.result.laps.iter().map(|laps| format!("[{}]", laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" "))).collect();
-    let total: Vec<String> = event.result.total.iter().map(|t| format!("{:08x}", t.to_bits())).collect();
-    format!(
-        "type {} positions {:?} lapCount {:?} total {:?} best [{}] laps {}",
-        event.current_session.session_type,
-        event.result.positions,
-        event.result.lap_count,
-        total,
-        event.result.best_laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" "),
-        laps.join("")
-    )
 }
 
 /// The game's referee and what it stands in.
@@ -940,6 +920,9 @@ pub struct WholeReferee<'a> {
     pub frames: u64,
     /// what the stand-ins were told, frame by frame (for a look)
     pub log: Vec<(u64, String)>,
+    /// what the player's car went through, in frames: a time penalty running, a drive-through
+    /// pending, controls locked by a time, black-flagged; and the most cuts in a lap
+    pub seen: [u64; 5],
 }
 
 impl<'a> WholeReferee<'a> {
@@ -964,7 +947,7 @@ impl<'a> WholeReferee<'a> {
         }
         game.start_race(setup.first_start_delay_ms);
         REFEREE_RAND_ON.with(|on| on.set(false));
-        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new() };
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5] };
         referee.note();
         referee
     }
@@ -1066,6 +1049,16 @@ impl<'a> WholeReferee<'a> {
         }
         REFEREE_RAND_ON.with(|on| on.set(false));
         self.note();
+        if let Some(car) = self.game.cars.first() {
+            self.seen[0] += (rd::<f64>(*car, 0x3d30) > 0.0) as u64;
+            self.seen[1] += (rd::<i32>(*car, 0x3a38 + 0x20) == 5 && rd::<i16>(*car, 0x3a38 + 0x26) > 0) as u64;
+            self.seen[2] += (rd::<f64>(*car, 0x3d18) > now) as u64;
+            self.seen[3] += rd::<u8>(*car, 0x3d20) as u64;
+            self.seen[4] = self.seen[4].max(rd::<i32>(car.add(CAR_TRANSPONDER), 0x84).max(0) as u64);
+        }
+        // (RaceManager::setCurrentSession writes the penalty mode straight into the engine,
+        // from the main thread: at once)
+        wr(self.engine, PE_PENALTY_MODE, rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE));
         self.state = self.dump();
         self.state_hash = rustyac_physics::race::referee::dump_hash(&self.state);
     }
@@ -1082,7 +1075,7 @@ impl<'a> WholeReferee<'a> {
             out.push((
                 format!("car {index}"),
                 format!(
-                    "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {}",
+                    "lockUntil {:016x} locked {} black {} retired {} penalty {} {}{} {} {:08x} cuts {} time {:016x} {:016x}",
                     rd::<u64>(*car, 0x3d18),
                     rd::<u8>(*car, 0x3d14),
                     rd::<u8>(*car, 0x3d20),
@@ -1092,7 +1085,9 @@ impl<'a> WholeReferee<'a> {
                     rd::<u8>(p, 0x25),
                     rd::<i16>(p, 0x26),
                     rd::<u32>(p, 0x44),
-                    rd::<i32>(car.add(CAR_TRANSPONDER), 0x84)
+                    rd::<i32>(car.add(CAR_TRANSPONDER), 0x84),
+                    rd::<u64>(*car, 0x3d30),
+                    rd::<u64>(*car, 0x3d28)
                 ),
             ));
         }
@@ -1225,70 +1220,6 @@ impl<'a> GameFlags<'a> {
     }
 }
 
-/// The port's flags in the same words.
-pub fn flags_text(flags: &rustyac_physics::race::flags::FlagManager, shown: &rustyac_physics::race::flags::Shown) -> String {
-    let places: Vec<String> = flags.last_position_on_spline.iter().map(|p| format!("{:08x}", p.to_bits())).collect();
-    format!("{} {:08x} [{}] {}{}{}{}{}", flags.current_flag as i32, flags.timer.to_bits(), places.join(" "), shown.blue as u8, shown.black as u8, shown.chequered as u8, shown.yellow as u8, shown.penalty as u8)
-}
-
-/// The port's state under the same names.
-pub fn dump_port(manager: &RaceManager, penalty_mode: i32) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut put = |key: &str, value: String| out.push((key.to_string(), value));
-    put("currentSessionIndex", manager.current_session_index.to_string());
-    put("flags", format!("{} {} {}", manager.time_race_ended as u8, manager.is_timed_last_lap as u8, manager.has_additional_lap as u8));
-    put("pitWindow", format!("{:08x} {:08x}", manager.pit_window_start_time.to_bits(), manager.pit_window_end_time.to_bits()));
-    let s = &manager.current_session;
-    put(
-        "session",
-        format!(
-            "type {} timed {} laps {} duration {:08x} overtime {:08x} spawn {:?} name {:?} start {:016x} forced {} over {} leaderLaps {}",
-            s.session_type,
-            s.is_timed_race as u8,
-            s.laps,
-            s.duration_minutes.to_bits(),
-            s.overtime_ms.to_bits(),
-            s.spawn_set,
-            s.name,
-            s.start_time.to_bits(),
-            s.forced_position,
-            s.is_over as u8,
-            s.leader_completed_laps
-        ),
-    );
-    put("penaltyMode", penalty_mode.to_string());
-    put("realTime", manager.cars_real_time_position.iter().map(|d| format!("{}:{}:{:08x}", d.car, d.crossed_for_the_first_time as u8, d.approx_pos.to_bits())).collect::<Vec<_>>().join(" "));
-    put("raceStatus", manager.cars_race_status.iter().map(|d| format!("{}:{:08x}:{}:{:08x}", d.car, d.reset_timer.to_bits(), d.retired as u8, d.invalid_state_timer.to_bits())).collect::<Vec<_>>().join(" "));
-    for (car, db) in manager.timing.lap_dbs.iter().enumerate() {
-        put(
-            &format!("lapDB {car}"),
-            format!(
-                "total {:016x} best {} lastStart {} current {:?} personal {:?} bestLapSplit {} completed {} laps {}",
-                db.total_time.to_bits(),
-                port_lap_text(&db.best_lap),
-                db.last_lap_start_time,
-                db.current_splits,
-                db.personal_best_splits,
-                db.best_lap_split,
-                db.has_completed_last_lap as u8,
-                db.laps.iter().map(port_lap_text).collect::<Vec<_>>().join(" ")
-            ),
-        );
-    }
-    put("bestSplits", format!("{:?} global {}", manager.timing.best_splits, manager.timing.global_best_lap));
-    let entry = |e: &rustyac_physics::race::LeaderboardEntry| format!("{}:{:016x}:{:016x}:{}:{}{}{}", e.car, e.total_time.to_bits(), e.best_lap.to_bits(), e.laps, e.is_race_mode as u8, e.is_black_flagged as u8, e.has_completed_last_lap as u8);
-    put("leaderboard", manager.timing.leaderboard.iter().map(entry).collect::<Vec<_>>().join(" "));
-    put("grid", manager.start_index.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" "));
-    put("resultsDisplayed", (manager.results_displayed as u8).to_string());
-    for (i, event) in manager.session_history_list.iter().enumerate() {
-        put(&format!("history {i}"), port_session_end_text(event));
-    }
-    for (i, board) in manager.leaderboard_history.iter().enumerate() {
-        put(&format!("leaderboardHistory {i}"), board.iter().map(entry).collect::<Vec<_>>().join(" "));
-    }
-    out
-}
-
 /// The port's actions as the stand-ins of the game's side write them down.
 pub fn told_by_port(actions: &[Action]) -> Vec<String> {
     let mut out = Vec::new();
@@ -1296,7 +1227,7 @@ pub fn told_by_port(actions: &[Action]) -> Vec<String> {
         match action {
             Action::NewSession { session, index } => out.push(format!("NewSession({index}, type {}, {:?})", session.session_type, session.name)),
             Action::GoToPit(car) => out.push(format!("GoToSpawn({car}, PIT)")),
-            Action::SessionEnd { event, .. } => out.push(format!("SessionEnd({})", port_session_end_text(event))),
+            Action::SessionEnd { event, .. } => out.push(format!("SessionEnd({})", rustyac_physics::race::referee::session_end_text(event))),
             Action::Message { text, description } => out.push(format!("Message({text} | {description})")),
             Action::DisplayResults => out.push("DisplayResults".to_string()),
             Action::HideResults => out.push("HideResults".to_string()),
@@ -1324,54 +1255,6 @@ pub fn jobs_by_port(actions: &[Action]) -> Vec<&'static str> {
     out
 }
 
-/// The session lists the made-up drives run through.
-pub fn micro_sessions(variant: usize, cars: usize) -> SessionsIni {
-    let session = |kind: i32, name: &str, laps: i32, minutes: f32, spawn: &str| Session {
-        session_type: kind,
-        name: name.to_string(),
-        laps,
-        duration_minutes: minutes,
-        is_timed_race: kind == SESSION_RACE && laps == 0,
-        spawn_set: spawn.to_string(),
-        forced_position: if kind == SESSION_RACE { cars as i32 } else { -1 },
-        ..Session::default()
-    };
-    let (sessions, additional): (Vec<Session>, bool) = match variant % 8 {
-        0 => (vec![session(1, "Practice", 0, 1.0, "PIT"), session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 3, 0.0, "START")], false),
-        1 => (vec![session(3, "Race", 0, 1.0, "START")], true),
-        2 => (vec![session(3, "Race", 0, 1.0, "START")], false),
-        3 => (vec![session(3, "Quick Race", 5, 0.0, "START")], false),
-        4 => (vec![session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 2, 0.0, "START")], false),
-        5 => (vec![session(1, "Practice", 0, 0.0, "PIT"), session(3, "Race", 0, 1.0, "START"), session(1, "Practice", 0, 1.0, "PIT")], true),
-        6 => (vec![session(2, "Qualify", 0, 2.0, "PIT"), session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 4, 0.0, "START"), session(3, "Race", 1, 0.0, "START")], false),
-        _ => (vec![session(4, "Hotlap", 0, 0.0, "HOTLAP_START"), session(1, "Practice", 0, 1.0, "PIT"), session(3, "Race", 2, 0.0, "START")], false),
-    };
-    SessionsIni { sessions, has_additional_lap: additional, fixed_setup: false, penalties_enabled: variant % 2 == 0, jump_start_penalty_mode: None, has_hotlap: variant % 8 == 7 }
-}
-
-/// A made-up car of a made-up drive.
-struct ToyCar {
-    lap_seconds: f32,
-    position: f32,
-    lap_start: f64,
-    sector_start: f64,
-    sector: usize,
-    laps: u32,
-    in_pit_until: f64,
-    parked: bool,
-    retired: bool,
-    retire_at: Option<f64>,
-    black: bool,
-    speed: f32,
-    filtered: f32,
-    cuts: i32,
-    /// until when all four tyres are off the track, the gearbox is in reverse, the car points
-    /// the wrong way
-    off_until: f64,
-    reverse_until: f64,
-    against_until: f64,
-}
-
 /// What a made-up drive found.
 pub struct MicroReport {
     pub frames: usize,
@@ -1385,6 +1268,10 @@ pub struct MicroReport {
     pub flag_frames: [usize; 7],
     /// server sessions through `convertRemoteSession`, all the same
     pub remote_sessions: usize,
+    /// one hash over the state after every frame, and the hash of `race_out.json`: what
+    /// `crates/rustyac-physics/tests/race_rules.rs` holds the port alone against
+    pub state_hash: u64,
+    pub json_hash: u64,
 }
 
 /// Where two values part: the words around the first one that differs.
@@ -1466,276 +1353,99 @@ pub unsafe fn remote_sessions(acs: &Acs, manager: *mut u8, seed: u32, count: usi
     Ok(count)
 }
 
-/// One made-up drive: `frames` frames of the game's referee and of the port's, fed the same
-/// cars, compared after every frame; the results and `race_out.json` at the end.
+/// One made-up drive (`rustyac_physics::race::toy`): `frames` frames of the game's referee
+/// and flags and of the port's, fed the same cars, compared after every frame; the results
+/// and `race_out.json` at the end.
 pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, frames: usize, fault: bool) -> Result<MicroReport, String> {
-    const DT: f32 = 0.009;
-    const SECTORS: usize = 3;
-    let ini = micro_sessions(variant, car_count);
-    let models = ["car_a", "car_a", "car_b", "car_c"];
-    let setups: Vec<CarSetup> = (0..car_count).map(|i| CarSetup { name: format!("Driver {i}"), car: models[(i + variant) % models.len()].to_string(), skin: format!("skin_{i}"), compound: ["S", "M", "H", "SM"][i % 4].to_string(), start_index: i as i32 }).collect();
-    let over_time_mult = 1.2f32;
-    let mut now = 100_000.0f64;
+    use rustyac_physics::race::toy::{self, Button, PortDrive};
+    let ini = toy::sessions(variant, car_count);
+    let setups: Vec<CarSetup> = toy::players(variant, car_count).into_iter().enumerate().map(|(i, (player, compound))| CarSetup { name: player.name, car: player.car, skin: player.skin, compound, start_index: i as i32 }).collect();
     let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
     srand(seed);
-    let game = GameReferee::build(acs, &ini, &setups, "toy_track", if variant % 3 == 0 { "layout" } else { "" }, 3000.0, SECTORS, over_time_mult, now, None);
-    let (mut game_log, mut game_jobs, _) = game.take_told();
+    let game = GameReferee::build(acs, &ini, &setups, "toy_track", toy::layout(variant), toy::TRACK_LENGTH, toy::SECTORS, toy::OVER_TIME_MULT, 100_000.0, None);
     // (online the manager's session is a copy of the server's: the conversion alone)
     let converted = remote_sessions(acs, game.manager, seed, 300)?;
-
-    // the port
-    let mut referee_rand = MsvcRand(seed);
-    let mut manager = RaceManager::new(&ini, car_count, SECTORS, over_time_mult);
-    manager.autoflip_recovery = false;
-    for (slot, setup) in manager.start_index.iter_mut().zip(&setups) {
-        *slot = setup.start_index;
-    }
-    let mut json = JsonOutputFile::new("toy_track", if variant % 3 == 0 { "layout" } else { "" }, ini.sessions.len() as i32);
-    let players: Vec<Player> = setups.iter().map(|s| Player { name: s.name.clone(), car: s.car.clone(), skin: s.skin.clone() }).collect();
-    let mut actions = Vec::new();
-    manager.set_current_session(0, now, &mut actions);
-    manager.reset_current_laps_and_mandatory_pit(&mut actions);
-    let mut penalty_mode = 0;
-    let mut port_log = told_by_port(&actions);
-    let mut port_jobs = jobs_by_port(&actions);
-    let mut pending: Vec<Action> = actions;
-
-    // Sim::Sim's startRace
-    let draws = manager.start_race_draws();
-    let mut start_actions = Vec::new();
-    manager.start_race(20000.0, if draws { referee_rand.next() } else { 0 }, &mut start_actions);
+    let (mut drive, start_actions) = PortDrive::new(seed, variant, car_count);
+    drive.fault = fault;
     game.start_race(20000.0);
-    port_log.extend(told_by_port(&start_actions));
-    port_jobs.extend(jobs_by_port(&start_actions));
-    pending.extend(start_actions);
-
-    let mut script = MsvcRand(seed ^ 0x5eed_0028);
-    let mut unit = move || script.next() as f32 / 32768.0;
-    let mut cars: Vec<ToyCar> = (0..car_count)
-        .map(|_| ToyCar { lap_seconds: 7.0 + 6.0 * unit(), position: 0.0, lap_start: now, sector_start: now, sector: 0, laps: 0, in_pit_until: now + 1500.0, parked: false, retired: false, retire_at: None, black: false, speed: 0.0, filtered: 0.0, cuts: 0, off_until: 0.0, reverse_until: 0.0, against_until: 0.0 })
-        .collect();
-    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None, flag_frames: [0; 7], remote_sessions: converted };
-    // the flags: the game's FlagManager and the port's
+    let (mut game_log, mut game_jobs, _) = game.take_told();
+    let mut port_log = told_by_port(&start_actions);
+    let mut port_jobs = jobs_by_port(&start_actions);
     let game_flags = GameFlags::build(acs, &game, 700.0);
-    let mut flags = rustyac_physics::race::flags::FlagManager::new(car_count, 3000.0, None);
-    let mut penalty = rustyac_physics::race::flags::PlayerPenalty::default();
-    let mut was_black = false;
-    let mut flag_counts = [0usize; 7];
+    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None, flag_frames: [0; 7], remote_sessions: converted, state_hash: 0xcbf2_9ce4_8422_2325, json_hash: 0 };
     let mut job_names: std::collections::BTreeMap<usize, &'static str> = std::collections::BTreeMap::new();
+    // (the first session is a new session too)
+    let mut last_new_session = true;
 
-    for frame in 0..frames {
-        // what the port's actions of the last frame do to the made-up cars
-        for action in pending.drain(..) {
-            match action {
-                Action::PenaltyMode(mode) => penalty_mode = mode,
-                Action::NewSession { session, .. } => {
-                    // (FlagManager's handler of the new-session event)
-                    flags.clear_flag();
-                    game_flags.new_session();
-                    for car in cars.iter_mut() {
-                        car.position = 0.0;
-                        car.lap_start = now;
-                        car.sector_start = now;
-                        car.sector = 0;
-                        car.laps = 0;
-                        car.cuts = 0;
-                        car.parked = false;
-                        car.retired = false;
-                        car.speed = 0.0;
-                        car.in_pit_until = if session.spawn_set == "PIT" { now + 1000.0 + 3000.0 * unit() as f64 } else { 0.0 };
-                        car.retire_at = (unit() < 0.15).then(|| now + 20000.0 + 60000.0 * unit() as f64);
-                    }
-                }
-                Action::GoToPit(car) => {
-                    cars[car].parked = true;
-                    cars[car].speed = 0.0;
-                }
-                Action::RetirePlayer => cars[0].retired = true,
-                Action::SessionEnd { event, index } => {
-                    json.end_session(index, &event, car_count, None);
-                    report.sessions_ended += 1;
-                }
-                _ => {}
-            }
+    for frame_index in 0..frames {
+        if last_new_session {
+            // (FlagManager's handler of the new-session event)
+            game_flags.new_session();
         }
-        now += (DT * 1000.0) as f64;
-        manager.now = now;
-        game.set_now(now);
-
-        // the made-up cars drive
-        let started = manager.has_session_started();
-        let mut splits = Vec::new();
-        let mut laps = Vec::new();
-        for (index, car) in cars.iter_mut().enumerate() {
-            if let Some(at) = car.retire_at {
-                if now >= at && !car.retired {
-                    car.retired = true;
-                    car.retire_at = None;
-                }
-            }
-            if !car.parked && !car.retired && unit() < 0.0004 {
-                car.in_pit_until = now + 2000.0 + 4000.0 * unit() as f64;
-            }
-            if index == 0 && unit() < if car.black { 0.0005 } else { 0.00003 } {
-                car.black = !car.black;
-            }
-            let chance = unit();
-            if chance < 0.0003 {
-                car.off_until = now + 1500.0 + 2500.0 * unit() as f64;
-            } else if chance < 0.0005 {
-                car.reverse_until = now + 1000.0 + 2000.0 * unit() as f64;
-            } else if chance < 0.0007 {
-                car.against_until = now + 1000.0 + 2000.0 * unit() as f64;
-            }
-            let in_pit = car.parked || now < car.in_pit_until;
-            let driving = started && !in_pit && !car.retired;
-            car.speed = if driving { 3000.0 / car.lap_seconds } else { 0.0 };
-            if driving {
-                if unit() < 0.0006 {
-                    car.cuts += 1;
-                }
-                let before = car.position;
-                car.position += DT / car.lap_seconds;
-                let line = (car.sector + 1) as f32 / SECTORS as f32;
-                if before < line && car.position >= line && car.sector + 1 < SECTORS {
-                    splits.push(OnSectorSplitEvent { car_index: index as u32, sector_index: car.sector as i32, sector_time: (now - car.sector_start) as u32, cuts: car.cuts });
-                    car.sector += 1;
-                    car.sector_start = now;
-                }
-                if car.position >= 1.0 {
-                    car.position -= 1.0;
-                    let valid = unit() >= 0.03;
-                    if valid {
-                        car.laps += 1;
-                    }
-                    laps.push(OnLapCompletedEvent { car_index: index as u32, lap_time: (now - car.lap_start) as u32, lap_count: car.laps, splits: Vec::new(), event_time: now, is_valid: valid, cuts: car.cuts });
-                    car.lap_start = now;
-                    car.sector_start = now;
-                    car.sector = 0;
-                    car.cuts = 0;
-                }
-            }
-            car.filtered = filter_speed(car.filtered, car.speed, DT);
-        }
-        let views: Vec<CarView> = cars
-            .iter()
-            .enumerate()
-            .map(|(index, car)| CarView {
-                normalized_spline_position: car.position,
-                is_in_pit: car.parked || now < car.in_pit_until,
-                filtered_speed: car.filtered,
-                is_retired: Some(car.retired),
-                is_connected: true,
-                is_black_flagged: car.black,
-                loaded_tyres: Some(4),
-                compound: setups[index].compound.clone(),
-                driver_name: setups[index].name.clone(),
-                gui_name: setups[index].car.clone(),
-            })
-            .collect();
-        for (index, view) in views.iter().enumerate() {
-            game.set_car(index, view, cars[index].speed);
+        let frame = drive.begin_frame();
+        game.set_now(drive.now);
+        for (index, view) in frame.views.iter().enumerate() {
+            game.set_car(index, view, frame.speeds[index]);
             game.set_fake_car(index, view);
+            game_flags.set_car(&game, index, &frame.flag_cars[index]);
         }
-        // what the flags read: a car in its pit box is in the pit lane; now and then one is
-        // off the track, in reverse, or points the wrong way and rolls back
-        let flag_cars: Vec<rustyac_physics::race::flags::FlagCar> = cars
-            .iter()
-            .zip(&views)
-            .map(|(car, view)| rustyac_physics::race::flags::FlagCar {
-                is_in_pitlane: view.is_in_pit,
-                tyres_off_track: if now < car.off_until { 4 } else { (car.cuts > 0) as u32 * 2 },
-                gear: if now < car.reverse_until { 0 } else { 3 },
-                speed: car.speed,
-                against_road: if now < car.against_until { 0.9 } else { -0.8 },
-            })
-            .collect();
-        for (index, car) in flag_cars.iter().enumerate() {
-            game_flags.set_car(&game, index, car);
+        game_flags.set_penalty(&game, &frame.penalty);
+        if let Some(flag) = frame.black_flag {
+            game_flags.black_flag(flag);
         }
-        let chance = unit();
-        if chance < 0.0002 {
-            penalty.penalty_time = if penalty.penalty_time > 0.0 || chance < 0.00004 { 0.0 } else { 5.0 };
-        } else if chance < 0.0004 && (penalty.pit_penalty_laps > 0 || chance < 0.00024) {
-            penalty.pit_penalty_laps = if penalty.pit_penalty_laps > 0 { 0 } else { 3 };
-        }
-        game_flags.set_penalty(&game, &penalty);
-        if cars[0].black != was_black {
-            was_black = cars[0].black;
-            flags.on_black_flag(was_black, 1);
-            game_flags.black_flag(was_black);
-        }
-        report.laps += laps.len();
-
         // the frame, the game's and the port's
-        for split in &splits {
+        for split in &frame.splits {
             game.sector_split(split);
-            manager.on_sector_split(split);
         }
-        for lap in &laps {
+        for lap in &frame.laps {
             game.lap_completed(lap);
-            manager.on_lap_completed(lap, &views);
         }
-        game.update(DT);
-        let mut actions = Vec::new();
-        let mut rand = referee_rand;
-        // (the fault: the port's frame is a microsecond longer)
-        manager.update(if fault { DT + 1.0e-6 } else { DT }, now, &views, &mut || rand.next(), &mut actions);
-        referee_rand = rand;
+        game.update(toy::DT);
         let (log, jobs, new_session) = game.take_told();
         game_log.extend(log);
         game_jobs.extend(jobs);
-        let port_new_session = actions.iter().any(|a| matches!(a, Action::NewSession { .. }));
-        if new_session != port_new_session {
-            report.mismatch = Some(format!("frame {frame}: a new session on one side only (the game: {new_session})"));
+        let port = drive.finish_frame(frame);
+        if new_session != port.new_session {
+            report.mismatch = Some(format!("frame {frame_index}: a new session on one side only (the game: {new_session})"));
             break;
         }
-        if port_new_session && manager.current_session.session_type == SESSION_RACE {
-            let draws = manager.start_race_draws();
-            manager.start_race(10000.0, if draws { referee_rand.next() } else { 0 }, &mut actions);
+        last_new_session = port.new_session;
+        if port.new_session && drive.manager.current_session.session_type == SESSION_RACE {
             game.start_race(10000.0);
         }
         // the player's buttons, now and then
-        let button = unit();
-        if button < 0.00012 {
-            manager.skip_current_session(&mut actions);
-            game.skip();
-        } else if button < 0.00018 {
-            manager.restart_current_session(&mut actions);
-            game.restart();
+        match port.button {
+            Button::NextSession => game.skip(),
+            Button::RestartSession => game.restart(),
+            Button::None => {}
         }
+        game_flags.update(toy::DT);
         let (log, jobs, _) = game.take_told();
         game_log.extend(log);
         game_jobs.extend(jobs);
-        port_log.extend(told_by_port(&actions));
-        port_jobs.extend(jobs_by_port(&actions));
-        for action in &actions {
-            if let Action::PenaltyMode(mode) = action {
-                penalty_mode = *mode;
-            }
-        }
-        pending = actions;
+        port_log.extend(told_by_port(&port.actions));
+        port_jobs.extend(jobs_by_port(&port.actions));
 
         if game_log != port_log {
             let at = game_log.iter().zip(&port_log).position(|(a, b)| a != b).unwrap_or(game_log.len().min(port_log.len()));
-            report.mismatch = Some(format!("frame {frame}: told differently\n  the game: {:?}\n  the port: {:?}", game_log.get(at), port_log.get(at)));
+            report.mismatch = Some(format!("frame {frame_index}: told differently\n  the game: {:?}\n  the port: {:?}", game_log.get(at), port_log.get(at)));
             break;
         }
         game_log.clear();
         port_log.clear();
         if game_jobs.len() != port_jobs.len() {
-            report.mismatch = Some(format!("frame {frame}: {} jobs for the physics thread in the game, {} in the port ({:x?} / {:?})", game_jobs.len(), port_jobs.len(), game_jobs, port_jobs));
+            report.mismatch = Some(format!("frame {frame_index}: {} jobs for the physics thread in the game, {} in the port ({:x?} / {:?})", game_jobs.len(), port_jobs.len(), game_jobs, port_jobs));
             break;
         }
         for (address, name) in game_jobs.drain(..).zip(port_jobs.drain(..)) {
             match job_names.get(&address) {
                 Some(known) if *known != name => {
-                    report.mismatch = Some(format!("frame {frame}: the job at {address:#x} is {known} and {name}"));
+                    report.mismatch = Some(format!("frame {frame_index}: the job at {address:#x} is {known} and {name}"));
                 }
                 Some(_) => {}
                 None => {
                     if job_names.values().any(|known| *known == name) {
-                        report.mismatch = Some(format!("frame {frame}: the job {name} has two addresses"));
+                        report.mismatch = Some(format!("frame {frame_index}: the job {name} has two addresses"));
                     }
                     job_names.insert(address, name);
                 }
@@ -1744,68 +1454,46 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         if report.mismatch.is_some() {
             break;
         }
-        // the flags' frame (after the manager's, as the game's object tree has them)
-        game_flags.update(DT);
-        let shown = flags.update(DT, &manager, &views, &flag_cars, &penalty, manager.results_displayed);
-        flag_counts[flags.current_flag as usize] += 1;
-        let (mut a, mut b) = (game.dump(), dump_port(&manager, penalty_mode));
+        let mut a = game.dump();
         a.push(("flag".to_string(), game_flags.text()));
-        b.push(("flag".to_string(), flags_text(&flags, &shown)));
+        let b = drive.dump();
         report.values += a.len();
         if a != b {
             let line = a.iter().zip(&b).find(|(x, y)| x != y).map(|(x, y)| first_difference(&x.0, &x.1, &y.1)).unwrap_or_else(|| format!("{} values in the game, {} in the port", a.len(), b.len()));
-            report.mismatch = Some(format!("frame {frame}: {line}"));
+            report.mismatch = Some(format!("frame {frame_index}: {line}"));
             break;
         }
+        report.state_hash = (report.state_hash ^ rustyac_physics::race::referee::dump_hash(&b)).wrapping_mul(0x0000_0100_0000_01b3);
         report.frames += 1;
     }
     report.jobs_seen = job_names.into_iter().collect();
-    report.flag_frames = flag_counts;
+    report.flag_frames = drive.flag_frames;
+    report.laps = drive.laps;
+    report.sessions_ended = drive.sessions_ended;
     if report.mismatch.is_some() {
         return Ok(report);
     }
     // the end of the program: the last session's results, the file
     let game_file = game.shutdown()?;
-    let views: Vec<CarView> = cars
-        .iter()
-        .enumerate()
-        .map(|(index, car)| CarView {
-            normalized_spline_position: car.position,
-            is_in_pit: car.parked || now < car.in_pit_until,
-            filtered_speed: car.filtered,
-            is_retired: Some(car.retired),
-            is_connected: true,
-            is_black_flagged: car.black,
-            loaded_tyres: Some(4),
-            compound: setups[index].compound.clone(),
-            driver_name: setups[index].name.clone(),
-            gui_name: setups[index].car.clone(),
-        })
-        .collect();
-    let mut actions = Vec::new();
-    let mut rand = referee_rand;
-    manager.finalize_current_session(&views, &mut || rand.next(), &mut actions);
-    for action in &actions {
-        if let Action::SessionEnd { event, index } = action {
-            json.end_session(*index, event, car_count, None);
-            report.sessions_ended += 1;
-        }
-    }
+    let (actions, port_file) = drive.shutdown();
+    report.sessions_ended = drive.sessions_ended;
     let (log, _, _) = game.take_told();
     let port_log = told_by_port(&actions);
     if log != port_log {
         report.mismatch = Some(format!("the end: told differently\n  the game: {log:?}\n  the port: {port_log:?}"));
         return Ok(report);
     }
-    let (a, b) = (game.dump(), dump_port(&manager, penalty_mode));
+    let mut a = game.dump();
+    a.push(("flag".to_string(), game_flags.text()));
+    let b = drive.dump();
     if a != b {
         let line = a.iter().zip(&b).find(|(x, y)| x != y).map(|(x, y)| first_difference(&x.0, &x.1, &y.1)).unwrap_or_default();
         report.mismatch = Some(format!("the end: {line}"));
         return Ok(report);
     }
-    let best = manager.timing.instance_best_times.first().map_or(0, |lap| lap.time as i32);
-    let port_file = json.file(&players, best);
+    report.state_hash = (report.state_hash ^ rustyac_physics::race::referee::dump_hash(&b)).wrapping_mul(0x0000_0100_0000_01b3);
     report.json_bytes = game_file.len();
+    report.json_hash = game_file.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ *byte as u64).wrapping_mul(0x0000_0100_0000_01b3));
     if game_file != port_file {
         let at = game_file.iter().zip(&port_file).position(|(x, y)| x != y).unwrap_or(game_file.len().min(port_file.len()));
         let from = at.saturating_sub(60);
@@ -1817,6 +1505,5 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
             String::from_utf8_lossy(&port_file[from..(at + 60).min(port_file.len())])
         ));
     }
-    let _ = Flag::None;
     Ok(report)
 }

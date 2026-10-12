@@ -102,6 +102,9 @@ impl World for SimWorld<'_> {
                 car.env.session_type = info.session_type;
                 car.env.session_start_time_ms = info.start_time_ms;
                 car.is_retired = false;
+                if car.black_flagged {
+                    car.set_black_flag_for(false, 0);
+                }
                 car.fuel_lap_evaluator.on_new_session();
                 self.solo_ai.session = info;
                 if self.car.device.ai.is_some() {
