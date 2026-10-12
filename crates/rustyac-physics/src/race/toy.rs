@@ -42,7 +42,7 @@ pub fn sessions(variant: usize, cars: usize) -> SessionsIni {
         6 => (vec![session(2, "Qualify", 0, 2.0, "PIT"), session(2, "Qualify", 0, 1.0, "PIT"), session(3, "Race", 4, 0.0, "START"), session(3, "Race", 1, 0.0, "START")], false),
         _ => (vec![session(4, "Hotlap", 0, 0.0, "HOTLAP_START"), session(1, "Practice", 0, 1.0, "PIT"), session(3, "Race", 2, 0.0, "START")], false),
     };
-    SessionsIni { sessions, has_additional_lap: additional, fixed_setup: false, penalties_enabled: variant % 2 == 0, jump_start_penalty_mode: None, has_hotlap: variant % 8 == 7 }
+    SessionsIni { sessions, has_additional_lap: additional, fixed_setup: false, penalties_enabled: variant.is_multiple_of(2), jump_start_penalty_mode: None, has_hotlap: variant % 8 == 7 }
 }
 
 /// The made-up cars' names: (driver, car, skin, tyre compound).
