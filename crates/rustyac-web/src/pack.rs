@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The preview pack: a folder with the files of at most two cars and two tracks, laid out as
-//! in the game's own folder (`content/cars/<car>/data.acd`, `content/tracks/<track>/...`,
+//! The preview pack: a folder with the files of some cars and tracks (two of each by default,
+//! as many as its maker's own server holds otherwise), laid out as in the game's own folder (`content/cars/<car>/data.acd`, `content/tracks/<track>/...`,
 //! `system/data/...`), and a `manifest.json` that lists them with sizes and SHA-256 hashes.
 //!
 //! `tools/web_pack` builds it from an Assetto Corsa install; the page fetches the manifest
@@ -11,9 +11,10 @@
 
 use std::fmt::Write as _;
 
-/// The most cars and the most tracks a pack may hold.
-pub const MAX_CARS: usize = 2;
-pub const MAX_TRACKS: usize = 2;
+/// A pack with more cars or more tracks than this gets a word of warning from the tool (the
+/// page itself has no limit): it is somebody's copy of Kunos' files and belongs on a server
+/// only its maker can reach.
+pub const MANY: usize = 10;
 
 pub const FORMAT: &str = "rustyac-preview-pack-1";
 
@@ -36,6 +37,9 @@ pub struct PackItem {
     pub layout: String,
     /// The menu's name.
     pub name: String,
+    /// Named in the pack's config itself, in a list that also has a `"*"`: the page lists it
+    /// before what the star added.
+    pub pinned: bool,
     /// Indices into [`Manifest::files`].
     pub files: Vec<usize>,
 }
@@ -98,6 +102,9 @@ impl Manifest {
                 json_text(&mut out, &item.layout);
                 out.push_str(", \"name\": ");
                 json_text(&mut out, &item.name);
+                if item.pinned {
+                    out.push_str(", \"pinned\": true");
+                }
                 let _ = write!(out, ", \"bytes\": {}, \"files\": [{}]}}", self.bytes_of(&item.files), list(&item.files));
             }
             out.push_str("\n  ]");
@@ -234,9 +241,11 @@ mod tests {
         let a = m.file(PackFile { path: "content/cars/a/data.acd".into(), bytes: 10, sha256: "00".into() });
         let b = m.file(PackFile { path: "system/data/surfaces.ini".into(), bytes: 5, sha256: "11".into() });
         assert_eq!(m.file(PackFile { path: "content/cars/A/data.acd".into(), bytes: 10, sha256: "00".into() }), a);
-        m.cars.push(PackItem { id: "a".into(), layout: String::new(), name: "The \"A\"".into(), files: vec![a] });
+        m.cars.push(PackItem { id: "a".into(), layout: String::new(), name: "The \"A\"".into(), pinned: false, files: vec![a] });
+        m.tracks.push(PackItem { id: "t".into(), layout: "gp".into(), name: "T".into(), pinned: true, files: vec![] });
         m.shared.push(b);
         let json = m.to_json();
+        assert!(json.contains("{\"id\": \"t\", \"layout\": \"gp\", \"name\": \"T\", \"pinned\": true, \"bytes\": 0, \"files\": []}"), "{json}");
         assert!(json.contains("\"format\": \"rustyac-preview-pack-1\""), "{json}");
         assert!(json.contains("{\"id\": \"a\", \"layout\": \"\", \"name\": \"The \\\"A\\\"\", \"bytes\": 10, \"files\": [0]}"), "{json}");
         assert!(json.contains("\"shared\": [1],\n  \"bytes\": 15"), "{json}");

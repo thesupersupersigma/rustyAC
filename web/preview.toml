@@ -1,7 +1,9 @@
 # The preview pack of the browser build: which cars and tracks `tools/web_pack` copies out of
-# your own Assetto Corsa install into dist-web/preview/ (a folder git ignores). At most two
-# cars and two tracks. The pack is your copy of Kunos' files, for a page you host yourself:
-# it is never part of the repository or of a release.
+# your own Assetto Corsa install into dist-web/preview/ (a folder git ignores). This is the
+# default: two cars and two tracks, the ones the multiplayer servers run. For a pack of your
+# own (more cars and tracks, "*" for everything you have) copy web/my_pack.example.toml to
+# web/my_pack.toml: the tool uses that file when it exists. The pack is your copy of Kunos'
+# files, for a page you host yourself: it is never part of the repository or of a release.
 #
 # A car is its folder name under content/cars; a track its folder name under content/tracks,
 # with "/<layout>" behind it for one layout of a track that has several

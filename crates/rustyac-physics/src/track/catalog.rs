@@ -265,7 +265,7 @@ pub fn packed_data(base: &Path) -> Option<PathBuf> {
 /// A name in a kn5 that says "encrypted". This is a guess: no encrypted track is installed
 /// on the PC this was written on, so the names are the obvious ones and nothing more. A kn5
 /// the reader cannot parse at all is refused in any case.
-fn encryption_marker(kn5: &Kn5) -> Option<String> {
+pub fn encryption_marker(kn5: &Kn5) -> Option<String> {
     let marked = |name: &str| {
         let lower = name.to_ascii_lowercase();
         lower.contains("__encrypt") || lower.contains("encrypted__") || lower.starts_with("__ac_shaders_patch")

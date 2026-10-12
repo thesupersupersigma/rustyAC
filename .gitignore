@@ -24,6 +24,8 @@ brainstorm.md
 
 # The browser build: the site and the preview pack (the pack is Assetto Corsa content)
 dist-web/
+# your own list of cars and tracks for the pack (web/my_pack.example.toml explains it)
+web/my_pack.toml
 
 # The server pack (server/make_server_pack.py): Kunos acServer and content, never commit
 dist-server/

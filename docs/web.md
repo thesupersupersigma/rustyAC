@@ -10,10 +10,14 @@ below and [docs/port/multiplayer_web.md](port/multiplayer_web.md).
 The site itself holds **no Assetto Corsa file**. Cars and tracks come from one of two places:
 
 - **your own Assetto Corsa folder**, picked in the page ("Open your Assetto Corsa folder"). The files are read
-  by the page on your computer; nothing is uploaded.
-- **a preview pack**: at most two cars and two tracks that you copy out of your own install with a tool and put
-  next to the site. This is for a page you host for yourself (a Chromebook without the game on it). The pack is
-  Kunos' content: it is never in this repository and never in a release.
+  by the page on your computer; nothing is uploaded. Chrome and Edge refuse a folder under `Program Files`
+  (where Steam puts the game) in their folder picker: the second button, **"Open it as a file list"**, takes
+  the same folder the other way (see [below](#chrome-and-a-folder-under-program-files)).
+- **a content pack**: cars and tracks that you copy out of your own install with a tool and put next to the
+  site: two cars and two tracks by default (the *preview pack*), or your own list, up to everything you have
+  (see [Your own pack](#your-own-pack)). This is for a page you host for yourself (a Chromebook without the
+  game on it). The pack is Kunos' (and mod makers') content: it is never in this repository and never in a
+  release.
 
 ## What you need
 
@@ -55,19 +59,52 @@ cars = ["ks_ferrari_f2004", "bmw_z4_gt3"]
 tracks = ["spa", "ks_laguna_seca"]
 ```
 
-A track with layouts is written `"<track>/<layout>"`. More than two cars or two tracks are refused.
+A track with layouts is written `"<track>/<layout>"`. That file is the default and stays as it is: the two
+cars and two tracks the multiplayer servers run.
 
 ```
 cargo run --release --manifest-path tools/web_pack/Cargo.toml
 ```
 
-It finds your install (`AC_ROOT`, else Steam's usual place; or `-- --ac <folder>`), loads every car on every
-track once with a log of every file the loaders open, and copies exactly those files into `dist-web/preview/`
-(the car's `data.acd` as it is, its collider and model, the track's models, `ai` and `data` files that are
-read, `system/data/surfaces.ini`), laid out as in the game. `manifest.json` lists them with sizes and SHA-256
-hashes. `-- --dry-run` prints the sizes without copying. The install is only read.
+It finds your install (`AC_ROOT`, else Steam's usual place; or `-- --ac <folder>`), loads every car once (on
+the flat road) and every track once (with the first car that loads) with a log of every file the loaders open,
+and copies exactly those files into `dist-web/preview/` (the car's `data.acd` as it is, its collider and
+model, the track's models, `ai` and `data` files that are read, `system/data/surfaces.ini`), laid out as in
+the game. `manifest.json` lists them with sizes and SHA-256 hashes. `-- --dry-run` prints the size of every
+car and track and the total without copying or hashing anything. The install is only read.
 
 With the default four it is 1.46 GB (see the table in the report): the tracks are large.
+
+### Your own pack
+
+There is no limit on the number of cars and tracks (above ten of either the tool adds a reminder that the
+site has to stay behind a login). Your own list goes into **`web/my_pack.toml`**, which git ignores:
+
+```
+cp web/my_pack.example.toml web/my_pack.toml        # then edit the two lists
+cargo run --release --manifest-path tools/web_pack/Cargo.toml -- --dry-run
+cargo run --release --manifest-path tools/web_pack/Cargo.toml
+```
+
+- The tool reads `--config <file>` if given, else `web/my_pack.toml` if it exists, else `web/preview.toml`.
+  Its first line of output says which.
+- `"*"` in a list is everything in the install (every car; every track and layout), `"<track>/*"` every
+  layout of one track. What the list names itself comes first in the page's lists, in the list's order; what
+  a star adds follows, sorted by name. From 13 entries on a list has a search box.
+- Keep `ks_ferrari_f2004`, `bmw_z4_gt3`, `spa` and `ks_laguna_seca` first: the multiplayer servers run those,
+  and a browser can only join a server whose track and cars are in the pack.
+- **A car or track the pack cannot use is left out with one line that says why, and the build goes on**: a DLC
+  that is not owned (only its menu entry is installed), content made for Custom Shaders Patch only, a model
+  or data file encrypted by its maker (rustyAC never decrypts anything), a file that is missing, a name that
+  is not in the install. The same reason is printed once with every name it holds for. `mods in the pack:`
+  lists the mods that made it (a car is a mod when the game's own sound table `content/sfx/GUIDs.txt` does
+  not know it; a track when its menu entry names an author other than Kunos or it has an `extension` folder).
+- `--dry-run` takes about a minute for a whole install (every car and track is loaded once to see which files
+  it reads) and prints one line per car and track with its megabytes, then the total.
+- A file that two layouts of a track share is in the pack once.
+
+See [docs/port/web_controls_pack.md](port/web_controls_pack.md) for what a whole install came to on the PC
+this was written on, and for the copy-to-the-server commands.
 
 ## Try it on this computer
 
@@ -81,6 +118,35 @@ and open `http://127.0.0.1:8080/` in Chrome or Edge. The server serves `dist-web
 In the page: pick the folder (or use the pack), pick a car and a track, press **Drive**. R puts the car back
 in the pits, Shift+R back on the track where it is, F1 changes the view, Esc goes back to the menu; the page
 lists the rest (H shows the list while driving).
+
+### Chrome and a folder under Program Files
+
+Chrome's and Edge's folder picker (`showDirectoryPicker`, the first button) refuses a folder under
+`C:\Program Files` or `C:\Program Files (x86)` ("contains system files"), which is where Steam installs the
+game by default; a directory junction to it is refused too. The second button, **"Open it as a file list"**,
+uses the browser's older way (`<input type="file" webkitdirectory>`, the one Firefox and Safari always use):
+the browser lists every file of the folder and asks whether to "upload" them. Nothing is uploaded; the page
+keeps only the paths a drive can need (2,445 of 30,001 on the PC this was written on) and reads a file when a
+drive needs it. Unlike the picker's folder this one cannot be remembered: it is picked again on every visit.
+What was tested and what was not is in [the report](port/web_controls_pack.md).
+
+### Steering and controls (your own controls.ini)
+
+The **Controls** panel (the button in the menu; the **O** key while driving; Esc closes it) has every value
+Assetto Corsa's pad and keyboard classes read from `controls.ini`, under AC's own names: the pad's speed
+sensitivity (0 = off), steering gamma, filter, dead zone, speed and rumble intensity, which stick steers, and
+the keyboard's steering speed, opposite-direction speed and return speed.
+
+- **Load my controls.ini** takes your own file (`Documents\Assetto Corsa\cfg\controls.ini`; it is not inside
+  the game's folder, so it is picked separately). It is read by the parser the desktop build uses, and all of
+  it counts: the steering numbers and also its keys and pad buttons. The panel then lists what drives.
+- **Reset to AC's defaults** goes back to the built-in layout (AC's default keys plus WASD).
+- A change works at once, also in the middle of a drive: the two classes are built again from the new values
+  before the next physics step. Nothing is reloaded.
+- The settings are kept in this browser (`localStorage`); where the browser lets a page keep nothing (a
+  private window) they last until the page is closed, and the panel says so.
+- On a server nothing else changes: the settings only decide what your own keys and stick make of the car's
+  controls.
 
 ### Keys and pad
 
@@ -99,6 +165,7 @@ lists the rest (H shows the list while driving).
 | next view | F1 or C | right stick press |
 | new car, automatic gearbox | N, G | |
 | pause, menu, the key list | P, Esc, H | Start |
+| steering and controls | O | |
 
 - The display shows `TC 2/3`, `ABS off` (or `not fitted`) and `Bias 58.0 %` all the time, lit while the aid
   acts, and a note in the upper middle for a moment when one changes. A level goes up to its highest and then
@@ -113,7 +180,8 @@ lists the rest (H shows the list while driving).
 
 Useful address options: `?car=bmw_z4_gt3&track=ks_laguna_seca&go=1` (start without a click),
 `&autodrive=1` (a line follower drives), `&backend=webgl` (do not use WebGPU), `&tex=512` (smaller textures),
-`&msaa=1` (no anti-aliasing), `&spawn=hotlap`.
+`&msaa=1` (no anti-aliasing), `&spawn=hotlap`, `&nocontrols=1` (do not use the Controls panel's kept
+settings), `&set=X360.SPEED_SENSITIVITY=0,KEYBOARD.STEERING_SPEED=3` (Controls values for this visit only).
 
 ### Check it without a window
 

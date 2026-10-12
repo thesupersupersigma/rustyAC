@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 license = "GPL-3.0-or-later"
-description = "Builds the browser preview's content pack (at most 2 cars and 2 tracks, chosen in web/preview.toml) from an Assetto Corsa install into dist-web/preview/, with a manifest of sizes and hashes"
+description = "Builds the browser preview's content pack (the cars and tracks of web/my_pack.toml, else the two and two of web/preview.toml) from an Assetto Corsa install into dist-web/preview/, with a manifest of sizes and hashes"
 
 [dependencies]
 rustyac-web = { path = "../../crates/rustyac-web" }

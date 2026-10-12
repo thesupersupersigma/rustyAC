@@ -3,25 +3,32 @@
 //! `web_pack`: builds the browser preview's content pack.
 //!
 //! ```text
-//! web_pack [--config web/preview.toml] [--out dist-web/preview] [--ac <Assetto Corsa folder>]
-//!          [--dry-run]
+//! web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]
 //! ```
 //!
-//! Reads which cars and tracks are wanted (at most two of each), loads every car on every
-//! track once with the file log on, and copies exactly the files those loads read from the
-//! game's folder into the output folder, laid out as in the game. `manifest.json` lists them
-//! with sizes and SHA-256 hashes, per car and per track. The game's folder is only read.
+//! Reads which cars and tracks are wanted: from `--config`, else from `web/my_pack.toml` when
+//! that file exists (your own list, ignored by git), else from `web/preview.toml` (two cars,
+//! two tracks). `"*"` in a list stands for everything in the install, `"<track>/*"` for every
+//! layout of a track.
 //!
-//! The pack is the user's own copy of Kunos' files. `dist-web/` is ignored by git; nothing in
-//! it belongs in the repository or in a release.
+//! Every car is loaded once on the flat road and every track once (with the first car that
+//! loads) with the file log on; exactly the files those loads read are copied from the game's
+//! folder into the output folder, laid out as in the game. `manifest.json` lists them with
+//! sizes and SHA-256 hashes, per car and per track. A car or track that cannot be used (not
+//! installed, made for Custom Shaders Patch only, encrypted, files missing) is left out with
+//! one line that says why; nothing is ever decrypted. `--dry-run` prints the sizes and what is
+//! left out, and writes nothing. The game's folder is only read.
+//!
+//! The pack is the user's own copy of Kunos' (and mod makers') files. `dist-web/` is ignored by
+//! git; nothing in it belongs in the repository or in a release.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use rustyac_physics::track::catalog;
+use rustyac_physics::track::catalog::{self, Maker};
 use rustyac_web::content;
-use rustyac_web::pack::{Manifest, PackFile, PackItem, Sha256, MAX_CARS, MAX_TRACKS};
+use rustyac_web::pack::{Manifest, PackFile, PackItem, Sha256, MANY};
 
 /// `key = ["a", "b"]` of the config file (the only TOML it uses).
 fn string_list(text: &str, key: &str) -> Result<Vec<String>, String> {
@@ -32,7 +39,7 @@ fn string_list(text: &str, key: &str) -> Result<Vec<String>, String> {
             continue;
         }
         let value = value.trim();
-        let inner = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')).ok_or_else(|| format!("{key}: expected a list in [ ]"))?;
+        let inner = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')).ok_or_else(|| format!("{key}: expected a list in [ ] on one line"))?;
         let mut out = Vec::new();
         for item in inner.split(',').map(str::trim).filter(|item| !item.is_empty()) {
             let name = item.strip_prefix('"').and_then(|v| v.strip_suffix('"')).ok_or_else(|| format!("{key}: {item} is not a text in double quotes"))?;
@@ -43,22 +50,63 @@ fn string_list(text: &str, key: &str) -> Result<Vec<String>, String> {
     Err(format!("no `{key} = [...]` line"))
 }
 
+/// The list of a config with its stars filled in: `"*"` is everything of `all`, `"x/*"` is
+/// `x` and every `x/...` of `all`. The order is the list's (what is named first comes first,
+/// what a star adds comes sorted as `all` is) and nothing comes twice.
+fn expand(list: &[String], all: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let add = |name: &str, out: &mut Vec<String>| {
+        if !out.iter().any(|have| have.eq_ignore_ascii_case(name)) {
+            out.push(name.to_string());
+        }
+    };
+    for item in list {
+        if item == "*" {
+            all.iter().for_each(|name| add(name, &mut out));
+        } else if let Some(folder) = item.strip_suffix("/*") {
+            let prefix = format!("{}/", folder.to_ascii_lowercase());
+            all.iter().filter(|name| name.eq_ignore_ascii_case(folder) || name.to_ascii_lowercase().starts_with(&prefix)).for_each(|name| add(name, &mut out));
+        } else {
+            add(item, &mut out);
+        }
+    }
+    out
+}
+
 fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1e6)
 }
 
+/// A refusal as one line of moderate length, without the game's folder in front of its paths.
+fn one_line(why: &str, root: &Path) -> String {
+    let root = root.to_string_lossy();
+    let line = why.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    let line = line.replace(&format!("{root}\\"), "").replace(&format!("{root}/"), "");
+    if line.chars().count() > 420 {
+        format!("{} ...", line.chars().take(420).collect::<String>())
+    } else {
+        line
+    }
+}
+
+/// The cars the game's own sound table names (`content/sfx/GUIDs.txt`, `event:/cars/<car>/`):
+/// Kunos' cars. A mod brings its own sounds and is not in it. `None` without the table.
+fn stock_cars(root: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read(root.join("content").join("sfx").join("GUIDs.txt")).ok()?;
+    let text = String::from_utf8_lossy(&text).to_ascii_lowercase();
+    let mut cars: Vec<String> = text.match_indices("event:/cars/").filter_map(|(at, marker)| text[at + marker.len()..].split('/').next().map(str::to_string)).collect();
+    cars.sort();
+    cars.dedup();
+    (!cars.is_empty()).then_some(cars)
+}
+
 /// Copies a file and returns its size and SHA-256.
-fn copy_hashed(from: &Path, to: Option<&Path>) -> Result<(u64, String), String> {
+fn copy_hashed(from: &Path, to: &Path) -> Result<(u64, String), String> {
     let mut input = std::fs::File::open(from).map_err(|e| format!("{}: {e}", from.display()))?;
-    let mut output = match to {
-        Some(to) => {
-            if let Some(parent) = to.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-            }
-            Some(std::fs::File::create(to).map_err(|e| format!("{}: {e}", to.display()))?)
-        }
-        None => None,
-    };
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let mut output = std::fs::File::create(to).map_err(|e| format!("{}: {e}", to.display()))?;
     let mut hash = Sha256::new();
     let mut buffer = vec![0u8; 1 << 20];
     let mut size = 0u64;
@@ -69,17 +117,49 @@ fn copy_hashed(from: &Path, to: Option<&Path>) -> Result<(u64, String), String> 
         }
         hash.update(&buffer[..n]);
         size += n as u64;
-        if let Some(output) = &mut output {
-            output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
-        }
+        output.write_all(&buffer[..n]).map_err(|e| format!("{}: {e}", to.display()))?;
     }
     Ok((size, hash.finish()))
+}
+
+/// A car or track that goes into the pack: what a load of it read.
+struct Item {
+    /// The car's folder, or the track's.
+    id: String,
+    layout: String,
+    name: String,
+    is_mod: bool,
+    /// Named in the config itself, in a list that has a star too.
+    pinned: bool,
+    /// Its own files, relative to the game's folder, with their sizes.
+    files: Vec<(String, u64)>,
+}
+
+impl Item {
+    fn label(&self) -> String {
+        if self.layout.is_empty() {
+            self.id.clone()
+        } else {
+            format!("{}/{}", self.id, self.layout)
+        }
+    }
+
+    fn bytes(&self) -> u64 {
+        self.files.iter().map(|(_, bytes)| bytes).sum()
+    }
 }
 
 fn run(args: &[String]) -> Result<(), String> {
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|at| args.get(at + 1)).cloned();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
-    let config = value("--config").map(PathBuf::from).unwrap_or_else(|| repo.join("web/preview.toml"));
+    let config = value("--config").map(PathBuf::from).unwrap_or_else(|| {
+        let mine = repo.join("web").join("my_pack.toml");
+        if mine.is_file() {
+            mine
+        } else {
+            repo.join("web").join("preview.toml")
+        }
+    });
     let out = value("--out").map(PathBuf::from).unwrap_or_else(|| repo.join("dist-web/preview"));
     let dry = args.iter().any(|a| a == "--dry-run");
     let root = match value("--ac") {
@@ -89,6 +169,8 @@ fn run(args: &[String]) -> Result<(), String> {
     if !rustyac_content::install::is_ac_root(&root) {
         return Err(format!("{} is not Assetto Corsa's folder (no content and system folders in it)", root.display()));
     }
+    // the loaders find a car by its name in this folder
+    rustyac_content::install::set_ac_root(Some(root.clone()));
     // the pack is written next to nothing of the game: never into its folder (a file would be
     // truncated before it is read), never around it
     let whole = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -99,100 +181,244 @@ fn run(args: &[String]) -> Result<(), String> {
     let text = std::fs::read_to_string(&config).map_err(|e| format!("{}: {e}", config.display()))?;
     let cars = string_list(&text, "cars").map_err(|e| format!("{}: {e}", config.display()))?;
     let tracks = string_list(&text, "tracks").map_err(|e| format!("{}: {e}", config.display()))?;
-    if cars.len() > MAX_CARS || tracks.len() > MAX_TRACKS {
-        return Err(format!(
-            "{} asks for {} cars and {} tracks: a preview pack holds at most {MAX_CARS} cars and {MAX_TRACKS} tracks",
-            config.display(),
-            cars.len(),
-            tracks.len()
-        ));
-    }
+
+    // what the install has: every folder under content/cars, every track and layout
+    let cars_folder = root.join("content").join("cars");
+    let mut all_cars: Vec<String> = std::fs::read_dir(&cars_folder)
+        .map_err(|e| format!("{}: {e}", cars_folder.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    all_cars.sort_by_key(|name| name.to_ascii_lowercase());
+    let all_tracks: Vec<String> = catalog::installed(&root).into_iter().map(|entry| if entry.layout.is_empty() { entry.track } else { format!("{}/{}", entry.track, entry.layout) }).collect();
+    // what the config names itself comes first on the page, before what a star adds
+    let named = |list: &[String]| -> Vec<String> { if list.iter().any(|item| item.ends_with('*')) { list.iter().filter(|item| !item.ends_with('*')).map(|item| item.to_ascii_lowercase()).collect() } else { Vec::new() } };
+    let (named_cars, named_tracks) = (named(&cars), named(&tracks));
+    let stock = stock_cars(&root);
+    let cars = expand(&cars, &all_cars);
+    let tracks: Vec<(String, String)> = expand(&tracks, &all_tracks).iter().map(|t| t.split_once('/').map_or((t.clone(), String::new()), |(track, layout)| (track.to_string(), layout.to_string()))).collect();
     if cars.is_empty() || tracks.is_empty() {
         return Err(format!("{}: at least one car and one track are needed", config.display()));
     }
-    let tracks: Vec<(String, String)> = tracks.iter().map(|t| t.split_once('/').map_or((t.clone(), String::new()), |(track, layout)| (track.to_string(), layout.to_string()))).collect();
+    println!("config: {}", config.display());
     println!("Assetto Corsa: {} (read only)", root.display());
     println!("pack: {}{}", out.display(), if dry { " (dry run: nothing is written)" } else { "" });
+    println!("asked for: {} cars, {} tracks and layouts", cars.len(), tracks.len());
 
-    // every car on every track: what each load read, by the folder it belongs to
     // (a path that climbs out of the game's folder with `..` is not copied anywhere)
     let relative = |file: &Path| file.strip_prefix(&root).ok().filter(|rest| rest.components().all(|part| matches!(part, std::path::Component::Normal(_)))).map(|rest| rest.to_string_lossy().replace('\\', "/"));
-    let mut car_files: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    let mut track_files: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    let mut shared: Vec<String> = Vec::new();
-    for (c, car) in cars.iter().enumerate() {
-        for (t, (track, layout)) in tracks.iter().enumerate() {
-            let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
-            catalog::check(&entry).map_err(|refusal| format!("the track {track} {layout} is refused: {refusal}"))?;
-            let read = content::files_read_by_drive(&root, car, track, layout).map_err(|e| format!("{car} on {track} {layout}: {e}"))?;
+    let sized = |file: String| -> Result<(String, u64), String> {
+        let bytes = std::fs::metadata(root.join(&file)).map_err(|e| format!("{file}: {e}"))?.len();
+        Ok((file, bytes))
+    };
+    // a loader that gives up on a mod's file must not fill the screen: its words become the reason
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut shared: BTreeMap<String, u64> = BTreeMap::new();
+    let mut skipped: Vec<(&str, String, String)> = Vec::new();
+
+    // every car, alone on the flat road
+    let mut car_items: Vec<Item> = Vec::new();
+    for (n, car) in cars.iter().enumerate() {
+        eprint!("\rchecking car {} of {}: {car:40}", n + 1, cars.len());
+        let folder = cars_folder.join(car);
+        let probe = (|| -> Result<Item, String> {
+            if !folder.is_dir() {
+                return Err("not installed: no such folder under content/cars".to_string());
+            }
+            if !folder.join("data.acd").is_file() && !folder.join("data").join("car.ini").is_file() {
+                return Err("not installed: the folder has neither data.acd nor a data folder (a DLC that is not owned, or a mod without its data)".to_string());
+            }
+            let read = content::files_read_by_drive(&root, car, "", "")?;
+            content::check_car_model(&root, car)?;
+            let own = format!("content/cars/{}/", car.to_ascii_lowercase());
+            let mut files = Vec::new();
             for file in read.iter().filter_map(|file| relative(file)) {
-                let lower = file.to_ascii_lowercase();
-                let list = if lower.starts_with(&format!("content/cars/{}/", car.to_ascii_lowercase())) {
-                    car_files.entry(c).or_default()
-                } else if lower.starts_with(&format!("content/tracks/{}/", track.to_ascii_lowercase())) {
-                    track_files.entry(t).or_default()
+                let (file, bytes) = sized(file)?;
+                if file.to_ascii_lowercase().starts_with(&own) {
+                    files.push((file, bytes));
                 } else {
-                    &mut shared
-                };
-                if !list.iter().any(|f| f.eq_ignore_ascii_case(&file)) {
-                    list.push(file);
+                    shared.insert(file, bytes);
                 }
             }
-            println!("  loaded {car} on {track}{}: {} files read", if layout.is_empty() { String::new() } else { format!(" ({layout})") }, read.len());
+            let is_mod = match &stock {
+                Some(stock) => !stock.contains(&car.to_ascii_lowercase()),
+                None => content::car_is_mod(&root, car),
+            };
+            Ok(Item { id: car.clone(), layout: String::new(), name: content::car_name(&root, car), is_mod, pinned: named_cars.contains(&car.to_ascii_lowercase()), files })
+        })();
+        match probe {
+            Ok(item) => car_items.push(item),
+            Err(why) => skipped.push(("car", car.clone(), one_line(&why, &root))),
         }
     }
+    eprintln!();
+    let Some(probe_car) = car_items.first().map(|item| item.id.clone()) else {
+        std::panic::set_hook(hook);
+        for (kind, name, why) in &skipped {
+            println!("skipped {kind} {name}: {why}");
+        }
+        return Err("none of the cars can be used: a pack needs at least one".to_string());
+    };
 
+    // every track, with the first car that loads
+    let mut track_items: Vec<Item> = Vec::new();
+    for (n, (track, layout)) in tracks.iter().enumerate() {
+        let label = if layout.is_empty() { track.clone() } else { format!("{track}/{layout}") };
+        eprint!("\rchecking track {} of {}: {label:50}", n + 1, tracks.len());
+        let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
+        let probe = (|| -> Result<Item, String> {
+            catalog::check(&entry).map_err(|refusal| refusal.to_string())?;
+            let read = content::files_read_by_drive(&root, &probe_car, track, layout)?;
+            let own = format!("content/tracks/{}/", track.to_ascii_lowercase());
+            let car = format!("content/cars/{}/", probe_car.to_ascii_lowercase());
+            let mut files = Vec::new();
+            for file in read.iter().filter_map(|file| relative(file)) {
+                let lower = file.to_ascii_lowercase();
+                if lower.starts_with(&car) {
+                    continue;
+                }
+                let (file, bytes) = sized(file)?;
+                if lower.starts_with(&own) {
+                    files.push((file, bytes));
+                } else {
+                    shared.insert(file, bytes);
+                }
+            }
+            let name = if entry.ui_name.is_empty() { track.clone() } else { entry.ui_name.clone() };
+            Ok(Item { id: track.clone(), layout: layout.clone(), name, is_mod: entry.maker == Maker::Mod, pinned: named_tracks.contains(&label.to_ascii_lowercase()), files })
+        })();
+        match probe {
+            Ok(item) => track_items.push(item),
+            Err(why) => skipped.push(("track", label, one_line(&why, &root))),
+        }
+    }
+    eprintln!();
+    std::panic::set_hook(hook);
+
+    // the sizes, before anything is copied (a file two layouts share counts once in the total)
+    let print_sizes = |car_items: &[Item], track_items: &[Item]| {
+        let mut every: BTreeMap<String, u64> = shared.iter().map(|(file, bytes)| (file.to_ascii_lowercase(), *bytes)).collect();
+        println!();
+        for (kind, items) in [("car", car_items), ("track", track_items)] {
+            for item in items {
+                let largest = item.files.iter().max_by_key(|(_, bytes)| *bytes);
+                println!(
+                    "{kind:5} {:44} {:>10}  {:3} files{}{}",
+                    item.label(),
+                    megabytes(item.bytes()),
+                    item.files.len(),
+                    largest.map(|(file, bytes)| format!("; the largest: {} ({})", file.rsplit('/').next().unwrap_or(""), megabytes(*bytes))).unwrap_or_default(),
+                    if item.is_mod { "   [mod]" } else { "" }
+                );
+                every.extend(item.files.iter().map(|(file, bytes)| (file.to_ascii_lowercase(), *bytes)));
+            }
+        }
+        println!("{:5} {:44} {:>10}  {:3} files", "", "system (shared)", megabytes(shared.values().sum()), shared.len());
+        let of = |items: &[Item]| {
+            let own: BTreeMap<String, u64> = items.iter().flat_map(|item| item.files.iter().map(|(file, bytes)| (file.to_ascii_lowercase(), *bytes))).collect();
+            megabytes(own.values().sum())
+        };
+        println!("total {:44} {:>10}  {:3} files   ({} cars: {}; {} tracks and layouts: {})", "", megabytes(every.values().sum()), every.len(), car_items.len(), of(car_items), track_items.len(), of(track_items));
+    };
+    print_sizes(&car_items, &track_items);
+
+    // what is left out, and why: the same reason once, with every name it holds for
+    let print_skipped = |skipped: &[(&str, String, String)]| {
+        if skipped.is_empty() {
+            return;
+        }
+        println!("\nleft out ({}):", skipped.len());
+        let mut by_reason: Vec<(String, Vec<String>)> = Vec::new();
+        for (kind, name, why) in skipped {
+            let key = format!("{kind}: {why}");
+            match by_reason.iter_mut().find(|(reason, _)| *reason == key) {
+                Some((_, names)) => names.push(name.clone()),
+                None => by_reason.push((key, vec![name.clone()])),
+            }
+        }
+        for (reason, names) in by_reason {
+            let (kind, why) = reason.split_once(": ").unwrap_or(("", &reason));
+            println!("  {kind} {}: {why}", names.join(", "));
+        }
+    };
+    print_skipped(&skipped);
+    let mods = |items: &[Item]| items.iter().filter(|item| item.is_mod).map(Item::label).collect::<Vec<_>>();
+    let (car_mods, track_mods) = (mods(&car_items), mods(&track_items));
+    let listed = |names: &[String]| if names.is_empty() { String::new() } else { format!(" ({})", names.join(", ")) };
+    println!("\nmods in the pack: {} cars{}; {} tracks and layouts{}", car_mods.len(), listed(&car_mods), track_mods.len(), listed(&track_mods));
+    if car_items.len() > MANY || track_items.len() > MANY {
+        println!(
+            "\nnote: {} cars and {} tracks and layouts is a large pack (more than {MANY} cars or tracks). That is fine on a server only you can reach;\n      it is Kunos' and the mod makers' content, so keep the site behind a login (Cloudflare Access).",
+            car_items.len(),
+            track_items.len()
+        );
+    }
+    if track_items.is_empty() {
+        return Err("none of the tracks can be used: a pack needs at least one".to_string());
+    }
+    if dry {
+        return Ok(());
+    }
+
+    // copy and hash; a car or track whose file cannot be copied after all is left out too
     let mut manifest = Manifest::default();
-    let add = |manifest: &mut Manifest, files: &[String]| -> Result<Vec<usize>, String> {
+    let mut late: Vec<(&str, String, String)> = Vec::new();
+    let add = |manifest: &mut Manifest, files: &[(String, u64)]| -> Result<Vec<usize>, String> {
         let mut numbers = Vec::new();
-        for file in files {
-            let target = (!dry).then(|| out.join(file));
-            let (bytes, sha256) = copy_hashed(&root.join(file), target.as_deref())?;
+        for (file, _) in files {
+            // (a file two layouts share is copied once)
+            if let Some(index) = manifest.files.iter().position(|f| f.path.eq_ignore_ascii_case(file)) {
+                numbers.push(index);
+                continue;
+            }
+            let (bytes, sha256) = copy_hashed(&root.join(file), &out.join(file))?;
             numbers.push(manifest.file(PackFile { path: file.clone(), bytes, sha256 }));
         }
         Ok(numbers)
     };
-    for (c, car) in cars.iter().enumerate() {
-        let files = add(&mut manifest, car_files.get(&c).map(Vec::as_slice).unwrap_or(&[]))?;
-        manifest.cars.push(PackItem { id: car.clone(), layout: String::new(), name: content::car_name(&root, car), files });
-    }
-    for (t, (track, layout)) in tracks.iter().enumerate() {
-        let files = add(&mut manifest, track_files.get(&t).map(Vec::as_slice).unwrap_or(&[]))?;
-        let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
-        let name = if entry.ui_name.is_empty() { track.clone() } else { entry.ui_name };
-        manifest.tracks.push(PackItem { id: track.clone(), layout: layout.clone(), name, files });
-    }
-    manifest.shared = add(&mut manifest, &shared)?;
-    if !dry {
-        std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-        std::fs::write(out.join("manifest.json"), manifest.to_json()).map_err(|e| format!("manifest.json: {e}"))?;
-    }
-
-    println!();
-    for (kind, items) in [("car", &manifest.cars), ("track", &manifest.tracks)] {
-        for item in items {
-            let largest = item.files.iter().map(|&i| &manifest.files[i]).max_by_key(|f| f.bytes);
-            println!(
-                "{kind:5} {:28} {:>10}  {} files{}",
-                if item.layout.is_empty() { item.id.clone() } else { format!("{}/{}", item.id, item.layout) },
-                megabytes(manifest.bytes_of(&item.files)),
-                item.files.len(),
-                largest.map(|f| format!("; the largest: {} ({})", f.path.rsplit('/').next().unwrap_or(""), megabytes(f.bytes))).unwrap_or_default()
-            );
+    let total = car_items.len() + track_items.len();
+    for (n, item) in car_items.iter().chain(&track_items).enumerate() {
+        let kind = if n < car_items.len() { "car" } else { "track" };
+        eprint!("\rcopying {} of {total}: {:50}", n + 1, item.label());
+        match add(&mut manifest, &item.files) {
+            Ok(files) => {
+                let entry = PackItem { id: item.id.clone(), layout: item.layout.clone(), name: item.name.clone(), pinned: item.pinned, files };
+                if kind == "car" {
+                    manifest.cars.push(entry);
+                } else {
+                    manifest.tracks.push(entry);
+                }
+            }
+            Err(why) => late.push((kind, item.label(), one_line(&why, &root))),
         }
     }
-    println!("{:5} {:28} {:>10}  {} files", "", "system (shared)", megabytes(manifest.bytes_of(&manifest.shared)), manifest.shared.len());
-    println!("total {:28} {:>10}  {} files", "", megabytes(manifest.total_bytes()), manifest.files.len());
-    if !dry {
-        println!("\nwrote {} (keep it out of git and out of releases: it is Kunos' content)", out.join("manifest.json").display());
+    eprintln!();
+    let shared_files: Vec<(String, u64)> = shared.iter().map(|(file, bytes)| (file.clone(), *bytes)).collect();
+    manifest.shared = add(&mut manifest, &shared_files)?;
+    if manifest.cars.is_empty() || manifest.tracks.is_empty() {
+        return Err("no car or no track could be copied: no pack was written".to_string());
     }
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    std::fs::write(out.join("manifest.json"), manifest.to_json()).map_err(|e| format!("manifest.json: {e}"))?;
+    print_skipped(&late);
+    println!(
+        "\nwrote {}: {} cars, {} tracks and layouts, {} in {} files\n(keep it out of git and out of releases: it is Kunos' and the mod makers' content)",
+        out.join("manifest.json").display(),
+        manifest.cars.len(),
+        manifest.tracks.len(),
+        megabytes(manifest.total_bytes()),
+        manifest.files.len()
+    );
     Ok(())
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("usage: web_pack [--config web/preview.toml] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]");
+        println!("usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]");
+        println!("the config: --config, else web/my_pack.toml when it exists, else web/preview.toml");
         return;
     }
     if let Err(message) = run(&args) {
@@ -212,5 +438,20 @@ mod tests {
         assert_eq!(string_list(text, "tracks").unwrap(), vec!["spa", "ring/layout_gp"]);
         assert!(string_list(text, "bikes").is_err());
         assert!(string_list("cars = \"a\"", "cars").is_err());
+    }
+
+    #[test]
+    fn a_star_is_everything_after_what_is_named_first() {
+        let all: Vec<String> = ["abarth500", "bmw_z4_gt3", "ks_ferrari_f2004"].iter().map(|s| s.to_string()).collect();
+        let list = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(expand(&list(&["ks_ferrari_f2004", "bmw_z4_gt3", "*"]), &all), list(&["ks_ferrari_f2004", "bmw_z4_gt3", "abarth500"]));
+        assert_eq!(expand(&list(&["*"]), &all), all);
+        // a name that is not in the install stays (it is left out later, with the reason), twice is once
+        assert_eq!(expand(&list(&["nope", "BMW_Z4_GT3", "bmw_z4_gt3"]), &all), list(&["nope", "BMW_Z4_GT3"]));
+        let tracks = list(&["imola", "ks_nurburgring/layout_gp_a", "ks_nurburgring/layout_sprint_a", "spa"]);
+        assert_eq!(expand(&list(&["spa", "ks_nurburgring/*"]), &tracks), list(&["spa", "ks_nurburgring/layout_gp_a", "ks_nurburgring/layout_sprint_a"]));
+        assert_eq!(expand(&list(&["imola/*"]), &tracks), list(&["imola"]));
+        assert_eq!(megabytes(1_500_000), "1.5 MB");
+        assert_eq!(one_line("C:\\ac\\content\\cars\\a\\data\\x.ini: bad\n  value\n", Path::new("C:\\ac")), "content\\cars\\a\\data\\x.ini: bad value");
     }
 }

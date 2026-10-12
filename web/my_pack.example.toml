@@ -1,0 +1,33 @@
+# Your own content pack for the browser build. Copy this file to web/my_pack.toml (git ignores
+# that name) and edit the two lists. `tools/web_pack` uses web/my_pack.toml when it exists,
+# else web/preview.toml (two cars, two tracks); `--config <file>` names any other file.
+#
+#   cargo run --release --manifest-path tools/web_pack/Cargo.toml -- --dry-run   # sizes only
+#   cargo run --release --manifest-path tools/web_pack/Cargo.toml                # build it
+#
+# The pack is your copy of Kunos' and the mod makers' files, for a page only you can reach
+# (the site behind Cloudflare Access). It is never part of the repository or of a release.
+#
+# A car is its folder name under content/cars. A track is its folder name under
+# content/tracks, with "/<layout>" behind it for one layout ("ks_nurburgring/layout_gp_a").
+#   "*"            everything in your install (in a cars list: every car; in a tracks list:
+#                  every track and layout)
+#   "<track>/*"    every layout of one track
+# Each list has to stay on one line.
+#
+# What is named here itself comes first in the page's lists, in this order; what a star adds
+# follows, sorted by name. Keep the first two cars and the first two tracks as they are: the
+# multiplayer servers (server/, web/servers.json) run the Ferrari F2004 and the BMW Z4 GT3 on
+# Spa and on Laguna Seca, and a browser can only join a server whose track and cars are in
+# the pack.
+#
+# A car or track the pack cannot use is left out with one line that says why, and the build
+# goes on: a DLC that is not owned, content made for Custom Shaders Patch only, a file
+# encrypted by its maker (nothing is ever decrypted), a file that is missing.
+
+cars = ["ks_ferrari_f2004", "bmw_z4_gt3", "*"]
+tracks = ["spa", "ks_laguna_seca", "*"]
+
+# A smaller pack, for example:
+# cars = ["ks_ferrari_f2004", "bmw_z4_gt3", "ks_porsche_911_gt3_r_2016", "lotus_exos_125_s1"]
+# tracks = ["spa", "ks_laguna_seca", "monza", "ks_nordschleife/nordschleife", "ks_nurburgring/*"]

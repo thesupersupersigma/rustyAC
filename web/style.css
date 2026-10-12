@@ -85,6 +85,8 @@ select, button {
 }
 
 select { margin-left: 6px; max-width: 300px; }
+input[type="search"] { font: inherit; color: var(--ink); background: #232a32; border: 1px solid #3b4550; border-radius: 5px; padding: 5px 8px; width: 110px; margin-left: 6px; }
+input[type="search"][hidden] { display: none; }
 button { cursor: pointer; }
 button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled, select:disabled { opacity: 0.45; cursor: default; }

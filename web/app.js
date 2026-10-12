@@ -108,8 +108,8 @@ async function openPack(base) {
     kind: 'pack',
     manifest,
     sizes: new Map(manifest.files.map((f) => [f.path, f.bytes])),
-    cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes })),
-    tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes })),
+    cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes, pinned: !!c.pinned })),
+    tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes, pinned: !!t.pinned })),
     async open(path) {
       const entry = entries.get(path.toLowerCase());
       if (!entry) throw new Error(`${path} is not in the preview pack`);
@@ -387,14 +387,49 @@ function folderFromFiles(list) {
 
 // ---------------------------------------------------------------- the lists
 
+const carLabel = (c) => (c.name === c.id ? c.id : `${c.name} (${c.id})`);
+const trackLabel = (t) => (t.layout ? `${t.name} (${t.track} / ${t.layout})` : `${t.name} (${t.track})`);
+const trackValue = (t) => `${t.track}|${t.layout}`;
+// a list this long gets a search box
+const SEARCH_FROM = 13;
+
+// A pack's lists: what its config named itself comes first, in its order (the preview's two
+// cars and two tracks); what a "*" added follows, sorted by name.
+function ordered(items, label) {
+  const pinned = items.filter((item) => item.pinned);
+  if (pinned.length === 0) return items;
+  const rest = items.filter((item) => !item.pinned).sort((a, b) => label(a).localeCompare(label(b), undefined, { sensitivity: 'base', numeric: true }));
+  return [...pinned, ...rest];
+}
+
+// The entries of a list that have every word of its search box, in the list's order. The
+// chosen entry stays chosen while it is among them.
+function fillOptions(select, search, items, label, value) {
+  const words = search.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = words.length ? items.filter((item) => words.every((word) => label(item).toLowerCase().includes(word))) : items;
+  const chosen = select.value;
+  select.replaceChildren(...shown.map((item) => new Option(label(item), value(item))));
+  if (shown.some((item) => value(item) === chosen)) select.value = chosen;
+  search.classList.toggle('nothing', words.length > 0 && shown.length === 0);
+}
+
+function searchLists() {
+  fillOptions($('car'), $('car-search'), state.cars, carLabel, (c) => c.id);
+  fillOptions($('track'), $('track-search'), state.tracks, trackLabel, trackValue);
+  markRefused();
+}
+
 function fillLists() {
   const source = state.source;
-  state.cars = source.cars;
-  state.tracks = source.tracks;
+  state.cars = ordered(source.cars, carLabel);
+  state.tracks = ordered(source.tracks, trackLabel);
   const car = $('car');
   const track = $('track');
-  car.replaceChildren(...state.cars.map((c) => new Option(c.name === c.id ? c.id : `${c.name} (${c.id})`, c.id)));
-  track.replaceChildren(...state.tracks.map((t) => new Option(t.layout ? `${t.name} (${t.track} / ${t.layout})` : `${t.name} (${t.track})`, `${t.track}|${t.layout}`)));
+  $('car-search').hidden = state.cars.length < SEARCH_FROM;
+  $('track-search').hidden = state.tracks.length < SEARCH_FROM;
+  $('car-search').value = $('track-search').value = '';
+  fillOptions(car, $('car-search'), state.cars, carLabel, (c) => c.id);
+  fillOptions(track, $('track-search'), state.tracks, trackLabel, trackValue);
   car.disabled = track.disabled = false;
   const wantCar = params.get('car');
   const wantTrack = params.get('track');
@@ -1498,6 +1533,8 @@ async function main() {
   });
   $('car').addEventListener('change', markRefused);
   $('track').addEventListener('change', markRefused);
+  $('car-search').addEventListener('input', searchLists);
+  $('track-search').addEventListener('input', searchLists);
   $('drive').addEventListener('click', () => {
     if (state.game && state.lastChoice === `${$('car').value}|${$('track').value}`) startDriving();
     else if (state.game) location.search = new URLSearchParams({ ...Object.fromEntries(params), car: $('car').value, track: $('track').value.split('|')[0], layout: $('track').value.split('|')[1], go: '1' }).toString();
@@ -1525,9 +1562,12 @@ async function main() {
     });
     if (pack) {
       rac.fs_list(pack.manifest.files.map((f) => f.path).join('\n'));
-      const line = `preview pack: ${pack.cars.map((c) => `${c.name} (${megabytes(c.bytes)})`).join(', ')}; ${pack.tracks.map((t) => `${t.name} (${megabytes(t.bytes)})`).join(', ')}`;
+      const few = pack.cars.length + pack.tracks.length <= 8;
+      const line = few
+        ? `preview pack: ${pack.cars.map((c) => `${c.name} (${megabytes(c.bytes)})`).join(', ')}; ${pack.tracks.map((t) => `${t.name} (${megabytes(t.bytes)})`).join(', ')}`
+        : `content pack: ${pack.cars.length} cars, ${pack.tracks.length} tracks and layouts`;
       $('pack-line').hidden = false;
-      $('pack-line').textContent = `A preview pack is on this server (${megabytes(pack.manifest.bytes)} in all; only the chosen car and track are fetched, and kept in this browser for the next visit).`;
+      $('pack-line').textContent = `A ${few ? 'preview' : 'content'} pack is on this server (${megabytes(pack.manifest.bytes)} in all; only the chosen car and track are fetched, and kept in this browser for the next visit).`;
       await useSource(pack, line);
       ready = true;
     } else {

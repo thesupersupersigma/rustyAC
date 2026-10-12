@@ -193,12 +193,32 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
     out
 }
 
+/// Runs a load with the file log on and returns every file that was read. A loader that
+/// panics on a file it cannot make sense of (a mod's) is an error like any other.
+fn files_read_by(load: impl FnOnce() -> Result<(), String>) -> Result<Vec<PathBuf>, String> {
+    vfs::set_log(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(load));
+    let log = vfs::take_log();
+    vfs::set_log(false);
+    match result {
+        Ok(result) => result?,
+        Err(panic) => {
+            let why = panic.downcast_ref::<String>().cloned().or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            return Err(format!("the loader gave up on it: {why}"));
+        }
+    }
+    let mut files: Vec<PathBuf> = log.into_iter().filter(|(_, found)| *found).map(|(path, _)| path).collect();
+    // a data file read out of the archive is the archive
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 /// Loads the drive once with the file log on and returns every file that was read: what a
 /// preview pack has to hold. (`files_of_drive` is the page's guess before a load; this is the
-/// proof after one.)
+/// proof after one.) With an empty `track`: the car alone, on the flat road.
 pub fn files_read_by_drive(root: &Path, car: &str, track: &str, layout: &str) -> Result<Vec<PathBuf>, String> {
-    vfs::set_log(true);
-    let result = (|| -> Result<(), String> {
+    files_read_by(|| {
         let sim = GameSim::new(setup(car, track, layout, true, "pit"), Box::new(NobodySource))?;
         // and what the picture reads: the car's shape, the model files (whole)
         let info = sim.car_info();
@@ -209,15 +229,31 @@ pub fn files_read_by_drive(root: &Path, car: &str, track: &str, layout: &str) ->
         }
         let _ = car_name(root, car);
         Ok(())
-    })();
-    let log = vfs::take_log();
-    vfs::set_log(false);
-    result?;
-    let mut files: Vec<PathBuf> = log.into_iter().filter(|(_, found)| *found).map(|(path, _)| path).collect();
-    // a data file read out of the archive is the archive
-    files.sort();
-    files.dedup();
-    Ok(files)
+    })
+}
+
+/// Who made a car, as far as its folder says: a car whose menu entry names an author other
+/// than Kunos, or that has Custom Shaders Patch's `extension` folder, is a mod (the rule
+/// `track::catalog` has for tracks).
+pub fn car_is_mod(root: &Path, car: &str) -> bool {
+    let folder = car_folder(root, car);
+    let author = vfs::read(&folder.join("ui").join("ui_car.json")).ok().and_then(|bytes| json_string(&String::from_utf8_lossy(&bytes), "author")).unwrap_or_default();
+    !(author.trim().is_empty() || author.to_ascii_lowercase().contains("kunos")) || folder.join("extension").vfs_is_dir()
+}
+
+/// Can the car's model be read as plain Assetto Corsa reads it? `Err`: the file is encrypted
+/// by its maker or for Custom Shaders Patch, or damaged. It is only ever looked at, never
+/// decrypted. A car without a model file is fine (it is drawn as boxes).
+pub fn check_car_model(root: &Path, car: &str) -> Result<(), String> {
+    let Some(file) = sim::find_car_model(car, &car_folder(root, car).join("data")) else { return Ok(()) };
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match rustyac_content::kn5::Kn5::open(&file) {
+        Err(e) => Err(format!("its model {name} is encrypted or unreadable (rustyAC never decrypts content): {e}")),
+        Ok(kn5) => match catalog::encryption_marker(&kn5) {
+            Some(marker) => Err(format!("its model {name} is encrypted (rustyAC never decrypts content): {marker}")),
+            None => Ok(()),
+        },
+    }
 }
 
 #[cfg(test)]
