@@ -86,7 +86,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
         "rc_pass_front" | "rc_pass_rev" => spec("r3", true, Some(1)),
-        "pit_box" | "pit_box_repair" | "pit_box_none" | "pit_feed" => spec("p20", true, None),
+        "pit_box" | "pit_box_repair" | "pit_box_none" | "pit_box_wing" | "pit_feed" => spec("p20", true, None),
         "pit_ai_race" | "pit_window_served" | "pit_window_missed" | "pit_window_early" => spec("r4", true, None),
         "pit_window_timed" => spec("rt5", true, None),
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
@@ -511,6 +511,14 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| pit_boxes(track, cars, 3, 34.0),
         },
         MultiScenario {
+            name: "pit_box_wing",
+            about: "Task 28b: as pit_box with a stop that adds 3 litres and three clicks of front wing (a car whose setup.ini has a wing with PITSTOP=)",
+            seconds: 90.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 2, 30.0),
+        },
+        MultiScenario {
             name: "pit_feed",
             about: "Task 28b: the pit stop's state machine on made-up states: as pit_box, but what the game's PitStop reads of the car (place, speed, fuel, pit lane, black flag), the frame's length, the menu's values and the car's damage are drawn from the seed (--seed), frame by frame; whatever the stops then do to the car is real",
             seconds: 120.0,
@@ -779,10 +787,14 @@ pub fn pit_of(scenario: &str) -> Option<PitSpec> {
     // the second preset: 5 litres; then the three repairs, from the menu's last lines
     const REPAIRS: &[u32] = &[DOWN, RIGHT, DOWN, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, UP, RIGHT, UP, RIGHT];
     const NOTHING: &[u32] = &[DOWN, DOWN];
+    // 3 litres, and three clicks more of the first wing a stop may change (the menu's
+    // seventh line on a car with four pressures)
+    const WING: &[u32] = &[DOWN, DOWN, RIGHT, RIGHT, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, RIGHT, RIGHT];
     match scenario {
         "pit_box" | "pit_feed" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
         "pit_box_repair" => Some(PitSpec { window: (0, 0), keys: REPAIRS, damage: true, calls: &[] }),
         "pit_box_none" => Some(PitSpec { window: (0, 0), keys: NOTHING, damage: false, calls: &[] }),
+        "pit_box_wing" => Some(PitSpec { window: (0, 0), keys: WING, damage: false, calls: &[] }),
         "pit_ai_race" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[(0, 20.0), (1, 20.0)] }),
         "pit_window_served" => Some(PitSpec { window: (1, 3), keys: FUEL_TYRES, damage: false, calls: &[(0, 110.0)] }),
         "pit_window_missed" => Some(PitSpec { window: (1, 3), keys: FUEL_TYRES, damage: false, calls: &[] }),
