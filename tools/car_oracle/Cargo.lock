@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-content"
-version = "0.25.0"
+version = "0.26.0"
 
 [[package]]
 name = "rustyac-gateway"
@@ -20,11 +20,11 @@ version = "0.26.0"
 
 [[package]]
 name = "rustyac-math"
-version = "0.25.0"
+version = "0.26.0"
 
 [[package]]
 name = "rustyac-net"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "rustyac-gateway",
  "rustyac-math",
@@ -33,14 +33,14 @@ dependencies = [
 
 [[package]]
 name = "rustyac-ode"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "rustyac-math",
 ]
 
 [[package]]
 name = "rustyac-physics"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
