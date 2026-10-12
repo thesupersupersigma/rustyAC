@@ -576,7 +576,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustyac-audio"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -585,11 +585,11 @@ dependencies = [
 
 [[package]]
 name = "rustyac-content"
-version = "0.24.1"
+version = "0.25.0"
 
 [[package]]
 name = "rustyac-game"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "png",
  "rustyac-audio",
@@ -603,11 +603,11 @@ dependencies = [
 
 [[package]]
 name = "rustyac-math"
-version = "0.24.1"
+version = "0.25.0"
 
 [[package]]
 name = "rustyac-net"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -616,14 +616,14 @@ dependencies = [
 
 [[package]]
 name = "rustyac-ode"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "rustyac-math",
 ]
 
 [[package]]
 name = "rustyac-physics"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-render"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-web"
-version = "0.24.1"
+version = "0.25.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
