@@ -500,9 +500,20 @@ impl Referee {
         if pit.timer_ran {
             self.pit_avatar.last_pitstop_time = now as f32;
         }
+        // QuickMenuPitstop::renderHUD: the menu's coming and going
+        let allowed = (1..=3).contains(&frame.session_type) && !self.manager.results_displayed && pit.app_interaction_enabled;
+        menu.frame(FRAME_DT, car.is_in_pitlane, allowed);
         self.pit = Some(pit);
         self.menu = Some(menu);
         self.apply_pit(out, world);
+    }
+
+    /// An arrow key for the pit menu (`Sim::onKeyDown` -> `QuickMenuPitstop::sendInput`):
+    /// 0x25 left, 0x26 up, 0x27 right, 0x28 down.
+    pub fn pit_key(&mut self, key: u32, car: &RollingChassis) {
+        if let Some(menu) = &mut self.menu {
+            menu.send_input(key, &pitstop::QuickMenuCar::of(car));
+        }
     }
 
     fn apply_pit(&mut self, actions: Vec<PitAction>, world: &mut dyn World) {

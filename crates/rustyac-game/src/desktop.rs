@@ -162,7 +162,11 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
             }
             setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
             let wind_base = setup.referee.as_ref().and_then(|referee| referee.wind_base);
-            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new() });
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new(), pit: (!options.no_pit_stop).then(|| rustyac_game::conditions::pit_header((0, 0), setup.session.setup_file.as_deref())) });
+        }
+        // Task 28b: --pit-window <open>,<close>
+        if let (Some(window), Some(pit)) = (options.pit_window, setup.referee.as_mut().and_then(|referee| referee.pit.as_mut())) {
+            pit.window = window;
         }
         if let Some(referee) = &mut setup.referee {
             if let Some(penalties) = options.penalties {
@@ -465,7 +469,7 @@ fn referee_out(options: &Options) -> Option<PathBuf> {
 
 /// Task 28: the referee's buttons pressed at given seconds of the run.
 fn session_script(options: &Options) -> Vec<(f64, u32)> {
-    options.next_session_at.iter().map(|at| (*at, event::NEXT_SESSION)).chain(options.restart_session_at.iter().map(|at| (*at, event::RESTART_SESSION))).collect()
+    options.next_session_at.iter().map(|at| (*at, event::NEXT_SESSION)).chain(options.restart_session_at.iter().map(|at| (*at, event::RESTART_SESSION))).chain(options.pit_keys.iter().copied()).collect()
 }
 
 fn drive(options: &Options) -> Result<(SimSetup, Option<Vec<StepInput>>), String> {
@@ -1067,6 +1071,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // Task 28: the referee's two buttons (F7 next session, F8 restart)
                             0x76 => request(event::NEXT_SESSION),
                             0x77 => request(event::RESTART_SESSION),
+                            // Task 28b: the pit menu (the number pad's 4 8 6 2, or Alt with the arrow keys)
+                            0x64 => request(event::PIT_LEFT),
+                            0x68 => request(event::PIT_UP),
+                            0x66 => request(event::PIT_RIGHT),
+                            0x62 => request(event::PIT_DOWN),
+                            0x25 if alt => request(event::PIT_LEFT),
+                            0x26 if alt => request(event::PIT_UP),
+                            0x27 if alt => request(event::PIT_RIGHT),
+                            0x28 if alt => request(event::PIT_DOWN),
                             _ => {}
                         }
                     }

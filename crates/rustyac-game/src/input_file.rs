@@ -64,8 +64,13 @@ pub mod event {
     pub const NEXT_SESSION: u32 = 1 << 18;
     /// Task 28: the referee's "restart session" (`RaceManager::restartCurrentSession`).
     pub const RESTART_SESSION: u32 = 1 << 19;
+    /// Task 28b: the pit menu's four keys (`QuickMenuPitstop::sendInput`).
+    pub const PIT_LEFT: u32 = 1 << 20;
+    pub const PIT_UP: u32 = 1 << 21;
+    pub const PIT_RIGHT: u32 = 1 << 22;
+    pub const PIT_DOWN: u32 = 1 << 23;
 
-    pub const NAMES: [(u32, &str); 20] = [
+    pub const NAMES: [(u32, &str); 24] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -86,6 +91,10 @@ pub mod event {
         (AI_ON, "ai on"),
         (NEXT_SESSION, "next session"),
         (RESTART_SESSION, "restart session"),
+        (PIT_LEFT, "pit menu left"),
+        (PIT_UP, "pit menu up"),
+        (PIT_RIGHT, "pit menu right"),
+        (PIT_DOWN, "pit menu down"),
     ];
 }
 
@@ -399,6 +408,48 @@ pub struct RefereeHeader {
     /// the drivers' names, the player's first (`[CAR_n] DRIVER_NAME`); a car without one is
     /// "Driver <n>"
     pub driver_names: Vec<String>,
+    /// Task 28b: the player's pit stop (`None`: none, as before v0.28.1)
+    pub pit: Option<PitHeader>,
+}
+
+/// Task 28b: what the player's pit stop is set up with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PitHeader {
+    /// the mandatory pit window: the leader's laps (minutes of a timed race) at which it
+    /// opens and closes; (0, 0): none
+    pub window: (u16, u16),
+    /// `system/cfg/pitstop.ini`
+    pub settings: rustyac_physics::race::QuickMenuSettings,
+    /// the menu's values at the start, when they are not the car's defaults
+    /// (`QuickMenu::values_text`)
+    pub values: Option<String>,
+    /// the text of the setup's `.sp` file (pit stop presets), read into the menu at the
+    /// start; a recording has `values` instead
+    pub presets_ini: Option<String>,
+}
+
+impl PitHeader {
+    fn to_text(&self) -> String {
+        let s = &self.settings;
+        format!("{}|{}|{}|{}|{}|{:08x}|{}", self.window.0, self.window.1, s.stay_in_car as u32, s.presets_count, s.auto_app_on_pitlane as u32, s.visibility_max_time.to_bits(), self.values.as_deref().unwrap_or("-"))
+    }
+
+    fn parse(value: &str) -> Result<PitHeader, String> {
+        let wrong = || format!("pit_stop: seven values expected, got {value:?}");
+        let parts: Vec<&str> = value.split('|').collect();
+        let [start, end, stay, presets, auto, visibility, values] = parts[..] else { return Err(wrong()) };
+        Ok(PitHeader {
+            window: (start.parse().map_err(|_| wrong())?, end.parse().map_err(|_| wrong())?),
+            settings: rustyac_physics::race::QuickMenuSettings {
+                stay_in_car: stay == "1",
+                presets_count: presets.parse().map_err(|_| wrong())?,
+                auto_app_on_pitlane: auto == "1",
+                visibility_max_time: u32::from_str_radix(visibility, 16).map(f32::from_bits).map_err(|_| wrong())?,
+            },
+            values: (values != "-").then(|| values.to_string()),
+            presets_ini: None,
+        })
+    }
 }
 
 impl RefereeHeader {
@@ -447,6 +498,7 @@ impl RefereeHeader {
             seed: seed.parse().map_err(|_| wrong())?,
             wind_base,
             driver_names: Vec::new(),
+            pit: None,
         })
     }
 
@@ -708,6 +760,10 @@ impl SimSetup {
             for name in &referee.driver_names {
                 put("referee_driver", name.clone());
             }
+            // (only a session with the pit stop has the key: older files read as before)
+            if let Some(pit) = &referee.pit {
+                put("pit_stop", pit.to_text());
+            }
         }
         for opponent in &self.opponents {
             put("opponent", opponent.to_text());
@@ -847,6 +903,7 @@ impl SimSetup {
                     };
                 }
                 "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
+                "pit_stop" => setup.referee.as_mut().ok_or("pit_stop before referee")?.pit = Some(PitHeader::parse(value)?),
                 "referee_driver" => setup.referee.as_mut().ok_or("referee_driver before referee")?.driver_names.push(value.to_string()),
                 "referee_session" => setup.referee.as_mut().ok_or("referee_session before referee")?.sessions.sessions.push(RefereeHeader::parse_session(value)?),
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),

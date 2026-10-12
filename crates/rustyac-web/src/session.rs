@@ -87,7 +87,7 @@ impl Session {
             setup.spawn = if sessions.sessions[0].spawn_set == "START" { "start" } else { "pit" }.to_string();
             setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
             // (OVER_TIME_MULT as the game ships it)
-            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new() });
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new(), pit: Some(rustyac_game::input_file::PitHeader { window: (0, 0), settings: rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 }, values: None, presets_ini: None }) });
         }
         Session::build(setup, None)
     }
@@ -278,6 +278,11 @@ impl Session {
             // Task 28: the referee's two buttons
             "F7" => self.request(event::NEXT_SESSION),
             "F8" => self.request(event::RESTART_SESSION),
+            // Task 28b: the pit menu
+            "Numpad4" => self.request(event::PIT_LEFT),
+            "Numpad8" => self.request(event::PIT_UP),
+            "Numpad6" => self.request(event::PIT_RIGHT),
+            "Numpad2" => self.request(event::PIT_DOWN),
             "KeyG" => self.request(event::AUTO_SHIFTER),
             _ => return false,
         }

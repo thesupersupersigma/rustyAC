@@ -259,6 +259,14 @@ pub struct Options {
     /// `--penalties <0|1>`, `--jump-start <0|1|2>`: race.ini's `PENALTIES` and `JUMP_START_PENALTY`
     pub penalties: Option<bool>,
     pub jump_start: Option<i32>,
+    /// `--no-pit-stop`: no pit stop for the player, as before v0.28.1
+    pub no_pit_stop: bool,
+    /// `--pit-window <open>,<close>`: a mandatory pit window (the leader's laps; minutes in a
+    /// timed race)
+    pub pit_window: Option<(u16, u16)>,
+    /// `--pit-key <key>@<s>` (repeatable; left, up, right, down): the pit menu's keys, pressed
+    /// at a time of the run (unattended checks)
+    pub pit_keys: Vec<(f64, u32)>,
     /// `--next-session-at <s>`, `--restart-session-at <s>` (repeatable): the referee's two
     /// buttons, pressed at a time of the run (unattended checks)
     pub next_session_at: Vec<f64>,
@@ -395,6 +403,9 @@ impl Default for Options {
             race_start_in: None,
             sessions: None,
             no_referee: false,
+            no_pit_stop: false,
+            pit_window: None,
+            pit_keys: Vec::new(),
             penalties: None,
             jump_start: None,
             next_session_at: Vec::new(),
@@ -862,6 +873,25 @@ impl Options {
                 "--race-start-in" => o.race_start_in = Some(value("--race-start-in")?.parse().map_err(|e| format!("--race-start-in: {e}"))?),
                 "--sessions" => o.sessions = Some(value("--sessions")?),
                 "--no-referee" => o.no_referee = true,
+                "--no-pit-stop" => o.no_pit_stop = true,
+                "--pit-window" => {
+                    let text = value("--pit-window")?;
+                    let window = text.split_once(',').and_then(|(open, close)| Some((open.trim().parse().ok()?, close.trim().parse().ok()?)));
+                    o.pit_window = Some(window.ok_or_else(|| format!("--pit-window: <open>,<close> expected, got {text:?}"))?);
+                }
+                "--pit-key" => {
+                    let text = value("--pit-key")?;
+                    let wrong = || format!("--pit-key: <left|up|right|down>@<seconds> expected, got {text:?}");
+                    let (key, at) = text.split_once('@').ok_or_else(wrong)?;
+                    let bit = match key {
+                        "left" => crate::input_file::event::PIT_LEFT,
+                        "up" => crate::input_file::event::PIT_UP,
+                        "right" => crate::input_file::event::PIT_RIGHT,
+                        "down" => crate::input_file::event::PIT_DOWN,
+                        _ => return Err(wrong()),
+                    };
+                    o.pit_keys.push((at.parse().map_err(|_| wrong())?, bit));
+                }
                 "--penalties" => o.penalties = Some(value("--penalties")? != "0"),
                 "--jump-start" => o.jump_start = Some(value("--jump-start")?.parse().map_err(|e| format!("--jump-start: {e}"))?),
                 "--next-session-at" => o.next_session_at.push(value("--next-session-at")?.parse().map_err(|e| format!("--next-session-at: {e}"))?),

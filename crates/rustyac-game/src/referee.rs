@@ -227,6 +227,46 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
     Some(lines)
 }
 
+/// Task 28b: the pit stop in words: the menu while it is up (AC's own menu comes with the
+/// UI), the stop's countdown with what is being done, and the mandatory pit window.
+pub fn pit_lines(referee: &Referee) -> Vec<String> {
+    use rustyac_physics::race::pitstop::STATE_OPERATING;
+    let mut out = Vec::new();
+    let (Some(pit), Some(menu)) = (&referee.pit, &referee.menu) else { return out };
+    let manager = &referee.manager;
+    if referee.pit_window.1 != 0 && manager.current_session.session_type == SESSION_RACE {
+        let unit = if manager.current_session.is_timed_race { "min" } else { "lap" };
+        let state = if referee.pit_avatar.mandatory_pitstop_done {
+            "DONE".to_string()
+        } else if manager.pit_window_end_time != 0.0 {
+            "CLOSED".to_string()
+        } else if manager.pit_window_start_time > 0.0 {
+            "OPEN".to_string()
+        } else {
+            format!("opens at {unit} {}", referee.pit_window.0)
+        };
+        out.push(format!("MANDATORY PIT: {state}  (PIT OPEN: {unit} {}  PIT CLOSE: {unit} {})", referee.pit_window.0, referee.pit_window.1));
+    }
+    if pit.state == STATE_OPERATING {
+        out.push(format!("PIT STOP  {:.1} s", pit.pit_timer.max(0.0)));
+        let mut work = Vec::new();
+        if pit.is_changing_tyres() {
+            work.push("TYRES".to_string());
+        }
+        if pit.fuel_time > 0.0 {
+            work.push(format!("FUEL {:.0}%", pit.get_fueling_percentage() * 100.0));
+        }
+        if pit.repair_time > 0.0 {
+            work.push(format!("REPAIR {:.0}%", pit.get_repairing_percentage() * 100.0));
+        }
+        out.push(work.join("   "));
+    } else if menu.is_visible {
+        out.extend(menu.lines());
+        out.push("number pad 8 2: line   4 6: change   (or Alt + arrows); stop in your pit box to begin".to_string());
+    }
+    out
+}
+
 /// The referee's words for this moment.
 pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
     let manager = &referee.manager;
@@ -262,6 +302,7 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
         out.centre.push(message[1].clone());
     }
     out.centre.extend(hud::manager_lines(manager, &referee.views, &state, manager.results_displayed));
+    out.centre.extend(pit_lines(referee));
     if manager.results_displayed {
         if let Some(event) = referee.last_results.as_ref().filter(|_| manager.finalized) {
             out.results = results_table(referee, event);

@@ -1465,8 +1465,34 @@ impl GameSim {
             layout: self.setup.layout.clone(),
         };
         let now = self.clock_ms();
+        // Task 28b: the pit menu of the player's car, with the presets of its setup
+        let mut menu = None;
+        if let Some(pit) = &header.pit {
+            match rustyac_physics::race::QuickMenu::for_car(&self.car.car, &pit.settings) {
+                Ok(mut made) => {
+                    if let Some(text) = &pit.presets_ini {
+                        made.load_presets(&rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("presets.sp"), text));
+                    }
+                    if let Some(values) = &pit.values {
+                        made.set_values_text(values);
+                    }
+                    // (a recording carries the menu as it starts)
+                    if pit.presets_ini.is_some() {
+                        if let Some(header) = self.setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()) {
+                            header.values = Some(made.values_text());
+                        }
+                    }
+                    menu = Some((made, pit.window));
+                }
+                Err(message) => eprintln!("no pit stop: {message}"),
+            }
+        }
         let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
-        let referee = rustyac_physics::race::Referee::new(setup, track, &mut world, now);
+        let mut referee = rustyac_physics::race::Referee::new(setup, track, &mut world, now);
+        if let Some((menu, window)) = menu {
+            referee.enable_pit_stop(menu, &world);
+            referee.pit_window = window;
+        }
         self.referee = Some(Box::new(referee));
     }
 
@@ -1847,6 +1873,12 @@ impl GameSim {
             }
             if events & event::RESTART_SESSION != 0 {
                 referee.restart_session(&mut world);
+            }
+            // Task 28b: the pit menu's keys
+            for (bit, key) in [(event::PIT_LEFT, 0x25), (event::PIT_UP, 0x26), (event::PIT_RIGHT, 0x27), (event::PIT_DOWN, 0x28)] {
+                if events & bit != 0 {
+                    referee.pit_key(key, rustyac_physics::race::World::car(&world, 0));
+                }
             }
             let sessions_before = referee.manager.current_session_index;
             referee.after_step(&mut world, time);

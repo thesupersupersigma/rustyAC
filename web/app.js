@@ -1356,14 +1356,14 @@ Object.assign(VK, {
 });
 
 // `rustyac_game::input_file::event`: commands that run before the next physics step.
-const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32, AUTO_SHIFTER: 64, TO_TRACK: 256 };
+const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32, AUTO_SHIFTER: 64, TO_TRACK: 256, NEXT_SESSION: 1 << 18, RESTART_SESSION: 1 << 19, PIT_LEFT: 1 << 20, PIT_UP: 1 << 21, PIT_RIGHT: 1 << 22, PIT_DOWN: 1 << 23 };
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F7', 'F8', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 // The page's keys that give way to the layout: a key the player's controls.ini drives with
 // keeps that job (the desktop's rule for its own plain keys).
-const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO'];
+const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 let drivingKeys = null;
 
 function layoutUses(event) {
@@ -1420,6 +1420,25 @@ window.addEventListener('keydown', (event) => {
       break;
     case 'KeyG':
       state.game.request(EVENT.AUTO_SHIFTER);
+      break;
+    // the referee's two buttons, and the pit menu (the number pad's 4 8 6 2)
+    case 'F7':
+      state.game.request(EVENT.NEXT_SESSION);
+      break;
+    case 'F8':
+      state.game.request(EVENT.RESTART_SESSION);
+      break;
+    case 'Numpad4':
+      state.game.request(EVENT.PIT_LEFT);
+      break;
+    case 'Numpad8':
+      state.game.request(EVENT.PIT_UP);
+      break;
+    case 'Numpad6':
+      state.game.request(EVENT.PIT_RIGHT);
+      break;
+    case 'Numpad2':
+      state.game.request(EVENT.PIT_DOWN);
       break;
     // the aids and the brake bias: the same commands the desktop's keys and the pad give
     case 'KeyT':

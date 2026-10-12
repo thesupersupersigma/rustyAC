@@ -327,7 +327,15 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                     "referee: {} (race.ini's sessions; --no-referee: none)",
                     sessions.sessions.iter().map(|s| if s.session_type == 3 && !s.is_timed_race { format!("{} {} laps", s.name, s.laps) } else { format!("{} {} min", s.name, s.duration_minutes) }).collect::<Vec<_>>().join(", ")
                 ));
-                setup.referee = Some(crate::input_file::RefereeHeader { sessions, over_time_mult: over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names });
+                // Task 28b: the mandatory pit window. The game has it online only (the server's
+                // RACE_PIT_WINDOW_START / RACE_PIT_WINDOW_END); the same two keys in race.ini's
+                // [RACE] turn it on here. Without them: no window, nothing is checked.
+                let window = (ini.get_int("RACE", "RACE_PIT_WINDOW_START").unwrap_or(0).clamp(0, 65535) as u16, ini.get_int("RACE", "RACE_PIT_WINDOW_END").unwrap_or(0).clamp(0, 65535) as u16);
+                if window.1 != 0 {
+                    car_notes.push(format!("mandatory pit window: opens at {}, closes at {} (the leader's laps; minutes in a timed race)", window.0, window.1));
+                }
+                let pit = (!options.no_pit_stop).then(|| pit_header(window, setup.session.setup_file.as_deref()));
+                setup.referee = Some(crate::input_file::RefereeHeader { sessions, over_time_mult: over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit });
             }
             notes.push(line);
             notes.append(&mut car_notes);
@@ -495,6 +503,18 @@ pub fn over_time_mult() -> f32 {
         Ok(ini) if path.is_file() && ini.has_section("RACE") => ini.get_float("RACE", "OVER_TIME_MULT").unwrap_or(0.0),
         _ => 1.5,
     }
+}
+
+/// Task 28b: the player's pit stop of a session: `system/cfg/pitstop.ini` of the installed
+/// game (only read; the constructor's values without it) and the pit stop presets beside
+/// the saved setup (`<setup>.sp`, as `SetupScreen::loadSetupAbsolutePath` looks for them).
+pub fn pit_header(window: (u16, u16), setup_file: Option<&std::path::Path>) -> crate::input_file::PitHeader {
+    let settings = match rustyac_content::install::ac_root().map(|root| root.join("system").join("cfg").join("pitstop.ini")) {
+        Some(path) if path.is_file() => IniReader::load(&path).map(|ini| rustyac_physics::race::QuickMenuSettings::from_ini(&ini)).unwrap_or_default(),
+        _ => rustyac_physics::race::QuickMenuSettings::default(),
+    };
+    let presets_ini = setup_file.map(|file| file.with_extension("sp")).filter(|file| file.is_file()).and_then(|file| std::fs::read_to_string(file).ok());
+    crate::input_file::PitHeader { window, settings, values: None, presets_ini }
 }
 
 /// `--sessions p10,q5,r3,rt20+`: a session list as race.ini would give it.
