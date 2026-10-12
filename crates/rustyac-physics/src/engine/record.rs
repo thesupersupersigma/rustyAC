@@ -502,7 +502,11 @@ impl ReplayWorld {
             car.forced_position_events = 0;
             car.init_pitstop_timings()?;
             let Some(ai) = &meta.ai else { continue };
-            car.expected_fuel_per_lap = ai.expected_fuel_per_lap;
+            // Car::Car's estimate of the fuel a lap takes: the game's own number is in the recording
+            car.init_expected_fuel_per_lap()?;
+            if car.expected_fuel_per_lap.to_bits() != ai.expected_fuel_per_lap.to_bits() {
+                return Err(format!("car {n}: the fuel a lap is expected to take is {} here and {} in the game", car.expected_fuel_per_lap, ai.expected_fuel_per_lap));
+            }
             let mut rand = self.engine.ai_rand;
             car.ai_input.session = session;
             let mut driver = crate::ai::AiDriver::new(car, &session, &mut rand, &crate::ai::driver::AiFiles::default())?;

@@ -135,6 +135,8 @@ pub trait EngineModel: Send {
     fn get_safe_turbo_level(&self) -> f32;
     /// `Engine::getThrottleResponseGas` @ 0x140285b90
     fn throttle_response_gas(&self, gas: f32, rpm: f32) -> f32;
+    /// A copy of `Engine::turbos` (the race engineer spins one up along the ideal line).
+    fn turbos_copy(&self) -> Vec<Turbo>;
     /// `Engine::getTorqueAtRPM` @ 0x140285c80: the torque at an engine speed and a throttle,
     /// with the coast torque of the engine's speed in its last step.
     fn get_torque_at_rpm(&self, rpm: f32, gas: f32) -> f32;
@@ -723,6 +725,10 @@ impl EngineModel for VanillaEngine {
 
     fn throttle_response_gas(&self, gas: f32, rpm: f32) -> f32 {
         self.get_throttle_response_gas(gas, rpm)
+    }
+
+    fn turbos_copy(&self) -> Vec<Turbo> {
+        self.turbos.clone()
     }
 
     #[allow(clippy::neg_cmp_op_on_partial_ord)]

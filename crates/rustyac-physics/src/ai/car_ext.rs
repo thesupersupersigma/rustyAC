@@ -53,6 +53,112 @@ impl RollingChassis {
         Ok(())
     }
 
+    /// `Car::expectedFuelPerLap` as `Car::Car` @ 0x14026bf00 works it out, for a car on its
+    /// track: `fuel_cons.ini [FUEL_EVAL] KM_PER_LITER` over the fast lane's length, else the
+    /// race engineer's estimate ([`RollingChassis::evaluate_fuel_per_lap_from_track_spline`]).
+    pub fn init_expected_fuel_per_lap(&mut self) -> Result<(), String> {
+        self.expected_fuel_per_lap = 0.0;
+        let path = self.data_path.join("fuel_cons.ini");
+        if crate::data::exists(&path) {
+            let ini = IniReader::load(&path)?;
+            if ini.has_section("FUEL_EVAL") {
+                let km_per_liter = ini.get_float("FUEL_EVAL", "KM_PER_LITER")?;
+                self.expected_fuel_per_lap = self.fast_lane_length() * (1.0 / (km_per_liter * 1000.0));
+            }
+        }
+        if self.expected_fuel_per_lap == 0.0 {
+            self.expected_fuel_per_lap = self.evaluate_fuel_per_lap_from_track_spline()?;
+        }
+        Ok(())
+    }
+
+    /// `RaceEngineer::getMaxSpeedFromGear` @ 0x14027c240: the speed at the limiter in a gear
+    /// (`gear` + 2 is its place in the drivetrain's list), m/s.
+    fn get_max_speed_from_gear(&self, gear: i32) -> f32 {
+        let Some(drivetrain) = &self.drivetrain else { return 0.0 };
+        let base = drivetrain.base();
+        let radius = if base.traction_type == crate::car::TractionType::Fwd { self.tyres[0].data.radius } else { self.tyres[2].data.radius };
+        let diameter = radius * 2.0;
+        let ratio = usize::try_from(gear + 2).ok().and_then(|index| base.gears.get(index)).map_or(0.0, |gear| gear.ratio);
+        let limiter = drivetrain.engine().get_limiter_rpm() as f32;
+        let turns = (base.final_ratio as f64 * ratio) * 336.0;
+        let mph = (((limiter * diameter) * 39.0) as f64 / turns) as f32;
+        mph * f32::from_bits(0x3ee4_e26d)
+    }
+
+    /// `RaceEngineer::evaluateFuelPerLapFromTrackSpline` @ 0x14027ac60: the litres a lap
+    /// takes, from the speeds and the throttle the track's `data/ideal_line.ai` was recorded
+    /// with; 30 for a track without that file.
+    pub fn evaluate_fuel_per_lap_from_track_spline(&self) -> Result<f32, String> {
+        use rustyac_content::vfs::{self, PathExt};
+        let Some(track) = &self.track else { return Ok(30.0) };
+        let path = track.data_folder.join("data").join("ideal_line.ai");
+        if !path.vfs_is_file() {
+            return Ok(30.0);
+        }
+        let bytes = vfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let line = crate::track::AiSpline::parse_fast(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let Some(drivetrain) = &self.drivetrain else { return Ok(30.0) };
+        let limiter = drivetrain.engine().get_limiter_rpm();
+        let up = if limiter == 0 { self.auto_shifter.change_up_rpm } else { limiter };
+        let down = self.auto_shifter.change_dn_rpm as f32;
+        let k = self.fuel_consumption_k as f32;
+        let gears = (drivetrain.base().gears.len() as i32).clamp(0, 8);
+        let top = super::sat(self.get_max_speed_from_gear(gears - 4) * 3.6, 0.0, 225.0);
+        let mut turbos = drivetrain.engine().turbos_copy();
+        let (mut max_speed, mut max_gas) = (0.0f32, 0.0f32);
+        let count = line.point_count() as i32;
+        for i in 0..count {
+            let p = line.payload_at_spline_index(i);
+            if max_speed <= p.speed_ms && p.speed_ms < 300.0 {
+                max_speed = p.speed_ms;
+            }
+            if max_gas <= p.gas {
+                max_gas = p.gas;
+            }
+        }
+        let mut total = 0.0f32;
+        if count != 0 {
+            let inv_gas = 1.0 / max_gas;
+            let inv_speed = 1.0 / max_speed;
+            let span = up as f32 - down;
+            for i in 0..count {
+                let p = line.payload_at_spline_index(i);
+                let pace = super::sat(inv_speed * p.speed_ms, 0.0, 1.0);
+                let gas = super::sat(inv_gas * p.gas, 0.0, 1.0);
+                let rpm = span * gas + down;
+                let prev = line.spline.point_at(line.spline.wrap_index(i - 1) as u32);
+                let cur = line.spline.point_at(i as u32);
+                let (dx, dy, dz) = (cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2]);
+                let squared = (dy * dy + dx * dx) + dz * dz;
+                let distance = if squared < 0.0 || squared > 0.0 { crate::math::sqrtf(squared) } else { 0.0 };
+                let seconds = distance / (((top - 1.0) * pace + 1.0) * f32::from_bits(0x3e8e_38e4));
+                let mut boost = 0.0f32;
+                if !turbos.is_empty() {
+                    let turning = if rpm <= 0.0 { 0.0 } else { rpm };
+                    for turbo in &mut turbos {
+                        turbo.step(gas, turning, seconds);
+                        boost += turbo.get_boost();
+                    }
+                }
+                let boost = if boost <= 0.0 { 0.0 } else { boost };
+                let rate = ((boost * 1.1 + 1.0) * (rpm.abs() * gas)) * k;
+                total += ((rate as f64) * 0.001) as f32 * seconds;
+            }
+        }
+        total *= 1.25;
+        let max = self.max_fuel as f32;
+        Ok(if total <= max {
+            if total < 0.0 {
+                0.0
+            } else {
+                total
+            }
+        } else {
+            max
+        })
+    }
+
     /// `Car::getFuelPerLap` @ 0x140270bd0
     pub fn get_fuel_per_lap(&self) -> f32 {
         let per_lap = self.fuel_lap_evaluator.fuel_per_lap();
