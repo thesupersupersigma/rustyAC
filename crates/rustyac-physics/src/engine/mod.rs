@@ -613,11 +613,14 @@ impl PhysicsEngine {
             // An AI driver reads the other cars as they are when its own car is stepped (the
             // ones before it stepped already, the ones after it not yet) and draws from the
             // one `rand()` of the physics thread: the game without its thread pool. Of what a
-            // driver reads of another car, a car's own step changes one thing only: whether a
-            // tyre stands on a pit-lane surface. So the drivers are asked here first, in
-            // creation order, each seeing the cars before it with that flag as their step
-            // will leave it; the cars are then stepped as always, on the workers when there
-            // are any. Nothing here depends on the number of workers.
+            // driver reads of another car, a car's own step changes two things only: whether a
+            // tyre stands on a pit-lane surface, and the body's velocity when the car sleeps
+            // (the sleeping rule stops the body: a driver behind a parked car reads a speed
+            // of exactly 0). So the drivers are asked here first, in creation order, each
+            // seeing the cars before it with the first part of their step done (controls to
+            // sleeping rule, `step_car_early`) and with that flag as their step will leave
+            // it; the heavy part of every car's step then runs as always, on the workers
+            // when there are any. Nothing here depends on the number of workers.
             for slot in cars.iter_mut() {
                 slot.car.step_pre_cache_values();
             }
@@ -646,7 +649,11 @@ impl PhysicsEngine {
                     slot.car.ai_controls_ready = true;
                 }
                 if index < last_ai {
-                    flags[index] = Some(cars[index].car.pit_lane_after_step());
+                    let slot = &mut cars[index];
+                    let mut feed = DeviceFeed { device: slot.device.get(), dt };
+                    slot.car.step_car_early(dt, physics_time, &mut feed);
+                    slot.car.early_step_done = true;
+                    flags[index] = Some(slot.car.pit_lane_after_step());
                 }
             }
         } else if cars.iter().any(|slot| slot.device.is_ai()) {

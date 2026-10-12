@@ -724,6 +724,8 @@ pub struct RollingChassis {
     /// order, before the cars are stepped on the workers): `Car::pollControls` does not ask
     /// again
     pub ai_controls_ready: bool,
+    /// The engine ran [`RollingChassis::step_car_early`] of this step already.
+    pub early_step_done: bool,
     /// The lock of the controls as [`RollingChassis::step_car_begin`] sampled it then
     pub ai_locked: bool,
     /// This step's rays of the four wheels, cast ahead of the tyres' steps
@@ -1164,6 +1166,7 @@ impl RollingChassis {
             expected_fuel_per_lap: 0.0,
             pit_timings: crate::ai::car_ext::PitStopTimings::default(),
             ai_controls_ready: false,
+            early_step_done: false,
             ai_locked: false,
             tyre_rays: [None; 4],
             forced_position_events: 0,
@@ -1773,9 +1776,25 @@ impl RollingChassis {
     /// `Car::stepPreCacheValues` and `Car::step`. The game runs it for every car, on its
     /// thread pool when it has one, before the one rigid-body step all cars share.
     pub fn step_car(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
-        // (a car whose AI driver the engine asked already, in the cars' order, has begun)
+        // (a car the engine took through the first part already, in the cars' order)
+        if self.early_step_done {
+            self.early_step_done = false;
+        } else {
+            self.step_car_early(dt, physics_time, feed);
+        }
+        self.step_car_late(dt, physics_time, feed);
+    }
+
+    /// `Car::step` from its start to the sleeping rule: the controls, the fuel burnt, the
+    /// penalties, the automatic clutch, and the stop of a car that sleeps. The stop zeroes
+    /// the body's velocity, which the AI drivers of the cars after this one read: in the
+    /// game (without its thread pool) they see this car already stepped. So the engine runs
+    /// this part of every car in the cars' order before anybody's heavy part
+    /// ([`RollingChassis::step_car_late`]), which reads nothing of another car.
+    pub fn step_car_early(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
+        // (a car whose AI driver the engine asked already has begun)
         let locked = if self.ai_controls_ready { self.ai_locked } else { self.step_car_begin(physics_time) };
-        self.step_car_rest(dt, physics_time, locked, feed);
+        self.step_car_controls(dt, locked, feed);
     }
 
     /// What `Car::step` does before it asks for the controls (with `Car::stepPreCacheValues`
@@ -1824,7 +1843,7 @@ impl RollingChassis {
     }
 
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    fn step_car_rest(&mut self, dt: f32, physics_time: f64, locked: bool, feed: &mut dyn ChassisFeed) {
+    fn step_car_controls(&mut self, dt: f32, locked: bool, feed: &mut dyn ChassisFeed) {
         self.poll_controls(dt, feed);
 
         // the headlight switch: a press toggles
@@ -1933,7 +1952,11 @@ impl RollingChassis {
             self.core.stop(self.fuel_tank_body);
             self.core.source = previous;
         }
+    }
 
+    /// `Car::step` after the sleeping rule: everything that makes forces.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn step_car_late(&mut self, dt: f32, physics_time: f64, feed: &mut dyn ChassisFeed) {
         // body acceleration in g, body axes
         let v = self.core.get_velocity(self.body);
         let inverse_dt = 1.0 / dt;

@@ -52,6 +52,7 @@ pub fn ai_session(scenario: &str) -> Option<(i32, f64, f64, i32)> {
     match scenario {
         "ai_solo" | "ai_solo_level" => Some((3, 3000.0, 0.0, 3)),
         "ai_race" | "ai_race_levels" | "ai_field" => Some((3, 6000.0, 0.0, 3)),
+        "ai_pass_front" | "ai_pass_mid" | "ai_pass_rev" | "ai_pass_free" => Some((3, 5000.0, 0.0, 3)),
         "ai_practice" => Some((1, 0.0, 1800.0, 0)),
         "ai_handover" => Some((4, 0.0, 0.0, 0)),
         "ai_qualify" => Some((2, 0.0, 600.0, 0)),
@@ -80,6 +81,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         "rc_weekend_q" => spec("p1,q4,r2", true, None),
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
+        "rc_pass_front" | "rc_pass_rev" => spec("r3", true, Some(1)),
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_jump_dt" => Some(RefereeSpec { list: "r5", penalties: true, jump_start: Some(2), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_cut" => spec("r3", true, None),
@@ -420,6 +422,78 @@ pub fn scenarios() -> Vec<MultiScenario> {
             no_collision_steps: 250,
             default_cars: &[F2004],
             cars: |track, cars| ai_grid(track, cars, &[F2004], 6, |i| 1.0 - 0.015 * (i % 5) as f32, |i| 0.19 * (i % 4) as f32),
+        },
+        MultiScenario {
+            name: "ai_pass_front",
+            about: "Task 28b: a race start in which the first car stays on the grid on its brakes; 3 AI drivers behind it have to pass a stopped car",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |_| 0.95, |_| 0.1)?;
+                out[0].drive = Drive::Parked;
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "ai_pass_mid",
+            about: "Task 28b: as ai_pass_front with the second car stopped (an AI driver ahead of it, more behind)",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 5, |i| 1.0 - 0.02 * i as f32, |i| 0.15 * (i % 3) as f32)?;
+                out[1].drive = Drive::Parked;
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "ai_pass_rev",
+            about: "Task 28b: as ai_pass_front, the stopped car in neutral with the throttle open (the line follower without its gearbox, as in the early jump-start variant)",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |_| 0.95, |_| 0.1)?;
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 0.75, limit: 55.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "ai_pass_free",
+            about: "Task 28b: as ai_pass_front, the stopped car with no pedal at all (it may roll)",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |i| 0.9 + 0.03 * i as f32, |i| 0.2 * i as f32)?;
+                out[0].drive = Drive::Script(vec![(0.0, 0.0, 0.0, 0.0)]);
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_pass_front",
+            about: "Task 28b: ai_pass_front under the game's referee (a race of 3 laps, JUMP_START_PENALTY=1, the green 5 s after the session's start)",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |_| 0.95, |_| 0.1)?;
+                out[0].drive = Drive::Parked;
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_pass_rev",
+            about: "Task 28b: the early jump-start variant itself: the line follower without its gearbox on the first slot under the referee, 3 AI drivers",
+            seconds: 30.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 4, |_| 0.95, |_| 0.1)?;
+                out[0].drive = Drive::Follow { lateral: vec![(0.0, 0.0)], pace: 0.75, limit: 55.0, brake_at: 1.0e9 };
+                Ok(out)
+            },
         },
         MultiScenario {
             name: "rc_race",
@@ -863,7 +937,7 @@ impl<'a> MultiWorld<'a> {
                 wr(car, CAR_AUTOCLUTCH + 0xc, 1u8);
                 wr(car, CAR_AUTOCLUTCH + 0xd, 1u8);
                 // (the car that jumps the start shifts by hand: the H-shifter's first gear)
-                let auto_shifter = !(scenario.name.starts_with("rc_jump") && index == 0);
+                let auto_shifter = !((scenario.name.starts_with("rc_jump") || scenario.name.ends_with("_pass_rev")) && index == 0);
                 wr(car, CAR_AUTO_SHIFT, auto_shifter as u8);
 
                 force_rotation(car, &planned.tail);
