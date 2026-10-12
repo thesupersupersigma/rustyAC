@@ -70,7 +70,13 @@
     <p>
       <button id="open-folder">Open your Assetto Corsa folder</button>
       <button id="reopen-folder" hidden></button>
+      <button id="open-folder-list" hidden>Open it as a file list</button>
       <input id="folder-input" type="file" webkitdirectory hidden>
+    </p>
+    <p id="folder-list-hint" class="hint" hidden>
+      Chrome refuses folders under Program Files: use this instead. The browser asks whether to
+      "upload" the folder's files: nothing is uploaded, the page reads them on this computer.
+      It has to be picked again on every visit.
     </p>
     <p class="hint">
       The folder is the one with <code>content</code> and <code>system</code> in it

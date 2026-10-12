@@ -267,8 +267,16 @@ async function openFolder(root) {
   // in the background, while the lists can already be used
   source.checking = (async () => {
     let checked = 0;
+    // (one pass over the folder's list, not one per car)
+    const dataOf = new Map();
+    for (const path of handles.keys()) {
+      const parts = path.toLowerCase().split('/');
+      if (parts[1] !== 'cars' || !(parts[3] || '').startsWith('data')) continue;
+      if (!dataOf.has(parts[2])) dataOf.set(parts[2], []);
+      dataOf.get(parts[2]).push(path);
+    }
     for (const car of source.cars) {
-      const data = [...handles.keys()].filter((p) => p.toLowerCase().startsWith(`content/cars/${car.id.toLowerCase()}/data`));
+      const data = dataOf.get(car.id.toLowerCase()) || [];
       try {
         for (const path of data) {
           if (!rac.fs_has(path)) rac.fs_put(path, new Uint8Array(await (await handles.get(path).getFile()).arrayBuffer()));
@@ -322,16 +330,43 @@ async function rememberedFolder() {
   }
 }
 
-// `<input webkitdirectory>` (Firefox, Safari): every file of the folder as a list, with paths.
+// The parts of a path below the game's folder that a drive can need: a car's data, models and
+// menu entry, a track without its skins, sounds and textures, the game's tables. The rest of
+// a folder with tens of thousands of files (skins, sounds, previews, apps) is never kept.
+function listedPathWanted(parts) {
+  const lower = parts.map((part) => part.toLowerCase());
+  if (lower[0] === 'system') return lower[1] === 'data' && parts.length === 3;
+  if (lower[0] !== 'content') return false;
+  if (lower[1] === 'cars') {
+    if (parts.length === 4) return lower[3] === 'data.acd' || lower[3].endsWith('.kn5');
+    return parts.length === 5 && (lower[3] === 'data' || (lower[3] === 'ui' && lower[4] === 'ui_car.json'));
+  }
+  if (lower[1] !== 'tracks') return false;
+  return parts.length <= 7 && !lower.slice(3, -1).some((part) => ['skins', 'extension', 'sfx', 'texture'].includes(part));
+}
+
+// `<input webkitdirectory>` (Firefox, Safari, and Chrome for a folder its picker refuses): the
+// browser hands over every file of the folder as one list, with paths.
 function folderFromFiles(list) {
-  const all = [...list];
-  const marker = all.map((f) => f.webkitRelativePath.toLowerCase()).find((p) => p.includes('/content/cars/') || p.includes('/content/tracks/'));
-  if (!marker) throw new Error("that is not Assetto Corsa's folder: no content/cars or content/tracks in it");
-  const prefix = marker.slice(0, marker.indexOf('/content/') + 1).length;
+  // where the game's folder ends in the paths: the highest `content/cars` or `content/tracks`
+  // (the game's own `server` folder has a `content/cars` of its own, deeper down)
+  let prefix = Infinity;
+  for (const file of list) {
+    const path = file.webkitRelativePath.toLowerCase();
+    for (const marker of ['/content/cars/', '/content/tracks/']) {
+      const at = path.indexOf(marker);
+      if (at >= 0 && at + 1 < prefix) prefix = at + 1;
+    }
+  }
+  if (prefix === Infinity) throw new Error("that is not Assetto Corsa's folder: no content/cars or content/tracks in it");
   // the same shape the picker's handle has
-  const tree = { kind: 'directory', name: all[0].webkitRelativePath.slice(0, prefix - 1), items: new Map() };
-  for (const file of all) {
+  const tree = { kind: 'directory', name: list[0].webkitRelativePath.slice(0, prefix - 1), items: new Map() };
+  for (const kind of ['content', 'system']) tree.items.set(kind, { kind: 'directory', name: kind, items: new Map() });
+  let kept = 0;
+  for (const file of list) {
     const parts = file.webkitRelativePath.slice(prefix).split('/');
+    if (!listedPathWanted(parts)) continue;
+    kept += 1;
     let folder = tree;
     for (const part of parts.slice(0, -1)) {
       if (!folder.items.has(part)) folder.items.set(part, { kind: 'directory', name: part, items: new Map() });
@@ -346,6 +381,7 @@ function folderFromFiles(list) {
     for (const item of folder.items.values()) if (item.kind === 'directory') withEntries(item);
     return folder;
   };
+  window.rustyac.listed = { files: list.length, kept };
   return withEntries(tree);
 }
 
@@ -1055,23 +1091,18 @@ function startControls() {
     controlsError('');
     takeControls(rac.controls_reset(), true);
   });
-  // Esc closes the panel (and does not end the drive); a key typed into one of its fields
-  // is the field's, not the car's
-  window.addEventListener(
-    'keydown',
-    (event) => {
-      if ($('controls').hidden) return;
-      const inField = event.target && event.target.closest && event.target.closest('#controls') && /^(INPUT|SELECT)$/.test(event.target.tagName);
-      if (event.code === 'Escape') {
-        closeControls();
-        event.preventDefault();
-        event.stopPropagation();
-      } else if (inField) {
-        event.stopPropagation();
-      }
-    },
-    true,
-  );
+}
+
+// A key while the panel is open: Esc closes it (and does not end the drive), and a key typed
+// into one of its fields is the field's, not the car's. True when the key was the panel's.
+function panelKey(event) {
+  if ($('controls').hidden) return false;
+  if (event.code === 'Escape') {
+    closeControls();
+    event.preventDefault();
+    return true;
+  }
+  return !!(event.target && event.target.closest && event.target.closest('#controls') && /^(INPUT|SELECT)$/.test(event.target.tagName));
 }
 
 // Test hooks: a whole controls.ini as text, one value, the built-in layout again.
@@ -1288,6 +1319,7 @@ function pageUses(event) {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (panelKey(event)) return;
   if (!(state.running || state.testing) || !state.game) return;
   // a key with Ctrl, Alt or the Windows key is the browser's (Ctrl+T, Alt+Left ...), except
   // that a Ctrl key is itself a driving key (gear down)
@@ -1443,9 +1475,23 @@ async function main() {
     showControls();
   }
   $('open-folder').addEventListener('click', pickFolder);
+  // Chrome and Edge have the folder picker, and it refuses a folder under Program Files
+  // (where Steam puts the game): the file-list way is offered beside it
+  if (window.showDirectoryPicker) {
+    $('open-folder-list').hidden = false;
+    $('folder-list-hint').hidden = false;
+    $('open-folder-list').addEventListener('click', () => $('folder-input').click());
+  }
   $('folder-input').addEventListener('change', async (event) => {
     try {
-      await useFolder(folderFromFiles(event.target.files), false);
+      if (!event.target.files.length) return;
+      const started = performance.now();
+      $('content-line').textContent = `reading the folder: ${event.target.files.length} files listed ...`;
+      await nextPaint();
+      const folder = folderFromFiles(event.target.files);
+      window.rustyac.listed.tree_ms = performance.now() - started;
+      await useFolder(folder, false);
+      window.rustyac.listed.ready_ms = performance.now() - started;
     } catch (error) {
       fail(error);
     }
