@@ -33,7 +33,14 @@ pub enum Drive {
     /// Task 27: by the game's own `AIDriver`, with this `basePush` (the AI level, 0..1) and
     /// `aggression`.
     Ai { push: f32, aggression: f32 },
+    /// Task 27: by the game's own `AIDriverDrag`, with this `push` (the AI level, 0..100);
+    /// it is told to start `start_ms` after the clock's start.
+    Drag { push: f32, start_ms: f32 },
 }
+
+const VA_AIDRIVERDRAG_CTOR: usize = 0x1_402a_b740; // AIDriverDrag::AIDriverDrag(Car*)
+const VA_AIDRIVERDRAG_SET_START_TIME: usize = 0x1_402a_c3d0; // AIDriverDrag::setStartTime(double)
+const DRAG_PUSH: usize = 0x18;
 
 /// Task 27: the session an AI scenario runs in (`None`: the engine's "undefined" session, in
 /// which a driver just drives): (type, milliseconds from the clock's start to the green
@@ -366,6 +373,22 @@ pub fn scenarios() -> Vec<MultiScenario> {
             },
         },
         MultiScenario {
+            name: "ai_drag",
+            about: "Task 27: a drag race: the game's AIDriverDrag in every car on the first grid slots (2 by default), levels 100 and 90, the start after 4 s",
+            seconds: 20.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let count = if cars.is_empty() { 2 } else { cars.len() };
+                let mut out = Vec::new();
+                for i in 0..count {
+                    let (p, tail) = track.spawn_pose("START", i).ok_or_else(|| format!("the track has no grid slot {i}"))?;
+                    out.push(MultiCar { name: name_of(cars, i, &[F2004]), position: [p.x, p.y, p.z], tail: [tail.x, tail.y, tail.z], drive: Drive::Drag { push: 100.0 - 10.0 * i as f32, start_ms: 4000.0 } });
+                }
+                Ok(out)
+            },
+        },
+        MultiScenario {
             name: "ai_race_levels",
             about: "Task 27: as ai_race with slow drivers in front (level 80 to 100 from the pole back) and aggression up to 95 %: overtakes",
             seconds: 90.0,
@@ -536,7 +559,18 @@ impl<'a> MultiWorld<'a> {
                 add_time_line(built.track, &left, &right, 0);
                 lines += 1;
             }
-            assert_eq!(lines, built.rust.time_lines.len(), "the port found other timing lines (point-to-point tracks are not for these scenarios)");
+            // Task 27 (the drag strip): a point-to-point track's gates, as the one-car oracle adds them
+            let ab = ["AC_AB_START_L", "AC_AB_START_R", "AC_AB_FINISH_L", "AC_AB_FINISH_R"].map(|name| place(name));
+            if let [Some(sl), Some(sr), Some(fl), Some(fr)] = ab {
+                add_time_line(built.track, &sl, &sr, 1);
+                add_time_line(built.track, &fl, &fr, 2);
+                lines += 2;
+            }
+            if let (Some(left), Some(right)) = (place("AC_OPEN_FINISH_L"), place("AC_OPEN_FINISH_R")) {
+                add_time_line(built.track, &left, &right, 0);
+                lines += 1;
+            }
+            assert_eq!(lines, built.rust.time_lines.len(), "the port found other timing lines");
             wr(engine, PE_PENALTY_MODE, 1i32);
             wr(engine, PE_ALLOWED_TYRES_OUT, 2i32);
             let game_objects = crate::track::create_objects(acs, engine, &built.rust);
@@ -657,6 +691,7 @@ impl<'a> MultiWorld<'a> {
                     ai: None,
                     pit: None,
                     handover: index == 0 && ai_handover(scenario.name).is_some(),
+                    drag: None,
                 });
                 let lateral = match &planned.drive {
                     Drive::Follow { lateral, .. } => lateral.first().map_or(0.0, |l| l.1),
@@ -669,6 +704,7 @@ impl<'a> MultiWorld<'a> {
             // rand(): `new AIDriver(car)` as the game's own code does it (its closure sets
             // basePush and aggression after the constructor and makes it the car's provider)
             let ai_seed = seed.wrapping_add(27_000);
+            let mut recording_ai_seed = false;
             let with_ai = cars.iter().any(|car| matches!(car.drive, Drive::Ai { .. })) || ai_handover(scenario.name).is_some();
             if with_ai {
                 // every car's pit box (CarAvatar gives the physics car its `AC_PIT_<n>`)
@@ -699,6 +735,40 @@ impl<'a> MultiWorld<'a> {
                     car.ai = ai;
                     metas[index].ai = Some(rustyac_physics::engine::record::AiMeta { base_push: push, aggression, expected_fuel_per_lap: rd(car.car, CAR_EXPECTED_FUEL_PER_LAP) });
                 }
+            }
+            // Task 27: the drag drivers (RaceManager::initOffline's drag branch): `new
+            // AIDriverDrag(car)`, its push, the car's provider; then every car on its place
+            // once more (the driver lays its line) and the start time (DragMode's call)
+            if cars.iter().any(|car| matches!(car.drive, Drive::Drag { .. })) {
+                let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z"));
+                let drag_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AIDRIVERDRAG_CTOR));
+                let set_start_time: extern "C" fn(*mut u8, f64) = std::mem::transmute(acs.va(VA_AIDRIVERDRAG_SET_START_TIME));
+                let mut drivers = Vec::new();
+                for (index, car) in cars.iter_mut().enumerate() {
+                    let Drive::Drag { push, start_ms } = car.drive else {
+                        drivers.push(std::ptr::null_mut());
+                        continue;
+                    };
+                    let ai = new(0x118);
+                    std::ptr::write_bytes(ai, 0, 0x118);
+                    drag_ctor(ai, car.car);
+                    wr(ai, DRAG_PUSH, push);
+                    wr(car.car, CAR_CONTROLS_PROVIDER, ai);
+                    car.ai = ai;
+                    metas[index].drag = Some((push, start_ms));
+                    drivers.push(ai);
+                }
+                for (index, planned) in plan.iter().enumerate() {
+                    force_rotation(cars[index].car, &planned.tail);
+                    force_position(cars[index].car, &planned.position, 1);
+                }
+                srand(ai_seed);
+                for (index, car) in cars.iter().enumerate() {
+                    if let Drive::Drag { start_ms, .. } = car.drive {
+                        set_start_time(drivers[index], CLOCK_START_MS + start_ms as f64);
+                    }
+                }
+                recording_ai_seed = true;
             }
             let session = ai_session(scenario.name);
             if let Some((kind, start_ms, time_secs, laps)) = session {
@@ -753,6 +823,9 @@ impl<'a> MultiWorld<'a> {
             recording.set("mesh_geom_high", geom_high.iter().map(|h| format!("{h:08x}")).collect::<Vec<_>>().join(","));
             recording.set("mesh_bounce_vel", format!("{:08x}", geom_high[0]));
             recording.set_cars(&metas);
+            if recording_ai_seed {
+                recording.set("ai_seed", ai_seed.to_string());
+            }
             if with_ai {
                 recording.set("ai_seed", ai_seed.to_string());
                 if let Some(step) = ai_handover(scenario.name) {
@@ -799,7 +872,7 @@ impl<'a> MultiWorld<'a> {
             let car = &mut self.cars[index];
             match &car.drive {
                 // (the game's driver is the car's provider: this device is never asked)
-                Drive::Ai { .. } => continue,
+                Drive::Ai { .. } | Drive::Drag { .. } => continue,
                 Drive::Parked => c.brake = 1.0,
                 Drive::Script(segments) => {
                     if let Some(&(_, gas, brake, steer)) = segments.iter().rev().find(|segment| t >= segment.0) {
@@ -966,7 +1039,7 @@ impl<'a> MultiWorld<'a> {
                     // the columns of the driver to come
                     row.extend(std::iter::repeat_n(0u32, rustyac_physics::ai::oracle::column_names().len()));
                 }
-                if !car.ai.is_null() {
+                if !car.ai.is_null() && !matches!(car.drive, Drive::Drag { .. }) {
                     use rustyac_physics::ai::oracle::{Kind, COLUMNS};
                     for &(_, offset, kind) in COLUMNS {
                         match kind {

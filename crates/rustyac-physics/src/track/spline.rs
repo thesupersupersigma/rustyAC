@@ -118,6 +118,9 @@ pub struct InterpolatingSpline {
     pub m_length: f32,
     /// `Spline::isClosed` (the game works it out again on every call; the points never change).
     closed: bool,
+    /// `interpolationMode` is `eLinear` (the drag driver's line); else Catmull-Rom, the mode
+    /// of every line of a track
+    pub linear: bool,
     pub grid_data: Option<GridData>,
     /// `grid`: for every X cell the run of its Z cells in `grid_cells`.
     grid_columns: Vec<(u32, u32)>,
@@ -455,7 +458,23 @@ impl InterpolatingSpline {
                 return first.point;
             }
         }
+        if self.linear {
+            return self.calculate_linear(n);
+        }
         self.calculate_catmull_rom(n)
+    }
+
+    /// `InterpolatingSpline::calculateLinear` @ 0x1401f0580: straight between two points.
+    fn calculate_linear(&self, n: f32) -> P3 {
+        let mut frac = 0.0f32;
+        let index = self.get_last_index_from_norm(n, &mut frac);
+        let next = self.wrap_index(index + 1);
+        let a = self.point_at(index as u32);
+        let b = self.point_at(next as u32);
+        let from = self.get_normalized_position(index as u32);
+        let to = self.get_normalized_position(next as u32);
+        let t = (n - from) / (to - from);
+        [(b[0] - a[0]) * t + a[0], (b[1] - a[1]) * t + a[1], (b[2] - a[2]) * t + a[2]]
     }
 
     /// `InterpolatingSpline::wrapPosition` @ 0x1401f41e0

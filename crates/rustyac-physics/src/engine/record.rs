@@ -52,6 +52,9 @@ pub struct CarMeta {
     /// Task 27: the car gets its AI driver during the run (`ai_handover`: the recording's
     /// first car): its row has the driver's columns from the start, zero until then
     pub handover: bool,
+    /// Task 27: the car is driven by the game's `AIDriverDrag`: its `push` and the
+    /// milliseconds from the clock's start to the time `setStartTime` was called with
+    pub drag: Option<(f32, f32)>,
 }
 
 /// An AI driver of a recording.
@@ -229,6 +232,9 @@ impl Recording {
             if let Some(ai) = &car.ai {
                 self.set(&format!("car.{n}.ai"), hex3(&[ai.base_push, ai.aggression, ai.expected_fuel_per_lap]));
             }
+            if let Some((push, start)) = car.drag {
+                self.set(&format!("car.{n}.drag"), format!("{:08x},{:08x}", push.to_bits(), start.to_bits()));
+            }
             if let Some(pit) = &car.pit {
                 self.set(&format!("car.{n}.pit"), pit.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(","));
             }
@@ -272,6 +278,14 @@ impl Recording {
                     None => None,
                 },
                 handover: n == 0 && self.get("ai_handover").is_some(),
+                drag: match self.get(&key("drag")) {
+                    Some(text) => {
+                        let (push, start) = text.split_once(',').ok_or("car.drag: two values")?;
+                        let bits = |t: &str| u32::from_str_radix(t, 16).map(f32::from_bits).map_err(|e| format!("car.drag: {e}"));
+                        Some((bits(push)?, bits(start)?))
+                    }
+                    None => None,
+                },
             });
         }
         Ok(cars)
@@ -424,6 +438,8 @@ pub struct ReplayWorld {
     pub devices: Vec<ScriptedDevice>,
     /// Task 27: the cars' AI drivers (a car without one is driven by its scripted device)
     pub ai: Vec<Option<Box<crate::ai::AiDriver>>>,
+    /// Task 27: the cars' drag drivers
+    pub drag: Vec<Option<Box<crate::ai::AiDriverDrag>>>,
     /// Task 27: the step before which the first car gets its AI driver
     pub handover: Option<usize>,
     pub clock_start_ms: f64,
@@ -516,12 +532,50 @@ impl ReplayWorld {
             Some(text) => Some(text.parse::<usize>().map_err(|e| format!("ai_handover: {e}"))?),
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), handover, clock_start_ms, steps: 0 };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0 };
         world.ai.resize_with(world.cars.len(), || None);
+        world.drag.resize_with(world.cars.len(), || None);
+        if recording.cars.iter().any(|meta| meta.drag.is_some()) {
+            world.build_drag(recording, clock_start_ms)?;
+        }
         if recording.cars.iter().any(|meta| meta.ai.is_some()) || handover.is_some() {
             world.build_ai(recording, clock_start_ms)?;
         }
         Ok(world)
+    }
+
+    /// Task 27: the drag drivers, made as `tools/car_oracle multi` made the game's: after
+    /// all cars, in creation order; then every car is put on its place once more (the
+    /// driver lays its line) and every driver is given its start time, from the `rand()`
+    /// state `ai_seed`.
+    fn build_drag(&mut self, recording: &Recording, clock_start_ms: f64) -> Result<(), String> {
+        let seed: u32 = recording.need("ai_seed")?.parse().map_err(|e| format!("ai_seed: {e}"))?;
+        self.engine.ai_rand = crate::session::MsvcRand(seed);
+        for (n, meta) in recording.cars.iter().enumerate() {
+            let Some((push, _)) = meta.drag else { continue };
+            let mut driver = crate::ai::AiDriverDrag::new(&mut self.cars[n])?;
+            driver.push = push;
+            self.drag[n] = Some(Box::new(driver));
+        }
+        for (n, meta) in recording.cars.iter().enumerate() {
+            let car = &mut self.cars[n];
+            car.forced_position_events = 0;
+            car.force_rotation(&Vec3f::new(meta.tail[0], meta.tail[1], meta.tail[2]));
+            car.force_position(&Vec3f::new(meta.position[0], meta.position[1], meta.position[2]));
+            if let Some(driver) = &mut self.drag[n] {
+                use crate::car::ControlsProvider as _;
+                driver.on_forced_position(car);
+            }
+            car.forced_position_events = 0;
+        }
+        for (n, meta) in recording.cars.iter().enumerate() {
+            if let (Some((_, start)), Some(driver)) = (meta.drag, &mut self.drag[n]) {
+                let mut rand = self.engine.ai_rand;
+                driver.set_start_time(clock_start_ms + start as f64, &mut rand);
+                self.engine.ai_rand = rand;
+            }
+        }
+        Ok(())
     }
 
     /// Task 27: the AI drivers, made as `tools/car_oracle multi` made the game's: after all
@@ -615,6 +669,11 @@ impl ReplayWorld {
             self.engine.ai_rand = rand;
         }
         let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
+        for (slot, drag) in slots.iter_mut().zip(self.drag.iter_mut()) {
+            if let Some(driver) = drag {
+                slot.device = DeviceRef::Anywhere(&mut **driver);
+            }
+        }
         self.engine.step_with(0.003, time, &mut slots, hooks);
         self.steps += 1;
     }
@@ -657,7 +716,7 @@ impl ReplayWorld {
         row.push(self.engine.core.no_collision_counter as u32);
         row.push(self.engine.core.current_frame);
         for (n, car) in self.cars.iter().enumerate() {
-            match &self.ai[n] {
+            match self.ai[n].as_ref().map(|_| ()).or(self.drag[n].as_ref().map(|_| ())) {
                 // an AI driver's inputs: what it left in the car's controls
                 Some(_) => {
                     let c = &car.controls;

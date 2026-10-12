@@ -637,8 +637,10 @@ pub struct RollingChassis {
     /// `Car::pitTimings`
     pub pit_timings: crate::ai::car_ext::PitStopTimings,
     /// `Car::forcePosition` calls an AI driver has not been told of yet
-    /// (`Car::evOnForcedPositionCompleted`)
+    /// (`Car::evOnForcedPositionCompleted`), and the place the event carries: where the
+    /// body was put
     pub forced_position_events: u32,
+    pub forced_position: Vec3f,
 }
 
 /// `ucomiss x, 0` + `je`: true for an ordered value that is not zero.
@@ -1058,6 +1060,7 @@ impl RollingChassis {
             expected_fuel_per_lap: 0.0,
             pit_timings: crate::ai::car_ext::PitStopTimings::default(),
             forced_position_events: 0,
+            forced_position: Vec3f::new(0.0, 0.0, 0.0),
             speed: 0.0,
             fuel_pressure: 0.0,
             physics_time,
@@ -1534,6 +1537,7 @@ impl RollingChassis {
         self.spline_locator.reset();
         // Car::evOnForcedPositionCompleted: an AI driver is told (the engine sees to it)
         self.forced_position_events += 1;
+        self.forced_position = pos;
     }
 
     /// `Tyre::setCompound` @ 0x1402834e0 on one tyre. False: no such compound.
