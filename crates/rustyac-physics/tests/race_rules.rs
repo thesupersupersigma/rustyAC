@@ -10,7 +10,46 @@
 //! of the file. The lines below are from runs that ended `referee: IDENTICAL`; this test runs
 //! the same drives through the port alone. No file of the game is needed.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use rustyac_physics::engine::record::{Golden, ReplayPaths};
 use rustyac_physics::race::toy;
+
+/// A whole session's start with the game's referee among the game's own cars and AI drivers
+/// (`car_oracle multi --scenario rc_race --track magione --cars bmw_m3_e30 x3 --steps 2700`,
+/// cut with `multi-check --csv-out`): three cars on Magione's grid, the session set up by
+/// `RaceManager::setCurrentSession`, the start drawn by `startRace`, the green light. Every
+/// step's row carries a hash over the game's `RaceManager` and `RaceTimingServices` and what
+/// their jobs left in the cars; the port's replay has to give the same rows.
+#[test]
+fn golden_race_start_with_the_referee() {
+    let golden = Golden::from_bytes(include_bytes!("golden/referee_magione_race_3_2700.mcgold")).expect("the golden file");
+    let cardata = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cardata");
+    if !cardata.join("bmw_m3_e30").join("suspensions.ini").is_file() {
+        eprintln!("NOT TESTED: cardata/bmw_m3_e30 is missing (the car's extracted data files)");
+        return;
+    }
+    let root = rustyac_content::install::ac_root().unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"));
+    if !root.join("content").join("tracks").join("magione").is_dir() {
+        eprintln!("NOT TESTED: Assetto Corsa's folder is missing (set AC_ROOT): the replay needs the track magione and the car's collider.kn5");
+        return;
+    }
+    let paths = ReplayPaths { cardata, game_root: Some(root) };
+    let recording = golden.recording().expect("the header");
+    assert!(recording.get("referee").is_some(), "the excerpt has a referee");
+    let track = match rustyac_physics::engine::record::load_track(&recording, &paths) {
+        Ok(track) => track,
+        Err(message) => {
+            eprintln!("NOT TESTED: the track could not be loaded ({message})");
+            return;
+        }
+    };
+    for threads in [0, 3] {
+        let result = golden.replay(&paths, Arc::clone(&track), threads).expect("the replay");
+        assert_eq!(result, None, "with {threads} worker threads the port leaves the game's values at this step");
+    }
+}
 
 /// (seed, session list, cars, frames, the hash of every frame's state, the hash of race_out.json)
 const GOLDEN: [(u32, usize, usize, usize, u64, u64); 8] = [
