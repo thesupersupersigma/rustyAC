@@ -230,6 +230,16 @@ impl Session {
         self.camera.update(view, &self.shape, view.acc_g, seconds as f32)
     }
 
+    /// New settings from the page's Controls panel (a `controls.ini`, see [`crate::controls`]):
+    /// AC's keyboard and pad classes are built again from them before the next physics step.
+    /// Only what the player's own devices make of a key or a stick changes.
+    pub fn set_controls(&mut self, ini: &rustyac_game::input::ini::ControlsIni, origin: &str) {
+        let source = WebSource::with_controls(Arc::default(), ini, origin);
+        self.keys = source.bindings.describe();
+        self.keys_used = source.keys_used();
+        self.input.lock().unwrap().controls = Some(ini.clone());
+    }
+
     /// R, Shift+R, N and the other one-off commands (`rustyac_game::input_file::event` bits).
     pub fn request(&mut self, events: u32) {
         self.input.lock().unwrap().requests |= events;

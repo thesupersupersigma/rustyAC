@@ -32,6 +32,30 @@
 
 <div id="keys" hidden></div>
 
+<div id="controls" hidden>
+  <div class="controls-head">
+    <h2>Controls</h2>
+    <button id="controls-close">Close (Esc)</button>
+  </div>
+  <p id="controls-origin" class="status"></p>
+  <p>
+    <button id="controls-load">Load my controls.ini</button>
+    <input id="controls-file" type="file" accept=".ini,text/plain" hidden>
+    <button id="controls-reset">Reset to AC's defaults</button>
+  </p>
+  <p class="hint">
+    Your own file is <code>Documents\Assetto Corsa\cfg\controls.ini</code>. It is read on this
+    computer by the parser the desktop build uses: its steering numbers, its keys and its pad
+    buttons all count. Nothing is uploaded; the settings are kept in this browser. A change
+    works at once, also while you drive. The defaults are the built-in layout: AC's default
+    keys, and the pad numbers this page has always used.
+  </p>
+  <p id="controls-error" class="refusal" hidden></p>
+  <div id="controls-list"></div>
+  <table id="controls-layout"></table>
+  <p id="controls-not-used" class="hint"></p>
+</div>
+
 <main id="menu">
   <h1>rustyAC <small>browser preview</small></h1>
   <p class="lead">
@@ -86,6 +110,18 @@
     <pre id="notes" hidden></pre>
   </section>
 
+  <section>
+    <h2>Controls</h2>
+    <p>
+      <button id="controls-open">Steering and controls ...</button>
+      <span id="controls-line" class="status"></span>
+    </p>
+    <p class="hint">
+      Speed sensitivity, gamma, filter, dead zone and rumble of the pad, the keyboard's steering
+      speeds, or your own <code>controls.ini</code> as a whole. While driving: the O key.
+    </p>
+  </section>
+
   <section id="multiplayer">
     <h2>Multiplayer</h2>
     <p class="hint">
@@ -120,6 +156,7 @@
       <tr><td>next view</td><td>F1 or C</td><td>right stick press</td></tr>
       <tr><td>new car, automatic gearbox</td><td>N, G</td><td></td></tr>
       <tr><td>pause, menu</td><td>P, Esc</td><td>Start</td></tr>
+      <tr><td>steering and controls</td><td>O</td><td></td></tr>
       <tr><td>on a server: chat, leave</td><td>Enter, Esc</td><td></td></tr>
     </table>
     <p class="hint">
@@ -129,9 +166,10 @@
       Left Shift is also the clutch: use Right Shift for Shift+T and Shift+Y while moving.
     </p>
     <p class="hint">
-      These are Assetto Corsa's default keys plus WASD. AC keeps your own bindings in
-      <code>Documents\Assetto Corsa\cfg\controls.ini</code>, which is not inside the game's folder,
-      so the page cannot read it: the defaults stand.
+      These are the built-in layout's keys: Assetto Corsa's default keys plus WASD. AC keeps
+      your own bindings in <code>Documents\Assetto Corsa\cfg\controls.ini</code>, which is not
+      inside the game's folder: load it under <b>Controls</b> above and its keys and pad buttons
+      take the place of this table's driving rows (the Controls panel then lists them).
     </p>
   </section>
 

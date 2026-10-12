@@ -21,6 +21,12 @@
 //                                       within that many metres (at most 8)
 //        [--end kill]                   end by killing the browser (a tab that just vanishes),
 //                                       not by closing it
+//        [--menu]          do not wait for a drive: the menu with its content is enough
+//        [--script <file.js>]   run that file's text in the page at the end (the body of an
+//                          async function; what it returns is the report's `script`)
+//        [--pick-folder <folder>]   with --menu: press "Open it as a file list" and answer the
+//                          browser's file chooser with that folder (what `<input
+//                          webkitdirectory>` does with it is the report's `picked`)
 //
 // Waits until the page drives (or its self test is done, with ?selftest=N), lets it drive for
 // --seconds, takes a screenshot and prints the lap timer, the speed, the frame rate, the
@@ -28,7 +34,7 @@
 // address reports its key presses in `selftest.presses`.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -122,6 +128,7 @@ let socket;
 let nextId = 1;
 const waiting = new Map();
 const messages = [];
+let fileChooser = null;
 
 function send(method, params = {}) {
   return new Promise((done, failed) => {
@@ -175,6 +182,8 @@ try {
       else done(message.result);
     } else if (message.method === 'Runtime.consoleAPICalled') {
       messages.push(`${message.params.type}: ${message.params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`);
+    } else if (message.method === 'Page.fileChooserOpened') {
+      fileChooser = message.params;
     } else if (message.method === 'Runtime.exceptionThrown') {
       messages.push(`exception: ${message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text}`);
     }
@@ -194,6 +203,7 @@ try {
     if (now && now.last && now.last !== lastLine && process.stderr.isTTY) process.stderr.write(`\r${now.last.slice(0, 110).padEnd(110)}`);
     lastLine = now?.last || lastLine;
     if (now && ['driving', 'selftest', 'error'].includes(now.state)) break;
+    if (now && now.state === 'menu' && args.includes('--menu')) break;
     if (Date.now() - started > timeout) throw new Error(`the page did not start driving within ${timeout / 1000} s (state: ${now?.state}, last: ${now?.last})`);
   }
   if (process.stderr.isTTY) process.stderr.write('\n');
@@ -291,6 +301,32 @@ try {
   } else if (now.state === 'selftest') {
     report.selftest = now.selftest;
   }
+  const pick = option('--pick-folder');
+  if (pick) {
+    // the page's second way to open the folder: the browser's file chooser, answered here
+    await send('Page.setInterceptFileChooserDialog', { enabled: true });
+    const asked = Date.now();
+    await send('Runtime.evaluate', { expression: "document.getElementById('open-folder-list').click()", userGesture: true });
+    for (let i = 0; i < 100 && !fileChooser; i++) await sleep(100);
+    if (!fileChooser) throw new Error('the page opened no file chooser');
+    report.picked = { folder: resolve(pick), chooser_mode: fileChooser.mode };
+    try {
+      await send('DOM.setFileInputFiles', { files: [resolve(pick)], backendNodeId: fileChooser.backendNodeId });
+      report.picked.accepted_after_seconds = (Date.now() - asked) / 1000;
+    } catch (error) {
+      report.picked.refused = String(error.message || error);
+    }
+    for (let i = 0; i < 2 * (timeout / 1000) && !report.picked.refused; i++) {
+      await sleep(500);
+      now = await page();
+      const listed = JSON.parse(await evaluate('JSON.stringify(window.rustyac.listed || null)'));
+      if (listed) Object.assign(report.picked, listed);
+      if ((listed && listed.ready_ms) || now.state === 'error') break;
+    }
+    report.picked.line = await evaluate("document.getElementById('content-line').textContent");
+    report.state = now.state;
+    report.error = now.error;
+  }
   if (args.includes('--wait-checks')) {
     // the folder's cars are checked in the background: wait until every one was built once
     for (let i = 0; i < 1200 && now.content && now.content.cars_checked < now.content.cars; i++) {
@@ -299,6 +335,8 @@ try {
     }
   }
   report.content = now.content;
+  const script = option('--script');
+  if (script) report.script = await evaluate(`(async () => { ${readFileSync(resolve(script), 'utf8')}\n})()`);
   const shot = option('--screenshot');
   if (shot) {
     const { data } = await send('Page.captureScreenshot', { format: shot.toLowerCase().endsWith('.png') ? 'png' : 'jpeg', quality: 82 });

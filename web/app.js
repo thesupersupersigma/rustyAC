@@ -34,6 +34,14 @@
 //                      &name=<driver name> &mpcar=<model> &password=<p>
 //   ?cars=<metres>     how far other players' cars are drawn with their model (default 150)
 //   ?arrivals=1        keep when every car state arrived (`window.rustyac.arrivals()`)
+//   ?nocontrols=1      do not read the Controls panel's settings kept in this browser
+//   ?set=<list>        Controls panel values for this visit, before the drive:
+//                      `X360.SPEED_SENSITIVITY=0,KEYBOARD.STEERING_SPEED=3` (a test's way in;
+//                      they are not kept)
+//   ?hold=<list>       with ?selftest: keys held on the way, as Windows virtual-key codes with
+//                      the steps they go down and up: `38@100-3000,37@1200-1500` holds Up from
+//                      step 100 to 3000 and Left from 1200 to 1500 (use it with autodrive=0;
+//                      the desktop's selftest takes the same list with `--hold`)
 
 import init, * as rac from './pkg/rustyac_web.js';
 
@@ -496,16 +504,34 @@ async function drive() {
           // (a step that is not a plain whole number counts as 0, as in the desktop's self test)
           return { key: name, at: Math.min(steps, /^\d+$/.test(at || '') ? Number(at) : 0) };
         })
+        .concat(
+          (params.get('hold') || '')
+            .split(',')
+            .filter(Boolean)
+            .flatMap((item) => {
+              const [code, span] = item.split('@');
+              const [from, to] = (span || '').split('-');
+              const at = (text) => Math.min(steps, /^\d+$/.test(text || '') ? Number(text) : 0);
+              return [
+                { hold: Number(code), down: true, at: at(from) },
+                { hold: Number(code), down: false, at: at(to) },
+              ];
+            }),
+        )
         .sort((a, b) => a.at - b.at);
       const presses = [];
       const before = performance.now();
       state.testing = true;
       $('hud').hidden = false;
       let done = 0;
-      for (const { key, at } of script) {
+      for (const { key, at, hold, down } of script) {
         // (a key at the step of the one before it comes a step later: that step has been run)
         game.run_steps(Math.max(0, at - done));
         done = Math.max(at, done);
+        if (hold !== undefined) {
+          game.key(hold, down);
+          continue;
+        }
         showHud(JSON.parse(game.hud()));
         const was = aidsShown();
         const prevented = window.rustyac.press(key);
@@ -838,6 +864,221 @@ $('chat').addEventListener('keydown', (event) => {
 });
 $('chat').addEventListener('keyup', (event) => event.stopPropagation());
 
+// ---------------------------------------------------------------- the Controls panel
+
+// The values AC's pad and keyboard classes read from controls.ini (crates/rustyac-web/src/
+// controls.rs has the list). The settings are a controls.ini on the wasm side; the page shows
+// them, sends one change at a time, and keeps the file's text in localStorage. The classes are
+// built again from every change, at once: nothing is reloaded.
+const CONTROLS_KEY = 'rustyac.controls';
+let controlsNow = null; // what `rac.controls_json()` said last
+const controlRows = new Map(); // "SECTION.KEY" -> { box, inputs }
+
+function controlsKept() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(CONTROLS_KEY) || 'null');
+    return kept && typeof kept.text === 'string' ? kept : null;
+  } catch {
+    // no storage here (a private window, a blocked site): the built-in layout
+    return null;
+  }
+}
+
+function keepControls() {
+  try {
+    const text = rac.controls_text();
+    if (text) localStorage.setItem(CONTROLS_KEY, JSON.stringify({ origin: controlsNow.origin, text }));
+    else localStorage.removeItem(CONTROLS_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// New settings from the wasm side: to the running car, to the storage, to the panel.
+function takeControls(json, keep) {
+  controlsNow = JSON.parse(json);
+  window.rustyac.controls = controlsNow;
+  drivingKeys = null;
+  if (state.game) {
+    state.game.controls_changed();
+    window.rustyac.bindings = state.game.bindings();
+  }
+  const kept = keep ? keepControls() : true;
+  showControls(kept);
+}
+
+function controlsError(text) {
+  $('controls-error').hidden = !text;
+  $('controls-error').textContent = text || '';
+}
+
+function changeControl(setting, value) {
+  try {
+    controlsError('');
+    takeControls(rac.controls_set(setting.section, setting.key, String(value)), true);
+  } catch (error) {
+    controlsError(String(error && error.message ? error.message : error));
+  }
+}
+
+function buildControls() {
+  const list = $('controls-list');
+  list.replaceChildren();
+  controlRows.clear();
+  for (const setting of controlsNow.settings) {
+    const box = document.createElement('div');
+    box.className = 'control';
+    const row = document.createElement('label');
+    row.className = 'control-row';
+    const name = document.createElement('span');
+    name.textContent = setting.label;
+    row.append(name);
+    const inputs = [];
+    if (setting.kind === 'number') {
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      const exact = document.createElement('input');
+      exact.type = 'number';
+      for (const input of [slider, exact]) {
+        input.min = setting.min;
+        input.max = setting.max;
+        input.step = setting.step;
+        inputs.push(input);
+      }
+      // the slider works while it is dragged; the keys go back to the car when it is let go
+      slider.addEventListener('input', () => changeControl(setting, slider.value));
+      slider.addEventListener('change', () => slider.blur());
+      exact.addEventListener('change', () => exact.value !== '' && changeControl(setting, exact.value));
+      row.append(slider, exact);
+    } else if (setting.kind === 'choice') {
+      const select = document.createElement('select');
+      select.replaceChildren(...setting.choices.map((choice) => new Option(choice.toLowerCase(), choice)));
+      select.addEventListener('change', () => {
+        changeControl(setting, select.value);
+        select.blur();
+      });
+      inputs.push(select);
+      row.append(select);
+    } else {
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.addEventListener('change', () => {
+        changeControl(setting, check.checked ? '1' : '0');
+        check.blur();
+      });
+      inputs.push(check);
+      row.append(check);
+    }
+    const builtIn = document.createElement('span');
+    builtIn.className = 'default';
+    const shown = (value) => (typeof value === 'boolean' ? (value ? 'on' : 'off') : String(value).toLowerCase());
+    builtIn.textContent = `default ${shown(setting.default)}`;
+    row.append(builtIn);
+    const what = document.createElement('p');
+    what.className = 'hint';
+    what.textContent = `[${setting.section}] ${setting.key}: ${setting.what}`;
+    box.append(row, what);
+    list.append(box);
+    controlRows.set(`${setting.section}.${setting.key}`, { box, inputs });
+  }
+}
+
+function showControls(kept) {
+  if (!controlsNow) return;
+  if (controlRows.size !== controlsNow.settings.length) buildControls();
+  for (const setting of controlsNow.settings) {
+    const { box, inputs } = controlRows.get(`${setting.section}.${setting.key}`);
+    box.classList.toggle('changed', setting.value !== setting.default);
+    for (const input of inputs) {
+      // (the field somebody is typing in keeps its text)
+      if (input.type === 'checkbox') input.checked = !!setting.value;
+      else if (input !== document.activeElement || input.type === 'range') input.value = setting.value;
+    }
+  }
+  const from = controlsNow.custom ? `In use: ${controlsNow.origin}.` : "In use: the built-in layout (AC's default keys plus WASD, the pad numbers below).";
+  $('controls-origin').textContent = from + (kept === false ? ' This browser lets the page keep nothing: the settings last until the page is closed.' : controlsNow.custom ? ' Kept in this browser.' : '');
+  $('controls-line').textContent = controlsNow.custom ? controlsNow.origin : 'the built-in layout';
+  $('controls-layout').replaceChildren(
+    ...[{ what: '', keys: 'keyboard', pad: 'Xbox pad' }, ...controlsNow.layout].map((line) => {
+      const row = document.createElement('tr');
+      for (const text of [line.what, line.keys, line.pad]) {
+        const cell = document.createElement('td');
+        cell.textContent = text;
+        row.append(cell);
+      }
+      return row;
+    }),
+  );
+  $('controls-not-used').textContent = `Also read by AC's keyboard class and not used here (mouse steering is not in rustyAC): ${controlsNow.not_used.join(', ')}.`;
+}
+
+function openControls() {
+  showControls();
+  $('controls').hidden = false;
+}
+
+function closeControls() {
+  $('controls').hidden = true;
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#controls')) document.activeElement.blur();
+}
+
+async function loadControlsFile(file) {
+  try {
+    controlsError('');
+    takeControls(rac.controls_load(new Uint8Array(await file.arrayBuffer()), file.name), true);
+  } catch (error) {
+    controlsError(`${file.name}: ${String(error && error.message ? error.message : error)}`);
+  }
+}
+
+function startControls() {
+  // what an earlier visit kept; a text that no longer reads is dropped
+  const kept = controlsKept();
+  let json = null;
+  if (kept && !params.has('nocontrols')) {
+    try {
+      json = rac.controls_load(new TextEncoder().encode(kept.text), kept.origin || 'kept in this browser');
+    } catch {
+      json = null;
+    }
+  }
+  takeControls(json || rac.controls_json(), false);
+  $('controls-open').addEventListener('click', openControls);
+  $('controls-close').addEventListener('click', closeControls);
+  $('controls-load').addEventListener('click', () => $('controls-file').click());
+  $('controls-file').addEventListener('change', async (event) => {
+    if (event.target.files[0]) await loadControlsFile(event.target.files[0]);
+    event.target.value = '';
+  });
+  $('controls-reset').addEventListener('click', () => {
+    controlsError('');
+    takeControls(rac.controls_reset(), true);
+  });
+  // Esc closes the panel (and does not end the drive); a key typed into one of its fields
+  // is the field's, not the car's
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if ($('controls').hidden) return;
+      const inField = event.target && event.target.closest && event.target.closest('#controls') && /^(INPUT|SELECT)$/.test(event.target.tagName);
+      if (event.code === 'Escape') {
+        closeControls();
+        event.preventDefault();
+        event.stopPropagation();
+      } else if (inField) {
+        event.stopPropagation();
+      }
+    },
+    true,
+  );
+}
+
+// Test hooks: a whole controls.ini as text, one value, the built-in layout again.
+window.rustyac.loadControls = (text, origin) => takeControls(rac.controls_load(new TextEncoder().encode(text), origin || 'a test'), true);
+window.rustyac.setControl = (section, key, value) => takeControls(rac.controls_set(section, key, String(value)), true);
+window.rustyac.resetControls = () => takeControls(rac.controls_reset(), true);
+
 // ---------------------------------------------------------------- driving
 
 function resizeCanvas() {
@@ -861,11 +1102,22 @@ const KEY_LIST =
   'ABS up, down    Y, Shift+Y   Back + D-pad up, down\n' +
   'brake bias fwd, back   ], [   D-pad right, left\n' +
   'pits R   track Shift+R   view F1 / C   new car N\n' +
-  'gearbox G   pause P   menu Esc   this list H';
+  'gearbox G   pause P   menu Esc   controls O   this list H';
 let keysTimer = 0;
 
+function keyList() {
+  if (!controlsNow || !controlsNow.custom) return KEY_LIST;
+  const width = Math.max(...controlsNow.layout.map((line) => line.what.length));
+  return (
+    controlsNow.layout.map((line) => `${line.what.padEnd(width)}   ${line.keys}   |   ${line.pad}`).join('\n') +
+    '\nABS up, down    Y, Shift+Y   Back + traction-control buttons\n' +
+    'pits R   track Shift+R   view F1 / C   new car N\n' +
+    'gearbox G   pause P   menu Esc   controls O   this list H'
+  );
+}
+
 function showKeys(forMs) {
-  $('keys').textContent = KEY_LIST;
+  $('keys').textContent = keyList();
   $('keys').hidden = false;
   clearTimeout(keysTimer);
   if (forMs) keysTimer = setTimeout(() => ($('keys').hidden = true), forMs);
@@ -1008,19 +1260,31 @@ const VK = {
 for (let i = 0; i < 26; i++) VK[`Key${String.fromCharCode(65 + i)}`] = 0x41 + i;
 for (let i = 0; i < 10; i++) VK[`Digit${i}`] = 0x30 + i;
 for (let i = 1; i <= 12; i++) VK[`F${i}`] = 0x6f + i;
+// the rest of what a controls.ini can name
+for (let i = 0; i < 10; i++) VK[`Numpad${i}`] = 0x60 + i;
+Object.assign(VK, {
+  NumpadMultiply: 0x6a, NumpadAdd: 0x6b, NumpadSubtract: 0x6d, NumpadDecimal: 0x6e, NumpadDivide: 0x6f, CapsLock: 0x14,
+  Semicolon: 0xba, Equal: 0xbb, Comma: 0xbc, Minus: 0xbd, Period: 0xbe, Slash: 0xbf, Backquote: 0xc0, Backslash: 0xdc, Quote: 0xde,
+});
 
 // `rustyac_game::input_file::event`: commands that run before the next physics step.
 const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32, AUTO_SHIFTER: 64, TO_TRACK: 256 };
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO'];
+// The page's keys that give way to the layout: a key the player's controls.ini drives with
+// keeps that job (the desktop's rule for its own plain keys).
+const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO'];
 let drivingKeys = null;
 
-function pageUses(event) {
-  if (PAGE_KEYS.includes(event.code)) return true;
+function layoutUses(event) {
   if (!drivingKeys) drivingKeys = new Set(state.game.keys_used());
   return drivingKeys.has(VK[event.code]);
+}
+
+function pageUses(event) {
+  return PAGE_KEYS.includes(event.code) || layoutUses(event);
 }
 
 window.addEventListener('keydown', (event) => {
@@ -1034,7 +1298,11 @@ window.addEventListener('keydown', (event) => {
   const code = VK[event.code];
   event.preventDefault();
   if (event.repeat) return;
-  switch (event.code) {
+  switch (GIVE_WAY.includes(event.code) && layoutUses(event) ? '' : event.code) {
+    case 'KeyO':
+      if ($('controls').hidden) openControls();
+      else closeControls();
+      return;
     case 'Escape':
       stopDriving();
       return;
@@ -1167,6 +1435,13 @@ async function useFolder(handle, remember) {
 async function main() {
   await init();
   $('version').textContent = rac.version();
+  startControls();
+  for (const item of (params.get('set') || '').split(',').filter(Boolean)) {
+    const [name, value] = [item.slice(0, item.indexOf('=')), item.slice(item.indexOf('=') + 1)];
+    controlsNow = JSON.parse(rac.controls_set(name.slice(0, name.indexOf('.')), name.slice(name.indexOf('.') + 1), value));
+    window.rustyac.controls = controlsNow;
+    showControls();
+  }
   $('open-folder').addEventListener('click', pickFolder);
   $('folder-input').addEventListener('change', async (event) => {
     try {

@@ -59,14 +59,19 @@ impl ControlsIni {
 
     pub fn load(path: &Path) -> Result<ControlsIni, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(ControlsIni::from_bytes(&bytes))
+    }
+
+    /// A file's bytes (the browser's page hands a picked `controls.ini` over like this).
+    pub fn from_bytes(bytes: &[u8]) -> ControlsIni {
         // Content Manager writes UTF-8; a UTF-16 file (byte order mark) is read as such
         let text = if bytes.starts_with(&[0xff, 0xfe]) {
             let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
             String::from_utf16_lossy(&units)
         } else {
-            String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes)).to_string()
+            String::from_utf8_lossy(bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes)).to_string()
         };
-        Ok(ControlsIni::parse(&text))
+        ControlsIni::parse(&text)
     }
 
     pub fn parse(text: &str) -> ControlsIni {

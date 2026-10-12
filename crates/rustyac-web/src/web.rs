@@ -9,16 +9,18 @@
 //! [`Game`] and calls [`Game::frame`] from `requestAnimationFrame`.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rustyac_content::vfs::{self, MemFs};
 use rustyac_game::input::bindings::key_name;
+use rustyac_game::input::ini::ControlsIni;
 use rustyac_game::input::pad::PadState;
 use rustyac_game::input::{device_name, DEVICE_PAD};
 use rustyac_game::view::CarView;
 use wasm_bindgen::prelude::*;
 
 use crate::content;
+use crate::controls;
 use crate::gpu::{Gpu, OtherCar};
 use crate::session::Session;
 
@@ -214,6 +216,64 @@ pub fn fs_forget_models() {
     }
 }
 
+/// The Controls panel's settings and where they came from; `None`: the built-in layout.
+fn panel() -> &'static Mutex<Option<(ControlsIni, String)>> {
+    static PANEL: OnceLock<Mutex<Option<(ControlsIni, String)>>> = OnceLock::new();
+    PANEL.get_or_init(|| Mutex::new(None))
+}
+
+const BUILT_IN: &str = "the built-in layout";
+
+fn panel_now() -> (ControlsIni, String) {
+    panel().lock().unwrap().clone().unwrap_or_else(|| (controls::defaults(), BUILT_IN.to_string()))
+}
+
+/// Keeps the settings; ones that are the built-in layout's again are kept as "none".
+fn panel_keep(ini: ControlsIni, origin: &str) -> String {
+    let json = controls::to_json(&ini, origin);
+    *panel().lock().unwrap() = (ini != controls::defaults()).then(|| (ini, origin.to_string()));
+    json
+}
+
+/// The Controls panel as JSON (`crate::controls::to_json`): every value AC's pad and keyboard
+/// classes read, with its range, its value now and the built-in one.
+#[wasm_bindgen]
+pub fn controls_json() -> String {
+    let (ini, origin) = panel_now();
+    controls::to_json(&ini, &origin)
+}
+
+/// The settings as the text of a `controls.ini`, for the page to keep; empty for the
+/// built-in layout (nothing to keep).
+#[wasm_bindgen]
+pub fn controls_text() -> String {
+    panel().lock().unwrap().as_ref().map(|(ini, _)| ini.to_text()).unwrap_or_default()
+}
+
+/// Takes a whole `controls.ini` (the player's own file, or what the page kept), read by the
+/// desktop's parser. Returns the panel's JSON. A running [`Game`] takes the settings with
+/// [`Game::controls_changed`].
+#[wasm_bindgen]
+pub fn controls_load(bytes: &[u8], origin: &str) -> Result<String, JsValue> {
+    let ini = controls::from_file(bytes)?;
+    Ok(panel_keep(ini, origin))
+}
+
+/// Changes one value of the panel. Returns the panel's JSON.
+#[wasm_bindgen]
+pub fn controls_set(section: &str, key: &str, value: &str) -> Result<String, JsValue> {
+    let (mut ini, origin) = panel_now();
+    controls::set(&mut ini, section, key, value)?;
+    let origin = if origin.ends_with(", changed here") { origin } else { format!("{origin}, changed here") };
+    Ok(panel_keep(ini, &origin))
+}
+
+/// Back to the built-in layout. Returns the panel's JSON.
+#[wasm_bindgen]
+pub fn controls_reset() -> String {
+    panel_keep(controls::defaults(), BUILT_IN)
+}
+
 /// One drive: the simulation and its picture.
 #[wasm_bindgen]
 pub struct Game {
@@ -271,7 +331,11 @@ impl Game {
         Ok(Game::finish(gpu, session, texture_size, Some(link)))
     }
 
-    fn finish(mut gpu: Gpu, session: Session, texture_size: u32, link: Option<std::rc::Rc<crate::net::Link>>) -> Game {
+    fn finish(mut gpu: Gpu, mut session: Session, texture_size: u32, link: Option<std::rc::Rc<crate::net::Link>>) -> Game {
+        // the Controls panel's settings, when they are not the built-in layout's
+        if let Some((ini, origin)) = panel().lock().unwrap().as_ref() {
+            session.set_controls(ini, origin);
+        }
         let mut notes = vec![format!("picture: {}{}", gpu.backend, if gpu.compressed_textures { "" } else { ", no compressed textures (they are unpacked, at half the size)" })];
         // (without the loader's timing line: a browser's wasm has no clock of its own)
         notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
@@ -628,8 +692,15 @@ impl Game {
         out
     }
 
-    /// The keys the built-in layout uses, as Windows virtual-key codes: with the page's own
-    /// keys they are the only ones the page keeps from the browser.
+    /// The Controls panel changed: AC's keyboard and pad classes are built again from its
+    /// settings before the next physics step. Nothing else about the drive changes.
+    pub fn controls_changed(&mut self) {
+        let (ini, origin) = panel_now();
+        self.session.set_controls(&ini, &origin);
+    }
+
+    /// The keys the layout uses, as Windows virtual-key codes: with the page's own keys they
+    /// are the only ones the page keeps from the browser.
     pub fn keys_used(&self) -> Vec<i32> {
         self.session.keys_used.clone()
     }

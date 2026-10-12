@@ -7,6 +7,7 @@
 //! * [`content`]: which cars and tracks are there, which load, which files a drive needs.
 //! * [`session`]: one drive: the simulation behind a fixed-step accumulator, its camera.
 //! * [`driver`]: the page's keys and pad behind AC's own keyboard and pad classes.
+//! * [`controls`]: the page's Controls panel: the values those classes read from `controls.ini`.
 //! * [`model`], [`bc`]: kn5 models and their textures, ready for a graphics card.
 //! * [`pack`]: the preview pack's manifest (`tools/web_pack` writes it, the page reads it).
 //! * `gpu`, `web` (wasm only): the wgpu picture and what the page calls.
@@ -17,6 +18,7 @@
 
 pub mod bc;
 pub mod content;
+pub mod controls;
 pub mod driver;
 pub mod model;
 pub mod pack;
