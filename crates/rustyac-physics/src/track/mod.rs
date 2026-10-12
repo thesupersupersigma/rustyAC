@@ -23,7 +23,7 @@ pub mod surfaces;
 pub mod timing;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rustyac_ode::collision::{RayContact, StaticWorld};
@@ -183,6 +183,18 @@ impl Track {
     /// says why).
     pub fn ai(&self) -> Option<&ai_line::AiSplineRecorder> {
         self.ai_recorder.get_or_init(|| ai_line::AiSplineRecorder::load(self, &self.ai_folder, &self.data_folder.join("data"))).as_ref().ok()
+    }
+
+    /// Another `ai` folder for this track (its `fast_lane.ai` and `pit_lane.ai`): everything
+    /// that was made from the lines is made again. Returns what the loader said.
+    pub fn replace_ai_line(&mut self, ai_folder: &Path) -> Result<Vec<String>, String> {
+        self.ai_spline = None;
+        self.pit_lane_spline = None;
+        self.ai_recorder = std::sync::OnceLock::new();
+        let mut messages = Vec::new();
+        let data = self.data_folder.join("data");
+        spline::init_ai_spline(self, ai_folder, &data, &mut messages)?;
+        Ok(messages)
     }
 
     /// [`Track::ai`] now, with the reason when it fails.

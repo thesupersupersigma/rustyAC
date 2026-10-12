@@ -444,7 +444,13 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
         let name = text.rsplit(['/', '\\']).find(|part| !part.is_empty()).ok_or("track_folder has no name")?;
         paths.game_root.as_ref().ok_or("the recording's track folder is not here and no game folder was given")?.join("content").join("tracks").join(name)
     };
-    let (track, _report) = crate::track::load_track(&folder, layout)?;
+    let (mut track, _report) = crate::track::load_track(&folder, layout)?;
+    if let Some(ai_folder) = recording.get("ai_folder") {
+        // Task 27: the run had another fast lane (a line of an old version)
+        for message in track.replace_ai_line(Path::new(ai_folder))? {
+            eprintln!("{message}");
+        }
+    }
     if recording.cars.iter().any(|car| car.ai.is_some() || car.handover) {
         // the lines as the AI drivers need them
         track.init_ai()?;

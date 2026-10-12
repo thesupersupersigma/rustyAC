@@ -131,6 +131,9 @@ struct Args {
     cars: Vec<String>,
     threads: Vec<usize>,
     game_threads: i32,
+    /// Task 27, `multi --ai-line <file.ai>`: this file as the track's `ai/fast_lane.ai` (a line
+    /// of an old version: the game rebuilds it in the oracle's scratch folder, the port in memory)
+    ai_line: Option<PathBuf>,
     fault: Option<(usize, usize)>,
 }
 
@@ -177,6 +180,7 @@ fn parse_args() -> Result<Args, String> {
         cars: Vec::new(),
         threads: Vec::new(),
         game_threads: 0,
+        ai_line: None,
         fault: None,
     };
     while let Some(flag) = it.next() {
@@ -238,6 +242,9 @@ fn parse_args() -> Result<Args, String> {
             "--threads" => {
                 let text = value()?;
                 a.threads = text.split(',').map(|part| part.parse::<usize>().map_err(|_| format!("--threads {text}: not numbers"))).collect::<Result<_, _>>()?;
+            }
+            "--ai-line" => {
+                a.ai_line = Some(PathBuf::from(value()?));
             }
             "--game-threads" => {
                 let text = value()?;
@@ -431,6 +438,25 @@ fn multi(args: &Args) -> Result<(), String> {
         game::prepare_root(&repo, &args.root, name)?;
     }
     track::prepare_root(&args.root, &folder, &args.layout)?;
+    // Task 27: another fast lane for this run. The game reads (and, for an old version,
+    // rewrites) `ai/fast_lane.ai` of the scratch root; the port reads the untouched copy
+    let mut ai_folder = None;
+    if let Some(line) = &args.ai_line {
+        let name = folder.file_name().ok_or("the track folder has no name")?;
+        let mut base = args.root.join("content/tracks").join(name);
+        if !args.layout.is_empty() {
+            base = base.join(&args.layout);
+        }
+        let port = base.join("ai_port");
+        let _ = std::fs::remove_dir_all(&port);
+        std::fs::create_dir_all(&port).map_err(|e| e.to_string())?;
+        std::fs::copy(line, base.join("ai/fast_lane.ai")).map_err(|e| format!("{}: {e}", line.display()))?;
+        std::fs::copy(line, port.join("fast_lane.ai")).map_err(|e| e.to_string())?;
+        if base.join("ai/pit_lane.ai").is_file() {
+            std::fs::copy(base.join("ai/pit_lane.ai"), port.join("pit_lane.ai")).map_err(|e| e.to_string())?;
+        }
+        ai_folder = Some(std::path::absolute(&port).map_err(|e| e.to_string())?);
+    }
     if args.game_threads != 0 {
         // the game's own thread pool (the default file of the scratch root has THREADS=0)
         let ini = args.root.join("system/cfg/assetto_corsa.ini");
@@ -491,6 +517,9 @@ fn multi(args: &Args) -> Result<(), String> {
     }
     let seconds = start.elapsed().as_secs_f64();
     world.recording.set("steps", steps.to_string());
+    if let Some(ai_folder) = &ai_folder {
+        world.recording.set("ai_folder", ai_folder.display().to_string());
+    }
     world.recording.set("game_threads", args.game_threads.to_string());
     let suffix = if args.game_threads != 0 { format!("_gt{}", args.game_threads) } else { String::new() };
     let path = out.join(format!("{}{suffix}.mcrec", scenario.name));
