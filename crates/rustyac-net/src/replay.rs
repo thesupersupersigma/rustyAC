@@ -23,7 +23,7 @@ use crate::client::Client;
 use crate::handshake::{CarEntry, JoinRequest};
 use crate::net_car::{NetCarGeometry, NetCarStateProvider};
 use crate::session::NetSession;
-use crate::transport::{Lane, Tape, TapePlayer};
+use crate::transport::{Lane, Tape, TapePlayer, Transport};
 
 /// The words of a remote car that are compared, in order, as (name, words).
 pub const REMOTE_FIELDS: [(&str, usize); 25] = [
@@ -88,23 +88,40 @@ pub fn comparable(lane: Lane, data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
-/// The session of a tape on the local car of a recording.
-pub struct NetReplay {
+/// What is asked of a tape's server (whatever is asked: the tape answers what it answered
+/// then).
+pub fn replay_request() -> JoinRequest {
+    JoinRequest { guid: "0".to_string(), name: "replay".to_string(), ..JoinRequest::default() }
+}
+
+/// The session of a tape on the local car of a recording. `T`: how the tape's messages
+/// reach the client (a [`TapePlayer`]; for Task 26's proofs also a WebSocket transport over
+/// a pipe that plays the tape, or over a real gateway).
+pub struct NetReplay<T: Transport = TapePlayer> {
     pub world: ReplayWorld,
-    pub session: NetSession<TapePlayer>,
+    pub session: NetSession<T>,
     /// The server's car list as the tape has it.
     pub cars: Vec<CarEntry>,
     sent_seen: usize,
 }
 
-impl NetReplay {
+impl NetReplay<TapePlayer> {
     /// The recording's car in its engine; the tape's handshake and car list; a remote car
     /// for every other slot of the list, as `Sim::addNetCar` makes them.
     pub fn build(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, tape: &Tape) -> Result<NetReplay, String> {
+        let (client, cars) = Client::join(TapePlayer::new(tape), &replay_request()).map_err(|e| e.to_string())?;
+        NetReplay::build_on(recording, paths, track, client, cars)
+    }
+}
+
+impl<T: Transport> NetReplay<T> {
+    /// The same on a client that has joined: its transport must keep what is sent
+    /// ([`Transport::tape`]).
+    pub fn build_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, client: Client<T>, cars: Vec<CarEntry>) -> Result<NetReplay<T>, String> {
+        if client.transport.tape().is_none() {
+            return Err("the replay's transport keeps no record of what is sent".to_string());
+        }
         let mut world = ReplayWorld::build(recording, paths, Arc::clone(&track), 0)?;
-        // (whatever is asked: the tape answers what it answered then)
-        let request = JoinRequest { guid: "0".to_string(), name: "replay".to_string(), ..JoinRequest::default() };
-        let (client, cars) = Client::join(TapePlayer::new(tape), &request).map_err(|e| e.to_string())?;
         let me = client.session_id;
         let mut session = NetSession::new(client);
         session.track = Some(Arc::clone(&track));
@@ -126,7 +143,10 @@ impl NetReplay {
     /// What the client sent before the first step (the handshake, the car list requests,
     /// the push-to-pass question).
     pub fn take_sent(&mut self) -> Vec<(Lane, Vec<u8>)> {
-        let sent = &self.session.client.transport.sent.entries;
+        let Some(tape) = self.session.client.transport.tape() else {
+            return Vec::new();
+        };
+        let sent = &tape.entries;
         let new: Vec<(Lane, Vec<u8>)> = sent[self.sent_seen..].iter().map(|entry| (entry.lane, entry.data.clone())).collect();
         self.sent_seen = sent.len();
         new
@@ -263,21 +283,64 @@ impl NetGolden {
     /// Replays the excerpt; `Ok(None)`: every step's hash is the game's, `Ok(Some(step))`:
     /// the first step that differs.
     pub fn replay(&self, paths: &ReplayPaths) -> Result<Option<usize>, String> {
+        Ok(self.replay_on(paths, |tape| Client::join(TapePlayer::new(tape), &replay_request()).map_err(|e| e.to_string()))?.first_difference)
+    }
+
+    /// Replays the excerpt on a client that `join` makes from the tape (any transport),
+    /// through to the end, and says what came of it.
+    pub fn replay_on<T: Transport>(&self, paths: &ReplayPaths, join: impl FnOnce(&Tape) -> Result<(Client<T>, Vec<CarEntry>), String>) -> Result<ReplayReport, String> {
         let golden = rustyac_physics::engine::record::Golden::from_bytes(&self.local)?;
         let recording = golden.recording()?;
         let track = rustyac_physics::engine::record::load_track(&recording, paths)?;
-        let mut replay = NetReplay::build(&recording, paths, track, &self.tape)?;
+        let (client, cars) = join(&self.tape)?;
+        let mut replay = NetReplay::build_on(&recording, paths, track, client, cars)?;
         // (the join's own messages are not part of a step)
-        replay.take_sent();
+        let join_messages = replay.take_sent();
+        let mut report = ReplayReport { remote_cars: replay.session.cars.len(), join_messages: join_messages.len(), digest: 0xcbf2_9ce4_8422_2325, sent_digest: 0xcbf2_9ce4_8422_2325, ..ReplayReport::default() };
         let width = rustyac_physics::engine::record::INPUT_COLUMNS.len();
         for (step, (inputs, expected)) in golden.inputs.iter().zip(&self.hashes).enumerate() {
             let inputs: Vec<&[u32]> = inputs.chunks(width).collect();
             let sent = replay.step(&inputs);
-            let hash = step_hash(&replay.world.row(&inputs), &replay.remote_row(), &sent);
-            if hash != *expected {
-                return Ok(Some(step));
+            let (local, remote) = (replay.world.row(&inputs), replay.remote_row());
+            report.values += (local.len() + remote.len()) as u64;
+            let hash = step_hash(&local, &remote, &sent);
+            if hash != *expected && report.first_difference.is_none() {
+                report.first_difference = Some(step);
+            }
+            report.steps += 1;
+            fnv(&mut report.digest, &hash.to_le_bytes());
+            for (lane, data) in &sent {
+                report.sent += 1;
+                if let Some(data) = comparable(*lane, data) {
+                    report.sent_compared += 1;
+                    fnv(&mut report.sent_digest, &[*lane as u8]);
+                    fnv(&mut report.sent_digest, &(data.len() as u32).to_le_bytes());
+                    fnv(&mut report.sent_digest, &data);
+                }
             }
         }
-        Ok(None)
+        report.transport_tape = replay.session.client.transport.tape().cloned();
+        Ok(report)
     }
+}
+
+/// What a whole replay of a golden excerpt gave ([`NetGolden::replay_on`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ReplayReport {
+    pub steps: usize,
+    /// The first step whose hash is not the game's; `None`: every step is the game's.
+    pub first_difference: Option<usize>,
+    pub remote_cars: usize,
+    /// Words compared in all (the local car's row and every remote car's, per step).
+    pub values: u64,
+    /// Messages the join sent before the first step.
+    pub join_messages: usize,
+    /// Messages sent in the steps, and how many of them are of a kind that is compared.
+    pub sent: usize,
+    pub sent_compared: usize,
+    /// One number over every step's hash, and one over every compared outgoing message.
+    pub digest: u64,
+    pub sent_digest: u64,
+    /// Everything the client sent, as its transport kept it.
+    pub transport_tape: Option<Tape>,
 }

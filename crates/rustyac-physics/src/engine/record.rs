@@ -377,8 +377,11 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
     let folder = if folder.is_dir() {
         folder
     } else {
-        // recorded on another machine: the same track of this machine's game
-        let name = folder.file_name().ok_or("track_folder has no name")?;
+        // recorded on another machine: the same track of this machine's game (the folder's
+        // name is what follows the last slash of either kind: a Windows path read on a
+        // system that only knows forward slashes is one long name otherwise)
+        let text = folder.to_string_lossy().into_owned();
+        let name = text.rsplit(['/', '\\']).find(|part| !part.is_empty()).ok_or("track_folder has no name")?;
         paths.game_root.as_ref().ok_or("the recording's track folder is not here and no game folder was given")?.join("content").join("tracks").join(name)
     };
     let (track, _report) = crate::track::load_track(&folder, layout)?;

@@ -19,7 +19,7 @@
 
 use std::collections::VecDeque;
 
-use crate::transport::{Transport, MAX_TCP_MESSAGE};
+use crate::transport::{Lane, Tape, TapeEntry, Transport, MAX_TCP_MESSAGE};
 
 /// The lane byte of the reliable channel.
 pub const LANE_RELIABLE: u8 = 0;
@@ -41,6 +41,14 @@ pub trait Pipe {
         let _ = timeout_ms;
         self.poll()
     }
+    /// The caller's clock (the number of the physics step), for a pipe that plays a tape.
+    fn set_tick(&mut self, tick: u64) {
+        let _ = tick;
+    }
+    /// What was sent so far, when the pipe keeps it.
+    fn tape(&self) -> Option<&Tape> {
+        None
+    }
 }
 
 impl<P: Pipe + ?Sized> Pipe for Box<P> {
@@ -52,6 +60,12 @@ impl<P: Pipe + ?Sized> Pipe for Box<P> {
     }
     fn wait(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
         (**self).wait(timeout_ms)
+    }
+    fn set_tick(&mut self, tick: u64) {
+        (**self).set_tick(tick)
+    }
+    fn tape(&self) -> Option<&Tape> {
+        (**self).tape()
     }
 }
 
@@ -158,6 +172,59 @@ impl<P: Pipe> Transport for WsTransport<P> {
                 }
             }
         }
+    }
+
+    fn set_tick(&mut self, tick: u64) {
+        self.pipe.set_tick(tick);
+    }
+
+    fn tape(&self) -> Option<&Tape> {
+        self.pipe.tape()
+    }
+}
+
+/// A pipe that plays a tape, for the proofs: the tape's incoming messages of both channels
+/// come out as a gateway would send them (one lane byte in front), each once the clock has
+/// reached the step it was recorded in, in the tape's order; what is sent is taken apart
+/// again and kept as a tape. A session on a [`WsTransport`] over this pipe must behave
+/// exactly as one on a [`crate::transport::TapePlayer`] of the same tape.
+#[derive(Clone, Debug, Default)]
+pub struct TapePipe {
+    arriving: VecDeque<TapeEntry>,
+    pub sent: Tape,
+    pub tick: u64,
+}
+
+impl TapePipe {
+    pub fn new(tape: &Tape) -> TapePipe {
+        TapePipe { arriving: tape.entries.iter().filter(|entry| !entry.lane.is_out()).cloned().collect(), sent: Tape::default(), tick: 0 }
+    }
+}
+
+impl Pipe for TapePipe {
+    fn send(&mut self, message: &[u8]) -> Result<(), String> {
+        let lane = match message.first() {
+            Some(&LANE_RELIABLE) => Lane::ReliableOut,
+            Some(&LANE_DATAGRAM) => Lane::DatagramOut,
+            _ => return Err("a message without a lane byte".to_string()),
+        };
+        self.sent.entries.push(TapeEntry { tick: self.tick, lane, data: message[1..].to_vec() });
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Result<Option<Vec<u8>>, String> {
+        if !self.arriving.front().is_some_and(|entry| entry.tick <= self.tick) {
+            return Ok(None);
+        }
+        Ok(self.arriving.pop_front().map(|entry| with_lane(if entry.lane == Lane::ReliableIn { LANE_RELIABLE } else { LANE_DATAGRAM }, &entry.data)))
+    }
+
+    fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+
+    fn tape(&self) -> Option<&Tape> {
+        Some(&self.sent)
     }
 }
 

@@ -120,3 +120,48 @@ fn join_polled_is_join_waited() {
     assert_eq!(polled.transport.inner.sent, waited.transport.sent, "the two joins sent different messages");
     assert!(waited.transport.sent.entries.len() >= 2, "a join request and at least one car list request");
 }
+
+/// Task 26: the same excerpt the way the browser plays it: the client on the WebSocket
+/// transport (one lane byte per message) over a pipe that plays the tape, the join polled.
+/// Every step must still be the game's, and the numbers must be the ones of the desktop's
+/// way (a tape player, a waited join). The wasm build of `examples/net_golden.rs` gives the
+/// same line under wasmtime (docs/port/multiplayer_web.md). NOT TESTED without the AC folder.
+#[test]
+fn golden_laguna_join_the_browsers_way() {
+    use rustyac_net::client::{Client, Join, JoinStage};
+    use rustyac_net::replay::replay_request;
+    use rustyac_net::transport::TapePlayer;
+    use rustyac_net::ws::{TapePipe, WsTransport};
+
+    let golden = NetGolden::from_bytes(include_bytes!("golden/laguna_join_3000.netgold")).expect("the golden file");
+    if ["ks_ferrari_f2004", "bmw_z4_gt3"].iter().any(|car| !cardata().join(car).join("suspensions.ini").is_file()) {
+        eprintln!("NOT TESTED: cardata/ is missing (the cars' extracted data files)");
+        return;
+    }
+    let Some(root) = game_root() else {
+        eprintln!("NOT TESTED: Assetto Corsa's folder is missing (set AC_ROOT): the online golden replay needs the track ks_laguna_seca and the cars' collider.kn5");
+        return;
+    };
+    let paths = ReplayPaths { cardata: cardata(), game_root: Some(root) };
+    let desktop = match golden.replay_on(&paths, |tape| Client::join(TapePlayer::new(tape), &replay_request()).map_err(|e| e.to_string())) {
+        Ok(report) => report,
+        Err(message) if message.contains("track") => {
+            eprintln!("NOT TESTED: the track could not be loaded ({message})");
+            return;
+        }
+        Err(message) => panic!("the replay: {message}"),
+    };
+    let browser = golden
+        .replay_on(&paths, |tape| {
+            let mut join = Join::start(WsTransport::new(TapePipe::new(tape)), &replay_request()).map_err(|e| e.to_string())?;
+            while join.poll().map_err(|e| e.to_string())? != JoinStage::Done {}
+            join.finish().ok_or("the join did not end".to_string())
+        })
+        .expect("the replay on the WebSocket transport");
+    assert_eq!(browser.first_difference, None, "on the WebSocket transport the port leaves the game's values at this step");
+    assert_eq!(desktop.first_difference, None);
+    assert!(browser.steps >= 3000 && browser.sent_compared > 100, "{browser:?}");
+    assert_eq!((browser.steps, browser.digest, browser.sent, browser.sent_digest, browser.join_messages), (desktop.steps, desktop.digest, desktop.sent, desktop.sent_digest, desktop.join_messages));
+    // what the two transports kept of the outgoing side is the same tape
+    assert_eq!(browser.transport_tape.as_ref().map(|tape| &tape.entries), desktop.transport_tape.as_ref().map(|tape| &tape.entries));
+}
