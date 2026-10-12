@@ -469,7 +469,7 @@ fn referee_out(options: &Options) -> Option<PathBuf> {
 
 /// Task 28: the referee's buttons pressed at given seconds of the run.
 fn session_script(options: &Options) -> Vec<(f64, u32)> {
-    options.next_session_at.iter().map(|at| (*at, event::NEXT_SESSION)).chain(options.restart_session_at.iter().map(|at| (*at, event::RESTART_SESSION))).chain(options.pit_keys.iter().copied()).collect()
+    options.next_session_at.iter().map(|at| (*at, event::NEXT_SESSION)).chain(options.restart_session_at.iter().map(|at| (*at, event::RESTART_SESSION))).chain(options.pit_keys.iter().copied()).chain(options.ai_pit_at.iter().map(|at| (*at, event::AI_PIT))).collect()
 }
 
 fn drive(options: &Options) -> Result<(SimSetup, Option<Vec<StepInput>>), String> {

@@ -69,8 +69,10 @@ pub mod event {
     pub const PIT_UP: u32 = 1 << 21;
     pub const PIT_RIGHT: u32 = 1 << 22;
     pub const PIT_DOWN: u32 = 1 << 23;
+    /// Task 28b: the car's AI driver is called in for a pit stop (`AIDriver::requestPitStop`).
+    pub const AI_PIT: u32 = 1 << 24;
 
-    pub const NAMES: [(u32, &str); 24] = [
+    pub const NAMES: [(u32, &str); 25] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -95,6 +97,7 @@ pub mod event {
         (PIT_UP, "pit menu up"),
         (PIT_RIGHT, "pit menu right"),
         (PIT_DOWN, "pit menu down"),
+        (AI_PIT, "ai pit"),
     ];
 }
 

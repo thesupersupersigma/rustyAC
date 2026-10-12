@@ -1643,6 +1643,12 @@ impl GameSim {
         if events & event::AI_ON != 0 {
             self.hand_over()?;
         }
+        // Task 28b: the AI driver of the player's car is called in
+        if events & event::AI_PIT != 0 {
+            if let Some(driver) = &mut self.car.device.ai {
+                driver.request_pit_stop = true;
+            }
+        }
         // a new session's jobs in the order the game queues them: the track's handler (the
         // loose objects go home) was registered before the car's
         if events & (event::OBJECTS_HOME | event::RESET) != 0 {
@@ -1864,6 +1870,32 @@ impl GameSim {
         }
         if self.online.is_some() {
             self.apply_server_events();
+        }
+        // Task 28b: the player's pit stop on a server (the menu's keys, then its frame)
+        if let Some(session) = &mut self.online {
+            if session.pit.is_none() && !session.pit_failed {
+                let window = (session.net.client.accepted.pit_window_start, session.net.client.accepted.pit_window_end);
+                match crate::online::OnlinePit::new(&self.car.car, &crate::online::PIT_SETTINGS, window) {
+                    Ok(pit) => {
+                        if window.1 != 0 {
+                            session.console.push(format!("online: the server has a mandatory pit window: opens at {}, closes at {} (the leader's laps; minutes in a timed race)", window.0, window.1));
+                        }
+                        session.pit = Some(pit);
+                    }
+                    Err(message) => {
+                        session.console.push(format!("online: no pit stop: {message}"));
+                        session.pit_failed = true;
+                    }
+                }
+            }
+            if let Some(pit) = &mut session.pit {
+                for (bit, key) in [(event::PIT_LEFT, 0x25), (event::PIT_UP, 0x26), (event::PIT_RIGHT, 0x27), (event::PIT_DOWN, 0x28)] {
+                    if events & bit != 0 {
+                        pit.menu.send_input(key, &rustyac_physics::race::QuickMenuCar::of(&self.car.car));
+                    }
+                }
+            }
+            session.pit_frame(&mut self.car.car, time);
         }
         // Task 28: the referee's frame (the game's main thread), every third step
         if let Some(mut referee) = self.referee.take() {

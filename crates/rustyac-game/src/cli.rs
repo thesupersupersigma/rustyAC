@@ -267,6 +267,9 @@ pub struct Options {
     /// `--pit-key <key>@<s>` (repeatable; left, up, right, down): the pit menu's keys, pressed
     /// at a time of the run (unattended checks)
     pub pit_keys: Vec<(f64, u32)>,
+    /// `--ai-pit-at <s>` (repeatable): the AI driver of your car (`--ai-drive`) is called in
+    /// for a pit stop at a time of the run
+    pub ai_pit_at: Vec<f64>,
     /// `--next-session-at <s>`, `--restart-session-at <s>` (repeatable): the referee's two
     /// buttons, pressed at a time of the run (unattended checks)
     pub next_session_at: Vec<f64>,
@@ -406,6 +409,7 @@ impl Default for Options {
             no_pit_stop: false,
             pit_window: None,
             pit_keys: Vec::new(),
+            ai_pit_at: Vec::new(),
             penalties: None,
             jump_start: None,
             next_session_at: Vec::new(),
@@ -874,6 +878,7 @@ impl Options {
                 "--sessions" => o.sessions = Some(value("--sessions")?),
                 "--no-referee" => o.no_referee = true,
                 "--no-pit-stop" => o.no_pit_stop = true,
+                "--ai-pit-at" => o.ai_pit_at.push(value("--ai-pit-at")?.parse().map_err(|e| format!("--ai-pit-at: {e}"))?),
                 "--pit-window" => {
                     let text = value("--pit-window")?;
                     let window = text.split_once(',').and_then(|(open, close)| Some((open.trim().parse().ok()?, close.trim().parse().ok()?)));

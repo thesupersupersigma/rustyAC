@@ -235,6 +235,48 @@ pub struct OnlineSession {
     pub results: Option<Vec<rustyac_net::messages::LeaderboardRow>>,
     /// the clock of the last step, ms
     pub now: f64,
+    /// Task 28b: the player's pit stop (made once the car is there; `pit_failed`: the car's
+    /// menu could not be made)
+    pub pit: Option<OnlinePit>,
+    pub pit_failed: bool,
+}
+
+/// `system/cfg/pitstop.ini` as the game ships it (a server session reads no file here).
+pub const PIT_SETTINGS: rustyac_physics::race::QuickMenuSettings = rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 };
+
+/// Task 28b: the player's pit stop on a server. `PitStop`, the pit menu and the applying job
+/// are the client's own there too (no message asks the server for a stop); what a server
+/// adds is the mandatory pit window (two numbers of its join reply) and message 0x0e: the
+/// client tells that its stop was counted (`RaceManager::checkMandatoryPit`), the server
+/// tells every client which cars have done theirs.
+pub struct OnlinePit {
+    pub pit: rustyac_physics::race::PitStop,
+    pub menu: rustyac_physics::race::QuickMenu,
+    pub avatar: rustyac_physics::race::PitAvatar,
+    /// `ACClient::pitWindowStart` / `pitWindowEnd`
+    pub window: (u16, u16),
+    /// the manager's two window times, and the session they are measured in
+    manager: rustyac_physics::race::RaceManager,
+    rand: rustyac_physics::session::MsvcRand,
+    step_in_frame: u32,
+    /// a new session began since the last frame
+    new_session: bool,
+}
+
+impl OnlinePit {
+    pub fn new(car: &RollingChassis, settings: &rustyac_physics::race::QuickMenuSettings, window: (u16, u16)) -> Result<OnlinePit, String> {
+        let menu = rustyac_physics::race::QuickMenu::for_car(car, settings)?;
+        let m = &car.pit_position.m;
+        let mut pit = rustyac_physics::race::PitStop::new([m[3][0], m[3][1], m[3][2]]);
+        pit.state = rustyac_physics::race::pitstop::STATE_UNDEFINED;
+        let sessions = rustyac_physics::race::SessionsIni::from_list("p1", 1, false, None, 3)?;
+        Ok(OnlinePit { pit, menu, avatar: Default::default(), window, manager: rustyac_physics::race::RaceManager::new(&sessions, 1, 0, 1.5), rand: rustyac_physics::session::MsvcRand(28), step_in_frame: 0, new_session: false })
+    }
+
+    /// The pit lines of the HUD (the menu, the countdown, the window).
+    pub fn lines(&self) -> Vec<String> {
+        crate::referee::pit_lines_of(&self.pit, &self.menu, self.window, &self.avatar, &self.manager)
+    }
 }
 
 /// `RaceManager::convertRemoteSession` for a session as the server's messages carry it
@@ -276,7 +318,7 @@ impl OnlineSession {
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
         let session = mirror_session(&client.current_session, client.session_start_time);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0 }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -359,6 +401,9 @@ impl OnlineSession {
                     self.session = mirror_session(info, info.start as f64);
                     self.standings.clear();
                     self.results = None;
+                    if let Some(pit) = &mut self.pit {
+                        pit.new_session = true;
+                    }
                     self.say(format!("New Session : {}", info.name));
                     for entry in &mut self.roster {
                         entry.laps = 0;
@@ -415,6 +460,19 @@ impl OnlineSession {
                                 entry.connected = true;
                             }
                         }
+                    }
+                }
+                Event::Message(Message::MandatoryPit { slot, done }) => {
+                    // ACP_CE_MANDATORY_PIT: a car has done its mandatory stop (the server
+                    // says so of the player's own car too)
+                    if *done {
+                        let who = self.driver_of(*slot);
+                        if *slot == self.net.client.session_id {
+                            if let Some(pit) = &mut self.pit {
+                                pit.avatar.mandatory_pitstop_done = true;
+                            }
+                        }
+                        self.say(format!("{who} has done the mandatory pit stop"));
                     }
                 }
                 Event::Message(Message::Damage { slot, levels }) => {
@@ -510,6 +568,9 @@ impl OnlineSession {
         let session = &self.net.client.current_session;
         lines.push(format!("ONLINE  {}  ({})  ping {} ms", self.net.client.accepted.server_name, session.name, self.net.client.ping));
         lines.extend(self.referee_lines());
+        if let Some(pit) = &self.pit {
+            lines.extend(pit.lines());
+        }
         for entry in self.roster.iter().filter(|entry| entry.connected) {
             let best = if entry.best_lap_ms > 0 { crate::online::lap_text(entry.best_lap_ms) } else { "-:--.---".to_string() };
             let name = if entry.driver.is_empty() { "?" } else { &entry.driver };
@@ -517,6 +578,88 @@ impl OnlineSession {
         }
         lines.extend(self.chat.iter().cloned());
         lines
+    }
+
+    /// Task 28b: a frame of the player's pit stop (every third physics step, as offline):
+    /// `CarAvatar::updateInPitlaneState`, the pit window's part of `RaceManager::update`
+    /// @ 0x140141550 and `PitStop::update`. A stop that counts is told to the server.
+    pub fn pit_frame(&mut self, car: &mut RollingChassis, now: f64) {
+        use rustyac_physics::race::pitstop::{self, PitAction, PitCarView, PitFrame};
+        let Some(pit) = &mut self.pit else { return };
+        pit.step_in_frame += 1;
+        if pit.step_in_frame < rustyac_physics::race::referee::FRAME_STEPS {
+            return;
+        }
+        pit.step_in_frame = 0;
+        let dt = rustyac_physics::race::referee::FRAME_DT;
+        let race = self.session.session_type == session_type::RACE as i32;
+        // the manager's session is the server's; the leader's laps come with the standings
+        pit.manager.current_session = self.session.clone();
+        pit.manager.current_session.leader_completed_laps = self.standings.iter().map(|row| row.laps as u32).max().unwrap_or(0);
+        let mut actions = Vec::new();
+        if std::mem::take(&mut pit.new_session) {
+            // RaceManager::setCurrentSession (resetMandatoryPit), ACClient::onNewSession and
+            // PitStop's own handler
+            pit.manager.pit_window_start_time = 0.0;
+            pit.manager.pit_window_end_time = 0.0;
+            pit.avatar.last_pitstop_time = 0.0;
+            pit.avatar.mandatory_pitstop_done = false;
+            pit.avatar.pit_lane_entry_time = 0.0;
+            pit.avatar.pit_lane_exit_time = 0.0;
+            pit.pit.on_new_session(&mut actions);
+        }
+        // CarAvatar::updateInPitlaneState
+        let in_pitlane = car.is_in_pit_lane();
+        let mut counted = false;
+        let a = &mut pit.avatar;
+        a.in_pitlane = in_pitlane;
+        if in_pitlane {
+            if !a.was_in_pitlane {
+                a.was_in_pitlane = true;
+                a.pit_lane_entry_time = now as f32;
+            }
+        } else if a.was_in_pitlane {
+            a.was_in_pitlane = false;
+            a.pit_lane_exit_time = now as f32;
+            if pit.manager.check_mandatory_pit(a.mandatory_pitstop_done, a.last_pitstop_time, a.pit_lane_entry_time, a.pit_lane_exit_time) {
+                a.mandatory_pitstop_done = true;
+                counted = true;
+            }
+        }
+        // the window, and the black flag for a car that missed it
+        if pit.window.1 != 0 && pit.manager.update_pit_window(pit.window.0, pit.window.1, now, pit.avatar.mandatory_pitstop_done, pit.avatar.in_pitlane) {
+            car.queue(|car| car.set_black_flag_for(true, 3));
+            car.is_retired = true;
+        }
+        // PitStop::update
+        let view = PitCarView::of(car);
+        let race_over = race && self.results.is_some();
+        let frame = PitFrame { dt, session_type: self.session.session_type, race_over, in_replay: false, pause_menu: false, esc_menu: false };
+        let mut rand = pit.rand;
+        pit.pit.update(&frame, &view, &mut pit.menu, car, &mut rand, &mut actions);
+        pit.rand = rand;
+        if pit.pit.timer_ran {
+            pit.avatar.last_pitstop_time = now as f32;
+        }
+        let allowed = (1..=3).contains(&frame.session_type) && pit.pit.app_interaction_enabled;
+        pit.menu.frame(dt, view.is_in_pitlane, allowed);
+        let mut said = Vec::new();
+        for action in actions {
+            match action {
+                PitAction::ControlsLock(locked) => car.queue(move |car| car.lock_controls(locked)),
+                PitAction::Commit(start) => said.push(format!("Pit stop: {:.1} s", start.total_time)),
+                PitAction::Over => said.push("Pit stop over".to_string()),
+                PitAction::Apply(choices) => car.queue(move |car| pitstop::apply(car, &choices)),
+            }
+        }
+        if counted {
+            // the handler of ACClient::evOnMandatoryPitDone (lambda @ 0x14003e2c0)
+            self.net.client.send_event(&rustyac_net::messages::ClientEvent::MandatoryPit(true));
+            said.push("online: the mandatory pit stop is done, told to the server".to_string());
+        }
+        for line in said {
+            self.console.push(line);
+        }
     }
 
     /// Task 28: the server's session as the referee's banner words it, its standings, and

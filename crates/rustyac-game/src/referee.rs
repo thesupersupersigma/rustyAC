@@ -240,22 +240,27 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
 /// Task 28b: the pit stop in words: the menu while it is up (AC's own menu comes with the
 /// UI), the stop's countdown with what is being done, and the mandatory pit window.
 pub fn pit_lines(referee: &Referee) -> Vec<String> {
+    let (Some(pit), Some(menu)) = (&referee.pit, &referee.menu) else { return Vec::new() };
+    pit_lines_of(pit, menu, referee.pit_window, &referee.pit_avatar, &referee.manager)
+}
+
+/// [`pit_lines`] of a stop, its menu, the mandatory window and the manager that keeps the
+/// window's times (online the manager is only that).
+pub fn pit_lines_of(pit: &rustyac_physics::race::PitStop, menu: &rustyac_physics::race::QuickMenu, window: (u16, u16), avatar: &rustyac_physics::race::PitAvatar, manager: &rustyac_physics::race::RaceManager) -> Vec<String> {
     use rustyac_physics::race::pitstop::STATE_OPERATING;
     let mut out = Vec::new();
-    let (Some(pit), Some(menu)) = (&referee.pit, &referee.menu) else { return out };
-    let manager = &referee.manager;
-    if referee.pit_window.1 != 0 && manager.current_session.session_type == SESSION_RACE {
+    if window.1 != 0 && manager.current_session.session_type == SESSION_RACE {
         let unit = if manager.current_session.is_timed_race { "min" } else { "lap" };
-        let state = if referee.pit_avatar.mandatory_pitstop_done {
+        let state = if avatar.mandatory_pitstop_done {
             "DONE".to_string()
         } else if manager.pit_window_end_time != 0.0 {
             "CLOSED".to_string()
         } else if manager.pit_window_start_time > 0.0 {
             "OPEN".to_string()
         } else {
-            format!("opens at {unit} {}", referee.pit_window.0)
+            format!("opens at {unit} {}", window.0)
         };
-        out.push(format!("MANDATORY PIT: {state}  (PIT OPEN: {unit} {}  PIT CLOSE: {unit} {})", referee.pit_window.0, referee.pit_window.1));
+        out.push(format!("MANDATORY PIT: {state}  (PIT OPEN: {unit} {}  PIT CLOSE: {unit} {})", window.0, window.1));
     }
     if pit.state == STATE_OPERATING {
         out.push(format!("PIT STOP  {:.1} s", pit.pit_timer.max(0.0)));
