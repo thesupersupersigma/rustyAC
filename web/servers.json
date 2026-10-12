@@ -1,0 +1,8 @@
+{
+  "spdx": "GPL-3.0-or-later",
+  "about": "The multiplayer servers the page offers. url: the WebSocket gateway of the server (crates/rustyac-gateway): a path on this site (/net/spa becomes wss://<this site>/net/spa) or a whole ws:// or wss:// address. cars: the models the server has, for the page's car list (any of them may be asked for).",
+  "servers": [
+    { "id": "spa", "name": "Spa (Ferrari F2004, BMW Z4 GT3)", "url": "/net/spa", "cars": ["ks_ferrari_f2004", "bmw_z4_gt3"] },
+    { "id": "laguna_seca", "name": "Laguna Seca (Ferrari F2004, BMW Z4 GT3)", "url": "/net/laguna_seca", "cars": ["ks_ferrari_f2004", "bmw_z4_gt3"] }
+  ]
+}

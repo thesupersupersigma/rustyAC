@@ -14,8 +14,8 @@ use crate::ws::{self, Decoder, Frame, Head};
 
 /// The largest message of the server's TCP stream (Assetto Corsa's own limit).
 pub const MAX_TCP_MESSAGE: usize = 0x7fe;
-/// The protocol's first message of a client (the join request) and its goodbye.
-const MESSAGE_JOIN: u8 = 0x3d;
+/// The server's answer that lets a client in, and a client's goodbye.
+const MESSAGE_ACCEPTED: u8 = 0x3e;
 const MESSAGE_GOODBYE: u8 = 0x43;
 /// How long a read waits before it looks whether the connection is over.
 const TICK: Duration = Duration::from_millis(250);
@@ -245,6 +245,8 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
 
     let started = Instant::now();
     let done = Arc::new(AtomicBool::new(false));
+    // the server let this client in (its first answer says so): it holds a slot
+    let joined = Arc::new(AtomicBool::new(false));
     let counts = Arc::new([AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]);
     let (Ok(ws_out), Ok(tcp_in), Ok(udp_in), Ok(ws_end), Ok(tcp_end)) = (stream.try_clone(), tcp.try_clone(), udp.try_clone(), stream.try_clone(), tcp.try_clone()) else {
         return;
@@ -270,7 +272,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
 
     // the server's TCP stream to the WebSocket: one message per frame
     let from_tcp = {
-        let (writer, done, counts, end) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts), end.clone());
+        let (writer, done, counts, end, joined) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts), end.clone(), Arc::clone(&joined));
         let mut tcp_in = tcp_in;
         std::thread::spawn(move || {
             let _ = tcp_in.set_read_timeout(Some(TICK));
@@ -296,7 +298,9 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                     if !send(&writer, ws::OP_BINARY, &[&[ws::LANE_RELIABLE], &pending[2..2 + length]]) {
                         break 'read;
                     }
-                    counts[2].fetch_add(1, Ordering::Relaxed);
+                    if counts[2].fetch_add(1, Ordering::Relaxed) == 0 && pending.get(2) == Some(&MESSAGE_ACCEPTED) {
+                        joined.store(true, Ordering::SeqCst);
+                    }
                     pending.drain(..2 + length);
                 }
             }
@@ -345,7 +349,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     let mut last_heard = Instant::now();
     let mut decoder = Decoder::new(true, config.max_message);
     decoder.push(&rest);
-    let (mut joined, mut said_goodbye) = (false, false);
+    let mut said_goodbye = false;
     let mut buffer = [0u8; 0x1000];
     let why = 'session: loop {
         loop {
@@ -361,7 +365,6 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
             match frame {
                 Frame::Binary(message) => match message.split_first() {
                     Some((&ws::LANE_RELIABLE, body)) if body.len() <= MAX_TCP_MESSAGE => {
-                        joined |= body.first() == Some(&MESSAGE_JOIN);
                         said_goodbye |= body.first() == Some(&MESSAGE_GOODBYE);
                         let mut framed = (body.len() as u16).to_le_bytes().to_vec();
                         framed.extend_from_slice(body);
@@ -416,7 +419,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     // a client that joined and went without a word (a closed tab): the gateway says the
     // protocol's goodbye for it, so that the server frees the slot and tells the others
     let mut spoke_for_it = false;
-    if joined && !said_goodbye && !done.load(Ordering::SeqCst) {
+    if joined.load(Ordering::SeqCst) && !said_goodbye && !done.load(Ordering::SeqCst) {
         spoke_for_it = tcp.write_all(&[1, 0, MESSAGE_GOODBYE]).and_then(|()| tcp.flush()).is_ok();
         // (the server reads it before the connection closes)
         let _ = tcp.shutdown(Shutdown::Write);

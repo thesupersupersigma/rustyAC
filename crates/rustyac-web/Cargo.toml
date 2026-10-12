@@ -17,6 +17,8 @@ rustyac-content = { path = "../rustyac-content" }
 # the simulation, AC's keyboard and pad classes and the scene maths (its Windows parts are
 # not compiled for wasm)
 rustyac-game = { path = "../rustyac-game" }
+# multiplayer: the client of a Kunos acServer, here through a WebSocket gateway
+rustyac-net = { path = "../rustyac-net" }
 
 # Everything below is the browser side and only exists in a wasm build: the desktop build of
 # the workspace compiles this crate's plain logic and its tests, nothing else.

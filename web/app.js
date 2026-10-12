@@ -28,6 +28,12 @@
 //                      desktop's selftest takes the same list with `--keys`.
 //   ?testfolder=<url>  the test hook of the folder picker: reads the folder over HTTP from
 //                      `web/serve.py --ac <folder>` through the same code the picker feeds
+//   ?server=<ws url>   multiplayer: one more server in the list, by its gateway's address
+//                      (`ws://127.0.0.1:9601/net/spa`); `servers.json` lists the usual ones
+//   ?join=<id>         join that server as soon as the content is there (no click); with
+//                      &name=<driver name> &mpcar=<model> &password=<p>
+//   ?cars=<metres>     how far other players' cars are drawn with their model (default 150)
+//   ?arrivals=1        keep when every car state arrived (`window.rustyac.arrivals()`)
 
 import init, * as rac from './pkg/rustyac_web.js';
 
@@ -44,6 +50,8 @@ const state = {
   running: false,
   paused: false,
   testing: false, // the self test runs: its keys count although nothing is being driven
+  servers: [], // multiplayer: { id, name, url, cars }
+  online: null, // on a server: { ws, link, server }
 };
 
 // what a test (or the curious) can read from outside
@@ -526,6 +534,291 @@ async function drive() {
   }
 }
 
+// ---------------------------------------------------------------- multiplayer
+
+// The player's id on servers: a number made once from random bits and kept in this browser
+// (Assetto Corsa sends the Steam id; a browser has none). 8 and sixteen digits, as the
+// desktop's own id: no Steam id starts like that.
+function playerId() {
+  const make = () => {
+    const digits = crypto.getRandomValues(new Uint8Array(16));
+    return '8' + [...digits].map((d) => d % 10).join('');
+  };
+  try {
+    let id = localStorage.getItem('rustyac.player-id');
+    if (!/^8\d{16}$/.test(id || '')) {
+      id = make();
+      localStorage.setItem('rustyac.player-id', id);
+    }
+    return id;
+  } catch {
+    // no storage (a private window): an id for this visit
+    state.visitId = state.visitId || make();
+    return state.visitId;
+  }
+}
+
+// `/net/spa` -> `wss://<this site>/net/spa`; a whole ws:// or wss:// address stays.
+function gatewayUrl(url) {
+  if (/^wss?:\/\//.test(url)) return url;
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + (url.startsWith('/') ? url : '/' + url);
+}
+
+function setMultiplayer(text) {
+  $('mp-status').textContent = text;
+  window.rustyac.log.push(text);
+}
+
+function markServers() {
+  const server = state.servers.find((s) => s.id === $('mp-server').value);
+  const cars = $('mp-car');
+  const chosen = cars.value;
+  // (a server gives a slot by the car's model: one has to be named. "Any free car" tries
+  // the server's models one after the other; a server that is not in servers.json with its
+  // cars is tried with the cars that are here)
+  const models = server && server.cars && server.cars.length ? server.cars : state.cars.map((c) => c.id);
+  cars.replaceChildren(new Option('any free car', ''), ...models.map((id) => new Option(state.cars.find((c) => c.id === id)?.name || id, id)));
+  const wanted = chosen || params.get('mpcar') || '';
+  cars.value = [...cars.options].some((o) => o.value === wanted) ? wanted : '';
+  $('mp-join').disabled = !server || !state.source || state.loading || state.running || !!state.game;
+}
+
+async function loadServers() {
+  let servers = [];
+  try {
+    const response = await fetch('servers.json', { cache: 'no-cache' });
+    if (response.ok) servers = (await response.json()).servers || [];
+  } catch {
+    // a site without the file has no server list
+  }
+  if (params.get('server')) servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars: [] });
+  state.servers = servers.filter((s) => s && s.id && s.url);
+  $('mp-server').replaceChildren(...state.servers.map((s) => new Option(s.name || s.id, s.id)));
+  $('mp-server').disabled = state.servers.length === 0;
+  if (params.get('join') && state.servers.some((s) => s.id === params.get('join'))) $('mp-server').value = params.get('join');
+  try {
+    $('mp-name').value = params.get('name') || localStorage.getItem('rustyac.player-name') || 'rustyAC driver';
+  } catch {
+    $('mp-name').value = params.get('name') || 'rustyAC driver';
+  }
+  if (params.get('password')) $('mp-password').value = params.get('password');
+  if (!state.servers.length) setMultiplayer('this site lists no server (servers.json)');
+  markServers();
+  if (params.get('mpcar')) $('mp-car').value = params.get('mpcar');
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Joins the chosen server: the WebSocket to its gateway, the handshake and the car list (the
+// wasm side's client, the desktop's own), then the files of what the server runs, then the
+// drive.
+async function joinServer() {
+  const server = state.servers.find((s) => s.id === $('mp-server').value);
+  if (!server || state.loading || state.game) return;
+  const name = $('mp-name').value.trim() || 'rustyAC driver';
+  try {
+    localStorage.setItem('rustyac.player-name', name);
+  } catch {
+    // not kept, then
+  }
+  state.loading = true;
+  $('mp-join').disabled = true;
+  $('drive').disabled = true;
+  $('refusal').hidden = true;
+  $('notes').hidden = true;
+  window.rustyac.state = 'joining';
+  let ws = null;
+  let join = null;
+  let link = null;
+  try {
+    const url = gatewayUrl(server.url);
+    // one try: a WebSocket to the gateway, the handshake for this model, the car list
+    const attempt = async (car) => {
+      setMultiplayer(`connecting to ${server.name || server.id} ...`);
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      const socket = ws;
+      const made = new rac.NetLink((bytes) => socket.send(bytes));
+      if (params.has('arrivals')) made.record(true);
+      socket.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) made.push(new Uint8Array(event.data));
+      };
+      socket.onclose = (event) => made.lost(event.reason || (event.code === 1006 ? 'the connection to the gateway broke' : `the gateway closed the connection (code ${event.code})`));
+      await new Promise((resolve, reject) => {
+        socket.onopen = resolve;
+        socket.onerror = () => reject(new Error(`no connection to ${url}: the gateway is not running there, or it does not let this page's address in`));
+      });
+      setMultiplayer(`asking ${server.name || server.id} for a ${car} ...`);
+      join = rac.NetJoin.start(made, playerId(), name, car, $('mp-password').value);
+      for (;;) {
+        const status = JSON.parse(join.status());
+        if (status.stage === 'done') {
+          link = made;
+          return status;
+        }
+        if (status.stage === 'error') {
+          join = null;
+          socket.close(1000);
+          throw new Error(status.error);
+        }
+        await sleep(25);
+      }
+    };
+    const candidates = $('mp-car').value ? [$('mp-car').value] : [...$('mp-car').options].map((o) => o.value).filter(Boolean);
+    if (!candidates.length) throw new Error('no car to ask the server for: the content has no car');
+    let status = null;
+    for (const [index, car] of candidates.entries()) {
+      try {
+        status = await attempt(car);
+        break;
+      } catch (error) {
+        // no free slot with this model: the next one (any other refusal ends it)
+        if (index + 1 === candidates.length || !/no available slots/i.test(String(error.message))) throw error;
+      }
+    }
+    // what the server runs has to be here: its track, the car it gave, the other cars
+    const models = [...new Set([status.car, ...status.cars])];
+    const track = state.tracks.find((t) => t.track.toLowerCase() === status.track.toLowerCase() && (t.layout || '') === (status.layout || ''));
+    const missing = models.filter((m) => !state.cars.some((c) => c.id.toLowerCase() === m.toLowerCase()));
+    const where = state.source.kind === 'pack' ? "this site's preview pack" : 'the folder you opened';
+    const what = `${status.server} runs the track ${status.track}${status.layout ? ' / ' + status.layout : ''} with the cars ${models.join(', ')}`;
+    if (!track) throw new Error(`${what}. The track is not in ${where}, so the server cannot be joined from here.`);
+    if (missing.length) throw new Error(`${what}. Not in ${where}: ${missing.join(', ')}. Every car of a server has to be there (the others' cars are in the picture and in the physics), so the server cannot be joined from here.`);
+    const refused = [track.refused, ...models.map((m) => state.cars.find((c) => c.id.toLowerCase() === m.toLowerCase()).refused)].filter(Boolean);
+    if (refused.length) throw new Error(`${what}, and rustyAC cannot load all of it: ${refused.join('; ')}`);
+    setMultiplayer(`${status.server}: slot ${status.slot}, ${status.car} at ${status.track}, session ${status.session}; ${status.drivers.length ? 'there now: ' + status.drivers.join(', ') : 'nobody else is there yet'}`);
+    window.rustyac.join = status;
+
+    // the files: of every car on the server, of the track, and the ones the server wants
+    // checksums of (they are worked out here, from the same files)
+    const started = performance.now();
+    let loaded = 0;
+    const cars = models.map((m) => state.cars.find((c) => c.id.toLowerCase() === m.toLowerCase()).id);
+    for (let round = 0; round < 8; round++) {
+      const wanted = new Set();
+      for (const car of cars) for (const path of rac.files_wanted(car, track.track, track.layout).split('\n')) if (path) wanted.add(path);
+      for (const path of status.checksum_files) if (!rac.fs_has(path)) wanted.add(path);
+      if (!wanted.size) break;
+      let total = 0;
+      for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
+      let got = 0;
+      $('progress').hidden = false;
+      await loadFiles([...wanted], (bytes, path, from) => {
+        got += bytes;
+        loaded += bytes;
+        $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
+        setStatus(`${from === 'cache' ? "from this browser's storage" : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
+      });
+    }
+    const fileSeconds = (performance.now() - started) / 1000;
+    $('progress').hidden = true;
+    setStatus('building the track and the cars (a large track takes some seconds; the page stands still meanwhile) ...');
+    await nextPaint();
+    resizeCanvas();
+    const built = performance.now();
+    let backend = params.get('backend') || $('backend').value;
+    if (backend !== 'webgl') {
+      const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
+      if (!adapter) backend = 'webgl';
+    }
+    const autodrive = params.get('autodrive') === '1';
+    const spawn = params.get('spawn') || 'pit';
+    // (create_online takes the join: from here on the game owns the session)
+    const joining = join;
+    join = null;
+    const game = await rac.Game.create_online(canvas, joining, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4), Number(params.get('cars') || 0));
+    rac.fs_forget_models();
+    state.game = game;
+    state.online = { ws, link, server };
+    game.set_autodrive(autodrive);
+    const notes = `${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
+    window.rustyac.notes = notes;
+    $('notes').textContent = notes;
+    $('notes').hidden = false;
+    window.rustyac.bindings = game.bindings();
+    state.loading = false;
+    startDriving();
+  } catch (error) {
+    state.loading = false;
+    if (join) {
+      try {
+        join.abandon();
+      } catch {
+        // the link is gone already
+      }
+    }
+    // (a moment for the goodbye to leave before the socket closes)
+    if (ws) setTimeout(() => ws.close(1000), 50);
+    setMultiplayer('');
+    fail(error);
+    markServers();
+  }
+}
+
+// Leaves the server: the protocol's goodbye, then the WebSocket. The page starts afresh for
+// the next drive (a drive's picture and memory are not taken apart piece by piece).
+function leaveServer(reload) {
+  const online = state.online;
+  if (!online) return;
+  state.online = null;
+  try {
+    if (state.game) state.game.leave();
+  } catch {
+    // the session is gone already
+  }
+  try {
+    online.ws.close(1000);
+  } catch {
+    // closed already
+  }
+  if (reload) {
+    const keep = new URLSearchParams(params);
+    for (const key of ['go', 'join']) keep.delete(key);
+    setTimeout(() => location.assign(location.pathname + (keep.toString() ? '?' + keep : '')), 150);
+  }
+}
+
+window.addEventListener('pagehide', () => leaveServer(false));
+
+function showOnline(online) {
+  window.rustyac.online = online;
+  const box = $('hud-online');
+  box.hidden = !online;
+  if (!online) return;
+  const lines = [`${online.server}   ${online.session}   ping ${online.ping} ms${online.associated ? '' : '   (waiting for the server)'}`];
+  for (const d of online.drivers) {
+    lines.push(`${d.me ? '>' : ' '} ${(d.name || '?').padEnd(18).slice(0, 18)} ${d.car.padEnd(17).slice(0, 17)} laps ${String(d.laps).padEnd(3)} best ${time(d.best_ms)}${d.me ? '' : `  ${d.ping} ms`}`);
+  }
+  lines.push(...online.chat);
+  lines.push('Enter: chat   Esc: leave');
+  box.textContent = lines.join('\n');
+}
+
+function openChat() {
+  const input = $('chat');
+  if (!state.online || !input.hidden) return;
+  state.game.release_keys();
+  input.value = '';
+  input.hidden = false;
+  input.focus();
+}
+
+$('chat').addEventListener('keydown', (event) => {
+  event.stopPropagation();
+  const input = $('chat');
+  if (event.key === 'Enter') {
+    const text = input.value.trim();
+    // (the game sends one line a second at most)
+    if (text && state.game && !state.game.chat(text)) return;
+    input.hidden = true;
+    input.blur();
+  } else if (event.key === 'Escape') {
+    input.hidden = true;
+    input.blur();
+  }
+});
+$('chat').addEventListener('keyup', (event) => event.stopPropagation());
+
 // ---------------------------------------------------------------- driving
 
 function resizeCanvas() {
@@ -571,6 +864,18 @@ function startDriving() {
 }
 
 function stopDriving() {
+  if (state.online) {
+    // a car that stands still in the menu would stay on the server's track: Esc leaves
+    state.running = false;
+    $('menu').hidden = false;
+    $('hud').hidden = true;
+    $('keys').hidden = true;
+    $('chat').hidden = true;
+    setMultiplayer(`you left ${state.online.server.name || state.online.server.id}`);
+    window.rustyac.state = 'left';
+    leaveServer(true);
+    return;
+  }
   state.running = false;
   if (state.game) state.game.release_keys();
   $('menu').hidden = false;
@@ -611,6 +916,7 @@ function showHud(hud) {
   $('hud-bias').textContent = hud.bias_text;
   $('hud-note').textContent = hud.note;
   $('hud-note').hidden = !hud.note;
+  showOnline(hud.online);
 }
 
 // What the display says about the aids right now (a test reads it).
@@ -646,9 +952,15 @@ function frame(now) {
     stats.fps = stats.frames / seconds;
     stats.steps_per_second = stats.steps / seconds;
     window.rustyac.perf = stats;
+    if (state.online) {
+      // what the session printed (who came, who left, laps, chat): kept for a look
+      for (const line of state.game.take_console().split('\n')) if (line) window.rustyac.log.push(line);
+      if (window.rustyac.log.length > 400) window.rustyac.log.splice(0, 200);
+    }
     $('hud-perf').textContent =
       `${stats.fps.toFixed(0)} frames/s   ${stats.steps_per_second.toFixed(0)} physics steps/s   ${stats.work_ms_per_frame.toFixed(2)} ms per frame\n` +
       `${stats.meshes} meshes, ${(stats.triangles / 1000).toFixed(0)}k triangles   ${stats.backend}` +
+      (state.online ? `   other cars: ${stats.other_cars_drawn} drawn, ${stats.other_cars_as_boxes} as boxes` : '') +
       (stats.dropped_seconds > 0.05 ? `\nslow frames: ${stats.dropped_seconds.toFixed(1)} s dropped in the last second` : '');
     perf.since = now;
   }
@@ -670,7 +982,7 @@ const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter'];
 let drivingKeys = null;
 
 function pageUses(event) {
@@ -694,9 +1006,18 @@ window.addEventListener('keydown', (event) => {
     case 'Escape':
       stopDriving();
       return;
+    case 'Enter':
+    case 'NumpadEnter':
+      // on a server: the chat line (offline the key is the layout's, if it has it)
+      if (state.online) {
+        openChat();
+        return;
+      }
+      break;
     case 'KeyP':
     case 'Pause':
-      state.paused = !state.paused;
+      // (a server's clock does not stop: no pause there)
+      if (!state.online) state.paused = !state.paused;
       return;
     case 'F1':
     case 'KeyC':
@@ -773,7 +1094,7 @@ function pollPad() {
   // XInput's sticks are positive up, the Gamepad API's positive down
   game.pad(true, buttons, trigger(found.buttons[6]), trigger(found.buttons[7]), stick(found.axes[0] || 0), stick(-(found.axes[1] || 0)), stick(found.axes[2] || 0), stick(-(found.axes[3] || 0)));
   const start = !!(buttons & 0x0010);
-  if (start && !pad.start) state.paused = !state.paused;
+  if (start && !pad.start && !state.online) state.paused = !state.paused;
   pad.start = start;
   const now = performance.now();
   if (found.vibrationActuator && now - pad.rumbleAt > 80) {
@@ -832,6 +1153,8 @@ async function main() {
       drive();
     }
   });
+  $('mp-server').addEventListener('change', markServers);
+  $('mp-join').addEventListener('click', joinServer);
   window.addEventListener('resize', resizeCanvas);
   if (params.get('backend') === 'webgl') $('backend').value = 'webgl';
   if (params.get('spawn')) $('spawn').value = params.get('spawn');
@@ -880,10 +1203,20 @@ async function main() {
       }
     }
   }
-  if (ready && params.get('go') === '1' && !$('drive').disabled) {
+  await loadServers();
+  if (ready && params.get('join') && !$('mp-join').disabled) {
+    await joinServer();
+  } else if (ready && params.get('go') === '1' && !$('drive').disabled) {
     state.lastChoice = `${$('car').value}|${$('track').value}`;
     await drive();
   }
 }
+
+// Test hooks of a drive on a server: where the other cars are, a chat line, the arrival
+// times of the car states (?arrivals=1), leaving.
+window.rustyac.others = () => (state.game && state.online ? JSON.parse(state.game.other_cars()) : []);
+window.rustyac.chat = (text) => !!(state.game && state.online && state.game.chat(text));
+window.rustyac.arrivals = () => (state.online ? state.online.link.arrivals() : '');
+window.rustyac.leave = () => state.online && stopDriving();
 
 main().catch(fail);

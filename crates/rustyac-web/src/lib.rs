@@ -10,6 +10,8 @@
 //! * [`model`], [`bc`]: kn5 models and their textures, ready for a graphics card.
 //! * [`pack`]: the preview pack's manifest (`tools/web_pack` writes it, the page reads it).
 //! * `gpu`, `web` (wasm only): the wgpu picture and what the page calls.
+//! * `net` (wasm only): multiplayer: the page's WebSocket to a gateway as the transport of
+//!   `rustyac-net`'s client, the join as the page steps it.
 //!
 //! Everything but the last two is plain Rust and is tested on the desktop.
 
@@ -22,5 +24,7 @@ pub mod session;
 
 #[cfg(target_arch = "wasm32")]
 mod gpu;
+#[cfg(target_arch = "wasm32")]
+mod net;
 #[cfg(target_arch = "wasm32")]
 mod web;

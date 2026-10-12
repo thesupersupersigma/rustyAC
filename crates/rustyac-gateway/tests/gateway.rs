@@ -109,9 +109,23 @@ fn a_client_that_vanishes_is_said_goodbye_for() {
     let (mut stream, _) = tcp.accept().unwrap();
     client.send(&lane(LANE_RELIABLE, &[0x3d, 0xca, 0])).unwrap();
     assert_eq!(read_framed(&mut stream), [0x3d, 0xca, 0]);
+    // (the server lets it in)
+    stream.write_all(&[3, 0, 0x3e, 1, 2]).unwrap();
+    assert_eq!(client.wait(5000).unwrap(), Some(lane(LANE_RELIABLE, &[0x3e, 1, 2])));
     drop(client.stream().try_clone().unwrap().shutdown(std::net::Shutdown::Both));
     assert_eq!(read_framed(&mut stream), [0x43], "the gateway did not say goodbye for a client that vanished");
-    // one that never joined: nothing to say
+    // one the server refused, and one that never asked: nothing to say
+    let mut client = connect(&gateway, &[]).unwrap();
+    let (mut stream, _) = tcp.accept().unwrap();
+    client.send(&lane(LANE_RELIABLE, &[0x3d, 0xca, 0])).unwrap();
+    assert_eq!(read_framed(&mut stream), [0x3d, 0xca, 0]);
+    stream.write_all(&[1, 0, 0x45]).unwrap();
+    assert_eq!(client.wait(5000).unwrap(), Some(lane(LANE_RELIABLE, &[0x45])));
+    drop(client);
+    let mut rest = Vec::new();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    stream.read_to_end(&mut rest).unwrap();
+    assert!(rest.is_empty(), "the gateway said {rest:02x?} for a client the server had refused");
     let client = connect(&gateway, &[]).unwrap();
     let (mut stream, _) = tcp.accept().unwrap();
     drop(client);

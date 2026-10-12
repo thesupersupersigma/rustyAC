@@ -19,9 +19,10 @@
 //!   the gateway opens for this client alone (the server tells clients apart by it).
 //!
 //! The gateway does not read what it carries, with one exception: when a WebSocket ends
-//! and the client has joined but not said goodbye (a browser tab that was closed), the
-//! gateway sends the protocol's one-byte goodbye (`0x43`) for it, so that the server frees
-//! the slot and tells the other players at once.
+//! and the server had let the client in (its first answer was `0x3e`) but the client has
+//! not said goodbye (a browser tab that was closed), the gateway sends the protocol's
+//! one-byte goodbye (`0x43`) for it, so that the server frees the slot and tells the other
+//! players at once.
 //!
 //! [`ws`] also holds the client side of the WebSocket, which `rustyac.exe --join ws://...`
 //! uses. Plain `std`: no dependency, no SIMD, nothing a processor without AVX cannot run.

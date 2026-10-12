@@ -18,7 +18,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use rustyac_game::input_file::event;
+use rustyac_game::input_file::{event, GridPlace, SimSetup};
+use rustyac_game::online::OnlineSession;
 use rustyac_game::render::scene::{CameraFrame, CarShape, DrivingCamera};
 use rustyac_game::sim::{GameSim, SpawnSequence, DT};
 use rustyac_game::view::CarView;
@@ -60,21 +61,54 @@ pub struct Session {
     /// Steps and dropped time over the whole drive.
     pub total_steps: u64,
     pub total_dropped_seconds: f64,
+    /// Online: the other players' cars, in the session's order: their shapes, and where each
+    /// was after the last two steps of the last frame.
+    pub remote_shapes: Vec<CarShape>,
+    remote_prev: Vec<CarView>,
+    remote_curr: Vec<CarView>,
+    /// Online: what the session printed (joins, laps, chat ...), until the page takes it.
+    pub console: Vec<String>,
 }
 
 impl Session {
     /// Builds the car on the track and puts it down (the spawn sequence runs to its end here:
     /// 470 steps of settling and selecting first gear, unpaced as on the desktop).
     pub fn new(car: &str, track: &str, layout: &str, auto_shifter: bool, spawn: &str) -> Result<Session, String> {
+        Session::build(crate::content::setup(car, track, layout, auto_shifter, spawn), None)
+    }
+
+    /// The same on a server: the server's car and track, in the pit box of the player's
+    /// slot, with the other players' cars. `online`: a finished join
+    /// (`rustyac_game::online::finish_join`). What the desktop's `join_server` and
+    /// `online_setup` do.
+    pub fn new_online(online: OnlineSession, auto_shifter: bool, spawn: &str) -> Result<Session, String> {
+        let accepted = online.net.client.accepted.clone();
+        let mut setup = crate::content::setup(&accepted.model, &accepted.track, &accepted.track_config, auto_shifter, spawn);
+        setup.player_skin = Some(accepted.skin.clone());
+        // CarAvatar::setSpawnPositionIndex("PIT", sessionID) / ("START", handshakeCarPosition)
+        setup.player_place = Some(GridPlace { pit: accepted.session_id as usize, start: accepted.current_session.handshake_position.map_or(-1, |p| p as i32), ballast_kg: 0.0, restrictor: 0.0 });
+        // the server's weather comes with its first weather message; its grip with the session
+        setup.session.dynamic_track = None;
+        setup.session.ballast_kg = 0.0;
+        setup.session.restrictor = 0.0;
+        Session::build(setup, Some(online))
+    }
+
+    fn build(setup: SimSetup, online: Option<OnlineSession>) -> Result<Session, String> {
         let input: SharedInput = Arc::new(Mutex::new(Input::default()));
         let source = WebSource::new(input.clone());
         let keys = source.bindings.describe();
         let keys_used = source.keys_used();
         let source = SpawnSequence::new(source, true);
-        let mut sim = GameSim::new(crate::content::setup(car, track, layout, auto_shifter, spawn), Box::new(source))?;
+        let mut sim = match online {
+            Some(online) => GameSim::new_online(setup, Box::new(source), online)?,
+            None => GameSim::new(setup, Box::new(source))?,
+        };
         while sim.car.device.source.in_spawn_sequence() {
             sim.step()?;
         }
+        let remote_shapes: Vec<CarShape> = sim.remote_infos().iter().map(CarShape::of).collect();
+        let remote: Vec<CarView> = (0..sim.remote_count()).map(|index| CarView::capture_remote(&sim, index)).collect();
         let shape = CarShape::of(&sim.car_info());
         let (floor, ceiling) = match &sim.track {
             Some(track) if !track.world.meshes.is_empty() => {
@@ -101,6 +135,10 @@ impl Session {
             ceiling,
             total_steps: 0,
             total_dropped_seconds: 0.0,
+            remote_shapes,
+            remote_prev: remote.clone(),
+            remote_curr: remote,
+            console: Vec::new(),
         })
     }
 
@@ -127,6 +165,23 @@ impl Session {
         self.prev = if burst { view } else { self.curr };
         self.curr = view;
         self.total_steps += 1;
+        if let Some(session) = &mut self.sim.online {
+            self.console.append(&mut session.console);
+            if self.console.len() > 200 {
+                self.console.drain(..100);
+            }
+            if session.net.client.is_lost() {
+                return Err("the connection to the server is gone".to_string());
+            }
+            // the other cars: only the last two steps of a frame are ever drawn between
+            if self.accumulator < 2.0 * DT as f64 || burst {
+                for index in 0..self.remote_curr.len() {
+                    let view = CarView::capture_remote(&self.sim, index);
+                    self.remote_prev[index] = if burst { view } else { self.remote_curr[index] };
+                    self.remote_curr[index] = view;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -157,6 +212,12 @@ impl Session {
     /// The car between the last two steps, where the page's clock is now.
     pub fn view(&self) -> CarView {
         CarView::between(&self.prev, &self.curr, (self.accumulator / DT as f64) as f32)
+    }
+
+    /// The other players' cars between the last two steps, in the session's order.
+    pub fn remote_views(&self) -> Vec<CarView> {
+        let blend = (self.accumulator / DT as f64) as f32;
+        self.remote_prev.iter().zip(&self.remote_curr).map(|(prev, curr)| CarView::between(prev, curr, blend)).collect()
     }
 
     /// The camera for `view`, `seconds` after the last frame's.

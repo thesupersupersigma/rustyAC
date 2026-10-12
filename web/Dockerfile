@@ -33,7 +33,7 @@ ARG WASM_OPT=1
 RUN if [ "$WASM_OPT" = "0" ]; then python3 web/build.py --no-opt; else python3 web/build.py; fi \
     # compressed once here, so the server does not compress 4 MB of wasm on every request
     && cd dist-web/site \
-    && for f in index.html app.js style.css pkg/rustyac_web.js pkg/rustyac_web_bg.wasm; do gzip -9 -c "$f" > "$f.gz"; done
+    && for f in index.html app.js style.css servers.json pkg/rustyac_web.js pkg/rustyac_web_bg.wasm; do gzip -9 -c "$f" > "$f.gz"; done
 
 # ---- stage 2: the server -----------------------------------------------------------------
 FROM nginx:1.30.0-alpine

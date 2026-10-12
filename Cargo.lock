@@ -731,6 +731,7 @@ dependencies = [
  "rustyac-content",
  "rustyac-game",
  "rustyac-math",
+ "rustyac-net",
  "rustyac-physics",
  "wasm-bindgen",
  "wasm-bindgen-futures",

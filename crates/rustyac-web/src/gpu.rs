@@ -87,8 +87,9 @@ type PipelineKey = (u8, u8);
 
 struct DrawCall {
     pipeline: PipelineKey,
-    /// `None`: the solid pipeline (the shadow, the boxes).
-    group: Option<(bool, usize)>,
+    /// The model (0: the track, k + 1: car model k) and its material. `None`: the solid
+    /// pipeline (the shadows, the boxes).
+    group: Option<(usize, usize)>,
     mesh: usize,
     index_count: u32,
     offset: u32,
@@ -99,6 +100,33 @@ struct DrawCall {
 pub struct DrawStats {
     pub meshes: u32,
     pub triangles: u64,
+    /// Other players' cars drawn with their model, and as boxes.
+    pub other_models: u32,
+    pub other_boxes: u32,
+}
+
+/// Another car of a frame (a remote player's): where it is, its shape, and its model on the
+/// card ([`Gpu::load_car_model`]) if it has one.
+pub struct OtherCar<'a> {
+    pub view: &'a CarView,
+    pub shape: &'a CarShape,
+    pub model: Option<usize>,
+}
+
+/// How far other cars are drawn, for a small machine (a Chromebook): nearer than `model_m`
+/// with their model (the `models` nearest only), nearer than `box_m` as their boxes, beyond
+/// that not at all. A car's small parts go before the car does (see `model_calls`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OtherCarLimits {
+    pub model_m: f32,
+    pub models: usize,
+    pub box_m: f32,
+}
+
+impl Default for OtherCarLimits {
+    fn default() -> OtherCarLimits {
+        OtherCarLimits { model_m: 150.0, models: 6, box_m: 600.0 }
+    }
 }
 
 pub struct Gpu {
@@ -131,7 +159,10 @@ pub struct Gpu {
     cube: usize,
     cube_vertices: u32,
     track: Option<Scene>,
-    car: Option<CarModel>,
+    /// Every car model on the card, and which of them is the driver's car.
+    cars: Vec<CarModel>,
+    car: Option<usize>,
+    pub other_cars: OtherCarLimits,
     scratch: Vec<u8>,
     calls: Vec<DrawCall>,
 }
@@ -354,7 +385,9 @@ impl Gpu {
             cube: 0,
             cube_vertices: 0,
             track: None,
+            cars: Vec::new(),
             car: None,
+            other_cars: OtherCarLimits::default(),
             scratch: Vec::new(),
             calls: Vec::new(),
         };
@@ -483,8 +516,21 @@ impl Gpu {
         Ok(summary)
     }
 
-    /// Puts the car's model on the card.
+    /// Puts the driver's car's model on the card.
     pub fn load_car(&mut self, file: &PathBuf, options: &ModelOptions) -> Result<String, String> {
+        let (index, summary) = self.load_car_model(file, options)?;
+        self.car = Some(index);
+        Ok(summary)
+    }
+
+    /// The model of the driver's car on the card, if it has one (another car of the same
+    /// kind is drawn with it).
+    pub fn car_model(&self) -> Option<usize> {
+        self.car
+    }
+
+    /// Puts a car's model on the card and returns its number, for [`OtherCar::model`].
+    pub fn load_car_model(&mut self, file: &PathBuf, options: &ModelOptions) -> Result<(usize, String), String> {
         let scene = self.scene(std::slice::from_ref(file), &[], options)?;
         let node = |name: &str| scene.model.find_node(name);
         let car = CarModel {
@@ -495,8 +541,8 @@ impl Gpu {
         };
         let s = &car.scene.model.stats;
         let summary = format!("car: {} meshes, {} triangles, {} textures ({:.0} MB)", s.meshes, s.triangles, s.textures, s.texture_bytes as f64 / 1e6);
-        self.car = Some(car);
-        Ok(summary)
+        self.cars.push(car);
+        Ok((self.cars.len() - 1, summary))
     }
 
     fn push(&mut self, constants: &DrawConstants) -> u32 {
@@ -508,12 +554,14 @@ impl Gpu {
         offset as u32
     }
 
-    /// The draws of one model: the meshes that are not `isTransparent` in the file's order,
-    /// then the others from the farthest to the nearest.
-    fn model_calls(&mut self, car: bool, base: &DrawConstants, planes: &[[f32; 4]; 6], eye: [f32; 3], stats: &mut DrawStats) {
-        let cull = !car;
+    /// The draws of one model (`which`: 0 the track, k + 1 car model k): the meshes that are
+    /// not `isTransparent` in the file's order, then the others from the farthest to the
+    /// nearest. `cull`: leave out what is outside the picture, outside its own range of
+    /// distances or a speck (the track's meshes, and another player's car; the driver's own
+    /// car is drawn whole).
+    fn model_calls(&mut self, which: usize, cull: bool, base: &DrawConstants, planes: &[[f32; 4]; 6], eye: [f32; 3], stats: &mut DrawStats) {
         let coverage = self.samples > 1;
-        let scene = if car { self.car.as_ref().map(|c| &c.scene) } else { self.track.as_ref() };
+        let scene = if which > 0 { self.cars.get(which - 1).map(|c| &c.scene) } else { self.track.as_ref() };
         let Some(scene) = scene else { return };
         let model = &scene.model;
         let mut order: Vec<(f32, usize, bool)> = Vec::with_capacity(model.meshes.len());
@@ -530,7 +578,8 @@ impl Gpu {
                 if distance < mesh.lod_in || (mesh.lod_out > 0.0 && distance >= mesh.lod_out) {
                     continue;
                 }
-                if mesh.radius < distance * 0.002 {
+                // (another car's small parts go sooner: at 50 m its body and wheels are left)
+                if mesh.radius < distance * if which > 0 { 0.004 } else { 0.002 } {
                     continue;
                 }
             }
@@ -574,12 +623,66 @@ impl Gpu {
         for (constants, pipeline, material, mesh, index_count) in draws {
             self.pipeline(pipeline);
             let offset = self.push(&constants);
-            self.calls.push(DrawCall { pipeline, group: Some((car, material)), mesh, index_count, offset });
+            self.calls.push(DrawCall { pipeline, group: Some((which, material)), mesh, index_count, offset });
         }
     }
 
-    /// Draws one frame.
-    pub fn draw(&mut self, view: &CarView, shape: &CarShape, camera: &CameraFrame) -> Result<DrawStats, String> {
+    /// Puts a car model where the physics has the car: the body with the model's offset, the
+    /// wheels and hubs where the physics has them, the steering wheel turned.
+    fn pose_car(&mut self, model: usize, view: &CarView, shape: &CarShape) {
+        let Some(car) = self.cars.get_mut(model) else { return };
+        let o = shape.graphics_offset;
+        let root = rotate_pitch(&mul(&translation(o[0], o[1], o[2]), &view.body), shape.graphics_pitch);
+        let mut fixed: Vec<(usize, Mat)> = Vec::with_capacity(9);
+        for k in 0..4 {
+            if let Some(node) = car.hubs[k] {
+                fixed.push((node, view.hubs[k]));
+            }
+            if let Some(node) = car.wheels[k] {
+                fixed.push((node, view.wheels[k]));
+            }
+        }
+        if let Some((node, rest)) = car.steer {
+            let (sin, cos) = (view.steer_deg * 0.017_453_292).sin_cos();
+            let turn: Mat = [[cos, sin, 0.0, 0.0], [-sin, cos, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+            car.scene.model.nodes[node].local = mul(&turn, &rest);
+        }
+        car.scene.model.update(&root, &fixed);
+    }
+
+    /// A car's shadow: a dark patch on the road under the body, in the plane the four tyres
+    /// stand on.
+    fn shadow_call(&mut self, view: &CarView, shape: &CarShape, base: &DrawConstants) {
+        let body = &view.body;
+        let mut drop = 0.0;
+        for k in 0..4 {
+            let w = view.wheels[k][3];
+            drop += (w[0] - body[3][0]) * body[1][0] + (w[1] - body[3][1]) * body[1][1] + (w[2] - body[3][2]) * body[1][2] - view.tyre_radius[k];
+        }
+        let flat = mul(&translation(0.0, drop * 0.25 + 0.012, 0.0), body);
+        let (mut x_max, mut z_min, mut z_max) = (0.5f32, -1.0f32, 1.0f32);
+        for b in &shape.boxes {
+            x_max = x_max.max(b.centre[0].abs() + b.size[0] * 0.5);
+            z_min = z_min.min(b.centre[2] - b.size[2] * 0.5);
+            z_max = z_max.max(b.centre[2] + b.size[2] * 0.5);
+        }
+        let shadow = mul(&scale_then(x_max * 2.0, 0.002, z_max - z_min, &translation(0.0, 0.0, (z_max + z_min) * 0.5)), &flat);
+        let offset = self.push(&DrawConstants { world: shadow, color: [0.0, 0.0, 0.0, 0.42], ..*base });
+        self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
+    }
+
+    /// A car as its boxes (no model, or too far for one).
+    fn box_calls(&mut self, view: &CarView, shape: &CarShape, base: &DrawConstants) {
+        for b in &shape.boxes {
+            let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), &view.body);
+            let offset = self.push(&DrawConstants { world, color: [b.color[0], b.color[1], b.color[2], 1.0], ..*base });
+            self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
+        }
+    }
+
+    /// Draws one frame: the track, the driver's car and the other players' cars that are
+    /// there (`others`; a car that is not on the server is not drawn).
+    pub fn draw(&mut self, view: &CarView, shape: &CarShape, camera: &CameraFrame, others: &[OtherCar]) -> Result<DrawStats, String> {
         let (width, height) = self.size();
         let projection = perspective_reversed(camera.fov, width as f32 / height as f32, camera.near.max(0.02), FAR);
         let view_matrix = view_matrix(&camera.matrix);
@@ -607,58 +710,50 @@ impl Gpu {
                 track.model.update(&IDENTITY, &[]);
             }
         }
-        // the car's model follows the physics: the body with the model's offset, the wheels
-        // and hubs where the physics has them, the steering wheel turned
-        if let Some(car) = self.car.as_mut() {
-            let o = shape.graphics_offset;
-            let root = rotate_pitch(&mul(&translation(o[0], o[1], o[2]), &view.body), shape.graphics_pitch);
-            let mut fixed: Vec<(usize, Mat)> = Vec::with_capacity(9);
-            for k in 0..4 {
-                if let Some(node) = car.hubs[k] {
-                    fixed.push((node, view.hubs[k]));
-                }
-                if let Some(node) = car.wheels[k] {
-                    fixed.push((node, view.wheels[k]));
-                }
-            }
-            if let Some((node, rest)) = car.steer {
-                let (sin, cos) = (view.steer_deg * 0.017_453_292).sin_cos();
-                let turn: Mat = [[cos, sin, 0.0, 0.0], [-sin, cos, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
-                car.scene.model.nodes[node].local = mul(&turn, &rest);
-            }
-            car.scene.model.update(&root, &fixed);
-        }
 
         self.scratch.clear();
         self.calls.clear();
         let mut stats = DrawStats::default();
-        self.model_calls(false, &base, &planes, eye3, &mut stats);
-        // the car's shadow: a dark patch on the road under the body, in the plane the four
-        // tyres stand on
-        let body = &view.body;
-        let mut drop = 0.0;
-        for k in 0..4 {
-            let w = view.wheels[k][3];
-            drop += (w[0] - body[3][0]) * body[1][0] + (w[1] - body[3][1]) * body[1][1] + (w[2] - body[3][2]) * body[1][2] - view.tyre_radius[k];
-        }
-        let flat = mul(&translation(0.0, drop * 0.25 + 0.012, 0.0), body);
-        let (mut x_max, mut z_min, mut z_max) = (0.5f32, -1.0f32, 1.0f32);
-        for b in &shape.boxes {
-            x_max = x_max.max(b.centre[0].abs() + b.size[0] * 0.5);
-            z_min = z_min.min(b.centre[2] - b.size[2] * 0.5);
-            z_max = z_max.max(b.centre[2] + b.size[2] * 0.5);
-        }
-        let shadow = mul(&scale_then(x_max * 2.0, 0.002, z_max - z_min, &translation(0.0, 0.0, (z_max + z_min) * 0.5)), &flat);
-        let offset = self.push(&DrawConstants { world: shadow, color: [0.0, 0.0, 0.0, 0.42], ..base });
-        self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
-        if self.car.is_some() {
-            self.model_calls(true, &base, &planes, eye3, &mut stats);
-        } else {
+        self.model_calls(0, true, &base, &planes, eye3, &mut stats);
+        self.shadow_call(view, shape, &base);
+        match self.car {
+            Some(model) => {
+                self.pose_car(model, view, shape);
+                self.model_calls(model + 1, false, &base, &planes, eye3, &mut stats);
+            }
             // no model: the car's boxes
-            for b in &shape.boxes {
-                let world = mul(&scale_then(b.size[0], b.size[1], b.size[2], &translation(b.centre[0], b.centre[1], b.centre[2])), body);
-                let offset = self.push(&DrawConstants { world, color: [b.color[0], b.color[1], b.color[2], 1.0], ..base });
-                self.calls.push(DrawCall { pipeline: (0, 0), group: None, mesh: self.cube, index_count: self.cube_vertices, offset });
+            None => self.box_calls(view, shape, &base),
+        }
+        // the other players' cars, the nearest first: a model for the nearest few, boxes
+        // further out, nothing beyond that or outside the picture
+        let limits = self.other_cars;
+        let mut near: Vec<(f32, usize)> = others
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| !other.view.disconnected && other.view.body.iter().flatten().all(|x| x.is_finite()))
+            .map(|(index, other)| {
+                let p = other.view.body[3];
+                let d = [p[0] - eye3[0], p[1] - eye3[1], p[2] - eye3[2]];
+                ((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(), index)
+            })
+            .filter(|(distance, index)| *distance < limits.box_m && sphere_visible(&planes, [others[*index].view.body[3][0], others[*index].view.body[3][1], others[*index].view.body[3][2]], 4.0))
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (distance, index) in near {
+            let other = &others[index];
+            self.shadow_call(other.view, other.shape, &base);
+            match other.model.filter(|model| *model < self.cars.len() && distance < limits.model_m && (stats.other_models as usize) < limits.models) {
+                Some(model) => {
+                    // (the same model drawn again for another car: its constants are copied
+                    // when its draws are listed, so posing it anew is safe)
+                    self.pose_car(model, other.view, other.shape);
+                    self.model_calls(model + 1, true, &base, &planes, eye3, &mut stats);
+                    stats.other_models += 1;
+                }
+                None => {
+                    self.box_calls(other.view, other.shape, &base);
+                    stats.other_boxes += 1;
+                }
             }
         }
 
@@ -712,13 +807,13 @@ impl Gpu {
             for call in &self.calls {
                 let mesh = &self.meshes[call.mesh];
                 match call.group {
-                    Some((car, material)) => {
+                    Some((which, material)) => {
                         if bound != Some(call.pipeline) || solid {
                             pass.set_pipeline(&self.pipelines[&call.pipeline]);
                             bound = Some(call.pipeline);
                             solid = false;
                         }
-                        let scene = if car { self.car.as_ref().map(|c| &c.scene) } else { self.track.as_ref() };
+                        let scene = if which > 0 { self.cars.get(which - 1).map(|c| &c.scene) } else { self.track.as_ref() };
                         let Some(scene) = scene else { continue };
                         pass.set_bind_group(0, &self.uniform_group, &[call.offset]);
                         pass.set_bind_group(1, &scene.groups[material], &[]);

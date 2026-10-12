@@ -174,6 +174,14 @@ impl<T: Transport> Join<T> {
         }
     }
 
+    /// Every car of the server, once the list is whole.
+    pub fn cars(&self) -> Option<&[CarEntry]> {
+        match &self.phase {
+            JoinPhase::Done { cars, .. } => Some(cars),
+            _ => None,
+        }
+    }
+
     /// One message of the reliable channel. After an error the join is over (a player the
     /// server had let in has said goodbye).
     pub fn on_message(&mut self, message: &[u8]) -> Result<JoinStage, JoinError> {

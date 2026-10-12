@@ -25,8 +25,10 @@
   <div id="hud-info"></div>
   <div id="hud-aids"><span id="hud-tc"></span><span id="hud-abs"></span><span id="hud-bias"></span></div>
   <div id="hud-note" hidden></div>
+  <div id="hud-online" hidden></div>
   <div id="hud-perf"></div>
 </div>
+<input id="chat" hidden maxlength="120" autocomplete="off" placeholder="say something: Enter sends, Esc closes">
 
 <div id="keys" hidden></div>
 
@@ -84,6 +86,24 @@
     <pre id="notes" hidden></pre>
   </section>
 
+  <section id="multiplayer">
+    <h2>Multiplayer</h2>
+    <p class="hint">
+      Race on a real Assetto Corsa server (Kunos' own <code>acServer</code>) against other
+      browsers, desktop rustyAC and Assetto Corsa itself. The server decides the track and
+      gives you one of its cars, so that track and every car on the server have to be in the
+      content above. Your name and a random player id are kept in this browser.
+    </p>
+    <div class="row">
+      <label>Server <select id="mp-server" disabled></select></label>
+      <label>Car <select id="mp-car"><option value="">any free car</option></select></label>
+      <label>Your name <input id="mp-name" maxlength="32" value="rustyAC driver"></label>
+      <label>Password <input id="mp-password" type="password" placeholder="none" autocomplete="off"></label>
+    </div>
+    <p><button id="mp-join" disabled>Join</button></p>
+    <p id="mp-status" class="status"></p>
+  </section>
+
   <section class="small">
     <h2>Keys</h2>
     <table>
@@ -100,6 +120,7 @@
       <tr><td>next view</td><td>F1 or C</td><td>right stick press</td></tr>
       <tr><td>new car, automatic gearbox</td><td>N, G</td><td></td></tr>
       <tr><td>pause, menu</td><td>P, Esc</td><td>Start</td></tr>
+      <tr><td>on a server: chat, leave</td><td>Enter, Esc</td><td></td></tr>
     </table>
     <p class="hint">
       The display shows the levels all the time (<code>TC 2/3</code>, <code>ABS off</code>,

@@ -12,6 +12,15 @@
 //        [--keys "KeyT,Shift+KeyT,KeyY,BracketRight,BracketLeft"]   (after --seconds of driving:
 //                          real key presses, one by one, with what the display showed of the
 //                          aids before and after each)
+//        multiplayer (the address has ?join=<server id>, see web/app.js):
+//        [--chat "hello@20,bye@40"]     chat lines, each so many seconds into the drive
+//        [--arrivals <file.csv>]        with &arrivals=1 in the address: when every car state
+//                                       arrived at the page and when the session took it
+//        [--shots <folder>] [--shot-near 60] [--shot-cars 2]
+//                                       a screenshot every 2 s while that many other cars are
+//                                       within that many metres (at most 8)
+//        [--end kill]                   end by killing the browser (a tab that just vanishes),
+//                                       not by closing it
 //
 // Waits until the page drives (or its self test is done, with ?selftest=N), lets it drive for
 // --seconds, takes a screenshot and prints the lap timer, the speed, the frame rate, the
@@ -190,11 +199,44 @@ try {
   const report = { url, browser: chrome, load_seconds: (Date.now() - started) / 1000, state: now.state, error: now.error, notes: now.notes };
   if (now.state === 'driving') {
     const samples = [];
-    const until = Date.now() + seconds * 1000;
+    const drivingSince = Date.now();
+    const until = drivingSince + seconds * 1000;
     let seen = null;
+    // multiplayer: chat lines by the clock, screenshots while other cars are near
+    const chat = option('--chat', '')
+      .split(',')
+      .filter(Boolean)
+      .map((item) => ({ text: item.slice(0, item.lastIndexOf('@')), at: Number(item.slice(item.lastIndexOf('@') + 1)) }))
+      .sort((a, b) => a.at - b.at);
+    const shots = option('--shots');
+    const shotNear = Number(option('--shot-near', '60'));
+    const shotCars = Number(option('--shot-cars', '2'));
+    let lastShot = 0;
+    report.chat_sent = [];
+    report.shots = [];
+    report.others_seen = 0;
     while (Date.now() < until) {
       await sleep(250);
       now = await page();
+      const drove = (Date.now() - drivingSince) / 1000;
+      while (chat.length && drove >= chat[0].at) {
+        const line = chat.shift();
+        report.chat_sent.push({ text: line.text, at: drove, sent: await evaluate(`window.rustyac.chat(${JSON.stringify(line.text)})`) });
+      }
+      if (now.hud?.online) {
+        const others = JSON.parse(await evaluate('JSON.stringify(window.rustyac.others())'));
+        const there = others.filter((car) => car.there);
+        report.others_seen = Math.max(report.others_seen, there.length);
+        const near = there.filter((car) => car.distance < shotNear);
+        if (shots && near.length >= shotCars && report.shots.length < 8 && Date.now() - lastShot > 2000) {
+          lastShot = Date.now();
+          const { data } = await send('Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+          mkdirSync(resolve(shots), { recursive: true });
+          const file = resolve(shots, `near_${report.shots.length + 1}.jpg`);
+          writeFileSync(file, Buffer.from(data, 'base64'));
+          report.shots.push({ file, at: drove, near: near.map((car) => `slot ${car.slot} ${car.distance} m`), drawn: now.hud.online.cars_drawn, boxes: now.hud.online.cars_as_boxes });
+        }
+      }
       if (now.perf && JSON.stringify(now.perf) !== seen) {
         seen = JSON.stringify(now.perf);
         samples.push(now.perf);
@@ -233,6 +275,18 @@ try {
       backend: now.perf?.backend,
       dropped_seconds: now.perf?.dropped_seconds,
     });
+    if (now.hud?.online) {
+      report.online = now.hud.online;
+      report.others = JSON.parse(await evaluate('JSON.stringify(window.rustyac.others())'));
+      report.join = JSON.parse(await evaluate('JSON.stringify(window.rustyac.join || null)'));
+      report.log = JSON.parse(await evaluate('JSON.stringify(window.rustyac.log.slice(-60))'));
+      const arrivals = option('--arrivals');
+      if (arrivals) {
+        mkdirSync(dirname(resolve(arrivals)), { recursive: true });
+        writeFileSync(arrivals, await evaluate('window.rustyac.arrivals()'));
+        report.arrivals = arrivals;
+      }
+    }
   } else if (now.state === 'selftest') {
     report.selftest = now.selftest;
   }
@@ -253,6 +307,10 @@ try {
   }
   report.console = messages.filter((m) => !m.startsWith('log:')).slice(0, 20);
   console.log(JSON.stringify(report, null, 2));
+  if (option('--end') === 'kill') {
+    // a tab that vanishes: the page gets no chance to say goodbye
+    browser.kill();
+  }
   await close(report.state === 'error' ? 1 : 0);
 } catch (error) {
   console.error(String(error && error.stack ? error.stack : error));

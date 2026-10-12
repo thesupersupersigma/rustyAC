@@ -15,6 +15,10 @@ name = "rustyac-content"
 version = "0.25.0"
 
 [[package]]
+name = "rustyac-gateway"
+version = "0.26.0"
+
+[[package]]
 name = "rustyac-math"
 version = "0.25.0"
 
@@ -22,6 +26,7 @@ version = "0.25.0"
 name = "rustyac-net"
 version = "0.25.0"
 dependencies = [
+ "rustyac-gateway",
  "rustyac-math",
  "rustyac-physics",
 ]

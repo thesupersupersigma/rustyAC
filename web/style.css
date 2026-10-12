@@ -121,6 +121,9 @@ footer { border-top: 1px solid var(--line); padding-top: 10px; color: var(--dim)
   border-radius: 4px;
 }
 #hud-note[hidden] { display: none; }
+#hud-online { position: absolute; left: 18px; top: 92px; white-space: pre; font-size: 13px; line-height: 1.35; background: rgba(0, 0, 0, 0.35); padding: 6px 10px; border-radius: 4px; }
+#hud-online[hidden], #chat[hidden] { display: none; }
+#chat { position: fixed; left: 18px; bottom: 60px; width: min(480px, 60vw); font: inherit; font-size: 15px; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: rgba(0, 0, 0, 0.7); color: #fff; z-index: 5; }
 #hud-perf { position: absolute; left: 18px; bottom: 14px; color: #d8dde3; white-space: pre; font-size: 12px; }
 
 #keys {

@@ -19,7 +19,7 @@ use rustyac_game::view::CarView;
 use wasm_bindgen::prelude::*;
 
 use crate::content;
-use crate::gpu::Gpu;
+use crate::gpu::{Gpu, OtherCar};
 use crate::session::Session;
 
 /// The folder the page's files sit under (a name only: nothing is on a disk).
@@ -134,7 +134,7 @@ impl FileWriter {
     }
 }
 
-fn json_text(text: &str) -> String {
+pub(crate) fn json_text(text: &str) -> String {
     let mut out = String::from("\"");
     for c in text.chars() {
         match c {
@@ -228,9 +228,13 @@ pub struct Game {
     work_ms: f64,
     dropped_seconds: f64,
     drawn: crate::gpu::DrawStats,
+    /// Online: the model on the card of every other player's car (the session's order).
+    remote_models: Vec<Option<usize>>,
+    /// Online: the WebSocket's end in here.
+    link: Option<std::rc::Rc<crate::net::Link>>,
 }
 
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     web_sys::window().and_then(|w| w.performance()).map_or(0.0, |p| p.now())
 }
 
@@ -241,30 +245,88 @@ impl Game {
     /// `webgl` forces WebGL2. `texture_size`: 0 = what suits the device. `samples`: 4 or 1.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(canvas: web_sys::HtmlCanvasElement, car: String, track: String, layout: String, spawn: String, auto_shifter: bool, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
-        let mut gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
-        let mut notes = vec![format!("picture: {}{}", gpu.backend, if gpu.compressed_textures { "" } else { ", no compressed textures (they are unpacked, at half the size)" })];
+        let gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
         let session = Session::new(&car, &track, &layout, auto_shifter, &spawn)?;
+        Ok(Game::finish(gpu, session, texture_size, None))
+    }
+
+    /// The same on a server: `join` is a join that is done ([`crate::net::NetJoin`]); the
+    /// car, the track and the other cars are the server's. The files have to be here
+    /// (`NetJoin::status` lists what the server runs; [`files_wanted`] per car).
+    /// `other_car_distance`: how far other cars are drawn with their model, metres (0: the
+    /// default).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_online(canvas: web_sys::HtmlCanvasElement, join: crate::net::NetJoin, spawn: String, auto_shifter: bool, backend: String, texture_size: u32, samples: u32, other_car_distance: f32) -> Result<Game, JsValue> {
+        let mut gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
+        if other_car_distance > 0.0 {
+            gpu.other_cars.model_m = other_car_distance;
+        }
+        // a device that has to unpack its textures is a small one: fewer car models at once
+        if !gpu.compressed_textures {
+            gpu.other_cars.models = 3;
+            gpu.other_cars.model_m = gpu.other_cars.model_m.min(80.0);
+        }
+        let (online, link) = join.finish(Path::new(ROOT))?;
+        let session = Session::new_online(online, auto_shifter, &spawn)?;
+        Ok(Game::finish(gpu, session, texture_size, Some(link)))
+    }
+
+    fn finish(mut gpu: Gpu, session: Session, texture_size: u32, link: Option<std::rc::Rc<crate::net::Link>>) -> Game {
+        let mut notes = vec![format!("picture: {}{}", gpu.backend, if gpu.compressed_textures { "" } else { ", no compressed textures (they are unpacked, at half the size)" })];
         // (without the loader's timing line: a browser's wasm has no clock of its own)
         notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
-        let (car_model, track_models) = content::model_files(Path::new(ROOT), &car, &track, &layout);
+        let setup = &session.sim.setup;
+        let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
         let options = gpu.model_options(texture_size);
         // a model that cannot be drawn is a line for the page, not the end of the drive
         match gpu.load_track(&track_models, &options) {
             Ok(summary) => notes.push(summary),
             Err(why) => notes.push(format!("the track's models are not drawn: {why}")),
         }
-        match car_model {
-            Some(file) => match gpu.load_car(&file, &options) {
+        match &car_model {
+            Some(file) => match gpu.load_car(file, &options) {
                 Ok(summary) => notes.push(summary),
                 Err(why) => notes.push(format!("the car's model is not drawn (boxes instead): {why}")),
             },
             None => notes.push("the car has no model file here: boxes instead".to_string()),
         }
+        // the other players' cars: one model per kind of car (the driver's own kind is on
+        // the card already), with smaller textures: they are seen from outside and afar
+        let mut remote_models = Vec::new();
+        if session.sim.online.is_some() {
+            let mut loaded: Vec<(PathBuf, Option<usize>)> = car_model.iter().map(|file| (file.clone(), gpu.car_model())).collect();
+            let other_options = crate::model::ModelOptions { texture_size: options.texture_size.min(512), texture_budget_mb: 96, ..options };
+            for info in session.sim.remote_infos() {
+                let model = match rustyac_game::sim::find_car_model(&info.name, &info.data_path) {
+                    Some(file) => match loaded.iter().find(|(known, _)| *known == file) {
+                        Some((_, model)) => *model,
+                        None => {
+                            let model = match gpu.load_car_model(&file, &other_options) {
+                                Ok((model, summary)) => {
+                                    notes.push(format!("{}: another {summary}", info.name));
+                                    Some(model)
+                                }
+                                Err(why) => {
+                                    notes.push(format!("the model of {} is not drawn (boxes instead): {why}", info.name));
+                                    None
+                                }
+                            };
+                            loaded.push((file, model));
+                            model
+                        }
+                    },
+                    None => None,
+                };
+                remote_models.push(model);
+            }
+            let limits = gpu.other_cars;
+            notes.push(format!("other cars: {} on the server; drawn with their model up to {:.0} m ({} at once), as boxes up to {:.0} m", remote_models.len(), limits.model_m, limits.models, limits.box_m));
+        }
         if let Some(wanted) = Some(files().take_wanted()).filter(|w| !w.is_empty()) {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
         }
         let view = session.view();
-        Ok(Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default() })
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), remote_models, link }
     }
 
     /// What loading found, one line each.
@@ -280,7 +342,9 @@ impl Game {
         let stats = self.session.advance(seconds)?;
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
-        self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera)?;
+        let remote = self.session.remote_views();
+        let others: Vec<OtherCar> = remote.iter().zip(&self.session.remote_shapes).zip(&self.remote_models).map(|((view, shape), model)| OtherCar { view, shape, model: *model }).collect();
+        self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?;
         self.frames += 1;
         self.steps += stats.steps;
         self.dropped_seconds += stats.dropped_seconds;
@@ -378,7 +442,7 @@ impl Game {
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
              \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
-             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}}}",
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -413,8 +477,114 @@ impl Game {
             v.abs_mode.1,
             v.abs_present,
             n(v.brake_bias),
-            json_text(v.aid_note().unwrap_or(""))
+            json_text(v.aid_note().unwrap_or("")),
+            self.online_json()
         )
+    }
+
+    /// Online: the server, the session, the drivers and the chat, as JSON (`null` offline).
+    fn online_json(&self) -> String {
+        let Some(session) = &self.session.sim.online else {
+            return "null".to_string();
+        };
+        let client = &session.net.client;
+        let drivers: Vec<String> = session
+            .roster
+            .iter()
+            .filter(|entry| entry.connected)
+            .map(|entry| {
+                format!(
+                    "{{\"slot\": {}, \"name\": {}, \"car\": {}, \"me\": {}, \"laps\": {}, \"best_ms\": {}, \"last_ms\": {}, \"ping\": {}}}",
+                    entry.slot,
+                    json_text(&entry.driver),
+                    json_text(&entry.model),
+                    entry.me,
+                    entry.laps,
+                    entry.best_lap_ms,
+                    entry.last_lap_ms,
+                    entry.ping
+                )
+            })
+            .collect();
+        let chat: Vec<String> = session.chat.iter().map(|line| json_text(line)).collect();
+        let there = session.net.cars.iter().filter(|car| !car.is_disconnected).count();
+        format!(
+            "{{\"server\": {}, \"session\": {}, \"ping\": {}, \"slot\": {}, \"associated\": {}, \"lost\": {}, \"drivers\": [{}], \"chat\": [{}], \"cars_there\": {}, \"cars_drawn\": {}, \"cars_as_boxes\": {},              \"datagrams_in\": {}, \"datagrams_out\": {}, \"messages_in\": {}, \"datagrams_dropped\": {}}}",
+            json_text(&client.accepted.server_name),
+            json_text(&client.current_session.name),
+            client.ping,
+            client.session_id,
+            client.is_associated,
+            client.is_lost(),
+            drivers.join(", "),
+            chat.join(", "),
+            there,
+            self.drawn.other_models,
+            self.drawn.other_boxes,
+            client.datagrams_in,
+            client.datagrams_out,
+            client.messages_in,
+            self.link.as_ref().map_or(0, |link| link.dropped())
+        )
+    }
+
+    /// Online: says `text` in the chat. False when it did not go out (the game sends one
+    /// line a second at most; nothing offline).
+    pub fn chat(&mut self, text: &str) -> bool {
+        let now = self.session.sim.sim_seconds() * 1000.0;
+        match &mut self.session.sim.online {
+            Some(session) => session.net.client.send_chat(text, now),
+            None => false,
+        }
+    }
+
+    /// Online: tells the server the player is leaving (`ACClient::shutdown`). The page
+    /// closes the WebSocket after it.
+    pub fn leave(&mut self) {
+        if let Some(session) = &mut self.session.sim.online {
+            if !session.net.client.is_lost() {
+                session.net.client.shutdown();
+            }
+        }
+    }
+
+    /// Online: what the session printed since the last call (who joined, laps, chat ...),
+    /// one line each.
+    pub fn take_console(&mut self) -> String {
+        std::mem::take(&mut self.session.console).join("\n")
+    }
+
+    /// Online: where the other cars are, as JSON (a check reads it): per car its slot,
+    /// whether it is there, its position and speed, and the distance from the driver's car.
+    pub fn other_cars(&self) -> String {
+        let Some(session) = &self.session.sim.online else {
+            return "[]".to_string();
+        };
+        let me = self.view.body[3];
+        let cars: Vec<String> = session
+            .net
+            .cars
+            .iter()
+            .zip(self.session.remote_views())
+            .zip(&session.remote)
+            .map(|((car, view), remote)| {
+                let p = view.body[3];
+                let d = [p[0] - me[0], p[1] - me[1], p[2] - me[2]];
+                let n = |x: f32| if x.is_finite() { x } else { 0.0 };
+                format!(
+                    "{{\"slot\": {}, \"model\": {}, \"there\": {}, \"x\": {:.2}, \"y\": {:.2}, \"z\": {:.2}, \"kmh\": {:.1}, \"distance\": {:.1}}}",
+                    car.session_id,
+                    json_text(&remote.entry.model),
+                    !car.is_disconnected,
+                    n(p[0]),
+                    n(p[1]),
+                    n(p[2]),
+                    n(car.state.speed * 3.6),
+                    n((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt())
+                )
+            })
+            .collect();
+        format!("[{}]", cars.join(", "))
     }
 
     /// The counters since the last call, as JSON: frames, physics steps, the milliseconds a
@@ -422,7 +592,7 @@ impl Game {
     /// drew.
     pub fn take_stats(&mut self) -> String {
         let out = format!(
-            "{{\"frames\": {}, \"steps\": {}, \"work_ms_per_frame\": {:.3}, \"meshes\": {}, \"triangles\": {}, \"total_steps\": {}, \"dropped_seconds\": {:.3}, \"file_megabytes\": {:.1}, \"backend\": {}}}",
+            "{{\"frames\": {}, \"steps\": {}, \"work_ms_per_frame\": {:.3}, \"meshes\": {}, \"triangles\": {}, \"total_steps\": {}, \"dropped_seconds\": {:.3}, \"file_megabytes\": {:.1}, \"backend\": {}, \"other_cars_drawn\": {}, \"other_cars_as_boxes\": {}}}",
             self.frames,
             self.steps,
             if self.frames > 0 { self.work_ms / self.frames as f64 } else { 0.0 },
@@ -431,7 +601,9 @@ impl Game {
             self.session.total_steps,
             self.dropped_seconds,
             fs_megabytes(),
-            json_text(&self.gpu.backend)
+            json_text(&self.gpu.backend),
+            self.drawn.other_models,
+            self.drawn.other_boxes
         );
         self.frames = 0;
         self.steps = 0;
