@@ -521,6 +521,51 @@ To offer other servers, edit `web/servers.json` and redeploy.
 4. Assetto Corsa itself: Content Manager > Online > add `10.0.0.140:8091` (LAN) > Join,
    with a browser on the same server.
 
+### 7. As it is deployed: rustyac.com
+
+The steps above say `rustyac.example.com` and were written before the first deployment. This is what the
+real one looks like, where it differs:
+
+- **The public site is `rustyac.com`**, a separate repository (**rustyACSite**). It downloads the newest
+  release's web zip and serves it at `/play/app/`; the preview pack is mounted at `/play/app/preview` from
+  `/storage/rustyac/preview` on the server (not `/srv/...`). See `docs/web.md`, "As it is deployed".
+- **The gateways are reached as `wss://rustyac.com/net/spa` and `wss://rustyac.com/net/laguna_seca`**:
+
+  ```
+  rustyac.exe --join wss://rustyac.com/net/spa --car ks_ferrari_f2004
+  rustyac.exe --join wss://rustyac.com/net/laguna_seca --car bmw_z4_gt3
+  ```
+
+  (`CF_ACCESS_HOST` is then `rustyac.com`.)
+- **`cloudflared` runs as a container in Coolify's `coolify` network**, so it reaches neither the host's
+  `127.0.0.1` nor a gateway bound there. The gateways publish on the **docker0 address** instead:
+  `GATEWAY_BIND=10.0.1.1` on this server (`ip -4 addr show docker0` prints yours), and the tunnel routes
+  point at `http://10.0.1.1:9601` (spa) and `http://10.0.1.1:9611` (laguna_seca). `0.0.0.0` is not needed
+  and would open the ports to the network.
+- **The two `/net/...` routes are listed above the site's own entry** in the tunnel's public hostnames (the
+  first match wins; below it they would go to the site and answer 404):
+
+  ```yaml
+  ingress:
+    - hostname: rustyac.com
+      path: ^/net/spa
+      service: http://10.0.1.1:9601
+    - hostname: rustyac.com
+      path: ^/net/laguna_seca
+      service: http://10.0.1.1:9611
+    - hostname: rustyac.com
+      service: <the site, as before>
+  ```
+
+- **Cloudflare Access covers only `rustyac.com/play/app/preview` and `rustyac.com/net`, both in one
+  application** (two paths of the same application, so one login and one cookie serve the pack and the
+  WebSocket). The page itself is public and offers "Open your Assetto Corsa folder" to everybody else.
+- **Browser Cache TTL: "Respect Existing Headers"** (Cloudflare -> Caching -> Configuration). Otherwise an
+  update mixes an old cached `rustyac_web.js` with a new `.wasm` and the page stops with
+  `function import requires a callable`.
+- **A new file in the web zip** has to be added to the allowlist in rustyACSite's
+  `scripts/fetch-web-preview.mjs` (`servers.json` already is).
+
 ## Not done
 
 - **Nothing was deployed and no Docker image was built.** There is no Docker on this PC.

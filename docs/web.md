@@ -370,6 +370,34 @@ A track's main model is up to 441 MB in one response. A tunnel passes that throu
 is for uploads, not downloads); the page shows its progress bar meanwhile and keeps the file in the browser's
 own storage afterwards.
 
+### As it is deployed: rustyac.com
+
+The steps above are the general way (this repository's own image, one host name for the page). The public
+site is set up a little differently, and these are the facts of it:
+
+- **The public site is `rustyac.com`**, built from a separate repository, **rustyACSite**. It does not build
+  this repository: its `scripts/fetch-web-preview.mjs` downloads the newest release's
+  `rustyAC-vX.Y.Z-web.zip` and serves it at **`/play/app/`**.
+- **A new file in the web zip has to be added to that script's allowlist**, otherwise the site does not serve
+  it (`servers.json` is already in the list). Whoever adds a file to `web/build.py`'s output: add it there too.
+- **The preview pack** is mounted at `/play/app/preview` from the server's folder
+  **`/storage/rustyac/preview`** (not `/srv/rustyac/preview` as in the example above):
+
+  ```
+  scp -r dist-web/preview/* tsss-server:/storage/rustyac/preview/
+  ssh tsss-server "chmod -R a+rX /storage/rustyac/preview"
+  ```
+
+- **The gateways** are reached as `wss://rustyac.com/net/spa` and `wss://rustyac.com/net/laguna_seca` (see
+  `docs/port/multiplayer_web.md`, "As it is deployed").
+- **Cloudflare Access covers only two paths, in one application**: `rustyac.com/play/app/preview` and
+  `rustyac.com/net`. The page itself stays public: a visitor without a login gets "Open your Assetto Corsa
+  folder" and never sees the pack or a server.
+- **Cloudflare's Browser Cache TTL must be "Respect Existing Headers"** (Caching -> Configuration). With any
+  other value Cloudflare overrides the `no-cache` the site sends for the page's script, the wasm and its glue,
+  and after an update a browser mixes an old cached `rustyac_web.js` with a new `.wasm`. The page then stops
+  with `function import requires a callable`.
+
 ### Old processors (no AVX)
 
 The server this was written for has Xeon E5620 processors, which have no AVX.
