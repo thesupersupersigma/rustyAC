@@ -120,6 +120,24 @@ pub trait EngineModel: Send {
     }
     /// `Engine::setTurboBoostLevel` @ 0x140288090: the cockpit boost control.
     fn set_turbo_boost_level(&mut self, level: f32);
+    /// `Engine::turboAdjustableFromCockpit`
+    fn turbo_adjustable_from_cockpit(&self) -> bool {
+        false
+    }
+    /// `Engine::turboControllers` is not empty
+    fn has_turbo_controllers(&self) -> bool {
+        false
+    }
+    /// `Engine::rpmDamageThreshold`
+    fn rpm_damage_threshold(&self) -> f32;
+    /// `Engine::getSafeTurboLevel` @ 0x140285b50: the boost setting at which the turbos
+    /// reach the pressure that damages the engine.
+    fn get_safe_turbo_level(&self) -> f32;
+    /// `Engine::getThrottleResponseGas` @ 0x140285b90
+    fn throttle_response_gas(&self, gas: f32, rpm: f32) -> f32;
+    /// `Engine::getTorqueAtRPM` @ 0x140285c80: the torque at an engine speed and a throttle,
+    /// with the coast torque of the engine's speed in its last step.
+    fn get_torque_at_rpm(&self, rpm: f32, gas: f32) -> f32;
     /// `Engine::setCoastSettings` @ 0x140288010: the cockpit engine-brake control.
     fn set_coast_settings(&mut self, index: i32);
     /// `Engine::blowUp` @ 0x140285a30
@@ -683,6 +701,51 @@ impl VanillaEngine {
 }
 
 impl EngineModel for VanillaEngine {
+    fn turbo_adjustable_from_cockpit(&self) -> bool {
+        self.turbo_adjustable_from_cockpit
+    }
+
+    fn has_turbo_controllers(&self) -> bool {
+        !self.turbo_controllers.is_empty()
+    }
+
+    fn rpm_damage_threshold(&self) -> f32 {
+        self.rpm_damage_threshold
+    }
+
+    fn get_safe_turbo_level(&self) -> f32 {
+        let mut sum = 0.0f32;
+        for turbo in &self.turbos {
+            sum += turbo.data.max_boost;
+        }
+        self.turbo_boost_damage_threshold / sum
+    }
+
+    fn throttle_response_gas(&self, gas: f32, rpm: f32) -> f32 {
+        self.get_throttle_response_gas(gas, rpm)
+    }
+
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    fn get_torque_at_rpm(&self, rpm: f32, gas: f32) -> f32 {
+        let power = self.data.power_curve.get_value(rpm);
+        let mut coast = self.data.coast0;
+        let last = self.base.last_input.rpm;
+        if self.data.coast1 < 0.0 || self.data.coast1 > 0.0 {
+            coast += (self.data.coast1 * last) * self.base.coast_torque_multiplier;
+        }
+        if self.data.coast2 < 0.0 || self.data.coast2 > 0.0 {
+            let sign = if last > 0.0 {
+                1.0f32
+            } else if last < 0.0 {
+                -1.0
+            } else {
+                0.0
+            };
+            coast -= (((self.data.coast2 * self.base.coast_torque_multiplier) * last) * last) * sign;
+        }
+        (power - coast) * gas + coast
+    }
+
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn step(&mut self, input: &SACEngineInput, dt: f32, car: &CarSignals) {
         self.base.last_input = *input;

@@ -38,7 +38,9 @@ pub mod record;
 
 use std::sync::Arc;
 
+use crate::ai::{AiStepInput, CarView, SessionInfo};
 use crate::car::chassis::{turn_to_car, CollisionInputs};
+use crate::session::MsvcRand;
 use crate::car::vanilla_car::DeviceFeed;
 use crate::car::{ChassisEnvironment, ControlsProvider, PhysicsCore, RigidBody, RollingChassis, SlipStream};
 use crate::ode::{BodyId, GeomId, JointId};
@@ -59,6 +61,13 @@ impl DeviceRef<'_> {
         match self {
             DeviceRef::Here(device) => *device,
             DeviceRef::Anywhere(device) => *device,
+        }
+    }
+
+    fn is_ai(&self) -> bool {
+        match self {
+            DeviceRef::Here(device) => device.is_ai(),
+            DeviceRef::Anywhere(device) => device.is_ai(),
         }
     }
 }
@@ -152,6 +161,12 @@ pub struct PhysicsEngine {
     /// pass, in `dWorldStep`, and in the rest of the step (copies, `Car::postStep`). Wall
     /// time; always 0 where there is no clock (wasm).
     pub seconds: [f64; 4],
+    /// `PhysicsEngine::sessionInfo`: what the AI drivers read of the session
+    /// ([`PhysicsEngine::set_session`])
+    pub session: SessionInfo,
+    /// The physics thread's `rand()` as the AI drivers draw from it: one stream for all of
+    /// them, in the order the game draws without a thread pool. A recording stores it.
+    pub ai_rand: MsvcRand,
     parts: Vec<CarParts>,
     /// The core is out, in a car that is being built.
     building: bool,
@@ -259,6 +274,8 @@ impl PhysicsEngine {
             last_events: Vec::new(),
             extra_wakes: Vec::new(),
             seconds: [0.0; 4],
+            session: SessionInfo { session_type: crate::ai::SESSION_UNDEFINED, start_time_ms: 0.0, time_secs: 0.0, laps: 0, index: 0 },
+            ai_rand: MsvcRand(1),
             parts: Vec::new(),
             building: false,
             stepped: false,
@@ -423,6 +440,8 @@ impl PhysicsEngine {
         for slot in cars.iter_mut() {
             slot.car.run_pre_step_jobs(physics_time);
         }
+        // (a job that put a car somewhere: Car::evOnForcedPositionCompleted)
+        self.deliver_forced_positions(cars);
 
         // Track::step @ 0x140278d20: the laps of all cars rubber the track in
         if let Some(track) = &mut self.dynamic_track {
@@ -531,8 +550,82 @@ impl PhysicsEngine {
         self.seconds[3] += clock.seconds();
     }
 
+    /// Calls `f` on car `index` and its device with [`AiStepInput`] in the car: the other
+    /// cars as they are now, the session and the drivers' random stream (taken back after).
+    fn with_ai_input(&mut self, cars: &mut [CarSlot<'_>], index: usize, f: impl FnOnce(&mut dyn ControlsProvider, &mut RollingChassis)) {
+        let views: Vec<CarView> = cars.iter().map(|slot| CarView::of(slot.car)).collect();
+        let slot = &mut cars[index];
+        slot.car.ai_input = AiStepInput { cars: views, me: index, rand: self.ai_rand, session: self.session };
+        f(slot.device.get(), slot.car);
+        self.ai_rand = slot.car.ai_input.rand;
+    }
+
+    /// `Car::evOnForcedPositionCompleted` of every car that was put somewhere since
+    /// (`Car::forcePosition`), in creation order: an AI driver chooses again where and when
+    /// it starts (`AIDriver::selectTimeStartTime`). [`PhysicsEngine::step`] does it for what
+    /// the queued jobs did; whoever places cars between two steps calls it after each car,
+    /// as the game's handlers run inside `Car::forcePosition`.
+    pub fn deliver_forced_positions(&mut self, cars: &mut [CarSlot<'_>]) {
+        for index in 0..cars.len() {
+            if cars[index].car.forced_position_events == 0 {
+                continue;
+            }
+            if cars[index].device.is_ai() {
+                self.with_ai_input(cars, index, |device, car| device.on_forced_position(car));
+            }
+            cars[index].car.forced_position_events = 0;
+        }
+    }
+
+    /// `PhysicsEngine::setSessionInfo` @ 0x140264560 and `evOnNewSessionPhysics`: the new
+    /// session for every car (`Car::onNewSession`: not retired any more, the fuel
+    /// evaluator's lap count from the start) and then for every AI driver, in creation order.
+    pub fn set_session(&mut self, info: SessionInfo, cars: &mut [CarSlot<'_>]) {
+        self.session = info;
+        for slot in cars.iter_mut() {
+            slot.car.env.session_type = info.session_type;
+            slot.car.env.session_start_time_ms = info.start_time_ms;
+            slot.car.is_retired = false;
+            slot.car.fuel_lap_evaluator.on_new_session();
+        }
+        self.env.session_type = info.session_type;
+        self.env.session_start_time_ms = info.start_time_ms;
+        for index in 0..cars.len() {
+            if cars[index].device.is_ai() {
+                self.with_ai_input(cars, index, |device, car| device.on_new_session(car, &info));
+            }
+        }
+    }
+
     /// `Car::stepPreCacheValues` and `Car::step` of every car.
     fn step_cars(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
+        if cars.iter().any(|slot| slot.device.is_ai()) {
+            // An AI driver reads the other cars as they are when its own car is stepped (the
+            // ones before it stepped already, the ones after it not yet) and draws from the
+            // one `rand()` of the physics thread: the game without its thread pool. So the
+            // cars are stepped in creation order here, with any number of workers.
+            for slot in cars.iter_mut() {
+                slot.car.step_pre_cache_values();
+            }
+            for index in 0..cars.len() {
+                if cars[index].device.is_ai() {
+                    self.with_ai_input(cars, index, |device, car| {
+                        let mut feed = DeviceFeed { device, dt };
+                        car.step_car(dt, physics_time, &mut feed);
+                    });
+                } else {
+                    step_one(&mut cars[index], dt, physics_time);
+                }
+                // Car::step's own teleport (a black flag): the driver is told before the next car
+                if cars[index].car.forced_position_events != 0 {
+                    if cars[index].device.is_ai() {
+                        self.with_ai_input(cars, index, |device, car| device.on_forced_position(car));
+                    }
+                    cars[index].car.forced_position_events = 0;
+                }
+            }
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &mut self.pool {
             // the game's split: the first `cars / workers + 1` cars on the calling thread,

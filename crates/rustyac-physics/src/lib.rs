@@ -7,10 +7,12 @@
 //! port of Assetto Corsa's code, bit-exact where that can be shown) and, later, an
 //! **Enhanced** one. Ported functions carry their original name and address in `acs.exe`.
 
+pub mod ai;
 pub mod car;
 pub mod curve;
 pub mod data;
 pub mod engine;
+pub mod msvc_sort;
 pub mod session;
 /// The C runtime functions with AC's exact results (shared crate `rustyac-math`).
 pub use rustyac_math as math;

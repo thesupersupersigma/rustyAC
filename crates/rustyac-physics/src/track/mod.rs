@@ -15,6 +15,7 @@
 //! thread and its display (`Arc<Track>`); what does change during a session (the grip level,
 //! each car's timer) lives in [`DynamicTrack`] and in the car.
 
+pub mod ai_line;
 pub mod catalog;
 pub mod loader;
 pub mod spline;
@@ -81,6 +82,11 @@ pub struct Track {
     pub ai_spline: Option<AiSpline>,
     /// `aiSplineRecorder->pitLaneSpline`
     pub pit_lane_spline: Option<AiSpline>,
+    /// `aiSplineRecorder` as the AI drivers need it: both lines finished as the game finishes
+    /// them at load, and the track's hints ([`Track::init_ai`]; `None` until then)
+    pub ai: Option<ai_line::AiSplineRecorder>,
+    /// The layout's `ai` folder
+    pub ai_folder: PathBuf,
     /// `startingBounds` (`data/starting_bounds.ini`): ranges of AI-line point indices
     pub starting_bounds: Vec<(u32, u32)>,
     /// The helper nodes of the track's models (every node whose name starts with `AC_`), in
@@ -165,6 +171,20 @@ impl Track {
     pub fn ray_cast_hit(&self, org: &Vec3f, dir: &Vec3f, length: f32) -> Option<TrackRayHit> {
         let contact = self.world.ray_cast(&[org.x, org.y, org.z], &[dir.x, dir.y, dir.z], length)?;
         Some(TrackRayHit { contact, surface_def: self.surfaces[contact.mesh].surface_def })
+    }
+
+    /// `AISplineRecorder::load` @ 0x1402952c0 and `loadHints` for the AI drivers: both lines
+    /// finished as the game finishes them when it loads a track (every point's radius,
+    /// grade and corner distances worked out again, normals, camber and grip from the track
+    /// under the line, the straights, the pit lane's line and where it meets the fast lane)
+    /// and `data/ai_hints.ini`. It takes a few seconds, so only a session with an AI driver
+    /// asks for it; nothing else reads [`Track::ai`].
+    pub fn init_ai(&mut self) -> Result<(), String> {
+        if self.ai.is_none() {
+            let recorder = ai_line::AiSplineRecorder::load(self, &self.ai_folder, &self.data_folder.join("data"))?;
+            self.ai = Some(recorder);
+        }
+        Ok(())
     }
 
     /// The name of the surface type a `SurfaceDef` of this track came from, for the display.

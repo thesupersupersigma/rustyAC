@@ -43,6 +43,29 @@ pub struct CarMeta {
     pub auto_shifter: bool,
     /// The car has its own collider mesh (the game's `collider.kn5`).
     pub collider_mesh: bool,
+    /// Task 27: the car is driven by the game's `AIDriver` (and here by the port's): its
+    /// inputs in a row are what the driver left in `Car::controls`, and its row has the
+    /// driver's members ([`crate::ai::oracle`]).
+    pub ai: Option<AiMeta>,
+}
+
+/// An AI driver of a recording.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AiMeta {
+    /// `AIDriver::basePush`, `AIDriver::aggression` as they were set after the constructor
+    pub base_push: f32,
+    pub aggression: f32,
+    /// `Car::expectedFuelPerLap` as the game's `Car::Car` worked it out
+    pub expected_fuel_per_lap: f32,
+}
+
+/// A car's columns after its inputs: its state, and an AI driver's members.
+pub fn car_columns(car: &CarMeta) -> Vec<String> {
+    let mut out = state_columns(car.bodies);
+    if car.ai.is_some() {
+        out.extend(crate::ai::oracle::column_names());
+    }
+    out
 }
 
 /// A recording: the header's keys, the cars, and one row of 32-bit words per step.
@@ -198,6 +221,9 @@ impl Recording {
             self.set(&format!("car.{n}.auto_clutch"), (car.auto_clutch as u8).to_string());
             self.set(&format!("car.{n}.auto_shifter"), (car.auto_shifter as u8).to_string());
             self.set(&format!("car.{n}.collider_mesh"), (car.collider_mesh as u8).to_string());
+            if let Some(ai) = &car.ai {
+                self.set(&format!("car.{n}.ai"), hex3(&[ai.base_push, ai.aggression, ai.expected_fuel_per_lap]));
+            }
         }
     }
 
@@ -216,6 +242,13 @@ impl Recording {
                 auto_clutch: flag("auto_clutch")?,
                 auto_shifter: flag("auto_shifter")?,
                 collider_mesh: flag("collider_mesh")?,
+                ai: match self.get(&key("ai")) {
+                    Some(text) => {
+                        let v = parse_hex3(text)?;
+                        Some(AiMeta { base_push: v[0], aggression: v[1], expected_fuel_per_lap: v[2] })
+                    }
+                    None => None,
+                },
             });
         }
         Ok(cars)
@@ -223,7 +256,7 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + state_columns(car.bodies).len()).sum::<usize>()
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>()
     }
 
     /// The name of every word of a row.
@@ -231,14 +264,14 @@ impl Recording {
         let mut out: Vec<String> = WORLD_COLUMNS.iter().map(|s| s.to_string()).collect();
         for (n, car) in self.cars.iter().enumerate() {
             out.extend(INPUT_COLUMNS.iter().map(|name| format!("car{n}.{name}")));
-            out.extend(state_columns(car.bodies).into_iter().map(|name| format!("car{n}.{name}")));
+            out.extend(car_columns(car).into_iter().map(|name| format!("car{n}.{name}")));
         }
         out
     }
 
     /// Where car `n`'s inputs start in a row.
     pub fn input_offset(&self, n: usize) -> usize {
-        WORLD_COLUMNS.len() + self.cars[..n].iter().map(|car| INPUT_COLUMNS.len() + state_columns(car.bodies).len()).sum::<usize>()
+        WORLD_COLUMNS.len() + self.cars[..n].iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>()
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -366,6 +399,8 @@ pub struct ReplayWorld {
     pub engine: PhysicsEngine,
     pub cars: Vec<RollingChassis>,
     pub devices: Vec<ScriptedDevice>,
+    /// Task 27: the cars' AI drivers (a car without one is driven by its scripted device)
+    pub ai: Vec<Option<Box<crate::ai::AiDriver>>>,
     pub clock_start_ms: f64,
     pub steps: usize,
 }
@@ -384,7 +419,11 @@ pub fn load_track(recording: &Recording, paths: &ReplayPaths) -> Result<Arc<Trac
         let name = text.rsplit(['/', '\\']).find(|part| !part.is_empty()).ok_or("track_folder has no name")?;
         paths.game_root.as_ref().ok_or("the recording's track folder is not here and no game folder was given")?.join("content").join("tracks").join(name)
     };
-    let (track, _report) = crate::track::load_track(&folder, layout)?;
+    let (mut track, _report) = crate::track::load_track(&folder, layout)?;
+    if recording.cars.iter().any(|car| car.ai.is_some()) {
+        // the lines as the AI drivers need them
+        track.init_ai()?;
+    }
     Ok(Arc::new(track))
 }
 
@@ -442,7 +481,52 @@ impl ReplayWorld {
         }
         engine.core.set_no_collision_steps(number("no_collision_steps")? as i32);
         let devices = vec![ScriptedDevice::default(); cars.len()];
-        Ok(ReplayWorld { engine, cars, devices, clock_start_ms, steps: 0 })
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), clock_start_ms, steps: 0 };
+        world.ai.resize_with(world.cars.len(), || None);
+        if recording.cars.iter().any(|meta| meta.ai.is_some()) {
+            world.build_ai(recording, clock_start_ms)?;
+        }
+        Ok(world)
+    }
+
+    /// Task 27: the AI drivers, made as `tools/car_oracle multi` made the game's: after all
+    /// cars, in creation order, from the `rand()` state `ai_seed`; then the session
+    /// (`ai_session`: type, milliseconds from the clock's start to the green light, seconds,
+    /// laps), which every driver is told, and every car put on its place once more.
+    fn build_ai(&mut self, recording: &Recording, clock_start_ms: f64) -> Result<(), String> {
+        let seed: u32 = recording.need("ai_seed")?.parse().map_err(|e| format!("ai_seed: {e}"))?;
+        self.engine.ai_rand = crate::session::MsvcRand(seed);
+        let session = self.engine.session;
+        for (n, meta) in recording.cars.iter().enumerate() {
+            let car = &mut self.cars[n];
+            car.forced_position_events = 0;
+            car.init_pitstop_timings()?;
+            let Some(ai) = &meta.ai else { continue };
+            car.expected_fuel_per_lap = ai.expected_fuel_per_lap;
+            let mut rand = self.engine.ai_rand;
+            car.ai_input.session = session;
+            let mut driver = crate::ai::AiDriver::new(car, &session, &mut rand, &crate::ai::driver::AiFiles::default())?;
+            self.engine.ai_rand = rand;
+            driver.base_push = ai.base_push;
+            driver.aggression = ai.aggression;
+            self.ai[n] = Some(Box::new(driver));
+        }
+        if let Some(text) = recording.get("ai_session") {
+            let parts: Vec<f64> = text.split(',').map(|part| part.parse::<f64>().map_err(|e| format!("ai_session: {e}"))).collect::<Result<_, _>>()?;
+            if parts.len() != 4 {
+                return Err("ai_session: four numbers".to_string());
+            }
+            let info = crate::ai::SessionInfo { session_type: parts[0] as i32, start_time_ms: clock_start_ms + parts[1], time_secs: parts[2], laps: parts[3] as i32, index: 0 };
+            let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
+            self.engine.set_session(info, &mut slots);
+            for n in 0..recording.cars.len() {
+                let meta = &recording.cars[n];
+                slots[n].car.force_rotation(&Vec3f::new(meta.tail[0], meta.tail[1], meta.tail[2]));
+                slots[n].car.force_position(&Vec3f::new(meta.position[0], meta.position[1], meta.position[2]));
+                self.engine.deliver_forced_positions(&mut slots);
+            }
+        }
+        Ok(())
     }
 
     /// One step with these controls (a car's [`INPUT_COLUMNS`] words each).
@@ -467,8 +551,7 @@ impl ReplayWorld {
             c.requested_gear_index = words[6] as i32;
         }
         let time = self.clock_start_ms + (self.steps as f64 + 1.0) * 3.0;
-        let mut slots: Vec<CarSlot<'_>> =
-            self.cars.iter_mut().zip(self.devices.iter_mut()).map(|(car, device)| CarSlot { car, device: DeviceRef::Anywhere(device) }).collect();
+        let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
         self.engine.step_with(0.003, time, &mut slots, hooks);
         self.steps += 1;
     }
@@ -511,7 +594,16 @@ impl ReplayWorld {
         row.push(self.engine.core.no_collision_counter as u32);
         row.push(self.engine.core.current_frame);
         for (n, car) in self.cars.iter().enumerate() {
-            row.extend_from_slice(inputs[n]);
+            match &self.ai[n] {
+                // an AI driver's inputs: what it left in the car's controls
+                Some(_) => {
+                    let c = &car.controls;
+                    row.extend([c.gas, c.brake, c.steer, c.clutch, c.hand_brake].map(f32::to_bits));
+                    row.push(c.gear_up as u32 | (c.gear_dn as u32) << 1 | (c.drs as u32) << 2 | (c.kers as u32) << 3);
+                    row.push(c.requested_gear_index as u32);
+                }
+                None => row.extend_from_slice(inputs[n]),
+            }
             for &body in self.engine.bodies_of(n) {
                 let b = car.core.world.body(body);
                 row.extend(b.pos[..3].iter().map(|x| x.to_bits()));
@@ -542,9 +634,25 @@ impl ReplayWorld {
             row.extend(double(car.last_collision_with_car_time));
             row.push(car.transponder.lap_count);
             row.push(car.spline_locator_data.npos.to_bits());
+            if let Some(driver) = &self.ai[n] {
+                row.extend(driver.oracle_words());
+            }
         }
         row
     }
+}
+
+/// The cars with their devices as the engine takes them: a car's AI driver, else its
+/// scripted device.
+fn slots_of<'a>(cars: &'a mut [RollingChassis], devices: &'a mut [ScriptedDevice], ai: &'a mut [Option<Box<crate::ai::AiDriver>>]) -> Vec<CarSlot<'a>> {
+    cars.iter_mut()
+        .zip(devices.iter_mut())
+        .zip(ai.iter_mut())
+        .map(|((car, device), ai)| match ai {
+            Some(driver) => CarSlot { car, device: DeviceRef::Anywhere(&mut **driver) },
+            None => CarSlot { car, device: DeviceRef::Anywhere(device) },
+        })
+        .collect()
 }
 
 /// Two words are the same value: the same bits, or two NaNs (a NaN's sign and payload follow
@@ -563,6 +671,7 @@ fn is_float_column(name: &str) -> bool {
         || name.ends_with("lapCount")
         || name.ends_with("buttons")
         || name.ends_with("requestedGear")
+        || name.contains(".ai.i.")
         || name.starts_with("world."))
 }
 

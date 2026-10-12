@@ -64,6 +64,7 @@ pub enum Choice {
 type F1 = unsafe extern "C" fn(f32) -> f32;
 type F2 = unsafe extern "C" fn(f32, f32) -> f32;
 type D1 = unsafe extern "C" fn(f64) -> f64;
+type D2 = unsafe extern "C" fn(f64, f64) -> f64;
 type Wcstod = unsafe extern "C" fn(*const u16, *mut *mut u16) -> f64;
 type Wcstol = unsafe extern "C" fn(*const u16, *mut *mut u16, i32) -> i32;
 type Errno = unsafe extern "C" fn() -> *mut i32;
@@ -85,6 +86,10 @@ struct Crt {
     log10f: F1,
     sin: D1,
     cos: D1,
+    asin: D1,
+    acos: D1,
+    tan: D1,
+    pow: D2,
     /// `wcstod`, `wcstol`, `_errno`: only with the real runtime; std has its own parser.
     parse: Option<(Wcstod, Wcstol, Errno)>,
 }
@@ -125,6 +130,18 @@ unsafe extern "C" fn std_sin(x: f64) -> f64 {
 
 unsafe extern "C" fn std_cos(x: f64) -> f64 {
     x.cos()
+}
+unsafe extern "C" fn std_asin(x: f64) -> f64 {
+    x.asin()
+}
+unsafe extern "C" fn std_acos(x: f64) -> f64 {
+    x.acos()
+}
+unsafe extern "C" fn std_tan(x: f64) -> f64 {
+    x.tan()
+}
+unsafe extern "C" fn std_pow(x: f64, y: f64) -> f64 {
+    x.powf(y)
 }
 
 unsafe extern "C" fn pure_sinf(x: f32) -> f32 {
@@ -177,6 +194,12 @@ const PURE: Crt = Crt {
     // (the DLL's double-precision cosine is not rewritten: only the version 1 flames' wobble
     // reads it, on a desktop that has the DLL)
     cos: std_cos,
+    // (the DLL's double-precision asin, acos, tan and pow are not rewritten: only the AI
+    // line's start-up maths reads them, see `asin`)
+    asin: std_asin,
+    acos: std_acos,
+    tan: std_tan,
+    pow: std_pow,
     parse: None,
 };
 
@@ -194,6 +217,12 @@ const STD: Crt = Crt {
     log10f: std_log10f,
     sin: std_sin,
     cos: std_cos,
+    // (the DLL's double-precision asin, acos, tan and pow are not rewritten: only the AI
+    // line's start-up maths reads them, see `asin`)
+    asin: std_asin,
+    acos: std_acos,
+    tan: std_tan,
+    pow: std_pow,
     parse: None,
 };
 
@@ -234,6 +263,10 @@ mod msvcr120 {
                 log10f: std::mem::transmute::<*mut c_void, super::F1>(get(c"log10f")?),
                 sin: std::mem::transmute::<*mut c_void, super::D1>(get(c"sin")?),
                 cos: std::mem::transmute::<*mut c_void, super::D1>(get(c"cos")?),
+                asin: std::mem::transmute::<*mut c_void, super::D1>(get(c"asin")?),
+                acos: std::mem::transmute::<*mut c_void, super::D1>(get(c"acos")?),
+                tan: std::mem::transmute::<*mut c_void, super::D1>(get(c"tan")?),
+                pow: std::mem::transmute::<*mut c_void, super::D2>(get(c"pow")?),
                 parse: Some((
                     std::mem::transmute::<*mut c_void, super::Wcstod>(get(c"wcstod")?),
                     std::mem::transmute::<*mut c_void, super::Wcstol>(get(c"wcstol")?),
@@ -382,6 +415,37 @@ pub fn sin(x: f64) -> f64 {
 pub fn cos(x: f64) -> f64 {
     // SAFETY: as `sinf`.
     unsafe { (crt().cos)(x) }
+}
+
+/// `asin` (MSVCR120), double precision. Without the DLL: Rust's own, as for `acos`, `tan`
+/// and `pow`: the AI line's corner radii (`AISpline::calculateRadius`) and the closing of a
+/// version 6 line are worked out with them once, when a track is loaded, so without the DLL
+/// an AI driver can see a radius that differs in its last digit.
+#[inline]
+pub fn asin(x: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().asin)(x) }
+}
+
+/// `acos` (MSVCR120), double precision. Without the DLL: Rust's own (see [`asin`]).
+#[inline]
+pub fn acos(x: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().acos)(x) }
+}
+
+/// `tan` (MSVCR120), double precision. Without the DLL: Rust's own (see [`asin`]).
+#[inline]
+pub fn tan(x: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().tan)(x) }
+}
+
+/// `pow` (MSVCR120), double precision. Without the DLL: Rust's own (see [`asin`]).
+#[inline]
+pub fn pow(x: f64, y: f64) -> f64 {
+    // SAFETY: as `sinf`.
+    unsafe { (crt().pow)(x, y) }
 }
 
 /// `sqrtf`: correctly rounded on both sides, so std is used.

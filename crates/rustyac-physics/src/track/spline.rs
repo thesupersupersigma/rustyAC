@@ -32,7 +32,7 @@ use crate::data::ini::IniReader;
 use crate::math::sqrtf;
 use crate::vecmath::Vec3f;
 
-type P3 = [f32; 3];
+pub(crate) type P3 = [f32; 3];
 
 /// `cvttss2si` with a 64-bit destination: the "integer indefinite" for what does not fit.
 fn truncate_i64(x: f32) -> i64 {
@@ -54,24 +54,24 @@ fn truncate_i32(x: f32) -> i32 {
 
 /// The squared length the game computes nearly everywhere: `(y*y + x*x) + z*z`.
 #[inline]
-fn len_sq(d: &P3) -> f32 {
+pub(crate) fn len_sq(d: &P3) -> f32 {
     (d[1] * d[1] + d[0] * d[0]) + d[2] * d[2]
 }
 
 #[inline]
-fn sub(a: &P3, b: &P3) -> P3 {
+pub(crate) fn sub(a: &P3, b: &P3) -> P3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// `ucomiss x, 0 ; je`: zero, or not a number.
 #[inline]
-fn is_zero(x: f32) -> bool {
+pub(crate) fn is_zero(x: f32) -> bool {
     !(x < 0.0 || x > 0.0)
 }
 
 /// A distance that tests for zero before the square root.
 #[inline]
-fn distance(a: &P3, b: &P3) -> f32 {
+pub(crate) fn distance(a: &P3, b: &P3) -> f32 {
     let q = len_sq(&sub(a, b));
     if is_zero(q) {
         0.0
@@ -81,7 +81,7 @@ fn distance(a: &P3, b: &P3) -> f32 {
 }
 
 /// Divides a vector by its length unless that is zero (the square root is taken first).
-fn normalized(mut d: P3) -> P3 {
+pub(crate) fn normalized(mut d: P3) -> P3 {
     let l = sqrtf(len_sq(&d));
     if !is_zero(l) {
         let inv = 1.0 / l;
@@ -187,6 +187,9 @@ pub struct AiSpline {
     pub grid_missing: bool,
     /// The file stored no grid: it was built as the game builds it at load.
     pub grid_built: bool,
+    /// `straights`: the line's straights, the longest first (`AISpline::initStraights`; empty
+    /// until the line is finished for the AI drivers, see `track::ai_line`)
+    pub straights: Vec<super::ai_line::AiStraightData>,
 }
 
 /// The Catmull-Rom weights of a parameter, as the game evaluates them.
@@ -546,7 +549,7 @@ impl InterpolatingSpline {
     /// `InterpolatingSpline::computeSplineLength` @ 0x1401f1db0: every point's distance from
     /// the start and the whole length, by walking the curve in steps of a thousandth of a
     /// segment.
-    fn compute_spline_length(&mut self) {
+    pub(crate) fn compute_spline_length(&mut self) {
         self.closed = self.compute_is_closed();
         let count = self.points.len();
         if count == 0 {
@@ -1321,7 +1324,29 @@ impl SplineLocator {
 /// line, the starting bounds.
 pub fn init_ai_spline(track: &mut Track, ai: &Path, data: &Path, messages: &mut Vec<String>) -> Result<(), String> {
     let fast_lane = ai.join("fast_lane.ai");
-    if fast_lane.vfs_is_file() {
+    track.ai_folder = ai.to_path_buf();
+    let version = vfs::read(&fast_lane).ok().filter(|bytes| bytes.len() >= 4).map(|bytes| i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+    if let Some(version) = version.filter(|&version| version < 7) {
+        // AISplineRecorder::load @ 0x1402952c0: a line older than version 7 is rebuilt (track
+        // limits from ray casts, the closing gap cleaned and smoothed, a new grid) and the
+        // game writes it back as version 7. Here it is rebuilt in memory, every time
+        match super::ai_line::AiSplineRecorder::load(track, ai, data) {
+            Ok(recorder) => {
+                if recorder.best_lap.point_count() == 0 {
+                    messages.push(format!("{}: the AI line has no points (version {version}): no position along the lap", fast_lane.display()));
+                } else {
+                    messages.push(format!(
+                        "{}: the AI line is version {version}: rebuilt in memory as the game rebuilds it before it saves it as version 7 ({} points)",
+                        fast_lane.display(),
+                        recorder.best_lap.point_count()
+                    ));
+                    track.ai_spline = Some(recorder.best_lap.clone());
+                }
+                track.ai = Some(recorder);
+            }
+            Err(e) => messages.push(format!("the AI line was not read ({e}): no position along the lap")),
+        }
+    } else if fast_lane.vfs_is_file() {
         match AiSpline::load(&fast_lane) {
             Ok(spline) => {
                 if spline.grid_missing {

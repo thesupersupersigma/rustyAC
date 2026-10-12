@@ -118,6 +118,10 @@ pub trait ChassisFeed {
         1.0
     }
 
+    /// `Car::evOnLapCompleted`, as the car's controls provider hears it (an AI driver counts
+    /// its valid laps). `valid`: `OnLapCompletedEvent::isValid`.
+    fn on_lap_completed(&mut self, _valid: bool) {}
+
     /// `ICarControlsProvider::setVibrations` (+0x48), from `Car::pollControls`.
     fn set_vibrations(&mut self, _def: &VibrationDef) {}
 

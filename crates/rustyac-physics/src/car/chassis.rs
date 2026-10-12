@@ -623,6 +623,22 @@ pub struct RollingChassis {
     pub dynamic_track: Option<crate::track::DynamicTrack>,
     /// The name of the setup file loaded with [`RollingChassis::load_setup`], for displays.
     pub setup_name: String,
+    /// What the engine hands a car with an AI driver for a step ([`crate::ai`])
+    pub ai_input: crate::ai::AiStepInput,
+    /// `Car::isRequestingPitStop`, `Car::aiLapsToComplete`: what an AI driver tells the rest
+    pub is_requesting_pit_stop: bool,
+    pub ai_laps_to_complete: i32,
+    /// `Car::fuelLapEvaluator`
+    pub fuel_lap_evaluator: super::fuel_lap_evaluator::FuelLapEvaluator,
+    /// `Car::expectedFuelPerLap`: `fuel_cons.ini [FUEL_EVAL] KM_PER_LITER` over the fast
+    /// lane's length, else the race engineer's estimate from the track's ideal line (0 until
+    /// [`RollingChassis::init_expected_fuel_per_lap`])
+    pub expected_fuel_per_lap: f32,
+    /// `Car::pitTimings`
+    pub pit_timings: crate::ai::car_ext::PitStopTimings,
+    /// `Car::forcePosition` calls an AI driver has not been told of yet
+    /// (`Car::evOnForcedPositionCompleted`)
+    pub forced_position_events: u32,
 }
 
 /// `ucomiss x, 0` + `je`: true for an ordered value that is not zero.
@@ -1035,6 +1051,13 @@ impl RollingChassis {
             ballast_kg: 0.0,
             dynamic_track: None,
             setup_name: String::new(),
+            ai_input: crate::ai::AiStepInput::default(),
+            is_requesting_pit_stop: false,
+            ai_laps_to_complete: -1,
+            fuel_lap_evaluator: super::fuel_lap_evaluator::FuelLapEvaluator::new(),
+            expected_fuel_per_lap: 0.0,
+            pit_timings: crate::ai::car_ext::PitStopTimings::default(),
+            forced_position_events: 0,
             speed: 0.0,
             fuel_pressure: 0.0,
             physics_time,
@@ -1509,6 +1532,16 @@ impl RollingChassis {
         self.core.source = previous;
         self.frames_to_sleep = 50;
         self.spline_locator.reset();
+        // Car::evOnForcedPositionCompleted: an AI driver is told (the engine sees to it)
+        self.forced_position_events += 1;
+    }
+
+    /// `Tyre::setCompound` @ 0x1402834e0 on one tyre. False: no such compound.
+    pub fn set_tyre_compound(&mut self, wheel: usize, compound: i32) -> bool {
+        let mut tyre = std::mem::take(&mut self.tyres[wheel]);
+        let (found, _) = self.with_tyre_ports(wheel, None, |hub, _ground, car| tyre.set_compound(compound, hub, Some(&*car)));
+        self.tyres[wheel] = tyre;
+        found
     }
 
     /// `Tyre::setCompound` @ 0x1402834e0 on the four tyres: what the game's setup screen does
@@ -1607,6 +1640,24 @@ impl RollingChassis {
         self.step_completed(dt, feed);
     }
 
+    /// `Car::stepPreCacheValues` @ 0x1402768c0: the speed and the power class. The game runs
+    /// it for every car before any car's `Car::step`, and an AI driver reads both of the
+    /// other cars: the engine calls it for all cars first when a car has such a driver
+    /// (nothing it reads changes until the rigid-body step, so calling it twice is the same).
+    pub fn step_pre_cache_values(&mut self) {
+        let v = self.core.get_velocity(self.body);
+        let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
+        self.speed = if ordered_nonzero(squared) { sqrtf(squared) } else { 0.0 };
+        if let Some(drivetrain) = &self.drivetrain {
+            let mut mass = self.suspensions[0].get_mass(&self.core);
+            mass += self.core.get_mass(self.body);
+            mass = self.suspensions[1].get_mass(&self.core) + mass;
+            mass = self.suspensions[2].get_mass(&self.core) + mass;
+            mass = self.suspensions[3].get_mass(&self.core) + mass;
+            self.power_class_index = drivetrain.engine().get_max_power_w() / mass;
+        }
+    }
+
     /// The first half of [`RollingChassis::step`], what belongs to this car alone:
     /// `Car::stepPreCacheValues` and `Car::step`. The game runs it for every car, on its
     /// thread pool when it has one, before the one rigid-body step all cars share.
@@ -1625,18 +1676,7 @@ impl RollingChassis {
             trace.pre.clear();
         }
 
-        // Car::stepPreCacheValues
-        let v = self.core.get_velocity(self.body);
-        let squared = (v.x * v.x + v.y * v.y) + v.z * v.z;
-        self.speed = if ordered_nonzero(squared) { sqrtf(squared) } else { 0.0 };
-        if let Some(drivetrain) = &self.drivetrain {
-            let mut mass = self.suspensions[0].get_mass(&self.core);
-            mass += self.core.get_mass(self.body);
-            mass = self.suspensions[1].get_mass(&self.core) + mass;
-            mass = self.suspensions[2].get_mass(&self.core) + mass;
-            mass = self.suspensions[3].get_mass(&self.core) + mass;
-            self.power_class_index = drivetrain.engine().get_max_power_w() / mass;
-        }
+        self.step_pre_cache_values();
 
         // --- Car::step ---------------------------------------------------------------------
         // the first car softens its joints' error correction below 1 m/s
@@ -1943,6 +1983,12 @@ impl RollingChassis {
             };
             let not_started = self.env.session_type == 3 && (self.env.session_start_time_ms - physics_time) > 0.0;
             let actions = self.transponder.step(&track, &probe, self.step_counter, physics_time, not_started, &finish);
+            if actions.lap_completed {
+                // Car::evOnLapCompleted: the fuel evaluator's handler, and an AI driver's count
+                let in_pit_lane = self.is_in_pit_lane();
+                self.fuel_lap_evaluator.on_lap_completed(self.fuel, in_pit_lane);
+                feed.on_lap_completed(self.transponder.lap_events.last().is_some_and(|lap| lap.is_valid));
+            }
             if actions.black_flag.is_some() {
                 self.set_black_flag(true);
             }
@@ -1970,6 +2016,9 @@ impl RollingChassis {
         }
 
         // --- the end of Car::step ------------------------------------------------------------
+        // 29: FuelLapEvaluator::step
+        let in_pit_lane = self.is_in_pit_lane();
+        self.fuel_lap_evaluator.step(dt, self.speed, self.fuel, in_pit_lane);
         self.update_collider_status();
         if self.env.is_first_car {
             self.step_jump_start();

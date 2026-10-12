@@ -75,6 +75,22 @@ pub struct Autoclutch {
 }
 
 impl Autoclutch {
+    /// `Autoclutch::getDownshiftSequenceDuration` @ 0x14029d3a0: the last reference of the
+    /// down-shift profile.
+    pub fn get_downshift_sequence_duration(&self) -> f32 {
+        let count = self.downshift_profile.get_count();
+        if count != 0 {
+            self.downshift_profile.get_pair_at_index(count - 1).0
+        } else {
+            0.0
+        }
+    }
+
+    /// `Autoclutch::setDownshiftProfile` @ 0x14029f840
+    pub fn set_downshift_profile(&mut self, profile: &Curve) {
+        self.downshift_profile = profile.clone();
+    }
+
     /// `Autoclutch::init` @ 0x1402b87d0 with `Autoclutch::loadINI` @ 0x1402b8890.
     pub fn new(data_path: &Path) -> Result<Autoclutch, String> {
         let mut a = Autoclutch {

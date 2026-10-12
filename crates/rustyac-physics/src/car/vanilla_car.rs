@@ -56,6 +56,30 @@ pub trait ControlsProvider {
 
     /// `setEngineRPM` (+0x50): the revs and two marks at 75 % and 95 % of the limiter.
     fn set_engine_rpm(&mut self, _rpm: f32, _low: f32, _high: f32) {}
+
+    /// `acquireControls` for a provider that needs the car itself: an AI driver. Every
+    /// other provider is asked through [`ControlsProvider::acquire_controls`].
+    fn acquire_controls_car(&mut self, car: &mut RollingChassis, dt: f32) {
+        let input = CarControlsInput { steer_lock: car.steer_lock, speed: car.speed };
+        self.acquire_controls(&mut car.controls, dt, &input);
+    }
+
+    /// The provider is one of the game's AI drivers (`AIDriver`, `AIDriverDrag`): its car
+    /// reads the other cars and draws random numbers while it is stepped, so the engine
+    /// steps the cars in order (see [`crate::ai`]).
+    fn is_ai(&self) -> bool {
+        false
+    }
+
+    /// `Car::evOnForcedPositionCompleted`: the car was put somewhere (`Car::forcePosition`).
+    /// The engine tells an AI driver right away; nobody else listens.
+    fn on_forced_position(&mut self, _car: &mut RollingChassis) {}
+
+    /// `Car::evOnLapCompleted` (`valid`: `OnLapCompletedEvent::isValid`)
+    fn on_lap_completed(&mut self, _valid: bool) {}
+
+    /// `PhysicsEngine::evOnNewSessionPhysics`
+    fn on_new_session(&mut self, _car: &mut RollingChassis, _info: &crate::ai::SessionInfo) {}
 }
 
 /// A device that reports whatever was last put into it: a scripted driver, a replayed
@@ -119,8 +143,11 @@ pub(crate) struct DeviceFeed<'a> {
 
 impl ChassisFeed for DeviceFeed<'_> {
     fn poll_controls(&mut self, chassis: &mut RollingChassis) {
-        let input = CarControlsInput { steer_lock: chassis.steer_lock, speed: chassis.speed };
-        self.device.acquire_controls(&mut chassis.controls, self.dt, &input);
+        self.device.acquire_controls_car(chassis, self.dt);
+    }
+
+    fn on_lap_completed(&mut self, valid: bool) {
+        self.device.on_lap_completed(valid);
     }
 
     fn get_action(&mut self, action: i32) -> bool {

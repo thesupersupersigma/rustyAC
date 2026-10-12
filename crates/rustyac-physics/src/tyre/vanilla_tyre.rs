@@ -844,7 +844,7 @@ impl VanillaTyre {
     /// `Tyre::getDY` @ 0x1402803d0: the peak lateral grip coefficient at this load (old tyre
     /// path), lowered by blistering.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    fn get_dy(&self, load: f32) -> f32 {
+    pub fn get_dy(&self, load: f32) -> f32 {
         if !(load > 0.0) {
             return 0.0;
         }
@@ -861,7 +861,7 @@ impl VanillaTyre {
 
     /// `Tyre::getDX` @ 0x140280240: the same lengthwise. (No test for a load of 0 or less at
     /// the top, unlike `getDY`.)
-    fn get_dx(&self, load: f32) -> f32 {
+    pub fn get_dx(&self, load: f32) -> f32 {
         let m = &self.model_data;
         let d = if m.dx_load_curve.get_count() > 0 {
             m.dx_load_curve.get_cubic_spline_value(load)
@@ -1203,6 +1203,20 @@ impl VanillaTyre {
     /// `Tyre::getCorrectedD` @ 0x140280190: grip multiplier from temperature, pressure and
     /// wear. `store_wear_mult` stands for the original's optional `wear_mult` out pointer
     /// (which is `&status.wearMult`).
+    /// `Tyre::getCorrectedD(d, nullptr)`: the same without storing the wear multiplier.
+    pub fn peek_corrected_d(&self, d: f32) -> f32 {
+        let mut corrected = self
+            .thermal_model
+            .get_corrected_d(d, self.status.camber_rad)
+            / ((self.status.pressure_dynamic - self.model_data.ideal_pressure).abs()
+                * self.model_data.pressure_gain_d
+                + 1.0);
+        if self.model_data.wear_curve.get_count() != 0 {
+            corrected *= self.model_data.wear_curve.get_value(self.status.virtual_km as f32);
+        }
+        corrected
+    }
+
     pub fn get_corrected_d(&mut self, d: f32, store_wear_mult: bool) -> f32 {
         let mut corrected = self
             .thermal_model

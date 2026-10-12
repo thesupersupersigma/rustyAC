@@ -646,6 +646,26 @@ pub struct AeroBase {
 }
 
 impl AeroBase {
+    /// `AeroMap::getCurrentDragKG` @ 0x1402b6a70
+    pub fn get_current_drag_kg(&self) -> f32 {
+        let mut sum = 0.0f32;
+        for wing in &self.wings {
+            sum += wing.status.drag_kg;
+        }
+        sum
+    }
+
+    /// `AeroMap::getCurrentLiftKG` @ 0x1402b6aa0
+    pub fn get_current_lift_kg(&self) -> f32 {
+        let mut sum = 0.0f32;
+        for wing in &self.wings {
+            sum += wing.status.lift_kg;
+        }
+        sum
+    }
+}
+
+impl AeroBase {
     /// `AeroMap::addDrag` @ 0x1402b5860 (the old one-body format): drag along the air speed,
     /// more of it when the car moves sideways or vertically, and a torque against the body's
     /// rotation. `v` is the body's velocity in its own axes (no wind here).

@@ -223,6 +223,11 @@ impl Kers {
 
     /// `Kers::reset` @ 0x1402b7e00: a teleport, or the first crossing of the line in a hot-lap
     /// session. The input and the controller's smoothed values stay.
+    /// `Kers::getDischargeTimeS` @ 0x1402b56d0
+    pub fn get_discharge_time_s(&self) -> f32 {
+        (1000.0 / self.discharge_k) * 0.001
+    }
+
     pub fn reset(&mut self) {
         self.charge = 1.0;
         self.current_j = 0.0;

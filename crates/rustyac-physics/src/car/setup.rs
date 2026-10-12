@@ -87,7 +87,7 @@ pub enum SetupTarget {
 }
 
 impl SetupTarget {
-    fn get(self, chassis: &RollingChassis) -> f32 {
+    pub(crate) fn get(self, chassis: &RollingChassis) -> f32 {
         use SetupTarget::*;
         match self {
             ArbK(a) => chassis.antiroll_bars[a].k,
@@ -603,6 +603,12 @@ impl SetupManager {
             log.push(format!("{} = {position}{note}", item.name));
         }
         Ok(log)
+    }
+
+    /// `SetupManager::getSetupItem` @ 0x14028ca50: the item of that name (its place in
+    /// [`SetupManager::items`]).
+    pub fn get_setup_item(&self, name: &str) -> Option<usize> {
+        self.items.iter().position(|item| item.name == name)
     }
 
     /// `SetupManager::step` @ 0x14028d090: for every attached item, `multiplier * newValue`
