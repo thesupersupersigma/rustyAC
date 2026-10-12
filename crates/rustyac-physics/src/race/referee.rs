@@ -18,6 +18,7 @@ use super::flags::{FlagCar, FlagManager, PlayerPenalty, Shown};
 use super::hud::{PenaltyMessages, PlayerState};
 use super::manager::{filter_speed, Action, CarView, OnSessionEndEvent, RaceManager, SessionsIni, SESSION_HOTLAP, SESSION_RACE};
 use super::output::{JsonOutputFile, Player};
+use super::pitstop::{self, PitAction, PitCarView, PitFrame, PitStop, PitStopStart, QuickMenu};
 use crate::ai::SessionInfo;
 use crate::car::RollingChassis;
 use crate::session::MsvcRand;
@@ -106,6 +107,42 @@ pub struct Referee {
     /// what the main thread posted for the engine on the physics thread: it runs at the
     /// start of the next step, in this order, before the cars' own queued jobs
     pending: Vec<EngineJob>,
+    /// Task 28b: the player's pit stop (`Sim::pitStop`) and the menu it reads; `None`: a
+    /// session without them (older recordings)
+    pub pit: Option<PitStop>,
+    pub menu: Option<QuickMenu>,
+    /// what the player's `CarAvatar` keeps of its pit lane visits
+    pub pit_avatar: PitAvatar,
+    /// the mandatory pit window: laps of the leader (minutes in a timed race) at which it
+    /// opens and closes; (0, 0): none, nothing is checked
+    pub pit_window: (u16, u16),
+    /// the stops that began and ended in the last frame (`evPitStopCommit`, `evPitStopOver`):
+    /// the pit crew and the sounds listen
+    pub pit_began: Option<PitStopStart>,
+    pub pit_over: bool,
+    /// the player's stop was counted as the mandatory one in the last frame (a server is told)
+    pub mandatory_pit_now: bool,
+}
+
+/// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PitAvatar {
+    /// `mandatoryPitstopDone`
+    pub mandatory_pitstop_done: bool,
+    /// `lastPitstopTime`: the clock (ms, as a float) of the last frame a stop's countdown ran
+    pub last_pitstop_time: f32,
+    /// `inPitlane`, `wasInPitlane`
+    pub in_pitlane: bool,
+    pub was_in_pitlane: bool,
+    /// `pitLaneEntryTime`, `pitLaneExitTime`
+    pub pit_lane_entry_time: f32,
+    pub pit_lane_exit_time: f32,
+}
+
+impl PitAvatar {
+    pub fn text(&self) -> String {
+        format!("done {} last {:08x} in {}{} entry {:08x} exit {:08x}", self.mandatory_pitstop_done as u8, self.last_pitstop_time.to_bits(), self.in_pitlane as u8, self.was_in_pitlane as u8, self.pit_lane_entry_time.to_bits(), self.pit_lane_exit_time.to_bits())
+    }
 }
 
 /// A job for the physics thread that is the engine's, not a car's.
@@ -154,6 +191,13 @@ impl Referee {
             hash_frames: false,
             state_hash: 0,
             pending: Vec::new(),
+            pit: None,
+            menu: None,
+            pit_avatar: PitAvatar::default(),
+            pit_window: (0, 0),
+            pit_began: None,
+            pit_over: false,
+            mandatory_pit_now: false,
             manager,
         };
         let mut actions = Vec::new();
@@ -162,6 +206,17 @@ impl Referee {
         referee.apply(actions, world);
         referee.start_race(setup.first_start_delay_ms, world);
         referee
+    }
+
+    /// Task 28b: the player's pit stop joins (`PitStop::PitStop` in `Sim::Sim`, for the pit
+    /// box of the first car) with the menu it reads. As the first session's start leaves
+    /// it: undefined until the car has been out of its box.
+    pub fn enable_pit_stop(&mut self, menu: QuickMenu, world: &dyn World) {
+        let m = &world.car(0).pit_position.m;
+        let mut pit = PitStop::new([m[3][0], m[3][1], m[3][2]]);
+        pit.state = pitstop::STATE_UNDEFINED;
+        self.pit = Some(pit);
+        self.menu = Some(menu);
     }
 
     fn start_race(&mut self, delay_ms: f32, world: &mut dyn World) {
@@ -281,6 +336,12 @@ impl Referee {
         for index in 0..world.car_count() {
             self.filtered_speed[index] = filter_speed(self.filtered_speed[index], world.car(index).speed, FRAME_DT);
         }
+        self.pit_began = None;
+        self.pit_over = false;
+        self.mandatory_pit_now = false;
+        if self.pit.is_some() && world.car_count() > 0 {
+            self.update_in_pitlane_state(world.car(0).is_in_pit_lane(), now);
+        }
         let mut views = self.views_of(world);
         for split in std::mem::take(&mut self.splits) {
             self.manager.on_sector_split(&split);
@@ -308,6 +369,7 @@ impl Referee {
             // (the click that ends the session's intro, at once)
             self.start_race(self.next_start_delay_ms, world);
         }
+        self.pit_frame(world, now, &views);
         // FlagManager::update and the messages
         let flag_cars: Vec<FlagCar> = (0..world.car_count()).map(|index| self.flag_car(world.car(index))).collect();
         if world.car_count() > 0 {
@@ -329,12 +391,21 @@ impl Referee {
             }
             match action {
                 Action::PenaltyMode(mode) => world.set_penalty_mode(mode),
-                Action::ResetCar(car) => world.car_mut(car).queue(|car| {
-                    // CarAvatar::lockControlsUntilTime(0, 0, false) and resetPenalty(true)
-                    car.lock_controls_until(0.0, 0.0);
-                    car.penalty_manager.reset_penalty();
-                    car.penalty_manager.reset();
-                }),
+                Action::ResetCar(car) => {
+                    world.car_mut(car).queue(|car| {
+                        // CarAvatar::lockControlsUntilTime(0, 0, false) and resetPenalty(true)
+                        car.lock_controls_until(0.0, 0.0);
+                        car.penalty_manager.reset_penalty();
+                        car.penalty_manager.reset();
+                    });
+                    // RaceManager::resetMandatoryPit @ 0x140140600
+                    if car == 0 {
+                        self.pit_avatar.last_pitstop_time = 0.0;
+                        self.pit_avatar.mandatory_pitstop_done = false;
+                        self.pit_avatar.pit_lane_entry_time = 0.0;
+                        self.pit_avatar.pit_lane_exit_time = 0.0;
+                    }
+                }
                 Action::NewSession { session, index } => {
                     // (the results panel's own button, which the game's player presses to go
                     // on, takes the panel down: EndSessionDisplayer::hide)
@@ -350,11 +421,24 @@ impl Referee {
                         let armed = session.session_type == SESSION_HOTLAP;
                         self.teleport(world, car, &session.spawn_set, slot, Some(armed));
                     }
+                    // PitStop's handler of the new session (lambda @ 0x1400a7ce0), after the
+                    // cars' (CarAvatar::forcePosition leaves the player's stop undefined too)
+                    if let Some(pit) = &mut self.pit {
+                        let mut out = Vec::new();
+                        pit.on_new_session(&mut out);
+                        self.apply_pit(out, world);
+                    }
                 }
                 Action::ControlsLock { car, locked } => world.car_mut(car).queue(move |car| car.lock_controls(locked)),
                 Action::GoToPit(car) => {
                     let slot = self.pit_index.get(car).copied().unwrap_or(car as i32);
                     self.teleport(world, car, "PIT", slot, None);
+                    // CarAvatar::forcePosition @ 0x1400d2f30 of the player's car
+                    if car == 0 {
+                        if let Some(pit) = &mut self.pit {
+                            pit.state = pitstop::STATE_UNDEFINED;
+                        }
+                    }
                 }
                 Action::SessionStartTime(ms) => self.pending.push(EngineJob::StartTime(ms)),
                 Action::RetirePlayer => world.car_mut(0).is_retired = true,
@@ -369,6 +453,71 @@ impl Referee {
                 Action::DisplayResults => world.car_mut(0).queue(|car| car.lock_controls(true)),
                 Action::HideResults => world.car_mut(0).queue(|car| car.lock_controls(false)),
                 Action::FadeStarted => {}
+            }
+        }
+    }
+
+    /// `CarAvatar::updateInPitlaneState` @ 0x1400dd6d0 of the player's car: when it came
+    /// onto the pit lane and left it, and at leaving, whether its stop was the mandatory one.
+    fn update_in_pitlane_state(&mut self, in_pitlane: bool, now: f64) {
+        let a = &mut self.pit_avatar;
+        a.in_pitlane = in_pitlane;
+        if in_pitlane {
+            if !a.was_in_pitlane {
+                a.was_in_pitlane = true;
+                a.pit_lane_entry_time = now as f32;
+            }
+        } else if a.was_in_pitlane {
+            a.was_in_pitlane = false;
+            a.pit_lane_exit_time = now as f32;
+            if self.manager.check_mandatory_pit(a.mandatory_pitstop_done, a.last_pitstop_time, a.pit_lane_entry_time, a.pit_lane_exit_time) {
+                a.mandatory_pitstop_done = true;
+                self.mandatory_pit_now = true;
+                self.log.push("Mandatory pit stop done".to_string());
+            }
+        }
+    }
+
+    /// The mandatory pit window and `PitStop::update` of a frame.
+    fn pit_frame(&mut self, world: &mut dyn World, now: f64, views: &[CarView]) {
+        if world.car_count() == 0 {
+            return;
+        }
+        if self.pit_window.1 != 0 && self.manager.update_pit_window(self.pit_window.0, self.pit_window.1, now, self.pit_avatar.mandatory_pitstop_done, self.pit_avatar.in_pitlane) {
+            // CarAvatar::setBlackFlag(eMandatoryPit), and the car is out
+            world.car_mut(0).queue(|car| car.set_black_flag_for(true, 3));
+            world.car_mut(0).is_retired = true;
+        }
+        let (Some(mut pit), Some(mut menu)) = (self.pit.take(), self.menu.take()) else { return };
+        let car = PitCarView::of(world.car(0));
+        // (the avatar's flag is the flag manager's, a frame behind the car's)
+        let car = PitCarView { is_black_flagged: self.was_black_flagged, ..car };
+        let frame = PitFrame { dt: FRAME_DT, session_type: self.manager.current_session.session_type, race_over: self.manager.is_race_over(0, views), in_replay: false, pause_menu: false, esc_menu: false };
+        let mut out = Vec::new();
+        let mut rand = self.rand;
+        pit.update(&frame, &car, &mut menu, world.car(0), &mut rand, &mut out);
+        self.rand = rand;
+        if pit.timer_ran {
+            self.pit_avatar.last_pitstop_time = now as f32;
+        }
+        self.pit = Some(pit);
+        self.menu = Some(menu);
+        self.apply_pit(out, world);
+    }
+
+    fn apply_pit(&mut self, actions: Vec<PitAction>, world: &mut dyn World) {
+        for action in actions {
+            match action {
+                PitAction::ControlsLock(locked) => world.car_mut(0).queue(move |car| car.lock_controls(locked)),
+                PitAction::Commit(start) => {
+                    self.log.push(format!("Pit stop: {:.1} s", start.total_time));
+                    self.pit_began = Some(start);
+                }
+                PitAction::Over => {
+                    self.log.push("Pit stop over".to_string());
+                    self.pit_over = true;
+                }
+                PitAction::Apply(choices) => world.car_mut(0).queue(move |car| pitstop::apply(car, &choices)),
             }
         }
     }
@@ -554,6 +703,11 @@ impl Referee {
         let mut out = dump(&self.manager, penalty_mode);
         for index in 0..world.car_count() {
             out.push((format!("car {index}"), car_text(world.car(index))));
+        }
+        if let (Some(pit), Some(menu)) = (&self.pit, &self.menu) {
+            out.push(("pit".to_string(), pit.text()));
+            out.push(("pitMenu".to_string(), menu.values_text()));
+            out.push(("pitAvatar".to_string(), self.pit_avatar.text()));
         }
         out
     }

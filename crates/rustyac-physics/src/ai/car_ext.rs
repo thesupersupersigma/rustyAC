@@ -219,7 +219,8 @@ impl RollingChassis {
                 if 0.0 < level {
                     let share = super::sat(level * 0.01, 0.0, 1.0);
                     let part = (t.body_repair_time_sec - 2.0) * share;
-                    repair = if zone == 0 { (part + 2.0) + extra } else { ((repair + part) + 2.0) + extra };
+                    let term = (part + 2.0) + extra;
+                    repair = if zone == 0 { term } else { repair + term };
                 }
             }
         }
@@ -231,16 +232,17 @@ impl RollingChassis {
                     if lost < 0.0 {
                         lost = 0.0;
                     }
-                    repair = (repair + (lost * t.engine_repair_time_sec) * 0.1) + extra;
+                    repair += (lost * t.engine_repair_time_sec) * 0.1 + extra;
                 }
             }
         }
         if suspension {
-            for s in &self.suspensions {
+            // (the first four, whatever the car has)
+            for s in self.suspensions.iter().take(4) {
                 let damage = s.get_damage();
                 if 0.0 < damage {
                     let damage = super::sat(damage, 0.0, 1.0);
-                    repair = (repair + damage * t.susp_repair_time_sec) + extra;
+                    repair += damage * t.susp_repair_time_sec + extra;
                 }
             }
         }

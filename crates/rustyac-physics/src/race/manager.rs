@@ -474,6 +474,54 @@ impl RaceManager {
         self.pit_window_end_time = 0.0;
     }
 
+    /// The mandatory pit window as `update` @ 0x140141550 keeps it (in the game: only with a
+    /// server, whose two numbers these are: laps of the leader in a race of laps, minutes in
+    /// a timed race; `end` 0 is "no window"). The window's opening and closing are noted as
+    /// milliseconds of the race, and the answer is whether the player's car is to be
+    /// black-flagged in this frame: the window has closed, its stop was not counted
+    /// (`done`), and it is not on the pit lane.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn update_pit_window(&mut self, start: u16, end: u16, now: f64, done: bool, in_pitlane: bool) -> bool {
+        if self.current_session.session_type != SESSION_RACE {
+            return false;
+        }
+        let elapsed = now - self.current_session.start_time;
+        if end != 0 && self.pit_window_end_time == 0.0 {
+            let closed;
+            if !self.current_session.is_timed_race {
+                let leader = self.current_session.leader_completed_laps;
+                if self.pit_window_start_time == 0.0 && start as u32 <= leader {
+                    self.pit_window_start_time = elapsed as f32;
+                }
+                closed = !(leader < end as u32 - 1);
+            } else {
+                if self.pit_window_start_time == 0.0 && (start as i32 * 60000) as f64 <= elapsed {
+                    self.pit_window_start_time = elapsed as f32;
+                }
+                closed = !(elapsed < (end as i32 * 60000) as f64);
+            }
+            if closed {
+                self.pit_window_end_time = elapsed as f32;
+            }
+        }
+        0.0 < elapsed && 0.0 < self.pit_window_end_time && !done && !in_pitlane
+    }
+
+    /// `checkMandatoryPit` @ 0x140136830, asked when the player's car leaves the pit lane:
+    /// the stop counts when its countdown ran during this visit to the pit lane
+    /// (`last_pitstop_time` between `entry` and `exit`, the clock's ms as floats) and the
+    /// visit began once the window was open.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn check_mandatory_pit(&self, done: bool, last_pitstop_time: f32, entry: f32, exit: f32) -> bool {
+        if !(self.pit_window_start_time > 0.0) || done {
+            return false;
+        }
+        if entry <= last_pitstop_time && last_pitstop_time <= exit {
+            return entry as f64 - self.current_session.start_time >= self.pit_window_start_time as f64 && exit != 0.0;
+        }
+        false
+    }
+
     /// `startRace` @ 0x140141470 (`delay_ms`: 20000 from `Sim::Sim`, 10000 from the click
     /// that ends the session's intro; `rand`: the C runtime's `rand()`, drawn only when this
     /// returns true beforehand from [`RaceManager::start_race_draws`]).

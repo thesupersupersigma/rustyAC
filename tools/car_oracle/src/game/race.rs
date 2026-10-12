@@ -923,6 +923,10 @@ pub struct WholeReferee<'a> {
     /// what the player's car went through, in frames: a time penalty running, a drive-through
     /// pending, controls locked by a time, black-flagged; and the most cuts in a lap
     pub seen: [u64; 5],
+    /// Task 28b: the game's pit stop of the first car
+    pub pit: Option<super::pit::GamePit<'a>>,
+    /// frames in which the stop's countdown ran, and in which the mandatory stop was done
+    pub pit_seen: [u64; 2],
 }
 
 impl<'a> WholeReferee<'a> {
@@ -947,9 +951,17 @@ impl<'a> WholeReferee<'a> {
         }
         game.start_race(setup.first_start_delay_ms);
         REFEREE_RAND_ON.with(|on| on.set(false));
-        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5] };
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 2] };
         referee.note();
         referee
+    }
+
+    /// Task 28b: the game's `PitStop` and `QuickMenuPitstop` join, for the first car's pit
+    /// box, with the menu as `menu` has it and this mandatory pit window.
+    pub unsafe fn enable_pit(&mut self, pit_position: [f32; 3], menu: &rustyac_physics::race::pitstop::QuickMenu, window: (u16, u16)) {
+        let pit = super::pit::GamePit::build(self.game.acs, self.game.sim, self.game.game, self.game.manager, self.game.avatars[0], self.game.cars[0], pit_position, menu, window);
+        self.game.add_handler(self.game.sim.add(SIM_EV_ON_NEW_SESSION), super::pit::GamePit::new_session_handler());
+        self.pit = Some(pit);
     }
 
     fn note(&mut self) {
@@ -1029,6 +1041,17 @@ impl<'a> WholeReferee<'a> {
                 wr(*avatar, CA_IS_BLACK_FLAGGED, rd::<u8>(car, 0x3d20));
             }
         }
+        if let Some(pit) = &self.pit {
+            // (CarAvatar::getCurrentCompoundShortName, after a stop's new tyres)
+            if let Some(name) = super::pit::current_compound(self.game.cars[0]) {
+                TOLD.with(|t| {
+                    if let Some(slot) = t.borrow_mut().compounds.get_mut(0) {
+                        *slot = name;
+                    }
+                });
+            }
+            pit.before_manager(DT);
+        }
         let (laps, splits) = TOLD.with(|t| {
             let mut t = t.borrow_mut();
             (std::mem::take(&mut t.laps), std::mem::take(&mut t.splits))
@@ -1046,6 +1069,11 @@ impl<'a> WholeReferee<'a> {
         self.log.extend(log.into_iter().map(|line| (frame, line)));
         if new_session && rd::<i32>(self.game.manager, RM_CURRENT_SESSION) == SESSION_RACE {
             self.game.start_race(self.next_start_delay_ms);
+        }
+        if let Some(pit) = &self.pit {
+            pit.update(DT, now);
+            self.pit_seen[0] += (rd::<i32>(pit.pit, 0x120) == 3) as u64;
+            self.pit_seen[1] += rd::<u8>(self.game.avatars[0], 0x1295) as u64;
         }
         REFEREE_RAND_ON.with(|on| on.set(false));
         self.note();
@@ -1090,6 +1118,9 @@ impl<'a> WholeReferee<'a> {
                     rd::<u64>(*car, 0x3d28)
                 ),
             ));
+        }
+        if let Some(pit) = &self.pit {
+            out.extend(pit.dump());
         }
         out
     }

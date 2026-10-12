@@ -10,11 +10,13 @@ pub mod flags;
 pub mod hud;
 pub mod manager;
 pub mod output;
+pub mod pitstop;
 pub mod referee;
 pub mod results;
 pub mod timing;
 pub mod toy;
 
 pub use manager::{convert_remote_session, Action, CarView, FadeJob, OnSessionEndEvent, RaceManager, RemoteSession, Session, SessionResult, SessionsIni};
-pub use referee::{Referee, RefereeSetup, World};
+pub use pitstop::{PitAction, PitApply, PitStop, QuickMenu, QuickMenuCar, QuickMenuSettings};
+pub use referee::{PitAvatar, Referee, RefereeSetup, World};
 pub use timing::{Lap, LapDb, LeaderboardEntry, RaceTimingServices};

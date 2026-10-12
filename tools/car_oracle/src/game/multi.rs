@@ -33,6 +33,10 @@ pub enum Drive {
     /// Along the pit lane's line from `from` on, then straight on with this throttle until
     /// `brake_at`.
     PitLane { from: f32, then_gas: f32, brake_at: f32 },
+    /// Task 28b: out of the pit box and back into it (a few metres forward, then in
+    /// reverse), a stop there on the brakes; from `leave_at` on along the pit lane and onto
+    /// the track with the line follower. The car shifts by hand.
+    PitBox { leave_at: f32 },
     /// Task 27: by the game's own `AIDriver`, with this `basePush` (the AI level, 0..1) and
     /// `aggression`.
     Ai { push: f32, aggression: f32 },
@@ -82,6 +86,9 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
         "rc_pass_front" | "rc_pass_rev" => spec("r3", true, Some(1)),
+        "pit_box" | "pit_box_repair" | "pit_box_none" => spec("p20", true, None),
+        "pit_ai_race" | "pit_window_served" | "pit_window_missed" | "pit_window_early" => spec("r4", true, None),
+        "pit_window_timed" => spec("rt5", true, None),
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_jump_dt" => Some(RefereeSpec { list: "r5", penalties: true, jump_start: Some(2), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_cut" => spec("r3", true, None),
@@ -496,6 +503,70 @@ pub fn scenarios() -> Vec<MultiScenario> {
             },
         },
         MultiScenario {
+            name: "pit_box",
+            about: "Task 28b: the player's pit stop. A practice; the first car drives out of its pit box and backs into it again, stops (fuel, another compound, other pressures), and drives out onto the track; AI drivers in the other boxes",
+            seconds: 90.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 3, 34.0),
+        },
+        MultiScenario {
+            name: "pit_box_repair",
+            about: "Task 28b: as pit_box with a car that starts damaged (four body zones, the engine, a bent suspension): a repair stop (body, suspension, engine), no fuel, the tyres stay",
+            seconds: 125.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 2, 100.0),
+        },
+        MultiScenario {
+            name: "pit_box_none",
+            about: "Task 28b: as pit_box with a menu that asks for nothing: the stop is over at once and nothing changes",
+            seconds: 40.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 2, 22.0),
+        },
+        MultiScenario {
+            name: "pit_ai_race",
+            about: "Task 28b: a race of 4 laps, every car with the game's AI driver; the first two are called in on the first lap and stop at the same time; the first car's stop is also the player's (fuel, another compound)",
+            seconds: 400.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 4, |i| 1.0 - 0.02 * i as f32, |i| 0.1 * i as f32),
+        },
+        MultiScenario {
+            name: "pit_window_served",
+            about: "Task 28b: a race of 4 laps with a mandatory pit window (open from the leader's lap 1, closed at lap 3); the first car is called in on lap 2: the stop counts",
+            seconds: 400.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |i| 0.1 * i as f32),
+        },
+        MultiScenario {
+            name: "pit_window_missed",
+            about: "Task 28b: as pit_window_served, nobody is called in: the first car is black-flagged when the window closes",
+            seconds: 400.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |i| 0.1 * i as f32),
+        },
+        MultiScenario {
+            name: "pit_window_early",
+            about: "Task 28b: as pit_window_served with the window open from lap 2 and the first car called in on lap 1: a stop before the window does not count, and the black flag falls when it closes",
+            seconds: 400.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |i| 0.1 * i as f32),
+        },
+        MultiScenario {
+            name: "pit_window_timed",
+            about: "Task 28b: a timed race of 5 minutes with a mandatory pit window in minutes (open after 1, closed after 3); the first car is called in during the second minute: the stop counts",
+            seconds: 400.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| ai_grid(track, cars, &[F2004], 3, |i| 1.0 - 0.02 * i as f32, |i| 0.1 * i as f32),
+        },
+        MultiScenario {
             name: "rc_race",
             about: "Task 28: a race of 3 laps with the game's referee: AI drivers on the grid (6 by default), the start 5 s after the session's, race over, results, race_out.json",
             seconds: 330.0,
@@ -670,6 +741,62 @@ pub fn scenarios() -> Vec<MultiScenario> {
 
 /// `count` cars on the first grid slots, each following the line at its own pace (the car in
 /// front the fastest).
+/// Task 28b: what a pit stop scenario sets up beside its referee.
+pub struct PitSpec {
+    /// the mandatory pit window (0, 0: none)
+    pub window: (u16, u16),
+    /// what the menu asks for: the arrow keys pressed before the first step
+    pub keys: &'static [u32],
+    /// the first car starts damaged
+    pub damage: bool,
+    /// (car, seconds): its AI driver is called in (`requestPitStop`) from that time on
+    pub calls: &'static [(usize, f32)],
+}
+
+/// The damage a `pit_box_repair` car starts with: the five zone levels, the engine's life
+/// left, and the speed of the hit that bent the second suspension (`Suspension::setDamage`).
+pub const PIT_DAMAGE: ([f32; 5], f64, f32) = ([40.0, 25.0, 0.0, 8.0, 40.0], 900.0, 75.0);
+/// The step before which it is damaged (a session's start repairs every car).
+pub const PIT_DAMAGE_STEP: usize = 400;
+
+const UP: u32 = 0x26;
+const DOWN: u32 = 0x28;
+const LEFT: u32 = 0x25;
+const RIGHT: u32 = 0x27;
+
+pub fn pit_of(scenario: &str) -> Option<PitSpec> {
+    // the first key only shows the menu; then down to the fuel line: 12 litres, the next
+    // compound, two pressures up and one down
+    const FUEL_TYRES: &[u32] = &[DOWN, DOWN, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, DOWN, RIGHT, RIGHT, DOWN, RIGHT, RIGHT, DOWN, RIGHT, DOWN, LEFT, LEFT, LEFT, LEFT, LEFT, LEFT];
+    // the second preset: 5 litres; then the three repairs, from the menu's last lines
+    const REPAIRS: &[u32] = &[DOWN, RIGHT, DOWN, RIGHT, RIGHT, RIGHT, RIGHT, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, UP, RIGHT, UP, RIGHT];
+    const NOTHING: &[u32] = &[DOWN, DOWN];
+    match scenario {
+        "pit_box" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
+        "pit_box_repair" => Some(PitSpec { window: (0, 0), keys: REPAIRS, damage: true, calls: &[] }),
+        "pit_box_none" => Some(PitSpec { window: (0, 0), keys: NOTHING, damage: false, calls: &[] }),
+        "pit_ai_race" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[(0, 20.0), (1, 20.0)] }),
+        "pit_window_served" => Some(PitSpec { window: (1, 3), keys: FUEL_TYRES, damage: false, calls: &[(0, 110.0)] }),
+        "pit_window_missed" => Some(PitSpec { window: (1, 3), keys: FUEL_TYRES, damage: false, calls: &[] }),
+        "pit_window_early" => Some(PitSpec { window: (2, 3), keys: FUEL_TYRES, damage: false, calls: &[(0, 20.0)] }),
+        "pit_window_timed" => Some(PitSpec { window: (1, 3), keys: FUEL_TYRES, damage: false, calls: &[(0, 70.0)] }),
+        _ => None,
+    }
+}
+
+/// Task 28b: the first car in its pit box with the driver that shuffles out and back in,
+/// AI drivers in the next boxes.
+fn pit_boxes(track: &Track, cars: &[String], count: usize, leave_at: f32) -> Result<Vec<MultiCar>, String> {
+    let count = if cars.is_empty() { count } else { cars.len() };
+    let mut out = Vec::new();
+    for i in 0..count {
+        let (p, tail) = track.spawn_pose("PIT", i).ok_or_else(|| format!("the track has no pit box {i}"))?;
+        let drive = if i == 0 { Drive::PitBox { leave_at } } else { Drive::Ai { push: 0.95 - 0.03 * i as f32, aggression: 0.1 * i as f32 } };
+        out.push(MultiCar { name: name_of(cars, i, &[F2004]), position: [p.x, p.y, p.z], tail: [tail.x, tail.y, tail.z], drive });
+    }
+    Ok(out)
+}
+
 fn ai_grid(track: &Track, cars: &[String], default: &[&str], count: usize, push: fn(usize) -> f32, aggression: fn(usize) -> f32) -> Result<Vec<MultiCar>, String> {
     let mut out = grid(track, cars, default, count, 0.9, 0.0)?;
     for (index, car) in out.iter_mut().enumerate() {
@@ -741,6 +868,9 @@ struct GameCar {
     drive: Drive,
     lateral: f32,
     pit_done: bool,
+    /// Task 28b: where the pit-box driver is (see `Drive::PitBox`), and its box
+    pit_phase: u8,
+    pit_box: ([f32; 3], [f32; 3]),
     grip: Grip,
     /// Task 27: the game's `AIDriver` of the car (null: none)
     ai: *mut u8,
@@ -769,6 +899,9 @@ pub struct MultiWorld<'a> {
     /// Task 28: the first car jumps the start (the `rc_jump*` scenarios)
     jump_start: bool,
     shift_wait: u32,
+    /// Task 28b: (car, step) at which its AI driver is called in
+    pit_calls: Vec<(usize, usize)>,
+    pit_damage: bool,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -937,7 +1070,7 @@ impl<'a> MultiWorld<'a> {
                 wr(car, CAR_AUTOCLUTCH + 0xc, 1u8);
                 wr(car, CAR_AUTOCLUTCH + 0xd, 1u8);
                 // (the car that jumps the start shifts by hand: the H-shifter's first gear)
-                let auto_shifter = !((scenario.name.starts_with("rc_jump") || scenario.name.ends_with("_pass_rev")) && index == 0);
+                let auto_shifter = !((scenario.name.starts_with("rc_jump") || scenario.name.ends_with("_pass_rev") || matches!(planned.drive, Drive::PitBox { .. })) && index == 0);
                 wr(car, CAR_AUTO_SHIFT, auto_shifter as u8);
 
                 force_rotation(car, &planned.tail);
@@ -973,7 +1106,7 @@ impl<'a> MultiWorld<'a> {
                     Drive::Follow { lateral, .. } => lateral.first().map_or(0.0, |l| l.1),
                     _ => 0.0,
                 };
-                cars.push(GameCar { car, device, bodies, suspensions, mesh_geom, drive: planned.drive.clone(), lateral, pit_done: false, grip: Grip::of(&planned.name), ai: std::ptr::null_mut() });
+                cars.push(GameCar { car, device, bodies, suspensions, mesh_geom, drive: planned.drive.clone(), lateral, pit_done: false, pit_phase: 0, pit_box: (planned.position, [-planned.tail[0], -planned.tail[1], -planned.tail[2]]), grip: Grip::of(&planned.name), ai: std::ptr::null_mut() });
             }
 
             // Task 27: the AI drivers, after all cars, in creation order, from a known point of
@@ -1151,9 +1284,35 @@ impl<'a> MultiWorld<'a> {
                     let index = tyres.get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
                     compounds.push(tyres.get_string(&if index == 0 { "FRONT".to_string() } else { format!("FRONT_{index}") }, "SHORT_NAME"));
                 }
-                referee = Some(super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, &compounds, CLOCK_START_MS));
+                let mut whole = super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, &compounds, CLOCK_START_MS);
+                // Task 28b: the player's pit stop, the menu it reads and the mandatory window
+                if let Some(pit) = pit_of(scenario.name) {
+                    use rustyac_physics::race::pitstop::{QuickMenu, QuickMenuSettings};
+                    let car = cars[0].car;
+                    let (menu_car, names) = super::pit::menu_car(car);
+                    let setup_ini = rustyac_physics::data::ini::IniReader::load(&Path::new("content/cars").join(&metas[0].name).join("data").join("setup.ini"))?;
+                    let mut menu = QuickMenu::build(&menu_car, names, &setup_ini, &QuickMenuSettings::default());
+                    for key in pit.keys {
+                        menu.send_input(*key, &menu_car);
+                    }
+                    println!("the pit menu:");
+                    for line in menu.lines() {
+                        println!("    {line}");
+                    }
+                    recording.set("pit", format!("{};{};{}", pit.window.0, pit.window.1, menu.values_text()));
+                    if pit.damage {
+                        let (zones, life, hit) = PIT_DAMAGE;
+                        recording.set("pit_damage", format!("{PIT_DAMAGE_STEP};{};{:016x};{:08x}", zones.iter().map(|z| format!("{:08x}", z.to_bits())).collect::<Vec<_>>().join(","), life.to_bits(), hit.to_bits()));
+                    }
+                    if !pit.calls.is_empty() {
+                        recording.set("ai_pit_calls", pit.calls.iter().map(|(car, seconds)| format!("{car}:{}", (*seconds / DT) as usize)).collect::<Vec<_>>().join(","));
+                    }
+                    let place: [f32; 3] = rd(car, CAR_PIT_POSITION + 0x30);
+                    whole.enable_pit(place, &menu, pit.window);
+                }
+                referee = Some(whole);
             }
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee, jump_start: scenario.name.starts_with("rc_jump"), shift_wait: 0 })
+            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee, jump_start: scenario.name.starts_with("rc_jump"), shift_wait: 0, pit_calls: pit_of(scenario.name).map(|pit| pit.calls.iter().map(|(car, seconds)| (*car, (*seconds / DT) as usize)).collect()).unwrap_or_default(), pit_damage: pit_of(scenario.name).is_some_and(|pit| pit.damage) })
         }
     }
 
@@ -1211,6 +1370,83 @@ impl<'a> MultiWorld<'a> {
                     let target = zones.iter().find(|zone| view.npos >= zone.0 && view.npos < zone.1).map_or(0.0, |zone| zone.2);
                     car.lateral += (target - car.lateral) * (DT / 0.35).min(1.0);
                     crate::track_driver::follow_line(&track, &view, car.lateral, *pace, *limit, &car.grip, t, &mut c);
+                }
+                Drive::PitBox { leave_at } => {
+                    // metres ahead of the box, along the way the box points
+                    let (place, ahead) = car.pit_box;
+                    let along = (view.position[0] - place[0]) * ahead[0] + (view.position[1] - place[1]) * ahead[1] + (view.position[2] - place[2]) * ahead[2];
+                    let mut want_gear = view.gear;
+                    match car.pit_phase {
+                        // out of the box: first gear, gently, until 6 m ahead of it
+                        0 => {
+                            c.brake = 1.0;
+                            if t >= 1.0 {
+                                car.pit_phase = 1;
+                            }
+                        }
+                        1 => {
+                            want_gear = 2;
+                            if view.gear == 2 {
+                                c.gas = if view.speed < 3.0 { 0.35 } else { 0.0 };
+                            } else {
+                                c.brake = 1.0;
+                            }
+                            if along > 6.0 {
+                                car.pit_phase = 2;
+                            }
+                        }
+                        2 => {
+                            c.brake = 1.0;
+                            if view.speed < 0.05 {
+                                car.pit_phase = 3;
+                            }
+                        }
+                        // back into it in reverse
+                        3 => {
+                            want_gear = 0;
+                            if view.gear == 0 {
+                                c.gas = if view.speed < 2.0 { 0.3 } else { 0.0 };
+                            } else {
+                                c.brake = 1.0;
+                            }
+                            if along < 1.6 {
+                                car.pit_phase = 4;
+                            }
+                        }
+                        // the stop
+                        4 => {
+                            c.brake = 1.0;
+                            if t >= *leave_at {
+                                car.pit_phase = 5;
+                            }
+                        }
+                        // and away: along the pit lane's line, then the track's
+                        _ => {
+                            if car.pit_done || !crate::track_driver::follow_pit_lane(&track, &view, &mut c) {
+                                car.pit_done = true;
+                                crate::track_driver::follow_line(&track, &view, 0.0, 0.7, 45.0, &car.grip, t, &mut c);
+                            } else {
+                                c.gas = if view.speed < 12.0 { 0.5 } else { 0.0 };
+                            }
+                            const UP: [f32; 4] = [12.0, 20.0, 29.0, 38.0];
+                            const DOWN: [f32; 4] = [8.0, 15.0, 23.0, 31.0];
+                            let slot = (view.gear - 2).clamp(0, 3) as usize;
+                            if view.gear <= 1 || (view.gear <= 5 && view.speed > UP[slot]) {
+                                want_gear = view.gear + 1;
+                            } else if view.gear > 2 && view.speed < DOWN[(view.gear - 3).clamp(0, 3) as usize] {
+                                want_gear = view.gear - 1;
+                            }
+                        }
+                    }
+                    if self.shift_wait > 0 {
+                        self.shift_wait -= 1;
+                    } else if want_gear > view.gear {
+                        c.gear_up = true;
+                        self.shift_wait = 150;
+                    } else if want_gear < view.gear {
+                        c.gear_dn = true;
+                        self.shift_wait = 150;
+                    }
                 }
                 Drive::PitLane { from, then_gas, brake_at } => {
                     if t < *from {
@@ -1308,6 +1544,23 @@ impl<'a> MultiWorld<'a> {
                 wr(self.cars[0].car, CAR_CONTROLS_PROVIDER, ai);
                 self.cars[0].ai = ai;
                 self.cars[0].drive = Drive::Ai { push: 1.0, aggression: 0.0 };
+            }
+            // Task 28b: the damage a repair stop starts from
+            if self.pit_damage && self.step_index == PIT_DAMAGE_STEP {
+                let (zones, life, hit) = PIT_DAMAGE;
+                let car = self.cars[0].car;
+                wr(car, CAR_DAMAGE_ZONE_LEVEL, zones);
+                wr(car, 0x710, life);
+                let suspension = self.cars[0].suspensions[1];
+                let vtable: *const usize = rd(suspension, 0);
+                let set_damage: extern "C" fn(*mut u8, f32) = std::mem::transmute(*vtable.add(0x78 / 8));
+                set_damage(suspension, hit);
+            }
+            // Task 28b: a driver is called in (`AIDriver::requestPitStop`)
+            for &(car, step) in &self.pit_calls {
+                if step == self.step_index && !self.cars[car].ai.is_null() {
+                    wr(self.cars[car].ai, 0x7c, 1u8);
+                }
             }
             self.drive();
             for car in &self.cars {

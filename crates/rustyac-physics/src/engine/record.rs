@@ -484,6 +484,13 @@ pub struct ReplayWorld {
     pub steps: usize,
     /// Task 28: the referee of a recording that has one
     pub referee: Option<Box<crate::race::Referee>>,
+    /// Task 28b: (car, step): before that step the car's AI driver is called in
+    /// (`AIDriver::requestPitStop`; header key `ai_pit_calls`)
+    pub pit_calls: Vec<(usize, usize)>,
+    /// Task 28b: the step before which the first car is damaged, the five zone levels, the
+    /// engine's life left and the hit that bends the second suspension (header key
+    /// `pit_damage`)
+    pub pit_damage: Option<(usize, [f32; 5], f64, f32)>,
 }
 
 impl crate::race::World for ReplayWorld {
@@ -618,7 +625,24 @@ impl ReplayWorld {
             Some(text) => Some(text.parse::<usize>().map_err(|e| format!("ai_handover: {e}"))?),
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None };
+        let mut pit_calls = Vec::new();
+        for call in recording.get("ai_pit_calls").unwrap_or("").split(',').filter(|call| !call.is_empty()) {
+            let wrong = || format!("ai_pit_calls: <car>:<step> expected, got {call:?}");
+            let (car, step) = call.split_once(':').ok_or_else(wrong)?;
+            pit_calls.push((car.parse().map_err(|_| wrong())?, step.parse().map_err(|_| wrong())?));
+        }
+        let pit_damage = match recording.get("pit_damage") {
+            Some(text) => {
+                let wrong = || format!("pit_damage: <step>;<five zones>;<life>;<hit> expected, got {text:?}");
+                let parts: Vec<&str> = text.split(';').collect();
+                let [step, zones, life, hit] = parts[..] else { return Err(wrong()) };
+                let zones: Vec<f32> = zones.split(',').filter_map(|z| u32::from_str_radix(z, 16).ok()).map(f32::from_bits).collect();
+                let zones: [f32; 5] = zones.try_into().map_err(|_| wrong())?;
+                Some((step.parse().map_err(|_| wrong())?, zones, f64::from_bits(u64::from_str_radix(life, 16).map_err(|_| wrong())?), f32::from_bits(u32::from_str_radix(hit, 16).map_err(|_| wrong())?)))
+            }
+            None => None,
+        };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, pit_calls, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         if recording.cars.iter().any(|meta| meta.drag.is_some()) {
@@ -631,6 +655,20 @@ impl ReplayWorld {
         if let Some(setup) = recording.referee_setup()? {
             let track = world.cars[0].track.clone().ok_or("a referee needs a track")?;
             let mut referee = crate::race::Referee::new(setup, track, &mut world, clock_start_ms);
+            // Task 28b: the player's pit stop, with the menu as the recording has it (header
+            // key `pit`: `<window start>;<window end>;<the menu's values>`)
+            if let Some(text) = recording.get("pit") {
+                let wrong = || format!("pit: <window start>;<window end>;<menu> expected, got {text:?}");
+                let mut parts = text.splitn(3, ';');
+                let start: u16 = parts.next().and_then(|v| v.parse().ok()).ok_or_else(wrong)?;
+                let end: u16 = parts.next().and_then(|v| v.parse().ok()).ok_or_else(wrong)?;
+                let mut menu = crate::race::QuickMenu::for_car(&world.cars[0], &crate::race::QuickMenuSettings::default())?;
+                if !menu.set_values_text(parts.next().ok_or_else(wrong)?) {
+                    return Err(format!("pit: the recording's menu is not this car's ({} items here)", menu.items.len()));
+                }
+                referee.enable_pit_stop(menu, &world);
+                referee.pit_window = (start, end);
+            }
             referee.hash_frames = true;
             world.referee = Some(Box::new(referee));
         }
@@ -760,6 +798,24 @@ impl ReplayWorld {
                 Err(message) => panic!("the hand-over: {message}"),
             }
             self.engine.ai_rand = rand;
+        }
+        // Task 28b: the damage a repair stop starts from, and drivers that are called in
+        if let Some((step, zones, life, hit)) = self.pit_damage {
+            if step == self.steps {
+                let car = &mut self.cars[0];
+                car.damage_zone_level = zones;
+                if let Some(drivetrain) = &mut car.drivetrain {
+                    drivetrain.engine_mut().base_mut().life_left = life;
+                }
+                car.suspensions[1].set_damage(hit);
+            }
+        }
+        for &(car, step) in &self.pit_calls {
+            if step == self.steps {
+                if let Some(driver) = self.ai.get_mut(car).and_then(|driver| driver.as_mut()) {
+                    driver.request_pit_stop = true;
+                }
+            }
         }
         // Task 28: the engine's jobs the referee posted
         if let Some(mut referee) = self.referee.take() {
