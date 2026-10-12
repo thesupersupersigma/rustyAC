@@ -9,7 +9,7 @@
 //! flat out (half throttle while the tyres slip past its limit) and shifts by revs.
 
 // (the comparisons and the order of the operations are the machine code's)
-#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern)]
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern, clippy::manual_clamp)]
 
 use super::{sat, PidController, RAND_UNIT};
 use crate::car::{CarControls, CarControlsInput, ControlsProvider, RollingChassis};
