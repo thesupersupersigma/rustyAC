@@ -874,7 +874,8 @@ impl RaceManager {
                 total_time: result.total.get(car).copied().unwrap_or(0.0) as f64,
                 // (through a float: a lap time above 2^24 ms is rounded)
                 best_lap: result.best_laps.get(car).map_or(0, |lap| lap.time) as f32 as f64,
-                laps: result.lap_count.get(car).copied().unwrap_or(0),
+                // (the game tests the car against the size of the best-lap list here)
+                laps: if car < result.best_laps.len() { result.lap_count.get(car).copied().unwrap_or(0) } else { 0 },
                 is_race_mode: session.session_type == SESSION_RACE,
                 is_black_flagged: cars[car].is_black_flagged,
                 has_completed_last_lap: true,

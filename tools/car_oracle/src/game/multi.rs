@@ -990,7 +990,15 @@ impl<'a> MultiWorld<'a> {
                     format!("{};{};{};{:08x};{:08x};{:08x};{referee_seed}", spec.list, spec.penalties as u8, spec.jump_start.map_or("-".to_string(), |mode| mode.to_string()), setup.over_time_mult.to_bits(), spec.first_delay_ms.to_bits(), spec.next_delay_ms.to_bits()),
                 );
                 let car_pointers: Vec<*mut u8> = cars.iter().map(|car| car.car).collect();
-                referee = Some(super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, CLOCK_START_MS));
+                // CarAvatar::getCurrentCompoundShortName: the short name of the compound the car is on
+                let mut compounds = Vec::new();
+                for meta in &metas {
+                    use rustyac_physics::data::ini::IniReader;
+                    let tyres = IniReader::load(&Path::new("content/cars").join(&meta.name).join("data").join("tyres.ini"))?;
+                    let index = tyres.get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
+                    compounds.push(tyres.get_string(&if index == 0 { "FRONT".to_string() } else { format!("FRONT_{index}") }, "SHORT_NAME"));
+                }
+                referee = Some(super::race::WholeReferee::build(acs, engine, &car_pointers, &track, &setup, &compounds, CLOCK_START_MS));
             }
             Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee })
         }

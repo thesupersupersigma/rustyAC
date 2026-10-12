@@ -449,6 +449,7 @@ fn race_micro(args: &Args) -> Result<(), String> {
     let jobs: Vec<String> = report.jobs_seen.iter().map(|(address, name)| format!("{name} @ {:#x}", 0x1_4000_0000usize + address)).collect();
     println!("race-micro seed {} list {variant} cars {cars}: {} frames, {} laps, {} sessions ended, {} values compared, race_out.json {} bytes", args.seed, report.frames, report.laps, report.sessions_ended, report.values, report.json_bytes);
     println!("  jobs for the physics thread: {}", jobs.join(", "));
+    println!("  frames by flag (none, blue, black, chequered, yellow, white, penalty): {:?}", report.flag_frames);
     match report.mismatch {
         None => {
             println!("referee: IDENTICAL");

@@ -945,7 +945,7 @@ pub struct WholeReferee<'a> {
 impl<'a> WholeReferee<'a> {
     /// The referee of `setup` for the cars of `engine`, as `RaceManager::initOffline` and
     /// `Sim::Sim` leave it. The first jobs run before the first step.
-    pub unsafe fn build(acs: &'a Acs, engine: *mut u8, cars: &[*mut u8], track: &rustyac_physics::track::Track, setup: &rustyac_physics::race::RefereeSetup, now: f64) -> WholeReferee<'a> {
+    pub unsafe fn build(acs: &'a Acs, engine: *mut u8, cars: &[*mut u8], track: &rustyac_physics::track::Track, setup: &rustyac_physics::race::RefereeSetup, compounds: &[String], now: f64) -> WholeReferee<'a> {
         CRT_RAND.with(|c| c.set(acs.crt_function(c"rand")));
         REFEREE_RAND.with(|r| r.set(Some(MsvcRand(setup.seed))));
         // the rules race.ini gives the engine
@@ -953,7 +953,7 @@ impl<'a> WholeReferee<'a> {
         if let Some(mode) = setup.sessions.jump_start_penalty_mode {
             wr(engine, PE_JUMP_START_PENALTY_MODE, mode);
         }
-        let car_setups: Vec<CarSetup> = setup.players.iter().enumerate().map(|(i, p)| CarSetup { name: p.name.clone(), car: p.car.clone(), skin: p.skin.clone(), compound: String::new(), start_index: setup.start_index[i] }).collect();
+        let car_setups: Vec<CarSetup> = setup.players.iter().enumerate().map(|(i, p)| CarSetup { name: p.name.clone(), car: p.car.clone(), skin: p.skin.clone(), compound: compounds.get(i).cloned().unwrap_or_default(), start_index: setup.start_index[i] }).collect();
         let length = track.ai_spline.as_ref().map_or(0.0, |spline| spline.length());
         REFEREE_RAND_ON.with(|on| on.set(true));
         let game = GameReferee::build(acs, &setup.sessions, &car_setups, &track.name, &setup.layout, length, track.sectors_normalized_positions.len(), setup.over_time_mult, now, Some((cars, track)));
@@ -1113,6 +1113,124 @@ impl<'a> WholeReferee<'a> {
     }
 }
 
+const VA_FLAGS_UPDATE: usize = 0x1_4009_d140; // void FlagManager::update(float)
+const VA_FLAGS_SET_FLAG: usize = 0x1_4009_cf00; // void FlagManager::setFlag(FlagType)
+const VA_FLAGS_CLEAR_FLAG: usize = 0x1_4009_cb60; // void FlagManager::clearFlag()
+const VA_GET_ROAD_DIRECTION: usize = 0x1_400d_3630; // vec3f CarAvatar::getRoadDirection()
+
+extern "C" fn control_virtual(_this: *mut u8, _value: u8) {}
+
+/// `CarAvatar::getRoadDirection`: along +z by as much as the harness wrote into the avatar's
+/// (unused) mirror position.
+extern "C" fn get_road_direction(avatar: *const u8, out: *mut f32) -> *mut f32 {
+    unsafe {
+        *out = 0.0;
+        *out.add(1) = 0.0;
+        *out.add(2) = rd::<f32>(avatar, 0x120);
+    }
+    out
+}
+
+/// The game's `FlagManager` on the cars of a [`GameReferee`]: a zeroed block with the members
+/// its constructor sets and six controls that are only their "visible" flag. `update`,
+/// `checkForBlue`, `checkForYellow`, `checkforPenalty`, `setFlag` and `clearFlag` are the
+/// game's own.
+pub struct GameFlags<'a> {
+    acs: &'a Acs,
+    flags: *mut u8,
+    controls: Vec<*mut u8>,
+    cars: usize,
+}
+
+impl<'a> GameFlags<'a> {
+    pub unsafe fn build(acs: &'a Acs, referee: &GameReferee, yellow_flag_distance: f32) -> GameFlags<'a> {
+        let mut code = vec![0x48, 0xb8];
+        code.extend_from_slice(&(get_road_direction as *const () as u64).to_le_bytes());
+        code.extend_from_slice(&[0xff, 0xe0]);
+        acs.patch(acs.va(VA_GET_ROAD_DIRECTION), &code);
+        let flags = zeroed(0x108);
+        wr(flags, 8, referee.game);
+        wr(flags, 0xa8, referee.sim);
+        wr(flags, 0xc8, rd::<*mut u8>(referee.sim, SIM_TRACK));
+        wr(flags, 0xd0, yellow_flag_distance);
+        wr(flags, 0xd4, 1u8);
+        let n = referee.avatars.len();
+        let last = Box::leak(vec![-1.0f32; n].into_boxed_slice()).as_mut_ptr();
+        wr(flags, 0x78, last);
+        wr(flags, 0x80, last.add(n));
+        wr(flags, 0x88, last.add(n));
+        let table = Box::leak(vec![control_virtual as *const () as usize; 32].into_boxed_slice());
+        let mut controls = Vec::new();
+        for offset in [0xd8usize, 0xe0, 0xe8, 0xf0, 0xf8, 0x100] {
+            let control = zeroed(0x400);
+            wr(control, 0, table.as_ptr());
+            wr(flags, offset, control);
+            controls.push(control);
+        }
+        // the menus the flags hide behind: there, and not shown
+        wr(referee.sim, 0x110, zeroed(0x400));
+        wr(referee.sim, 0x118, zeroed(0x400));
+        GameFlags { acs, flags, controls, cars: n }
+    }
+
+    /// What the flags read of a car beyond the manager's view, written into its avatar.
+    pub unsafe fn set_car(&self, referee: &GameReferee, index: usize, car: &rustyac_physics::race::flags::FlagCar) {
+        let avatar = referee.avatars[index];
+        wr(avatar, 0x129c, car.is_in_pitlane as u8);
+        for tyre in 0..4usize {
+            wr(avatar, 0x268 + 0x328 + tyre * 0xc8 + 0xa0, (tyre as u32 >= car.tyres_off_track) as u8);
+        }
+        wr(avatar, 0x268 + 0x26c, car.gear);
+        // the body's forward axis is -z here: the road's direction dot the backward axis is
+        // what the stand-in for getRoadDirection answers along z
+        wr(avatar, 0x268 + 4 + 0x20, [0.0f32, 0.0, -1.0]);
+        wr(avatar, 0x120, car.against_road);
+    }
+
+    /// The player's penalties (`Car::penaltyTime`, the penalty manager's laps).
+    pub unsafe fn set_penalty(&self, referee: &GameReferee, penalty: &rustyac_physics::race::flags::PlayerPenalty) {
+        let car = referee.cars[0];
+        wr(car, 0x3d30, penalty.penalty_time);
+        wr(car, 0x3d28, penalty.penalty_time);
+        wr(car, 0x3a38 + 0x26, penalty.pit_penalty_laps);
+    }
+
+    pub unsafe fn black_flag(&self, flag: bool) {
+        if flag {
+            let set_flag: extern "C" fn(*mut u8, i32) = std::mem::transmute(self.acs.va(VA_FLAGS_SET_FLAG));
+            set_flag(self.flags, 2);
+        } else {
+            let clear_flag: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_FLAGS_CLEAR_FLAG));
+            clear_flag(self.flags);
+        }
+    }
+
+    pub unsafe fn new_session(&self) {
+        let clear_flag: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(VA_FLAGS_CLEAR_FLAG));
+        clear_flag(self.flags);
+    }
+
+    pub unsafe fn update(&self, dt: f32) {
+        let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_FLAGS_UPDATE));
+        update(self.flags, dt);
+    }
+
+    /// The flag, its timer, every car's last place, and what is shown (blue, black,
+    /// chequered, yellow, penalty).
+    pub unsafe fn text(&self) -> String {
+        let last: *const u32 = rd(self.flags, 0x78);
+        let places: Vec<String> = (0..self.cars).map(|i| format!("{:08x}", *last.add(i))).collect();
+        let shown: Vec<String> = self.controls[..5].iter().map(|control| rd::<u8>(*control, 0x150).to_string()).collect();
+        format!("{} {:08x} [{}] {}", rd::<i32>(self.flags, 0xb0), rd::<u32>(self.flags, 0x70), places.join(" "), shown.join(""))
+    }
+}
+
+/// The port's flags in the same words.
+pub fn flags_text(flags: &rustyac_physics::race::flags::FlagManager, shown: &rustyac_physics::race::flags::Shown) -> String {
+    let places: Vec<String> = flags.last_position_on_spline.iter().map(|p| format!("{:08x}", p.to_bits())).collect();
+    format!("{} {:08x} [{}] {}{}{}{}{}", flags.current_flag as i32, flags.timer.to_bits(), places.join(" "), shown.blue as u8, shown.black as u8, shown.chequered as u8, shown.yellow as u8, shown.penalty as u8)
+}
+
 /// The port's state under the same names.
 pub fn dump_port(manager: &RaceManager, penalty_mode: i32) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -1247,6 +1365,11 @@ struct ToyCar {
     speed: f32,
     filtered: f32,
     cuts: i32,
+    /// until when all four tyres are off the track, the gearbox is in reverse, the car points
+    /// the wrong way
+    off_until: f64,
+    reverse_until: f64,
+    against_until: f64,
 }
 
 /// What a made-up drive found.
@@ -1258,6 +1381,8 @@ pub struct MicroReport {
     pub jobs_seen: Vec<(usize, &'static str)>,
     pub json_bytes: usize,
     pub mismatch: Option<String>,
+    /// frames with each flag as the current one (none, blue, black, chequered, yellow, white, penalty)
+    pub flag_frames: [usize; 7],
 }
 
 /// Where two values part: the words around the first one that differs.
@@ -1312,9 +1437,15 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
     let mut script = MsvcRand(seed ^ 0x5eed_0028);
     let mut unit = move || script.next() as f32 / 32768.0;
     let mut cars: Vec<ToyCar> = (0..car_count)
-        .map(|_| ToyCar { lap_seconds: 7.0 + 6.0 * unit(), position: 0.0, lap_start: now, sector_start: now, sector: 0, laps: 0, in_pit_until: now + 1500.0, parked: false, retired: false, retire_at: None, black: false, speed: 0.0, filtered: 0.0, cuts: 0 })
+        .map(|_| ToyCar { lap_seconds: 7.0 + 6.0 * unit(), position: 0.0, lap_start: now, sector_start: now, sector: 0, laps: 0, in_pit_until: now + 1500.0, parked: false, retired: false, retire_at: None, black: false, speed: 0.0, filtered: 0.0, cuts: 0, off_until: 0.0, reverse_until: 0.0, against_until: 0.0 })
         .collect();
-    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None };
+    let mut report = MicroReport { frames: 0, laps: 0, sessions_ended: 0, values: 0, jobs_seen: Vec::new(), json_bytes: 0, mismatch: None, flag_frames: [0; 7] };
+    // the flags: the game's FlagManager and the port's
+    let game_flags = GameFlags::build(acs, &game, 700.0);
+    let mut flags = rustyac_physics::race::flags::FlagManager::new(car_count, 3000.0, None);
+    let mut penalty = rustyac_physics::race::flags::PlayerPenalty::default();
+    let mut was_black = false;
+    let mut flag_counts = [0usize; 7];
     let mut job_names: std::collections::BTreeMap<usize, &'static str> = std::collections::BTreeMap::new();
 
     for frame in 0..frames {
@@ -1323,6 +1454,9 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
             match action {
                 Action::PenaltyMode(mode) => penalty_mode = mode,
                 Action::NewSession { session, .. } => {
+                    // (FlagManager's handler of the new-session event)
+                    flags.clear_flag();
+                    game_flags.new_session();
                     for car in cars.iter_mut() {
                         car.position = 0.0;
                         car.lap_start = now;
@@ -1367,8 +1501,16 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
             if !car.parked && !car.retired && unit() < 0.0004 {
                 car.in_pit_until = now + 2000.0 + 4000.0 * unit() as f64;
             }
-            if index == 0 && unit() < 0.00005 {
+            if index == 0 && unit() < if car.black { 0.0005 } else { 0.00003 } {
                 car.black = !car.black;
+            }
+            let chance = unit();
+            if chance < 0.0003 {
+                car.off_until = now + 1500.0 + 2500.0 * unit() as f64;
+            } else if chance < 0.0005 {
+                car.reverse_until = now + 1000.0 + 2000.0 * unit() as f64;
+            } else if chance < 0.0007 {
+                car.against_until = now + 1000.0 + 2000.0 * unit() as f64;
             }
             let in_pit = car.parked || now < car.in_pit_until;
             let driving = started && !in_pit && !car.retired;
@@ -1419,6 +1561,34 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         for (index, view) in views.iter().enumerate() {
             game.set_car(index, view, cars[index].speed);
             game.set_fake_car(index, view);
+        }
+        // what the flags read: a car in its pit box is in the pit lane; now and then one is
+        // off the track, in reverse, or points the wrong way and rolls back
+        let flag_cars: Vec<rustyac_physics::race::flags::FlagCar> = cars
+            .iter()
+            .zip(&views)
+            .map(|(car, view)| rustyac_physics::race::flags::FlagCar {
+                is_in_pitlane: view.is_in_pit,
+                tyres_off_track: if now < car.off_until { 4 } else { (car.cuts > 0) as u32 * 2 },
+                gear: if now < car.reverse_until { 0 } else { 3 },
+                speed: car.speed,
+                against_road: if now < car.against_until { 0.9 } else { -0.8 },
+            })
+            .collect();
+        for (index, car) in flag_cars.iter().enumerate() {
+            game_flags.set_car(&game, index, car);
+        }
+        let chance = unit();
+        if chance < 0.0002 {
+            penalty.penalty_time = if penalty.penalty_time > 0.0 || chance < 0.00004 { 0.0 } else { 5.0 };
+        } else if chance < 0.0004 && (penalty.pit_penalty_laps > 0 || chance < 0.00024) {
+            penalty.pit_penalty_laps = if penalty.pit_penalty_laps > 0 { 0 } else { 3 };
+        }
+        game_flags.set_penalty(&game, &penalty);
+        if cars[0].black != was_black {
+            was_black = cars[0].black;
+            flags.on_black_flag(was_black, 1);
+            game_flags.black_flag(was_black);
         }
         report.laps += laps.len();
 
@@ -1499,7 +1669,13 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         if report.mismatch.is_some() {
             break;
         }
-        let (a, b) = (game.dump(), dump_port(&manager, penalty_mode));
+        // the flags' frame (after the manager's, as the game's object tree has them)
+        game_flags.update(DT);
+        let shown = flags.update(DT, &manager, &views, &flag_cars, &penalty, manager.results_displayed);
+        flag_counts[flags.current_flag as usize] += 1;
+        let (mut a, mut b) = (game.dump(), dump_port(&manager, penalty_mode));
+        a.push(("flag".to_string(), game_flags.text()));
+        b.push(("flag".to_string(), flags_text(&flags, &shown)));
         report.values += a.len();
         if a != b {
             let line = a.iter().zip(&b).find(|(x, y)| x != y).map(|(x, y)| first_difference(&x.0, &x.1, &y.1)).unwrap_or_else(|| format!("{} values in the game, {} in the port", a.len(), b.len()));
@@ -1509,6 +1685,7 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         report.frames += 1;
     }
     report.jobs_seen = job_names.into_iter().collect();
+    report.flag_frames = flag_counts;
     if report.mismatch.is_some() {
         return Ok(report);
     }
