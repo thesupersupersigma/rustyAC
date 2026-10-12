@@ -8,8 +8,11 @@
 //!   framing, and tapes of what crossed. [`native`] is the desktop's TCP + UDP.
 //! * [`md5`]: the checksums a server asks for.
 //!
+//! * [`ws`]: both channels in one WebSocket to a gateway next to the server
+//!   (`crates/rustyac-gateway`), for the browser and for a desktop behind an HTTP-only tunnel.
+//!
 //! Nothing in this crate is platform code: it builds for `wasm32-unknown-unknown`, where
-//! the transport will be a WebSocket to a gateway next to the server (M2).
+//! the page's own `WebSocket` is the pipe under [`ws::WsTransport`].
 
 pub mod car_update;
 pub mod client;
@@ -26,3 +29,4 @@ pub mod packet;
 pub mod replay;
 pub mod session;
 pub mod transport;
+pub mod ws;

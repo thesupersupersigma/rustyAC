@@ -56,3 +56,67 @@ fn golden_laguna_join() {
     let result = spoiled.replay(&paths).expect("the replay");
     assert!(result.is_some_and(|step| step >= 1500), "a changed bit of a car state went unnoticed");
 }
+
+/// Task 26: the join as a state machine. The browser cannot wait for an answer: it polls,
+/// and each answer arrives in a frame of its own. The desktop waits. Both ways must send the
+/// same messages in the same order and end with the same client and car list. The tape of
+/// the golden excerpt answers (no Assetto Corsa file is needed here).
+#[test]
+fn join_polled_is_join_waited() {
+    use rustyac_net::client::{Client, Join, JoinStage};
+    use rustyac_net::handshake::JoinRequest;
+    use rustyac_net::transport::{TapePlayer, Transport};
+
+    /// A transport on which an answer only arrives after it was asked for twice in vain
+    /// (as in a browser, where the answer comes some frames later).
+    struct Late {
+        inner: TapePlayer,
+        idle: u32,
+    }
+    impl Transport for Late {
+        fn send_reliable(&mut self, message: &[u8]) -> Result<(), String> {
+            self.idle = 0;
+            self.inner.send_reliable(message)
+        }
+        fn send_datagram(&mut self, message: &[u8]) -> Result<(), String> {
+            self.inner.send_datagram(message)
+        }
+        fn poll_reliable(&mut self) -> Result<Option<Vec<u8>>, String> {
+            self.idle += 1;
+            if self.idle <= 2 {
+                return Ok(None);
+            }
+            // (one answer per question, as the server gives them)
+            self.idle = u32::MIN;
+            self.inner.wait_reliable(0)
+        }
+        fn poll_datagram(&mut self) -> Result<Option<Vec<u8>>, String> {
+            self.inner.poll_datagram()
+        }
+    }
+
+    let golden = NetGolden::from_bytes(include_bytes!("golden/laguna_join_3000.netgold")).expect("the golden file");
+    let request = JoinRequest { guid: "0".to_string(), name: "replay".to_string(), ..JoinRequest::default() };
+    let (waited, waited_cars) = Client::join(TapePlayer::new(&golden.tape), &request).expect("the waited join");
+
+    let mut join = Join::start(Late { inner: TapePlayer::new(&golden.tape), idle: 0 }, &request).expect("the request");
+    let mut stages = vec![join.stage()];
+    let mut polls = 0;
+    while join.stage() != JoinStage::Done {
+        polls += 1;
+        assert!(polls < 1000, "the polled join does not end");
+        let stage = join.poll().expect("a poll");
+        if stages.last() != Some(&stage) {
+            stages.push(stage);
+        }
+    }
+    assert_eq!(stages, [JoinStage::Handshake, JoinStage::CarList, JoinStage::Done]);
+    assert!(polls > 4, "the answers were there at once: nothing was polled");
+    let (polled, polled_cars) = join.finish().expect("a finished join");
+    assert_eq!(polled_cars, waited_cars);
+    assert!(polled_cars.len() >= 4, "the tape's server has more cars than that");
+    assert_eq!(polled.accepted, waited.accepted);
+    assert_eq!(polled.session_id, waited.session_id);
+    assert_eq!(polled.transport.inner.sent, waited.transport.sent, "the two joins sent different messages");
+    assert!(waited.transport.sent.entries.len() >= 2, "a join request and at least one car list request");
+}

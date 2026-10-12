@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Joining a server from the desktop: what `RaceManager::initOnline` @ 0x14013d160 does
-//! before the track is loaded. The player's identity, the TCP connection, the handshake, the
-//! car list, the checksums the server asks for.
+//! before the track is loaded. The player's identity, the connection (TCP and UDP, or a
+//! WebSocket to a gateway next to the server), the handshake, the car list, the checksums
+//! the server asks for.
 //!
 //! Where the server is comes from the command line (`--join host:port`) or, for a start
 //! without a car and a track on the command line, from race.ini's `[REMOTE]` section, which
 //! is how Assetto Corsa itself and Content Manager's "join" start an online session.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use rustyac_net::client::Client;
+use rustyac_net::client::{Join, JOIN_TIMEOUT_MS};
 use rustyac_net::handshake::{CarEntry, JoinRequest};
 use rustyac_net::native::NativeTransport;
 use rustyac_net::transport::{Taped, Transport};
@@ -32,11 +33,14 @@ pub struct JoinTarget {
     pub password: String,
     /// The server's name as a launcher wrote it (for the console only).
     pub server_name: String,
+    /// `--join ws://...` / `wss://...`: the address of a gateway next to the server
+    /// (`crates/rustyac-gateway`) instead of the server's own `host:port`.
+    pub gateway: Option<String>,
 }
 
 /// `host:port` of `--join`.
 pub fn parse_address(text: &str) -> Result<(String, u16), String> {
-    let (host, port) = text.rsplit_once(':').ok_or(format!("--join {text}: <host>:<port> is expected (the server's TCP port, e.g. 127.0.0.1:9600)"))?;
+    let (host, port) = text.rsplit_once(':').ok_or(format!("--join {text}: <host>:<port> is expected (the server's TCP port, e.g. 127.0.0.1:9600), or a gateway's ws:// or wss:// address"))?;
     let port = port.parse().map_err(|_| format!("--join {text}: {port:?} is no port number"))?;
     if host.is_empty() {
         return Err(format!("--join {text}: the host is missing"));
@@ -70,6 +74,7 @@ pub fn remote_of_race_ini(path: &Path) -> Result<Option<JoinTarget>, String> {
         car: ini.get_string("REMOTE", "REQUESTED_CAR"),
         password: ini.get_string("REMOTE", "PASSWORD"),
         server_name: ini.get_string("REMOTE", "SERVER_NAME"),
+        gateway: None,
     }))
 }
 
@@ -81,6 +86,10 @@ pub fn target(options: &Options) -> Result<Option<JoinTarget>, String> {
         return Ok(None);
     }
     let mut target = match &options.join {
+        Some(address) if rustyac_net::native::is_gateway_url(address) => {
+            let url = rustyac_net::native::WsUrl::parse(address)?;
+            Some(JoinTarget { host: url.host.clone(), port: url.port, gateway: Some(address.clone()), ..JoinTarget::default() })
+        }
         Some(address) => {
             let (host, port) = parse_address(address)?;
             Some(JoinTarget { host, port, ..JoinTarget::default() })
@@ -115,48 +124,7 @@ pub fn target(options: &Options) -> Result<Option<JoinTarget>, String> {
     Ok(target)
 }
 
-/// A name a server sent that becomes part of a path: one folder's name, nothing that leaves
-/// the folder it is joined to.
-pub fn is_plain_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0']) && !name.bytes().any(|b| b < 0x20)
-}
-
-fn read_game_file(root: &Path, path: &str) -> Option<Vec<u8>> {
-    // the server's paths have forward slashes and never leave the game's folder: every
-    // part is a plain name (no drive, no root, no "..")
-    if path.is_empty() || !path.split(['/', '\\']).all(is_plain_name) {
-        return None;
-    }
-    std::fs::read(root.join(path)).ok()
-}
-
-/// `ACClient::getCarMD5` @ 0x140046070: the MD5 of `content/cars/<model>/data.acd`, or,
-/// for a car with an unpacked `data` folder, of all its files one after the other in the
-/// order of their lower-cased names (`md5Folder` @ 0x14023a450).
-pub fn car_md5(root: &Path, model: &str) -> [u8; 16] {
-    let car = root.join("content").join("cars").join(model);
-    if let Ok(bytes) = std::fs::read(car.join("data.acd")) {
-        return rustyac_net::md5::digest(&bytes);
-    }
-    let mut names: Vec<(Vec<u16>, PathBuf)> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(car.join("data")) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let lower: Vec<u16> = entry.file_name().to_string_lossy().to_lowercase().encode_utf16().collect();
-                names.push((lower, path));
-            }
-        }
-    }
-    names.sort();
-    let mut md5 = rustyac_net::md5::Md5::new();
-    for (_, path) in &names {
-        if let Ok(bytes) = std::fs::read(path) {
-            md5.update(&bytes);
-        }
-    }
-    md5.finish()
-}
+pub use crate::online::{car_md5, is_plain_name};
 
 /// What a join gives: the session (the client with the car list) and what was learnt.
 pub struct Joined {
@@ -176,10 +144,18 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
         GuidSource::Given => "online: the player id of the command line".to_string(),
     });
     let request = JoinRequest { guid: identity.guid, name: target.name.clone(), team: target.team.clone(), nation_code: target.nation_code.clone(), car: target.car.clone(), password: target.password.clone() };
-    notes.push(format!("online: joining {}:{} as {:?}{}", target.host, target.port, request.name, if target.server_name.is_empty() { String::new() } else { format!(" ({})", target.server_name) }));
-    let transport = NativeTransport::connect(&target.host, target.port, 8000)?;
-    let transport: BoxedTransport = if options.net_tape.is_some() { Box::new(Taped::new(transport)) } else { Box::new(transport) };
-    let mut client = Client::join(transport, &request).map_err(|e| e.to_string())?;
+    notes.push(format!("online: joining {} as {:?}{}", target.gateway.clone().unwrap_or(format!("{}:{}", target.host, target.port)), request.name, if target.server_name.is_empty() { String::new() } else { format!(" ({})", target.server_name) }));
+    let transport: BoxedTransport = match &target.gateway {
+        // through a gateway: both channels in one WebSocket
+        Some(url) => crate::gateway::connect(url, &options.ws_headers, options.tls_root.as_deref(), 8000)?,
+        None => Box::new(NativeTransport::connect(&target.host, target.port, 8000)?),
+    };
+    let transport: BoxedTransport = if options.net_tape.is_some() { Box::new(Taped::new(transport)) } else { transport };
+    // the handshake and the car list: the same state machine the browser steps, here
+    // waiting for each answer
+    let mut join = Join::start(transport, &request).map_err(|e| e.to_string())?;
+    join.wait(JOIN_TIMEOUT_MS).map_err(|e| e.to_string())?;
+    let (client, cars) = join.finish().ok_or("the join did not end")?;
     let accepted = client.accepted.clone();
     notes.push(format!(
         "online: {:?} lets you in: slot {}, {} ({}) at {}{}, session {:?}, {} updates a second",
@@ -206,37 +182,7 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
         accepted.allowed_tyres_out,
         accepted.current_session.grip * 100.0
     ));
-    // from here on the server holds a slot for this player: a failure says goodbye (0x43)
-    let rest = (|| -> Result<Vec<CarEntry>, String> {
-        let cars = client.car_list()?;
-        // what becomes a folder's name is a plain name
-        let named = [("track", &accepted.track), ("car", &accepted.model)].into_iter().chain(cars.iter().map(|car| ("car", &car.model)));
-        for (what, name) in named {
-            if !is_plain_name(name) {
-                return Err(format!("the server names a {what} {name:?}: that is no folder's name"));
-            }
-        }
-        if !accepted.track_config.is_empty() && !is_plain_name(&accepted.track_config) {
-            return Err(format!("the server names a track layout {:?}: that is no folder's name", accepted.track_config));
-        }
-        // the checksums: every file the server names must be there ("Problems during checksum")
-        let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;
-        let mut digests = Vec::new();
-        for file in &accepted.checksum_files {
-            let bytes = read_game_file(&root, file).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
-            digests.push(rustyac_net::md5::digest(&bytes));
-        }
-        client.set_checksums(digests, car_md5(&root, &accepted.model));
-        Ok(cars)
-    })();
-    let cars = match rest {
-        Ok(cars) => cars,
-        Err(message) => {
-            client.shutdown();
-            return Err(message);
-        }
-    };
-    let session = OnlineSession::new(client, &cars);
+    let session = crate::online::finish_join(client, cars.clone(), root.as_deref())?;
     let others = session.remote_entries.iter().filter(|car| !car.driver_name.is_empty()).count();
     notes.push(format!("online: {} cars on the server, {} other driver(s) there now", cars.len(), others));
     Ok(Joined { session, cars, notes })

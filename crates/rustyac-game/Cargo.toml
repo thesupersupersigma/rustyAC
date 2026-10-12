@@ -65,3 +65,8 @@ features = [
 rustyac-audio = { path = "../rustyac-audio" }
 # AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
 rustyac-render = { path = "../rustyac-render" }
+# `--join wss://...`: TLS to a gateway behind an HTTPS address (a Cloudflare Tunnel). rustls
+# with the ring provider and Mozilla's root certificates compiled in; nothing of the
+# system's TLS is used.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"

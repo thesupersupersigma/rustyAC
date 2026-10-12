@@ -104,8 +104,7 @@ impl NetReplay {
         let mut world = ReplayWorld::build(recording, paths, Arc::clone(&track), 0)?;
         // (whatever is asked: the tape answers what it answered then)
         let request = JoinRequest { guid: "0".to_string(), name: "replay".to_string(), ..JoinRequest::default() };
-        let mut client = Client::join(TapePlayer::new(tape), &request).map_err(|e| e.to_string())?;
-        let cars = client.car_list()?;
+        let (client, cars) = Client::join(TapePlayer::new(tape), &request).map_err(|e| e.to_string())?;
         let me = client.session_id;
         let mut session = NetSession::new(client);
         session.track = Some(Arc::clone(&track));

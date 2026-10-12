@@ -4,8 +4,8 @@
 //! AC's `ACClient`: the online session of one player, over any [`Transport`].
 //!
 //! ```text
-//! Client::join            ACClient::handshakeTCP        the handshake (question and answer)
-//! Client::car_list        ACClient::getRemoteCarList    the cars, ten per page
+//! Join::start             ACClient::handshakeTCP        the handshake (question and answer)
+//! Join (the car list)     ACClient::getRemoteCarList    the cars, ten per page
 //! Client::set_checksums   (handshake + initOnline)      the digests the server asked for
 //! Client::begin_update_mode   ACClient::beginUpdateMode + askForP2Pvalue
 //! Client::on_physics_step ACClient::onPhysicsStep       after every physics step: the car
@@ -120,19 +120,188 @@ pub struct Client<T: Transport> {
 /// How long the join waits for an answer, ms (the game waits for ever).
 pub const JOIN_TIMEOUT_MS: u32 = 10_000;
 
-impl<T: Transport> Client<T> {
-    /// `ACClient::handshakeTCP` @ 0x140048b50: sends the request and reads the answer.
-    pub fn join(mut transport: T, request: &JoinRequest) -> Result<Client<T>, JoinError> {
+/// Where a [`Join`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JoinStage {
+    /// The request is out; the server's answer has not come.
+    Handshake,
+    /// The server let the player in; the car list is being asked for, ten cars a page.
+    CarList,
+    /// The client and the car list are ready ([`Join::finish`]).
+    Done,
+}
+
+enum JoinPhase<T: Transport> {
+    Handshake(T),
+    CarList { client: Box<Client<T>>, cars: Vec<CarEntry>, index: u8, strays: u32 },
+    Done { client: Box<Client<T>>, cars: Vec<CarEntry> },
+    /// It failed (or was finished): nothing is left.
+    Over,
+}
+
+/// The join: `ACClient::handshakeTCP` @ 0x140048b50 and `ACClient::getRemoteCarList`
+/// @ 0x140046f80 as a state machine. The game sends a question and blocks for the answer,
+/// five to fifteen times in a row; a browser cannot block, so here every answer is a
+/// message that is handed in ([`Join::on_message`]) and moves the join one stage on. The
+/// messages on the wire and their order are the game's.
+///
+/// * the desktop drives it with [`Join::wait`], which blocks in the transport;
+/// * the browser calls [`Join::poll`] once a frame until it says [`JoinStage::Done`].
+pub struct Join<T: Transport> {
+    phase: JoinPhase<T>,
+}
+
+impl<T: Transport> Join<T> {
+    /// Sends the join request.
+    pub fn start(mut transport: T, request: &JoinRequest) -> Result<Join<T>, JoinError> {
         transport.send_reliable(&request.encode()).map_err(JoinError::Transport)?;
-        let reply = transport.wait_reliable(JOIN_TIMEOUT_MS).map_err(JoinError::Transport)?;
-        let accepted = match reply.as_deref().map(HandshakeReply::decode) {
-            Some(HandshakeReply::Accepted(accepted)) => *accepted,
-            Some(HandshakeReply::Refused(refusal)) => return Err(JoinError::Refused(refusal)),
-            None => return Err(JoinError::Refused(Refusal::NoResponse)),
-        };
-        // serverIP = IPAddress(SERVER_IP, the reply's UDP port)
-        transport.set_datagram_port(accepted.udp_port);
-        Ok(Client {
+        Ok(Join { phase: JoinPhase::Handshake(transport) })
+    }
+
+    pub fn stage(&self) -> JoinStage {
+        match self.phase {
+            JoinPhase::Handshake(_) | JoinPhase::Over => JoinStage::Handshake,
+            JoinPhase::CarList { .. } => JoinStage::CarList,
+            JoinPhase::Done { .. } => JoinStage::Done,
+        }
+    }
+
+    /// The server's answer to the handshake, once it let the player in.
+    pub fn accepted(&self) -> Option<&Accepted> {
+        match &self.phase {
+            JoinPhase::CarList { client, .. } | JoinPhase::Done { client, .. } => Some(&client.accepted),
+            _ => None,
+        }
+    }
+
+    /// One message of the reliable channel. After an error the join is over (a player the
+    /// server had let in has said goodbye).
+    pub fn on_message(&mut self, message: &[u8]) -> Result<JoinStage, JoinError> {
+        match std::mem::replace(&mut self.phase, JoinPhase::Over) {
+            JoinPhase::Handshake(mut transport) => {
+                let accepted = match HandshakeReply::decode(message) {
+                    HandshakeReply::Accepted(accepted) => *accepted,
+                    HandshakeReply::Refused(refusal) => return Err(JoinError::Refused(refusal)),
+                };
+                // serverIP = IPAddress(SERVER_IP, the reply's UDP port)
+                transport.set_datagram_port(accepted.udp_port);
+                let mut client = Box::new(Client::new(transport, accepted));
+                // getRemoteCarList: the first page
+                if let Err(why) = client.transport.send_reliable(&car_list_request(0)) {
+                    client.shutdown();
+                    return Err(JoinError::Transport(why));
+                }
+                self.phase = JoinPhase::CarList { client, cars: Vec::new(), index: 0, strays: 0 };
+            }
+            JoinPhase::CarList { mut client, mut cars, mut index, mut strays } => {
+                let fail = |mut client: Box<Client<T>>, why: String| {
+                    client.shutdown();
+                    Err(JoinError::Transport(why))
+                };
+                match decode_car_list(message, index) {
+                    Ok(entries) => {
+                        let count = entries.len();
+                        cars.extend(entries);
+                        // (a slot is one byte: a server cannot have more cars than that)
+                        if cars.len() > 256 {
+                            return fail(client, "the server's car list does not end".to_string());
+                        }
+                        // a full page: there may be more (a page that is not full ends the list)
+                        if count != 10 {
+                            self.phase = JoinPhase::Done { client, cars };
+                            return Ok(JoinStage::Done);
+                        }
+                        index = index.wrapping_add(10);
+                    }
+                    // another message came first: the game drops it and asks again; here it
+                    // is handled like any message of the session
+                    Err(_) if strays < 32 => {
+                        strays += 1;
+                        client.on_reliable(message);
+                    }
+                    Err(why) => return fail(client, why),
+                }
+                if let Err(why) = client.transport.send_reliable(&car_list_request(index)) {
+                    return fail(client, why);
+                }
+                self.phase = JoinPhase::CarList { client, cars, index, strays };
+            }
+            done @ JoinPhase::Done { .. } => self.phase = done,
+            JoinPhase::Over => return Err(JoinError::Transport("the join is over".to_string())),
+        }
+        Ok(self.stage())
+    }
+
+    fn transport(&mut self) -> Option<&mut T> {
+        match &mut self.phase {
+            JoinPhase::Handshake(transport) => Some(transport),
+            JoinPhase::CarList { client, .. } => Some(&mut client.transport),
+            _ => None,
+        }
+    }
+
+    fn lose(&mut self, why: String) -> JoinError {
+        if let JoinPhase::CarList { mut client, .. } = std::mem::replace(&mut self.phase, JoinPhase::Over) {
+            client.shutdown();
+        }
+        JoinError::Transport(why)
+    }
+
+    /// Takes the answers that have arrived, without waiting.
+    pub fn poll(&mut self) -> Result<JoinStage, JoinError> {
+        loop {
+            let Some(transport) = self.transport() else {
+                return if self.stage() == JoinStage::Done { Ok(JoinStage::Done) } else { Err(JoinError::Transport("the join is over".to_string())) };
+            };
+            match transport.poll_reliable() {
+                Ok(Some(message)) => self.on_message(&message)?,
+                Ok(None) => return Ok(self.stage()),
+                Err(why) => return Err(self.lose(why)),
+            };
+        }
+    }
+
+    /// Runs the join to its end, waiting up to `timeout_ms` for each answer (the game
+    /// waits for ever).
+    pub fn wait(&mut self, timeout_ms: u32) -> Result<(), JoinError> {
+        loop {
+            let stage = self.stage();
+            let Some(transport) = self.transport() else {
+                return if stage == JoinStage::Done { Ok(()) } else { Err(JoinError::Transport("the join is over".to_string())) };
+            };
+            match transport.wait_reliable(timeout_ms) {
+                Ok(Some(message)) => self.on_message(&message)?,
+                Ok(None) if stage == JoinStage::Handshake => {
+                    self.phase = JoinPhase::Over;
+                    return Err(JoinError::Refused(Refusal::NoResponse));
+                }
+                Ok(None) => return Err(self.lose("the server did not send its car list".to_string())),
+                Err(why) => return Err(self.lose(why)),
+            };
+        }
+    }
+
+    /// The client and every car of the server (the player's own slot and spectators
+    /// included; the game makes remote cars of the others), once the join is done.
+    pub fn finish(self) -> Option<(Client<T>, Vec<CarEntry>)> {
+        match self.phase {
+            JoinPhase::Done { client, cars } => Some((*client, cars)),
+            _ => None,
+        }
+    }
+
+    /// Gives the join up: a player the server had let in says goodbye.
+    pub fn abandon(self) {
+        if let JoinPhase::CarList { mut client, .. } | JoinPhase::Done { mut client, .. } = self.phase {
+            client.shutdown();
+        }
+    }
+}
+
+impl<T: Transport> Client<T> {
+    /// The client of a server that let the player in.
+    fn new(transport: T, accepted: Accepted) -> Client<T> {
+        Client {
             transport,
             session_id: accepted.session_id,
             send_interval: accepted.send_interval_ms(),
@@ -160,42 +329,14 @@ impl<T: Transport> Client<T> {
             datagrams_out: 0,
             messages_in: 0,
             accepted,
-        })
+        }
     }
 
-    /// `ACClient::getRemoteCarList` @ 0x140046f80: every car of the server, the player's
-    /// own slot and spectators included (the game makes remote cars of the others).
-    /// Messages of other kinds that arrive meanwhile are kept for later.
-    pub fn car_list(&mut self) -> Result<Vec<CarEntry>, String> {
-        let mut cars = Vec::new();
-        let mut index = 0u8;
-        let mut strays = 0;
-        loop {
-            self.transport.send_reliable(&car_list_request(index))?;
-            let page = self.transport.wait_reliable(JOIN_TIMEOUT_MS)?.ok_or("the server did not send its car list")?;
-            let entries = match decode_car_list(&page, index) {
-                Ok(entries) => entries,
-                // another message came first: the game drops it and asks again; here it is
-                // handled like any message of the session
-                Err(_) if strays < 32 => {
-                    strays += 1;
-                    self.on_reliable(&page);
-                    continue;
-                }
-                Err(message) => return Err(message),
-            };
-            let count = entries.len();
-            cars.extend(entries);
-            // (a slot is one byte: a server cannot have more cars than that)
-            if cars.len() > 256 {
-                return Err("the server's car list does not end".to_string());
-            }
-            // a full page: there may be more (a page that is not full ends the list)
-            if count != 10 {
-                return Ok(cars);
-            }
-            index = index.wrapping_add(10);
-        }
+    /// The whole join, waiting for each answer: [`Join`] run to its end.
+    pub fn join(transport: T, request: &JoinRequest) -> Result<(Client<T>, Vec<CarEntry>), JoinError> {
+        let mut join = Join::start(transport, request)?;
+        join.wait(JOIN_TIMEOUT_MS)?;
+        join.finish().ok_or(JoinError::Transport("the join did not end".to_string()))
     }
 
     /// The digests of the files the handshake listed, in its order, and the digest of the

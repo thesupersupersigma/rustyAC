@@ -9,11 +9,12 @@
 //! the remote cars' steps (`NetCarStateProvider::step`) after it. See
 //! [`rustyac_physics::engine::StepHooks`].
 //!
-//! No platform code: the transport is a trait object (TCP and UDP on the desktop, a
-//! WebSocket in the browser build to come).
+//! No platform code: the transport is a trait object (TCP and UDP on the desktop, or a
+//! WebSocket to a gateway; the page's WebSocket in the browser build), and the files the
+//! server wants checksums of are read through `rustyac_content::vfs`.
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rustyac_net::client::{Client, Event};
 use rustyac_net::handshake::{session_type, Accepted, CarEntry};
@@ -21,12 +22,95 @@ use rustyac_net::messages::Message;
 use rustyac_net::net_car::{NetCarGeometry, NetCarStateProvider};
 use rustyac_net::session::NetSession;
 use rustyac_net::transport::Transport;
+use rustyac_content::vfs;
 use rustyac_physics::car::{PhysicsCore, RollingChassis};
 use rustyac_physics::engine::{CarSlot, StepHooks};
 use rustyac_physics::vecmath::Mat44f;
 
-/// The transport of a session: any, behind a box.
+/// The transport of a session: any, behind a box. (On the desktop the session lives on
+/// the physics thread; a browser has one thread, and its WebSocket cannot leave it.)
+#[cfg(not(target_arch = "wasm32"))]
 pub type BoxedTransport = Box<dyn Transport + Send>;
+#[cfg(target_arch = "wasm32")]
+pub type BoxedTransport = Box<dyn Transport>;
+
+/// A name a server sent that becomes part of a path: one folder's name, nothing that leaves
+/// the folder it is joined to.
+pub fn is_plain_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0']) && !name.bytes().any(|b| b < 0x20)
+}
+
+fn read_game_file(root: &Path, path: &str) -> Option<Vec<u8>> {
+    // the server's paths have forward slashes and never leave the game's folder: every
+    // part is a plain name (no drive, no root, no "..")
+    if path.is_empty() || !path.split(['/', '\\']).all(is_plain_name) {
+        return None;
+    }
+    vfs::read(&root.join(path)).ok()
+}
+
+/// `ACClient::getCarMD5` @ 0x140046070: the MD5 of `content/cars/<model>/data.acd`, or,
+/// for a car with an unpacked `data` folder, of all its files one after the other in the
+/// order of their lower-cased names (`md5Folder` @ 0x14023a450).
+pub fn car_md5(root: &Path, model: &str) -> [u8; 16] {
+    let car = root.join("content").join("cars").join(model);
+    if let Ok(bytes) = vfs::read(&car.join("data.acd")) {
+        return rustyac_net::md5::digest(&bytes);
+    }
+    let folder = car.join("data");
+    let mut names: Vec<(Vec<u16>, PathBuf)> = Vec::new();
+    if let Ok(entries) = vfs::read_dir(&folder) {
+        for (name, is_folder) in entries {
+            if !is_folder {
+                names.push((name.to_lowercase().encode_utf16().collect(), folder.join(&name)));
+            }
+        }
+    }
+    names.sort();
+    let mut md5 = rustyac_net::md5::Md5::new();
+    for (_, path) in &names {
+        if let Ok(bytes) = vfs::read(path) {
+            md5.update(&bytes);
+        }
+    }
+    md5.finish()
+}
+
+/// What `RaceManager::initOnline` @ 0x14013d160 does with a finished join
+/// ([`rustyac_net::client::Join`]), on the desktop and in the browser alike: the names the
+/// server sent that become folders are checked, the files it wants checksums of are read
+/// from the game's folder `root` (the desktop's disk, the browser's own files) and
+/// digested, and the session is made. From the handshake on the server holds a slot for
+/// this player: a failure says goodbye (`0x43`).
+pub fn finish_join(mut client: Client<BoxedTransport>, cars: Vec<CarEntry>, root: Option<&Path>) -> Result<OnlineSession, String> {
+    let accepted = client.accepted.clone();
+    let rest = (|| -> Result<(), String> {
+        // what becomes a folder's name is a plain name
+        let named = [("track", &accepted.track), ("car", &accepted.model)].into_iter().chain(cars.iter().map(|car| ("car", &car.model)));
+        for (what, name) in named {
+            if !is_plain_name(name) {
+                return Err(format!("the server names a {what} {name:?}: that is no folder's name"));
+            }
+        }
+        if !accepted.track_config.is_empty() && !is_plain_name(&accepted.track_config) {
+            return Err(format!("the server names a track layout {:?}: that is no folder's name", accepted.track_config));
+        }
+        // the checksums: every file the server names must be there ("Problems during checksum")
+        let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;
+        let mut digests = Vec::new();
+        for file in &accepted.checksum_files {
+            let bytes = read_game_file(root, file).ok_or(format!("PROBLEMS DURING CHECKSUM: {file} is not in {}", root.display()))?;
+            digests.push(rustyac_net::md5::digest(&bytes));
+        }
+        client.set_checksums(digests, car_md5(root, &accepted.model));
+        Ok(())
+    })();
+    if let Err(message) = rest {
+        client.shutdown();
+        return Err(message);
+    }
+    Ok(OnlineSession::new(client, &cars))
+}
 
 /// What the server dictates of the physics (the handshake's reply), as the game applies it.
 #[derive(Clone, Copy, Debug, PartialEq)]

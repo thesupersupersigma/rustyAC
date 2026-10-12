@@ -15,6 +15,7 @@ use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use crate::transport::{Framer, Transport};
+use crate::ws::{Pipe, WsTransport};
 
 pub struct NativeTransport {
     tcp: TcpStream,
@@ -157,4 +158,62 @@ impl Transport for NativeTransport {
             }
         }
     }
+}
+
+/// The desktop's pipe to a gateway: a WebSocket client on a TCP stream (`ws://`) or on TLS
+/// over one (`wss://`; the game brings the TLS stream, this crate has none).
+pub struct WsPipe<S: rustyac_gateway::ws::Socket> {
+    client: rustyac_gateway::ws::Client<S>,
+}
+
+pub use rustyac_gateway::ws::{is_url as is_gateway_url, Socket as WsSocket, Url as WsUrl};
+
+impl<S: WsSocket> WsPipe<S> {
+    /// The WebSocket's opening handshake on a connected stream. `fields`: more header
+    /// fields of the request (a tunnel's service token).
+    pub fn open(stream: S, url: &WsUrl, fields: &[(String, String)], timeout_ms: u32) -> Result<WsPipe<S>, String> {
+        Ok(WsPipe { client: rustyac_gateway::ws::Client::connect(stream, &url.host_field(), &url.path, fields, timeout_ms)? })
+    }
+}
+
+impl<S: WsSocket> Pipe for WsPipe<S> {
+    fn send(&mut self, message: &[u8]) -> Result<(), String> {
+        self.client.send(message)
+    }
+    fn poll(&mut self) -> Result<Option<Vec<u8>>, String> {
+        self.client.poll()
+    }
+    fn wait(&mut self, timeout_ms: u32) -> Result<Option<Vec<u8>>, String> {
+        self.client.wait(timeout_ms)
+    }
+}
+
+impl<S: WsSocket> Drop for WsPipe<S> {
+    fn drop(&mut self) {
+        self.client.close();
+    }
+}
+
+/// A TCP connection to `host:port` for a WebSocket (IPv4 or IPv6, whichever answers).
+pub fn connect_tcp(host: &str, port: u16, timeout_ms: u32) -> Result<TcpStream, String> {
+    let mut last = format!("{host}: no address");
+    for address in (host, port).to_socket_addrs().map_err(|e| format!("{host}:{port}: {e}"))? {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(timeout_ms as u64)) {
+            Ok(stream) => {
+                stream.set_nodelay(true).map_err(|e| e.to_string())?;
+                return Ok(stream);
+            }
+            Err(e) => last = format!("connecting to {address}: {e}"),
+        }
+    }
+    Err(last)
+}
+
+/// The transport through a gateway at a plain `ws://` address.
+pub fn connect_ws(url: &WsUrl, fields: &[(String, String)], timeout_ms: u32) -> Result<WsTransport<WsPipe<TcpStream>>, String> {
+    if url.tls {
+        return Err("a wss:// address needs TLS, which the game adds (rustyac.exe --join wss://...)".to_string());
+    }
+    let stream = connect_tcp(&url.host, url.port, timeout_ms)?;
+    Ok(WsTransport::new(WsPipe::open(stream, url, fields, timeout_ms)?))
 }

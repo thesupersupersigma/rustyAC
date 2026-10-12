@@ -199,8 +199,18 @@ pub struct Options {
     pub pressure_law: Option<(f32, f32)>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
-    /// Task 25. `--join <host:port>`: the server to join (its TCP port).
+    /// Task 25. `--join <host:port>`: the server to join (its TCP port). Task 26: or
+    /// `ws://...` / `wss://...`, a gateway next to the server.
     pub join: Option<String>,
+    /// `--join-header <Name: value>` (repeatable): more header fields of the WebSocket
+    /// request to a gateway (a tunnel's service token).
+    pub ws_headers: Vec<(String, String)>,
+    /// `--tls-root <file.pem>`: one more root certificate for `wss://` (a gateway behind a
+    /// certificate of your own).
+    pub tls_root: Option<PathBuf>,
+    /// `--net-arrivals <file.csv>`: when every state of another car arrived (for
+    /// measuring a transport's delay).
+    pub net_arrivals: Option<PathBuf>,
     /// `--offline`: no server, whatever race.ini's `[REMOTE]` says.
     pub offline: bool,
     /// `--name`, `--team`, `--password`: who joins.
@@ -327,6 +337,9 @@ impl Default for Options {
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
             join: None,
+            ws_headers: Vec::new(),
+            tls_root: None,
+            net_arrivals: None,
             offline: false,
             driver_name: None,
             team: None,
@@ -443,6 +456,16 @@ usage: rustyac [options]
                         name), --password the server's, --team your team. Without --join, a
                         start without --car and --track follows race.ini's [REMOTE] section
                         when it has ACTIVE=1 (what Content Manager writes when you join a server)
+  --join <ws://...>     the same through a WebSocket gateway next to the server
+         <wss://...>    (crates/rustyac-gateway): for a server that is only reachable over
+                        HTTPS (a Cloudflare Tunnel carries no UDP), e.g.
+                        --join wss://rustyac.example.com/net/spa . wss:// is TLS (rustls).
+  --join-header <Name: value>
+                        one more header field of the WebSocket request (repeatable). A
+                        Cloudflare Access service token is also taken from the environment:
+                        CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET
+  --tls-root <file.pem> trust this certificate too for wss:// (a gateway of your own)
+  --net-arrivals <csv>  write when every state of another car arrived (to measure delay)
   --offline             never join a server, whatever race.ini says
   --no-steam            do not ask Steam for your player id (rustyAC's own id is used: a
                         random number made once, kept in rustyac_net.ini next to the program)
@@ -612,6 +635,13 @@ impl Options {
                     o.car_given = true;
                 }
                 "--join" => o.join = Some(value("--join")?),
+                "--join-header" => {
+                    let field = value("--join-header")?;
+                    let (name, text) = field.split_once(':').ok_or("--join-header \"<Name>: <value>\"")?;
+                    o.ws_headers.push((name.trim().to_string(), text.trim().to_string()));
+                }
+                "--tls-root" => o.tls_root = Some(PathBuf::from(value("--tls-root")?)),
+                "--net-arrivals" => o.net_arrivals = Some(PathBuf::from(value("--net-arrivals")?)),
                 "--offline" => o.offline = true,
                 "--name" => o.driver_name = Some(value("--name")?),
                 "--team" => o.team = Some(value("--team")?),

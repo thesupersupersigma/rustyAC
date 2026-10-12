@@ -27,6 +27,8 @@ pub mod crt;
 pub mod dump;
 pub mod focus;
 #[cfg(windows)]
+pub mod gateway;
+#[cfg(windows)]
 pub mod identity;
 pub mod input;
 pub mod input_file;

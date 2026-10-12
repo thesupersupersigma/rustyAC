@@ -11,5 +11,10 @@ license = "GPL-3.0-or-later"
 rustyac-math = { path = "../rustyac-math" }
 rustyac-physics = { path = "../rustyac-physics" }
 
+# the WebSocket client of the desktop's transport through a gateway (plain std, no
+# dependencies of its own); a browser brings its own WebSocket
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rustyac-gateway = { path = "../rustyac-gateway" }
+
 [dev-dependencies]
 rustyac-content = { path = "../rustyac-content" }
