@@ -37,7 +37,12 @@ pub type BoxedTransport = Box<dyn Transport>;
 /// A name a server sent that becomes part of a path: one folder's name, nothing that leaves
 /// the folder it is joined to.
 pub fn is_plain_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0']) && !name.bytes().any(|b| b < 0x20)
+    // (no separators, no drive, no wildcard or pipe characters, no control bytes, no dot or
+    // space at the end, and none of the names Windows keeps for devices: `CON` read as a
+    // file waits for the keyboard)
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || (stem.len() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem.as_bytes()[3].is_ascii_digit());
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', ':', '\0', '<', '>', '"', '|', '?', '*']) && !name.bytes().any(|b| b < 0x20) && !name.ends_with(['.', ' ']) && !device
 }
 
 fn read_game_file(root: &Path, path: &str) -> Option<Vec<u8>> {
@@ -94,6 +99,12 @@ pub fn finish_join(mut client: Client<BoxedTransport>, cars: Vec<CarEntry>, root
         }
         if !accepted.track_config.is_empty() && !is_plain_name(&accepted.track_config) {
             return Err(format!("the server names a track layout {:?}: that is no folder's name", accepted.track_config));
+        }
+        // (a skin is a folder below the car's; a slot may have none)
+        for skin in std::iter::once(&accepted.skin).chain(cars.iter().map(|car| &car.skin)) {
+            if !skin.is_empty() && !is_plain_name(skin) {
+                return Err(format!("the server names a skin {skin:?}: that is no folder's name"));
+            }
         }
         // the checksums: every file the server names must be there ("Problems during checksum")
         let root = root.ok_or("the server asks for checksums of the game's files: Assetto Corsa's folder was not found (set AC_ROOT)")?;

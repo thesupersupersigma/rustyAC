@@ -154,8 +154,12 @@ fn golden_laguna_join_the_browsers_way() {
     let browser = golden
         .replay_on(&paths, |tape| {
             let mut join = Join::start(WsTransport::new(TapePipe::new(tape)), &replay_request()).map_err(|e| e.to_string())?;
-            while join.poll().map_err(|e| e.to_string())? != JoinStage::Done {}
-            join.finish().ok_or("the join did not end".to_string())
+            for _ in 0..10_000 {
+                if join.poll().map_err(|e| e.to_string())? == JoinStage::Done {
+                    return join.finish().ok_or("the join did not end".to_string());
+                }
+            }
+            Err("the polled join did not end".to_string())
         })
         .expect("the replay on the WebSocket transport");
     assert_eq!(browser.first_difference, None, "on the WebSocket transport the port leaves the game's values at this step");

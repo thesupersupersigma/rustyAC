@@ -48,6 +48,8 @@ x-gateway: &gateway
     context: ${GATEWAY_SRC:-../crates/rustyac-gateway}
   image: rustyac-gateway
   restart: unless-stopped
+  # (a small init as process 1, so that "docker stop" ends the gateway at once)
+  init: true
   stop_grace_period: 5s
 
 services:

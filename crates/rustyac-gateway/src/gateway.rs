@@ -19,6 +19,8 @@ const MESSAGE_ACCEPTED: u8 = 0x3e;
 const MESSAGE_GOODBYE: u8 = 0x43;
 /// How long a read waits before it looks whether the connection is over.
 const TICK: Duration = Duration::from_millis(250);
+/// How long a new WebSocket has for its first message to the game server (the join request).
+const FIRST_MESSAGE: Duration = Duration::from_secs(30);
 
 /// One gateway: one listening port for one game server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,7 +75,11 @@ pub fn origin_allowed(allowed: &[String], origin: &str) -> bool {
         }
         match pattern.strip_suffix(":*") {
             // any port of that host, or none
-            Some(host) => origin.eq_ignore_ascii_case(host) || origin.len() > host.len() + 1 && origin[..host.len()].eq_ignore_ascii_case(host) && origin.as_bytes()[host.len()] == b':' && origin[host.len() + 1..].bytes().all(|b| b.is_ascii_digit()),
+            Some(host) => {
+                // (compared as bytes: an origin is whatever a client sends)
+                let (origin, host) = (origin.as_bytes(), host.as_bytes());
+                origin.eq_ignore_ascii_case(host) || origin.len() > host.len() + 1 && origin[..host.len()].eq_ignore_ascii_case(host) && origin[host.len()] == b':' && origin[host.len() + 1..].iter().all(|b| b.is_ascii_digit())
+            }
             None => origin.eq_ignore_ascii_case(pattern.trim_end_matches('/')),
         }
     })
@@ -81,6 +87,8 @@ pub fn origin_allowed(allowed: &[String], origin: &str) -> bool {
 
 struct Shared {
     config: Config,
+    /// Connections open in all (also the ones that have not asked for anything yet).
+    connections: AtomicUsize,
     clients: AtomicUsize,
     served: AtomicU64,
     stop: AtomicBool,
@@ -108,7 +116,7 @@ impl Gateway {
     pub fn start(config: Config) -> Result<Gateway, String> {
         let listener = TcpListener::bind(&config.listen).map_err(|e| format!("listening on {}: {e}", config.listen))?;
         let address = listener.local_addr().map_err(|e| e.to_string())?;
-        let shared = Arc::new(Shared { config, clients: AtomicUsize::new(0), served: AtomicU64::new(0), stop: AtomicBool::new(false) });
+        let shared = Arc::new(Shared { config, connections: AtomicUsize::new(0), clients: AtomicUsize::new(0), served: AtomicU64::new(0), stop: AtomicBool::new(false) });
         shared.log(&format!(
             "listening on {address} for {} (UDP port {}), at most {} clients, origins {:?}",
             shared.config.server,
@@ -123,11 +131,26 @@ impl Gateway {
                     break;
                 }
                 let Ok(stream) = stream else {
+                    // (out of sockets: wait for some to close instead of spinning)
+                    std::thread::sleep(Duration::from_millis(50));
                     continue;
                 };
+                // connections that have not become a client yet are limited too: each has a
+                // thread, and somebody who only opens connections must not use them all up
+                let limit = accepting.config.max_clients * 4 + 32;
+                if accepting.connections.fetch_add(1, Ordering::SeqCst) >= limit {
+                    accepting.connections.fetch_sub(1, Ordering::SeqCst);
+                    continue;
+                }
                 let shared = Arc::clone(&accepting);
                 // (a thread that cannot be started: the connection is dropped)
-                let _ = std::thread::Builder::new().name("gateway-client".to_string()).spawn(move || serve(stream, &shared));
+                let started = std::thread::Builder::new().name("gateway-client".to_string()).spawn(move || {
+                    serve(stream, &shared);
+                    shared.connections.fetch_sub(1, Ordering::SeqCst);
+                });
+                if started.is_err() {
+                    accepting.connections.fetch_sub(1, Ordering::SeqCst);
+                }
             }
         });
         Ok(Gateway { address, shared, thread: Some(thread) })
@@ -174,13 +197,28 @@ fn respond(stream: &mut TcpStream, status: &str, extra: &str, body: &str) {
     let _ = stream.flush();
 }
 
+/// A stream whose reads all end by one deadline (the request's head has ten seconds in
+/// all, however slowly its bytes come).
+struct Until<'a>(&'a TcpStream, Instant);
+
+impl Read for Until<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.1.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(ErrorKind::TimedOut.into());
+        }
+        self.0.set_read_timeout(Some(left))?;
+        let mut stream = self.0;
+        stream.read(buffer)
+    }
+}
+
 /// One connection: an HTTP request that is either the health check or a WebSocket.
 fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     let config = &shared.config;
     let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-    let Ok((head, rest)) = ws::read_head(&mut stream, 0x4000) else {
+    let Ok((head, rest)) = ws::read_head(&mut Until(&stream, Instant::now() + Duration::from_secs(10)), 0x4000) else {
         return;
     };
     let head = Head::parse(&head);
@@ -225,6 +263,8 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
         let address = config.server.to_socket_addrs().map_err(|e| e.to_string())?.find(SocketAddr::is_ipv4).ok_or("no IPv4 address")?;
         let tcp = TcpStream::connect_timeout(&address, Duration::from_secs(5)).map_err(|e| e.to_string())?;
         tcp.set_nodelay(true).map_err(|e| e.to_string())?;
+        // (a server that stops reading must not hold this client's thread for ever)
+        tcp.set_write_timeout(Some(Duration::from_secs(10))).map_err(|e| e.to_string())?;
         let local = tcp.local_addr().map_err(|e| e.to_string())?;
         let udp = UdpSocket::bind(SocketAddr::new(local.ip(), 0)).map_err(|e| e.to_string())?;
         udp.connect(SocketAddr::new(address.ip(), config.udp_port.unwrap_or(address.port()))).map_err(|e| e.to_string())?;
@@ -247,15 +287,24 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     let done = Arc::new(AtomicBool::new(false));
     // the server let this client in (its first answer says so): it holds a slot
     let joined = Arc::new(AtomicBool::new(false));
+    // the game server's side ended (it closed, or its connection broke)
+    let server_gone = Arc::new(AtomicBool::new(false));
     let counts = Arc::new([AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]);
     let (Ok(ws_out), Ok(tcp_in), Ok(udp_in), Ok(ws_end), Ok(tcp_end)) = (stream.try_clone(), tcp.try_clone(), udp.try_clone(), stream.try_clone(), tcp.try_clone()) else {
         return;
     };
-    let writer = Arc::new(Mutex::new(ws_out));
-    let send = |writer: &Mutex<TcpStream>, opcode: u8, parts: &[&[u8]]| -> bool {
+    // the WebSocket's writing side, and whether its close frame has gone out (nothing may
+    // follow that one)
+    let writer = Arc::new(Mutex::new((ws_out, false)));
+    let send = |writer: &Mutex<(TcpStream, bool)>, opcode: u8, parts: &[&[u8]]| -> bool {
         let payload = parts.concat();
         let frame = ws::encode_frame(opcode, &payload, None);
-        let mut out = writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (out, closing) = &mut *guard;
+        if *closing {
+            return false;
+        }
+        *closing = opcode == ws::OP_CLOSE;
         out.write_all(&frame).and_then(|()| out.flush()).is_ok()
     };
     // whatever ends first ends all three threads: the sockets are shut, which wakes the
@@ -272,23 +321,28 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
 
     // the server's TCP stream to the WebSocket: one message per frame
     let from_tcp = {
-        let (writer, done, counts, end, joined) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts), end.clone(), Arc::clone(&joined));
+        let (writer, done, counts, end, joined, server_gone) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts), end.clone(), Arc::clone(&joined), Arc::clone(&server_gone));
         let mut tcp_in = tcp_in;
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("gateway-tcp".to_string()).spawn(move || {
             let _ = tcp_in.set_read_timeout(Some(TICK));
             let mut buffer = [0u8; 0x1000];
             let mut pending: Vec<u8> = Vec::new();
             'read: loop {
                 match tcp_in.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(count) => pending.extend_from_slice(&buffer[..count]),
+                    Ok(count) if count > 0 => pending.extend_from_slice(&buffer[..count]),
                     Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => {
                         if done.load(Ordering::SeqCst) {
                             break;
                         }
                         continue;
                     }
-                    Err(_) => break,
+                    // the server closed, or its connection broke (unless this side ended it)
+                    _ => {
+                        if !done.load(Ordering::SeqCst) {
+                            server_gone.store(true, Ordering::SeqCst);
+                        }
+                        break;
+                    }
                 }
                 while pending.len() >= 2 {
                     let length = u16::from_le_bytes([pending[0], pending[1]]) as usize;
@@ -304,18 +358,24 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                     pending.drain(..2 + length);
                 }
             }
-            if !done.load(Ordering::SeqCst) {
+            if server_gone.load(Ordering::SeqCst) {
                 let _ = send(&writer, ws::OP_CLOSE, &[&ws::close_payload(ws::CLOSE_GOING_AWAY, "the game server closed the connection")]);
+                end();
+            } else {
+                // (the client's side ended: the session's own thread closes the server's)
+                done.store(true, Ordering::SeqCst);
             }
-            end();
         })
+    };
+    let Ok(from_tcp) = from_tcp else {
+        return;
     };
 
     // the server's datagrams to the WebSocket, and the pings that keep a quiet tunnel open
     let from_udp = {
-        let (writer, done, counts, end) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts), end.clone());
+        let (writer, done, counts) = (Arc::clone(&writer), Arc::clone(&done), Arc::clone(&counts));
         let ping_every = Duration::from_secs(config.ping_interval_s.max(1));
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("gateway-udp".to_string()).spawn(move || {
             let _ = udp_in.set_read_timeout(Some(TICK));
             let mut buffer = vec![0u8; 0x10000];
             let mut last_ping = Instant::now();
@@ -327,9 +387,10 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                         }
                         counts[3].fetch_add(1, Ordering::Relaxed);
                     }
-                    // nothing for a moment; Windows reports an ICMP "port unreachable" of an
-                    // earlier send as a reset
-                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::ConnectionReset | ErrorKind::Interrupted) => {}
+                    // nothing for a moment; an ICMP "port unreachable" of an earlier send comes
+                    // back here as a reset (Windows) or a refusal (Linux): a server that is
+                    // restarting, not the end of this session
+                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::ConnectionReset | ErrorKind::ConnectionRefused | ErrorKind::Interrupted) => {}
                     Err(_) => break,
                 }
                 if last_ping.elapsed() >= ping_every {
@@ -339,8 +400,15 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                     }
                 }
             }
-            end();
+            // (the client's side is gone, or everything is over: the session's own thread
+            // sees it and says the goodbye that may be owed)
+            done.store(true, Ordering::SeqCst);
         })
+    };
+    let Ok(from_udp) = from_udp else {
+        end();
+        let _ = from_tcp.join();
+        return;
     };
 
     // the WebSocket to the server
@@ -350,6 +418,8 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     let mut decoder = Decoder::new(true, config.max_message);
     decoder.push(&rest);
     let mut said_goodbye = false;
+    // a client that asks the server for nothing is not kept
+    let mut asked = false;
     let mut buffer = [0u8; 0x1000];
     let why = 'session: loop {
         loop {
@@ -365,6 +435,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
             match frame {
                 Frame::Binary(message) => match message.split_first() {
                     Some((&ws::LANE_RELIABLE, body)) if body.len() <= MAX_TCP_MESSAGE => {
+                        asked = true;
                         said_goodbye |= body.first() == Some(&MESSAGE_GOODBYE);
                         let mut framed = (body.len() as u16).to_le_bytes().to_vec();
                         framed.extend_from_slice(body);
@@ -405,8 +476,13 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                 last_heard = Instant::now();
                 decoder.push(&buffer[..count]);
             }
-            Err(_) if done.load(Ordering::SeqCst) => break "the game server closed the connection".to_string(),
+            Err(_) if done.load(Ordering::SeqCst) => break if server_gone.load(Ordering::SeqCst) { "the game server closed the connection" } else { "the client's connection broke" }.to_string(),
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => {
+                if !asked && started.elapsed() >= FIRST_MESSAGE {
+                    let why = format!("no message for the game server in the first {} s", FIRST_MESSAGE.as_secs());
+                    let _ = send(&writer, ws::OP_CLOSE, &[&ws::close_payload(ws::CLOSE_GOING_AWAY, &why)]);
+                    break why;
+                }
                 if last_heard.elapsed() >= idle_timeout {
                     let why = format!("nothing from the client for {} s", config.idle_timeout_s);
                     let _ = send(&writer, ws::OP_CLOSE, &[&ws::close_payload(ws::CLOSE_GOING_AWAY, &why)]);
@@ -419,7 +495,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
     // a client that joined and went without a word (a closed tab): the gateway says the
     // protocol's goodbye for it, so that the server frees the slot and tells the others
     let mut spoke_for_it = false;
-    if joined.load(Ordering::SeqCst) && !said_goodbye && !done.load(Ordering::SeqCst) {
+    if joined.load(Ordering::SeqCst) && !said_goodbye && !server_gone.load(Ordering::SeqCst) {
         spoke_for_it = tcp.write_all(&[1, 0, MESSAGE_GOODBYE]).and_then(|()| tcp.flush()).is_ok();
         // (the server reads it before the connection closes)
         let _ = tcp.shutdown(Shutdown::Write);
@@ -469,6 +545,9 @@ mod tests {
         assert!(!origin_allowed(&allowed, "http://127.0.0.1:80a"));
         assert!(!origin_allowed(&allowed, "https://rustyac.example.com.evil.example"));
         assert!(!origin_allowed(&allowed, "null"));
+        // (letters of more than one byte where the pattern ends: no match, and no panic)
+        assert!(!origin_allowed(&allowed, "http://127.0.0.\u{e9}\u{e9}"));
+        assert!(!origin_allowed(&allowed, "http://127.0.0.1:\u{e9}"));
         assert!(origin_allowed(&["*".to_string()], "https://anything.example"));
         assert!(!origin_allowed(&[], "https://anything.example"));
     }

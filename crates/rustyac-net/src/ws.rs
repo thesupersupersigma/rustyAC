@@ -156,8 +156,9 @@ impl<P: Pipe> Transport for WsTransport<P> {
             return Ok(Some(message));
         }
         // datagrams that come first are kept for their own channel. Each wait starts the
-        // timeout again: only an unbroken silence of `timeout_ms` ends it.
-        loop {
+        // timeout again, so only so many of them are waited through: a peer that keeps
+        // sending datagrams and never the answer does not hold the join for ever.
+        for _ in 0..DATAGRAM_BACKLOG {
             match self.pipe.wait(timeout_ms) {
                 Ok(Some(message)) => {
                     self.sort(message);
@@ -172,6 +173,7 @@ impl<P: Pipe> Transport for WsTransport<P> {
                 }
             }
         }
+        Ok(None)
     }
 
     fn set_tick(&mut self, tick: u64) {

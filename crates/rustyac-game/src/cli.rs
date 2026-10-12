@@ -463,7 +463,8 @@ usage: rustyac [options]
   --join-header <Name: value>
                         one more header field of the WebSocket request (repeatable). A
                         Cloudflare Access service token is also taken from the environment:
-                        CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET
+                        CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, sent only over
+                        wss:// and only to the host named in CF_ACCESS_HOST
   --tls-root <file.pem> trust this certificate too for wss:// (a gateway of your own)
   --net-arrivals <csv>  write when every state of another car arrived (to measure delay)
   --offline             never join a server, whatever race.ini says

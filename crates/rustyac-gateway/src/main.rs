@@ -50,7 +50,12 @@ fn main() {
         "name" => config.name = value,
         "listen" => config.listen = value,
         "server" => config.server = value,
-        "udp-port" => config.udp_port = Some(number(name, &value) as u16),
+        "udp-port" => {
+            config.udp_port = Some(u16::try_from(number(name, &value)).unwrap_or_else(|_| {
+                eprintln!("{name}: {value:?} is no port number");
+                std::process::exit(2);
+            }))
+        }
         "origins" => config.origins = value.split(',').map(|origin| origin.trim().to_string()).filter(|origin| !origin.is_empty()).collect(),
         "max-clients" => config.max_clients = number(name, &value) as usize,
         "max-message" => config.max_message = (number(name, &value) as usize).max(64),

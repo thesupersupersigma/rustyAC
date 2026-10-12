@@ -158,7 +158,11 @@ pub fn join(options: &Options, target: &JoinTarget) -> Result<Joined, String> {
     // the handshake and the car list: the same state machine the browser steps, here
     // waiting for each answer
     let mut join = Join::start(transport, &request).map_err(|e| e.to_string())?;
-    join.wait(JOIN_TIMEOUT_MS).map_err(|e| e.to_string())?;
+    join.wait(JOIN_TIMEOUT_MS).map_err(|e| {
+        // (Kunos' acServer gives its pick-up slots by the car's model: an empty model finds none)
+        let hint = if request.car.is_empty() && matches!(e, rustyac_net::client::JoinError::Refused(rustyac_net::handshake::Refusal::NoSlots)) { " (no car was asked for: name one of the server's models with --car)" } else { "" };
+        format!("{e}{hint}")
+    })?;
     let (client, cars) = join.finish().ok_or("the join did not end")?;
     let accepted = client.accepted.clone();
     notes.push(format!(

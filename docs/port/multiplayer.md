@@ -13,7 +13,9 @@ half-wired. What is left is listed under [Not done](#not-done).
   the tapes in `re/scratch/task25/interop` and `rich`, which are git-ignored),
   `cargo test --release -p rustyac-net` (golden + robustness), `sh re/scratch/task25/run_rich.sh`
   (a live four-client session that records new tapes).
-- **Next (M2):** the browser. See [What M2 needs](#what-m2-needs).
+- **M2 (Task 26) is done:** the browser and the WebSocket gateway are in
+  [multiplayer_web.md](multiplayer_web.md). `Client::join` and `car_list` became the
+  `Join` state machine there (`crates/rustyac-net/src/client.rs`).
 - Briefs read from the machine code (git-ignored): `re/scratch/task25/spec_1_transport.md` to
   `spec_9_netcar_step.md`. Local test servers: `re/scratch/task25/server` (Spa),
   `server_laguna`, `server_rich` (a one-minute practice): copies of the game's `acServer.exe`
@@ -393,9 +395,11 @@ rustyac.exe --join 127.0.0.1:9600 --password secret --team "my team"
 ```
 
 - The port is the server's **TCP port** (`TCP_PORT` of its config), not the HTTP port.
-- `--car` asks for a model; the server gives a free slot of it (without `--car`: any free
-  slot). The track, the car's skin and the rules are the server's. `--skin` has no effect
-  online: the protocol has no field for it, the slot's skin is used, as in Assetto Corsa.
+- `--car` asks for a model; the server gives a free slot of it. **Name one**: Kunos'
+  `acServer` gives its pick-up slots by the car's model, and a join without a model is
+  refused with "no available slots" (found in Task 26; rustyAC then says so). The track,
+  the car's skin and the rules are the server's. `--skin` has no effect online: the
+  protocol has no field for it, the slot's skin is used, as in Assetto Corsa.
 - `--name`: your driver name. Default: on this PC `thesupersupersigma` (the Windows user
   name); elsewhere the Windows user name, or "rustyAC driver" when there is none.
 - `--password`: the server's join password.

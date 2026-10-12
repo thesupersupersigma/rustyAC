@@ -50,18 +50,24 @@ def main():
     found = {}
     total = 0
     covered = 0
+    unread = []
     for address, size, name in functions:
         section = next((s for s in code if s[3] <= address < s[3] + s[5]), None)
         if section is None:
             continue
         start = section[4] + address - section[3]
         covered += size
+        decoded = 0
         for ins in md.disasm(data[start:start + size], address):
             total += 1
+            decoded += ins.size
             groups = {md.group_name(g) for g in ins.groups}
             extra = sorted(g for g in groups if g not in BASELINE_OK)
             if extra:
                 found.setdefault(' '.join(extra), []).append((name, ins.mnemonic))
+        # (the disassembler stops at bytes it does not know: such a function was not read whole)
+        if decoded < size and any(data[start + decoded:start + size].strip(b'\x00\xcc\x90')):
+            unread.append((name, size - decoded))
     text = sum(s[5] for s in code)
     print(f'{sys.argv[1]}: {len(functions)} functions, {total} instructions, {covered} of {text} bytes of code are inside named functions')
     bad = 0
@@ -76,8 +82,12 @@ def main():
         print('   uses it where the two give the same answer; it is part of every baseline x86-64 build)')
     if not found:
         print('  nothing but the x86-64 baseline (SSE, SSE2)')
+    for name, left in unread[:10]:
+        print(f'  NOT READ: {left} bytes at the end of {name}')
+    if unread:
+        print(f'{len(unread)} functions could not be read to their end: the check is not complete')
     print('NO AVX, AVX2, AVX-512 or FMA instruction' if bad == 0 else f'{bad} instructions need AVX or newer')
-    sys.exit(1 if bad else 0)
+    sys.exit(1 if bad or unread else 0)
 
 
 if __name__ == '__main__':

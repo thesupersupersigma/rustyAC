@@ -201,6 +201,9 @@ pub fn connect_tcp(host: &str, port: u16, timeout_ms: u32) -> Result<TcpStream, 
         match TcpStream::connect_timeout(&address, Duration::from_millis(timeout_ms as u64)) {
             Ok(stream) => {
                 stream.set_nodelay(true).map_err(|e| e.to_string())?;
+                // car updates go through this stream, from the physics thread: a connection
+                // that has stalled must end the session, not hold every step
+                stream.set_write_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
                 return Ok(stream);
             }
             Err(e) => last = format!("connecting to {address}: {e}"),

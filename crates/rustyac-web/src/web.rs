@@ -295,8 +295,14 @@ impl Game {
         let mut remote_models = Vec::new();
         if session.sim.online.is_some() {
             let mut loaded: Vec<(PathBuf, Option<usize>)> = car_model.iter().map(|file| (file.clone(), gpu.car_model())).collect();
-            let other_options = crate::model::ModelOptions { texture_size: options.texture_size.min(512), texture_budget_mb: 96, ..options };
-            for info in session.sim.remote_infos() {
+            // (one budget for all of them: a server with ten kinds of car must not take ten
+            // times the memory)
+            let infos = session.sim.remote_infos();
+            let mut kinds: Vec<&str> = infos.iter().map(|info| info.name.as_str()).filter(|name| *name != setup.car).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            let other_options = crate::model::ModelOptions { texture_size: options.texture_size.min(512), texture_budget_mb: (192 / kinds.len().max(1) as u32).clamp(16, 96), ..options };
+            for info in &infos {
                 let model = match rustyac_game::sim::find_car_model(&info.name, &info.data_path) {
                     Some(file) => match loaded.iter().find(|(known, _)| *known == file) {
                         Some((_, model)) => *model,
@@ -533,6 +539,16 @@ impl Game {
     pub fn chat(&mut self, text: &str) -> bool {
         let now = self.session.sim.sim_seconds() * 1000.0;
         match &mut self.session.sim.online {
+            // (the game's own command: the list is shown here, nothing is sent)
+            Some(session) if text.trim() == "/client_list" => {
+                let lines = session.hud_lines();
+                self.session.console.extend(lines.iter().cloned());
+                session.chat.extend(lines.into_iter().skip(1).take(4));
+                while session.chat.len() > 6 {
+                    session.chat.pop_front();
+                }
+                true
+            }
             Some(session) => session.net.client.send_chat(text, now),
             None => false,
         }

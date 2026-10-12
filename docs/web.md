@@ -2,8 +2,10 @@
 
 rustyAC's physics also runs in a browser tab: the same Rust code compiled to WebAssembly, with a small
 picture (WebGPU, or WebGL2 where the browser has no WebGPU), keyboard and gamepad. It is a preview: no sound,
-not Assetto Corsa's own look, one car on the track. What it proves and what it measures is in
-[docs/port/web.md](port/web.md).
+not Assetto Corsa's own look. What it proves and what it measures is in
+[docs/port/web.md](port/web.md). Alone on the track, or **on a real Assetto Corsa server**
+with other browsers, desktop rustyAC and Assetto Corsa itself: see [Multiplayer](#multiplayer)
+below and [docs/port/multiplayer_web.md](port/multiplayer_web.md).
 
 The site itself holds **no Assetto Corsa file**. Cars and tracks come from one of two places:
 
@@ -34,7 +36,7 @@ It builds `crates/rustyac-web` for wasm (`--release --locked`, no SIMD and no fa
 `wasm-bindgen` and `wasm-opt -O3`, and writes the site into `dist-web/site/`:
 
 ```
-dist-web/site/index.html, app.js, style.css
+dist-web/site/index.html, app.js, style.css, servers.json
 dist-web/site/pkg/rustyac_web.js, rustyac_web_bg.wasm      (about 4.1 MB)
 dist-web/site/LICENSE-GPL, LICENSING.md
 ```
@@ -150,6 +152,54 @@ real key presses while the page drives (trusted events, through the browser's ow
 ```
 node web/check.mjs --url "http://127.0.0.1:8080/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca" --seconds 8 --keys "KeyT,Shift+KeyT,KeyY,BracketRight,BracketLeft"
 ```
+
+## Multiplayer
+
+The page's **Multiplayer** section joins a Kunos `acServer` through a WebSocket gateway that
+runs next to the server (`crates/rustyac-gateway`; the server kit in `server/` starts one per
+server). A browser can open neither TCP nor UDP, so the gateway carries both in one WebSocket.
+
+- **Which servers:** `web/servers.json` lists them (it is copied into the site):
+
+  ```json
+  { "servers": [
+    { "id": "spa", "name": "Spa (Ferrari F2004, BMW Z4 GT3)", "url": "/net/spa", "cars": ["ks_ferrari_f2004", "bmw_z4_gt3"] }
+  ] }
+  ```
+
+  `url` is the gateway's address: a path on the site itself (`/net/spa` becomes
+  `wss://<the site>/net/spa`; the tunnel sends that path to the gateway, see the report) or a
+  whole `ws://` / `wss://` address. `cars` are the models the server has, for the page's car
+  list. `?server=ws://127.0.0.1:9601/net/spa` in the page's address adds one more server
+  without the file.
+- **To join:** pick the server, a car ("any free car" tries the server's models one after
+  the other), type your name, press **Join**. The server names the track and gives you a car;
+  the track and **every** car model on the server have to be in the content (the preview
+  pack or your folder), otherwise the page says which one is missing. The page fetches the
+  files, works out the checksums the server asks for from those same files, and you start in
+  your slot's pit box.
+- **On the server:** the top-left panel lists the drivers (car, laps, best lap, ping) and the
+  last chat lines. **Enter** opens the chat line, **Esc** leaves (the page then starts
+  afresh). There is no pause on a server. Other cars are drawn with their model up to 150 m
+  (the six nearest), as plain boxes up to 600 m, and not beyond; `?cars=<metres>` changes the
+  first number, and a device that has to unpack its textures draws three models up to 80 m.
+- **Who you are:** the name you type and a random player id (8 and sixteen digits) made once
+  and kept in this browser's local storage. No Steam, no account.
+- **A tab in the background does not drive**: browsers stop a hidden page's frames, so your
+  car stands still for the others and the server may drop you after a while.
+
+Try it on one PC (nothing leaves 127.0.0.1): a copy of `acServer.exe` with the kit's
+configs (see `docs/port/multiplayer.md`), then
+
+```
+cargo run --release -p rustyac-gateway -- --name spa --listen 127.0.0.1:9601 --server 127.0.0.1:9600
+python web/serve.py
+node web/check.mjs --url "http://127.0.0.1:8080/?server=ws://127.0.0.1:9601/net/spa&join=address&name=tester&mpcar=ks_ferrari_f2004&autodrive=1&spawn=start" --seconds 60 --chat "hello@20"
+```
+
+(or open that address in Chrome without `&join=...` and press Join). `check.mjs` prints the
+player list, the chat and where the other cars are; `--shots <folder>` takes screenshots
+while other cars are near, `--end kill` ends like a tab that vanishes.
 
 ## Host it
 

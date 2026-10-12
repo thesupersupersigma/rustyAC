@@ -54,8 +54,14 @@ impl WsSocket for TlsStream {
 }
 
 /// A Cloudflare Access service token of the environment, as the two header fields
-/// Cloudflare reads (so that the token is in no command line and no script).
-fn access_token(fields: &mut Vec<(String, String)>) {
+/// Cloudflare reads (so that the token is in no command line and no script). It is a
+/// secret for one site: it only goes out over TLS, and only to the host that
+/// `CF_ACCESS_HOST` names.
+fn access_token(fields: &mut Vec<(String, String)>, url: &WsUrl) {
+    let host = std::env::var("CF_ACCESS_HOST").unwrap_or_default();
+    if !url.tls || host.trim().is_empty() || !host.trim().eq_ignore_ascii_case(&url.host) {
+        return;
+    }
     for (variable, name) in [("CF_ACCESS_CLIENT_ID", "CF-Access-Client-Id"), ("CF_ACCESS_CLIENT_SECRET", "CF-Access-Client-Secret")] {
         if let Ok(value) = std::env::var(variable) {
             if !value.trim().is_empty() && !fields.iter().any(|(known, _)| known.eq_ignore_ascii_case(name)) {
@@ -69,7 +75,7 @@ fn access_token(fields: &mut Vec<(String, String)>) {
 pub fn connect(address: &str, headers: &[(String, String)], tls_root: Option<&Path>, timeout_ms: u32) -> Result<BoxedTransport, String> {
     let url = WsUrl::parse(address)?;
     let mut fields = headers.to_vec();
-    access_token(&mut fields);
+    access_token(&mut fields, &url);
     if !url.tls {
         return Ok(Box::new(connect_ws(&url, &fields, timeout_ms)?));
     }

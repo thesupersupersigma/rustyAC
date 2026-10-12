@@ -386,6 +386,7 @@ function markRefused() {
   const chosenTrack = state.tracks.find((t) => `${t.track}|${t.layout}` === $('track').value);
   const why = (chosen && chosen.refused) || (chosenTrack && chosenTrack.refused);
   $('drive').disabled = !chosen || !chosenTrack || !!why || state.running || state.loading;
+  markServers();
 }
 
 async function useSource(source, line) {
@@ -580,7 +581,7 @@ function markServers() {
   cars.replaceChildren(new Option('any free car', ''), ...models.map((id) => new Option(state.cars.find((c) => c.id === id)?.name || id, id)));
   const wanted = chosen || params.get('mpcar') || '';
   cars.value = [...cars.options].some((o) => o.value === wanted) ? wanted : '';
-  $('mp-join').disabled = !server || !state.source || state.loading || state.running || !!state.game;
+  $('mp-join').disabled = !server || !state.source || state.loading || state.running || !!state.online;
 }
 
 async function loadServers() {
@@ -591,7 +592,10 @@ async function loadServers() {
   } catch {
     // a site without the file has no server list
   }
-  if (params.get('server')) servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars: [] });
+  // (a server from the address bar is a test hook: only on this computer, so that a link
+  // to the real site cannot send a visitor's player id to somebody's gateway)
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+  if (params.get('server') && local) servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars: [] });
   state.servers = servers.filter((s) => s && s.id && s.url);
   $('mp-server').replaceChildren(...state.servers.map((s) => new Option(s.name || s.id, s.id)));
   $('mp-server').disabled = state.servers.length === 0;
@@ -614,12 +618,22 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // drive.
 async function joinServer() {
   const server = state.servers.find((s) => s.id === $('mp-server').value);
-  if (!server || state.loading || state.game) return;
+  if (!server || state.loading || state.online) return;
   const name = $('mp-name').value.trim() || 'rustyAC driver';
   try {
     localStorage.setItem('rustyac.player-name', name);
   } catch {
     // not kept, then
+  }
+  if (state.game) {
+    // a drive is loaded already (its picture and memory are not taken apart): the page
+    // starts afresh and joins
+    const next = new URLSearchParams(params);
+    for (const key of ['go', 'car', 'track', 'layout']) next.delete(key);
+    next.set('join', server.id);
+    if ($('mp-car').value) next.set('mpcar', $('mp-car').value);
+    location.search = next.toString();
+    return;
   }
   state.loading = true;
   $('mp-join').disabled = true;
@@ -638,7 +652,12 @@ async function joinServer() {
       ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       const socket = ws;
-      const made = new rac.NetLink((bytes) => socket.send(bytes));
+      // (a car update is a datagram: when the connection has stalled and they pile up, the
+      // new ones are dropped, as UDP would have lost them; the other lane is never dropped)
+      const made = new rac.NetLink((bytes) => {
+        if (bytes[0] === 1 && socket.bufferedAmount > 16384) return;
+        socket.send(bytes);
+      });
       if (params.has('arrivals')) made.record(true);
       socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) made.push(new Uint8Array(event.data));
@@ -922,6 +941,18 @@ function showHud(hud) {
 // What the display says about the aids right now (a test reads it).
 const aidsShown = () => `${$('hud-tc').textContent} | ${$('hud-abs').textContent} | ${$('hud-bias').textContent}`;
 
+// A drive on a server that broke (the connection is gone, the picture failed): the server
+// is left properly and the page says how to go on.
+function failOnline(error) {
+  const text = String(error && error.message ? error.message : error);
+  leaveServer(false);
+  $('hud').hidden = true;
+  $('chat').hidden = true;
+  setMultiplayer('');
+  fail(new Error(`${text}. You are off the server: reload the page to join again.`));
+  window.rustyac.state = 'error';
+}
+
 function frame(now) {
   if (!state.running) return;
   resizeCanvas();
@@ -932,7 +963,8 @@ function frame(now) {
     } catch (error) {
       state.running = false;
       $('menu').hidden = false;
-      fail(error);
+      if (state.online) failOnline(error);
+      else fail(error);
       return;
     }
   }
