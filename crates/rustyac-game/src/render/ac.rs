@@ -862,6 +862,23 @@ impl AcRenderer {
 
     /// `Sim::Sim`, once the cars are there: `TrackAvatar::initPitCrew` (a lollipop man for every
     /// car that has a pit box), then the marker of `PitStop::PitStop` at the player's box.
+    /// By wheel: the wheel gun the mechanic there is on while a stop runs (the member's state
+    /// 2: unscrewing, 4: screwing), which is the event `PitCrew::updateCurrentPosition` asks
+    /// about in this frame.
+    pub fn crew_guns_wanted(&self) -> [Option<bool>; 4] {
+        let mut wanted = [None; 4];
+        if let Some(crew) = self.tyre_crew.as_ref().filter(|crew| crew.pit_stop_on) {
+            for (k, m) in crew.members.iter().enumerate().take(4) {
+                wanted[k] = match m.state {
+                    2 => Some(false),
+                    4 => Some(true),
+                    _ => None,
+                };
+            }
+        }
+        wanted
+    }
+
     pub fn init_pit_crew(&mut self) -> String {
         let mut summary = String::new();
         if self.crew_cars.is_empty() {

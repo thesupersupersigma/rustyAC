@@ -64,6 +64,23 @@ impl Picture {
         }
     }
 
+    /// The tyre changers' sound and camera link (AC's renderer with a pit crew only).
+    pub fn crew_link(&mut self) -> Option<&mut super::ac::CrewLink> {
+        match self {
+            Picture::Debug(_) => None,
+            Picture::Ac(r) => Some(&mut r.crew),
+        }
+    }
+
+    /// By wheel: the gun the mechanic there is on in this frame (`Some(true)`: screwing,
+    /// `Some(false)`: unscrewing).
+    pub fn crew_guns_wanted(&self) -> [Option<bool>; 4] {
+        match self {
+            Picture::Debug(_) => [None; 4],
+            Picture::Ac(r) => r.crew_guns_wanted(),
+        }
+    }
+
     /// Whether each car's backfire test of the last frame fired, in the order of the cars.
     pub fn backfires_triggered(&self) -> Vec<Option<bool>> {
         match self {

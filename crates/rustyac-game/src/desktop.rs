@@ -1194,7 +1194,31 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
         // Game::update: the car's one backfire test (CarAvatar::update), whose event the sound
         // and the flames both hear; the flames empty its counter
+        // the pit crew's wheel guns: what the crew will ask of them in this frame (the gun of
+        // each mechanic who is unscrewing or screwing, when his car is the focused one)
+        let guns = renderer.crew_guns_wanted();
+        if let (Some(sound), Some(link)) = (audio.as_mut(), renderer.crew_link()) {
+            for (wheel, wanted) in guns.iter().enumerate() {
+                if let (Some(screw), true) = (*wanted, focus.index == 0) {
+                    link.playing[wheel][screw as usize] = sound.crew_is_playing(wheel, screw);
+                }
+            }
+        }
         renderer.draw_world(&world, focus.index, &shapes[focus.index], &camera, &frame, &info, dt.as_secs_f32());
+        if let Some(link) = renderer.crew_link() {
+            use rustyac_game::render::ac::CrewSound;
+            let calls = std::mem::take(&mut link.sound);
+            // (the camera's part: see docs/port/replays.md, "Not done")
+            link.camera.clear();
+            if let Some(sound) = audio.as_mut() {
+                for call in calls {
+                    match call {
+                        CrewSound::Start { wheel, screw, matrix } => sound.crew_start(wheel, screw, &matrix.m),
+                        CrewSound::Stop { wheel, screw } => sound.crew_stop(wheel, screw),
+                    }
+                }
+            }
+        }
         // Game::evOnPostGui: the focus changes at the fade's black frame
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown

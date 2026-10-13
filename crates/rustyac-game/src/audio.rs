@@ -365,6 +365,9 @@ pub struct GameAudio {
     logging: bool,
     frame_number: u64,
     focus: usize,
+    /// the pit crew's wheel guns, made when the first pit stop needs them (the game makes them
+    /// with the session; here a session without a stop keeps the calls it always made)
+    crew: Option<rustyac_audio::pit_crew::CrewGuns>,
 }
 
 /// Documents `Assetto Corsa`, where the game keeps `cfg/audio.ini`.
@@ -505,6 +508,7 @@ impl GameAudio {
             logging,
             frame_number: 0,
             focus: 0,
+            crew: None,
         })
     }
 
@@ -571,6 +575,39 @@ impl GameAudio {
         self.timing.frames += 1;
         self.timing.sum += took;
         self.timing.max = self.timing.max.max(took);
+    }
+
+    fn crew_guns(&mut self) -> &rustyac_audio::pit_crew::CrewGuns {
+        if self.crew.is_none() {
+            self.crew = Some(rustyac_audio::pit_crew::CrewGuns::new(&mut self.world.engine));
+        }
+        self.crew.as_ref().expect("just made")
+    }
+
+    /// `AudioEvent::isPlaying` of a wheel gun of the pit crew (`screw` or unscrew).
+    pub fn crew_is_playing(&mut self, wheel: usize, screw: bool) -> bool {
+        self.crew_guns();
+        self.crew.as_ref().is_some_and(|guns| guns.is_playing(&self.world.engine, wheel, screw))
+    }
+
+    /// A wheel gun starts at its wheel (`AudioEvent::set3DAttributes`, `start`).
+    pub fn crew_start(&mut self, wheel: usize, screw: bool, matrix: &Mat) {
+        self.crew_guns();
+        if let Some(guns) = &self.crew {
+            let mut m = [0.0f32; 16];
+            for (r, row) in matrix.iter().enumerate() {
+                m[r * 4..r * 4 + 4].copy_from_slice(row);
+            }
+            guns.start(&self.world.engine, wheel, screw, &m);
+        }
+    }
+
+    /// A wheel gun stops (`AudioEvent::stop`).
+    pub fn crew_stop(&mut self, wheel: usize, screw: bool) {
+        self.crew_guns();
+        if let Some(guns) = &self.crew {
+            guns.stop(&self.world.engine, wheel, screw);
+        }
     }
 
     /// `CarAvatar::evOnBackfireTriggered` of the frame, when the picture's car ran the test
