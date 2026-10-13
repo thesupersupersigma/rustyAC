@@ -1571,6 +1571,14 @@ fn run_window(options: &Options) -> Result<(), String> {
                     }
                     SimAction::Shutdown => shutdown = true,
                     SimAction::ClearMessage | SimAction::FadeIn(_) => {}
+                    // (the tables' clicks: the camera to a car; a vote to kick is the
+                    // online client's, which has no voting yet)
+                    SimAction::SetFocusedCarIndex(car) => {
+                        if (car as usize) < world.len() {
+                            focus.index = car as usize;
+                        }
+                    }
+                    SimAction::SendVote { .. } => {}
                 }
             }
         }

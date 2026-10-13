@@ -48,7 +48,7 @@ fn class_name(gui: &Gui, id: Id) -> &'static str {
         Kind::GameScreen(_) => "GameScreen",
         Kind::Taskbar(_) => "Taskbar",
         Kind::TaskBarIcon(_) => "TaskBarIcon",
-        Kind::Menu(_) => "PauseMenu",
+        Kind::Menu(_) => crate::gui_port_menu::class_name(gui, id),
         Kind::Widget(w) => match &**w {
             Widget::ProgressBar(_) => "ProgressBar",
             Widget::ActiveButton(_) => "ActiveButton",

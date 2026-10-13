@@ -16,6 +16,7 @@ pub mod gui;
 pub mod hud;
 pub mod hud_cars;
 pub mod hud_flags;
+pub mod leaderboard;
 pub mod menus;
 pub mod painter;
 pub mod pit_menu;

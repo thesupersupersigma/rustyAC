@@ -265,6 +265,7 @@ impl Gui {
         match self.class(id) {
             Class::GameScreen if !self.game_screen_data(id).app_interaction_enabled => false,
             Class::Widget => self.widget_on_mouse_down(id, e),
+            Class::Menu => self.menu_on_mouse_down(id, e),
             _ => self.control_on_mouse_down(id, e),
         }
     }

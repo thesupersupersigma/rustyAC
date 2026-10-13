@@ -16,12 +16,15 @@ use crate::gui_seq_menu::{action, script};
 pub struct Menus {
     pub pause: Option<Id>,
     pub esc: Option<Id>,
+    pub boards: Vec<Id>,
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
 pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     let s = script();
     gui.sim.session_type = hud.input.session_type;
+    gui.sim.online = hud.input.online;
+    gui.sim.race = crate::gui_seq_menu::race_link(&hud.input);
     gui.sim.session_count = s.session_count;
     gui.sim.time_to_session_start = hud.input.time_to_session_start;
     gui.sim.has_replay_manager = s.replay_manager;
@@ -53,6 +56,8 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::GoToSpawnPosition(name) => action(format!("goToSpawnPosition {name}")),
             SimAction::StartReplayMode => action("startReplayMode 0".into()),
             SimAction::Shutdown => action("shutdown".into()),
+            SimAction::SendVote { kind, value, guid } => action(format!("sendVote {kind} {} {guid}", value as u8)),
+            SimAction::SetFocusedCarIndex(car) => action(format!("setFocusedCarIndex {car}")),
         }
     }
     if let Some(pause) = hud.more.menus.pause {
@@ -77,6 +82,31 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
     }
     sync(hud, gui);
     match what {
+        "menu.lb" => {
+            let board = gui.new_leaderboard(painter, number as i32, text == "focus");
+            gui.add_root(painter, board);
+            hud.more.menus.boards.push(board);
+        }
+        "menu.lbPos" | "menu.lbSize" | "menu.lbSet" | "menu.lbLast" | "menu.lbVisible" => {
+            let board = *hud.more.menus.boards.last().ok_or("no leaderboard")?;
+            let pair = || -> (f32, f32) {
+                let (x, y) = text.split_once(',').unwrap_or(("0", "0"));
+                (x.parse().unwrap_or(0.0), y.parse().unwrap_or(0.0))
+            };
+            match what {
+                "menu.lbPos" => gui.set_position(board, pair().0, pair().1),
+                "menu.lbSize" => gui.set_size(board, pair().0, pair().1),
+                "menu.lbSet" => match text {
+                    "ui" => gui.leaderboard_mut(board).ui = number as i32,
+                    "show" => gui.leaderboard_mut(board).show_mode_buttons = number != 0.0,
+                    "loaded" => gui.leaderboard_mut(board).is_loaded = number != 0.0,
+                    other => return Err(format!("no leaderboard member {other:?}")),
+                },
+                "menu.lbLast" => gui.leaderboard_set_last_session(board),
+                _ => gui.set_visible(board, number != 0.0),
+            }
+        }
+        "menu.newSession" => gui.sim_on_new_session(),
         "menu.pause" => {
             gui.sim.online = hud.input.online;
             gui.sim.game_screen = Some(screen);
@@ -118,7 +148,27 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
     Ok(())
 }
 
+pub fn class_name(gui: &Gui, id: Id) -> &'static str {
+    match &gui.controls[id].kind {
+        rustyac_gui::control::Kind::Menu(menu) => match &**menu {
+            rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
+            rustyac_gui::menus::Menu::Leaderboard(_) => "Leaderboard",
+        },
+        _ => "?",
+    }
+}
+
 pub fn extra(gui: &Gui, id: Id) -> String {
-    let p = gui.pause_menu(id);
-    format!(" pause={} fade={:08x}", p.currently_selected_button, p.fade_seconds.to_bits())
+    match class_name(gui, id) {
+        "PauseMenu" => {
+            let p = gui.pause_menu(id);
+            format!(" pause={} fade={:08x}", p.currently_selected_button, p.fade_seconds.to_bits())
+        }
+        "Leaderboard" => {
+            let l = gui.leaderboard(id);
+            let printed: Vec<String> = l.printed_cars.iter().map(|car| car.to_string()).collect();
+            crate::gui_seq_menu::board_extra(l.session_id, l.current_page, l.selected_car_index, l.mode, l.last_mode, l.show_mode_buttons, l.is_loaded, &printed.join(","), l.avatar_to_be_kicked.map_or(-1, |car| car as i32))
+        }
+        _ => String::new(),
+    }
 }

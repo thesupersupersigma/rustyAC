@@ -206,7 +206,9 @@ pub unsafe fn dump(game: &Game, h: &HudGame, out: &mut String) {
     let (begin, end): (*const *const u8, *const *const u8) = (rd(c.names, 0x98), rd(c.names, 0xa0));
     if !begin.is_null() {
         for i in 0..end.offset_from(begin) as usize {
-            crate::gui_ac::dump_control(game, *begin.add(i), 1, out);
+            let mut block = String::new();
+            crate::gui_ac::dump_control(game, *begin.add(i), 1, &mut block);
+            out.push_str(&crate::gui_seq_menu::tag_names(i, block));
         }
     }
     let (begin, end): (*const u8, *const u8) = (rd(c.damage, 0x68), rd(c.damage, 0x70));

@@ -438,7 +438,7 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
     }
     copy_tree(&args.game.join("content/gui"), &args.root.join("content/gui"))?;
     // the HUD's pictures besides the GUI's: a car's logo, the damage pictures, the wrong-way sign
-    for file in ["content/cars/ks_ferrari_f2004/logo.png", "content/texture/wrongway.png"] {
+    for file in ["content/cars/ks_ferrari_f2004/logo.png", "content/texture/wrongway.png", "content/texture/mini_finish.png", "content/cars/ks_ferrari_f2004/skins/00_official/livery.png", "content/cars/ks_ferrari_f2004/skins/01_ferrari_1/livery.png", "content/cars/ks_ferrari_f2004/skins/02_ferrari_2/livery.png"] {
         let (from, to) = (args.game.join(file), args.root.join(file));
         if from.is_file() && !to.is_file() {
             std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
@@ -527,7 +527,9 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     call0(VA_GRAPHICS_BEGIN_SCENE);
                     crate::gui_ac_hud::update(&game, *dt);
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
+                    crate::gui_ac_menu::client_present(true);
                     render(gui, *dt);
+                    crate::gui_ac_menu::client_present(false);
                     crate::gui_ac_hud::render_hud(&game, *dt);
                     crate::gui_ac2::render_hud(&game, gui, *dt);
                     for (font, x, y, text, size, align, color, shadowed) in &side.blits {

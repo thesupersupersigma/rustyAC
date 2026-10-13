@@ -42,16 +42,32 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 1] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE)];
+pub const CLASSES: [(&str, usize, usize, usize); 2] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE)];
+const VA_LEADERBOARD_CTOR: usize = 0x1_402d_10f0;
+const VA_LEADERBOARD_VTABLE: usize = 0x1_4050_1288;
+const VA_LEADERBOARD_SET_LAST_SESSION: usize = 0x1_402d_6990;
+const VA_CONTROL_SET_POSITION: usize = 0x1_4024_50a0;
 
 struct Menus {
     pause: usize,
     /// `ACCameraManager::evOnFadeInFinished`: owner, the `std::function`'s implementation
     fade: Vec<(usize, usize)>,
     fade_sender: usize,
+    /// every `ACStandardLeaderboard` the script made
+    boards: Vec<usize>,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0 });
+static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new() });
+
+/// `Sim::client` is there or not, around the calls of the game that ask (the tables of an
+/// online session read it while they are drawn; the HUD's proofs of Task 29 ran without it).
+pub unsafe fn client_present(present: bool) {
+    let Some(h) = hud() else { return };
+    if MENUS.lock().unwrap().boards.is_empty() {
+        return;
+    }
+    wr(h.sim, 0x1c8, if present && input(|i| i.online) { h.more.cars.client as usize } else { 0 });
+}
 
 unsafe extern "C" fn get_session_count(_this: *mut u8) -> u32 {
     script().session_count
@@ -233,6 +249,72 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
                 }
             }
         }
+        "menu.lb" => {
+            crate::gui_ac_race::install(game);
+            crate::gui_ac_race::sync(h);
+            jump(game, VA_RACE_MANAGER_GET_SESSION_COUNT, get_session_count as *const () as usize);
+            let client: usize = rd(sim, 0x1c8);
+            if input(|i| i.online) {
+                wr(sim, 0x1c8, h.more.cars.client);
+            }
+            let board = a.alloc(0x2e8);
+            let ctor: extern "C" fn(*mut u8, *mut u8, i32, bool) -> *mut u8 = std::mem::transmute(a.va(VA_LEADERBOARD_CTOR));
+            ctor(board, sim, number as i32, text == "focus");
+            wr(sim, 0x1c8, client);
+            let add: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(a.va(VA_GUI_ADD_CONTROL));
+            add(gui, board);
+            MENUS.lock().unwrap().boards.push(board as usize);
+        }
+        "menu.lbPos" | "menu.lbSize" | "menu.lbSet" | "menu.lbLast" | "menu.lbVisible" => {
+            let board = *MENUS.lock().unwrap().boards.last().ok_or("no leaderboard")? as *mut u8;
+            let pair = || -> (f32, f32) {
+                let (x, y) = text.split_once(',').unwrap_or(("0", "0"));
+                (x.parse().unwrap_or(0.0), y.parse().unwrap_or(0.0))
+            };
+            match what {
+                "menu.lbPos" => {
+                    let set: extern "C" fn(*mut u8, f32, f32) = std::mem::transmute(a.va(VA_CONTROL_SET_POSITION));
+                    set(board, pair().0, pair().1);
+                }
+                "menu.lbSize" => {
+                    let table: *const usize = rd(board, 0);
+                    let set: extern "C" fn(*mut u8, f32, f32) = std::mem::transmute(*table.add(0x38 / 8));
+                    set(board, pair().0, pair().1);
+                }
+                "menu.lbSet" => match text {
+                    "ui" => wr(board, 0x280, number as i32),
+                    "show" => wr(board, 0x18c, (number != 0.0) as u8),
+                    "loaded" => wr(board, 0x284, (number != 0.0) as u8),
+                    other => return Err(format!("no leaderboard member {other:?}")),
+                },
+                "menu.lbLast" => {
+                    let set: extern "C" fn(*mut u8) = std::mem::transmute(a.va(VA_LEADERBOARD_SET_LAST_SESSION));
+                    set(board);
+                }
+                _ => {
+                    let set: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_CONTROL_SET_VISIBLE));
+                    set(board, number != 0.0);
+                }
+            }
+        }
+        // Sim::evOnNewSession, as the tables hear it
+        "menu.newSession" => {
+            let (begin, end): (*const u8, *const u8) = (rd(sim, 0xc0), rd(sim, 0xc8));
+            if !begin.is_null() {
+                let event = a.alloc(0x40);
+                let boards = MENUS.lock().unwrap().boards.clone();
+                for i in 0..end.offset_from(begin) as usize / 0x28 {
+                    // (only the tables' handlers: an entry's first word is who hung it up)
+                    if !boards.contains(&rd::<usize>(begin.add(i * 0x28), 0)) {
+                        continue;
+                    }
+                    let implementation: *mut u8 = rd(begin.add(i * 0x28), 0x20);
+                    let table: *const usize = rd(implementation, 0);
+                    let call: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(*table.add(2));
+                    call(implementation, event);
+                }
+            }
+        }
         "menu.fadeDone" => {
             let waiting = std::mem::take(&mut MENUS.lock().unwrap().fade);
             for (_, implementation) in waiting {
@@ -248,6 +330,13 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
 pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
     match class {
         "PauseMenu" => Some(format!(" pause={} fade={:08x}", rd::<i32>(control, 0x1f0), rd::<u32>(control, 0x1f4))),
+        "Leaderboard" => {
+            let (begin, end): (*const *const u8, *const *const u8) = (rd(control, 0x190), rd(control, 0x198));
+            let printed: Vec<String> = if begin.is_null() { Vec::new() } else { (0..end.offset_from(begin) as usize).map(|i| rd::<i32>(*begin.add(i), 0x1158).to_string()).collect() };
+            let picked: *const u8 = rd(control, 0x240);
+            let picked = if picked.is_null() { -1 } else { rd::<i32>(picked, 0x1158) };
+            Some(crate::gui_seq_menu::board_extra(rd(control, 0x178), rd(control, 0x184), rd(control, 0x188), rd(control, 0x200), rd(control, 0x204), rd::<u8>(control, 0x18c) != 0, rd::<u8>(control, 0x284) != 0, &printed.join(","), picked))
+        }
         _ => None,
     }
 }

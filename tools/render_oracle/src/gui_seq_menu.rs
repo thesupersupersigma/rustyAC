@@ -115,11 +115,20 @@ MAX=38
 static ACTIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 pub fn script() -> MenuScript {
-    SCRIPT.lock().unwrap().clone()
+    let mut script = SCRIPT.lock().unwrap().clone();
+    // (sessions the script named count before `menu.sessions`)
+    let named = race_sessions();
+    if named > 0 {
+        script.session_count = named as u32;
+    }
+    script
 }
 
 /// A script's change of the menus' session state (true: it was one).
 pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
+    if what.starts_with("race.") {
+        return race_input(what, number, _text);
+    }
     let mut s = SCRIPT.lock().unwrap();
     match what {
         "menu.sessions" => s.session_count = number as u32,
@@ -345,4 +354,263 @@ pub fn pit_stop() -> Vec<Op> {
     }
     o.extend([hud("car.lock", 4000.0, "0"), Op::Frame(DT), hud("car.lock", 0.0, "0"), Op::Frame(DT), hud("pit.state", 3.0, ""), hud("menu.pitState", 0.0, ""), Op::Frame(DT)]);
     o
+}
+
+// ----- the standings (the tables of `ACStandardLeaderboard` and what hosts it) -----
+
+use rustyac_gui::hud::HudInput;
+use rustyac_gui::leaderboard::{RaceCar, RaceEntry, RaceLink, RaceSession};
+
+static RACE: Mutex<Option<RaceLink>> = Mutex::new(None);
+
+fn numbers(text: &str) -> Vec<u32> {
+    text.split(',').filter_map(|word| word.trim().parse().ok()).collect()
+}
+
+fn entries(text: &str) -> Vec<RaceEntry> {
+    text.split(';')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let v: Vec<f64> = entry.split(':').map(|word| word.parse().unwrap_or(0.0)).collect();
+            RaceEntry { car: v[0] as usize, total_time: v[1], best_lap: v[2], laps: v[3] as i32, has_completed_last_lap: v[4] != 0.0 }
+        })
+        .collect()
+}
+
+/// A script's change of the standings (true: it was one). A car's own values: the number is
+/// the value and the text the car, or the text is the value and the number the car.
+pub fn race_input(what: &str, number: f32, text: &str) -> bool {
+    let mut guard = RACE.lock().unwrap();
+    let race = guard.get_or_insert_with(RaceLink::default);
+    let car = |race: &mut RaceLink, index: usize| -> Option<*mut RaceCar> { race.cars.get_mut(index).map(|car| car as *mut RaceCar) };
+    match what {
+        "race.cars" => race.cars = vec![RaceCar { performance_meter: 0.0, ..RaceCar::default() }; number as usize],
+        "race.sessions" => {
+            race.sessions = text
+                .split('|')
+                .filter(|session| !session.is_empty())
+                .map(|session| {
+                    let mut parts = session.splitn(3, ':');
+                    RaceSession { session_type: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0), is_timed_race: parts.next() == Some("1"), name: parts.next().unwrap_or("").to_string() }
+                })
+                .collect()
+        }
+        "race.current" => race.current_session_index = number as i32,
+        "race.board" => race.leaderboard = entries(text),
+        "race.history" => {
+            let index = number as usize;
+            if race.leaderboard_history.len() <= index {
+                race.leaderboard_history.resize(index + 1, Vec::new());
+            }
+            race.leaderboard_history[index] = entries(text);
+        }
+        "race.globalBest" => race.global_best_lap = number as u32,
+        "race.bestSplits" => race.best_splits = numbers(text),
+        // the text is the value, the number the car
+        "race.car.skin" | "race.car.shortName" | "race.car.compound" | "race.car.lastSplits" | "race.car.curSplits" | "race.car.pbSplits" => {
+            let Some(car) = car(race, number as usize) else { return true };
+            // SAFETY: the pointer is into `race`, which is held for the whole function.
+            let car = unsafe { &mut *car };
+            match what {
+                "race.car.skin" => car.skin = text.to_string(),
+                "race.car.shortName" => car.gui_short_name = text.to_string(),
+                "race.car.compound" => car.compound_short_name = text.to_string(),
+                "race.car.lastSplits" => car.last_lap.splits = numbers(text),
+                "race.car.curSplits" => car.current_splits = numbers(text),
+                _ => car.personal_best_splits = numbers(text),
+            }
+        }
+        _ if what.starts_with("race.car.") => {
+            let Some(car) = text.parse::<usize>().ok().and_then(|index| car(race, index)) else { return true };
+            // SAFETY: as above.
+            let car = unsafe { &mut *car };
+            match what {
+                "race.car.black" => car.is_black_flagged = number != 0.0,
+                "race.car.pit" => car.in_pitlane = number != 0.0,
+                "race.car.ballast" => car.ballast_kg = number,
+                "race.car.restrictor" => car.restrictor = number,
+                "race.car.perf" => car.performance_meter = number,
+                "race.car.last" => car.last_lap.time = number as u32,
+                "race.car.lastValid" => car.last_lap.is_valid = number != 0.0,
+                "race.car.best" => car.best_lap = number as u32,
+                "race.car.done" => car.has_completed_flag = number != 0.0,
+                _ => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// The standings as both sides read them: the script's, with the names, nations, folders,
+/// pings and "is connected" of the HUD's cars.
+pub fn race_link(input: &HudInput) -> RaceLink {
+    let mut race = RACE.lock().unwrap().clone().unwrap_or_default();
+    for (car, hud) in race.cars.iter_mut().zip(&input.cars) {
+        car.driver_name = hud.driver_name.clone();
+        car.nation_code = hud.nation_code.clone();
+        car.unix_name = hud.unix_name.clone();
+        car.connected = hud.connected;
+        car.ping = hud.ping;
+    }
+    race
+}
+
+/// The sessions the script named (0: none, and `menu.sessions` counts).
+pub fn race_sessions() -> usize {
+    RACE.lock().unwrap().as_ref().map_or(0, |race| race.sessions.len())
+}
+
+fn leak(text: String) -> &'static str {
+    Box::leak(text.into_boxed_str())
+}
+
+const DRIVERS: [&str; 24] = [
+    "Tazio Nuvolari", "Rudolf Caracciola", "Bernd Rosemeyer", "Achille Varzi", "Louis Chiron", "Hans Stuck", "Luigi Fagioli", "Manfred von Brauchitsch", "Raymond Sommer", "Jean-Pierre Wimille", "Giuseppe Farina", "Hermann Lang", "Richard Seaman", "Rene Dreyfus", "Piero Taruffi", "Carlo Felice Trossi", "Philippe Etancelin", "Goffredo Zehender", "Earl Howe", "Whitney Straight", "A Driver With A Very Long Name Indeed", "", "Clemente Biondetti", "Christian Kautz",
+];
+const NATIONS: [&str; 8] = ["ITA", "DEU", "", "FRA", "GBR", "ZZZ", "MCO", "CHE"];
+const SKINS: [&str; 4] = ["00_official", "01_ferrari_1", "02_ferrari_2", "no_such_skin"];
+
+/// The cars of the tables' scripts: names, nations, liveries, tyres.
+fn field(o: &mut Vec<Op>, cars: usize) {
+    o.extend([hud("create", cars as f32, ""), hud("race.cars", cars as f32, ""), hud("session", 1.0, ""), hud("pqText", 0.0, "Practice")]);
+    for i in 0..cars {
+        let index = leak(i.to_string());
+        o.extend([
+            hud("car.name", i as f32, DRIVERS[i % DRIVERS.len()]),
+            hud("car.nation", i as f32, NATIONS[i % NATIONS.len()]),
+            hud("car.unixName", i as f32, if i % 5 == 4 { "no_such_car" } else { "ks_ferrari_f2004" }),
+            hud("car.connected", 1.0, index),
+            hud("race.car.skin", i as f32, SKINS[i % SKINS.len()]),
+            hud("race.car.shortName", i as f32, if i % 3 == 0 { "Ferrari F2004 of the year 2004" } else { "F2004" }),
+            hud("race.car.compound", i as f32, ["S", "M", "H", ""][i % 4]),
+        ]);
+    }
+}
+
+/// A board of `cars` entries: `race` by laps and total time, else by best lap; some cars have
+/// no time yet. `seed` moves the numbers.
+fn board(cars: usize, race: bool, seed: usize) -> &'static str {
+    let mut out = Vec::new();
+    for place in 0..cars {
+        let car = (place * 7 + seed) % cars;
+        let laps = if race { 5usize.saturating_sub(place / 5) } else { (place + seed) % 6 };
+        let best = if place + 2 >= cars && !race { 0.0 } else { 83456.0 + place as f64 * 417.5 + seed as f64 * 13.0 };
+        let total = if race && laps > 0 { laps as f64 * 84000.0 + place as f64 * 1234.5 } else { 0.0 };
+        let done = race && place < 3 && seed % 2 == 1;
+        out.push(format!("{car}:{total}:{best}:{laps}:{}", done as u8));
+    }
+    leak(out.join(";"))
+}
+
+/// The table. `kind`: 0 as "Race control" has it (pages, tabs, the sessions' buttons), 1 the
+/// Leaderboard app's (5 rows around the player), 2 the one on TAB (10 rows around the player),
+/// 3 online (ping, ballast, the kick button). `cars`: how many drive.
+pub fn leaderboard(kind: u32, cars: usize) -> Vec<Op> {
+    let mut o = Vec::new();
+    field(&mut o, cars);
+    o.extend([hud("race.sessions", 0.0, "1:0:Practice|2:0:Qualifying|3:0:Quick Race"), hud("race.current", 0.0, ""), hud("race.board", 0.0, board(cars, false, 0))]);
+    if kind == 3 {
+        o.push(hud("online", 1.0, ""));
+        for i in 0..cars {
+            let index = leak(i.to_string());
+            o.extend([hud("car.ping", (17 * i % 230) as f32, index), hud("race.car.ballast", if i % 3 == 0 { 0.0 } else { 5.0 * i as f32 }, index), hud("race.car.restrictor", if i % 4 == 0 { 0.0 } else { 2.0 * i as f32 }, index)]);
+        }
+    }
+    let (rows, focus) = match kind {
+        1 => (5.0, "focus"),
+        2 => (10.0, "focus"),
+        _ => (10.0, ""),
+    };
+    o.extend([hud("menu.lb", rows, focus), hud("menu.lbPos", 0.0, "250,60")]);
+    match kind {
+        1 => o.extend([hud("menu.lbSize", 0.0, "780,172.5"), hud("menu.lbSet", 1.0, "ui"), hud("menu.lbSet", 0.0, "loaded")]),
+        2 => o.extend([hud("menu.lbSet", 2.0, "ui"), hud("menu.lbSet", 0.0, "loaded")]),
+        _ => o.push(hud("menu.lbSet", 1.0, "show")),
+    }
+    o.extend([Op::Frame(DT), Op::Frame(DT)]);
+    // the time table: last laps (one that does not count), sectors, the best of all, deltas
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let (tab_time, tab_entry) = ((250 + 570 + 50, 60 + 335 + 9), (250 + 465 + 50, 60 + 335 + 9));
+    let tabs_y = if kind == 1 { 60 + 172 + 10 + 9 } else { tab_time.1 };
+    click(&mut o, tab_time.0, tabs_y);
+    o.extend([hud("race.globalBest", 83456.0, ""), hud("race.bestSplits", 0.0, "27100,30200,26000")]);
+    for i in 0..cars.min(8) {
+        let index = leak(i.to_string());
+        o.extend([
+            hud("race.car.last", 84000.0 + 731.0 * i as f32, index),
+            hud("race.car.lastValid", (i % 3 != 1) as u8 as f32, index),
+            hud("race.car.lastSplits", i as f32, leak(format!("{},{},{}", 27100 + 40 * i, 30200 + 55 * i, 26700 + 636 * i))),
+            hud("race.car.best", 83456.0 + 417.0 * i as f32, index),
+            hud("race.car.pbSplits", i as f32, leak(format!("{},{},{}", 27100 + 40 * i, 30200 + 20 * i, 26000 + 300 * i))),
+            hud("race.car.perf", [0.0, -0.35, 1.25, 100.0, -100.0, 12.0, -0.04, 0.5][i], index),
+        ]);
+    }
+    o.push(Op::Frame(DT));
+    // a lap under way: sectors as they come, the driver's best in green, the best of all purple
+    o.extend([hud("race.car.curSplits", 0.0, "27100"), hud("race.car.curSplits", 1.0, "27140,30200"), hud("race.car.curSplits", 2.0, "1000000,2,26000"), hud("race.car.pit", 1.0, "1"), Op::Frame(DT)]);
+    o.extend([hud("race.car.done", 1.0, "0"), hud("race.car.done", 1.0, "1"), hud("race.car.done", 1.0, "3"), hud("race.car.black", 1.0, "2"), hud("car.connected", 0.0, "1"), Op::Frame(DT)]);
+    click(&mut o, tab_entry.0, tabs_y);
+    // a row is picked (the camera goes to its car); pages
+    click(&mut o, 400, 60 + 20 + 45);
+    click(&mut o, 400, 60 + 20 + 15);
+    click(&mut o, 400, 60 + 20 + 280);
+    click(&mut o, 250 + 760, 60 + 345);
+    click(&mut o, 250 + 760, 60 + 345);
+    click(&mut o, 250 + 760, 60 + 345);
+    click(&mut o, 250 + 700, 60 + 345);
+    click(&mut o, 400, 60 + 20 + 75);
+    if kind == 3 {
+        // the kick button of the picked row
+        click(&mut o, 250 + 755 + 15, 60 + 20 + 61 + 15);
+    }
+    click(&mut o, 250 + 700, 60 + 345);
+    click(&mut o, 250 + 700, 60 + 345);
+    // qualifying begins: the practice becomes history, its button comes
+    o.extend([hud("race.history", 0.0, board(cars, false, 0)), hud("race.current", 1.0, ""), hud("race.board", 0.0, board(cars, false, 3)), hud("session", 2.0, ""), hud("menu.newSession", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, 250 + 150 + 20, 60 + 345);
+    click(&mut o, tab_time.0, tabs_y);
+    click(&mut o, 250 + 225 + 20, 60 + 345);
+    click(&mut o, tab_time.0, tabs_y);
+    click(&mut o, 250 + 150 + 20, 60 + 345);
+    click(&mut o, 250 + 225 + 20, 60 + 345);
+    // the race: laps and totals, cars that are a lap down, the flag of who has finished
+    o.extend([hud("race.history", 1.0, board(cars, false, 3)), hud("race.current", 2.0, ""), hud("race.board", 0.0, board(cars, true, 0)), hud("session", 3.0, ""), hud("raceText", 0.0, "Race"), hud("menu.newSession", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, tab_entry.0, tabs_y);
+    o.extend([hud("race.board", 0.0, board(cars, true, 1)), Op::Frame(DT), hud("race.sessions", 0.0, "1:0:Practice|2:0:Qualifying|3:1:Quick Race"), Op::Frame(DT)]);
+    click(&mut o, 250 + 300 + 20, 60 + 345);
+    click(&mut o, 250 + 150 + 20, 60 + 345);
+    o.extend([hud("menu.lbLast", 0.0, ""), Op::Frame(DT), hud("menu.lbVisible", 0.0, ""), Op::Frame(DT), hud("race.current", 1.0, ""), hud("menu.lbVisible", 1.0, ""), Op::Frame(DT)]);
+    // the table moves: its columns stay where they were first drawn (but for the app's)
+    o.extend([hud("menu.lbPos", 0.0, "120,200"), Op::Frame(DT), hud("race.board", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// What both sides write down of a table besides its controls.
+#[allow(clippy::too_many_arguments)]
+pub fn board_extra(session: i32, page: i32, selected: i32, mode: i32, last_mode: i32, show: bool, loaded: bool, printed: &str, picked: i32) -> String {
+    format!(" board={session},{page},{selected},{mode},{last_mode},{}{} printed={printed} picked={picked}", show as u8, loaded as u8)
+}
+
+/// The dump of a name tag's controls. The game names them by adding the car's number to a
+/// pointer into a word ("CAR_LABEL", "Name" ...): past the fifth car that reads whatever
+/// follows the word in the program's data, where the port gives an empty name (Task 29, open
+/// question 6). The names are never drawn; from the sixth car on they are left out of the
+/// comparison.
+pub fn tag_names(car: usize, block: String) -> String {
+    if car < 5 {
+        return block;
+    }
+    let mut out = String::new();
+    for line in block.lines() {
+        match (line.find('"'), line.find("\" r=")) {
+            (Some(from), Some(to)) if from < to => {
+                out.push_str(&line[..from + 1]);
+                out.push_str(&line[to..]);
+            }
+            _ => out.push_str(line),
+        }
+        out.push(char::from(10u8));
+    }
+    out
 }

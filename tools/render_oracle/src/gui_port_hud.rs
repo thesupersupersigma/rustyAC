@@ -18,7 +18,7 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
-    if what.starts_with("menu.") || what.starts_with("pit.") {
+    if what.starts_with("menu.") || what.starts_with("pit.") || what.starts_with("race.") {
         if crate::gui_seq_menu::menu_input(what, number, text) {
             return Ok(());
         }

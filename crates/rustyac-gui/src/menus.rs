@@ -64,6 +64,10 @@ pub enum SimAction {
     StartReplayMode,
     /// `Game::shutdown` 0x140242fb0
     Shutdown,
+    /// `ACClient::sendVote(type, value, guid)` 0x140052ba0 (2: kick this car)
+    SendVote { kind: i32, value: bool, guid: i32 },
+    /// `Sim::setFocusedCarIndex` 0x14019e6b0
+    SetFocusedCarIndex(u32),
 }
 
 /// What a handler of `ACCameraManager::evOnFadeInFinished` does when the fade is over.
@@ -97,6 +101,12 @@ pub struct SimLink {
     /// `ACCameraManager::fadeMode.sender`
     pub fade_sender: Option<Id>,
     pub actions: Vec<SimAction>,
+    /// what the tables read of `RaceManager` (see `leaderboard`)
+    pub race: crate::leaderboard::RaceLink,
+    /// `Sim::flagMapCache`: the nations' flags that were asked for
+    pub flag_cache: std::collections::BTreeMap<String, Texture>,
+    /// every `ACStandardLeaderboard` (they hear `Sim::evOnNewSession`)
+    pub leaderboards: Vec<Id>,
 }
 
 /// `PauseMenu`'s own members.
@@ -110,6 +120,7 @@ pub struct PauseMenu {
 /// A menu of the game: a `ksgui::Control` with a `render` and an `onVisibleChanged` of its own.
 pub enum Menu {
     Pause(PauseMenu),
+    Leaderboard(Box<crate::leaderboard::Leaderboard>),
 }
 
 impl Gui {
@@ -204,6 +215,7 @@ impl Gui {
         match &self.controls[id].kind {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(p) => p,
+                _ => panic!("control {id} is not the pause menu"),
             },
             _ => panic!("control {id} is not the pause menu"),
         }
@@ -213,6 +225,7 @@ impl Gui {
         match &mut self.controls[id].kind {
             Kind::Menu(menu) => match &mut **menu {
                 Menu::Pause(p) => p,
+                _ => panic!("control {id} is not the pause menu"),
             },
             _ => panic!("control {id} is not the pause menu"),
         }
@@ -390,6 +403,7 @@ impl Gui {
         match &self.controls[id].kind {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(_) => self.pause_menu_render(id, dt, painter),
+                Menu::Leaderboard(_) => self.leaderboard_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -399,8 +413,19 @@ impl Gui {
         match &self.controls[id].kind {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(_) => self.pause_menu_on_visible_changed(id, visible),
+                Menu::Leaderboard(_) => self.leaderboard_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),
+        }
+    }
+
+    pub fn menu_on_mouse_down(&mut self, id: Id, e: &crate::control::MouseEvent) -> bool {
+        match &self.controls[id].kind {
+            Kind::Menu(menu) => match &**menu {
+                Menu::Leaderboard(_) => self.leaderboard_on_mouse_down(id, e),
+                _ => self.control_on_mouse_down(id, e),
+            },
+            _ => self.control_on_mouse_down(id, e),
         }
     }
 }

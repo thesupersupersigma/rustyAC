@@ -67,8 +67,10 @@ pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
 pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     let c = &hud.more.cars;
     let (Some(names), Some(damage)) = (&c.names, &c.damage) else { return };
-    for label in &names.car_displayers {
-        crate::gui_port::dump_control(gui, label.control, 1, out);
+    for (i, label) in names.car_displayers.iter().enumerate() {
+        let mut block = String::new();
+        crate::gui_port::dump_control(gui, label.control, 1, &mut block);
+        out.push_str(&crate::gui_seq_menu::tag_names(i, block));
     }
     let items: Vec<(f32, f32)> = damage.items.iter().map(|i| (i.health, i.blink_time)).collect();
     out.push_str(&crate::gui_seq::damage_line(damage.render_timer, damage.initialized, damage.enabled, &items));

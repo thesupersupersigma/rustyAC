@@ -105,6 +105,11 @@ unsafe extern "C" fn get_car_leaderboard_position(_this: *mut u8, car: *mut u8) 
 /// In place of `RaceManager::getLastLap`: a `Lap` (0x48 bytes) with only its time.
 unsafe extern "C" fn get_last_lap(_this: *mut u8, out: *mut u8, car: *mut u8) -> *mut u8 {
     let index = car_index(car);
+    // (the standings' scripts say the whole lap; the HUD's only its time)
+    if let Some(car) = crate::gui_ac_race::race().cars.get(index) {
+        crate::gui_ac_race::write_lap(out, &car.last_lap);
+        return out;
+    }
     std::ptr::write_bytes(out, 0, 0x48);
     wr(out, 0, input(|i| i.cars.get(index).map(|c| c.last_lap_ms).unwrap_or(0)));
     empty_wstring(out.add(0x28));
@@ -160,12 +165,13 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
-    if what.starts_with("menu.") || what.starts_with("pit.") {
+    if what.starts_with("menu.") || what.starts_with("pit.") || what.starts_with("race.") {
         if crate::gui_seq_menu::menu_input(what, number, text) {
             return Ok(());
         }
         if let Some(h) = hud() {
             sync(h);
+            crate::gui_ac_race::sync(h);
         }
         if what.starts_with("menu.pit") {
             return crate::gui_ac_pit::call(game, gui, what, number, text);
@@ -272,6 +278,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
 pub unsafe fn update(game: &Game, dt: f32) {
     let Some(h) = hud() else { return };
     sync(h);
+    crate::gui_ac_race::sync(h);
     let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SYSTEM_MESSAGE_UPDATE));
     update(h.message, dt);
     let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SYSTEM_NOTIFICATION_UPDATE));
