@@ -429,6 +429,16 @@ In all: 693,000 samples, the 3 x 3999 slots compared after each of 11 laps and a
 files byte for byte. rustyac.exe: the drive of section 5 replayed with 0, 1 and 8 workers
 wrote the same `.tc` file three times (80,031 bytes, best 1:30.123).
 
+Your own telemetry files: the 14 `.tc` files the game wrote into
+`Documents\Assetto Corsa\ctelemetry\player` were read where they are (read only) and have
+exactly the layout the port reads and writes: version 1, the four names in the order driver,
+track, car, layout, the best time, 3999 slots of 20 bytes, nothing after them. Thirteen of them
+are named `_<track>_<layout>_.tc`, with the driver's and the car's name missing from the file's
+name (they are inside the file); one has the full name. The game builds the name from the car's
+avatar when it shuts down, and in your installation that avatar's names are mostly empty by
+then; rustyAC always writes the full name. They were not loaded through the port's code or
+compared with the game's loader.
+
 ### 7. Tests and builds
 
 - `cargo test --release --workspace --locked`: 286 passed, 0 failed (6 new in `tests/replays.rs`:
@@ -644,3 +654,8 @@ only moved when the file counts as many as rustyAC finds on the track; your Spa 
 16. **Telemetry is recorded by default in a window, not in headless runs** (they are the
     proofs) unless `--telemetry-dir` is given. The file is small (80 kB) and only written when
     a lap was the best.
+17. **The telemetry file's name.** rustyAC writes `<driver>_<track>_<layout>_<car>.tc`, as the
+    game's code does when the car's names are there (the oracle's run). Most of your own files
+    are named `_<track>_<layout>_.tc` (see the results). To make rustyAC read a file of the game,
+    copy it into `ctelemetry\player\` under the full name; the driver's name inside the file
+    must be the session's.
