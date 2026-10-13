@@ -43,7 +43,7 @@ fn loose(line: &[u8]) -> Vec<u8> {
     out
 }
 
-fn show(line: &[u8]) -> String {
+pub fn show(line: &[u8]) -> String {
     let text = String::from_utf8_lossy(line);
     if text.len() > 300 {
         format!("{} … ({} bytes)", &text[..300], text.len())
@@ -53,7 +53,7 @@ fn show(line: &[u8]) -> String {
 }
 
 /// Where two byte payloads of one call first differ: the offset in the buffer.
-fn payload_difference(a: &[u8], b: &[u8]) -> Option<String> {
+pub fn payload_difference(a: &[u8], b: &[u8]) -> Option<String> {
     let last = |l: &[u8]| l.rsplit(|c| *c == b' ').next().map(|s| s.to_vec()).unwrap_or_default();
     let (pa, pb) = (last(a), last(b));
     if pa.len() != pb.len() || pa.len() < 16 {

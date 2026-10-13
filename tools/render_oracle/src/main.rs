@@ -12,7 +12,11 @@ mod ac_car;
 mod compare;
 mod frames;
 mod gui_ac;
+mod gui_ac2;
+mod gui_compare;
 mod gui_port;
+mod gui_port2;
+mod gui_seq;
 mod port;
 mod root;
 
@@ -167,7 +171,8 @@ fn parse() -> Result<Args, String> {
                 frame_option = false;
             }
             "--root" => {
-                a.root = PathBuf::from(value()?);
+                // absolute: the game's side changes the current directory
+                a.root = std::path::absolute(value()?).map_err(|e| e.to_string())?;
                 frame_option = false;
             }
             "--out" => {
@@ -482,8 +487,9 @@ fn run() -> Result<(), String> {
             println!("{}: frame {} of {}", out.display(), args.tape_from, tape.display());
             Ok(())
         }
-        "font-probe" if args.side == "port" => gui_port::font_probe(&args),
-        "font-probe" => gui_ac::font_probe(&args),
+        // the GUI oracle: `gui --gui <sequence>` compares, `gui-run --side ac|port --gui <sequence>` runs one side
+        "gui-run" => gui_compare::run_side(&args),
+        "gui" => gui_compare::compare(&args),
         "run" => run_side(&args),
         "compare" => compare::compare(&args),
         _ => Err(USAGE.into()),

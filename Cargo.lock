@@ -683,6 +683,13 @@ name = "rustyac-gateway"
 version = "0.28.2"
 
 [[package]]
+name = "rustyac-gui"
+version = "0.28.2"
+dependencies = [
+ "rustyac-physics",
+]
+
+[[package]]
 name = "rustyac-math"
 version = "0.28.2"
 
@@ -717,6 +724,7 @@ name = "rustyac-render"
 version = "0.28.2"
 dependencies = [
  "rustyac-content",
+ "rustyac-gui",
  "rustyac-math",
  "rustyac-physics",
  "windows",

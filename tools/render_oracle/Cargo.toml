@@ -8,6 +8,7 @@ description = "Test oracle for rustyac-render: runs Assetto Corsa's own Graphics
 
 [dependencies]
 rustyac-render = { path = "../../crates/rustyac-render" }
+rustyac-gui = { path = "../../crates/rustyac-gui" }
 rustyac-physics = { path = "../../crates/rustyac-physics" }
 rustyac-content = { path = "../../crates/rustyac-content" }
 rustyac-math = { path = "../../crates/rustyac-math" }

@@ -215,6 +215,26 @@ impl GlRenderer {
         self.end(graphics);
     }
 
+    /// `GLRenderer::quadCentred` 0x1401ff540: a rectangle around a point, corners in the order
+    /// top left, bottom left, bottom right, top right; it ends the drawing itself.
+    pub fn quad_centred(&mut self, graphics: &mut Graphics, x: f32, y: f32, w: f32, h: f32, use_texture: bool, shader: Option<ShaderId>) {
+        self.primitive = GL_QUADS;
+        self.current_index = 0;
+        self.temp_counter = 0;
+        self.use_texture = false;
+        self.shader = shader;
+        let (half_w, half_h) = (w * 0.5, h * 0.5);
+        let (left, top) = (x - half_w, y - half_h);
+        let (right, bottom) = (x + half_w, y + half_h);
+        for (px, py, u, v) in [(left, top, 0.0, 0.0), (left, bottom, 0.0, 1.0), (right, bottom, 1.0, 1.0), (right, top, 1.0, 0.0)] {
+            if use_texture {
+                self.tex_coord2f(u, v);
+            }
+            self.vertex3f(px, py, 0.0);
+        }
+        self.end(graphics);
+    }
+
     /// `GLRenderer::vertex3fv` 0x1401ffc00.
     pub fn vertex3fv(&mut self, v: &[f32; 3]) {
         self.vertex3f(v[0], v[1], v[2]);

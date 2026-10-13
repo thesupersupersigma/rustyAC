@@ -1,0 +1,13 @@
+[package]
+name = "rustyac-gui"
+description = "rustyAC: Assetto Corsa's widget library (ksGUI), its form layout file and its HUD objects, ported 1:1. No platform code: everything is drawn through the `Painter` trait (the game's GLRenderer, GraphicsManager and font calls), which the Direct3D renderer and the browser preview each implement."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+# A 1:1 port of Assetto Corsa's GUI (acs.exe, Kunos Simulazioni); see LICENSING.md.
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# the port of INIReader
+rustyac-physics = { path = "../rustyac-physics" }

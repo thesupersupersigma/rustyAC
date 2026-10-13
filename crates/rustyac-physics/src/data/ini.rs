@@ -276,6 +276,25 @@ impl IniReader {
     }
 
     /// `INIReader::getInt` @ 0x140235c70: `wcstol(text, .., 10)`, 0 for an empty value.
+    /// `INIReader::getFloat4` 0x140235860 (`getVector4` 0x140236ad0): up to four numbers
+    /// between commas; a missing one stays 0.
+    pub fn get_float4(&self, section: &str, key: &str) -> Result<[f32; 4], String> {
+        let text = self.get_string(section, key);
+        let mut out = [0.0f32; 4];
+        // wcstok_s with ",": empty tokens are skipped
+        for (slot, token) in out.iter_mut().zip(text.split(',').filter(|t| !t.is_empty())) {
+            let parsed = wcstod(token);
+            if parsed.consumed == 0 {
+                return Err(self.error(section, key, &text, "invalid stof argument"));
+            }
+            if parsed.out_of_range {
+                return Err(self.error(section, key, &text, "stof argument out of range"));
+            }
+            *slot = parsed.value as f32;
+        }
+        Ok(out)
+    }
+
     pub fn get_int(&self, section: &str, key: &str) -> Result<i32, String> {
         let text = self.get_string(section, key);
         if text.is_empty() {

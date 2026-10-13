@@ -29,6 +29,7 @@ pub mod flames;
 pub mod ghost_car;
 pub mod gl;
 pub mod gpulog;
+pub mod gui_paint;
 pub mod graphics;
 pub mod ideal_line;
 pub mod kgl;

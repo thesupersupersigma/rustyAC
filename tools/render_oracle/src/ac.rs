@@ -377,7 +377,7 @@ pub struct Rendered {
 
 impl Game {
     pub fn start(args: &Args) -> Result<Game, String> {
-        let gui = args.gui.is_some() || args.command == "font-probe";
+        let gui = args.gui.is_some();
         if gui {
             // FW1FontWrapper: DirectWrite (Windows' own, from System32) and the GDI calls of its glyph rasteriser
             crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll", "dwrite.dll", "gdi32.dll", "user32.dll"]);

@@ -106,6 +106,7 @@ version = "0.1.0"
 dependencies = [
  "png",
  "rustyac-content",
+ "rustyac-gui",
  "rustyac-math",
  "rustyac-physics",
  "rustyac-render",
@@ -115,6 +116,13 @@ dependencies = [
 [[package]]
 name = "rustyac-content"
 version = "0.28.2"
+
+[[package]]
+name = "rustyac-gui"
+version = "0.28.2"
+dependencies = [
+ "rustyac-physics",
+]
 
 [[package]]
 name = "rustyac-math"
@@ -141,6 +149,7 @@ name = "rustyac-render"
 version = "0.28.2"
 dependencies = [
  "rustyac-content",
+ "rustyac-gui",
  "rustyac-math",
  "rustyac-physics",
  "windows",

@@ -14,6 +14,8 @@ rustyac-math = { path = "../rustyac-math" }
 rustyac-physics = { path = "../rustyac-physics" }
 # kn5 models: nodes, meshes, materials, textures
 rustyac-content = { path = "../rustyac-content" }
+# AC's widgets and HUD objects: this crate is their painter on Direct3D
+rustyac-gui = { path = "../rustyac-gui" }
 
 [dependencies.windows]
 version = "0.62"
