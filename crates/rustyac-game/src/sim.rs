@@ -1476,12 +1476,6 @@ impl GameSim {
                     if let Some(values) = &pit.values {
                         made.set_values_text(values);
                     }
-                    // (a recording carries the menu as it starts)
-                    if pit.presets_ini.is_some() {
-                        if let Some(header) = self.setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()) {
-                            header.values = Some(made.values_text());
-                        }
-                    }
                     menu = Some((made, pit.window));
                 }
                 Err(message) => eprintln!("no pit stop: {message}"),

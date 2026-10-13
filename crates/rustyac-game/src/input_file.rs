@@ -427,7 +427,7 @@ pub struct PitHeader {
     /// (`QuickMenu::values_text`)
     pub values: Option<String>,
     /// the text of the setup's `.sp` file (pit stop presets), read into the menu at the
-    /// start; a recording has `values` instead
+    /// start (a recording carries it in the key `pit_presets`, as hex)
     pub presets_ini: Option<String>,
 }
 
@@ -766,6 +766,9 @@ impl SimSetup {
             // (only a session with the pit stop has the key: older files read as before)
             if let Some(pit) = &referee.pit {
                 put("pit_stop", pit.to_text());
+                if let Some(text) = &pit.presets_ini {
+                    put("pit_presets", text.bytes().map(|byte| format!("{byte:02x}")).collect::<String>());
+                }
             }
         }
         for opponent in &self.opponents {
@@ -907,6 +910,11 @@ impl SimSetup {
                 }
                 "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
                 "pit_stop" => setup.referee.as_mut().ok_or("pit_stop before referee")?.pit = Some(PitHeader::parse(value)?),
+                "pit_presets" => {
+                    let bytes: Option<Vec<u8>> = (0..value.len() / 2).map(|i| u8::from_str_radix(value.get(2 * i..2 * i + 2)?, 16).ok()).collect();
+                    let text = bytes.and_then(|bytes| String::from_utf8(bytes).ok()).ok_or("pit_presets: hex text expected")?;
+                    setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()).ok_or("pit_presets before pit_stop")?.presets_ini = Some(text);
+                }
                 "referee_driver" => setup.referee.as_mut().ok_or("referee_driver before referee")?.driver_names.push(value.to_string()),
                 "referee_session" => setup.referee.as_mut().ok_or("referee_session before referee")?.sessions.sessions.push(RefereeHeader::parse_session(value)?),
                 "opponent" => setup.opponents.push(Opponent::parse(value)?),

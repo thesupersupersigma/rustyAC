@@ -3,6 +3,7 @@
 ## Resume here
 
 State: **done**, v0.27.0. Every proof of section 5 is identical; nothing is half-wired. What is left is listed under "Not done".
+(Task 28b, v0.28.1, fixed one case these proofs did not have: an AI driver behind a car that sleeps reads its speed as exactly 0, because the sleeping rule stops the body inside the car's own step. The engine now runs the first part of every car's step in the cars' order before the parallel part. See `docs/port/pit_stops.md`.)
 
 - The port: `crates/rustyac-physics/src/ai/` (`driver.rs` = `AIDriver`, `awareness.rs` =
   `stepCarsAwareness2`, `engineer.rs` = the `RaceEngineer` parts, `car_ext.rs` = the `Car`

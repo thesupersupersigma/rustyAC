@@ -223,6 +223,10 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
         let car = &sim.car.car;
         let compound = car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index.max(0) as usize)).map(|def| def.short_name.clone()).unwrap_or_default();
         lines.push(format!("pit stops of your car: {}{}; now {:.1} l of fuel, tyres {compound}", stops.len(), if stops.is_empty() { String::new() } else { format!(" ({})", stops.join(", ")) }, car.fuel));
+        if let Some(menu) = &referee.menu {
+            let items: Vec<String> = menu.items.iter().map(|item| format!("{} {}", item.title.to_lowercase(), menu.value_text(item))).collect();
+            lines.push(format!("pit menu (preset {} of {}): {}", menu.current_preset + 1, menu.presets_count, items.join(", ")));
+        }
         if referee.pit_window.1 != 0 {
             lines.push(format!("mandatory pit stop: {}", if referee.pit_avatar.mandatory_pitstop_done { "done" } else if car.black_flagged { "not done: black flag" } else { "not done" }));
         }

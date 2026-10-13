@@ -15,8 +15,8 @@ State at v0.28.0:
     at `re/scratch/task28/bin/car_oracle_final.exe` (`tools/car_oracle/target/release/car_oracle.exe`).
   - `cargo test --release -p rustyac-physics --test race_rules`: the same without the game
     (hashes of approved runs).
-- **Next (Task 28b)**: pit stops and the pit crew, the mandatory pit window's enforcement, AC
-  replays, the ghost car. The hooks are listed under "Not done".
+- **Task 28b (v0.28.1)** added the player's pit stop and the mandatory pit window and
+  resolved open question 7: see `docs/port/pit_stops.md`.
 - Scratch files of this task: `re/scratch/task28/` (the three reading briefs `spec_*.md` say
   where every field of the game's classes is and are worth keeping).
 
@@ -306,12 +306,9 @@ session, the standings and the results in the same HUD lines.
 
 ## Not done
 
-- **Pit stops and the pit crew, AC replays, the ghost car**: Task 28b, by the task's own
-  wording.
-- **The mandatory pit window**: the referee has the game's two fields
-  (`RaceManager::pit_window_start_time` / `pit_window_end_time`, compared with the game's every
-  frame) and that is the hook. Nothing sets them (they are 0, "no window") and nobody is
-  disqualified for missing a window: the game decides that with the pit stop's code.
+- **Pit stops and the mandatory pit window**: done in Task 28b (`docs/port/pit_stops.md`);
+  the pit crew that changes the wheels is still open there. **AC replays, the ghost car**:
+  not done.
 - **A black flag's "retire to the pits" teleport for the player** follows the game (the car is
   retired and stays where it is until the next session); the pit crew scene is 28b.
 - **`laps.ini` was not compared with the game's writer.** The lap database it is written from
@@ -354,10 +351,11 @@ Choices made without asking, to be confirmed or changed:
    car's is the folder name, as the game writes them.
 6. **Keys F7 / F8** for next session and restart were free; the game has no keys for them
    (they are buttons in its results screen and pause menu).
-7. **One thing seen and not explained**: in an early variant of `rc_jump`, with a car standing
-   still on the grid among AI cars, the second AI car left the game's values at step 4677.
-   The final scenarios do not show it (they are identical throughout), and it is in Task 27's
-   code (an AI driver passing a stopped car), not in the referee. Worth a scenario of its own.
+7. **One thing seen and not explained** (explained and fixed in Task 28b, see
+   `docs/port/pit_stops.md`: a sleeping car's body is stopped in its own step, and the AI
+   drivers of the cars after it read that): in an early variant of `rc_jump`, with a car
+   standing still on the grid among AI cars, the second AI car left the game's values at
+   step 4677.
 8. **A bug of Task 27 found and fixed here**: an AI driver's qualifying tyre. A compound
    without a `[COMPOUND_n]` strategy counts as good for 100000 km in the game; the port had
    0, so in qualifying an AI driver could pick another tyre than the game's.
