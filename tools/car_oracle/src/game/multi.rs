@@ -922,6 +922,9 @@ pub struct MultiWorld<'a> {
     /// Task 28b: (car, step) at which its AI driver is called in
     pit_calls: Vec<(usize, usize)>,
     pit_damage: bool,
+    /// Task 28c: the game's `Track` and its loose objects (`PhysicsObject`s), for the replays
+    pub game_track: *mut u8,
+    pub physics_objects: Vec<*mut u8>,
 }
 
 unsafe fn car_bodies(acs: &Acs, car: *mut u8) -> (Vec<*mut u8>, [*mut u8; 4]) {
@@ -1002,6 +1005,8 @@ impl<'a> MultiWorld<'a> {
             wr(engine, PE_ALLOWED_TYRES_OUT, 2i32);
             let game_objects = crate::track::create_objects(acs, engine, &built.rust);
             let objects: Vec<*mut u8> = game_objects.iter().map(|o| o.body()).collect();
+            let physics_objects: Vec<*mut u8> = game_objects.iter().map(|o| o.object).collect();
+            let game_track = built.track;
             let track = std::sync::Arc::new(built.rust.clone());
             let built: &'static crate::track::GameTrack = Box::leak(Box::new(built));
             let _ = built;
@@ -1338,7 +1343,7 @@ impl<'a> MultiWorld<'a> {
                 }
                 referee = Some(whole);
             }
-            Ok(MultiWorld { acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee, jump_start: scenario.name.starts_with("rc_jump"), shift_wait: 0, pit_calls: pit_of(scenario.name).map(|pit| pit.calls.iter().map(|(car, seconds)| (*car, (*seconds / DT) as usize)).collect()).unwrap_or_default(), pit_damage: pit_of(scenario.name).is_some_and(|pit| pit.damage) })
+            Ok(MultiWorld { game_track, physics_objects, acs, engine, cars, track, objects, step_index: 0, recording, taping: false, tape_events: Vec::new(), state_buffer: acs.alloc(0xb70), names: metas.iter().map(|m| m.name.clone()).collect(), handover: ai_handover(scenario.name), referee, jump_start: scenario.name.starts_with("rc_jump"), shift_wait: 0, pit_calls: pit_of(scenario.name).map(|pit| pit.calls.iter().map(|(car, seconds)| (*car, (*seconds / DT) as usize)).collect()).unwrap_or_default(), pit_damage: pit_of(scenario.name).is_some_and(|pit| pit.damage) })
         }
     }
 
@@ -1552,6 +1557,16 @@ impl<'a> MultiWorld<'a> {
     }
 
     /// The game's `Car` object of car `index`.
+    /// The physics time of the last step, ms.
+    pub fn time_ms(&self) -> f64 {
+        CLOCK_START_MS + self.step_index as f64 * 3.0
+    }
+
+    /// The port's copy of the track.
+    pub fn port_track(&self) -> std::sync::Arc<Track> {
+        std::sync::Arc::clone(&self.track)
+    }
+
     pub fn car_ptr(&self, index: usize) -> *mut u8 {
         self.cars[index].car
     }

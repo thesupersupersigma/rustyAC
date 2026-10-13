@@ -316,6 +316,9 @@ pub struct ReplayManager {
     pub events: Vec<ReplayEvent>,
     /// what the game prints
     pub log: Vec<String>,
+    /// the places in the last saved file of bytes the game never sets (the three bytes after
+    /// a lap's flag are whatever its stack held; they are 0 here)
+    pub save_undefined: Vec<usize>,
 }
 
 impl ReplayManager {
@@ -356,6 +359,7 @@ impl ReplayManager {
             interval_static: None,
             events: Vec::new(),
             log: Vec::new(),
+            save_undefined: Vec::new(),
         };
         if let Some(ini) = ini {
             if ini.has_section("QUALITY") {
@@ -405,18 +409,24 @@ impl ReplayManager {
                 }
             }
         }
-        let frames = m.max_frames.max(0) as usize;
-        for recorder in &mut m.recorders {
+        m.size_ring(track_objects);
+        m.log.push(format!("ReplayManager initialized current type {}", m.current_session_type));
+        m
+    }
+
+    /// The constructor's steps 4 and 5: every recorder's ring and the scene's frames get
+    /// `max_frames` slots.
+    pub fn size_ring(&mut self, track_objects: Option<usize>) {
+        let frames = self.max_frames.max(0) as usize;
+        for recorder in &mut self.recorders {
             recorder.set_frame_size(frames);
         }
-        m.frame_information.resize(frames, FrameInformation::default());
+        self.frame_information.resize(frames, FrameInformation::default());
         if let Some(count) = track_objects {
-            for info in &mut m.frame_information {
+            for info in &mut self.frame_information {
                 info.track_objects.resize(count, [0; 6]);
             }
         }
-        m.log.push(format!("ReplayManager initialized current type {}", m.current_session_type));
-        m
     }
 
     fn event(&mut self, status: i32, time_mult: f32, slow_motion_level: f32) {
@@ -542,6 +552,7 @@ impl ReplayManager {
     /// `ReplayManager::save`, the file's bytes.
     pub fn save_bytes(&mut self, info: &SaveInfo) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
+        self.save_undefined.clear();
         out.extend_from_slice(&16i32.to_le_bytes());
         out.extend_from_slice(&self.record_interval_ms.to_le_bytes());
         put_string(&mut out, &info.weather);
@@ -594,6 +605,7 @@ impl ReplayManager {
                 out.extend_from_slice(&lap.time.to_le_bytes());
                 // (the three bytes after the flag are whatever the game's stack held)
                 out.extend_from_slice(&[lap.is_valid as u8, 0, 0, 0]);
+                self.save_undefined.extend(out.len() - 3..out.len());
             }
         }
         out.extend_from_slice(&(self.replay_leaderboards.len() as i32).to_le_bytes());
@@ -653,7 +665,11 @@ impl ReplayManager {
         self.recorders.clear();
         self.replay_laps.clear();
         for _ in 0..car_count.max(0) {
-            let header = CarHeader { unix_name: r.string()?, driver_name: r.string()?, nation_code: r.string()?, team: r.string()?, skin: r.string()? };
+            let mut header = CarHeader { unix_name: r.string()?, driver_name: r.string()?, nation_code: r.string()?, team: r.string()?, skin: r.string()? };
+            // (a nation code of more than three letters becomes AC)
+            if header.nation_code.encode_utf16().count() > 3 {
+                header.nation_code = "AC".to_string();
+            }
             let mut recorder = loader.add_car(&header);
             self.recorded_frames = recorder.load(bytes, &mut r.at, version)?;
             let laps = r.i32()? as u32;

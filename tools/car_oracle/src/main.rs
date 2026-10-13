@@ -97,6 +97,12 @@ struct Args {
     /// Task 19: also write `<scenario>.audiotape` (the game's own `CarPhysicsState` at 60
     /// frames a second and every physics event), the input of `tools/audio_oracle`.
     audio_tape: bool,
+    /// Task 28c: `multi --replay`: the game's replay code records beside the port's, then
+    /// both save, load and play (`--replay-frames <n>`: the ring's size, `--replay-level
+    /// <0..4>`: replay.ini's quality level)
+    replay: bool,
+    replay_frames: Option<i32>,
+    replay_level: Option<i32>,
     only: Vec<String>,
     ignore: Vec<String>,
     table: String,
@@ -153,6 +159,9 @@ fn parse_args() -> Result<Args, String> {
         damage: None,
         hash_only: false,
         audio_tape: false,
+        replay: false,
+        replay_frames: None,
+        replay_level: None,
         only: Vec::new(),
         ignore: Vec::new(),
         table: "steps".into(),
@@ -206,6 +215,9 @@ fn parse_args() -> Result<Args, String> {
             }
             "--hash-only" => a.hash_only = true,
             "--audio-tape" => a.audio_tape = true,
+            "--replay" => a.replay = true,
+            "--replay-frames" => a.replay_frames = Some(value()?.parse().map_err(|_| "--replay-frames needs a number")?),
+            "--replay-level" => a.replay_level = Some(value()?.parse().map_err(|_| "--replay-level needs 0..4")?),
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
             "--ignore" => a.ignore = value()?.split(',').map(str::to_string).collect(),
             "--table" => a.table = value()?,
@@ -556,9 +568,20 @@ fn multi(args: &Args) -> Result<(), String> {
             tapes.push(file);
         }
     }
+    // Task 28c: the replays
+    let mut replay = None;
+    if args.replay {
+        let ini_text = format!("[QUALITY]\nLEVEL={}\n\n[REPLAY]\nMAX_SIZE_MB=26\n\n[AUTOSAVE]\nENABLED=1\nRACE=3\nQUALIFY=2\nOTHERS=1\nMIN_TIME_SECONDS=30\n", args.replay_level.unwrap_or(3));
+        let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("replay.ini"), &ini_text);
+        let cars: Vec<*mut u8> = (0..world.names.len()).map(|i| world.car_ptr(i)).collect();
+        replay = Some(unsafe { game::replay::ReplayProof::build(&acs, &cars, &world.names, world.game_track, world.port_track(), &world.physics_objects, Some(&ini), args.replay_frames, true) });
+    }
     let mut next_frame = 1usize;
     for i in 0..steps {
         world.step();
+        if let Some(replay) = &mut replay {
+            unsafe { replay.after_step(world.time_ms(), &|index| world.physics_state(index).0)? };
+        }
         if !tapes.is_empty() {
             use std::io::Write as _;
             for event in world.tape_events.drain(..) {
@@ -591,6 +614,9 @@ fn multi(args: &Args) -> Result<(), String> {
         println!("  {line}");
     }
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
+    if let Some(replay) = &mut replay {
+        replay_proof(replay, scenario.name, &out, &repo)?;
+    }
     let recording = world.recording.clone();
     // Task 28: the end of the program for the game's referee: its results, its race_out.json
     let mut game_file = None;
@@ -611,6 +637,78 @@ fn multi(args: &Args) -> Result<(), String> {
         game_file = Some(file);
     }
     multi_compare(args, &recording, &path, game_file.as_deref())
+}
+
+/// Task 28c: the end of a `multi --replay` run: what was recorded is compared, three files
+/// are saved by the game and by the port and compared, each is loaded by both and played
+/// through a script of the transport's functions.
+fn replay_proof(replay: &mut game::replay::ReplayProof, scenario: &str, out: &Path, repo: &Path) -> Result<(), String> {
+    use game::replay::Act;
+    let verdict = |differences: &[String]| if differences.is_empty() { "IDENTICAL".to_string() } else { format!("DIFFERENT ({})", differences.len()) };
+    let mut all_ok = true;
+    let (frames, differences) = unsafe { replay.compare_recording() };
+    println!("replay | {scenario} | recording | {} frames recorded, {} laps, {frames} ring slots of the cars compared | {}", replay.recorded, replay.laps, verdict(&differences));
+    for line in &differences {
+        println!("    {line}");
+    }
+    all_ok &= differences.is_empty();
+    let long: Vec<(Act, usize)> = vec![
+        (Act::Play, 90),
+        (Act::SlowMotion(4.0), 70),
+        (Act::SlowMotion(8.0), 20),
+        (Act::Play, 10),
+        (Act::FastForward(1, false), 40),
+        (Act::FastForward(1, false), 40),
+        (Act::Rewind(1, false), 60),
+        (Act::Rewind(1, false), 30),
+        (Act::Pause, 5),
+        (Act::NextFrame, 12),
+        (Act::NextFrame, 12),
+        (Act::Position(0.5), 3),
+        (Act::Play, 40),
+        (Act::NextLap, 20),
+        (Act::PreviousLap, 20),
+        (Act::Position(0.97), 2),
+        (Act::Play, 120),
+        (Act::Rewind(3, false), 80),
+        (Act::CutIn(0.3), 2),
+        (Act::CutOut(0.6), 2),
+        (Act::Play, 60),
+        (Act::FastForward(4, false), 200),
+        (Act::Rewind(4, false), 300),
+        (Act::Stop, 3),
+        (Act::Play, 30),
+        (Act::FastForward(1, true), 2),
+        (Act::Rewind(1, true), 2),
+    ];
+    let short: Vec<(Act, usize)> = vec![(Act::Play, 60), (Act::Rewind(2, false), 60), (Act::SlowMotion(2.0), 40), (Act::Position(0.9), 2), (Act::Play, 80)];
+    let cuts: [(&str, Option<(f32, f32)>, bool); 3] = [("as an autosave writes it (no cut set)", None, false), ("after the replay was entered (cut 0 to the last frame)", None, true), ("cut from 25% to 75%", Some((0.25, 0.75)), true)];
+    for (index, (label, cut, entered)) in cuts.iter().enumerate() {
+        unsafe { replay.set_cuts(*cut, *entered) };
+        let name = format!("{scenario}_{index}");
+        let (game_file, port_file) = unsafe { replay.save(&name, repo)? };
+        let differences = replay.compare_files(&game_file, &port_file);
+        println!("replay | {scenario} | file {index}: {label} | {} bytes of the game, {} of the port | {}", game_file.len(), port_file.len(), verdict(&differences));
+        for line in &differences {
+            println!("    {line}");
+        }
+        all_ok &= differences.is_empty();
+        let _ = std::fs::write(out.join(format!("{name}.game.acreplay")), &game_file);
+        let _ = std::fs::write(out.join(format!("{name}.port.acreplay")), &port_file);
+        let report = unsafe { replay.load_and_play(&name, &port_file, if index == 1 { &long } else { &short })? };
+        println!("replay | {scenario} | playback of file {index} | {} frames of {} recorded, the cursor ends at {}; {} car states and {} object matrices compared, {} and {} differ | {}", report.frames, report.recorded, report.last_frame, report.states, report.objects, report.bad_states, report.bad_objects, verdict(&report.differences));
+        for line in &report.differences {
+            println!("    {line}");
+        }
+        if index == 0 {
+            for line in &report.told {
+                println!("    load: {line}");
+            }
+        }
+        all_ok &= report.differences.is_empty() && report.bad_states == 0 && report.bad_objects == 0;
+    }
+    println!("replay | {scenario} | all | {}", if all_ok { "IDENTICAL" } else { "DIFFERENT" });
+    Ok(())
 }
 
 /// Task 25: `car_oracle net <tape> --scenario net_... --track <track> [--steps n]
