@@ -127,12 +127,13 @@ impl Gui {
         }
     }
 
-    /// The widget's event: remembered in [`Gui::widget_events`] and handed to its handlers.
+    /// The widget's event: handed to its handlers, then remembered in [`Gui::widget_events`]
+    /// (after what the handlers themselves set off, as a listener hung on last hears it).
     pub fn fire_widget(&mut self, handlers: Vec<WidgetHandler>, event: WidgetEvent) {
-        self.widget_events.push(event.clone());
         for handler in handlers {
             handler(self, &event);
         }
+        self.widget_events.push(event);
     }
 
     // ----- ProgressBar -----
