@@ -66,7 +66,7 @@ unsafe fn transponder(car: *const u8) -> GhostTransponder {
     GhostTransponder { t: rd(t, 0), last_lap: rd(t, 4), lap_count: rd(t, 0xc), finish_line_passed: rd::<u8>(t, 0x10) != 0, was_last_lap_valid: rd::<u8>(t, 0x11) != 0, cuts: rd(t, 0x84) }
 }
 
-unsafe fn read_wstring(string: *const u8) -> String {
+pub(super) unsafe fn read_wstring(string: *const u8) -> String {
     let len: usize = rd(string, 0x10);
     let cap: usize = rd(string, 0x18);
     let data: *const u16 = if cap > 7 { rd(string, 0) } else { string.cast() };
@@ -138,7 +138,7 @@ extern "C" fn on_step(_this: *mut u8, event: *const u8) {
 }
 
 /// One more handler at the end of an `Event<T>` (as `GameReferee::add_handler`).
-unsafe fn add_handler(acs: &Acs, event: *mut u8, handler: usize) {
+pub(super) unsafe fn add_handler(acs: &Acs, event: *mut u8, handler: usize) {
     let (begin, end): (*mut u8, *mut u8) = (rd(event, 0), rd(event, 8));
     let count = if begin.is_null() { 0 } else { end.offset_from(begin) as usize / 0x28 };
     let buffer = acs.alloc(0x28 * (count + 4));

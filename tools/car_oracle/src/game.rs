@@ -7,6 +7,7 @@
 //! (`re/types/*.txt`), ODE offsets from the disassembly of ODE's own accessors.
 
 pub mod ghost;
+pub mod telemetry;
 pub mod multi;
 pub mod net;
 pub mod pit;

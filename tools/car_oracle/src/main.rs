@@ -103,6 +103,8 @@ struct Args {
     replay: bool,
     /// Task 28c: `multi --ghost`: the game's GhostCarRecorder beside the port's on the first car
     ghost: bool,
+    /// Task 28c: `multi --telemetry`: the game's ComparativeTelemetryRecorder beside the port's
+    telemetry: bool,
     replay_frames: Option<i32>,
     replay_level: Option<i32>,
     only: Vec<String>,
@@ -163,6 +165,7 @@ fn parse_args() -> Result<Args, String> {
         audio_tape: false,
         replay: false,
         ghost: false,
+        telemetry: false,
         replay_frames: None,
         replay_level: None,
         only: Vec::new(),
@@ -220,6 +223,7 @@ fn parse_args() -> Result<Args, String> {
             "--audio-tape" => a.audio_tape = true,
             "--replay" => a.replay = true,
             "--ghost" => a.ghost = true,
+            "--telemetry" => a.telemetry = true,
             "--replay-frames" => a.replay_frames = Some(value()?.parse().map_err(|_| "--replay-frames needs a number")?),
             "--replay-level" => a.replay_level = Some(value()?.parse().map_err(|_| "--replay-level needs 0..4")?),
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
@@ -585,6 +589,10 @@ fn multi(args: &Args) -> Result<(), String> {
         let port_track = world.port_track();
         unsafe { game::ghost::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
     }
+    if args.telemetry {
+        let port_track = world.port_track();
+        unsafe { game::telemetry::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
+    }
     let mut next_frame = 1usize;
     for i in 0..steps {
         world.step();
@@ -625,6 +633,11 @@ fn multi(args: &Args) -> Result<(), String> {
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
     if args.ghost {
         for line in unsafe { game::ghost::finish(&repo, scenario.name)? } {
+            println!("{line}");
+        }
+    }
+    if args.telemetry {
+        for line in unsafe { game::telemetry::finish(&repo, scenario.name)? } {
             println!("{line}");
         }
     }

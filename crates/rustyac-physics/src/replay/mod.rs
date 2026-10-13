@@ -14,6 +14,7 @@ pub mod ghost;
 pub mod half;
 pub mod manager;
 pub mod recorder;
+pub mod telemetry;
 pub mod track_env;
 
 pub use manager::*;
