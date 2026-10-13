@@ -317,7 +317,13 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
         out.centre.push(message[1].clone());
     }
     out.centre.extend(hud::manager_lines(manager, &referee.views, &state, manager.results_displayed));
-    out.centre.extend(pit_lines(referee));
+    let mut pit = pit_lines(referee);
+    if let (Some(menu), true) = (&referee.menu, pit.len() > 1 && referee.menu.as_ref().is_some_and(|menu| menu.is_visible) && referee.pit.as_ref().is_some_and(|pit| pit.state != rustyac_physics::race::pitstop::STATE_OPERATING)) {
+        // (the estimate the game's mouse menu shows; the quick menu has none)
+        let at = pit.len() - 1;
+        pit.insert(at, format!("ESTIMATED TIME  {:.1} s", menu.estimate(player)));
+    }
+    out.centre.extend(pit);
     if manager.results_displayed {
         if let Some(event) = referee.last_results.as_ref().filter(|_| manager.finalized) {
             out.results = results_table(referee, event);

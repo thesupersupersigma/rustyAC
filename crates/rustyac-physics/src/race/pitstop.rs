@@ -848,12 +848,53 @@ impl PitStop {
     }
 }
 
+/// `PitStop::getEstimatedTime` @ 0x1400a9600: the seconds a stop would take, without the
+/// random part. It is the old mouse menu's (what its buttons ask for: the fuel as a share of
+/// the tank, a tyre change, the three repairs; "repair suspension" includes the body).
+pub fn get_estimated_time(chassis: &RollingChassis, max_fuel: f32, fuel_to_add_percentage: f32, tyres: bool, repair_body: bool, repair_engine: bool, repair_suspension: bool) -> f32 {
+    let fuel = max_fuel * fuel_to_add_percentage;
+    // CarAvatar::getPitstopTime @ 0x1400d3570
+    let fuel = if fuel > 0.0 { fuel } else { 0.0 };
+    chassis.get_pitstop_time(fuel, tyres, repair_body || repair_suspension, repair_engine, repair_suspension, false, &mut MsvcRand(0)).total
+}
+
+impl QuickMenu {
+    /// The seconds the stop the menu asks for now would take, without the random part: the
+    /// quick menu's choices through the same sum as `PitStop::update` makes when the car
+    /// stops (and [`get_estimated_time`] makes for the mouse menu).
+    pub fn estimate(&self, chassis: &RollingChassis) -> f32 {
+        let (mut fuel, mut tyres, mut body, mut suspension, mut engine, mut wings) = (0.0f32, false, false, false, false, 0.0f32);
+        for item in &self.items {
+            let value = self.get_value(item);
+            match item.kind {
+                ITEM_FUEL => {
+                    let room = self.get_max_fuel() - chassis.fuel as f32;
+                    fuel = if value <= room { value } else { room };
+                }
+                ITEM_WING if value as i32 != 0 => wings += item.pitstop_time,
+                ITEM_TYRE_COMPOUND => tyres = value as i32 != -1,
+                ITEM_REPAIR => match item.component_index {
+                    0 => body = value != 0.0,
+                    1 => suspension = value != 0.0,
+                    2 => engine = value != 0.0,
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        let fuel = if fuel > 0.0 { fuel } else { 0.0 };
+        chassis.get_pitstop_time(fuel, tyres, body || suspension, engine, suspension, false, &mut MsvcRand(0)).total + wings
+    }
+}
+
 /// Made-up states for the pit stop's state machine, for proofs: what `PitStop::update` reads
 /// of the player's car and of the menu, drawn frame by frame from a seed. `tools/car_oracle`
 /// feeds the game's own `PitStop` from the same stream (the `pit_feed` scenarios).
 #[derive(Clone, Debug)]
 pub struct PitFeed {
     rand: MsvcRand,
+    /// a second stream, for what `getEstimatedTime` is asked
+    rand_estimate: MsvcRand,
     /// frames left of the current spell, and what it is: 0 in the box, 1 away, 2 anything
     left: u32,
     spell: u32,
@@ -870,11 +911,14 @@ pub struct Fed {
     pub menu: Option<(i32, Vec<f32>)>,
     /// new damage: the five zone levels and the engine's life left
     pub damage: Option<([f32; 5], f64)>,
+    /// what the mouse menu's buttons say, for `getEstimatedTime`: the fuel to add as a share
+    /// of the tank, a tyre change, repair body, repair engine, repair suspension
+    pub estimate: (f32, bool, bool, bool, bool),
 }
 
 impl PitFeed {
     pub fn new(seed: u32) -> PitFeed {
-        PitFeed { rand: MsvcRand(seed), left: 0, spell: 0, dt: 0.009, black: false }
+        PitFeed { rand: MsvcRand(seed), rand_estimate: MsvcRand(seed ^ 0x2b28), left: 0, spell: 0, dt: 0.009, black: false }
     }
 
     fn unit(&mut self) -> f32 {
@@ -936,7 +980,11 @@ impl PitFeed {
         let fuel = [0.0, 1.0, 0.5 * max_fuel, max_fuel, max_fuel + 3.0][self.pick(5) as usize] + self.unit();
         let is_in_pitlane = self.pick(if self.spell == 1 { 3 } else { 60 }) != 0;
         let dt = if self.pick(25) == 0 { self.unit() * 0.1 } else { self.dt };
-        Fed { car: PitCarView { is_black_flagged: self.black && self.pick(3) == 0, is_in_pitlane, position, speed, fuel }, dt, menu: fed_menu, damage }
+        let car = PitCarView { is_black_flagged: self.black && self.pick(3) == 0, is_in_pitlane, position, speed, fuel };
+        let e = &mut self.rand_estimate;
+        let share = [0.0, 0.0, 1.0, -0.2][e.next() as usize % 4] + e.next() as f32 / 32767.0 * 1.1;
+        let estimate = (share, e.next() % 2 == 0, e.next() % 3 == 0, e.next() % 3 == 0, e.next() % 3 == 0);
+        Fed { car, dt, menu: fed_menu, damage, estimate }
     }
 }
 

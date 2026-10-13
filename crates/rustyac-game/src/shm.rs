@@ -360,6 +360,11 @@ impl ShmSink {
         page.set_w("smVersion", "1.7");
         page.set_w("acVersion", "rustyAC 0.1");
         page.set_i("numberOfSessions", 1);
+        // SharedMemoryWriter::writeStatic 0x1401877c0: RaceManager::getPitWindowStart / End
+        // (the server's two numbers in the game; here also a window of race.ini's)
+        let (open, close) = sim.pit_window();
+        page.set_i("PitWindowStart", open as i32);
+        page.set_i("PitWindowEnd", close as i32);
         page.set_i("numCars", 1);
         // the car's folder name, however `--car` named it
         let model = crate::sim::car_name(&sim.data_path);
@@ -473,6 +478,8 @@ impl ShmSink {
             // SharedMemoryWriter::update 0x140186230: DrivingAssistManager::idealLine
             g.set_i("idealLineOn", IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed) as i32);
             g.set_i("isInPit", car.is_in_pits() as i32);
+            // CarAvatar::mandatoryPitstopDone
+            g.set_i("mandatoryPitDone", sim.mandatory_pit_done() as i32);
         } else {
             g.set_i("session", 0);
             let ms = ((sim.steps - self.drive_start_steps) as f64 * 3.0) as i32;

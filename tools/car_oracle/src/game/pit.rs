@@ -31,6 +31,7 @@ const VA_PITSTOP_UPDATE: usize = 0x1_400a_b190; // void PitStop::update(float)
 const VA_PITSTOP_NEW_SESSION: usize = 0x1_400a_7ce0; // the handler of Sim::evOnNewSession
 const VA_UPDATE_IN_PITLANE_STATE: usize = 0x1_400d_d6d0; // void CarAvatar::updateInPitlaneState(float)
 const VA_SET_BLACK_FLAG: usize = 0x1_400d_9e70; // void CarAvatar::setBlackFlag(PenaltyDescription)
+const VA_GET_ESTIMATED_TIME: usize = 0x1_400a_9600; // float PitStop::getEstimatedTime()
 
 const SIM_GAME_OBJECTS: usize = 0x40;
 const SIM_GAME_SCREEN: usize = 0x108;
@@ -137,6 +138,11 @@ pub struct GamePit<'a> {
     pub feed: Option<std::cell::RefCell<rustyac_physics::race::pitstop::PitFeed>>,
     port_menu: QuickMenu,
     pit_position: [f32; 3],
+    /// the mouse menu's controls `getEstimatedTime` reads: the fuel gauge and the three
+    /// repair buttons (suspension, body, engine); what it last said
+    fuel_control: *mut u8,
+    buttons: [*mut u8; 3],
+    estimate: std::cell::Cell<f32>,
 }
 
 impl<'a> GamePit<'a> {
@@ -214,11 +220,31 @@ impl<'a> GamePit<'a> {
         // (the first session has begun: the handler of its event and the player's teleport)
         wr(pit, 0x120, 5i32);
 
+        // the mouse menu's controls, as far as PitStop::getEstimatedTime reads them: the
+        // fuel gauge, the repair buttons (`selected` at +0x1e8), and a setup screen whose
+        // fuel spinner is not read-only (SetupScreen::isFixedFuel: no fixed setup)
+        let fuel_control = zeroed(0x180);
+        wr(pit, 0x150, fuel_control);
+        let buttons = [zeroed(0x200), zeroed(0x200), zeroed(0x200)];
+        wr(pit, 0x170, buttons[0]);
+        wr(pit, 0x178, buttons[1]);
+        wr(pit, 0x180, buttons[2]);
+        let spinner = zeroed(0x1000);
+        let fuel_manager = zeroed(0x400);
+        for slot in 0..0x80 {
+            wr(fuel_manager, slot * 8, spinner);
+        }
+        let setup_screen = zeroed(0x400);
+        wr(setup_screen, 0x1e0, fuel_manager);
+        wr(rd::<*mut u8>(sim, SIM_ESC_MENU), 0x1a8, setup_screen);
+        // CarAvatar::physicsInfo.maxFuel
+        wr(avatar, 0xe40 + 0x88, rd::<f64>(car, CAR_MAX_FUEL));
+
         // a server's session, for RaceManager::checkMandatoryPit only (see `before_manager`)
         let client = zeroed(0x10818);
         write_wstring(client.add(CLIENT_CURRENT_SESSION), "");
         PIT.with(|p| p.set((pit as usize, acs.va(VA_PITSTOP_NEW_SESSION))));
-        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window, feed: None, port_menu: port.clone(), pit_position }
+        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window, feed: None, port_menu: port.clone(), pit_position, fuel_control, buttons, estimate: std::cell::Cell::new(0.0) }
     }
 
     /// The handler `PitStop::PitStop` adds to `Sim::evOnNewSession`.
@@ -288,6 +314,15 @@ impl<'a> GamePit<'a> {
             wr(self.car, 0x3de0, zones);
             wr(self.car, 0x710, life);
         }
+        // PitStop::getEstimatedTime, of what the mouse menu's controls say
+        let (share, tyres, body, engine, suspension) = fed.estimate;
+        wr(self.fuel_control, 0x17c, share);
+        write_wstring(self.pit.add(0xf0), if tyres { "x" } else { "" });
+        wr(self.buttons[0], 0x1e8, suspension as u8);
+        wr(self.buttons[1], 0x1e8, body as u8);
+        wr(self.buttons[2], 0x1e8, engine as u8);
+        let estimated: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(self.acs.va(VA_GET_ESTIMATED_TIME));
+        self.estimate.set(estimated(self.pit));
         let kept: (f32, f32, u8, u8) = (rd(self.avatar, 0x4d8), rd(self.avatar, 0x9fc), rd(self.avatar, CA_IN_PITLANE), rd(self.avatar, 0x1000));
         wr(self.avatar, CA_BODY_MATRIX + 0x30, fed.car.position);
         wr(self.avatar, 0x4d8, fed.car.speed);
@@ -341,6 +376,10 @@ impl<'a> GamePit<'a> {
         let menu = format!("{};{}", rd::<i32>(self.menu, 0xf0), presets.join("/"));
         let a = self.avatar;
         let avatar = format!("done {} last {:08x} in {}{} entry {:08x} exit {:08x}", rd::<u8>(a, CA_MANDATORY_DONE), rd::<u32>(a, CA_LAST_PITSTOP_TIME), rd::<u8>(a, CA_IN_PITLANE), rd::<u8>(a, 0x129d), rd::<u32>(a, 0x12a0), rd::<u32>(a, 0x12a4));
-        vec![("pit".to_string(), text), ("pitMenu".to_string(), menu), ("pitAvatar".to_string(), avatar)]
+        let mut out = vec![("pit".to_string(), text), ("pitMenu".to_string(), menu), ("pitAvatar".to_string(), avatar)];
+        if self.feed.is_some() {
+            out.push(("pitEstimate".to_string(), format!("{:08x}", self.estimate.get().to_bits())));
+        }
+        out
     }
 }

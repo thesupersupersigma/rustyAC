@@ -124,6 +124,8 @@ pub struct Referee {
     pub mandatory_pit_now: bool,
     /// proofs only: the stop is fed made-up states instead of the car's
     pub pit_feed: Option<pitstop::PitFeed>,
+    /// proofs only: what `PitStop::getEstimatedTime` said of the last fed frame
+    pub pit_estimate: f32,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -201,6 +203,7 @@ impl Referee {
             pit_over: false,
             mandatory_pit_now: false,
             pit_feed: None,
+            pit_estimate: 0.0,
             manager,
         };
         let mut actions = Vec::new();
@@ -514,6 +517,9 @@ impl Referee {
                     drivetrain.engine_mut().base_mut().life_left = life;
                 }
             }
+            let (share, tyres, body, engine, suspension) = fed.estimate;
+            let chassis = world.car(0);
+            self.pit_estimate = pitstop::get_estimated_time(chassis, chassis.max_fuel as f32, share, tyres, body, engine, suspension);
         }
         let mut out = Vec::new();
         let mut rand = self.rand;
@@ -741,6 +747,9 @@ impl Referee {
             out.push(("pit".to_string(), pit.text()));
             out.push(("pitMenu".to_string(), menu.values_text()));
             out.push(("pitAvatar".to_string(), self.pit_avatar.text()));
+            if self.pit_feed.is_some() {
+                out.push(("pitEstimate".to_string(), format!("{:08x}", self.pit_estimate.to_bits())));
+            }
         }
         out
     }

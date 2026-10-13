@@ -1043,15 +1043,18 @@ impl<'a> WholeReferee<'a> {
                 wr(*avatar, CA_IS_BLACK_FLAGGED, rd::<u8>(car, 0x3d20));
             }
         }
-        if let Some(pit) = &self.pit {
-            // (CarAvatar::getCurrentCompoundShortName, after a stop's new tyres)
-            if let Some(name) = super::pit::current_compound(self.game.cars[0]) {
+        // CarAvatar::getCurrentCompoundShortName of every car: the compound it has on now (a
+        // pit stop's new tyres, an AI driver's choice in its box)
+        for (index, car) in self.game.cars.iter().enumerate() {
+            if let Some(name) = super::pit::current_compound(*car) {
                 TOLD.with(|t| {
-                    if let Some(slot) = t.borrow_mut().compounds.get_mut(0) {
+                    if let Some(slot) = t.borrow_mut().compounds.get_mut(index) {
                         *slot = name;
                     }
                 });
             }
+        }
+        if let Some(pit) = &self.pit {
             pit.before_manager(DT);
         }
         let (laps, splits) = TOLD.with(|t| {
@@ -1099,6 +1102,14 @@ impl<'a> WholeReferee<'a> {
         wr(self.engine, PE_PENALTY_MODE, rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE));
         self.state = self.dump();
         self.state_hash = rustyac_physics::race::referee::dump_hash(&self.state);
+        // (for a look at a difference: REFEREE_DUMP_FRAME=<frame> writes the game's state
+        // after that frame to REFEREE_DUMP_FILE)
+        if std::env::var("REFEREE_DUMP_FRAME").ok().and_then(|frame| frame.parse::<u64>().ok()) == Some(self.frames) {
+            if let Ok(file) = std::env::var("REFEREE_DUMP_FILE") {
+                let _ = std::fs::write(file, self.state.iter().map(|(key, value)| format!("{key}: {value}
+")).collect::<String>());
+            }
+        }
     }
 
     /// The state as the port's `Referee::dump` words it: the manager, then every car.

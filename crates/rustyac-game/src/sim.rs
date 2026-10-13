@@ -1507,6 +1507,23 @@ impl GameSim {
         pit.map(|pit| (pit.state, pit.indicator_visible))
     }
 
+    /// Task 28b: the mandatory pit window (0, 0: none) and whether the player's stop was counted.
+    pub fn pit_window(&self) -> (u16, u16) {
+        match (&self.referee, &self.online) {
+            (Some(referee), _) => referee.pit_window,
+            (None, Some(session)) => (session.net.client.accepted.pit_window_start, session.net.client.accepted.pit_window_end),
+            (None, None) => (0, 0),
+        }
+    }
+
+    pub fn mandatory_pit_done(&self) -> bool {
+        match (&self.referee, &self.online) {
+            (Some(referee), _) => referee.pit_avatar.mandatory_pitstop_done,
+            (None, Some(session)) => session.pit.as_ref().is_some_and(|pit| pit.avatar.mandatory_pitstop_done),
+            (None, None) => false,
+        }
+    }
+
     /// Task 28: what the referee says, for the display.
     pub fn referee_hud(&self) -> Option<crate::referee::RefereeHud> {
         self.referee.as_ref().map(|referee| crate::referee::hud_of(referee, &self.car.car))
