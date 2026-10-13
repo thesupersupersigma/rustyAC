@@ -95,6 +95,12 @@ pub const VA_CAR_NODE_SORTER_CTOR: usize = 0x1_4006_bb60; // CarNodeSorter::CarN
 const VA_CAR_NODE_SORTER_ADD_CAR: usize = 0x1_4006_bdf0; // CarNodeSorter::addCar(Node*, CarAvatar*)
 const VA_CAR_NODE_SORTER_SORT: usize = 0x1_4006_be30; // CarNodeSorter::sort()
 const VA_SIM_UNLOAD_MESH_RESOURCES: usize = 0x1_4019_edd0; // Sim::unloadMeshResources(Node*)
+const VA_PIT_CREW_CTOR: usize = 0x1_400a_0b80; // PitCrew::PitCrew(CarAvatar*, std::wstring)
+const VA_PIT_CREW_UPDATE: usize = 0x1_400a_3f20; // PitCrew::pitCrewUpdate(float)
+const VA_PIT_CREW_BEGIN: usize = 0x1_400a_33e0; // PitCrew::onPitStopBegin(const PitStopStart&)
+const VA_AUDIO_EVENT_CTOR: usize = 0x1_401f_7630; // AudioEvent::AudioEvent(AudioEngine*, const std::wstring&, ReverbResponse)
+const VA_AUDIO_EVENT_IS_PLAYING: usize = 0x1_401f_a170; // AudioEvent::isPlaying()
+const VA_AUDIO_EVENT_STOP: usize = 0x1_401f_c040; // AudioEvent::stop()
 const VA_CAMERA_MANAGER_FADE_HANDLER: usize = 0x1_4003_2770; // ACCameraManager's handler of Game::evOnPostGui (a lambda [this])
 const VA_CAR_AVATAR_SET_NEW_PHYSICS_STATE: usize = 0x1_400d_a420; // CarAvatar::setNewPhysicsState(CarPhysicsState&, float)
 pub const VA_CARS_TO_BE_LOADED: usize = 0x1_4155_9b00; // static int RaceManager::carsToBeLoaded
@@ -1095,6 +1101,51 @@ impl Game {
         // (the frame's time by value, in xmm1)
         let handler: extern "C" fn(*mut *mut u8, f32) = std::mem::transmute(self.acs.va(VA_CAMERA_MANAGER_FADE_HANDLER));
         handler(&mut closure, dt);
+    }
+
+    /// `PitStop::PitStop` 0x1400a55d0, the tyre changers' part: the game's own
+    /// `PitCrew::PitCrew` on the stand-in car, `PIT_CREWS` under the blurred node. The picture
+    /// has no sound: `AudioEvent`'s constructor makes nothing, every event "plays" (so none
+    /// is started) and `stop` does nothing. `tyre_change_time_sec`: the car's `pitTimings`.
+    pub unsafe fn make_pit_crew(&self, c: &Car, folder: &str, pit_stop: *mut u8, blurred: *mut u8, tyre_change_time_sec: f32) -> *mut u8 {
+        let acs = &self.acs;
+        acs.patch(acs.va(VA_AUDIO_EVENT_CTOR), &[0x48, 0x89, 0xc8, 0xc3]); // mov rax, rcx; ret
+        acs.patch(acs.va(VA_AUDIO_EVENT_IS_PLAYING), &[0xb0, 0x01, 0xc3]); // mov al, 1; ret
+        acs.patch(acs.va(VA_AUDIO_EVENT_STOP), &[0xc3]); // ret
+        // the start-up initialiser of PitCrew.obj's table of wheel names
+        let wheels: extern "C" fn() = std::mem::transmute(acs.va(0x1_4000_4590));
+        wheels();
+        let physics: *mut u8 = rd(c.car, 0x1168);
+        wr(physics, 0x3e6c, tyre_change_time_sec);
+        let crew = acs.alloc(0xa8);
+        // (the folder by value: the constructor frees its text)
+        let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PIT_CREW_CTOR));
+        ctor(crew, c.car, wstring(acs, folder));
+        // GameObject::addGameObject is left out (nothing walks the pit stop's children here);
+        // sim->blurredNode->addChild(pitCrew->pitcrews)
+        let pitcrews: *mut u8 = rd(crew, 0x58);
+        let vtable = rd::<*const usize>(blurred, 0);
+        let add_child: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*vtable.add(1));
+        add_child(blurred, pitcrews);
+        // PitCrew::pitStop, which the first update would look up among the Sim's objects (and
+        // would hang its two handlers on: they are called by hand here)
+        wr(crew, 0x80, pit_stop);
+        crew
+    }
+
+    /// `PitCrew::onPitStopBegin` 0x1400a33e0 (what the commit's camera fade ends in).
+    pub unsafe fn pit_crew_begin(&self, crew: *mut u8, tyre_change_time: f32, total_time: f32) {
+        let mut start = [0u8; 12];
+        start[0..4].copy_from_slice(&tyre_change_time.to_le_bytes());
+        start[4..8].copy_from_slice(&total_time.to_le_bytes());
+        let begin: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(self.acs.va(VA_PIT_CREW_BEGIN));
+        begin(crew, start.as_ptr());
+    }
+
+    /// `PitCrew::pitCrewUpdate` 0x1400a3f20, the pit stop's handler of `Game::evOnPostUpdate`.
+    pub unsafe fn pit_crew_update(&self, crew: *mut u8, dt: f32) {
+        let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_PIT_CREW_UPDATE));
+        update(crew, dt);
     }
 
     /// The handlers of `Game::evOnPostUpdate` of one car, in the order they were registered

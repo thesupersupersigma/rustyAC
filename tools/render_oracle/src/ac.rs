@@ -972,6 +972,15 @@ impl Game {
                 pit_marker = Some((marker, rules_scene, rules));
             }
         }
+        // PitStop::PitStop: the tyre changers of the player's car, the game's own
+        let mut tyre_crew = std::ptr::null_mut::<u8>();
+        let mut crew_began = false;
+        if let (true, Some(spec), Some(car)) = (frame.tyre_crew, &frame.car, &car) {
+            for file in ["pitcrewtyre.kn5", "pitcrewtyre.ksanim", "pitcrewtyre.ini"] {
+                copy_into_root(&self.game_folder, &format!("content/objects3D/{file}"))?;
+            }
+            tyre_crew = self.make_pit_crew(car, &format!("content/cars/{}/skins/{}", spec.name, spec.skin), pit_stop, blurred, crate::frames::tyre_change_time_sec(spec));
+        }
 
         let cube_log;
         // Sim::initStaticCubemap 0x14019a2a0, from Sim::onPostLoad: the small model and the sky
@@ -1106,6 +1115,19 @@ impl Game {
                 for other in &others {
                     self.post_update_car(other, crate::frames::DT);
                 }
+            }
+            // the pit stop's handler of evOnPostUpdate: PitCrew::pitCrewUpdate; a stop that was
+            // committed begins here (the camera fade that leads to it is not part of the frame)
+            if let (Some(car), false) = (&car, tyre_crew.is_null()) {
+                wr(pit_stop, 0xa4, step.extra.crew);
+                wr(pit_stop, 0xac, step.extra.crew);
+                wr(pit_stop, 0xbc, step.extra.crew);
+                if step.extra.crew != 0.0 && !crew_began {
+                    crew_began = true;
+                    self.pit_crew_begin(tyre_crew, step.extra.crew, step.extra.crew);
+                }
+                let _ = car;
+                self.pit_crew_update(tyre_crew, crate::frames::DT);
             }
             // PitStop::update (after the cars): the marker's rules; the number Car::getPitstopTime
             // draws comes from the game's own rand()

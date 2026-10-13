@@ -381,6 +381,71 @@ impl Scene {
         None
     }
 
+    /// `SceneGraphCloner::getClonedNode` 0x140217b30: a copy of one node by its class's copy
+    /// constructor (`Node::Node(Node*)` 0x14020d9c0, `Mesh::Mesh(Mesh*)` 0x140225ab0,
+    /// `SkinnedMesh::SkinnedMesh(SkinnedMesh*)` 0x14022bc50): the name, the matrices and the
+    /// flags, the vertices and indices, the same material; no parent, no children, nothing on
+    /// the graphics card yet (`compile` makes that). Any other class is copied as a plain node.
+    fn get_cloned_node(&mut self, node: NodeId) -> NodeId {
+        let n = &self.nodes[node];
+        let (kind, renderable, needs_matrix_ws) = match &n.kind {
+            NodeKind::Mesh(mesh) => (
+                NodeKind::Mesh(Box::new(MeshData { vertices: mesh.vertices.clone(), indices: mesh.indices.clone(), material: mesh.material, is_renderable: mesh.is_renderable, vb: None, ib: None, compiled_indices_count: 0, compiled_vertices_count: 0 })),
+                n.renderable.clone(),
+                false,
+            ),
+            NodeKind::SkinnedMesh(mesh) => (
+                NodeKind::SkinnedMesh(Box::new(SkinnedMeshData {
+                    vertices: mesh.vertices.clone(),
+                    indices: mesh.indices.clone(),
+                    material: mesh.material,
+                    bones: mesh.bones.iter().map(|b| SkinnedBone { bone: b.bone, offset_matrix: b.offset_matrix }).collect(),
+                    vb: None,
+                    ib: None,
+                    bones_buffer: None,
+                    bones_staging_buffer: Vec::new(),
+                    compiled_indices_count: 0,
+                    compiled_vertices_count: 0,
+                })),
+                n.renderable.clone(),
+                false,
+            ),
+            _ => (NodeKind::Node, None, n.needs_matrix_ws),
+        };
+        let copy = Node { name: n.name.clone(), matrix: n.matrix, matrix_ws: n.matrix_ws, children: Vec::new(), parent: None, needs_matrix_ws, is_active: n.is_active, renderable, kind };
+        self.nodes.push(copy);
+        self.nodes.len() - 1
+    }
+
+    /// `SceneGraphCloner::cloneNode` 0x140217a80.
+    fn clone_node(&mut self, from: NodeId, to: NodeId) {
+        let children = self.nodes[from].children.clone();
+        for child in children {
+            let copy = self.get_cloned_node(child);
+            self.add_child(to, copy);
+            self.clone_node(child, copy);
+        }
+    }
+
+    /// `SceneGraphCloner::cloneGraph` 0x140217a40: a deep copy of a node and all below it.
+    pub fn clone_graph(&mut self, node: NodeId) -> NodeId {
+        let copy = self.get_cloned_node(node);
+        self.clone_node(node, copy);
+        copy
+    }
+
+    /// `Node::visit` 0x14020e610: `pre` on the node; when it says so, the children first to
+    /// last the same way, then `post` on the node.
+    pub fn visit(&mut self, node: NodeId, pre: &mut dyn FnMut(&mut Scene, NodeId) -> bool, post: &mut dyn FnMut(&mut Scene, NodeId)) {
+        if pre(self, node) {
+            let children = self.nodes[node].children.clone();
+            for child in children {
+                self.visit(child, pre, post);
+            }
+            post(self, node);
+        }
+    }
+
     /// `Node::getWorldMatrix` 0x14020e190: from the local matrices up the tree, as they are
     /// now (not the world matrices of the last traversal).
     pub fn get_world_matrix(&self, node: NodeId) -> Mat44f {

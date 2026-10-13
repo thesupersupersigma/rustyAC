@@ -66,6 +66,12 @@ pub struct CarSpec {
     pub max_gear: i32,
 }
 
+/// `car.ini [PIT_STOP] TYRE_CHANGE_TIME_SEC` (10 s when the car does not say).
+pub fn tyre_change_time_sec(spec: &CarSpec) -> f32 {
+    let file = std::path::Path::new(&spec.folder).join("data/car.ini");
+    rustyac_physics::data::ini::IniReader::load(&file).ok().and_then(|ini| ini.get_float("PIT_STOP", "TYRE_CHANGE_TIME_SEC").ok()).unwrap_or(10.0)
+}
+
 #[derive(Clone, Copy)]
 pub struct CameraSpec {
     /// `Camera::matrix`: rows right, up, back, position
@@ -154,6 +160,9 @@ pub struct Extra {
     /// `--set alllights=1`: every car's headlights are on (`Sim::applyCustomWeather` with a
     /// weather that forces them)
     pub all_lights: bool,
+    /// `--set crew=<seconds>`: from the first frame this is not 0 the tyre changers work: a
+    /// pit stop was committed with this tyre change time (`PitCrew::onPitStopBegin`)
+    pub crew: f32,
 }
 
 impl Extra {
@@ -170,7 +179,7 @@ impl Extra {
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false, crew: 0.0 }
     }
 }
 
@@ -202,6 +211,8 @@ pub struct Frame {
     pub start_lights: bool,
     /// `--set pitstate=…`: the lollipop men, the static crews and the pit box marker are built
     pub pit_crew: bool,
+    /// `--set crew=…`: the four tyre changers (`PitCrew`) are built
+    pub tyre_crew: bool,
     /// `--set gate=…`: the time-attack gates are built
     pub time_attack: bool,
 }
@@ -544,7 +555,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
     let cars_to_be_loaded = if args.loaded > 0 { args.loaded } else { others.len() as i32 + 1 };
-    Ok(Frame { name, track, car, others, cars_to_be_loaded, fade_at: args.fade_at, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
+    Ok(Frame { name, track, car, others, cars_to_be_loaded, fade_at: args.fade_at, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), tyre_crew: args.set.iter().any(|(name, _, _)| name == "crew"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
 }
 
 /// `<prefix>.car<n>.audiotape`.
@@ -661,6 +672,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         "tts" => x.tts = number(value)?,
         "newsession" => x.new_session = number(value)? as i32,
         "pitstate" => x.pit_state = number(value)? as i32,
+        "crew" => x.crew = number(value)?,
         "kmpl" => x.kmpl = number(value)?,
         "cars" => x.cars = number(value)? as i32,
         "maxfuel" => x.max_fuel = number(value)? as f64,
@@ -708,7 +720,7 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
                 *slot = number(part)?;
             }
         }
-        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate kmpl cars maxfuel torque ratio sessionlaps gate turbolevel fuellaps accg wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage focus alllights")),
+        other => return Err(format!("--set {other}: not one of lights flash brake gas gear rpm limiter kmh fuel turbo water kers p2p p2pn session pos tc abs air replay rscale rstatus pause ideal tts newsession pitstate crew kmpl cars maxfuel torque ratio sessionlaps gate turbolevel fuellaps accg wing kersmax ersmax kerskj kerscharge perf laps pit dirt damage focus alllights")),
     }
     Ok(())
 }

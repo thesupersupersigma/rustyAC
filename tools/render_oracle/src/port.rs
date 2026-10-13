@@ -259,6 +259,13 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
         car.init_common_post_physics(&mut graphics, &mut scene, &sim, frame.car.as_ref().map(|c| c.tyre_width).unwrap_or([0.0; 4]))?;
     }
+    // PitStop::PitStop: the tyre changers of the player's car
+    let mut tyre_crew = None;
+    let mut crew_began = false;
+    if let (true, Some(spec), Some(car)) = (frame.tyre_crew, &frame.car, &car) {
+        let crew_car = rustyac_render::pit_crew::CrewCar { folder_text: spec.folder.clone(), folder: std::path::PathBuf::from(&spec.folder), skin: spec.skin.clone(), guid: 0 };
+        tyre_crew = Some(rustyac_render::tyre_crew::PitCrew::new(&mut graphics, &mut scene, blurred, &crew_car, car.car_node, crate::frames::tyre_change_time_sec(spec))?);
+    }
     // Sim::addCar for the cars after the first: guid 1, 2, …
     let mut others: Vec<rustyac_render::car::CarAvatar> = Vec::new();
     for (i, spec) in frame.others.iter().enumerate() {
@@ -381,6 +388,9 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             if step.extra.replay_status != last_status {
                 last_status = step.extra.replay_status;
                 car.on_replay_status_changed(&mut scene, last_status, step.extra.replay_scale, 2.0);
+                if let Some(crew) = &mut tyre_crew {
+                    crew.on_replay_status_changed(&mut scene, last_status);
+                }
                 for other in &mut others {
                     other.on_replay_status_changed(&mut scene, last_status, step.extra.replay_scale, 2.0);
                 }
@@ -398,6 +408,25 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             for (other, state) in others.iter_mut().zip(&other_states) {
                 other.post_update(&mut scene, state, crate::frames::DT, &mat(&step.camera.matrix), step.camera.fov, false);
             }
+        }
+        // the pit stop's handler of evOnPostUpdate: PitCrew::pitCrewUpdate
+        if let Some(crew) = &mut tyre_crew {
+            let t = step.extra.crew;
+            let inputs = rustyac_render::tyre_crew::CrewInputs {
+                replay: false,
+                pause_menu: step.extra.pause,
+                session_type: step.extra.session_type,
+                pit: rustyac_render::tyre_crew::CrewPitStop { state: step.extra.pit_state, pit_timer: t, max_pit_timer: t, tyre_time: t },
+                tyre_matrix: step.state.tyre_matrix,
+                tyre_contact_point: step.state.tyre_contact_point,
+                focused: true,
+            };
+            let rand = &mut graphics.crt_rand;
+            if t != 0.0 && !crew_began {
+                crew_began = true;
+                crew.on_pit_stop_begin(&mut scene, &mut QuietCrewHost, &mut || rand.next(), &inputs, &rustyac_render::tyre_crew::CrewStart { tyre_change_time: t, total_time: t, force_change_camera: false });
+            }
+            crew.pit_crew_update(&mut scene, &mut QuietCrewHost, crate::frames::DT, &inputs);
         }
         // PitStop::update (after the cars): the marker
         if let (Some(marker), Some(car)) = (&mut pit_marker, &car) {
@@ -482,4 +511,23 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         graphics.end_scene();
     }
     Ok((init.text, rendered))
+}
+
+/// The camera and the sound of the tyre changers in a picture's proof: the camera stays, every
+/// wheel gun "plays" already (the game's side has `AudioEvent` patched the same way).
+struct QuietCrewHost;
+
+impl rustyac_render::tyre_crew::CrewHost for QuietCrewHost {
+    fn camera_mode(&mut self) -> i32 {
+        0
+    }
+    fn set_camera_mode(&mut self, _mode: i32, _a: bool, _b: bool) {}
+    fn force_theta_phi(&mut self, _theta: f32, _phi: f32, _radius: f32) {}
+    fn lock_camera(&mut self, _locked: bool) {}
+    fn fade_in(&mut self, _fade_total_time: f32) {}
+    fn event_is_playing(&mut self, _wheel: usize, _screw: bool) -> bool {
+        true
+    }
+    fn event_start(&mut self, _wheel: usize, _screw: bool, _matrix: &rustyac_physics::vecmath::Mat44f) {}
+    fn event_stop(&mut self, _wheel: usize, _screw: bool) {}
 }

@@ -54,7 +54,7 @@ pub struct LollipopCrew {
 
 /// `LollipopCrew::loadCrewSkin` 0x1401136d0: the folders of a part's colour and of its normal
 /// maps, where they exist.
-fn load_crew_skin(io: &mut Kn5Io, game: &str, ini: &IniReader, key: &str) {
+pub(crate) fn load_crew_skin(io: &mut Kn5Io, game: &str, ini: &IniReader, key: &str) {
     if !ini.has_key("CREW", key) {
         return;
     }
