@@ -259,6 +259,12 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         let sim = rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished };
         car.init_common_post_physics(&mut graphics, &mut scene, &sim, frame.car.as_ref().map(|c| c.tyre_width).unwrap_or([0.0; 4]))?;
     }
+    // RaceManager::initGhostcar: the ghost car of the player's car
+    let mut ghost = None;
+    let mut ghost_recorder = frame.ghost.clone();
+    if let (Some(_), Some(spec)) = (&ghost_recorder, &frame.car) {
+        ghost = Some(rustyac_render::ghost_car::GhostCar::new(&mut graphics, &mut scene, before_cars, &spec.folder, std::path::Path::new(&spec.folder))?);
+    }
     // PitStop::PitStop: the tyre changers of the player's car
     let mut tyre_crew = None;
     let mut crew_began = false;
@@ -398,6 +404,15 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
             // the cars' updates in the order they were made, then every handler of evOnPostUpdate
             feed(car, spec, step, index, count);
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
+            // (the car's children after it: GhostCar::update)
+            if let (Some(ghost), Some(recorder)) = (&mut ghost, &mut ghost_recorder) {
+                let b = scene.nodes[car.body_transform].matrix.m[3];
+                ghost.update(&mut scene, recorder, step.state.lap_time, &|m| car.make_body_matrix(m), &[b[0], b[1], b[2]], false);
+                if std::env::var_os("RENDER_ORACLE_GHOST").is_some() {
+                    let g = scene.nodes[ghost.body_transform].matrix.m[3];
+                    println!("ghost: frame {} of {} shows {} at {:?}, the car at {:?}", recorder.current_frame, recorder.playing_buffer.len(), scene.nodes[ghost.car_node].is_active, &g[..3], &b[..3]);
+                }
+            }
             // (PhysicsAvatar::update: CarAvatar::setNewPhysicsState of every car, before the cars update)
             let other_states: Vec<rustyac_render::car::CarPhysicsState> = others.iter_mut().zip(&step.others).map(|(other, state)| if fault == "nosmooth" { *state } else { other.set_new_physics_state(state, crate::frames::DT) }).collect();
             for ((other, spec), state) in others.iter_mut().zip(&frame.others).zip(&other_states) {

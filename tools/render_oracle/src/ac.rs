@@ -972,6 +972,12 @@ impl Game {
                 pit_marker = Some((marker, rules_scene, rules));
             }
         }
+        // RaceManager::initGhostcar: the ghost car of the player's car, the game's own
+        let mut ghost = std::ptr::null_mut::<u8>();
+        if let (Some(recorder), Some(car)) = (&frame.ghost, &car) {
+            copy_into_root(&self.game_folder, "system/cfg/ghost_car.ini")?;
+            ghost = self.make_ghost(car, recorder);
+        }
         // PitStop::PitStop: the tyre changers of the player's car, the game's own
         let mut tyre_crew = std::ptr::null_mut::<u8>();
         let mut crew_began = false;
@@ -1108,6 +1114,10 @@ impl Game {
                     self.sort_cars(car, cars, &step.camera);
                 }
                 self.update_car(car, &step.state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
+                // (the car's children after it: GhostCar::update)
+                if !ghost.is_null() {
+                    self.update_ghost(ghost, crate::frames::DT);
+                }
                 for (other, state) in others.iter().zip(&step.others) {
                     self.update_car(other, state, &step.camera, &step.extra, crate::frames::DT, crate::frames::game_time_ms(index));
                 }

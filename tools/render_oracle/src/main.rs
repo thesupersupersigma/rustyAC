@@ -86,6 +86,10 @@ pub struct Args {
     pub capture: usize,
     pub sun_angle: f32,
     pub weather: String,
+    /// `--ghost <file.ghost>`: the ghost car of that file drives with the car; the car's lap
+    /// time is `--ghost-lap-ms <ms>` at the first frame and runs with the frames
+    pub ghost: Option<String>,
+    pub ghost_lap_ms: f64,
     pub loose: bool,
     /// `compare` runs the two sides one after the other
     pub serial: bool,
@@ -138,6 +142,8 @@ fn parse() -> Result<Args, String> {
         capture: 1,
         sun_angle: -16.0,
         weather: "3_clear".into(),
+        ghost: None,
+        ghost_lap_ms: 0.0,
         loose: false,
         serial: false,
         own_textures: false,
@@ -308,6 +314,15 @@ fn parse() -> Result<Args, String> {
             "--weather" => {
                 text = value()?;
                 a.weather = text.clone();
+            }
+            "--ghost" => {
+                text = value()?;
+                a.ghost = Some(std::path::absolute(&text).map_err(|e| e.to_string())?.to_string_lossy().into_owned());
+                text = a.ghost.clone().unwrap_or_default();
+            }
+            "--ghost-lap-ms" => {
+                text = value()?;
+                a.ghost_lap_ms = text.parse().map_err(|_| "--ghost-lap-ms <ms>")?;
             }
             "--own-textures" => {
                 a.own_textures = true;

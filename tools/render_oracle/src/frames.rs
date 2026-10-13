@@ -213,6 +213,8 @@ pub struct Frame {
     pub pit_crew: bool,
     /// `--set crew=…`: the four tyre changers (`PitCrew`) are built
     pub tyre_crew: bool,
+    /// `--ghost <file>`: the ghost car (`GhostCar`) of that file: its recorder as the file fills it
+    pub ghost: Option<rustyac_physics::replay::ghost::GhostCarRecorder>,
     /// `--set gate=…`: the time-attack gates are built
     pub time_attack: bool,
 }
@@ -491,7 +493,7 @@ pub fn build(args: &Args) -> Result<Frame, String> {
             }
         }
     }
-    let steps: Vec<Step> = if states.is_empty() {
+    let mut steps: Vec<Step> = if states.is_empty() {
         let camera = camera_of(None, seats[0])?;
         // without a car: `--frames` frames when asked for (things of the track that move)
         let count = if args.frames_given { args.frames.max(args.capture + 1) } else { args.capture + 1 };
@@ -555,7 +557,24 @@ pub fn build(args: &Args) -> Result<Frame, String> {
     };
     let capture = if sequence { args.capture.min(steps.len() - 1) } else { args.capture };
     let cars_to_be_loaded = if args.loaded > 0 { args.loaded } else { others.len() as i32 + 1 };
-    Ok(Frame { name, track, car, others, cars_to_be_loaded, fade_at: args.fade_at, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), tyre_crew: args.set.iter().any(|(name, _, _)| name == "crew"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
+    // --ghost: the file's ghost, shown from the start; the car's lap time runs with the frames
+    let mut ghost = None;
+    if let Some(file) = &args.ghost {
+        use rustyac_physics::replay::ghost::{GhostCarRecorder, GhostNames};
+        let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+        let mut recorder = GhostCarRecorder::new("", false, true);
+        recorder.load_bytes(&bytes, &GhostNames::default());
+        let names = recorder.names.clone();
+        if !recorder.load_bytes(&bytes, &names) {
+            return Err(format!("{file}: not a ghost car file"));
+        }
+        recorder.line_passed_for_the_first_time = true;
+        for (i, step) in steps.iter_mut().enumerate() {
+            step.state.lap_time = (args.ghost_lap_ms + i as f64 * 1000.0 / 60.0) as u32;
+        }
+        ghost = Some(recorder);
+    }
+    Ok(Frame { ghost, name, track, car, others, cars_to_be_loaded, fade_at: args.fade_at, steps, capture, sequence, sun_angle: args.sun_angle, weather: args.weather.clone(), cubemap_model, ideal_line, start_lights: args.set.iter().any(|(name, _, _)| name == "tts"), pit_crew: args.set.iter().any(|(name, _, _)| name == "pitstate"), tyre_crew: args.set.iter().any(|(name, _, _)| name == "crew"), time_attack: args.set.iter().any(|(name, _, _)| name == "gate") })
 }
 
 /// `<prefix>.car<n>.audiotape`.

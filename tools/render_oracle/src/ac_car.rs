@@ -95,6 +95,9 @@ pub const VA_CAR_NODE_SORTER_CTOR: usize = 0x1_4006_bb60; // CarNodeSorter::CarN
 const VA_CAR_NODE_SORTER_ADD_CAR: usize = 0x1_4006_bdf0; // CarNodeSorter::addCar(Node*, CarAvatar*)
 const VA_CAR_NODE_SORTER_SORT: usize = 0x1_4006_be30; // CarNodeSorter::sort()
 const VA_SIM_UNLOAD_MESH_RESOURCES: usize = 0x1_4019_edd0; // Sim::unloadMeshResources(Node*)
+const VA_GHOST_CAR_CTOR: usize = 0x1_4010_4fe0; // GhostCar::GhostCar(CarAvatar*, GhostCarRecorder*)
+const VA_GHOST_CAR_UPDATE: usize = 0x1_4010_6380; // GhostCar::update(float)
+const VA_GHOST_NAME_TABLES: [usize; 2] = [0x1_4000_8880, 0x1_4000_8990]; // the start-up initialisers of GhostCar.obj's susNames and wheelNames
 const VA_PIT_CREW_CTOR: usize = 0x1_400a_0b80; // PitCrew::PitCrew(CarAvatar*, std::wstring)
 const VA_PIT_CREW_UPDATE: usize = 0x1_400a_3f20; // PitCrew::pitCrewUpdate(float)
 const VA_PIT_CREW_BEGIN: usize = 0x1_400a_33e0; // PitCrew::onPitStopBegin(const PitStopStart&)
@@ -1101,6 +1104,49 @@ impl Game {
         // (the frame's time by value, in xmm1)
         let handler: extern "C" fn(*mut *mut u8, f32) = std::mem::transmute(self.acs.va(VA_CAMERA_MANAGER_FADE_HANDLER));
         handler(&mut closure, dt);
+    }
+
+    /// `CarAvatar::initGhostCar` 0x1400d7510: a `GhostCarRecorder` laid out by hand with the
+    /// file's ghost in its playing buffer (playing, the line crossed), and the game's own
+    /// `GhostCar::GhostCar` on it.
+    pub unsafe fn make_ghost(&self, c: &Car, recorder: &rustyac_physics::replay::ghost::GhostCarRecorder) -> *mut u8 {
+        let acs = &self.acs;
+        for va in VA_GHOST_NAME_TABLES {
+            let init: extern "C" fn() = std::mem::transmute(acs.va(va));
+            init();
+        }
+        let r = acs.alloc(0x160);
+        wr(r, 0x68, rd::<*mut u8>(c.car, 0x1168));
+        wr(r, 0x70, c.car);
+        for offset in [0x10, 0xa8, 0xc8, 0xe8, 0x108] {
+            write_wstring(acs, r.add(offset), "");
+        }
+        let mut bytes = Vec::new();
+        for frame in &recorder.playing_buffer {
+            frame.to_bytes(&mut bytes);
+        }
+        let buffer = acs.alloc(bytes.len().max(8));
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len());
+        wr(r, 0x90, buffer);
+        wr(r, 0x98, buffer.add(bytes.len()));
+        wr(r, 0xa0, buffer.add(bytes.len()));
+        wr(r, 0x128, recorder.advantage_time_ms);
+        wr(r, 0x130, recorder.ghost_car_lap);
+        wr(r, 0x134, 1u8);
+        wr(r, 0x135, 1u8);
+        wr(r, 0x152, 1u8);
+        wr(r, 0x158, recorder.version);
+        wr(r, 0x15c, recorder.suspension_wheels_enabled);
+        let ghost = acs.alloc(0x330);
+        let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GHOST_CAR_CTOR));
+        ctor(ghost, c.car, r);
+        ghost
+    }
+
+    /// `GhostCar::update` 0x140106380.
+    pub unsafe fn update_ghost(&self, ghost: *mut u8, dt: f32) {
+        let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(self.acs.va(VA_GHOST_CAR_UPDATE));
+        update(ghost, dt);
     }
 
     /// `PitStop::PitStop` 0x1400a55d0, the tyre changers' part: the game's own
