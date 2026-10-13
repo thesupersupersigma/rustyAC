@@ -166,6 +166,8 @@ pub struct CarView {
     /// The tyre compound's name and the loaded setup's (empty: the default setup).
     pub compound: SurfaceName,
     pub setup: SurfaceName,
+    /// The compound's short name (`CarAvatar::getCurrentCompoundShortName`).
+    pub compound_short: SurfaceName,
     /// The hybrid system and the engine brake, for a car that has them.
     pub hybrid: HybridView,
     /// What the dashboard's lights read: every wing's angle as the aero uses it
@@ -352,6 +354,7 @@ impl Default for CarView {
             wind_deg: 0.0,
             compound: SurfaceName::default(),
             setup: SurfaceName::default(),
+            compound_short: SurfaceName::default(),
             hybrid: HybridView::default(),
             wing_angles: [0.0; 8],
             wing_count: 0,
@@ -645,6 +648,7 @@ impl CarView {
             wind_deg: car.env.wind_direction_deg,
             compound: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.name.as_str())),
             setup: SurfaceName::new(&car.setup_name),
+            compound_short: SurfaceName::new(car.tyres.first().and_then(|tyre| tyre.compound_defs.get(tyre.current_compound_index as usize)).map_or("", |c| c.short_name.as_str())),
             brake_bias: car.brake_system.as_deref().map_or(-1.0, |brakes| brakes.get_front_bias()),
             note: if player { sim.aid_note } else { AidNote::default() },
             ..CarView::default()

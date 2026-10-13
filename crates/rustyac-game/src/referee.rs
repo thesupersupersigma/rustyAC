@@ -181,6 +181,9 @@ pub struct RefereeHud {
     pub gui: RefereeGui,
     /// Task 30: the pit menu and the stop, for AC's own labels and panel
     pub pit_gui: Option<PitGui>,
+    /// Task 30: the standings as AC's tables read them (`RaceManager`'s answers; the cars'
+    /// names and looks are the picture's side's to add)
+    pub race: Option<rustyac_gui::leaderboard::RaceLink>,
 }
 
 /// What AC's pit menu (`QuickMenuPitstop`) and `PitStop::renderHUD` show: the menu as it is,
@@ -421,6 +424,34 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
     out.lines.extend(pit.window);
     out.centre.extend(pit.countdown);
     out.pit = pit.menu;
+    {
+        use rustyac_gui::leaderboard::{RaceCar, RaceEntry, RaceLap, RaceLink, RaceSession};
+        let entry = |e: &rustyac_physics::race::timing::LeaderboardEntry| RaceEntry { car: e.car, total_time: e.total_time, best_lap: e.best_lap, laps: e.laps, has_completed_last_lap: e.has_completed_last_lap };
+        out.race = Some(RaceLink {
+            cars: manager
+                .timing
+                .lap_dbs
+                .iter()
+                .enumerate()
+                .map(|(car, db)| RaceCar {
+                    is_black_flagged: referee.views.get(car).is_some_and(|view| view.is_black_flagged),
+                    // RaceTimingServices::getLastLap: the last lap of the list, or none
+                    last_lap: db.laps.last().map(|lap| RaceLap { time: lap.time, splits: lap.splits.clone(), is_valid: lap.is_valid }).unwrap_or_default(),
+                    best_lap: db.best_lap.time,
+                    has_completed_flag: db.has_completed_last_lap,
+                    current_splits: db.current_splits.clone(),
+                    personal_best_splits: db.personal_best_splits.clone(),
+                    ..RaceCar::default()
+                })
+                .collect(),
+            sessions: manager.sessions.iter().map(|s| RaceSession { session_type: s.session_type, is_timed_race: s.is_timed_race, name: s.name.clone() }).collect(),
+            current_session_index: manager.current_session_index,
+            leaderboard: manager.timing.leaderboard.iter().map(entry).collect(),
+            leaderboard_history: manager.leaderboard_history.iter().map(|board| board.iter().map(entry).collect()).collect(),
+            global_best_lap: manager.timing.global_best_lap,
+            best_splits: manager.timing.best_splits.clone(),
+        });
+    }
     if let (Some(stop), Some(menu)) = (&referee.pit, &referee.menu) {
         let car = rustyac_gui::pit_menu::PitMenuCar {
             has_race_engineer: true,

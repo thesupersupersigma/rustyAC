@@ -424,6 +424,28 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             online: options.join.is_some(),
             replay: !options.no_ac_replay && options.replay.is_none(),
             player_data: info.data_path.clone(),
+            skins: cars
+                .iter()
+                .enumerate()
+                .map(|(i, car)| {
+                    // (as the cars are drawn: the skin asked for, else the first of the folder)
+                    let asked = if i == 0 { options.skin.clone() } else { car.skin.clone() };
+                    asked.unwrap_or_else(|| {
+                        let mut skins: Vec<String> = std::fs::read_dir(game.join("content/cars").join(&car.name).join("skins")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+                        skins.sort();
+                        skins.first().cloned().unwrap_or_default()
+                    })
+                })
+                .collect(),
+            // CarAvatar::initCommon 0x1400d56e0: car.ini [INFO] SHORT_NAME, else the screen name
+            short_names: cars
+                .iter()
+                .map(|car| {
+                    let ini = rustyac_physics::data::ini::IniReader::load(&car.data_path.join("car.ini")).ok();
+                    let key = |name: &str| ini.as_ref().filter(|ini| ini.has_key("INFO", name)).map(|ini| ini.get_string("INFO", name)).filter(|text| !text.is_empty());
+                    key("SHORT_NAME").or_else(|| key("SCREEN_NAME")).unwrap_or_else(|| car.name.clone())
+                })
+                .collect(),
             cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),

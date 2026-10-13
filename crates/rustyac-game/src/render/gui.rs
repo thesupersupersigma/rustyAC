@@ -14,6 +14,8 @@ use rustyac_gui::control::{Id, MouseEvent};
 use rustyac_gui::gui::{Gui, GuiFiles};
 use rustyac_gui::hud::{HudCar, HudInput, SystemMessage, SystemNotification, MESSAGE_ABS, MESSAGE_BRAKE_BIAS, MESSAGE_DEFAULT, MESSAGE_TC};
 use rustyac_gui::hud_cars::{DamageDisplayer, DriverNames, ProximityIndicator};
+use rustyac_gui::end_session::EndSession;
+use rustyac_gui::leaderboard::{RaceCar, RaceSession};
 use rustyac_gui::menus::SimAction;
 use rustyac_gui::pit_menu::{PitMenu, PitMenuLooks, PitMenuScene, PitStopHud};
 use rustyac_gui::hud_flags::{DriveThroughPenalty, FlagDisplay, FuelLight, LapInvalidator, LockControlsTime, WrongWayIndicator};
@@ -52,6 +54,9 @@ pub struct GuiSetup {
     pub replay: bool,
     /// the player's car's data folder (its `setup.ini` names the pit menu's rows)
     pub player_data: PathBuf,
+    /// every car: its skin's folder, and its short name (`car.ini [INFO] SHORT_NAME`)
+    pub skins: Vec<String>,
+    pub short_names: Vec<String>,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -99,6 +104,12 @@ pub struct GameGui {
     pit_stop: PitStopHud,
     /// the menu and the stop as the referee last showed them
     pit: Option<crate::referee::PitGui>,
+    /// `Sim::endSessionDisplayer`
+    pub end: EndSession,
+    /// what the tables read of every car that never changes (names, nation, folder, skin)
+    race_static: Vec<RaceCar>,
+    /// `RaceManager::getCurrentSessionIndex` as of the last frame
+    last_session_index: i32,
     /// `ScreenCapturer`: `readyToCapture`, `frameSkip`, `flashTime`
     shot_ready: bool,
     shot_frame_skip: i32,
@@ -155,6 +166,29 @@ impl GameGui {
 
         let mut message = SystemMessage::new(&mut gui, &mut painter, system("messages.ini").as_ref(), system("session_info.ini").as_ref());
         let notification = SystemNotification::new(&mut gui, &mut painter, screen, gameplay.as_ref());
+        // what the tables read of the cars and the sessions from the start (Sim::Sim loads the
+        // default flag; the liveries are loaded when a table is made)
+        let race_static: Vec<RaceCar> = setup
+            .cars
+            .iter()
+            .enumerate()
+            .map(|(i, names)| RaceCar {
+                driver_name: names[0].clone(),
+                unix_name: names[2].clone(),
+                nation_code: names[3].clone(),
+                skin: setup.skins.get(i).cloned().unwrap_or_default(),
+                gui_short_name: setup.short_names.get(i).cloned().unwrap_or_else(|| names[1].clone()),
+                connected: true,
+                ..RaceCar::default()
+            })
+            .collect();
+        gui.sim.race.cars = race_static.clone();
+        gui.sim.race.sessions = vec![RaceSession { session_type: setup.session_type, ..RaceSession::default() }; setup.session_count.max(1) as usize];
+        let default_flag = {
+            use rustyac_gui::painter::Painter;
+            painter.get_texture("content/gui/NationFlags/AC.png")
+        };
+        gui.sim.flag_cache.insert("AC".to_string(), default_flag);
         // PauseMenu, hidden, a top-level control (Sim::Sim 0x1401931b5)
         gui.sim.game_screen = Some(screen);
         gui.sim.session_type = setup.session_type;
@@ -174,12 +208,14 @@ impl GameGui {
         let section = |name: &str| gameplay.as_ref().filter(|ini| ini.has_section(name)).map(|ini| ini.get_int(name, "IS_ACTIVE").unwrap_or(0));
         let names = DriverNames::new(&mut gui, &mut painter, system("name_displayer.ini").as_ref(), section("DRIVER_NAME_DISPLAYER").map(|v| v != 0), setup.cars.len());
         let damage = DamageDisplayer::new(&mut painter, system("damage_displayer.ini").as_ref(), section("DAMAGE_DISPLAYER"), 0);
+        // EndSessionDisplayer (Sim::Sim 0x140194ed7)
+        let end = EndSession::new(&mut gui, &mut painter, system("endSessionDisplayer.ini").as_ref());
         let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -206,6 +242,42 @@ impl GameGui {
         input.camera_matrix = *camera.0;
         input.game_time_now = time_ms;
         self.pit = info.referee.as_ref().and_then(|referee| referee.pit_gui.clone());
+        // the standings: the referee's, with what the picture's side knows of every car
+        self.gui.sim.in_replay = info.replay;
+        self.gui.sim.camera_mode = camera_mode;
+        if let Some(mut race) = info.referee.as_ref().and_then(|referee| referee.race.clone()) {
+            for (i, car) in race.cars.iter_mut().enumerate() {
+                if let Some(fixed) = self.race_static.get(i) {
+                    car.driver_name = fixed.driver_name.clone();
+                    car.unix_name = fixed.unix_name.clone();
+                    car.nation_code = fixed.nation_code.clone();
+                    car.skin = fixed.skin.clone();
+                    car.gui_short_name = fixed.gui_short_name.clone();
+                }
+                car.connected = true;
+                if let Some(view) = world.get(i) {
+                    car.connected = !view.disconnected;
+                    car.in_pitlane = view.lap.in_pit_lane;
+                    car.compound_short_name = view.compound_short.as_str().to_string();
+                }
+            }
+            let index = race.current_session_index;
+            self.gui.sim.race = race;
+            // Sim::evOnNewSession, as the tables hear it
+            if index != self.last_session_index {
+                self.last_session_index = index;
+                self.gui.sim_on_new_session();
+            }
+        }
+        // the results: RaceManager shows them (EndSessionDisplayer::displayResults), a new
+        // session takes them down (hide)
+        let results = info.referee.as_ref().is_some_and(|referee| referee.gui.results_displayed);
+        if results && !self.end.is_active {
+            self.end.display_results(&mut self.gui);
+        } else if !results && self.end.is_active {
+            self.end.hide(&mut self.gui);
+        }
+        self.end.update(&mut self.gui);
         let mut shown = [false; 5];
         match info.referee.as_ref().map(|referee| &referee.gui) {
             Some(r) => {
@@ -374,6 +446,7 @@ impl GameGui {
         }
         self.names.render_hud(gui, &mut painter, dt, input);
         self.damage.render_hud(gui, &mut painter, dt, input);
+        self.end.render_hud(gui, &mut painter, dt);
         if self.fuel.is_active {
             self.fuel.render_hud(gui, &mut painter, input);
         }
@@ -381,20 +454,31 @@ impl GameGui {
 
     // ----- the window's input (`ksgui::GUI`'s listeners of the mouse and the keyboard) -----
 
+    // (the GUI hears of the mouse first, then the game objects that hung themselves on the
+    // window's mouse events: the end-of-session displayer)
+
     pub fn mouse_move(&mut self, x: i32, y: i32) {
-        self.gui.mouse_move(&MouseEvent { x, y, ..MouseEvent::default() });
+        let e = MouseEvent { x, y, ..MouseEvent::default() };
+        self.gui.mouse_move(&e);
+        self.end.on_mouse_move(&mut self.gui, &e);
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32, button: i32) {
-        self.gui.mouse_down(&MouseEvent { x, y, button, delta: 0.0 });
+        let e = MouseEvent { x, y, button, delta: 0.0 };
+        self.gui.mouse_down(&e);
+        self.end.on_mouse_down(&mut self.gui, &e);
     }
 
     pub fn mouse_up(&mut self, x: i32, y: i32, button: i32) {
-        self.gui.mouse_up(&MouseEvent { x, y, button, delta: 0.0 });
+        let e = MouseEvent { x, y, button, delta: 0.0 };
+        self.gui.mouse_up(&e);
+        self.end.on_mouse_up(&mut self.gui, &e);
     }
 
     pub fn mouse_wheel(&mut self, x: i32, y: i32, delta: f32) {
-        self.gui.mouse_wheel(&MouseEvent { x, y, button: 0, delta });
+        let e = MouseEvent { x, y, button: 0, delta };
+        self.gui.mouse_wheel(&e);
+        self.end.on_mouse_wheel(&mut self.gui, &e);
     }
 
     pub fn key_down(&mut self, key: u32) {
@@ -437,6 +521,10 @@ impl GameGui {
     /// fade still runs. Online the car must stand first (`online_moving`: it is faster than
     /// 1 km/h), and a message says so.
     pub fn esc_key(&mut self, online_moving: bool) {
+        // (Sim::isDisplayingResults: the results have their own buttons)
+        if self.end.is_active {
+            return;
+        }
         if online_moving {
             self.message.add_message(&mut self.gui, "Stop for Esc Menu", "Stop your car to enter the pause menu", MESSAGE_DEFAULT);
         } else if self.gui.sim.esc_menu.is_none_or(|esc| !self.gui.controls[esc].visible) && self.gui.sim.fade_listeners.is_empty() {
