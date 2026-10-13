@@ -908,3 +908,105 @@ impl Gui {
         }
     }
 }
+
+/// `SessionLeaderboard` (0x60 bytes): the table held on TAB, in the middle of a dimmed screen.
+/// `SessionLeaderboard::SessionLeaderboard` 0x1400baf60, `renderHUD` 0x1400bb3c0, `setVisible`
+/// 0x1400bb3e0, its three handlers of the window's mouse events (0x1400bb2b0 …);
+/// `Sim::displayLeaderboard` 0x140044910, and what `Sim::onKeyDown` 0x14019a940 and
+/// `Sim::renderHUD` 0x14019e4f0 do with the TAB key.
+pub struct SessionLeaderboard {
+    /// `GameObject::isActive`
+    pub is_active: bool,
+    pub parent_control: Id,
+    pub leaderboard: Id,
+}
+
+impl SessionLeaderboard {
+    /// The constructor (the game makes it with more than one car, or online), and
+    /// `Sim::displayLeaderboard(false)` right after it.
+    pub fn new(gui: &mut Gui, painter: &mut dyn Painter) -> SessionLeaderboard {
+        let parent = gui.new_control(painter, "PARENT_CONTROL");
+        let (w, h) = painter.screen();
+        gui.set_size(parent, w as f32, h as f32);
+        gui.set_position(parent, 0.0, 0.0);
+        gui.controls[parent].draw_border = false;
+        let leaderboard = gui.new_leaderboard(painter, 10, true);
+        let (p, c) = (gui.controls[parent].rect, gui.controls[leaderboard].rect);
+        let x = ((p.right - p.left) * 0.5) - ((c.right - c.left) * 0.5);
+        let y = ((p.bottom - p.top) * 0.5) - ((c.bottom - c.top) * 0.5);
+        gui.add_control(parent, leaderboard);
+        gui.set_position(leaderboard, x, y);
+        gui.leaderboard_mut(leaderboard).ui = UI_TAB;
+        gui.leaderboard_mut(leaderboard).is_loaded = false;
+        let mut board = SessionLeaderboard { is_active: true, parent_control: parent, leaderboard };
+        board.display(gui, false);
+        board
+    }
+
+    /// `Sim::displayLeaderboard` 0x140044910.
+    pub fn display(&mut self, gui: &mut Gui, show: bool) {
+        gui.set_visible(self.parent_control, show);
+        self.is_active = show;
+    }
+
+    /// `Sim::onKeyDown`, its first lines: TAB shows the table, unless a menu or the results show.
+    pub fn on_tab_down(&mut self, gui: &mut Gui, esc_menu_visible: bool, pause_menu_visible: bool, results_displayed: bool) {
+        if !esc_menu_visible && !pause_menu_visible && !results_displayed {
+            self.display(gui, true);
+        }
+    }
+
+    /// `Sim::renderHUD` 0x14019e4f0, once a frame: the table goes when TAB is let go (or the
+    /// ESC menu or the results come).
+    pub fn poll(&mut self, gui: &mut Gui, tab_held: bool, esc_menu_visible: bool, results_displayed: bool) {
+        if gui.controls[self.parent_control].visible && (!tab_held || esc_menu_visible || results_displayed) {
+            self.display(gui, false);
+        }
+    }
+
+    /// `SessionLeaderboard::renderHUD` 0x1400bb3c0.
+    pub fn render_hud(&self, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
+        if self.is_active && gui.controls[self.parent_control].visible {
+            gui.render(self.parent_control, dt, painter);
+        }
+    }
+
+    pub fn on_mouse_down(&self, gui: &mut Gui, e: &MouseEvent) {
+        if self.is_active {
+            gui.on_mouse_down(self.parent_control, e);
+        }
+    }
+
+    pub fn on_mouse_up(&self, gui: &mut Gui, e: &MouseEvent) {
+        if self.is_active {
+            gui.on_mouse_up(self.parent_control, e);
+        }
+    }
+
+    pub fn on_mouse_move(&self, gui: &mut Gui, e: &MouseEvent) {
+        if self.is_active {
+            gui.on_mouse_move(self.parent_control, e);
+        }
+    }
+}
+
+impl Gui {
+    /// `LeaderboardApp::LeaderboardApp` 0x140329bf0: the app "Leaderboard", a form with a
+    /// table of five rows around the player. `Sim::addForm` puts it on the game screen.
+    pub fn new_leaderboard_app(&mut self, painter: &mut dyn Painter) -> Id {
+        let form = self.new_form(painter, "LEADERBOARD_APP", false);
+        self.form_set_title(form, &translate("Leaderboard"));
+        self.form_data_mut(form).dev_app = false;
+        let board = self.new_leaderboard(painter, 5, true);
+        self.set_position(board, 0.0, 30.0);
+        let r = self.controls[board].rect;
+        self.set_size(board, r.right - r.left, 172.5);
+        self.add_control(form, board);
+        let r = self.controls[board].rect;
+        self.set_size(form, r.right - r.left, ((r.bottom - r.top) + r.top) + 40.0);
+        self.form_data_mut(form).autohide = true;
+        self.leaderboard_mut(board).ui = UI_APP;
+        self.leaderboard_mut(board).is_loaded = false;
+        form
+    }
+}

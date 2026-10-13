@@ -21,6 +21,8 @@ pub struct Menus {
     /// a plain control where the game's stand-in `Sim` has one for the pause menu (its
     /// "shows" flag is the script's), until the script makes the real menu
     pub pause_stand_in: Option<Id>,
+    pub tab: Option<rustyac_gui::leaderboard::SessionLeaderboard>,
+    pub app: Option<Id>,
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
@@ -131,6 +133,20 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             let ini = IniReader::load(&root.join("system/cfg/endSessionDisplayer.ini")).ok();
             hud.more.menus.end = Some(rustyac_gui::end_session::EndSession::new(gui, painter, ini.as_ref()));
         }
+        "menu.tab" => hud.more.menus.tab = Some(rustyac_gui::leaderboard::SessionLeaderboard::new(gui, painter)),
+        "menu.tabShow" => {
+            let Some(tab) = &mut hud.more.menus.tab else { return Err("no TAB leaderboard".into()) };
+            tab.display(gui, number != 0.0);
+        }
+        "menu.app" => {
+            let app = gui.new_leaderboard_app(painter);
+            gui.game_screen_add_control(painter, screen, app, true);
+            hud.more.menus.app = Some(app);
+        }
+        "menu.appVisible" => {
+            let app = hud.more.menus.app.ok_or("no leaderboard app")?;
+            gui.set_visible(app, number != 0.0);
+        }
         "menu.endShow" | "menu.endHide" => {
             let Some(end) = &mut hud.more.menus.end else { return Err("no end of session".into()) };
             if what == "menu.endShow" {
@@ -219,6 +235,9 @@ pub fn render_end(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
     if let Some(end) = &mut hud.more.menus.end {
         end.render_hud(gui, painter, dt);
     }
+    if let Some(tab) = &hud.more.menus.tab {
+        tab.render_hud(gui, painter, dt);
+    }
 }
 
 /// The window's mouse events as the game objects that hang on them hear them (after the GUI):
@@ -232,11 +251,23 @@ pub fn window_mouse(hud: &mut HudPort, gui: &mut Gui, kind: u32, e: &MouseEvent)
             _ => end.on_mouse_wheel(gui, e),
         }
     }
+    if let Some(tab) = &hud.more.menus.tab {
+        match kind {
+            0 => tab.on_mouse_down(gui, e),
+            1 => tab.on_mouse_up(gui, e),
+            2 => tab.on_mouse_move(gui, e),
+            _ => {}
+        }
+    }
 }
 
 pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     if let Some(end) = &hud.more.menus.end {
         out.push_str(&crate::gui_seq_menu::end_line(end.is_active, end.is_loaded, end.old_mode, gui.is_active));
         crate::gui_port::dump_control(gui, end.parent_control, 1, out);
+    }
+    if let Some(tab) = &hud.more.menus.tab {
+        out.push_str(&format!("tab active={}\n", tab.is_active as u8));
+        crate::gui_port::dump_control(gui, tab.parent_control, 1, out);
     }
 }

@@ -15,7 +15,7 @@ use rustyac_gui::gui::{Gui, GuiFiles};
 use rustyac_gui::hud::{HudCar, HudInput, SystemMessage, SystemNotification, MESSAGE_ABS, MESSAGE_BRAKE_BIAS, MESSAGE_DEFAULT, MESSAGE_TC};
 use rustyac_gui::hud_cars::{DamageDisplayer, DriverNames, ProximityIndicator};
 use rustyac_gui::end_session::EndSession;
-use rustyac_gui::leaderboard::{RaceCar, RaceSession};
+use rustyac_gui::leaderboard::{RaceCar, RaceSession, SessionLeaderboard};
 use rustyac_gui::menus::SimAction;
 use rustyac_gui::pit_menu::{PitMenu, PitMenuLooks, PitMenuScene, PitStopHud};
 use rustyac_gui::hud_flags::{DriveThroughPenalty, FlagDisplay, FuelLight, LapInvalidator, LockControlsTime, WrongWayIndicator};
@@ -106,6 +106,10 @@ pub struct GameGui {
     pit: Option<crate::referee::PitGui>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
+    /// `Sim::leaderboard`: the table held on TAB (with more than one car, or online)
+    pub tab: Option<SessionLeaderboard>,
+    /// the app "Leaderboard"
+    pub leaderboard_app: Id,
     /// what the tables read of every car that never changes (names, nation, folder, skin)
     race_static: Vec<RaceCar>,
     /// `RaceManager::getCurrentSessionIndex` as of the last frame
@@ -200,6 +204,9 @@ impl GameGui {
         gui.set_visible(pause_menu, false);
         gui.add_root(&mut painter, pause_menu);
         gui.sim.actions.clear();
+        // the apps (Sim::addForm): of the game's 56 only the Leaderboard so far
+        let leaderboard_app = gui.new_leaderboard_app(&mut painter);
+        gui.game_screen_add_control(&mut painter, screen, leaderboard_app, true);
         let wrong = (setup.session_type != 6).then(|| WrongWayIndicator::new(&mut painter, setup.penalties));
         let lap = LapInvalidator::new(&mut painter);
         let drive = DriveThroughPenalty::new(&mut painter);
@@ -210,12 +217,14 @@ impl GameGui {
         let damage = DamageDisplayer::new(&mut painter, system("damage_displayer.ini").as_ref(), section("DAMAGE_DISPLAYER"), 0);
         // EndSessionDisplayer (Sim::Sim 0x140194ed7)
         let end = EndSession::new(&mut gui, &mut painter, system("endSessionDisplayer.ini").as_ref());
+        // SessionLeaderboard (Sim::Sim 0x140195191)
+        let tab = (setup.cars.len() > 1 || setup.online).then(|| SessionLeaderboard::new(&mut gui, &mut painter));
         let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -274,6 +283,10 @@ impl GameGui {
         let results = info.referee.as_ref().is_some_and(|referee| referee.gui.results_displayed);
         if results && !self.end.is_active {
             self.end.display_results(&mut self.gui);
+            // (RaceManager's job at the end of a race, 0x140133c90, takes the TAB table down)
+            if let Some(tab) = &mut self.tab {
+                tab.display(&mut self.gui, false);
+            }
         } else if !results && self.end.is_active {
             self.end.hide(&mut self.gui);
         }
@@ -447,6 +460,9 @@ impl GameGui {
         self.names.render_hud(gui, &mut painter, dt, input);
         self.damage.render_hud(gui, &mut painter, dt, input);
         self.end.render_hud(gui, &mut painter, dt);
+        if let Some(tab) = &self.tab {
+            tab.render_hud(gui, &mut painter, dt);
+        }
         if self.fuel.is_active {
             self.fuel.render_hud(gui, &mut painter, input);
         }
@@ -461,18 +477,27 @@ impl GameGui {
         let e = MouseEvent { x, y, ..MouseEvent::default() };
         self.gui.mouse_move(&e);
         self.end.on_mouse_move(&mut self.gui, &e);
+        if let Some(tab) = &self.tab {
+            tab.on_mouse_move(&mut self.gui, &e);
+        }
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32, button: i32) {
         let e = MouseEvent { x, y, button, delta: 0.0 };
         self.gui.mouse_down(&e);
         self.end.on_mouse_down(&mut self.gui, &e);
+        if let Some(tab) = &self.tab {
+            tab.on_mouse_down(&mut self.gui, &e);
+        }
     }
 
     pub fn mouse_up(&mut self, x: i32, y: i32, button: i32) {
         let e = MouseEvent { x, y, button, delta: 0.0 };
         self.gui.mouse_up(&e);
         self.end.on_mouse_up(&mut self.gui, &e);
+        if let Some(tab) = &self.tab {
+            tab.on_mouse_up(&mut self.gui, &e);
+        }
     }
 
     pub fn mouse_wheel(&mut self, x: i32, y: i32, delta: f32) {
@@ -487,6 +512,26 @@ impl GameGui {
 
     pub fn key_char(&mut self, key: u32) {
         self.gui.key_char(key);
+    }
+
+    // ----- the table on TAB -----
+
+    /// `Sim::onKeyDown`, TAB: the table comes (not over a menu or the results).
+    pub fn tab_down(&mut self) {
+        let (pause, results) = (self.pause_menu_visible(), self.end.is_active);
+        let esc = self.gui.sim.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible);
+        if let Some(tab) = &mut self.tab {
+            tab.on_tab_down(&mut self.gui, esc, pause, results);
+        }
+    }
+
+    /// `Sim::renderHUD`, once a frame: the table goes when TAB is let go.
+    pub fn tab_poll(&mut self, held: bool) {
+        let results = self.end.is_active;
+        let esc = self.gui.sim.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible);
+        if let Some(tab) = &mut self.tab {
+            tab.poll(&mut self.gui, held, esc, results);
+        }
     }
 
     // ----- ScreenCapturer -----
@@ -607,7 +652,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -649,6 +694,12 @@ impl GameGui {
                 "notify" => self.notification.show_notification(&mut self.gui, need(1)?[0]),
                 "esc" => self.esc_key(false),
                 "screenshot" => self.take_screen(),
+                "tab" => self.tab_down(),
+                "app" => {
+                    let app = self.leaderboard_app;
+                    let shown = self.gui.controls[app].visible;
+                    self.gui.set_visible(app, !shown);
+                }
                 "flag" => {
                     let index = ["blue", "black", "yellow", "penalty", "chequered"].iter().position(|f| *f == rest);
                     self.forced_flags = [false; 5];
@@ -658,7 +709,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, tab, app)")),
             }
         }
         Ok(())

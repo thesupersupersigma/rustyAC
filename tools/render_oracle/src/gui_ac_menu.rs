@@ -42,7 +42,11 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 3] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998)];
+pub const CLASSES: [(&str, usize, usize, usize); 4] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998), ("Form", 0x1b8, VA_LEADERBOARD_APP_CTOR, 0x1_4050_e8c0)];
+const VA_LEADERBOARD_APP_CTOR: usize = 0x1_4032_9bf0;
+const VA_SESSION_LEADERBOARD_CTOR: usize = 0x1_400b_af60;
+const VA_SESSION_LEADERBOARD_RENDER_HUD: usize = 0x1_400b_b3c0;
+const VA_SIM_DISPLAY_LEADERBOARD: usize = 0x1_4004_4910;
 const VA_END_SESSION_CTOR: usize = 0x1_4010_a650;
 const VA_END_SESSION_UPDATE: usize = 0x1_4010_bf90;
 const VA_END_SESSION_DISPLAY_RESULTS: usize = 0x1_4010_b260;
@@ -65,9 +69,12 @@ struct Menus {
     boards: Vec<usize>,
     /// the `EndSessionDisplayer`
     end: usize,
+    /// the `SessionLeaderboard` (TAB), the `LeaderboardApp`
+    tab: usize,
+    app: usize,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0 });
+static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0, tab: 0, app: 0 });
 
 unsafe extern "C" fn set_mode(_this: *mut u8, mode: i32, _fade: bool, _random: bool) {
     action(format!("setMode {mode}"));
@@ -159,6 +166,14 @@ pub unsafe fn render_end(game: &Game, h: &HudGame, dt: f32) {
         client_present(false);
     }
     let _ = h;
+    // SessionLeaderboard::renderHUD (made after the displayer)
+    let tab = MENUS.lock().unwrap().tab as *mut u8;
+    if !tab.is_null() && rd::<u8>(tab, 0x30) != 0 {
+        client_present(true);
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SESSION_LEADERBOARD_RENDER_HUD));
+        render(tab, dt);
+        client_present(false);
+    }
 }
 
 pub unsafe fn dump(game: &Game, out: &mut String) {
@@ -167,6 +182,11 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
         let gui: *const u8 = rd(rd::<*const u8>(end, 0x8), 0x180);
         out.push_str(&crate::gui_seq_menu::end_line(rd::<u8>(end, 0x30) != 0, rd::<u8>(end, 0x128) != 0, rd(end, 0x100), rd::<u8>(gui, 0x8) != 0));
         crate::gui_ac::dump_control(game, rd(end, 0x70), 1, out);
+    }
+    let tab = MENUS.lock().unwrap().tab as *const u8;
+    if !tab.is_null() {
+        out.push_str(&format!("tab active={}\n", rd::<u8>(tab, 0x30)));
+        crate::gui_ac::dump_control(game, rd(tab, 0x58), 1, out);
     }
 }
 
@@ -424,6 +444,51 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
             m.end = end as usize;
             m.boards.push(rd::<usize>(end, 0x78));
         }
+        "menu.tab" => {
+            crate::gui_ac_race::install(game);
+            crate::gui_ac_race::sync(h);
+            install(game, sim);
+            let tab = a.alloc(0x60);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_SESSION_LEADERBOARD_CTOR));
+            let client: usize = rd(sim, 0x1c8);
+            if input(|i| i.online) {
+                wr(sim, 0x1c8, h.more.cars.client);
+            }
+            ctor(tab, sim);
+            wr(sim, 0x1c8, client);
+            wr(sim, 0x268, tab);
+            let display: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_SIM_DISPLAY_LEADERBOARD));
+            display(sim, false);
+            let mut m = MENUS.lock().unwrap();
+            m.tab = tab as usize;
+            m.boards.push(*children(rd::<*const u8>(tab, 0x58)).first().ok_or("no table in the TAB leaderboard")? as usize);
+        }
+        // Sim::displayLeaderboard (what TAB going down, and its being let go, come to)
+        "menu.tabShow" => {
+            let display: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_SIM_DISPLAY_LEADERBOARD));
+            display(sim, number != 0.0);
+        }
+        "menu.app" => {
+            crate::gui_ac_race::install(game);
+            crate::gui_ac_race::sync(h);
+            install(game, sim);
+            let app = a.alloc(0x1b8);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_LEADERBOARD_APP_CTOR));
+            ctor(app, sim);
+            // Sim::addForm: GameScreen::addControl(form, true)
+            let screen: *mut u8 = rd(sim, 0x108);
+            let table: *const usize = rd(screen, 0);
+            let add: extern "C" fn(*mut u8, *mut u8, bool) = std::mem::transmute(*table.add(0xa8 / 8));
+            add(screen, app, true);
+            let mut m = MENUS.lock().unwrap();
+            m.app = app as usize;
+            m.boards.push(*children(app).last().ok_or("no table in the app")? as usize);
+        }
+        "menu.appVisible" => {
+            let app = MENUS.lock().unwrap().app as *mut u8;
+            let set: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_CONTROL_SET_VISIBLE));
+            set(app, number != 0.0);
+        }
         "menu.endShow" | "menu.endHide" => {
             let end = MENUS.lock().unwrap().end as *mut u8;
             wr(sim, 0x188, h.more.camera);
@@ -460,9 +525,16 @@ pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
 
 /// The controls no GUI holds: the panel of the end-of-session displayer.
 pub unsafe fn extra_roots() -> Vec<*mut u8> {
-    let end = MENUS.lock().unwrap().end as *const u8;
-    if end.is_null() {
-        return Vec::new();
+    let (end, tab) = {
+        let m = MENUS.lock().unwrap();
+        (m.end as *const u8, m.tab as *const u8)
+    };
+    let mut roots = Vec::new();
+    if !end.is_null() {
+        roots.push(rd(end, 0x70));
     }
-    vec![rd(end, 0x70)]
+    if !tab.is_null() {
+        roots.push(rd(tab, 0x58));
+    }
+    roots
 }

@@ -1380,7 +1380,12 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // Shift does; they come before rustyAC's own Ctrl+F
                     let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
                     let in_ac_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode());
-                    if key == 0x1b {
+                    if key == 0x09 {
+                        // Sim::onKeyDown 0x14019a940, its first lines: TAB shows the table
+                        if let Some(gui) = renderer.gui() {
+                            gui.tab_down();
+                        }
+                    } else if key == 0x1b {
                         // Sim::onKeyDown 0x14019a940, ESC (not with Ctrl: the Ctrl block skips
                         // the plain keys): a replay that was loaded from a file, and a drive
                         // that is run again, end the program; a replay of the session goes back
@@ -1567,6 +1572,11 @@ fn run_window(options: &Options) -> Result<(), String> {
         // what the menus asked of the session (the calls their buttons make on Sim)
         let mut shutdown = false;
         if let Some(gui) = renderer.gui() {
+            // Sim::renderHUD: the table of TAB goes when the key is let go (--gui-do tab holds
+            // it for pictures)
+            // SAFETY: a plain call.
+            let tab_held = options.gui_do.as_deref().is_some_and(|script| script.split(';').any(|c| c.trim() == "tab")) || (shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x09) } != 0);
+            gui.tab_poll(tab_held);
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
             use rustyac_gui::menus::SimAction;

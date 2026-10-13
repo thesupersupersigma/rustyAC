@@ -684,3 +684,65 @@ pub fn end_session(kind: u32, cars: usize) -> Vec<Op> {
     o.push(Op::Frame(DT));
     o
 }
+
+/// The standings of a weekend's qualifying, with a practice behind it.
+fn weekend(o: &mut Vec<Op>, cars: usize, online: bool) {
+    field(o, cars);
+    o.extend([hud("race.sessions", 0.0, "1:0:Practice|2:0:Qualifying|3:0:Quick Race"), hud("race.history", 0.0, board(cars, false, 2)), hud("race.current", 1.0, ""), hud("race.board", 0.0, board(cars, false, 0)), hud("session", 2.0, ""), hud("pqText", 0.0, "Qualifying")]);
+    for i in 0..cars.min(8) {
+        let index = leak(i.to_string());
+        o.extend([
+            hud("race.car.last", 84000.0 + 731.0 * i as f32, index),
+            hud("race.car.lastValid", (i % 3 != 1) as u8 as f32, index),
+            hud("race.car.lastSplits", i as f32, leak(format!("{},{},{}", 27100 + 40 * i, 30200 + 55 * i, 26700 + 636 * i))),
+            hud("race.car.best", 83456.0 + 417.0 * i as f32, index),
+            hud("race.car.pbSplits", i as f32, leak(format!("{},{},{}", 27100 + 40 * i, 30200 + 20 * i, 26000 + 300 * i))),
+        ]);
+    }
+    o.extend([hud("race.globalBest", 83456.0, ""), hud("race.bestSplits", 0.0, "27100,30200,26000")]);
+    if online {
+        o.push(hud("online", 1.0, ""));
+        for i in 0..cars {
+            o.push(hud("car.ping", (29 * i % 210) as f32, leak(i.to_string())));
+        }
+    }
+}
+
+/// The table held on TAB: it comes, shows the standings round the player, hears the mouse,
+/// goes. A screen of 1280 x 720 is taken for the mouse.
+pub fn tab_leaderboard(cars: usize, online: bool) -> Vec<Op> {
+    let mut o = Vec::new();
+    weekend(&mut o, cars, online);
+    o.extend([hud("menu.tab", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let (left, top) = (250, 197);
+    // hidden: the mouse is not heard
+    click(&mut o, left + 570 + 50, top + 335 + 9);
+    o.extend([hud("menu.tabShow", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    click(&mut o, left + 570 + 50, top + 335 + 9);
+    click(&mut o, left + 300, top + 20 + 45);
+    click(&mut o, left + 150 + 20, top + 345);
+    click(&mut o, left + 225 + 20, top + 345);
+    click(&mut o, left + 465 + 50, top + 335 + 9);
+    // the player is further down the order; then the race
+    o.extend([hud("race.board", 0.0, board(cars, false, 5)), Op::Frame(DT), hud("menu.tabShow", 0.0, ""), Op::Frame(DT)]);
+    o.extend([hud("race.history", 1.0, board(cars, false, 5)), hud("race.current", 2.0, ""), hud("race.board", 0.0, board(cars, true, 3)), hud("session", 3.0, ""), hud("raceText", 0.0, "Race"), hud("menu.newSession", 0.0, ""), Op::Frame(DT)]);
+    o.extend([hud("menu.tabShow", 1.0, ""), Op::Frame(DT), hud("race.board", 0.0, board(cars, true, 4)), Op::Frame(DT), hud("menu.tabShow", 1.0, ""), Op::Frame(DT), hud("menu.tabShow", 0.0, ""), Op::Frame(DT), hud("menu.tabShow", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// The Leaderboard app: a form of the app bar with five rows round the player.
+pub fn leaderboard_app(cars: usize) -> Vec<Op> {
+    let mut o = Vec::new();
+    weekend(&mut o, cars, false);
+    o.extend([hud("menu.app", 0.0, ""), Op::Frame(DT), hud("menu.appVisible", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    // its tabs, the sessions' buttons; the form dragged by its title; hidden and back
+    click(&mut o, 570 + 50, 80 + 30 + 172 + 10 + 9);
+    click(&mut o, 150 + 20, 80 + 30 + 172 + 20);
+    click(&mut o, 225 + 20, 80 + 30 + 172 + 20);
+    click(&mut o, 465 + 50, 80 + 30 + 172 + 10 + 9);
+    o.extend([Op::MouseMove(300, 90), Op::MouseDown(300, 90), Op::MouseMove(380, 260), Op::Frame(DT), Op::MouseUp(380, 260), Op::Frame(DT), Op::Frame(DT)]);
+    o.extend([hud("race.board", 0.0, board(cars, false, 5)), Op::Frame(DT), hud("menu.appVisible", 0.0, ""), Op::Frame(DT), hud("menu.appVisible", 1.0, ""), Op::Frame(DT), Op::MouseMove(1279, 300), Op::Frame(DT), Op::Frame(DT), Op::MouseMove(600, 600), Op::Frame(DT)]);
+    o
+}
