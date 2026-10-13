@@ -1700,6 +1700,25 @@ impl RollingChassis {
         }
     }
 
+    /// A job of the setup editor (`PhysicsAvatar::executeOnPhysicsThread`), done before a step.
+    pub fn apply_setup_job(&mut self, job: &super::setup::SetupJob) {
+        use super::setup::SetupJob;
+        match *job {
+            SetupJob::SetTyreCompound { tyre, index } => {
+                if tyre < self.tyres.len() {
+                    self.set_tyre_compound(tyre, index);
+                }
+            }
+            SetupJob::SetRequestedFuel { value, .. } => {
+                // Car::setRequestedFuel @ 0x140275cb0
+                self.fuel = value as f64;
+                self.requested_fuel = value;
+                self.fuel_lap_evaluator.ignore_lap = true;
+            }
+            _ => self.setup_manager.apply_job(job),
+        }
+    }
+
     /// Loads a saved setup (`Documents\Assetto Corsa\setups\<car>\<track>\<name>.ini`) as the
     /// game's setup screen does when "Load" is pressed, here before the first step: after
     /// [`RollingChassis::session_start`], whose default values stay for everything the file

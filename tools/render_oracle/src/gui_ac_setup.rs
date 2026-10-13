@@ -116,8 +116,21 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(game.acs.va(0x1_4027_9bf0));
             ctor(engineer, car);
             wr(h.cars[0], 0xf80, engineer);
-            // CarAvatar::physicsInfo.maxGear; Sim::useMousePitstop
-            wr(h.cars[0], 0xe44, number as i32);
+            // CarAvatar::physicsInfo, as CarAvatar::initPhysics fills it (here from the port's
+            // car of the same data folder); Sim::useMousePitstop
+            let port = crate::gui_port_setup::make_car(std::path::Path::new("."), text, number as i32)?;
+            use rustyac_gui::setup_car::SetupCar;
+            let info = h.cars[0].add(0xe40);
+            wr(info, 0x4, number as i32);
+            wr(info, 0x88, port.max_fuel());
+            let names = port.tyre_compound_names();
+            let list = game.acs.alloc(names.len() * 0x20 + 0x20);
+            for (i, name) in names.iter().enumerate() {
+                crate::ac::write_wstring(&game.acs, list.add(i * 0x20), name);
+            }
+            wr(info, 0xd8, list);
+            wr(info, 0xe0, list.add(names.len() * 0x20));
+            wr(info, 0xe8, list.add(names.len() * 0x20));
             wr(h.sim, 0x1e4, 1u8);
         }
         other => return Err(format!("the setup editor has no call {other:?}")),

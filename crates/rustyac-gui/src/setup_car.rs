@@ -33,6 +33,23 @@ pub trait SetupCar {
     fn max_gear(&self) -> i32;
     /// `PhysicsAvatar::executeOnPhysicsThread`
     fn job(&mut self, job: SetupJob);
+    /// `Drivetrain::gears[index].ratio` (0 reverse, 1 neutral, 2 the first gear), `finalRatio`
+    fn gear_ratio(&self, index: usize) -> f64;
+    fn final_ratio(&self) -> f32;
+    /// `Drivetrain::tractionType` is FWD
+    fn is_front_wheel_drive(&self) -> bool;
+    /// `Car::tyres[index].data.radius`
+    fn tyre_radius(&self, index: usize) -> f32;
+    /// `Engine::getLimiterRPM`
+    fn limiter_rpm(&self) -> i32;
+    /// `CarAvatar::physicsInfo.tyreCompounds`
+    fn tyre_compound_names(&self) -> Vec<String>;
+    /// `CarAvatar::physicsInfo.maxFuel`, `Car::requestedFuel`
+    fn max_fuel(&self) -> f64;
+    fn requested_fuel(&self) -> f32;
+    /// `FuelLapEvaluator::getFuelPerLap`, `CarAvatar::physicsState.normalizedSplinePosition`
+    fn fuel_per_lap(&self) -> f32;
+    fn normalized_spline_position(&self) -> f32;
 }
 
 /// What the editor reads of the session besides the car.
@@ -42,6 +59,10 @@ pub struct SetupLink {
     pub track_name: String,
     /// `Sim::useMousePitstop`
     pub use_mouse_pitstop: bool,
+    /// `Speed::useMPH`
+    pub use_mph: bool,
+    /// `RaceManager::getSessionTotalTime(0)`, ms
+    pub session_total_time: i32,
     /// `QuickMenuPitstop::buildControls` was asked of these pit menus (the runner does it)
     pub quick_menu_build_controls: Vec<crate::control::Id>,
 }

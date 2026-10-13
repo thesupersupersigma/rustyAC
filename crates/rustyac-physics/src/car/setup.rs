@@ -238,8 +238,14 @@ pub enum SetupJob {
     /// `SetupScreen::loadINI` @ 0x14017d950: the item has a spinner (`attached = true`; the
     /// game writes the flag from the screen's own thread)
     Attach { item: usize },
-    /// the spinners' job @ 0x140183620: `newValue`
+    /// the spinners' job @ 0x140183620: `newValue` (the gears' spinners write it themselves)
     SetNewValue { item: usize, value: f32 },
+    /// the job of `CarAvatar::setTyreCompound` @ 0x1400d0740: `Tyre::setCompound`
+    SetTyreCompound { tyre: usize, index: i32 },
+    /// the fuel spinner's job @ 0x14016e450: `Car::setRequestedFuel(value, true)`; the fuel
+    /// used this lap is not counted. `spinner_value` is what the spinner shows when the job
+    /// runs (another number than the car's restarts the wait for the setup's check).
+    SetRequestedFuel { value: f32, spinner_value: i32 },
 }
 
 /// One value `SetupManager::step` changed.
@@ -632,6 +638,8 @@ impl SetupManager {
                     item.new_value = value;
                 }
             }
+            // (the car's own: see `RollingChassis::apply_setup_job`)
+            SetupJob::SetTyreCompound { .. } | SetupJob::SetRequestedFuel { .. } => {}
         }
     }
 

@@ -45,7 +45,47 @@ impl SetupCar for PortCar {
     }
 
     fn job(&mut self, job: SetupJob) {
-        self.chassis.borrow_mut().setup_manager.apply_job(&job);
+        self.chassis.borrow_mut().apply_setup_job(&job);
+    }
+
+    fn gear_ratio(&self, index: usize) -> f64 {
+        self.chassis.borrow().drivetrain.as_ref().and_then(|d| d.base().gears.get(index).map(|gear| gear.ratio)).unwrap_or(0.0)
+    }
+
+    fn final_ratio(&self) -> f32 {
+        self.chassis.borrow().drivetrain.as_ref().map_or(0.0, |d| d.base().final_ratio)
+    }
+
+    fn is_front_wheel_drive(&self) -> bool {
+        self.chassis.borrow().drivetrain.as_ref().is_some_and(|d| d.base().traction_type == rustyac_physics::car::drivetrain::TractionType::Fwd)
+    }
+
+    fn tyre_radius(&self, index: usize) -> f32 {
+        self.chassis.borrow().tyres[index].data.radius
+    }
+
+    fn limiter_rpm(&self) -> i32 {
+        self.chassis.borrow().drivetrain.as_ref().map_or(0, |d| d.engine().get_limiter_rpm())
+    }
+
+    fn tyre_compound_names(&self) -> Vec<String> {
+        self.chassis.borrow().tyres[0].compound_defs.iter().map(|def| def.name.clone()).collect()
+    }
+
+    fn max_fuel(&self) -> f64 {
+        self.chassis.borrow().max_fuel
+    }
+
+    fn requested_fuel(&self) -> f32 {
+        self.chassis.borrow().requested_fuel
+    }
+
+    fn fuel_per_lap(&self) -> f32 {
+        self.chassis.borrow().fuel_lap_evaluator.fuel_per_lap()
+    }
+
+    fn normalized_spline_position(&self) -> f32 {
+        self.chassis.borrow().spline_locator_data.npos
     }
 }
 
