@@ -58,7 +58,7 @@ fn class_name(gui: &Gui, id: Id) -> &'static str {
     }
 }
 
-fn dump_control(gui: &Gui, id: Id, depth: usize, out: &mut String) {
+pub fn dump_control(gui: &Gui, id: Id, depth: usize, out: &mut String) {
     let c = &gui.controls[id];
     let r = |r: &rustyac_gui::painter::Rect| [r.left, r.right, r.top, r.bottom];
     let class = class_name(gui, id);
@@ -107,7 +107,7 @@ fn dump_control(gui: &Gui, id: Id, depth: usize, out: &mut String) {
     }
 }
 
-fn dump(gui: &Gui, out: &mut String) {
+fn dump(gui: &Gui, hud: &crate::gui_port2::Hud, out: &mut String) {
     let name = gui.captured_form.map(|f| gui.controls[f].name.clone()).unwrap_or_else(|| "-".into());
     out.push_str(&format!(
         "gui captured={name} at={:08x},{:08x} good={:08x},{:08x} move={} area={} mouse={:08x},{:08x} desktop={}\n",
@@ -125,6 +125,7 @@ fn dump(gui: &Gui, out: &mut String) {
         dump_control(gui, *root, 0, out);
     }
     dump_control(gui, gui.taskbar, 0, out);
+    crate::gui_port_hud::dump(&hud.hud, gui, out);
 }
 
 fn op(gui: &mut Gui, painter: &mut dyn Painter, hud: &mut crate::gui_port2::Hud, screen: Id, objects: &mut Vec<Id>, op: &Op) -> Result<(), String> {
@@ -214,7 +215,7 @@ fn op(gui: &mut Gui, painter: &mut dyn Painter, hud: &mut crate::gui_port2::Hud,
         Op::Wheel(x, y, delta) => gui.mouse_wheel(&MouseEvent { x: *x, y: *y, button: -1, delta: *delta }),
         Op::KeyDown(code) => gui.key_down(*code),
         Op::KeyChar(code) => gui.key_char(*code),
-        Op::Font(..) | Op::Blit(..) | Op::ClearText | Op::Frame(_) | Op::Save => {}
+        Op::Font(..) | Op::Blit(..) | Op::ClearText | Op::Frame(_) | Op::Save | Op::Hud(..) => {}
     }
     Ok(())
 }
@@ -257,7 +258,9 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                 graphics.set_screen_space_mode();
                 {
                     let mut painter = renderer.painter(&mut graphics);
+                    crate::gui_port_hud::update(&mut hud.hud, &mut gui, *dt);
                     gui.render_all(*dt, &mut painter);
+                    crate::gui_port_hud::render_hud(&mut hud.hud, &mut gui, &mut painter, *dt);
                     hud.render(&mut gui, &mut painter, *dt);
                     for (font, x, y, text, size, align, color, shadowed) in &blits {
                         let font: &mut Font = &mut fonts[*font];
@@ -279,7 +282,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     outcome.state.push_str(&format!("event {}\n", crate::gui_port2::event_text(&gui, event)));
                 }
                 widget_events = gui.widget_events.len();
-                dump(&gui, &mut outcome.state);
+                dump(&gui, &hud, &mut outcome.state);
                 frame += 1;
             }
             Op::Save => outcome.saved.push(gui.serialize_forms().unwrap_or_default()),
@@ -290,6 +293,10 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
             }
             Op::Blit(font, x, y, text, size, align, color, shadowed) => blits.push((*font, *x, *y, *text, *size, *align, *color, *shadowed)),
             Op::ClearText => blits.clear(),
+            Op::Hud(what, number, text) => {
+                let mut painter = renderer.painter(&mut graphics);
+                crate::gui_port_hud::call(&mut hud.hud, &mut gui, &mut painter, &args.game, screen, what, *number, text)?;
+            }
             other => {
                 let mut painter = renderer.painter(&mut graphics);
                 op(&mut gui, &mut painter, &mut hud, screen, &mut objects, other)?;

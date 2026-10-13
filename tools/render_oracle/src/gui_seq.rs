@@ -42,6 +42,8 @@ pub enum Op {
     Blit(usize, f32, f32, &'static str, f32, i32, [f32; 4], bool),
     /// the text list is emptied
     ClearText,
+    /// a call on the HUD objects, or a change of the session's state they read
+    Hud(&'static str, f32, &'static str),
     /// one frame is drawn (and compared): the frame's time
     Frame(f32),
     /// `GUI::serializeForms`: the layout file is written (and compared)
@@ -136,6 +138,122 @@ pub struct Sequence {
 }
 
 const DT: f32 = 1.0 / 60.0;
+
+/// A car as the HUD scripts start it: a valid lap, no place yet.
+pub fn default_car() -> rustyac_gui::hud::HudCar {
+    rustyac_gui::hud::HudCar { current_lap_valid: true, leaderboard_position: -1, steer_lock: 1.0, ..Default::default() }
+}
+
+/// A script's change of what the HUD reads of the session (true: it was one).
+pub fn hud_input(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f32, text: &str) -> bool {
+    let on = number != 0.0;
+    match what {
+        "session" => input.session_type = number as i32,
+        "pqText" => input.practice_qualify_text = text.to_string(),
+        "raceText" => input.race_text = text.to_string(),
+        "tts" => input.time_to_session_start = number as f64,
+        "esc" => {
+            input.esc_menu_visible = on;
+            input.esc_menu_width = text.parse().unwrap_or(0.0);
+        }
+        "pause" => input.pause_menu_visible = on,
+        "replay" => input.in_replay = on,
+        _ if what.starts_with("car.") => {
+            // a number: the car is the text; a text: the car is the number
+            let textual = matches!(what, "car.name" | "car.guiName" | "car.unixName");
+            let index: usize = if textual { number as usize } else { text.parse().unwrap_or(0) };
+            let Some(car) = input.cars.get_mut(index) else { return true };
+            match what {
+                "car.name" => car.driver_name = text.to_string(),
+                "car.guiName" => car.gui_name = text.to_string(),
+                "car.unixName" => car.unix_name = text.to_string(),
+                "car.steer" => car.steer = number,
+                "car.steerLock" => car.steer_lock = number,
+                "car.penalty" => car.has_penalty = on,
+                "car.lock" => car.lock_controls_time = number,
+                "car.valid" => car.current_lap_valid = on,
+                "car.pos" => car.leaderboard_position = number as i32,
+                "car.last" => car.last_lap_ms = number as u32,
+                _ => return crate::gui_seq::hud_input2(input, what, number, text),
+            }
+        }
+        _ => return crate::gui_seq::hud_input2(input, what, number, text),
+    }
+    true
+}
+
+/// (the state of the HUD objects of part two)
+pub fn hud_input2(_input: &mut rustyac_gui::hud::HudInput, _what: &str, _number: f32, _text: &str) -> bool {
+    false
+}
+
+pub fn message_line(status: i32, timer: f32, session_text: &str, last_valid: bool, invalid_time: f32, car_index: u32) -> String {
+    format!("hud message status={status} timer={:08x} session=\"{session_text}\" valid={} invalid={:08x} car={car_index}\n", timer.to_bits(), last_valid as u8, invalid_time.to_bits())
+}
+
+pub fn notification_line(status: i32, timer: f32, blink: f32, show: bool) -> String {
+    format!("hud notification status={status} timer={:08x} blink={:08x} show={}\n", timer.to_bits(), blink.to_bits(), show as u8)
+}
+
+/// The messages of the HUD: the banner, the session's line with its gates, the bar of a car,
+/// the two notifications.
+fn hud_messages() -> Vec<Op> {
+    use Op::*;
+    let mut o = vec![
+        Hud("create", 3.0, ""),
+        Hud("car.name", 0.0, "Tazio Nuvolari"),
+        Hud("car.guiName", 0.0, "Ferrari F2004"),
+        Hud("car.unixName", 0.0, "ks_ferrari_f2004"),
+        Hud("car.name", 1.0, "Rudolf Caracciola"),
+        Hud("car.guiName", 1.0, "A car with no logo"),
+        Hud("car.unixName", 1.0, "no_such_car"),
+        Hud("car.name", 2.0, "Bernd Rosemeyer"),
+        Hud("car.guiName", 2.0, "Third car"),
+        Hud("car.steerLock", 450.0, "0"),
+        Hud("session", 1.0, ""),
+        Hud("pqText", 0.0, "Practice  -  Time left 12:34"),
+        Hud("raceText", 0.0, "Race  -  Lap 2/5"),
+        Frame(DT),
+        Frame(DT),
+        Hud("message", 8.0, "ABS|Set on level : 2/3"),
+        Frame(DT),
+        Frame(1.0),
+        Hud("message", 9.0, "TC|OFF"),
+        Frame(DT),
+        Hud("message", 0.0, "A title long enough to run past the line under it, and then some more of it|with a description"),
+        Frame(2.0),
+        Frame(2.0),
+        Frame(2.0),
+        Frame(DT),
+        Hud("message", 11.0, "Brake Bias|58.5 %"),
+        Frame(DT),
+        Hud("clear", 0.0, ""),
+        Frame(DT),
+    ];
+    // the bar of a car, in the three kinds of session
+    for (session, car, position, last) in [(1, 0, -1, 0), (2, 1, 3, 101234), (3, 2, 1, 83007), (3, 0, -1, 59999), (0, 1, 2, 0)] {
+        o.extend([Hud("session", session as f32, ""), Hud("car.pos", position as f32, ["0", "1", "2"][car]), Hud("car.last", last as f32, ["0", "1", "2"][car]), Hud("carMessage", car as f32, "0"), Frame(DT), Frame(DT)]);
+    }
+    // (a car index equal to the number of cars crashes the game itself: only one past it here)
+    o.extend([Hud("carMessage", 4.0, "0"), Frame(DT)]);
+    // the ESC menu shows: the message is gone, the bars begin at its right edge
+    o.extend([Hud("session", 3.0, ""), Hud("carMessage", 0.0, "0"), Frame(DT), Hud("esc", 1.0, "400"), Frame(DT), Hud("message", 0.0, "Hidden|by the menu"), Frame(DT), Hud("esc", 0.0, "400"), Frame(DT), Hud("message", 0.0, "Shown|again"), Frame(DT), Frame(6.0), Frame(DT)]);
+    // the session's line: gone for five seconds after the lap went invalid, with a penalty, locked controls, the pause menu, a replay
+    o.extend([Hud("car.valid", 0.0, "0"), Frame(DT), Frame(2.0), Frame(2.0), Frame(2.0), Frame(DT), Hud("car.valid", 1.0, "0"), Frame(DT)]);
+    for what in ["car.penalty", "car.lock", "pause", "replay"] {
+        o.extend([Hud(what, 1.0, "0"), Frame(DT), Hud(what, 0.0, "0"), Frame(DT)]);
+    }
+    o.extend([Hud("session", 2.0, ""), Frame(DT), Hud("session", 5.0, ""), Frame(DT), Hud("session", 3.0, ""), Hud("raceText", 0.0, ""), Frame(DT), Hud("raceText", 0.0, "Race  -  Last lap"), Frame(DT)]);
+    // the down-shift protection icon: it blinks, and goes after 2.2 seconds
+    o.push(Hud("notify", 1.0, ""));
+    for _ in 0..30 {
+        o.push(Frame(0.1));
+    }
+    // the wheel is not centred before the start of a race: the warning with its bar, left and right
+    o.extend([Hud("tts", 5000.0, ""), Hud("car.steer", 120.0, "0"), Frame(DT), Frame(DT), Hud("car.steer", -300.0, "0"), Frame(DT), Hud("car.steer", 600.0, "0"), Frame(DT), Hud("car.steer", 10.0, "0"), Frame(DT), Hud("car.steer", 95.0, "0"), Frame(DT), Hud("tts", 500.0, ""), Frame(1.0), Frame(1.0), Frame(1.5), Frame(DT)]);
+    o.extend([Hud("notify", 2.0, ""), Frame(DT), Hud("esc", 1.0, "300"), Frame(DT), Hud("esc", 0.0, "300"), Frame(DT)]);
+    o
+}
 
 /// The game's clock (`ksGetTime`, milliseconds) at a frame: both sides are told the same.
 pub fn time_ms(frame: usize) -> f64 {
@@ -717,6 +835,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "widgets_a" => plain(widgets_a()),
         "widgets_b" => plain(widgets_b()),
         "widgets_c" => plain(widgets_c()),
+        "hud_messages" => plain(hud_messages()),
         // forms as a first session finds them (no layout file)
         "forms" => {
             let mut ops = forms();
@@ -735,7 +854,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
             forms_more(&mut ops);
             Sequence { ops, acos: None, allow_overlapping: true }
         }
-        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c)")),
+        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages)")),
     })
 }
 

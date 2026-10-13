@@ -16,6 +16,7 @@ use crate::gui_seq::Val;
 pub struct Hud {
     /// the pop-overs drawn after the GUI in every frame
     pub pop_overs: Vec<Id>,
+    pub hud: crate::gui_port_hud::HudPort,
 }
 
 impl Hud {

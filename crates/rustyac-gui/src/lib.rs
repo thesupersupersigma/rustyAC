@@ -6,13 +6,14 @@
 
 // The ported code keeps the game's operations as the machine code has them: comparisons are
 // spelled so that a NaN takes the game's branch.
-#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments, clippy::nonminimal_bool, clippy::type_complexity, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop)]
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments, clippy::nonminimal_bool, clippy::type_complexity, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop, clippy::manual_clamp)]
 
 pub mod acos;
 pub mod control;
 pub mod font;
 pub mod form;
 pub mod gui;
+pub mod hud;
 pub mod painter;
 pub mod spinner;
 pub mod taskbar;

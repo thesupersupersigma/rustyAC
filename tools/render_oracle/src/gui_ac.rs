@@ -86,6 +86,71 @@ unsafe extern "C" fn not_called() {
     std::process::abort();
 }
 
+pub unsafe fn class_of(game: &Game, object: *const u8) -> &'static str {
+    let table: usize = rd(object, 0);
+    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+}
+
+pub unsafe fn children(object: *const u8) -> Vec<*mut u8> {
+    let (begin, end): (*const *mut u8, *const *mut u8) = (rd(object, 0xa0), rd(object, 0xa8));
+    if begin.is_null() {
+        return Vec::new();
+    }
+    (0..end.offset_from(begin) as usize).map(|i| *begin.add(i)).collect()
+}
+
+pub unsafe fn dump_control(game: &Game, control: *const u8, depth: usize, out: &mut String) {
+    let class = class_of(game, control);
+    let bits = |offset: usize| rd::<u32>(control, offset);
+    let float = |offset: usize| rd::<f32>(control, offset);
+    let four = |offset: usize| rd::<[f32; 4]>(control, offset);
+    let flag = |offset: usize| rd::<u8>(control, offset);
+    let extra = match class {
+        "Form" => format!(" form={}{}{} save={:08x} step={:08x}", flag(0x180), flag(0x181), flag(0x182), bits(0x184), bits(0x1b4)),
+        "ActiveButton" => format!(" button={} sel={} multi={} active={} label=\"{}\"", rd::<i32>(control, 0x1c0), flag(0x1e8), flag(0x1e9), flag(0x1c6), read_wstring(control.add(0x1c8))),
+        "ProgressBar" => format!(" progress={:08x},{:08x},{:08x},{}{}", bits(0x178), bits(0x17c), bits(0x180), flag(0x184), flag(0x185)),
+        "CheckBox" => format!(" check={}", flag(0x190)),
+        "Slider" => format!(" slider={:08x}", bits(0x1a8)),
+        "TaskBarIcon" => format!(" icon={} target={:08x}", rd::<i32>(control, 0x178), bits(0x210)),
+        "Taskbar" => format!(" bar={},{},{},{}", rd::<i32>(control, 0x178), flag(0x17c), rd::<i32>(control, 0x230), rd::<i16>(control, 0x260)),
+        "GameScreen" => {
+            let (begin, end): (usize, usize) = (rd(control, 0x198), rd(control, 0x1a0));
+            format!(" screen={} hidden={}", flag(0x178), (end - begin) / 4)
+        }
+        other => crate::gui_ac2::extra(game, control, other),
+    };
+    out.push_str(&crate::gui_seq::control_line(
+        depth,
+        &crate::gui_seq::ControlState {
+            class,
+            name: read_wstring(control.add(8)),
+            rect: four(0x28),
+            rect_base: four(0x168),
+            visible: flag(0x150) != 0,
+            is_mouse_down: flag(0x151) != 0,
+            highlight: flag(0x78) != 0,
+            is_highlight: flag(0x140) != 0,
+            draw_border: flag(0x110) != 0,
+            draw_background: flag(0x111) != 0,
+            text: read_wstring(control.add(0x120)),
+            font_scale: float(0x118),
+            scale_mult: float(0x15c),
+            font_align: rd::<i32>(control, 0xc0),
+            colors: [four(0x38), four(0x48), four(0x58), four(0x68), four(0x7c)],
+            has_texture: rd::<usize>(control, 0xe8) != 0,
+            repeat: (float(0x114), float(0x154), flag(0x158) != 0),
+            extra,
+        },
+    ));
+    if class == "TaskBarIcon" {
+        // the title box is not a child: the icon draws it itself
+        dump_control(game, rd::<*const u8>(control, 0x200), depth + 1, out);
+    }
+    for child in children(control) {
+        dump_control(game, child, depth + 1, out);
+    }
+}
+
 struct Side<'a> {
     game: &'a Game,
     gui: *mut u8,
@@ -109,16 +174,11 @@ impl Side<'_> {
     }
 
     unsafe fn class_of(&self, object: *const u8) -> &'static str {
-        let table: usize = rd(object, 0);
-        CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).find(|c| self.game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+        class_of(self.game, object)
     }
 
     unsafe fn children(&self, object: *const u8) -> Vec<*mut u8> {
-        let (begin, end): (*const *mut u8, *const *mut u8) = (rd(object, 0xa0), rd(object, 0xa8));
-        if begin.is_null() {
-            return Vec::new();
-        }
-        (0..end.offset_from(begin) as usize).map(|i| *begin.add(i)).collect()
+        children(object)
     }
 
     unsafe fn new_object(&mut self, class: &str, name: &str, flag: bool) -> Result<*mut u8, String> {
@@ -206,58 +266,6 @@ impl Side<'_> {
         }
     }
 
-    unsafe fn dump_control(&self, control: *const u8, depth: usize, out: &mut String) {
-        let class = self.class_of(control);
-        let bits = |offset: usize| rd::<u32>(control, offset);
-        let float = |offset: usize| rd::<f32>(control, offset);
-        let four = |offset: usize| rd::<[f32; 4]>(control, offset);
-        let flag = |offset: usize| rd::<u8>(control, offset);
-        let extra = match class {
-            "Form" => format!(" form={}{}{} save={:08x} step={:08x}", flag(0x180), flag(0x181), flag(0x182), bits(0x184), bits(0x1b4)),
-            "ActiveButton" => format!(" button={} sel={} multi={} active={} label=\"{}\"", rd::<i32>(control, 0x1c0), flag(0x1e8), flag(0x1e9), flag(0x1c6), read_wstring(control.add(0x1c8))),
-            "ProgressBar" => format!(" progress={:08x},{:08x},{:08x},{}{}", bits(0x178), bits(0x17c), bits(0x180), flag(0x184), flag(0x185)),
-            "CheckBox" => format!(" check={}", flag(0x190)),
-            "Slider" => format!(" slider={:08x}", bits(0x1a8)),
-            "TaskBarIcon" => format!(" icon={} target={:08x}", rd::<i32>(control, 0x178), bits(0x210)),
-            "Taskbar" => format!(" bar={},{},{},{}", rd::<i32>(control, 0x178), flag(0x17c), rd::<i32>(control, 0x230), rd::<i16>(control, 0x260)),
-            "GameScreen" => {
-                let (begin, end): (usize, usize) = (rd(control, 0x198), rd(control, 0x1a0));
-                format!(" screen={} hidden={}", flag(0x178), (end - begin) / 4)
-            }
-            other => crate::gui_ac2::extra(self.game, control, other),
-        };
-        out.push_str(&crate::gui_seq::control_line(
-            depth,
-            &crate::gui_seq::ControlState {
-                class,
-                name: read_wstring(control.add(8)),
-                rect: four(0x28),
-                rect_base: four(0x168),
-                visible: flag(0x150) != 0,
-                is_mouse_down: flag(0x151) != 0,
-                highlight: flag(0x78) != 0,
-                is_highlight: flag(0x140) != 0,
-                draw_border: flag(0x110) != 0,
-                draw_background: flag(0x111) != 0,
-                text: read_wstring(control.add(0x120)),
-                font_scale: float(0x118),
-                scale_mult: float(0x15c),
-                font_align: rd::<i32>(control, 0xc0),
-                colors: [four(0x38), four(0x48), four(0x58), four(0x68), four(0x7c)],
-                has_texture: rd::<usize>(control, 0xe8) != 0,
-                repeat: (float(0x114), float(0x154), flag(0x158) != 0),
-                extra,
-            },
-        ));
-        if class == "TaskBarIcon" {
-            // the title box is not a child: the icon draws it itself
-            self.dump_control(rd::<*const u8>(control, 0x200), depth + 1, out);
-        }
-        for child in self.children(control) {
-            self.dump_control(child, depth + 1, out);
-        }
-    }
-
     unsafe fn dump(&self, out: &mut String) {
         let g = self.gui;
         let captured: *const u8 = rd(g, 0xc8);
@@ -276,9 +284,10 @@ impl Side<'_> {
         ));
         let (begin, end): (*const *mut u8, *const *mut u8) = (rd(g, 0xa0), rd(g, 0xa8));
         for i in 0..end.offset_from(begin) as usize {
-            self.dump_control(*begin.add(i), 0, out);
+            dump_control(self.game, *begin.add(i), 0, out);
         }
-        self.dump_control(rd::<*const u8>(g, 0x98), 0, out);
+        dump_control(self.game, rd::<*const u8>(g, 0x98), 0, out);
+        crate::gui_ac_hud::dump(self.game, out);
     }
 
     unsafe fn mouse(&mut self, va: usize, x: i32, y: i32, button: i32, delta: f32) {
@@ -404,6 +413,7 @@ impl Side<'_> {
             }
             Op::Blit(font, x, y, text, size, align, color, shadowed) => self.blits.push((*font, *x, *y, text, *size, *align, *color, *shadowed)),
             Op::ClearText => self.blits.clear(),
+            Op::Hud(what, number, text) => crate::gui_ac_hud::call(self.game, self.gui, self.screen, what, *number, text)?,
             Op::Frame(_) | Op::Save => {}
         }
         Ok(())
@@ -424,6 +434,17 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
         }
     }
     copy_tree(&args.game.join("content/gui"), &args.root.join("content/gui"))?;
+    // the HUD's pictures besides the GUI's: a car's logo, the damage pictures, the wrong-way sign
+    for file in ["content/cars/ks_ferrari_f2004/logo.png", "content/texture/wrongway.png"] {
+        let (from, to) = (args.game.join(file), args.root.join(file));
+        if from.is_file() && !to.is_file() {
+            std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
+            std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        }
+    }
+    if args.game.join("content/texture/damage").is_dir() {
+        copy_tree(&args.game.join("content/texture/damage"), &args.root.join("content/texture/damage"))?;
+    }
     let gameplay = format!("[VIRTUAL_MIRROR]\nACTIVE=0\n\n[GUI]\nALLOW_OVERLAPPING_FORMS={}\n", sequence.allow_overlapping as i32);
     for cfg in [args.root.join("cfg"), args.root.join("documents/Assetto Corsa/cfg")] {
         std::fs::create_dir_all(&cfg).map_err(|e| e.to_string())?;
@@ -494,8 +515,10 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     rustyac_render::gpulog::begin_capture(name);
                     // Game::onIdle 0x140242730: the scene (none here), the screen-space mode, the GUI
                     call0(VA_GRAPHICS_BEGIN_SCENE);
+                    crate::gui_ac_hud::update(&game, *dt);
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     render(gui, *dt);
+                    crate::gui_ac_hud::render_hud(&game, *dt);
                     crate::gui_ac2::render_hud(&game, gui, *dt);
                     for (font, x, y, text, size, align, color, shadowed) in &side.blits {
                         let font = side.fonts[*font];
