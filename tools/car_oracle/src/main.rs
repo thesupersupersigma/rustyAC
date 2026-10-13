@@ -101,6 +101,8 @@ struct Args {
     /// both save, load and play (`--replay-frames <n>`: the ring's size, `--replay-level
     /// <0..4>`: replay.ini's quality level)
     replay: bool,
+    /// Task 28c: `multi --ghost`: the game's GhostCarRecorder beside the port's on the first car
+    ghost: bool,
     replay_frames: Option<i32>,
     replay_level: Option<i32>,
     only: Vec<String>,
@@ -160,6 +162,7 @@ fn parse_args() -> Result<Args, String> {
         hash_only: false,
         audio_tape: false,
         replay: false,
+        ghost: false,
         replay_frames: None,
         replay_level: None,
         only: Vec::new(),
@@ -216,6 +219,7 @@ fn parse_args() -> Result<Args, String> {
             "--hash-only" => a.hash_only = true,
             "--audio-tape" => a.audio_tape = true,
             "--replay" => a.replay = true,
+            "--ghost" => a.ghost = true,
             "--replay-frames" => a.replay_frames = Some(value()?.parse().map_err(|_| "--replay-frames needs a number")?),
             "--replay-level" => a.replay_level = Some(value()?.parse().map_err(|_| "--replay-level needs 0..4")?),
             "--only" => a.only = value()?.split(',').map(str::to_string).collect(),
@@ -577,6 +581,10 @@ fn multi(args: &Args) -> Result<(), String> {
         let cars: Vec<*mut u8> = (0..world.names.len()).map(|i| world.car_ptr(i)).collect();
         replay = Some(unsafe { game::replay::ReplayProof::build(&acs, &cars, &world.names, world.game_track, world.port_track(), &world.physics_objects, 0, Some(&ini), args.replay_frames, true) });
     }
+    if args.ghost {
+        let port_track = world.port_track();
+        unsafe { game::ghost::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
+    }
     let mut next_frame = 1usize;
     for i in 0..steps {
         world.step();
@@ -615,6 +623,11 @@ fn multi(args: &Args) -> Result<(), String> {
         println!("  {line}");
     }
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
+    if args.ghost {
+        for line in unsafe { game::ghost::finish(&repo, scenario.name)? } {
+            println!("{line}");
+        }
+    }
     if let Some(replay) = &mut replay {
         replay_proof(replay, scenario.name, &out, &repo, &world.names, &track.display().to_string(), &args.layout)?;
     }

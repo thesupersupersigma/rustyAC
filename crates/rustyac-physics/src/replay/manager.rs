@@ -190,7 +190,7 @@ pub fn clear_saved(mut files: Vec<String>, keep: i32) -> Option<String> {
 }
 
 /// `ksEncodeUtf8` 0x140238f10: UTF-8 of each 16-bit unit by itself.
-fn encode_utf8(text: &str) -> Vec<u8> {
+pub(crate) fn encode_utf8(text: &str) -> Vec<u8> {
     let mut out = Vec::new();
     for unit in text.encode_utf16() {
         let c = unit as u32;
@@ -206,7 +206,7 @@ fn encode_utf8(text: &str) -> Vec<u8> {
 }
 
 /// `ksDecodeUtf8`.
-fn decode_utf8(bytes: &[u8]) -> String {
+pub(crate) fn decode_utf8(bytes: &[u8]) -> String {
     let mut units: Vec<u16> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {

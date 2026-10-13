@@ -10,6 +10,7 @@
 //! while the physics stands still. The code has no file, window or sound in it, so it runs
 //! in the browser as it runs on the desktop.
 
+pub mod ghost;
 pub mod half;
 pub mod manager;
 pub mod recorder;
