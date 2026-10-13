@@ -20,6 +20,7 @@ pub mod hud_cars;
 pub mod hud_flags;
 pub mod leaderboard;
 pub mod menus;
+pub mod online_hud;
 pub mod overlay_leaderboard;
 pub mod painter;
 pub mod pit_menu;

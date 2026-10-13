@@ -22,6 +22,12 @@ pub struct MenuScript {
     pub esc: EscScript,
     /// what the replay's bar reads besides the manager's members
     pub replay: ReplayScript,
+    /// an online session's own overlays: the ping to the server (`ACClient::getPing(null)`),
+    /// the server's welcome message, the message of the countdown of a kicked driver ("":
+    /// none runs)
+    pub own_ping: i32,
+    pub welcome: String,
+    pub disconnect: String,
 }
 
 /// What a script says of the session for the ESC menu.
@@ -70,6 +76,9 @@ static SCRIPT: Mutex<MenuScript> = Mutex::new(MenuScript {
     session_count: 1,
     replay_manager: false,
     pit: PitScript { max_fuel: 0.0, compounds: Vec::new(), pressure: [0; 4], wing: [0.0; 8], in_pitlane: false, fuel_per_lap: 0.0, spline: 0.0, total_time: 0, timed: false, state: 0, times: [0.0; 5] },
+    own_ping: 0,
+    welcome: String::new(),
+    disconnect: String::new(),
     replay: ReplayScript { lap_marks: Vec::new(), camera_manager: false, camera_sets: Vec::new(), camera_index: 0 },
     esc: EscScript { setup_state: 1, fixed_setup: false, time_to_wait: 0.0, game_time: 0.0, in_pit: false, grip: 1.0, sun_angle: 0.0, ambient: 0.0, road: 0.0, wind_speed: 0.0, wind_direction: 0.0 },
 });
@@ -158,6 +167,9 @@ pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
     match what {
         "menu.sessions" => s.session_count = number as u32,
         "menu.replayManager" => s.replay_manager = number != 0.0,
+        "menu.ping" => s.own_ping = number as i32,
+        "menu.welcome" => s.welcome = _text.replace('|', "\n"),
+        "menu.disconnect" => s.disconnect = _text.to_string(),
         "menu.replayLaps" => s.replay.lap_marks = _text.split(',').filter_map(|mark| mark.trim().parse().ok()).collect(),
         "menu.replayCamera" => s.replay.camera_manager = number != 0.0,
         "menu.cameraSets" => s.replay.camera_sets = _text.split('|').filter(|set| !set.is_empty()).map(str::to_string).collect(),
@@ -1131,5 +1143,20 @@ pub fn replay_bar(cars: usize) -> Vec<Op> {
     set(&mut o, "loaded", 1.0);
     click(&mut o, exit, row);
     o.extend([hud("menu.replayShow", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// An online session's own overlays: the ping in the corner in its three colours, the
+/// server's welcome message, the red screen of a driver who is counted out.
+pub fn online_overlays() -> Vec<Op> {
+    let mut o = vec![hud("create", 2.0, ""), hud("car.name", 0.0, "Tazio Nuvolari"), hud("online", 1.0, ""), hud("menu.qos", 0.0, ""), Op::Frame(DT)];
+    for ping in [23.0, 70.0, 71.0, 120.0, 121.0, 999.0, 0.0, -1.0] {
+        o.extend([hud("menu.ping", ping, ""), Op::Frame(DT)]);
+    }
+    o.extend([hud("menu.welcome", 0.0, "Welcome to the made-up server|Be fair. No wrecking.||Have fun"), Op::Frame(DT), Op::Frame(DT), hud("menu.welcome", 0.0, ""), Op::Frame(DT)]);
+    for now in [61_000.0, 61_999.0, 62_000.0, 63_500.0] {
+        o.extend([hud("menu.env", now, "now"), hud("menu.disconnect", 0.0, "You have been voted to be kicked from the race"), Op::Frame(DT)]);
+    }
+    o.extend([hud("menu.welcome", 0.0, "both at once"), Op::Frame(DT), hud("menu.disconnect", 0.0, ""), hud("menu.welcome", 0.0, ""), Op::Frame(DT)]);
     o
 }

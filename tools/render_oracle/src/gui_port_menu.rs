@@ -30,6 +30,7 @@ pub struct Menus {
     pub replay: Option<Id>,
     pub drivable_camera: i32,
     pub last_replay_name: String,
+    pub client: Option<(rustyac_gui::online_hud::ClientHud, rustyac_gui::online_hud::QosOverlay)>,
 }
 
 fn replay_model(gui: &Gui) -> crate::gui_seq_menu::ReplayModel {
@@ -301,6 +302,11 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             }
         }
         "menu.fadeDone" => gui.sim_fade_in_finished(),
+        "menu.qos" => {
+            let client = rustyac_gui::online_hud::ClientHud::new(gui, painter);
+            let qos = rustyac_gui::online_hud::QosOverlay::new(gui, painter);
+            hud.more.menus.client = Some((client, qos));
+        }
         "menu.replay" => {
             replay_store(gui, &crate::gui_seq_menu::ReplayModel::default());
             sync(hud, gui);
@@ -439,6 +445,11 @@ pub fn render_end(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
     }
     if let Some(tab) = &hud.more.menus.tab {
         tab.render_hud(gui, painter, dt);
+    }
+    if let Some((client, qos)) = &hud.more.menus.client {
+        let s = script();
+        client.render_hud(gui, painter, &s.welcome, Some(s.disconnect.as_str()).filter(|message| !message.is_empty()), s.esc.game_time);
+        qos.render_hud(gui, painter, s.own_ping);
     }
 }
 

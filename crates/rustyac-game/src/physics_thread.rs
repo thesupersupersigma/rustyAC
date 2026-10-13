@@ -155,6 +155,8 @@ pub struct Shared {
     pub replay_restart: AtomicBool,
     /// Task 25: an online session's lines for the HUD (the player list, the chat).
     pub online_hud: Mutex<Vec<String>>,
+    /// Task 30: what AC's own online overlays show
+    pub online_gui: Mutex<Option<crate::online::OnlineGui>>,
     /// Task 28: what the referee says, for the HUD.
     pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
     /// Task 28c: the session's track, for the replay's playback on the display thread
@@ -177,6 +179,7 @@ impl Shared {
             replay_speed: AtomicU32::new(1.0f32.to_bits()),
             replay_restart: AtomicBool::new(false),
             online_hud: Mutex::new(Vec::new()),
+            online_gui: Mutex::new(None),
             referee_hud: Mutex::new(None),
             track: Mutex::new(None),
             timing: Mutex::new(Timing::default()),
@@ -504,6 +507,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
             if steps.is_multiple_of(64) {
                 *shared.online_hud.lock().unwrap() = session.hud_lines();
+                *shared.online_gui.lock().unwrap() = Some(session.gui_state());
             }
             if session.net.client.is_lost() {
                 result = Err("the connection to the server is gone".to_string());

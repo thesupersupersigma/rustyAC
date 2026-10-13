@@ -107,6 +107,12 @@ pub struct GameGui {
     pit: Option<crate::referee::PitGui>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
+    /// an online session's own overlays (`ACClient::renderHUD`, `QOSOverlay`), what they
+    /// show, the welcome message a click closed, and how long the countdown has run
+    client_hud: Option<(rustyac_gui::online_hud::ClientHud, rustyac_gui::online_hud::QosOverlay)>,
+    online: Option<crate::online::OnlineGui>,
+    welcome_closed: String,
+    disconnect_time: f32,
     /// `ReplayManager::replayInterface`: the replay's bar (when the session has a replay)
     pub replay_bar: Option<Id>,
     /// `Sim::escMenu` (off line; an online session has none yet)
@@ -257,7 +263,9 @@ impl GameGui {
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, replay_bar, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
+        let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -311,6 +319,11 @@ impl GameGui {
                 self.gui.sim_on_new_session();
                 self.pits_lock_stale = true;
             }
+        }
+        // an online session's overlays; the countdown of a driver who was put out
+        self.online = info.online.clone();
+        if self.online.as_ref().is_some_and(|online| online.disconnect.is_some()) {
+            self.disconnect_time += dt;
         }
         // what the ESC menu and its page read
         self.gui.sim.game_time = time_ms;
@@ -514,6 +527,12 @@ impl GameGui {
         if self.fuel.is_active {
             self.fuel.render_hud(gui, &mut painter, input);
         }
+        // ACClient::renderHUD, then its child the QOSOverlay
+        if let (Some((client, qos)), Some(online)) = (&self.client_hud, &self.online) {
+            let welcome = if online.welcome == self.welcome_closed { "" } else { online.welcome.as_str() };
+            client.render_hud(gui, &mut painter, welcome, online.disconnect.as_deref(), input.game_time_now);
+            qos.render_hud(gui, &mut painter, online.ping);
+        }
     }
 
     // ----- the window's input (`ksgui::GUI`'s listeners of the mouse and the keyboard) -----
@@ -532,6 +551,10 @@ impl GameGui {
 
     pub fn mouse_down(&mut self, x: i32, y: i32, button: i32) {
         let e = MouseEvent { x, y, button, delta: 0.0 };
+        // (ACClient's handler of the window's mouse buttons: the welcome message goes)
+        if let Some(online) = &self.online {
+            self.welcome_closed = online.welcome.clone();
+        }
         self.gui.mouse_down(&e);
         self.end.on_mouse_down(&mut self.gui, &e);
         if let Some(tab) = &self.tab {
@@ -659,6 +682,11 @@ impl GameGui {
         if let Some(bar) = self.replay_bar {
             self.gui.replay_did_finished_saving(bar, ok, file);
         }
+    }
+
+    /// The countdown of a driver who was put out of an online session is over (ten seconds).
+    pub fn disconnect_over(&self) -> bool {
+        self.disconnect_time > 10.0
     }
 
     /// The ESC menu (the menu of the pits) shows.

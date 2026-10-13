@@ -1700,6 +1700,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                     SimAction::SetTrackCameraSet(_) => {}
                 }
             }
+            // ACClient::update's last lines: ten seconds after the player was put out the game
+            // closes
+            if gui.disconnect_over() {
+                shutdown = true;
+            }
             // what the replay's bar reads of the replay manager and the cameras; the bar shows
             // while the replay is watched
             if let Some(rig) = &rig {
@@ -1888,6 +1893,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             replay_transport: transport.is_some() || ac_replay_line.is_some(),
             replay_state: ac_replay_line.clone().unwrap_or(replay_state),
             notes: shared.online_hud.lock().unwrap().clone(),
+            online: shared.online_gui.lock().unwrap().clone(),
             hidden: !debug_hud,
             focus_fade,
             referee: shared.referee_hud.lock().unwrap().clone(),

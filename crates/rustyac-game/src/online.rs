@@ -180,6 +180,16 @@ impl ServerRules {
 }
 
 /// One slot of the server, for the player list.
+/// What an online session draws over everything (`ACClient::renderHUD`, `QOSOverlay`): the
+/// ping to the server, the server's welcome message, the message of the countdown of a
+/// driver who was put out.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OnlineGui {
+    pub ping: i32,
+    pub welcome: String,
+    pub disconnect: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RosterEntry {
     pub slot: u8,
@@ -216,6 +226,9 @@ pub struct OnlineSession {
     pub console: Vec<String>,
     /// What the game has to act on, in arrival order.
     pub pending: Vec<Event>,
+    /// `ACClient::welcomeMessage`, `ACClient::dcCountdown.message` (once it is signaled)
+    pub welcome: String,
+    pub disconnect: Option<String>,
     /// The cars that become remote cars when the world is built (then empty).
     pub remote_entries: Vec<CarEntry>,
     /// `damageReport`: the damage the server was last told of, and when (ms).
@@ -318,7 +331,7 @@ impl OnlineSession {
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
         let session = mirror_session(&client.current_session, client.session_start_time);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -481,8 +494,25 @@ impl OnlineSession {
                     }
                 }
                 Event::Message(Message::WelcomeMessage(text)) => {
+                    self.welcome = text.clone();
                     for line in text.lines().filter(|line| !line.trim().is_empty()) {
                         self.console.push(format!("server: {line}"));
+                    }
+                }
+                // the player is put out himself: no notice, the countdown's red screen
+                // (ACClient's handler of the message 0x68)
+                Event::Message(Message::Kicked { slot, reason }) if *slot == self.net.client.session_id => {
+                    if self.disconnect.is_none() {
+                        self.disconnect = Some(
+                            match reason {
+                                0 => "You have been voted to be kicked from the race",
+                                1 => "You have been voted to be banned from the server",
+                                2 => "You have been voted to be blacklisted from the server",
+                                3 => "Checksum failed. You have been kicked out of the race",
+                                _ => "You have been kicked from the server",
+                            }
+                            .to_string(),
+                        );
                     }
                 }
                 Event::Message(Message::Kicked { slot, reason }) => {
@@ -560,6 +590,11 @@ impl OnlineSession {
             ));
         }
         lines
+    }
+
+    /// What AC's own online overlays show.
+    pub fn gui_state(&self) -> OnlineGui {
+        OnlineGui { ping: self.net.client.ping as i32, welcome: self.welcome.clone(), disconnect: self.disconnect.clone() }
     }
 
     /// The lines of the player list and the chat, for the HUD.

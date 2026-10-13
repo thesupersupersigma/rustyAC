@@ -56,6 +56,10 @@ unsafe extern "C" fn get_car_real_time_position(_this: *mut u8, car: *mut u8) ->
 }
 
 unsafe extern "C" fn get_ping(_this: *mut u8, car: *mut u8) -> i32 {
+    if car.is_null() {
+        // (no car: the player's own ping to the server)
+        return crate::gui_seq_menu::script().own_ping;
+    }
     let index = car_of(car);
     input(|i| i.cars.get(index).map(|c| c.ping).unwrap_or(-1))
 }

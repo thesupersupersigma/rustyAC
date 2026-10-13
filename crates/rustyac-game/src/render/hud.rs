@@ -49,6 +49,8 @@ pub struct HudInfo {
     pub hidden: bool,
     /// Task 28: what the referee says (the session, the flags, penalties, results).
     pub referee: Option<crate::referee::RefereeHud>,
+    /// Task 30: an online session's ping, welcome message and countdown
+    pub online: Option<crate::online::OnlineGui>,
 }
 
 type Color = [f32; 4];

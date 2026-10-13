@@ -92,9 +92,12 @@ struct Menus {
     app: usize,
     /// the `OverlayLeaderboard`
     overlay: usize,
+    /// an `ACClient` with the members its own `renderHUD` reads, and its `QOSOverlay`
+    client: usize,
+    qos: usize,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0, tab: 0, app: 0, overlay: 0 });
+static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0, tab: 0, app: 0, overlay: 0, client: 0, qos: 0 });
 
 unsafe extern "C" fn set_mode(_this: *mut u8, mode: i32, _fade: bool, _random: bool) {
     action(format!("setMode {mode}"));
@@ -202,6 +205,26 @@ pub unsafe fn render_end(game: &Game, h: &HudGame, dt: f32) {
         let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SESSION_LEADERBOARD_RENDER_HUD));
         render(tab, dt);
         client_present(false);
+    }
+    // ACClient::renderHUD, then its child the QOSOverlay
+    let (client, qos) = {
+        let m = MENUS.lock().unwrap();
+        (m.client as *mut u8, m.qos as *mut u8)
+    };
+    if !client.is_null() {
+        let s = script();
+        if crate::gui_ac::read_wstring(client.add(0x10588)) != s.welcome {
+            crate::ac::write_wstring(&game.acs, client.add(0x10588), &s.welcome);
+        }
+        wr(client, 0x10558, !s.disconnect.is_empty() as u8);
+        if crate::gui_ac::read_wstring(client.add(0x10560)) != s.disconnect {
+            crate::ac::write_wstring(&game.acs, client.add(0x10560), &s.disconnect);
+        }
+        wr(rd::<*mut u8>(client, 0x8), 0x18, s.esc.game_time);
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(0x1_4005_1650));
+        render(client, dt);
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(0x1_400a_c5d0));
+        render(qos, dt);
     }
 }
 
@@ -526,6 +549,25 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         "menu.tabShow" => {
             let display: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_SIM_DISPLAY_LEADERBOARD));
             display(sim, number != 0.0);
+        }
+        "menu.qos" => {
+            // ACClient::ACClient: its font (Segoe UI 32), its two texts, then the overlay
+            let client = a.alloc(0x11000);
+            wr(client, 0x8, rd::<usize>(sim, 0x8));
+            let font = a.alloc(0x20);
+            let ctor: extern "C" fn(*mut u8, *const u8, i32, f32, bool, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_4020_0a60));
+            ctor(font, wstring(a, ""), 0, 32.0, false, false);
+            wr(client, 0x10538, font);
+            for at in [0x10560, 0x10588] {
+                std::ptr::write_bytes(client.add(at), 0, 0x20);
+                wr(client, at + 0x18, 7usize);
+            }
+            let qos = a.alloc(0x68);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_400a_c470));
+            ctor(qos, client);
+            let mut m = MENUS.lock().unwrap();
+            m.client = client as usize;
+            m.qos = qos as usize;
         }
         "menu.overlay" => {
             crate::gui_ac_race::install(game);
