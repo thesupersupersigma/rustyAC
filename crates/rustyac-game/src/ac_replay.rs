@@ -299,6 +299,12 @@ impl ReplayRig {
         replay::get_replay_file_name(&local_time(), suffix, car, &self.info.track, &self.info.layout)
     }
 
+    /// `ReplayManager::getAutoFileName`: the name the replay bar's save box proposes.
+    pub fn auto_file_name(&self) -> String {
+        let car = self.info.cars.first().map_or("", |car| car.unix_name.as_str());
+        replay::get_auto_file_name(&local_time(), car, &self.info.track, &self.info.layout)
+    }
+
     /// `ReplayManager::save`: into rustyAC's replay folder (`temp/` below it for an
     /// autosave), never into a folder of the game.
     pub fn save(&mut self, name: &str, temp: bool) -> Result<PathBuf, String> {

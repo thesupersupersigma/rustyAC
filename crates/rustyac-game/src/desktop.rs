@@ -719,6 +719,49 @@ fn save_replay(rig: &mut ReplayRig) {
     }
 }
 
+/// A call of the replay's bar on the replay manager. The answer of a save: whether it was
+/// written, and the name for the message.
+fn replay_bar_action(rig: &mut ReplayRig, asked: rustyac_gui::replay_interface::ReplayAction, shared: &Shared, online: bool) -> Option<(bool, String)> {
+    use rustyac_gui::replay_interface::ReplayAction;
+    match asked {
+        ReplayAction::StopReplayMode => leave_replay(rig, shared, online),
+        ReplayAction::Save(name) => {
+            return Some(match rig.save(&name, false) {
+                Ok(path) => {
+                    println!("Saving replay: {}", path.display());
+                    (true, name)
+                }
+                Err(message) => {
+                    eprintln!("WARNING: the replay was not saved: {message}");
+                    (false, name)
+                }
+            });
+        }
+        asked => {
+            let manager = rig.manager.as_mut().filter(|manager| manager.replay_mode)?;
+            match asked {
+                ReplayAction::Rewind => manager.rewind(1, false),
+                ReplayAction::FastForward => manager.fast_forward(1, false),
+                ReplayAction::Play => manager.play(),
+                ReplayAction::Pause => manager.pause(),
+                ReplayAction::Stop => manager.stop(),
+                ReplayAction::NextFrame => manager.next_frame(),
+                ReplayAction::SlowMotion(level) => manager.slow_motion(level),
+                ReplayAction::SetNormalizedPosition(p) => manager.set_normalized_position(p),
+                // ReplayInterface::onSliderSelection's own event (status 10)
+                ReplayAction::SliderInteraction => {
+                    let (time_mult, slow_motion_level) = (manager.time_mult, manager.slow_mo_level);
+                    manager.events.push(rustyac_physics::replay::ReplayEvent::StatusChanged { status: 10, time_mult, slow_motion_level });
+                }
+                ReplayAction::SetCutInPerc(p) => drop(manager.set_cut_in_perc(p)),
+                ReplayAction::SetCutOutPerc(p) => drop(manager.set_cut_out_perc(p)),
+                ReplayAction::StopReplayMode | ReplayAction::Save(_) => {}
+            }
+        }
+    }
+    None
+}
+
 /// `ReplayManager::stopReplayMode`: the driving goes on (offline the physics was standing).
 fn leave_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
     if rig.manager.as_ref().is_some_and(|manager| manager.has_loaded_replay) {
@@ -1641,6 +1684,49 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // the camera a driver chose in the last session is not kept)
                     SimAction::DriveMenuPressed | SimAction::LoadPreviousSessionUserCamera => {}
                     SimAction::AddMessage { .. } => {}
+                    // the replay bar's buttons, its time line and its save box
+                    SimAction::Replay(asked) => {
+                        if let Some(rig) = &rig {
+                            let mut rig = rig.lock().unwrap();
+                            if let Some((ok, file)) = replay_bar_action(&mut rig, asked, &shared, is_online) {
+                                gui.replay_saved(ok, &file);
+                            }
+                        }
+                    }
+                    // its camera spinner (the track's cameras are not ported: it has no
+                    // such entries)
+                    SimAction::SetDrivableCamera(view) => camera.set_drivable(view),
+                    SimAction::SetCameraModeKept(mode) => camera.set_mode_kept(mode),
+                    SimAction::SetTrackCameraSet(_) => {}
+                }
+            }
+            // what the replay's bar reads of the replay manager and the cameras; the bar shows
+            // while the replay is watched
+            if let Some(rig) = &rig {
+                let rig = rig.lock().unwrap();
+                let link = &mut gui.gui.sim.replay;
+                if let Some(manager) = &rig.manager {
+                    link.status = manager.status;
+                    link.time_mult = manager.time_mult;
+                    link.slow_mo_level = manager.slow_mo_level;
+                    link.current_frame = manager.current_frame;
+                    link.recorded_frames = manager.recorded_frames;
+                    link.cut_in = manager.cut_in;
+                    link.cut_out = manager.cut_out;
+                    link.has_loaded_replay = manager.has_loaded_replay;
+                    link.record_interval_ms = manager.record_interval_ms;
+                    link.lap_marks = if focus.index < manager.recorders.len() { manager.get_normalized_lap_change(focus.index) } else { Vec::new() };
+                }
+                link.auto_file_name = rig.auto_file_name();
+                link.camera_manager = true;
+                if let Some(on) = options.post {
+                    link.post_processing = Some(on);
+                }
+                let watching = rig.in_replay_mode();
+                drop(rig);
+                gui.replay_bar_show(watching);
+                if let Some(index) = camera.global_index().filter(|index| *index != gui.gui.sim.replay.camera_index) {
+                    gui.replay_camera_index(index);
                 }
             }
         }

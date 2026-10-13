@@ -20,6 +20,8 @@ pub struct MenuScript {
     pub pit: PitScript,
     /// what the ESC menu and its pages read
     pub esc: EscScript,
+    /// what the replay's bar reads besides the manager's members
+    pub replay: ReplayScript,
 }
 
 /// What a script says of the session for the ESC menu.
@@ -68,6 +70,7 @@ static SCRIPT: Mutex<MenuScript> = Mutex::new(MenuScript {
     session_count: 1,
     replay_manager: false,
     pit: PitScript { max_fuel: 0.0, compounds: Vec::new(), pressure: [0; 4], wing: [0.0; 8], in_pitlane: false, fuel_per_lap: 0.0, spline: 0.0, total_time: 0, timed: false, state: 0, times: [0.0; 5] },
+    replay: ReplayScript { lap_marks: Vec::new(), camera_manager: false, camera_sets: Vec::new(), camera_index: 0 },
     esc: EscScript { setup_state: 1, fixed_setup: false, time_to_wait: 0.0, game_time: 0.0, in_pit: false, grip: 1.0, sun_angle: 0.0, ambient: 0.0, road: 0.0, wind_speed: 0.0, wind_direction: 0.0 },
 });
 
@@ -155,6 +158,10 @@ pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
     match what {
         "menu.sessions" => s.session_count = number as u32,
         "menu.replayManager" => s.replay_manager = number != 0.0,
+        "menu.replayLaps" => s.replay.lap_marks = _text.split(',').filter_map(|mark| mark.trim().parse().ok()).collect(),
+        "menu.replayCamera" => s.replay.camera_manager = number != 0.0,
+        "menu.cameraSets" => s.replay.camera_sets = _text.split('|').filter(|set| !set.is_empty()).map(str::to_string).collect(),
+        "menu.cameraAt" => s.replay.camera_index = number as i32,
         "menu.env" => match _text {
             "setup" => s.esc.setup_state = number as i32,
             "fixedSetup" => s.esc.fixed_setup = number != 0.0,
@@ -933,5 +940,196 @@ pub fn esc_menu(kind: u32) -> Vec<Op> {
     // "Exit"
     click(&mut o, 50, exit);
     o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// What a script says for the replay's bar that the manager's own members do not hold.
+#[derive(Clone, Debug)]
+pub struct ReplayScript {
+    /// `ReplayManager::getNormalizedLapChange` of the focused car
+    pub lap_marks: Vec<f32>,
+    /// the game object `ACCameraManager` is there; the track's camera sets; the camera's number
+    pub camera_manager: bool,
+    pub camera_sets: Vec<String>,
+    pub camera_index: i32,
+}
+
+/// `ReplayManager::getAutoFileName` in the scripts (made up).
+pub const REPLAY_AUTO_NAME: &str = "ks_ferrari_f2004_magione__131026-142501";
+
+/// The members of `ReplayManager` the bar reads, and the rules its transport calls change
+/// them by in the scripts (the manager itself is Task 28c's).
+#[derive(Clone, Copy, Debug)]
+pub struct ReplayModel {
+    pub status: i32,
+    pub time_mult: f32,
+    pub slow_mo_level: f32,
+    pub current_frame: i32,
+    pub recorded_frames: i32,
+    pub cut_in: i32,
+    pub cut_out: i32,
+    pub has_loaded: bool,
+}
+
+impl Default for ReplayModel {
+    fn default() -> ReplayModel {
+        ReplayModel { status: 2, time_mult: 0.0, slow_mo_level: 2.0, current_frame: 0, recorded_frames: 0, cut_in: 0, cut_out: 0, has_loaded: false }
+    }
+}
+
+/// A transport call on the manager: its members after it, and the line that says it was made.
+pub fn replay_apply(m: &mut ReplayModel, what: &str, value: f32) -> String {
+    let clamp01 = |p: f32| if p > 1.0 { 1.0 } else if p >= 0.0 { p } else { 0.0 };
+    match what {
+        "play" => {
+            m.time_mult = 1.0;
+            m.status = 0;
+        }
+        "pause" => {
+            m.status = 1;
+            m.time_mult = 0.0;
+        }
+        "stop" => {
+            m.time_mult = 0.0;
+            m.status = 2;
+            m.current_frame = m.cut_in;
+        }
+        "nextFrame" => {
+            m.status = 12;
+            m.time_mult = 0.49;
+        }
+        "rewind" => {
+            if m.time_mult > -1.0 {
+                m.time_mult = -1.0;
+            }
+            m.time_mult = (m.time_mult - 1.0).clamp(-20.0, 0.0);
+            m.status = 3;
+        }
+        "fastForward" => {
+            if m.time_mult < 1.0 {
+                m.time_mult = 1.0;
+            }
+            m.time_mult = (m.time_mult + 1.0).clamp(0.0, 20.0);
+            m.status = 4;
+        }
+        "slowMotion" => {
+            m.slow_mo_level = value;
+            m.status = 5;
+            m.time_mult = 1.0 / value;
+        }
+        "setNormalizedPosition" => m.current_frame = (m.recorded_frames as f32 * clamp01(value)) as i32,
+        // ReplayManager::setCutInPerc 0x14015af30, setCutOutPerc 0x14015aff0
+        "cutIn" => {
+            m.cut_in = ((m.recorded_frames - 1) as f32 * clamp01(value)) as i32;
+            if m.current_frame < m.cut_in {
+                m.current_frame = m.cut_in;
+            }
+        }
+        "cutOut" => {
+            m.cut_out = ((m.recorded_frames - 1) as f32 * clamp01(value)) as i32;
+            if m.cut_out <= m.current_frame {
+                m.current_frame = m.cut_out;
+            }
+        }
+        _ => {}
+    }
+    format!("replay {what} {:08x}", value.to_bits())
+}
+
+/// A member of the manager set by the script.
+pub fn replay_set(m: &mut ReplayModel, field: &str, number: f32) {
+    match field {
+        "status" => m.status = number as i32,
+        "mult" => m.time_mult = number,
+        "level" => m.slow_mo_level = number,
+        "frame" => m.current_frame = number as i32,
+        "frames" => m.recorded_frames = number as i32,
+        "cutIn" => m.cut_in = number as i32,
+        "cutOut" => m.cut_out = number as i32,
+        "loaded" => m.has_loaded = number != 0.0,
+        _ => {}
+    }
+}
+
+/// The bar's own state in the dump.
+pub fn replay_extra(force_camera: bool, target_y: f32, stay_up: f32, last: i32, names: usize) -> String {
+    format!(" replay={},{:08x},{:08x},{last},{names}", force_camera as u8, target_y.to_bits(), stay_up.to_bits())
+}
+
+/// The manager's members in the dump, and the camera that drives with the car.
+pub fn replay_line(m: &ReplayModel, drivable: i32) -> String {
+    format!("replay status={} mult={:08x} level={:08x} frame={}/{} cut={},{} loaded={} drivable={drivable}{}", m.status, m.time_mult.to_bits(), m.slow_mo_level.to_bits(), m.current_frame, m.recorded_frames, m.cut_in, m.cut_out, m.has_loaded as u8, char::from(10u8))
+}
+
+/// The replay's bar: it comes, lays itself out, finds the cameras; every button; the time
+/// line (a click, the two cut markers dragged, the laps' marks); the spinners; the box that
+/// asks for a name; the bar slides away and back; "Exit" in a replay of the session and in
+/// a replay opened from a file. A screen of 1280 x 720 is taken for the mouse.
+pub fn replay_bar(cars: usize) -> Vec<Op> {
+    let mut o = Vec::new();
+    field(&mut o, cars);
+    let set = |o: &mut Vec<Op>, what: &'static str, value: f32| o.push(hud("menu.replaySet", value, what));
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    o.extend([hud("menu.replay", 0.0, ""), Op::Frame(DT)]);
+    set(&mut o, "frames", 3000.0);
+    set(&mut o, "cutOut", 2999.0);
+    o.extend([hud("menu.replayLaps", 0.0, "0.21,0.5,0.93"), hud("menu.replayShow", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    // the camera manager is found: the cameras' names, the spinner goes to the camera in use
+    o.extend([hud("menu.cameraSets", 0.0, "Camera set 1|TV 2"), hud("menu.cameraAt", 3.0, ""), hud("menu.replayCamera", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    let (row, bar) = (673, 172);
+    let (exit, save, rewind, stop, play, next, forward, slow, photo) = (bar + 73, bar + 142, bar + 211, bar + 280, bar + 349, bar + 418, bar + 487, bar + 579, bar + 871);
+    o.extend([Op::MouseMove(640, 700), Op::Frame(DT)]);
+    for x in [exit, save, rewind, stop, play, next, forward, slow, photo] {
+        o.extend([Op::MouseMove(x, row), Op::Frame(DT)]);
+    }
+    // the transport
+    for (i, x) in [play, play, forward, forward, forward, forward, forward, forward, rewind, rewind, rewind, rewind, rewind, rewind, rewind, slow, slow, slow, next, stop, play, photo].into_iter().enumerate() {
+        set(&mut o, "frame", 100.0 + 137.0 * i as f32);
+        click(&mut o, x, row);
+    }
+    // the spinners: the slow motion's level, the camera, the car (both ends of each)
+    for spinner in [539, 639, 739] {
+        let (left, right, y) = (bar + spinner + 8, bar + spinner + 72, 620 + 41 + 11);
+        for x in [right, right, right, left, right, right, right, right, right, left, left] {
+            click(&mut o, x, y);
+        }
+    }
+    // another camera is picked elsewhere: the spinner follows without picking it again
+    o.extend([hud("menu.cameraAt", 6.0, ""), hud("menu.cameraIndex", 6.0, ""), Op::Frame(DT), hud("menu.cameraIndex", 6.0, ""), Op::Frame(DT)]);
+    // the time line: clicks, the cut markers dragged and let go
+    for x in [500, 980, 294, 640] {
+        click(&mut o, x, 638);
+    }
+    o.extend([Op::MouseMove(284, 634), Op::MouseDown(284, 634), Op::MouseMove(400, 634), Op::Frame(DT), Op::MouseUp(400, 634), Op::Frame(DT)]);
+    o.extend([Op::MouseMove(994, 634), Op::MouseDown(994, 634), Op::MouseMove(800, 636), Op::Frame(DT), Op::MouseUp(800, 636), Op::Frame(DT)]);
+    click(&mut o, 300, 638);
+    click(&mut o, 600, 638);
+    click(&mut o, stop, row);
+    // a long replay: the times with hours
+    set(&mut o, "frames", 400_000.0);
+    set(&mut o, "frame", 250_123.0);
+    o.push(Op::Frame(DT));
+    set(&mut o, "frames", 3000.0);
+    set(&mut o, "frame", 1500.0);
+    // the box that asks for the name: opened, written in, given; opened and closed
+    click(&mut o, save, row);
+    click(&mut o, 400, 582);
+    o.extend([Op::KeyChar(0x5f), Op::KeyChar(0x61), Op::KeyChar(0x42), Op::Frame(DT), Op::MouseMove(640, 500), Op::Frame(DT), Op::MouseMove(640, 590), Op::Frame(DT)]);
+    click(&mut o, 172 + 934 - 25, 582);
+    o.extend([hud("menu.replaySaved", 1.0, ""), Op::Frame(DT)]);
+    click(&mut o, save, row);
+    o.push(Op::KeyChar(0x0d));
+    click(&mut o, save, row);
+    click(&mut o, save, row);
+    click(&mut o, 400, 582);
+    o.extend([Op::KeyChar(0x2f), Op::KeyChar(0x0d), Op::Frame(DT), hud("menu.replaySaved", 0.0, ""), Op::Frame(DT)]);
+    // the mouse leaves the bottom of the screen: the bar waits, slides away; and comes back
+    o.extend([Op::MouseMove(640, 300), Op::Frame(1.0), Op::Frame(1.0), Op::Frame(1.0), Op::Frame(0.1), Op::Frame(0.1), Op::Frame(0.1), Op::Frame(0.2), Op::Frame(0.2), Op::MouseMove(640, 716), Op::Frame(0.1), Op::Frame(0.1), Op::Frame(0.2), Op::Frame(0.2), Op::Frame(DT)]);
+    // hidden and shown again; "Exit"
+    o.extend([hud("menu.cameraAt", 1.0, ""), hud("menu.replayShow", 0.0, ""), Op::Frame(DT), hud("menu.replayShow", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    click(&mut o, exit, row);
+    set(&mut o, "loaded", 1.0);
+    click(&mut o, exit, row);
+    o.extend([hud("menu.replayShow", 0.0, ""), Op::Frame(DT)]);
     o
 }

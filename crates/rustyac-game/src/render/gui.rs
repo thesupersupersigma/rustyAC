@@ -107,6 +107,8 @@ pub struct GameGui {
     pit: Option<crate::referee::PitGui>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
+    /// `ReplayManager::replayInterface`: the replay's bar (when the session has a replay)
+    pub replay_bar: Option<Id>,
     /// `Sim::escMenu` (off line; an online session has none yet)
     pub esc_menu: Option<Id>,
     /// a new session began since the window last asked (the car is its own again: a lock of
@@ -207,6 +209,18 @@ impl GameGui {
         gui.sim.session_count = setup.session_count;
         gui.sim.online = setup.online;
         gui.sim.has_replay_manager = setup.replay;
+        // ReplayInterface, hidden, the top-level control after the game screen
+        // (ReplayManager::ReplayManager 0x140153130)
+        gui.sim.replay.status = 2;
+        gui.sim.replay.slow_mo_level = 2.0;
+        gui.sim.replay.record_interval_ms = 30.0;
+        gui.sim.replay.post_processing = own_or_documents(&setup, "video.ini").filter(|ini| ini.ready && ini.has_section("POST_PROCESS")).map(|ini| ini.get_int("POST_PROCESS", "ENABLED").unwrap_or(0) != 0);
+        let replay_bar = setup.replay.then(|| {
+            let id = gui.new_replay_interface(&mut painter);
+            gui.add_root(&mut painter, id);
+            gui.set_visible(id, false);
+            id
+        });
         let pause_menu = gui.new_pause_menu(&mut painter, system("fades.ini").as_ref());
         gui.sim.pause_menu = Some(pause_menu);
         gui.set_visible(pause_menu, false);
@@ -243,7 +257,7 @@ impl GameGui {
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, replay_bar, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -620,6 +634,33 @@ impl GameGui {
         }
     }
 
+    /// `ReplayManager::startReplayMode` / `stopReplayMode` as far as the bar goes: it shows
+    /// (its cut markers back at the ends) or goes.
+    pub fn replay_bar_show(&mut self, on: bool) {
+        let Some(bar) = self.replay_bar else { return };
+        if self.gui.controls[bar].visible != on {
+            self.gui.set_visible(bar, on);
+            if on {
+                self.gui.replay_reset_cuts(bar);
+            }
+        }
+    }
+
+    /// `ACCameraManager::evOnCameraSelectedIndex`: another camera is the one in use.
+    pub fn replay_camera_index(&mut self, index: i32) {
+        self.gui.sim.replay.camera_index = index;
+        if let Some(bar) = self.replay_bar {
+            self.gui.replay_on_camera_selected_index(bar, index);
+        }
+    }
+
+    /// `ReplayManager::evDidFinishedSavingReplay`.
+    pub fn replay_saved(&mut self, ok: bool, file: &str) {
+        if let Some(bar) = self.replay_bar {
+            self.gui.replay_did_finished_saving(bar, ok, file);
+        }
+    }
+
     /// The ESC menu (the menu of the pits) shows.
     pub fn esc_menu_visible(&self) -> bool {
         self.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible)
@@ -700,7 +741,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -743,6 +784,12 @@ impl GameGui {
                 "esc" => self.esc_key(false),
                 "screenshot" => self.take_screen(),
                 "tab" => self.tab_down(),
+                "replay" => {
+                    // (for pictures: the bar as a replay of 100 s, half way, would show it)
+                    let link = &mut self.gui.sim.replay;
+                    (link.status, link.time_mult, link.current_frame, link.recorded_frames, link.camera_manager, link.lap_marks) = (0, 1.0, 1666, 3333, true, vec![0.31, 0.68]);
+                    self.replay_bar_show(true);
+                }
                 "pits" => {
                     if self.esc_menu.is_some() {
                         self.gui.sim_activate_esc_menu();
@@ -766,7 +813,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, pits, tab, app)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, pits, replay, tab, app)")),
             }
         }
         Ok(())

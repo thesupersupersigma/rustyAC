@@ -23,6 +23,7 @@ pub mod menus;
 pub mod overlay_leaderboard;
 pub mod painter;
 pub mod pit_menu;
+pub mod replay_interface;
 pub mod spinner;
 pub mod taskbar;
 pub mod ttf;

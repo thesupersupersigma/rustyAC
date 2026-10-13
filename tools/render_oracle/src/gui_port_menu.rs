@@ -26,6 +26,20 @@ pub struct Menus {
     pub overlay: Option<rustyac_gui::overlay_leaderboard::OverlayLeaderboard>,
     /// the ESC menu itself (`esc` is the stand-in the pause menu's scripts have)
     pub pits: Option<Id>,
+    /// the replay's bar; `CameraDrivableManager`'s camera; `ReplayManager::lastFilename`
+    pub replay: Option<Id>,
+    pub drivable_camera: i32,
+    pub last_replay_name: String,
+}
+
+fn replay_model(gui: &Gui) -> crate::gui_seq_menu::ReplayModel {
+    let r = &gui.sim.replay;
+    crate::gui_seq_menu::ReplayModel { status: r.status, time_mult: r.time_mult, slow_mo_level: r.slow_mo_level, current_frame: r.current_frame, recorded_frames: r.recorded_frames, cut_in: r.cut_in, cut_out: r.cut_out, has_loaded: r.has_loaded_replay }
+}
+
+fn replay_store(gui: &mut Gui, m: &crate::gui_seq_menu::ReplayModel) {
+    let r = &mut gui.sim.replay;
+    (r.status, r.time_mult, r.slow_mo_level, r.current_frame, r.recorded_frames, r.cut_in, r.cut_out, r.has_loaded_replay) = (m.status, m.time_mult, m.slow_mo_level, m.current_frame, m.recorded_frames, m.cut_in, m.cut_out, m.has_loaded);
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
@@ -49,6 +63,14 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     if let Some(esc) = hud.more.menus.esc {
         gui.controls[esc].visible = hud.input.esc_menu_visible;
     }
+    gui.sim.replay.lap_marks = s.replay.lap_marks.clone();
+    gui.sim.replay.camera_manager = s.replay.camera_manager;
+    gui.sim.replay.track_camera_sets = s.replay.camera_sets.clone();
+    gui.sim.replay.camera_index = s.replay.camera_index;
+    gui.sim.replay.auto_file_name = crate::gui_seq_menu::REPLAY_AUTO_NAME.to_string();
+    gui.sim.replay.record_interval_ms = 30.0;
+    // (the game's side reads the scratch root's video.ini at every press of "Photo mode")
+    gui.sim.replay.post_processing = IniReader::load(&crate::root::documents().join("Assetto Corsa/cfg/video.ini")).ok().filter(|ini| ini.ready && ini.has_section("POST_PROCESS")).map(|ini| ini.get_int("POST_PROCESS", "ENABLED").unwrap_or(0) != 0);
     let e = s.esc;
     gui.sim.setup_state = e.setup_state;
     gui.sim.fixed_setup = e.fixed_setup;
@@ -105,6 +127,40 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::FocusPlayerCar => focus = true,
             SimAction::DriveMenuPressed => {}
             SimAction::LoadPreviousSessionUserCamera => action("loadPreviousSessionUserCamera".into()),
+            SimAction::Replay(asked) => {
+                use rustyac_gui::replay_interface::ReplayAction;
+                let mut m = replay_model(gui);
+                let mut apply = |what: &str, value: f32| crate::gui_seq_menu::replay_apply(&mut m, what, value);
+                match asked {
+                    ReplayAction::Rewind => action(apply("rewind", 0.0)),
+                    ReplayAction::FastForward => action(apply("fastForward", 0.0)),
+                    ReplayAction::Play => action(apply("play", 0.0)),
+                    ReplayAction::Pause => action(apply("pause", 0.0)),
+                    ReplayAction::Stop => action(apply("stop", 0.0)),
+                    ReplayAction::NextFrame => action(apply("nextFrame", 0.0)),
+                    ReplayAction::SlowMotion(level) => action(apply("slowMotion", level)),
+                    ReplayAction::StopReplayMode => action(apply("stopReplayMode", 0.0)),
+                    ReplayAction::SetNormalizedPosition(p) => action(apply("setNormalizedPosition", p)),
+                    // (nobody listens in the scripts)
+                    ReplayAction::SliderInteraction => {}
+                    // (the game's own code on its side: no stand-in writes these down)
+                    ReplayAction::SetCutInPerc(p) => drop(apply("cutIn", p)),
+                    ReplayAction::SetCutOutPerc(p) => drop(apply("cutOut", p)),
+                    ReplayAction::Save(name) => {
+                        action(format!("replay save {name:?} 1"));
+                        hud.more.menus.last_replay_name = name;
+                    }
+                }
+                replay_store(gui, &m);
+            }
+            // CameraDrivableManager::setCurrentCamera: five cameras, the others are not taken
+            SimAction::SetDrivableCamera(camera) => {
+                if camera as u32 <= 4 {
+                    hud.more.menus.drivable_camera = camera;
+                }
+            }
+            SimAction::SetTrackCameraSet(set) => action(format!("setCurrentCameraSet {set}")),
+            SimAction::SetCameraModeKept(mode) => action(format!("setMode {mode}")),
         }
     }
     if focus {
@@ -245,6 +301,39 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             }
         }
         "menu.fadeDone" => gui.sim_fade_in_finished(),
+        "menu.replay" => {
+            replay_store(gui, &crate::gui_seq_menu::ReplayModel::default());
+            sync(hud, gui);
+            let id = gui.new_replay_interface(painter);
+            gui.add_root(painter, id);
+            gui.set_visible(id, false);
+            // (what the constructor's own calls made the spinners say is not listened to yet)
+            gui.widget_events.clear();
+            hud.more.menus.replay = Some(id);
+        }
+        "menu.replayShow" => {
+            sync(hud, gui);
+            let id = hud.more.menus.replay.ok_or("no replay bar")?;
+            gui.set_visible(id, number != 0.0);
+            if number != 0.0 {
+                gui.replay_reset_cuts(id);
+            }
+        }
+        "menu.replaySet" => {
+            let mut m = replay_model(gui);
+            crate::gui_seq_menu::replay_set(&mut m, text, number);
+            replay_store(gui, &m);
+        }
+        "menu.cameraIndex" => {
+            sync(hud, gui);
+            let id = hud.more.menus.replay.ok_or("no replay bar")?;
+            gui.replay_on_camera_selected_index(id, number as i32);
+        }
+        "menu.replaySaved" => {
+            let id = hud.more.menus.replay.ok_or("no replay bar")?;
+            let name = hud.more.menus.last_replay_name.clone();
+            gui.replay_did_finished_saving(id, number != 0.0, &name);
+        }
         "menu.escMenu" => {
             use rustyac_gui::esc_menu::EscPages;
             gui.sim.online = hud.input.online;
@@ -296,6 +385,7 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
             rustyac_gui::menus::Menu::Leaderboard(_) => "Leaderboard",
             rustyac_gui::menus::Menu::EndCommon(_) => "EndCommon",
             rustyac_gui::menus::Menu::Esc(_) => "ESCMenu",
+            rustyac_gui::menus::Menu::Replay(_) => "ReplayInterface",
             rustyac_gui::menus::Menu::RaceControl(_) => "RaceControlScreen",
             rustyac_gui::menus::Menu::SpSession(_) => "RaceControlSPSession",
             rustyac_gui::menus::Menu::SessionInfo(_) => "RaceControlSessionInfo",
@@ -309,6 +399,11 @@ pub fn extra(gui: &Gui, id: Id) -> String {
         "PauseMenu" => {
             let p = gui.pause_menu(id);
             format!(" pause={} fade={:08x}", p.currently_selected_button, p.fade_seconds.to_bits())
+        }
+        "ReplayInterface" => {
+            let r = gui.replay_interface(id);
+            let index = r.last_selected.and_then(|last| gui.controls[id].controls.iter().position(|c| *c == last)).map_or(-1, |i| i as i32);
+            crate::gui_seq_menu::replay_extra(r.force_camera, r.target_y, r.stay_up_counter, index, r.camera_names.len())
         }
         "ESCMenu" => {
             let m = gui.esc_menu(id);
@@ -369,6 +464,9 @@ pub fn window_mouse(hud: &mut HudPort, gui: &mut Gui, kind: u32, e: &MouseEvent)
 }
 
 pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
+    if hud.more.menus.replay.is_some() {
+        out.push_str(&crate::gui_seq_menu::replay_line(&replay_model(gui), hud.more.menus.drivable_camera));
+    }
     if let Some(end) = &hud.more.menus.end {
         out.push_str(&crate::gui_seq_menu::end_line(end.is_active, end.is_loaded, end.old_mode, gui.is_active));
         crate::gui_port::dump_control(gui, end.parent_control, 1, out);

@@ -20,6 +20,7 @@ mod gui_ac_esc;
 mod gui_ac_menu;
 mod gui_ac_pit;
 mod gui_ac_race;
+mod gui_ac_replay;
 mod gui_compare;
 mod gui_port;
 mod gui_port2;

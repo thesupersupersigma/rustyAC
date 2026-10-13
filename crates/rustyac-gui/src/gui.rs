@@ -287,6 +287,7 @@ impl Gui {
             Class::Taskbar => self.taskbar_on_mouse_move(id, e),
             Class::TaskBarIcon => self.icon_on_mouse_move(id, e),
             Class::Widget => self.widget_on_mouse_move(id, e),
+            Class::Menu => self.menu_on_mouse_move(id, e),
             _ => self.control_on_mouse_move(id, e),
         }
     }

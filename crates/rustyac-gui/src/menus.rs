@@ -84,6 +84,16 @@ pub enum SimAction {
     DriveMenuPressed,
     /// `ACCameraManager::loadPreviousSessionUserCamera`
     LoadPreviousSessionUserCamera,
+    /// a call of the replay's bar on `ReplayManager`
+    Replay(crate::replay_interface::ReplayAction),
+    /// `CameraDrivableManager::setCurrentCamera` 0x1400c6960 (0 to 4: chase 1, chase 2,
+    /// bonnet, bumper, dash), `CameraTrack::setCurrentCameraSet` 0x1400cbe10
+    SetDrivableCamera(i32),
+    SetTrackCameraSet(i32),
+    /// `ACCameraManager::setMode(mode, true, false)`: the mode is set as it is (0 cockpit,
+    /// 2 the cameras that drive with the car, 3 the track's); when it is done the runner
+    /// tells the replay's bar the camera's number ([`Gui::replay_on_camera_selected_index`])
+    SetCameraModeKept(i32),
 }
 
 /// What a handler of `ACCameraManager::evOnFadeInFinished` does when the fade is over.
@@ -153,6 +163,8 @@ pub struct SimLink {
     /// `PhysicsAvatar::windData`: `speed.value`, `directionDEG`
     pub wind_speed: f32,
     pub wind_direction_deg: f32,
+    /// what the replay's bar reads of `ReplayManager` and `ACCameraManager`
+    pub replay: crate::replay_interface::ReplayLink,
 }
 
 /// `PauseMenu`'s own members.
@@ -172,6 +184,7 @@ pub enum Menu {
     RaceControl(crate::esc_menu::RaceControlScreen),
     SpSession(crate::esc_menu::SpSession),
     SessionInfo(Box<crate::esc_menu::SessionInfo>),
+    Replay(Box<crate::replay_interface::ReplayInterface>),
 }
 
 impl Gui {
@@ -461,6 +474,7 @@ impl Gui {
                 Menu::RaceControl(_) => self.race_control_render(id, dt, painter),
                 Menu::SpSession(_) => self.sp_session_render(id, dt, painter),
                 Menu::SessionInfo(_) => self.session_info_render(id, dt, painter),
+                Menu::Replay(_) => self.replay_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -472,6 +486,7 @@ impl Gui {
                 Menu::Pause(_) => self.pause_menu_on_visible_changed(id, visible),
                 Menu::Leaderboard(_) => self.leaderboard_on_visible_changed(id, visible),
                 Menu::Esc(_) => self.esc_menu_on_visible_changed(id, visible),
+                Menu::Replay(_) => self.replay_on_visible_changed(id),
                 _ => self.control_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),
@@ -485,6 +500,16 @@ impl Gui {
                 _ => self.control_on_mouse_down(id, e),
             },
             _ => self.control_on_mouse_down(id, e),
+        }
+    }
+
+    pub fn menu_on_mouse_move(&mut self, id: Id, e: &crate::control::MouseEvent) {
+        match &self.controls[id].kind {
+            Kind::Menu(menu) => match &**menu {
+                Menu::Replay(_) => self.replay_on_mouse_move(id, e),
+                _ => self.control_on_mouse_move(id, e),
+            },
+            _ => self.control_on_mouse_move(id, e),
         }
     }
 }

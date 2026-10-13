@@ -539,7 +539,13 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     crate::gui_ac_menu::client_present(true);
                     crate::gui_ac_esc::sun(&game, true);
+                    if let Some(h) = crate::gui_ac_hud::hud() {
+                        crate::gui_ac_replay::around_render(h, true);
+                    }
                     render(gui, *dt);
+                    if let Some(h) = crate::gui_ac_hud::hud() {
+                        crate::gui_ac_replay::around_render(h, false);
+                    }
                     crate::gui_ac_esc::sun(&game, false);
                     crate::gui_ac_menu::client_present(false);
                     crate::gui_ac_hud::render_hud(&game, *dt);

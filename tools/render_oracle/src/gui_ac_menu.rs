@@ -42,7 +42,8 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 8] = [
+pub const CLASSES: [(&str, usize, usize, usize); 9] = [
+    ("ReplayInterface", 0x330, crate::gui_ac_replay::VA_REPLAY_INTERFACE_CTOR, crate::gui_ac_replay::VA_REPLAY_INTERFACE_VTABLE),
     ("ESCMenu", 0x260, crate::gui_ac_esc::VA_ESC_MENU_CTOR, crate::gui_ac_esc::VA_ESC_MENU_VTABLE),
     ("RaceControlScreen", 0x1b8, 0x1_400b_2370, 0x1_404b_96e0),
     ("RaceControlSPSession", 0x1a8, 0x1_400b_7e90, 0x1_404b_a318),
@@ -169,6 +170,7 @@ pub unsafe fn window_mouse(gui_handler: usize, event: *mut u8) {
 /// `EndSessionDisplayer::update`, in the update pass (only while the object is active).
 pub unsafe fn update(game: &Game, _h: &HudGame, dt: f32) {
     crate::gui_ac_esc::sync(game, _h);
+    crate::gui_ac_replay::sync(_h);
     let end = MENUS.lock().unwrap().end as *mut u8;
     if !end.is_null() && rd::<u8>(end, 0x30) != 0 {
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_END_SESSION_UPDATE));
@@ -204,6 +206,7 @@ pub unsafe fn render_end(game: &Game, h: &HudGame, dt: f32) {
 }
 
 pub unsafe fn dump(game: &Game, out: &mut String) {
+    crate::gui_ac_replay::dump(out);
     let end = MENUS.lock().unwrap().end as *const u8;
     if !end.is_null() {
         let gui: *const u8 = rd(rd::<*const u8>(end, 0x8), 0x180);
@@ -343,12 +346,20 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
     if crate::gui_seq_menu::menu_input(what, number, text) {
         if let Some(h) = hud() {
             crate::gui_ac_esc::sync(game, h);
+            crate::gui_ac_replay::sync(h);
         }
         return Ok(());
     }
     let a = &game.acs;
     let h = hud().ok_or("the HUD was not made (Hud(\"create\", cars, \"\") first)")?;
     let sim = h.sim;
+    if matches!(what, "menu.replay" | "menu.replayShow" | "menu.replaySet" | "menu.cameraIndex" | "menu.replaySaved") {
+        crate::gui_ac_race::install(game);
+        crate::gui_ac_race::sync(h);
+        install(game, sim);
+        crate::gui_ac_replay::call(game, gui, h, what, number, text);
+        return Ok(());
+    }
     if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl") {
         crate::gui_ac_race::install(game);
         crate::gui_ac_race::sync(h);
@@ -595,6 +606,7 @@ pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
         "PauseMenu" => Some(format!(" pause={} fade={:08x}", rd::<i32>(control, 0x1f0), rd::<u32>(control, 0x1f4))),
         "EndCommon" | "RaceControlScreen" | "RaceControlSPSession" | "RaceControlSessionInfo" => Some(String::new()),
         "ESCMenu" => Some(crate::gui_ac_esc::extra(control)),
+        "ReplayInterface" => Some(crate::gui_ac_replay::extra(control)),
         "Leaderboard" => {
             let (begin, end): (*const *const u8, *const *const u8) = (rd(control, 0x190), rd(control, 0x198));
             let printed: Vec<String> = if begin.is_null() { Vec::new() } else { (0..end.offset_from(begin) as usize).map(|i| rd::<i32>(*begin.add(i), 0x1158).to_string()).collect() };

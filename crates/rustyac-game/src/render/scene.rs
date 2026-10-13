@@ -428,6 +428,36 @@ impl DrivingCamera {
         self.started = false;
     }
 
+    /// `CameraDrivableManager::setCurrentCamera` 0x1400c6960: one of the five views (another
+    /// number is not taken).
+    pub fn set_drivable(&mut self, index: i32) {
+        if let Some(view) = usize::try_from(index).ok().and_then(|i| Drivable::ALL.get(i)) {
+            self.drivable = *view;
+        }
+    }
+
+    /// `ACCameraManager::setMode(mode, true, false)` as the replay's bar asks for it: 0 the
+    /// cockpit, 2 the views that drive with the car (the track's cameras are not ported).
+    pub fn set_mode_kept(&mut self, mode: i32) {
+        self.mode = match mode {
+            0 => CameraMode::Cockpit,
+            2 => CameraMode::Drivable,
+            _ => return,
+        };
+        self.last_driving = self.mode;
+        self.started = false;
+    }
+
+    /// `ACCameraManager::currentGlobalCameraIndex` as `setMode` leaves it: 0 the cockpit, 1 to
+    /// 5 the views that drive with the car; a camera of the car's own leaves it as it was.
+    pub fn global_index(&self) -> Option<i32> {
+        match self.mode {
+            CameraMode::Cockpit => Some(0),
+            CameraMode::Drivable => Some(1 + Drivable::ALL.iter().position(|d| *d == self.drivable).unwrap_or(0) as i32),
+            CameraMode::Car => None,
+        }
+    }
+
     /// F6: to the car's cameras, at the one last shown; pressed again, to the next one
     /// (`CameraCarManager::nextCamera` @ 0x1400c4710). `count`: how many the car has.
     pub fn f6(&mut self, count: usize) {
