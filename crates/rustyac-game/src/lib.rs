@@ -18,6 +18,7 @@
 // and the scene maths.
 #[cfg(windows)]
 pub mod audio;
+pub mod ac_replay;
 pub mod autodrive;
 #[cfg(windows)]
 pub mod cli;

@@ -417,12 +417,11 @@ pub fn lerp_pose(a: &Mat, b: &Mat, t: f32) -> Mat {
 
 impl CarView {
     /// The part of the game's `CarPhysicsState` its renderer poses the car from.
-    #[cfg(windows)]
-    pub fn physics_state(&self) -> rustyac_render::car::CarPhysicsState {
+    pub fn physics_state(&self) -> rustyac_physics::car_physics_state::CarPhysicsState {
         let m = |m: &Mat| Mat44f { m: *m };
         let r = &self.render;
-        let mut surfaces = [rustyac_render::state::SurfaceDef::default(); 4];
-        let mut thermal = [rustyac_render::state::TyreThermalState::default(); 4];
+        let mut surfaces = [rustyac_physics::car_physics_state::SurfaceDef::default(); 4];
+        let mut thermal = [rustyac_physics::car_physics_state::TyreThermalState::default(); 4];
         for i in 0..4 {
             surfaces[i].grip_mod = r.surface_grip_mod[i];
             surfaces[i].dirt_additive_k = r.surface_dirt_additive_k[i];
@@ -430,7 +429,7 @@ impl CarView {
             surfaces[i].is_pitlane = r.surface_is_pitlane[i];
             thermal[i].core_temp = r.core_temps[i];
         }
-        rustyac_render::car::CarPhysicsState {
+        rustyac_physics::car_physics_state::CarPhysicsState {
             world_matrix: m(&self.body),
             suspension_matrix: [m(&self.hubs[0]), m(&self.hubs[1]), m(&self.hubs[2]), m(&self.hubs[3])],
             tyre_matrix: [m(&self.tyre_matrix[0]), m(&self.tyre_matrix[1]), m(&self.tyre_matrix[2]), m(&self.tyre_matrix[3])],
@@ -488,7 +487,7 @@ impl CarView {
             tyre_thermal_states: thermal,
             disc_temps: r.disc_temps,
             status_bytes: self.lights as u32 | if self.drs { 4 } else { 0 },
-            ..rustyac_render::car::CarPhysicsState::at_origin()
+            ..rustyac_physics::car_physics_state::CarPhysicsState::at_origin()
         }
     }
 

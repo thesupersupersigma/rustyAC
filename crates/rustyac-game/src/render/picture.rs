@@ -64,6 +64,13 @@ impl Picture {
         }
     }
 
+    /// Task 28c: the states a replay shows (`None`: the cars are live).
+    pub fn set_replay_states(&mut self, states: Option<Vec<rustyac_physics::car_physics_state::CarPhysicsState>>) {
+        if let Picture::Ac(r) = self {
+            r.replay_states = states;
+        }
+    }
+
     /// The tyre changers' sound and camera link (AC's renderer with a pit crew only).
     pub fn crew_link(&mut self) -> Option<&mut super::ac::CrewLink> {
         match self {

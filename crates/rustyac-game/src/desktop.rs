@@ -21,6 +21,8 @@ use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
+use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
+use rustyac_physics::replay::ReplayEvent;
 use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
@@ -432,8 +434,147 @@ fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustya
     Some(audio)
 }
 
-fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
+/// Task 28c: the session's replay (AC's `ReplayManager`), shared by the physics thread, which
+/// records, and the window, which plays. A window always has one; a run without a window
+/// only when it is asked to save one. Replays go into rustyAC's own folder: `--replay-dir`,
+/// else `replay` beside rustyac.exe (never one of Assetto Corsa's folders).
+fn replay_rig(options: &Options, window: bool) -> Option<Arc<Mutex<ReplayRig>>> {
+    if options.no_ac_replay || !(window || options.save_replay.is_some()) {
+        return None;
+    }
+    let folder = options.replay_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("replay")))).unwrap_or_else(|| PathBuf::from("replay"));
+    // cfg/replay.ini: the player's (read only), else the game's own; none with --no-race-ini,
+    // so that a check does not depend on the player's files (10 minutes at 33 frames a second)
+    let mut ini = None;
+    if options.race_ini != Some(false) {
+        let mut files = Vec::new();
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            files.push(PathBuf::from(home).join("Documents/Assetto Corsa/cfg/replay.ini"));
+        }
+        if let Some(game) = rustyac_content::install::ac_root() {
+            files.push(game.join("cfg/replay.ini"));
+        }
+        ini = files.iter().find(|file| file.is_file()).and_then(|file| rustyac_physics::data::ini::IniReader::load(file).ok());
+    }
+    Some(Arc::new(Mutex::new(ReplayRig::new(folder, ini, -16.0, 1))))
+}
+
+/// The physics thread's end of the replay: a frame of every car whenever the recording
+/// interval has passed (`ReplayManager::onStepCompleted`), and the save at the program's end.
+struct ReplaySink {
+    rig: Arc<Mutex<ReplayRig>>,
+    save: Option<PathBuf>,
+}
+
+impl StepSink for ReplaySink {
+    fn after_step(&mut self, sim: &rustyac_game::sim::GameSim, _input: &StepInput) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        if !rig.in_replay_mode() {
+            rig.after_step(sim);
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        match &self.save {
+            Some(path) => match rig.save_to(path) {
+                Ok(bytes) => println!("replay: {} ({bytes} bytes, {} frames)", path.display(), rig.manager.as_ref().map_or(0, |m| m.recorded_frames)),
+                Err(message) => eprintln!("WARNING: the replay was not saved: {message}"),
+            },
+            None => rig.shutdown(),
+        }
+        for line in rig.messages.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+}
+
+/// A key of a replay that shows. The answer: the key was the replay's.
+#[allow(clippy::too_many_arguments)]
+fn ac_replay_key(rig: &Arc<Mutex<ReplayRig>>, shared: &Shared, bindings: &Bindings, key: i32, ctrl: bool, alt: bool, online: bool) -> bool {
+    let mut rig = rig.lock().unwrap();
+    let command = if ctrl {
+        match key {
+            _ if key == bindings.key_ffwd => Some(ReplayKey::FastForward),
+            _ if key == bindings.key_slowmo => Some(ReplayKey::SlowMotion),
+            _ if key == bindings.key_pause_replay => Some(ReplayKey::PlayPause),
+            _ if key == bindings.key_rev => Some(ReplayKey::Rewind),
+            _ if key == bindings.key_next_lap => Some(ReplayKey::NextLap),
+            _ if key == bindings.key_previous_lap => Some(ReplayKey::PreviousLap),
+            _ if key == bindings.key_start_replay => {
+                // back to the driving (a loaded replay has none)
+                leave_replay(&mut rig, shared, online);
+                return true;
+            }
+            _ => None,
+        }
+    } else if alt {
+        None
+    } else {
+        match key {
+            0x50 | 0x13 => Some(ReplayKey::PlayPause),
+            0x24 => Some(ReplayKey::Stop),
+            0xbe => Some(ReplayKey::NextFrame),
+            0x21 => Some(ReplayKey::NextLap),
+            0x22 => Some(ReplayKey::PreviousLap),
+            0x79 => {
+                save_replay(&mut rig);
+                return true;
+            }
+            _ => None,
+        }
+    };
+    match command {
+        Some(command) => {
+            rig.key(command);
+            true
+        }
+        None => false,
+    }
+}
+
+/// F10: the replay into rustyAC's replay folder, under the name the game's autosave would
+/// give it (with an `M` for "by hand" where the session's letter goes).
+fn save_replay(rig: &mut ReplayRig) {
+    let name = rig.file_name("M");
+    match rig.save(&name, false) {
+        Ok(path) => println!("Saving replay: {}", path.display()),
+        Err(message) => eprintln!("WARNING: the replay was not saved: {message}"),
+    }
+}
+
+/// `ReplayManager::stopReplayMode`: the driving goes on (offline the physics was standing).
+fn leave_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
+    if rig.manager.as_ref().is_some_and(|manager| manager.has_loaded_replay) {
+        return;
+    }
+    rig.stop_replay_mode();
+    if !online {
+        shared.paused.store(false, Ordering::Relaxed);
+    }
+    println!("REPLAY: back to the session");
+}
+
+/// `ReplayManager::startReplayMode`: the replay of the session so far, from its first frame.
+/// Offline the physics stands still meanwhile (`Sim::onReplayModeChanged`).
+fn enter_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
+    if rig.start_replay_mode() {
+        if !online {
+            shared.paused.store(true, Ordering::Relaxed);
+        }
+        println!("{}", rig.status_line());
+    } else {
+        println!("REPLAY: nothing is recorded yet");
+    }
+}
+
+fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, rig: &Option<Arc<Mutex<ReplayRig>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
     let mut sinks: Vec<Box<dyn StepSink>> = Vec::new();
+    if let Some(rig) = rig {
+        sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
+    }
     if let Some(feed) = feed {
         sinks.push(Box::new(AudioSink::new(Arc::clone(feed))));
     }
@@ -620,7 +761,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         None => drive(options)?,
     };
     let feed = audio_feed(options, true);
-    let sinks = sinks(options, &setup, &feed)?;
+    let sinks = sinks(options, &setup, &feed, &replay_rig(options, false))?;
     let shared = Shared::new();
     let config = LoopConfig {
         replay: replay.clone(),
@@ -864,7 +1005,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
     }
     let feed = audio_feed(options, false);
-    let sinks = sinks(options, &setup, &feed)?;
+    let rig = replay_rig(options, true);
+    let is_online = online.is_some();
+    let sinks = sinks(options, &setup, &feed, &rig)?;
     let shared = Shared::new();
     // a replay waits for the picture: its first step runs when the first frame is drawn (the
     // frame loop sets the transport's speed)
@@ -938,6 +1081,33 @@ fn run_window(options: &Options) -> Result<(), String> {
             return Err(message);
         }
     };
+    // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
+    // replay shows from its first frame (the physics stands still for good)
+    if let (Some(file), Some(rig)) = (&options.ac_replay, &rig) {
+        let loaded = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display())).and_then(|bytes| {
+            let views = shared.world_at(Instant::now());
+            let cars: Vec<(PathBuf, usize, f64)> = std::iter::once(&car_info).chain(&other_infos).zip(&views).map(|(info, view)| (info.data_path.clone(), view.wing_count as usize, view.max_fuel)).collect();
+            let mut rig = rig.lock().unwrap();
+            let header = rig.load(&bytes, &cars)?;
+            if !rig.start_replay_mode() {
+                return Err(format!("{}: the replay has no frames to play", file.display()));
+            }
+            Ok(header)
+        });
+        match loaded {
+            Ok(header) => {
+                shared.paused.store(true, Ordering::Relaxed);
+                println!("replay {}: version {}, {} frames every {} ms ({:.1} s), {} cars", file.display(), header.version, header.frames, header.record_interval_ms, header.frames as f64 * header.record_interval_ms * 0.001, header.cars.len());
+            }
+            Err(message) => {
+                shared.quit.store(true, Ordering::Relaxed);
+                let _ = thread.join();
+                return Err(message);
+            }
+        }
+    }
+    let mut ac_replay_audio = true;
+    let mut window_shot = false;
     let mut camera_toggles = 0;
     // the replay's transport (ReplayManager): a recorded drive starts playing
     let mut transport = replay.is_some().then(rustyac_game::replay_manager::ReplayManager::new);
@@ -972,7 +1142,21 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // Sim::onKeyDown 0x14019a940, the replay's commands: with Ctrl, whatever
                     // Shift does; they come before rustyAC's own Ctrl+F
                     let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
-                    if let (Some(rm), true) = (transport.as_mut(), ctrl && replay_keys.contains(&key)) {
+                    let in_ac_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode());
+                    if let (true, Some(rig)) = (in_ac_replay && !(ctrl && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) && !replay_keys.contains(&key)), &rig) {
+                        // Task 28c: a replay of recorded frames shows: its keys
+                        if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
+                            match key {
+                                0x70 | 0x43 => camera.f1(),
+                                0x73 => focus.command(FocusCommand::Player, &world, &car_names),
+                                0x75 => camera.f6(shapes[focus.index].car_cameras.len()),
+                                _ => {}
+                            }
+                        }
+                    } else if let (true, Some(rig), true) = (transport.is_none() && replay.is_none(), &rig, ctrl && key == bindings.key_start_replay) {
+                        // Sim::onKeyDown, the command "Start Replay"
+                        enter_replay(&mut rig.lock().unwrap(), &shared, is_online);
+                    } else if let (Some(rm), true) = (transport.as_mut(), ctrl && replay_keys.contains(&key)) {
                         if key == bindings.key_ffwd {
                             rm.fast_forward();
                         } else if key == bindings.key_slowmo {
@@ -1099,6 +1283,68 @@ fn run_window(options: &Options) -> Result<(), String> {
         let dt = now - last;
         last = now;
         world = shared.world_at(now);
+        // Task 28c: --replay-script for a replay of recorded frames; then the replay's frame
+        // (ReplayManager::updatePlayState): every car's state from its recorder
+        let (mut ac_replay_line, mut ac_replay_events, mut ac_replay_scale) = (None, Vec::new(), 1.0f32);
+        if let Some(rig) = &rig {
+            let mut rig = rig.lock().unwrap();
+            rig.focused_car = focus.index;
+            while let (true, Some(at)) = (transport.is_none(), script.first().map(|(at, _)| *at).filter(|at| started.elapsed().as_secs_f64() >= *at)) {
+                let (_, name) = script.remove(0);
+                match name.as_str() {
+                    "replay" => enter_replay(&mut rig, &shared, is_online),
+                    "exit" => leave_replay(&mut rig, &shared, is_online),
+                    "save" => save_replay(&mut rig),
+                    "pause" => rig.key(ReplayKey::PlayPause),
+                    "slow" => rig.key(ReplayKey::SlowMotion),
+                    "ffwd" => rig.key(ReplayKey::FastForward),
+                    "rewind" => rig.key(ReplayKey::Rewind),
+                    "frame" => rig.key(ReplayKey::NextFrame),
+                    "nextlap" => rig.key(ReplayKey::NextLap),
+                    "prevlap" => rig.key(ReplayKey::PreviousLap),
+                    _ => rig.key(ReplayKey::Stop),
+                }
+                println!("replay script at {at:.2} s: {name} -> {}", rig.status_line());
+            }
+            if rig.in_replay_mode() {
+                let track = shared.track.lock().unwrap().clone();
+                for event in rig.frame(dt.as_secs_f32(), track.as_deref()) {
+                    match event {
+                        ReplayEvent::StatusChanged { status, time_mult, slow_motion_level } => ac_replay_events.push((status, time_mult, slow_motion_level)),
+                        ReplayEvent::Audio(on) => ac_replay_audio = on,
+                        _ => {}
+                    }
+                }
+                for (i, view) in world.iter_mut().enumerate() {
+                    let Some(state) = rig.states.get(i) else { continue };
+                    let mut shown = rustyac_game::ac_replay::view_of(view, state);
+                    let wings = rig.wings(i);
+                    shown.wing_count = wings.len().min(8) as u8;
+                    shown.wing_angles[..shown.wing_count as usize].copy_from_slice(&wings[..shown.wing_count as usize]);
+                    shown.disconnected = !rig.car_shows(i);
+                    *view = shown;
+                }
+                // the loose objects as the scene's frames have them
+                if let Some(first) = world.first_mut() {
+                    let count = rig.objects.len().min(rustyac_game::view::MOVED_OBJECTS);
+                    for (number, matrix) in rig.objects.iter().take(count).enumerate() {
+                        first.moved_objects[number] = (number as u16, matrix.m);
+                    }
+                    first.moved_object_count = count as u8;
+                }
+                renderer.set_replay_states(Some(rig.states.clone()));
+                if let Some(sound) = audio.as_mut() {
+                    sound.set_replay_states(&rig.states);
+                }
+                ac_replay_scale = rig.manager.as_ref().map_or(1.0, |manager| manager.time_mult);
+                ac_replay_line = Some(rig.status_line());
+            } else {
+                renderer.set_replay_states(None);
+            }
+            for line in rig.messages.drain(..) {
+                println!("{line}");
+            }
+        }
         // --focus-script: the focus keys by the clock
         while let Some(at) = focus_script.first().map(|(at, _)| *at).filter(|at| started.elapsed().as_secs_f64() >= *at) {
             let (_, name) = focus_script.remove(0);
@@ -1167,14 +1413,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             frame_ms,
             frame_max_ms,
             timing: shared.timing(),
-            paused: shared.paused.load(Ordering::Relaxed) || unfocused,
+            paused: ac_replay_line.is_none() && (shared.paused.load(Ordering::Relaxed) || unfocused),
             camera: camera.name(),
-            replay: replay.is_some(),
+            replay: replay.is_some() || ac_replay_line.is_some(),
             replay_over,
-            replay_events,
-            replay_scale,
-            replay_transport: transport.is_some(),
-            replay_state,
+            replay_events: if ac_replay_line.is_some() { ac_replay_events } else { replay_events },
+            replay_scale: if ac_replay_line.is_some() { ac_replay_scale } else { replay_scale },
+            replay_transport: transport.is_some() || ac_replay_line.is_some(),
+            replay_state: ac_replay_line.clone().unwrap_or(replay_state),
             notes: shared.online_hud.lock().unwrap().clone(),
             hidden: false,
             focus_fade,
@@ -1229,7 +1475,21 @@ fn run_window(options: &Options) -> Result<(), String> {
             } else {
                 sound.set_picture_backfires(&renderer.backfires_triggered());
                 // (ReplayManager::updateReplayAudio: no sound outside half to double speed)
-                sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound);
+                sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound || (info.replay_transport && transport.is_none() && !ac_replay_audio));
+            }
+        }
+        // --bench-shot in a window: the picture a quarter of a second before --duration ends
+        if let (Some(path), false, true) = (&options.bench_shot, window_shot, options.duration.is_some_and(|d| started.elapsed().as_secs_f64() >= d - 0.25)) {
+            window_shot = true;
+            match renderer.read_pixels() {
+                Ok(pixels) => {
+                    let (width, height) = renderer.size();
+                    match write_png(path, width, height, &pixels) {
+                        Ok(()) => println!("{}: {width} x {height}, the window's picture", path.display()),
+                        Err(message) => eprintln!("WARNING: {message}"),
+                    }
+                }
+                Err(message) => eprintln!("WARNING: {message}"),
             }
         }
         match renderer.present(&chain, options.vsync) {
@@ -1483,6 +1743,30 @@ fn run(options: &Options) -> Result<(), String> {
         eprintln!("{}", rustyac_math::describe());
     } else {
         println!("{}", rustyac_math::describe());
+    }
+    // Task 28c: --replay with one of AC's replays: the file names the track and the cars; they
+    // are built as a session whose physics stands still, and the replay shows
+    if let Some(file) = options.replay.clone().filter(|file| rustyac_game::ac_replay::is_ac_replay(file)) {
+        let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let header = rustyac_game::ac_replay::read_header(&bytes)?;
+        let first = header.cars.first().ok_or("the replay has no car")?;
+        let mut o = options.clone();
+        o.ac_replay = Some(file);
+        o.replay = None;
+        o.headless = false;
+        o.car = first.unix_name.clone();
+        o.skin = Some(first.skin.clone()).filter(|skin| !skin.is_empty());
+        o.track = Some(header.track.clone()).filter(|track| !track.is_empty());
+        o.layout = Some(if header.layout.is_empty() { "-".to_string() } else { header.layout.clone() });
+        o.opponents = header.cars[1..].iter().map(|car| if car.skin.is_empty() { format!("{}:parked", car.unix_name) } else { format!("{}:{}:parked", car.unix_name, car.skin) }).collect();
+        o.cars = None;
+        o.ai_cars = None;
+        o.race_ini = Some(false);
+        o.no_referee = true;
+        o.sessions = None;
+        o.no_shm = true;
+        println!("{}: AC replay version {}: {} on {} {}", o.ac_replay.as_ref().map(|f| f.display().to_string()).unwrap_or_default(), header.version, header.cars.iter().map(|car| car.unix_name.as_str()).collect::<Vec<_>>().join(", "), header.track, header.layout);
+        return run_window(&o);
     }
     if let Some(path) = &options.screenshot {
         return run_screenshot(options, path);

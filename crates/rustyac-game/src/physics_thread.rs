@@ -157,6 +157,8 @@ pub struct Shared {
     pub online_hud: Mutex<Vec<String>>,
     /// Task 28: what the referee says, for the HUD.
     pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
+    /// Task 28c: the session's track, for the replay's playback on the display thread
+    pub track: Mutex<Option<Arc<rustyac_physics::track::Track>>>,
 }
 
 impl Shared {
@@ -176,6 +178,7 @@ impl Shared {
             replay_restart: AtomicBool::new(false),
             online_hud: Mutex::new(Vec::new()),
             referee_hud: Mutex::new(None),
+            track: Mutex::new(None),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -296,6 +299,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     let mut result = Ok(());
     {
         shared.publish_start(&sim);
+        *shared.track.lock().unwrap() = sim.track.clone();
         *shared.other_infos.lock().unwrap() = sim.opponent_infos();
         *shared.car_info.lock().unwrap() = Some(sim.car_info());
     }

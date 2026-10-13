@@ -450,6 +450,8 @@ pub struct AcRenderer {
     cars: Vec<CarAvatar>,
     /// each car's folder and skin, for the pit crews
     crew_cars: Vec<rustyac_render::pit_crew::CrewCar>,
+    /// Task 28c: a replay shows: every car's state comes from its recorder, not from its view
+    pub replay_states: Option<Vec<rustyac_physics::car_physics_state::CarPhysicsState>>,
     /// `PitCrew`: the four mechanics who change the player's tyres
     tyre_crew: Option<rustyac_render::tyre_crew::PitCrew>,
     /// the crew's sound and camera, between the picture and the game's loop
@@ -683,7 +685,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -1157,7 +1159,12 @@ impl AcRenderer {
             car.game_time_ms = self.time_ms;
             // PhysicsAvatar::update: CarAvatar::setNewPhysicsState (a frame without time is a
             // still: the car is shown as its state has it, not as the frame before left it)
-            let state = car.set_new_physics_state(&view.physics_state(), if dt > 0.0 { dt } else { 1.0 });
+            // (in a replay the car's state provider is its ReplayRecorder: CarAvatar::onStartReplay)
+            let from_provider = match self.replay_states.as_ref().and_then(|states| states.get(index)) {
+                Some(state) => *state,
+                None => view.physics_state(),
+            };
+            let state = car.set_new_physics_state(&from_provider, if dt > 0.0 { dt } else { 1.0 });
             car.view = rustyac_render::car::ViewState { camera_mode, drivable_mode, focused_car_index: focus as i32, camera_position: [frame.matrix[3][0], frame.matrix[3][1], frame.matrix[3][2]], camera_matrix: rustyac_physics::vecmath::Mat44f { m: frame.matrix }, use_pro_view: false };
             // what the car's objects read beside the physics state: the aids' levels and the air
             // (CarAvatar::getTCMode, getABSMode, PhysicsEngine::ambientTemperature), the wings

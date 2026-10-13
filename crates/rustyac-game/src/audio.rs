@@ -577,6 +577,13 @@ impl GameAudio {
         self.timing.max = self.timing.max.max(took);
     }
 
+    /// Task 28c: a replay shows: the sound's cars take these states (the physics stands still,
+    /// so nothing else writes them).
+    pub fn set_replay_states(&mut self, states: &[rustyac_physics::car_physics_state::CarPhysicsState]) {
+        let frames: Vec<CarFrame> = states.iter().map(|state| CarFrame::from_physics_state(&state.to_game_bytes())).collect();
+        self.feed.lock().unwrap().state = Some(frames);
+    }
+
     fn crew_guns(&mut self) -> &rustyac_audio::pit_crew::CrewGuns {
         if self.crew.is_none() {
             self.crew = Some(rustyac_audio::pit_crew::CrewGuns::new(&mut self.world.engine));

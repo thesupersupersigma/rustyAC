@@ -51,6 +51,10 @@ const BRAKE: usize = 0x109;
 const LAP_COUNT: usize = 0x10a;
 const STATUS: usize = 0x10c;
 
+/// `ReplayFrameAdditionalInfo` as its constructor leaves it: no dirt, an engine life of 255,
+/// no boost, not connected.
+pub const ADDITIONAL_INFO_DEFAULT: [u8; 4] = [0, 0xff, 0, 0];
+
 /// The frame's lap marker: the first frame of a new `lapCount`.
 pub const STATUS_LAP: u32 = 0x800;
 
@@ -274,7 +278,7 @@ impl ReplayRecorder {
     pub fn set_frame_size(&mut self, n: usize) {
         self.frames.resize(n, ReplayFrame::default());
         self.frames_wings.resize(n, Vec::new());
-        self.frames_additional_info.resize(n, [0; 4]);
+        self.frames_additional_info.resize(n, ADDITIONAL_INFO_DEFAULT);
         for wings in &mut self.frames_wings {
             wings.resize(self.wing_count, [0; 4]);
         }
@@ -442,7 +446,7 @@ impl ReplayRecorder {
         if self.frames.len() != count {
             self.frames.resize(count, ReplayFrame::default());
             self.frames_wings.resize(count, Vec::new());
-            self.frames_additional_info.resize(count, [0; 4]);
+            self.frames_additional_info.resize(count, ADDITIONAL_INFO_DEFAULT);
         }
         self.lap_frame_index_cache.clear();
         let wings_in_file = self.meta_data.1 as usize;

@@ -134,6 +134,15 @@ pub struct Options {
     pub ideal_line: Option<bool>,
     /// `--start-lights <seconds>`: the track's start lights count down a race start
     pub start_lights: Option<f32>,
+    /// Task 28c: `--no-ac-replay`: AC's replay is not recorded (the program as before v0.28.2)
+    pub no_ac_replay: bool,
+    /// `--replay-dir <folder>`: where replays are saved (default: `replay` beside rustyac.exe;
+    /// never one of Assetto Corsa's folders)
+    pub replay_dir: Option<PathBuf>,
+    /// `--save-replay <file>`: the session's replay is written to this file when the run ends
+    pub save_replay: Option<PathBuf>,
+    /// `--replay` named one of AC's replays (not a `.ryin` recording): the file
+    pub ac_replay: Option<PathBuf>,
     /// `--replay-script <key@seconds,…>`: the replay's keys pressed by the clock (for checks)
     pub replay_script: Vec<(f64, String)>,
     /// `--new-session-at <seconds>`: N pressed by the clock (for checks)
@@ -363,6 +372,10 @@ impl Default for Options {
             ideal_line: None,
             start_lights: None,
             replay_script: Vec::new(),
+            no_ac_replay: false,
+            replay_dir: None,
+            save_replay: None,
+            ac_replay: None,
             new_session_at: None,
             spawn_given: false,
             controls: None,
@@ -584,6 +597,15 @@ usage: rustyac [options]
                         Not there: Ctrl+D rewind, Ctrl+N / Ctrl+P lap jumps, Ctrl+R instant
                         replay (they need recorded frames to go back over)
   --new-session-at <s>  in a window: N (a new session) pressed by the clock, for unattended checks
+  --replay <file>       also plays one of AC's own replays (.acreplay, format 15 or 16): the
+                        file names its track and cars. Ctrl+R enters and leaves the replay of
+                        a running session; in a replay: P play / pause, Ctrl+F faster,
+                        Ctrl+D back, Ctrl+S slow motion, the full stop a frame on, Page Up /
+                        Page Down the next / previous lap, Home to the start, F10 saves
+  --replay-dir <dir>    where replays are saved (default: replay beside rustyac.exe; a new
+                        session autosaves the last one into its temp folder)
+  --save-replay <file>  write the session's replay to this file when the run ends
+  --no-ac-replay        record no replay
   --replay-script <l>   with --replay in a window: press the replay's keys by the clock, for
                         unattended checks: a list of key@seconds with the keys pause, slow,
                         ffwd, stop (e.g. slow@2,pause@4,ffwd@5,stop@8,pause@9)
@@ -823,11 +845,14 @@ impl Options {
                 "--ideal-line" => o.ideal_line = Some(true),
                 "--no-ideal-line" => o.ideal_line = Some(false),
                 "--new-session-at" => o.new_session_at = Some(value("--new-session-at")?.parse().map_err(|_| "--new-session-at <seconds>")?),
+                "--no-ac-replay" => o.no_ac_replay = true,
+                "--replay-dir" => o.replay_dir = Some(PathBuf::from(value("--replay-dir")?)),
+                "--save-replay" => o.save_replay = Some(PathBuf::from(value("--save-replay")?)),
                 "--replay-script" => {
                     for item in value("--replay-script")?.split(',').filter(|s| !s.is_empty()) {
                         let (name, at) = item.split_once('@').ok_or("--replay-script <key@seconds,…>")?;
-                        if !["pause", "slow", "ffwd", "stop"].contains(&name) {
-                            return Err(format!("--replay-script: {name} is not one of pause, slow, ffwd, stop"));
+                        if !["pause", "slow", "ffwd", "stop", "replay", "rewind", "frame", "nextlap", "prevlap", "save", "exit"].contains(&name) {
+                            return Err(format!("--replay-script: {name} is not one of pause, slow, ffwd, stop, replay, rewind, frame, nextlap, prevlap, save, exit"));
                         }
                         o.replay_script.push((at.parse().map_err(|_| "--replay-script <key@seconds,…>")?, name.to_string()));
                     }
