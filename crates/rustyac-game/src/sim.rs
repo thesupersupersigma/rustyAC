@@ -676,6 +676,9 @@ pub struct GameSim {
     /// New sessions so far (N: a new car at the spawn point): the picture's handlers of the
     /// game's new-session event run when it changes
     pub new_sessions: u32,
+    /// The laps the player's car finished in the last step (`Car::evOnLapCompleted`), for the
+    /// handlers that run after the step (the ghost car's recorder)
+    pub step_laps: Vec<rustyac_physics::track::timing::OnLapCompletedEvent>,
     /// `Car::fuelLapEvaluator`: the fuel a lap takes, the distance per litre (for the displays)
     pub fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator,
     /// The last change of an aid or of the brake bias, for the displays. Never read by the
@@ -1252,7 +1255,7 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None };
         sim.start_ai()?;
         sim.start_referee();
         Ok(sim)
@@ -1886,8 +1889,10 @@ impl GameSim {
         let (speed, fuel, in_pit_lane) = (self.car.car.speed, self.car.car.fuel, self.car.car.is_in_pit_lane());
         self.fuel_evaluator.step(DT, speed, fuel, in_pit_lane);
         // Car::evOnSectorSplit / evOnLapCompleted -> the lap list
+        self.step_laps.clear();
         if self.track.is_some() {
             let (laps, splits) = self.car.car.transponder.take_events();
+            self.step_laps.extend(laps.iter().cloned());
             if let Some(session) = &mut self.online {
                 session.report_local_car(&self.car.car, &laps, &splits, time);
             }

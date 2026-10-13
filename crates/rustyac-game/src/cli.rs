@@ -139,6 +139,16 @@ pub struct Options {
     /// `--replay-dir <folder>`: where replays are saved (default: `replay` beside rustyac.exe;
     /// never one of Assetto Corsa's folders)
     pub replay_dir: Option<PathBuf>,
+    /// `--ghost <off|record|play|both>`: AC's ghost car whatever race.ini's `[GHOST_CAR]` says:
+    /// `record` keeps the best lap, `play` loads the last ghost and shows it, `both` does both
+    pub ghost: Option<String>,
+    /// `--ghost-file <file>`: that `.ghost` file is loaded (race.ini's `FILE`)
+    pub ghost_file: Option<PathBuf>,
+    /// `--ghost-advantage <seconds>`: the ghost runs this far ahead (`SECONDS_ADVANTAGE`)
+    pub ghost_advantage: Option<f32>,
+    /// `--ghost-dir <folder>`: where ghost cars are kept (default: `GhostCar` beside
+    /// rustyac.exe; never one of Assetto Corsa's folders)
+    pub ghost_dir: Option<PathBuf>,
     /// `--save-replay <file>`: the session's replay is written to this file when the run ends
     pub save_replay: Option<PathBuf>,
     /// `--replay` named one of AC's replays (not a `.ryin` recording): the file
@@ -375,6 +385,10 @@ impl Default for Options {
             no_ac_replay: false,
             replay_dir: None,
             save_replay: None,
+            ghost: None,
+            ghost_file: None,
+            ghost_advantage: None,
+            ghost_dir: None,
             ac_replay: None,
             new_session_at: None,
             spawn_given: false,
@@ -606,6 +620,14 @@ usage: rustyac [options]
                         session autosaves the last one into its temp folder)
   --save-replay <file>  write the session's replay to this file when the run ends
   --no-ac-replay        record no replay
+  --ghost <mode>        AC's ghost car (the see-through car that drives your best lap
+                        again): record keeps the best valid lap of the run and writes it
+                        when the program ends, play loads the last one and shows it, both
+                        does both, off neither (default: race.ini's [GHOST_CAR]; never
+                        on a server)
+  --ghost-file <file>   load this .ghost file (one of the game's too) instead
+  --ghost-advantage <s> the ghost runs this many seconds ahead
+  --ghost-dir <dir>     where ghost cars are kept (default: GhostCar beside rustyac.exe)
   --replay-script <l>   with --replay in a window: press the replay's keys by the clock, for
                         unattended checks: a list of key@seconds with the keys pause, slow,
                         ffwd, stop (e.g. slow@2,pause@4,ffwd@5,stop@8,pause@9)
@@ -848,6 +870,16 @@ impl Options {
                 "--no-ac-replay" => o.no_ac_replay = true,
                 "--replay-dir" => o.replay_dir = Some(PathBuf::from(value("--replay-dir")?)),
                 "--save-replay" => o.save_replay = Some(PathBuf::from(value("--save-replay")?)),
+                "--ghost" => {
+                    let mode = value("--ghost")?;
+                    if !["off", "record", "play", "both"].contains(&mode.as_str()) {
+                        return Err("--ghost <off|record|play|both>".into());
+                    }
+                    o.ghost = Some(mode);
+                }
+                "--ghost-file" => o.ghost_file = Some(PathBuf::from(value("--ghost-file")?)),
+                "--ghost-advantage" => o.ghost_advantage = Some(value("--ghost-advantage")?.parse().map_err(|_| "--ghost-advantage <seconds>")?),
+                "--ghost-dir" => o.ghost_dir = Some(PathBuf::from(value("--ghost-dir")?)),
                 "--replay-script" => {
                     for item in value("--replay-script")?.split(',').filter(|s| !s.is_empty()) {
                         let (name, at) = item.split_once('@').ok_or("--replay-script <key@seconds,…>")?;

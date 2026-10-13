@@ -22,6 +22,7 @@ use rustyac_game::render::models::ModelOptions;
 use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
+use rustyac_game::ghost::{GhostOptions, GhostRig};
 use rustyac_physics::replay::ReplayEvent;
 use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
@@ -459,6 +460,79 @@ fn replay_rig(options: &Options, window: bool) -> Option<Arc<Mutex<ReplayRig>>> 
     Some(Arc::new(Mutex::new(ReplayRig::new(folder, ini, -16.0, 1))))
 }
 
+/// AC's ghost car, when race.ini's `[GHOST_CAR]` or `--ghost` asks for one
+/// (`RaceManager::initGhostcar`: offline only). Its files live in rustyAC's own folder.
+fn ghost_rig(options: &Options) -> Option<Arc<Mutex<GhostRig>>> {
+    // (a recorded drive played again has a ghost only when the command line asks for one: what
+    // it does must not depend on the player's files)
+    let asked = options.ghost.is_some() || options.ghost_file.is_some();
+    if options.join.is_some() || options.ac_replay.is_some() || (options.replay.is_some() && !asked) {
+        return None;
+    }
+    let mut ghost = GhostOptions::default();
+    let race = match (&options.race_ini_file, options.race_ini) {
+        _ if options.replay.is_some() => None,
+        (Some(file), _) => Some(file.clone()),
+        (None, Some(false)) => None,
+        (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
+    };
+    if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
+        let on = |key: &str| ini.get_int("GHOST_CAR", key).unwrap_or(0) != 0;
+        ghost.recording = on("RECORDING");
+        ghost.playing = on("PLAYING");
+        ghost.load = on("LOAD");
+        ghost.file = Some(ini.get_string("GHOST_CAR", "FILE")).filter(|file| !file.is_empty()).map(PathBuf::from);
+        ghost.seconds_advantage = ini.get_float("GHOST_CAR", "SECONDS_ADVANTAGE").unwrap_or(0.0);
+    }
+    match options.ghost.as_deref() {
+        Some("off") => return None,
+        Some("record") => ghost.recording = true,
+        Some("play") => (ghost.playing, ghost.load) = (true, true),
+        Some("both") => (ghost.recording, ghost.playing, ghost.load) = (true, true, true),
+        _ => {}
+    }
+    if let Some(file) = &options.ghost_file {
+        ghost.file = Some(file.clone());
+        ghost.load = true;
+    }
+    if let Some(seconds) = options.ghost_advantage {
+        ghost.seconds_advantage = seconds;
+    }
+    if !ghost.wanted() {
+        return None;
+    }
+    let folder = options.ghost_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("GhostCar")))).unwrap_or_else(|| PathBuf::from("GhostCar"));
+    Some(Arc::new(Mutex::new(GhostRig::new(folder, ghost))))
+}
+
+/// The physics thread's end of the ghost car: the recorder's handlers after every step, and
+/// the file when the run ends.
+struct GhostSink {
+    rig: Arc<Mutex<GhostRig>>,
+}
+
+impl StepSink for GhostSink {
+    fn after_step(&mut self, sim: &rustyac_game::sim::GameSim, _input: &StepInput) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        if sim.online.is_none() {
+            rig.after_step(sim);
+        }
+        for line in rig.messages.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        rig.shutdown();
+        for line in rig.messages.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+}
+
 /// The physics thread's end of the replay: a frame of every car whenever the recording
 /// interval has passed (`ReplayManager::onStepCompleted`), and the save at the program's end.
 struct ReplaySink {
@@ -570,8 +644,11 @@ fn enter_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
     }
 }
 
-fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, rig: &Option<Arc<Mutex<ReplayRig>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
+fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, rig: &Option<Arc<Mutex<ReplayRig>>>, ghost: &Option<Arc<Mutex<GhostRig>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
     let mut sinks: Vec<Box<dyn StepSink>> = Vec::new();
+    if let Some(ghost) = ghost {
+        sinks.push(Box::new(GhostSink { rig: Arc::clone(ghost) }));
+    }
     if let Some(rig) = rig {
         sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
     }
@@ -761,7 +838,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         None => drive(options)?,
     };
     let feed = audio_feed(options, true);
-    let sinks = sinks(options, &setup, &feed, &replay_rig(options, false))?;
+    let sinks = sinks(options, &setup, &feed, &replay_rig(options, false), &ghost_rig(options))?;
     let shared = Shared::new();
     let config = LoopConfig {
         replay: replay.clone(),
@@ -1007,7 +1084,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     let feed = audio_feed(options, false);
     let rig = replay_rig(options, true);
     let is_online = online.is_some();
-    let sinks = sinks(options, &setup, &feed, &rig)?;
+    let ghost = ghost_rig(options).filter(|_| !is_online);
+    let sinks = sinks(options, &setup, &feed, &rig, &ghost)?;
     let shared = Shared::new();
     // a replay waits for the picture: its first step runs when the first frame is drawn (the
     // frame loop sets the transport's speed)
@@ -1054,7 +1132,10 @@ fn run_window(options: &Options) -> Result<(), String> {
     focus_script.sort_by(|a, b| a.0.total_cmp(&b.0));
     let shape = shapes[focus.index].clone();
     let (width, height) = window.client_size();
-    let graphics = make_picture(options, width, height, &car_info, &other_infos).and_then(|renderer| {
+    let graphics = make_picture(options, width, height, &car_info, &other_infos).and_then(|mut renderer| {
+        if let Some(ghost) = &ghost {
+            renderer.set_ghost(Arc::clone(ghost));
+        }
         let chain = renderer.swap_chain(window.handle)?;
         Ok((renderer, chain))
     });
@@ -1781,7 +1862,9 @@ fn run(options: &Options) -> Result<(), String> {
             }
             // as fast as it goes
             let started = Instant::now();
-            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay))?;
+            let ghost = ghost_rig(options);
+            let mut ghost = ghost.as_ref().map(|ghost| ghost.lock().unwrap());
+            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay), ghost.as_deref_mut())?;
             let seconds = started.elapsed().as_secs_f64();
             // the dump may be going to the standard output
             eprintln!(

@@ -452,6 +452,10 @@ pub struct AcRenderer {
     crew_cars: Vec<rustyac_render::pit_crew::CrewCar>,
     /// Task 28c: a replay shows: every car's state comes from its recorder, not from its view
     pub replay_states: Option<Vec<rustyac_physics::car_physics_state::CarPhysicsState>>,
+    /// `GhostCar`: the see-through car of the player's best lap, and its recorder (the physics
+    /// thread's) when the session has one
+    ghost: Option<rustyac_render::ghost_car::GhostCar>,
+    pub ghost_rig: Option<std::sync::Arc<std::sync::Mutex<crate::ghost::GhostRig>>>,
     /// `PitCrew`: the four mechanics who change the player's tyres
     tyre_crew: Option<rustyac_render::tyre_crew::PitCrew>,
     /// the crew's sound and camera, between the picture and the game's loop
@@ -685,7 +689,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -1195,6 +1199,25 @@ impl AcRenderer {
                 self.scene.nodes[car.car_node].is_active = !view.disconnected;
             }
             car.update(&mut self.graphics, &mut self.scene, &state, dt);
+            // CarAvatar::initGhostCar's GhostCar, a child of the player's avatar: its update
+            if index == 0 && self.ghost_rig.is_some() && self.ghost.is_none() {
+                if let Some(crew_car) = self.crew_cars.first() {
+                    // RaceManager::initGhostcar
+                    self.scene.nodes[self.sim_nodes.before_cars].is_active = true;
+                    match rustyac_render::ghost_car::GhostCar::new(&mut self.graphics, &mut self.scene, self.sim_nodes.before_cars, &crew_car.folder_text, &crew_car.folder) {
+                        Ok(ghost) => self.ghost = Some(ghost),
+                        Err(message) => {
+                            println!("WARNING: no ghost car: {message}");
+                            self.ghost_rig = None;
+                        }
+                    }
+                }
+            }
+            if let (0, Some(rig), Some(ghost)) = (index, &self.ghost_rig, &mut self.ghost) {
+                let mut rig = rig.lock().unwrap();
+                let b = self.scene.nodes[car.body_transform].matrix.m[3];
+                ghost.update(&mut self.scene, &mut rig.recorder, state.lap_time, &|m| car.make_body_matrix(m), &[b[0], b[1], b[2]], info.replay);
+            }
             states.push(state);
         }
         // Game::evOnPostUpdate, after every car's update: each car's handlers in the order the

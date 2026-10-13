@@ -71,6 +71,13 @@ impl Picture {
         }
     }
 
+    /// The session's ghost car: its recorder, which the physics thread fills.
+    pub fn set_ghost(&mut self, rig: std::sync::Arc<std::sync::Mutex<crate::ghost::GhostRig>>) {
+        if let Picture::Ac(r) = self {
+            r.ghost_rig = Some(rig);
+        }
+    }
+
     /// The tyre changers' sound and camera link (AC's renderer with a pit crew only).
     pub fn crew_link(&mut self) -> Option<&mut super::ac::CrewLink> {
         match self {
