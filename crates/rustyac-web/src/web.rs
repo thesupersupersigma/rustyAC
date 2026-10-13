@@ -581,6 +581,8 @@ impl Game {
         if !hud.caption.is_empty() {
             top.push(hud.caption.clone());
         }
+        // Task 28b: the pit menu while it is up, under the referee's lines
+        top.extend(hud.pit.iter().cloned());
         format!("{{\"top\": [{}], \"centre\": [{}], \"results\": [{}], \"fade\": {:.3}}}", list(&top), list(&hud.centre), list(&hud.results), hud.fade)
     }
 

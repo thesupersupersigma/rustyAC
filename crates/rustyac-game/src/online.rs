@@ -275,7 +275,7 @@ impl OnlinePit {
 
     /// The pit lines of the HUD (the menu, the countdown, the window).
     pub fn lines(&self) -> Vec<String> {
-        crate::referee::pit_lines_of(&self.pit, &self.menu, self.window, &self.avatar, &self.manager)
+        crate::referee::pit_lines_of(&self.pit, &self.menu, self.window, &self.avatar, &self.manager).all()
     }
 }
 

@@ -443,6 +443,18 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
             hud.text_centred(width * 0.5, y + 5.0 * s, 1.2 * s, RED, text);
             y += gh * 1.2 * s + 12.0 * s;
         }
+        // Task 28b: the pit menu, a block at the right (the game's quick menu sits there too)
+        if !referee.pit.is_empty() {
+            let w = referee.pit.iter().map(|text| hud.width(text, 0.8 * s)).fold(0.0f32, f32::max) + 28.0 * s;
+            let h = (gh * 0.8 * s + 4.0 * s) * referee.pit.len() as f32 + 16.0 * s;
+            let (x, mut y) = (width - w - 24.0 * s, height * 0.25);
+            hud.rect(x, y, w, h, PANEL);
+            y += 8.0 * s;
+            for text in &referee.pit {
+                hud.text(x + 14.0 * s, y, 0.8 * s, if text.starts_with('>') { YELLOW } else { WHITE }, text);
+                y += gh * 0.8 * s + 4.0 * s;
+            }
+        }
         if !referee.results.is_empty() {
             let w = referee.results.iter().map(|text| hud.width(text, 0.8 * s)).fold(0.0f32, f32::max) + 40.0 * s;
             let h = (gh * 0.8 * s + 4.0 * s) * referee.results.len() as f32 + 24.0 * s;

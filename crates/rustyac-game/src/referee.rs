@@ -175,6 +175,8 @@ pub struct RefereeHud {
     pub time_to_start_ms: Option<f64>,
     /// the picture is fading to black: 0 none .. 1 black
     pub fade: f32,
+    /// Task 28b: the pit menu while it is up, line by line (the cursor's line starts with `>`)
+    pub pit: Vec<String>,
 }
 
 fn session_name(kind: i32) -> &'static str {
@@ -241,18 +243,33 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
     Some(lines)
 }
 
-/// Task 28b: the pit stop in words: the menu while it is up (AC's own menu comes with the
-/// UI), the stop's countdown with what is being done, and the mandatory pit window.
-pub fn pit_lines(referee: &Referee) -> Vec<String> {
-    let (Some(pit), Some(menu)) = (&referee.pit, &referee.menu) else { return Vec::new() };
+/// Task 28b: the pit stop in words, in three groups: the mandatory pit window (a line for
+/// the top of the screen), the stop's countdown with what is being done (the middle), and
+/// the menu while it is up (AC's own menu comes with the UI).
+pub struct PitLines {
+    pub window: Vec<String>,
+    pub countdown: Vec<String>,
+    pub menu: Vec<String>,
+}
+
+impl PitLines {
+    /// All of them, one after the other.
+    pub fn all(self) -> Vec<String> {
+        self.window.into_iter().chain(self.countdown).chain(self.menu).collect()
+    }
+}
+
+pub fn pit_lines(referee: &Referee) -> PitLines {
+    let (Some(pit), Some(menu)) = (&referee.pit, &referee.menu) else { return PitLines { window: Vec::new(), countdown: Vec::new(), menu: Vec::new() } };
     pit_lines_of(pit, menu, referee.pit_window, &referee.pit_avatar, &referee.manager)
 }
 
 /// [`pit_lines`] of a stop, its menu, the mandatory window and the manager that keeps the
 /// window's times (online the manager is only that).
-pub fn pit_lines_of(pit: &rustyac_physics::race::PitStop, menu: &rustyac_physics::race::QuickMenu, window: (u16, u16), avatar: &rustyac_physics::race::PitAvatar, manager: &rustyac_physics::race::RaceManager) -> Vec<String> {
+pub fn pit_lines_of(pit: &rustyac_physics::race::PitStop, menu: &rustyac_physics::race::QuickMenu, window: (u16, u16), avatar: &rustyac_physics::race::PitAvatar, manager: &rustyac_physics::race::RaceManager) -> PitLines {
     use rustyac_physics::race::pitstop::STATE_OPERATING;
-    let mut out = Vec::new();
+    let mut lines = PitLines { window: Vec::new(), countdown: Vec::new(), menu: Vec::new() };
+    let out = &mut lines.window;
     if window.1 != 0 && manager.current_session.session_type == SESSION_RACE {
         let unit = if manager.current_session.is_timed_race { "min" } else { "lap" };
         let state = if avatar.mandatory_pitstop_done {
@@ -267,6 +284,7 @@ pub fn pit_lines_of(pit: &rustyac_physics::race::PitStop, menu: &rustyac_physics
         out.push(format!("MANDATORY PIT: {state}  (PIT OPEN: {unit} {}  PIT CLOSE: {unit} {})", window.0, window.1));
     }
     if pit.state == STATE_OPERATING {
+        let out = &mut lines.countdown;
         out.push(format!("PIT STOP  {:.1} s", pit.pit_timer.max(0.0)));
         let mut work = Vec::new();
         if pit.is_changing_tyres() {
@@ -280,10 +298,11 @@ pub fn pit_lines_of(pit: &rustyac_physics::race::PitStop, menu: &rustyac_physics
         }
         out.push(work.join("   "));
     } else if menu.is_visible {
-        out.extend(menu.lines());
-        out.push("number pad 8 2: line   4 6: change   (or Alt + arrows); stop in your pit box to begin".to_string());
+        lines.menu.extend(menu.lines());
+        lines.menu.push("number pad 8 2: line, 4 6: change (or Alt + arrows)".to_string());
+        lines.menu.push("stop in your pit box to begin".to_string());
     }
-    out
+    lines
 }
 
 /// The referee's words for this moment.
@@ -322,12 +341,14 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
     }
     out.centre.extend(hud::manager_lines(manager, &referee.views, &state, manager.results_displayed));
     let mut pit = pit_lines(referee);
-    if let (Some(menu), true) = (&referee.menu, pit.len() > 1 && referee.menu.as_ref().is_some_and(|menu| menu.is_visible) && referee.pit.as_ref().is_some_and(|pit| pit.state != rustyac_physics::race::pitstop::STATE_OPERATING)) {
+    if let (Some(menu), false) = (&referee.menu, pit.menu.is_empty()) {
         // (the estimate the game's mouse menu shows; the quick menu has none)
-        let at = pit.len() - 1;
-        pit.insert(at, format!("ESTIMATED TIME  {:.1} s", menu.estimate(player)));
+        let at = pit.menu.len() - 2;
+        pit.menu.insert(at, format!("  ESTIMATED TIME         {:.1} s", menu.estimate(player)));
     }
-    out.centre.extend(pit);
+    out.lines.extend(pit.window);
+    out.centre.extend(pit.countdown);
+    out.pit = pit.menu;
     if manager.results_displayed {
         if let Some(event) = referee.last_results.as_ref().filter(|_| manager.finalized) {
             out.results = results_table(referee, event);
