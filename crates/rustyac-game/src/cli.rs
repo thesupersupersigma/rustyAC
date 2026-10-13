@@ -729,7 +729,7 @@ for checks, without anybody at the controls:
                         semaphore) count down, the start being <s> seconds away, give or take one
                         (the game: 20). The car is not held on the grid (no races yet). A race.ini
                         whose session is a race does the same with 20; N starts it again
-  --show-fps            the frame-rate counter on from the start (Ctrl+F or F9 switches it while
+  --show-fps            the frame-rate counter on from the start (Ctrl+F or F12 switches it while
                         driving: frame time, FPS, physics steps a second)
   --no-a2c              NOT Assetto Corsa, a diagnosis only: no alpha to coverage. It proves where
                         the dotted trees and fences of a picture without anti-aliasing come from
