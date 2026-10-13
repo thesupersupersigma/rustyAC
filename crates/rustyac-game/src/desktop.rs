@@ -413,8 +413,19 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             cars: rustyac_game::render::gui::car_names(&game, race_reader.as_ref(), &folders),
             steer_locks: cars.iter().map(|car| ini(car, "CONTROLS", "STEER_LOCK")).collect(),
             fuel_light_min_liters: ini(info, "GRAPHICS", "FUEL_LIGHT_MIN_LITERS"),
-            session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }),
+            session_type: options.sessions.as_deref().and_then(|list| match list.trim().chars().next() {
+                Some('p') => Some(1),
+                Some('q') => Some(2),
+                Some('r') => Some(3),
+                _ => None,
+            }).or(session_type).unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }),
             penalties: race_reader.as_ref().is_some_and(|ini| ini.get_int("RACE", "PENALTIES").unwrap_or(0) != 0),
+            session_count: match &options.sessions {
+                Some(list) => list.split(',').filter(|s| !s.trim().is_empty()).count() as u32,
+                None => race_reader.as_ref().map_or(1, |ini| (0..32).take_while(|n| ini.has_section(&format!("SESSION_{n}"))).count().max(1) as u32),
+            },
+            online: options.join.is_some(),
+            replay: !options.no_ac_replay && options.replay.is_none(),
             cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),
@@ -1283,7 +1294,9 @@ fn run_window(options: &Options) -> Result<(), String> {
     'frames: loop {
         for event in window.pump() {
             match event {
-                Event::Close | Event::Key { key: 0x1b, .. } => break 'frames,
+                Event::Close => break 'frames,
+                // ESC without AC's GUI (--no-gui, the debug view) ends the program, as before
+                Event::Key { key: 0x1b, .. } if renderer.gui().is_none() => break 'frames,
                 // ksgui::GUI's listeners of the mouse and the keyboard
                 Event::Mouse { x, y, action } => {
                     if let Some(gui) = renderer.gui() {
@@ -1320,7 +1333,26 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // Shift does; they come before rustyAC's own Ctrl+F
                     let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
                     let in_ac_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode());
-                    if let (true, Some(rig)) = (in_ac_replay && !(ctrl && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) && !replay_keys.contains(&key)), &rig) {
+                    if key == 0x1b {
+                        // Sim::onKeyDown 0x14019a940, ESC (not with Ctrl: the Ctrl block skips
+                        // the plain keys): a replay that was loaded from a file, and a drive
+                        // that is run again, end the program; a replay of the session goes back
+                        // to the session with the pause menu up (the job 0x140195f20); else
+                        // the pause menu comes, and the pause
+                        if ctrl {
+                            continue;
+                        }
+                        if options.ac_replay.is_some() || transport.is_some() || replay.is_some() {
+                            break 'frames;
+                        }
+                        if let (true, Some(rig)) = (in_ac_replay, &rig) {
+                            leave_replay(&mut rig.lock().unwrap(), &shared, is_online);
+                        }
+                        let moving = is_online && world.first().is_some_and(|car| car.speed_kmh > 1.0);
+                        if let Some(gui) = renderer.gui() {
+                            gui.esc_key(moving && !in_ac_replay);
+                        }
+                    } else if let (true, Some(rig)) = (in_ac_replay && !(ctrl && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) && !replay_keys.contains(&key)), &rig) {
                         // Task 28c: a replay of recorded frames shows: its keys
                         if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
                             match key {
@@ -1459,6 +1491,39 @@ fn run_window(options: &Options) -> Result<(), String> {
                     }
                 }
             }
+        }
+        // what the menus asked of the session (the calls their buttons make on Sim)
+        let mut shutdown = false;
+        if let Some(gui) = renderer.gui() {
+            use rustyac_gui::menus::SimAction;
+            for action in gui.take_actions() {
+                match action {
+                    // Sim::setPauseMode 0x14019e6d0 (online the physics runs on: the physics
+                    // thread sees to that)
+                    SimAction::SetPauseMode(paused) => shared.paused.store(paused, Ordering::Relaxed),
+                    // (the sound follows the pause: AudioEngine::stop / start)
+                    SimAction::AudioStop | SimAction::AudioStart => {}
+                    SimAction::SkipCurrentSession => {
+                        shared.requests.fetch_or(event::NEXT_SESSION, Ordering::Relaxed);
+                    }
+                    SimAction::RestartCurrentSession => {
+                        shared.requests.fetch_or(event::RESTART_SESSION, Ordering::Relaxed);
+                    }
+                    SimAction::LockControlsUntilTime(_) | SimAction::GoToSpawnPosition(_) => {
+                        shared.requests.fetch_or(event::BACK_TO_PITS, Ordering::Relaxed);
+                    }
+                    SimAction::StartReplayMode => {
+                        if let Some(rig) = &rig {
+                            enter_replay(&mut rig.lock().unwrap(), &shared, is_online);
+                        }
+                    }
+                    SimAction::Shutdown => shutdown = true,
+                    SimAction::ClearMessage | SimAction::FadeIn(_) => {}
+                }
+            }
+        }
+        if shutdown {
+            break;
         }
         let toggles = shared.camera_toggles.load(Ordering::Relaxed);
         if toggles != camera_toggles {

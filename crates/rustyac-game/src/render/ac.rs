@@ -1430,6 +1430,10 @@ impl AcRenderer {
                 self.crew_fade = Some((time + dt, total));
             }
         }
+        // (the same handler, for a fade one of the menus asked for)
+        if let Some(gui) = &mut self.gui {
+            gui.post_gui(&mut self.graphics, dt);
+        }
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
             if let Some(path) = &self.options.gpu_log {

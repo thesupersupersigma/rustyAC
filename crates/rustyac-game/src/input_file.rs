@@ -71,8 +71,11 @@ pub mod event {
     pub const PIT_DOWN: u32 = 1 << 23;
     /// Task 28b: the car's AI driver is called in for a pit stop (`AIDriver::requestPitStop`).
     pub const AI_PIT: u32 = 1 << 24;
+    /// Task 30: the pause menu's "Back to pits" (`CarAvatar::goToSpawnPosition("PIT")`; in a
+    /// race the controls are locked for a while too).
+    pub const BACK_TO_PITS: u32 = 1 << 25;
 
-    pub const NAMES: [(u32, &str); 25] = [
+    pub const NAMES: [(u32, &str); 26] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -98,6 +101,7 @@ pub mod event {
         (PIT_RIGHT, "pit menu right"),
         (PIT_DOWN, "pit menu down"),
         (AI_PIT, "ai pit"),
+        (BACK_TO_PITS, "back to pits"),
     ];
 }
 

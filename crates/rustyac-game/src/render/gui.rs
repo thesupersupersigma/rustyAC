@@ -14,6 +14,7 @@ use rustyac_gui::control::{Id, MouseEvent};
 use rustyac_gui::gui::{Gui, GuiFiles};
 use rustyac_gui::hud::{HudCar, HudInput, SystemMessage, SystemNotification, MESSAGE_ABS, MESSAGE_BRAKE_BIAS, MESSAGE_DEFAULT, MESSAGE_TC};
 use rustyac_gui::hud_cars::{DamageDisplayer, DriverNames, ProximityIndicator};
+use rustyac_gui::menus::SimAction;
 use rustyac_gui::hud_flags::{DriveThroughPenalty, FlagDisplay, FuelLight, LapInvalidator, LockControlsTime, WrongWayIndicator};
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::Mat44f;
@@ -42,6 +43,12 @@ pub struct GuiSetup {
     pub session_type: i32,
     /// `race.ini [RACE] PENALTIES`
     pub penalties: bool,
+    /// how many sessions the event has (`RaceManager::getSessionCount`)
+    pub session_count: u32,
+    /// the game is online (`Sim::client`)
+    pub online: bool,
+    /// AC's replay is recorded (the game object "REPLAY_MANAGER")
+    pub replay: bool,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -78,6 +85,10 @@ pub struct GameGui {
     was_replay: bool,
     /// `--gui-do flag:<name>`: flags shown whatever the referee says (for pictures and checks)
     forced_flags: [bool; 5],
+    /// `Sim::pauseMenu`
+    pub pause_menu: Id,
+    /// `ACCameraManager::fadeMode` of a fade a menu asked for: `fadeTime`, `fadeTotalTime`
+    menu_fade: Option<(f32, f32)>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -130,6 +141,17 @@ impl GameGui {
 
         let mut message = SystemMessage::new(&mut gui, &mut painter, system("messages.ini").as_ref(), system("session_info.ini").as_ref());
         let notification = SystemNotification::new(&mut gui, &mut painter, screen, gameplay.as_ref());
+        // PauseMenu, hidden, a top-level control (Sim::Sim 0x1401931b5)
+        gui.sim.game_screen = Some(screen);
+        gui.sim.session_type = setup.session_type;
+        gui.sim.session_count = setup.session_count;
+        gui.sim.online = setup.online;
+        gui.sim.has_replay_manager = setup.replay;
+        let pause_menu = gui.new_pause_menu(&mut painter, system("fades.ini").as_ref());
+        gui.sim.pause_menu = Some(pause_menu);
+        gui.set_visible(pause_menu, false);
+        gui.add_root(&mut painter, pause_menu);
+        gui.sim.actions.clear();
         let wrong = (setup.session_type != 6).then(|| WrongWayIndicator::new(&mut painter, setup.penalties));
         let lap = LapInvalidator::new(&mut painter);
         let drive = DriveThroughPenalty::new(&mut painter);
@@ -141,7 +163,7 @@ impl GameGui {
         let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5] })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -161,7 +183,7 @@ impl GameGui {
             car.sus_damage = view.suspension_damage;
             car.engine_life_left = view.engine_life;
         }
-        input.pause_menu_visible = info.paused;
+        input.pause_menu_visible = self.gui.controls[self.pause_menu].visible;
         input.in_replay = info.replay;
         input.focused_car_index = focus as i32;
         input.camera_mode = camera_mode;
@@ -170,6 +192,8 @@ impl GameGui {
         let mut shown = [false; 5];
         match info.referee.as_ref().map(|referee| &referee.gui) {
             Some(r) => {
+                self.gui.sim.session_type = r.session_type;
+                self.gui.sim.time_to_session_start = r.time_to_session_start;
                 input.session_type = r.session_type;
                 input.practice_qualify_text = r.practice_qualify_text.clone();
                 input.race_text = r.race_text.clone();
@@ -322,6 +346,58 @@ impl GameGui {
         self.gui.key_char(key);
     }
 
+    // ----- the menus -----
+
+    /// `Sim::onKeyDown` 0x14019a940, ESC while driving: the pause menu and the pause, unless a
+    /// fade still runs. Online the car must stand first (`online_moving`: it is faster than
+    /// 1 km/h), and a message says so.
+    pub fn esc_key(&mut self, online_moving: bool) {
+        if online_moving {
+            self.message.add_message(&mut self.gui, "Stop for Esc Menu", "Stop your car to enter the pause menu", MESSAGE_DEFAULT);
+        } else if self.gui.sim.esc_menu.is_none_or(|esc| !self.gui.controls[esc].visible) && self.gui.sim.fade_listeners.is_empty() {
+            self.gui.sim_activate_pause_menu();
+            self.gui.sim_set_pause_mode(true);
+        }
+    }
+
+    /// The pause menu shows.
+    pub fn pause_menu_visible(&self) -> bool {
+        self.gui.controls[self.pause_menu].visible
+    }
+
+    /// What the menus asked of the session since the last call, in order. The message banner
+    /// is cleared and a fade is started here; the rest is the window's to carry out.
+    pub fn take_actions(&mut self) -> Vec<SimAction> {
+        let mut out = Vec::new();
+        for action in std::mem::take(&mut self.gui.sim.actions) {
+            match action {
+                SimAction::ClearMessage => self.message.clear_message(),
+                SimAction::FadeIn(total) => self.menu_fade = Some((0.0, total)),
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
+    /// `ACCameraManager`'s handler of `Game::evOnPostGui` (the lambda 0x140032770) for a fade a
+    /// menu asked for: the picture goes black over `fadeTotalTime`, the jobs hung on the fade
+    /// are done at the first frame after that, and the picture comes back over the same time.
+    pub fn post_gui(&mut self, graphics: &mut Graphics, dt: f32) {
+        let Some((time, total)) = self.menu_fade else { return };
+        if total * 2.0 <= time {
+            if !self.gui.sim.fade_listeners.is_empty() {
+                self.gui.sim_fade_in_finished();
+            }
+            self.menu_fade = None;
+        } else {
+            if total <= time && !self.gui.sim.fade_listeners.is_empty() {
+                self.gui.sim_fade_in_finished();
+            }
+            rustyac_render::gl::fade_overlay(graphics, time, total);
+            self.menu_fade = Some((dt + time, total));
+        }
+    }
+
     // ----- the commands of `Sim::onKeyDown` 0x14019a940 that act on the GUI and the HUD -----
 
     /// "Hide Show Apps" (Ctrl+H): `GameScreen::showDesktop`.
@@ -358,7 +434,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`.
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -398,6 +474,7 @@ impl GameGui {
                 }
                 "car" => self.message.add_car_message(need(1)?[0] as u32, MESSAGE_DEFAULT),
                 "notify" => self.notification.show_notification(&mut self.gui, need(1)?[0]),
+                "esc" => self.esc_key(false),
                 "flag" => {
                     let index = ["blue", "black", "yellow", "penalty", "chequered"].iter().position(|f| *f == rest);
                     self.forced_flags = [false; 5];
@@ -407,7 +484,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc)")),
             }
         }
         Ok(())

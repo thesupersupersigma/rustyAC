@@ -1936,6 +1936,10 @@ impl GameSim {
             }
             session.pit_frame(&mut self.car.car, time);
         }
+        // Task 30: "Back to pits" without a referee is the plain way back to the spawn point
+        if events & event::BACK_TO_PITS != 0 && self.referee.is_none() {
+            self.car.device.source.request(event::RESET);
+        }
         // Task 28: the referee's frame (the game's main thread), every third step
         if let Some(mut referee) = self.referee.take() {
             let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
@@ -1944,6 +1948,9 @@ impl GameSim {
             }
             if events & event::RESTART_SESSION != 0 {
                 referee.restart_session(&mut world);
+            }
+            if events & event::BACK_TO_PITS != 0 {
+                referee.back_to_pits(&mut world, time);
             }
             // Task 28b: the pit menu's keys
             for (bit, key) in [(event::PIT_LEFT, 0x25), (event::PIT_UP, 0x26), (event::PIT_RIGHT, 0x27), (event::PIT_DOWN, 0x28)] {

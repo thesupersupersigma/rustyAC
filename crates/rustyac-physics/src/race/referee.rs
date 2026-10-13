@@ -611,6 +611,22 @@ impl Referee {
         self.apply(actions, world);
     }
 
+    /// The pause menu's "Back to pits", once the picture has faded (the lambda @ 0x14011ec90):
+    /// outside a race `CarAvatar::goToSpawnPosition("PIT")`; in a race
+    /// `CarAvatar::lockControlsUntilTime(20000, now, true)` @ 0x1400d8e20, whose job on the
+    /// physics thread (@ 0x1400cf530) locks the controls for 20 s on top of the time a whole
+    /// pit stop takes, before the car is put on its box all the same.
+    pub fn back_to_pits(&mut self, world: &mut dyn World, now: f64) {
+        if self.manager.current_session.session_type == SESSION_RACE {
+            world.car_mut(0).queue(move |car| {
+                let mut rand = MsvcRand(0);
+                let time = car.get_pitstop_time(0.0, true, true, true, true, false, &mut rand);
+                car.lock_controls_until((time.total * 1000.0) as f64 + 20000.0, now);
+            });
+        }
+        self.apply(vec![Action::GoToPit(0)], world);
+    }
+
     /// `RaceManager::shutdown` @ 0x140141320 and `Sim::writeOutputJson`: the current
     /// session's results are made if they were not, and the two files' bytes are returned:
     /// `race_out.json` and `laps.ini`.
