@@ -4,6 +4,8 @@
 //! the frames they draw. A script is a list of [`Op`]s; objects are named by the order they
 //! were made in (the game screen is object 0).
 
+use rustyac_physics::vecmath::{xm_matrix_inverse, Mat44f};
+
 #[derive(Clone, Debug)]
 pub enum Val {
     F(f32),
@@ -131,6 +133,8 @@ pub const ACOS_SAMPLE: &str = "[HEADER]\nVERSION=2\nDESKTOP_SELECTED=1\n\n[DESK_
 
 pub struct Sequence {
     pub ops: Vec<Op>,
+    /// files of `system/cfg` the session finds changed: name, text
+    pub cfg: &'static [(&'static str, &'static str)],
     /// `cfg/acos.ini` as the session finds it (none: no file)
     pub acos: Option<&'static str>,
     /// `cfg/gameplay.ini [GUI] ALLOW_OVERLAPPING_FORMS`
@@ -141,7 +145,7 @@ const DT: f32 = 1.0 / 60.0;
 
 /// A car as the HUD scripts start it: a valid lap, no place yet.
 pub fn default_car() -> rustyac_gui::hud::HudCar {
-    rustyac_gui::hud::HudCar { current_lap_valid: true, leaderboard_position: -1, steer_lock: 1.0, ..Default::default() }
+    rustyac_gui::hud::HudCar { current_lap_valid: true, leaderboard_position: -1, steer_lock: 1.0, ping: -1, body_matrix: Mat44f::IDENTITY, engine_life_left: 1000.0, gearbox: 1.0, tyre_inflation: [1.0; 4], ..Default::default() }
 }
 
 /// A script's change of what the HUD reads of the session (true: it was one).
@@ -194,6 +198,12 @@ pub fn hud_input2(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f3
         "cameraMode" => input.camera_mode = number as i32,
         "ended" => input.end_session_active = on,
         _ if what.starts_with("car.") => {
+            if what == "car.nation" {
+                if let Some(car) = input.cars.get_mut(number as usize) {
+                    car.nation_code = text.to_string();
+                }
+                return true;
+            }
             let Some(car) = text.parse::<usize>().ok().and_then(|i| input.cars.get_mut(i)) else { return false };
             match what {
                 "car.clearDisabled" => car.min_speed_penalty_clear_disabled = on,
@@ -207,8 +217,103 @@ pub fn hud_input2(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f3
     true
 }
 
-pub fn hud_input3(_input: &mut rustyac_gui::hud::HudInput, _what: &str, _number: f32, _text: &str) -> bool {
-    false
+/// A turn about the y axis (degrees) that keeps the matrix's place.
+fn yaw(m: &mut Mat44f, degrees: f32) {
+    let (s, c) = degrees.to_radians().sin_cos();
+    m.m[0] = [c, 0.0, -s, 0.0];
+    m.m[1] = [0.0, 1.0, 0.0, 0.0];
+    m.m[2] = [s, 0.0, c, 0.0];
+}
+
+pub fn hud_input3(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f32, text: &str) -> bool {
+    let on = number != 0.0;
+    let index = |name: &str, prefix: &str| name.strip_prefix(prefix).and_then(|k| k.parse::<usize>().ok()).filter(|k| *k < 4);
+    match what {
+        "camX" => input.camera_matrix.m[3][0] = number,
+        "camY" => input.camera_matrix.m[3][1] = number,
+        "camZ" => input.camera_matrix.m[3][2] = number,
+        "camYaw" => yaw(&mut input.camera_matrix, number),
+        "online" => input.online = on,
+        "now" => input.game_time_now = number as f64,
+        _ if what.starts_with("car.") => {
+            let Some(car) = text.parse::<usize>().ok().and_then(|i| input.cars.get_mut(i)) else { return false };
+            match what {
+                "car.x" | "car.y" | "car.z" => {
+                    let k = (what.as_bytes()[4] - b'x') as usize;
+                    car.world_position[k] = number;
+                    car.body_matrix.m[3][k] = number;
+                }
+                "car.yaw" => yaw(&mut car.body_matrix, number),
+                "car.connected" => car.connected = on,
+                "car.laps" => car.lap_count = number as i32,
+                "car.rtpos" => car.real_time_position = number as i32,
+                "car.ping" => car.ping = number as i32,
+                "car.engine" => car.engine_life_left = number,
+                "car.gearbox" => car.gearbox = number,
+                _ => {
+                    if let Some(k) = index(what, "car.zone") {
+                        car.damage_zone_level[k] = number;
+                    } else if let Some(k) = index(what, "car.tyre") {
+                        car.tyre_inflation[k] = number;
+                    } else if let Some(k) = index(what, "car.sus") {
+                        car.sus_damage[k] = number;
+                    } else if let Some(k) = index(what, "car.flat") {
+                        car.tyre_flat_spot[k] = number;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// The view and the perspective both sides take for a camera's matrix: its inverse, and 60
+/// degrees up and down on a 16:9 screen from 0.1 to 1000 m.
+pub fn hud_view(camera: &Mat44f) -> (Mat44f, Mat44f) {
+    let h = 1.732_050_8f32;
+    let w = h * 9.0 / 16.0;
+    let (n, f) = (0.1f32, 1000.0f32);
+    let perspective = Mat44f { m: [[w, 0.0, 0.0, 0.0], [0.0, h, 0.0, 0.0], [0.0, 0.0, f / (n - f), -1.0], [0.0, 0.0, n * f / (n - f), 0.0]] };
+    (xm_matrix_inverse(camera), perspective)
+}
+
+pub fn damage_line(timer: f32, initialized: bool, enabled: bool, items: &[(f32, f32)]) -> String {
+    let items: Vec<String> = items.iter().map(|(h, b)| format!("{:08x}:{:08x}", h.to_bits(), b.to_bits())).collect();
+    format!("hud damage timer={:08x} init={} enabled={} items={}\n", timer.to_bits(), initialized as u8, enabled as u8, items.join(","))
+}
+
+/// The name tags, the proximity arrows and the damage picture.
+fn hud_cars() -> Vec<Op> {
+    use Op::*;
+    let mut o = vec![Hud("create", 5.0, ""), Hud("session", 1.0, ""), Hud("pqText", 0.0, "Practice"), Hud("camY", 1.2, "")];
+    let cars: [(&str, &str, &str, [f32; 3]); 5] = [("Tazio Nuvolari", "ITA", "0", [0.0, 0.0, -4.0]), ("Rudolf Caracciola", "DEU", "1", [-2.0, 0.0, -12.0]), ("Bernd Rosemeyer", "", "2", [4.0, 0.0, -35.0]), ("A. N. Other", "ZZZ", "3", [0.5, 0.0, -80.0]), ("Behind", "GBR", "4", [0.0, 0.0, 30.0])];
+    for (i, (name, nation, index, at)) in cars.into_iter().enumerate() {
+        o.extend([Hud("car.name", i as f32, name), Hud("car.nation", i as f32, nation), Hud("car.x", at[0], index), Hud("car.y", at[1], index), Hud("car.z", at[2], index), Hud("car.connected", 1.0, index), Hud("car.pos", i as f32 + 1.0, index)]);
+    }
+    o.extend([Frame(DT), Frame(DT)]);
+    // a car comes nearer, a name grows, a place changes
+    o.extend([Hud("car.z", -8.0, "1"), Frame(DT), Hud("car.name", 2.0, "Bernd Rosemeyer of the Auto Union"), Hud("car.pos", 12.0, "2"), Frame(DT), Hud("car.nation", 2.0, "ITA"), Frame(DT)]);
+    // a race: places as they are on the road, laps ahead and behind
+    o.extend([Hud("session", 3.0, ""), Hud("raceText", 0.0, "Race"), Hud("car.laps", 2.0, "0"), Hud("car.laps", 3.0, "1"), Hud("car.laps", 1.0, "2"), Hud("car.laps", 2.0, "3"), Hud("car.rtpos", 0.0, "1"), Hud("car.rtpos", 3.0, "2"), Hud("car.rtpos", 1.0, "3"), Frame(DT)]);
+    // online: the pings
+    o.extend([Hud("online", 1.0, ""), Hud("car.ping", 50.0, "1"), Hud("car.ping", 150.0, "2"), Hud("car.ping", 300.0, "3"), Frame(DT), Hud("car.ping", 250.0, "3"), Hud("car.ping", 100.0, "2"), Frame(DT), Hud("online", 0.0, ""), Frame(DT)]);
+    // from outside the car; another car in focus; the switch; the menus
+    o.extend([Hud("cameraMode", 1.0, ""), Frame(DT), Hud("focus", 1.0, ""), Frame(DT), Hud("cameraMode", 0.0, ""), Frame(DT), Hud("focus", 0.0, ""), Frame(DT)]);
+    o.extend([Hud("namesActive", 0.0, ""), Frame(DT), Hud("namesActive", 1.0, ""), Frame(DT), Hud("pause", 1.0, ""), Frame(DT), Hud("pause", 0.0, ""), Hud("esc", 1.0, "300"), Frame(DT), Hud("esc", 0.0, "300"), Frame(DT)]);
+    // the camera turns and moves; a car too far; a car that left
+    o.extend([Hud("camYaw", 25.0, ""), Frame(DT), Hud("camYaw", -40.0, ""), Hud("camX", 3.0, ""), Frame(DT), Hud("camYaw", 0.0, ""), Hud("camX", 0.0, ""), Hud("car.z", -150.0, "3"), Frame(DT), Hud("car.connected", 0.0, "2"), Frame(DT), Hud("camYaw", 180.0, ""), Frame(DT), Hud("camYaw", 0.0, ""), Frame(DT)]);
+    // the arrows: cars within ten metres, around a car that turns
+    o.extend([Hud("car.x", 2.0, "1"), Hud("car.z", -6.0, "1"), Frame(DT), Hud("car.x", -3.0, "4"), Hud("car.z", 2.0, "4"), Frame(DT), Hud("car.yaw", 90.0, "0"), Frame(DT), Hud("car.yaw", 200.0, "0"), Frame(DT), Hud("car.x", 0.0, "1"), Hud("car.z", -4.0, "1"), Frame(DT)]);
+    o.extend([Hud("cameraMode", 3.0, ""), Frame(DT), Hud("cameraMode", 2.0, ""), Frame(DT), Hud("cameraMode", 0.0, ""), Hud("proximityActive", 0.0, ""), Frame(DT), Hud("proximityActive", 1.0, ""), Hud("car.connected", 0.0, "4"), Frame(DT), Hud("car.z", -30.0, "1"), Hud("car.yaw", 0.0, "0"), Frame(DT)]);
+    // the damage picture: a knock at the front, the blinking, every part, the timer
+    o.extend([Hud("car.zone0", 30.0, "0"), Frame(DT), Hud("now", 100.0, ""), Frame(DT), Hud("now", 150.0, ""), Frame(0.2), Hud("now", 200.0, ""), Frame(DT), Hud("now", 300.0, ""), Frame(0.4), Frame(DT)]);
+    o.extend([Hud("car.zone1", 80.0, "0"), Hud("car.zone2", 15.0, "0"), Hud("car.zone3", -5.0, "0"), Hud("car.engine", 500.0, "0"), Hud("car.gearbox", 0.2, "0"), Hud("now", 0.0, ""), Frame(DT), Hud("car.sus0", 0.3, "0"), Hud("car.sus3", 1.0, "0"), Hud("car.flat1", 0.6, "0"), Hud("car.flat2", 0.1, "0"), Hud("car.tyre1", 0.4, "0"), Frame(DT), Frame(3.0), Frame(3.0), Frame(DT)]);
+    o.extend([Hud("car.tyre0", 0.0, "0"), Frame(DT), Frame(5.0), Frame(DT), Hud("car.tyre0", 1.0, "0"), Hud("car.sus3", 0.5, "0"), Frame(DT), Frame(5.0), Frame(DT), Hud("damageShow", 0.0, ""), Frame(DT), Hud("damageEnabled", 0.0, ""), Frame(DT), Hud("damageEnabled", 1.0, ""), Hud("ended", 1.0, ""), Frame(DT), Hud("ended", 0.0, ""), Frame(DT)]);
+    o.extend([Hud("focus", 1.0, ""), Hud("car.zone0", 20.0, "1"), Frame(DT), Frame(DT), Hud("focus", 0.0, ""), Hud("car.zone0", 45.0, "0"), Frame(DT), Frame(DT)]);
+    o
 }
 
 pub fn flags_line(flag: i32, timer: f32, invalid: f32, valid: bool, x_pos: f32, text_pos: f32) -> String {
@@ -895,7 +1000,7 @@ fn text() -> Vec<Op> {
 }
 
 pub fn sequence(name: &str) -> Result<Sequence, String> {
-    let plain = |ops: Vec<Op>| Sequence { ops, acos: None, allow_overlapping: false };
+    let plain = |ops: Vec<Op>| Sequence { ops, cfg: &[], acos: None, allow_overlapping: false };
     Ok(match name {
         "base" => plain(base()),
         "text" => plain(text()),
@@ -905,6 +1010,16 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "hud_messages" => plain(hud_messages()),
         "hud_flags" => plain(hud_flags(false)),
         "hud_flags_triple" => plain(hud_flags(true)),
+        "hud_cars" => plain(hud_cars()),
+        // the plain tags, bigger, the focused car's too, a shorter sight; the damage in numbers
+        "hud_cars_simple" => Sequence {
+            ops: hud_cars(),
+            cfg: &[("name_displayer.ini", "[MAIN]\nMAX_DISTANCE=60\nFONT_COLOR=1,1,1\nDRAW_FOCUSEDCAR=1\nSCALE=1.5\nSIMPLE_LABEL=1\n"), ("damage_displayer.ini", "[MAIN]\nTIME=2\nMAX_DAMAGE_KMH=40\nPOSITION_X=300\nDISTANCE_FROM_CENTER_Y=50\nPRINT_VALUES=1\n")],
+            acos: None,
+            allow_overlapping: false,
+        },
+        // the tags without a flag, as big as they get
+        "hud_cars_noflag" => Sequence { ops: hud_cars(), cfg: &[("name_displayer.ini", "[MAIN]\nMAX_DISTANCE=100\nFONT_COLOR=1,1,1\nRENDER_FLAG=0\nSCALE=9\nSIMPLE_LABEL=0\n")], acos: None, allow_overlapping: false },
         // forms as a first session finds them (no layout file)
         "forms" => {
             let mut ops = forms();
@@ -915,15 +1030,15 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "forms_layout" => {
             let mut ops = forms();
             ops.extend([Op::Frame(DT), Op::Call(0, "cycleDesktop", 0.0, ""), Op::Frame(DT), Op::Call(0, "cycleDesktop", 0.0, ""), Op::Frame(DT), Op::Save]);
-            Sequence { ops, acos: Some(ACOS_SAMPLE), allow_overlapping: false }
+            Sequence { ops, cfg: &[], acos: Some(ACOS_SAMPLE), allow_overlapping: false }
         }
         // … and with forms allowed over each other
         "forms_overlap" => {
             let mut ops = forms();
             forms_more(&mut ops);
-            Sequence { ops, acos: None, allow_overlapping: true }
+            Sequence { ops, cfg: &[], acos: None, allow_overlapping: true }
         }
-        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple)")),
+        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
     })
 }
 

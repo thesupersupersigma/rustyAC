@@ -39,7 +39,9 @@ const VA_SPINNER_SET_DRAW_ARROWS: usize = 0x1_4024_d830;
 const VA_SPINNER_SET_POSITION: usize = 0x1_4024_db30;
 
 /// class, size, constructor, table
-pub const CLASSES: [(&str, usize, usize, usize); 16] = [
+pub const CLASSES: [(&str, usize, usize, usize); 17] = [
+    // CarLabel: a plain control to the port, which keeps its parts beside it
+    ("Control", 0x230, 0x1_4006_9840, 0x1_404a_ee40),
     // DriverStatusSystemMessage: a plain control to the port, which draws it by hand
     ("Control", 0x228, 0x1_4008_e4a0, 0x1_404b_4168),
     ("ListBox", 0x218, 0x1_4024_8340, 0x1_404f_1cf0),

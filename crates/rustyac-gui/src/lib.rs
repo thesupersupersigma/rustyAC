@@ -14,6 +14,7 @@ pub mod font;
 pub mod form;
 pub mod gui;
 pub mod hud;
+pub mod hud_cars;
 pub mod hud_flags;
 pub mod painter;
 pub mod spinner;

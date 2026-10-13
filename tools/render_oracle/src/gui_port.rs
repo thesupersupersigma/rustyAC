@@ -295,7 +295,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
             Op::ClearText => blits.clear(),
             Op::Hud(what, number, text) => {
                 let mut painter = renderer.painter(&mut graphics);
-                crate::gui_port_hud::call(&mut hud.hud, &mut gui, &mut painter, &args.game, screen, what, *number, text)?;
+                crate::gui_port_hud::call(&mut hud.hud, &mut gui, &mut painter, &args.root, screen, what, *number, text)?;
             }
             other => {
                 let mut painter = renderer.painter(&mut graphics);

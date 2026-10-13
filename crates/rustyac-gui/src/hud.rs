@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 
 use rustyac_physics::data::ini::IniReader;
+use rustyac_physics::vecmath::Mat44f;
 
 use crate::control::Id;
 use crate::font::{Font, FontType};
@@ -76,6 +77,32 @@ pub struct HudCar {
     pub pit_penalty_laps: i16,
     /// `physicsState.fuel`
     pub fuel: f32,
+    /// `driverInfo.nationCode`
+    pub nation_code: String,
+    /// `isConnected()`: the car's node is shown
+    pub connected: bool,
+    /// the translation of `physicsState.worldMatrix`
+    pub world_position: [f32; 3],
+    /// `bodyTransform->getWorldMatrix()`
+    pub body_matrix: Mat44f,
+    /// `RaceManager::getLapCount`
+    pub lap_count: i32,
+    /// `RaceManager::getCarRealTimePosition`
+    pub real_time_position: i32,
+    /// `ACClient::getPing` (online)
+    pub ping: i32,
+    /// `physicsState.damageZoneLevel`: front, rear, left, right
+    pub damage_zone_level: [f32; 4],
+    /// `physicsState.engineLifeLeft`
+    pub engine_life_left: f32,
+    /// the float at `physicsState` + 0x7f4 the damage picture reads as the gearbox's health
+    pub gearbox: f32,
+    /// `physicsState.tyreInflation`
+    pub tyre_inflation: [f32; 4],
+    /// `physicsState.susDamage`
+    pub sus_damage: [f32; 4],
+    /// `physicsState.tyreFlatSpot`
+    pub tyre_flat_spot: [f32; 4],
     /// `physicsState.lockControlsTime`
     pub lock_controls_time: f32,
     /// `isCurrentLapValid()`
@@ -125,6 +152,12 @@ pub struct HudInput {
     pub triple_screen: bool,
     /// `Speed::useMPH`
     pub use_mph: bool,
+    /// `Sim::sceneCamera->matrix`: where the camera is
+    pub camera_matrix: Mat44f,
+    /// `Sim::client` is there
+    pub online: bool,
+    /// `Game::gameTime.now`
+    pub game_time_now: f64,
 }
 
 /// `SessionStatusSystemMessage`.

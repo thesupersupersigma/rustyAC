@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use rustyac_gui::hud::{HudCar, HudInput};
+use rustyac_gui::hud::HudInput;
 
 use crate::ac::{rd, wr, write_wstring, wstring, Game};
 use crate::acs::Acs;
@@ -211,7 +211,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         wr(sim, 0x210, list.add(count * 8));
         wr(sim, 0x218, list.add(count * 8));
         *CARS.lock().unwrap() = cars.iter().map(|c| *c as usize).collect();
-        input(|i| i.cars.resize(count, HudCar { current_lap_valid: true, leaderboard_position: -1, steer_lock: 1.0, ..HudCar::default() }));
+        input(|i| i.cars.resize(count, crate::gui_seq::default_car()));
 
         let h = Box::leak(Box::new(HudGame { sim, message: std::ptr::null_mut(), notification: std::ptr::null_mut(), cars, esc, pause, more: Default::default() }));
         HUD.store(h as *mut HudGame as usize, Ordering::SeqCst);

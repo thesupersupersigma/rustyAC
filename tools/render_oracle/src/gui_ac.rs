@@ -445,6 +445,13 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
     if args.game.join("content/texture/damage").is_dir() {
         copy_tree(&args.game.join("content/texture/damage"), &args.root.join("content/texture/damage"))?;
     }
+    // the HUD's own settings: as the game ships them, or as the sequence wants them
+    for name in ["name_displayer.ini", "damage_displayer.ini"] {
+        std::fs::copy(args.game.join("system/cfg").join(name), args.root.join("system/cfg").join(name)).map_err(|e| format!("{name}: {e}"))?;
+    }
+    for (name, text) in sequence.cfg {
+        std::fs::write(args.root.join("system/cfg").join(name), text).map_err(|e| format!("{name}: {e}"))?;
+    }
     let gameplay = format!("[VIRTUAL_MIRROR]\nACTIVE=0\n\n[GUI]\nALLOW_OVERLAPPING_FORMS={}\n", sequence.allow_overlapping as i32);
     for cfg in [args.root.join("cfg"), args.root.join("documents/Assetto Corsa/cfg")] {
         std::fs::create_dir_all(&cfg).map_err(|e| e.to_string())?;
