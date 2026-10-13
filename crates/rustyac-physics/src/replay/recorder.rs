@@ -11,6 +11,10 @@
 //! 0x14015d760, `getWingState` 0x14015ff00, `setFrameSize` 0x140162420, `clearFrames`
 //! 0x14015d4a0.
 
+// The loops over wheels and axes index several arrays at once, and the limits are written as
+// the machine code tests them.
+#![allow(clippy::needless_range_loop, clippy::manual_range_contains, clippy::too_many_arguments)]
+
 use rustyac_math::{asinf, atan2f, sqrtf};
 
 use super::half::{float_to_half, half_to_float};

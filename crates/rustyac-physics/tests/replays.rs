@@ -63,11 +63,11 @@ fn state(car: usize, step: usize) -> CarPhysicsState {
     s.fuel_laps = 7.6;
     s.turbo_boost = 1.2 + t.s() * 0.3;
     s.engine_life_left = 990.0;
-    s.is_gear_grinding = step % 97 == 0;
-    s.is_drift_valid = step % 2 == 0;
+    s.is_gear_grinding = step.is_multiple_of(97);
+    s.is_drift_valid = step.is_multiple_of(2);
     s.actions_state = if step % 60 < 3 { 0x40 | 0x100 } else { 0 };
     s.status_bytes = if step % 120 < 30 { 4 } else { 1 };
-    s.kers_is_charging = step % 5 == 0;
+    s.kers_is_charging = step.is_multiple_of(5);
     s
 }
 
@@ -95,7 +95,7 @@ fn record(cars: usize, steps: usize, max_frames: i32) -> (ReplayManager, SaveInf
         if manager.wants_first_leaderboard() {
             manager.on_lap_leaderboard(vec![LeaderboardEntry { car: 0, total_time: 0.0, best_lap: 0.0, laps: 0, is_race_mode: true, is_black_flagged: false, has_completed_last_lap: false }; cars]);
         }
-        if step > 0 && step % 1200 == 0 {
+        if step > 0 && step.is_multiple_of(1200) {
             for car in 0..cars {
                 manager.on_lap_completed(car, 36_000 + car as u32, (step / 1200) as u32, car != 1);
             }

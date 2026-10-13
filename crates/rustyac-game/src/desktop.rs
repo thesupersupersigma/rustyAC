@@ -1171,7 +1171,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                         // ReplayManager::stop, back to the first frame
                         rm.stop();
                         shared.replay_restart.store(true, Ordering::Relaxed);
-                    } else if ctrl && !shared.paused.load(Ordering::Relaxed) && world.len() > 1 && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) {
+                    } else if ctrl && (in_ac_replay || !shared.paused.load(Ordering::Relaxed)) && world.len() > 1 && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) {
                         // Sim::onKeyDown 0x14019a940: with Ctrl, not while the pause menu shows,
                         // only with more than one car; tested in the game's order
                         let command = if key == bindings.key_previous_car {

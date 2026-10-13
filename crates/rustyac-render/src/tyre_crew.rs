@@ -13,6 +13,10 @@
 //!
 //! The camera manager and the sound are behind [`CrewHost`]: this crate has neither.
 
+// (the loops over wheels and axes index several arrays at once)
+// (and the states of `pitCrewUpdate` are kept apart as the game's switch has them)
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments, clippy::collapsible_match, clippy::collapsible_if)]
+
 use rustyac_math::sqrtf;
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f};

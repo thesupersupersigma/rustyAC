@@ -491,7 +491,7 @@ pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, heig
         hud.text_centred(width * 0.5, height * 0.36 + 10.0 * s, 2.5 * s, WHITE, "PAUSED");
     }
     let keys = if info.replay {
-        "REPLAY  Ctrl+Space or P play / pause  Ctrl+S slow motion  Ctrl+F faster  Home stop (back to the start)  F1 view  F6 car cameras  Esc quit"
+        "REPLAY  Ctrl+Space or P play / pause  Ctrl+S slow  Ctrl+F faster  Ctrl+D back  . frame  Home stop  F10 save  F1 view  F6 cameras  Esc quit"
     } else if lap.on_track {
         "F1 view  F6 car cameras  R to the start  Shift+R back on track  N new car  T / Y TC / ABS (Shift: down)  ] [ bias  P pause  Esc quit"
     } else {

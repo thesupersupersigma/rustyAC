@@ -23,7 +23,7 @@
 //! cars' frames; `rewind` and `fastForward` by frames clamp to 0..1; and so on).
 
 // The comparisons and limits are written as the machine code has them (what a NaN does).
-#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp)]
+#![allow(clippy::neg_cmp_op_on_partial_ord, clippy::manual_clamp, clippy::needless_range_loop, clippy::too_many_arguments)]
 
 use super::half::{float_to_half, half_to_float};
 use super::recorder::{create_from_euler_safe, AvatarRecord, PlaybackAvatar, PlaybackTrack, ReplayRecorder};
