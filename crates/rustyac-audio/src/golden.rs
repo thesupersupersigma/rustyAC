@@ -37,9 +37,29 @@ pub struct Session<'a> {
     pub dt: f32,
 }
 
+/// Something else that makes sound in a session (the pit crew): it is set up after the session's
+/// own sounds and runs at the start of every frame.
+pub trait SessionHooks {
+    fn setup(&mut self, engine: &mut AudioEngine);
+    fn frame(&mut self, engine: &mut AudioEngine, index: usize);
+}
+
+/// No hooks.
+pub struct NoHooks;
+
+impl SessionHooks for NoHooks {
+    fn setup(&mut self, _engine: &mut AudioEngine) {}
+    fn frame(&mut self, _engine: &mut AudioEngine, _index: usize) {}
+}
+
 /// Sets the session up, runs its frames and tears it down, with the marks the oracle's logs
 /// carry (`setup`, `frame <n>`, `teardown`).
 pub fn run_session<'a>(session: Session, frames: impl Iterator<Item = SessionFrame<'a>>) -> Result<(), String> {
+    run_session_with(session, frames, &mut NoHooks)
+}
+
+/// [`run_session`] with hooks.
+pub fn run_session_with<'a>(session: Session, frames: impl Iterator<Item = SessionFrame<'a>>, hooks: &mut dyn SessionHooks) -> Result<(), String> {
     log::mark("setup");
     let mut engine = AudioEngine::new(session.files)?;
     engine.set_volume(session.master);
@@ -53,8 +73,10 @@ pub fn run_session<'a>(session: Session, frames: impl Iterator<Item = SessionFra
     let sim = SimView { focused_car_index: 0, camera: Some(session.camera) };
     // the session's camera is set up: ACCameraManager::setAudioDistanceScale
     world.set_audio_distance_scale(&sim, 1.0);
+    hooks.setup(&mut world.engine);
     for (i, frame) in frames.enumerate() {
         log::mark(&format!("frame {i}"));
+        hooks.frame(&mut world.engine, i);
         world.frame(&FrameInput { cars: std::slice::from_ref(frame.car), events: frame.events, sim, listener: Some(frame.listener), dt: session.dt });
     }
     log::mark("teardown");

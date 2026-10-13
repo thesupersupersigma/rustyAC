@@ -10,6 +10,8 @@ description = "Test oracle for rustyac-audio: runs Assetto Corsa's own AudioEngi
 rustyac-audio = { path = "../../crates/rustyac-audio" }
 rustyac-physics = { path = "../../crates/rustyac-physics" }
 rustyac-content = { path = "../../crates/rustyac-content" }
+# the pit crew: its timeline is the picture's (`tyre_crew`), its wheel guns are sound
+rustyac-render = { path = "../../crates/rustyac-render" }
 
 [profile.release]
 opt-level = 2

@@ -1492,13 +1492,25 @@ impl GameSim {
 
     /// Task 28b: the player's pit stop for the picture: `PitStop::state` and the marker's
     /// visibility (`None`: no pit stop in this session).
-    pub fn pit_stop_view(&self) -> Option<(i32, bool)> {
+    pub fn pit_stop_view(&self) -> Option<crate::view::PitStopView> {
         let pit = match (&self.referee, &self.online) {
             (Some(referee), _) => referee.pit.as_ref(),
             (None, Some(session)) => session.pit.as_ref().map(|pit| &pit.pit),
             (None, None) => None,
         };
-        pit.map(|pit| (pit.state, pit.indicator_visible))
+        pit.map(|pit| crate::view::PitStopView {
+            state: pit.state,
+            visible: pit.indicator_visible,
+            pit_timer: pit.pit_timer,
+            max_pit_timer: pit.max_pit_timer,
+            tyre_time: pit.tyre_time,
+            commits: pit.commits,
+            overs: pit.overs,
+            tyre_change_time: pit.last_start.tyre_change_time,
+            total_time: pit.last_start.total_time,
+            force_change_camera: pit.last_start.force_change_camera,
+            changing_tyres: pit.last_changing_tyres,
+        })
     }
 
     /// Task 28b: the mandatory pit window (0, 0: none) and whether the player's stop was counted.

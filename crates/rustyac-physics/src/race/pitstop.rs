@@ -589,6 +589,13 @@ pub struct PitStop {
     pub strategies: [PitStopStrategy; 2],
     pub current_strategy_index: i32,
     pub pit_random_modifier: f32,
+    /// for the pit crew, which listens to `evPitStopCommit` and `evPitStopOver` from another
+    /// thread: how often each was raised, what the last commit carried and whether the tyres
+    /// are changed in that stop (`isChangingTyres` @ 0x1400a9870)
+    pub commits: u32,
+    pub overs: u32,
+    pub last_start: PitStopStart,
+    pub last_changing_tyres: bool,
 }
 
 /// `PitStopStrategy` (12 bytes; constructor @ 0x1400a7590).
@@ -633,6 +640,10 @@ impl PitStop {
             strategies: [PitStopStrategy::default(), PitStopStrategy { tyre_compound: 2, ..PitStopStrategy::default() }],
             current_strategy_index: 0,
             pit_random_modifier: 0.0,
+            commits: 0,
+            overs: 0,
+            last_start: PitStopStart { tyre_change_time: 0.0, total_time: 0.0, force_change_camera: false },
+            last_changing_tyres: false,
         }
     }
 
@@ -740,6 +751,7 @@ impl PitStop {
             STATE_OPERATING => {
                 if self.is_pit_stop_done(frame.dt, car, menu, out) {
                     out.push(PitAction::Over);
+                    self.overs += 1;
                     self.displaying_pit_menu = false;
                     self.state = STATE_FINISHED;
                 }
@@ -817,7 +829,11 @@ impl PitStop {
         if time.total <= 0.0 {
             self.state = STATE_FINISHED;
         } else {
-            out.push(PitAction::Commit(PitStopStart { tyre_change_time: time.tyres, total_time: time.total, force_change_camera: !menu.stay_in_car }));
+            let start = PitStopStart { tyre_change_time: time.tyres, total_time: time.total, force_change_camera: !menu.stay_in_car };
+            out.push(PitAction::Commit(start));
+            self.commits += 1;
+            self.last_start = start;
+            self.last_changing_tyres = self.is_changing_tyres();
             self.state = STATE_OPERATING;
         }
     }

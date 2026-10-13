@@ -43,6 +43,8 @@ pub struct Drive {
     pub other_cars: Vec<String>,
     /// a word for the files' names when the drive is not the plain one-car one
     pub label: String,
+    /// `--crew <frame>:<seconds>`: the pit crew changes the tyres from that frame
+    pub crew: Option<crate::crew::CrewSpec>,
 }
 
 impl Drive {
@@ -61,7 +63,7 @@ impl Drive {
             let listener = camera.listener(&frame, first);
             frames.push(Frame { state: f.state, events: f.events, car: frame, listener, others: Vec::new(), focus: 0 });
         }
-        Ok(Drive { name, car, track_folder, layout, camera, frames, other_cars: Vec::new(), label: String::new() })
+        Ok(Drive { name, car, track_folder, layout, camera, frames, other_cars: Vec::new(), label: String::new(), crew: None })
     }
 
     /// A drive of several cars: `<prefix>.car<n>.audiotape` of `car_oracle multi --audio-tape`

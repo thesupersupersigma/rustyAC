@@ -1112,11 +1112,20 @@ impl Game {
         acs.patch(acs.va(VA_AUDIO_EVENT_CTOR), &[0x48, 0x89, 0xc8, 0xc3]); // mov rax, rcx; ret
         acs.patch(acs.va(VA_AUDIO_EVENT_IS_PLAYING), &[0xb0, 0x01, 0xc3]); // mov al, 1; ret
         acs.patch(acs.va(VA_AUDIO_EVENT_STOP), &[0xc3]); // ret
+        // ACCameraManager::setMode 0x1400340d0 (the camera the crew goes back to when a stop is
+        // broken off): the picture's camera is the frame's own, the call does nothing
+        acs.patch(acs.va(0x1_4003_40d0), &[0xc3]);
         // the start-up initialiser of PitCrew.obj's table of wheel names
         let wheels: extern "C" fn() = std::mem::transmute(acs.va(0x1_4000_4590));
         wheels();
         let physics: *mut u8 = rd(c.car, 0x1168);
         wr(physics, 0x3e6c, tyre_change_time_sec);
+        // ACCameraManager::cameraOnBoardFree, whose lockCamera the crew clears when it is done
+        let sim: *mut u8 = rd(c.car, 0x130);
+        let camera_manager: *mut u8 = rd(sim, 0x188);
+        if rd::<*mut u8>(camera_manager, 0xb0).is_null() {
+            wr(camera_manager, 0xb0, acs.alloc(0x1b0));
+        }
         let crew = acs.alloc(0xa8);
         // (the folder by value: the constructor frees its text)
         let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_PIT_CREW_CTOR));

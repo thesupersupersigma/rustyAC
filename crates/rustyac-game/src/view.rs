@@ -266,7 +266,28 @@ pub struct LapView {
     pub in_pit_lane: bool,
     /// Task 28b: the player's pit stop, when there is one: `PitStop::state` and whether the
     /// pit box marker shows (the lollipop man and the marker follow them)
-    pub pit_stop: Option<(i32, bool)>,
+    pub pit_stop: Option<PitStopView>,
+}
+
+/// The player's pit stop as the picture and the pit crew read it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PitStopView {
+    /// `PitStop::state`
+    pub state: i32,
+    /// the pit box marker shows
+    pub visible: bool,
+    /// `pitTimer`, `maxPitTimer`, `tyreTime`
+    pub pit_timer: f32,
+    pub max_pit_timer: f32,
+    pub tyre_time: f32,
+    /// how often `evPitStopCommit` and `evPitStopOver` were raised so far
+    pub commits: u32,
+    pub overs: u32,
+    /// what the last commit carried (`PitStopStart`), and `isChangingTyres` of that stop
+    pub tyre_change_time: f32,
+    pub total_time: f32,
+    pub force_change_camera: bool,
+    pub changing_tyres: bool,
 }
 
 impl Default for CarView {

@@ -450,6 +450,15 @@ pub struct AcRenderer {
     cars: Vec<CarAvatar>,
     /// each car's folder and skin, for the pit crews
     crew_cars: Vec<rustyac_render::pit_crew::CrewCar>,
+    /// `PitCrew`: the four mechanics who change the player's tyres
+    tyre_crew: Option<rustyac_render::tyre_crew::PitCrew>,
+    /// the crew's sound and camera, between the picture and the game's loop
+    pub crew: CrewLink,
+    /// the commits and the ends of pit stops the crew was told of
+    crew_seen: (u32, u32),
+    /// the camera fade a commit asked for: (`fadeTime`, `fadeTotalTime`)
+    crew_fade: Option<(f32, f32)>,
+    crew_inputs: Option<rustyac_render::tyre_crew::CrewInputs>,
     /// `RaceManager::carsToBeLoaded`
     cars_to_be_loaded: i32,
     /// `ACCameraManager::currentGlobalCameraIndex`: what `CarNodeSorter::sort` reads
@@ -493,6 +502,8 @@ pub struct AcRenderer {
     /// (-1: no replay yet)
     told_paused: bool,
     told_replay_status: i32,
+    /// the status told in the frame before this one
+    told_replay_status_before: i32,
     /// `CarView::new_sessions` of the last frame
     told_new_sessions: u32,
     /// `TrackAvatar::dynamicObjects`: balloons and aircraft that drift over the track
@@ -672,7 +683,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     pub fn is_warp(&self) -> bool {
@@ -881,7 +892,16 @@ impl AcRenderer {
                     Err(message) => println!("WARNING: no pit box marker: {message}"),
                 }
             }
-            summary.push_str(&format!("pit crew: {} lollipop man, the marker {}", self.lollipops.len(), if self.pit_marker.is_some() { "loaded" } else { "missing" }));
+            // PitStop::PitStop: the tyre changers of the player's car
+            if let (Some(crew_car), Some(car)) = (self.crew_cars.first(), self.cars.first()) {
+                let car_ini = crew_car.folder.join("data/car.ini");
+                let seconds = IniReader::load(&car_ini).ok().and_then(|ini| ini.get_float("PIT_STOP", "TYRE_CHANGE_TIME_SEC").ok()).unwrap_or(10.0);
+                match rustyac_render::tyre_crew::PitCrew::new(&mut self.graphics, &mut self.scene, self.blurred, crew_car, car.car_node, seconds) {
+                    Ok(crew) => self.tyre_crew = Some(crew),
+                    Err(message) => println!("WARNING: no tyre changers: {message}"),
+                }
+            }
+            summary.push_str(&format!("pit crew: {} lollipop man, the marker {}, the tyre changers {}", self.lollipops.len(), if self.pit_marker.is_some() { "loaded" } else { "missing" }, if self.tyre_crew.is_some() { "loaded" } else { "missing" }));
             if !self.lollipops.is_empty() && self.graphics.video.world_detail < 5 {
                 summary.push_str(" (the lollipop man only shows with WORLD_DETAIL 5, as in the game)");
             }
@@ -1041,6 +1061,7 @@ impl AcRenderer {
             }
         }
         self.told_paused = info.paused && !info.replay;
+        self.told_replay_status_before = self.told_replay_status;
         self.told_replay_status = replay_status;
         // SunAnimator::update: the sun, the lighting's clock, the clouds' drift. A rustyAC
         // replay is the drive run again, so its sun moves as it did; a paused replay's stands.
@@ -1157,6 +1178,38 @@ impl AcRenderer {
         for (car, state) in self.cars.iter_mut().zip(&states) {
             car.post_update(&mut self.scene, state, dt, &Mat44f { m: frame.matrix }, frame.fov, false);
         }
+        // PitStop::update raised evPitStopCommit / evPitStopOver; then the pit stop's handler of
+        // evOnPostUpdate: PitCrew::pitCrewUpdate
+        if let (Some(crew), Some(pit), Some(state)) = (&mut self.tyre_crew, view.lap.pit_stop, states.first()) {
+            use rustyac_render::tyre_crew::{CrewInputs, CrewPitStop, CrewStart};
+            if info.replay && self.told_replay_status_before == -1 {
+                // Sim::evOnReplayStatusChanged, status 6: entering a replay hides the crew
+                crew.on_replay_status_changed(&mut self.scene, 6);
+            }
+            let inputs = CrewInputs {
+                replay: info.replay,
+                pause_menu: self.told_paused,
+                session_type: self.options.session_type,
+                pit: CrewPitStop { state: pit.state, pit_timer: pit.pit_timer, max_pit_timer: pit.max_pit_timer, tyre_time: pit.tyre_time },
+                tyre_matrix: state.tyre_matrix,
+                tyre_contact_point: state.tyre_contact_point,
+                focused: focus == 0,
+            };
+            if pit.commits != self.crew_seen.0 {
+                self.crew_seen.0 = pit.commits;
+                let start = CrewStart { tyre_change_time: pit.tyre_change_time, total_time: pit.total_time, force_change_camera: pit.force_change_camera };
+                crew.on_pit_stop_commit(&mut self.crew, &start, pit.changing_tyres);
+                if let Some(total) = self.crew.fade.take() {
+                    self.crew_fade = Some((0.0, total));
+                }
+            }
+            if pit.overs != self.crew_seen.1 {
+                self.crew_seen.1 = pit.overs;
+                crew.on_pit_stop_over(&mut self.crew);
+            }
+            crew.pit_crew_update(&mut self.scene, &mut self.crew, dt, &inputs);
+            self.crew_inputs = Some(inputs);
+        }
         // TimeAttack::update 0x1401be0b0: the mode runs once the car is 3 m from where it stood
         if let (Some(gates), Some(car)) = (&self.gates, self.cars.first()) {
             gates.borrow_mut().in_replay = info.replay;
@@ -1174,7 +1227,7 @@ impl AcRenderer {
             rustyac_render::pit_crew::PitInputs { car_position: [b[0], b[1], b[2]], speed: view.speed_ms, in_pitlane: view.lap.in_pit_lane, session_type: self.options.session_type, pause_menu: self.told_paused, replay: info.replay }
         });
         if let (Some(marker), Some(inputs)) = (&mut self.pit_marker, &pit_inputs) {
-            match view.lap.pit_stop {
+            match view.lap.pit_stop.map(|pit| (pit.state, pit.visible)) {
                 // Task 28b: the pit stop itself runs with the referee: the marker follows it
                 Some((state, visible)) => {
                     let rand = &mut self.graphics.crt_rand;
@@ -1281,6 +1334,23 @@ impl AcRenderer {
         // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
         if let Some((time, total)) = info.focus_fade {
             rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+        } else if let Some((time, total)) = self.crew_fade {
+            // the fade a pit stop's commit asked for (ACCameraManager::fadeIn with 0.25 s): at
+            // its black frame the crew is put round the car (the lambda 0x140032770)
+            rustyac_render::gl::fade_overlay(&mut self.graphics, time, total);
+        }
+        if let Some((time, total)) = self.crew_fade {
+            if time >= total * 2.0 {
+                self.crew_fade = None;
+            } else {
+                if time >= total {
+                    if let (Some(crew), Some(inputs)) = (&mut self.tyre_crew, &self.crew_inputs) {
+                        let rand = &mut self.graphics.crt_rand;
+                        crew.on_fade_in_finished(&mut self.scene, &mut self.crew, &mut || rand.next(), inputs);
+                    }
+                }
+                self.crew_fade = Some((time + dt, total));
+            }
         }
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
@@ -1400,5 +1470,67 @@ impl AcRenderer {
             status.ok().map_err(err("present"))?;
             Ok(status.0 != 0x087A_0001)
         }
+    }
+}
+
+/// One call of a wheel gun's `AudioEvent` the tyre changers made in a frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CrewSound {
+    /// `set3DAttributes` at the wheel's matrix (standing still), then `start`
+    Start { wheel: usize, screw: bool, matrix: Mat44f },
+    Stop { wheel: usize, screw: bool },
+}
+
+/// What the tyre changers ask of the camera manager.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CrewCamera {
+    /// `ACCameraManager::setMode`
+    SetMode(i32),
+    /// `CameraOnBoardFree::forceThetaPhi`
+    ForceThetaPhi(f32, f32, f32),
+    /// `CameraOnBoardFree::lockCamera`
+    Lock(bool),
+}
+
+/// The tyre changers' sound and camera, between the picture (which runs the crew) and the
+/// game's loop (which has the sound and the cameras): the loop writes `playing` and
+/// `camera_mode` before a frame and takes `sound` and `camera` after it. Each event is asked
+/// whether it plays at most once a frame, before anything is done to it, so the answers of
+/// before the frame are the answers the game's code would get.
+#[derive(Default)]
+pub struct CrewLink {
+    /// by wheel: the unscrew [0] and the screw [1] event play (`AudioEvent::isPlaying`)
+    pub playing: [[bool; 2]; 4],
+    pub sound: Vec<CrewSound>,
+    /// `ACCameraManager::mode`
+    pub camera_mode: i32,
+    pub camera: Vec<CrewCamera>,
+    fade: Option<f32>,
+}
+
+impl rustyac_render::tyre_crew::CrewHost for CrewLink {
+    fn camera_mode(&mut self) -> i32 {
+        self.camera_mode
+    }
+    fn set_camera_mode(&mut self, mode: i32, _a: bool, _b: bool) {
+        self.camera.push(CrewCamera::SetMode(mode));
+    }
+    fn force_theta_phi(&mut self, theta: f32, phi: f32, radius: f32) {
+        self.camera.push(CrewCamera::ForceThetaPhi(theta, phi, radius));
+    }
+    fn lock_camera(&mut self, locked: bool) {
+        self.camera.push(CrewCamera::Lock(locked));
+    }
+    fn fade_in(&mut self, fade_total_time: f32) {
+        self.fade = Some(fade_total_time);
+    }
+    fn event_is_playing(&mut self, wheel: usize, screw: bool) -> bool {
+        self.playing[wheel][screw as usize]
+    }
+    fn event_start(&mut self, wheel: usize, screw: bool, matrix: &Mat44f) {
+        self.sound.push(CrewSound::Start { wheel, screw, matrix: *matrix });
+    }
+    fn event_stop(&mut self, wheel: usize, screw: bool) {
+        self.sound.push(CrewSound::Stop { wheel, screw });
     }
 }

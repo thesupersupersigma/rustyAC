@@ -101,6 +101,9 @@ pub struct Harness<'a> {
     /// every car in the order `Sim::addCar` makes them: the index is the guid
     cars: Vec<HarnessCar>,
     track_audio: *mut u8,
+    /// `--crew`: the pit crew with the game's own wheel-gun events
+    crew: Option<crate::crew::GameCrew>,
+    frame_index: usize,
 }
 
 impl<'a> Harness<'a> {
@@ -273,7 +276,11 @@ impl<'a> Harness<'a> {
         }
         let set_distance_scale: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_DISTANCE_SCALE));
         set_distance_scale(engine, 1.0);
-        Harness { acs, engine, sim, cars, track_audio }
+        let crew = match (drive.crew, cars.first()) {
+            (Some(spec), Some(first)) => Some(crate::crew::GameCrew::build(acs, ac, engine, sim, first.car, spec, &|text| wstring(acs, text))),
+            _ => None,
+        };
+        Harness { acs, engine, sim, cars, track_audio, crew, frame_index: 0 }
     }
 
     /// One frame, in the order of `rustyac_audio::sim::AudioWorld::frame`.
@@ -281,6 +288,10 @@ impl<'a> Harness<'a> {
         let acs = self.acs;
         // Sim::focusedCarIndex (a change of it happened at the end of the frame before)
         wr::<u32>(self.sim, 0x220, frame.focus);
+        if let Some(crew) = &mut self.crew {
+            crew.frame(acs, self.frame_index);
+        }
+        self.frame_index += 1;
         // Sim::update, before the cars take their new state: Sim::stepPhysicsEvent 0x14019ebd0:
         // a collision goes to the sound of the car its event names (an event for a car that is
         // not there, or that has no sound, is dropped) ...

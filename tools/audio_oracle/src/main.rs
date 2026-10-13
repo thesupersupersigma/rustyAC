@@ -24,6 +24,7 @@
 #[path = "../../car_oracle/src/acs.rs"]
 mod acs;
 mod crash;
+mod crew;
 mod drive;
 mod dsp_check;
 mod harness;
@@ -70,6 +71,9 @@ pub struct Args {
     pub only: Option<String>,
     /// `run --script <log>`: the port is told what that run was told about its events' states.
     script: Option<PathBuf>,
+    /// `--crew <frame>:<seconds>`: the pit crew's wheel guns (see `crew.rs`)
+    crew: Option<crew::CrewSpec>,
+    crew_text: String,
 }
 
 fn parse() -> Result<Args, String> {
@@ -96,6 +100,8 @@ fn parse() -> Result<Args, String> {
         out_file: None,
         only: None,
         script: None,
+        crew: None,
+        crew_text: String::new(),
     };
     while let Some(arg) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -123,6 +129,10 @@ fn parse() -> Result<Args, String> {
             "--out-file" => a.out_file = Some(PathBuf::from(value()?)),
             "--only" => a.only = Some(value()?),
             "--script" => a.script = Some(PathBuf::from(value()?)),
+            "--crew" => {
+                a.crew_text = value()?;
+                a.crew = Some(crew::CrewSpec::parse(&a.crew_text)?);
+            }
             other => return Err(format!("unknown option {other}")),
         }
     }
@@ -158,6 +168,15 @@ fn file_stem(drive: &Drive, side: &str) -> String {
 
 /// The drive the command line names: one car's tape, or the tapes of a field.
 fn load_drive(args: &Args) -> Result<Drive, String> {
+    let mut drive = load_drive_of(args)?;
+    drive.crew = args.crew;
+    if args.crew.is_some() {
+        drive.label = format!("{}crew", drive.label);
+    }
+    Ok(drive)
+}
+
+fn load_drive_of(args: &Args) -> Result<Drive, String> {
     match (&args.tapes, &args.tape) {
         (Some(prefix), _) => {
             let mut drive = Drive::load_field(prefix, args.camera, args.frames, args.max_cars, &args.focus, args.in_pit)?;
@@ -239,7 +258,11 @@ fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfac
     let session = Session { files, master, track, surfaces, car, camera: drive.camera.view(), dt: DT };
     let events: Vec<Vec<PhysicsEvent>> = drive.frames.iter().map(|f| f.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect()).collect();
     if drive.other_cars.is_empty() {
-        return run_session(session, drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener }));
+        let frames = drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener });
+        return match drive.crew {
+            Some(spec) => rustyac_audio::golden::run_session_with(session, frames, &mut crew::PortCrew::new(ac, spec, drive.frames.iter().map(|f| f.state.as_slice()).collect())),
+            None => run_session(session, frames),
+        };
     }
     let others: Vec<CarInfo> = drive.other_cars.iter().enumerate().map(|(i, name)| CarInfo { unix_name: name.clone(), guid: i as i32 + 1, data_folder: root.join("content/cars").join(name).join("data"), car_cameras_external_sound: Vec::new() }).collect();
     let fields: Vec<Vec<rustyac_audio::car::CarFrame>> = drive.frames.iter().map(|f| std::iter::once(f.car.clone()).chain(f.others.iter().map(|o| o.1.clone())).collect()).collect();
@@ -305,6 +328,9 @@ fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<S
     }
     if args.no_track {
         command.arg("--no-track");
+    }
+    if args.crew.is_some() {
+        command.arg("--crew").arg(&args.crew_text);
     }
     if let Some(script) = script {
         command.arg("--script").arg(script);

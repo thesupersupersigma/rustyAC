@@ -23,6 +23,7 @@ pub mod dsp;
 pub mod engine;
 pub mod fmod;
 pub mod golden;
+pub mod pit_crew;
 pub mod sim;
 pub mod tape;
 pub mod track;
