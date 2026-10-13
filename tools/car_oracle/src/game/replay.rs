@@ -80,6 +80,22 @@ extern "C" fn fake_ray_cast(_this: *mut u8, origin: *const f32, direction: *cons
     }
 }
 
+/// The game's `operator new`, for what the game's code will free.
+static OPERATOR_NEW: AtomicUsize = AtomicUsize::new(0);
+
+/// `ICarPhysicsStateProvider::getWingState` of a car that is only a replay's (a file of the
+/// player's: there is no physics car): as many wings as the file has for it, all at rest.
+extern "C" fn fake_get_wing_state(this: *mut u8, out: *mut [usize; 3]) -> *mut [usize; 3] {
+    unsafe {
+        let count: usize = rd(this, 8);
+        let new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(OPERATOR_NEW.load(Ordering::Relaxed));
+        let data = new((count * 0x44).max(8));
+        std::ptr::write_bytes(data, 0, (count * 0x44).max(8));
+        *out = [data as usize, data as usize + count * 0x44, data as usize + count * 0x44];
+        out
+    }
+}
+
 /// What `Sim::addCar` of a load makes: the harness's context.
 struct AddCar {
     acs: usize,
@@ -87,6 +103,8 @@ struct AddCar {
     sim: usize,
     /// the game's `Car` of each car of the session, in order
     cars: Vec<usize>,
+    /// a file of the player's: each car's wing count (there are no physics cars)
+    wings: Option<Vec<usize>>,
     dirt: bool,
     made: Vec<(usize, usize)>,
 }
@@ -118,7 +136,7 @@ unsafe fn write_vector(acs: &Acs, at: *mut u8, count: usize, size: usize) -> *mu
 }
 
 /// A stand-in `CarAvatar` with the game's own `ReplayRecorder` as its child.
-unsafe fn make_avatar(acs: &Acs, game: *mut u8, sim: *mut u8, car: *mut u8, name: &str, guid: i32, dirt: bool) -> (*mut u8, *mut u8) {
+unsafe fn make_avatar(acs: &Acs, game: *mut u8, sim: *mut u8, car: *mut u8, wings: Option<usize>, name: &str, guid: i32, dirt: bool) -> (*mut u8, *mut u8) {
     let avatar = acs.alloc(0x12a8);
     wr(avatar, 0, acs.va(VA_CAR_AVATAR_VTABLE));
     wr(avatar, 0x8, game);
@@ -129,15 +147,27 @@ unsafe fn make_avatar(acs: &Acs, game: *mut u8, sim: *mut u8, car: *mut u8, name
     let car_node = acs.alloc(0xe0);
     wr(car_node, 0xd8, 1u8);
     wr(avatar, 0x210, car_node);
-    wr(avatar, 0xec8, rd::<f64>(car, CAR_MAX_FUEL));
+    wr(avatar, 0xec8, if car.is_null() { 100.0f64 } else { rd::<f64>(car, CAR_MAX_FUEL) });
     for offset in [0x10b8, 0x10d8, 0x10f8, 0x1118, 0x1138] {
         write_wstring(avatar.add(offset), "");
     }
     wr(avatar, 0x1158, guid);
-    wr(avatar, 0x1168, car);
+    // (`CarAvatar::physics` stays null: with a car, `setDriverInfo` would hand the name on to
+    // the physics thread)
     let provider = acs.alloc(0x10);
-    wr(provider, 0, acs.va(VA_PROVIDER_VTABLE));
-    wr(provider, 8, car);
+    match wings {
+        Some(count) => {
+            OPERATOR_NEW.store(acs.crt_function(c"??2@YAPEAX_K@Z"), Ordering::Relaxed);
+            let table = acs.alloc(0x20);
+            wr(table, 0x10, fake_get_wing_state as *const () as usize);
+            wr(provider, 0, table);
+            wr(provider, 8, count);
+        }
+        None => {
+            wr(provider, 0, acs.va(VA_PROVIDER_VTABLE));
+            wr(provider, 8, car);
+        }
+    }
     wr(avatar, 0x11b8, provider);
     let recorder = acs.alloc(0x110);
     let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_RECORDER_CTOR));
@@ -172,8 +202,11 @@ extern "C" fn add_car(_sim: *mut u8, model: *const u8, _config: *const u8, skin:
         let c = context.as_mut().expect("a load is running");
         let acs = &*(c.acs as *const Acs);
         let index = c.made.len();
-        let car = c.cars[index.min(c.cars.len() - 1)] as *mut u8;
-        let (avatar, recorder) = make_avatar(acs, c.game as *mut u8, c.sim as *mut u8, car, &read_wstring(model), index as i32, c.dirt);
+        let (car, wings) = match &c.wings {
+            Some(wings) => (std::ptr::null_mut(), Some(wings.get(index).copied().unwrap_or(0))),
+            None => (c.cars[index.min(c.cars.len() - 1)] as *mut u8, None),
+        };
+        let (avatar, recorder) = make_avatar(acs, c.game as *mut u8, c.sim as *mut u8, car, wings, &read_wstring(model), index as i32, c.dirt);
         write_wstring(avatar.add(0x1138), &read_wstring(skin));
         // Sim::cars.push_back(avatar)
         let sim = c.sim as *mut u8;
@@ -293,7 +326,7 @@ impl<'a> ReplayProof<'a> {
     /// `cars`: the game's `Car`s; `interval_ms`: the recording interval; `max_frames`: the
     /// ring's size (the port works it out of `replay.ini` when this is `None`).
     #[allow(clippy::too_many_arguments)]
-    pub unsafe fn build(acs: &'a Acs, cars: &[*mut u8], names: &[String], game_track: *mut u8, port_track: Arc<Track>, physics_objects: &[*mut u8], ini: Option<&rustyac_physics::data::ini::IniReader>, max_frames: Option<i32>, dirt: bool) -> ReplayProof<'a> {
+    pub unsafe fn build(acs: &'a Acs, cars: &[*mut u8], names: &[String], game_track: *mut u8, port_track: Arc<Track>, physics_objects: &[*mut u8], file_objects: usize, ini: Option<&rustyac_physics::data::ini::IniReader>, max_frames: Option<i32>, dirt: bool) -> ReplayProof<'a> {
         REAL_TRACK.store(game_track as usize, Ordering::Relaxed);
         // the sound, the pause of the physics and the car's dirt are not part of this
         acs.patch(acs.va(VA_AUDIO_START), &[0xc3]);
@@ -322,9 +355,11 @@ impl<'a> ReplayProof<'a> {
         wr(table, 8, fake_ray_cast as *const () as usize);
         wr(track_avatar, 0xf8, table);
         wr(track_avatar, 0xf8 + 0x80, rd::<usize>(game_track, 0x80));
-        let objects = write_vector(acs, track_avatar.add(0x60), physics_objects.len(), 8);
+        // (a file of the player's brings its own count of loose objects: stand-ins without a body)
+        let object_list: Vec<*mut u8> = if physics_objects.is_empty() { vec![std::ptr::null_mut(); file_objects] } else { physics_objects.to_vec() };
+        let objects = write_vector(acs, track_avatar.add(0x60), object_list.len(), 8);
         let mut track_objects = Vec::new();
-        for (k, physics) in physics_objects.iter().enumerate() {
+        for (k, physics) in object_list.iter().enumerate() {
             let object = acs.alloc(0xe0);
             wr(object, 0x58, *physics);
             wr(object, 0x60, acs.alloc(0xe0));
@@ -337,7 +372,7 @@ impl<'a> ReplayProof<'a> {
         let (mut max_fuel, mut wings, mut limiters) = (Vec::new(), Vec::new(), Vec::new());
         let mut port_recorders = Vec::new();
         for (i, (&car, name)) in cars.iter().zip(names).enumerate() {
-            let (avatar, recorder) = make_avatar(acs, game, sim, car, name, i as i32, dirt);
+            let (avatar, recorder) = make_avatar(acs, game, sim, car, None, name, i as i32, dirt);
             write_wstring(avatar.add(0x10b8), &format!("Driver {i}"));
             write_wstring(avatar.add(0x10d8), &format!("Team {}", i % 3));
             write_wstring(avatar.add(0x1118), ["ITA", "GBR", "ZZZZ"][i % 3]);
@@ -759,17 +794,17 @@ impl<'a> ReplayProof<'a> {
 
     /// The saved file loaded by the game's `ReplayManager::load` into a second manager, and by
     /// the port's; then the recorders and the scene compared, and a playback run.
-    pub unsafe fn load_and_play(&mut self, name: &str, port_file: &[u8], script: &[(Act, usize)]) -> Result<PlaybackReport, String> {
+    pub unsafe fn load_and_play(&mut self, game_path: &str, port_file: &[u8], script: &[(Act, usize)], file_wings: Option<&[usize]>) -> Result<PlaybackReport, String> {
         let acs = self.acs;
-        let n = self.cars.len();
+        let n = file_wings.map_or(self.cars.len(), |wings| wings.len());
         // a new session with no car, as RaceManager::initReplay has it; the leaderboards of the
         // recording are not this session's
         let global = acs.va(VA_REPLAY_LEADERBOARDS) as *mut u8;
         wr(global, 8, rd::<usize>(global, 0));
         let sim = make_sim(acs, self.game, self.track_avatar, n);
         let manager = make_manager(acs, self.game, sim, self.max_frames);
-        ADD_CAR.with(|c| *c.borrow_mut() = Some(AddCar { acs: acs as *const Acs as usize, game: self.game as usize, sim: sim as usize, cars: self.cars.iter().map(|c| *c as usize).collect(), dirt: self.dirt, made: Vec::new() }));
-        let path = new_wstring(acs, &format!("oracle_no_documents/Assetto Corsa/replay/{name}"));
+        ADD_CAR.with(|c| *c.borrow_mut() = Some(AddCar { acs: acs as *const Acs as usize, game: self.game as usize, sim: sim as usize, cars: self.cars.iter().map(|c| *c as usize).collect(), wings: file_wings.map(|wings| wings.to_vec()), dirt: self.dirt, made: Vec::new() }));
+        let path = new_wstring(acs, game_path);
         let load: extern "C" fn(*mut u8, *const u8) -> bool = std::mem::transmute(acs.va(VA_LOAD));
         let ok = load(manager, path);
         let made = ADD_CAR.with(|c| c.borrow_mut().take()).map(|c| c.made).unwrap_or_default();
@@ -798,7 +833,15 @@ impl<'a> ReplayProof<'a> {
                 self.told.push(format!("weather {weather}"));
             }
         }
-        let mut loader = Loader { limiters: &self.limiters, wings: &self.wings, made: 0, told: Vec::new() };
+        // each loaded car's limiter (read by the game's recorder constructor), wing count and
+        // tank, as the game's side has them
+        let limiters: Vec<i32> = loaded.recorders.iter().map(|recorder| rd::<i32>(*recorder, 0x10c)).collect();
+        let wings: Vec<usize> = loaded.avatars.iter().map(|avatar| wing_angles(rd(*avatar, 0x11b8)).len()).collect();
+        let max_fuel: Vec<f64> = loaded.avatars.iter().map(|avatar| rd::<f64>(*avatar, 0xec8)).collect();
+        if limiters.is_empty() {
+            return Err("the game loaded no car".to_string());
+        }
+        let mut loader = Loader { limiters: &limiters, wings: &wings, made: 0, told: Vec::new() };
         let mut port = ReplayManager::new(None, self.port.record_interval_ms, Vec::new(), None, 0);
         port.max_frames = self.max_frames;
         port.load(port_file, &mut loader)?;
@@ -832,7 +875,7 @@ impl<'a> ReplayProof<'a> {
         self.compare_manager(manager, &port, "after the start of the replay", &mut report.differences);
         let cars = loaded.recorders.len();
         let mut outs: Vec<CarPhysicsState> = (0..cars).map(|_| CarPhysicsState::from_game_bytes(&vec![0u8; STATE])).collect::<Result<_, _>>()?;
-        let mut fx: Vec<PlaybackAvatar> = (0..cars).map(|i| PlaybackAvatar { max_fuel: self.max_fuel[i.min(n - 1)], has_dynamic_effects: self.dirt, dirt_level: None, car_node_active: true }).collect();
+        let mut fx: Vec<PlaybackAvatar> = (0..cars).map(|i| PlaybackAvatar { max_fuel: max_fuel[i], has_dynamic_effects: self.dirt, dirt_level: None, car_node_active: true }).collect();
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_UPDATE_PLAY_STATE));
         let call0 = |va: usize| {
             let f: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(va));

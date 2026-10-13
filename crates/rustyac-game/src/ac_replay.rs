@@ -14,9 +14,9 @@
 
 use std::path::{Path, PathBuf};
 
-use rustyac_physics::car_physics_state::{CarPhysicsState, SurfaceDef};
+use rustyac_physics::car_physics_state::CarPhysicsState;
 use rustyac_physics::data::ini::IniReader;
-use rustyac_physics::replay::{self, AvatarRecord, CarHeader, LeaderboardEntry, LocalTime, PlaybackAvatar, PlaybackTrack, ReplayEvent, ReplayLoader, ReplayManager, ReplayRecorder, SaveInfo};
+use rustyac_physics::replay::{self, AvatarRecord, CarHeader, LeaderboardEntry, LocalTime, PlaybackAvatar, ReplayEvent, ReplayLoader, ReplayManager, ReplayRecorder, SaveInfo};
 use rustyac_physics::track::Track;
 use rustyac_physics::vecmath::Mat44f;
 
@@ -119,17 +119,7 @@ pub fn local_time() -> LocalTime {
     }
 }
 
-/// A track that is not there (the flat road): no line, no ground to find.
-struct NoTrack;
-
-impl PlaybackTrack for NoTrack {
-    fn world_to_spline(&self, _pos: &[f32; 3]) -> f32 {
-        0.0
-    }
-    fn ray_cast(&self, _origin: &[f32; 3], _direction: &[f32; 3], _length: f32) -> Option<(SurfaceDef, [f32; 3], [f32; 3])> {
-        None
-    }
-}
+use rustyac_physics::replay::track_env::NoTrack;
 
 /// The replay's keys (`Sim::onKeyDown` 0x14019a940: the commands `Pause Replay`, `FFWD`,
 /// `REV`, `SLOWMO`, `Next Lap`, `Previous Lap`; the GUI's buttons for the rest).

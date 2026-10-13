@@ -295,6 +295,7 @@ fn main() {
         "multi" => multi(&args),
         "net" => net(&args),
         "multi-check" => multi_check(&args),
+        "replay-file" => replay_file(&args),
         "race-ini" => race_ini(&args),
         "race-micro" => race_micro(&args),
         "multi-list" => {
@@ -574,7 +575,7 @@ fn multi(args: &Args) -> Result<(), String> {
         let ini_text = format!("[QUALITY]\nLEVEL={}\n\n[REPLAY]\nMAX_SIZE_MB=26\n\n[AUTOSAVE]\nENABLED=1\nRACE=3\nQUALIFY=2\nOTHERS=1\nMIN_TIME_SECONDS=30\n", args.replay_level.unwrap_or(3));
         let ini = rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("replay.ini"), &ini_text);
         let cars: Vec<*mut u8> = (0..world.names.len()).map(|i| world.car_ptr(i)).collect();
-        replay = Some(unsafe { game::replay::ReplayProof::build(&acs, &cars, &world.names, world.game_track, world.port_track(), &world.physics_objects, Some(&ini), args.replay_frames, true) });
+        replay = Some(unsafe { game::replay::ReplayProof::build(&acs, &cars, &world.names, world.game_track, world.port_track(), &world.physics_objects, 0, Some(&ini), args.replay_frames, true) });
     }
     let mut next_frame = 1usize;
     for i in 0..steps {
@@ -639,6 +640,117 @@ fn multi(args: &Args) -> Result<(), String> {
     multi_compare(args, &recording, &path, game_file.as_deref())
 }
 
+/// Task 28c: `car_oracle replay-file <file.acreplay> --track <track> [--layout l]`: one of the
+/// player's own replays (read only) loaded by the game's `ReplayManager::load` and by the
+/// port's, the recorders and scene frames compared, then played by both through a script of
+/// the transport's functions, every car's rebuilt `CarPhysicsState` compared. The cars are
+/// stand-ins (no car's data is read: wings as the file counts them, a tank of 100 l).
+fn replay_file(args: &Args) -> Result<(), String> {
+    use game::replay::Act;
+    use rustyac_physics::replay::{CarHeader, ReplayLoader, ReplayManager, ReplayRecorder};
+    let file = std::path::absolute(args.file.as_ref().ok_or("replay-file needs a file")?).map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    // the file's cars and their wing counts, by the port's reader
+    struct Peek(Vec<String>);
+    impl ReplayLoader for Peek {
+        fn load_track(&mut self, _track: &str, _layout: &str) {}
+        fn add_car(&mut self, car: &CarHeader) -> ReplayRecorder {
+            self.0.push(car.unix_name.clone());
+            ReplayRecorder::new(9999, 0)
+        }
+        fn apply_custom_weather(&mut self, _weather: &str) {}
+    }
+    let mut peek = Peek(Vec::new());
+    let mut manager = ReplayManager::new(None, 30.0, Vec::new(), None, 0);
+    manager.load(&bytes, &mut peek)?;
+    let wings: Vec<usize> = manager.recorders.iter().map(|recorder| recorder.meta_data.1 as usize).collect();
+    let objects = manager.frame_information.first().map_or(0, |frame| frame.track_objects.len());
+    let version = i32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let repo = repo_root();
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if args.fault.is_some() || std::env::var_os("REPLAY_PORT_ONLY").is_some() {
+        // REPLAY_PORT_ONLY=1: the port alone (a file the game's own loader cannot read)
+        use rustyac_physics::replay::{track_env::NoTrack, PlaybackAvatar};
+        manager.start_replay_mode(0);
+        let cars = manager.recorders.len();
+        let mut outs = vec![rustyac_physics::car_physics_state::CarPhysicsState::at_origin(); cars];
+        let mut fx = vec![PlaybackAvatar { max_fuel: 100.0, has_dynamic_effects: true, dirt_level: None, car_node_active: true }; cars];
+        let mut frames = 0;
+        for step in 0..1500 {
+            match step {
+                300 => manager.fast_forward(2, false),
+                700 => manager.rewind(3, false),
+                1000 => manager.set_normalized_position(0.9),
+                1001 => manager.play(),
+                _ => {}
+            }
+            manager.update_play_state(1.0 / 60.0);
+            for car in 0..cars {
+                manager.get_physics_state(car, &mut outs[car], &mut fx[car], &NoTrack);
+            }
+            frames += 1;
+        }
+        println!("replay-file | {name} | version {version}, {} bytes, {} cars, {} frames, {objects} loose objects | the port alone: loaded, {frames} frames played to frame {} | {}", bytes.len(), wings.len(), manager.recorded_frames, manager.current_frame, manager.log.last().cloned().unwrap_or_default());
+        return Ok(());
+    }
+    let track = args.track.as_ref().ok_or("replay-file needs --track <folder or name>")?;
+    let folder = track_folder(args, track);
+    track::prepare_root(&args.root, &folder, &args.layout)?;
+    std::env::set_current_dir(&args.root).map_err(|e| format!("{}: {e}", args.root.display()))?;
+    acs::set_extra_overrides(vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)]);
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let (game_track, port_track) = unsafe { game::multi::track_for_replay(&acs, &folder, &args.layout)? };
+    let mut cars: Vec<String> = peek.0.clone();
+    cars.sort();
+    cars.dedup();
+    let mut proof = unsafe { game::replay::ReplayProof::build(&acs, &[], &[], game_track, port_track, &[], objects, None, Some(manager.recorded_frames.max(1)), true) };
+    let script: Vec<(Act, usize)> = vec![
+        (Act::Play, 90),
+        (Act::SlowMotion(4.0), 60),
+        (Act::Play, 10),
+        (Act::FastForward(1, false), 60),
+        (Act::Rewind(1, false), 60),
+        (Act::Pause, 4),
+        (Act::NextFrame, 12),
+        (Act::Position(0.5), 3),
+        (Act::Play, 40),
+        (Act::NextLap, 20),
+        (Act::PreviousLap, 20),
+        (Act::Position(0.97), 2),
+        (Act::Play, 100),
+        (Act::CutIn(0.3), 2),
+        (Act::CutOut(0.6), 2),
+        (Act::Play, 60),
+        (Act::Rewind(4, false), 150),
+        (Act::Stop, 3),
+        (Act::Play, 30),
+    ];
+    let report = unsafe { proof.load_and_play(&file.to_string_lossy(), &bytes, &script, Some(&wings))? };
+    let ok = report.differences.is_empty() && report.bad_states == 0 && report.bad_objects == 0;
+    println!(
+        "replay-file | {name} | version {version}, {} bytes, {} cars ({}), {} frames, {} loose objects, {} {} | loaded by both; playback {} frames: {} car states and {} object matrices compared, {} and {} differ | {}",
+        bytes.len(),
+        wings.len(),
+        cars.join(" "),
+        report.recorded,
+        objects,
+        track.display(),
+        args.layout,
+        report.frames,
+        report.states,
+        report.objects,
+        report.bad_states,
+        report.bad_objects,
+        if ok { "IDENTICAL" } else { "DIFFERENT" }
+    );
+    for line in &report.differences {
+        println!("    {line}");
+    }
+    let _ = repo;
+    Ok(())
+}
+
 /// Task 28c: the end of a `multi --replay` run: what was recorded is compared, three files
 /// are saved by the game and by the port and compared, each is loaded by both and played
 /// through a script of the transport's functions.
@@ -695,7 +807,7 @@ fn replay_proof(replay: &mut game::replay::ReplayProof, scenario: &str, out: &Pa
         all_ok &= differences.is_empty();
         let _ = std::fs::write(out.join(format!("{name}.game.acreplay")), &game_file);
         let _ = std::fs::write(out.join(format!("{name}.port.acreplay")), &port_file);
-        let report = unsafe { replay.load_and_play(&name, &port_file, if index == 1 { &long } else { &short })? };
+        let report = unsafe { replay.load_and_play(&format!("oracle_no_documents/Assetto Corsa/replay/{name}"), &port_file, if index == 1 { &long } else { &short }, None)? };
         println!("replay | {scenario} | playback of file {index} | {} frames of {} recorded, the cursor ends at {}; {} car states and {} object matrices compared, {} and {} differ | {}", report.frames, report.recorded, report.last_frame, report.states, report.objects, report.bad_states, report.bad_objects, verdict(&report.differences));
         for line in &report.differences {
             println!("    {line}");

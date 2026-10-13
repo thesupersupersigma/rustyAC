@@ -66,6 +66,13 @@ use std::path::Path;
 /// time a step took (stderr). `physics_threads`: the worker threads of a drive with several
 /// cars (`None`: as the game decides).
 pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>) -> Result<u64, String> {
+    run_replay_headless_saving(replay, dump_states, state_hash, physics_threads, None)
+}
+
+/// [`run_replay_headless`] that also records AC's replay of the drive (`ReplayManager`, at
+/// its default 33 frames a second) and writes it to `save_replay` at the end.
+pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>, save_replay: Option<&Path>) -> Result<u64, String> {
+    let mut rig = save_replay.map(|path| ac_replay::ReplayRig::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), None, -16.0, 1));
     let file = input_file::InputFile::read(replay)?;
     let mut setup = file.setup.clone();
     setup.physics_threads = physics_threads;
@@ -79,6 +86,9 @@ pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash
     let started = std::time::Instant::now();
     for step in &file.steps {
         sim.step_recorded(step)?;
+        if let Some(rig) = &mut rig {
+            rig.after_step(&sim);
+        }
         if let Some(writer) = &mut writer {
             writer.push(&dump::StepDump::capture(&sim.car.car))?;
         }
@@ -88,6 +98,10 @@ pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash
     }
     if let Some(writer) = writer {
         writer.finish()?;
+    }
+    if let (Some(rig), Some(path)) = (&mut rig, save_replay) {
+        let bytes = rig.save_to(path)?;
+        eprintln!("replay: {} ({bytes} bytes, {} frames)", path.display(), rig.manager.as_ref().map_or(0, |m| m.recorded_frames));
     }
     // Task 28: the referee's files of a replay are not written, their hashes are said
     if let Some(lines) = referee::finish(&mut sim, None) {

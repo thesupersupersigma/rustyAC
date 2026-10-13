@@ -1778,7 +1778,7 @@ fn run(options: &Options) -> Result<(), String> {
             }
             // as fast as it goes
             let started = Instant::now();
-            let steps = rustyac_game::run_replay_headless(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads)?;
+            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay))?;
             let seconds = started.elapsed().as_secs_f64();
             // the dump may be going to the standard output
             eprintln!(

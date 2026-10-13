@@ -126,6 +126,16 @@ pub extern "system" fn sh_get_folder_path_w(_window: usize, _folder: i32, _token
     0
 }
 
+/// Task 28c: the game's own `Track` of a folder (with its AI line) and the port's copy, in an
+/// engine of their own: what a replay's playback asks the track.
+pub unsafe fn track_for_replay(acs: &Acs, track_folder: &Path, layout: &str) -> Result<(*mut u8, std::sync::Arc<Track>), String> {
+    let engine = new_engine(acs, 1);
+    let built = crate::track::GameTrack::build(acs, engine, track_folder, layout, false)?;
+    let port = std::sync::Arc::new(built.rust.clone());
+    let built: &'static crate::track::GameTrack = Box::leak(Box::new(built));
+    Ok((built.track, port))
+}
+
 /// One car of a scenario.
 #[derive(Clone, Debug)]
 pub struct MultiCar {

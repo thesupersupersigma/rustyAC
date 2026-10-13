@@ -36,6 +36,18 @@ pub fn surface_of(track: &Track, mesh: usize) -> SurfaceDef {
     }
 }
 
+/// No track at all (the flat road, or a check without one): no line, no ground to find.
+pub struct NoTrack;
+
+impl PlaybackTrack for NoTrack {
+    fn world_to_spline(&self, _pos: &[f32; 3]) -> f32 {
+        0.0
+    }
+    fn ray_cast(&self, _origin: &[f32; 3], _direction: &[f32; 3], _length: f32) -> Option<(SurfaceDef, [f32; 3], [f32; 3])> {
+        None
+    }
+}
+
 impl PlaybackTrack for Track {
     fn world_to_spline(&self, pos: &[f32; 3]) -> f32 {
         match &self.ai_spline {

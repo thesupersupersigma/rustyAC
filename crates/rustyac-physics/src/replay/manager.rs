@@ -685,18 +685,38 @@ impl ReplayManager {
             self.replay_laps.push(list);
         }
         if version > 9 {
-            let snapshots = r.i32()?;
-            for _ in 0..snapshots.max(0) {
-                let mut snapshot = Vec::new();
-                for _ in 0..car_count.max(0) {
-                    let car = r.i32()?;
-                    let best = r.f32()?;
-                    let race = r.i32()?;
-                    let laps = r.i32()?;
-                    let total = r.f32()?;
-                    snapshot.push(LeaderboardEntry { car, total_time: total as f64, best_lap: best as f64, laps, is_race_mode: race > 0, is_black_flagged: loader.is_black_flagged(car), has_completed_last_lap: false });
+            // The reader takes every snapshot to have an entry for every car; the writer
+            // writes each snapshot as long as it was. A file whose snapshots are shorter is read
+            // out of step from there on: the game then asks for a car that is not there (and
+            // crashes on it). Here such a file plays without its leaderboards.
+            let mut read = || -> Result<Vec<Vec<LeaderboardEntry>>, String> {
+                let mut all = Vec::new();
+                let snapshots = r.i32()?;
+                for _ in 0..snapshots.max(0) {
+                    let mut snapshot = Vec::new();
+                    for _ in 0..car_count.max(0) {
+                        let car = r.i32()?;
+                        let best = r.f32()?;
+                        let race = r.i32()?;
+                        let laps = r.i32()?;
+                        let total = r.f32()?;
+                        if car < 0 || car >= car_count {
+                            return Err(format!("a leaderboard entry names car {car} of {car_count}"));
+                        }
+                        snapshot.push(LeaderboardEntry { car, total_time: total as f64, best_lap: best as f64, laps, is_race_mode: race > 0, is_black_flagged: loader.is_black_flagged(car), has_completed_last_lap: false });
+                    }
+                    all.push(snapshot);
                 }
-                self.replay_leaderboards.push(snapshot);
+                Ok(all)
+            };
+            match read() {
+                Ok(all) => self.replay_leaderboards.extend(all),
+                Err(message) => {
+                    self.log.push(format!("the file's leaderboard snapshots cannot be read ({message}): the replay plays without them"));
+                    for info in &mut self.frame_information {
+                        info.lb_index = 0;
+                    }
+                }
             }
         }
         self.has_loaded_replay = true;
