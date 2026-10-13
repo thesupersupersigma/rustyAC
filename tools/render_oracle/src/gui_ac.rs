@@ -449,7 +449,7 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
         copy_tree(&args.game.join("content/texture/damage"), &args.root.join("content/texture/damage"))?;
     }
     // the HUD's own settings: as the game ships them, or as the sequence wants them
-    for name in ["name_displayer.ini", "damage_displayer.ini", "fades.ini"] {
+    for name in ["name_displayer.ini", "damage_displayer.ini", "fades.ini", "pitstop.ini"] {
         std::fs::copy(args.game.join("system/cfg").join(name), args.root.join("system/cfg").join(name)).map_err(|e| format!("{name}: {e}"))?;
     }
     for (name, text) in sequence.cfg {

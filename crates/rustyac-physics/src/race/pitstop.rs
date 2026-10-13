@@ -192,7 +192,9 @@ impl QuickMenu {
             stay_in_car: settings.stay_in_car,
             presets: Vec::new(),
             fuel_index: 0,
-            current_index: -1,
+            // (the constructor leaves 0: a menu that came up by itself on the pit lane has its
+            // cursor on the fuel; only a key that wakes the menu puts it on the presets' row)
+            current_index: 0,
             current_preset: 0,
             presets_count: settings.presets_count,
             compounds,

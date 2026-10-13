@@ -426,6 +426,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             },
             online: options.join.is_some(),
             replay: !options.no_ac_replay && options.replay.is_none(),
+            player_data: info.data_path.clone(),
             cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),

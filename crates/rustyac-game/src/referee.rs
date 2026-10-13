@@ -179,6 +179,20 @@ pub struct RefereeHud {
     pub pit: Vec<String>,
     /// Task 29: the same moment as AC's HUD objects read it
     pub gui: RefereeGui,
+    /// Task 30: the pit menu and the stop, for AC's own labels and panel
+    pub pit_gui: Option<PitGui>,
+}
+
+/// What AC's pit menu (`QuickMenuPitstop`) and `PitStop::renderHUD` show: the menu as it is,
+/// what its labels read of the car and the session, and the stop's state and clocks
+/// (`pitTimer`, `maxPitTimer`, `tyreTime`, `repairTime`, `fuelTime`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PitGui {
+    pub menu: rustyac_physics::race::QuickMenu,
+    pub car: rustyac_gui::pit_menu::PitMenuCar,
+    pub in_pitlane: bool,
+    pub state: i32,
+    pub times: [f32; 5],
 }
 
 /// What AC's HUD objects read of the session through `Sim` (see `rustyac_gui::hud::HudInput`).
@@ -407,6 +421,22 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
     out.lines.extend(pit.window);
     out.centre.extend(pit.countdown);
     out.pit = pit.menu;
+    if let (Some(stop), Some(menu)) = (&referee.pit, &referee.menu) {
+        let car = rustyac_gui::pit_menu::PitMenuCar {
+            has_race_engineer: true,
+            // CarAvatar::getTyreCompound(index, false): the compounds' short names
+            compounds: player.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.short_name.clone()).collect()).unwrap_or_default(),
+            wing_angle: rustyac_physics::race::QuickMenuCar::of(player).wing_angle,
+            fuel_per_lap: player.fuel_lap_evaluator.fuel_per_lap(),
+            lap_count: manager.lap_count(0),
+            normalized_spline_position: player.spline_locator_data.npos,
+            session_type: session.session_type,
+            is_timed_race: session.is_timed_race,
+            // RaceManager::getSessionTotalTime(0) offline: RaceTimingServices::getTotalTime
+            session_total_time: manager.timing.lap_dbs.first().map_or(0, |db| db.total_time as i32),
+        };
+        out.pit_gui = Some(PitGui { menu: menu.clone(), car, in_pitlane: referee.pit_avatar.in_pitlane, state: stop.state, times: [stop.pit_timer, stop.max_pit_timer, stop.tyre_time, stop.repair_time, stop.fuel_time] });
+    }
     if manager.results_displayed {
         if let Some(event) = referee.last_results.as_ref().filter(|_| manager.finalized) {
             out.results = results_table(referee, event);

@@ -1038,11 +1038,67 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
             forms_more(&mut ops);
             Sequence { ops, cfg: &[], acos: None, allow_overlapping: true }
         }
+        "pit_menu" => plain(crate::gui_seq_menu::pit_menu(false, false)),
+        "pit_menu_small" => plain(crate::gui_seq_menu::pit_menu(true, false)),
+        "pit_menu_lane" => plain(crate::gui_seq_menu::pit_menu(false, true)),
+        // other looks: top left, bold, bigger, one preset more, other colours; no coming up by itself
+        "pit_menu_looks" => Sequence {
+            ops: crate::gui_seq_menu::pit_menu(false, true),
+            cfg: &[("pitstop.ini", "[SETTINGS]
+USE_MOUSE_PITSTOP=0
+VISIBILITY_MAX_TIME=2
+STAY_IN_CAR=1
+AUTO_APP_ON_PITLANE=0
+PRESETS_COUNT=4
+SIZE_MULT=1.5
+FONT_IS_BOLD=1
+HEADER_FONT=11
+HEADER_HEIGHT=19
+OBJECT_POS_X=33
+OBJECT_POS_Y=47
+FORM_ALIGNMENT_V=0
+FORM_ALIGNMENT_H=0
+ITEM_HEIGHT=18
+ITEM_TITLE_WIDTH=141
+ITEM_VALUE_WIDTH=77
+ITEM_FOREGROUND_HEADER=1,1,0,1
+ITEM_BACKGROUND_HEADER=0,0,0.5,0.9
+ITEM_FOREGROUND_UNSELECTED=0.9,0.9,0.9,1
+ITEM_BACKGROUND_UNSELECTED=0.2,0.2,0.2,0.6
+ITEM_FOREGROUND_SELECTED=0,0,0,1
+ITEM_BACKGROUND_SELECTED=0,0.8,0.2,1
+")],
+            acos: None,
+            allow_overlapping: false,
+        },
+        // … at the bottom, in the middle; and a file with nothing in it
+        "pit_menu_bottom" => Sequence { ops: crate::gui_seq_menu::pit_menu(true, true), cfg: &[("pitstop.ini", "[SETTINGS]
+VISIBILITY_MAX_TIME=5
+AUTO_APP_ON_PITLANE=1
+PRESETS_COUNT=2
+SIZE_MULT=1
+HEADER_FONT=9
+HEADER_HEIGHT=16
+OBJECT_POS_X=10
+OBJECT_POS_Y=20
+FORM_ALIGNMENT_V=2
+FORM_ALIGNMENT_H=1
+ITEM_HEIGHT=20
+ITEM_TITLE_WIDTH=130
+ITEM_VALUE_WIDTH=80
+ITEM_FOREGROUND_HEADER=0,0,0,1
+ITEM_BACKGROUND_HEADER=1,1,1,1
+ITEM_FOREGROUND_UNSELECTED=1,1,1,1
+ITEM_BACKGROUND_UNSELECTED=0,0,0,0.5
+ITEM_FOREGROUND_SELECTED=1,1,1,1
+ITEM_BACKGROUND_SELECTED=0.74,0,0,1
+")], acos: None, allow_overlapping: false },
+        "pit_stop" => plain(crate::gui_seq_menu::pit_stop()),
         "pause_menu" => plain(crate::gui_seq_menu::pause_menu(0)),
         "pause_menu_online" => plain(crate::gui_seq_menu::pause_menu(1)),
         "pause_menu_race" => plain(crate::gui_seq_menu::pause_menu(2)),
         "pause_menu_plain" => plain(crate::gui_seq_menu::pause_menu(3)),
-        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
+        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, pit_menu, pit_menu_small, pit_menu_lane, pit_menu_looks, pit_menu_bottom, pit_stop, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
     })
 }
 

@@ -50,11 +50,15 @@ pub fn update(hud: &mut HudPort, _gui: &mut Gui, _dt: f32) {
 }
 
 pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
-    let c = &mut hud.more.cars;
-    let (Some(proximity), Some(names), Some(damage)) = (&mut c.proximity, &mut c.names, &mut c.damage) else { return };
-    if proximity.is_active {
-        proximity.render_hud(gui, painter, &hud.input);
+    {
+        let Some(proximity) = &mut hud.more.cars.proximity else { return };
+        if proximity.is_active {
+            proximity.render_hud(gui, painter, &hud.input);
+        }
     }
+    crate::gui_port_pit::render_stop(hud, gui, painter);
+    let c = &mut hud.more.cars;
+    let (Some(_), Some(names), Some(damage)) = (&mut c.proximity, &mut c.names, &mut c.damage) else { return };
     // (the name tags' own switch is tested inside, as the game's `isActive` is outside)
     names.render_hud(gui, painter, dt, &hud.input);
     damage.render_hud(gui, painter, dt, &hud.input);

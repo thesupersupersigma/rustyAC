@@ -25,6 +25,7 @@ pub struct More {
     pub flags: Option<Flags>,
     pub cars: crate::gui_port_hud3::Cars,
     pub menus: crate::gui_port_menu::Menus,
+    pub pit: crate::gui_port_pit::Pit,
 }
 
 pub fn create(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id) -> Result<(), String> {

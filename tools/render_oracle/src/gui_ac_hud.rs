@@ -77,6 +77,7 @@ unsafe fn empty_wstring(at: *mut u8) {
 unsafe extern "C" fn get_current_session(_this: *mut u8, out: *mut u8) -> *mut u8 {
     std::ptr::write_bytes(out, 0, 0x70);
     wr(out, 0, input(|i| i.session_type));
+    wr(out, 4, crate::gui_seq_menu::script().pit.timed as u8);
     empty_wstring(out.add(0x18));
     empty_wstring(out.add(0x38));
     out
@@ -159,9 +160,15 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
-    if what.starts_with("menu.") {
+    if what.starts_with("menu.") || what.starts_with("pit.") {
+        if crate::gui_seq_menu::menu_input(what, number, text) {
+            return Ok(());
+        }
         if let Some(h) = hud() {
             sync(h);
+        }
+        if what.starts_with("menu.pit") {
+            return crate::gui_ac_pit::call(game, gui, what, number, text);
         }
         return crate::gui_ac_menu::call(game, gui, what, number, text);
     }
@@ -277,6 +284,7 @@ pub unsafe fn render_hud(game: &Game, dt: f32) {
     let Some(h) = hud() else { return };
     let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SYSTEM_MESSAGE_RENDER_HUD));
     render(h.message, dt);
+    crate::gui_ac_pit::render_menu(game, h, dt);
     crate::gui_ac_hud2::render_hud(game, h, dt);
 }
 
@@ -290,5 +298,6 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     let n = h.notification;
     out.push_str(&crate::gui_seq::notification_line(rd(n, 0x80), rd(n, 0x84), rd(n, 0x88), rd::<u8>(n, 0x8c) != 0));
     crate::gui_ac_hud2::dump(game, h, out);
+    crate::gui_ac_pit::dump(game, out);
     crate::gui_seq_menu::dump_actions(out);
 }

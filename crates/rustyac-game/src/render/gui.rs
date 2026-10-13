@@ -15,6 +15,7 @@ use rustyac_gui::gui::{Gui, GuiFiles};
 use rustyac_gui::hud::{HudCar, HudInput, SystemMessage, SystemNotification, MESSAGE_ABS, MESSAGE_BRAKE_BIAS, MESSAGE_DEFAULT, MESSAGE_TC};
 use rustyac_gui::hud_cars::{DamageDisplayer, DriverNames, ProximityIndicator};
 use rustyac_gui::menus::SimAction;
+use rustyac_gui::pit_menu::{PitMenu, PitMenuLooks, PitMenuScene, PitStopHud};
 use rustyac_gui::hud_flags::{DriveThroughPenalty, FlagDisplay, FuelLight, LapInvalidator, LockControlsTime, WrongWayIndicator};
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::Mat44f;
@@ -49,6 +50,8 @@ pub struct GuiSetup {
     pub online: bool,
     /// AC's replay is recorded (the game object "REPLAY_MANAGER")
     pub replay: bool,
+    /// the player's car's data folder (its `setup.ini` names the pit menu's rows)
+    pub player_data: PathBuf,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -89,6 +92,13 @@ pub struct GameGui {
     pub pause_menu: Id,
     /// `ACCameraManager::fadeMode` of a fade a menu asked for: `fadeTime`, `fadeTotalTime`
     menu_fade: Option<(f32, f32)>,
+    /// `QuickMenuPitstop`'s labels (made when the referee first shows its menu), their looks,
+    /// and the panel of `PitStop::renderHUD`
+    pit_menu: Option<PitMenu>,
+    pit_looks: PitMenuLooks,
+    pit_stop: PitStopHud,
+    /// the menu and the stop as the referee last showed them
+    pit: Option<crate::referee::PitGui>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -163,7 +173,9 @@ impl GameGui {
         let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None })
+        let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
+        let pit_stop = PitStopHud::new(&mut painter);
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -189,6 +201,7 @@ impl GameGui {
         input.camera_mode = camera_mode;
         input.camera_matrix = *camera.0;
         input.game_time_now = time_ms;
+        self.pit = info.referee.as_ref().and_then(|referee| referee.pit_gui.clone());
         let mut shown = [false; 5];
         match info.referee.as_ref().map(|referee| &referee.gui) {
             Some(r) => {
@@ -304,6 +317,32 @@ impl GameGui {
         let mut painter = self.renderer.painter(graphics);
         let (gui, input) = (&mut self.gui, &self.input);
         self.message.render_hud(gui, &mut painter, dt, input);
+        // QuickMenuPitstop::renderHUD 0x1400b1230 (the menu's coming and going is the
+        // referee's: Task 28b; here what the picture's side knows hides it too)
+        let scene = PitMenuScene {
+            esc_menu_visible: input.esc_menu_visible,
+            pause_menu_visible: input.pause_menu_visible,
+            in_replay: input.in_replay,
+            end_session_active: input.end_session_active,
+            camera_mode: input.camera_mode,
+            app_interaction_enabled: true,
+            focused_car_index: input.focused_car_index,
+            in_pitlane: self.pit.as_ref().is_some_and(|pit| pit.in_pitlane),
+        };
+        if let Some(pit) = &self.pit {
+            if self.pit_menu.is_none() {
+                if let Ok(setup) = IniReader::load(&self.setup.player_data.join("setup.ini")) {
+                    self.pit_menu = Some(PitMenu::build(gui, &mut painter, self.pit_looks, &pit.menu, &setup, &pit.car));
+                }
+            }
+            if let Some(labels) = self.pit_menu.as_ref().filter(|labels| labels.items.len() == pit.menu.items.len()) {
+                let hidden = scene.esc_menu_visible || scene.pause_menu_visible || scene.in_replay || scene.end_session_active || (scene.camera_mode as u32 & 0xffff_fffd) != 0 || scene.focused_car_index != 0;
+                if pit.menu.is_visible && !hidden {
+                    labels.update_ui(gui, &pit.menu, &pit.car);
+                    labels.draw(gui, &mut painter, dt, &pit.menu, &pit.car);
+                }
+            }
+        }
         if let Some(wrong) = self.wrong.as_mut().filter(|w| w.is_active) {
             wrong.render_hud(gui, &mut painter, input);
         }
@@ -312,6 +351,11 @@ impl GameGui {
         self.lock.render_hud(gui, &mut painter, input, &mut self.message);
         if self.proximity.is_active {
             self.proximity.render_hud(gui, &mut painter, input);
+        }
+        // PitStop::renderHUD 0x1400aa300
+        if let Some(pit) = &self.pit {
+            let mut state = pit.state;
+            self.pit_stop.render_hud(&mut painter, &scene, input.race_over, input.cars.first().map_or(0.0, |car| car.lock_controls_time), &mut state, &pit.times);
         }
         self.names.render_hud(gui, &mut painter, dt, input);
         self.damage.render_hud(gui, &mut painter, dt, input);

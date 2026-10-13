@@ -185,6 +185,13 @@ pub unsafe fn render_hud(game: &Game, h: &mut HudGame, dt: f32) {
         wr(h.sim, 0x1c8, c.client);
     }
     render(game, c.proximity, VA_PROXIMITY_RENDER_HUD, dt);
+    wr(h.sim, 0x188, 0usize);
+    wr(h.sim, 0x1c8, 0usize);
+    crate::gui_ac_pit::render_stop(game, h, dt);
+    wr(h.sim, 0x188, h.more.camera);
+    if input(|i| i.online) {
+        wr(h.sim, 0x1c8, c.client);
+    }
     render(game, c.names, VA_NAMES_RENDER_HUD, dt);
     render(game, c.damage, VA_DAMAGE_RENDER_HUD, dt);
     wr(h.sim, 0x188, 0usize);

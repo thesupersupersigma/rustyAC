@@ -18,7 +18,14 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
-    if what.starts_with("menu.") {
+    if what.starts_with("menu.") || what.starts_with("pit.") {
+        if crate::gui_seq_menu::menu_input(what, number, text) {
+            return Ok(());
+        }
+        if what.starts_with("menu.pit") {
+            crate::gui_port_menu::sync(hud, gui);
+            return crate::gui_port_pit::call(hud, gui, painter, game_folder, screen, what, number, text);
+        }
         return crate::gui_port_menu::call(hud, gui, painter, game_folder, screen, what, number, text);
     }
     if crate::gui_seq::hud_input(&mut hud.input, what, number, text) {
@@ -59,6 +66,7 @@ pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
 pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
     let Some(message) = &mut hud.message else { return };
     message.render_hud(gui, painter, dt, &hud.input);
+    crate::gui_port_pit::render_menu(hud, gui, painter, dt);
     crate::gui_port_hud2::render_hud(hud, gui, painter, dt);
 }
 
@@ -69,5 +77,6 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     crate::gui_port::dump_control(gui, m.driver.control, 1, out);
     out.push_str(&crate::gui_seq::notification_line(n.current_status, n.timer, n.blink_time, n.show));
     crate::gui_port_hud2::dump(hud, gui, out);
+    crate::gui_port_pit::dump(hud, gui, out);
     crate::gui_seq_menu::dump_actions(out);
 }
