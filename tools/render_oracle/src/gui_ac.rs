@@ -88,7 +88,7 @@ unsafe extern "C" fn not_called() {
 
 pub unsafe fn class_of(game: &Game, object: *const u8) -> &'static str {
     let table: usize = rd(object, 0);
-    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).chain(crate::gui_ac_menu::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
 }
 
 pub unsafe fn children(object: *const u8) -> Vec<*mut u8> {
@@ -117,7 +117,10 @@ pub unsafe fn dump_control(game: &Game, control: *const u8, depth: usize, out: &
             let (begin, end): (usize, usize) = (rd(control, 0x198), rd(control, 0x1a0));
             format!(" screen={} hidden={}", flag(0x178), (end - begin) / 4)
         }
-        other => crate::gui_ac2::extra(game, control, other),
+        other => match crate::gui_ac_menu::extra(control, other) {
+            Some(extra) => extra,
+            None => crate::gui_ac2::extra(game, control, other),
+        },
     };
     out.push_str(&crate::gui_seq::control_line(
         depth,
@@ -446,7 +449,7 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
         copy_tree(&args.game.join("content/texture/damage"), &args.root.join("content/texture/damage"))?;
     }
     // the HUD's own settings: as the game ships them, or as the sequence wants them
-    for name in ["name_displayer.ini", "damage_displayer.ini"] {
+    for name in ["name_displayer.ini", "damage_displayer.ini", "fades.ini"] {
         std::fs::copy(args.game.join("system/cfg").join(name), args.root.join("system/cfg").join(name)).map_err(|e| format!("{name}: {e}"))?;
     }
     for (name, text) in sequence.cfg {

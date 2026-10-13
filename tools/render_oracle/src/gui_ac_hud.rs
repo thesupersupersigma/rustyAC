@@ -159,6 +159,12 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
+    if what.starts_with("menu.") {
+        if let Some(h) = hud() {
+            sync(h);
+        }
+        return crate::gui_ac_menu::call(game, gui, what, number, text);
+    }
     if crate::gui_seq::hud_input(&mut *INPUT.lock().unwrap().get_or_insert_with(HudInput::default), what, number, text) {
         if let Some(h) = hud() {
             if what.starts_with("car.") {
@@ -284,4 +290,5 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     let n = h.notification;
     out.push_str(&crate::gui_seq::notification_line(rd(n, 0x80), rd(n, 0x84), rd(n, 0x88), rd::<u8>(n, 0x8c) != 0));
     crate::gui_ac_hud2::dump(game, h, out);
+    crate::gui_seq_menu::dump_actions(out);
 }

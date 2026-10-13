@@ -55,6 +55,8 @@ pub enum Kind {
     Taskbar(Box<crate::taskbar::TaskbarData>),
     TaskBarIcon(Box<crate::taskbar::IconData>),
     Widget(Box<crate::widgets::Widget>),
+    /// a menu of the game (`PauseMenu` …)
+    Menu(Box<crate::menus::Menu>),
 }
 
 pub struct Control {

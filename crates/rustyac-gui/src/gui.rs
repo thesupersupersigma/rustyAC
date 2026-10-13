@@ -61,6 +61,7 @@ pub enum Class {
     Taskbar,
     TaskBarIcon,
     Widget,
+    Menu,
 }
 
 pub struct Gui {
@@ -106,6 +107,8 @@ pub struct Gui {
     /// `ksGetTime()`: milliseconds since the game started, as whoever runs the GUI last set
     /// it (a text input's caret blinks by it)
     pub time_ms: f64,
+    /// what the menus read of `Sim` and ask of it
+    pub sim: crate::menus::SimLink,
 }
 
 impl Gui {
@@ -141,6 +144,7 @@ impl Gui {
             widget_events: Vec::new(),
             graph_gl: None,
             time_ms: 0.0,
+            sim: crate::menus::SimLink::default(),
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
         gui.taskbar = gui.new_taskbar(painter);
@@ -190,6 +194,7 @@ impl Gui {
             Kind::Taskbar(_) => Class::Taskbar,
             Kind::TaskBarIcon(_) => Class::TaskBarIcon,
             Kind::Widget(_) => Class::Widget,
+            Kind::Menu(_) => Class::Menu,
         }
     }
 
@@ -231,6 +236,7 @@ impl Gui {
             Class::Taskbar => self.taskbar_render(id, dt, painter),
             Class::TaskBarIcon => self.icon_render(id, dt, painter),
             Class::Widget => self.widget_render(id, dt, painter),
+            Class::Menu => self.menu_render(id, dt, painter),
             Class::Control | Class::Form => self.control_render(id, dt, painter),
         }
     }
@@ -249,6 +255,7 @@ impl Gui {
         match self.class(id) {
             Class::Form => self.form_on_visible_changed(id),
             Class::Widget => self.widget_on_visible_changed(id, visible),
+            Class::Menu => self.menu_on_visible_changed(id, visible),
             _ => self.control_on_visible_changed(id, visible),
         }
     }

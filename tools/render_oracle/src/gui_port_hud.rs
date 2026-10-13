@@ -18,6 +18,9 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if what.starts_with("menu.") {
+        return crate::gui_port_menu::call(hud, gui, painter, game_folder, screen, what, number, text);
+    }
     if crate::gui_seq::hud_input(&mut hud.input, what, number, text) {
         return Ok(());
     }
@@ -46,6 +49,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
 }
 
 pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
+    crate::gui_port_menu::sync(hud, gui);
     let (Some(message), Some(notification)) = (&mut hud.message, &mut hud.notification) else { return };
     message.update(gui, dt, &hud.input);
     notification.update(gui, dt, &hud.input);
@@ -65,4 +69,5 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     crate::gui_port::dump_control(gui, m.driver.control, 1, out);
     out.push_str(&crate::gui_seq::notification_line(n.current_status, n.timer, n.blink_time, n.show));
     crate::gui_port_hud2::dump(hud, gui, out);
+    crate::gui_seq_menu::dump_actions(out);
 }

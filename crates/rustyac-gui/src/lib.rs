@@ -16,6 +16,7 @@ pub mod gui;
 pub mod hud;
 pub mod hud_cars;
 pub mod hud_flags;
+pub mod menus;
 pub mod painter;
 pub mod spinner;
 pub mod taskbar;

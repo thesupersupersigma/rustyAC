@@ -48,6 +48,7 @@ fn class_name(gui: &Gui, id: Id) -> &'static str {
         Kind::GameScreen(_) => "GameScreen",
         Kind::Taskbar(_) => "Taskbar",
         Kind::TaskBarIcon(_) => "TaskBarIcon",
+        Kind::Menu(_) => "PauseMenu",
         Kind::Widget(w) => match &**w {
             Widget::ProgressBar(_) => "ProgressBar",
             Widget::ActiveButton(_) => "ActiveButton",
@@ -67,6 +68,7 @@ pub fn dump_control(gui: &Gui, id: Id, depth: usize, out: &mut String) {
         Kind::TaskBarIcon(d) => format!(" icon={} target={:08x}", d.status, d.target_x.to_bits()),
         Kind::Taskbar(d) => format!(" bar={},{},{},{}", d.target_x, d.task_bar_full_showed as u8, d.top_app_index, d.virtual_desktop),
         Kind::GameScreen(d) => format!(" screen={} hidden={}", d.app_interaction_enabled as u8, d.old_apps_opened.len()),
+        Kind::Menu(_) => crate::gui_port_menu::extra(gui, id),
         Kind::Widget(w) => match &**w {
             Widget::ActiveButton(b) => format!(" button={} sel={} multi={} active={} label=\"{}\"", b.status, b.selected as u8, b.using_multiple_textures as u8, b.is_active as u8, b.active_button_text),
             Widget::ProgressBar(p) => format!(" progress={:08x},{:08x},{:08x},{}{}", p.max_value.to_bits(), p.min_value.to_bits(), p.value.to_bits(), p.is_vertical as u8, p.is_inverted as u8),
@@ -296,10 +298,12 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
             Op::Hud(what, number, text) => {
                 let mut painter = renderer.painter(&mut graphics);
                 crate::gui_port_hud::call(&mut hud.hud, &mut gui, &mut painter, &args.root, screen, what, *number, text)?;
+                crate::gui_port_menu::drain(&mut hud.hud, &mut gui);
             }
             other => {
                 let mut painter = renderer.painter(&mut graphics);
                 op(&mut gui, &mut painter, &mut hud, screen, &mut objects, other)?;
+                crate::gui_port_menu::drain(&mut hud.hud, &mut gui);
             }
         }
     }

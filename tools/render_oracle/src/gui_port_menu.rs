@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The port side of the GUI oracle's menus: `rustyac_gui::menus` fed the script's session
+//! state; what the menus ask of the session is written down as the game's side writes it.
+
+use rustyac_gui::control::{Id, MouseEvent};
+use rustyac_gui::gui::Gui;
+use rustyac_gui::menus::SimAction;
+use rustyac_gui::painter::Painter;
+use rustyac_physics::data::ini::IniReader;
+
+use crate::gui_port_hud::HudPort;
+use crate::gui_seq_menu::{action, script};
+
+#[derive(Default)]
+pub struct Menus {
+    pub pause: Option<Id>,
+    pub esc: Option<Id>,
+}
+
+/// What the game's side writes into its stand-in `Sim` before every call: the script's state.
+pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
+    let s = script();
+    gui.sim.session_type = hud.input.session_type;
+    gui.sim.session_count = s.session_count;
+    gui.sim.time_to_session_start = hud.input.time_to_session_start;
+    gui.sim.has_replay_manager = s.replay_manager;
+    if let Some(esc) = hud.more.menus.esc {
+        gui.controls[esc].visible = hud.input.esc_menu_visible;
+    }
+    if let Some(pause) = hud.more.menus.pause {
+        hud.input.pause_menu_visible = gui.controls[pause].visible;
+    }
+}
+
+/// The calls the menus made since the last time, written down; the one on the message banner
+/// is carried out.
+pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
+    for a in std::mem::take(&mut gui.sim.actions) {
+        match a {
+            SimAction::SetPauseMode(paused) => action(format!("setPauseMode {}", paused as u8)),
+            SimAction::ClearMessage => {
+                if let Some(message) = &mut hud.message {
+                    message.clear_message();
+                }
+            }
+            SimAction::AudioStop => action("audio stop".into()),
+            SimAction::AudioStart => action("audio start".into()),
+            SimAction::SkipCurrentSession => action("skipCurrentSession".into()),
+            SimAction::RestartCurrentSession => action("restartCurrentSession".into()),
+            SimAction::FadeIn(seconds) => action(format!("fadeIn {:08x}", seconds.to_bits())),
+            SimAction::LockControlsUntilTime(ms) => action(format!("lockControlsUntilTime {:016x}", ms.to_bits())),
+            SimAction::GoToSpawnPosition(name) => action(format!("goToSpawnPosition {name}")),
+            SimAction::StartReplayMode => action("startReplayMode 0".into()),
+            SimAction::Shutdown => action("shutdown".into()),
+        }
+    }
+    if let Some(pause) = hud.more.menus.pause {
+        hud.input.pause_menu_visible = gui.controls[pause].visible;
+    }
+}
+
+fn button(gui: &Gui, menu: Id, name: &str) -> Option<[f32; 4]> {
+    let parent = gui.controls[menu].rect;
+    gui.controls[menu].controls.iter().find(|c| gui.controls[**c].name == name).map(|c| {
+        let r = gui.controls[*c].rect;
+        [parent.left + r.left, parent.left + r.right, parent.top + r.top, parent.top + r.bottom]
+    })
+}
+
+pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if crate::gui_seq_menu::menu_input(what, number, text) {
+        return Ok(());
+    }
+    if hud.message.is_none() {
+        return Err("the HUD was not made".into());
+    }
+    sync(hud, gui);
+    match what {
+        "menu.pause" => {
+            gui.sim.online = hud.input.online;
+            gui.sim.game_screen = Some(screen);
+            let esc = gui.new_control(painter, "ESC_MENU");
+            gui.controls[esc].visible = false;
+            gui.sim.esc_menu = Some(esc);
+            hud.more.menus.esc = Some(esc);
+            let fades = IniReader::load(&root.join("system/cfg/fades.ini")).ok();
+            let menu = gui.new_pause_menu(painter, fades.as_ref());
+            gui.sim.pause_menu = Some(menu);
+            gui.set_visible(menu, false);
+            gui.add_root(painter, menu);
+            hud.more.menus.pause = Some(menu);
+        }
+        "menu.esc" => {
+            gui.sim_activate_pause_menu();
+            gui.sim_set_pause_mode(true);
+        }
+        "menu.resume" => gui.sim_activate_game_gui(),
+        "menu.blank" => {
+            let menu = hud.more.menus.pause.ok_or("no pause menu")?;
+            gui.pause_menu_blank_button(menu, number as i32, text == "1");
+        }
+        "menu.hover" | "menu.click" => {
+            let menu = hud.more.menus.pause.ok_or("no pause menu")?;
+            if let Some(r) = button(gui, menu, text) {
+                let (x, y) = (((r[0] + r[1]) * 0.5) as i32, ((r[2] + r[3]) * 0.5) as i32);
+                gui.mouse_move(&MouseEvent { x, y, button: -1, delta: 0.0 });
+                if what == "menu.click" {
+                    gui.mouse_down(&MouseEvent { x, y, button: 0, delta: 0.0 });
+                    gui.mouse_up(&MouseEvent { x, y, button: 0, delta: 0.0 });
+                }
+            }
+        }
+        "menu.fadeDone" => gui.sim_fade_in_finished(),
+        other => return Err(format!("the port side knows no menu call {other:?}")),
+    }
+    drain(hud, gui);
+    Ok(())
+}
+
+pub fn extra(gui: &Gui, id: Id) -> String {
+    let p = gui.pause_menu(id);
+    format!(" pause={} fade={:08x}", p.currently_selected_button, p.fade_seconds.to_bits())
+}
