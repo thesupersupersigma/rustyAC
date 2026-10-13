@@ -86,10 +86,9 @@ unsafe extern "C" fn get_current_session(_this: *mut u8, out: *mut u8) -> *mut u
     let race = race();
     std::ptr::write_bytes(out, 0, 0x70);
     let mut session = race.session_info(race.current_session_index);
-    if race.sessions.is_empty() {
-        // (a script that names no sessions: the HUD's own session type, as its objects read it)
-        session.session_type = input(|i| i.session_type);
-    }
+    // (the running session's kind is the HUD scripts' own "session", which every HUD object
+    // reads; a script may move it apart from the list of sessions)
+    session.session_type = input(|i| i.session_type);
     write_session(out, &session);
     out
 }
