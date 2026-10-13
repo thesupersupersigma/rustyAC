@@ -267,6 +267,10 @@ impl Side<'_> {
         for i in 0..end.offset_from(begin) as usize {
             self.hook_tree(*begin.add(i));
         }
+        // (controls of the game objects that draw and hear the mouse themselves)
+        for root in crate::gui_ac_menu::extra_roots() {
+            self.hook_tree(root);
+        }
     }
 
     unsafe fn dump(&self, out: &mut String) {
@@ -302,6 +306,8 @@ impl Side<'_> {
         wr(event, 12, delta);
         let handler: extern "C" fn(*mut u8, *mut u8) = self.va(va);
         handler(self.gui, event);
+        // (the game objects that hang on the window's mouse events hear of it after the GUI)
+        crate::gui_ac_menu::window_mouse(va, event);
     }
 
     unsafe fn op(&mut self, op: &Op) -> Result<(), String> {

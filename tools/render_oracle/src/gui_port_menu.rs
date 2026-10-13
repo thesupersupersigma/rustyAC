@@ -17,6 +17,10 @@ pub struct Menus {
     pub pause: Option<Id>,
     pub esc: Option<Id>,
     pub boards: Vec<Id>,
+    pub end: Option<rustyac_gui::end_session::EndSession>,
+    /// a plain control where the game's stand-in `Sim` has one for the pause menu (its
+    /// "shows" flag is the script's), until the script makes the real menu
+    pub pause_stand_in: Option<Id>,
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
@@ -25,6 +29,11 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     gui.sim.session_type = hud.input.session_type;
     gui.sim.online = hud.input.online;
     gui.sim.race = crate::gui_seq_menu::race_link(&hud.input);
+    gui.sim.in_replay = hud.input.in_replay;
+    gui.sim.camera_mode = hud.input.camera_mode;
+    if let Some(end) = &hud.more.menus.end {
+        hud.input.end_session_active = end.is_active;
+    }
     gui.sim.session_count = s.session_count;
     gui.sim.time_to_session_start = hud.input.time_to_session_start;
     gui.sim.has_replay_manager = s.replay_manager;
@@ -33,6 +42,8 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     }
     if let Some(pause) = hud.more.menus.pause {
         hud.input.pause_menu_visible = gui.controls[pause].visible;
+    } else if let Some(stand_in) = hud.more.menus.pause_stand_in {
+        gui.controls[stand_in].visible = hud.input.pause_menu_visible;
     }
 }
 
@@ -58,6 +69,9 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::Shutdown => action("shutdown".into()),
             SimAction::SendVote { kind, value, guid } => action(format!("sendVote {kind} {} {guid}", value as u8)),
             SimAction::SetFocusedCarIndex(car) => action(format!("setFocusedCarIndex {car}")),
+            SimAction::SetCameraMode(mode) => action(format!("setMode {mode}")),
+            SimAction::SetIntroMode(on) => action(format!("setIntroMode {}", on as u8)),
+            SimAction::SetControlsLock(on) => action(format!("setControlsLock {}", on as u8)),
         }
     }
     if let Some(pause) = hud.more.menus.pause {
@@ -107,6 +121,24 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             }
         }
         "menu.newSession" => gui.sim_on_new_session(),
+        "menu.end" => {
+            if gui.sim.pause_menu.is_none() {
+                let stand_in = gui.new_control(painter, "PAUSE_MENU");
+                gui.controls[stand_in].visible = hud.input.pause_menu_visible;
+                gui.sim.pause_menu = Some(stand_in);
+                hud.more.menus.pause_stand_in = Some(stand_in);
+            }
+            let ini = IniReader::load(&root.join("system/cfg/endSessionDisplayer.ini")).ok();
+            hud.more.menus.end = Some(rustyac_gui::end_session::EndSession::new(gui, painter, ini.as_ref()));
+        }
+        "menu.endShow" | "menu.endHide" => {
+            let Some(end) = &mut hud.more.menus.end else { return Err("no end of session".into()) };
+            if what == "menu.endShow" {
+                end.display_results(gui);
+            } else {
+                end.hide(gui);
+            }
+        }
         "menu.pause" => {
             gui.sim.online = hud.input.online;
             gui.sim.game_screen = Some(screen);
@@ -153,6 +185,7 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
         rustyac_gui::control::Kind::Menu(menu) => match &**menu {
             rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
             rustyac_gui::menus::Menu::Leaderboard(_) => "Leaderboard",
+            rustyac_gui::menus::Menu::EndCommon(_) => "EndCommon",
         },
         _ => "?",
     }
@@ -170,5 +203,40 @@ pub fn extra(gui: &Gui, id: Id) -> String {
             crate::gui_seq_menu::board_extra(l.session_id, l.current_page, l.selected_car_index, l.mode, l.last_mode, l.show_mode_buttons, l.is_loaded, &printed.join(","), l.avatar_to_be_kicked.map_or(-1, |car| car as i32))
         }
         _ => String::new(),
+    }
+}
+
+/// `EndSessionDisplayer::update`, in the update pass.
+pub fn update(hud: &mut HudPort, gui: &mut Gui) {
+    if let Some(end) = &mut hud.more.menus.end {
+        end.update(gui);
+    }
+    drain(hud, gui);
+}
+
+/// `EndSessionDisplayer::renderHUD` (after the damage picture).
+pub fn render_end(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
+    if let Some(end) = &mut hud.more.menus.end {
+        end.render_hud(gui, painter, dt);
+    }
+}
+
+/// The window's mouse events as the game objects that hang on them hear them (after the GUI):
+/// 0 down, 1 up, 2 move, 3 the wheel.
+pub fn window_mouse(hud: &mut HudPort, gui: &mut Gui, kind: u32, e: &MouseEvent) {
+    if let Some(end) = &hud.more.menus.end {
+        match kind {
+            0 => end.on_mouse_down(gui, e),
+            1 => end.on_mouse_up(gui, e),
+            2 => end.on_mouse_move(gui, e),
+            _ => end.on_mouse_wheel(gui, e),
+        }
+    }
+}
+
+pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
+    if let Some(end) = &hud.more.menus.end {
+        out.push_str(&crate::gui_seq_menu::end_line(end.is_active, end.is_loaded, end.old_mode, gui.is_active));
+        crate::gui_port::dump_control(gui, end.parent_control, 1, out);
     }
 }

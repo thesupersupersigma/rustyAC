@@ -1045,6 +1045,11 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "lb_tab_2" => plain(crate::gui_seq_menu::leaderboard(2, 2)),
         "lb_tab_24" => plain(crate::gui_seq_menu::leaderboard(2, 24)),
         "lb_online_12" => plain(crate::gui_seq_menu::leaderboard(3, 12)),
+        "end_race_12" => plain(crate::gui_seq_menu::end_session(3, 12)),
+        "end_race_24" => plain(crate::gui_seq_menu::end_session(3, 24)),
+        "end_qualify_2" => plain(crate::gui_seq_menu::end_session(2, 2)),
+        "end_practice_12" => plain(crate::gui_seq_menu::end_session(1, 12)),
+        "end_online_12" => plain(crate::gui_seq_menu::end_session(13, 12)),
         "pit_menu" => plain(crate::gui_seq_menu::pit_menu(false, false)),
         "pit_menu_small" => plain(crate::gui_seq_menu::pit_menu(true, false)),
         "pit_menu_lane" => plain(crate::gui_seq_menu::pit_menu(false, true)),
@@ -1105,7 +1110,7 @@ ITEM_BACKGROUND_SELECTED=0.74,0,0,1
         "pause_menu_online" => plain(crate::gui_seq_menu::pause_menu(1)),
         "pause_menu_race" => plain(crate::gui_seq_menu::pause_menu(2)),
         "pause_menu_plain" => plain(crate::gui_seq_menu::pause_menu(3)),
-        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, lb_control_2, lb_control_12, lb_control_24, lb_app_12, lb_tab_2, lb_tab_24, lb_online_12, pit_menu, pit_menu_small, pit_menu_lane, pit_menu_looks, pit_menu_bottom, pit_stop, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
+        other => return Err(format!("no GUI sequence {other:?} (pause_menu, pause_menu_online, pause_menu_race, pause_menu_plain, lb_control_2, lb_control_12, lb_control_24, lb_app_12, lb_tab_2, lb_tab_24, lb_online_12, end_race_12, end_race_24, end_qualify_2, end_practice_12, end_online_12, pit_menu, pit_menu_small, pit_menu_lane, pit_menu_looks, pit_menu_bottom, pit_stop, base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple, hud_cars, hud_cars_simple, hud_cars_noflag)")),
     })
 }
 

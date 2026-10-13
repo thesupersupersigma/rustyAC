@@ -284,6 +284,7 @@ pub unsafe fn update(game: &Game, dt: f32) {
     let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SYSTEM_NOTIFICATION_UPDATE));
     update(h.notification, dt);
     crate::gui_ac_hud2::update(game, h, dt);
+    crate::gui_ac_menu::update(game, h, dt);
 }
 
 /// `Game::renderHUD` over the HUD objects.
@@ -306,5 +307,6 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     out.push_str(&crate::gui_seq::notification_line(rd(n, 0x80), rd(n, 0x84), rd(n, 0x88), rd::<u8>(n, 0x8c) != 0));
     crate::gui_ac_hud2::dump(game, h, out);
     crate::gui_ac_pit::dump(game, out);
+    crate::gui_ac_menu::dump(game, out);
     crate::gui_seq_menu::dump_actions(out);
 }

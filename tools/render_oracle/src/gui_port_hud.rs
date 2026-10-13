@@ -61,6 +61,7 @@ pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
     message.update(gui, dt, &hud.input);
     notification.update(gui, dt, &hud.input);
     crate::gui_port_hud2::update(hud, gui, dt);
+    crate::gui_port_menu::update(hud, gui);
 }
 
 pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
@@ -78,5 +79,6 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     out.push_str(&crate::gui_seq::notification_line(n.current_status, n.timer, n.blink_time, n.show));
     crate::gui_port_hud2::dump(hud, gui, out);
     crate::gui_port_pit::dump(hud, gui, out);
+    crate::gui_port_menu::dump(hud, gui, out);
     crate::gui_seq_menu::dump_actions(out);
 }

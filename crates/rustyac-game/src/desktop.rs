@@ -1579,6 +1579,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                         }
                     }
                     SimAction::SendVote { .. } => {}
+                    // (the results' camera and the lock of the controls are the referee's
+                    // already: Task 28)
+                    SimAction::SetCameraMode(_) | SimAction::SetIntroMode(_) | SimAction::SetControlsLock(_) => {}
                 }
             }
         }

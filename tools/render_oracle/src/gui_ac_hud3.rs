@@ -196,6 +196,7 @@ pub unsafe fn render_hud(game: &Game, h: &mut HudGame, dt: f32) {
     render(game, c.damage, VA_DAMAGE_RENDER_HUD, dt);
     wr(h.sim, 0x188, 0usize);
     wr(h.sim, 0x1c8, 0usize);
+    crate::gui_ac_menu::render_end(game, h, dt);
 }
 
 pub unsafe fn dump(game: &Game, h: &HudGame, out: &mut String) {

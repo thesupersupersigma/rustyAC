@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac::{children, read_wstring};
-use crate::gui_ac_hud::{acs, hud, input, jump};
+use crate::gui_ac_hud::{acs, hud, input, jump, HudGame};
 use crate::gui_seq_menu::{action, script};
 
 const VA_PAUSE_MENU_CTOR: usize = 0x1_4011_d9b0;
@@ -42,7 +42,15 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 2] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE)];
+pub const CLASSES: [(&str, usize, usize, usize); 3] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998)];
+const VA_END_SESSION_CTOR: usize = 0x1_4010_a650;
+const VA_END_SESSION_UPDATE: usize = 0x1_4010_bf90;
+const VA_END_SESSION_DISPLAY_RESULTS: usize = 0x1_4010_b260;
+const VA_END_SESSION_HIDE: usize = 0x1_4010_b380;
+const VA_END_SESSION_RENDER_HUD: usize = 0x1_4010_b520;
+const VA_CAMERA_SET_MODE: usize = 0x1_4003_40d0;
+const VA_CAMERA_SET_INTRO_MODE: usize = 0x1_4011_5c80;
+const VA_CAR_SET_CONTROLS_LOCK: usize = 0x1_400d_9f00;
 const VA_LEADERBOARD_CTOR: usize = 0x1_402d_10f0;
 const VA_LEADERBOARD_VTABLE: usize = 0x1_4050_1288;
 const VA_LEADERBOARD_SET_LAST_SESSION: usize = 0x1_402d_6990;
@@ -55,9 +63,112 @@ struct Menus {
     fade_sender: usize,
     /// every `ACStandardLeaderboard` the script made
     boards: Vec<usize>,
+    /// the `EndSessionDisplayer`
+    end: usize,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new() });
+static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0 });
+
+unsafe extern "C" fn set_mode(_this: *mut u8, mode: i32, _fade: bool, _random: bool) {
+    action(format!("setMode {mode}"));
+}
+
+unsafe extern "C" fn set_intro_mode(_this: *mut u8, on: bool) {
+    action(format!("setIntroMode {}", on as u8));
+}
+
+unsafe extern "C" fn set_controls_lock(_this: *mut u8, on: bool) {
+    action(format!("setControlsLock {}", on as u8));
+}
+
+/// What the menus call of the session, replaced by stand-ins that write the call down, and a
+/// table for `Game` whose only function is `shutdown`.
+unsafe fn install(game: &Game, sim: *mut u8) {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let a = &game.acs;
+    for (va, to) in [
+        (VA_RACE_MANAGER_GET_SESSION_COUNT, get_session_count as *const () as usize),
+        (VA_RACE_MANAGER_SKIP_CURRENT_SESSION, skip_current_session as *const () as usize),
+        (VA_RACE_MANAGER_RESTART_CURRENT_SESSION, restart_current_session as *const () as usize),
+        (VA_SIM_SET_PAUSE_MODE, set_pause_mode as *const () as usize),
+        (VA_AUDIO_ENGINE_STOP, audio_stop as *const () as usize),
+        (VA_AUDIO_ENGINE_START, audio_start as *const () as usize),
+        (VA_CAMERA_REGISTER_TO_FADE_IN, register_to_fade_in_event as *const () as usize),
+        (VA_CAMERA_FADE_IN, fade_in as *const () as usize),
+        (VA_CAR_LOCK_CONTROLS_UNTIL_TIME, lock_controls_until_time as *const () as usize),
+        (VA_CAR_GO_TO_SPAWN_POSITION, go_to_spawn_position as *const () as usize),
+        (VA_REPLAY_START_REPLAY_MODE, start_replay_mode as *const () as usize),
+        (VA_GET_GAME_OBJECT_BY_NAME, get_game_object as *const () as usize),
+        (VA_CAMERA_SET_MODE, set_mode as *const () as usize),
+        (VA_CAMERA_SET_INTRO_MODE, set_intro_mode as *const () as usize),
+        (VA_CAR_SET_CONTROLS_LOCK, set_controls_lock as *const () as usize),
+    ] {
+        jump(game, va, to);
+    }
+    let table = a.alloc(16 * 8);
+    for slot in 0..16 {
+        wr(table, slot * 8, no_such_slot as *const () as usize);
+    }
+    wr(table, 8, shutdown as *const () as usize);
+    let game_block: *mut u8 = rd(sim, 0x8);
+    wr(game_block, 0, table);
+}
+
+/// The window's mouse events (`RenderWindow::evOnMouseDown` … at `Game` + 0x58, 0x88, 0xa0,
+/// 0x70) as whoever hung a handler on them hears them.
+pub unsafe fn window_mouse(gui_handler: usize, event: *mut u8) {
+    let Some(h) = hud() else { return };
+    let at = match gui_handler {
+        VA_GUI_ON_MOUSE_DOWN => 0x58,
+        VA_GUI_ON_MOUSE_UP => 0x88,
+        VA_GUI_ON_MOUSE_MOVE => 0xa0,
+        _ => 0x70,
+    };
+    let game_block: *const u8 = rd(h.sim, 0x8);
+    let (begin, end): (*const u8, *const u8) = (rd(game_block, at), rd(game_block, at + 8));
+    if begin.is_null() {
+        return;
+    }
+    for i in 0..end.offset_from(begin) as usize / 0x28 {
+        let implementation: *mut u8 = rd(begin.add(i * 0x28), 0x20);
+        let table: *const usize = rd(implementation, 0);
+        let call: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(*table.add(2));
+        call(implementation, event);
+    }
+}
+
+/// `EndSessionDisplayer::update`, in the update pass (only while the object is active).
+pub unsafe fn update(game: &Game, _h: &HudGame, dt: f32) {
+    let end = MENUS.lock().unwrap().end as *mut u8;
+    if !end.is_null() && rd::<u8>(end, 0x30) != 0 {
+        let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_END_SESSION_UPDATE));
+        update(end, dt);
+    }
+}
+
+/// `EndSessionDisplayer::renderHUD` (after the damage picture).
+pub unsafe fn render_end(game: &Game, h: &HudGame, dt: f32) {
+    let end = MENUS.lock().unwrap().end as *mut u8;
+    if !end.is_null() && rd::<u8>(end, 0x30) != 0 {
+        client_present(true);
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_END_SESSION_RENDER_HUD));
+        render(end, dt);
+        client_present(false);
+    }
+    let _ = h;
+}
+
+pub unsafe fn dump(game: &Game, out: &mut String) {
+    let end = MENUS.lock().unwrap().end as *const u8;
+    if !end.is_null() {
+        let gui: *const u8 = rd(rd::<*const u8>(end, 0x8), 0x180);
+        out.push_str(&crate::gui_seq_menu::end_line(rd::<u8>(end, 0x30) != 0, rd::<u8>(end, 0x128) != 0, rd(end, 0x100), rd::<u8>(gui, 0x8) != 0));
+        crate::gui_ac::dump_control(game, rd(end, 0x70), 1, out);
+    }
+}
 
 /// `Sim::client` is there or not, around the calls of the game that ask (the tables of an
 /// online session read it while they are drawn; the HUD's proofs of Task 29 ran without it).
@@ -185,26 +296,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
     let menu = MENUS.lock().unwrap().pause as *mut u8;
     match what {
         "menu.pause" => {
-            jump(game, VA_RACE_MANAGER_GET_SESSION_COUNT, get_session_count as *const () as usize);
-            jump(game, VA_RACE_MANAGER_SKIP_CURRENT_SESSION, skip_current_session as *const () as usize);
-            jump(game, VA_RACE_MANAGER_RESTART_CURRENT_SESSION, restart_current_session as *const () as usize);
-            jump(game, VA_SIM_SET_PAUSE_MODE, set_pause_mode as *const () as usize);
-            jump(game, VA_AUDIO_ENGINE_STOP, audio_stop as *const () as usize);
-            jump(game, VA_AUDIO_ENGINE_START, audio_start as *const () as usize);
-            jump(game, VA_CAMERA_REGISTER_TO_FADE_IN, register_to_fade_in_event as *const () as usize);
-            jump(game, VA_CAMERA_FADE_IN, fade_in as *const () as usize);
-            jump(game, VA_CAR_LOCK_CONTROLS_UNTIL_TIME, lock_controls_until_time as *const () as usize);
-            jump(game, VA_CAR_GO_TO_SPAWN_POSITION, go_to_spawn_position as *const () as usize);
-            jump(game, VA_REPLAY_START_REPLAY_MODE, start_replay_mode as *const () as usize);
-            jump(game, VA_GET_GAME_OBJECT_BY_NAME, get_game_object as *const () as usize);
-            // Game's table: only `shutdown` (slot 1) is ever called
-            let table = a.alloc(16 * 8);
-            for slot in 0..16 {
-                wr(table, slot * 8, no_such_slot as *const () as usize);
-            }
-            wr(table, 8, shutdown as *const () as usize);
-            let game_block: *mut u8 = rd(sim, 0x8);
-            wr(game_block, 0, table);
+            install(game, sim);
             // Sim::Sim 0x1401931b5: the menu, hidden, a top-level control of the GUI
             let client: usize = rd(sim, 0x1c8);
             if input(|i| i.online) {
@@ -252,7 +344,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         "menu.lb" => {
             crate::gui_ac_race::install(game);
             crate::gui_ac_race::sync(h);
-            jump(game, VA_RACE_MANAGER_GET_SESSION_COUNT, get_session_count as *const () as usize);
+            install(game, sim);
             let client: usize = rd(sim, 0x1c8);
             if input(|i| i.online) {
                 wr(sim, 0x1c8, h.more.cars.client);
@@ -315,6 +407,30 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
                 }
             }
         }
+        "menu.end" => {
+            crate::gui_ac_race::install(game);
+            crate::gui_ac_race::sync(h);
+            install(game, sim);
+            let end = a.alloc(0x130);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_END_SESSION_CTOR));
+            let client: usize = rd(sim, 0x1c8);
+            if input(|i| i.online) {
+                wr(sim, 0x1c8, h.more.cars.client);
+            }
+            ctor(end, sim);
+            wr(sim, 0x1c8, client);
+            wr(sim, 0x260, end);
+            let mut m = MENUS.lock().unwrap();
+            m.end = end as usize;
+            m.boards.push(rd::<usize>(end, 0x78));
+        }
+        "menu.endShow" | "menu.endHide" => {
+            let end = MENUS.lock().unwrap().end as *mut u8;
+            wr(sim, 0x188, h.more.camera);
+            let call: extern "C" fn(*mut u8) = std::mem::transmute(a.va(if what == "menu.endShow" { VA_END_SESSION_DISPLAY_RESULTS } else { VA_END_SESSION_HIDE }));
+            call(end);
+            wr(sim, 0x188, 0usize);
+        }
         "menu.fadeDone" => {
             let waiting = std::mem::take(&mut MENUS.lock().unwrap().fade);
             for (_, implementation) in waiting {
@@ -330,6 +446,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
 pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
     match class {
         "PauseMenu" => Some(format!(" pause={} fade={:08x}", rd::<i32>(control, 0x1f0), rd::<u32>(control, 0x1f4))),
+        "EndCommon" => Some(String::new()),
         "Leaderboard" => {
             let (begin, end): (*const *const u8, *const *const u8) = (rd(control, 0x190), rd(control, 0x198));
             let printed: Vec<String> = if begin.is_null() { Vec::new() } else { (0..end.offset_from(begin) as usize).map(|i| rd::<i32>(*begin.add(i), 0x1158).to_string()).collect() };
@@ -339,4 +456,13 @@ pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// The controls no GUI holds: the panel of the end-of-session displayer.
+pub unsafe fn extra_roots() -> Vec<*mut u8> {
+    let end = MENUS.lock().unwrap().end as *const u8;
+    if end.is_null() {
+        return Vec::new();
+    }
+    vec![rd(end, 0x70)]
 }

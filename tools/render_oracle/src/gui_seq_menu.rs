@@ -614,3 +614,73 @@ pub fn tag_names(car: usize, block: String) -> String {
     }
     out
 }
+
+/// What both sides write down of the end-of-session displayer besides its controls.
+pub fn end_line(active: bool, loaded: bool, old_mode: i32, gui_active: bool) -> String {
+    format!("end active={} loaded={} oldMode={old_mode} gui={}\n", active as u8, loaded as u8, gui_active as u8)
+}
+
+/// The end of a session: the results over a dark screen, the three buttons. `kind`: the type
+/// of the session that ends (1 practice, 2 qualifying, 3 a race; +10: online); `cars`: how
+/// many drove. A screen of 1280 x 720 is taken for the mouse.
+pub fn end_session(kind: u32, cars: usize) -> Vec<Op> {
+    let (online, kind) = (kind >= 10, kind % 10);
+    let mut o = Vec::new();
+    field(&mut o, cars);
+    let race = kind == 3;
+    let sessions = match kind {
+        1 => "1:0:Practice",
+        2 => "1:0:Practice|2:0:Qualifying",
+        _ => "1:0:Practice|2:0:Qualifying|3:0:Quick Race",
+    };
+    let current = (kind - 1) as f32;
+    o.extend([hud("race.sessions", 0.0, sessions), hud("race.current", current, ""), hud("session", kind as f32, ""), hud("raceText", 0.0, "Race"), hud("pqText", 0.0, "Session"), hud("cameraMode", 2.0, "")]);
+    for index in 0..current as usize {
+        o.push(hud("race.history", index as f32, board(cars, false, index + 1)));
+    }
+    o.push(hud("race.board", 0.0, board(cars, race, 1)));
+    for i in 0..cars.min(6) {
+        let index = leak(i.to_string());
+        o.extend([hud("race.car.last", 84000.0 + 731.0 * i as f32, index), hud("race.car.lastValid", (i % 3 != 1) as u8 as f32, index), hud("race.car.best", 83456.0 + 417.0 * i as f32, index), hud("race.car.done", 1.0, index)]);
+    }
+    if online {
+        o.push(hud("online", 1.0, ""));
+        for i in 0..cars {
+            o.push(hud("car.ping", (23 * i % 190) as f32, leak(i.to_string())));
+        }
+    }
+    o.extend([hud("menu.end", 0.0, ""), Op::Frame(DT), hud("message", 0.0, "Race|Over"), Op::Frame(DT)]);
+    // the results come: the GUI goes, the camera turns, the controls are locked
+    o.extend([hud("menu.endShow", 0.0, ""), Op::Frame(DT), Op::Frame(DT), hud("menu.endShow", 0.0, ""), Op::Frame(DT)]);
+    let (restart, replay, exit) = ((470, 625), (640, 625), (810, 625));
+    for at in [restart, replay, exit, (640, 300)] {
+        o.extend([Op::MouseMove(at.0, at.1), Op::Frame(DT)]);
+    }
+    // a row of the table is picked; a page on, a page back (more than ten cars)
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let (left, top) = (250, 197);
+    click(&mut o, left + 300, top + 20 + 45);
+    click(&mut o, left + 760, top + 345);
+    click(&mut o, left + 700, top + 345);
+    click(&mut o, left + 150 + 20, top + 345);
+    click(&mut o, left + 225 + 20, top + 345);
+    // Replay: the panel goes while the replay runs and is back after it
+    click(&mut o, replay.0, replay.1);
+    o.extend([hud("replay", 1.0, ""), Op::Frame(DT), Op::Frame(DT), hud("replay", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    // the pause menu's place is taken: nothing is drawn while it shows
+    o.extend([hud("pause", 1.0, ""), Op::Frame(DT), hud("pause", 0.0, ""), Op::Frame(DT)]);
+    // other kinds of session behind the same panel
+    for other in [0.0, 4.0, 1.0, 2.0, 3.0] {
+        o.extend([hud("session", other, ""), Op::Frame(DT)]);
+    }
+    o.extend([hud("session", kind as f32, ""), Op::Frame(DT)]);
+    // Restart: the referee's; then the panel is taken down, and comes again
+    click(&mut o, restart.0, restart.1);
+    o.extend([hud("menu.endHide", 0.0, ""), Op::Frame(DT), hud("menu.endHide", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, restart.0, restart.1);
+    click(&mut o, replay.0, replay.1);
+    o.extend([hud("cameraMode", 0.0, ""), hud("race.board", 0.0, board(cars, race, 2)), hud("menu.endShow", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    click(&mut o, exit.0, exit.1);
+    o.push(Op::Frame(DT));
+    o
+}

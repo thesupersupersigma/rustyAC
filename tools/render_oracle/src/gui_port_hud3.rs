@@ -62,6 +62,7 @@ pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
     // (the name tags' own switch is tested inside, as the game's `isActive` is outside)
     names.render_hud(gui, painter, dt, &hud.input);
     damage.render_hud(gui, painter, dt, &hud.input);
+    crate::gui_port_menu::render_end(hud, gui, painter, dt);
 }
 
 pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {

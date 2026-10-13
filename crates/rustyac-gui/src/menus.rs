@@ -68,6 +68,12 @@ pub enum SimAction {
     SendVote { kind: i32, value: bool, guid: i32 },
     /// `Sim::setFocusedCarIndex` 0x14019e6b0
     SetFocusedCarIndex(u32),
+    /// `ACCameraManager::setMode(mode, false, false)` 0x1400340d0
+    SetCameraMode(i32),
+    /// `CameraOnBoardFree::setIntroMode` 0x140115c80
+    SetIntroMode(bool),
+    /// `CarAvatar::setControlsLock` 0x1400d9f00 on the player's car
+    SetControlsLock(bool),
 }
 
 /// What a handler of `ACCameraManager::evOnFadeInFinished` does when the fade is over.
@@ -96,6 +102,12 @@ pub struct SimLink {
     pub time_to_session_start: f64,
     /// the game object "REPLAY_MANAGER" is there
     pub has_replay_manager: bool,
+    /// `ReplayManager::isInReplaymode`
+    pub in_replay: bool,
+    /// `ACCameraManager::mode`
+    pub camera_mode: i32,
+    /// `Sim::isVrConnected`
+    pub vr_connected: bool,
     /// `ACCameraManager::evOnFadeInFinished`: who hung a job there, and the job
     pub fade_listeners: Vec<(Id, FadeJob)>,
     /// `ACCameraManager::fadeMode.sender`
@@ -121,6 +133,7 @@ pub struct PauseMenu {
 pub enum Menu {
     Pause(PauseMenu),
     Leaderboard(Box<crate::leaderboard::Leaderboard>),
+    EndCommon(crate::end_session::EndCommon),
 }
 
 impl Gui {
@@ -404,6 +417,7 @@ impl Gui {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(_) => self.pause_menu_render(id, dt, painter),
                 Menu::Leaderboard(_) => self.leaderboard_render(id, dt, painter),
+                Menu::EndCommon(_) => self.end_common_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -414,6 +428,7 @@ impl Gui {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(_) => self.pause_menu_on_visible_changed(id, visible),
                 Menu::Leaderboard(_) => self.leaderboard_on_visible_changed(id, visible),
+                Menu::EndCommon(_) => self.control_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),
         }

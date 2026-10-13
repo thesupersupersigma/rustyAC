@@ -211,10 +211,26 @@ fn op(gui: &mut Gui, painter: &mut dyn Painter, hud: &mut crate::gui_port2::Hud,
                 other => crate::gui_port2::call(gui, painter, hud, id, other, *number, text)?,
             }
         }
-        Op::MouseMove(x, y) => gui.mouse_move(&MouseEvent { x: *x, y: *y, button: -1, delta: 0.0 }),
-        Op::MouseDown(x, y) => gui.mouse_down(&MouseEvent { x: *x, y: *y, button: 0, delta: 0.0 }),
-        Op::MouseUp(x, y) => gui.mouse_up(&MouseEvent { x: *x, y: *y, button: 0, delta: 0.0 }),
-        Op::Wheel(x, y, delta) => gui.mouse_wheel(&MouseEvent { x: *x, y: *y, button: -1, delta: *delta }),
+        Op::MouseMove(x, y) => {
+            let e = MouseEvent { x: *x, y: *y, button: -1, delta: 0.0 };
+            gui.mouse_move(&e);
+            crate::gui_port_menu::window_mouse(&mut hud.hud, gui, 2, &e);
+        }
+        Op::MouseDown(x, y) => {
+            let e = MouseEvent { x: *x, y: *y, button: 0, delta: 0.0 };
+            gui.mouse_down(&e);
+            crate::gui_port_menu::window_mouse(&mut hud.hud, gui, 0, &e);
+        }
+        Op::MouseUp(x, y) => {
+            let e = MouseEvent { x: *x, y: *y, button: 0, delta: 0.0 };
+            gui.mouse_up(&e);
+            crate::gui_port_menu::window_mouse(&mut hud.hud, gui, 1, &e);
+        }
+        Op::Wheel(x, y, delta) => {
+            let e = MouseEvent { x: *x, y: *y, button: -1, delta: *delta };
+            gui.mouse_wheel(&e);
+            crate::gui_port_menu::window_mouse(&mut hud.hud, gui, 3, &e);
+        }
         Op::KeyDown(code) => gui.key_down(*code),
         Op::KeyChar(code) => gui.key_char(*code),
         Op::Font(..) | Op::Blit(..) | Op::ClearText | Op::Frame(_) | Op::Save | Op::Hud(..) => {}
