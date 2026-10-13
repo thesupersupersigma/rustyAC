@@ -101,8 +101,9 @@ pub struct Gui {
     pub fired: Vec<Clicked>,
     /// every event of a widget that fired, in order
     pub widget_events: Vec<crate::widgets::WidgetEvent>,
-    /// the `TextInput` that has the keyboard (`ksgui::TextInput`'s static)
-    pub focused_input: Option<Id>,
+    /// `ksGetTime()`: milliseconds since the game started, as whoever runs the GUI last set
+    /// it (a text input's caret blinks by it)
+    pub time_ms: f64,
 }
 
 impl Gui {
@@ -136,7 +137,7 @@ impl Gui {
             screen: painter.screen(),
             fired: Vec::new(),
             widget_events: Vec::new(),
-            focused_input: None,
+            time_ms: 0.0,
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
         gui.taskbar = gui.new_taskbar(painter);
@@ -301,6 +302,14 @@ impl Gui {
         match self.class(id) {
             Class::Widget => self.widget_on_key_down(id, key),
             _ => self.control_on_key_down(id, key),
+        }
+    }
+
+    /// vtable +0x80.
+    pub fn set_repeat_interval(&mut self, id: Id, v: f32) {
+        match self.class(id) {
+            Class::Widget => self.widget_set_repeat_interval(id, v),
+            _ => self.controls[id].repeat_interval = v,
         }
     }
 

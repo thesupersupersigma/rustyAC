@@ -22,6 +22,9 @@ use crate::painter::{GlId, Painter, Rect, Texture, ALIGN_CENTER, ALIGN_LEFT, GL_
 /// A control of a [`Gui`].
 pub type Id = usize;
 
+/// The "no control" some handlers are called with (a null pointer in the game).
+pub const NO_CONTROL: Id = usize::MAX;
+
 /// `OnControlClicked`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Clicked {

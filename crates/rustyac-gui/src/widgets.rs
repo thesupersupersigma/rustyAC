@@ -35,11 +35,11 @@ pub enum WidgetEvent {
     /// `OnListBoxSelection` and the like: a row of a list
     ListBoxRow { list_box: Id, row: i32, kind: i32 },
     /// `OnScrollBarValueChanged`
-    ScrollBarValueChanged { scroll_bar: Id, value: f32 },
+    ScrollBarValueChanged { scroll_bar: Id, value: u32 },
     /// `OnTextInputValidated` and the like
     Text { control: Id, text: String, kind: i32 },
-    /// `OnTabSelection`
-    TabSelected { tab_bar: Id, index: i32 },
+    /// `OnCellSelected` of a tab bar
+    TabSelected { tab_bar: Id, old_index: u32, new_index: u32 },
 }
 
 pub type WidgetHandler = Rc<dyn Fn(&mut Gui, &WidgetEvent)>;
@@ -692,6 +692,13 @@ impl Gui {
         match self.widget(id) {
             Widget::More(_) => self.widget2_scale_by_mult(id, m),
             _ => self.control_scale_by_mult(id, m),
+        }
+    }
+
+    pub fn widget_set_repeat_interval(&mut self, id: Id, v: f32) {
+        match self.widget(id) {
+            Widget::More(_) => self.widget2_set_repeat_interval(id, v),
+            _ => self.controls[id].repeat_interval = v,
         }
     }
 

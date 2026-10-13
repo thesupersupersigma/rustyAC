@@ -17,3 +17,4 @@ pub mod painter;
 pub mod taskbar;
 pub mod widgets;
 pub mod widgets2;
+pub mod widgets3;

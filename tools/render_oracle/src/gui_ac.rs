@@ -77,7 +77,8 @@ pub unsafe fn read_wstring(at: *const u8) -> String {
 unsafe extern "C" fn click_recorder(_this: *mut u8, event: *const u8) {
     let control: *const u8 = rd(event, 0);
     let (x, y): (i32, i32) = (rd(event, 8), rd(event, 0xc));
-    EVENTS.lock().unwrap().push(format!("click \"{}\" {x} {y}", read_wstring(control.add(8))));
+    let name = if control.is_null() { String::from("<null>") } else { read_wstring(control.add(8)) };
+    EVENTS.lock().unwrap().push(format!("click \"{name}\" {x} {y}"));
 }
 
 unsafe extern "C" fn not_called() {
@@ -109,7 +110,7 @@ impl Side<'_> {
 
     unsafe fn class_of(&self, object: *const u8) -> &'static str {
         let table: usize = rd(object, 0);
-        CLASSES.iter().find(|c| self.game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+        CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).find(|c| self.game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
     }
 
     unsafe fn children(&self, object: *const u8) -> Vec<*mut u8> {
@@ -122,7 +123,9 @@ impl Side<'_> {
 
     unsafe fn new_object(&mut self, class: &str, name: &str, flag: bool) -> Result<*mut u8, String> {
         let acs = &self.game.acs;
-        let (_, size, ctor, _) = CLASSES.iter().find(|c| c.0 == class).ok_or(format!("the oracle knows no class {class:?}"))?;
+        let Some((_, size, ctor, _)) = CLASSES.iter().find(|c| c.0 == class) else {
+            return crate::gui_ac2::new_object(self.game, self.gui, class, name, flag);
+        };
         let object = acs.alloc(*size);
         match class {
             "Form" | "Slider" => {
@@ -485,6 +488,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
             match op {
                 Op::Frame(dt) => {
                     side.hook_all();
+                    crate::gui_ac2::set_time(crate::gui_seq::time_ms(frame));
                     rustyac_render::gpulog::begin_capture(name);
                     // Game::onIdle 0x140242730: the scene (none here), the screen-space mode, the GUI
                     call0(VA_GRAPHICS_BEGIN_SCENE);

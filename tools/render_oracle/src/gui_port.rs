@@ -127,7 +127,7 @@ fn dump(gui: &Gui, out: &mut String) {
     dump_control(gui, gui.taskbar, 0, out);
 }
 
-fn op(gui: &mut Gui, painter: &mut dyn Painter, screen: Id, objects: &mut Vec<Id>, op: &Op) -> Result<(), String> {
+fn op(gui: &mut Gui, painter: &mut dyn Painter, hud: &mut crate::gui_port2::Hud, screen: Id, objects: &mut Vec<Id>, op: &Op) -> Result<(), String> {
     match op {
         Op::New(class, name, flag) => {
             let id = match *class {
@@ -205,7 +205,7 @@ fn op(gui: &mut Gui, painter: &mut dyn Painter, screen: Id, objects: &mut Vec<Id
                 "markerRight" => gui.slider_set_marker_right_position(id, *number),
                 "updateMarkers" => gui.slider_update_markers(id),
                 "resetMarkers" => gui.slider_reset_markers(id),
-                other => crate::gui_port2::call(gui, painter, id, other, *number, text)?,
+                other => crate::gui_port2::call(gui, painter, hud, id, other, *number, text)?,
             }
         }
         Op::MouseMove(x, y) => gui.mouse_move(&MouseEvent { x: *x, y: *y, button: -1, delta: 0.0 }),
@@ -251,6 +251,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
     for o in &sequence.ops {
         match o {
             Op::Frame(dt) => {
+                gui.time_ms = crate::gui_seq::time_ms(frame);
                 rustyac_render::gpulog::begin_capture(name);
                 graphics.begin_scene();
                 graphics.set_screen_space_mode();
@@ -271,7 +272,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                 crate::gui_compare::frame_done(args, name, "port", frame, &capture.text, capture.draws, width, height, &pixels, &mut outcome)?;
                 outcome.state.push_str(&format!("frame {frame}\n"));
                 for event in &gui.fired[fired..] {
-                    outcome.state.push_str(&format!("event click \"{}\" {} {}\n", gui.controls[event.control].name, event.local_x, event.local_y));
+                    outcome.state.push_str(&format!("event click \"{}\" {} {}\n", crate::gui_port2::name(&gui, event.control), event.local_x, event.local_y));
                 }
                 fired = gui.fired.len();
                 for event in &gui.widget_events[widget_events..] {
@@ -291,7 +292,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
             Op::ClearText => blits.clear(),
             other => {
                 let mut painter = renderer.painter(&mut graphics);
-                op(&mut gui, &mut painter, screen, &mut objects, other)?;
+                op(&mut gui, &mut painter, &mut hud, screen, &mut objects, other)?;
             }
         }
     }

@@ -94,6 +94,160 @@ pub struct Sequence {
 
 const DT: f32 = 1.0 / 60.0;
 
+/// The game's clock (`ksGetTime`, milliseconds) at a frame: both sides are told the same.
+pub fn time_ms(frame: usize) -> f64 {
+    frame as f64 * (1000.0 / 60.0)
+}
+
+fn click(o: &mut Vec<Op>, x: i32, y: i32) {
+    o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+}
+
+/// The second set of widgets: scroll bars (plain and with pictures), text boxes, text inputs
+/// with the keyboard, a pop-over, connected labels, a tab bar and the message banner.
+fn widgets_b() -> Vec<Op> {
+    use Op::*;
+    let mut o = vec![
+        New("Form", "WIDGETS_B", true), // 1
+        Call(1, "title", 0.0, "More widgets"),
+        Size(1, 900.0, 420.0),
+        AddScreen(1, true),
+        Visible(1, true),
+        Pos(1, 40.0, 220.0),
+        New("ScrollBar", "SB_PLAIN", false), // 2
+        Add(1, 2),
+        Pos(2, 20.0, 50.0),
+        Size(2, 18.0, 200.0),
+        New("ScrollBar", "SB_DRESSED", true), // 3
+        Add(1, 3),
+        Pos(3, 60.0, 50.0),
+        Size(3, 18.0, 200.0),
+        Call(3, "sbItems", 40.0, ""),
+        Call(3, "sbPerPage", 8.0, ""),
+        Call(3, "repeat", 0.1, ""),
+        New("TextBox", "TB", false), // 4
+        Add(1, 4),
+        Pos(4, 100.0, 50.0),
+        Size(4, 260.0, 40.0),
+        Call(4, "formatted", 0.0, "First line\nSecond line, a longer one\n\nFourth, after an empty one"),
+        New("TextBox", "TB_MONO", true), // 5
+        Add(1, 5),
+        Pos(5, 100.0, 180.0),
+        Size(5, 260.0, 30.0),
+        Call(5, "formatted", 0.0, "mono 0123\nsecond\n"),
+        New("TextInput", "TI", false), // 6
+        Add(1, 6),
+        Pos(6, 380.0, 50.0),
+        Size(6, 220.0, 26.0),
+        Text(6, "typed"),
+        New("TextInput", "TI2", false), // 7
+        Add(1, 7),
+        Pos(7, 380.0, 90.0),
+        Size(7, 220.0, 26.0),
+        New("PopOver", "POP", false), // 8
+        Add(7, 8),
+        Call(8, "popTitle", 0.0, "Camber"),
+        Call(8, "popText", 0.0, "The angle of the wheel seen from the front.\nNegative leans the top inwards.\nA third line"),
+        Call(8, "drawPopOver", 1.0, ""),
+        New("ConnectedLabel", "Speed", true), // 9
+        Add(1, 9),
+        Pos(9, 380.0, 280.0),
+        Size(9, 200.0, 20.0),
+        Call(9, "connect", 123.4567, ""),
+        Call(9, "suffix", 0.0, " km/h"),
+        New("ConnectedLabel", "Gear", false), // 10
+        Add(1, 10),
+        Pos(10, 380.0, 310.0),
+        Size(10, 200.0, 20.0),
+        Call(10, "connect", 4.0, ""),
+        New("Form", "TAB_FORM", false), // 11
+        Size(11, 1000.0, 120.0),
+        AddScreen(11, true),
+        Visible(11, true),
+        Pos(11, 0.0, 0.0),
+        New("TabBar", "TABS", false), // 12
+        Add(11, 12),
+        Call(12, "addTab", 0.0, "Generic"),
+        Call(12, "addTab", 0.0, "Tyres"),
+        Call(12, "addTab", 0.0, "Electronics"),
+        Call(12, "addTab", 0.0, "Fuel"),
+        Call(12, "addTab", 0.0, "Aero"),
+        New("DefaultSystemMessage", "", false), // 13
+        AddScreen(13, false),
+        Pos(13, 0.0, 130.0),
+        Size(13, 1280.0, 80.0),
+        Call(13, "message", 0.0, "Traction Control|Level 3 of 8"),
+        Frame(DT),
+        Frame(DT),
+    ];
+    // the plain scroll bar: minus and plus (minus at 0 wraps to the end), the wheel
+    for _ in 0..3 {
+        click(&mut o, 68, 278);
+    }
+    for _ in 0..4 {
+        click(&mut o, 68, 460);
+    }
+    o.extend([Wheel(68, 350, 120.0), Frame(DT), Wheel(68, 350, -120.0), Wheel(68, 350, -120.0), Frame(DT)]);
+    // the one with pictures: plus held for a second and a half (it repeats), then its thumb dragged
+    o.extend([MouseMove(108, 460), MouseDown(108, 460)]);
+    frames(&mut o, 90);
+    o.extend([MouseUp(108, 460), Frame(DT)]);
+    o.extend([MouseMove(108, 330), MouseDown(108, 330), Frame(DT)]);
+    for y in [336, 342, 350, 370, 330, 300] {
+        o.extend([MouseMove(108, y), Frame(DT)]);
+    }
+    o.extend([MouseUp(108, 300), Frame(DT), Call(3, "sbValue", 39.0, ""), Frame(DT), Call(3, "sbValue", 2.0, ""), Frame(DT)]);
+    // the text input: a click gives it the keyboard; letters, a backspace, more than it holds, Enter
+    click(&mut o, 430, 280);
+    for (i, c) in "Ab1 x".chars().enumerate() {
+        o.push(KeyChar(c as u32));
+        if i % 2 == 0 {
+            o.push(Frame(DT));
+        }
+    }
+    o.extend([KeyChar(8), KeyChar(8), Frame(DT), KeyDown(0x25), KeyChar(0x1b), KeyChar(0xe9), Frame(DT)]);
+    // the caret: half a second on, half a second off
+    frames(&mut o, 62);
+    for _ in 0..70 {
+        o.push(KeyChar('w' as u32));
+    }
+    o.extend([Frame(DT), KeyChar(13), Frame(DT), KeyChar('z' as u32), Frame(DT)]);
+    // the second input takes the keyboard, a click elsewhere takes it away
+    click(&mut o, 430, 320);
+    o.extend([KeyChar('q' as u32), Frame(DT)]);
+    click(&mut o, 700, 600);
+    o.extend([KeyChar('q' as u32), Frame(DT)]);
+    // the text box grows with its text; one line too long ends the text
+    o.extend([Call(4, "formatted", 0.0, "one\ntwo\nthree\nfour\nfive\nsix\nseven"), Frame(DT), Frame(DT), Call(8, "popText", 0.0, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14"), Frame(DT), Frame(DT), Frame(DT)]);
+    // the connected labels: rounding at a tie, precisions, a negative number
+    for (value, precision) in [(0.0625, 3.0), (2.5, 0.0), (-0.125, 2.0), (1234567.9, 1.0), (0.0004, 3.0)] {
+        o.extend([Call(9, "connect", value, ""), Call(9, "precision", precision, ""), Call(10, "connect", value * 100.0, ""), Frame(DT)]);
+    }
+    o.extend([Call(9, "labelText", 0.0, "Top speed"), Call(9, "suffix", 0.0, ""), Frame(DT)]);
+    // the tab bar: the mouse over a tab, a click on the second and the third (they slide), the arrows round
+    o.extend([MouseMove(600, 15), Frame(DT)]);
+    click(&mut o, 600, 15);
+    frames(&mut o, 8);
+    click(&mut o, 800, 15);
+    frames(&mut o, 8);
+    for _ in 0..4 {
+        click(&mut o, 950, 15);
+    }
+    frames(&mut o, 10);
+    for _ in 0..2 {
+        click(&mut o, 100, 15);
+    }
+    frames(&mut o, 10);
+    o.extend([Call(12, "orderTabs", 0.0, ""), Frame(DT), Frame(DT)]);
+    click(&mut o, 100, 15);
+    frames(&mut o, 10);
+    // the banner: another message, a long one, an empty description
+    o.extend([Call(13, "message", 0.0, "ABS|Off"), Frame(DT), Call(13, "message", 0.0, "A title that is long enough to be wider than the line under it|and a description"), Frame(DT), Call(13, "message", 0.0, "Alone|"), Frame(DT)]);
+    // all of the first form at another size
+    o.extend([Call(1, "scaleByMult", 1.25, ""), Frame(DT), Frame(DT)]);
+    o
+}
+
 fn frames(ops: &mut Vec<Op>, count: usize) {
     for _ in 0..count {
         ops.push(Op::Frame(DT));
@@ -394,6 +548,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "base" => plain(base()),
         "text" => plain(text()),
         "widgets_a" => plain(widgets_a()),
+        "widgets_b" => plain(widgets_b()),
         // forms as a first session finds them (no layout file)
         "forms" => {
             let mut ops = forms();
@@ -412,7 +567,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
             forms_more(&mut ops);
             Sequence { ops, acos: None, allow_overlapping: true }
         }
-        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a)")),
+        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b)")),
     })
 }
 
