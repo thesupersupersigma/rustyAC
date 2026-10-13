@@ -1,4 +1,4 @@
-# The pit crew, AC's replays (Task 28c)
+# The pit crew, AC's replays, the ghost car, comparative telemetry (Task 28c)
 
 ## Resume here
 
@@ -11,9 +11,16 @@ State at v0.28.2:
     the ring, the file of format 16 and 15, the playback's state machine, `getPhysicsState`), wired into
     rustyac.exe (`crates/rustyac-game/src/ac_replay.rs`, `desktop.rs`): recording, autosave, save, the
     replay of a running session, `--replay <file.acreplay>`.
-- **Not done**: the ghost car and comparative telemetry (Part 3: only read out, in
-  `re/scratch/task28c/ghost.md`), the camera's move out of the car during a stop, the replay's GUI.
-  See "Not done".
+  - AC's ghost car: `crates/rustyac-physics/src/replay/ghost.rs` (`GhostCarRecorder`: sampling, the
+    best-lap rule, the `.ghost` file, the playback), `crates/rustyac-render/src/ghost_car.rs`
+    (`GhostCar`: the see-through car), wired into rustyac.exe (`crates/rustyac-game/src/ghost.rs`,
+    `desktop.rs`, `render/ac.rs`): race.ini's `[GHOST_CAR]`, `--ghost`.
+  - AC's comparative telemetry: `crates/rustyac-physics/src/replay/telemetry.rs`
+    (`ComparativeTelemetryRecorder`: the samples, their 3999 slots, the lap rule, the `.tc` file),
+    wired into rustyac.exe (`crates/rustyac-game/src/telemetry.rs`, `desktop.rs`). It records and
+    saves; rustyAC has no display for it yet.
+- **Not done**: the camera's move out of the car during a stop, the replay's GUI and the
+  telemetry's display (the UI phase), the telemetry's list of opponents. See "Not done".
 - **To check the port again** (all read-only on the game; nothing is written outside this repo):
   - `sh re/scratch/task28c/render_crew.sh`: the crew in the game's renderer and the port's (5
     sequences, about 6 minutes). Needs a copy of the render oracle at
@@ -29,6 +36,12 @@ State at v0.28.2:
     renderer / sound code and the port's.
   - `sh re/scratch/task28c/determinism.sh`: rustyac.exe with 0, 1 and 8 workers, and against the
     v0.28.1 exe (`re/scratch/task28c/tgt_v0281/`, built from the tag).
+  - `sh re/scratch/task28c/ghost.sh`: six sessions with the game's ghost recorder beside the
+    port's (`bin/car_oracle_ghost.exe`); `sh re/scratch/task28c/render_ghost.sh`: the ghost's
+    picture in the game's renderer and the port's (it needs the `.ghost` file the first leaves in
+    `re/scratch/task28c/root_g/`).
+  - `sh re/scratch/task28c/telemetry.sh`: six sessions with the game's telemetry recorder beside
+    the port's (`bin/car_oracle_tel.exe`).
   - `python re/scratch/task28c/tables.py` prints the tables below from the logs.
   - `cargo test --release -p rustyac-physics --test replays`: made-up drives recorded, saved,
     loaded and played, without the game.
@@ -65,6 +78,24 @@ rustyAC writes replays into its own `replay` folder (beside rustyac.exe), never 
 `Documents\Assetto Corsa`. Its `.ryin` recordings (the inputs of a drive, simulated again) stay
 as they are: they are what the proofs run on. A `.acreplay` is a film of the cars; a `.ryin` is
 the drive itself.
+
+**The ghost car.** AC's ghost is a see-through copy of your car that drives your best lap again
+while you drive, so you see where you gain and lose. The game takes the car's place and its four
+wheels about every 129 ms once you have crossed the line; a lap becomes the ghost when it is
+valid, has no cut and is strictly faster than the ghost so far. The ghost fades with distance:
+right on top of you it is invisible, from 50 m on it is at its full (quarter) strength. rustyAC
+does the same, with the same file format (`.ghost`), so a ghost of the game can be played and
+the other way round. The file is written when the program ends, into rustyAC's own `GhostCar`
+folder, never the game's.
+
+![The ghost car ahead on Magione's straight, in rustyac.exe](replays_ghost.png)
+
+**Comparative telemetry.** The game also keeps, for the lap you are on, your last lap and your
+best lap, what gear you were in, how fast you went and how far the two pedals were down at 3999
+places round the track, so that an app can draw your lap over your best one. The best lap is
+written to a `.tc` file when the game ends and read at the next start. rustyAC now records and
+saves the same, in the same file format, into its own `ctelemetry` folder. It has no screen to
+show it on yet: that comes with the apps.
 
 **What "proven" means here.** The game's own functions (in `acs.exe`, loaded into a test
 program) and the port's were given the same inputs, and everything they produced was compared
@@ -137,6 +168,10 @@ The game's quirks are kept, because a file must be read as the game reads it:
   the frame count; the lap jumps are 60 frames past / before the lap's first frame.
 - An unrecorded slot's additional info is 0, 255, 0, 0 (the struct's constructor).
 - A nation code of more than three letters is read as `AC`.
+- The cuts stay as the last replay left them. After you watched a replay of a running session
+  and went back to driving, a later save (also the autosave) holds as many frames as were
+  recorded when you entered that replay, counted from the oldest frame: `startReplayMode` set
+  the cut-out there and nothing resets it.
 
 Three things differ from the game on purpose:
 
@@ -147,6 +182,50 @@ Three things differ from the game on purpose:
 - **What the game leaves undefined**: six bytes of a frame that the game never writes (they hold
   whatever its heap held), the three bytes after a lap's flag (its stack) and three bytes a wing
   are 0 in rustyAC's files.
+
+### The ghost car
+
+| Game | Port |
+|---|---|
+| `GhostCarRecorder::GhostCarRecorder` 0x140106b90, the new-session handler 0x140107980 | `rustyac_physics::replay::ghost::GhostCarRecorder::new`, `on_new_session` |
+| `onStepComplete` 0x1401093f0 (a frame of the body, the four wheels and the four hubs when 129 ms have passed) | `on_step_complete` |
+| `onLapCompleted` 0x1401091e0 (the best-lap rule) | `on_lap_completed` |
+| `getGhostCarFileName` 0x140107d20, `saveGhostCarRecording` 0x1401097b0, `loadGhostCarRecording` 0x140108c10 | `file_name`, `save_bytes`, `load_bytes` |
+| `loadGhostCarRecorderCustomParameters` 0x140108880 (race.ini `LOAD`, `FILE`, `SECONDS_ADVANTAGE`), `RaceManager::initGhostcar` 0x14013a210 (`RECORDING`, `PLAYING`) | `rustyac_game::ghost::GhostRig`, `desktop.rs` `ghost_rig` |
+| `shouldDisplayGhostCar` 0x140109ca0, `setCurrentFrame` 0x140109c30, `getBodyMatrix` 0x140107cd0, `getTyreMatrix` 0x140108590, `getSuspensionMatrix` 0x140108520, `lerp` 0x140108600 | `should_display_ghost_car`, `set_current_frame`, `get_body_matrix`, `get_tyre_matrix`, `get_suspension_matrix`, `dxmath::mat44f_lerp` |
+| `GhostCar::GhostCar` 0x140104fe0, `loadGhostCarParameters` 0x140105fd0, `init3D` 0x140105520, `assignGhostMaterial` 0x1401053a0 | `rustyac_render::ghost_car::GhostCar::new` |
+| `GhostCar::update` 0x140106380, `getGhostCarOpacity` 0x140105480 | `GhostCar::update`, `ghost::ghost_car_opacity` |
+
+Kept as the game has them: frames are 129 to 132 ms apart but played as if exactly 129 ms apart;
+the last interval of a ghost lap is never shown; the save always writes version 4; a new session
+forgets that an unsaved ghost needs saving; the colour of `ghost_car.ini` is divided by 255 and
+then made a unit vector (150,150,255 becomes 0.45, 0.45, 0.77); `MAX_MINUTES_RECORDING`,
+`TIME_DIFF_ENABLED` and `PLAYER_NAME_ENABLED` of that file are never read.
+
+Different from the game on purpose: the folder (`GhostCar\<track>\` beside rustyac.exe instead
+of `Documents\Assetto Corsa\GhostCar\<track>\`), and the on-screen message "New Ghost Car
+best" is a line on the console.
+
+### Comparative telemetry
+
+| Game | Port |
+|---|---|
+| `ComparativeTelemetryRecorder::ComparativeTelemetryRecorder` 0x1400731b0 | `rustyac_physics::replay::telemetry::ComparativeTelemetryRecorder::new` |
+| the closure 0x140073820 on `Car::evOnStepComplete` (a sample of every step into a queue) | `on_step_complete` |
+| `update` 0x140076850 (the queue's samples into their slots) | `update` |
+| the closure 0x1400736e0 on `Car::evOnLapCompleted` (the tail of the lap, last and best) | `on_lap_completed` |
+| `saveBest` 0x140075d50 (the best lap laid out anew at even steps, the file), `loadBest` 0x140074d30 | `file_name`, `save_bytes`, `load_bytes` |
+
+Kept as the game has them: the place on the track in a sample is one physics step old; samples
+are dropped while the car's lap count is 0, so the first lap of a race (from the grid) counts as
+a lap with nothing recorded in it, and can become the "best"; any finished lap counts, valid or
+not; the slots a lap did not reach are filled with the next slot's old content; saving changes
+the best lap in memory too (it is laid out anew); gears are the game's raw numbers (0 reverse,
+1 neutral, 2 first).
+
+Different from the game on purpose: the folder (`ctelemetry\player\` beside rustyac.exe
+instead of `Documents\Assetto Corsa\ctelemetry\player\`); and rustyac.exe files each sample
+right after its physics step, where the game files them once a picture (see "Open questions").
 
 ## How each part was proven
 
@@ -201,6 +280,20 @@ Three things differ from the game on purpose:
 7. **Your files.** `car_oracle replay-file <file> --track <t>`: the game's loader and the
    port's on the same file, read in place; then playback as in 5. The cars are stand-ins (no
    car's data is read: wings as the file counts them, a tank of 100 l, no limiter file).
+7b. **The ghost car.** `car_oracle multi --ghost`: the game's own `GhostCarRecorder` (laid out by
+   hand, its handlers hung on the game car's step and lap events) beside the port's, in whole
+   sessions of the game's physics: what the code branches on after every step and lap, the
+   saved file, the load (and a file of another car refused), then the playback's matrices for
+   lap times every 23 ms across the lap and past its end. `render_oracle compare --ghost <file>`:
+   the game's own `GhostCar` (constructor and `update`) on a recorder filled from a `.ghost`
+   file, beside the port's, over a recorded lap: D3D11 command log and pixels. rustyac.exe: a
+   practice with the AI driver recording a ghost, the drive replayed with 0, 1 and 8 workers.
+7c. **Comparative telemetry.** `car_oracle multi --telemetry`: the game's own recorder (laid out
+   by hand, its queue made by the runtime's own constructor) with the game's two closures hung
+   on the game car's step and lap events and the game's `update` run after every sixth step,
+   beside the port's with the same car values: the counters after every call, the three laps'
+   slots after every lap, the saved file, the load, another driver's file refused.
+   rustyac.exe: the drive of 7b replayed with 0, 1 and 8 workers.
 8. **Determinism.** rustyac.exe headless: three new sessions run live with the replay
    recording, recorded as `.ryin`, replayed with 0, 1 and 8 workers; state hashes and the saved
    replay files compared. The state dumps of those and of older recordings against the exe
@@ -228,11 +321,118 @@ the program goes on; no picture was taken there (see "Not done": the camera).
 
 ### 2. Replays: 14 sessions
 
-DETERMINISM_TABLES
+Every session ran in the game's own physics with the game's replay code beside the port's. "Ring slots" is what was compared after the recording: every slot of every car's ring (272-byte frame, additional info, wings).
 
-### 6. Tests and builds
+| Session | Cars | Frames recorded (laps) | Recording | The three saved files (bytes) | Playback: car states compared | Loose object matrices | Verdict |
+|---|---|---|---|---|---|---|---|
+| A race of 3 laps, 6 AI drivers (E30), Magione; the referee (Task 28) | 6 | 11200 (18) | IDENTICAL (95586 ring slots) | 19401274, 19399546, 9724474: IDENTICAL | 10554, 0 differ | 0 | IDENTICAL |
+| A race of 4 laps, 4 AI drivers, two pit stops (Task 28b); ring of 5000 frames (it goes round 2.7 times) | 4 | 13500 (15) | IDENTICAL (20000 ring slots) | 5781719, 5780567, 2901719: IDENTICAL | 7036, 0 differ | 0 | IDENTICAL |
+| Four cars into the barrier at Spa (damage); 15 ms a frame | 4 | 940 (0) | IDENTICAL (95588 ring slots) | 1214899, 1213683, 643379: IDENTICAL | 7036, 0 differ | 10554 | IDENTICAL |
+| An AI race of 6 F2004 at Spa (6 loose objects); 15 ms a frame; ring of 900 frames | 6 | 4000 (0) | IDENTICAL (5400 ring slots) | 1710602, 1708778, 889802: IDENTICAL | 10554, 0 differ | 10554 | IDENTICAL |
+| Practice, qualifying and a race of 2 laps, 4 AI drivers; 60 ms a frame; ring of 3000 | 4 | 7500 (8) | IDENTICAL (12000 ring slots) | 3469103, 3467951, 1741103: IDENTICAL | 7036, 0 differ | 0 | IDENTICAL |
+| The player's repair stop (a damaged car), 2 cars; 120 ms a frame | 2 | 1050 (0) | IDENTICAL (95588 ring slots) | 609228, 608652, 306252: IDENTICAL | 3518, 0 differ | 0 | IDENTICAL |
+| Four different cars at Spa (F2004, E30, a 4WD car, a live-axle car) | 4 | 2500 (0) | IDENTICAL (95588 ring slots) | 3120428, 3119256, 1655428: IDENTICAL | 7036, 0 differ | 10554 | IDENTICAL |
+| 12 AI drivers at Spa; ring of 400 frames | 12 | 2000 (0) | IDENTICAL (4800 ring slots) | 1490754, 1487106, 761154: IDENTICAL | 21108, 0 differ | 10554 | IDENTICAL |
+| The player's pit stop with a wing change (F2004, 7 wings); 15 ms a frame | 2 | 6000 (0) | IDENTICAL (95588 ring slots) | 3576234, 3575642, 1800234: IDENTICAL | 3518, 0 differ | 0 | IDENTICAL |
+| One AI driver at Spa; 90 ms a frame | 1 | 1400 (1) | IDENTICAL (95588 ring slots) | 532173, 531869, 319373: IDENTICAL | 1759, 0 differ | 10554 | IDENTICAL |
+| A race with cuts and penalties, 3 cars | 3 | 10000 (6) | IDENTICAL (95586 ring slots) | 8680722, 8679858, 4360722: IDENTICAL | 5277, 0 differ | 0 | IDENTICAL |
+| A race with a mandatory pit window, 3 cars; ring of 7000 frames | 3 | 13500 (11) | IDENTICAL (21000 ring slots) | 6077062, 6076198, 3053062: IDENTICAL | 5277, 0 differ | 0 | IDENTICAL |
+| A pit stop, three different cars (488 GT3, E30, R8); 15 ms a frame; ring of 1500 | 3 | 6000 (0) | IDENTICAL (4500 ring slots) | 1314327, 1313455, 660327: IDENTICAL | 5277, 0 differ | 0 | IDENTICAL |
+| A car into the back of a standing one at Spa (damage); 15 ms a frame | 2 | 600 (0) | IDENTICAL (95588 ring slots) | 410636, 410028, 228236: IDENTICAL | 3518, 0 differ | 10554 | IDENTICAL |
 
-- `cargo test --release --workspace --locked`: 284 passed, 0 failed (4 new: `tests/replays.rs`;
+In all: 80190 frames recorded, 98504 car states and 63324 object matrices compared in playback.
+
+The three files of a session are: as an autosave writes it (no cut), after the replay was
+entered (cut 0 to the last frame), cut from 25% to 75%. Each was then loaded by the game's
+`ReplayManager::load` and by the port's and played: 242 frames for the first and the third, 1275
+for the second (play, slow motion 1/4 and 1/8, fast forward x2 and x3, rewind x2 and x3, pause,
+frame by frame, positions, lap jumps, the cuts moved, stop), with every car's whole state and
+every loose object's matrix compared after each frame.
+
+### 3. Replay frames in the renderer and the sound
+
+| # | What | Frames, calls | Command log (game against port) | Pixels |
+|---|---|---|---|---|
+| 1 | spa, three F2004 of an AI race, a replay's playback from far: the replay entered, playing, slow motion from frame 90 | 119; 1,158,361 calls | IDENTICAL in all 119 frames | IDENTICAL in all 119 frames |
+| 2 | spa, the same playback, chase camera on car 1: fast forward (frames 190 to 270 of the playback), then rewind | 129; 1,172,132 calls | IDENTICAL in all 129 frames | IDENTICAL in all 129 frames |
+| 3 | magione, E30 in the pit lane (the pit stop session), on board: paused, frame by frame, then play | 79; 423,736 calls | IDENTICAL in all 79 frames | IDENTICAL in all 79 frames |
+
+The sound of the same playback (the FMOD call logs of the game's sound code, twice, and the port's):
+
+| What | Frames | Lines of FMOD calls | The game twice | Game against port | Verdict |
+|---|---|---|---|---|---|
+| spa, F2004, 500 frames of the playback (play, slow motion, fast forward, rewind), chase camera | 500 | 110,701 | identical | identical | ok |
+| spa, three F2004, 300 frames of the playback, trackside camera | 300 | 237,950 | identical | identical | ok (2 run(s) repeated: FMOD crashed) |
+
+### 4. rustyac.exe: 0, 1 and 8 workers, and against v0.28.1
+
+Three new sessions, headless, an AI driver in the player's car, with the replay recording: a practice of 30 minutes in which the driver pits twice (E30, Magione, 3 cars), a race of 4 laps with a pit window (the same cars), a race of one lap of 6 F2004 at Spa. Each was run live, recorded as `.ryin`, and replayed with 0, 1 and 8 workers; every run saved its replay.
+
+| Session | State hash with 0, 1, 8 workers | The replay file: live run and the three replays | State dump: v0.28.1, this version with the replay off, with it on |
+|---|---|---|---|
+| Practice, two pit stops | `889a180a3ae928bf` three times | four identical files (10441924 bytes, 18000 frames) | the same three times (`a21587be85a4a9ba`) |
+| Race with a pit window | `bebb73dd826046ac` three times | four identical files (9923220 bytes, 17108 frames) | the same three times (`09953746b56c9a6d`) |
+| Race at Spa, 6 cars | `b4c7538a6fa7289c` three times | four identical files (14880480 bytes, 9323 frames) | the same three times (`4238c5617a2e49ce`) |
+
+The exe with the ghost car and the telemetry in it (the last commits) gives the same three state dumps again, and the same dumps as v0.28.1 on five older recordings.
+
+Older recordings (every fifth of `oracle/game/*.ryin` and four of Tasks 28 and 28b) replayed by the v0.28.1 exe and by this one: 36 of 36 state dumps the same.
+
+The live run and the replays of its `.ryin` give the same replay file: a `.ryin` replay of a session with the replay recording is exact, and the recording does not depend on the number of workers.
+
+### 5. Your files
+
+See "Your AC replays" below: 10 of 12 files load in the game's loader and the port's and play the same (57,512 car states and 26,208 object matrices compared in all); 2 crash the game's own loader.
+
+### 5b. The ghost car
+
+The recorder, in the game's physics with the game's recorder beside the port's:
+
+| Session | Steps compared | Laps, new ghosts | The `.ghost` file (game = port) | Playback matrices | Verdict |
+|---|---|---|---|---|---|
+| Race, Magione, 3 E30 | 112,000 | 3 laps, 2 ghosts (1:30.636, 702 frames) | 404,413 bytes | 36,135 | IDENTICAL |
+| Race with pit stops, Magione, 4 E30 | 135,000 | 3 laps, 3 ghosts (1:30.878, 704 frames) | 405,565 bytes | 36,243 | IDENTICAL |
+| Race with cut laps, Magione | 100,000 | no lap kept, no ghost, no file (on both sides) | none | none | IDENTICAL |
+| Practice, qualifying and race, Magione, 4 E30 | 150,000 | 2 laps, 2 ghosts (1:30.177, 699 frames) | 402,685 bytes | 35,982 | IDENTICAL |
+| Spa, F2004 alone | 84,000 | 2 laps, 2 ghosts (1:46.775, 828 frames) | 476,991 bytes | 42,633 | IDENTICAL |
+| Timed race, Magione, F2004 and 3 E30 | 112,000 | 1 lap, 1 ghost (1:12.722, 555 frames) | 319,747 bytes | 28,557 | IDENTICAL |
+
+In all: 693,000 steps, 5 files byte for byte, 179,550 playback matrices, 0 different.
+
+The picture (Magione, E30, the ghost of the first session over a recorded lap):
+
+| # | Sequence | Frames, calls | Command log | Pixels |
+|---|---|---|---|---|
+| 1 | the ghost ahead in a slow corner, chase camera | 119; 756,644 calls | IDENTICAL | IDENTICAL |
+| 2 | the ghost ahead, cockpit camera | 119; 661,505 calls | IDENTICAL | IDENTICAL |
+| 3 | the ghost beside the car and falling behind, chase camera | 119; 711,644 calls | IDENTICAL | IDENTICAL |
+| 4 | the ghost's lap runs out and the ghost goes | 119; 661,764 calls | IDENTICAL | IDENTICAL |
+
+rustyac.exe (a practice at Magione, the AI driver in the E30, 152,286 steps): two laps became
+the ghost (1:42.070, then 1:30.123, 698 frames, a file of 402,103 bytes). The drive replayed with
+0, 1 and 8 workers wrote the same file each time (4 files, one hash), and the state hash
+(`3df829ac56993ead`) is the same with the ghost and without it. A second start with `--ghost
+play` loaded the file and showed the ghost (the picture above).
+
+### 6. Comparative telemetry
+
+| Session | Samples (dropped on the lap out) | Laps, new bests | The `.tc` file (game = port) | Load | Verdict |
+|---|---|---|---|---|---|
+| Race, Magione, 3 E30 | 112,000 (34,104) | 3 laps, 2 bests (1:30.636) | 80,041 bytes | the same, another driver's refused | IDENTICAL |
+| Race with pit stops, Magione, 4 E30 | 135,000 (43,644) | 3 laps, 3 bests (1:30.878) | 80,041 bytes | the same | IDENTICAL |
+| Race with cut laps, Magione | 100,000 (99,996) | no lap, no file (on both sides) | none | none | IDENTICAL |
+| Practice, qualifying and race, Magione, 4 E30 | 150,000 (78,198) | 2 laps, 2 bests (1:30.177) | 80,041 bytes | the same | IDENTICAL |
+| Spa, F2004 alone | 84,000 (37,188) | 2 laps, 2 bests (1:46.775) | 80,043 bytes | the same | IDENTICAL |
+| Timed race, Magione, F2004 and 3 E30 | 112,000 (26,100) | 1 lap, 1 best (1:12.722; the race's first lap: nothing recorded in it, on both sides) | 80,047 bytes | the same | IDENTICAL |
+
+In all: 693,000 samples, the 3 x 3999 slots compared after each of 11 laps and at the end, 5
+files byte for byte. rustyac.exe: the drive of section 5 replayed with 0, 1 and 8 workers
+wrote the same `.tc` file three times (80,031 bytes, best 1:30.123).
+
+### 7. Tests and builds
+
+- `cargo test --release --workspace --locked`: 286 passed, 0 failed (6 new in `tests/replays.rs`:
+  made-up drives recorded, saved, loaded and played, the ghost's and the telemetry's recorders;
   2 new unit tests of the 16-bit floats).
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`: clean; the same for
   `wasm32-unknown-unknown` (`rustyac-web`) and `wasm32-wasip1` (math, ode, content, physics, game).
@@ -302,6 +502,30 @@ damage zones, the tyres' dirt, the fuel, the lap times, the wings. What a frame 
 not there in a replay (tyre temperatures, the forces on the tyres): the game's apps show their
 resting values then, and so does rustyAC's HUD.
 
+## How to use the ghost car
+
+- `rustyac.exe --car <car> --track <track> --ghost both`: your best valid lap of the run is kept
+  and written to `GhostCar\<track>\GHOST_CAR_<driver>_<car>[_<layout>].ghost` beside rustyac.exe
+  when the program ends; at the next start it is loaded and drives with you from the moment you
+  cross the line. `--ghost record` only keeps and writes, `--ghost play` only loads and shows,
+  `--ghost off` neither.
+- Without `--ghost`, race.ini's `[GHOST_CAR]` section decides, as in the game (`RECORDING`,
+  `PLAYING`, `LOAD`, `FILE`, `SECONDS_ADVANTAGE`); with `--no-race-ini` there is no ghost.
+- `--ghost-file <file>` plays a given file, for instance one of the game's from
+  `Documents\Assetto Corsa\GhostCar\<track>\` (read only). It must be of the same car, track
+  and layout, as in the game; otherwise the folder's own file is tried.
+- `--ghost-advantage <seconds>` puts the ghost that far ahead; `--ghost-dir <folder>` moves the
+  folder.
+- As in the game: the player's car only, never on a server, hidden in a replay; a lap with a
+  cut never becomes the ghost.
+
+## Comparative telemetry in rustyac.exe
+
+In a window, offline, rustyac.exe records it without being asked, as the game does, and writes
+`ctelemetry\player\<driver>_<track>_<layout>_<car>.tc` beside rustyac.exe when the program
+ends, if a lap was faster than the file's. `--telemetry-dir <folder>` moves the folder (and
+turns the recording on in a headless run), `--no-telemetry` turns it off. Nothing shows it yet.
+
 ## Your AC replays
 
 All twelve files of `Documents\Assetto Corsa\replay\temp` were read where they are (nothing was
@@ -309,7 +533,20 @@ copied or changed; the folder holds the same 12 files). All are format version 1
 version 15. Each has a block of Custom Shaders Patch after the game's own data, which neither
 the game's loader nor the port reads.
 
-REAL_FILES_TABLE
+| File (the day and time of its name) | Session | What it holds | The game's loader and the port's | Verdict |
+|---|---|---|---|---|
+| 061026-124707 | R | version 16, 29760965 bytes, 24 cars (lotus_exos_125_s1), 3982 frames, 12 loose objects, spa | loaded by both; playback 728 frames: 17472 car states and 8736 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 061026-173950 | R | | FAILED: the game's code crashed: exception 0xc0000005 at 0x7ff7098385bb | the game's own loader crashes |
+| 061026-174127 | Q | version 16, 24198923 bytes, 24 cars (ks_ferrari_f2004, ks_ferrari_sf70h), 3218 frames, 12 loose objects, spa | loaded by both; playback 728 frames: 17472 car states and 8736 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 061026-175153 | Q | | FAILED: the game's code crashed: exception 0xc0000005 at 0x7ff7098385bb | the game's own loader crashes |
+| 061026-180726 | R | version 16, 30160228 bytes, 24 cars (ks_ferrari_f2004, ks_ferrari_sf70h), 3982 frames, 12 loose objects, spa | loaded by both; playback 728 frames: 17472 car states and 8736 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-192202 | O | version 16, 894893 bytes, 1 cars (rss_formula_hybrid_2020), 2479 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-192904 | O | version 16, 5418878 bytes, 1 cars (rss_formula_hybrid_2020), 14040 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-193517 | O | version 16, 4754102 bytes, 1 cars (rss_formula_hybrid_2020), 12395 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-193639 | O | version 16, 1095703 bytes, 1 cars (rss_formula_hybrid_2020), 2695 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-193837 | O | version 16, 1556365 bytes, 1 cars (rss_formula_hybrid_2020), 3885 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-194032 | O | version 16, 1493222 bytes, 1 cars (rss_formula_hybrid_2020), 3802 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
+| 121026-195113 | O | version 16, 3669601 bytes, 1 cars (rss_formula_hybrid_2020), 9437 frames, 0 loose objects, monaco_2017 | loaded by both; playback 728 frames: 728 car states and 0 object matrices compared, 0 and 0 differ | IDENTICAL |
 
 Two files make the game's own loader crash. Their leaderboard table at the end holds snapshots
 with fewer entries than the file has cars; the game's `save` writes each snapshot as long as it
@@ -326,12 +563,17 @@ only moved when the file counts as many as rustyAC finds on the track; your Spa 
 
 ## Not done
 
-- **The ghost car and comparative telemetry** (Part 3: `GhostCarRecorder`, `GhostCar`,
-  `ComparativeTelemetryRecorder`). Read out in full in `re/scratch/task28c/ghost.md` (layouts,
-  the 129 ms sampling, when a lap becomes the ghost, the `.ghost` and `.tc` files byte by byte,
-  the playback's frame and blend, the ghost's opacity by distance); nothing of it is ported or
-  wired. A follow-up starts from that brief; the matrix blend the ghost uses (`lerp`
-  0x140108600) is in `rustyac_physics::dxmath` already.
+- **Of comparative telemetry**: its display (the game's app that draws the laps: the UI
+  phase) and the list of other drivers' laps (`getCTOpponents` 0x1400741a0, `loadCTOpponent`
+  0x140075730: read out in `re/scratch/task28c/ghost.md` B7, not ported; they only feed that
+  app). The game's constructor and its `RaceManager::getLapCount` were stood in for by hand in
+  the oracle (the car's own lap count).
+- **Of the ghost car**: the on-screen message and the time difference / driver name the game's
+  apps show beside it (the UI phase); a ghost file of the game itself (none exists on this PC,
+  the `GhostCar` folder of `Documents\Assetto Corsa` is not there), so version 3 files are
+  ported from the listing only; the frames rustyac.exe records were not compared with the
+  game's for the same drive (the recorder was, with the game's car; rustyac.exe hands it the
+  same car state the picture gets).
 - **The camera's move out of the car during a pit stop.** The game does it in the crew's code:
   `ACCameraManager::setMode(eOnBoardFree)`, `CameraOnBoardFree::forceThetaPhi(0.1, 0.1, 5)` and
   `lockCamera`, and back to the old view at the stop's end. rustyAC has no free on-board camera
@@ -356,8 +598,9 @@ only moved when the file counts as many as rustyAC finds on the track; your Spa 
   (26 MB and 24 cars give 3982 frames, which is what your Spa files hold).
 - **Version 15 files against the game.** None exists on this PC. `convertReplayFormat` is
   ported from the listing and tested on a made-up frame only.
-- **Online.** The game keeps its physics running during a replay online; rustyac.exe does that
-  too (it does not pause), but no live server run was made with a replay.
+- **Online.** The game keeps its physics running during a replay online, and goes on
+  recording into the ring it plays from. rustyac.exe keeps the physics running too but does not
+  record while a replay shows; no live server run was made with a replay.
 - **The browser.** The replay code builds for it; the browser preview has no replay keys yet.
 
 ## Open questions
@@ -385,3 +628,19 @@ only moved when the file counts as many as rustyAC finds on the track; your Spa 
    records its lighting's angle, which moves with the time of day.
 10. **In a replay the game's quirk of the first frame is kept** (`getNormalizedPosition` is 1 at
     the very start). The status line shows it as frame 0.
+11. **Ghost cars live in `GhostCar\` beside rustyac.exe**, not in `Documents\Assetto Corsa`
+    (rule: never write there). To share ghosts with the game, copy the files by hand or use
+    `--ghost-file` / `--ghost-dir`.
+12. **`--ghost play` and `--ghost both` set `LOAD=1`.** In the game a ghost of an earlier run is
+    only loaded when the launcher writes `LOAD=1`; an option that shows nothing would be odd.
+13. **The ghost's driver name** is the player's name of race.ini (`[CAR_0] DRIVER_NAME`), else
+    `Player`. It is part of the file's name, as in the game.
+14. **A `.ryin` recording played again has a ghost only with `--ghost`**: it must not depend on
+    race.ini.
+15. **Telemetry samples are filed after every physics step**, not once a picture as in the
+    game. In the game the result depends a little on the frame rate (a sample that waits across
+    the finish line lands in the new lap); in rustyAC the same drive always gives the same file.
+    The game's own behaviour at one fixed pace (every sixth step) is what the oracle proves.
+16. **Telemetry is recorded by default in a window, not in headless runs** (they are the
+    proofs) unless `--telemetry-dir` is given. The file is small (80 kB) and only written when
+    a lap was the best.
