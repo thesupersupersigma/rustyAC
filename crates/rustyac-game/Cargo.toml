@@ -24,6 +24,9 @@ rustyac-math = { path = "../rustyac-math" }
 # kn5 models: the track and the car of the debug view
 rustyac-content = { path = "../rustyac-content" }
 rustyac-net = { path = "../rustyac-net" }
+# AC's widget library, HUD objects and menus (portable; the window draws them with
+# rustyac-render, the browser preview with its own painter)
+rustyac-gui = { path = "../rustyac-gui" }
 # Encodes the screenshot (`--screenshot`) as a PNG. Small and well known; nothing else uses it.
 png = "0.17"
 
@@ -47,6 +50,7 @@ features = [
     "Win32_System_Memory",
     "Win32_System_Console",
     "Win32_System_Power",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Performance",
     "Win32_System_Diagnostics_ToolHelp",
@@ -65,8 +69,6 @@ features = [
 rustyac-audio = { path = "../rustyac-audio" }
 # AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
 rustyac-render = { path = "../rustyac-render" }
-# AC's widget library and HUD objects (portable; the window draws them with rustyac-render)
-rustyac-gui = { path = "../rustyac-gui" }
 # `--join wss://...`: TLS to a gateway behind an HTTPS address (a Cloudflare Tunnel). rustls
 # with the ring provider and Mozilla's root certificates compiled in; nothing of the
 # system's TLS is used.

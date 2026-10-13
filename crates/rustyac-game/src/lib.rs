@@ -39,6 +39,8 @@ pub mod input_file;
 pub mod join;
 pub mod online;
 #[cfg(windows)]
+pub mod mouse_hider;
+#[cfg(windows)]
 pub mod physics_thread;
 pub mod referee;
 #[cfg(windows)]

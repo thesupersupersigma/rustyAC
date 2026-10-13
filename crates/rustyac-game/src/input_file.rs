@@ -452,6 +452,9 @@ impl PitHeader {
                 presets_count: presets.parse().map_err(|_| wrong())?,
                 auto_app_on_pitlane: auto == "1",
                 visibility_max_time: u32::from_str_radix(visibility, 16).map(f32::from_bits).map_err(|_| wrong())?,
+                // (a recording says where the menu's cursor starts in a key of its own,
+                // `pit_cursor`, since v0.30; the ones before had it on the presets' row)
+                cursor_start: -1,
             },
             values: (values != "-").then(|| values.to_string()),
             presets_ini: None,
@@ -770,6 +773,7 @@ impl SimSetup {
             // (only a session with the pit stop has the key: older files read as before)
             if let Some(pit) = &referee.pit {
                 put("pit_stop", pit.to_text());
+                put("pit_cursor", pit.settings.cursor_start.to_string());
                 if let Some(text) = &pit.presets_ini {
                     put("pit_presets", text.bytes().map(|byte| format!("{byte:02x}")).collect::<String>());
                 }
@@ -914,6 +918,7 @@ impl SimSetup {
                 }
                 "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
                 "pit_stop" => setup.referee.as_mut().ok_or("pit_stop before referee")?.pit = Some(PitHeader::parse(value)?),
+                "pit_cursor" => setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()).ok_or("pit_cursor before pit_stop")?.settings.cursor_start = value.parse().map_err(|e| format!("pit_cursor: {e}"))?,
                 "pit_presets" => {
                     let bytes: Option<Vec<u8>> = (0..value.len() / 2).map(|i| u8::from_str_radix(value.get(2 * i..2 * i + 2)?, 16).ok()).collect();
                     let text = bytes.and_then(|bytes| String::from_utf8(bytes).ok()).ok_or("pit_presets: hex text expected")?;

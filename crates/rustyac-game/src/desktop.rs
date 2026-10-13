@@ -32,15 +32,12 @@ use rustyac_game::focus::{Focus, FocusCommand};
 use rustyac_game::view::CarView;
 use rustyac_game::window::{Event, MouseAction, Window};
 
-/// The game's default keys of the commands "Hide Show Apps", "Cycle Virtual Desktop", "Driver
-/// Names", "Show Damage" and "Hide Damage" (`CommandManager::CommandManager` 0x1400e8b70), and
-/// rustyAC's own key for its own display.
-const KEY_HIDE_APPS: i32 = 0x48;
-const KEY_CYCLE_DESKTOP: i32 = 0x55;
-const KEY_DRIVER_NAMES: i32 = 0x4c;
-const KEY_SHOW_DAMAGE: i32 = 0x4a;
-const KEY_HIDE_DAMAGE: i32 = 0x51;
+/// rustyAC's own keys for its own displays, on keys the game does not use: F10 its panels and
+/// numbers, F12 its frame-rate counter (the game's key handler has an empty case for F12).
 const KEY_DEBUG_HUD: i32 = 0x79;
+const KEY_FPS_COUNTER: i32 = 0x7b;
+/// The game's fixed keys: F8 the screenshot, and with Ctrl the command "Mouse Force Hide".
+const KEY_SCREENSHOT: i32 = 0x77;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED};
 
@@ -712,6 +709,20 @@ fn leave_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
     println!("REPLAY: back to the session");
 }
 
+/// `ScreenCapturer::getPath` 0x140162be0: the name of the file, with the local time as the game
+/// writes it (no leading zeros, the year counted from 1900). The game writes JPEG
+/// (`system/cfg/assetto_corsa.ini [SCREENSHOT] FORMAT=JPG`); rustyAC writes PNG.
+fn screenshot_name(car: &str, track: Option<&str>) -> String {
+    // SAFETY: a plain call.
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let mut name = format!("Screenshot_{car}_");
+    if let Some(track) = track {
+        name.push_str(track);
+        name.push('_');
+    }
+    format!("{name}{}-{}-{}-{}-{}-{}.png", t.wDay, t.wMonth, t.wYear as i32 - 1900, t.wHour, t.wMinute, t.wSecond)
+}
+
 /// `ReplayManager::startReplayMode`: the replay of the session so far, from its first frame.
 /// Offline the physics stands still meanwhile (`Sim::onReplayModeChanged`).
 fn enter_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
@@ -1281,6 +1292,12 @@ fn run_window(options: &Options) -> Result<(), String> {
     script.sort_by(|a, b| a.0.total_cmp(&b.0));
     let started = Instant::now();
     let mut last = Instant::now();
+    // MouseHider (Sim::Sim 0x14019457b)
+    let mut mouse_hider = rustyac_game::mouse_hider::MouseHider::new(
+        rustyac_content::install::ac_root().and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/mouse_hider.ini")).ok()).as_ref(),
+        bindings.input_method == "KEYBOARD",
+        window.handle,
+    );
     let (mut frames, mut fps, mut fps_frames, mut fps_since) = (0u64, 0.0f32, 0u32, Instant::now());
     // Ctrl+F / --show-fps: the frame-rate counter; the frame times of the running half second
     let (mut fps_counter, mut frame_ms, mut frame_max_ms, mut running_max) = (options.show_fps, 0.0f32, 0.0f32, Duration::ZERO);
@@ -1301,10 +1318,17 @@ fn run_window(options: &Options) -> Result<(), String> {
                 // ksgui::GUI's listeners of the mouse and the keyboard
                 Event::Mouse { x, y, action } => {
                     if let Some(gui) = renderer.gui() {
+                        let now_ms = started.elapsed().as_secs_f64() * 1000.0;
                         match action {
-                            MouseAction::Move => gui.mouse_move(x, y),
+                            MouseAction::Move => {
+                                mouse_hider.on_mouse_move(&mut gui.gui, now_ms);
+                                gui.mouse_move(x, y);
+                            }
                             MouseAction::Down(button) => gui.mouse_down(x, y, button),
-                            MouseAction::Up(button) => gui.mouse_up(x, y, button),
+                            MouseAction::Up(button) => {
+                                mouse_hider.on_mouse_up(&mut gui.gui, now_ms);
+                                gui.mouse_up(x, y, button);
+                            }
                             MouseAction::Wheel(delta) => gui.mouse_wheel(x, y, delta as f32 / 120.0),
                         }
                     }
@@ -1353,6 +1377,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                         if let Some(gui) = renderer.gui() {
                             gui.esc_key(moving && !in_ac_replay);
                         }
+                        // (MouseHider::forceMouseHide(false): the menu needs the cursor)
+                        if !(moving && !in_ac_replay) {
+                            mouse_hider.force_mouse_hide(false);
+                        }
                     } else if let (true, Some(rig)) = (in_ac_replay && !(ctrl && [bindings.key_previous_car, bindings.key_player_car, bindings.key_next_car].contains(&key) && !replay_keys.contains(&key)), &rig) {
                         // Task 28c: a replay of recorded frames shows: its keys
                         if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
@@ -1392,22 +1420,46 @@ fn run_window(options: &Options) -> Result<(), String> {
                             FocusCommand::Next
                         };
                         focus.command(command, &world, &car_names);
-                    } else if let (true, Some(gui)) = (ctrl && !shared.paused.load(Ordering::Relaxed) && [KEY_HIDE_APPS, KEY_CYCLE_DESKTOP, KEY_DRIVER_NAMES, KEY_SHOW_DAMAGE, KEY_HIDE_DAMAGE].contains(&key), renderer.gui()) {
+                    } else if let (true, Some(gui)) = (ctrl && key == KEY_SCREENSHOT, renderer.gui()) {
+                        // Sim::onKeyDown, the command "Mouse Force Hide" (Ctrl+F8, a fixed key):
+                        // the cursor hidden for good, or back
+                        if mouse_hider.get_force_mouse_hide() {
+                            mouse_hider.force_mouse_hide(false);
+                            gui.add_message("Mouse Cursor visible", "Press CTRL + F8 to hide cursor");
+                        } else {
+                            mouse_hider.force_mouse_hide(true);
+                            gui.add_message("Mouse Cursor not visible", "Press CTRL + F8 to reset");
+                        }
+                    } else if let (true, Some(gui)) = (!ctrl && !alt && key == KEY_SCREENSHOT, renderer.gui()) {
+                        // F8: ScreenCapturer::takeScreen
+                        gui.take_screen();
+                    } else if let (true, Some(gui)) = (ctrl && key == bindings.key_reset_race && options.ac_replay.is_none() && !in_ac_replay && transport.is_none(), renderer.gui()) {
+                        // Sim::onKeyDown, the command "Reset Race" (Ctrl+O): not in a replay,
+                        // not while a menu shows; RaceManager::restartCurrentSession
+                        if !gui.pause_menu_visible() {
+                            request(event::RESTART_SESSION);
+                        }
+                    } else if let (true, Some(gui)) = (ctrl && !shared.paused.load(Ordering::Relaxed) && [bindings.key_hide_apps, bindings.key_cycle_desktop, bindings.key_driver_names, bindings.key_show_damage, bindings.key_hide_damage].contains(&key), renderer.gui()) {
                         // Sim::onKeyDown 0x14019a940, the commands of the GUI and the HUD (the
-                        // game's default keys; with Ctrl, not while the pause menu shows)
-                        match key {
-                            KEY_HIDE_APPS => gui.hide_show_apps(),
-                            KEY_CYCLE_DESKTOP => println!("GUI: desktop {}", gui.cycle_desktop() + 1),
-                            KEY_DRIVER_NAMES => println!("DRIVER NAMES: {}", if gui.toggle_driver_names() { "ON" } else { "OFF" }),
-                            KEY_SHOW_DAMAGE => gui.show_damage(),
-                            _ => println!("DAMAGE DISPLAYER: {}", if gui.toggle_damage() { "Enabled" } else { "Disabled" }),
+                        // keys of controls.ini; with Ctrl, not while the pause menu shows)
+                        if key == bindings.key_hide_apps {
+                            gui.hide_show_apps();
+                        } else if key == bindings.key_show_damage {
+                            gui.show_damage();
+                        } else if key == bindings.key_driver_names {
+                            println!("DRIVER NAMES: {}", if gui.toggle_driver_names() { "ON" } else { "OFF" });
+                        } else if key == bindings.key_hide_damage {
+                            println!("DAMAGE DISPLAYER: {}", if gui.toggle_damage() { "Enabled" } else { "Disabled" });
+                        } else {
+                            println!("GUI: desktop {}", gui.cycle_desktop() + 1);
                         }
                     } else if !ctrl && !alt && key == KEY_DEBUG_HUD {
                         // F10 (rustyAC's own key): its own panels and numbers
                         debug_hud = !debug_hud;
-                    } else if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
-                        // Ctrl+F or F9: the frame-rate counter (rustyAC's own keys; AC has an
-                        // app for it). F alone is the keyboard's second DRS key, hence F9 too
+                    } else if (ctrl && key == 0x46) || (!ctrl && !alt && key == KEY_FPS_COUNTER) {
+                        // Ctrl+F or F12: the frame-rate counter (rustyAC's own keys; AC has an
+                        // app for it). F alone is the keyboard's second DRS key, hence F12 too
+                        // (F9, which it was until v0.29, is the game's gap display)
                         fps_counter = !fps_counter;
                     } else if ctrl && key == bindings.key_traction_control {
                         request(if shift { event::TC_DN } else { event::TC_UP });
@@ -1475,9 +1527,6 @@ fn run_window(options: &Options) -> Result<(), String> {
                             },
                             0x52 => request(if shift { event::TO_TRACK } else { event::RESET }),
                             0x4e => request(event::REBUILD),
-                            // Task 28: the referee's two buttons (F7 next session, F8 restart)
-                            0x76 => request(event::NEXT_SESSION),
-                            0x77 => request(event::RESTART_SESSION),
                             // Task 28b: the pit menu (the number pad's 4 8 6 2, or Alt with the arrow keys)
                             0x64 => request(event::PIT_LEFT),
                             0x68 => request(event::PIT_UP),
@@ -1496,6 +1545,8 @@ fn run_window(options: &Options) -> Result<(), String> {
         // what the menus asked of the session (the calls their buttons make on Sim)
         let mut shutdown = false;
         if let Some(gui) = renderer.gui() {
+            // MouseHider::update, once a frame
+            mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
             use rustyac_gui::menus::SimAction;
             for action in gui.take_actions() {
                 match action {
@@ -1710,6 +1761,23 @@ fn run_window(options: &Options) -> Result<(), String> {
             }
         }
         renderer.draw_world(&world, focus.index, &shapes[focus.index], &camera, &frame, &info, dt.as_secs_f32());
+        // ScreenCapturer::saveScreen 0x140163360: the picture of the scene, into the folder
+        // `screenshots` beside rustyac.exe (the game writes into Documents\Assetto Corsa\screens)
+        if let Some(shot) = renderer.take_pre_gui_shot() {
+            let folder = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("screenshots"))).unwrap_or_else(|| PathBuf::from("screenshots"));
+            let written = shot.and_then(|(width, height, mut pixels)| {
+                std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+                let path = folder.join(screenshot_name(&car_names[0], options.track.as_deref()));
+                write_png(&path, width, height, &pixels).map(|()| path)
+            });
+            match written {
+                Ok(path) => println!("SCREENSHOT: {}", path.display()),
+                Err(message) => eprintln!("WARNING: screenshot: {message}"),
+            }
+        }
         if let Some(link) = renderer.crew_link() {
             use rustyac_game::render::ac::CrewSound;
             let calls = std::mem::take(&mut link.sound);

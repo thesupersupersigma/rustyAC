@@ -64,7 +64,7 @@ fn menu() -> (QuickMenu, QuickMenuCar) {
         std::path::Path::new("setup.ini"),
         "[PRESSURE_LF]\nNAME=Pressure LF\nMIN=15\nMAX=40\n[PRESSURE_RF]\nNAME=Pressure RF\nMIN=15\nMAX=40\n[PRESSURE_LR]\nNAME=Pressure LR\nMIN=15\nMAX=40\n[PRESSURE_RR]\nNAME=Pressure RR\nMIN=15\nMAX=40\n[WING_1]\nNAME=Rear\nMIN=0\nMAX=10\nPITSTOP=2.5\n[WING_2]\nNAME=No stop\nMIN=0\nMAX=10\n[WING_4]\nNAME=After a gap\nMIN=0\nMAX=10\nPITSTOP=1\n",
     );
-    let settings = QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 };
+    let settings = QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0, cursor_start: 0 };
     (QuickMenu::build(&car, vec!["Soft".into(), "Medium".into(), "Hard".into()], &ini, &settings), car)
 }
 

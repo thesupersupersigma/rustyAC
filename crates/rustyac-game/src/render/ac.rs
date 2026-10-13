@@ -432,6 +432,9 @@ fn splits_of(camera: &DrivingCamera) -> [f32; 4] {
 }
 
 /// The game's picture, drawn by the port of AC's renderer.
+/// A picture read back from the screen: width, height, RGBA (or why it could not be read).
+pub type ScreenShot = Result<(u32, u32, Vec<u8>), String>;
+
 pub struct AcRenderer {
     graphics: Graphics,
     scene: Scene,
@@ -519,6 +522,8 @@ pub struct AcRenderer {
     hud: HudPass,
     /// AC's GUI and HUD (none: only the 2D pass's states are set, as with no form on the screen)
     pub gui: Option<Box<super::gui::GameGui>>,
+    /// the picture `ScreenCapturer` took this frame (the scene before the GUI and the HUD)
+    pub pre_gui_shot: Option<ScreenShot>,
     pub adapter: String,
     pub software: bool,
     /// draw calls of the last frame
@@ -691,7 +696,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1362,7 +1367,10 @@ impl AcRenderer {
         self.draw_calls = self.graphics.stats.dip_calls;
         self.triangles = self.graphics.stats.triangles;
         self.graphics.set_screen_space_mode();
-        // Game::evOnPreGUI
+        // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
+        if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
+            self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
+        }
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
         }

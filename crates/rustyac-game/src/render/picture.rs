@@ -141,6 +141,14 @@ impl Picture {
         }
     }
 
+    /// The picture `ScreenCapturer` took in the last frame, if it took one: width, height, RGBA.
+    pub fn take_pre_gui_shot(&mut self) -> Option<super::ac::ScreenShot> {
+        match self {
+            Picture::Ac(r) => r.pre_gui_shot.take(),
+            Picture::Debug(_) => None,
+        }
+    }
+
     pub fn set_virtual_mirror(&mut self, active: bool) {
         if let Picture::Ac(r) = self {
             r.set_virtual_mirror(active);

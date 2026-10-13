@@ -95,12 +95,16 @@ pub struct QuickMenuSettings {
     pub auto_app_on_pitlane: bool,
     pub presets_count: i32,
     pub visibility_max_time: f32,
+    /// the row the cursor is on before a key wakes the menu: 0 (the fuel), as the game's
+    /// constructor leaves `currentIndex`. Recordings made before v0.30 replay with -1 (the
+    /// presets' row), which is what rustyAC had then.
+    pub cursor_start: i32,
 }
 
 impl Default for QuickMenuSettings {
     /// The constructor's values, which stay when the file is missing.
     fn default() -> QuickMenuSettings {
-        QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: false, presets_count: 3, visibility_max_time: 3.0 }
+        QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: false, presets_count: 3, visibility_max_time: 3.0, cursor_start: 0 }
     }
 }
 
@@ -116,6 +120,7 @@ impl QuickMenuSettings {
             auto_app_on_pitlane: ini.get_int("SETTINGS", "AUTO_APP_ON_PITLANE").unwrap_or(0) != 0,
             presets_count: ini.get_int("SETTINGS", "PRESETS_COUNT").unwrap_or(0),
             visibility_max_time: ini.get_float("SETTINGS", "VISIBILITY_MAX_TIME").unwrap_or(0.0),
+            cursor_start: 0,
         }
     }
 }
@@ -194,7 +199,7 @@ impl QuickMenu {
             fuel_index: 0,
             // (the constructor leaves 0: a menu that came up by itself on the pit lane has its
             // cursor on the fuel; only a key that wakes the menu puts it on the presets' row)
-            current_index: 0,
+            current_index: settings.cursor_start,
             current_preset: 0,
             presets_count: settings.presets_count,
             compounds,

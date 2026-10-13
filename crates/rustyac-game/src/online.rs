@@ -242,7 +242,7 @@ pub struct OnlineSession {
 }
 
 /// `system/cfg/pitstop.ini` as the game ships it (a server session reads no file here).
-pub const PIT_SETTINGS: rustyac_physics::race::QuickMenuSettings = rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 };
+pub const PIT_SETTINGS: rustyac_physics::race::QuickMenuSettings = rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0, cursor_start: 0 };
 
 /// Task 28b: the player's pit stop on a server. `PitStop`, the pit menu and the applying job
 /// are the client's own there too (no message asks the server for a stop); what a server

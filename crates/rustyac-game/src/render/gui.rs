@@ -99,6 +99,10 @@ pub struct GameGui {
     pit_stop: PitStopHud,
     /// the menu and the stop as the referee last showed them
     pit: Option<crate::referee::PitGui>,
+    /// `ScreenCapturer`: `readyToCapture`, `frameSkip`, `flashTime`
+    shot_ready: bool,
+    shot_frame_skip: i32,
+    screen_flash: f32,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -175,7 +179,7 @@ impl GameGui {
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -315,6 +319,17 @@ impl GameGui {
     /// `Game::renderHUD` 0x140242e30 over the HUD objects, in the order `Sim::Sim` made them.
     pub fn render_hud(&mut self, graphics: &mut Graphics, dt: f32) {
         let mut painter = self.renderer.painter(graphics);
+        // ScreenCapturer::renderHUD 0x1401631a0: the white flash of a screenshot, a second long
+        if self.screen_flash > 0.0 {
+            use rustyac_gui::painter::{Painter, BLEND_ALPHA, DEPTH_OFF, GRAPHICS_GL};
+            painter.set_depth_mode(DEPTH_OFF);
+            painter.set_blend_mode(BLEND_ALPHA);
+            painter.gl_color4f(GRAPHICS_GL, 3.0, 3.0, 3.0, self.screen_flash);
+            let (width, height) = painter.screen();
+            painter.gl_quad(GRAPHICS_GL, 0.0, 0.0, width as f32, height as f32, false);
+            self.screen_flash -= dt;
+            painter.set_depth_mode(0);
+        }
         let (gui, input) = (&mut self.gui, &self.input);
         self.message.render_hud(gui, &mut painter, dt, input);
         // QuickMenuPitstop::renderHUD 0x1400b1230 (the menu's coming and going is the
@@ -388,6 +403,32 @@ impl GameGui {
 
     pub fn key_char(&mut self, key: u32) {
         self.gui.key_char(key);
+    }
+
+    // ----- ScreenCapturer -----
+
+    /// `ScreenCapturer::takeScreen` 0x140163470 (F8): a picture is asked for, unless the flash
+    /// of the last one still shows.
+    pub fn take_screen(&mut self) {
+        if self.screen_flash <= 0.0 {
+            self.shot_ready = true;
+        }
+    }
+
+    /// The handler `ScreenCapturer` hangs on `Game::evOnPreGUI` (0x140162b60): the third frame
+    /// after the key is the picture (true: this frame, as it is before the GUI and the HUD
+    /// are drawn), and the flash begins.
+    pub fn pre_gui(&mut self) -> bool {
+        if self.shot_ready {
+            self.shot_frame_skip += 1;
+            if self.shot_frame_skip > 2 {
+                self.shot_frame_skip = 0;
+                self.screen_flash = 1.0;
+                self.shot_ready = false;
+                return true;
+            }
+        }
+        false
     }
 
     // ----- the menus -----
@@ -478,7 +519,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -519,6 +560,7 @@ impl GameGui {
                 "car" => self.message.add_car_message(need(1)?[0] as u32, MESSAGE_DEFAULT),
                 "notify" => self.notification.show_notification(&mut self.gui, need(1)?[0]),
                 "esc" => self.esc_key(false),
+                "screenshot" => self.take_screen(),
                 "flag" => {
                     let index = ["blue", "black", "yellow", "penalty", "chequered"].iter().position(|f| *f == rest);
                     self.forced_flags = [false; 5];
@@ -528,7 +570,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot)")),
             }
         }
         Ok(())

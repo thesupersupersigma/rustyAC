@@ -143,6 +143,14 @@ pub struct Bindings {
     pub key_next_lap: i32,
     pub key_previous_lap: i32,
     pub key_start_replay: i32,
+    /// "Reset Race" `[RESET_RACE]` O, and the GUI's commands: `[HIDE_APPS]` H,
+    /// `[CYCLE_DESKTOP]` U, `[DRIVER_NAMES]` L, `[SHOW_DAMAGE]` J, `[HIDE_DAMAGE]` Q (with Ctrl)
+    pub key_reset_race: i32,
+    pub key_hide_apps: i32,
+    pub key_cycle_desktop: i32,
+    pub key_driver_names: i32,
+    pub key_show_damage: i32,
+    pub key_hide_damage: i32,
     /// `[RUSTYAC] COMMAND_MODIFIER`.
     pub command_modifier: CommandModifier,
     /// The keys of the seven cockpit buttons of [`HYBRID_SECTIONS`]: AC's `KEY` of the section
@@ -335,6 +343,12 @@ impl Bindings {
             key_next_lap: if ini.has_section("NEXT_LAP") { ini.get_hex("NEXT_LAP", "KEY") } else { 0x4e },
             key_previous_lap: if ini.has_section("PREVIOUS_LAP") { ini.get_hex("PREVIOUS_LAP", "KEY") } else { 0x50 },
             key_start_replay: if ini.has_section("START_REPLAY") { ini.get_hex("START_REPLAY", "KEY") } else { 0x52 },
+            key_reset_race: if ini.has_section("RESET_RACE") { ini.get_hex("RESET_RACE", "KEY") } else { 0x4f },
+            key_hide_apps: if ini.has_section("HIDE_APPS") { ini.get_hex("HIDE_APPS", "KEY") } else { 0x48 },
+            key_cycle_desktop: if ini.has_section("CYCLE_DESKTOP") { ini.get_hex("CYCLE_DESKTOP", "KEY") } else { 0x55 },
+            key_driver_names: if ini.has_section("DRIVER_NAMES") { ini.get_hex("DRIVER_NAMES", "KEY") } else { 0x4c },
+            key_show_damage: if ini.has_section("SHOW_DAMAGE") { ini.get_hex("SHOW_DAMAGE", "KEY") } else { 0x4a },
+            key_hide_damage: if ini.has_section("HIDE_DAMAGE") { ini.get_hex("HIDE_DAMAGE", "KEY") } else { 0x51 },
             command_modifier: CommandModifier::from_name(ini.get_string("RUSTYAC", "COMMAND_MODIFIER")),
             hybrid_keys: HYBRID_SECTIONS.map(|section| [ini.get_hex(section, "KEY"), ini.get_hex("RUSTYAC_KEYS_2", section)]),
             ini,

@@ -87,7 +87,7 @@ impl Session {
             setup.spawn = if sessions.sessions[0].spawn_set == "START" { "start" } else { "pit" }.to_string();
             setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
             // (OVER_TIME_MULT as the game ships it)
-            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new(), pit: Some(rustyac_game::input_file::PitHeader { window: (0, 0), settings: rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 }, values: None, presets_ini: None }) });
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new(), pit: Some(rustyac_game::input_file::PitHeader { window: (0, 0), settings: rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 , cursor_start: 0}, values: None, presets_ini: None }) });
         }
         Session::build(setup, None)
     }
