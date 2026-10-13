@@ -313,6 +313,22 @@ unsafe extern "system" fn sh_get_folder_path(_window: *mut c_void, _folder: i32,
     0
 }
 
+/// In place of the game's `operator new` and `operator new[]` in the GUI oracle: the C
+/// runtime's `calloc`. The game leaves some of what it allocates unwritten (the last index of
+/// FW1's index buffer, which is one longer than its quads need), and the command log hashes
+/// it; zeroed, the log does not depend on what the heap held before.
+unsafe extern "C" fn operator_new_zeroed(size: usize) -> *mut c_void {
+    static CALLOC: AtomicUsize = AtomicUsize::new(0);
+    let mut calloc = CALLOC.load(Ordering::SeqCst);
+    if calloc == 0 {
+        let module = LoadLibraryW(w!("msvcr120.dll")).expect("msvcr120.dll");
+        calloc = GetProcAddress(module, windows::core::s!("calloc")).expect("calloc") as usize;
+        CALLOC.store(calloc, Ordering::SeqCst);
+    }
+    let calloc: extern "C" fn(usize, usize) -> *mut c_void = std::mem::transmute(calloc);
+    calloc(1, size.max(1))
+}
+
 unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     DefWindowProcW(window, message, wparam, lparam)
 }
@@ -384,11 +400,16 @@ impl Game {
         } else {
             crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll"]);
         }
-        crate::acs::set_extra_overrides(vec![
+        let mut overrides = vec![
             ("d3d11.dll", "D3D11CreateDeviceAndSwapChain", create_device_and_swap_chain as *const () as usize),
             ("d3d11.dll", "D3D11CreateDevice", create_device as *const () as usize),
             ("shell32.dll", "SHGetFolderPathW", sh_get_folder_path as *const () as usize),
-        ]);
+        ];
+        if gui {
+            overrides.push(("msvcr120.dll", "??2@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
+            overrides.push(("msvcr120.dll", "??_U@YAPEAX_K@Z", operator_new_zeroed as *const () as usize));
+        }
+        crate::acs::set_extra_overrides(overrides);
         let acs = Acs::load(&args.acs)?;
         if args.verbose {
             acs.unbuffer_game_stdout();

@@ -187,6 +187,7 @@ pub enum Menu {
     Replay(Box<crate::replay_interface::ReplayInterface>),
     SetupScreen(Box<crate::setup_screen::SetupScreen>),
     SetupTab(Box<crate::setup_tab::SetupTab>),
+    SetupInfo(Box<crate::setup_info::SetupInformation>),
 }
 
 impl Gui {
@@ -479,6 +480,7 @@ impl Gui {
                 Menu::Replay(_) => self.replay_render(id, dt, painter),
                 Menu::SetupScreen(_) => self.setup_screen_render(id, dt, painter),
                 Menu::SetupTab(_) => self.setup_tab_render(id, dt, painter),
+                Menu::SetupInfo(_) => self.setup_information_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }

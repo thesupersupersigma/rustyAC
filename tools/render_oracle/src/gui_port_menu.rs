@@ -55,6 +55,9 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
         hud.input.end_session_active = end.is_active;
     }
     gui.sim.session_count = s.session_count;
+    if let Some(car) = hud.input.cars.first() {
+        crate::gui_port_setup::BODY.with(|body| *body.borrow_mut() = car.body_matrix);
+    }
     gui.sim.time_to_session_start = hud.input.time_to_session_start;
     gui.sim.has_replay_manager = s.replay_manager;
     if let Some(pits) = hud.more.menus.pits {
@@ -201,6 +204,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             gui.setup.use_mouse_pitstop = true;
             gui.setup_car = Some(Box::new(crate::gui_port_setup::make_car(root, text, number as i32)?));
         }
+        "menu.setupState" => crate::gui_seq_setup::set_car_state(number),
         "menu.lb" => {
             let board = gui.new_leaderboard(painter, number as i32, text == "focus");
             gui.add_root(painter, board);
@@ -405,6 +409,7 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
         rustyac_gui::control::Kind::Menu(menu) => match &**menu {
             rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
             rustyac_gui::menus::Menu::SetupScreen(_) => "SetupScreen",
+            rustyac_gui::menus::Menu::SetupInfo(_) => "SetupInformation",
             rustyac_gui::menus::Menu::SetupTab(tab) => match tab.kind {
                 rustyac_gui::setup_tab::TabKind::Generic => "SetupTab",
                 rustyac_gui::setup_tab::TabKind::Io(_) => "SetupIOManager",

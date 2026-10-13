@@ -147,6 +147,25 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
             wr(h.cars[0], 0xa18, port.turbo_boost_level());
             wr(h.sim, 0x1e4, 1u8);
         }
+        "menu.setupState" => {
+            crate::gui_seq_setup::set_car_state(number);
+            let state = crate::gui_seq_setup::car_state();
+            // CarAvatar::physicsState and physicsInfo.minHeightM
+            let ps = h.cars[0].add(0x268);
+            for w in 0..4 {
+                wr(ps, 0x6dc + w * 4, state.camber_rad[w]);
+                crate::gui_ac_hud3::write_matrix(ps.add(0x44 + w * 0x40), &state.suspension_matrix[w]);
+                let t = ps.add(0x81c + w * 0xc0);
+                wr(t, 0x98, state.tyres[w].dynamic_pressure);
+                wr(t, 0x9c, state.tyres[w].static_pressure);
+                wr(t, 0xa0, state.tyres[w].last_set_imo);
+                wr(t, 0xb0, state.tyres[w].last_grain);
+                wr(t, 0xb4, state.tyres[w].last_blister);
+            }
+            wr(ps, 0xb64, state.caster);
+            wr(ps, 0x79c, state.ride_height);
+            wr(h.cars[0], 0xf30, state.min_height_m);
+        }
         other => return Err(format!("the setup editor has no call {other:?}")),
     }
     Ok(())

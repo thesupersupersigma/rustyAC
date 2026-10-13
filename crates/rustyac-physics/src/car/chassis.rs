@@ -1700,6 +1700,14 @@ impl RollingChassis {
         }
     }
 
+    /// `RaceEngineer::evalRideHeight` @ 0x14027a9d0 (0 the front axle, 1 the rear).
+    pub fn eval_ride_height(&self, axle: usize) -> f32 {
+        match &self.telemetry {
+            Some(writer) => writer.eval_ride_height(self, axle),
+            None => PhysicsPageWriter::new(self, &self.data_path.clone()).map_or(f32::NAN, |writer| writer.eval_ride_height(self, axle)),
+        }
+    }
+
     /// A job of the setup editor (`PhysicsAvatar::executeOnPhysicsThread`), done before a step.
     pub fn apply_setup_job(&mut self, job: &super::setup::SetupJob) {
         use super::setup::SetupJob;
@@ -2126,6 +2134,10 @@ impl RollingChassis {
         // 20: setup values that changed reach the car here
         let mut manager = std::mem::take(&mut self.setup_manager);
         manager.step(self);
+        if manager.wait_time > 0.0 && manager.check_rules {
+            let heights = [0, 1].map(|axle| self.eval_ride_height(axle));
+            manager.step_rules(dt, |axle| heights[axle]);
+        }
         self.setup_manager = manager;
         // 21 to 29: telemetry, lap timing, stability control
         // 24: LapInvalidator::step, the player's car only

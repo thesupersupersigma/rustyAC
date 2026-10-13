@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 pub use rustyac_physics::car::setup::SetupJob;
+use rustyac_physics::vecmath::Mat44f;
 
 /// A `SetupItem` of the car's `SetupManager`, as far as the editor reads it.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -14,6 +15,40 @@ pub struct SetupItemInfo {
     pub name: String,
     pub units: String,
     pub label_multiplier: f32,
+}
+
+/// `TyreThermalState`, what the car's status panel shows of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TyreInfo {
+    pub last_grain: f32,
+    pub last_blister: f32,
+    pub dynamic_pressure: f32,
+    pub static_pressure: f32,
+    /// inner, middle, outer
+    pub last_set_imo: [f32; 3],
+}
+
+/// What the car's status panel reads of `CarAvatar::physicsState` every frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SetupCarState {
+    /// `camberRAD`
+    pub camber_rad: [f32; 4],
+    /// `caster[0]`
+    pub caster: f32,
+    /// `suspensionMatrix`; the world matrix of `CarAvatar::bodyTransform`
+    pub suspension_matrix: [Mat44f; 4],
+    pub body_matrix: Mat44f,
+    /// `tyreThermalStates`
+    pub tyres: [TyreInfo; 4],
+    /// `rideHeight`; `physicsInfo.minHeightM`
+    pub ride_height: [f32; 2],
+    pub min_height_m: f32,
+}
+
+impl Default for SetupCarState {
+    fn default() -> SetupCarState {
+        SetupCarState { camber_rad: [0.0; 4], caster: 0.0, suspension_matrix: [Mat44f { m: [[0.0; 4]; 4] }; 4], body_matrix: Mat44f::IDENTITY, tyres: [TyreInfo::default(); 4], ride_height: [0.0; 2], min_height_m: 0.0 }
+    }
 }
 
 /// The player's car as the setup editor sees it.
@@ -73,6 +108,8 @@ pub trait SetupCar {
     /// `physicsInfo.engineBrakeSettingsCount`, `CarAvatar::currentEngineBrakeSetting`
     fn engine_brake_settings_count(&self) -> i32;
     fn engine_brake_setting(&self) -> i32;
+    /// `CarAvatar::physicsState` as of now
+    fn state(&self) -> SetupCarState;
 }
 
 /// What the editor reads of the session besides the car.

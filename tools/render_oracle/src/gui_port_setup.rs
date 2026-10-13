@@ -14,6 +14,8 @@ use rustyac_physics::car::setup::SetupTarget;
 use rustyac_physics::car::{ChassisEnvironment, RollingChassis};
 
 thread_local! {
+    /// the car's body matrix of the HUD scripts
+    pub static BODY: RefCell<rustyac_physics::vecmath::Mat44f> = const { RefCell::new(rustyac_physics::vecmath::Mat44f::IDENTITY) };
     static CAR: RefCell<Option<Rc<RefCell<RollingChassis>>>> = const { RefCell::new(None) };
 }
 
@@ -150,6 +152,12 @@ impl SetupCar for PortCar {
 
     fn engine_brake_setting(&self) -> i32 {
         self.chassis.borrow().cockpit.engine_brake
+    }
+
+    fn state(&self) -> rustyac_gui::setup_car::SetupCarState {
+        let mut state = crate::gui_seq_setup::car_state();
+        state.body_matrix = BODY.with(|body| *body.borrow());
+        state
     }
 }
 

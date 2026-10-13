@@ -64,7 +64,7 @@ unsafe extern "C" fn get_ping(_this: *mut u8, car: *mut u8) -> i32 {
     input(|i| i.cars.get(index).map(|c| c.ping).unwrap_or(-1))
 }
 
-unsafe fn write_matrix(at: *mut u8, m: &Mat44f) {
+pub unsafe fn write_matrix(at: *mut u8, m: &Mat44f) {
     for (i, row) in m.m.iter().enumerate() {
         for (j, v) in row.iter().enumerate() {
             wr(at, (i * 4 + j) * 4, *v);

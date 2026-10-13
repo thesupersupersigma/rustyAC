@@ -20,6 +20,36 @@ pub fn item_line(name: &str, new_value: f32, attached: bool, value: f32) -> Stri
     format!("item {name} {:08x} {} {:08x}\n", new_value.to_bits(), attached as u8, value.to_bits())
 }
 
+static STATE: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
+
+/// `Hud("menu.setupState", seed, "")`: the car's state from here on (0: all nothing).
+pub fn set_car_state(seed: f32) {
+    *STATE.lock().unwrap() = seed;
+}
+
+/// The car's state the script last asked for: numbers made from its seed.
+pub fn car_state() -> rustyac_gui::setup_car::SetupCarState {
+    use rustyac_gui::setup_car::{SetupCarState, TyreInfo};
+    let seed = *STATE.lock().unwrap();
+    let mut state = SetupCarState::default();
+    if seed == 0.0 {
+        return state;
+    }
+    for w in 0..4 {
+        let k = seed + w as f32;
+        state.camber_rad[w] = -0.031 - 0.0043 * k;
+        // the suspension: turned about the upright axis by a small angle (the toe)
+        let angle = 0.0021 * (k - 2.3) * if w % 2 == 0 { 1.0 } else { -1.0 };
+        let (s, c) = (angle.sin(), angle.cos());
+        state.suspension_matrix[w].m = [[c, 0.0, -s, 0.0], [0.0, 1.0, 0.0, 0.0], [s, 0.0, c, 0.0], [0.7 * k, 0.3, 1.2, 1.0]];
+        state.tyres[w] = TyreInfo { last_grain: 3.7 * k, last_blister: 0.9 * k, dynamic_pressure: 27.4 + k, static_pressure: 21.9 + k * 0.5, last_set_imo: if w == 3 && seed > 5.0 { [-60.0, 0.0, 0.0] } else { [81.3 + k, 79.9 + k, 74.2 - k] } };
+    }
+    state.caster = 4.57 + seed * 0.11;
+    state.ride_height = [0.0417 + seed * 0.001, 0.0652 - seed * 0.002];
+    state.min_height_m = [0.045, 0.0, -1.0, 0.0437][seed as usize % 4];
+    state
+}
+
 /// The car a script's setup editor is for.
 pub fn car_of(ops: &[Op]) -> Option<&'static str> {
     ops.iter().find_map(|op| match op {

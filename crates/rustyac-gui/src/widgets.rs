@@ -105,10 +105,11 @@ pub fn msvc_floor(x: f32) -> f32 {
     if t == i32::MIN {
         return x;
     }
+    // (a whole number is left as it is: a negative zero stays one)
     if t as f32 != x {
         (t - (x.to_bits() >> 31) as i32) as f32
     } else {
-        t as f32
+        x
     }
 }
 

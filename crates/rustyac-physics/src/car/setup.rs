@@ -64,6 +64,8 @@ pub enum SetupTarget {
     WingAngle(usize),
     /// `Car::steerAssist`
     SteerAssist,
+    /// `Car::userFFGain`
+    FfGain,
     /// `drivetrain.diffPowerRamp`, `diffCoastRamp`, `diffPreLoad`
     DiffPowerRamp,
     DiffCoastRamp,
@@ -121,6 +123,7 @@ impl SetupTarget {
                 }
             }
             SteerAssist => chassis.steer_assist,
+            FfGain => chassis.user_ff_gain,
             DiffPowerRamp => drivetrain(chassis).base().diff_power_ramp,
             DiffCoastRamp => drivetrain(chassis).base().diff_coast_ramp,
             DiffPreLoad => drivetrain(chassis).base().diff_pre_load,
@@ -173,6 +176,7 @@ impl SetupTarget {
                 }
             }
             SteerAssist => chassis.steer_assist = value,
+            FfGain => chassis.user_ff_gain = value,
             DiffPowerRamp => drivetrain_mut(chassis).base_mut().diff_power_ramp = value,
             DiffCoastRamp => drivetrain_mut(chassis).base_mut().diff_coast_ramp = value,
             DiffPreLoad => drivetrain_mut(chassis).base_mut().diff_pre_load = value,
@@ -272,7 +276,7 @@ pub struct SetupChange {
 /// Items of systems that are not ported (the four-wheel-drive differentials, the
 /// force-feedback gain) are left out; the items of wings, brakes, drivetrain and engine exist
 /// in a car that has those systems.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SetupManager {
     /// `items`, in the order `SetupManager::initItems` registers them.
     pub items: Vec<SetupItem>,
@@ -280,6 +284,45 @@ pub struct SetupManager {
     pub gear_settings: Vec<f32>,
     /// Every value written so far ("Setup change for Car … Changing: … from … to …").
     pub changes: Vec<SetupChange>,
+    /// `checkRules`: car.ini has `[RULES]`
+    pub check_rules: bool,
+    /// `minimumHeight_m` (-1: none)
+    pub minimum_height_m: f32,
+    /// `maxWaitTime`, `waitTime`: a change of the setup is checked this long after it (s)
+    pub max_wait_time: f32,
+    pub wait_time: f32,
+    /// `setupState`: 0 not known yet, 1 legal, 2 illegal
+    pub setup_state: i32,
+}
+
+impl Default for SetupManager {
+    /// The members as `Car::Car` @ 0x14026bf00 sets them.
+    fn default() -> SetupManager {
+        SetupManager { items: Vec::new(), gear_settings: Vec::new(), changes: Vec::new(), check_rules: false, minimum_height_m: -1.0, max_wait_time: 1.0, wait_time: 1.0, setup_state: 1 }
+    }
+}
+
+/// The unit `SetupManager::initItems` @ 0x140289570 gives an item (what the setup screen
+/// writes after its value).
+fn units_of(name: &str) -> &'static str {
+    let starts = |prefix: &str| name.starts_with(prefix);
+    if name == "ARB_FRONT" || name == "ARB_REAR" {
+        "N/m"
+    } else if starts("ARB_") || starts("SPRING_RATE_") {
+        "N/mm"
+    } else if starts("WING_") || starts("CAMBER_") {
+        "deg"
+    } else if name.ends_with("DIFF_POWER") || name.ends_with("DIFF_COAST") || matches!(name, "AWD_FRONT_TORQUE_DISTRIBUTION" | "BRAKE_POWER_MULT" | "FRONT_BIAS" | "FF_GAIN") {
+        "%"
+    } else if name.ends_with("DIFF_PRELOAD") {
+        "Nm"
+    } else if starts("PRESSURE_") {
+        "psi"
+    } else if starts("PACKER_RANGE_") {
+        "mm"
+    } else {
+        ""
+    }
 }
 
 const WHEELS: [&str; 4] = ["LF", "RF", "LR", "RR"];
@@ -386,7 +429,8 @@ impl SetupManager {
         let mut manager = SetupManager::default();
         let mut add = |name: String, target: SetupTarget, multiplier: f32, label_multiplier: f32| {
             let new_value = target.get(chassis) / multiplier;
-            manager.items.push(SetupItem { name, target, multiplier, new_value, attached: false, label_multiplier, units: String::new() });
+            let units = units_of(&name).to_string();
+            manager.items.push(SetupItem { name, target, multiplier, new_value, attached: false, label_multiplier, units });
         };
         add("ARB_FRONT".into(), ArbK(0), 1.0, 1.0);
         add("ARB_REAR".into(), ArbK(1), 1.0, 1.0);
@@ -467,15 +511,25 @@ impl SetupManager {
         }
         let mut add = |name: String, target: SetupTarget, multiplier: f32, label_multiplier: f32, attached: bool| {
             let new_value = target.get(chassis) / multiplier;
-            manager.items.push(SetupItem { name, target, multiplier, new_value, attached, label_multiplier, units: String::new() });
+            let units = units_of(&name).to_string();
+            manager.items.push(SetupItem { name, target, multiplier, new_value, attached, label_multiplier, units });
         };
         if chassis.drivetrain.is_some() {
             add("FINAL_RATIO".into(), FinalRatio, 1.0, 1.0, true);
             add("ENGINE_LIMITER".into(), EngineLimiter, 0.01, 1.0, false);
             add("COAST_TORQUE_MULT".into(), CoastTorqueMult, 0.01, 1.0, false);
         }
-        // (`FF_GAIN` is registered here)
+        add("FF_GAIN".into(), FfGain, 1.0, 1.0, false);
         add("STEER_ASSIST".into(), SteerAssist, 0.01, 1.0, false);
+        // car.ini [RULES]: the car's least ride height
+        let ini = IniReader::load(&_data_path.join("car.ini"))?;
+        if ini.ready && ini.has_section("RULES") {
+            manager.check_rules = true;
+            let height = ini.get_float("RULES", "MIN_HEIGHT").unwrap_or(0.0);
+            if 0.0 < height {
+                manager.minimum_height_m = height;
+            }
+        }
         Ok(manager)
     }
 
@@ -655,7 +709,21 @@ impl SetupManager {
         }
     }
 
-    /// `SetupManager::getSetupItem` @ 0x14028ca50: the item of that name (its place in
+    /// The end of `SetupManager::step` @ 0x14028d090: a while after the last change the setup
+    /// is checked against the car's rules (`isSetupRespectingRules` @ 0x14028cc10: neither
+    /// ride height under the car's minimum). `ride_height` is `RaceEngineer::evalRideHeight`.
+    pub fn step_rules(&mut self, dt: f32, ride_height: impl Fn(usize) -> f32) {
+        if self.wait_time > 0.0 && self.check_rules {
+            self.wait_time -= dt;
+            self.setup_state = 0;
+            if !(self.wait_time > 0.0) {
+                let respecting = self.minimum_height_m == -1.0 || self.minimum_height_m.is_nan() || !(0..2).any(|axle| !(ride_height(axle) >= self.minimum_height_m));
+                self.setup_state = if respecting { 1 } else { 2 };
+            }
+        }
+    }
+
+    /// `SetupManager::getSetupItem` @ 0x1402891b0: the item of that name (its place in
     /// [`SetupManager::items`]).
     pub fn get_setup_item(&self, name: &str) -> Option<usize> {
         self.items.iter().position(|item| item.name == name)
@@ -675,6 +743,7 @@ impl SetupManager {
             if let SetupTarget::GearSetting(index) = item.target {
                 let current = self.gear_settings[index];
                 if value < current || value > current {
+                    self.wait_time = self.max_wait_time;
                     self.changes.push(SetupChange { name: item.name.clone(), from: current, to: value });
                     self.gear_settings[index] = value;
                     if let Some(drivetrain) = &mut chassis.drivetrain {
@@ -688,6 +757,7 @@ impl SetupManager {
             if !(value < current || value > current) {
                 continue;
             }
+            self.wait_time = self.max_wait_time;
             self.changes.push(SetupChange { name: item.name.clone(), from: current, to: value });
             item.target.set(chassis, value);
             if let SetupTarget::ToeOut(wheel @ (2 | 3)) = item.target {
