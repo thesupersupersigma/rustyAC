@@ -243,3 +243,87 @@ fn the_file_names_and_the_autosave_rules() {
     assert_eq!(manager.auto_save_data.iter().find(|(session, _)| *session == 3).map(|(_, data)| (data.size, data.short_name.as_str())), Some((3, "R")));
     assert_eq!(ReplayManager::new(None, 30.0, Vec::new(), None, 0).max_frames, 18000);
 }
+
+/// The ghost car's recorder without the game: a lap sampled every 129 ms becomes the ghost,
+/// the file goes round, a slower lap and a lap with a cut change nothing.
+#[test]
+fn ghost_lap_file_round_trip() {
+    use rustyac_physics::replay::ghost::{GhostCarFrame, GhostCarRecorder, GhostNames, GhostTransponder};
+    use rustyac_physics::vecmath::Mat44f;
+    let names = GhostNames { driver: "Tester".into(), track: "a_track".into(), config: "short".into(), car: "a_car".into() };
+    let mut r = GhostCarRecorder::new("Tester", true, true);
+    let mut time = 0.0f64;
+    let mut lap = |r: &mut GhostCarRecorder, steps: u32, cuts: i32, count: u32| -> bool {
+        for step in 0..steps {
+            time += 3.0;
+            let t = GhostTransponder { t: step * 3, last_lap: 0, lap_count: count, finish_line_passed: step == 0, was_last_lap_valid: true, cuts };
+            r.on_step_complete(time, &t, &mut || {
+                let mut body = Mat44f::IDENTITY;
+                body.m[3][0] = step as f32;
+                GhostCarFrame { body, wheels: [Mat44f::IDENTITY; 4], suspensions: [Mat44f::IDENTITY; 4] }
+            });
+        }
+        r.on_lap_completed(&GhostTransponder { t: 0, last_lap: steps * 3, lap_count: count + 1, finish_line_passed: true, was_last_lap_valid: true, cuts }, &names)
+    };
+    assert!(lap(&mut r, 20_000, 0, 0));
+    let frames = r.playing_buffer.len();
+    assert!((455..=466).contains(&frames), "{frames} frames of a lap of 60 s");
+    assert!(!lap(&mut r, 21_000, 0, 1), "a slower lap is not the ghost");
+    assert!(!lap(&mut r, 19_000, 1, 2), "a lap with a cut is not the ghost");
+    assert_eq!(r.ghost_car_lap, 60_000);
+    assert_eq!(r.playing_buffer.len(), frames);
+    let bytes = r.save_bytes();
+    assert_eq!(GhostCarRecorder::file_name(&r.names), "a_track/GHOST_CAR_Tester_a_car_short.ghost");
+    let mut loaded = GhostCarRecorder::new("Somebody", false, true);
+    assert!(loaded.load_bytes(&bytes, &names));
+    assert_eq!(loaded.playing_buffer, r.playing_buffer);
+    assert_eq!(loaded.save_bytes(), bytes);
+    let other = GhostNames { car: "another_car".into(), ..names.clone() };
+    assert!(!GhostCarRecorder::new("x", false, true).load_bytes(&bytes, &other));
+    // the playback: hidden until the line was crossed, then a blend of two frames
+    assert!(!loaded.should_display_ghost_car());
+    loaded.line_passed_for_the_first_time = true;
+    assert!(loaded.should_display_ghost_car());
+    loaded.set_lap_time(1000);
+    assert_eq!(loaded.current_frame, 7);
+    let x = loaded.get_body_matrix().unwrap().m[3][0];
+    let (a, b) = (loaded.playing_buffer[7].body.m[3][0], loaded.playing_buffer[8].body.m[3][0]);
+    assert!(a < x && x < b, "{a} {x} {b}");
+}
+
+/// Comparative telemetry without the game: a lap's samples land in their slots, the lap out
+/// is dropped, the best lap's file goes round.
+#[test]
+fn telemetry_lap_file_round_trip() {
+    use rustyac_physics::replay::telemetry::{ComparativeTelemetryRecorder, TelemetryNames, SLOTS};
+    let names = TelemetryNames { driver: "Tester".into(), track: "a_track".into(), car: "a_car".into(), config: String::new() };
+    let mut r = ComparativeTelemetryRecorder::new(names.clone());
+    let lap = |r: &mut ComparativeTelemetryRecorder, lap_count: u32, steps: u32| {
+        for step in 0..steps {
+            let npos = step as f32 / steps as f32;
+            r.on_step_complete(2 + (step / 5000) as i32, npos, 30.0 + npos * 10.0, 1.0 - npos, npos);
+            r.update(lap_count);
+        }
+    };
+    lap(&mut r, 0, 20_000);
+    assert_eq!(r.last_recording_index, 0, "the lap out is dropped");
+    assert!(!r.on_lap_completed(70_000, 0));
+    lap(&mut r, 1, 20_000);
+    assert!(r.last_recording_index as usize > SLOTS - 3);
+    assert!(r.on_lap_completed(60_000, 1));
+    lap(&mut r, 2, 21_000);
+    assert!(!r.on_lap_completed(63_000, 2));
+    assert_eq!((r.best_time, r.last_time), (60_000, 63_000));
+    assert_eq!(r.best[2000].gear, 4);
+    assert!((r.best[2000].speed - (30.0 + 0.5 * 10.0) * 3.6).abs() < 0.1);
+    let bytes = r.save_bytes().unwrap();
+    assert_eq!(bytes.len(), 4 + (4 + 6) + (4 + 7) + (4 + 5) + 4 + 4 + 4 + SLOTS * 20);
+    assert_eq!(ComparativeTelemetryRecorder::file_name(&names), "player/Tester_a_track__a_car.tc");
+    let mut loaded = ComparativeTelemetryRecorder::new(names.clone());
+    assert!(loaded.load_bytes(&bytes));
+    assert_eq!(loaded.best, r.best);
+    assert_eq!(loaded.best_time, 60_000);
+    let mut other = ComparativeTelemetryRecorder::new(TelemetryNames { driver: "Somebody".into(), ..names });
+    assert!(!other.load_bytes(&bytes));
+    assert_eq!(other.best_time, u32::MAX);
+}
