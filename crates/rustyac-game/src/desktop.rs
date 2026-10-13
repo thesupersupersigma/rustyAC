@@ -1324,8 +1324,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                     shown.disconnected = !rig.car_shows(i);
                     *view = shown;
                 }
-                // the loose objects as the scene's frames have them
-                if let Some(first) = world.first_mut() {
+                // the loose objects as the scene's frames have them (a file that counts them
+                // differently than this track does was written with objects a patch added, or
+                // is another track's: then they stay where they are)
+                let same_objects = track.as_ref().is_some_and(|track| track.objects.len() == rig.objects.len());
+                if let (true, Some(first)) = (same_objects, world.first_mut()) {
                     let count = rig.objects.len().min(rustyac_game::view::MOVED_OBJECTS);
                     for (number, matrix) in rig.objects.iter().take(count).enumerate() {
                         first.moved_objects[number] = (number as u16, matrix.m);

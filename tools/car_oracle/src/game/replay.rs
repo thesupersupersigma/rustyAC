@@ -269,6 +269,10 @@ pub struct ReplayProof<'a> {
     layout: String,
     pub recorded: u64,
     pub laps: u64,
+    /// the next playback's car states are kept: by car, the game's rebuilt `CarPhysicsState` of
+    /// every picture frame (for the picture's and the sound's oracles)
+    pub keep_tape: bool,
+    pub tapes: Vec<Vec<u8>>,
 }
 
 /// A hand-made `std::map` head (`_Tree_node` with `_Isnil`): an empty map.
@@ -456,6 +460,8 @@ impl<'a> ReplayProof<'a> {
             max_frames,
             recorded: 0,
             laps: 0,
+            keep_tape: false,
+            tapes: Vec::new(),
         }
     }
 
@@ -967,6 +973,12 @@ impl<'a> ReplayProof<'a> {
                         if let Some(end) = name.iter().position(|c| *c == 0) {
                             name[end..].fill(0);
                         }
+                    }
+                    if self.keep_tape {
+                        if self.tapes.len() <= i {
+                            self.tapes.resize(i + 1, Vec::new());
+                        }
+                        self.tapes[i].extend_from_slice(std::slice::from_raw_parts(avatar.add(AVATAR_STATE), STATE));
                     }
                     let (g, p) = (game.to_game_bytes(), outs[i].to_game_bytes());
                     report.states += 1;

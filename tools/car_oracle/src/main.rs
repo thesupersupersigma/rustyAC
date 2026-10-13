@@ -616,7 +616,7 @@ fn multi(args: &Args) -> Result<(), String> {
     }
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
     if let Some(replay) = &mut replay {
-        replay_proof(replay, scenario.name, &out, &repo)?;
+        replay_proof(replay, scenario.name, &out, &repo, &world.names, &track.display().to_string(), &args.layout)?;
     }
     let recording = world.recording.clone();
     // Task 28: the end of the program for the game's referee: its results, its race_out.json
@@ -754,7 +754,7 @@ fn replay_file(args: &Args) -> Result<(), String> {
 /// Task 28c: the end of a `multi --replay` run: what was recorded is compared, three files
 /// are saved by the game and by the port and compared, each is loaded by both and played
 /// through a script of the transport's functions.
-fn replay_proof(replay: &mut game::replay::ReplayProof, scenario: &str, out: &Path, repo: &Path) -> Result<(), String> {
+fn replay_proof(replay: &mut game::replay::ReplayProof, scenario: &str, out: &Path, repo: &Path, names: &[String], track: &str, layout: &str) -> Result<(), String> {
     use game::replay::Act;
     let verdict = |differences: &[String]| if differences.is_empty() { "IDENTICAL".to_string() } else { format!("DIFFERENT ({})", differences.len()) };
     let mut all_ok = true;
@@ -807,7 +807,32 @@ fn replay_proof(replay: &mut game::replay::ReplayProof, scenario: &str, out: &Pa
         all_ok &= differences.is_empty();
         let _ = std::fs::write(out.join(format!("{name}.game.acreplay")), &game_file);
         let _ = std::fs::write(out.join(format!("{name}.port.acreplay")), &port_file);
+        replay.keep_tape = index == 1;
         let report = unsafe { replay.load_and_play(&format!("oracle_no_documents/Assetto Corsa/replay/{name}"), &port_file, if index == 1 { &long } else { &short }, None)? };
+        if index == 1 {
+            // the game's rebuilt states of that playback as tapes (the format of --audio-tape),
+            // one frame a picture: for the picture's and the sound's oracles
+            for (car, tape) in replay.tapes.iter().enumerate() {
+                let mut bytes = format!("audiotape=1
+scenario={scenario}_replay
+car={}
+frame_hz=60
+step_ms=3
+cars={}
+car_index={car}
+track={track}
+track_layout={layout}
+
+", names.get(car).map_or("", String::as_str), replay.tapes.len()).into_bytes();
+                for (frame, state) in tape.chunks(0xb70).enumerate() {
+                    bytes.push(2);
+                    bytes.extend_from_slice(&(frame as u32 * 50 / 9).to_le_bytes());
+                    bytes.extend_from_slice(state);
+                    bytes.push(0);
+                }
+                let _ = std::fs::write(out.join(format!("{scenario}_replay.car{car}.audiotape")), bytes);
+            }
+        }
         println!("replay | {scenario} | playback of file {index} | {} frames of {} recorded, the cursor ends at {}; {} car states and {} object matrices compared, {} and {} differ | {}", report.frames, report.recorded, report.last_frame, report.states, report.objects, report.bad_states, report.bad_objects, verdict(&report.differences));
         for line in &report.differences {
             println!("    {line}");

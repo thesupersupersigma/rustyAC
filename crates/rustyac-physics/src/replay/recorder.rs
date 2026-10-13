@@ -61,7 +61,7 @@ pub const STATUS_LAP: u32 = 0x800;
 /// `ReplayFrame` (0x110 bytes), as the bytes the game holds and writes into a file. Bytes
 /// 0x00 to 0x13 (`bodyTranslation`, `bodyOrientation`), 0xee, 0xef and 0x10b (`boh`) are
 /// never written by the game's code.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReplayFrame(pub [u8; FRAME_SIZE]);
 
 impl Default for ReplayFrame {
