@@ -50,7 +50,7 @@ pub enum Op {
 
 /// Members a script may write: name, offset in the game's object, kind (f float, b bool, i int,
 /// c four floats).
-pub const FIELDS: [(&str, usize, char); 24] = [
+pub const FIELDS: [(&str, usize, char); 41] = [
     ("backColor", 0x38, 'c'),
     ("borderColor", 0x48, 'c'),
     ("foreColor", 0x58, 'c'),
@@ -75,7 +75,50 @@ pub const FIELDS: [(&str, usize, char); 24] = [
     ("slider.value", 0x1a8, 'f'),
     ("screen.appInteractionEnabled", 0x178, 'b'),
     ("form.devApp", 0x180, 'b'),
+    ("graph.minY", 0x178, 'f'),
+    ("graph.maxY", 0x17c, 'f'),
+    ("graph.maxValues", 0x180, 'i'),
+    ("graph.auto", 0x184, 'b'),
+    ("spinner.homogeneous", 0x178, 'b'),
+    ("spinner.mult", 0x17c, 'f'),
+    ("spinner.min", 0x180, 'i'),
+    ("spinner.max", 0x184, 'i'),
+    ("spinner.step", 0x188, 'i'),
+    ("spinner.popover", 0x1b0, 'b'),
+    ("spinner.underline", 0x1b1, 'b'),
+    ("spinner.central", 0x1b2, 'b'),
+    ("spinner.label", 0x1b3, 'b'),
+    ("spinner.textSize", 0x1d8, 'f'),
+    ("spinner.readOnly", 0x1dc, 'b'),
+    ("cspin.press", 0x178, 'b'),
+    ("cspin.bar", 0x1d0, 'f'),
 ];
+
+/// An item of a list as a script writes it: "name;column;column;…" and a number that picks
+/// its colours (the same on both sides).
+pub fn list_item(text: &str, number: f32) -> (String, Vec<String>, [f32; 4], Vec<[f32; 4]>) {
+    let mut parts = text.split(';');
+    let name = parts.next().unwrap_or("").to_string();
+    let columns: Vec<String> = parts.map(|s| s.to_string()).collect();
+    let code = number as u32;
+    let bit = |n: u32| ((code >> n) & 1) as f32 * 0.8 + 0.1;
+    let back = [bit(0), bit(1), bit(2), 0.5];
+    let fore = (0..columns.len()).map(|i| if !columns.is_empty() && i == code as usize % columns.len() { [1.0, 1.0, 0.0, 1.0] } else { [1.0; 4] }).collect();
+    (name, columns, back, fore)
+}
+
+/// A colour of a graph's series from a script's number.
+pub fn code_color(number: f32) -> [f32; 3] {
+    let code = number as u32;
+    [(code & 1) as f32, ((code >> 1) & 1) as f32, ((code >> 2) & 1) as f32]
+}
+
+/// The values a script fills a series with: "serie:count" and an amplitude.
+pub fn fill_values(text: &str, amplitude: f32) -> (u32, Vec<f32>) {
+    let (serie, count) = text.split_once(':').unwrap_or(("0", "0"));
+    let count: u32 = count.parse().unwrap_or(0);
+    (serie.parse().unwrap_or(0), (0..count).map(|i| (((i * 37) % 100) as f32 / 50.0 - 1.0) * amplitude).collect())
+}
 
 pub fn field(name: &str) -> Result<(usize, char), String> {
     FIELDS.iter().find(|f| f.0 == name).map(|f| (f.1, f.2)).ok_or(format!("no member {name:?} in the oracle's table"))
@@ -101,6 +144,130 @@ pub fn time_ms(frame: usize) -> f64 {
 
 fn click(o: &mut Vec<Op>, x: i32, y: i32) {
     o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+}
+
+/// The third set of widgets: a list box with its rows and scroll bar, a graph, spinners
+/// (plain, with pictures, with items, mirrored) and the two custom spinners.
+fn widgets_c() -> Vec<Op> {
+    use Op::*;
+    let mut o = vec![
+        New("Form", "WIDGETS_C", true), // 1
+        Call(1, "title", 0.0, "Lists, graphs, spinners"),
+        Size(1, 1000.0, 560.0),
+        AddScreen(1, true),
+        Visible(1, true),
+        Pos(1, 20.0, 90.0),
+        New("ListBox", "LIST", false), // 2
+        Add(1, 2),
+        Pos(2, 20.0, 70.0),
+        Size(2, 420.0, 180.0),
+        Child(2, 0), // 3: the title row
+        Child(3, 0), // 4
+        Child(3, 1), // 5
+        Child(3, 2), // 6
+        Text(4, "Pos"),
+        Text(5, "Driver"),
+        Text(6, "Best lap"),
+        New("Graph", "GRAPH", false), // 7
+        Add(1, 7),
+        Pos(7, 480.0, 70.0),
+        Size(7, 300.0, 150.0),
+        Call(7, "addSerie", 1.0, ""),
+        Call(7, "addSerie", 6.0, ""),
+        Call(7, "fill", 0.8, "0:60"),
+        Call(7, "fill", 1.5, "1:150"),
+        Call(7, "axis", 0.5, "h"),
+        Call(7, "axis", 0.25, "v"),
+        New("Spinner", "Camber", false), // 8
+        Add(1, 8),
+        Call(8, "spPos", 480.0, "290"),
+        Size(8, 240.0, 24.0),
+        New("Spinner", "Compound", true), // 9
+        Add(1, 9),
+        Size(9, 260.0, 26.0),
+        Call(9, "spPos", 480.0, "360"),
+        Call(9, "spItem", 0.0, "Soft"),
+        Call(9, "spItem", 0.0, "Medium compound with a long name"),
+        Call(9, "spItem", 0.0, "Hard"),
+        New("SpinnerMirrored", "Toe", true), // 10
+        Add(1, 10),
+        Size(10, 260.0, 26.0),
+        Call(10, "spPos", 480.0, "430"),
+        Call(10, "spUnits", 0.0, "deg"),
+        Set(10, "spinner.mult", Val::F(0.1)),
+        Set(10, "spinner.min", Val::I(-20)),
+        Set(10, "spinner.max", Val::I(20)),
+        Set(10, "spinner.step", Val::I(2)),
+        Call(10, "spValue", 6.0, ""),
+        New("CustomSpinner", "CS_ROUND", false), // 11
+        Add(1, 11),
+        Pos(11, 800.0, 70.0),
+        Size(11, 120.0, 120.0),
+        New("CustomSpinner", "CS_BAR", true), // 12
+        Add(1, 12),
+        Pos(12, 940.0, 70.0),
+        Size(12, 30.0, 160.0),
+        Set(12, "cspin.bar", Val::F(0.4)),
+        Frame(DT),
+        Frame(DT),
+    ];
+    // the list: four items (they fit), then eight more (the scroll bar shows)
+    for (i, item) in ["a;1;Ayrton;1:41.2", "b;2;Gilles;1:41.9", "c;3;Juan Manuel;1:42.0", "d;4;Jim;1:42.4"].into_iter().enumerate() {
+        o.push(Call(2, "addItem", i as f32, item));
+    }
+    o.extend([Frame(DT), Frame(DT)]);
+    click(&mut o, 100, 205);
+    click(&mut o, 100, 205);
+    for (i, item) in ["e;5;Niki;1:42.6", "f;6;Alain;1:42.7", "g;7;Jackie;1:43.0", "h;8;Stirling;1:43.3", "i;9;Alberto;1:43.9", "j;10;Nigel;1:44.0", "k;11;Mika;1:44.4", "l;12;Jochen;1:45.1"].into_iter().enumerate() {
+        o.push(Call(2, "addItem", (i + 4) as f32, item));
+    }
+    o.extend([Frame(DT), Frame(DT)]);
+    click(&mut o, 100, 235);
+    o.extend([Wheel(200, 250, 120.0), Frame(DT), Wheel(200, 250, 120.0), Wheel(200, 250, 120.0), Frame(DT), Wheel(200, 250, -120.0), Frame(DT), Wheel(700, 500, -120.0), Frame(DT)]);
+    click(&mut o, 448, 172);
+    click(&mut o, 448, 328);
+    o.extend([Call(2, "lbSelectName", 0.0, "Jackie"), Frame(DT), Call(2, "lbSelect", 0.0, ""), Frame(DT), Call(2, "lbTop", 0.0, ""), Frame(DT), Call(2, "lbCells", 0.0, ""), Frame(DT), Call(2, "lbCells", 1.0, ""), Call(2, "lbSelect", 11.0, ""), Frame(DT)]);
+    // the graph: the top of its range follows the values, a series is emptied, more values than it keeps
+    o.extend([Set(7, "graph.auto", Val::B(true)), Call(7, "fill", 3.0, "0:30"), Frame(DT), Call(7, "clearSerie", 1.0, ""), Frame(DT), Set(7, "graph.maxValues", Val::I(40)), Call(7, "fill", 0.5, "1:300"), Frame(DT), Set(7, "graph.minY", Val::F(-4.0)), Frame(DT)]);
+    // the plain spinner: plus, minus below the range, the strip, plus held (it repeats after half a second)
+    click(&mut o, 728, 392);
+    click(&mut o, 728, 392);
+    for _ in 0..3 {
+        click(&mut o, 512, 392);
+    }
+    click(&mut o, 620, 406);
+    click(&mut o, 700, 406);
+    o.extend([MouseMove(728, 392), MouseDown(728, 392)]);
+    frames(&mut o, 75);
+    o.extend([MouseUp(728, 392), Frame(DT)]);
+    o.extend([Set(8, "spinner.homogeneous", Val::B(true)), MouseDown(512, 392)]);
+    frames(&mut o, 40);
+    o.extend([MouseUp(512, 392), Frame(DT)]);
+    // the one with pictures and items: through its items, the strip, arrows in place of plus and minus
+    click(&mut o, 747, 463);
+    click(&mut o, 747, 463);
+    click(&mut o, 747, 463);
+    click(&mut o, 513, 463);
+    click(&mut o, 630, 478);
+    o.extend([Call(9, "spArrows", 1.0, ""), Frame(DT), Call(9, "spArrows", 0.0, ""), Call(9, "spValueItem", 0.0, "Hard"), Frame(DT)]);
+    // the mirrored one: a negative value, the strip, no central value, no label, read only
+    click(&mut o, 513, 533);
+    for _ in 0..5 {
+        click(&mut o, 747, 533);
+    }
+    click(&mut o, 540, 548);
+    o.extend([Set(10, "spinner.central", Val::B(false)), Frame(DT), Set(10, "spinner.central", Val::B(true)), Set(10, "spinner.underline", Val::B(false)), Frame(DT), Set(10, "spinner.underline", Val::B(true)), Set(10, "spinner.readOnly", Val::B(true)), Frame(DT)]);
+    click(&mut o, 540, 548);
+    o.extend([Set(10, "spinner.readOnly", Val::B(false)), Set(10, "spinner.label", Val::B(false)), Frame(DT)]);
+    // the help bubble of a spinner: under the mouse on its label, switched by a click on it
+    o.extend([Child(8, 4), Call(13, "popTitle", 0.0, "Camber"), Call(13, "popText", 0.0, "Wheel angle.\nMore negative: more grip in corners."), Call(13, "drawPopOver", 1.0, ""), Set(8, "spinner.popover", Val::B(true)), Call(8, "spLabel", 0.0, "Camber LF"), MouseMove(600, 370), Frame(DT), Frame(DT), MouseMove(600, 300), Frame(DT)]);
+    click(&mut o, 600, 370);
+    o.extend([Frame(DT), Call(13, "drawPopOver", 0.0, "")]);
+    // the custom spinners: a held arm clicks every frame; the bar's place
+    o.extend([MouseMove(830, 220), MouseDown(830, 220), Frame(DT), Frame(DT), Frame(DT), MouseUp(830, 220), Frame(DT), Set(11, "cspin.press", Val::B(false)), MouseDown(930, 220), Frame(DT), MouseUp(930, 220), Set(12, "cspin.bar", Val::F(1.0)), Frame(DT), Set(12, "cspin.bar", Val::F(0.0)), Frame(DT)]);
+    // everything at other sizes, and the rows' font (the GUI's own, so every text changes)
+    o.extend([Call(1, "scaleByMult", 1.25, ""), Frame(DT), Frame(DT), Call(1, "scaleByMult", 0.75, ""), Frame(DT), Call(1, "scaleByMult", 1.0, ""), Call(2, "lbFont", 12.0, ""), Frame(DT), Call(2, "lbClear", 0.0, ""), Frame(DT)]);
+    o
 }
 
 /// The second set of widgets: scroll bars (plain and with pictures), text boxes, text inputs
@@ -549,6 +716,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "text" => plain(text()),
         "widgets_a" => plain(widgets_a()),
         "widgets_b" => plain(widgets_b()),
+        "widgets_c" => plain(widgets_c()),
         // forms as a first session finds them (no layout file)
         "forms" => {
             let mut ops = forms();
@@ -567,7 +735,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
             forms_more(&mut ops);
             Sequence { ops, acos: None, allow_overlapping: true }
         }
-        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b)")),
+        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c)")),
     })
 }
 

@@ -293,6 +293,8 @@ impl Side<'_> {
     }
 
     unsafe fn op(&mut self, op: &Op) -> Result<(), String> {
+        // (our handlers are on every event before anything can fire one)
+        self.hook_all();
         let acs = &self.game.acs;
         match op {
             Op::New(class, name, flag) => {

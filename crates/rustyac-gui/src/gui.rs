@@ -101,6 +101,8 @@ pub struct Gui {
     pub fired: Vec<Clicked>,
     /// every event of a widget that fired, in order
     pub widget_events: Vec<crate::widgets::WidgetEvent>,
+    /// `ksgui::Graph::localGL`: the drawer all graphs share, made by the first that draws
+    pub graph_gl: Option<crate::painter::GlId>,
     /// `ksGetTime()`: milliseconds since the game started, as whoever runs the GUI last set
     /// it (a text input's caret blinks by it)
     pub time_ms: f64,
@@ -137,6 +139,7 @@ impl Gui {
             screen: painter.screen(),
             fired: Vec::new(),
             widget_events: Vec::new(),
+            graph_gl: None,
             time_ms: 0.0,
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
