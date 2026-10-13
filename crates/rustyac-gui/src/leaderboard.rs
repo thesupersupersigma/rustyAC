@@ -703,7 +703,7 @@ impl Gui {
             if end - start < rows as i64 {
                 let s2 = end - rows as i64 + 1;
                 start = size - 1;
-                if s2 <= size - 1 {
+                if s2 < size {
                     start = s2;
                     if s2 < 0 {
                         start = 0;
