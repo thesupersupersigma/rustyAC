@@ -10,7 +10,7 @@ Copyright (c) 2026 thesupersupersigma.
 
 | Part | Paths | License |
 |---|---|---|
-| The game, the car physics, the sound and the renderer | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
+| The game, the car physics, the sound, the renderer and the game's GUI and HUD | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/`<br>`crates/rustyac-gui/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
 | The browser preview: the wasm build, its page and its server image | `crates/rustyac-web/`<br>`web/`<br>`.dockerignore` | `GPL-3.0-or-later` |
 | Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
@@ -49,6 +49,12 @@ everything that links the car physics is GPL.
   the names of the exported functions the game itself imports. Without an Assetto Corsa
   install rustyAC runs silently. FMOD is a trademark of Firelight Technologies Pty Ltd, who
   are not affiliated with rustyAC.
+- **FW1FontWrapper**, copyright (c) 2011 Erik Rufelt, the library Assetto Corsa links for its
+  text (DirectWrite glyphs drawn with Direct3D 11). `crates/rustyac-render/src/fw1.rs` is a
+  Rust translation of the part the game uses, as the game has it (Kunos changed a few things),
+  and carries the library's notice at its top. The library was published on CodePlex under the
+  MIT License (its NuGet package still points at `fw1.codeplex.com/license`; CodePlex itself is
+  offline, and the copies of the source on GitHub carry no license file).
 - The Rust crates from crates.io (`windows`, `png`, and for the browser preview `wgpu`,
   `wasm-bindgen`, `web-sys` and what they depend on) are downloaded by Cargo at build time and
   keep their own licenses. They are not in this repository. The browser preview's build also

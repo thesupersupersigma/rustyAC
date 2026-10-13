@@ -24,6 +24,7 @@ mod gui_port_hud;
 mod gui_port_hud2;
 mod gui_port_hud3;
 mod gui_seq;
+mod text_fallback;
 mod port;
 mod root;
 
@@ -497,6 +498,8 @@ fn run() -> Result<(), String> {
         // the GUI oracle: `gui --gui <sequence>` compares, `gui-run --side ac|port --gui <sequence>` runs one side
         "gui-run" => gui_compare::run_side(&args),
         "gui" => gui_compare::compare(&args),
+        // the text backend without DirectWrite against the game's text
+        "text-fallback" => text_fallback::run(&args),
         "run" => run_side(&args),
         "compare" => compare::compare(&args),
         _ => Err(USAGE.into()),

@@ -19,6 +19,7 @@ pub mod hud_flags;
 pub mod painter;
 pub mod spinner;
 pub mod taskbar;
+pub mod ttf;
 pub mod widgets;
 pub mod widgets2;
 pub mod widgets3;
