@@ -9,11 +9,14 @@
 
 pub mod ai;
 pub mod car;
+pub mod car_physics_state;
 pub mod curve;
 pub mod data;
+pub mod dxmath;
 pub mod engine;
 pub mod msvc_sort;
 pub mod race;
+pub mod replay;
 pub mod session;
 /// The C runtime functions with AC's exact results (shared crate `rustyac-math`).
 pub use rustyac_math as math;

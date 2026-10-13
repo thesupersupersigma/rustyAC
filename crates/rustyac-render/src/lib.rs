@@ -44,7 +44,11 @@ pub mod shader;
 pub mod skid;
 pub mod sky;
 pub mod start_lights;
-pub mod state;
+/// The game's `CarPhysicsState`, which lives with the physics (the replays rebuild it
+/// where there is no Direct3D).
+pub mod state {
+    pub use rustyac_physics::car_physics_state::*;
+}
 pub mod suspension_graphics;
 pub mod texture;
 pub mod time_attack;

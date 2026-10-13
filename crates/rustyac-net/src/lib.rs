@@ -17,7 +17,10 @@
 pub mod car_update;
 pub mod client;
 pub mod datagram;
-pub mod dxmath;
+/// The matrix blend of the game (`lerp` 0x140108600), which lives with the other maths.
+pub mod dxmath {
+    pub use rustyac_physics::dxmath::*;
+}
 pub mod handshake;
 pub mod md5;
 pub mod messages;

@@ -8,14 +8,15 @@
 //! `XMMatrixRotationQuaternion` 0x140107260.
 //!
 //! The same code is in `rustyac-render` (`animator.rs`, where the render oracle proves it
-//! against the game's suspension animation); this crate cannot use the renderer's (it has
-//! to build where there is no Direct3D), so the functions are here a second time.
+//! against the game's suspension animation); the multiplayer and the replays cannot use the
+//! renderer's (they have to build where there is no Direct3D), so the functions are here a
+//! second time.
 
 // Comparisons are spelled the way the original branches so NaN takes the same path.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 use rustyac_math::sqrtf;
-use rustyac_physics::vecmath::Mat44f;
+use crate::vecmath::Mat44f;
 
 /// `DirectX::XMVectorATan` 0x140107670, one lane.
 fn xm_atan(v: f32) -> f32 {

@@ -4,7 +4,7 @@
 //! every frame. The members have the game's names; [`CarPhysicsState::to_game_bytes`] lays
 //! them out as `acs.exe` has them, so that one file can feed the game's own code and the port.
 
-use rustyac_physics::vecmath::Mat44f;
+use crate::vecmath::Mat44f;
 
 /// The size of the game's `CarPhysicsState`.
 pub const GAME_SIZE: usize = 0xb70;
