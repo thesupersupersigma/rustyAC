@@ -169,7 +169,7 @@ pub fn hud_input(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f32
                 "car.unixName" => car.unix_name = text.to_string(),
                 "car.steer" => car.steer = number,
                 "car.steerLock" => car.steer_lock = number,
-                "car.penalty" => car.has_penalty = on,
+                "car.penalty" => car.penalty_time = number as f64,
                 "car.lock" => car.lock_controls_time = number,
                 "car.valid" => car.current_lap_valid = on,
                 "car.pos" => car.leaderboard_position = number as i32,
@@ -183,8 +183,75 @@ pub fn hud_input(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f32
 }
 
 /// (the state of the HUD objects of part two)
-pub fn hud_input2(_input: &mut rustyac_gui::hud::HudInput, _what: &str, _number: f32, _text: &str) -> bool {
+pub fn hud_input2(input: &mut rustyac_gui::hud::HudInput, what: &str, number: f32, text: &str) -> bool {
+    let on = number != 0.0;
+    match what {
+        "focus" => input.focused_car_index = number as i32,
+        "raceOver" => input.race_over = on,
+        "timeLeft" => input.session_time_left = number as f64,
+        "triple" => input.triple_screen = on,
+        "mph" => input.use_mph = on,
+        "cameraMode" => input.camera_mode = number as i32,
+        "ended" => input.end_session_active = on,
+        _ if what.starts_with("car.") => {
+            let Some(car) = text.parse::<usize>().ok().and_then(|i| input.cars.get_mut(i)) else { return false };
+            match what {
+                "car.clearDisabled" => car.min_speed_penalty_clear_disabled = on,
+                "car.pitLaps" => car.pit_penalty_laps = number as i16,
+                "car.fuel" => car.fuel = number,
+                _ => return hud_input3(input, what, number, text),
+            }
+        }
+        _ => return hud_input3(input, what, number, text),
+    }
+    true
+}
+
+pub fn hud_input3(_input: &mut rustyac_gui::hud::HudInput, _what: &str, _number: f32, _text: &str) -> bool {
     false
+}
+
+pub fn flags_line(flag: i32, timer: f32, invalid: f32, valid: bool, x_pos: f32, text_pos: f32) -> String {
+    format!("hud flags flag={flag} timer={:08x} invalid={:08x} valid={} fuelX={:08x} textPos={:08x}\n", timer.to_bits(), invalid.to_bits(), valid as u8, x_pos.to_bits(), text_pos.to_bits())
+}
+
+/// The flags, the three banners, the wrong-way picture and the fuel light.
+fn hud_flags(triple: bool) -> Vec<Op> {
+    use Op::*;
+    let mut o = vec![];
+    if triple {
+        o.push(Hud("triple", 1.0, ""));
+    }
+    o.extend([Hud("create", 2.0, ""), Hud("car.name", 0.0, "Tazio Nuvolari"), Hud("car.fuel", 50.0, "0"), Hud("session", 3.0, ""), Hud("raceText", 0.0, "Race  -  Lap 2/5"), Frame(DT)]);
+    // every flag, one after the other; the yellow one runs out after five seconds
+    o.extend([Hud("setBlueFlag", 0.0, ""), Frame(DT), Hud("setFlag", 4.0, ""), Frame(DT), Frame(3.0), Frame(3.0), Frame(DT), Hud("setFlag", 6.0, ""), Frame(DT), Hud("setFlag", 0.0, ""), Frame(DT)]);
+    o.extend([Hud("setFlag", 4.0, ""), Hud("setBlueFlag", 0.0, ""), Frame(DT), Hud("clearFlag", 0.0, ""), Hud("setBlueFlag", 0.0, ""), Frame(DT)]);
+    // the gates: a replay, the pause menu, the ESC menu, another car in focus, the results
+    for what in ["replay", "pause", "esc", "focus", "ended", "raceOver"] {
+        o.extend([Hud(what, 1.0, "300"), Frame(DT), Hud(what, 0.0, "300"), Frame(DT)]);
+    }
+    // the black flag with its caption, and a yellow one that may not replace it
+    o.extend([Hud("blackFlag", 1.0, "You have been disqualified for not clearing the JumpStart penalty"), Frame(DT), Hud("setFlag", 4.0, ""), Frame(DT), Hud("car.pitLaps", 3.0, "0"), Frame(DT), Hud("blackFlag", 0.0, ""), Frame(DT)]);
+    // the chequered flag: a race that is over, a qualifying out of time
+    o.extend([Hud("raceOver", 1.0, ""), Frame(DT), Frame(DT), Hud("ended", 1.0, ""), Frame(DT), Hud("ended", 0.0, ""), Hud("raceOver", 0.0, ""), Hud("clearFlag", 0.0, ""), Frame(DT)]);
+    o.extend([Hud("session", 2.0, ""), Hud("timeLeft", 1000.0, ""), Frame(DT), Hud("timeLeft", -1.0, ""), Frame(DT), Hud("timeLeft", 5000.0, ""), Hud("clearFlag", 0.0, ""), Frame(DT)]);
+    // the drive-through lines under the penalty flag
+    o.extend([Hud("setFlag", 6.0, ""), Frame(DT), Hud("car.pitLaps", 1.0, "0"), Frame(DT), Hud("pause", 1.0, ""), Frame(DT), Hud("pause", 0.0, ""), Hud("car.pitLaps", 0.0, "0"), Hud("setFlag", 0.0, ""), Frame(DT)]);
+    // a cut: five seconds of banner (not in a race), and a message that it clears
+    o.extend([Hud("message", 0.0, "Under|the banner"), Frame(DT), Hud("car.valid", 0.0, "0"), Frame(DT), Frame(2.0), Hud("session", 3.0, ""), Frame(2.0), Hud("session", 1.0, ""), Frame(2.0), Frame(2.0), Frame(DT), Hud("car.valid", 1.0, "0"), Frame(DT)]);
+    // a penalty in seconds: the long line, the short one, miles
+    o.extend([Hud("car.penalty", 12.9, "0"), Frame(DT), Hud("car.clearDisabled", 1.0, "0"), Frame(DT), Hud("car.clearDisabled", 0.0, "0"), Hud("mph", 1.0, ""), Frame(DT), Hud("mph", 0.0, ""), Hud("pause", 1.0, ""), Frame(DT), Hud("pause", 0.0, ""), Hud("replay", 1.0, ""), Hud("car.valid", 0.0, "0"), Frame(DT), Hud("replay", 0.0, ""), Hud("car.valid", 1.0, "0"), Hud("car.penalty", 0.0, "0"), Frame(DT)]);
+    // locked controls
+    o.extend([Hud("car.lock", 4999.0, "0"), Frame(DT), Hud("car.lock", 20000.0, "0"), Frame(DT), Hud("esc", 1.0, "300"), Frame(DT), Hud("esc", 0.0, "300"), Hud("car.lock", 0.0, "0"), Frame(DT)]);
+    // the wrong way picture, not from the track cameras
+    o.extend([Hud("wrongWay", 1.0, ""), Frame(DT), Hud("cameraMode", 3.0, ""), Frame(DT), Hud("cameraMode", 0.0, ""), Hud("replayActive", 0.0, ""), Frame(DT), Hud("replayActive", 1.0, ""), Frame(DT), Hud("wrongWay", 0.0, ""), Frame(DT)]);
+    // the fuel light: yellow to red, the empty tank, beside a flag, another reserve
+    for fuel in [3.0, 2.0, 0.5, 0.0, -1.0] {
+        o.extend([Hud("car.fuel", fuel, "0"), Frame(DT)]);
+    }
+    o.extend([Hud("car.fuel", 1.5, "0"), Hud("setFlag", 6.0, ""), Frame(DT), Hud("clearFlag", 0.0, ""), Frame(DT), Hud("setBlueFlag", 0.0, ""), Frame(DT), Hud("blackFlag", 1.0, ""), Frame(DT), Hud("blackFlag", 0.0, ""), Frame(DT)]);
+    o.extend([Hud("fuelLimit", 8.0, ""), Hud("car.fuel", 6.0, "0"), Frame(DT), Hud("esc", 1.0, "300"), Frame(DT), Hud("esc", 0.0, "300"), Hud("raceOver", 1.0, ""), Frame(DT), Hud("raceOver", 0.0, ""), Hud("focus", 1.0, ""), Frame(DT), Hud("focus", 0.0, ""), Frame(DT)]);
+    o
 }
 
 pub fn message_line(status: i32, timer: f32, session_text: &str, last_valid: bool, invalid_time: f32, car_index: u32) -> String {
@@ -836,6 +903,8 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "widgets_b" => plain(widgets_b()),
         "widgets_c" => plain(widgets_c()),
         "hud_messages" => plain(hud_messages()),
+        "hud_flags" => plain(hud_flags(false)),
+        "hud_flags_triple" => plain(hud_flags(true)),
         // forms as a first session finds them (no layout file)
         "forms" => {
             let mut ops = forms();
@@ -854,7 +923,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
             forms_more(&mut ops);
             Sequence { ops, acos: None, allow_overlapping: true }
         }
-        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages)")),
+        other => return Err(format!("no GUI sequence {other:?} (base, text, forms, forms_layout, forms_overlap, widgets_a, widgets_b, widgets_c, hud_messages, hud_flags, hud_flags_triple)")),
     })
 }
 

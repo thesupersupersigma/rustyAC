@@ -56,7 +56,7 @@ pub fn input<T>(f: impl FnOnce(&mut HudInput) -> T) -> T {
     f(INPUT.lock().unwrap().get_or_insert_with(HudInput::default))
 }
 
-unsafe fn acs() -> &'static Acs {
+pub unsafe fn acs() -> &'static Acs {
     &*(ACS.load(Ordering::SeqCst) as *const Acs)
 }
 
@@ -116,7 +116,7 @@ unsafe extern "C" fn ac_translate(out: *mut u8, text: *const u8) -> *mut u8 {
     out
 }
 
-unsafe fn jump(game: &Game, va: usize, to: usize) {
+pub unsafe fn jump(game: &Game, va: usize, to: usize) {
     // mov rax, <to>; jmp rax
     let mut code = vec![0x48, 0xb8];
     code.extend_from_slice(&to.to_le_bytes());
@@ -138,8 +138,8 @@ unsafe fn sync(h: &HudGame) {
         wr(*avatar, 0xe40, car.steer_lock);
         // Car::getPenaltyTime 0x140270d50 and TimeTransponder::getCuts 0x1402906a0 read these
         let physics: *mut u8 = rd(*avatar, 0x1168);
-        wr(physics, 0x3d30, if car.has_penalty { 1.0f64 } else { 0.0 });
-        wr(physics, 0x3d28, 1.0f64);
+        wr(physics, 0x3d30, if car.penalty_time > 0.0 { 1.0f64 } else { 0.0 });
+        wr(physics, 0x3d28, car.penalty_time);
         wr(physics, 0x1f8 + 0x84, !car.current_lap_valid as u32);
     }
     crate::gui_ac_hud2::sync(h, &state);

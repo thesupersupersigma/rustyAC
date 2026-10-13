@@ -68,8 +68,14 @@ pub struct HudCar {
     pub gui_name: String,
     /// `unixName`: the car's folder
     pub unix_name: String,
-    /// `hasPenalty()` is not 0
-    pub has_penalty: bool,
+    /// `hasPenalty()`: the seconds to serve, 0 for none
+    pub penalty_time: f64,
+    /// `isMinSpeedPenaltyClearDisabled()`
+    pub min_speed_penalty_clear_disabled: bool,
+    /// `Car::penaltyManager.pitPenaltyLaps`
+    pub pit_penalty_laps: i16,
+    /// `physicsState.fuel`
+    pub fuel: f32,
     /// `physicsState.lockControlsTime`
     pub lock_controls_time: f32,
     /// `isCurrentLapValid()`
@@ -107,6 +113,18 @@ pub struct HudInput {
     pub time_to_session_start: f64,
     /// `ACCameraManager::currentGlobalCameraIndex` and `randomMode` (none: no camera manager)
     pub camera: Option<(i32, bool)>,
+    /// `ACCameraManager::mode`: 0 cockpit, 1 car, 2 drivable, 3 track, 4 helicopter, 5 on board free, 6 free, 7 start
+    pub camera_mode: i32,
+    /// `Sim::getFocusedCarIndex` (the player's car is 0)
+    pub focused_car_index: i32,
+    /// `RaceManager::isRaceOver(0)`
+    pub race_over: bool,
+    /// `RaceManager::getSessionTimeLeft()`, ms
+    pub session_time_left: f64,
+    /// `Sim::isInTripleScreenMode`
+    pub triple_screen: bool,
+    /// `Speed::useMPH`
+    pub use_mph: bool,
 }
 
 /// `SessionStatusSystemMessage`.
@@ -326,7 +344,7 @@ impl SystemMessage {
         let s = &mut self.session;
         s.text_to_render = String::new();
         let Some(car) = input.cars.first() else { return };
-        if car.has_penalty || 0.0 < car.lock_controls_time || input.esc_menu_visible || input.pause_menu_visible || input.in_replay || input.end_session_active {
+        if car.penalty_time > 0.0 || 0.0 < car.lock_controls_time || input.esc_menu_visible || input.pause_menu_visible || input.in_replay || input.end_session_active {
             return;
         }
         let valid = car.current_lap_valid;
