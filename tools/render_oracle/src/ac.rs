@@ -377,7 +377,13 @@ pub struct Rendered {
 
 impl Game {
     pub fn start(args: &Args) -> Result<Game, String> {
-        crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll"]);
+        let gui = args.gui.is_some() || args.command == "font-probe";
+        if gui {
+            // FW1FontWrapper: DirectWrite (Windows' own, from System32) and the GDI calls of its glyph rasteriser
+            crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll", "dwrite.dll", "gdi32.dll", "user32.dll"]);
+        } else {
+            crate::acs::set_extra_bound(vec!["d3d11.dll", "dxgi.dll", "d3dcompiler_43.dll", "d3dx11_43.dll"]);
+        }
         crate::acs::set_extra_overrides(vec![
             ("d3d11.dll", "D3D11CreateDeviceAndSwapChain", create_device_and_swap_chain as *const () as usize),
             ("d3d11.dll", "D3D11CreateDevice", create_device as *const () as usize),
@@ -394,7 +400,9 @@ impl Game {
             // xor eax, eax; ret: static objects made here are never destroyed
             acs.patch(acs.va(VA_ATEXIT), &[0x31, 0xc0, 0xc3]);
             // ret: no fonts (the 3D frame draws no text)
-            acs.patch(acs.va(VA_KGL_INIT_FONTS), &[0xc3]);
+            if !gui {
+                acs.patch(acs.va(VA_KGL_INIT_FONTS), &[0xc3]);
+            }
             for va in VA_STATIC_INITIALISERS {
                 let init: extern "C" fn() = std::mem::transmute(acs.va(va));
                 init();

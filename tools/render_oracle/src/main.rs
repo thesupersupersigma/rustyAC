@@ -11,6 +11,8 @@ mod ac;
 mod ac_car;
 mod compare;
 mod frames;
+mod gui_ac;
+mod gui_port;
 mod port;
 mod root;
 
@@ -102,6 +104,8 @@ pub struct Args {
     pub car_data: Option<PathBuf>,
     /// `--time-mult <n>`: how fast the clouds drift (race.ini `TIME_MULT`)
     pub time_mult: f32,
+    /// `--gui <sequence>`: the GUI oracle's script (see `gui_seq`); the game's fonts are started
+    pub gui: Option<String>,
     /// the options of the frame, to hand on to the two child processes of `compare`
     pub frame_options: Vec<String>,
 }
@@ -149,6 +153,7 @@ fn parse() -> Result<Args, String> {
         own_textures: false,
         car_data: None,
         time_mult: 1.0,
+        gui: None,
         frame_options: Vec::new(),
     };
     let mut profile = root::TASK_20;
@@ -324,6 +329,10 @@ fn parse() -> Result<Args, String> {
                 text = value()?;
                 a.ghost_lap_ms = text.parse().map_err(|_| "--ghost-lap-ms <ms>")?;
             }
+            "--gui" => {
+                text = value()?;
+                a.gui = Some(text.clone());
+            }
             "--own-textures" => {
                 a.own_textures = true;
             }
@@ -391,7 +400,7 @@ fn print_timing(side: &str) {
     println!("timing {side}: {} frames, median {:.2} ms, mean {:.2} ms, fastest {:.2} ms, slowest {:.2} ms", ms.len(), ms[ms.len() / 2], mean, ms[0], ms[ms.len() - 1]);
 }
 
-fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
@@ -473,6 +482,8 @@ fn run() -> Result<(), String> {
             println!("{}: frame {} of {}", out.display(), args.tape_from, tape.display());
             Ok(())
         }
+        "font-probe" if args.side == "port" => gui_port::font_probe(&args),
+        "font-probe" => gui_ac::font_probe(&args),
         "run" => run_side(&args),
         "compare" => compare::compare(&args),
         _ => Err(USAGE.into()),

@@ -24,6 +24,7 @@ pub mod digital;
 pub mod driver;
 pub mod fake_shadow;
 pub mod forward;
+pub mod fw1;
 pub mod flames;
 pub mod ghost_car;
 pub mod gl;
