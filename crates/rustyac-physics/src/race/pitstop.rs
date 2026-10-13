@@ -583,6 +583,28 @@ pub struct PitStop {
     pub app_interaction_enabled: bool,
     /// `CarAvatar::lastPitstopTime` would be written this frame (the countdown ran)
     pub timer_ran: bool,
+    /// `strategies`, `currentStrategyIndex`, `pitRandomModifier`: as the constructor leaves
+    /// them. No function of the game reads them again (the random part of a stop's time is
+    /// the one `rand()` of `Car::getPitstopTime`); they are here for the record.
+    pub strategies: [PitStopStrategy; 2],
+    pub current_strategy_index: i32,
+    pub pit_random_modifier: f32,
+}
+
+/// `PitStopStrategy` (12 bytes; constructor @ 0x1400a7590).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PitStopStrategy {
+    pub fuel: f32,
+    pub tyre_compound: i32,
+    pub fix_body: bool,
+    pub fix_engine: bool,
+    pub fix_susp: bool,
+}
+
+impl Default for PitStopStrategy {
+    fn default() -> PitStopStrategy {
+        PitStopStrategy { fuel: 30.0, tyre_compound: -1, fix_body: false, fix_engine: false, fix_susp: false }
+    }
 }
 
 impl PitStop {
@@ -608,6 +630,9 @@ impl PitStop {
             rengine: false,
             app_interaction_enabled: true,
             timer_ran: false,
+            strategies: [PitStopStrategy::default(), PitStopStrategy { tyre_compound: 2, ..PitStopStrategy::default() }],
+            current_strategy_index: 0,
+            pit_random_modifier: 0.0,
         }
     }
 
