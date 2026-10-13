@@ -87,6 +87,70 @@ impl SetupCar for PortCar {
     fn normalized_spline_position(&self) -> f32 {
         self.chassis.borrow().spline_locator_data.npos
     }
+
+    fn tc_available(&self) -> bool {
+        self.chassis.borrow().aids.as_ref().is_some_and(|a| a.base().traction_control.is_present)
+    }
+
+    fn abs_available(&self) -> bool {
+        self.chassis.borrow().aids.as_ref().is_some_and(|a| a.base().abs.is_present)
+    }
+
+    fn tc_mode(&self) -> (u32, u32) {
+        self.chassis.borrow().aids.as_ref().map_or((0, 0), |a| a.base().traction_control.get_current_mode())
+    }
+
+    fn abs_mode(&self) -> (u32, u32) {
+        self.chassis.borrow().aids.as_ref().map_or((0, 0), |a| a.base().abs.get_current_mode())
+    }
+
+    fn has_adjustable_turbo(&self) -> bool {
+        self.chassis.borrow().drivetrain.as_ref().is_some_and(|d| d.engine().turbo_adjustable_from_cockpit())
+    }
+
+    fn turbo_boost_level(&self) -> f32 {
+        self.chassis.borrow().drivetrain.as_ref().map_or(0.0, |d| d.engine().get_turbo_boost_level())
+    }
+
+    fn has_ers(&self) -> bool {
+        self.chassis.borrow().ers.is_some()
+    }
+
+    fn has_cockpit_ers_delivery_profile(&self) -> bool {
+        self.chassis.borrow().ers.as_ref().is_some_and(|e| e.cockpit_delivery_profile)
+    }
+
+    fn has_cockpit_ers_recovery(&self) -> bool {
+        self.chassis.borrow().ers.as_ref().is_some_and(|e| e.cockpit_recovery)
+    }
+
+    fn has_cockpit_ers_mgu_h_mode(&self) -> bool {
+        self.chassis.borrow().ers.as_ref().is_some_and(|e| e.cockpit_mgu_h_mode)
+    }
+
+    fn ers_power_controller_names(&self) -> Vec<String> {
+        self.chassis.borrow().ers.as_ref().map(|e| e.power_controllers.iter().map(|c| c.name.clone()).collect()).unwrap_or_default()
+    }
+
+    fn ers_power_index(&self) -> i32 {
+        self.chassis.borrow().cockpit.ers_power_index
+    }
+
+    fn ers_recovery(&self) -> i32 {
+        self.chassis.borrow().cockpit.ers_recovery
+    }
+
+    fn ers_heat_charging(&self) -> bool {
+        self.chassis.borrow().cockpit.ers_heat_charging
+    }
+
+    fn engine_brake_settings_count(&self) -> i32 {
+        self.chassis.borrow().engine_brake_settings()
+    }
+
+    fn engine_brake_setting(&self) -> i32 {
+        self.chassis.borrow().cockpit.engine_brake
+    }
 }
 
 /// The script's car: the Rust car of `<root>/content/cars/<name>/data`.

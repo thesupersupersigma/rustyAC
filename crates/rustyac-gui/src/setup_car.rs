@@ -50,6 +50,29 @@ pub trait SetupCar {
     /// `FuelLapEvaluator::getFuelPerLap`, `CarAvatar::physicsState.normalizedSplinePosition`
     fn fuel_per_lap(&self) -> f32;
     fn normalized_spline_position(&self) -> f32;
+    /// `CarAvatar::isTcAvailable`, `isAbsAvailable`; `getTCMode`, `getABSMode` (the mode shown,
+    /// 0 for off, and how many there are)
+    fn tc_available(&self) -> bool;
+    fn abs_available(&self) -> bool;
+    fn tc_mode(&self) -> (u32, u32);
+    fn abs_mode(&self) -> (u32, u32);
+    /// `physicsInfo.hasAdjustableTurbo`, `Engine::getTurboBoostLevel`
+    fn has_adjustable_turbo(&self) -> bool;
+    fn turbo_boost_level(&self) -> f32;
+    /// `physicsInfo.hasERS`, `hasCockpitERSDeliveryProfile`, `hasCockpitERSRecovery`,
+    /// `hasCockpitERSMguHMode`; the names of `ERS::ersPowerControllers`
+    fn has_ers(&self) -> bool;
+    fn has_cockpit_ers_delivery_profile(&self) -> bool;
+    fn has_cockpit_ers_recovery(&self) -> bool;
+    fn has_cockpit_ers_mgu_h_mode(&self) -> bool;
+    fn ers_power_controller_names(&self) -> Vec<String>;
+    /// `CarAvatar::currentERSPowerIndex`, `currentERSRecovery`, `isHeatChargingBatteries`
+    fn ers_power_index(&self) -> i32;
+    fn ers_recovery(&self) -> i32;
+    fn ers_heat_charging(&self) -> bool;
+    /// `physicsInfo.engineBrakeSettingsCount`, `CarAvatar::currentEngineBrakeSetting`
+    fn engine_brake_settings_count(&self) -> i32;
+    fn engine_brake_setting(&self) -> i32;
 }
 
 /// What the editor reads of the session besides the car.
@@ -65,6 +88,10 @@ pub struct SetupLink {
     pub setups_read: Option<PathBuf>,
     /// `Sim::useMousePitstop`
     pub use_mouse_pitstop: bool,
+    /// `cfg/assists.ini [ASSISTS] TRACTION_CONTROL` and `ABS` (on line the server's): 0 off,
+    /// 1 as the car has it, 2 on whatever the car has
+    pub tc_assist: i32,
+    pub abs_assist: i32,
     /// `Speed::useMPH`
     pub use_mph: bool,
     /// `RaceManager::getSessionTotalTime(0)`, ms

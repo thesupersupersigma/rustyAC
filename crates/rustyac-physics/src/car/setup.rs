@@ -246,6 +246,18 @@ pub enum SetupJob {
     /// used this lap is not counted. `spinner_value` is what the spinner shows when the job
     /// runs (another number than the car's restarts the wait for the setup's check).
     SetRequestedFuel { value: f32, spinner_value: i32 },
+    /// the jobs of `CarAvatar::cycleTcMode` / `cycleAbsMode`: `TractionControl::cycleMode`,
+    /// `ABS::cycleMode`
+    CycleTc { dir: i32 },
+    CycleAbs { dir: i32 },
+    /// `Engine::setTurboBoostLevel` (the game's editor calls it from its own thread)
+    SetTurboBoostLevel { level: f32 },
+    /// `CarAvatar::cycleERSPower`, `cycleERSRecovery`, `cycleERSHeatCharging`,
+    /// `cycleEngineBrake` (the car's own setting moves a step, and the physics follows)
+    CycleErsPower { dir: i32 },
+    CycleErsRecovery { dir: i32 },
+    CycleErsHeatCharging,
+    CycleEngineBrake { dir: i32 },
 }
 
 /// One value `SetupManager::step` changed.
@@ -639,7 +651,7 @@ impl SetupManager {
                 }
             }
             // (the car's own: see `RollingChassis::apply_setup_job`)
-            SetupJob::SetTyreCompound { .. } | SetupJob::SetRequestedFuel { .. } => {}
+            _ => {}
         }
     }
 

@@ -1715,6 +1715,33 @@ impl RollingChassis {
                 self.requested_fuel = value;
                 self.fuel_lap_evaluator.ignore_lap = true;
             }
+            SetupJob::CycleTc { dir } => {
+                if let Some(aids) = &mut self.aids {
+                    aids.base_mut().traction_control.cycle_mode(dir);
+                }
+            }
+            SetupJob::CycleAbs { dir } => {
+                if let Some(aids) = &mut self.aids {
+                    aids.base_mut().abs.cycle_mode(dir);
+                }
+            }
+            SetupJob::SetTurboBoostLevel { level } => {
+                if let Some(drivetrain) = &mut self.drivetrain {
+                    drivetrain.engine_mut().set_turbo_boost_level(level);
+                }
+            }
+            SetupJob::CycleErsPower { dir } => {
+                self.cycle_ers_power(dir);
+            }
+            SetupJob::CycleErsRecovery { dir } => {
+                self.cycle_ers_recovery(dir);
+            }
+            SetupJob::CycleErsHeatCharging => {
+                self.cycle_ers_heat_charging();
+            }
+            SetupJob::CycleEngineBrake { dir } => {
+                self.cycle_engine_brake(dir);
+            }
             _ => self.setup_manager.apply_job(job),
         }
     }

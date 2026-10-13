@@ -131,6 +131,20 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
             wr(info, 0xd8, list);
             wr(info, 0xe0, list.add(names.len() * 0x20));
             wr(info, 0xe8, list.add(names.len() * 0x20));
+            wr(info, 0x121, port.has_ers() as u8);
+            wr(info, 0x122, port.has_cockpit_ers_recovery() as u8);
+            wr(info, 0x123, port.has_cockpit_ers_delivery_profile() as u8);
+            wr(info, 0x125, port.has_cockpit_ers_mgu_h_mode() as u8);
+            wr(info, 0x128, port.engine_brake_settings_count());
+            wr(info, 0x12c, port.ers_power_controller_names().len() as i32);
+            wr(info, 0x134, port.has_adjustable_turbo() as u8);
+            // the car's own cockpit settings (CarAvatar::CarAvatar and initPhysics), and the
+            // boost level of its state
+            wr(h.cars[0], 0x127c, port.engine_brake_setting());
+            wr(h.cars[0], 0x1280, port.ers_heat_charging() as u8);
+            wr(h.cars[0], 0x1284, port.ers_power_index());
+            wr(h.cars[0], 0x1288, port.ers_recovery());
+            wr(h.cars[0], 0xa18, port.turbo_boost_level());
             wr(h.sim, 0x1e4, 1u8);
         }
         other => return Err(format!("the setup editor has no call {other:?}")),

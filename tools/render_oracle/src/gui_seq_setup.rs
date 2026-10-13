@@ -32,6 +32,9 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
             std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
         }
     }
+    // the assists as the game ships them: what the car has
+    std::fs::create_dir_all(args.root.join("cfg")).map_err(|e| e.to_string())?;
+    std::fs::write(args.root.join("cfg/assists.ini"), "[ASSISTS]\nTRACTION_CONTROL=1\nABS=1\n").map_err(|e| e.to_string())?;
     // the game's English strings and setup help
     for file in ["system/locales/en.ini", "system/locales/setup/en.ini", "system/locales/setup/en.tag"] {
         let target = args.root.join(file);

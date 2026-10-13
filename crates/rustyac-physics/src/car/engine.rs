@@ -120,6 +120,10 @@ pub trait EngineModel: Send {
     }
     /// `Engine::setTurboBoostLevel` @ 0x140288090: the cockpit boost control.
     fn set_turbo_boost_level(&mut self, level: f32);
+    /// `Engine::getTurboBoostLevel` @ 0x140285dc0: the first turbo's setting (0 without one).
+    fn get_turbo_boost_level(&self) -> f32 {
+        0.0
+    }
     /// `Engine::turboAdjustableFromCockpit`
     fn turbo_adjustable_from_cockpit(&self) -> bool {
         false
@@ -936,6 +940,10 @@ impl EngineModel for VanillaEngine {
         for turbo in &mut self.turbos {
             turbo.set_turbo_boost_level(level);
         }
+    }
+
+    fn get_turbo_boost_level(&self) -> f32 {
+        self.turbos.first().map_or(0.0, |turbo| turbo.user_setting)
     }
 
     fn coast_settings_count(&self) -> i32 {
