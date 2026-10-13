@@ -57,6 +57,12 @@ pub trait SetupCar {
 pub struct SetupLink {
     /// the name of `Sim::track`
     pub track_name: String,
+    /// the folders of `content/tracks`, in the file system's order (by name)
+    pub tracks: Vec<String>,
+    /// rustyAC's own `setups` folder: everything the editor writes goes here
+    pub setups_save: PathBuf,
+    /// the game's `Documents\Assetto Corsa\setups`: only read (none: not looked at)
+    pub setups_read: Option<PathBuf>,
     /// `Sim::useMousePitstop`
     pub use_mouse_pitstop: bool,
     /// `Speed::useMPH`

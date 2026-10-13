@@ -41,6 +41,45 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
     Ok(())
 }
 
+/// The track folders of the scratch root, as the game's side finds them.
+pub fn tracks(root: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root.join("content/tracks")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    names.sort_by_key(|name| name.to_uppercase());
+    names
+}
+
+/// Before both sides start: a few track folders, and each side's own setups folder (the
+/// game's in its stand-in Documents, the port's beside it) emptied and filled alike with
+/// what `<root>/seed_setups/<car>` holds.
+pub fn seed(args: &Args, sequence: &Sequence) -> Result<(), String> {
+    let Some(car) = car_of(&sequence.ops) else { return Ok(()) };
+    let io = |e: std::io::Error| e.to_string();
+    for track in ["ai", "imola", "ks_nordschleife", "magione", "spa"] {
+        std::fs::create_dir_all(args.root.join("content/tracks").join(track)).map_err(io)?;
+    }
+    for documents in ["documents", "port_documents"] {
+        let setups = args.root.join(documents).join("Assetto Corsa/setups");
+        let _ = std::fs::remove_dir_all(&setups);
+        std::fs::create_dir_all(&setups).map_err(io)?;
+        copy_tree(&args.root.join("seed_setups").join(car), &setups.join(car))?;
+    }
+    Ok(())
+}
+
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(from) else { return Ok(()) };
+    std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn click(o: &mut Vec<Op>, x: i32, y: i32) {
     o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
 }

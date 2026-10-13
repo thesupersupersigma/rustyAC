@@ -72,6 +72,11 @@ fn run_sides(args: &Args, name: &str, dump: &[usize]) -> Result<(), String> {
 pub fn compare(args: &Args) -> Result<(), String> {
     let name = args.gui.as_ref().ok_or("gui --gui <sequence>")?;
     std::fs::create_dir_all(&args.out).map_err(|e| e.to_string())?;
+    {
+        let sequence = crate::gui_seq::sequence(name)?;
+        crate::gui_seq_setup::prepare_root(args, &sequence)?;
+        crate::gui_seq_setup::seed(args, &sequence)?;
+    }
     run_sides(args, name, &args.dump)?;
     let read = |side: &str, kind: &str| {
         let path = args.out.join(format!("{name}.{side}.{kind}"));

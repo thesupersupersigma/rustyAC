@@ -59,11 +59,8 @@ pub fn text_file_bytes(text: &str) -> Vec<u8> {
     out
 }
 
-/// `Path::createFolder` for each folder of the way, then the file.
+/// The file as the stream's open and close leave it (a folder that is missing: no file).
 fn write_file(path: &Path, bytes: &[u8]) -> bool {
-    if let Some(folder) = path.parent() {
-        let _ = std::fs::create_dir_all(folder);
-    }
     std::fs::write(path, bytes).is_ok()
 }
 
@@ -372,8 +369,9 @@ impl Gui {
         if self.sim.replay.has_loaded_replay {
             return;
         }
-        let path = folder.join("setups").join(car.unix_name()).join("generic").join("last.ini");
-        self.setup_screen_save_setup_absolute_path(screen, &path);
+        let generic = folder.join("setups").join(car.unix_name()).join("generic");
+        let _ = std::fs::create_dir_all(&generic);
+        self.setup_screen_save_setup_absolute_path(screen, &generic.join("last.ini"));
     }
 }
 
