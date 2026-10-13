@@ -1222,6 +1222,7 @@ impl AcRenderer {
             if pit.commits != self.crew_seen.0 {
                 self.crew_seen.0 = pit.commits;
                 let start = CrewStart { tyre_change_time: pit.tyre_change_time, total_time: pit.total_time, force_change_camera: pit.force_change_camera };
+                println!("pit stop {} at {:.1} s: {:.1} s in all, {:.1} s for the tyres{}", pit.commits, self.time_ms * 0.001, pit.total_time, pit.tyre_change_time, if pit.changing_tyres { " (the crew comes)" } else { "" });
                 crew.on_pit_stop_commit(&mut self.crew, &start, pit.changing_tyres);
                 if let Some(total) = self.crew.fade.take() {
                     self.crew_fade = Some((0.0, total));

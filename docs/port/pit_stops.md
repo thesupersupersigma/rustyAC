@@ -424,6 +424,10 @@ program prints your pit stops and whether the mandatory one was done.
 
 ## Not done
 
+(Task 28c, v0.28.2, did the first two points below: the tyre changers, their wheel guns and
+their render and audio oracles are in `docs/port/replays.md`. The camera's move out of the car
+is still open.)
+
 - **The pit crew that changes the wheels, and the wheel-gun sounds** (`PitCrew`, 41
   functions, 20.7 kB: four animated mechanics from `pitcrewtyre.kn5` / `.ksanim`, a copy of
   each of the car's wheels as "the new tyre", the camera's move out of the cockpit, the
