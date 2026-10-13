@@ -25,6 +25,19 @@ pub enum Event {
     Focus(bool),
     /// The client area's new size, pixels.
     Resize(u32, u32),
+    /// The mouse over the client area: where (pixels), and what it did.
+    Mouse { x: i32, y: i32, action: MouseAction },
+    /// A character was typed.
+    Char(u32),
+}
+
+/// What the mouse did: a button is 0 (left) or 1 (right); the wheel's turn is in notches of 120.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseAction {
+    Move,
+    Down(i32),
+    Up(i32),
+    Wheel(i32),
 }
 
 /// Windows is running a loop of its own inside the window's messages (the title bar is being
@@ -34,6 +47,8 @@ pub static MODAL_LOOP: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    /// where the mouse last was (the wheel's message says it in screen pixels)
+    static MOUSE: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 fn push(event: Event) {
@@ -58,6 +73,28 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM
                 // SAFETY: the default handler with the message's own arguments.
                 return unsafe { DefWindowProcW(window, message, wparam, lparam) };
             }
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP => {
+            let (x, y) = ((lparam.0 & 0xffff) as i16 as i32, ((lparam.0 >> 16) & 0xffff) as i16 as i32);
+            MOUSE.with(|mouse| mouse.set((x, y)));
+            let action = match message {
+                WM_MOUSEMOVE => MouseAction::Move,
+                WM_LBUTTONDOWN => MouseAction::Down(0),
+                WM_LBUTTONUP => MouseAction::Up(0),
+                WM_RBUTTONDOWN => MouseAction::Down(1),
+                _ => MouseAction::Up(1),
+            };
+            push(Event::Mouse { x, y, action });
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            let (x, y) = MOUSE.with(|mouse| mouse.get());
+            push(Event::Mouse { x, y, action: MouseAction::Wheel(((wparam.0 >> 16) & 0xffff) as i16 as i32) });
+            LRESULT(0)
+        }
+        WM_CHAR => {
+            push(Event::Char(wparam.0 as u32));
             LRESULT(0)
         }
         // Alt+letter is a command of rustyAC's (Alt+T, Alt+A, Alt+G): the default handler would

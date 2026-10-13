@@ -107,7 +107,7 @@ pub unsafe fn create(game: &Game, gui: *mut u8, screen: *mut u8, h: &mut HudGame
     }
     // a track that is only a name, and the list of the Sim's children the constructors search
     let track = a.alloc(0x400);
-    wr(track, 0, a.va(VA_TRACK_AVATAR_VTABLE) as usize);
+    wr(track, 0, a.va(VA_TRACK_AVATAR_VTABLE));
     for at in [0x10, 0x80, 0xa0] {
         std::ptr::write_bytes(track.add(at), 0, 0x20);
         wr(track, at + 0x18, 7usize);
@@ -151,7 +151,7 @@ pub unsafe fn create(game: &Game, gui: *mut u8, screen: *mut u8, h: &mut HudGame
     // the game's own handler on FlagManager::evOnFlagChange: a function object whose target is
     // FuelLight's lambda, which finds the light in the word after the table
     let table = a.alloc(6 * 8);
-    wr(table, 2 * 8, a.va(VA_FUEL_LIGHT_FLAG_HANDLER) as usize);
+    wr(table, 2 * 8, a.va(VA_FUEL_LIGHT_FLAG_HANDLER));
     let function = a.alloc(16);
     wr(function, 0, table);
     wr(function, 8, fuel);

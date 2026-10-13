@@ -12,6 +12,7 @@
 pub mod ac;
 pub mod dds;
 pub mod font;
+pub mod gui;
 pub mod hud;
 pub mod models;
 pub mod picture;

@@ -14,8 +14,14 @@ State after the last commit (update after every commit):
   `tools/render_oracle/target/release/render_oracle.exe gui --gui <name> --root re/scratch/task29/root --out re/scratch/task29/out`
   (names: `text base forms forms_layout forms_overlap widgets_a widgets_b widgets_c hud_messages
   hud_flags hud_flags_triple hud_cars hud_cars_simple hud_cars_noflag`).
-- **Next:** the GUI pass and the keys in `rustyac.exe`
-  (brief `spec_keys.md`), the browser's text fallback, the report, the version.
+- **In `rustyac.exe`:** `crates/rustyac-game/src/render/gui.rs` (`GameGui`) makes the GUI and
+  the HUD objects and feeds them; `AcRenderer::draw` calls it at `GUI::render` and
+  `Game::renderHUD`; the window sends mouse, keys and characters; Ctrl+H / U / L / J / Q and
+  F10; `--debug-hud`, `--no-gui`, `--cfg-dir`, `--gui-do`. Own files go to `cfg` beside the
+  exe (`acos.ini`, `gameplay.ini`).
+- **Pictures:** `rustyac.exe --no-race-ini --track spa --autodrive --screenshot x.png --at 3
+  --gui-do "message:ABS|Set on level : 2/3"` (more in the report's last section).
+- **Next:** the browser's text fallback, the unchanged-proofs run, the report, the version.
 - **Briefs** (git-ignored, written by readers from the disassembly; claims, not facts, until
   the oracle agrees): `re/scratch/task29/spec_*.md`. Patch scripts used on the way:
   `re/scratch/task29/p*.py`.

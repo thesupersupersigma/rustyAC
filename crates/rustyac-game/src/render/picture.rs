@@ -64,6 +64,14 @@ impl Picture {
         }
     }
 
+    /// AC's GUI and HUD, when they are drawn.
+    pub fn gui(&mut self) -> Option<&mut super::gui::GameGui> {
+        match self {
+            Picture::Ac(r) => r.gui.as_deref_mut(),
+            Picture::Debug(_) => None,
+        }
+    }
+
     /// Task 28c: the states a replay shows (`None`: the cars are live).
     pub fn set_replay_states(&mut self, states: Option<Vec<rustyac_physics::car_physics_state::CarPhysicsState>>) {
         if let Picture::Ac(r) = self {

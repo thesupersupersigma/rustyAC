@@ -670,6 +670,7 @@ dependencies = [
  "rustls",
  "rustyac-audio",
  "rustyac-content",
+ "rustyac-gui",
  "rustyac-math",
  "rustyac-net",
  "rustyac-physics",

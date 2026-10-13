@@ -30,7 +30,17 @@ use rustyac_game::shm::{SharedMemory, ShmSink};
 use rustyac_game::sim::{DriverSource, GameSim, NobodySource, ReplaySource, SpawnSequence};
 use rustyac_game::focus::{Focus, FocusCommand};
 use rustyac_game::view::CarView;
-use rustyac_game::window::{Event, Window};
+use rustyac_game::window::{Event, MouseAction, Window};
+
+/// The game's default keys of the commands "Hide Show Apps", "Cycle Virtual Desktop", "Driver
+/// Names", "Show Damage" and "Hide Damage" (`CommandManager::CommandManager` 0x1400e8b70), and
+/// rustyAC's own key for its own display.
+const KEY_HIDE_APPS: i32 = 0x48;
+const KEY_CYCLE_DESKTOP: i32 = 0x55;
+const KEY_DRIVER_NAMES: i32 = 0x4c;
+const KEY_SHOW_DAMAGE: i32 = 0x4a;
+const KEY_HIDE_DAMAGE: i32 = 0x51;
+const KEY_DEBUG_HUD: i32 = 0x79;
 use windows::Win32::System::Console::SetConsoleCtrlHandler;
 use windows::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED};
 
@@ -289,6 +299,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
         (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
     };
     let assists_file = race.as_ref().map(|p| p.with_file_name("assists.ini")).filter(|p| p.is_file());
+    let race_reader = race.as_ref().and_then(|p| rustyac_physics::data::ini::IniReader::load(p).ok());
     if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
         if ini.has_section("LIGHTING") {
             sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(sun_angle);
@@ -393,6 +404,25 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
         println!("no 3D model of {} in Assetto Corsa's folder: no car is drawn", info.name);
     }
     renderer.finish_loading()?;
+    // Task 29: AC's GUI and HUD (Sim::Sim makes them once the cars are there)
+    if !options.no_gui && !options.no_hud {
+        let ini = |car: &rustyac_game::sim::CarInfo, section: &str, key: &str| rustyac_physics::data::ini::IniReader::load(&car.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float(section, key).ok()).unwrap_or(0.0);
+        let cars: Vec<&rustyac_game::sim::CarInfo> = std::iter::once(info).chain(others).collect();
+        let folders: Vec<String> = cars.iter().map(|car| car.name.clone()).collect();
+        let setup = rustyac_game::render::gui::GuiSetup {
+            cars: rustyac_game::render::gui::car_names(&game, race_reader.as_ref(), &folders),
+            steer_locks: cars.iter().map(|car| ini(car, "CONTROLS", "STEER_LOCK")).collect(),
+            fuel_light_min_liters: ini(info, "GRAPHICS", "FUEL_LIGHT_MIN_LITERS"),
+            session_type: session_type.unwrap_or(if options.spawn == "hotlap" { 4 } else { 1 }),
+            penalties: race_reader.as_ref().is_some_and(|ini| ini.get_int("RACE", "PENALTIES").unwrap_or(0) != 0),
+            cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
+            documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
+            game: game.clone(),
+        };
+        if let Err(message) = renderer.enable_gui(setup) {
+            eprintln!("WARNING: AC's GUI could not be made ({message}); rustyAC's own display is drawn instead");
+        }
+    }
     Ok(renderer)
 }
 
@@ -1245,10 +1275,31 @@ fn run_window(options: &Options) -> Result<(), String> {
     let mut frame_max = Duration::ZERO;
     let mut result = Ok(());
     let mut world = shared.world_at(Instant::now());
+    // rustyAC's own panels and numbers: --debug-hud, F10, or when AC's HUD is not there
+    let mut debug_hud = options.debug_hud || renderer.gui().is_none();
+    if let (Some(commands), Some(gui)) = (&options.gui_do, renderer.gui()) {
+        gui.script(commands)?;
+    }
     'frames: loop {
         for event in window.pump() {
             match event {
                 Event::Close | Event::Key { key: 0x1b, .. } => break 'frames,
+                // ksgui::GUI's listeners of the mouse and the keyboard
+                Event::Mouse { x, y, action } => {
+                    if let Some(gui) = renderer.gui() {
+                        match action {
+                            MouseAction::Move => gui.mouse_move(x, y),
+                            MouseAction::Down(button) => gui.mouse_down(x, y, button),
+                            MouseAction::Up(button) => gui.mouse_up(x, y, button),
+                            MouseAction::Wheel(delta) => gui.mouse_wheel(x, y, delta as f32 / 120.0),
+                        }
+                    }
+                }
+                Event::Char(character) => {
+                    if let Some(gui) = renderer.gui() {
+                        gui.key_char(character);
+                    }
+                }
                 Event::Focus(focused) => shared.focused.store(focused, Ordering::Relaxed),
                 Event::Resize(width, height) => {
                     if let Err(message) = renderer.resize_swap_chain(&chain, width, height) {
@@ -1262,6 +1313,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
                     let key = key as i32;
+                    if let Some(gui) = renderer.gui() {
+                        gui.key_down(key as u32);
+                    }
                     // Sim::onKeyDown 0x14019a940, the replay's commands: with Ctrl, whatever
                     // Shift does; they come before rustyAC's own Ctrl+F
                     let replay_keys = [bindings.key_ffwd, bindings.key_slowmo, bindings.key_pause_replay, bindings.key_rev, bindings.key_next_lap, bindings.key_previous_lap, bindings.key_start_replay];
@@ -1305,6 +1359,19 @@ fn run_window(options: &Options) -> Result<(), String> {
                             FocusCommand::Next
                         };
                         focus.command(command, &world, &car_names);
+                    } else if let (true, Some(gui)) = (ctrl && !shared.paused.load(Ordering::Relaxed) && [KEY_HIDE_APPS, KEY_CYCLE_DESKTOP, KEY_DRIVER_NAMES, KEY_SHOW_DAMAGE, KEY_HIDE_DAMAGE].contains(&key), renderer.gui()) {
+                        // Sim::onKeyDown 0x14019a940, the commands of the GUI and the HUD (the
+                        // game's default keys; with Ctrl, not while the pause menu shows)
+                        match key {
+                            KEY_HIDE_APPS => gui.hide_show_apps(),
+                            KEY_CYCLE_DESKTOP => println!("GUI: desktop {}", gui.cycle_desktop() + 1),
+                            KEY_DRIVER_NAMES => println!("DRIVER NAMES: {}", if gui.toggle_driver_names() { "ON" } else { "OFF" }),
+                            KEY_SHOW_DAMAGE => gui.show_damage(),
+                            _ => println!("DAMAGE DISPLAYER: {}", if gui.toggle_damage() { "Enabled" } else { "Disabled" }),
+                        }
+                    } else if !ctrl && !alt && key == KEY_DEBUG_HUD {
+                        // F10 (rustyAC's own key): its own panels and numbers
+                        debug_hud = !debug_hud;
                     } else if (ctrl && key == 0x46) || (!ctrl && !alt && key == 0x78) {
                         // Ctrl+F or F9: the frame-rate counter (rustyAC's own keys; AC has an
                         // app for it). F alone is the keyboard's second DRS key, hence F9 too
@@ -1548,7 +1615,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             replay_transport: transport.is_some() || ac_replay_line.is_some(),
             replay_state: ac_replay_line.clone().unwrap_or(replay_state),
             notes: shared.online_hud.lock().unwrap().clone(),
-            hidden: false,
+            hidden: !debug_hud,
             focus_fade,
             referee: shared.referee_hud.lock().unwrap().clone(),
         };
@@ -1643,6 +1710,13 @@ fn run_window(options: &Options) -> Result<(), String> {
         }
     }
     let seconds = started.elapsed().as_secs_f64();
+    // what the game writes at its end, into rustyAC's own cfg folder
+    if let Some(gui) = renderer.gui() {
+        match gui.shutdown() {
+            Ok(files) => println!("GUI: wrote {}", files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")),
+            Err(message) => eprintln!("WARNING: the GUI's files were not written ({message})"),
+        }
+    }
     shared.quit.store(true, Ordering::Relaxed);
     let outcome = thread.join().map_err(|_| "the physics thread panicked".to_string())?;
     drop(chain);
@@ -1759,7 +1833,12 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     if options.no_hud {
         renderer.set_virtual_mirror(false);
     }
-    let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: options.no_hud, ..HudInfo::default() };
+    // rustyAC's own panels: with --debug-hud, or when AC's HUD is not there
+    let text_hidden = options.no_hud || !(options.debug_hud || renderer.gui().is_none());
+    if let (Some(commands), Some(gui)) = (&options.gui_do, renderer.gui()) {
+        gui.script(commands)?;
+    }
+    let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: text_hidden, referee: sim.referee_hud(), ..HudInfo::default() };
     for old_world in &lead {
         let old = &old_world[focus.min(old_world.len() - 1)];
         let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
@@ -1770,7 +1849,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     camera.update(&previous, &shape, previous.acc_g, 1.0 / 60.0);
     let frame = camera.update(&view, &shape, view.acc_g, 1.0);
     let frame = free.unwrap_or(frame);
-    let info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: options.no_hud, ..HudInfo::default() };
+    let info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: text_hidden, referee: sim.referee_hud(), ..HudInfo::default() };
     // two frames: the second is a frame as the game draws them one after the other (the first
     // after loading still uploads and binds everything)
     let dt = if lead.is_empty() { 0.0 } else { 1.0 / 60.0 };

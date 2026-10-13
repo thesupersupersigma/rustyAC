@@ -109,6 +109,16 @@ pub struct Options {
     /// `--no-hud`: with `--screenshot`, the picture without rustyAC's own panels and numbers and
     /// without the virtual mirror
     pub no_hud: bool,
+    /// `--debug-hud`: rustyAC's own panels and numbers are drawn too (in the window: F10)
+    pub debug_hud: bool,
+    /// `--no-gui`: AC's GUI and HUD are not made
+    pub no_gui: bool,
+    /// `--cfg-dir <folder>`: where rustyAC keeps its own `acos.ini` and `gameplay.ini`
+    /// (default: `cfg` beside rustyac.exe; never Assetto Corsa's own folders)
+    pub cfg_dir: Option<PathBuf>,
+    /// `--gui-do <commands>`: mouse moves, keys and a few events for AC's GUI, done before the
+    /// first frame (`render::gui::GameGui::script`)
+    pub gui_do: Option<String>,
     /// `--pose-out <file>`: with `--screenshot`, also write the car's state the picture is made
     /// from (for the render oracle: the game's own renderer is given the same state).
     pub pose_out: Option<PathBuf>,
@@ -345,6 +355,10 @@ impl Default for Options {
             pose_out: None,
             supersample: 1,
             no_hud: false,
+            debug_hud: false,
+            no_gui: false,
+            cfg_dir: None,
+            gui_do: None,
             free_camera: None,
             debug_view: false,
             warp: false,
@@ -741,7 +755,16 @@ for checks, without anybody at the controls:
                         (default: video.ini [CUBEMAP] FACES_PER_FRAME; 0 = only once at load)
   --screenshot <png>    draw one frame off screen into a PNG and stop
   --at <s>              with --screenshot: seconds into the drive (default: the end of the replay, or 3)
-  --no-hud              with --screenshot: the picture alone, without rustyAC's panels and numbers
+  --no-hud              with --screenshot: the picture alone, without AC's HUD and rustyAC's panels
+  --debug-hud           rustyAC's own panels and numbers too (in the window: F10 switches them);
+                        without it the screen shows AC's GUI and HUD only
+  --no-gui              without AC's GUI and HUD (the app bar, messages, flags, name tags ...)
+  --gui-do <commands>   for pictures and unattended checks: things done to AC's GUI before the
+                        first frame, ; between them: mouse:X:Y  click:X:Y  wheel:X:Y:N  key:VK
+                        apps  desktop  names  damage  hidedamage  message:Title|Text  car:N
+                        notify:N  flag:blue|black|yellow|penalty|chequered|none
+  --cfg-dir <folder>    where rustyAC keeps its own acos.ini (the apps' layout) and gameplay.ini
+                        (default: cfg beside rustyac.exe; Assetto Corsa's files are only read)
                         and without the virtual mirror
   --supersample <n>     with --screenshot: draw the picture n times wider and higher (2, 3 or 4) and
                         average it down to --width x --height: smoother edges and finer detail than
@@ -811,6 +834,10 @@ impl Options {
                 "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--no-hud" => o.no_hud = true,
+                "--debug-hud" => o.debug_hud = true,
+                "--no-gui" => o.no_gui = true,
+                "--cfg-dir" => o.cfg_dir = Some(PathBuf::from(value("--cfg-dir")?)),
+                "--gui-do" => o.gui_do = Some(value("--gui-do")?),
                 "--supersample" => o.supersample = value("--supersample")?.parse().ok().filter(|n| (1..=4).contains(n)).ok_or("--supersample <1 to 4>")?,
                 "--free-camera" => o.free_camera = Some(FreeCamera::parse(&value("--free-camera")?)?),
                 "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),

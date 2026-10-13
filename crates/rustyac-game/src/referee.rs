@@ -177,6 +177,41 @@ pub struct RefereeHud {
     pub fade: f32,
     /// Task 28b: the pit menu while it is up, line by line (the cursor's line starts with `>`)
     pub pit: Vec<String>,
+    /// Task 29: the same moment as AC's HUD objects read it
+    pub gui: RefereeGui,
+}
+
+/// What AC's HUD objects read of the session through `Sim` (see `rustyac_gui::hud::HudInput`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RefereeGui {
+    pub session_type: i32,
+    /// `RaceManager::getPracticeQualifyText`, `getRaceText`
+    pub practice_qualify_text: String,
+    pub race_text: String,
+    /// `RaceManager::getTimeToSessionStart`, ms
+    pub time_to_session_start: f64,
+    /// `RaceManager::isRaceOver(0)`
+    pub race_over: bool,
+    /// `RaceManager::getSessionTimeLeft`, ms
+    pub session_time_left: f64,
+    /// the results are up (`Sim::isDisplayingResults`)
+    pub results_displayed: bool,
+    /// the flags `FlagManager::update` shows: blue, black, yellow, penalty, chequered
+    pub flags: [bool; 5],
+    /// the caption under the black flag
+    pub caption: String,
+    /// the player's car: `hasPenalty()`, `disableMinSpeedPenaltyClear`, the ms its controls
+    /// stay locked, `pitPenaltyLaps`, `isCurrentLapValid()`, `isBlackFlagged`
+    pub penalty_time: f64,
+    pub min_speed_penalty_clear_disabled: bool,
+    pub lock_controls_time: f32,
+    pub pit_penalty_laps: i16,
+    pub current_lap_valid: bool,
+    pub is_black_flagged: bool,
+    /// how much the player's car points against the road (over 0.4: the wrong way)
+    pub against_road: f32,
+    /// every car: its place on the leaderboard, its place on the road, its laps, its last lap (ms)
+    pub cars: Vec<(i32, i32, i32, u32)>,
 }
 
 fn session_name(kind: i32) -> &'static str {
@@ -319,6 +354,29 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
         out.time_to_start_ms = Some(manager.time_to_session_start());
     }
     let cars = manager.car_count();
+    out.gui = RefereeGui {
+        session_type: session.session_type,
+        practice_qualify_text: hud::practice_qualify_text(manager),
+        race_text: hud::race_text(manager),
+        time_to_session_start: manager.time_to_session_start(),
+        race_over: !referee.views.is_empty() && manager.is_race_over(0, &referee.views),
+        session_time_left: manager.session_time_left(),
+        results_displayed: manager.results_displayed,
+        flags: [referee.shown.blue, referee.shown.black, referee.shown.yellow, referee.shown.penalty, referee.shown.chequered],
+        caption: if referee.shown.black { referee.flags.black_flag_caption.to_string() } else { String::new() },
+        penalty_time: state.penalty_time,
+        min_speed_penalty_clear_disabled: state.min_speed_clear_disabled,
+        lock_controls_time: state.lock_controls_time as f32,
+        pit_penalty_laps: state.pit_penalty_laps,
+        current_lap_valid: state.current_lap_valid,
+        is_black_flagged: state.is_black_flagged,
+        against_road: referee.player_against_road,
+        cars: if referee.views.is_empty() {
+            Vec::new()
+        } else {
+            (0..cars).map(|car| (manager.car_leaderboard_position(car, &referee.views), manager.car_real_time_position(car, &referee.views), manager.lap_count(car) as i32, manager.timing.lap_dbs.get(car).and_then(|db| db.laps.last()).map_or(0, |lap| lap.time))).collect()
+        },
+    };
     if cars > 0 && !referee.views.is_empty() {
         let place = if session.session_type == SESSION_RACE { manager.car_real_time_position(0, &referee.views) + 1 } else { manager.car_leaderboard_position(0, &referee.views) };
         let db = &manager.timing.lap_dbs[0];

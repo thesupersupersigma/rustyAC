@@ -116,6 +116,9 @@ pub struct Referee {
     /// the mandatory pit window: laps of the leader (minutes in a timed race) at which it
     /// opens and closes; (0, 0): none, nothing is checked
     pub pit_window: (u16, u16),
+    /// how much the player's car points against the road (the last frame's `FlagCar`): the
+    /// wrong-way sign reads it
+    pub player_against_road: f32,
     /// the stops that began and ended in the last frame (`evPitStopCommit`, `evPitStopOver`):
     /// the pit crew and the sounds listen
     pub pit_began: Option<PitStopStart>,
@@ -199,6 +202,7 @@ impl Referee {
             menu: None,
             pit_avatar: PitAvatar::default(),
             pit_window: (0, 0),
+            player_against_road: 0.0,
             pit_began: None,
             pit_over: false,
             mandatory_pit_now: false,
@@ -378,6 +382,7 @@ impl Referee {
         self.pit_frame(world, now, &views);
         // FlagManager::update and the messages
         let flag_cars: Vec<FlagCar> = (0..world.car_count()).map(|index| self.flag_car(world.car(index))).collect();
+        self.player_against_road = flag_cars.first().map_or(0.0, |car| car.against_road);
         if world.car_count() > 0 {
             let player = Self::player_state(world.car(0));
             let penalty = PlayerPenalty { penalty_time: player.penalty_time, pit_penalty_laps: player.pit_penalty_laps };
