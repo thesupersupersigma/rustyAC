@@ -185,6 +185,8 @@ pub enum Menu {
     SpSession(crate::esc_menu::SpSession),
     SessionInfo(Box<crate::esc_menu::SessionInfo>),
     Replay(Box<crate::replay_interface::ReplayInterface>),
+    SetupScreen(Box<crate::setup_screen::SetupScreen>),
+    SetupTab(Box<crate::setup_tab::SetupTab>),
 }
 
 impl Gui {
@@ -475,6 +477,8 @@ impl Gui {
                 Menu::SpSession(_) => self.sp_session_render(id, dt, painter),
                 Menu::SessionInfo(_) => self.session_info_render(id, dt, painter),
                 Menu::Replay(_) => self.replay_render(id, dt, painter),
+                Menu::SetupScreen(_) => self.setup_screen_render(id, dt, painter),
+                Menu::SetupTab(_) => self.setup_tab_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -487,6 +491,7 @@ impl Gui {
                 Menu::Leaderboard(_) => self.leaderboard_on_visible_changed(id, visible),
                 Menu::Esc(_) => self.esc_menu_on_visible_changed(id, visible),
                 Menu::Replay(_) => self.replay_on_visible_changed(id),
+                Menu::SetupTab(_) => self.setup_tab_on_visible_changed(id, visible),
                 _ => self.control_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),

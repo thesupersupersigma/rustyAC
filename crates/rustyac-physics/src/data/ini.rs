@@ -85,6 +85,12 @@ fn decode_utf8_like_the_game(bytes: &[u8]) -> String {
     out
 }
 
+/// A plain file as a text-mode wide stream with that UTF-8 facet reads it (the setup help of
+/// `TagDocumentReader::load` @ 0x14044e030); none when it cannot be opened.
+pub fn read_text_utf8(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|bytes| decode_utf8_like_the_game(&text_mode(&bytes)))
+}
+
 /// `trim2` @ 0x140238290: cut after the last character that is not space, tab or CR; a
 /// string of only those becomes empty. The front is left alone.
 fn trim2(text: &mut String) {
@@ -180,6 +186,11 @@ impl IniReader {
     /// `INIReader::hasSection` @ 0x1402370b0
     pub fn has_section(&self, section: &str) -> bool {
         self.sections.contains_key(section)
+    }
+
+    /// `INIReader::getKeyes` @ 0x140235e10: the keys of a section, in the map's order.
+    pub fn keys(&self, section: &str) -> Vec<&str> {
+        self.sections.get(section).map(|keys| keys.keys().map(String::as_str).collect()).unwrap_or_default()
     }
 
     /// `INIReader::hasKey` @ 0x140236f00

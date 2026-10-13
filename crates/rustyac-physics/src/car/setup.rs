@@ -87,7 +87,7 @@ pub enum SetupTarget {
 }
 
 impl SetupTarget {
-    pub(crate) fn get(self, chassis: &RollingChassis) -> f32 {
+    pub fn get(self, chassis: &RollingChassis) -> f32 {
         use SetupTarget::*;
         match self {
             ArbK(a) => chassis.antiroll_bars[a].k,
@@ -227,6 +227,19 @@ pub struct SetupItem {
     pub attached: bool,
     /// `labelMultiplier`: display factor of the setup screen.
     pub label_multiplier: f32,
+    /// `units`: what the setup screen writes after the value.
+    pub units: String,
+}
+
+/// What the setup editor hands the physics thread (`PhysicsAvatar::executeOnPhysicsThread`):
+/// done before the next step.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SetupJob {
+    /// `SetupScreen::loadINI` @ 0x14017d950: the item has a spinner (`attached = true`; the
+    /// game writes the flag from the screen's own thread)
+    Attach { item: usize },
+    /// the spinners' job @ 0x140183620: `newValue`
+    SetNewValue { item: usize, value: f32 },
 }
 
 /// One value `SetupManager::step` changed.
@@ -355,7 +368,7 @@ impl SetupManager {
         let mut manager = SetupManager::default();
         let mut add = |name: String, target: SetupTarget, multiplier: f32, label_multiplier: f32| {
             let new_value = target.get(chassis) / multiplier;
-            manager.items.push(SetupItem { name, target, multiplier, new_value, attached: false, label_multiplier });
+            manager.items.push(SetupItem { name, target, multiplier, new_value, attached: false, label_multiplier, units: String::new() });
         };
         add("ARB_FRONT".into(), ArbK(0), 1.0, 1.0);
         add("ARB_REAR".into(), ArbK(1), 1.0, 1.0);
@@ -429,13 +442,14 @@ impl SetupManager {
                     new_value: ratio / 1.0,
                     attached: true,
                     label_multiplier: 1.0,
+                    units: String::new(),
                 });
             }
             manager.gear_settings = ratios;
         }
         let mut add = |name: String, target: SetupTarget, multiplier: f32, label_multiplier: f32, attached: bool| {
             let new_value = target.get(chassis) / multiplier;
-            manager.items.push(SetupItem { name, target, multiplier, new_value, attached, label_multiplier });
+            manager.items.push(SetupItem { name, target, multiplier, new_value, attached, label_multiplier, units: String::new() });
         };
         if chassis.drivetrain.is_some() {
             add("FINAL_RATIO".into(), FinalRatio, 1.0, 1.0, true);
@@ -603,6 +617,22 @@ impl SetupManager {
             log.push(format!("{} = {position}{note}", item.name));
         }
         Ok(log)
+    }
+
+    /// A job of the setup editor (see [`SetupJob`]).
+    pub fn apply_job(&mut self, job: &SetupJob) {
+        match *job {
+            SetupJob::Attach { item } => {
+                if let Some(item) = self.items.get_mut(item) {
+                    item.attached = true;
+                }
+            }
+            SetupJob::SetNewValue { item, value } => {
+                if let Some(item) = self.items.get_mut(item) {
+                    item.new_value = value;
+                }
+            }
+        }
     }
 
     /// `SetupManager::getSetupItem` @ 0x14028ca50: the item of that name (its place in

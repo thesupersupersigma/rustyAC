@@ -309,4 +309,5 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     crate::gui_ac_pit::dump(game, out);
     crate::gui_ac_menu::dump(game, out);
     crate::gui_seq_menu::dump_actions(out);
+    crate::gui_ac_setup::items(out);
 }

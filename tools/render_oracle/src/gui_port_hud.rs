@@ -81,4 +81,5 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     crate::gui_port_pit::dump(hud, gui, out);
     crate::gui_port_menu::dump(hud, gui, out);
     crate::gui_seq_menu::dump_actions(out);
+    crate::gui_port_setup::items(out);
 }

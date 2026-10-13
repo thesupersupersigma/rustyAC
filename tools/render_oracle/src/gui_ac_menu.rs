@@ -383,6 +383,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         crate::gui_ac_replay::call(game, gui, h, what, number, text);
         return Ok(());
     }
+    if what.starts_with("menu.setup") {
+        return crate::gui_ac_setup::call(game, gui, h, what, number, text);
+    }
     if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl") {
         crate::gui_ac_race::install(game);
         crate::gui_ac_race::sync(h);

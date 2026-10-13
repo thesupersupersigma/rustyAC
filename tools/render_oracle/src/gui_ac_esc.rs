@@ -198,6 +198,10 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &HudGame, what: &str, number: f
                     (VA_CAR_IS_IN_PIT, is_in_pit as *const () as usize),
                     (VA_LOAD_PREVIOUS_SESSION_USER_CAMERA, load_previous_session_user_camera as *const () as usize),
                 ] {
+                    // (a script with a car of the game has the game's own setup editor)
+                    if va == VA_SETUP_SCREEN_CTOR && !crate::gui_ac_setup::car().is_null() {
+                        continue;
+                    }
                     jump(game, va, to);
                 }
             }

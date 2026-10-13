@@ -192,6 +192,12 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
     }
     sync(hud, gui);
     match what {
+        "menu.setupCar" => {
+            gui.locale = rustyac_gui::locale::Locale::load(root, "en");
+            gui.setup.track_name = "nowhere".to_string();
+            gui.setup.use_mouse_pitstop = true;
+            gui.setup_car = Some(Box::new(crate::gui_port_setup::make_car(root, text, number as i32)?));
+        }
         "menu.lb" => {
             let board = gui.new_leaderboard(painter, number as i32, text == "focus");
             gui.add_root(painter, board);
@@ -361,7 +367,14 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             fn table(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
                 gui.new_control(painter, "ESC_MENU_TIME_TABLE")
             }
+            fn setup_editor(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                gui.new_setup_screen(painter, None)
+            }
+            let setup = if gui.setup_car.is_some() { setup_editor } else { setup };
+            // (the game's side hears the widgets only once they are made)
+            let heard = gui.widget_events.len();
             let id = gui.new_esc_menu(painter, fades.as_ref(), EscPages { setup_screen: Some(setup), comparative_telemetry: Some(telemetry), time_table: Some(table) });
+            gui.widget_events.truncate(heard);
             gui.add_root(painter, id);
             gui.sim.esc_menu = Some(id);
             hud.more.menus.pits = Some(id);
@@ -388,6 +401,16 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
     match &gui.controls[id].kind {
         rustyac_gui::control::Kind::Menu(menu) => match &**menu {
             rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
+            rustyac_gui::menus::Menu::SetupScreen(_) => "SetupScreen",
+            rustyac_gui::menus::Menu::SetupTab(tab) => match tab.kind {
+                rustyac_gui::setup_tab::TabKind::Generic => "SetupTab",
+                rustyac_gui::setup_tab::TabKind::Io(_) => "SetupIOManager",
+                rustyac_gui::setup_tab::TabKind::Gears(_) => "SetupGearManager",
+                rustyac_gui::setup_tab::TabKind::Tyres(_) => "SetupTyresManager",
+                rustyac_gui::setup_tab::TabKind::Fuel(_) => "SetupFuelManager",
+                rustyac_gui::setup_tab::TabKind::Electronics(_) => "SetupElectronics",
+                rustyac_gui::setup_tab::TabKind::Presets(_) => "SetupPitstopPresets",
+            },
             rustyac_gui::menus::Menu::Leaderboard(_) => "Leaderboard",
             rustyac_gui::menus::Menu::EndCommon(_) => "EndCommon",
             rustyac_gui::menus::Menu::Esc(_) => "ESCMenu",

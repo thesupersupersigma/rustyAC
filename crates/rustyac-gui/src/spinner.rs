@@ -73,6 +73,14 @@ impl Gui {
         }
     }
 
+    /// `dynamic_cast<ksgui::Spinner*>`.
+    pub fn is_spinner(&self, id: Id) -> bool {
+        use crate::control::Kind;
+        use crate::widgets::Widget;
+        use crate::widgets2::Widget2;
+        matches!(&self.controls[id].kind, Kind::Widget(w) if matches!(&**w, Widget::More(Widget2::More(Widget3::Spinner(_)))))
+    }
+
     pub fn spinner_mut(&mut self, id: Id) -> &mut Spinner {
         match self.widget3_mut(id) {
             Widget3::Spinner(s) => s,

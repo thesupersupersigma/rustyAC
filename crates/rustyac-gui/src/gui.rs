@@ -109,6 +109,13 @@ pub struct Gui {
     pub time_ms: f64,
     /// what the menus read of `Sim` and ask of it
     pub sim: crate::menus::SimLink,
+    /// the strings of the setup editor
+    pub locale: crate::locale::Locale,
+    /// the car of the player as the setup editor sees it (none: there is no editor)
+    pub setup_car: Option<Box<dyn crate::setup_car::SetupCar>>,
+    pub setup: crate::setup_car::SetupLink,
+    /// `SetupTab::fixedVector`: the spinners a fixed setup has set
+    pub setup_fixed: Vec<Id>,
 }
 
 impl Gui {
@@ -145,6 +152,10 @@ impl Gui {
             graph_gl: None,
             time_ms: 0.0,
             sim: crate::menus::SimLink::default(),
+            locale: crate::locale::Locale::default(),
+            setup_car: None,
+            setup: crate::setup_car::SetupLink::default(),
+            setup_fixed: Vec::new(),
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
         gui.taskbar = gui.new_taskbar(painter);

@@ -229,7 +229,7 @@ pub fn dump_actions(out: &mut String) {
 
 const DT: f32 = 1.0 / 60.0;
 
-fn hud(what: &'static str, number: f32, text: &'static str) -> Op {
+pub(crate) fn hud(what: &'static str, number: f32, text: &'static str) -> Op {
     Op::Hud(what, number, text)
 }
 
@@ -531,7 +531,7 @@ pub fn race_sessions() -> usize {
     RACE.lock().unwrap().as_ref().map_or(0, |race| race.sessions.len())
 }
 
-fn leak(text: String) -> &'static str {
+pub(crate) fn leak(text: String) -> &'static str {
     Box::leak(text.into_boxed_str())
 }
 
@@ -542,7 +542,7 @@ const NATIONS: [&str; 8] = ["ITA", "DEU", "", "FRA", "GBR", "ZZZ", "MCO", "CHE"]
 const SKINS: [&str; 4] = ["00_official", "01_ferrari_1", "02_ferrari_2", "no_such_skin"];
 
 /// The cars of the tables' scripts: names, nations, liveries, tyres.
-fn field(o: &mut Vec<Op>, cars: usize) {
+pub(crate) fn field(o: &mut Vec<Op>, cars: usize) {
     o.extend([hud("create", cars as f32, ""), hud("race.cars", cars as f32, ""), hud("session", 1.0, ""), hud("pqText", 0.0, "Practice")]);
     for i in 0..cars {
         let index = leak(i.to_string());

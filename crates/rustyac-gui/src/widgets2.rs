@@ -824,7 +824,12 @@ impl Gui {
     /// `TabBar::render` 0x140258530: the bar is 88 hundredths of its parent wide; the chosen
     /// tab slides to 226 pixels from its left at 2500 pixels a second.
     fn tab_bar_render(&mut self, id: Id, dt: f32, painter: &mut dyn Painter) {
-        // updateTabBarPosition 0x140258810
+        self.tab_bar_update_position(id);
+        self.tab_bar_render_rest(id, dt, painter);
+    }
+
+    /// `TabBar::updateTabBarPosition` 0x140258810.
+    pub fn tab_bar_update_position(&mut self, id: Id) {
         if let Some(parent) = self.controls[id].parent {
             let p = self.controls[parent].rect;
             let w = p.right - p.left;
@@ -836,6 +841,9 @@ impl Gui {
             self.set_position(right, ((r.right - r.left) - 24.0) - 1.0, 0.0);
             self.set_position(id, x, 0.0);
         }
+    }
+
+    fn tab_bar_render_rest(&mut self, id: Id, dt: f32, painter: &mut dyn Painter) {
         self.tab_bar_update_roll_on_index(id);
         // updateTabs 0x1402588b0
         let step = dt * 2500.0;

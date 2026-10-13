@@ -1001,6 +1001,9 @@ fn text() -> Vec<Op> {
 
 pub fn sequence(name: &str) -> Result<Sequence, String> {
     let plain = |ops: Vec<Op>| Sequence { ops, cfg: &[], acos: None, allow_overlapping: false };
+    if let Some(ops) = crate::gui_seq_setup::sequence(name) {
+        return Ok(plain(ops));
+    }
     Ok(match name {
         "base" => plain(base()),
         "text" => plain(text()),

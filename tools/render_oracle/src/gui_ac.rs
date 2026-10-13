@@ -92,7 +92,7 @@ unsafe extern "C" fn not_called() {
 
 pub unsafe fn class_of(game: &Game, object: *const u8) -> &'static str {
     let table: usize = rd(object, 0);
-    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).chain(crate::gui_ac_menu::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).chain(crate::gui_ac_menu::CLASSES.iter()).chain(crate::gui_ac_setup::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
 }
 
 pub unsafe fn children(object: *const u8) -> Vec<*mut u8> {
@@ -437,6 +437,7 @@ impl Side<'_> {
 /// file (or none) and the gameplay settings where `INIReaderDocuments` looks for them.
 pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
     crate::root::prepare(args)?;
+    crate::gui_seq_setup::prepare_root(args, sequence)?;
     let to = args.root.join("content/fonts");
     std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
     let from = args.game.join("content/fonts");
