@@ -80,6 +80,9 @@ pub trait Painter {
     fn gl_quad(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, textured: bool);
     /// `GLRenderer::quadCentred` 0x1401ff540.
     fn gl_quad_centred(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, textured: bool);
+    /// `GLRenderer::quadCentredRotated` 0x1401ff6b0
+    #[allow(clippy::too_many_arguments)]
+    fn gl_quad_centred_rotated(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, angle: f32, textured: bool);
 
     /// `Font::getFontWrapper` 0x1402010d0: the wrapper of a family, italic or not, bold or not.
     fn font_wrapper(&mut self, family: &str, italic: bool, bold: bool) -> usize;

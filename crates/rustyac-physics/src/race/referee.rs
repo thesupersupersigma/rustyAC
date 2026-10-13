@@ -627,6 +627,19 @@ impl Referee {
         self.apply(vec![Action::GoToPit(0)], world);
     }
 
+    /// Task 30: the ESC menu shows (`ESCMenu::render` 0x1400fe420 locks the player's controls,
+    /// every frame it is drawn).
+    pub fn pits_lock(&mut self, world: &mut dyn World) {
+        world.car_mut(0).queue(|car| car.lock_controls(true));
+    }
+
+    /// Task 30: the ESC menu's "Drive" (the job `Sim::startGame` leaves for the end of the
+    /// fade, 0x140195cf0): `startRace(10000)`, and the player's controls are free again.
+    pub fn drive(&mut self, world: &mut dyn World) {
+        self.start_race(10000.0, world);
+        world.car_mut(0).queue(|car| car.lock_controls(false));
+    }
+
     /// `RaceManager::shutdown` @ 0x140141320 and `Sim::writeOutputJson`: the current
     /// session's results are made if they were not, and the two files' bytes are returned:
     /// `race_out.json` and `laps.ini`.

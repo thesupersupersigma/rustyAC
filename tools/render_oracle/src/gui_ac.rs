@@ -78,6 +78,10 @@ unsafe extern "C" fn click_recorder(_this: *mut u8, event: *const u8) {
     let control: *const u8 = rd(event, 0);
     let (x, y): (i32, i32) = (rd(event, 8), rd(event, 0xc));
     let name = if control.is_null() { String::from("<null>") } else { read_wstring(control.add(8)) };
+    if crate::gui_ac_esc::synthetic() {
+        EVENTS.lock().unwrap().push(format!("click \"{name}\" by the menu itself"));
+        return;
+    }
     EVENTS.lock().unwrap().push(format!("click \"{name}\" {x} {y}"));
 }
 
@@ -534,7 +538,9 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     crate::gui_ac_hud::update(&game, *dt);
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     crate::gui_ac_menu::client_present(true);
+                    crate::gui_ac_esc::sun(&game, true);
                     render(gui, *dt);
+                    crate::gui_ac_esc::sun(&game, false);
                     crate::gui_ac_menu::client_present(false);
                     crate::gui_ac_hud::render_hud(&game, *dt);
                     crate::gui_ac2::render_hud(&game, gui, *dt);

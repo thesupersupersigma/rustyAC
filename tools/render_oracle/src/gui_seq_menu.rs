@@ -18,6 +18,27 @@ pub struct MenuScript {
     pub replay_manager: bool,
     /// the player's car as the pit menu reads it
     pub pit: PitScript,
+    /// what the ESC menu and its pages read
+    pub esc: EscScript,
+}
+
+/// What a script says of the session for the ESC menu.
+#[derive(Clone, Copy, Debug)]
+pub struct EscScript {
+    /// the player's car's `setupState`; `RaceManager::fixedSetup`
+    pub setup_state: i32,
+    pub fixed_setup: bool,
+    /// `RaceManager::getTimetoWait`; `Game::gameTime.now`; `CarAvatar::isInPit`
+    pub time_to_wait: f64,
+    pub game_time: f64,
+    pub in_pit: bool,
+    /// the track's grip, the sun's angle, the air's and the road's temperature, the wind
+    pub grip: f32,
+    pub sun_angle: f32,
+    pub ambient: f32,
+    pub road: f32,
+    pub wind_speed: f32,
+    pub wind_direction: f32,
 }
 
 /// What a script says of the player's car for the pit menu.
@@ -47,6 +68,7 @@ static SCRIPT: Mutex<MenuScript> = Mutex::new(MenuScript {
     session_count: 1,
     replay_manager: false,
     pit: PitScript { max_fuel: 0.0, compounds: Vec::new(), pressure: [0; 4], wing: [0.0; 8], in_pitlane: false, fuel_per_lap: 0.0, spline: 0.0, total_time: 0, timed: false, state: 0, times: [0.0; 5] },
+    esc: EscScript { setup_state: 1, fixed_setup: false, time_to_wait: 0.0, game_time: 0.0, in_pit: false, grip: 1.0, sun_angle: 0.0, ambient: 0.0, road: 0.0, wind_speed: 0.0, wind_direction: 0.0 },
 });
 
 /// The car's `data/setup.ini` of the pit menu's scripts (made up: no car of the game has it).
@@ -133,6 +155,20 @@ pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
     match what {
         "menu.sessions" => s.session_count = number as u32,
         "menu.replayManager" => s.replay_manager = number != 0.0,
+        "menu.env" => match _text {
+            "setup" => s.esc.setup_state = number as i32,
+            "fixedSetup" => s.esc.fixed_setup = number != 0.0,
+            "wait" => s.esc.time_to_wait = number as f64,
+            "now" => s.esc.game_time = number as f64,
+            "inPit" => s.esc.in_pit = number != 0.0,
+            "grip" => s.esc.grip = number,
+            "sun" => s.esc.sun_angle = number,
+            "ambient" => s.esc.ambient = number,
+            "road" => s.esc.road = number,
+            "wind" => s.esc.wind_speed = number,
+            "windDirection" => s.esc.wind_direction = number,
+            _ => return false,
+        },
         "pit.maxFuel" => s.pit.max_fuel = number,
         "pit.compounds" => s.pit.compounds = _text.split('|').filter(|c| !c.is_empty()).map(str::to_string).collect(),
         "pit.inPitlane" => s.pit.in_pitlane = number != 0.0,
@@ -390,12 +426,26 @@ pub fn race_input(what: &str, number: f32, text: &str) -> bool {
                 .split('|')
                 .filter(|session| !session.is_empty())
                 .map(|session| {
-                    let mut parts = session.splitn(3, ':');
-                    RaceSession { session_type: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0), is_timed_race: parts.next() == Some("1"), name: parts.next().unwrap_or("").to_string() }
+                    // type:timed:name, and then laps:minutes:start for who reads them
+                    let mut parts = session.split(':');
+                    RaceSession {
+                        session_type: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0),
+                        is_timed_race: parts.next() == Some("1"),
+                        name: parts.next().unwrap_or("").to_string(),
+                        laps: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0),
+                        duration_minutes: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0.0),
+                        start_time: parts.next().and_then(|t| t.parse().ok()).unwrap_or(0.0),
+                    }
                 })
                 .collect()
         }
         "race.current" => race.current_session_index = number as i32,
+        "race.inverted" => race.inverted_grid_positions = number as i32,
+        "race.pitWindow" => {
+            let (start, end) = text.split_once(',').unwrap_or(("0", "0"));
+            race.pit_window_start = start.parse().unwrap_or(0);
+            race.pit_window_end = end.parse().unwrap_or(0);
+        }
         "race.board" => race.leaderboard = entries(text),
         "race.history" => {
             let index = number as usize;
@@ -434,6 +484,7 @@ pub fn race_input(what: &str, number: f32, text: &str) -> bool {
                 "race.car.lastValid" => car.last_lap.is_valid = number != 0.0,
                 "race.car.best" => car.best_lap = number as u32,
                 "race.car.done" => car.has_completed_flag = number != 0.0,
+                "race.car.laps" => car.lap_count = number as u32,
                 _ => return false,
             }
         }
@@ -797,5 +848,90 @@ pub fn overlay(cars: usize, vertical: bool) -> Vec<Op> {
     }
     // a face the file can say and F9 cannot
     o.extend([hud("menu.overlayMode", 7.0, side), Op::Frame(DT), hud("menu.overlayF9", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// The ESC menu's own state in the dump: which child is the picked button, whether "Drive"
+/// was ever pressed, the fade's seconds.
+pub fn esc_extra(last: i32, drive_pressed: bool, fade: f32) -> String {
+    format!(" esc={last},{},{:08x}", drive_pressed as u8, fade.to_bits())
+}
+
+/// The ESC menu (the menu of the pits) with its page "Race control". `kind`: 0 a practice
+/// with two sessions after it, 1 the race of a weekend (laps, then by the clock), 2 one
+/// session whose setup is fixed.
+pub fn esc_menu(kind: u32) -> Vec<Op> {
+    let mut o = Vec::new();
+    let cars = if kind == 2 { 3 } else { 12 };
+    field(&mut o, cars);
+    let env = |o: &mut Vec<Op>, what: &'static str, value: f32| o.push(hud("menu.env", value, what));
+    let sessions = match kind {
+        0 => "1:0:Practice:0:30:0|2:0:Qualifying:0:15:0|3:0:Quick Race:5:0:0",
+        1 => "1:0:Practice:0:90:0|3:0:Race:12:0:20000|3:1:endurance:0:125.5:20000",
+        _ => "4:0:Hotlap:0:0:0",
+    };
+    o.extend([hud("race.sessions", 0.0, sessions), hud("race.current", if kind == 1 { 1.0 } else { 0.0 }, ""), hud("race.board", 0.0, board(cars, kind == 1, 0)), hud("session", [1.0, 3.0, 4.0][kind as usize], ""), hud("timeLeft", 1_234_567.0, "")]);
+    if kind == 1 {
+        o.push(hud("race.history", 0.0, board(cars, false, 2)));
+    }
+    for (what, value) in [("grip", 0.9734), ("sun", -32.5), ("ambient", 26.4), ("road", 31.9), ("wind", 3.3), ("windDirection", 135.0), ("now", 61_000.0), ("fixedSetup", (kind == 2) as u8 as f32)] {
+        env(&mut o, what, value);
+    }
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let (drive, setup, time, telemetry, control, exit) = (125 + 48, 225 + 48, 325 + 48, 425 + 48, 525 + 48, 720 - 97 + 48);
+    // made, hidden; shown: off line the page "Race control" opens by itself
+    o.extend([hud("menu.escMenu", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    for y in [drive, setup, time, telemetry, control, exit] {
+        o.extend([Op::MouseMove(50, y), Op::Frame(DT)]);
+    }
+    // the pages by their buttons: another page, the same button again, the fixed setup's message
+    for y in [time, telemetry, setup, setup, telemetry, telemetry, control] {
+        click(&mut o, 50, y);
+    }
+    o.push(Op::Frame(1.0));
+    // the session's panel: the setup's state, a session not started, no time left, the clock
+    for state in [0.0, 2.0, 5.0, 1.0] {
+        env(&mut o, "setup", state);
+        o.push(Op::Frame(DT));
+    }
+    o.extend([hud("tts", 3000.0, ""), Op::Frame(DT), hud("tts", 0.0, ""), hud("timeLeft", 0.0, ""), Op::Frame(DT), hud("timeLeft", 4_000_000.0, ""), Op::Frame(DT), hud("timeLeft", 59_999.0, ""), Op::Frame(DT)]);
+    for (what, value) in [("sun", 80.0), ("sun", -200.5), ("ambient", -3.7), ("road", 0.4), ("wind", 27.9), ("windDirection", -45.0), ("grip", 1.0)] {
+        env(&mut o, what, value);
+        o.push(Op::Frame(DT));
+    }
+    if kind == 1 {
+        // a race by laps: what the leader has left; the grid turned round; a pit window
+        let leader = leak(((3) % cars).to_string());
+        o.extend([hud("race.car.laps", 4.0, leader), Op::Frame(DT), hud("race.car.laps", 40.0, leader), Op::Frame(DT), hud("race.inverted", 1.0, ""), hud("race.pitWindow", 0.0, "3,9"), Op::Frame(DT)]);
+        // the race by the clock that follows
+        o.extend([hud("race.history", 1.0, board(cars, true, 3)), hud("race.current", 2.0, ""), hud("race.board", 0.0, board(cars, true, 5)), hud("menu.newSession", 0.0, ""), Op::Frame(DT), hud("race.pitWindow", 0.0, "0,0"), hud("race.inverted", 0.0, ""), Op::Frame(DT)]);
+    } else if kind == 0 {
+        o.extend([hud("race.history", 0.0, board(cars, false, 4)), hud("race.current", 1.0, ""), hud("race.board", 0.0, board(cars, false, 1)), hud("session", 2.0, ""), hud("menu.newSession", 0.0, ""), Op::Frame(DT)]);
+    }
+    // the table of the page hears the mouse; the three buttons of the session's panel
+    click(&mut o, 425 + 150 + 20, 55 + 20 + 12);
+    click(&mut o, 425 + 300, 55 + 20 + 45);
+    for x in [45, 130, 215] {
+        o.extend([Op::MouseMove(120 + x + 20, 273 + 30 + 20), Op::Frame(DT)]);
+        click(&mut o, 120 + x + 20, 273 + 30 + 20);
+    }
+    // "Drive": the camera fades, then the car is let go and the game's screen is back
+    click(&mut o, 50, drive);
+    o.extend([Op::Frame(DT), hud("menu.fadeDone", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    // back in the pits: the page is as it was left; "Drive" forbidden, then allowed
+    o.extend([hud("menu.escShow", 0.0, ""), Op::Frame(DT), hud("menu.driveEnabled", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, 50, drive);
+    o.extend([hud("menu.driveEnabled", 1.0, ""), Op::Frame(DT)]);
+    click(&mut o, 50, drive);
+    o.extend([hud("menu.fadeDone", 0.0, ""), Op::Frame(DT)]);
+    // with no page picked the menu opens "Race control" again, but not from the free camera
+    o.extend([hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, 50, control);
+    o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT), hud("cameraMode", 5.0, ""), hud("menu.escShow", 0.0, ""), Op::Frame(DT), hud("menu.resume", 0.0, ""), hud("cameraMode", 0.0, ""), hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, 50, time);
+    o.extend([hud("menu.raceControl", 0.0, ""), Op::Frame(DT), hud("menu.raceControl", 0.0, ""), Op::Frame(DT)]);
+    // "Exit"
+    click(&mut o, 50, exit);
+    o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT)]);
     o
 }

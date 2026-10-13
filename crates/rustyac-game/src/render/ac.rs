@@ -1386,6 +1386,7 @@ impl AcRenderer {
                     super::scene::CameraMode::Car => 1,
                     super::scene::CameraMode::Drivable => 2,
                 };
+                gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
                 gui.render(&mut self.graphics, dt);
             }

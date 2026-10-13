@@ -24,6 +24,8 @@ pub struct Menus {
     pub tab: Option<rustyac_gui::leaderboard::SessionLeaderboard>,
     pub app: Option<Id>,
     pub overlay: Option<rustyac_gui::overlay_leaderboard::OverlayLeaderboard>,
+    /// the ESC menu itself (`esc` is the stand-in the pause menu's scripts have)
+    pub pits: Option<Id>,
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
@@ -40,9 +42,26 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     gui.sim.session_count = s.session_count;
     gui.sim.time_to_session_start = hud.input.time_to_session_start;
     gui.sim.has_replay_manager = s.replay_manager;
+    if let Some(pits) = hud.more.menus.pits {
+        hud.input.esc_menu_visible = gui.controls[pits].visible;
+        hud.input.esc_menu_width = gui.controls[pits].rect.right;
+    }
     if let Some(esc) = hud.more.menus.esc {
         gui.controls[esc].visible = hud.input.esc_menu_visible;
     }
+    let e = s.esc;
+    gui.sim.setup_state = e.setup_state;
+    gui.sim.fixed_setup = e.fixed_setup;
+    gui.sim.time_to_wait = e.time_to_wait;
+    gui.sim.game_time = e.game_time;
+    gui.sim.player_in_pit = e.in_pit;
+    gui.sim.session_time_left = hud.input.session_time_left;
+    gui.sim.track_grip = e.grip;
+    gui.sim.sun_angle = e.sun_angle;
+    gui.sim.ambient_temperature = e.ambient;
+    gui.sim.road_temperature = e.road;
+    gui.sim.wind_speed = e.wind_speed;
+    gui.sim.wind_direction_deg = e.wind_direction;
     if let Some(pause) = hud.more.menus.pause {
         hud.input.pause_menu_visible = gui.controls[pause].visible;
     } else if let Some(stand_in) = hud.more.menus.pause_stand_in {
@@ -53,6 +72,7 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
 /// The calls the menus made since the last time, written down; the one on the message banner
 /// is carried out.
 pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
+    let mut focus = false;
     for a in std::mem::take(&mut gui.sim.actions) {
         match a {
             SimAction::SetPauseMode(paused) => action(format!("setPauseMode {}", paused as u8)),
@@ -75,7 +95,23 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::SetCameraMode(mode) => action(format!("setMode {mode}")),
             SimAction::SetIntroMode(on) => action(format!("setIntroMode {}", on as u8)),
             SimAction::SetControlsLock(on) => action(format!("setControlsLock {}", on as u8)),
+            SimAction::AddMessage { title, text } => {
+                if let Some(message) = &mut hud.message {
+                    message.add_message(gui, &title, &text, 0);
+                }
+            }
+            SimAction::StartRace(wait) => action(format!("startRace {:08x}", wait.to_bits())),
+            // (a member the game writes without a call: its side sees it when the job is over)
+            SimAction::FocusPlayerCar => focus = true,
+            SimAction::DriveMenuPressed => {}
+            SimAction::LoadPreviousSessionUserCamera => action("loadPreviousSessionUserCamera".into()),
         }
+    }
+    if focus {
+        action("focusPlayerCar".into());
+    }
+    if let Some(pits) = hud.more.menus.pits {
+        hud.input.esc_menu_visible = gui.controls[pits].visible;
     }
     if let Some(pause) = hud.more.menus.pause {
         hud.input.pause_menu_visible = gui.controls[pause].visible;
@@ -209,6 +245,44 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             }
         }
         "menu.fadeDone" => gui.sim_fade_in_finished(),
+        "menu.escMenu" => {
+            use rustyac_gui::esc_menu::EscPages;
+            gui.sim.online = hud.input.online;
+            gui.sim.game_screen = Some(screen);
+            sync(hud, gui);
+            let fades = IniReader::load(&root.join("system/cfg/fades.ini")).ok();
+            fn setup(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                let id = gui.new_control(painter, "SETUP_SCREEN");
+                gui.controls[id].back_color = [0.0; 4];
+                gui.set_position(id, 100.0, 0.0);
+                gui.controls[id].visible = false;
+                gui.controls[id].draw_border = false;
+                gui.controls[id].draw_background = false;
+                id
+            }
+            fn telemetry(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                gui.new_form(painter, "COMPARATIVE_TELEMETRY", false)
+            }
+            fn table(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                gui.new_control(painter, "ESC_MENU_TIME_TABLE")
+            }
+            let id = gui.new_esc_menu(painter, fades.as_ref(), EscPages { setup_screen: Some(setup), comparative_telemetry: Some(telemetry), time_table: Some(table) });
+            gui.add_root(painter, id);
+            gui.sim.esc_menu = Some(id);
+            hud.more.menus.pits = Some(id);
+        }
+        "menu.escShow" => {
+            sync(hud, gui);
+            gui.sim_activate_esc_menu();
+        }
+        "menu.driveEnabled" => {
+            let id = hud.more.menus.pits.ok_or("no ESC menu")?;
+            gui.esc_menu_set_drive_button_enabled(id, number != 0.0);
+        }
+        "menu.raceControl" => {
+            let id = hud.more.menus.pits.ok_or("no ESC menu")?;
+            gui.esc_menu_set_race_control_screen(id);
+        }
         other => return Err(format!("the port side knows no menu call {other:?}")),
     }
     drain(hud, gui);
@@ -221,6 +295,10 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
             rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
             rustyac_gui::menus::Menu::Leaderboard(_) => "Leaderboard",
             rustyac_gui::menus::Menu::EndCommon(_) => "EndCommon",
+            rustyac_gui::menus::Menu::Esc(_) => "ESCMenu",
+            rustyac_gui::menus::Menu::RaceControl(_) => "RaceControlScreen",
+            rustyac_gui::menus::Menu::SpSession(_) => "RaceControlSPSession",
+            rustyac_gui::menus::Menu::SessionInfo(_) => "RaceControlSessionInfo",
         },
         _ => "?",
     }
@@ -231,6 +309,11 @@ pub fn extra(gui: &Gui, id: Id) -> String {
         "PauseMenu" => {
             let p = gui.pause_menu(id);
             format!(" pause={} fade={:08x}", p.currently_selected_button, p.fade_seconds.to_bits())
+        }
+        "ESCMenu" => {
+            let m = gui.esc_menu(id);
+            let index = m.last_selected.and_then(|last| gui.controls[id].controls.iter().position(|c| *c == last)).map_or(-1, |i| i as i32);
+            crate::gui_seq_menu::esc_extra(index, m.drive_menu_pressed, m.fade_time)
         }
         "Leaderboard" => {
             let l = gui.leaderboard(id);

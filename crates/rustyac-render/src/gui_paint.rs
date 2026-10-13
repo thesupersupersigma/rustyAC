@@ -129,6 +129,10 @@ impl Painter for GuiPainter<'_> {
         self.with_gl(gl, |g, graphics| g.quad_centred(graphics, x, y, w, h, textured, None));
     }
 
+    fn gl_quad_centred_rotated(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, angle: f32, textured: bool) {
+        self.with_gl(gl, |g, graphics| g.quad_centred_rotated(graphics, x, y, w, h, angle, textured, None));
+    }
+
     fn font_wrapper(&mut self, family: &str, italic: bool, bold: bool) -> usize {
         // (none: an index no wrapper has, so that nothing is drawn with it)
         self.state.fonts.get_font_wrapper(&self.graphics.kgl, family, italic, bold).unwrap_or(usize::MAX)

@@ -184,6 +184,9 @@ pub struct RefereeHud {
     /// Task 30: the standings as AC's tables read them (`RaceManager`'s answers; the cars'
     /// names and looks are the picture's side's to add)
     pub race: Option<rustyac_gui::leaderboard::RaceLink>,
+    /// Task 30: what the ESC menu's "Race control" says of the day: the track's grip, the
+    /// air's and the road's temperature, the wind's speed (m/s) and direction (degrees)
+    pub env: [f32; 5],
 }
 
 /// What AC's pit menu (`QuickMenuPitstop`) and `PitStop::renderHUD` show: the menu as it is,
@@ -441,16 +444,30 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
                     has_completed_flag: db.has_completed_last_lap,
                     current_splits: db.current_splits.clone(),
                     personal_best_splits: db.personal_best_splits.clone(),
+                    // RaceManager::getLapCount
+                    lap_count: db.laps.len() as u32,
                     ..RaceCar::default()
                 })
                 .collect(),
-            sessions: manager.sessions.iter().map(|s| RaceSession { session_type: s.session_type, is_timed_race: s.is_timed_race, name: s.name.clone() }).collect(),
+            sessions: manager
+                .sessions
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    // (the running session's start is the manager's own copy's)
+                    let s = if i as i32 == manager.current_session_index { &manager.current_session } else { s };
+                    RaceSession { session_type: s.session_type, is_timed_race: s.is_timed_race, name: s.name.clone(), laps: s.laps, duration_minutes: s.duration_minutes, start_time: s.start_time }
+                })
+                .collect(),
             current_session_index: manager.current_session_index,
             leaderboard: manager.timing.leaderboard.iter().map(entry).collect(),
             leaderboard_history: manager.leaderboard_history.iter().map(|board| board.iter().map(entry).collect()).collect(),
             global_best_lap: manager.timing.global_best_lap,
             best_splits: manager.timing.best_splits.clone(),
+            ..RaceLink::default()
         });
+        let env = &player.env;
+        out.env = [env.dynamic_grip_level, env.ambient_temperature, env.road_temperature, env.wind_speed, env.wind_direction_deg];
     }
     if let (Some(stop), Some(menu)) = (&referee.pit, &referee.menu) {
         let car = rustyac_gui::pit_menu::PitMenuCar {

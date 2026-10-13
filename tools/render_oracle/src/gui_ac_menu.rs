@@ -42,7 +42,12 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 4] = [("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998), ("Form", 0x1b8, VA_LEADERBOARD_APP_CTOR, 0x1_4050_e8c0)];
+pub const CLASSES: [(&str, usize, usize, usize); 8] = [
+    ("ESCMenu", 0x260, crate::gui_ac_esc::VA_ESC_MENU_CTOR, crate::gui_ac_esc::VA_ESC_MENU_VTABLE),
+    ("RaceControlScreen", 0x1b8, 0x1_400b_2370, 0x1_404b_96e0),
+    ("RaceControlSPSession", 0x1a8, 0x1_400b_7e90, 0x1_404b_a318),
+    ("RaceControlSessionInfo", 0x2b8, 0x1_400b_3660, 0x1_404b_99f0),
+    ("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998), ("Form", 0x1b8, VA_LEADERBOARD_APP_CTOR, 0x1_4050_e8c0)];
 const VA_LEADERBOARD_APP_CTOR: usize = 0x1_4032_9bf0;
 const VA_SESSION_LEADERBOARD_CTOR: usize = 0x1_400b_af60;
 const VA_SESSION_LEADERBOARD_RENDER_HUD: usize = 0x1_400b_b3c0;
@@ -163,6 +168,7 @@ pub unsafe fn window_mouse(gui_handler: usize, event: *mut u8) {
 
 /// `EndSessionDisplayer::update`, in the update pass (only while the object is active).
 pub unsafe fn update(game: &Game, _h: &HudGame, dt: f32) {
+    crate::gui_ac_esc::sync(game, _h);
     let end = MENUS.lock().unwrap().end as *mut u8;
     if !end.is_null() && rd::<u8>(end, 0x30) != 0 {
         let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_END_SESSION_UPDATE));
@@ -335,11 +341,26 @@ unsafe fn mouse(game: &Game, gui: *mut u8, va: usize, x: i32, y: i32, button: i3
 
 pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     if crate::gui_seq_menu::menu_input(what, number, text) {
+        if let Some(h) = hud() {
+            crate::gui_ac_esc::sync(game, h);
+        }
         return Ok(());
     }
     let a = &game.acs;
     let h = hud().ok_or("the HUD was not made (Hud(\"create\", cars, \"\") first)")?;
     let sim = h.sim;
+    if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl") {
+        crate::gui_ac_race::install(game);
+        crate::gui_ac_race::sync(h);
+        install(game, sim);
+        crate::gui_ac_esc::call(game, gui, h, what, number, text);
+        if what == "menu.escMenu" {
+            // the page's table hears of a new session like the others
+            let page: *const u8 = rd(crate::gui_ac_esc::menu(), 0x250);
+            MENUS.lock().unwrap().boards.push(rd::<usize>(page, 0x1a0));
+        }
+        return Ok(());
+    }
     let menu = MENUS.lock().unwrap().pause as *mut u8;
     match what {
         "menu.pause" => {
@@ -557,9 +578,11 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         }
         "menu.fadeDone" => {
             let waiting = std::mem::take(&mut MENUS.lock().unwrap().fade);
-            for (_, implementation) in waiting {
-                run_job(implementation, false);
-            }
+            crate::gui_ac_esc::fade_done(h, || {
+                for (_, implementation) in waiting {
+                    run_job(implementation, false);
+                }
+            });
         }
         other => return Err(format!("the game side knows no menu call {other:?}")),
     }
@@ -570,7 +593,8 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
 pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
     match class {
         "PauseMenu" => Some(format!(" pause={} fade={:08x}", rd::<i32>(control, 0x1f0), rd::<u32>(control, 0x1f4))),
-        "EndCommon" => Some(String::new()),
+        "EndCommon" | "RaceControlScreen" | "RaceControlSPSession" | "RaceControlSessionInfo" => Some(String::new()),
+        "ESCMenu" => Some(crate::gui_ac_esc::extra(control)),
         "Leaderboard" => {
             let (begin, end): (*const *const u8, *const *const u8) = (rd(control, 0x190), rd(control, 0x198));
             let printed: Vec<String> = if begin.is_null() { Vec::new() } else { (0..end.offset_from(begin) as usize).map(|i| rd::<i32>(*begin.add(i), 0x1158).to_string()).collect() };

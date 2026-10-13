@@ -74,8 +74,13 @@ pub mod event {
     /// Task 30: the pause menu's "Back to pits" (`CarAvatar::goToSpawnPosition("PIT")`; in a
     /// race the controls are locked for a while too).
     pub const BACK_TO_PITS: u32 = 1 << 25;
+    /// Task 30: the ESC menu (the menu of the pits) shows: the player's controls are locked
+    /// (`CarAvatar::setControlsLock(true)`).
+    pub const PITS_LOCK: u32 = 1 << 26;
+    /// Task 30: the ESC menu's "Drive" (`RaceManager::startRace(10000)`, the controls freed).
+    pub const PITS_DRIVE: u32 = 1 << 27;
 
-    pub const NAMES: [(u32, &str); 26] = [
+    pub const NAMES: [(u32, &str); 28] = [
         (RESET, "reset"),
         (REBUILD, "rebuild"),
         (TC_UP, "tc+"),
@@ -102,6 +107,8 @@ pub mod event {
         (PIT_DOWN, "pit menu down"),
         (AI_PIT, "ai pit"),
         (BACK_TO_PITS, "back to pits"),
+        (PITS_LOCK, "pits: controls locked"),
+        (PITS_DRIVE, "drive"),
     ];
 }
 

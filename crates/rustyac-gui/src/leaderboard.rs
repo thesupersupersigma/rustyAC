@@ -61,6 +61,8 @@ pub struct RaceCar {
     pub in_pitlane: bool,
     /// `getCurrentCompoundShortName()`
     pub compound_short_name: String,
+    /// `RaceManager::getLapCount(car)`
+    pub lap_count: u32,
     /// `getBallastKG()`, `getRestrictor()`
     pub ballast_kg: f32,
     pub restrictor: f32,
@@ -95,6 +97,10 @@ pub struct RaceSession {
     pub session_type: i32,
     pub is_timed_race: bool,
     pub name: String,
+    /// `laps`, `durationMinutes`, `startTime` (ms)
+    pub laps: i32,
+    pub duration_minutes: f32,
+    pub start_time: f64,
 }
 
 /// What the tables read of the session (`RaceManager`, `ACClient`).
@@ -113,6 +119,12 @@ pub struct RaceLink {
     pub global_best_lap: u32,
     /// the best sector times of anybody (`getBestSplit(i, true, …)`)
     pub best_splits: Vec<u32>,
+    /// `RaceManager::getInvertedGridPositions`, `getPitWindowStart`, `getPitWindowEnd`;
+    /// `ACClient::hasExtraLap` (all nothing off line)
+    pub inverted_grid_positions: i32,
+    pub pit_window_start: u16,
+    pub pit_window_end: u16,
+    pub has_extra_lap: bool,
 }
 
 impl RaceLink {

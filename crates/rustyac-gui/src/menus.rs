@@ -74,6 +74,16 @@ pub enum SimAction {
     SetIntroMode(bool),
     /// `CarAvatar::setControlsLock` 0x1400d9f00 on the player's car
     SetControlsLock(bool),
+    /// `SystemMessage::addMessage(title, text, eDefault)` 0x1401b61c0
+    AddMessage { title: String, text: String },
+    /// `RaceManager::startRace` 0x140141470 (the wait before the start, in ms)
+    StartRace(f32),
+    /// `Sim::focusedCarIndex = 0` (the member is written, no function is called)
+    FocusPlayerCar,
+    /// `ESCMenu::evOnDriveMenuPressed` (the drag race and the pit crew listen)
+    DriveMenuPressed,
+    /// `ACCameraManager::loadPreviousSessionUserCamera`
+    LoadPreviousSessionUserCamera,
 }
 
 /// What a handler of `ACCameraManager::evOnFadeInFinished` does when the fade is over.
@@ -83,6 +93,8 @@ pub enum FadeJob {
     BackToPits,
     /// the pause menu's "Replay" (0x14011f2a0)
     StartReplay,
+    /// the ESC menu's "Drive" (`Sim::startGame`'s job 0x140195cf0)
+    Drive,
 }
 
 /// What the menus read of `Sim`, and what they ask of it.
@@ -119,6 +131,28 @@ pub struct SimLink {
     pub flag_cache: std::collections::BTreeMap<String, Texture>,
     /// every `ACStandardLeaderboard` (they hear `Sim::evOnNewSession`)
     pub leaderboards: Vec<Id>,
+    /// the player's car's `physicsState.setupState` (0 not known yet, 1 legal, 2 illegal)
+    pub setup_state: i32,
+    /// `RaceManager::fixedSetup`
+    pub fixed_setup: bool,
+    /// `Sim::isInTripleScreenMode`
+    pub triple_screen: bool,
+    /// `RaceManager::getTimetoWait`, `getSessionTimeLeft`; `Game::gameTime.now` (ms)
+    pub time_to_wait: f64,
+    pub session_time_left: f64,
+    pub game_time: f64,
+    /// `CarAvatar::isInPit` of the player's car
+    pub player_in_pit: bool,
+    /// `Track::dynamicGripLevel`
+    pub track_grip: f32,
+    /// `GraphicsManager::lightingSettings.angle` (the sun's)
+    pub sun_angle: f32,
+    /// `PhysicsAvatar::getTemperatureInfo`
+    pub ambient_temperature: f32,
+    pub road_temperature: f32,
+    /// `PhysicsAvatar::windData`: `speed.value`, `directionDEG`
+    pub wind_speed: f32,
+    pub wind_direction_deg: f32,
 }
 
 /// `PauseMenu`'s own members.
@@ -134,6 +168,10 @@ pub enum Menu {
     Pause(PauseMenu),
     Leaderboard(Box<crate::leaderboard::Leaderboard>),
     EndCommon(crate::end_session::EndCommon),
+    Esc(Box<crate::esc_menu::EscMenu>),
+    RaceControl(crate::esc_menu::RaceControlScreen),
+    SpSession(crate::esc_menu::SpSession),
+    SessionInfo(Box<crate::esc_menu::SessionInfo>),
 }
 
 impl Gui {
@@ -219,6 +257,7 @@ impl Gui {
                     self.sim.actions.push(SimAction::StartReplayMode);
                 }
             }
+            FadeJob::Drive => self.sim_drive(),
         }
     }
 
@@ -418,6 +457,10 @@ impl Gui {
                 Menu::Pause(_) => self.pause_menu_render(id, dt, painter),
                 Menu::Leaderboard(_) => self.leaderboard_render(id, dt, painter),
                 Menu::EndCommon(_) => self.end_common_render(id, dt, painter),
+                Menu::Esc(_) => self.esc_menu_render(id, dt, painter),
+                Menu::RaceControl(_) => self.race_control_render(id, dt, painter),
+                Menu::SpSession(_) => self.sp_session_render(id, dt, painter),
+                Menu::SessionInfo(_) => self.session_info_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -428,7 +471,8 @@ impl Gui {
             Kind::Menu(menu) => match &**menu {
                 Menu::Pause(_) => self.pause_menu_on_visible_changed(id, visible),
                 Menu::Leaderboard(_) => self.leaderboard_on_visible_changed(id, visible),
-                Menu::EndCommon(_) => self.control_on_visible_changed(id, visible),
+                Menu::Esc(_) => self.esc_menu_on_visible_changed(id, visible),
+                _ => self.control_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),
         }

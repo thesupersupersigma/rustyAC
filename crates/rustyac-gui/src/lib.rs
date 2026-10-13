@@ -11,6 +11,7 @@
 pub mod acos;
 pub mod control;
 pub mod end_session;
+pub mod esc_menu;
 pub mod font;
 pub mod form;
 pub mod gui;

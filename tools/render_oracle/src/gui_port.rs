@@ -278,6 +278,8 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     let mut painter = renderer.painter(&mut graphics);
                     crate::gui_port_hud::update(&mut hud.hud, &mut gui, *dt);
                     gui.render_all(*dt, &mut painter);
+                    // (what a menu asked of the session while it was drawn)
+                    crate::gui_port_menu::drain(&mut hud.hud, &mut gui);
                     crate::gui_port_hud::render_hud(&mut hud.hud, &mut gui, &mut painter, *dt);
                     hud.render(&mut gui, &mut painter, *dt);
                     for (font, x, y, text, size, align, color, shadowed) in &blits {
@@ -293,7 +295,11 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                 crate::gui_compare::frame_done(args, name, "port", frame, &capture.text, capture.draws, width, height, &pixels, &mut outcome)?;
                 outcome.state.push_str(&format!("frame {frame}\n"));
                 for event in &gui.fired[fired..] {
-                    outcome.state.push_str(&format!("event click \"{}\" {} {}\n", crate::gui_port2::name(&gui, event.control), event.local_x, event.local_y));
+                    if event.local_x == i32::MIN {
+                        outcome.state.push_str(&format!("event click \"{}\" by the menu itself\n", crate::gui_port2::name(&gui, event.control)));
+                    } else {
+                        outcome.state.push_str(&format!("event click \"{}\" {} {}\n", crate::gui_port2::name(&gui, event.control), event.local_x, event.local_y));
+                    }
                 }
                 fired = gui.fired.len();
                 for event in &gui.widget_events[widget_events..] {

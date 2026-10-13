@@ -65,11 +65,27 @@ pub unsafe fn write_lap(out: *mut u8, lap: &RaceLap) {
 unsafe extern "C" fn get_session_info(_this: *mut u8, out: *mut u8, index: i32) -> *mut u8 {
     let session = race().session_info(index);
     std::ptr::write_bytes(out, 0, 0x70);
+    write_session(out, &session);
+    out
+}
+
+/// A `Session` (0x70 bytes) of the game from one of the script's.
+unsafe fn write_session(out: *mut u8, session: &rustyac_gui::leaderboard::RaceSession) {
     wr(out, 0, session.session_type);
     wr(out, 4, session.is_timed_race as u8);
+    wr(out, 0x8, session.laps);
+    wr(out, 0xc, session.duration_minutes);
     empty_wstring(out.add(0x18));
     empty_wstring(out.add(0x38));
     write_wstring(acs(), out.add(0x38), &session.name);
+    wr(out, 0x58, session.start_time);
+}
+
+/// In place of `RaceManager::getCurrentSession` 0x140138220.
+unsafe extern "C" fn get_current_session(_this: *mut u8, out: *mut u8) -> *mut u8 {
+    let race = race();
+    std::ptr::write_bytes(out, 0, 0x70);
+    write_session(out, &race.session_info(race.current_session_index));
     out
 }
 
@@ -191,6 +207,7 @@ pub unsafe fn install(game: &Game) {
     init();
     for (va, to) in [
         (VA_GET_SESSION_INFO, get_session_info as *const () as usize),
+        (0x1_4013_8220, get_current_session as *const () as usize),
         (VA_GET_CURRENT_SESSION_INDEX, get_current_session_index as *const () as usize),
         (VA_GET_LEADERBOARD_FROM_SESSION, get_leaderboard_from_session as *const () as usize),
         (VA_GET_LEADERBOARD, get_leaderboard as *const () as usize),

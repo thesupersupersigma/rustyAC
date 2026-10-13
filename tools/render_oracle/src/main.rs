@@ -16,6 +16,7 @@ mod gui_ac2;
 mod gui_ac_hud;
 mod gui_ac_hud2;
 mod gui_ac_hud3;
+mod gui_ac_esc;
 mod gui_ac_menu;
 mod gui_ac_pit;
 mod gui_ac_race;

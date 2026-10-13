@@ -107,6 +107,11 @@ pub struct GameGui {
     pit: Option<crate::referee::PitGui>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
+    /// `Sim::escMenu` (off line; an online session has none yet)
+    pub esc_menu: Option<Id>,
+    /// a new session began since the window last asked (the car is its own again: a lock of
+    /// the controls the ESC menu wants has to be asked for anew)
+    pub pits_lock_stale: bool,
     /// the `OverlayLeaderboard` (with more than one car, outside a drag race)
     pub overlay: Option<OverlayLeaderboard>,
     /// `Sim::leaderboard`: the table held on TAB (with more than one car, or online)
@@ -206,6 +211,15 @@ impl GameGui {
         gui.sim.pause_menu = Some(pause_menu);
         gui.set_visible(pause_menu, false);
         gui.add_root(&mut painter, pause_menu);
+        // ESCMenu, hidden, the next top-level control (Sim::Sim 0x1401942ae). Its pages
+        // "Setup", "Telemetry" and "Time table" are not made: their buttons cannot be used.
+        gui.sim.setup_state = 1;
+        let esc_menu = (!setup.online).then(|| {
+            let id = gui.new_esc_menu(&mut painter, system("fades.ini").as_ref(), rustyac_gui::esc_menu::EscPages::default());
+            gui.add_root(&mut painter, id);
+            gui.sim.esc_menu = Some(id);
+            id
+        });
         gui.sim.actions.clear();
         // the apps (Sim::addForm): of the game's 56 only the Leaderboard so far
         let leaderboard_app = gui.new_leaderboard_app(&mut painter);
@@ -229,7 +243,7 @@ impl GameGui {
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -281,7 +295,18 @@ impl GameGui {
             if index != self.last_session_index {
                 self.last_session_index = index;
                 self.gui.sim_on_new_session();
+                self.pits_lock_stale = true;
             }
+        }
+        // what the ESC menu and its page read
+        self.gui.sim.game_time = time_ms;
+        if let Some(referee) = &info.referee {
+            self.gui.sim.session_time_left = referee.gui.session_time_left;
+            [self.gui.sim.track_grip, self.gui.sim.ambient_temperature, self.gui.sim.road_temperature, self.gui.sim.wind_speed, self.gui.sim.wind_direction_deg] = referee.env;
+        }
+        if let Some(esc) = self.esc_menu {
+            input.esc_menu_visible = self.gui.controls[esc].visible;
+            input.esc_menu_width = self.gui.controls[esc].rect.right;
         }
         // the results: RaceManager shows them (EndSessionDisplayer::displayResults), a new
         // session takes them down (hide)
@@ -595,6 +620,11 @@ impl GameGui {
         }
     }
 
+    /// The ESC menu (the menu of the pits) shows.
+    pub fn esc_menu_visible(&self) -> bool {
+        self.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible)
+    }
+
     /// The pause menu shows.
     pub fn pause_menu_visible(&self) -> bool {
         self.gui.controls[self.pause_menu].visible
@@ -607,6 +637,7 @@ impl GameGui {
         for action in std::mem::take(&mut self.gui.sim.actions) {
             match action {
                 SimAction::ClearMessage => self.message.clear_message(),
+                SimAction::AddMessage { title, text } => self.message.add_message(&mut self.gui, &title, &text, MESSAGE_DEFAULT),
                 SimAction::FadeIn(total) => self.menu_fade = Some((0.0, total)),
                 other => out.push(other),
             }
@@ -669,7 +700,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -712,6 +743,11 @@ impl GameGui {
                 "esc" => self.esc_key(false),
                 "screenshot" => self.take_screen(),
                 "tab" => self.tab_down(),
+                "pits" => {
+                    if self.esc_menu.is_some() {
+                        self.gui.sim_activate_esc_menu();
+                    }
+                }
                 "overlay" => {
                     self.overlay_poll(true);
                     self.overlay_poll(false);
@@ -730,7 +766,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, tab, app)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, pits, tab, app)")),
             }
         }
         Ok(())

@@ -1315,6 +1315,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     let started = Instant::now();
     let mut last = Instant::now();
     // MouseHider (Sim::Sim 0x14019457b)
+    // the ESC menu asked for the player's controls to be locked
+    let mut pits_locked = false;
     let mut mouse_hider = rustyac_game::mouse_hider::MouseHider::new(
         rustyac_content::install::ac_root().and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/mouse_hider.ini")).ok()).as_ref(),
         bindings.input_method == "KEYBOARD",
@@ -1617,7 +1619,28 @@ fn run_window(options: &Options) -> Result<(), String> {
                     SimAction::SendVote { .. } => {}
                     // (the results' camera and the lock of the controls are the referee's
                     // already: Task 28)
-                    SimAction::SetCameraMode(_) | SimAction::SetIntroMode(_) | SimAction::SetControlsLock(_) => {}
+                    SimAction::SetCameraMode(_) | SimAction::SetIntroMode(_) => {}
+                    // ESCMenu::render: the player's controls are locked while the menu of the
+                    // pits shows (asked once, and again after a new session)
+                    SimAction::SetControlsLock(true) => {
+                        if gui.esc_menu_visible() && (!pits_locked || gui.pits_lock_stale) {
+                            pits_locked = true;
+                            gui.pits_lock_stale = false;
+                            shared.requests.fetch_or(event::PITS_LOCK, Ordering::Relaxed);
+                        }
+                    }
+                    SimAction::SetControlsLock(false) => {}
+                    // the ESC menu's "Drive": RaceManager::startRace(10000), the controls
+                    // free, the camera back on the player's car
+                    SimAction::StartRace(_) => {
+                        pits_locked = false;
+                        shared.requests.fetch_or(event::PITS_DRIVE, Ordering::Relaxed);
+                    }
+                    SimAction::FocusPlayerCar => focus.index = 0,
+                    // (nobody listens yet: the drag race and the pit crew's lollipop man;
+                    // the camera a driver chose in the last session is not kept)
+                    SimAction::DriveMenuPressed | SimAction::LoadPreviousSessionUserCamera => {}
+                    SimAction::AddMessage { .. } => {}
                 }
             }
         }

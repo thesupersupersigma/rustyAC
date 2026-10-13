@@ -235,6 +235,34 @@ impl GlRenderer {
         self.end(graphics);
     }
 
+    /// `GLRenderer::quadCentredRotated` 0x1401ff6b0: the quad round the origin, under a world
+    /// matrix that turns it about z and carries it to (x, y); the old matrix is put back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn quad_centred_rotated(&mut self, graphics: &mut Graphics, x: f32, y: f32, w: f32, h: f32, angle: f32, use_texture: bool, shader: Option<ShaderId>) {
+        use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
+        let (half_w, half_h) = (w * 0.5, h * 0.5);
+        let old = graphics.state.world_matrix;
+        let turn = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 0.0, 1.0), angle);
+        let mut carry = Mat44f::IDENTITY;
+        carry.m[3][0] = x;
+        carry.m[3][1] = y;
+        let world = xm_matrix_multiply(&xm_matrix_multiply(&turn, &carry), &old);
+        graphics.set_world_matrix(&world);
+        self.primitive = GL_QUADS;
+        self.current_index = 0;
+        self.temp_counter = 0;
+        self.use_texture = false;
+        self.shader = shader;
+        for (px, py, u, v) in [(-half_w, -half_h, 0.0, 0.0), (-half_w, half_h, 0.0, 1.0), (half_w, half_h, 1.0, 1.0), (half_w, -half_h, 1.0, 0.0)] {
+            if use_texture {
+                self.tex_coord2f(u, v);
+            }
+            self.vertex3f(px, py, 0.0);
+        }
+        self.end(graphics);
+        graphics.set_world_matrix(&old);
+    }
+
     /// `GLRenderer::vertex3fv` 0x1401ffc00.
     pub fn vertex3fv(&mut self, v: &[f32; 3]) {
         self.vertex3f(v[0], v[1], v[2]);

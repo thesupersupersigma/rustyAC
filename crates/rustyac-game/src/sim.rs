@@ -1940,6 +1940,15 @@ impl GameSim {
         if events & event::BACK_TO_PITS != 0 && self.referee.is_none() {
             self.car.device.source.request(event::RESET);
         }
+        // Task 30: the ESC menu's lock of the controls, and its "Drive", without a referee
+        if self.referee.is_none() {
+            if events & event::PITS_LOCK != 0 {
+                self.car.car.lock_controls(true);
+            }
+            if events & event::PITS_DRIVE != 0 {
+                self.car.car.lock_controls(false);
+            }
+        }
         // Task 28: the referee's frame (the game's main thread), every third step
         if let Some(mut referee) = self.referee.take() {
             let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
@@ -1951,6 +1960,12 @@ impl GameSim {
             }
             if events & event::BACK_TO_PITS != 0 {
                 referee.back_to_pits(&mut world, time);
+            }
+            if events & event::PITS_LOCK != 0 {
+                referee.pits_lock(&mut world);
+            }
+            if events & event::PITS_DRIVE != 0 {
+                referee.drive(&mut world);
             }
             // Task 28b: the pit menu's keys
             for (bit, key) in [(event::PIT_LEFT, 0x25), (event::PIT_UP, 0x26), (event::PIT_RIGHT, 0x27), (event::PIT_DOWN, 0x28)] {
