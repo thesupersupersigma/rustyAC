@@ -17,6 +17,7 @@ use crate::gui_seq_menu::action;
 const VA_GET_SESSION_INFO: usize = 0x1_4013_9d70;
 const VA_GET_CURRENT_SESSION_INDEX: usize = 0x1_4013_82d0;
 const VA_GET_LEADERBOARD_FROM_SESSION: usize = 0x1_4013_8b90;
+const VA_GET_LEADERBOARD: usize = 0x1_4013_8ab0;
 const VA_GET_BEST_LAP_OF_CAR: usize = 0x1_4013_7c00;
 const VA_GET_BEST_LAP: usize = 0x1_4013_7e80;
 const VA_GET_BEST_SPLIT: usize = 0x1_4013_7eb0;
@@ -99,6 +100,11 @@ unsafe fn write_entries(out: *mut u8, entries: &[RaceEntry]) {
 
 unsafe extern "C" fn get_leaderboard_from_session(_this: *mut u8, out: *mut u8, index: i32) -> *mut u8 {
     write_entries(out, &race().leaderboard_from_session(index));
+    out
+}
+
+unsafe extern "C" fn get_leaderboard(_this: *mut u8, out: *mut u8) -> *mut u8 {
+    write_entries(out, &race().leaderboard);
     out
 }
 
@@ -187,6 +193,7 @@ pub unsafe fn install(game: &Game) {
         (VA_GET_SESSION_INFO, get_session_info as *const () as usize),
         (VA_GET_CURRENT_SESSION_INDEX, get_current_session_index as *const () as usize),
         (VA_GET_LEADERBOARD_FROM_SESSION, get_leaderboard_from_session as *const () as usize),
+        (VA_GET_LEADERBOARD, get_leaderboard as *const () as usize),
         (VA_GET_BEST_LAP_OF_CAR, get_best_lap_of_car as *const () as usize),
         (VA_GET_BEST_LAP, get_best_lap as *const () as usize),
         (VA_GET_BEST_SPLIT, get_best_split as *const () as usize),

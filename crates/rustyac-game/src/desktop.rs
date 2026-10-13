@@ -1577,6 +1577,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             // SAFETY: a plain call.
             let tab_held = options.gui_do.as_deref().is_some_and(|script| script.split(';').any(|c| c.trim() == "tab")) || (shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x09) } != 0);
             gui.tab_poll(tab_held);
+            // OverlayLeaderboard::update: F9 (the game asks the key itself, whichever window
+            // has the keyboard; here only rustyAC's own)
+            // SAFETY: a plain call.
+            gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
             use rustyac_gui::menus::SimAction;

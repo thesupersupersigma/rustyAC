@@ -16,6 +16,7 @@ use rustyac_gui::hud::{HudCar, HudInput, SystemMessage, SystemNotification, MESS
 use rustyac_gui::hud_cars::{DamageDisplayer, DriverNames, ProximityIndicator};
 use rustyac_gui::end_session::EndSession;
 use rustyac_gui::leaderboard::{RaceCar, RaceSession, SessionLeaderboard};
+use rustyac_gui::overlay_leaderboard::OverlayLeaderboard;
 use rustyac_gui::menus::SimAction;
 use rustyac_gui::pit_menu::{PitMenu, PitMenuLooks, PitMenuScene, PitStopHud};
 use rustyac_gui::hud_flags::{DriveThroughPenalty, FlagDisplay, FuelLight, LapInvalidator, LockControlsTime, WrongWayIndicator};
@@ -106,6 +107,8 @@ pub struct GameGui {
     pit: Option<crate::referee::PitGui>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
+    /// the `OverlayLeaderboard` (with more than one car, outside a drag race)
+    pub overlay: Option<OverlayLeaderboard>,
     /// `Sim::leaderboard`: the table held on TAB (with more than one car, or online)
     pub tab: Option<SessionLeaderboard>,
     /// the app "Leaderboard"
@@ -217,6 +220,8 @@ impl GameGui {
         let damage = DamageDisplayer::new(&mut painter, system("damage_displayer.ini").as_ref(), section("DAMAGE_DISPLAYER"), 0);
         // EndSessionDisplayer (Sim::Sim 0x140194ed7)
         let end = EndSession::new(&mut gui, &mut painter, system("endSessionDisplayer.ini").as_ref());
+        // OverlayLeaderboard (Sim::Sim 0x140194f0d)
+        let overlay = (setup.cars.len() > 1 && setup.session_type != 7).then(|| OverlayLeaderboard::new(&mut gui, &mut painter, gameplay.as_ref()));
         // SessionLeaderboard (Sim::Sim 0x140195191)
         let tab = (setup.cars.len() > 1 || setup.online).then(|| SessionLeaderboard::new(&mut gui, &mut painter));
         let flags = FlagDisplay::new(&mut gui, &mut painter, screen, false);
@@ -224,7 +229,7 @@ impl GameGui {
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
         let pit_stop = PitStopHud::new(&mut painter);
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -460,6 +465,10 @@ impl GameGui {
         self.names.render_hud(gui, &mut painter, dt, input);
         self.damage.render_hud(gui, &mut painter, dt, input);
         self.end.render_hud(gui, &mut painter, dt);
+        if let Some(overlay) = &mut self.overlay {
+            let position = input.cars.first().map_or(-1, |car| car.leaderboard_position);
+            overlay.render_hud(gui, &mut painter, dt, self.end.is_active, position);
+        }
         if let Some(tab) = &self.tab {
             tab.render_hud(gui, &mut painter, dt);
         }
@@ -531,6 +540,14 @@ impl GameGui {
         let esc = self.gui.sim.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible);
         if let Some(tab) = &mut self.tab {
             tab.poll(&mut self.gui, held, esc, results);
+        }
+    }
+
+    /// `OverlayLeaderboard::update`, once a frame: F9 steps through its faces, each with a
+    /// message.
+    pub fn overlay_poll(&mut self, f9_down: bool) {
+        if let Some(words) = self.overlay.as_mut().and_then(|overlay| overlay.update(f9_down)) {
+            self.message.add_message(&mut self.gui, "Overlay Leaderboard", words, MESSAGE_DEFAULT);
         }
     }
 
@@ -652,7 +669,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -695,6 +712,10 @@ impl GameGui {
                 "esc" => self.esc_key(false),
                 "screenshot" => self.take_screen(),
                 "tab" => self.tab_down(),
+                "overlay" => {
+                    self.overlay_poll(true);
+                    self.overlay_poll(false);
+                }
                 "app" => {
                     let app = self.leaderboard_app;
                     let shown = self.gui.controls[app].visible;
@@ -709,7 +730,7 @@ impl GameGui {
                         _ => return Err(format!("--gui-do {command}: blue, black, yellow, penalty, chequered or none")),
                     }
                 }
-                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, tab, app)")),
+                _ => return Err(format!("--gui-do: no command {name:?} (mouse, click, wheel, key, apps, desktop, names, damage, hidedamage, message, car, notify, flag, esc, screenshot, overlay, tab, app)")),
             }
         }
         Ok(())
@@ -722,7 +743,7 @@ impl GameGui {
 
     /// What the game does at its end (`GameScreen::shutdown` 0x1402510c0, `GUI::serializeForms`
     /// 0x1402551e0, `DriverNameDisplayer::shutdown` 0x14008e080, `DamageDisplayer::shutdown`
-    /// 0x14007b800), into rustyAC's own cfg folder: the forms' layout, and the two switches in
+    /// 0x14007b800, `OverlayLeaderboard::shutdown` 0x1401c1a30), into rustyAC's own cfg folder: the forms' layout, and the two switches in
     /// a `gameplay.ini` that starts as a copy of the game's.
     pub fn shutdown(&mut self) -> Result<Vec<PathBuf>, String> {
         let folder = self.setup.cfg_dir.clone();
@@ -737,7 +758,13 @@ impl GameGui {
         let path = folder.join("gameplay.ini");
         let start = std::fs::read_to_string(&path).ok().or_else(|| self.setup.documents_cfg.as_ref().and_then(|d| std::fs::read_to_string(d.join("gameplay.ini")).ok())).unwrap_or_default();
         let text = set_ini_key(&start, "DRIVER_NAME_DISPLAYER", "IS_ACTIVE", if self.names.is_active { "1" } else { "0" });
-        let text = set_ini_key(&text, "DAMAGE_DISPLAYER", "IS_ACTIVE", if self.damage.enabled { "1" } else { "0" });
+        let mut text = set_ini_key(&text, "DAMAGE_DISPLAYER", "IS_ACTIVE", if self.damage.enabled { "1" } else { "0" });
+        // OverlayLeaderboard::shutdown 0x1401c1a30
+        if let Some(overlay) = &self.overlay {
+            let (active, vertical) = overlay.shutdown();
+            text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "ACTIVE", &active);
+            text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "VERTICAL", &vertical);
+        }
         std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         written.push(path);
         Ok(written)

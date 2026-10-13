@@ -47,6 +47,18 @@ const VA_LEADERBOARD_APP_CTOR: usize = 0x1_4032_9bf0;
 const VA_SESSION_LEADERBOARD_CTOR: usize = 0x1_400b_af60;
 const VA_SESSION_LEADERBOARD_RENDER_HUD: usize = 0x1_400b_b3c0;
 const VA_SIM_DISPLAY_LEADERBOARD: usize = 0x1_4004_4910;
+const VA_OVERLAY_CTOR: usize = 0x1_401b_f440;
+const VA_OVERLAY_UPDATE: usize = 0x1_401c_1f20;
+const VA_OVERLAY_RENDER_HUD: usize = 0x1_401c_1350;
+const VA_TRIGGER_IGNORE_SUBSEQUENT_TRUE: usize = 0x1_4023_b3a0;
+
+/// The script's F9: the edge `Trigger::ignoreSubsequentTrue` finds (the key itself, read
+/// with `GetAsyncKeyState`, cannot be scripted).
+static F9_EDGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+unsafe extern "C" fn ignore_subsequent_true(_this: *mut u8, _down: bool) -> bool {
+    F9_EDGE.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
 const VA_END_SESSION_CTOR: usize = 0x1_4010_a650;
 const VA_END_SESSION_UPDATE: usize = 0x1_4010_bf90;
 const VA_END_SESSION_DISPLAY_RESULTS: usize = 0x1_4010_b260;
@@ -72,9 +84,11 @@ struct Menus {
     /// the `SessionLeaderboard` (TAB), the `LeaderboardApp`
     tab: usize,
     app: usize,
+    /// the `OverlayLeaderboard`
+    overlay: usize,
 }
 
-static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0, tab: 0, app: 0 });
+static MENUS: Mutex<Menus> = Mutex::new(Menus { pause: 0, fade: Vec::new(), fade_sender: 0, boards: Vec::new(), end: 0, tab: 0, app: 0, overlay: 0 });
 
 unsafe extern "C" fn set_mode(_this: *mut u8, mode: i32, _fade: bool, _random: bool) {
     action(format!("setMode {mode}"));
@@ -166,6 +180,13 @@ pub unsafe fn render_end(game: &Game, h: &HudGame, dt: f32) {
         client_present(false);
     }
     let _ = h;
+    // OverlayLeaderboard::renderHUD (made after the displayer, before the table of TAB)
+    let overlay = MENUS.lock().unwrap().overlay as *mut u8;
+    if !overlay.is_null() {
+        crate::gui_ac_race::sync(h);
+        let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_OVERLAY_RENDER_HUD));
+        render(overlay, dt);
+    }
     // SessionLeaderboard::renderHUD (made after the displayer)
     let tab = MENUS.lock().unwrap().tab as *mut u8;
     if !tab.is_null() && rd::<u8>(tab, 0x30) != 0 {
@@ -182,6 +203,12 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
         let gui: *const u8 = rd(rd::<*const u8>(end, 0x8), 0x180);
         out.push_str(&crate::gui_seq_menu::end_line(rd::<u8>(end, 0x30) != 0, rd::<u8>(end, 0x128) != 0, rd(end, 0x100), rd::<u8>(gui, 0x8) != 0));
         crate::gui_ac::dump_control(game, rd(end, 0x70), 1, out);
+    }
+    let overlay = MENUS.lock().unwrap().overlay as *const u8;
+    if !overlay.is_null() {
+        let (begin, end): (*const u8, *const u8) = (rd(overlay, 0xd8), rd(overlay, 0xe0));
+        let names: Vec<String> = (0..(end as usize - begin as usize) / 0x40).map(|i| format!("{}={}", read_wstring(begin.add(i * 0x40)), read_wstring(begin.add(i * 0x40 + 0x20)))).collect();
+        out.push_str(&crate::gui_seq_menu::overlay_line(rd(overlay, 0x58), rd::<u8>(overlay, 0x68) != 0, rd(overlay, 0x84), &names));
     }
     let tab = MENUS.lock().unwrap().tab as *const u8;
     if !tab.is_null() {
@@ -467,6 +494,38 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         "menu.tabShow" => {
             let display: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_SIM_DISPLAY_LEADERBOARD));
             display(sim, number != 0.0);
+        }
+        "menu.overlay" => {
+            crate::gui_ac_race::install(game);
+            crate::gui_ac_race::sync(h);
+            install(game, sim);
+            jump(game, VA_TRIGGER_IGNORE_SUBSEQUENT_TRUE, ignore_subsequent_true as *const () as usize);
+            // Sim::microSectors: not enabled
+            if rd::<usize>(sim, 0x1f0) == 0 {
+                wr(sim, 0x1f0, a.alloc(0x200));
+            }
+            let overlay = a.alloc(0xf0);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_OVERLAY_CTOR));
+            ctor(overlay, sim);
+            // (the constructor read the face out of the player's own gameplay.ini: the
+            // script's instead)
+            wr(overlay, 0x58, number as i32);
+            wr(overlay, 0x68, (text == "v") as u8);
+            wr(overlay, 0x6c, 0.0f32);
+            MENUS.lock().unwrap().overlay = overlay as usize;
+        }
+        "menu.overlayMode" => {
+            let overlay = MENUS.lock().unwrap().overlay as *mut u8;
+            wr(overlay, 0x58, number as i32);
+            wr(overlay, 0x68, (text == "v") as u8);
+        }
+        // OverlayLeaderboard::update with F9 newly down
+        "menu.overlayF9" => {
+            let overlay = MENUS.lock().unwrap().overlay as *mut u8;
+            F9_EDGE.store(true, std::sync::atomic::Ordering::SeqCst);
+            let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(a.va(VA_OVERLAY_UPDATE));
+            update(overlay, 0.0);
+            update(overlay, 0.0);
         }
         "menu.app" => {
             crate::gui_ac_race::install(game);

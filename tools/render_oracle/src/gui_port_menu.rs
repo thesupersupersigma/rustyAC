@@ -23,6 +23,7 @@ pub struct Menus {
     pub pause_stand_in: Option<Id>,
     pub tab: Option<rustyac_gui::leaderboard::SessionLeaderboard>,
     pub app: Option<Id>,
+    pub overlay: Option<rustyac_gui::overlay_leaderboard::OverlayLeaderboard>,
 }
 
 /// What the game's side writes into its stand-in `Sim` before every call: the script's state.
@@ -138,6 +139,24 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             let Some(tab) = &mut hud.more.menus.tab else { return Err("no TAB leaderboard".into()) };
             tab.display(gui, number != 0.0);
         }
+        "menu.overlay" => {
+            let mut overlay = rustyac_gui::overlay_leaderboard::OverlayLeaderboard::new(gui, painter, None);
+            overlay.gap_display_mode = number as i32;
+            overlay.vertical_layout = text == "v";
+            hud.more.menus.overlay = Some(overlay);
+        }
+        "menu.overlayMode" => {
+            let Some(overlay) = &mut hud.more.menus.overlay else { return Err("no overlay leaderboard".into()) };
+            overlay.gap_display_mode = number as i32;
+            overlay.vertical_layout = text == "v";
+        }
+        "menu.overlayF9" => {
+            let Some(overlay) = &mut hud.more.menus.overlay else { return Err("no overlay leaderboard".into()) };
+            if let (Some(words), Some(message)) = (overlay.update(true), &mut hud.message) {
+                message.add_message(gui, "Overlay Leaderboard", words, 0);
+            }
+            overlay.update(false);
+        }
         "menu.app" => {
             let app = gui.new_leaderboard_app(painter);
             gui.game_screen_add_control(painter, screen, app, true);
@@ -235,6 +254,11 @@ pub fn render_end(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
     if let Some(end) = &mut hud.more.menus.end {
         end.render_hud(gui, painter, dt);
     }
+    if let Some(overlay) = &mut hud.more.menus.overlay {
+        let hidden = hud.input.end_session_active || hud.input.esc_menu_visible || hud.input.pause_menu_visible;
+        let position = hud.input.cars.first().map_or(-1, |car| car.leaderboard_position);
+        overlay.render_hud(gui, painter, dt, hidden, position);
+    }
     if let Some(tab) = &hud.more.menus.tab {
         tab.render_hud(gui, painter, dt);
     }
@@ -265,6 +289,10 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     if let Some(end) = &hud.more.menus.end {
         out.push_str(&crate::gui_seq_menu::end_line(end.is_active, end.is_loaded, end.old_mode, gui.is_active));
         crate::gui_port::dump_control(gui, end.parent_control, 1, out);
+    }
+    if let Some(overlay) = &hud.more.menus.overlay {
+        let names: Vec<String> = overlay.driver_names.iter().map(|(name, short)| format!("{name}={short}")).collect();
+        out.push_str(&crate::gui_seq_menu::overlay_line(overlay.gap_display_mode, overlay.vertical_layout, overlay.timer, &names));
     }
     if let Some(tab) = &hud.more.menus.tab {
         out.push_str(&format!("tab active={}\n", tab.is_active as u8));

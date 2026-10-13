@@ -746,3 +746,56 @@ pub fn leaderboard_app(cars: usize) -> Vec<Op> {
     o.extend([hud("race.board", 0.0, board(cars, false, 5)), Op::Frame(DT), hud("menu.appVisible", 0.0, ""), Op::Frame(DT), hud("menu.appVisible", 1.0, ""), Op::Frame(DT), Op::MouseMove(1279, 300), Op::Frame(DT), Op::Frame(DT), Op::MouseMove(600, 600), Op::Frame(DT)]);
     o
 }
+
+/// The state line of the overlay leaderboard.
+pub fn overlay_line(mode: i32, vertical: bool, timer: f32, names: &[String]) -> String {
+    format!("overlay mode={mode} vertical={} timer={:08x} names={}{}", vertical as u8, timer.to_bits(), names.join("|"), char::from(10u8))
+}
+
+/// The overlay leaderboard: the strip along the bottom (`vertical`: the column at the left),
+/// through a practice and a race, every face of F9, the player's place moved through the
+/// field, cars in the pits, retired and gone, a driver's name changed, the menus over it.
+pub fn overlay(cars: usize, vertical: bool) -> Vec<Op> {
+    let mut o = Vec::new();
+    field(&mut o, cars);
+    let side = if vertical { "v" } else { "" };
+    let place = |o: &mut Vec<Op>, p: usize| o.extend([hud("car.pos", p as f32, "0"), Op::Frame(DT)]);
+    o.extend([hud("race.sessions", 0.0, "1:0:Practice|3:0:Quick Race"), hud("race.current", 0.0, ""), hud("race.board", 0.0, board(cars, false, 0)), hud("car.pos", 1.0, "0")]);
+    // off: nothing; then on, in a practice (the gaps are those of the best laps)
+    o.extend([hud("menu.overlay", 0.0, ""), Op::Frame(DT), hud("menu.overlayMode", 1.0, side), Op::Frame(DT)]);
+    for p in [1, 2, cars / 2, cars.saturating_sub(1), cars, cars + 3, 0] {
+        place(&mut o, p);
+    }
+    // the race: gaps to the first, to the car ahead, the two in turn (ten seconds each)
+    o.extend([hud("race.current", 1.0, ""), hud("race.board", 0.0, board(cars, true, 3)), hud("session", 3.0, ""), hud("raceText", 0.0, "Race"), Op::Frame(DT)]);
+    for mode in [1.0, 2.0, 3.0] {
+        o.extend([hud("menu.overlayMode", mode, side), Op::Frame(DT)]);
+        place(&mut o, cars / 2 + 1);
+        place(&mut o, 1);
+    }
+    o.extend([Op::Frame(6.0), Op::Frame(5.0), Op::Frame(6.0), Op::Frame(5.0), Op::Frame(DT)]);
+    // cars in the pits, retired, gone; a driver's name changed (and one that makes the same
+    // three letters as another's)
+    let last = leak((cars - 1).to_string());
+    o.extend([hud("race.car.pit", 1.0, "1"), hud("race.car.black", 1.0, "0"), Op::Frame(DT), hud("race.car.black", 1.0, last), hud("race.car.pit", 1.0, "0"), Op::Frame(DT), hud("car.connected", 0.0, "1"), Op::Frame(DT), hud("car.connected", 1.0, "1"), hud("race.car.black", 0.0, "0"), hud("race.car.pit", 0.0, "0")]);
+    o.extend([hud("car.name", 0.0, "J. O'Neil"), Op::Frame(DT), hud("car.name", 1.0, "A. B. Nuvoletta"), Op::Frame(DT), hud("car.name", 0.0, "Xu"), Op::Frame(DT), hud("car.name", 1.0, "carlo nuvolari"), hud("car.name", 0.0, "Tazio Nuvolari"), Op::Frame(DT), Op::Frame(DT)]);
+    // a wider gap than the cell can say; other kinds of session; the taskbar out (the mouse
+    // at the right edge)
+    o.extend([hud("race.board", 0.0, leak(format!("0:420000:83000:5:0;1:{}:84000:5:0", 420000.0 + 123456789.0))), Op::Frame(DT), hud("race.board", 0.0, board(cars, true, 4))]);
+    for session in [2.0, 4.0, 0.0, 3.0] {
+        o.extend([hud("session", session, ""), Op::Frame(DT)]);
+    }
+    o.extend([Op::MouseMove(1279, 300), Op::Frame(DT), Op::Frame(0.3), Op::Frame(0.3), Op::MouseMove(600, 300), Op::Frame(DT)]);
+    // hidden by the menus, a replay, the results
+    for what in ["pause", "esc", "replay", "ended"] {
+        o.extend([hud(what, 1.0, "300"), Op::Frame(DT), hud(what, 0.0, ""), Op::Frame(DT)]);
+    }
+    // F9, eight times round: every face, with its message
+    o.extend([hud("menu.overlayMode", 0.0, ""), Op::Frame(DT)]);
+    for _ in 0..8 {
+        o.extend([hud("menu.overlayF9", 0.0, ""), Op::Frame(DT), Op::Frame(0.5)]);
+    }
+    // a face the file can say and F9 cannot
+    o.extend([hud("menu.overlayMode", 7.0, side), Op::Frame(DT), hud("menu.overlayF9", 0.0, ""), Op::Frame(DT)]);
+    o
+}
