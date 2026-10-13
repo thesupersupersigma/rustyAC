@@ -20,6 +20,7 @@
 pub mod audio;
 pub mod ac_replay;
 pub mod ghost;
+pub mod telemetry;
 pub mod autodrive;
 #[cfg(windows)]
 pub mod cli;
@@ -67,13 +68,14 @@ use std::path::Path;
 /// time a step took (stderr). `physics_threads`: the worker threads of a drive with several
 /// cars (`None`: as the game decides).
 pub fn run_replay_headless(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>) -> Result<u64, String> {
-    run_replay_headless_saving(replay, dump_states, state_hash, physics_threads, None, None)
+    run_replay_headless_saving(replay, dump_states, state_hash, physics_threads, None, None, None)
 }
 
 /// [`run_replay_headless`] that also records AC's replay of the drive (`ReplayManager`, at
 /// its default 33 frames a second) and writes it to `save_replay` at the end, and that runs
-/// AC's ghost car recorder beside the drive (`ghost`; its file is written at the end).
-pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>, save_replay: Option<&Path>, mut ghost: Option<&mut ghost::GhostRig>) -> Result<u64, String> {
+/// AC's ghost car recorder and its telemetry recorder beside the drive (`ghost`, `telemetry`;
+/// their files are written at the end).
+pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, state_hash: bool, physics_threads: Option<usize>, save_replay: Option<&Path>, mut ghost: Option<&mut ghost::GhostRig>, mut telemetry: Option<&mut telemetry::TelemetryRig>) -> Result<u64, String> {
     let mut rig = save_replay.map(|path| ac_replay::ReplayRig::new(path.parent().map(Path::to_path_buf).unwrap_or_default(), None, -16.0, 1));
     let file = input_file::InputFile::read(replay)?;
     let mut setup = file.setup.clone();
@@ -94,6 +96,9 @@ pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, sta
         if let Some(ghost) = &mut ghost {
             ghost.after_step(&sim);
         }
+        if let Some(telemetry) = &mut telemetry {
+            telemetry.after_step(&sim);
+        }
         if let Some(writer) = &mut writer {
             writer.push(&dump::StepDump::capture(&sim.car.car))?;
         }
@@ -111,6 +116,12 @@ pub fn run_replay_headless_saving(replay: &Path, dump_states: Option<&Path>, sta
     if let Some(ghost) = &mut ghost {
         ghost.shutdown();
         for line in ghost.messages.drain(..) {
+            eprintln!("{line}");
+        }
+    }
+    if let Some(telemetry) = &mut telemetry {
+        telemetry.shutdown();
+        for line in telemetry.messages.drain(..) {
             eprintln!("{line}");
         }
     }

@@ -149,6 +149,12 @@ pub struct Options {
     /// `--ghost-dir <folder>`: where ghost cars are kept (default: `GhostCar` beside
     /// rustyac.exe; never one of Assetto Corsa's folders)
     pub ghost_dir: Option<PathBuf>,
+    /// `--telemetry-dir <folder>`: where the comparative telemetry's best laps are kept (default:
+    /// `ctelemetry` beside rustyac.exe; never one of Assetto Corsa's folders). Headless runs
+    /// and replayed drives record telemetry only when this is given.
+    pub telemetry_dir: Option<PathBuf>,
+    /// `--no-telemetry`: no comparative telemetry
+    pub no_telemetry: bool,
     /// `--save-replay <file>`: the session's replay is written to this file when the run ends
     pub save_replay: Option<PathBuf>,
     /// `--replay` named one of AC's replays (not a `.ryin` recording): the file
@@ -385,6 +391,8 @@ impl Default for Options {
             no_ac_replay: false,
             replay_dir: None,
             save_replay: None,
+            telemetry_dir: None,
+            no_telemetry: false,
             ghost: None,
             ghost_file: None,
             ghost_advantage: None,
@@ -628,6 +636,11 @@ usage: rustyac [options]
   --ghost-file <file>   load this .ghost file (one of the game's too) instead
   --ghost-advantage <s> the ghost runs this many seconds ahead
   --ghost-dir <dir>     where ghost cars are kept (default: GhostCar beside rustyac.exe)
+  --telemetry-dir <dir> where AC's comparative telemetry keeps your best lap's gear, speed
+                        and pedals (a .tc file, written when the program ends; default:
+                        ctelemetry beside rustyac.exe; a headless run records it only when
+                        this is given; never on a server)
+  --no-telemetry        record no comparative telemetry
   --replay-script <l>   with --replay in a window: press the replay's keys by the clock, for
                         unattended checks: a list of key@seconds with the keys pause, slow,
                         ffwd, stop (e.g. slow@2,pause@4,ffwd@5,stop@8,pause@9)
@@ -880,6 +893,8 @@ impl Options {
                 "--ghost-file" => o.ghost_file = Some(PathBuf::from(value("--ghost-file")?)),
                 "--ghost-advantage" => o.ghost_advantage = Some(value("--ghost-advantage")?.parse().map_err(|_| "--ghost-advantage <seconds>")?),
                 "--ghost-dir" => o.ghost_dir = Some(PathBuf::from(value("--ghost-dir")?)),
+                "--telemetry-dir" => o.telemetry_dir = Some(PathBuf::from(value("--telemetry-dir")?)),
+                "--no-telemetry" => o.no_telemetry = true,
                 "--replay-script" => {
                     for item in value("--replay-script")?.split(',').filter(|s| !s.is_empty()) {
                         let (name, at) = item.split_once('@').ok_or("--replay-script <key@seconds,…>")?;

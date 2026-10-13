@@ -23,6 +23,7 @@ use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCam
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
 use rustyac_game::ghost::{GhostOptions, GhostRig};
+use rustyac_game::telemetry::TelemetryRig;
 use rustyac_physics::replay::ReplayEvent;
 use rustyac_game::render::{box_downscale, write_png, DebugRenderer, Picture};
 use rustyac_game::shm::{SharedMemory, ShmSink};
@@ -505,6 +506,44 @@ fn ghost_rig(options: &Options) -> Option<Arc<Mutex<GhostRig>>> {
     Some(Arc::new(Mutex::new(GhostRig::new(folder, ghost))))
 }
 
+/// AC's comparative telemetry (`Sim::Sim` makes its recorder for the player's car, offline
+/// or not; rustyAC: never on a server): in a window, and elsewhere when a folder is named.
+fn telemetry_rig(options: &Options, window: bool) -> Option<Arc<Mutex<TelemetryRig>>> {
+    let asked = options.telemetry_dir.is_some();
+    if options.no_telemetry || options.join.is_some() || options.ac_replay.is_some() || ((options.replay.is_some() || !window) && !asked) {
+        return None;
+    }
+    let folder = options.telemetry_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("ctelemetry")))).unwrap_or_else(|| PathBuf::from("ctelemetry"));
+    Some(Arc::new(Mutex::new(TelemetryRig::new(folder))))
+}
+
+/// The physics thread's end of the telemetry: a sample after every step, the file at the end.
+struct TelemetrySink {
+    rig: Arc<Mutex<TelemetryRig>>,
+}
+
+impl StepSink for TelemetrySink {
+    fn after_step(&mut self, sim: &rustyac_game::sim::GameSim, _input: &StepInput) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        if sim.online.is_none() {
+            rig.after_step(sim);
+        }
+        for line in rig.messages.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        let mut rig = self.rig.lock().unwrap();
+        rig.shutdown();
+        for line in rig.messages.drain(..) {
+            println!("{line}");
+        }
+        Ok(())
+    }
+}
+
 /// The physics thread's end of the ghost car: the recorder's handlers after every step, and
 /// the file when the run ends.
 struct GhostSink {
@@ -644,10 +683,13 @@ fn enter_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
     }
 }
 
-fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, rig: &Option<Arc<Mutex<ReplayRig>>>, ghost: &Option<Arc<Mutex<GhostRig>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
+fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, rig: &Option<Arc<Mutex<ReplayRig>>>, ghost: &Option<Arc<Mutex<GhostRig>>>, telemetry: &Option<Arc<Mutex<TelemetryRig>>>) -> Result<Vec<Box<dyn StepSink>>, String> {
     let mut sinks: Vec<Box<dyn StepSink>> = Vec::new();
     if let Some(ghost) = ghost {
         sinks.push(Box::new(GhostSink { rig: Arc::clone(ghost) }));
+    }
+    if let Some(rig) = telemetry {
+        sinks.push(Box::new(TelemetrySink { rig: Arc::clone(rig) }));
     }
     if let Some(rig) = rig {
         sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
@@ -838,7 +880,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         None => drive(options)?,
     };
     let feed = audio_feed(options, true);
-    let sinks = sinks(options, &setup, &feed, &replay_rig(options, false), &ghost_rig(options))?;
+    let sinks = sinks(options, &setup, &feed, &replay_rig(options, false), &ghost_rig(options), &telemetry_rig(options, false))?;
     let shared = Shared::new();
     let config = LoopConfig {
         replay: replay.clone(),
@@ -1085,7 +1127,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     let rig = replay_rig(options, true);
     let is_online = online.is_some();
     let ghost = ghost_rig(options).filter(|_| !is_online);
-    let sinks = sinks(options, &setup, &feed, &rig, &ghost)?;
+    let sinks = sinks(options, &setup, &feed, &rig, &ghost, &telemetry_rig(options, true).filter(|_| !is_online))?;
     let shared = Shared::new();
     // a replay waits for the picture: its first step runs when the first frame is drawn (the
     // frame loop sets the transport's speed)
@@ -1864,7 +1906,9 @@ fn run(options: &Options) -> Result<(), String> {
             let started = Instant::now();
             let ghost = ghost_rig(options);
             let mut ghost = ghost.as_ref().map(|ghost| ghost.lock().unwrap());
-            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay), ghost.as_deref_mut())?;
+            let telemetry = telemetry_rig(options, false);
+            let mut telemetry = telemetry.as_ref().map(|rig| rig.lock().unwrap());
+            let steps = rustyac_game::run_replay_headless_saving(replay, options.dump_states.as_deref(), options.state_hash, options.physics_threads, options.save_replay.as_deref().filter(|_| !options.no_ac_replay), ghost.as_deref_mut(), telemetry.as_deref_mut())?;
             let seconds = started.elapsed().as_secs_f64();
             // the dump may be going to the standard output
             eprintln!(
