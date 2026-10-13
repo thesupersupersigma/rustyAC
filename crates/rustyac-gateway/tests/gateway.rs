@@ -12,12 +12,17 @@ use rustyac_gateway::ws::{self, Client, LANE_DATAGRAM, LANE_RELIABLE};
 
 /// The stand-in server: TCP and UDP on the same port number, as an `acServer` has them.
 fn server() -> (TcpListener, UdpSocket) {
-    for _ in 0..50 {
+    // (the system hands out its free ports in a row, and may keep a whole block of them from
+    // one of the two protocols: the listeners that found no partner are kept until one did, so
+    // that the next try gets another number, and the search is long enough to leave a block)
+    let mut kept = Vec::new();
+    for _ in 0..2000 {
         let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
         if let Ok(udp) = UdpSocket::bind(tcp.local_addr().unwrap()) {
             udp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             return (tcp, udp);
         }
+        kept.push(tcp);
     }
     panic!("no port free for both TCP and UDP");
 }

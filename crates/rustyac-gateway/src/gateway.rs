@@ -251,9 +251,11 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
         }
     }
     let count = shared.clients.fetch_add(1, Ordering::SeqCst) + 1;
-    let _place = Place(&shared.clients);
+    let place = Place(&shared.clients);
     if count > config.max_clients {
         shared.log("refused: the gateway is full");
+        // (given back before the answer goes out: whoever reads the answer may count at once)
+        drop(place);
         return respond(&mut stream, "503 Service Unavailable", "", "the gateway is full\n");
     }
     let number = shared.served.fetch_add(1, Ordering::SeqCst) + 1;
@@ -274,6 +276,7 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
         Ok(sockets) => sockets,
         Err(why) => {
             shared.log(&format!("#{number} refused: the game server {} is not reachable: {why}", config.server));
+            drop(place);
             return respond(&mut stream, "502 Bad Gateway", "", "the game server is not reachable from the gateway\n");
         }
     };
@@ -327,6 +330,8 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
             let _ = tcp_in.set_read_timeout(Some(TICK));
             let mut buffer = [0u8; 0x1000];
             let mut pending: Vec<u8> = Vec::new();
+            // the server's first message is still to come
+            let mut first = true;
             'read: loop {
                 match tcp_in.read(&mut buffer) {
                     Ok(count) if count > 0 => pending.extend_from_slice(&buffer[..count]),
@@ -349,12 +354,16 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                     if pending.len() < 2 + length {
                         break;
                     }
+                    // (decided before the message goes out: a client that gets it and vanishes
+                    // at once must already count as joined, or no goodbye is said for it)
+                    if first && pending.get(2) == Some(&MESSAGE_ACCEPTED) {
+                        joined.store(true, Ordering::SeqCst);
+                    }
+                    first = false;
                     if !send(&writer, ws::OP_BINARY, &[&[ws::LANE_RELIABLE], &pending[2..2 + length]]) {
                         break 'read;
                     }
-                    if counts[2].fetch_add(1, Ordering::Relaxed) == 0 && pending.get(2) == Some(&MESSAGE_ACCEPTED) {
-                        joined.store(true, Ordering::SeqCst);
-                    }
+                    counts[2].fetch_add(1, Ordering::Relaxed);
                     pending.drain(..2 + length);
                 }
             }
