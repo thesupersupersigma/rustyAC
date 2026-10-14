@@ -23,6 +23,8 @@ use crate::gui_seq::Op;
 use crate::gui_seq_menu::{hud, leak};
 
 pub const DT: f32 = 1.0 / 60.0;
+/// Where the Audio app's form is on the screen (its top left).
+const VOLUMES_AT: (i32, i32) = (0, 80);
 
 /// What the stand-in referee knows of one car at one frame.
 #[derive(Clone, Debug, Default)]
@@ -86,6 +88,9 @@ pub struct AppScript {
     pub use_mph: bool,
     /// a car's state changed by the script after the tape's (car, name, value)
     pub sets: Vec<(usize, String, f32)>,
+    /// the sound cards' names; every car's bonnet and bumper views' "external sound" at the start
+    pub drivers: Vec<String>,
+    pub camera: Vec<[bool; 2]>,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -238,6 +243,14 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             script(|s| s.env[k] = number);
         }
         "app.focus" => script(|s| s.focused = number as usize),
+        "app.drivers" => script(|s| s.drivers = text.split('|').map(str::to_string).collect()),
+        "app.camera" => script(|s| {
+            let car = number as usize;
+            if s.camera.len() <= car {
+                s.camera.resize(car + 1, [false; 2]);
+            }
+            s.camera[car] = [text.as_bytes().first() == Some(&b'1'), text.as_bytes().get(1) == Some(&b'1')];
+        }),
         "app.session" => script(|s| s.session_type = number as i32),
         "app.timed" => script(|s| s.is_timed_race = on),
         "app.laps" => script(|s| s.session_laps = number as i32),
@@ -386,6 +399,9 @@ pub fn link() -> AppLink {
             sun_angle: s.sun_angle,
             time_mult: None,
             use_mph: s.use_mph,
+            camera_sounds: s.camera.clone(),
+            audio_drivers: s.drivers.clone(),
+            audio_ini: None,
             actions: Vec::new(),
         }
     })
@@ -394,6 +410,25 @@ pub fn link() -> AppLink {
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
 /// its pixels, and `data\map.ini`, byte for byte).
 pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if name.starts_with("app_volumes") {
+        let mut same = true;
+        let docs = args.root.join("documents/Assetto Corsa/cfg");
+        let port = args.root.join("port_files/documents/Assetto Corsa/cfg");
+        for (what, a, b) in [
+            ("cfg/audio.ini", docs.join("audio.ini"), port.join("audio.ini")),
+            ("cfg/camera_manager.ini", docs.join("camera_manager.ini"), port.join("camera_manager.ini")),
+            ("the sound's settings (master level calls, every car's mix, the views' sounds)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
+        ] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if !name.contains("ailine") {
         return Ok(true);
     }
@@ -529,6 +564,17 @@ FF_GAIN=0.85
         std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
         std::fs::copy(std::path::Path::new("cardata").join(car).join("engine.ini"), to.join("engine.ini")).map_err(|e| format!("{car} engine.ini: {e}"))?;
     }
+    // the Audio app's files: an audio.ini as a hand would leave it (levels between the steps,
+    // one past 1, no TRANSMISSION), no camera_manager.ini; the same for the port's side
+    let port_docs = args.root.join("port_files/documents/Assetto Corsa/cfg");
+    std::fs::create_dir_all(&port_docs).map_err(|e| e.to_string())?;
+    for dir in [&docs, &port_docs] {
+        std::fs::write(dir.join("audio.ini"), "[LEVELS]\r\nMASTER=0.85\r\nENGINE=0.85\r\nWIND=0.4\r\nTYRES=1.2\r\nSURFACES=0.6\r\nDIRT_BOTTOM=0.3\r\nOPPONENTS=0.9\r\n\r\n[SETTINGS]\r\nDRIVER_NAME=Speakers\r\n").map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(dir.join("camera_manager.ini"));
+    }
+    for file in ["effects_game.txt", "effects_port.txt"] {
+        let _ = std::fs::remove_file(args.root.join(file));
+    }
     Ok(())
 }
 
@@ -655,6 +701,50 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 click(&mut o, 1250, 60);
                 o.extend([Op::MouseMove(600, 400), Op::Frame(DT), Op::Frame(DT), Op::Save]);
             }
+        }
+        "app_volumes" => {
+            // the Audio app on the race: two sound cards, the first car's bonnet view heard
+            // from outside, the second's bumper view
+            race(&mut o, 6);
+            o.extend([hud("app.drivers", 0.0, "Speakers (High Definition Audio Device)|Headphones (USB Audio)"), hud("app.camera", 0.0, "10"), hud("app.camera", 1.0, "01")]);
+            o.push(hud("app.new", 0.0, "volumes"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "volumes"));
+            play(&mut o, 0, 60, 20);
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            // a spinner's minus and plus: 11 px into its ends; the rows 58, 116, 174, 232
+            let (minus_l, plus_l, minus_r, plus_r) = (61, 238, 281, 458);
+            let row = |r: i32| 58 + r * 58 + 11;
+            for (cx, r, n) in [(plus_l, 0, 2), (minus_l, 0, 1), (minus_l, 1, 3), (plus_l, 2, 1), (minus_l, 3, 1), (minus_r, 0, 1), (plus_r, 1, 1), (minus_r, 2, 2), (plus_r, 3, 1), (minus_r, 3, 1), (plus_r, 3, 4)] {
+                for _ in 0..n {
+                    click(&mut o, cx, row(r));
+                }
+            }
+            if rest != "short" {
+                // the master to 0 and past it, and up to 10 and past it
+                for _ in 0..10 {
+                    click(&mut o, minus_l, row(0));
+                }
+                for _ in 0..12 {
+                    click(&mut o, plus_l, row(0));
+                }
+            }
+            // bonnet inside, bumper outside, bumper inside
+            for cx in [100, 420, 320] {
+                click(&mut o, cx, 301);
+            }
+            // SET DRIVER with nothing chosen, a sound card chosen, SET DRIVER (its "Saved" for
+            // five seconds, the warning)
+            click(&mut o, 420, 464);
+            click(&mut o, 150, 375);
+            click(&mut o, 420, 464);
+            o.extend(std::iter::repeat_n(Op::Frame(DT), if rest == "short" { 20 } else { 310 }));
+            // the focus on the second car: its views' buttons
+            o.extend([hud("app.focus", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+            click(&mut o, 200, 301);
+            o.extend([hud("app.focus", 0.0, ""), Op::Frame(DT)]);
+            o.extend([hud("app.visible", 0.0, "volumes"), Op::Frame(DT), hud("app.visible", 1.0, "volumes"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
         "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {
             let which = leak(app[4..].to_string());

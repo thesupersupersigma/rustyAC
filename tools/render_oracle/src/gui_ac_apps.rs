@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 15] = [
+pub const APPS: [(&str, usize, usize, usize); 16] = [
+    ("volumes", 0x258, 0x1_402f_8fd0, 0x1_4050_65d0),
     ("help", 0x1c0, 0x1_4030_7900, 0x1_4050_87c8),
     ("hideall", 0x1d0, 0x1_4030_f3e0, 0x1_4050_9f38),
     ("runningtime", 0x1d0, 0x1_402d_c760, 0x1_4050_24c0),
@@ -39,6 +40,8 @@ pub const APPS: [(&str, usize, usize, usize); 15] = [
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 const TAKES_CAR: [&str; 5] = ["delta", "tyres", "pedals", "electronics", "gears"];
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
+/// `static std::wstring INIReaderDocuments::basePath`
+const VA_INIREADERDOCUMENTS_BASE_PATH: usize = 0x1_4151_d100;
 
 /// The apps' tables for `gui_ac::class_of`: every app's form is a "Form" in the dumps.
 pub fn classes() -> Vec<(&'static str, usize, usize, usize)> {
@@ -54,6 +57,39 @@ struct AppGame {
 }
 
 static GAME: Mutex<Option<AppGame>> = Mutex::new(None);
+
+/// The Audio app's session: `CarAudioFMOD` blocks (their `mixVolumes` at +0x118), the
+/// drivable cameras' definitions (0x38 a car), the master level's calls, the last line of
+/// `effects_game.txt`.
+#[derive(Default)]
+struct Sound {
+    audio: Vec<usize>,
+    defs: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static SOUND: Mutex<Option<Sound>> = Mutex::new(None);
+
+/// `AudioEngine::setVolume` 0x1401fbdf0: the call, written down.
+unsafe extern "C" fn set_volume(_this: *mut u8, v: f32) {
+    if let Some(s) = SOUND.lock().unwrap().as_mut() {
+        s.log.push(format!("master {:08x}", v.to_bits()));
+    }
+}
+
+/// `AudioEngine::getDriverNum` 0x1401f9830: the script's sound cards.
+unsafe extern "C" fn get_driver_num(_this: *mut u8) -> i32 {
+    crate::gui_seq_apps::script(|s| s.drivers.len() as i32)
+}
+
+/// `AudioEngine::getDriverInfo(int)` 0x1401f96d0.
+unsafe extern "C" fn get_driver_info(_this: *mut u8, out: *mut u8, i: i32) -> *mut u8 {
+    let name = crate::gui_seq_apps::script(|s| s.drivers.get(i as usize).cloned().unwrap_or_default());
+    empty_wstring(out);
+    crate::ac::write_wstring(crate::gui_ac_hud::acs(), out, &name);
+    out
+}
 /// where `Speed::useMPH` is in the loaded game
 static GAME_ACS: Mutex<Option<(usize,)>> = Mutex::new(None);
 
@@ -239,6 +275,9 @@ unsafe fn install(game: &Game) {
         (0x1_4013_7f90, get_car_real_time_position as *const () as usize),
         (0x1_4013_8570, get_lap_count as *const () as usize),
         (0x1_4024_0cf0, crate::gui_ac_hud::ac_translate as *const () as usize),
+        (0x1_401f_bdf0, set_volume as *const () as usize),
+        (0x1_401f_9830, get_driver_num as *const () as usize),
+        (0x1_401f_96d0, get_driver_info as *const () as usize),
     ] {
         jump(game, va, to);
     }
@@ -376,6 +415,33 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(sim, 0x48, list.add(8));
                 wr(sim, 0x50, list.add(8));
             }
+            if text == "volumes" {
+                // Game::audioEngine (its calls stand in), every car's CarAudioFMOD
+                // (CarAvatar+0xe18), Sim::cameraManager (+0x188) -> cameraDrivable (+0xc0) ->
+                // drivableCameraPositions (+0x88) with the script's views
+                let (game_block, cars) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block, g.cars.clone())).unwrap_or_default();
+                wr(game_block as *mut u8, 0x148, a.alloc(0x400));
+                let mut audio = Vec::new();
+                for car in &cars {
+                    let block = a.alloc(0x200);
+                    wr(*car as *mut u8, 0xe18, block);
+                    audio.push(block as usize);
+                }
+                let camera = a.alloc(0x200);
+                let drivable = a.alloc(0x200);
+                let defs = a.alloc(cars.len().max(1) * 0x38);
+                let views = crate::gui_seq_apps::script(|s| s.camera.clone());
+                for (i, v) in views.iter().enumerate().take(cars.len()) {
+                    wr(defs, i * 0x38 + 0x35, v[0] as u8);
+                    wr(defs, i * 0x38 + 0x34, v[1] as u8);
+                }
+                wr(drivable, 0x88, defs);
+                wr(drivable, 0x90, defs.add(cars.len() * 0x38));
+                wr(drivable, 0x98, defs.add(cars.len() * 0x38));
+                wr(camera, 0xc0, drivable);
+                wr(sim, 0x188, camera);
+                *SOUND.lock().unwrap() = Some(Sound { audio, defs: defs as usize, ..Sound::default() });
+            }
             if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
@@ -384,6 +450,12 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, gui);
             } else {
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
+            }
+            if text == "volumes" {
+                // INIReaderDocuments::basePath (the oracle skips its making, which leaves it
+                // empty): the stand-in Documents' folder, where the app's Win32 writes go too
+                let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+                crate::ac::write_wstring(a, a.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
             }
             // Sim::addForm: GameScreen::addControl(form, true)
             let screen: *mut u8 = rd(sim, 0x108);
@@ -501,5 +573,13 @@ pub unsafe fn update() {
     wr(g.game_block as *mut u8, 0x18, l.game_time);
     if let Some(game) = GAME_ACS.lock().unwrap().as_ref() {
         wr(game.0 as *mut u8, 0, l.use_mph as u8);
+    }
+    // the Audio app's effects, as the port's side writes them
+    if let Some(s) = SOUND.lock().unwrap().as_mut() {
+        let mix: Vec<[f32; 7]> = s.audio.iter().map(|b| rd::<[f32; 7]>(*b as *mut u8, 0x118)).collect();
+        let camera: Vec<[bool; 2]> = (0..s.audio.len()).map(|i| [rd::<u8>(s.defs as *mut u8, i * 0x38 + 0x35) != 0, rd::<u8>(s.defs as *mut u8, i * 0x38 + 0x34) != 0]).collect();
+        let line = crate::gui_port_apps::sound_line(&mix, &camera);
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut s.log), &line, &mut s.last);
     }
 }

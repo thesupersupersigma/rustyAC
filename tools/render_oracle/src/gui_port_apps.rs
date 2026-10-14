@@ -2,6 +2,7 @@
 
 //! The port side of the apps' proofs: `rustyac_gui`'s app forms, fed the same tapes.
 
+use rustyac_gui::apps::{AppAction, MixLevel};
 use rustyac_gui::control::Id;
 use rustyac_gui::gui::Gui;
 use rustyac_gui::painter::Painter;
@@ -51,6 +52,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "essentials" => gui.new_essentials_app(painter),
         "delta" => gui.new_performance_delta_app(painter),
         "realtime" => gui.new_realtime_app(painter),
+        "volumes" => gui.new_volumes_app(painter),
         _ => return Err(format!("no app {name:?} in the port")),
     })
 }
@@ -74,24 +76,112 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
     Ok(())
 }
 
-/// The files the apps asked to write, into `port_files` of the scratch root.
+/// What the apps asked of the session: the files into `port_files` of the scratch root (the
+/// settings files into its `documents`), the sound's settings into [`SOUND`].
 fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
+    let docs = root.join("port_files/documents/Assetto Corsa");
     for action in std::mem::take(&mut gui.apps.actions) {
-        let rustyac_gui::apps::AppAction::WriteFile { path, bytes } = action;
-        let target = root.join("port_files").join(path.replace('\\', "/"));
-        std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
-        std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+        match action {
+            AppAction::WriteFile { path, bytes } => {
+                let target = root.join("port_files").join(path.replace('\\', "/"));
+                std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
+                std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+            }
+            AppAction::WriteProfileString { file, section, key, value } => {
+                let target = docs.join(&file);
+                std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
+                let old = std::fs::read(&target).ok();
+                let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
+                std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
+            }
+            AppAction::SetMasterVolume(v) => sound(|s| s.log.push(format!("master {:08x}", v.to_bits()))),
+            AppAction::SetMixLevel { level, value } => sound(|s| {
+                for mix in s.mix.iter_mut() {
+                    let k = level as usize;
+                    // MixLevel's order is MixVolumes' (wind, tyres, surfaces, dirt, engine,
+                    // transmission, opponents); the transmission's -1 copies the engine's
+                    mix[k] = if level == MixLevel::Transmission { if value == -1.0 { mix[4] } else { value * 3.0 } } else { value };
+                }
+            }),
+            AppAction::SetCameraSound { car, which, external } => sound(|s| {
+                if let Some(c) = s.camera.get_mut(car) {
+                    c[which] = external;
+                }
+            }),
+        }
     }
     Ok(())
 }
 
+/// The sound's settings as the port's apps left them: the master level's calls, every car's
+/// `MixVolumes`, every car's views' sounds.
+#[derive(Default)]
+pub struct Sound {
+    pub log: Vec<String>,
+    pub mix: Vec<[f32; 7]>,
+    pub camera: Vec<[bool; 2]>,
+    pub made: bool,
+    pub last: String,
+}
+
+static SOUND: std::sync::Mutex<Option<Sound>> = std::sync::Mutex::new(None);
+
+fn sound<T>(f: impl FnOnce(&mut Sound) -> T) -> T {
+    f(SOUND.lock().unwrap().get_or_insert_with(Sound::default))
+}
+
+/// The sound's settings as a line of `effects_*.txt` (the same text on the two sides).
+pub fn sound_line(mix: &[[f32; 7]], camera: &[[bool; 2]]) -> String {
+    let mut line = String::new();
+    for (i, m) in mix.iter().enumerate() {
+        line += &format!("car {i} mix {}", m.iter().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(" "));
+        if let Some(c) = camera.get(i) {
+            line += &format!(" bonnet {} bumper {}", c[0] as u8, c[1] as u8);
+        }
+        line += "; ";
+    }
+    line
+}
+
 /// What the apps read, as the script has it now.
 pub fn sync(gui: &mut Gui) {
-    let actions = std::mem::take(&mut gui.apps.actions);
+    let documents = crate::root::documents();
+    let root = documents.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let _ = write_files(gui, &root);
     let was_replay = gui.apps.in_replay;
     gui.apps = crate::gui_seq_apps::link();
-    gui.apps.actions = actions;
     if gui.apps.in_replay != was_replay {
         gui.apps_on_replay_status(gui.apps.in_replay);
+    }
+    // the Audio app's: the views as the port's apps left them, Documents cfg/audio.ini
+    let volumes = gui.controls.iter().any(|c| c.name == "FORM_VOLUMES");
+    if volumes {
+        let (camera, line, log) = sound(|s| {
+            if !s.made {
+                s.made = true;
+                s.camera = gui.apps.camera_sounds.clone();
+                s.camera.resize(gui.apps.cars.len(), [false; 2]);
+                s.mix = vec![[0.0; 7]; gui.apps.cars.len()];
+            }
+            let line = sound_line(&s.mix, &s.camera);
+            (s.camera.clone(), line, std::mem::take(&mut s.log))
+        });
+        gui.apps.camera_sounds = camera;
+        gui.apps.audio_ini = std::fs::read(root.join("port_files/documents/Assetto Corsa/cfg/audio.ini")).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+        append_effects(&root.join("effects_port.txt"), log, &line, &mut sound(|s| std::mem::take(&mut s.last)));
+        sound(|s| s.last = line);
+    }
+}
+
+/// The master level's calls, then the settings' line when it changed.
+pub fn append_effects(path: &std::path::Path, log: Vec<String>, line: &str, last: &mut String) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) else { return };
+    for l in log {
+        let _ = writeln!(f, "{l}");
+    }
+    if line != last {
+        let _ = writeln!(f, "{line}");
+        *last = line.to_string();
     }
 }
