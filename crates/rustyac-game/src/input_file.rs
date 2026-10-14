@@ -571,6 +571,9 @@ pub struct SimSetup {
     pub drs_zones: bool,
     /// `getFFGlobalGain` of the driver's device (a wheel's force-feedback gain; else 1).
     pub ff_gain: f32,
+    /// Task 31: the session begins in the ESC menu, the player's car held (the controls
+    /// locked) until "Drive", as in the game. Off in files recorded before.
+    pub esc_start: bool,
     /// Task 31: the setup editor's jobs of the drive, each with the step it is done before.
     /// Not in the header: they are the file beside the input file (`<input>.setup`).
     pub setup_jobs: Vec<(u64, SetupJob)>,
@@ -624,6 +627,7 @@ impl Default for SimSetup {
             session_starts_at_spawn: false,
             drs_zones: false,
             ff_gain: 1.0,
+            esc_start: false,
             setup_jobs: Vec::new(),
             oracle: None,
             track: String::new(),
@@ -717,6 +721,9 @@ impl SimSetup {
         put("auto_shifter", (self.auto_shifter as u32).to_string());
         if let Some(blip) = self.auto_blip {
             put("auto_blip", (blip as u32).to_string());
+        }
+        if self.esc_start {
+            put("esc_start", "1".to_string());
         }
         if self.session_starts_at_spawn {
             put("session_starts_at_spawn", "1".to_string());
@@ -911,6 +918,7 @@ impl SimSetup {
                 "auto_shifter" => setup.auto_shifter = flag(),
                 "auto_blip" => setup.auto_blip = Some(flag()),
                 "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
+                "esc_start" => setup.esc_start = flag(),
                 "drs_zones" => setup.drs_zones = flag(),
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),

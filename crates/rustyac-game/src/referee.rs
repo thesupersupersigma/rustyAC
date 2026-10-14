@@ -184,6 +184,9 @@ pub struct RefereeHud {
     /// Task 30: the standings as AC's tables read them (`RaceManager`'s answers; the cars'
     /// names and looks are the picture's side's to add)
     pub race: Option<rustyac_gui::leaderboard::RaceLink>,
+    /// Task 31: every car's laps of the running session and of the ones that are over, for
+    /// the ESC menu's page "Time"
+    pub time: Option<rustyac_gui::time_table::TimeLink>,
     /// Task 30: what the ESC menu's "Race control" says of the day: the track's grip, the
     /// air's and the road's temperature, the wind's speed (m/s) and direction (degrees)
     pub env: [f32; 5],
@@ -466,6 +469,16 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
             best_splits: manager.timing.best_splits.clone(),
             ..RaceLink::default()
         });
+        {
+            use rustyac_gui::time_table::{TimeHistory, TimeLap, TimeLink};
+            let lap = |lap: &rustyac_physics::race::timing::Lap| TimeLap { time: lap.time, splits: lap.splits.clone(), cuts: lap.cuts, is_valid: lap.is_valid, compound: lap.compound.clone() };
+            out.time = Some(TimeLink {
+                laps: manager.timing.lap_dbs.iter().map(|db| db.laps.iter().map(lap).collect()).collect(),
+                history: manager.session_history_list.iter().map(|event| TimeHistory { laps: event.result.laps.iter().map(|laps| laps.iter().map(lap).collect()).collect(), best_laps: event.result.best_laps.iter().map(lap).collect() }).collect(),
+                sector_count: manager.timing.sector_count,
+                ..TimeLink::default()
+            });
+        }
         let env = &player.env;
         out.env = [env.dynamic_grip_level, env.ambient_temperature, env.road_temperature, env.wind_speed, env.wind_direction_deg];
     }

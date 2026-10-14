@@ -59,9 +59,13 @@ pub struct RefereeSetup {
     pub players: Vec<Player>,
     /// the seed of the referee's `rand()` (the start's random second, made-up laps)
     pub seed: u32,
-    /// `startRace`'s delay for the first session, ms (20000 in the game)
+    /// `startRace`'s delay for the first session, ms (20000 in the game, which is what
+    /// `Sim::Sim` calls it with when the session does not begin in the ESC menu). Negative:
+    /// the session begins in the ESC menu, and `startRace` waits for its "Drive"
+    /// ([`Referee::drive`]), as in the game.
     pub first_start_delay_ms: f32,
-    /// and for a race that follows another session (10000: the click that ends the intro)
+    /// and for a race that follows another session (10000: the click that ends the intro);
+    /// negative: that session waits for "Drive" too
     pub next_start_delay_ms: f32,
     /// the track's `data/overlays.ini [YELLOW_FLAG] DISTANCE`
     pub yellow_flag_distance: Option<f32>,
@@ -214,7 +218,12 @@ impl Referee {
         referee.manager.set_current_session(0, now, &mut actions);
         referee.manager.reset_current_laps_and_mandatory_pit(&mut actions);
         referee.apply(actions, world);
-        referee.start_race(setup.first_start_delay_ms, world);
+        if setup.first_start_delay_ms >= 0.0 {
+            referee.start_race(setup.first_start_delay_ms, world);
+        } else {
+            // ESCMenu::render: the player's controls are locked while the menu shows
+            world.car_mut(0).queue(|car| car.lock_controls(true));
+        }
         referee
     }
 
@@ -375,9 +384,13 @@ impl Referee {
         self.rand = rand;
         let new_session = actions.iter().any(|action| matches!(action, Action::NewSession { .. }));
         self.apply(actions, world);
-        if new_session && self.manager.current_session.session_type == SESSION_RACE {
+        if new_session && self.manager.current_session.session_type == SESSION_RACE && self.next_start_delay_ms >= 0.0 {
             // (the click that ends the session's intro, at once)
             self.start_race(self.next_start_delay_ms, world);
+        }
+        if new_session && self.next_start_delay_ms < 0.0 {
+            // the ESC menu comes up again (the handler of the new session, 0x140195c60)
+            world.car_mut(0).queue(|car| car.lock_controls(true));
         }
         self.pit_frame(world, now, &views);
         // FlagManager::update and the messages

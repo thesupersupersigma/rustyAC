@@ -116,6 +116,10 @@ pub struct Options {
     /// `--cfg-dir <folder>`: where rustyAC keeps its own `acos.ini` and `gameplay.ini`
     /// (default: `cfg` beside rustyac.exe; never Assetto Corsa's own folders)
     pub cfg_dir: Option<PathBuf>,
+    /// `--esc-start` / `--no-esc-start`: the session begins in the ESC menu with the car held
+    /// until "Drive", as in the game (default: on for a drive at the wheel in a window; off
+    /// for replays, unattended drives, pictures and online)
+    pub esc_start: Option<bool>,
     /// `--setups-dir <folder>`: where the setup editor saves (default: `setups` beside
     /// rustyac.exe; never Assetto Corsa's own folders)
     pub setups_dir: Option<PathBuf>,
@@ -363,6 +367,7 @@ impl Default for Options {
             debug_hud: false,
             no_gui: false,
             cfg_dir: None,
+            esc_start: None,
             setups_dir: None,
             no_ac_setups: false,
             gui_do: None,
@@ -846,6 +851,8 @@ impl Options {
                 "--cfg-dir" => o.cfg_dir = Some(PathBuf::from(value("--cfg-dir")?)),
                 "--setups-dir" => o.setups_dir = Some(PathBuf::from(value("--setups-dir")?)),
                 "--no-ac-setups" => o.no_ac_setups = true,
+                "--esc-start" => o.esc_start = Some(true),
+                "--no-esc-start" => o.esc_start = Some(false),
                 "--gui-do" => o.gui_do = Some(value("--gui-do")?),
                 "--supersample" => o.supersample = value("--supersample")?.parse().ok().filter(|n| (1..=4).contains(n)).ok_or("--supersample <1 to 4>")?,
                 "--free-camera" => o.free_camera = Some(FreeCamera::parse(&value("--free-camera")?)?),

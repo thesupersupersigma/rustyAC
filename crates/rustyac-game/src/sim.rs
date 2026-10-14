@@ -1267,6 +1267,10 @@ impl GameSim {
         }
         let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new() };
         sim.setup_schedule = sim.setup.setup_jobs.iter().cloned().collect();
+        // the session begins in the ESC menu: without a referee the car is held here
+        if sim.setup.esc_start && sim.setup.referee.is_none() {
+            sim.car.car.lock_controls(true);
+        }
         sim.start_ai()?;
         sim.start_referee();
         Ok(sim)

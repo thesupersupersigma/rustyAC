@@ -152,6 +152,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
     }
     // Task 28: the referee. race.ini's sessions (conditions::apply), or --sessions, or a race
     // of --ai-laps laps when AI drivers race without a race.ini session
+    setup.esc_start = esc_start(options);
     if options.no_referee {
         setup.referee = None;
     } else if !setup.track.is_empty() {
@@ -187,6 +188,10 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
             if let Some(seconds) = options.race_start_in {
                 referee.first_start_delay_ms = (seconds * 1000.0) as f32;
                 referee.next_start_delay_ms = (seconds * 1000.0) as f32;
+            } else if esc_start(options) {
+                // the session begins in the ESC menu: `startRace` waits for its "Drive"
+                referee.first_start_delay_ms = -1.0;
+                referee.next_start_delay_ms = -1.0;
             }
             // (a live drive draws anew every time; pictures and unattended runs do not)
             referee.seed = match options.ai_seed {
@@ -451,6 +456,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+            track_layout: info.track_layout.clone(),
+            esc_start: esc_start(options),
+            out_dir: referee_out(options).unwrap_or_else(|| PathBuf::from("out")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),
         };
@@ -837,6 +845,25 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
         }
     }
     Ok(sinks)
+}
+
+/// Whether the session begins in the ESC menu, as the game's does (`Sim::Sim` 0x140192070:
+/// no replay is loaded and `system/cfg/options.ini [OPTIONS] DISABLE_SHOW_MODE` is 0). Asked
+/// for or refused with `--esc-start` / `--no-esc-start`; left alone, it is so for a drive at
+/// the wheel in a window, and not for a replay, a drive nobody sits at, a picture, a run
+/// without AC's GUI, or online (where rustyAC has no ESC menu yet).
+fn esc_start(options: &Options) -> bool {
+    if options.replay.is_some() || options.join.is_some() || options.no_gui || options.no_hud || options.debug_view {
+        return false;
+    }
+    if let Some(asked) = options.esc_start {
+        return asked;
+    }
+    let unattended = options.headless || options.screenshot.is_some() || options.autodrive || options.ai_drive || options.flat_out || options.duration.is_some() || options.gui_do.is_some();
+    let disabled = rustyac_content::install::ac_root()
+        .and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/options.ini")).ok())
+        .is_some_and(|ini| ini.get_float("OPTIONS", "DISABLE_SHOW_MODE").unwrap_or(0.0) != 0.0);
+    !unattended && !disabled
 }
 
 /// The car's set-up, and the recorded drive if one is to be played.

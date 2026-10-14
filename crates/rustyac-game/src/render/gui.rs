@@ -64,8 +64,13 @@ pub struct GuiSetup {
     /// `Documents\Assetto Corsa\setups` (read only: its setups can be loaded)
     pub setups_dir: PathBuf,
     pub documents_setups: Option<PathBuf>,
-    /// the track's folder name ("" for none)
+    /// the track's folder name ("" for none), and its layout
     pub track_name: String,
+    pub track_layout: String,
+    /// rustyAC's own `out` folder (the page "Time" prints there)
+    pub out_dir: PathBuf,
+    /// the session begins in the ESC menu (and so does every session after it)
+    pub esc_start: bool,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -280,6 +285,15 @@ impl GameGui {
             gui.setup_car = Some(Box::new(car));
             pages.setup_screen = Some(editor);
         }
+        // the page "Time" (the session's lap lists are the referee's: with it only)
+        if setup.session_count > 0 {
+            fn time_table(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
+                gui.new_time_table(painter)
+            }
+            pages.time_table = Some(time_table);
+            gui.sim.time.out_dir = setup.out_dir.clone();
+            gui.sim.time.track_config = setup.track_layout.clone();
+        }
         let esc_menu = (!setup.online).then(|| {
             let id = gui.new_esc_menu(&mut painter, system("fades.ini").as_ref(), pages);
             gui.add_root(&mut painter, id);
@@ -288,6 +302,11 @@ impl GameGui {
         });
         if let Some(data) = &setup_data {
             data.borrow_mut().muted = false;
+        }
+        // Sim::Sim 0x140192070: the session begins in the ESC menu (no replay, and
+        // `options.ini [OPTIONS] DISABLE_SHOW_MODE` is 0)
+        if setup.esc_start && esc_menu.is_some() {
+            gui.set_visible(esc_menu.unwrap_or(0), true);
         }
         gui.sim.actions.clear();
         // the apps (Sim::addForm): of the game's 56 only the Leaderboard so far
@@ -379,11 +398,20 @@ impl GameGui {
             }
             let index = race.current_session_index;
             self.gui.sim.race = race;
+            // the page "Time": the laps, the car the camera follows, where PRINT writes
+            if let Some(time) = info.referee.as_ref().and_then(|referee| referee.time.clone()) {
+                let (config, out_dir) = (std::mem::take(&mut self.gui.sim.time.track_config), std::mem::take(&mut self.gui.sim.time.out_dir));
+                self.gui.sim.time = rustyac_gui::time_table::TimeLink { focused_car: focus, track_config: config, out_dir, time_stamp: time_stamp(), ..time };
+            }
             // Sim::evOnNewSession, as the tables hear it
             if index != self.last_session_index {
                 self.last_session_index = index;
                 self.gui.sim_on_new_session();
                 self.pits_lock_stale = true;
+                // the handler of `Sim::evOnNewSession` (0x140195c60): the ESC menu comes up
+                if self.setup.esc_start && self.esc_menu.is_some() {
+                    self.gui.sim_activate_esc_menu();
+                }
             }
         }
         // an online session's overlays; the countdown of a driver who was put out
@@ -969,6 +997,23 @@ impl GameGui {
         }
         Ok(written)
     }
+}
+
+/// "DDMMYY-HHMMSS" of now (the name of the file the page "Time" prints).
+fn time_stamp() -> String {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    // days since 1970 to a date (the civil calendar)
+    let (days, rest) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    format!("{day:02}{month:02}{:02}-{:02}{:02}{:02}", year.rem_euclid(100), rest / 3600, rest % 3600 / 60, rest % 60)
 }
 
 /// `WritePrivateProfileStringW`'s effect on an ini text: the key of the section is set (the
