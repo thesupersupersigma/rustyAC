@@ -398,6 +398,21 @@ pub unsafe fn announce_laps(game: &Game) {
 
 static SUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// Task 33: the game's `MicroSectors` of the sequence (0: none).
+static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
+pub unsafe fn frame(game: &Game) {
+    let ms = MICRO.load(std::sync::atomic::Ordering::SeqCst);
+    if ms == 0 {
+        return;
+    }
+    let table: *const usize = rd(ms as *const u8, 0);
+    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(*table.add(1));
+    let _ = game;
+    update(ms as *mut u8, crate::gui_seq_apps::DT);
+}
+
 /// The sun's angle an app script set, in `GraphicsManager::lightingSettings.angle` around the
 /// GUI's pass only (ACTimeFlow reads it there; the scene's lighting, made at the frame's
 /// start, keeps its own).
@@ -424,8 +439,26 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         wr(sim, 0x8, game_block);
         wr(sim, 0x108, screen);
         wr(sim, 0x1a8, a.alloc(0x400));
-        // MicroSectors (0x90), switched off: its strip is not ported
-        wr(sim, 0x1f0, a.alloc(0x90));
+        // MicroSectors (0x90): switched off, or (Task 33) the game's own as SHOW_SECTORS=1
+        // makes it (enabled, 24 overall bests of FLT_MAX and no car)
+        if crate::gui_seq_apps::script(|s| s.sectors) {
+            let ms = a.alloc(0x90);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4009_e9d0));
+            ctor(ms, sim);
+            wr(ms, 0x88, 1u8);
+            let best = a.alloc(24 * 8);
+            for k in 0..24 {
+                wr(best, k * 8, f32::MAX);
+                wr(best, k * 8 + 4, -1i32);
+            }
+            wr(ms, 0x70, best);
+            wr(ms, 0x78, best.add(24 * 8));
+            wr(ms, 0x80, best.add(24 * 8));
+            wr(sim, 0x1f0, ms);
+            MICRO.store(ms as usize, std::sync::atomic::Ordering::SeqCst);
+        } else {
+            wr(sim, 0x1f0, a.alloc(0x90));
+        }
         // the track: its AI spline (TrackAvatar+0x178 -> AISplineRecorder, getBestLapSpline = +0xf0,
         // its Spline at +0x50: points begin / end, length at +0x20)
         let track = a.alloc(0x400);

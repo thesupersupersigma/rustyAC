@@ -89,7 +89,11 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
 pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
     sync(gui);
     match what {
-        "app.create" => {}
+        "app.create" => {
+            if crate::gui_seq_apps::script(|s| s.sectors) {
+                gui.micro_sectors = rustyac_gui::micro_sectors::MicroSectors::new(Some(1));
+            }
+        }
         "app.new" => {
             let form = make(gui, painter, game_folder, screen, text)?;
             gui.game_screen_add_control(painter, screen, form, number == 0.0);

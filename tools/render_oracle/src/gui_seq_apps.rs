@@ -106,6 +106,8 @@ pub struct AppScript {
     pub eyes: Option<([f32; 3], f32, f32)>,
     /// `RaceManager::penaltiesEnabled`
     pub penalties: bool,
+    /// Task 33: `MicroSectors` on (`gameplay.ini [GUI] SHOW_SECTORS=1`)
+    pub sectors: bool,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -272,6 +274,7 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             script(|s| s.eyes = Some(([e[0], e[1], e[2]], fov, pitch * f32::from_bits(0x3c8e_f998))));
         }
         "app.penalties" => script(|s| s.penalties = on),
+        "app.sectors" => script(|s| s.sectors = on),
         "app.ersNames" => script(|s| s.ers_names = text.split('|').map(str::to_string).collect()),
         "app.ersState" => {
             let v: Vec<i32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
@@ -710,8 +713,12 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
     let mut o = Vec::new();
     let (app, rest) = name.split_once('@').unwrap_or((name, ""));
     match app {
-        "app_laps" | "app_position" | "app_essentials" | "app_delta" | "app_realtime" => {
-            let which = leak(app[4..].to_string());
+        "app_laps" | "app_position" | "app_essentials" | "app_delta" | "app_realtime" | "app_delta_sectors" => {
+            // (Task 33: the delta with its micro-sectors)
+            if app == "app_delta_sectors" {
+                o.push(hud("app.sectors", 1.0, ""));
+            }
+            let which = leak(app[4..].trim_end_matches("_sectors").to_string());
             race(&mut o, 6);
             o.push(hud("app.new", 0.0, which));
             o.push(Op::Frame(DT));
