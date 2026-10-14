@@ -97,6 +97,10 @@ pub struct AppScript {
     pub ff_mult: f32,
     pub steer_assist: f32,
     pub ff_upgrades: Option<[f32; 4]>,
+    /// the player's car's ERS power controllers' names (none: the car has no physics block for
+    /// the apps), its cockpit's ERS power index, recovery, engine brake and heat charging
+    pub ers_names: Vec<String>,
+    pub ers_state: [i32; 4],
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -251,6 +255,14 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.focus" => script(|s| s.focused = number as usize),
         "app.drivers" => script(|s| s.drivers = text.split('|').map(str::to_string).collect()),
         "app.ffMult" => script(|s| s.ff_mult = number),
+        "app.ersNames" => script(|s| s.ers_names = text.split('|').map(str::to_string).collect()),
+        "app.ersState" => {
+            let v: Vec<i32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            if v.len() != 4 {
+                return Err("app.ersState wants power,recovery,brake,heat".to_string());
+            }
+            script(|s| s.ers_state = [v[0], v[1], v[2], v[3]]);
+        }
         "app.steerAssist" => script(|s| s.steer_assist = number),
         "app.wheel" => {
             let gains: Vec<f32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
@@ -382,6 +394,11 @@ pub fn link() -> AppLink {
                     has_drs: s.drs,
                     ff_global_gain: (i == 0).then_some(s.ff_gain),
                     user_ff_gain: (i == 0).then_some(s.user_ff_gain),
+                    has_physics: i == 0 && !s.ers_names.is_empty(),
+                    ers_power_name: if i == 0 { s.ers_names.get(s.ers_state[0] as usize).cloned().unwrap_or_default() } else { String::new() },
+                    ers_recovery: if i == 0 { s.ers_state[1] } else { 0 },
+                    engine_brake_setting: if i == 0 { s.ers_state[2] } else { 0 },
+                    ers_heat_charging: i == 0 && s.ers_state[3] != 0,
                     ..AppCar::default()
                 }
             })
@@ -424,6 +441,19 @@ pub fn link() -> AppLink {
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
 /// its pixels, and `data\map.ini`, byte for byte).
 pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if name.starts_with("app_ballast") {
+        let (a, b) = (std::fs::read(args.root.join("effects_game.txt")), std::fs::read(args.root.join("effects_port.txt")));
+        return Ok(match (a, b) {
+            (Ok(a), Ok(b)) if a == b => {
+                println!("file the player's car's ballast: IDENTICAL ({} bytes)", a.len());
+                true
+            }
+            (a, b) => {
+                println!("file the player's car's ballast: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                false
+            }
+        });
+    }
     if name.starts_with("app_ffb") {
         let mut same = true;
         let car_ini = "content/cars/ks_ferrari_f2004/data/car.ini";
@@ -660,6 +690,9 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             o.push(hud("app.tape", 0.0, tape("oracle/t32/sf15t/spa_hybrid_lap")));
             o.extend([hud("app.session", 1.0, ""), hud("app.sessions", 1.0, ""), hud("app.duration", 30.0, ""), hud("app.maxFuel", 120.0, ""), hud("app.damageRpm", 15500.0, ""), hud("app.unix", 0.0, "ks_ferrari_sf15t")]);
             o.extend([hud("app.hybrid", 0.0, "hasKers"), hud("app.hybrid", 1.0, "hasErs"), hud("app.hybrid", 0.0, "kersMaxJ"), hud("app.hybrid", 4_000_000.0, "ersMaxJ"), hud("app.spline", 7004.0, "")]);
+            // the SF15-T's six ctrl_ers_N.ini; the cockpit at Balanced high, recovery 5, brake 3,
+            // charging the battery
+            o.extend([hud("app.ersNames", 0.0, "Charging|Balanced low|Balanced high|Overtake|Top Speed|Hotlap"), hud("app.ersState", 0.0, "2,5,2,1")]);
             o.push(hud("app.new", 0.0, which));
             o.push(Op::Frame(DT));
             o.push(hud("app.visible", 1.0, which));
@@ -671,6 +704,8 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 play(&mut o, 2000, 2300, 6);
                 o.extend([hud("app.mph", 0.0, ""), hud("app.hybrid", 0.0, "ersMaxJ")]);
                 play(&mut o, 2300, 2500, 6);
+                // the driver's ERS buttons: Overtake, recovery 9, engine brake 1, the MGU-H to the motor
+                o.extend([hud("app.ersState", 0.0, "3,9,0,0"), Op::Frame(DT), hud("app.ersState", 0.0, "5,0,10,1"), Op::Frame(DT), hud("app.ersState", 0.0, "0,10,4,0"), Op::Frame(DT)]);
                 handle(&mut o, 0, 80, 196);
                 o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
             }
@@ -829,6 +864,30 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             click(&mut o, 200, 301);
             o.extend([hud("app.focus", 0.0, ""), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "volumes"), Op::Frame(DT), hud("app.visible", 1.0, "volumes"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
+        }
+        "app_ballast" => {
+            // the ballast spinner of the player's car: up 3, its arrows held, down to 0 and below
+            race(&mut o, 6);
+            o.push(hud("app.ersNames", 0.0, "-"));
+            o.push(hud("app.new", 0.0, "ballast"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "ballast"));
+            play(&mut o, 0, 60, 20);
+            let (x, y) = FFB_AT;
+            let hold = |o: &mut Vec<Op>, cx: i32, cy: i32, frames: usize| {
+                o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy)]);
+                o.extend(std::iter::repeat_n(Op::Frame(DT), frames));
+                o.extend([Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            };
+            // the spinner at (58, 70), 184 x 21: minus 58..79, plus 221..242
+            for _ in 0..3 {
+                hold(&mut o, 231, 80, 1);
+            }
+            hold(&mut o, 231, 80, if rest == "short" { 10 } else { 90 });
+            hold(&mut o, 68, 80, if rest == "short" { 20 } else { 120 });
+            play(&mut o, 60, 400, 20);
+            o.extend([Op::MouseMove(150, 75), Op::Frame(DT), Op::Frame(DT)]);
+            o.extend([hud("app.visible", 0.0, "ballast"), Op::Frame(DT), hud("app.visible", 1.0, "ballast"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
         "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {
             let which = leak(app[4..].to_string());

@@ -19,7 +19,9 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 17] = [
+pub const APPS: [(&str, usize, usize, usize); 19] = [
+    ("mgu", 0x1e0, 0x1_402e_b080, 0x1_4050_45b0),
+    ("ballast", 0x1c0, 0x1_402f_0ef0, 0x1_4050_50b0),
     ("ffb", 0x268, 0x1_4031_4a10, 0x1_4050_b110),
     ("volumes", 0x258, 0x1_402f_8fd0, 0x1_4050_65d0),
     ("help", 0x1c0, 0x1_4030_7900, 0x1_4050_87c8),
@@ -39,7 +41,7 @@ pub const APPS: [(&str, usize, usize, usize); 17] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 6] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb"];
+const TAKES_CAR: [&str; 8] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -87,6 +89,9 @@ struct Ffb {
 }
 
 static FFB: Mutex<Option<Ffb>> = Mutex::new(None);
+
+/// The player's `Car` block of the MGU and ballast apps, the last line of `effects_game.txt`.
+static BALLAST: Mutex<Option<(usize, String)>> = Mutex::new(None);
 
 /// `PhysicsAvatar::executeOnPhysicsThread(std::function<void()>)` 0x140121f20: the job done at
 /// once (the oracle has no physics thread), the function given by value destroyed as the
@@ -518,6 +523,22 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 }
                 *FFB.lock().unwrap() = Some(Ffb { car: car as usize, dic, avatar: first_car as usize, ..Ffb::default() });
             }
+            if (text == "mgu" || text == "ballast") && crate::gui_seq_apps::script(|s| !s.ers_names.is_empty()) && rd::<usize>(first_car, 0x1168) == 0 {
+                // the player's Car: its ERS power controllers (Car+0x3790, 0x48-byte elements
+                // with the name first), its ballast (+0x3e30)
+                let names = crate::gui_seq_apps::script(|s| s.ers_names.clone());
+                let car = a.alloc(0x4000);
+                let list = a.alloc(names.len().max(1) * 0x48);
+                for (i, name) in names.iter().enumerate() {
+                    empty_wstring(list.add(i * 0x48));
+                    crate::ac::write_wstring(a, list.add(i * 0x48), name);
+                }
+                wr(car, 0x3790, list);
+                wr(car, 0x3798, list.add(names.len() * 0x48));
+                wr(car, 0x37a0, list.add(names.len() * 0x48));
+                wr(first_car, 0x1168, car);
+                *BALLAST.lock().unwrap() = Some((car as usize, String::new()));
+            }
             if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
@@ -661,6 +682,20 @@ pub unsafe fn update() {
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut f.log), &line, &mut f.last);
     }
     wr(g.game_block as *mut u8, 0x20, l.game_dt);
+    // the player's ERS cockpit (CarAvatar: power index +0x1284, recovery +0x1288, engine brake
+    // +0x127c, heat charging +0x1280); the ballast app's effect (Car+0x3e30)
+    if let (Some(avatar), Some(c)) = (g.cars.first(), l.cars.first()) {
+        let s = crate::gui_seq_apps::script(|s| s.ers_state);
+        wr(*avatar as *mut u8, 0x1284, s[0]);
+        wr(*avatar as *mut u8, 0x1288, c.ers_recovery);
+        wr(*avatar as *mut u8, 0x127c, c.engine_brake_setting);
+        wr(*avatar as *mut u8, 0x1280, c.ers_heat_charging as u8);
+    }
+    if let Some((car, last)) = BALLAST.lock().unwrap().as_mut() {
+        let line = format!("ballast {:08x}", rd::<f32>(*car as *mut u8, 0x3e30).to_bits());
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), Vec::new(), &line, last);
+    }
     // the Audio app's effects, as the port's side writes them
     if let Some(s) = SOUND.lock().unwrap().as_mut() {
         let mix: Vec<[f32; 7]> = s.audio.iter().map(|b| rd::<[f32; 7]>(*b as *mut u8, 0x118)).collect();

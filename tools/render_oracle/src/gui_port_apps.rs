@@ -53,6 +53,11 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "delta" => gui.new_performance_delta_app(painter),
         "realtime" => gui.new_realtime_app(painter),
         "volumes" => gui.new_volumes_app(painter),
+        "mgu" => gui.new_mgu_app(painter),
+        "ballast" => {
+            *BALLAST.lock().unwrap() = Some((0.0, String::new()));
+            gui.new_ballast_app(painter)
+        }
         "ffb" => {
             let unix = gui.apps.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
             let loose = game_folder.join(format!("content/cars/{unix}/data/car.ini")).is_file();
@@ -133,6 +138,11 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     u[which.min(3)] = value;
                 }
             }),
+            AppAction::SetBallastKg(kg) => {
+                if let Some(b) = BALLAST.lock().unwrap().as_mut() {
+                    b.0 = kg;
+                }
+            }
             AppAction::AddMessage { title, text } => ffb(|f| {
                 if let Some(f) = f {
                     f.log.push(format!("message {title}|{text}"));
@@ -194,6 +204,9 @@ impl FfbPort {
 
 static FFB: std::sync::Mutex<Option<FfbPort>> = std::sync::Mutex::new(None);
 
+/// The ballast app's: the player's car's ballast as the port's app set it, the last line.
+static BALLAST: std::sync::Mutex<Option<(f32, String)>> = std::sync::Mutex::new(None);
+
 fn ffb<T>(f: impl FnOnce(&mut Option<FfbPort>) -> T) -> T {
     f(&mut FFB.lock().unwrap())
 }
@@ -234,6 +247,10 @@ pub fn sync(gui: &mut Gui) {
                 append_effects(&path, std::mem::take(&mut f.log), &line, &mut f.last);
             }
         });
+    }
+    if let Some((kg, last)) = BALLAST.lock().unwrap().as_mut() {
+        let line = format!("ballast {:08x}", kg.to_bits());
+        append_effects(&root.join("effects_port.txt"), Vec::new(), &line, last);
     }
     // the Audio app's: the views as the port's apps left them, Documents cfg/audio.ini
     let volumes = gui.controls.iter().any(|c| c.name == "FORM_VOLUMES");
