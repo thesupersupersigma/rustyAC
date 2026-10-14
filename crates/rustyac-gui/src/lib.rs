@@ -13,6 +13,7 @@ pub mod app_delta;
 pub mod app_essentials;
 pub mod app_eyes;
 pub mod app_ffb;
+pub mod app_friends;
 pub mod app_gears;
 pub mod app_laps;
 pub mod app_mgu;

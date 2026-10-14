@@ -178,6 +178,9 @@ impl GameApps {
                 add(gui, painter, "runningtime", id);
             }
         }
+        // FriendsLeaderboardDisplayer: made after SteamInterface, the last of the apps here
+        let id = gui.new_friends_app(painter);
+        add(gui, painter, "friends", id);
         for (name, show) in std::mem::take(&mut self.pending) {
             if let Some(id) = self.app(&name) {
                 let visible = if show { true } else { !gui.controls[id].visible };
@@ -378,6 +381,7 @@ impl GameApps {
             // (rustyAC draws no driver model: no head to put the eyes in)
             auto_eyes: None,
             ctrl_down: self.ctrl_down,
+            penalties_enabled: setup.penalties,
             camera_sounds: vec![self.sound.camera; world.len()],
             audio_drivers: self.sound.drivers.clone(),
             audio_ini: self.audio_ini.clone(),

@@ -269,6 +269,8 @@ pub struct AppLink {
     pub onboard_pitch: f32,
     pub auto_eyes: Option<[f32; 3]>,
     pub ctrl_down: bool,
+    /// `RaceManager::penaltiesEnabled`
+    pub penalties_enabled: bool,
     pub actions: Vec<AppAction>,
 }
 
