@@ -71,6 +71,9 @@ pub struct GuiSetup {
     pub out_dir: PathBuf,
     /// the session begins in the ESC menu (and so does every session after it)
     pub esc_start: bool,
+    /// race.ini `[RACE] FIXED_SETUP` (`RaceManager::fixedSetup`): the menu's Setup button is
+    /// dimmed and answers "Blocked"
+    pub fixed_setup: bool,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -230,6 +233,7 @@ impl GameGui {
         gui.sim.game_screen = Some(screen);
         gui.sim.session_type = setup.session_type;
         gui.sim.session_count = setup.session_count;
+        gui.sim.fixed_setup = setup.fixed_setup;
         gui.sim.online = setup.online;
         gui.sim.has_replay_manager = setup.replay;
         // ReplayInterface, hidden, the top-level control after the game screen
@@ -398,6 +402,10 @@ impl GameGui {
             }
             let index = race.current_session_index;
             self.gui.sim.race = race;
+            if let Some(referee) = &info.referee {
+                self.gui.setup.session_total_time = referee.session_total_time;
+                self.gui.sim.fixed_setup = referee.fixed_setup;
+            }
             // the page "Time": the laps, the car the camera follows, where PRINT writes
             if let Some(time) = info.referee.as_ref().and_then(|referee| referee.time.clone()) {
                 let (config, out_dir) = (std::mem::take(&mut self.gui.sim.time.track_config), std::mem::take(&mut self.gui.sim.time.out_dir));

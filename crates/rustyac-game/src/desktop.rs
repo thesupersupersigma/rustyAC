@@ -458,6 +458,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
+            fixed_setup: options.sessions.is_none() && !options.no_referee && race_reader.as_ref().is_some_and(|ini| ini.get_int("RACE", "FIXED_SETUP").unwrap_or(0) > 0),
             out_dir: referee_out(options).unwrap_or_else(|| PathBuf::from("out")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),

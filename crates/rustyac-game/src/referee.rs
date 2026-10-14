@@ -187,6 +187,12 @@ pub struct RefereeHud {
     /// Task 31: every car's laps of the running session and of the ones that are over, for
     /// the ESC menu's page "Time"
     pub time: Option<rustyac_gui::time_table::TimeLink>,
+    /// `RaceManager::getSessionTotalTime(0)` off line (`RaceTimingServices::getTotalTime`), for
+    /// the setup editor's fuel page
+    pub session_total_time: i32,
+    /// `RaceManager::fixedSetup` (race.ini `[RACE] FIXED_SETUP`): the ESC menu's Setup button
+    /// is dimmed and answers "Blocked"
+    pub fixed_setup: bool,
     /// Task 30: what the ESC menu's "Race control" says of the day: the track's grip, the
     /// air's and the road's temperature, the wind's speed (m/s) and direction (degrees)
     pub env: [f32; 5],
@@ -472,6 +478,8 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
         {
             use rustyac_gui::time_table::{TimeHistory, TimeLap, TimeLink};
             let lap = |lap: &rustyac_physics::race::timing::Lap| TimeLap { time: lap.time, splits: lap.splits.clone(), cuts: lap.cuts, is_valid: lap.is_valid, compound: lap.compound.clone() };
+            out.fixed_setup = manager.fixed_setup;
+            out.session_total_time = manager.timing.lap_dbs.first().map_or(0, |db| db.total_time as i32);
             out.time = Some(TimeLink {
                 laps: manager.timing.lap_dbs.iter().map(|db| db.laps.iter().map(lap).collect()).collect(),
                 history: manager.session_history_list.iter().map(|event| TimeHistory { laps: event.result.laps.iter().map(|laps| laps.iter().map(lap).collect()).collect(), best_laps: event.result.best_laps.iter().map(lap).collect() }).collect(),
