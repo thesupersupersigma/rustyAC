@@ -101,6 +101,9 @@ pub struct CarView {
     pub other_car_count: u8,
     /// New sessions so far (`GameSim::new_sessions`)
     pub new_sessions: u32,
+    /// `CarPhysicsState::performanceMeter` (s) and `performanceMeterSpeedDiffMS` (m/s): the
+    /// car's `PerformanceMeter` (Task 33)
+    pub performance_meter: (f32, f32),
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
     /// in the order LF, RF, LR, RR.
     pub wheels: [Mat; 4],
@@ -319,6 +322,7 @@ impl Default for CarView {
             other_cars: [IDENTITY; OTHER_CARS],
             other_car_count: 0,
             new_sessions: 0,
+            performance_meter: (0.0, 0.0),
             steps: 0,
             sim_seconds: 0.0,
             drive_seconds: 0.0,
@@ -524,6 +528,8 @@ impl CarView {
             tyre_thermal_states: thermal,
             disc_temps: r.disc_temps,
             status_bytes: self.lights as u32 | if self.drs { 4 } else { 0 },
+            performance_meter: self.performance_meter.0,
+            performance_meter_speed_diff_ms: self.performance_meter.1,
             ..rustyac_physics::car_physics_state::CarPhysicsState::at_origin()
         }
     }
@@ -656,6 +662,7 @@ impl CarView {
             },
             other_car_count: if player { sim.opponents.len().min(OTHER_CARS) as u8 } else { 0 },
             new_sessions: sim.new_sessions,
+            performance_meter: car.performance_meter_state(),
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
             gas: car.controls.gas,

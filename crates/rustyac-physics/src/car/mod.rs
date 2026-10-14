@@ -56,6 +56,7 @@ pub mod feed;
 pub mod fuel_lap_evaluator;
 pub mod heave_spring;
 pub mod kers;
+pub mod performance_meter;
 pub mod replay;
 pub mod setup;
 pub mod shift_assists;

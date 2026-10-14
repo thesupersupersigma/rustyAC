@@ -1253,6 +1253,11 @@ impl<'a> MultiWorld<'a> {
 
             let mut recording = Recording::default();
             recording.set("scenario", scenario.name);
+            // Task 33: with the game's PerformanceMeter on, its outputs are compared with the
+            // port's at every step
+            if std::env::var("CAR_ORACLE_PERF_METER").is_ok_and(|v| v == "1") {
+                recording.set("meter", "1");
+            }
             recording.set("about", scenario.about);
             recording.set("track", track.name.clone());
             recording.set("track_folder", track_folder.display().to_string());
@@ -1718,6 +1723,12 @@ impl<'a> MultiWorld<'a> {
             }
             if let Some(referee) = &self.referee {
                 row.extend([referee.state_hash as u32, (referee.state_hash >> 32) as u32]);
+            }
+            if self.recording.get("meter").is_some() {
+                // Task 33: PerformanceMeter::currentDiff (+0x60), currentSpeedDiffMS (+0x68)
+                let meter = self.cars[0].car.add(CAR_PERFORMANCE_METER_IS_ENABLED);
+                row.extend(rd::<[u32; 2]>(meter, 0x60));
+                row.push(rd(meter, 0x68));
             }
             assert_eq!(row.len(), self.recording.row_words(), "a row of the wrong length");
             self.recording.rows.push(row);

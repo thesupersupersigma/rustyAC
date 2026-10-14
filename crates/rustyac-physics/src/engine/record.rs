@@ -28,6 +28,10 @@ pub const WORLD_COLUMNS: [&str; 5] = ["world.contactJoints", "world.contactHash"
 /// Task 28: the referee's state after the step, at the end of a row: a hash over every field
 /// of the game's `RaceManager` and `RaceTimingServices` and of what its jobs leave in the cars.
 pub const REFEREE_COLUMNS: [&str; 2] = ["world.referee.lo", "world.referee.hi"];
+/// Task 33: the player's car's `PerformanceMeter` outputs (`currentDiff` as two words,
+/// `currentSpeedDiffMS`), in a recording whose header has the key `meter` (the car oracle's
+/// `CAR_ORACLE_PERF_METER=1`: the game's meter left on)
+pub const METER_COLUMNS: [&str; 3] = ["world.meter.diff.lo", "world.meter.diff.hi", "world.meter.speedDiff"];
 
 /// What a car's device reported in a step, in a row.
 pub const INPUT_COLUMNS: [&str; 7] = ["in.gas", "in.brake", "in.steer", "in.clutch", "in.handBrake", "in.buttons", "in.requestedGear"];
@@ -297,7 +301,7 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 }
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 }
     }
 
     /// Task 28: the referee of the recording (header key `referee`:
@@ -336,6 +340,9 @@ impl Recording {
         }
         if self.get("referee").is_some() {
             out.extend(REFEREE_COLUMNS.iter().map(|s| s.to_string()));
+        }
+        if self.get("meter").is_some() {
+            out.extend(METER_COLUMNS.iter().map(|s| s.to_string()));
         }
         out
     }
@@ -484,6 +491,8 @@ pub struct ReplayWorld {
     pub steps: usize,
     /// Task 28: the referee of a recording that has one
     pub referee: Option<Box<crate::race::Referee>>,
+    /// Task 33: the rows end with the player's car's `PerformanceMeter` ([`METER_COLUMNS`])
+    pub meter: bool,
     /// Task 28b: (car, step): before that step the car's AI driver is called in
     /// (`AIDriver::requestPitStop`; header key `ai_pit_calls`)
     pub pit_calls: Vec<(usize, usize)>,
@@ -642,7 +651,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, pit_calls, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), pit_calls, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         if recording.cars.iter().any(|meta| meta.drag.is_some()) {
@@ -933,6 +942,11 @@ impl ReplayWorld {
         }
         if let Some(referee) = &self.referee {
             row.extend([referee.state_hash as u32, (referee.state_hash >> 32) as u32]);
+        }
+        if self.meter {
+            let meter = &self.cars[0].performance_meter;
+            let bits = meter.current_diff.to_bits();
+            row.extend([bits as u32, (bits >> 32) as u32, meter.current_speed_diff_ms.to_bits()]);
         }
         row
     }

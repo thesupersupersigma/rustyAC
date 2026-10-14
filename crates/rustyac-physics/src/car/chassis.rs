@@ -576,10 +576,13 @@ pub struct RollingChassis {
     pub disable_min_speed_penalty_clear: bool,
     /// `Car::penaltyPerfTarget`
     pub penalty_perf_target: f64,
-    /// `PerformanceMeter::getCurrentSplit().t` of the car: the lap-time difference the
-    /// "recover time" penalty reads. The performance meter needs the track's racing line and
-    /// is not ported; 0 as on a car that is not on a timed lap.
+    /// `PerformanceMeter::getCurrentSplit().t` of the car as the "recover time" penalty, the
+    /// shared memory and the online car updates read it: 0, as the car oracle's game side has
+    /// it (its `PerformanceMeter` is switched off); the meter itself is
+    /// [`RollingChassis::performance_meter`] (Task 33), which only the GUI reads.
     pub performance_split: f64,
+    /// `Car::performanceMeter` (Task 33): stepped for the player's car, read by the apps
+    pub performance_meter: super::performance_meter::PerformanceMeter,
     /// `Car::penaltyManager`
     pub penalty_manager: PenaltyManager,
     /// `Car::vibrationPhase`, `Car::slipVibrationPhase`: only the device's rumble reads them
@@ -1103,6 +1106,12 @@ impl RollingChassis {
             disable_min_speed_penalty_clear: false,
             penalty_perf_target: 0.0,
             performance_split: 0.0,
+            // PerformanceMeter::init in Car::Car
+            performance_meter: {
+                let mut meter = super::performance_meter::PerformanceMeter::default();
+                meter.init();
+                meter
+            },
             penalty_manager: PenaltyManager::default(),
             vibration_phase: 0.0,
             slip_vibration_phase: 0.0,
@@ -2152,6 +2161,19 @@ impl RollingChassis {
         }
         self.setup_manager = manager;
         // 21 to 29: telemetry, lap timing, stability control
+        // 23: PerformanceMeter::step, the player's car only (what the last step's lap timer and
+        // spline locator left, the speed of this step's start)
+        if self.env.is_first_car {
+            let input = super::performance_meter::PerformanceMeterInput {
+                finish_line_passed: self.transponder.finish_line_passed,
+                was_last_lap_valid: self.transponder.was_last_lap_valid,
+                last_lap: self.transponder.last_lap,
+                t: self.transponder.t,
+                npos: self.spline_locator_data.npos,
+                speed: self.speed,
+            };
+            self.performance_meter.step(&input);
+        }
         // 24: LapInvalidator::step, the player's car only
         if self.env.is_first_car && self.track.is_some() {
             let surfaces = [0, 1, 2, 3].map(|k| self.tyres.get(k).and_then(|t| t.surface_def.as_ref()));
@@ -2445,11 +2467,22 @@ impl RollingChassis {
         self.pre_step_jobs.push(Box::new(job));
     }
 
-    /// `Car::onNewSession` @ 0x140274c30: a new session lifts a black flag and un-retires the
-    /// car (the lap-time meter it also resets is not ported).
+    /// `Car::onNewSession` @ 0x140274c30: a new session lifts a black flag, un-retires the
+    /// car and resets its lap-time meter.
     pub fn on_new_session(&mut self) {
         self.is_retired = false;
         self.black_flagged = false;
+        self.performance_meter.reset();
+    }
+
+    /// `PerformanceMeter::getCurrentSplit` 0x14026b700 as `Car::getPhysicsState` takes it:
+    /// `CarPhysicsState::performanceMeter` (`(f32)` of the seconds) and
+    /// `performanceMeterSpeedDiffMS`.
+    pub fn performance_meter_state(&self) -> (f32, f32) {
+        // TimeTransponder::isInOpenTrackTransition 0x140290960
+        let transition = self.transponder.is_open_track && self.transponder.open_track_state == 0;
+        let (t, speed) = self.performance_meter.get_current_split(transition);
+        (t as f32, speed)
     }
 
     /// `Car::lockControls` @ 0x1402745f0.
