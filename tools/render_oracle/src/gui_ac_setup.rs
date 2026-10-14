@@ -33,7 +33,6 @@ pub const CLASSES: [(&str, usize, usize, usize); 10] = [
 ];
 
 static CAR: AtomicUsize = AtomicUsize::new(0);
-static ENGINE: AtomicUsize = AtomicUsize::new(0);
 
 /// The game's `Car` of the script (null: the script has none).
 pub fn car() -> *mut u8 {
@@ -67,7 +66,6 @@ pub unsafe fn make_car(game: &Game, name: &str) -> *mut u8 {
     let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAR_CTOR));
     ctor(car, engine, wstring(acs, name), wstring(acs, ""));
     CAR.store(car as usize, Ordering::SeqCst);
-    ENGINE.store(engine as usize, Ordering::SeqCst);
     car
 }
 

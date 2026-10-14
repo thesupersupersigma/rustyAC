@@ -451,7 +451,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         };
         // the car as the setup editor sees it: after its jobs, and a few times a second
-        if sim.setup_log.len() != jobs_before || sim.steps % 64 == 0 {
+        if sim.setup_log.len() != jobs_before || sim.steps.is_multiple_of(64) {
             shared.publish_setup(&sim);
         }
         if input.events & (event::RESET | event::REBUILD) != 0 {

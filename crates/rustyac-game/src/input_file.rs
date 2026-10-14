@@ -1185,3 +1185,37 @@ impl InputWriter {
         Ok(self.steps)
     }
 }
+
+#[cfg(test)]
+mod setup_jobs_tests {
+    use super::*;
+
+    /// Every kind of job comes back from its line as it went in, floats to the bit.
+    #[test]
+    fn jobs_round_trip() {
+        let jobs = vec![
+            (0, SetupJob::Attach { item: 7 }),
+            (0, SetupJob::SetNewValue { item: 7, value: -0.0 }),
+            (12, SetupJob::SetNewValue { item: 31, value: f32::from_bits(0x3dcc_cccd) }),
+            (12, SetupJob::SetTyreCompound { tyre: 3, index: 2 }),
+            (40, SetupJob::SetRequestedFuel { value: 37.5, spinner_value: 37 }),
+            (41, SetupJob::CycleTc { dir: -1 }),
+            (41, SetupJob::CycleAbs { dir: 1 }),
+            (90, SetupJob::SetTurboBoostLevel { level: 0.7 }),
+            (91, SetupJob::CycleErsPower { dir: 1 }),
+            (92, SetupJob::CycleErsRecovery { dir: -1 }),
+            (93, SetupJob::CycleErsHeatCharging),
+            (u64::from(u32::MAX) + 5, SetupJob::CycleEngineBrake { dir: 1 }),
+        ];
+        let text = setup_jobs_text(&jobs);
+        let back = parse_setup_jobs(&text).unwrap();
+        assert_eq!(back.len(), jobs.len());
+        for ((step, job), (step_back, job_back)) in jobs.iter().zip(&back) {
+            assert_eq!(step, step_back);
+            assert_eq!(format!("{job:?}"), format!("{job_back:?}"));
+        }
+        assert_eq!(setup_jobs_text(&back), text);
+        assert!(parse_setup_jobs("something else\n").is_err());
+        assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n3 nonsense 1\n").is_err());
+    }
+}
