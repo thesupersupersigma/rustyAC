@@ -11,6 +11,7 @@
 pub mod acos;
 pub mod app_delta;
 pub mod comparative_telemetry;
+pub mod console;
 pub mod app_essentials;
 pub mod app_eyes;
 pub mod app_ffb;
