@@ -412,13 +412,24 @@ impl<'a> Harness<'a> {
     }
 }
 
+/// `--master-at`: (frame, level).
+pub static MASTER_AT: std::sync::Mutex<Option<(usize, f32)>> = std::sync::Mutex::new(None);
+
 /// Runs a drive through the game's own sound code.
 pub fn run(acs: &Acs, ac: &Path, drive: &Drive, scene: Option<&Scene>, cache_paths: &[String], master: f32) {
     unsafe {
         log::mark("setup");
         let mut harness = Harness::build(acs, ac, drive, scene, cache_paths, master);
+        let master_at = *MASTER_AT.lock().unwrap();
         for (i, frame) in drive.frames.iter().enumerate() {
             log::mark(&format!("frame {i}"));
+            // the Audio app's Master spinner (FormVolumes' handler 0x1402face0)
+            if let Some((at, level)) = master_at {
+                if at == i {
+                    let set_volume: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_AUDIO_ENGINE_SET_VOLUME));
+                    set_volume(harness.engine, level);
+                }
+            }
             harness.frame(frame);
         }
         log::mark("teardown");

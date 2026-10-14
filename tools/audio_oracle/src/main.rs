@@ -74,6 +74,12 @@ pub struct Args {
     /// `--crew <frame>:<seconds>`: the pit crew's wheel guns (see `crew.rs`)
     crew: Option<crew::CrewSpec>,
     crew_text: String,
+    /// `--audio-ini <file>`: the levels both sides read instead of the oracle's own (an
+    /// audio.ini the Audio app wrote); `--master-at <frame>:<level>`: the Audio app's Master
+    /// spinner at the start of that frame (`AudioEngine::setVolume`)
+    audio_ini: Option<PathBuf>,
+    master_at: Option<(usize, f32)>,
+    master_at_text: String,
 }
 
 fn parse() -> Result<Args, String> {
@@ -102,6 +108,9 @@ fn parse() -> Result<Args, String> {
         script: None,
         crew: None,
         crew_text: String::new(),
+        audio_ini: None,
+        master_at: None,
+        master_at_text: String::new(),
     };
     while let Some(arg) = it.next() {
         let mut value = || it.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -119,6 +128,12 @@ fn parse() -> Result<Args, String> {
                 }
             }
             "--camera" => a.camera = Camera::parse(&value()?)?,
+            "--audio-ini" => a.audio_ini = Some(std::path::absolute(PathBuf::from(value()?)).map_err(|e| e.to_string())?),
+            "--master-at" => {
+                a.master_at_text = value()?;
+                let (frame, level) = a.master_at_text.split_once(':').ok_or("--master-at <frame>:<level>")?;
+                a.master_at = Some((frame.parse().map_err(|_| "--master-at <frame>:<level>")?, level.parse().map_err(|_| "--master-at <frame>:<level>")?));
+            }
             "--out" => a.out = PathBuf::from(value()?),
             "--frames" => a.frames = Some(value()?.parse().map_err(|_| "--frames needs a number")?),
             "--no-track" => a.no_track = true,
@@ -203,6 +218,10 @@ fn run(args: &Args) -> Result<(), String> {
     let repo = repo_root();
     let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
     drive::prepare_root(&root, &repo, &ac, &drive)?;
+    if let Some(file) = &args.audio_ini {
+        std::fs::copy(file, root.join("cfg/audio.ini")).map_err(|e| format!("{}: {e}", file.display()))?;
+    }
+    *harness::MASTER_AT.lock().unwrap() = args.master_at;
     let stem = file_stem(&drive, if args.script.is_some() { "scripted" } else { &args.side });
     let wav = out.join(format!("{stem}.wav"));
     let log_file = out.join(format!("{stem}.log"));
@@ -247,6 +266,22 @@ fn run(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// `--master-at`: the master level set at the start of a frame, as the Audio app does.
+struct MasterAt {
+    at: usize,
+    level: f32,
+}
+
+impl rustyac_audio::golden::SessionHooks for MasterAt {
+    fn setup(&mut self, _engine: &mut rustyac_audio::engine::AudioEngine) {}
+
+    fn frame(&mut self, engine: &mut rustyac_audio::engine::AudioEngine, index: usize) {
+        if index == self.at {
+            engine.set_volume(self.level);
+        }
+    }
+}
+
 /// The port's side: the same session through `rustyac_audio`.
 fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfaces: &[(String, String)], master: f32) -> Result<(), String> {
     let files = EngineFiles { content_root: ac.to_path_buf(), audio_engine_ini: root.join("system/cfg/audio_engine.ini"), audio_ini: root.join("cfg/audio.ini") };
@@ -259,6 +294,12 @@ fn run_port(ac: &Path, root: &Path, drive: &Drive, scene: Option<&Scene>, surfac
     let events: Vec<Vec<PhysicsEvent>> = drive.frames.iter().map(|f| f.events.iter().map(|raw| PhysicsEvent::from_bytes(raw)).collect()).collect();
     if drive.other_cars.is_empty() {
         let frames = drive.frames.iter().zip(&events).map(|(frame, events)| SessionFrame { car: &frame.car, events, listener: frame.listener });
+        if let Some((at, level)) = *harness::MASTER_AT.lock().unwrap() {
+            if drive.crew.is_some() {
+                return Err("--master-at is for a drive without --crew".to_string());
+            }
+            return rustyac_audio::golden::run_session_with(session, frames, &mut MasterAt { at, level });
+        }
         return match drive.crew {
             Some(spec) => rustyac_audio::golden::run_session_with(session, frames, &mut crew::PortCrew::new(ac, spec, drive.frames.iter().map(|f| f.state.as_slice()).collect())),
             None => run_session(session, frames),
@@ -331,6 +372,12 @@ fn child(args: &Args, side: &str, out: &Path, script: Option<&Path>) -> Result<S
     }
     if args.crew.is_some() {
         command.arg("--crew").arg(&args.crew_text);
+    }
+    if let Some(file) = &args.audio_ini {
+        command.arg("--audio-ini").arg(file);
+    }
+    if args.master_at.is_some() {
+        command.arg("--master-at").arg(&args.master_at_text);
     }
     if let Some(script) = script {
         command.arg("--script").arg(script);
