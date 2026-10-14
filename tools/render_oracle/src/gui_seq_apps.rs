@@ -66,6 +66,11 @@ pub struct AppScript {
     pub track: (String, String),
     /// the AI line's points (the track map of a track without map.png draws it)
     pub ai_points: Vec<[f32; 3]>,
+    /// the track's sections (data/sections.ini), the sun's angle, the game's start (ms)
+    pub sections: Vec<(f32, f32, String)>,
+    pub sun_angle: f32,
+    pub sun_set: bool,
+    pub start_ms: f64,
     /// every car's timing at every frame of the tapes
     pub timing: Vec<Vec<Timing>>,
     /// the frame of the tapes the session is at
@@ -213,6 +218,16 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             let (name, config) = text.split_once('|').unwrap_or((text, ""));
             script(|s| s.track = (name.to_string(), config.to_string()));
         }
+        "app.sections" => {
+            let ini = rustyac_physics::data::ini::IniReader::load(std::path::Path::new(text)).ok();
+            let sections = rustyac_gui::app_small::read_sections(ini.as_ref());
+            script(|s| s.sections = sections);
+        }
+        "app.sun" => script(|s| {
+            s.sun_angle = number;
+            s.sun_set = true;
+        }),
+        "app.gameStart" => script(|s| s.start_ms = number as f64),
         "app.hybrid" => {
             let k = ["hasKers", "hasErs", "kersMaxJ", "ersMaxJ"].iter().position(|n| *n == text).ok_or("app.hybrid: hasKers, hasErs, kersMaxJ or ersMaxJ")?;
             script(|s| s.hybrid[k] = number);
@@ -281,6 +296,11 @@ pub fn driver_name(car: usize) -> String {
 /// The laps the script's last move finished, for each side to announce.
 pub fn take_laps() -> Vec<(u32, u32)> {
     script(|s| std::mem::take(&mut s.pending_laps))
+}
+
+/// The sun's angle a script set (none: the graphics keep theirs).
+pub fn sun() -> Option<f32> {
+    script(|s| s.sun_set.then_some(s.sun_angle))
 }
 
 /// The tapes' clock (ms) at a frame.
@@ -362,6 +382,9 @@ pub fn link() -> AppLink {
             wind_speed: s.env[3],
             wind_direction_deg: s.env[4],
             game_time: now,
+            game_start_time: s.start_ms,
+            sun_angle: s.sun_angle,
+            time_mult: None,
             use_mph: s.use_mph,
             actions: Vec::new(),
         }
@@ -488,6 +511,11 @@ FF_GAIN=0.85
             std::fs::copy(args.game.join("content/tracks").join(track).join(file), to.join(file)).map_err(|e| format!("{track} {file}: {e}"))?;
         }
     }
+    // ACHelp's text; a time limited test of 3 minutes (FormRunningTime)
+    let help = args.root.join("system/locales/help");
+    std::fs::create_dir_all(&help).map_err(|e| e.to_string())?;
+    std::fs::copy(args.game.join("system/locales/help/en.tag"), help.join("en.tag")).map_err(|e| format!("en.tag: {e}"))?;
+    std::fs::write(docs.join("time_limited_test.ini"), "[SETTINGS]\nMAX_RUNNING_TIME=3\n").map_err(|e| e.to_string())?;
     // a track with no map.png: the map is drawn from the AI line, written by each side into
     // its own place (the game's into the scratch root, the port's into port_files)
     let ai_track = args.root.join("content/tracks/t32_ai_line");
@@ -587,6 +615,45 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 o.extend([Op::MouseMove(150, 200), Op::MouseDown(150, 200), Op::MouseMove(400, 300), Op::Frame(DT), Op::MouseMove(700, 380), Op::Frame(DT), Op::MouseUp(700, 380), Op::Frame(DT)]);
                 play(&mut o, 9000, 9600, 10);
                 o.extend([hud("app.visible", 0.0, "trackmap"), Op::Frame(DT), hud("app.visible", 1.0, "trackmap"), Op::Frame(DT), Op::Save]);
+            }
+        }
+        "app_small" => {
+            // Help, Hide all, Running time, Time of the day, Track description on the race
+            race(&mut o, 6);
+            let sections = std::path::Path::new(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\content\tracks\magione\data\sections.ini");
+            o.extend([hud("app.sections", 0.0, leak(sections.to_string_lossy().into_owned())), hud("app.sun", -40.0, ""), hud("app.gameStart", 1000.0, "")]);
+            for app in ["hideall", "help", "timeflow", "trackdescription", "runningtime"] {
+                o.push(hud("app.new", 0.0, app));
+            }
+            o.push(Op::Frame(DT));
+            for app in ["help", "timeflow", "trackdescription", "runningtime"] {
+                o.push(hud("app.visible", 1.0, app));
+            }
+            play(&mut o, 0, 600, 30);
+            play(&mut o, 600, 1200, 6);
+            if !rest.ends_with("short") {
+                for sun in [-80.0f32, -12.5, 0.0, 33.3, 77.0, 95.0] {
+                    o.push(hud("app.sun", sun, ""));
+                    play(&mut o, 1200, 1260, 30);
+                }
+                play(&mut o, 1260, 11000, 61);
+                o.extend([hud("app.replay", 1.0, ""), Op::Frame(DT), Op::Frame(DT), hud("app.replay", 0.0, ""), Op::Frame(DT)]);
+                // past the test's three minutes, the last half minute blinking
+                play(&mut o, 9300, 9500, 5);
+                play(&mut o, 11000, 11400, 20);
+                // the app bar: shown, Hide all's icon pressed (every app hides), pressed again
+                // (the bar slides in for 24 frames, an icon's title for 22)
+                o.push(Op::MouseMove(1270, 300));
+                o.extend(std::iter::repeat_n(Op::Frame(DT), 24));
+                o.push(Op::MouseMove(1250, 60));
+                o.extend(std::iter::repeat_n(Op::Frame(DT), 22));
+                let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT), Op::Frame(DT)]);
+                // Hide all on (every app hides); Help's icon (Hide all goes off); Hide all on and off
+                click(&mut o, 1250, 60);
+                click(&mut o, 1250, 130);
+                click(&mut o, 1250, 60);
+                click(&mut o, 1250, 60);
+                o.extend([Op::MouseMove(600, 400), Op::Frame(DT), Op::Frame(DT), Op::Save]);
             }
         }
         "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {

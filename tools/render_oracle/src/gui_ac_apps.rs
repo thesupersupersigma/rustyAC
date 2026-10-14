@@ -19,7 +19,12 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 10] = [
+pub const APPS: [(&str, usize, usize, usize); 15] = [
+    ("help", 0x1c0, 0x1_4030_7900, 0x1_4050_87c8),
+    ("hideall", 0x1d0, 0x1_4030_f3e0, 0x1_4050_9f38),
+    ("runningtime", 0x1d0, 0x1_402d_c760, 0x1_4050_24c0),
+    ("timeflow", 0x290, 0x1_4030_cb10, 0x1_4050_9678),
+    ("trackdescription", 0x1c8, 0x1_4032_70e0, 0x1_4050_dde8),
     ("trackmap", 0x368, 0x1_402e_e8e0, 0x1_4050_4db0),
     ("gears", 0x3d8, 0x1_402e_8280, 0x1_4050_3dd0),
     ("tyres", 0x4f0, 0x1_4033_8860, 0x1_4051_1d38),
@@ -203,6 +208,8 @@ unsafe fn install(game: &Game) {
     // the static `gears` of ACEssentials.obj ("R", "N", "1" …)
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_5240));
     init();
+    // the language (acLocaleGetCurrentLocale's `currentLocale`): ACHelp reads help/<it>.tag
+    crate::ac::write_wstring(&game.acs, game.acs.va(0x1_4151_d190) as *mut u8, "en");
     // FormGear.obj's own `gears` ("R", "N", "1" … "10")
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_2b60));
     init();
@@ -264,6 +271,21 @@ pub unsafe fn announce_laps(game: &Game) {
     }
 }
 
+static SUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The sun's angle an app script set, in `GraphicsManager::lightingSettings.angle` around the
+/// GUI's pass only (ACTimeFlow reads it there; the scene's lighting, made at the frame's
+/// start, keeps its own).
+pub unsafe fn sun(game: &Game, on: bool) {
+    let Some(angle) = crate::gui_seq_apps::sun() else { return };
+    if on {
+        SUN.store(rd::<u32>(game.graphics, 0xd4), std::sync::atomic::Ordering::SeqCst);
+        wr(game.graphics, 0xd4, angle);
+    } else {
+        wr(game.graphics, 0xd4, SUN.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let a = &game.acs;
     if what == "app.create" {
@@ -281,7 +303,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         wr(sim, 0x1f0, a.alloc(0x90));
         // the track: its AI spline (TrackAvatar+0x178 -> AISplineRecorder, getBestLapSpline = +0xf0,
         // its Spline at +0x50: points begin / end, length at +0x20)
-        let track = a.alloc(0x200);
+        let track = a.alloc(0x400);
         let recorder = a.alloc(0x200);
         wr(track, 0x178, recorder);
         RECORDER.store(recorder as usize, std::sync::atomic::Ordering::SeqCst);
@@ -338,10 +360,28 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             let form = a.alloc(*size);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(*ctor));
             let first_car = GAME.lock().unwrap().as_ref().and_then(|g| g.cars.first().copied()).unwrap_or(0) as *mut u8;
+            if text == "runningtime" {
+                // a TimeLimitedTest among the Sim's game objects (its ctor reads the Documents
+                // cfg/time_limited_test.ini); FormRunningTime finds it by its type
+                let test = a.alloc(0x80);
+                let tctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_401b_ecd0));
+                tctor(test, sim);
+                // (its read of the Documents' cfg/time_limited_test.ini finds nothing in the
+                // oracle: the test the port reads, 3 minutes, is laid in its members)
+                wr(test, 0x30, 1u8);
+                wr(test, 0x58, 3i32);
+                let list = a.alloc(0x10);
+                wr(list, 0, test);
+                wr(sim, 0x40, list);
+                wr(sim, 0x48, list.add(8));
+                wr(sim, 0x50, list.add(8));
+            }
             if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
                 ctor(form, gui, sim, false);
+            } else if text == "help" {
+                ctor(form, gui);
             } else {
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
             }
@@ -410,6 +450,29 @@ pub unsafe fn update() {
     let track: *mut u8 = rd(sim, 0x150);
     wr(rd::<*mut u8>(track, 0x178), 0x140 + 0x20, l.ai_spline_length);
     let (name, config) = crate::gui_seq_apps::script(|s| s.track.clone());
+    // the track's sections (TrackAvatar+0x2f0: 0x28-byte {in, out, text})
+    let sections = crate::gui_seq_apps::script(|s| s.sections.clone());
+    if !sections.is_empty() && rd::<usize>(track, 0x2f8).wrapping_sub(rd::<usize>(track, 0x2f0)) != sections.len() * 0x28 {
+        let block = crate::gui_ac_hud::acs().alloc(sections.len() * 0x28);
+        for (i, (i_n, o_ut, text)) in sections.iter().enumerate() {
+            let e = block.add(i * 0x28);
+            wr(e, 0, *i_n);
+            wr(e, 4, *o_ut);
+            empty_wstring(e.add(8));
+            crate::ac::write_wstring(crate::gui_ac_hud::acs(), e.add(8), text);
+        }
+        wr(track, 0x2f0, block);
+        wr(track, 0x2f8, block.add(sections.len() * 0x28));
+        wr(track, 0x300, block.add(sections.len() * 0x28));
+    }
+    // the sun's angle (GraphicsManager::lightingSettings.angle), the game's start
+    wr(g.game_block as *mut u8, 0x38, l.game_start_time);
+    // ACTimeFlow's `active`, as its handler of the replay's status leaves it
+    for (n, form) in &g.made {
+        if n == "timeflow" {
+            wr(*form as *mut u8, 0x270, !l.in_replay as u8);
+        }
+    }
     // the AI line's points (20-byte SplinePoints: x, y, z, length, tag) in the spline's vector
     let points = crate::gui_seq_apps::script(|s| s.ai_points.clone());
     let spline = rd::<*mut u8>(track, 0x178).add(0x140);

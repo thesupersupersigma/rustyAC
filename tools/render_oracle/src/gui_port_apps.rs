@@ -16,12 +16,23 @@ fn app(apps: &AppsPort, name: &str) -> Result<Id, String> {
 }
 
 /// The game's folder (`content/...` and `system/cfg/...` are read from there by the apps).
-pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, name: &str) -> Result<Id, String> {
+pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, name: &str) -> Result<Id, String> {
     let read = |path: std::path::PathBuf| rustyac_physics::data::ini::IniReader::load(&path).ok().filter(|ini| ini.ready);
     Ok(match name {
         "tyres" => gui.new_tyres_app(painter, read(game_folder.join("system/cfg/tyres_app.ini")).as_ref()),
         "pedals" => gui.new_pedals_app(painter, read(game_folder.join("documents/Assetto Corsa/cfg/controls.ini")).as_ref()),
         "electronics" => gui.new_electronics_app(painter),
+        "help" => {
+            let text = std::fs::read(game_folder.join("system/locales/help/en.tag")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            gui.new_help_app(painter, &text)
+        }
+        "hideall" => gui.new_hide_all_app(painter, screen),
+        "runningtime" => {
+            let ini = read(game_folder.join("documents/Assetto Corsa/cfg/time_limited_test.ini"));
+            gui.new_running_time_app(painter, ini.map_or(0, |i| i.get_int("SETTINGS", "MAX_RUNNING_TIME").unwrap_or(0)))
+        }
+        "timeflow" => gui.new_time_flow_app(painter),
+        "trackdescription" => gui.new_track_description_app(painter, crate::gui_seq_apps::script(|s| s.sections.clone())),
         "trackmap" => {
             let (track, config) = crate::gui_seq_apps::script(|s| s.track.clone());
             let map_ini = read(game_folder.join("system/cfg/map.ini"));
@@ -49,7 +60,7 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
     match what {
         "app.create" => {}
         "app.new" => {
-            let form = make(gui, painter, game_folder, text)?;
+            let form = make(gui, painter, game_folder, screen, text)?;
             gui.game_screen_add_control(painter, screen, form, number == 0.0);
             write_files(gui, game_folder)?;
             apps.made.push((text.to_string(), form));
@@ -77,6 +88,10 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
 /// What the apps read, as the script has it now.
 pub fn sync(gui: &mut Gui) {
     let actions = std::mem::take(&mut gui.apps.actions);
+    let was_replay = gui.apps.in_replay;
     gui.apps = crate::gui_seq_apps::link();
     gui.apps.actions = actions;
+    if gui.apps.in_replay != was_replay {
+        gui.apps_on_replay_status(gui.apps.in_replay);
+    }
 }
