@@ -27,6 +27,9 @@ pub struct TaskbarData {
     pub task_bar_full_showed: bool,
     /// `evAppOpened` (true) / `evAppDismiss` (false) as they fired
     pub app_events: Vec<(bool, Clicked)>,
+    /// the handlers of `evAppOpened` (+0x180) and `evAppDismiss` (+0x198)
+    pub ev_app_opened: Vec<crate::control::ClickHandler>,
+    pub ev_app_dismiss: Vec<crate::control::ClickHandler>,
     pub forms: Vec<Id>,
     pub top_scroller: Id,
     pub bottom_scroller: Id,
@@ -92,6 +95,8 @@ impl Gui {
             target_x: out as i32,
             task_bar_full_showed: false,
             app_events: Vec::new(),
+            ev_app_opened: Vec::new(),
+            ev_app_dismiss: Vec::new(),
             forms: Vec::new(),
             top_scroller: 0,
             bottom_scroller: 0,
@@ -193,6 +198,11 @@ impl Gui {
             let Some(form) = gui.icon_data(ev.control).form else { return };
             let showing = gui.controls[form].visible;
             gui.taskbar_data_mut(id).app_events.push((!showing, *ev));
+            // the event's handlers run before the form is shown or hidden
+            let handlers = if showing { gui.taskbar_data(id).ev_app_dismiss.clone() } else { gui.taskbar_data(id).ev_app_opened.clone() };
+            for handler in handlers {
+                handler(gui, ev);
+            }
             gui.set_visible(form, !showing);
         }));
         self.taskbar_data_mut(id).icons.push(icon);

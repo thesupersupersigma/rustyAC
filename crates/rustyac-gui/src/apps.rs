@@ -119,8 +119,13 @@ pub struct AppLink {
     pub grip: f32,
     pub wind_speed: f32,
     pub wind_direction_deg: f32,
-    /// `Game::gameTime.now` (ms)
+    /// `Game::gameTime.now` (ms), `startTime` (the clock when the game started)
     pub game_time: f64,
+    pub game_start_time: f64,
+    /// `GraphicsManager::lightingSettings.angle` (the sun's), `SunAnimator::getVelocityMultiplier`
+    /// (none: there is no sun animator)
+    pub sun_angle: f32,
+    pub time_mult: Option<f32>,
     /// `GameplaySettings` / `ksIsMPH`: speeds in miles an hour
     pub use_mph: bool,
     pub actions: Vec<AppAction>,
@@ -182,6 +187,9 @@ pub trait App: Any {
 
     /// A handler of `Sim::evOnNewSession`.
     fn on_new_session(&mut self, _gui: &mut Gui, _id: Id) {}
+
+    /// A handler of `Sim::evOnReplayStatusChanged`: the replay began (true) or ended.
+    fn on_replay_status(&mut self, _gui: &mut Gui, _id: Id, _entered: bool) {}
 }
 
 impl Gui {
@@ -233,6 +241,15 @@ impl Gui {
         for id in 0..self.controls.len() {
             if self.is_app(id) {
                 self.with_app(id, |app, gui| app.on_new_session(gui, id));
+            }
+        }
+    }
+
+    /// `Sim::evOnReplayStatusChanged` as the apps hear it.
+    pub fn apps_on_replay_status(&mut self, entered: bool) {
+        for id in 0..self.controls.len() {
+            if self.is_app(id) {
+                self.with_app(id, |app, gui| app.on_replay_status(gui, id, entered));
             }
         }
     }

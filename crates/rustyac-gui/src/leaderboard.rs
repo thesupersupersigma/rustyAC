@@ -76,6 +76,10 @@ pub struct RaceCar {
     pub has_completed_flag: bool,
     /// `RaceManager::getCurrentLap(car).splits`
     pub current_splits: Vec<u32>,
+    /// `RaceManager::getBestLap(car)` whole, and `getSplit(car)` (the last lap against the best
+    /// before it)
+    pub best: RaceLap,
+    pub best_lap_split: i32,
     /// the car's own best sector times (`getBestSplit(i, false, car)`)
     pub personal_best_splits: Vec<u32>,
 }
