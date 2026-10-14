@@ -16,6 +16,7 @@ pub mod app_laps;
 pub mod app_pedals;
 pub mod app_position;
 pub mod app_realtime;
+pub mod app_track_map;
 pub mod app_tyres;
 pub mod apps;
 pub mod control;

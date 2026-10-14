@@ -384,6 +384,11 @@ impl Kgl {
         unsafe { self.context.RSSetState(self.cull_states[index as usize].as_ref()) }
     }
 
+    /// `kglFlush` 0x140018df0.
+    pub fn flush(&self) {
+        unsafe { self.context.Flush() }
+    }
+
     /// `kglSetViewport` 0x140018ee0.
     pub fn set_viewport(&self, x: f32, y: f32, width: f32, height: f32) {
         let viewport = D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: width, Height: height, MinDepth: 0.0, MaxDepth: 1.0 };

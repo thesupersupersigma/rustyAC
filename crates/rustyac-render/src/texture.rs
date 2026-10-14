@@ -140,6 +140,29 @@ impl KglTexture {
         texture
     }
 
+    /// What [`KglTexture::from_file`] makes of a file whose bytes are these: D3DX with no load
+    /// info (usage DEFAULT, D3DX's default mip filter), from memory.
+    pub fn from_file_bytes(kgl: &Kgl, bytes: &[u8]) -> KglTexture {
+        let mut texture = KglTexture { shader_resource_view: None, width: 0, height: 0 };
+        match d3dx() {
+            Some(d3dx) if d3dx_available() => unsafe {
+                let mut view: *mut c_void = std::ptr::null_mut();
+                let result = (d3dx.create_srv_from_memory)(kgl.device.as_raw(), bytes.as_ptr() as *const c_void, bytes.len(), std::ptr::null(), std::ptr::null_mut(), &mut view, std::ptr::null_mut());
+                if result < 0 || view.is_null() {
+                    println!("ERROR: D3DX11CreateShaderResourceViewFromMemory failed?");
+                } else {
+                    texture.shader_resource_view = Some(ID3D11ShaderResourceView::from_raw(view));
+                }
+            },
+            _ => match crate::texture_fallback::create(kgl, bytes) {
+                Ok(view) => texture.shader_resource_view = Some(view),
+                Err(message) => println!("ERROR: texture not readable without d3dx11_43.dll: {message}"),
+            },
+        }
+        texture.init_size();
+        texture
+    }
+
     /// `KGLTexture::KGLTexture(const std::wstring&)` 0x140023820: D3DX reads the file with all
     /// its defaults (no load info: usage DEFAULT, D3DX's default mip filter).
     pub fn from_file(kgl: &Kgl, path: &Path) -> KglTexture {
@@ -262,6 +285,15 @@ impl ResourceStore {
             return Texture { kid: None, file_name: String::new() };
         }
         let kid = self.add(KglTexture::from_file(kgl, path));
+        let texture = Texture { kid, file_name: name.to_string() };
+        self.by_name.insert(name.to_string(), texture.clone());
+        texture
+    }
+
+    /// A file the game has just written itself (a track's `map.png`): kept under its name as
+    /// `getTexture` would have read it from disk.
+    pub fn add_file_texture(&mut self, kgl: &Kgl, name: &str, bytes: &[u8]) -> Texture {
+        let kid = self.add(KglTexture::from_file_bytes(kgl, bytes));
         let texture = Texture { kid, file_name: name.to_string() };
         self.by_name.insert(name.to_string(), texture.clone());
         texture

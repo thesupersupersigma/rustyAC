@@ -24,9 +24,9 @@ use crate::painter::Painter;
 /// A call an app makes on the session, for whoever runs the GUI to carry out.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppAction {
-    /// a settings file the app writes: the file's name (as the game names it, under
-    /// `Documents\Assetto Corsa\`) and its whole text
-    WriteFile { path: String, text: String },
+    /// a file the app writes: its name as the game names it (under `Documents\Assetto Corsa\`
+    /// for a settings file, under the game's folder for a track's map) and its bytes
+    WriteFile { path: String, bytes: Vec<u8> },
 }
 
 /// One car as the apps read it.
@@ -34,6 +34,8 @@ pub enum AppAction {
 pub struct AppCar {
     /// `CarAvatar::physicsState`
     pub state: CarPhysicsState,
+    /// `CarAvatar::bodyTransform`'s matrix (the car as it is drawn)
+    pub body_matrix: rustyac_physics::vecmath::Mat44f,
     /// `RaceManager::getCurrentLap(car)` (the running lap's time and finished sector times),
     /// `getBestLap(car)`, `getLastLap(car)`
     pub current_lap: RaceLap,

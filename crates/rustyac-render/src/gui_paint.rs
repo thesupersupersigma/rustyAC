@@ -17,12 +17,67 @@ pub struct GuiRenderer {
     pub fonts: Fonts,
     /// index 0 is unused: it stands for `GraphicsManager::gl`
     gls: Vec<Option<GlRenderer>>,
+    /// the render target `TrackMapHandler::drawMapOnRenderTarget` draws into
+    map_target: Option<crate::kgl::KglRenderTarget>,
+}
+
+/// A PNG of RGBA pixels with stored (not compressed) deflate blocks: the same pixels as any
+/// other PNG writer gives, so that loading it again makes the same texture.
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut c = 0xffff_ffffu32;
+        for b in bytes {
+            c ^= *b as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+    }
+    let mut raw = Vec::with_capacity((width as usize * 4 + 1) * height as usize);
+    for row in rgba.chunks(width as usize * 4).take(height as usize) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        z.push((i + 1 == blocks.len()) as u8);
+        z.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    if blocks.is_empty() {
+        z.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for x in &raw {
+        a = (a + *x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &header);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    out
 }
 
 impl GuiRenderer {
     /// kgl's fonts are started (`kglInitFonts`).
     pub fn new(graphics: &Graphics) -> GuiRenderer {
-        GuiRenderer { fonts: Fonts::new(&graphics.game_folder), gls: vec![None] }
+        GuiRenderer { fonts: Fonts::new(&graphics.game_folder), gls: vec![None], map_target: None }
     }
 
     pub fn painter<'a>(&'a mut self, graphics: &'a mut Graphics) -> GuiPainter<'a> {
@@ -131,6 +186,51 @@ impl Painter for GuiPainter<'_> {
 
     fn gl_quad_centred_rotated(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, angle: f32, textured: bool) {
         self.with_gl(gl, |g, graphics| g.quad_centred_rotated(graphics, x, y, w, h, angle, textured, None));
+    }
+
+    fn begin_map_target(&mut self, w: i32, h: i32, wf: f32, hf: f32) -> bool {
+        let g = &mut *self.graphics;
+        // RenderTarget::RenderTarget(gm, eR8G8B8A8, w, h, colour, no depth, 1) 0x14021c030
+        let target = g.kgl.create_render_target(windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT(0x1c), w, h, 1, 1);
+        g.kgl.set_render_targets(Some(&target), None);
+        g.set_viewport(0, 0, w, h);
+        g.clear_render_target(&[0.0; 4]);
+        g.set_depth_mode(2);
+        g.set_blend_mode(0);
+        let mut p = rustyac_physics::vecmath::Mat44f::default();
+        p.m[0][0] = 2.0 / wf;
+        p.m[1][1] = 2.0 / -hf;
+        p.m[2][2] = -0.5;
+        p.m[3][0] = wf / -wf;
+        p.m[3][1] = hf / hf;
+        p.m[3][2] = 0.5;
+        p.m[3][3] = 1.0;
+        g.set_projection_matrix(&p);
+        g.set_view_matrix(&rustyac_physics::vecmath::Mat44f::IDENTITY, None);
+        g.set_world_matrix(&rustyac_physics::vecmath::Mat44f::IDENTITY);
+        g.set_cull_mode(2);
+        self.state.map_target = Some(target);
+        true
+    }
+
+    fn end_map_target(&mut self, path: &str) -> Option<Vec<u8>> {
+        let target = self.state.map_target.take()?;
+        self.graphics.kgl.flush();
+        let pixels = self.graphics.kgl.read_render_target(&target).unwrap_or_default();
+        let png = encode_png(target.width as u32, target.height as u32, &pixels);
+        // the game saves the picture and its ResourceStore reads it again by that name
+        let full = self.graphics.game_folder.join(path);
+        let _ = self.graphics.resources.add_file_texture(&self.graphics.kgl, &full.to_string_lossy(), &png);
+        Some(png)
+    }
+
+    fn override_sampler_state(&mut self, state: i32) {
+        // GraphicsManager::overrideSamplerState 0x140204410: slot 5
+        match state {
+            0 => self.graphics.kgl.set_sampler_ps(&self.graphics.samplers.linear_simple, 5),
+            1 => self.graphics.kgl.set_sampler_ps(&self.graphics.samplers.linear_clamp, 5),
+            _ => {}
+        }
     }
 
     fn get_shader(&mut self, name: &str) -> Option<usize> {

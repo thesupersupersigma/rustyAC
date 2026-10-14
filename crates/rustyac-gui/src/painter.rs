@@ -84,6 +84,22 @@ pub trait Painter {
     #[allow(clippy::too_many_arguments)]
     fn gl_quad_centred_rotated(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, angle: f32, textured: bool);
 
+    /// `GraphicsManager::overrideSamplerState` 0x140204410: sampler slot 5 linear and clamped
+    /// (1) or back to the plain linear one (0).
+    fn override_sampler_state(&mut self, _state: i32) {}
+    /// What `TrackMapHandler::drawMapOnRenderTarget` 0x14033c810 does before it draws: a render
+    /// target of `w` x `h` (RGBA8) made and set, the viewport, a clear to transparent black, no
+    /// depth, no blending, the 2D projection of `wf` x `hf`, identity view and world, no culling.
+    /// False: the painter has no render targets (nothing is drawn).
+    fn begin_map_target(&mut self, _w: i32, _h: i32, _wf: f32, _hf: f32) -> bool {
+        false
+    }
+    /// The end of it: `kglFlush`, the target kept as the picture of `path` (what the game saves
+    /// with `kglRenderTargetSaveToFile` and loads again), the target released.
+    /// Returns the picture as a PNG (none: there was no target).
+    fn end_map_target(&mut self, _path: &str) -> Option<Vec<u8>> {
+        None
+    }
     /// `GraphicsManager::getShader` 0x140202c60 (none: there is no such shader).
     fn get_shader(&mut self, _name: &str) -> Option<usize> {
         None
