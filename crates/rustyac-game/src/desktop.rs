@@ -1332,10 +1332,12 @@ fn run_window(options: &Options) -> Result<(), String> {
     let other_infos = shared.other_infos.lock().unwrap().clone();
     // every car's shape (its eye point and its cameras), the player's first
     let mut shapes: Vec<CarShape> = std::iter::once(&car_info).chain(&other_infos).map(CarShape::of).collect();
-    // what the Onboard settings app saved in rustyAC's own cfg (the player's car)
-    let player_unix = Path::new(&car_info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    shapes[0].apply_own_onboard(&cfg_dir(options), &player_unix);
     let car_names: Vec<String> = std::iter::once(&car_info).chain(&other_infos).map(|info| Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone())).collect();
+    // what the Onboard settings app saved in rustyAC's own cfg: every car's own eye point,
+    // the pitch of the player's car's file for every car (as the game does)
+    for (shape, unix) in shapes.iter_mut().zip(&car_names) {
+        shape.apply_own_onboard(&cfg_dir(options), unix, &car_names[0]);
+    }
     let mut focus = Focus::new(options.focus.min(other_infos.len()));
     let mut focus_script = options.focus_script.clone();
     focus_script.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2210,10 +2212,12 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let previous = if focus == 0 { previous } else { world[focus] };
     let view = world[focus];
     let mut shape = CarShape::of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() });
-    // what the Onboard settings app saved in rustyAC's own cfg (the player's car)
-    if focus == 0 {
-        let unix = Path::new(&sim.car_info().name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        shape.apply_own_onboard(&cfg_dir(options), &unix);
+    // what the Onboard settings app saved in rustyAC's own cfg: the car's own eye point, the
+    // player's car's pitch
+    {
+        let unix_of = |name: &str| Path::new(name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let unix = unix_of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() }.name);
+        shape.apply_own_onboard(&cfg_dir(options), &unix, &unix_of(&sim.car_info().name));
     }
     // --supersample: the picture is drawn larger and averaged down at the end
     let supersample = options.supersample.max(1);

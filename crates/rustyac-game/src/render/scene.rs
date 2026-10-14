@@ -245,14 +245,17 @@ impl CarShape {
         self.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];
     }
 
-    /// What the Onboard settings app saved in rustyAC's own `cfg`: `cars/<car>/view.ini`
-    /// (`CarAvatar::init3D`'s eye point, `CameraOnBoard::CameraOnBoard`'s pitch in radians) and
-    /// `camera_onboard.ini [MODE] FOV` (0: 54) before the other files.
-    pub fn apply_own_onboard(&mut self, cfg_dir: &Path, unix_name: &str) {
+    /// What the Onboard settings app saved in rustyAC's own `cfg`: `cars/<car>/view.ini` of the
+    /// car itself for its eye point (`CarAvatar::init3D`), `cars/<first car>/view.ini` for its
+    /// pitch in radians (`CameraOnBoard::CameraOnBoard` 0x1400c84e0 reads the file of car 0's
+    /// name for every car), and `camera_onboard.ini [MODE] FOV` (0: 54) before the other files.
+    pub fn apply_own_onboard(&mut self, cfg_dir: &Path, unix_name: &str, first_car: &str) {
         if let Ok(ini) = ControlsIni::load(&cfg_dir.join("cars").join(unix_name).join("view.ini")) {
             if let Some(q) = three(ini.get_string("DRIVER_EYES_POSITION", "DRIVEREYES")) {
                 self.set_eye_model(q);
             }
+        }
+        if let Ok(ini) = ControlsIni::load(&cfg_dir.join("cars").join(first_car).join("view.ini")) {
             if ini.has_key("CAMERA", "ON_BOARD_PITCH_ANGLE") {
                 self.eye_pitch = ini.get_float("CAMERA", "ON_BOARD_PITCH_ANGLE");
             }
