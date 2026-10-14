@@ -74,7 +74,9 @@ pub fn time_to_diff_short(ms: i32) -> String {
     } else if ms == 0 {
         "---".to_string()
     } else {
-        format!("-{}.{}", ms / 1000, ((ms - (ms / 1000) * 1000) / 100).abs())
+        // of the magnitude: "-%0d.%0d"
+        let a = ms.wrapping_abs();
+        format!("-{}.{}", a / 1000, ((a - (a / 1000) * 1000) / 100).wrapping_abs())
     }
 }
 
