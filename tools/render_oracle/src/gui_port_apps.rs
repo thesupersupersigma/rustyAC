@@ -53,6 +53,14 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "delta" => gui.new_performance_delta_app(painter),
         "realtime" => gui.new_realtime_app(painter),
         "volumes" => gui.new_volumes_app(painter),
+        "ffb" => {
+            let unix = gui.apps.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
+            let loose = game_folder.join(format!("content/cars/{unix}/data/car.ini")).is_file();
+            let upgrades = crate::gui_seq_apps::script(|s| s.ff_upgrades);
+            ffb(|f| *f = Some(FfbPort::new()));
+            sync(gui);
+            gui.new_ffb_app(painter, loose, upgrades)
+        }
         _ => return Err(format!("no app {name:?} in the port")),
     })
 }
@@ -88,7 +96,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                 std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
             }
             AppAction::WriteProfileString { file, section, key, value } => {
-                let target = docs.join(&file);
+                // (a car's car.ini: a file of the game's folder)
+                let target = if file.starts_with("content/") { root.join("port_files").join(&file) } else { docs.join(&file) };
                 std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
                 let old = std::fs::read(&target).ok();
                 let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
@@ -106,6 +115,27 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             AppAction::SetCameraSound { car, which, external } => sound(|s| {
                 if let Some(c) = s.camera.get_mut(car) {
                     c[which] = external;
+                }
+            }),
+            AppAction::SetUserFfGain(v) => ffb(|f| {
+                if let Some(f) = f {
+                    f.avatar = v;
+                    f.car = v;
+                }
+            }),
+            AppAction::SetFfMult(v) => ffb(|f| {
+                if let Some(f) = f {
+                    f.mult = v;
+                }
+            }),
+            AppAction::SetFfUpgrade { which, value } => ffb(|f| {
+                if let Some(u) = f.as_mut().and_then(|f| f.upgrades.as_mut()) {
+                    u[which.min(3)] = value;
+                }
+            }),
+            AppAction::AddMessage { title, text } => ffb(|f| {
+                if let Some(f) = f {
+                    f.log.push(format!("message {title}|{text}"));
                 }
             }),
         }
@@ -143,6 +173,40 @@ pub fn sound_line(mix: &[[f32; 7]], camera: &[[bool; 2]]) -> String {
     line
 }
 
+/// The force feedback app's session on the port's side: the avatar's and the car's gains, the
+/// car's FF mult and steer assist, the wheel's effects, the messages.
+pub struct FfbPort {
+    pub avatar: f32,
+    pub car: f32,
+    pub mult: f32,
+    pub assist: f32,
+    pub upgrades: Option<[f32; 4]>,
+    pub log: Vec<String>,
+    pub last: String,
+}
+
+impl FfbPort {
+    fn new() -> FfbPort {
+        let (mult, assist, upgrades) = crate::gui_seq_apps::script(|s| (s.ff_mult, s.steer_assist, s.ff_upgrades));
+        FfbPort { avatar: 1.0, car: 1.0, mult, assist, upgrades, log: Vec::new(), last: String::new() }
+    }
+}
+
+static FFB: std::sync::Mutex<Option<FfbPort>> = std::sync::Mutex::new(None);
+
+fn ffb<T>(f: impl FnOnce(&mut Option<FfbPort>) -> T) -> T {
+    f(&mut FFB.lock().unwrap())
+}
+
+/// The force feedback's settings as a line of `effects_*.txt`.
+pub fn ffb_line(avatar: f32, car: f32, mult: f32, upgrades: Option<[f32; 4]>) -> String {
+    let mut line = format!("ffb avatar {:08x} car {:08x} mult {:08x}", avatar.to_bits(), car.to_bits(), mult.to_bits());
+    if let Some(u) = upgrades {
+        line += &format!(" upgrades {}", u.iter().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(" "));
+    }
+    line
+}
+
 /// What the apps read, as the script has it now.
 pub fn sync(gui: &mut Gui) {
     let documents = crate::root::documents();
@@ -152,6 +216,24 @@ pub fn sync(gui: &mut Gui) {
     gui.apps = crate::gui_seq_apps::link();
     if gui.apps.in_replay != was_replay {
         gui.apps_on_replay_status(gui.apps.in_replay);
+    }
+    // the force feedback app's: the player's car as the port's apps left it
+    let state = ffb(|f| f.as_ref().map(|f| (f.avatar, f.mult, f.assist, f.upgrades)));
+    if let Some((avatar, mult, assist, upgrades)) = state {
+        if let Some(car) = gui.apps.cars.first_mut() {
+            car.has_physics = true;
+            car.avatar_ff_gain = avatar;
+            car.ff_mult = mult;
+            car.steer_assist = assist;
+        }
+        gui.apps.ff_upgrades = upgrades;
+        let path = root.join("effects_port.txt");
+        ffb(|f| {
+            if let Some(f) = f {
+                let line = ffb_line(f.avatar, f.car, f.mult, f.upgrades);
+                append_effects(&path, std::mem::take(&mut f.log), &line, &mut f.last);
+            }
+        });
     }
     // the Audio app's: the views as the port's apps left them, Documents cfg/audio.ini
     let volumes = gui.controls.iter().any(|c| c.name == "FORM_VOLUMES");

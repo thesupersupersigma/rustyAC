@@ -25,6 +25,8 @@ use crate::gui_seq_menu::{hud, leak};
 pub const DT: f32 = 1.0 / 60.0;
 /// Where the Audio app's form is on the screen (its top left).
 const VOLUMES_AT: (i32, i32) = (0, 80);
+/// Where the force feedback app's form is.
+const FFB_AT: (i32, i32) = (0, 80);
 
 /// What the stand-in referee knows of one car at one frame.
 #[derive(Clone, Debug, Default)]
@@ -91,6 +93,10 @@ pub struct AppScript {
     /// the sound cards' names; every car's bonnet and bumper views' "external sound" at the start
     pub drivers: Vec<String>,
     pub camera: Vec<[bool; 2]>,
+    /// the player's car's `ffMult` and `steerAssist` (car.ini), its wheel's effects (none: no wheel)
+    pub ff_mult: f32,
+    pub steer_assist: f32,
+    pub ff_upgrades: Option<[f32; 4]>,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -244,6 +250,12 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         }
         "app.focus" => script(|s| s.focused = number as usize),
         "app.drivers" => script(|s| s.drivers = text.split('|').map(str::to_string).collect()),
+        "app.ffMult" => script(|s| s.ff_mult = number),
+        "app.steerAssist" => script(|s| s.steer_assist = number),
+        "app.wheel" => {
+            let gains: Vec<f32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            script(|s| s.ff_upgrades = (gains.len() == 4).then(|| [gains[0], gains[1], gains[2], gains[3]]));
+        }
         "app.camera" => script(|s| {
             let car = number as usize;
             if s.camera.len() <= car {
@@ -399,6 +411,8 @@ pub fn link() -> AppLink {
             sun_angle: s.sun_angle,
             time_mult: None,
             use_mph: s.use_mph,
+            game_dt: DT,
+            ff_upgrades: s.ff_upgrades,
             camera_sounds: s.camera.clone(),
             audio_drivers: s.drivers.clone(),
             audio_ini: None,
@@ -410,6 +424,24 @@ pub fn link() -> AppLink {
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
 /// its pixels, and `data\map.ini`, byte for byte).
 pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if name.starts_with("app_ffb") {
+        let mut same = true;
+        let car_ini = "content/cars/ks_ferrari_f2004/data/car.ini";
+        for (what, a, b) in [
+            ("cfg/controls.ini", args.root.join("documents/Assetto Corsa/cfg/controls.ini"), args.root.join("port_files/documents/Assetto Corsa/cfg/controls.ini")),
+            (car_ini, args.root.join(car_ini), args.root.join("port_files").join(car_ini)),
+            ("the force feedback's settings (the gains, the FF mult, the wheel's effects, the messages)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
+        ] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if name.starts_with("app_volumes") {
         let mut same = true;
         let docs = args.root.join("documents/Assetto Corsa/cfg");
@@ -575,6 +607,18 @@ FF_GAIN=0.85
     for file in ["effects_game.txt", "effects_port.txt"] {
         let _ = std::fs::remove_file(args.root.join(file));
     }
+    // the force feedback app's: the same controls.ini for the port's writes; the F2004's
+    // car.ini a loose file (FFBForm's "Auto FFB" and "Quick Adjust" are only for such a car)
+    std::fs::copy(docs.join("controls.ini"), port_docs.join("controls.ini")).map_err(|e| e.to_string())?;
+    let car_ini = "content/cars/ks_ferrari_f2004/data/car.ini";
+    if name.starts_with("app_ffb") {
+        for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
+            std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
+            std::fs::copy("cardata/ks_ferrari_f2004/car.ini", &to).map_err(|e| format!("car.ini: {e}"))?;
+        }
+    } else {
+        let _ = std::fs::remove_file(args.root.join(car_ini));
+    }
     Ok(())
 }
 
@@ -701,6 +745,46 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 click(&mut o, 1250, 60);
                 o.extend([Op::MouseMove(600, 400), Op::Frame(DT), Op::Frame(DT), Op::Save]);
             }
+        }
+        "app_ffb" => {
+            // the force feedback app of the F2004 (car.ini FFMULT 3.752, STEER_ASSIST 0.86) with
+            // a wheel, on the race
+            race(&mut o, 6);
+            o.extend([hud("app.ff", 0.85, ""), hud("app.userFf", 1.0, ""), hud("app.ffMult", 3.752 * 0.001, ""), hud("app.steerAssist", 0.86, ""), hud("app.wheel", 0.0, "0.1,0.2,0.3,0.4")]);
+            o.push(hud("app.new", 0.0, "ffb"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "ffb"));
+            play(&mut o, 0, 60, 20);
+            let (x, y) = FFB_AT;
+            let hold = |o: &mut Vec<Op>, cx: i32, cy: i32, frames: usize| {
+                o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy)]);
+                o.extend(std::iter::repeat_n(Op::Frame(DT), frames));
+                o.extend([Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            };
+            // the gain up for half a second, down for a fifth; Quick Adjust (the gain into the
+            // car's FF mult, the gain back to 1)
+            hold(&mut o, 314, 85, if rest == "short" { 6 } else { 30 });
+            hold(&mut o, 35, 85, 12);
+            hold(&mut o, 240, 155, 1);
+            // the wheel's effects: slips up 2, road down 1, curbs up 1, ABS down 3, then "Save"
+            for (cx, cy, n) in [(315, 210, 2), (32, 272, 1), (307, 332, 1), (32, 392, 3)] {
+                for _ in 0..n {
+                    hold(&mut o, cx, cy, 1);
+                }
+            }
+            hold(&mut o, 170, 452, 1);
+            // the gain up again; Auto FFB on (the gain back to 1), the average over the laps (at
+            // each of the player's laps the car's FF mult adjusted, with its message)
+            hold(&mut o, 314, 85, 10);
+            hold(&mut o, 240, 125, 1);
+            play(&mut o, 60, if rest == "short" { 300 } else { 4000 }, 4);
+            if rest != "short" {
+                play(&mut o, 4000, 24000, 97);
+            }
+            // the gain up, Auto FFB off (the gain back to 1, car.ini saved)
+            hold(&mut o, 314, 85, 10);
+            hold(&mut o, 240, 125, 1);
+            o.extend([hud("app.visible", 0.0, "ffb"), Op::Frame(DT), hud("app.visible", 1.0, "ffb"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
         "app_volumes" => {
             // the Audio app on the race: two sound cards, the first car's bonnet view heard

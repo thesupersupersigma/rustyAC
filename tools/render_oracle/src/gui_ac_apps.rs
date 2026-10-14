@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 16] = [
+pub const APPS: [(&str, usize, usize, usize); 17] = [
+    ("ffb", 0x268, 0x1_4031_4a10, 0x1_4050_b110),
     ("volumes", 0x258, 0x1_402f_8fd0, 0x1_4050_65d0),
     ("help", 0x1c0, 0x1_4030_7900, 0x1_4050_87c8),
     ("hideall", 0x1d0, 0x1_4030_f3e0, 0x1_4050_9f38),
@@ -38,7 +39,9 @@ pub const APPS: [(&str, usize, usize, usize); 16] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 5] = ["delta", "tyres", "pedals", "electronics", "gears"];
+const TAKES_CAR: [&str; 6] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb"];
+/// `const DICarControl::vftable'`
+const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
 /// `static std::wstring INIReaderDocuments::basePath`
 const VA_INIREADERDOCUMENTS_BASE_PATH: usize = 0x1_4151_d100;
@@ -70,6 +73,45 @@ struct Sound {
 }
 
 static SOUND: Mutex<Option<Sound>> = Mutex::new(None);
+
+/// The force feedback app's session: the player's `Car` block (`CarAvatar+0x1168`), its
+/// `DICarControl` (a block with the class's own table, for the app's `__RTDynamicCast`), the
+/// avatar; the messages; the last line of `effects_game.txt`.
+#[derive(Default)]
+struct Ffb {
+    car: usize,
+    dic: usize,
+    avatar: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static FFB: Mutex<Option<Ffb>> = Mutex::new(None);
+
+/// `PhysicsAvatar::executeOnPhysicsThread(std::function<void()>)` 0x140121f20: the job done at
+/// once (the oracle has no physics thread), the function given by value destroyed as the
+/// game's does it (`_Do_call` +0x10, `_Delete_this` +0x20 of its implementation at +0x18).
+unsafe extern "C" fn execute_on_physics_thread(_this: *mut u8, f: *mut u8) {
+    let imp: *mut u8 = rd(f, 0x18);
+    if imp.is_null() {
+        return;
+    }
+    let table: *const usize = rd(imp, 0);
+    let call: extern "C" fn(*mut u8) = std::mem::transmute(*table.add(2));
+    call(imp);
+    let delete: extern "C" fn(*mut u8, bool) = std::mem::transmute(*table.add(4));
+    delete(imp, imp != f);
+    wr(f, 0x18, 0usize);
+}
+
+/// `SystemMessage::addMessage(std::wstring, std::wstring, eMessageType)` 0x1401b61c0: written
+/// down.
+unsafe extern "C" fn add_message(_this: *mut u8, title: *const u8, text: *const u8, _kind: i32) {
+    let line = format!("message {}|{}", crate::gui_ac::read_wstring(title), crate::gui_ac::read_wstring(text));
+    if let Some(f) = FFB.lock().unwrap().as_mut() {
+        f.log.push(line);
+    }
+}
 
 /// `AudioEngine::setVolume` 0x1401fbdf0: the call, written down.
 unsafe extern "C" fn set_volume(_this: *mut u8, v: f32) {
@@ -276,6 +318,8 @@ unsafe fn install(game: &Game) {
         (0x1_4013_8570, get_lap_count as *const () as usize),
         (0x1_4024_0cf0, crate::gui_ac_hud::ac_translate as *const () as usize),
         (0x1_401f_bdf0, set_volume as *const () as usize),
+        (0x1_4012_1f20, execute_on_physics_thread as *const () as usize),
+        (0x1_401b_61c0, add_message as *const () as usize),
         (0x1_401f_9830, get_driver_num as *const () as usize),
         (0x1_401f_96d0, get_driver_info as *const () as usize),
     ] {
@@ -296,6 +340,16 @@ pub unsafe fn announce_laps(game: &Game) {
     let sim = GAME.lock().unwrap().as_ref().map(|g| g.sim).unwrap_or(0);
     for (car, time) in laps {
         for (name, form) in &made {
+            if name == "ffb" {
+                // FFBForm's lap handler 0x1403167d0, its object {form}
+                let lambda = game.acs.alloc(0x10);
+                wr(lambda, 0, *form);
+                let event = game.acs.alloc(0x8);
+                wr(event, 0, car);
+                wr(event, 4, time);
+                let f: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(game.acs.va(0x1_4031_67d0));
+                f(lambda, event);
+            }
             if name == "realtime" {
                 let lambda = game.acs.alloc(0x10);
                 wr(lambda, 0, *form);
@@ -442,6 +496,28 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(sim, 0x188, camera);
                 *SOUND.lock().unwrap() = Some(Sound { audio, defs: defs as usize, ..Sound::default() });
             }
+            if text == "ffb" {
+                // the player's Car (userFFGain +0xec, ffMult +0x1e4, steerAssist +0x3c70) and
+                // the avatar's copy of the gain (+0x105c); a DICarControl as the controls
+                let (s_mult, s_assist, upgrades) = crate::gui_seq_apps::script(|s| (s.ff_mult, s.steer_assist, s.ff_upgrades));
+                let car = a.alloc(0x4000);
+                wr(car, 0xec, 1.0f32);
+                wr(car, 0x1e4, s_mult);
+                wr(car, 0x3c70, s_assist);
+                wr(first_car, 0x1168, car);
+                wr(first_car, 0x105c, 1.0f32);
+                let mut dic = 0usize;
+                if let Some(u) = upgrades {
+                    let block = a.alloc(0x1000);
+                    wr(block, 0, a.va(VA_DICARCONTROL_VFTABLE) as usize);
+                    wr(block, 0xa68, u);
+                    if let Some(p) = PROVIDERS.lock().unwrap().get_mut(0) {
+                        *p = block as usize;
+                    }
+                    dic = block as usize;
+                }
+                *FFB.lock().unwrap() = Some(Ffb { car: car as usize, dic, avatar: first_car as usize, ..Ffb::default() });
+            }
             if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
@@ -574,6 +650,17 @@ pub unsafe fn update() {
     if let Some(game) = GAME_ACS.lock().unwrap().as_ref() {
         wr(game.0 as *mut u8, 0, l.use_mph as u8);
     }
+    // the force feedback app's: the gains, the car's FF mult, the wheel's effects, the messages
+    if let Some(f) = FFB.lock().unwrap().as_mut() {
+        if f.dic != 0 {
+            wr(f.dic as *mut u8, 0xa50, l.cars.first().and_then(|c| c.ff_global_gain).unwrap_or(0.0));
+        }
+        let upgrades = (f.dic != 0).then(|| rd::<[f32; 4]>(f.dic as *mut u8, 0xa68));
+        let line = crate::gui_port_apps::ffb_line(rd(f.avatar as *mut u8, 0x105c), rd(f.car as *mut u8, 0xec), rd(f.car as *mut u8, 0x1e4), upgrades);
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut f.log), &line, &mut f.last);
+    }
+    wr(g.game_block as *mut u8, 0x20, l.game_dt);
     // the Audio app's effects, as the port's side writes them
     if let Some(s) = SOUND.lock().unwrap().as_mut() {
         let mix: Vec<[f32; 7]> = s.audio.iter().map(|b| rd::<[f32; 7]>(*b as *mut u8, 0x118)).collect();
