@@ -11,3 +11,5 @@ license = "GPL-3.0-or-later"
 [dependencies]
 # the port of INIReader
 rustyac-physics = { path = "../rustyac-physics" }
+# the C runtime's maths functions as acs.exe has them (atan2f)
+rustyac-math = { path = "../rustyac-math" }

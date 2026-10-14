@@ -57,6 +57,19 @@ pub struct AppCar {
     pub abs_in_action: bool,
     pub tc_enabled: bool,
     pub tc_in_action: bool,
+    /// `CarAvatar::isEdlEnabled`, `getEdlOutLevel`; `physicsInfo.hasDRS`
+    pub edl_enabled: bool,
+    pub edl_out_level: f32,
+    pub has_drs: bool,
+    /// the controls' `getFFGlobalGain` (none: the car has no controls provider, no physics),
+    /// `raceEngineer->car->userFFGain` (none: no race engineer)
+    pub ff_global_gain: Option<f32>,
+    pub user_ff_gain: Option<f32>,
+    /// `CarAvatar::getCurrentCompoundShortName`, `getCurrentCompoundIdealPressure(tyre)`
+    pub compound_short_name: String,
+    pub ideal_pressure: [i32; 4],
+    /// `CarAvatar::isConnected`
+    pub connected: bool,
     /// `CarAvatar::isInPit`, `isInPitlane`
     pub in_pit: bool,
     pub in_pitlane: bool,
@@ -90,6 +103,15 @@ pub struct AppLink {
     pub time_to_session_start: f64,
     /// `ReplayManager::isInReplaymode`
     pub in_replay: bool,
+    /// `Spline::length` of the track's AI spline (m)
+    pub ai_spline_length: f32,
+    /// `PhysicsAvatar::getTemperatureInfo` (ambient, road), `getDynamicTrackStatus().currentGripLevel`,
+    /// `windData` (`speed.value` m/s, `directionDEG`)
+    pub ambient_temperature: f32,
+    pub road_temperature: f32,
+    pub grip: f32,
+    pub wind_speed: f32,
+    pub wind_direction_deg: f32,
     /// `Game::gameTime.now` (ms)
     pub game_time: f64,
     /// `GameplaySettings` / `ksIsMPH`: speeds in miles an hour
@@ -146,6 +168,13 @@ pub trait App: Any {
 
     /// `Form::shutdown` (vtable +0xb0): the game is closing.
     fn shutdown(&mut self, _gui: &mut Gui, _id: Id) {}
+
+    /// A handler of `RaceManager::evOnLapCompleted` (`OnLapCompletedEvent`: the car's index,
+    /// the lap's time).
+    fn on_lap_completed(&mut self, _gui: &mut Gui, _id: Id, _car: u32, _time: u32) {}
+
+    /// A handler of `Sim::evOnNewSession`.
+    fn on_new_session(&mut self, _gui: &mut Gui, _id: Id) {}
 }
 
 impl Gui {
@@ -180,6 +209,24 @@ impl Gui {
     pub fn set_app(&mut self, id: Id, app: Box<dyn App>) {
         if let Kind::Form(data) = &mut self.controls[id].kind {
             data.app = Some(app);
+        }
+    }
+
+    /// `RaceManager::evOnLapCompleted` as the apps hear it, in the order they were made.
+    pub fn apps_on_lap_completed(&mut self, car: u32, time: u32) {
+        for id in 0..self.controls.len() {
+            if self.is_app(id) {
+                self.with_app(id, |app, gui| app.on_lap_completed(gui, id, car, time));
+            }
+        }
+    }
+
+    /// `Sim::evOnNewSession` as the apps hear it.
+    pub fn apps_on_new_session(&mut self) {
+        for id in 0..self.controls.len() {
+            if self.is_app(id) {
+                self.with_app(id, |app, gui| app.on_new_session(gui, id));
+            }
         }
     }
 

@@ -84,6 +84,24 @@ pub trait Painter {
     #[allow(clippy::too_many_arguments)]
     fn gl_quad_centred_rotated(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, angle: f32, textured: bool);
 
+    /// `GraphicsManager::getShader` 0x140202c60 (none: there is no such shader).
+    fn get_shader(&mut self, _name: &str) -> Option<usize> {
+        None
+    }
+    /// `Shader::getVar` 0x14021a3c0.
+    fn shader_var(&self, _shader: usize, _name: &str) -> Option<usize> {
+        None
+    }
+    /// `ShaderVariable::set` 0x140209600: the variable's bytes into its constant buffer.
+    fn set_shader_var(&mut self, _shader: usize, _var: usize, _bytes: &[u8]) {}
+    /// `CBuffer::commit` 0x140219920 of the variable's constant buffer.
+    fn commit_shader_var(&mut self, _shader: usize, _var: usize) {}
+    /// `GLRenderer::quad` 0x1401ff420 drawn with a shader of its own.
+    #[allow(clippy::too_many_arguments)]
+    fn gl_quad_shader(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, textured: bool, _shader: usize) {
+        self.gl_quad(gl, x, y, w, h, textured);
+    }
+
     /// `Font::getFontWrapper` 0x1402010d0: the wrapper of a family, italic or not, bold or not.
     fn font_wrapper(&mut self, family: &str, italic: bool, bold: bool) -> usize;
     /// `kglBlitStringWide` 0x140019aa0: `align` 0 left, 1 centre, 2 right; `color` 0xAABBGGRR.

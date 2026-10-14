@@ -133,6 +133,30 @@ impl Painter for GuiPainter<'_> {
         self.with_gl(gl, |g, graphics| g.quad_centred_rotated(graphics, x, y, w, h, angle, textured, None));
     }
 
+    fn get_shader(&mut self, name: &str) -> Option<usize> {
+        self.graphics.shaders.get_shader(&self.graphics.kgl, name).ok().map(|s| s.0)
+    }
+
+    fn shader_var(&self, shader: usize, name: &str) -> Option<usize> {
+        self.graphics.shaders.get(crate::shader::ShaderId(shader)).get_var(name)
+    }
+
+    fn set_shader_var(&mut self, shader: usize, var: usize, bytes: &[u8]) {
+        self.graphics.shaders.get_mut(crate::shader::ShaderId(shader)).set_var(var, bytes);
+    }
+
+    fn commit_shader_var(&mut self, shader: usize, var: usize) {
+        let kgl = &self.graphics.kgl;
+        let s = self.graphics.shaders.get_mut(crate::shader::ShaderId(shader));
+        if let Some(buffer) = s.vars.get(var).and_then(|v| v.buffer) {
+            s.cbuffers[buffer].commit(kgl);
+        }
+    }
+
+    fn gl_quad_shader(&mut self, gl: GlId, x: f32, y: f32, w: f32, h: f32, textured: bool, shader: usize) {
+        self.with_gl(gl, |g, graphics| g.quad(graphics, x, y, w, h, textured, Some(crate::shader::ShaderId(shader))));
+    }
+
     fn font_wrapper(&mut self, family: &str, italic: bool, bold: bool) -> usize {
         // (none: an index no wrapper has, so that nothing is drawn with it)
         self.state.fonts.get_font_wrapper(&self.graphics.kgl, family, italic, bold).unwrap_or(usize::MAX)
