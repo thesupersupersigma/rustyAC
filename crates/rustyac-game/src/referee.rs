@@ -455,6 +455,8 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
                     best_lap: db.best_lap.time,
                     has_completed_flag: db.has_completed_last_lap,
                     current_splits: db.current_splits.clone(),
+                    best: RaceLap { time: db.best_lap.time, splits: db.best_lap.splits.clone(), is_valid: db.best_lap.is_valid },
+                    best_lap_split: db.best_lap_split,
                     personal_best_splits: db.personal_best_splits.clone(),
                     // RaceManager::getLapCount
                     lap_count: db.laps.len() as u32,

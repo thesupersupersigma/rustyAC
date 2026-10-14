@@ -74,6 +74,8 @@ pub struct GuiSetup {
     /// race.ini `[RACE] FIXED_SETUP` (`RaceManager::fixedSetup`): the menu's Setup button is
     /// dimmed and answers "Blocked"
     pub fixed_setup: bool,
+    /// Task 32: every car's data folder (the apps read `engine.ini`, `drs.ini`)
+    pub data_paths: Vec<PathBuf>,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -151,6 +153,9 @@ pub struct GameGui {
     pub tab: Option<SessionLeaderboard>,
     /// the app "Leaderboard"
     pub leaderboard_app: Id,
+    /// the other apps (made at the first frame), `Speed::useMPH`
+    pub apps: super::gui_apps::GameApps,
+    use_mph: bool,
     /// what the tables read of every car that never changes (names, nation, folder, skin)
     race_static: Vec<RaceCar>,
     /// `RaceManager::getCurrentSessionIndex` as of the last frame
@@ -318,9 +323,10 @@ impl GameGui {
             gui.set_visible(esc_menu.unwrap_or(0), true);
         }
         gui.sim.actions.clear();
-        // the apps (Sim::addForm): of the game's 56 only the Leaderboard so far
+        // the apps (Sim::addForm): the Leaderboard's form now, every app put on the screen in
+        // the game's order at the first frame (GameApps::make)
         let leaderboard_app = gui.new_leaderboard_app(&mut painter);
-        gui.game_screen_add_control(&mut painter, screen, leaderboard_app, true);
+        let use_mph = super::gui_apps::use_mph(&setup.cfg_dir, setup.documents_cfg.as_ref());
         let wrong = (setup.session_type != 6).then(|| WrongWayIndicator::new(&mut painter, setup.penalties));
         let lap = LapInvalidator::new(&mut painter);
         let drive = DriveThroughPenalty::new(&mut painter);
@@ -342,7 +348,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -563,13 +569,19 @@ impl GameGui {
             self.was_replay = info.replay;
             self.damage.enabled = !info.replay;
         }
+        // the apps' view of the session
+        self.apps.update(&mut self.gui, world, focus, info, &self.setup, self.use_mph, time_ms);
     }
 
     /// `ksgui::GUI::render` 0x140254c10: the 2D pass's states, the game screen with its forms
     /// (and the flags), the app bar.
     pub fn render(&mut self, graphics: &mut Graphics, dt: f32) {
         let mut painter = self.renderer.painter(graphics);
+        if self.apps.made.is_empty() {
+            self.apps.make(&mut self.gui, &mut painter, self.screen, &self.setup, self.leaderboard_app);
+        }
         self.gui.render_all(dt, &mut painter);
+        super::gui_apps::GameApps::write_files(&mut self.gui, &self.setup);
     }
 
     /// `Game::renderHUD` 0x140242e30 over the HUD objects, in the order `Sim::Sim` made them.
@@ -946,10 +958,21 @@ impl GameGui {
                     self.overlay_poll(true);
                     self.overlay_poll(false);
                 }
-                "app" => {
-                    let app = self.leaderboard_app;
-                    let shown = self.gui.controls[app].visible;
-                    self.gui.set_visible(app, !shown);
+                "app" | "show" => {
+                    // app (the Leaderboard) or app:<name> / show:<name> (essentials, laps, delta,
+                    // realtime, position, tyres, gears, pedals, electronics, trackmap, help,
+                    // timeflow, trackdescription, hideall, runningtime): shown or hidden, or shown
+                    if rest.is_empty() {
+                        let app = self.leaderboard_app;
+                        let shown = self.gui.controls[app].visible;
+                        self.gui.set_visible(app, !shown);
+                    } else if self.apps.made.is_empty() {
+                        self.apps.pending.push((rest.to_string(), name == "show"));
+                    } else {
+                        let Some(app) = self.apps.app(rest) else { return Err(format!("--gui-do {name}:{rest}: no such app")) };
+                        let visible = name == "show" || !self.gui.controls[app].visible;
+                        self.gui.set_visible(app, visible);
+                    }
                 }
                 "flag" => {
                     let index = ["blue", "black", "yellow", "penalty", "chequered"].iter().position(|f| *f == rest);

@@ -51,6 +51,20 @@ pub struct RenderState {
     pub surface_is_pitlane: [bool; 4],
     pub disc_temps: [f32; 4],
     pub core_temps: [f32; 4],
+    /// `Car::getTyreThermalState` 0x1402727b0: the tread's temperatures as the game lays them
+    /// out (element `e` of stripe `s` at `s + 3 * e`, the stripes turned round on the left
+    /// tyres), the pressures, the grip multiplier, "hot"
+    pub tyre_temps: [[[f32; 12]; 3]; 4],
+    pub dynamic_pressure: [f32; 4],
+    pub static_pressure: [f32; 4],
+    pub thermal_mult: [f32; 4],
+    pub is_hot: [bool; 4],
+    /// `CarAvatar::getCurrentCompoundIdealPressure` 0x1400d3180: the compound's ideal
+    /// pressure, cut to a whole number
+    pub ideal_pressure: [i32; 4],
+    /// `CarPhysicsState::wear` (-1: the tyre does not wear) and `wearMult`
+    pub wear: [f32; 4],
+    pub wear_mult: [f32; 4],
     pub virtual_km: [f32; 4],
     pub inflation: [f32; 4],
     pub flat_spot: [f32; 4],
@@ -431,6 +445,11 @@ impl CarView {
             surfaces[i].is_valid_track = r.surface_is_valid_track[i];
             surfaces[i].is_pitlane = r.surface_is_pitlane[i];
             thermal[i].core_temp = r.core_temps[i];
+            thermal[i].temps = r.tyre_temps[i];
+            thermal[i].dynamic_pressure = r.dynamic_pressure[i];
+            thermal[i].static_pressure = r.static_pressure[i];
+            thermal[i].mult = r.thermal_mult[i];
+            thermal[i].is_hot = r.is_hot[i];
         }
         rustyac_physics::car_physics_state::CarPhysicsState {
             world_matrix: m(&self.body),
@@ -480,6 +499,14 @@ impl CarView {
             fuel_laps: self.fuel_laps,
             engine_life_left: self.engine_life,
             tyre_inflation: r.inflation,
+            wear: r.wear,
+            wear_mult: r.wear_mult,
+            lap_time: self.lap.current_ms,
+            last_lap: self.lap.last_ms,
+            best_lap: self.lap.best_ms,
+            lap_count: self.lap.laps,
+            normalized_spline_position: self.lap.position,
+            last_ff_pure: self.ff,
             kers_charge: self.hybrid.charge,
             kers_input: self.hybrid.input,
             kers_current_kj: self.hybrid.used_kj,
@@ -690,6 +717,32 @@ impl CarView {
             r.inflation[index] = s.inflation;
             r.flat_spot[index] = s.flat_spot as f32;
             r.core_temps[index] = tyre.thermal_model.core_temp;
+            // Car::getTyreThermalState 0x1402727b0
+            let model = &tyre.thermal_model;
+            if model.stripes >= 3 && model.elements >= 12 {
+                for s in 0..3i32 {
+                    let stripe = if index & 1 == 0 { 2 - s } else { s };
+                    for e in 0..12i32 {
+                        let f = s as usize + 3 * e as usize;
+                        r.tyre_temps[index][f / 12][f % 12] = model.patches[model.patch_index(stripe, e)].t;
+                    }
+                }
+            }
+            let ideal = tyre.model_data.ideal_pressure;
+            r.ideal_pressure[index] = if ideal > -2147483649.0 && ideal < 2147483648.0 { ideal as i32 } else { i32::MIN };
+            r.dynamic_pressure[index] = s.pressure_dynamic;
+            r.static_pressure[index] = s.pressure_static;
+            r.thermal_mult[index] = model.thermal_mult_d;
+            r.is_hot[index] = tyre.data.blister_threshold <= model.practical_temp;
+            // Car::getPhysicsState 0x140270d70: the wear
+            let max = tyre.model_data.max_wear_km;
+            if max == 0.0 {
+                r.wear[index] = -1.0;
+            } else {
+                let w = s.virtual_km / max as f64;
+                r.wear[index] = if 1.0 <= w { 1.0 } else { w as f32 };
+                r.wear_mult[index] = s.wear_mult;
+            }
             if let Some(surface) = &tyre.surface_def {
                 r.surface_grip_mod[index] = surface.grip_mod;
                 r.surface_dirt_additive_k[index] = surface.dirt_additive_k;
