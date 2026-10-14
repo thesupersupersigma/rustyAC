@@ -76,6 +76,23 @@ pub struct GuiSetup {
     pub fixed_setup: bool,
     /// Task 32: every car's data folder (the apps read `engine.ini`, `drs.ini`)
     pub data_paths: Vec<PathBuf>,
+    /// Task 33: the developers' apps get icons (`Sim::Sim`'s `devEnabled`: `system/cfg/
+    /// assetto_corsa.ini [AC_APPS] ENABLE_DEV_APPS`, or `--dev-apps`)
+    pub dev_apps: bool,
+    /// the GUI's language (`system/locales/<it>.ini`)
+    pub language: String,
+}
+
+/// `Sim::Sim` 0x140192070's `devEnabled`: true unless the game's `system/cfg/assetto_corsa.ini`
+/// has an `[AC_APPS]` section whose `ENABLE_DEV_APPS` is not above 0 (`--dev-apps`: always true).
+pub fn dev_apps_enabled(game: &Path, forced: bool) -> bool {
+    if forced {
+        return true;
+    }
+    match IniReader::load(&game.join("system/cfg/assetto_corsa.ini")) {
+        Ok(ini) if ini.ready && ini.has_section("AC_APPS") => ini.get_int("AC_APPS", "ENABLE_DEV_APPS").unwrap_or(0) > 0,
+        _ => true,
+    }
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -179,6 +196,12 @@ impl GameGui {
     /// The GUI and the HUD objects, in the order `Sim::Sim` 0x140192070 makes them.
     pub fn new(graphics: &mut Graphics, setup: GuiSetup) -> Result<GameGui, String> {
         let mut renderer = GuiRenderer::new(graphics);
+        // initLocalization 0x1400c15c0 (wWinMain, before anything is made): the language's
+        // strings, its font locale
+        if let Some(font_locale) = rustyac_gui::locale::font_locale(&setup.language) {
+            renderer.fonts.set_locale(font_locale);
+        }
+        let locale = rustyac_gui::locale::Locale::load(&setup.game, &setup.language);
         let system = |name: &str| read(setup.game.join("system/cfg").join(name));
         let gameplay = own_or_documents(&setup, "gameplay.ini");
         let files = GuiFiles {
@@ -189,6 +212,7 @@ impl GameGui {
         };
         let mut painter = renderer.painter(graphics);
         let mut gui = Gui::new(&mut painter, files);
+        gui.locale = locale;
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");
         gui.add_root(&mut painter, screen);
 
@@ -278,7 +302,6 @@ impl GameGui {
             let assist = |key: &str| assists.as_ref().map_or(0, |ini| ini.get_int("ASSISTS", key).unwrap_or(0));
             let mut tracks: Vec<String> = std::fs::read_dir(setup.game.join("content/tracks")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
             tracks.sort_by_key(|name| name.to_uppercase());
-            gui.locale = rustyac_gui::locale::Locale::load(&setup.game, "en");
             gui.setup = rustyac_gui::setup_car::SetupLink {
                 track_name: setup.track_name.clone(),
                 tracks,

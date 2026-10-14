@@ -6,11 +6,14 @@
 //! (`acLocaleGetString` 0x1402404a0), and the help texts of `system/locales/setup/<lang>.tag`
 //! (`TagDocumentReader::load` 0x14044e030, `acLocaleGetSetupHelpText` 0x140240410).
 //!
-//! `acTranslate` (the `[STRINGS]` of `system/locales/<lang>.ini`) is [`crate::hud::translate`]:
-//! in English every string is itself.
+//! `acTranslate` 0x140240cf0 reads `translatedText`, the `[STRINGS]` of
+//! `system/locales/<lang>.ini` (`loadMainINI` 0x140240ee0), kept here for the whole process as
+//! in the game (a global); [`crate::hud::translate`] is it. A string the table does not have
+//! comes back as it is.
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::RwLock;
 
 use rustyac_physics::data::ini::{read_text_utf8, IniReader};
 
@@ -21,12 +24,61 @@ pub struct TagDocumentText {
     pub lines_count: u32,
 }
 
+/// `translatedText` (none: no table was loaded, every string is itself).
+static TRANSLATED_TEXT: RwLock<Option<BTreeMap<String, String>>> = RwLock::new(None);
+
+/// `acTranslate` 0x140240cf0.
+pub fn ac_translate(text: &str) -> String {
+    match TRANSLATED_TEXT.read() {
+        Ok(table) => table.as_ref().and_then(|t| t.get(text)).cloned().unwrap_or_else(|| text.to_string()),
+        Err(_) => text.to_string(),
+    }
+}
+
+/// `loadMainINI` 0x140240ee0 on `system/locales/<language>.ini` of the game's folder `root`:
+/// every key of `[STRINGS]` and its value, a written `\n` in either made a line break, into
+/// `translatedText` (none: the file is not there, "CANNOT OPEN LOCALIZATION FILE").
+pub fn load_main_ini(root: &Path, language: &str) -> Option<BTreeMap<String, String>> {
+    let ini = IniReader::load(&root.join(format!("system/locales/{language}.ini"))).ok().filter(|ini| ini.ready)?;
+    let mut table = BTreeMap::new();
+    for key in ini.keys("STRINGS") {
+        let value = ini.get_string("STRINGS", key);
+        table.insert(key.replace("\\n", "\n"), value.replace("\\n", "\n"));
+    }
+    Some(table)
+}
+
+/// The language `initLocalization` 0x1400c15c0 sets: `Documents\Assetto Corsa\cfg\launcher.ini
+/// [WINDOW] LANGUAGE` when that file can be read (an empty value when the key is missing),
+/// else "en". `forced`: `--language`. `documents_cfg`: the Documents `cfg` folder.
+pub fn language(documents_cfg: Option<&Path>, forced: Option<&str>) -> String {
+    if let Some(code) = forced {
+        return code.to_string();
+    }
+    match documents_cfg.and_then(|folder| IniReader::load(&folder.join("launcher.ini")).ok()).filter(|ini| ini.ready) {
+        Some(ini) => ini.get_string("WINDOW", "LANGUAGE"),
+        None => "en".to_string(),
+    }
+}
+
+/// The font locale `acLocaleSetLocale` gives `kglSetFontLocale` for a language (none: the
+/// default one).
+pub fn font_locale(language: &str) -> Option<&'static str> {
+    match language {
+        "chs" => Some("zh-CN"),
+        "cht" => Some("zh-HK"),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Locale {
     /// `strings`
     pub strings: BTreeMap<String, String>,
     /// `setupHelp.document`
     pub setup_help: BTreeMap<String, TagDocumentText>,
+    /// `currentLocale`
+    pub language: String,
 }
 
 /// `TagDocumentReader::load` 0x14044e030 on the file's text (as the text-mode stream gives it):
@@ -73,9 +125,21 @@ pub fn parse_tag_document(text: &str) -> BTreeMap<String, TagDocumentText> {
 }
 
 impl Locale {
-    /// `acLocaleSetLocale` 0x140240980, the setup editor's part. `root` is the game's folder.
+    /// `acLocaleSetLocale` 0x140240980. `root` is the game's folder. `translatedText` (the
+    /// process's, [`ac_translate`]) is filled first; the setup editor's tables only when it
+    /// could be ("Set locale failed" otherwise: every string stays itself).
     pub fn load(root: &Path, language: &str) -> Locale {
-        let mut locale = Locale::default();
+        let mut locale = Locale { language: language.to_string(), ..Locale::default() };
+        let main = load_main_ini(root, language);
+        let failed = main.is_none();
+        if let Ok(mut table) = TRANSLATED_TEXT.write() {
+            // (operator[] on the game's map: a second locale adds to the first)
+            let into = table.get_or_insert_with(BTreeMap::new);
+            into.extend(main.unwrap_or_default());
+        }
+        if failed {
+            return locale;
+        }
         // loadSetupINI: every key of every section, whatever the section is called
         if let Ok(ini) = IniReader::load(&root.join(format!("system/locales/setup/{language}.ini"))) {
             let sections: Vec<String> = ini.sections().map(str::to_string).collect();

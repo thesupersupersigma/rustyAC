@@ -108,7 +108,8 @@ impl GameApps {
         self.audio_ini = own_or_documents_text(setup, "audio.ini").map(|b| String::from_utf8_lossy(&b).into_owned());
         let id = gui.new_volumes_app(painter);
         add(gui, painter, "volumes", id);
-        let help = std::fs::read(setup.game.join("system/locales/help/en.tag")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        // ACHelp reads help/<acLocaleGetCurrentLocale>.tag
+        let help = std::fs::read(setup.game.join(format!("system/locales/help/{}.tag", setup.language))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let id = gui.new_help_app(painter, &help);
         add(gui, painter, "help", id);
         let id = gui.new_time_flow_app(painter);

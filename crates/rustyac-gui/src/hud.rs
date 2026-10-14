@@ -48,7 +48,7 @@ pub const MESSAGE_MGU: i32 = 13;
 
 /// `acTranslate` 0x140240cf0: a string the tables do not have comes back as it is.
 pub fn translate(text: &str) -> String {
-    text.to_string()
+    crate::locale::ac_translate(text)
 }
 
 /// `timeToString(ms, 3)` 0x140053110: minutes, seconds, thousandths.

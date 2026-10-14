@@ -113,6 +113,12 @@ pub struct Options {
     pub debug_hud: bool,
     /// `--no-gui`: AC's GUI and HUD are not made
     pub no_gui: bool,
+    /// `--dev-apps`: AC's developers' apps get their icons in the app bar whatever
+    /// `system/cfg/assetto_corsa.ini [AC_APPS] ENABLE_DEV_APPS` says
+    pub dev_apps: bool,
+    /// `--language <code>`: the language of AC's GUI (`system/locales/<code>.ini`; default: the
+    /// game's `cfg/launcher.ini [WINDOW] LANGUAGE`, else English)
+    pub language: Option<String>,
     /// `--cfg-dir <folder>`: where rustyAC keeps its own `acos.ini` and `gameplay.ini`
     /// (default: `cfg` beside rustyac.exe; never Assetto Corsa's own folders)
     pub cfg_dir: Option<PathBuf>,
@@ -369,6 +375,8 @@ impl Default for Options {
             no_hud: false,
             debug_hud: false,
             no_gui: false,
+            dev_apps: false,
+            language: None,
             cfg_dir: None,
             esc_start: None,
             setups_dir: None,
@@ -775,6 +783,10 @@ for checks, without anybody at the controls:
   --debug-hud           rustyAC's own panels and numbers too (in the window: F10 switches them);
                         without it the screen shows AC's GUI and HUD only
   --no-gui              without AC's GUI and HUD (the app bar, messages, flags, name tags ...)
+  --dev-apps            AC's developers' apps get their icons in the app bar (as the game's
+                        system/cfg/assetto_corsa.ini [AC_APPS] ENABLE_DEV_APPS=1 does)
+  --language <code>     the GUI's language: en, it, de, fr, es, chs, cht (system/locales/<code>.ini;
+                        default: the game's cfg/launcher.ini [WINDOW] LANGUAGE, else en)
   --gui-do <commands>   for pictures and unattended checks: things done to AC's GUI before the
                         first frame, ; between them: mouse:X:Y  click:X:Y  wheel:X:Y:N  key:VK
                         apps  desktop  names  damage  hidedamage  message:Title|Text  car:N
@@ -852,6 +864,8 @@ impl Options {
                 "--no-hud" => o.no_hud = true,
                 "--debug-hud" => o.debug_hud = true,
                 "--no-gui" => o.no_gui = true,
+                "--dev-apps" => o.dev_apps = true,
+                "--language" => o.language = Some(value("--language")?),
                 "--cfg-dir" => o.cfg_dir = Some(PathBuf::from(value("--cfg-dir")?)),
                 "--setups-dir" => o.setups_dir = Some(PathBuf::from(value("--setups-dir")?)),
                 "--no-ac-setups" => o.no_ac_setups = true,
