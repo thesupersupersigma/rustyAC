@@ -200,6 +200,8 @@ pub struct AppCar {
     pub ideal_pressure: [i32; 4],
     /// `CarAvatar::isConnected`
     pub connected: bool,
+    /// `CarAvatar::pitPosition`'s place (M41, M42, M43): `isInPit` measures from it
+    pub pit_position: [f32; 3],
     /// `CarAvatar::isInPit`, `isInPitlane`
     pub in_pit: bool,
     pub in_pitlane: bool,
@@ -382,6 +384,22 @@ impl Gui {
                 self.with_app(id, |app, gui| app.on_lap_completed(gui, id, car, time));
             }
         }
+    }
+
+    /// `MicroSectors::update` 0x14009fe20 of a frame, on the cars as `AppLink` has them.
+    pub fn micro_sectors_update(&mut self) {
+        let cars: Vec<crate::micro_sectors::MsCar> = self
+            .apps
+            .cars
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let m = &c.state.world_matrix.m;
+                crate::micro_sectors::MsCar { guid: i as i32, in_pit: crate::micro_sectors::is_in_pit([m[3][0], m[3][1], m[3][2]], c.pit_position), npos: c.state.normalized_spline_position, lap_time: c.state.lap_time }
+            })
+            .collect();
+        let tts = self.apps.time_to_session_start;
+        self.micro_sectors.update(tts, &cars);
     }
 
     /// `Sim::evOnNewSession` as the apps hear it.

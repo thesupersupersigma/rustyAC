@@ -330,6 +330,7 @@ impl GameApps {
                     compound_short_name: view.compound_short.as_str().to_string(),
                     ideal_pressure: if i == 0 { view.render.ideal_pressure } else { [0; 4] },
                     connected: !view.disconnected,
+                    pit_position: view.pit_position,
                     in_pit: view.lap.in_pit_lane,
                     in_pitlane: view.lap.in_pit_lane,
                     driver_name: setup.cars.get(i).map(|c| c[0].clone()).unwrap_or_default(),
@@ -397,6 +398,8 @@ impl GameApps {
         if let Some(referee) = referee {
             if self.sessions.is_some_and(|seen| seen != referee.new_sessions) {
                 gui.apps_on_new_session();
+                // MicroSectors::initialize (Sim's handler of evOnNewSession)
+                gui.micro_sectors.initialize();
                 self.laps.clear();
             }
             self.sessions = Some(referee.new_sessions);

@@ -118,6 +118,8 @@ pub struct Gui {
     pub setup_fixed: Vec<Id>,
     /// what the apps read of `Sim` and ask of it
     pub apps: crate::apps::AppLink,
+    /// `Sim::microSectors` (Task 33)
+    pub micro_sectors: crate::micro_sectors::MicroSectors,
 }
 
 impl Gui {
@@ -159,6 +161,7 @@ impl Gui {
             setup: crate::setup_car::SetupLink::default(),
             setup_fixed: Vec::new(),
             apps: crate::apps::AppLink::default(),
+            micro_sectors: crate::micro_sectors::MicroSectors::default(),
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
         gui.taskbar = gui.new_taskbar(painter);

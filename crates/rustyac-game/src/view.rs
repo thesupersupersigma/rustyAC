@@ -104,6 +104,8 @@ pub struct CarView {
     /// `CarPhysicsState::performanceMeter` (s) and `performanceMeterSpeedDiffMS` (m/s): the
     /// car's `PerformanceMeter` (Task 33)
     pub performance_meter: (f32, f32),
+    /// `CarAvatar::pitPosition`'s place (the pit box)
+    pub pit_position: [f32; 3],
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
     /// in the order LF, RF, LR, RR.
     pub wheels: [Mat; 4],
@@ -323,6 +325,7 @@ impl Default for CarView {
             other_car_count: 0,
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
+            pit_position: [0.0; 3],
             steps: 0,
             sim_seconds: 0.0,
             drive_seconds: 0.0,
@@ -663,6 +666,7 @@ impl CarView {
             other_car_count: if player { sim.opponents.len().min(OTHER_CARS) as u8 } else { 0 },
             new_sessions: sim.new_sessions,
             performance_meter: car.performance_meter_state(),
+            pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
             gas: car.controls.gas,

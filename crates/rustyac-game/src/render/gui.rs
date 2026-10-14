@@ -232,6 +232,8 @@ impl GameGui {
         let mut painter = renderer.painter(graphics);
         let mut gui = Gui::new(&mut painter, files);
         gui.locale = locale;
+        // MicroSectors::MicroSectors 0x14009e9d0: Documents cfg/gameplay.ini [GUI] SHOW_SECTORS
+        gui.micro_sectors = rustyac_gui::micro_sectors::MicroSectors::new(gameplay.as_ref().filter(|ini| ini.has_key("GUI", "SHOW_SECTORS")).map(|ini| ini.get_int("GUI", "SHOW_SECTORS").unwrap_or(0)));
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");
         gui.add_root(&mut painter, screen);
 
@@ -650,6 +652,8 @@ impl GameGui {
         }
         // the apps' view of the session
         self.apps.update(&mut self.gui, world, focus, info, &self.setup, self.use_mph, time_ms);
+        // MicroSectors::update, a game object updated every frame (Task 33)
+        self.gui.micro_sectors_update();
     }
 
     /// `ksgui::GUI::render` 0x140254c10: the 2D pass's states, the game screen with its forms

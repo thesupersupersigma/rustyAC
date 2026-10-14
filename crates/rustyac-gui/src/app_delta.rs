@@ -5,9 +5,9 @@
 //! best lap at this point of the track, the speed against it as two bars, the lap time it
 //! comes to.
 //!
-//! `PerformanceMeterApp::PerformanceMeterApp` 0x140302570, `render` 0x140303090. The strip of
-//! micro-sectors under the form (`MicroSectors::drawSectors` 0x14009f290, drawn when
-//! `gameplay.ini [GUI] SHOW_SECTORS` is set) is not ported: `MicroSectors` is not.
+//! `PerformanceMeterApp::PerformanceMeterApp` 0x140302570, `render` 0x140303090, with the
+//! strip of micro-sectors under the form (`MicroSectors::drawSectors` 0x14009f290, drawn when
+//! `gameplay.ini [GUI] SHOW_SECTORS` is set).
 
 use std::any::Any;
 
@@ -153,6 +153,15 @@ impl App for PerformanceDelta {
         let st = &car.state;
         gui.progress_bar_mut(self.pb_green).value = clamp01(st.performance_meter_speed_diff_ms * f32::from_bits(0x3e38_51eb));
         gui.progress_bar_mut(self.pb_red).value = clamp01(st.performance_meter_speed_diff_ms * f32::from_bits(0xbe38_51eb));
+        // the micro-sectors of the player's car (guid 0) under the form
+        if gui.micro_sectors.enabled {
+            let mut r = gui.controls[id].rect;
+            gui.get_world_rect(id, &mut r);
+            let p = gui.local_to_world(id, [0.0, r.bottom - r.top]);
+            let strip_h = ((r.bottom - r.top) * f32::from_bits(0x3c6a_0ea1)) * 10.0;
+            let color = gui.controls[id].back_color;
+            gui.micro_sectors.draw_sectors(painter, crate::painter::GRAPHICS_GL, 0, p[0], p[1], r.right - r.left, strip_h, color);
+        }
         gui.control_render(id, dt, painter);
         let d = st.performance_meter;
         if d == 0.0 || d.is_nan() {

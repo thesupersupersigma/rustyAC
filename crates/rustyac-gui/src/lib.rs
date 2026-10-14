@@ -38,6 +38,7 @@ pub mod hud_flags;
 pub mod leaderboard;
 pub mod locale;
 pub mod menus;
+pub mod micro_sectors;
 pub mod online_hud;
 pub mod overlay_leaderboard;
 pub mod painter;
