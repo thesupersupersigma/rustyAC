@@ -273,6 +273,9 @@ pub enum SetupJob {
     /// the ballast app's job of `CarAvatar::setBallastKG` @ 0x1400d9de0 (`_Do_call`
     /// @ 0x1400d05a0): `Car::setBallastKG`, the body's mass at its next update
     SetBallastKg { kg: f32 },
+    /// `Car::steerAssist` written (the console's `steerAssist`, a car.ini the force feedback
+    /// app saved)
+    SetSteerAssist { value: f32 },
 }
 
 /// One value `SetupManager::step` changed.

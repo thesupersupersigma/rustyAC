@@ -129,7 +129,7 @@ impl GameApps {
         let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
         // DriverEyesPositioner (after FormOpenVR and PostProcessFilterSelector, not made here):
         // the car.ini's eye point and pitch, the game folder's camera_onboard.ini field of view
-        let car_ini = setup.data_paths.first().and_then(|data| crate::input::ini::ControlsIni::load_car_data(&data.join("car.ini")).ok());
+        let car_ini = crate::input::ini::ControlsIni::load(&setup.cfg_dir.join("content/cars").join(&unix).join("data/car.ini")).ok().or_else(|| setup.data_paths.first().and_then(|data| crate::input::ini::ControlsIni::load_car_data(&data.join("car.ini")).ok()));
         let onboard_ini = read(setup.game.join("cfg/camera_onboard.ini"));
         let defaults = rustyac_gui::app_eyes::EyesDefaults {
             eyes: car_ini.as_ref().map(|ini| {
@@ -411,6 +411,30 @@ impl GameApps {
         }
         self.laps = counts.iter().map(|c| c.0).collect();
     }
+}
+
+/// The jobs that give the player's car what the force feedback app saved in rustyAC's own
+/// `cfg\content\cars\<car>\data\car.ini` (`[CONTROLS] FFMULT` / 1000, `STEER_ASSIST`; none:
+/// no such file), as the game's `Car` reads the loose car.ini the app wrote over.
+pub fn saved_car_jobs(cfg_dir: &Path, unix_name: &str) -> Vec<rustyac_physics::car::setup::SetupJob> {
+    use rustyac_physics::car::setup::SetupJob;
+    let Some(ini) = read(cfg_dir.join("content/cars").join(unix_name).join("data/car.ini")) else { return Vec::new() };
+    let mut jobs = Vec::new();
+    if ini.has_key("CONTROLS", "FFMULT") {
+        if let Ok(mult) = ini.get_float("CONTROLS", "FFMULT") {
+            jobs.push(SetupJob::SetFfMult { value: mult * 0.001 });
+        }
+    }
+    if ini.has_key("CONTROLS", "STEER_ASSIST") {
+        if let Ok(mut assist) = ini.get_float("CONTROLS", "STEER_ASSIST") {
+            // (Car::Car: 0 or not a number is 1)
+            if assist == 0.0 || assist.is_nan() {
+                assist = 1.0;
+            }
+            jobs.push(SetupJob::SetSteerAssist { value: assist });
+        }
+    }
+    jobs
 }
 
 /// `cfg/gameplay.ini [OPTIONS] USE_MPH` (`Sim::Sim` sets `Speed::useMPH` from it).

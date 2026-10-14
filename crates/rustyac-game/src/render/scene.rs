@@ -245,6 +245,25 @@ impl CarShape {
         self.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];
     }
 
+    /// The car's own files as the apps left them in rustyAC's `cfg` (Onboard settings' "Save
+    /// car.ini" and "Save Dash", the force feedback app's car.ini): `content/cars/<car>/data/
+    /// car.ini [GRAPHICS] DRIVEREYES, ON_BOARD_PITCH_ANGLE` and `dash_cam.ini [DASH_CAM] POS`
+    /// in place of the car's, as the game reads the loose files the apps wrote over.
+    pub fn apply_saved_car_files(&mut self, cfg_dir: &Path, unix_name: &str) {
+        let data = cfg_dir.join("content/cars").join(unix_name).join("data");
+        if let Ok(ini) = ControlsIni::load(&data.join("car.ini")) {
+            if let Some(q) = three(ini.get_string("GRAPHICS", "DRIVEREYES")) {
+                self.set_eye_model(q);
+            }
+            if ini.has_key("GRAPHICS", "ON_BOARD_PITCH_ANGLE") {
+                self.eye_pitch = ini.get_float("GRAPHICS", "ON_BOARD_PITCH_ANGLE") * 0.017_453;
+            }
+        }
+        if let Ok(ini) = ControlsIni::load(&data.join("dash_cam.ini")) {
+            self.dash_pos = three(ini.get_string("DASH_CAM", "POS")).unwrap_or([0.0; 3]);
+        }
+    }
+
     /// What the Onboard settings app saved in rustyAC's own `cfg`: `cars/<car>/view.ini` of the
     /// car itself for its eye point (`CarAvatar::init3D`), `cars/<first car>/view.ini` for its
     /// pitch in radians (`CameraOnBoard::CameraOnBoard` 0x1400c84e0 reads the file of car 0's

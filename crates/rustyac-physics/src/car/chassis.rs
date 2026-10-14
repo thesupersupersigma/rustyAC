@@ -1761,6 +1761,7 @@ impl RollingChassis {
             SetupJob::SetFfUpgrade { .. } => {}
             // Car::setBallastKG @ 0x1402759e0
             SetupJob::SetBallastKg { kg } => self.ballast_kg = kg,
+            SetupJob::SetSteerAssist { value } => self.steer_assist = value,
             _ => self.setup_manager.apply_job(job),
         }
     }

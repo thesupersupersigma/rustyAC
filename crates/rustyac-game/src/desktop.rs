@@ -1256,7 +1256,18 @@ fn run_window(options: &Options) -> Result<(), String> {
     };
     let setup_esc_start = setup.esc_start && replay.is_none();
     let mut notes = Vec::new();
-    let bindings = Bindings::load(options, &mut notes);
+    let mut bindings = Bindings::load(options, &mut notes);
+    // Task 33: the wheel's effects the force feedback app saved ("Save") in rustyAC's cfg
+    if let Ok(saved) = rustyac_game::input::ini::ControlsIni::load(&cfg_dir(options).join("controls.ini")) {
+        if saved.has_section("FF_ENHANCEMENT") {
+            for key in ["CURBS", "ROAD", "SLIPS", "ABS"] {
+                if saved.has_key("FF_ENHANCEMENT", key) {
+                    bindings.ini.set("FF_ENHANCEMENT", key, saved.get_string("FF_ENHANCEMENT", key));
+                }
+            }
+            notes.push(format!("the wheel's effects from {}", cfg_dir(options).join("controls.ini").display()));
+        }
+    }
     for note in &notes {
         println!("bindings: {note}");
     }
@@ -1336,7 +1347,17 @@ fn run_window(options: &Options) -> Result<(), String> {
     // what the Onboard settings app saved in rustyAC's own cfg: every car's own eye point,
     // the pitch of the player's car's file for every car (as the game does)
     for (shape, unix) in shapes.iter_mut().zip(&car_names) {
+        shape.apply_saved_car_files(&cfg_dir(options), unix);
         shape.apply_own_onboard(&cfg_dir(options), unix, &car_names[0]);
+    }
+    // Task 33: the force feedback app's car.ini (FFMULT, STEER_ASSIST) for the player's car,
+    // as jobs of the physics thread at the start (so a recording repeats them)
+    if replay.is_none() {
+        let jobs = rustyac_game::render::gui_apps::saved_car_jobs(&cfg_dir(options), &car_names[0]);
+        if !jobs.is_empty() {
+            println!("cfg: the player's car takes the force feedback settings saved in {}", cfg_dir(options).join("content/cars").join(&car_names[0]).join("data/car.ini").display());
+            shared.setup_jobs.lock().unwrap().extend(jobs);
+        }
     }
     let mut focus = Focus::new(options.focus.min(other_infos.len()));
     let mut focus_script = options.focus_script.clone();
@@ -2217,6 +2238,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     {
         let unix_of = |name: &str| Path::new(name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let unix = unix_of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() }.name);
+        shape.apply_saved_car_files(&cfg_dir(options), &unix);
         shape.apply_own_onboard(&cfg_dir(options), &unix, &unix_of(&sim.car_info().name));
     }
     // --supersample: the picture is drawn larger and averaged down at the end

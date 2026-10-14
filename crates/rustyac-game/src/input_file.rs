@@ -1109,6 +1109,7 @@ pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
             SetupJob::SetFfMult { value } => format!("ff_mult {:08x}", value.to_bits()),
             SetupJob::SetFfUpgrade { which, value } => format!("ff_upgrade {which} {:08x}", value.to_bits()),
             SetupJob::SetBallastKg { kg } => format!("ballast {:08x}", kg.to_bits()),
+            SetupJob::SetSteerAssist { value } => format!("steer_assist {:08x}", value.to_bits()),
         };
         out.push_str(&format!("{step} {line}\n"));
     }
@@ -1147,6 +1148,7 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
             "ff_mult" => SetupJob::SetFfMult { value: float(2)? },
             "ff_upgrade" => SetupJob::SetFfUpgrade { which: int(2)? as usize, value: float(3)? },
             "ballast" => SetupJob::SetBallastKg { kg: float(2)? },
+            "steer_assist" => SetupJob::SetSteerAssist { value: float(2)? },
             _ => return Err(bad()),
         };
         jobs.push((step, job));
