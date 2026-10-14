@@ -275,8 +275,8 @@ AI cars, a layout in `--cfg-dir`).
 
 ## Disk space
 
-58 GB free at the start; END_DISK at the end (the v0.31.0 build, the scratch target and the
-oracle outputs deleted).
+58 GB free at the start; 59 GB free at the end (the v0.31.0 build, the scratch build target and
+the oracle outputs deleted; the tapes under `oracle/t32/`, 452 MB, kept for re-running the proofs).
 
 ## Not done
 
