@@ -81,6 +81,10 @@ pub struct GuiSetup {
     pub dev_apps: bool,
     /// the GUI's language (`system/locales/<it>.ini`)
     pub language: String,
+    /// the comparative telemetry's folder (its `opponents` folder holds others' laps; none:
+    /// there is no recorder), the player's car's `drivetrain.ini [GEARS] COUNT`
+    pub telemetry_folder: Option<PathBuf>,
+    pub max_gear: i32,
 }
 
 /// `Sim::Sim` 0x140192070's `devEnabled`: true unless the game's `system/cfg/assetto_corsa.ini`
@@ -193,6 +197,21 @@ fn own_or_documents(setup: &GuiSetup, name: &str) -> Option<IniReader> {
 }
 
 impl GameGui {
+    /// The comparative telemetry recorder's best and last laps for the ESC menu's page
+    /// "Telemetry" (`getBestTime` / `getBestTimeData`, `getLastTime` / `getLastTimeData`), taken
+    /// when they changed.
+    pub fn telemetry_laps(&mut self, recorder: &rustyac_physics::replay::telemetry::ComparativeTelemetryRecorder) {
+        let link = &mut self.gui.sim.telemetry;
+        if link.best_time != recorder.best_time {
+            link.best_time = recorder.best_time;
+            link.best = std::rc::Rc::new(recorder.best.clone());
+        }
+        if link.last_time != recorder.last_time {
+            link.last_time = recorder.last_time;
+            link.last = std::rc::Rc::new(recorder.last.clone());
+        }
+    }
+
     /// The GUI and the HUD objects, in the order `Sim::Sim` 0x140192070 makes them.
     pub fn new(graphics: &mut Graphics, setup: GuiSetup) -> Result<GameGui, String> {
         let mut renderer = GuiRenderer::new(graphics);
@@ -321,6 +340,43 @@ impl GameGui {
             setup_data = Some(car.data.clone());
             gui.setup_car = Some(Box::new(car));
             pages.setup_screen = Some(editor);
+        }
+        // the page "Telemetry" (ComparativeTelemetry): what it reads of the recorder and the car
+        {
+            fn telemetry(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
+                gui.new_comparative_telemetry(painter)
+            }
+            let folder = setup.game.join("content/tracks").join(&setup.track_name);
+            let folder = if setup.track_layout.is_empty() { folder } else { folder.join(&setup.track_layout) };
+            gui.sim.telemetry = rustyac_gui::comparative_telemetry::TelemetryLink {
+                has_recorder: setup.telemetry_folder.is_some(),
+                best_time: u32::MAX,
+                last_time: u32::MAX,
+                opponents_folder: setup.telemetry_folder.as_ref().map(|f| f.join("opponents")),
+                track: setup.track_name.clone(),
+                track_config: setup.track_layout.clone(),
+                car: setup.cars.first().map(|c| c[2].clone()).unwrap_or_default(),
+                player_name: setup.cars.first().map(|c| c[0].clone()).unwrap_or_default(),
+                max_gear: setup.max_gear,
+                ai_spline_length: rustyac_physics::track::spline::AiSpline::load(&folder.join("ai/fast_lane.ai")).map(|ai| ai.spline.length()).unwrap_or(0.0),
+                use_mph: super::gui_apps::use_mph(&setup.cfg_dir, setup.documents_cfg.as_ref()),
+                ..Default::default()
+            };
+            // (ComparativeTelemetryRecorder::ComparativeTelemetryRecorder loads the best lap's
+            // file before the menu is made)
+            if let Some(folder) = &setup.telemetry_folder {
+                use rustyac_physics::replay::telemetry::{ComparativeTelemetryRecorder, TelemetryNames};
+                let driver = setup.cars.first().map(|c| c[0].clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Player".to_string());
+                let names = TelemetryNames { driver, track: setup.track_name.clone(), car: gui.sim.telemetry.car.clone(), config: setup.track_layout.clone() };
+                let mut recorder = ComparativeTelemetryRecorder::new(names);
+                if let Ok(bytes) = std::fs::read(folder.join(ComparativeTelemetryRecorder::file_name(&recorder.names))) {
+                    if recorder.load_bytes(&bytes) {
+                        gui.sim.telemetry.best_time = recorder.best_time;
+                        gui.sim.telemetry.best = std::rc::Rc::new(recorder.best.clone());
+                    }
+                }
+            }
+            pages.comparative_telemetry = Some(telemetry);
         }
         // the page "Time" (the session's lap lists are the referee's: with it only)
         if setup.session_count > 0 {

@@ -93,7 +93,14 @@ impl Gui {
         self.controls[form].border_color = self.get_skin_color("FORM", "BORDER");
         self.controls[form].fore_color = self.get_skin_color("FORM", "FORE");
         // a click on the form: it is held by the mouse
-        self.controls[form].ev_clicked.push(Rc::new(move |gui: &mut Gui, ev: &Clicked| gui.form_on_title_clicked(form, ev)));
+        // (vtable +0xa8: an app may have its own)
+        self.controls[form].ev_clicked.push(Rc::new(move |gui: &mut Gui, ev: &Clicked| {
+            if gui.is_app(form) {
+                gui.with_app(form, |app, gui| app.on_title_clicked(gui, form, ev));
+            } else {
+                gui.form_on_title_clicked(form, ev);
+            }
+        }));
 
         let pin = self.new_active_button(painter, "PIN_ICON");
         self.set_text(pin, "");

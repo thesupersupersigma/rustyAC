@@ -167,6 +167,8 @@ pub struct SimLink {
     pub replay: crate::replay_interface::ReplayLink,
     /// what the ESC menu's page "Time" reads besides `race`
     pub time: crate::time_table::TimeLink,
+    /// what the ESC menu's page "Telemetry" reads (Task 33)
+    pub telemetry: crate::comparative_telemetry::TelemetryLink,
 }
 
 /// `PauseMenu`'s own members.

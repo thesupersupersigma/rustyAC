@@ -321,6 +321,11 @@ pub trait App: Any {
         gui.form_scale_by_mult(id, m)
     }
 
+    /// `Form::onTitleClicked` (vtable +0xa8): the form is caught by the mouse.
+    fn on_title_clicked(&mut self, gui: &mut Gui, id: Id, ev: &crate::control::Clicked) {
+        gui.form_on_title_clicked(id, ev);
+    }
+
     /// `Form::shutdown` (vtable +0xb0): the game is closing.
     fn shutdown(&mut self, _gui: &mut Gui, _id: Id) {}
 

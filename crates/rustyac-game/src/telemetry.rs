@@ -24,7 +24,7 @@ use crate::sim::GameSim;
 /// The telemetry recorder with the things of the game around it.
 pub struct TelemetryRig {
     pub recorder: Option<ComparativeTelemetryRecorder>,
-    folder: PathBuf,
+    pub folder: PathBuf,
     /// `splineLocatorData.npos` as the last step left it: the game's sample is taken before
     /// the step's own value is copied there
     npos: f32,

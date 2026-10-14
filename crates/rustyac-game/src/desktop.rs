@@ -459,6 +459,9 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
+            // Task 33: the ESC menu's page "Telemetry": the recorder's folder (none: no recorder)
+            telemetry_folder: telemetry_folder(options, true).filter(|_| !options.online_session),
+            max_gear: rustyac_game::input::ini::ControlsIni::load_car_data(&info.data_path.join("drivetrain.ini")).map_or(0, |ini| ini.get_int("GEARS", "COUNT")),
             fixed_setup: options.sessions.is_none() && !options.no_referee && race_reader.as_ref().is_some_and(|ini| ini.get_int("RACE", "FIXED_SETUP").unwrap_or(0) > 0),
             out_dir: referee_out(options).unwrap_or_else(|| PathBuf::from("out")),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
@@ -595,12 +598,16 @@ fn ghost_rig(options: &Options) -> Option<Arc<Mutex<GhostRig>>> {
 /// AC's comparative telemetry (`Sim::Sim` makes its recorder for the player's car, offline
 /// or not; rustyAC: never on a server): in a window, and elsewhere when a folder is named.
 fn telemetry_rig(options: &Options, window: bool) -> Option<Arc<Mutex<TelemetryRig>>> {
+    Some(Arc::new(Mutex::new(TelemetryRig::new(telemetry_folder(options, window)?))))
+}
+
+/// Where the telemetry rig keeps its files (none: there is no rig).
+fn telemetry_folder(options: &Options, window: bool) -> Option<PathBuf> {
     let asked = options.telemetry_dir.is_some();
     if options.no_telemetry || options.join.is_some() || options.ac_replay.is_some() || ((options.replay.is_some() || !window) && !asked) {
         return None;
     }
-    let folder = options.telemetry_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("ctelemetry")))).unwrap_or_else(|| PathBuf::from("ctelemetry"));
-    Some(Arc::new(Mutex::new(TelemetryRig::new(folder))))
+    Some(options.telemetry_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("ctelemetry")))).unwrap_or_else(|| PathBuf::from("ctelemetry")))
 }
 
 /// The physics thread's end of the telemetry: a sample after every step, the file at the end.
@@ -1302,7 +1309,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     let rig = replay_rig(options, true);
     let is_online = online.is_some();
     let ghost = ghost_rig(options).filter(|_| !is_online);
-    let sinks = sinks(options, &setup, &feed, &rig, &ghost, &telemetry_rig(options, true).filter(|_| !is_online))?;
+    let telemetry = telemetry_rig(options, true).filter(|_| !is_online);
+    let sinks = sinks(options, &setup, &feed, &rig, &ghost, &telemetry)?;
     let shared = Shared::new();
     // a replay waits for the picture: its first step runs when the first frame is drawn (the
     // frame loop sets the transport's speed)
@@ -1705,6 +1713,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
+            // Task 33: the recorder's best and last laps for the ESC menu's page "Telemetry"
+            if let Some(rig) = &telemetry {
+                if let Ok(rig) = rig.try_lock() {
+                    if let Some(recorder) = &rig.recorder {
+                        gui.telemetry_laps(recorder);
+                    }
+                }
+            }
             // the force feedback app's jobs to the physics thread (its command queue)
             {
                 let jobs = std::mem::take(&mut gui.apps.ffb_jobs);
