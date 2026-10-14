@@ -8,13 +8,13 @@ decompiles of CSP's replacement functions in `dwrite.dll` (RVAs, image base `0x1
 |---|---|
 | [`physics_config_and_api.md`](physics_config_and_api.md) | every switch, every physics config key (170), the data-file extensions of cars and tracks, the physics Lua API (counted), how a car script plugs in, surfaces; the "always / needs extended physics / needs the car's script" table; port difficulty per feature |
 | [`physics_car_core.md`](physics_car_core.md) | the hooks in `Car`, `PhysicsEngine`, `PhysicsDriveThread`, colliders, assists; **the physics tick with CSP's injection points**; the per-car extension object |
-| [`physics_tyres_suspension.md`](physics_tyres_suspension.md) | `Tyre`, thermal model, `Suspension*`, COSMIC, dampers (written in wave 2) |
-| [`physics_powertrain_aero.md`](physics_powertrain_aero.md) | `Drivetrain`, `Engine`, `Turbo`, brakes / ABS / TC, ERS, aero, DRS, setup, the ODE core, ray casts, surfaces (written in wave 2) |
+| [`physics_tyres_suspension.md`](physics_tyres_suspension.md) | `Tyre`, thermal model, `Suspension*`, COSMIC, dampers  |
+| [`physics_powertrain_aero.md`](physics_powertrain_aero.md) | `Drivetrain`, `Engine`, `Turbo`, brakes / ABS / TC, ERS, aero, DRS, setup, the ODE core, ray casts, surfaces  |
 
 ## 1. The three different things CSP does to physics
 
 1. **Always-on changes for every car**, extended physics or not: the **air density law**
-   (barometric formula from the track's altitude and the car's height, temperature and humidity,
+   (standard barometric formula from the track's base altitude plus the car's height and the air temperature with a near-ground blend; humidity and weather pressure are not inputs;
    replacing acs.exe's `1.2922 - 0.0041 T`; the engine sees the same density), **CSP's own ODE build**
    (double precision, libccd, multithreaded collisions and joint solver) instead of acs.exe's
    single-precision ODE, its own physics thread loop (acs.exe is told there are 0 logical CPUs),

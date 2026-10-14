@@ -16,11 +16,11 @@ Read-only work: nothing in the game folder, `Documents\Assetto Corsa`, the Ghidr
 | Step | State |
 |---|---|
 | README, attach and hook mechanism | done: [`attach.md`](attach.md) |
-| Physics extensions | overview + config/API + car core done; tyres/suspension and powertrain/aero in progress |
-| `content_needs.md` | data collected (`content_scan.json`, 6 `fa_2026` layouts with extended physics found); write-up pending |
-| Lua | in progress |
-| Rendering | not started |
-| UI / apps, online, audio, input / FFB, VR / screens, misc | not started |
+| Physics extensions | done: overview + 4 detail files |
+| `content_needs.md` | done (15 cars with `VERSION=extended-N`, 6 extended track layouts, 1 encrypted car); re-check after the rendering files |
+| Lua | done: [`lua.md`](lua.md) |
+| Rendering | in progress (config, core hooks, content hooks being written) |
+| UI / apps, online, audio, input / FFB, VR / screens, misc | in progress |
 | `plan.md` | not started |
 
 Scratch (not committed, gitignored): `re/scratch/csp1/` — index tables of `dwrite.dll`, decompiles of
@@ -117,8 +117,8 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 | Area | File | Status |
 |---|---|---|
 | Attach and hook mechanism | [`attach.md`](attach.md) | done |
-| Physics extensions | [`physics.md`](physics.md) (+ 4 detail files) | overview done; 2 detail files pending |
-| Lua | [`lua.md`](lua.md) | pending |
+| Physics extensions | [`physics.md`](physics.md) (+ 4 detail files) | done |
+| Lua | [`lua.md`](lua.md) | done |
 | Rendering | [`rendering.md`](rendering.md) | pending |
 | UI and apps | [`ui_apps.md`](ui_apps.md) | pending |
 | Online | [`online.md`](online.md) | pending |
@@ -126,5 +126,5 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 | Input and FFB | [`input_ffb.md`](input_ffb.md) | pending |
 | VR and screens | [`vr_screens.md`](vr_screens.md) | pending |
 | Misc | [`misc.md`](misc.md) | pending |
-| Content needs | [`content_needs.md`](content_needs.md) | pending |
+| Content needs | [`content_needs.md`](content_needs.md) | done |
 | Plan | [`plan.md`](plan.md) | pending |
