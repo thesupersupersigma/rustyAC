@@ -54,6 +54,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "realtime" => gui.new_realtime_app(painter),
         "volumes" => gui.new_volumes_app(painter),
         "mgu" => gui.new_mgu_app(painter),
+        "friends" => gui.new_friends_app(painter),
         "eyes" => {
             let (e, fov, pitch) = crate::gui_seq_apps::script(|s| s.eyes).ok_or("app.eyes first")?;
             *EYES.lock().unwrap() = Some(EyesPort { eyes: e, fov, pitch, log: Vec::new(), last: String::new() });

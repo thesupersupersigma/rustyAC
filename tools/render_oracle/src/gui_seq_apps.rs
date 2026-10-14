@@ -104,6 +104,8 @@ pub struct AppScript {
     /// the player's car's eye point, the on-board camera's field of view and pitch (radians)
     /// at the start
     pub eyes: Option<([f32; 3], f32, f32)>,
+    /// `RaceManager::penaltiesEnabled`
+    pub penalties: bool,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -269,6 +271,7 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             }
             script(|s| s.eyes = Some(([e[0], e[1], e[2]], fov, pitch * f32::from_bits(0x3c8e_f998))));
         }
+        "app.penalties" => script(|s| s.penalties = on),
         "app.ersNames" => script(|s| s.ers_names = text.split('|').map(str::to_string).collect()),
         "app.ersState" => {
             let v: Vec<i32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
@@ -449,6 +452,7 @@ pub fn link() -> AppLink {
             onboard_pitch: s.eyes.map_or(0.0, |e| e.2),
             auto_eyes: None,
             ctrl_down: false,
+            penalties_enabled: s.penalties,
             camera_sounds: s.camera.clone(),
             audio_drivers: s.drivers.clone(),
             audio_ini: None,
@@ -914,6 +918,23 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             click(&mut o, 200, 301);
             o.extend([hud("app.focus", 0.0, ""), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "volumes"), Op::Frame(DT), hud("app.visible", 1.0, "volumes"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
+        }
+        "app_friends" => {
+            // the race (no board for a race), a hot lap without penalties, with them (no board
+            // found: no Steam), the two buttons, a time attack, a drift
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "friends"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "friends"));
+            play(&mut o, 0, 60, 20);
+            o.extend([hud("app.session", 4.0, ""), Op::Frame(DT), Op::Frame(DT), hud("app.penalties", 1.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+            let (x, y) = FFB_AT;
+            for (cx, cy) in [(425, 225), (25, 225)] {
+                o.extend([Op::MouseMove(x + cx, y + cy), Op::Frame(DT), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            }
+            o.extend([hud("app.session", 5.0, ""), Op::Frame(DT), hud("app.session", 6.0, ""), Op::Frame(DT), hud("app.session", 7.0, ""), Op::Frame(DT), hud("app.penalties", 0.0, ""), hud("app.session", 4.0, ""), Op::Frame(DT)]);
+            o.extend([Op::MouseMove(600, 400), Op::Frame(DT)]);
+            o.extend([hud("app.visible", 0.0, "friends"), Op::Frame(DT), hud("app.visible", 1.0, "friends"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
         "app_eyes" => {
             // Onboard settings of the F2004 (car.ini DRIVEREYES, ON_BOARD_PITCH_ANGLE -5.264918,

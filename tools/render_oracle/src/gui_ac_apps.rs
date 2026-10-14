@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 20] = [
+pub const APPS: [(&str, usize, usize, usize); 21] = [
+    ("friends", 0x270, 0x1_4032_4fc0, 0x1_4050_d7b8),
     ("eyes", 0x290, 0x1_4030_fa60, 0x1_4050_a450),
     ("mgu", 0x1e0, 0x1_402e_b080, 0x1_4050_45b0),
     ("ballast", 0x1c0, 0x1_402f_0ef0, 0x1_4050_50b0),
@@ -138,6 +139,9 @@ unsafe extern "C" fn set_volume(_this: *mut u8, v: f32) {
         s.log.push(format!("master {:08x}", v.to_bits()));
     }
 }
+
+/// A Steam request of the Friends leaderboard's buttons: nothing (no Steam).
+unsafe extern "C" fn steam_nothing(_this: *mut u8) {}
 
 /// `AudioEngine::getDriverNum` 0x1401f9830: the script's sound cards.
 unsafe extern "C" fn get_driver_num(_this: *mut u8) -> i32 {
@@ -339,6 +343,10 @@ unsafe fn install(game: &Game) {
         (0x1_401f_bdf0, set_volume as *const () as usize),
         (0x1_4012_1f20, execute_on_physics_thread as *const () as usize),
         (0x1_401b_61c0, add_message as *const () as usize),
+        // SteamInterface::resetPlayerLeaderboard / refreshPlayerLeaderboard: Steam requests
+        // that never answer here
+        (0x1_401a_ca60, steam_nothing as *const () as usize),
+        (0x1_401a_c7c0, steam_nothing as *const () as usize),
         (0x1_401f_9830, get_driver_num as *const () as usize),
         (0x1_401f_96d0, get_driver_info as *const () as usize),
     ] {
@@ -553,6 +561,17 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(first_car, 0x1168, car);
                 *BALLAST.lock().unwrap() = Some((car as usize, String::new()));
             }
+            if text == "friends" {
+                // a SteamInterface among the Sim's game objects (the class's own table, for the
+                // app's dynamic cast; its evOnLeaderboardUpdated at +0x58)
+                let steam = a.alloc(0x400);
+                wr(steam, 0, a.va(0x1_404d_a7b8) as usize);
+                let list = a.alloc(0x10);
+                wr(list, 0, steam);
+                wr(sim, 0x40, list);
+                wr(sim, 0x48, list.add(8));
+                wr(sim, 0x50, list.add(8));
+            }
             if text == "eyes" {
                 // Sim: the render-finished node event (+0x170, its evOnRender at +0xe0), the
                 // camera manager (+0x188: cameraOnBoard +0x88 with onBoardFov +0x90 and one
@@ -722,6 +741,8 @@ pub unsafe fn update() {
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut f.log), &line, &mut f.last);
     }
     wr(g.game_block as *mut u8, 0x20, l.game_dt);
+    // RaceManager::penaltiesEnabled
+    wr(rd::<*mut u8>(sim, 0x1a8), 0xa0, l.penalties_enabled as u8);
     // the player's ERS cockpit (CarAvatar: power index +0x1284, recovery +0x1288, engine brake
     // +0x127c, heat charging +0x1280); the ballast app's effect (Car+0x3e30)
     if let (Some(avatar), Some(c)) = (g.cars.first(), l.cars.first()) {
