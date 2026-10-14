@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 8] = [
+pub const APPS: [(&str, usize, usize, usize); 9] = [
+    ("gears", 0x3d8, 0x1_402e_8280, 0x1_4050_3dd0),
     ("tyres", 0x4f0, 0x1_4033_8860, 0x1_4051_1d38),
     ("pedals", 0x1f0, 0x1_402d_bc80, 0x1_4050_2340),
     ("electronics", 0x1e0, 0x1_402e_a500, 0x1_4050_42e8),
@@ -30,7 +31,7 @@ pub const APPS: [(&str, usize, usize, usize); 8] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 4] = ["delta", "tyres", "pedals", "electronics"];
+const TAKES_CAR: [&str; 5] = ["delta", "tyres", "pedals", "electronics", "gears"];
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
 
 /// The apps' tables for `gui_ac::class_of`: every app's form is a "Form" in the dumps.
@@ -193,6 +194,9 @@ unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
 unsafe fn install(game: &Game) {
     // the static `gears` of ACEssentials.obj ("R", "N", "1" …)
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_5240));
+    init();
+    // FormGear.obj's own `gears` ("R", "N", "1" … "10")
+    let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_2b60));
     init();
     for (va, to) in [
         (0x1_400d_8ab0, is_abs_enabled as *const () as usize),
@@ -357,6 +361,14 @@ pub unsafe fn update() {
             wr(*avatar as *mut u8, 0xec8, s.max_fuel);
             wr(*avatar as *mut u8, 0xf70, s.damage_rpm);
             if let Some(c) = l.cars.get(i) {
+                // physicsInfo: kersMaxJ, ersMaxJ, hasKERS, hasERS; the car's folder
+                wr(*avatar as *mut u8, 0xf54, c.kers_max_j);
+                wr(*avatar as *mut u8, 0xf58, c.ers_max_j);
+                wr(*avatar as *mut u8, 0xf60, c.has_kers as u8);
+                wr(*avatar as *mut u8, 0xf61, c.has_ers as u8);
+                if crate::gui_ac::read_wstring((*avatar as *mut u8).add(0x138)) != c.unix_name {
+                    crate::ac::write_wstring(crate::gui_ac_hud::acs(), (*avatar as *mut u8).add(0x138), &c.unix_name);
+                }
                 wr(rd::<*mut u8>(*avatar as *mut u8, 0x210), 0xd8, c.connected as u8);
                 wr(*avatar as *mut u8, 0x129c, c.in_pitlane as u8);
                 wr(*avatar as *mut u8, 0xf66, c.has_drs as u8);

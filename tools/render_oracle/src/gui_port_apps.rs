@@ -22,6 +22,10 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "tyres" => gui.new_tyres_app(painter, read(game_folder.join("system/cfg/tyres_app.ini")).as_ref()),
         "pedals" => gui.new_pedals_app(painter, read(game_folder.join("documents/Assetto Corsa/cfg/controls.ini")).as_ref()),
         "electronics" => gui.new_electronics_app(painter),
+        "gears" => {
+            let engines: Vec<_> = gui.apps.cars.iter().map(|c| read(game_folder.join("content/cars").join(&c.unix_name).join("data/engine.ini"))).collect();
+            gui.new_gears_app(painter, &engines)
+        }
         "laps" => gui.new_laps_app(painter),
         "position" => gui.new_race_position_app(painter),
         "essentials" => gui.new_essentials_app(painter),

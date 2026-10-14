@@ -59,6 +59,9 @@ pub struct AppScript {
     pub drs: bool,
     pub ff_gain: f32,
     pub user_ff_gain: f32,
+    /// the cars' folder; KERS / ERS: there, the lap's energy (J)
+    pub unix: String,
+    pub hybrid: [f32; 4],
     /// every car's timing at every frame of the tapes
     pub timing: Vec<Vec<Timing>>,
     /// the frame of the tapes the session is at
@@ -196,6 +199,11 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.edl" => script(|s| s.edl = if text == "off" { None } else { Some(number) }),
         "app.drs" => script(|s| s.drs = on),
         "app.ff" => script(|s| s.ff_gain = number),
+        "app.unix" => script(|s| s.unix = text.to_string()),
+        "app.hybrid" => {
+            let k = ["hasKers", "hasErs", "kersMaxJ", "ersMaxJ"].iter().position(|n| *n == text).ok_or("app.hybrid: hasKers, hasErs, kersMaxJ or ersMaxJ")?;
+            script(|s| s.hybrid[k] = number);
+        }
         "app.userFf" => script(|s| s.user_ff_gain = number),
         "app.env" => {
             let k = ["air", "road", "grip", "wind", "windDirection"].iter().position(|n| *n == text).ok_or("app.env: air, road, grip, wind or windDirection")?;
@@ -302,6 +310,11 @@ pub fn link() -> AppLink {
                     tc_in_action: s.tc && s.tcs.get(i).and_then(|t| t.get(s.frame.min(t.len().saturating_sub(1)))).is_some_and(|b| *b != 0),
                     driver_name: driver_name(i),
                     connected: true,
+                    unix_name: s.unix.clone(),
+                    has_kers: s.hybrid[0] != 0.0,
+                    has_ers: s.hybrid[1] != 0.0,
+                    kers_max_j: s.hybrid[2],
+                    ers_max_j: s.hybrid[3],
                     compound_short_name: s.compound.clone(),
                     // (only the player's car has the physics the getter asks)
                     ideal_pressure: if i == 0 { [s.ideal_pressure; 4] } else { [0; 4] },
@@ -363,7 +376,7 @@ fn race(o: &mut Vec<Op>, cars: usize) {
     o.push(hud("app.tape", 0.0, tape("oracle/t32/race/rc_race")));
     o.extend([hud("app.session", 3.0, ""), hud("app.laps", 3.0, ""), hud("app.start", 5000.0, ""), hud("app.duration", 0.0, ""), hud("app.sessions", 1.0, "")]);
     // the F2004's tank and engine (car.ini [FUEL] MAX_FUEL, engine.ini [DAMAGE] RPM_THRESHOLD)
-    o.extend([hud("app.maxFuel", 150.0, ""), hud("app.damageRpm", 20200.0, ""), hud("app.abs", 0.0, ""), hud("app.tc", 1.0, "")]);
+    o.extend([hud("app.maxFuel", 150.0, ""), hud("app.damageRpm", 20200.0, ""), hud("app.abs", 0.0, ""), hud("app.tc", 1.0, ""), hud("app.unix", 0.0, "ks_ferrari_f2004")]);
     // Magione's AI spline, the car oracle's weather (26 C air, 30 C road, no wind)
     o.extend([hud("app.spline", 2507.6, ""), hud("app.env", 26.0, "air"), hud("app.env", 30.0, "road"), hud("app.env", 0.97, "grip"), hud("app.env", 0.0, "wind"), hud("app.env", 0.0, "windDirection")]);
 }
@@ -399,6 +412,19 @@ INPUT_METHOD=WHEEL
 [STEER]
 FF_GAIN=0.85
 ").map_err(|e| e.to_string())?;
+    // the gauges' pictures of FormGear
+    let tex = args.root.join("content/texture");
+    std::fs::create_dir_all(&tex).map_err(|e| e.to_string())?;
+    for name in ["rpm_off", "rpm_on", "turbo_off", "turbo_on", "kers_left_off", "kers_right_off", "kersmotor_on", "battery_on", "kersload_on", "kers_inner_right_off"] {
+        let file = format!("content/texture/{name}.png");
+        std::fs::copy(args.game.join(&file), args.root.join(&file)).map_err(|e| format!("{file}: {e}"))?;
+    }
+    // the cars' engine.ini (the repo's cardata): FormGear reads [TURBO_n] DISPLAY_MAX_BOOST
+    for car in ["ks_ferrari_f2004", "ks_ferrari_sf15t"] {
+        let to = args.root.join("content/cars").join(car).join("data");
+        std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+        std::fs::copy(std::path::Path::new("cardata").join(car).join("engine.ini"), to.join("engine.ini")).map_err(|e| format!("{car} engine.ini: {e}"))?;
+    }
     Ok(())
 }
 
@@ -433,7 +459,29 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
             }
         }
-        "app_tyres" | "app_pedals" | "app_electronics" => {
+        "app_gears_ers" | "app_mgu_ers" => {
+            // the SF15-T's lap of Spa with the ERS (Task 16's spa_hybrid_lap), alone
+            let which = leak(app[4..app.len() - 4].to_string());
+            o.push(hud("app.create", 1.0, ""));
+            o.push(hud("app.tape", 0.0, tape("oracle/t32/sf15t/spa_hybrid_lap")));
+            o.extend([hud("app.session", 1.0, ""), hud("app.sessions", 1.0, ""), hud("app.duration", 30.0, ""), hud("app.maxFuel", 120.0, ""), hud("app.damageRpm", 15500.0, ""), hud("app.unix", 0.0, "ks_ferrari_sf15t")]);
+            o.extend([hud("app.hybrid", 0.0, "hasKers"), hud("app.hybrid", 1.0, "hasErs"), hud("app.hybrid", 0.0, "kersMaxJ"), hud("app.hybrid", 4_000_000.0, "ersMaxJ"), hud("app.spline", 7004.0, "")]);
+            o.push(hud("app.new", 0.0, which));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, which));
+            play(&mut o, 0, 400, 40);
+            play(&mut o, 400, 1000, 3);
+            if rest != "short" {
+                play(&mut o, 1000, 3540, 13);
+                o.extend([hud("app.mph", 1.0, ""), hud("app.hybrid", 1.0, "hasKers"), hud("app.hybrid", 400_000.0, "kersMaxJ")]);
+                play(&mut o, 2000, 2300, 6);
+                o.extend([hud("app.mph", 0.0, ""), hud("app.hybrid", 0.0, "ersMaxJ")]);
+                play(&mut o, 2300, 2500, 6);
+                handle(&mut o, 0, 80, 196);
+                o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
+            }
+        }
+        "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {
             let which = leak(app[4..].to_string());
             race(&mut o, 6);
             o.extend([hud("app.compound", 23.0, "S"), hud("app.ff", 0.85, ""), hud("app.userFf", 1.0, "")]);
