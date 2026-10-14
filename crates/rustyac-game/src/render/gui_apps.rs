@@ -56,6 +56,12 @@ pub struct GameApps {
     pub messages: Vec<(String, String)>,
     /// `Game::gameTime.deltaT` of this frame
     pub game_dt: f32,
+    /// the player's car's eye point (model frame), the cockpit view's field of view and pitch
+    /// (the camera's, given at the start; then as Onboard settings changes them), changed in
+    /// this frame; Ctrl held
+    pub onboard: ([f32; 3], f32, f32),
+    pub onboard_changed: bool,
+    pub ctrl_down: bool,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -109,8 +115,6 @@ impl GameApps {
         add(gui, painter, "timeflow", id);
         // FFBForm (after DriverEyesPositioner, not ported): the player's car; its car.ini a
         // loose file of the game's folder or not, its wheel's effects
-        let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
-        let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
         self.ff_upgrades = match &controls {
             Some(ini) if ini.get_string("HEADER", "INPUT_METHOD") == "WHEEL" => {
                 let enhancement = ini.has_section("FF_ENHANCEMENT");
@@ -120,6 +124,25 @@ impl GameApps {
             _ => None,
         };
         gui.apps.ff_upgrades = self.ff_upgrades;
+        let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
+        let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
+        // DriverEyesPositioner (after FormOpenVR and PostProcessFilterSelector, not made here):
+        // the car.ini's eye point and pitch, the game folder's camera_onboard.ini field of view
+        let car_ini = setup.data_paths.first().and_then(|data| crate::input::ini::ControlsIni::load_car_data(&data.join("car.ini")).ok());
+        let onboard_ini = read(setup.game.join("cfg/camera_onboard.ini"));
+        let defaults = rustyac_gui::app_eyes::EyesDefaults {
+            eyes: car_ini.as_ref().map(|ini| {
+                let v: Vec<f32> = ini.get_string("GRAPHICS", "DRIVEREYES").split(',').filter_map(|p| p.trim().parse().ok()).collect();
+                if v.len() == 3 { [v[0], v[1], v[2]] } else { [0.0; 3] }
+            }),
+            pitch_degrees: car_ini.as_ref().map(|ini| ini.get_float("GRAPHICS", "ON_BOARD_PITCH_ANGLE")),
+            fov: onboard_ini.as_ref().map(|ini| ini.get_float("MODE", "FOV").unwrap_or(0.0)),
+        };
+        gui.apps.driver_eyes = self.onboard.0;
+        gui.apps.onboard_fov = self.onboard.1;
+        gui.apps.onboard_pitch = self.onboard.2;
+        let id = gui.new_eyes_app(painter, defaults, loose);
+        add(gui, painter, "eyes", id);
         let id = gui.new_ffb_app(painter, loose, self.ff_upgrades);
         add(gui, painter, "ffb", id);
         let id = gui.new_pedals_app(painter, own_or_documents("controls.ini").as_ref());
@@ -209,6 +232,25 @@ impl GameApps {
                         gains[which.min(3)] = value;
                     }
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetFfUpgrade { which, value });
+                    continue;
+                }
+                AppAction::SetDriverEyes(e) => {
+                    self.onboard.0 = e;
+                    self.onboard_changed = true;
+                    continue;
+                }
+                AppAction::SetOnboardFov(f) => {
+                    self.onboard.1 = f;
+                    self.onboard_changed = true;
+                    continue;
+                }
+                AppAction::SetOnboardPitch(p) => {
+                    self.onboard.2 = p;
+                    self.onboard_changed = true;
+                    continue;
+                }
+                AppAction::DeleteFile { path } => {
+                    let _ = std::fs::remove_file(setup.cfg_dir.join(path.strip_prefix("cfg/").unwrap_or(&path)));
                     continue;
                 }
                 AppAction::SetBallastKg(kg) => {
@@ -330,6 +372,12 @@ impl GameApps {
             use_mph,
             game_dt: self.game_dt,
             ff_upgrades: self.ff_upgrades,
+            driver_eyes: self.onboard.0,
+            onboard_fov: self.onboard.1,
+            onboard_pitch: self.onboard.2,
+            // (rustyAC draws no driver model: no head to put the eyes in)
+            auto_eyes: None,
+            ctrl_down: self.ctrl_down,
             camera_sounds: vec![self.sound.camera; world.len()],
             audio_drivers: self.sound.drivers.clone(),
             audio_ini: self.audio_ini.clone(),

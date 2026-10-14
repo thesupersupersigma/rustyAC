@@ -172,6 +172,9 @@ pub struct CarShape {
     /// cockpit view, radians.
     pub eye: [f32; 3],
     pub eye_pitch: f32,
+    /// The eye point as AC keeps it (`CarAvatar::driverEyesPosition`: car.ini `DRIVEREYES`,
+    /// in the 3D model's frame); `eye` is it in body axes.
+    pub eye_model: [f32; 3],
     /// The cockpit view's vertical field of view, degrees.
     pub onboard_fov: f32,
     /// `car.ini [BASIC] GRAPHICS_PITCH_ROTATION`, radians: the 3D model's pitch against the
@@ -204,6 +207,7 @@ impl CarShape {
             boxes: vec![BoxShape { centre: [0.0, 0.15, 0.1], size: [1.4, 0.5, 4.2], color: [0.75, 0.08, 0.06] }],
             eye: [0.0, 0.6, 0.0],
             eye_pitch: 0.0,
+            eye_model: [0.0, 0.6, 0.0],
             onboard_fov: 54.0,
             graphics_pitch: 0.0,
             graphics_offset: [0.0; 3],
@@ -231,6 +235,32 @@ impl CarShape {
             }
         }
         shape
+    }
+
+    /// The eye point in the 3D model's frame (`driverEyesPosition`), and so in body axes.
+    pub fn set_eye_model(&mut self, q: [f32; 3]) {
+        let (offset, pitch) = (self.graphics_offset, self.graphics_pitch);
+        let (s, c) = pitch.sin_cos();
+        self.eye_model = q;
+        self.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];
+    }
+
+    /// What the Onboard settings app saved in rustyAC's own `cfg`: `cars/<car>/view.ini`
+    /// (`CarAvatar::init3D`'s eye point, `CameraOnBoard::CameraOnBoard`'s pitch in radians) and
+    /// `camera_onboard.ini [MODE] FOV` (0: 54) before the other files.
+    pub fn apply_own_onboard(&mut self, cfg_dir: &Path, unix_name: &str) {
+        if let Ok(ini) = ControlsIni::load(&cfg_dir.join("cars").join(unix_name).join("view.ini")) {
+            if let Some(q) = three(ini.get_string("DRIVER_EYES_POSITION", "DRIVEREYES")) {
+                self.set_eye_model(q);
+            }
+            if ini.has_key("CAMERA", "ON_BOARD_PITCH_ANGLE") {
+                self.eye_pitch = ini.get_float("CAMERA", "ON_BOARD_PITCH_ANGLE");
+            }
+        }
+        if let Ok(ini) = ControlsIni::load(&cfg_dir.join("camera_onboard.ini")) {
+            let fov = ini.get_float("MODE", "FOV");
+            self.onboard_fov = if fov == 0.0 { 54.0 } else { fov };
+        }
     }
 
     /// The shape from a car's data folder: the collision boxes of `colliders.ini` (what the
@@ -273,8 +303,7 @@ impl CarShape {
             shape.graphics_pitch = pitch;
             shape.graphics_offset = offset;
             if let Some(q) = three(ini.get_string("GRAPHICS", "DRIVEREYES")) {
-                let (s, c) = pitch.sin_cos();
-                shape.eye = [q[0] + offset[0], q[1] * c - q[2] * s + offset[1], q[1] * s + q[2] * c + offset[2]];
+                shape.set_eye_model(q);
             }
             shape.eye_pitch = ini.get_float("GRAPHICS", "ON_BOARD_PITCH_ANGLE") * 0.017_453;
             // `CameraDrivableManager::CameraDrivableManager` @ 0x1400c4a80: a missing position

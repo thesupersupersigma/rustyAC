@@ -48,6 +48,13 @@ pub enum AppAction {
     AddMessage { title: String, text: String },
     /// the player's car's `Car::ballastKG` (`CarAvatar::setBallastKG`'s job)
     SetBallastKg(f32),
+    /// the player's car's `CarAvatar::driverEyesPosition` (the 3D model's frame)
+    SetDriverEyes([f32; 3]),
+    /// `CameraOnBoard::onBoardFov` (degrees), `customCameraSettings[0].pitch` (radians)
+    SetOnboardFov(f32),
+    SetOnboardPitch(f32),
+    /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
+    DeleteFile { path: String },
 }
 
 /// A level of `MixVolumes` (`CarAudioFMOD+0x118`).
@@ -254,6 +261,14 @@ pub struct AppLink {
     /// ABS; none: the player drives without a wheel)
     pub game_dt: f32,
     pub ff_upgrades: Option<[f32; 4]>,
+    /// the player's car's `driverEyesPosition`, `CameraOnBoard::onBoardFov`,
+    /// `customCameraSettings[0].pitch`; `DriverModel::getEyesPosition` in the body node's frame
+    /// (none: no driver model); Ctrl held (`GetAsyncKeyState(VK_CONTROL)`)
+    pub driver_eyes: [f32; 3],
+    pub onboard_fov: f32,
+    pub onboard_pitch: f32,
+    pub auto_eyes: Option<[f32; 3]>,
+    pub ctrl_down: bool,
     pub actions: Vec<AppAction>,
 }
 

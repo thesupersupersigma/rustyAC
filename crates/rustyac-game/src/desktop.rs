@@ -1329,7 +1329,10 @@ fn run_window(options: &Options) -> Result<(), String> {
     };
     let other_infos = shared.other_infos.lock().unwrap().clone();
     // every car's shape (its eye point and its cameras), the player's first
-    let shapes: Vec<CarShape> = std::iter::once(&car_info).chain(&other_infos).map(CarShape::of).collect();
+    let mut shapes: Vec<CarShape> = std::iter::once(&car_info).chain(&other_infos).map(CarShape::of).collect();
+    // what the Onboard settings app saved in rustyAC's own cfg (the player's car)
+    let player_unix = Path::new(&car_info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    shapes[0].apply_own_onboard(&cfg_dir(options), &player_unix);
     let car_names: Vec<String> = std::iter::once(&car_info).chain(&other_infos).map(|info| Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone())).collect();
     let mut focus = Focus::new(options.focus.min(other_infos.len()));
     let mut focus_script = options.focus_script.clone();
@@ -1897,6 +1900,19 @@ fn run_window(options: &Options) -> Result<(), String> {
             focus.index = 0;
         }
         let view = world[focus.index];
+        // Onboard settings: the player's eye point, field of view and pitch as the app left them
+        if let Some(gui) = renderer.gui() {
+            if gui.apps.made.is_empty() {
+                gui.apps.onboard = (shapes[0].eye_model, shapes[0].onboard_fov, shapes[0].eye_pitch);
+            } else if std::mem::take(&mut gui.apps.onboard_changed) {
+                let (eyes, fov, pitch) = gui.apps.onboard;
+                shapes[0].set_eye_model(eyes);
+                shapes[0].onboard_fov = fov;
+                shapes[0].eye_pitch = pitch;
+            }
+            // SAFETY: a plain call.
+            gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
+        }
         let frame = camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32());
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);
