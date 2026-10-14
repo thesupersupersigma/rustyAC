@@ -116,6 +116,8 @@ pub struct Gui {
     pub setup: crate::setup_car::SetupLink,
     /// `SetupTab::fixedVector`: the spinners a fixed setup has set
     pub setup_fixed: Vec<Id>,
+    /// what the apps read of `Sim` and ask of it
+    pub apps: crate::apps::AppLink,
 }
 
 impl Gui {
@@ -156,6 +158,7 @@ impl Gui {
             setup_car: None,
             setup: crate::setup_car::SetupLink::default(),
             setup_fixed: Vec::new(),
+            apps: crate::apps::AppLink::default(),
         };
         gui.fonts.push(Font::new(painter, "", FontType::Proportional, 16.0, false, false));
         gui.taskbar = gui.new_taskbar(painter);
@@ -248,7 +251,12 @@ impl Gui {
             Class::TaskBarIcon => self.icon_render(id, dt, painter),
             Class::Widget => self.widget_render(id, dt, painter),
             Class::Menu => self.menu_render(id, dt, painter),
-            Class::Control | Class::Form => self.control_render(id, dt, painter),
+            Class::Form => {
+                if self.with_app(id, |app, gui| app.render(gui, id, dt, painter)).is_none() {
+                    self.control_render(id, dt, painter)
+                }
+            }
+            Class::Control => self.control_render(id, dt, painter),
         }
     }
 
@@ -264,7 +272,11 @@ impl Gui {
     /// vtable +0x40.
     pub fn on_visible_changed(&mut self, id: Id, visible: bool) {
         match self.class(id) {
-            Class::Form => self.form_on_visible_changed(id),
+            Class::Form => {
+                if self.with_app(id, |app, gui| app.on_visible_changed(gui, id, visible)).is_none() {
+                    self.form_on_visible_changed(id)
+                }
+            }
             Class::Widget => self.widget_on_visible_changed(id, visible),
             Class::Menu => self.menu_on_visible_changed(id, visible),
             _ => self.control_on_visible_changed(id, visible),
@@ -275,6 +287,7 @@ impl Gui {
     pub fn on_mouse_down(&mut self, id: Id, e: &MouseEvent) -> bool {
         match self.class(id) {
             Class::GameScreen if !self.game_screen_data(id).app_interaction_enabled => false,
+            Class::Form if self.is_app(id) => self.with_app(id, |app, gui| app.on_mouse_down(gui, id, e)).unwrap_or(false),
             Class::Widget => self.widget_on_mouse_down(id, e),
             Class::Menu => self.menu_on_mouse_down(id, e),
             _ => self.control_on_mouse_down(id, e),
@@ -285,6 +298,9 @@ impl Gui {
     pub fn on_mouse_up(&mut self, id: Id, e: &MouseEvent) {
         match self.class(id) {
             Class::GameScreen if !self.game_screen_data(id).app_interaction_enabled => {}
+            Class::Form if self.is_app(id) => {
+                self.with_app(id, |app, gui| app.on_mouse_up(gui, id, e));
+            }
             Class::Widget => self.widget_on_mouse_up(id, e),
             _ => self.control_on_mouse_up(id, e),
         }
@@ -294,7 +310,11 @@ impl Gui {
     pub fn on_mouse_move(&mut self, id: Id, e: &MouseEvent) {
         match self.class(id) {
             Class::GameScreen if !self.game_screen_data(id).app_interaction_enabled => {}
-            Class::Form => self.form_on_mouse_move(id, e),
+            Class::Form => {
+                if self.with_app(id, |app, gui| app.on_mouse_move(gui, id, e)).is_none() {
+                    self.form_on_mouse_move(id, e)
+                }
+            }
             Class::Taskbar => self.taskbar_on_mouse_move(id, e),
             Class::TaskBarIcon => self.icon_on_mouse_move(id, e),
             Class::Widget => self.widget_on_mouse_move(id, e),
@@ -307,6 +327,9 @@ impl Gui {
     pub fn on_mouse_wheel(&mut self, id: Id, e: &MouseEvent) {
         match self.class(id) {
             Class::GameScreen if !self.game_screen_data(id).app_interaction_enabled => {}
+            Class::Form if self.is_app(id) => {
+                self.with_app(id, |app, gui| app.on_mouse_wheel(gui, id, e));
+            }
             Class::Widget => self.widget_on_mouse_wheel(id, e),
             _ => self.control_on_mouse_wheel(id, e),
         }
@@ -347,7 +370,11 @@ impl Gui {
     /// vtable +0x98.
     pub fn scale_by_mult(&mut self, id: Id, m: f32) {
         match self.class(id) {
-            Class::Form => self.form_scale_by_mult(id, m),
+            Class::Form => {
+                if self.with_app(id, |app, gui| app.scale_by_mult(gui, id, m)).is_none() {
+                    self.form_scale_by_mult(id, m)
+                }
+            }
             Class::Widget => self.widget_scale_by_mult(id, m),
             _ => self.control_scale_by_mult(id, m),
         }

@@ -9,6 +9,11 @@
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments, clippy::nonminimal_bool, clippy::type_complexity, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop, clippy::manual_clamp, clippy::neg_multiply, clippy::collapsible_match)]
 
 pub mod acos;
+pub mod app_delta;
+pub mod app_essentials;
+pub mod app_laps;
+pub mod app_position;
+pub mod apps;
 pub mod control;
 pub mod end_session;
 pub mod esc_menu;

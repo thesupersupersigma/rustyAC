@@ -37,6 +37,8 @@ pub struct FormData {
     pub zoom_out_icon: Option<Id>,
     pub header_height: f32,
     pub scale_step: f32,
+    /// the members and overrides of the app this form is (none: a plain form)
+    pub app: Option<Box<dyn crate::apps::App>>,
 }
 
 pub struct GameScreenData {
@@ -85,6 +87,7 @@ impl Gui {
             zoom_out_icon: None,
             header_height: 32.0,
             scale_step: 0.25,
+            app: None,
         }));
         self.controls[form].back_color = self.get_skin_color("FORM", "BACK");
         self.controls[form].border_color = self.get_skin_color("FORM", "BORDER");
