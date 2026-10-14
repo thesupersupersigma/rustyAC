@@ -92,7 +92,7 @@ unsafe extern "C" fn not_called() {
 
 pub unsafe fn class_of(game: &Game, object: *const u8) -> &'static str {
     let table: usize = rd(object, 0);
-    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).chain(crate::gui_ac_menu::CLASSES.iter()).chain(crate::gui_ac_setup::CLASSES.iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
+    CLASSES.iter().chain(crate::gui_ac2::CLASSES.iter()).chain(crate::gui_ac_menu::CLASSES.iter()).chain(crate::gui_ac_setup::CLASSES.iter()).chain(crate::gui_ac_apps::classes().iter()).find(|c| game.acs.va(c.3) == table).map(|c| c.0).unwrap_or("?")
 }
 
 pub unsafe fn children(object: *const u8) -> Vec<*mut u8> {
@@ -537,6 +537,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     // Game::onIdle 0x140242730: the scene (none here), the screen-space mode, the GUI
                     call0(VA_GRAPHICS_BEGIN_SCENE);
                     crate::gui_ac_hud::update(&game, *dt);
+                    crate::gui_ac_apps::update();
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     crate::gui_ac_menu::client_present(true);
                     crate::gui_ac_esc::sun(&game, true);

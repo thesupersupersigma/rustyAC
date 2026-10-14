@@ -1099,7 +1099,11 @@ impl<'a> MultiWorld<'a> {
                 wr(device, DEV_GAS, [0.0f32, 0.0, 0.0, 1.0, 0.0]);
                 wr(device, DEV_REQUESTED_GEAR, -1i32);
                 wr(car, CAR_CONTROLS_PROVIDER, device);
-                wr(car, CAR_PERFORMANCE_METER_IS_ENABLED, 0u8);
+                // (Task 32: CAR_ORACLE_PERF_METER=1 leaves the game's PerformanceMeter on, so that
+                // a tape of the session has the delta the app "Performance Delta" shows)
+                if std::env::var("CAR_ORACLE_PERF_METER").map_or(true, |v| v != "1") {
+                    wr(car, CAR_PERFORMANCE_METER_IS_ENABLED, 0u8);
+                }
                 wr(car, CAR_TELEMETRY_IS_ENABLED, 0u8);
                 // the automatic clutch and gearbox (CarAvatar::setAutoClutchEnabled, the assist option)
                 wr(car, CAR_AUTOCLUTCH + 0xc, 1u8);

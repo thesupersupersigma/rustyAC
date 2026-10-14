@@ -15,9 +15,17 @@ pub struct HudPort {
     pub message: Option<SystemMessage>,
     pub notification: Option<SystemNotification>,
     pub more: crate::gui_port_hud2::More,
+    pub apps: crate::gui_port_apps::AppsPort,
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if what.starts_with("app.") {
+        if crate::gui_seq_apps::app_input(what, number, text)? {
+            crate::gui_port_apps::sync(gui);
+            return Ok(());
+        }
+        return crate::gui_port_apps::call(&mut hud.apps, gui, painter, game_folder, screen, what, number, text);
+    }
     if what.starts_with("menu.") || what.starts_with("pit.") || what.starts_with("race.") {
         if crate::gui_seq_menu::menu_input(what, number, text) {
             return Ok(());
@@ -57,6 +65,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
 
 pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
     crate::gui_port_menu::sync(hud, gui);
+    crate::gui_port_apps::sync(gui);
     let (Some(message), Some(notification)) = (&mut hud.message, &mut hud.notification) else { return };
     message.update(gui, dt, &hud.input);
     notification.update(gui, dt, &hud.input);

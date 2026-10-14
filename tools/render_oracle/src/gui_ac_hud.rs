@@ -56,6 +56,10 @@ pub fn input<T>(f: impl FnOnce(&mut HudInput) -> T) -> T {
     f(INPUT.lock().unwrap().get_or_insert_with(HudInput::default))
 }
 
+pub fn set_acs(acs: &Acs) {
+    ACS.store(acs as *const Acs as usize, Ordering::SeqCst);
+}
+
 pub unsafe fn acs() -> &'static Acs {
     &*(ACS.load(Ordering::SeqCst) as *const Acs)
 }
@@ -117,7 +121,7 @@ unsafe extern "C" fn get_last_lap(_this: *mut u8, out: *mut u8, car: *mut u8) ->
 }
 
 /// In place of `acTranslate`: the string as it is (what the game gives for English).
-unsafe extern "C" fn ac_translate(out: *mut u8, text: *const u8) -> *mut u8 {
+pub unsafe extern "C" fn ac_translate(out: *mut u8, text: *const u8) -> *mut u8 {
     write_wstring(acs(), out, &read_wstring(text));
     out
 }
@@ -165,6 +169,13 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
+    if what.starts_with("app.") {
+        if crate::gui_seq_apps::app_input(what, number, text)? {
+            crate::gui_ac_apps::update();
+            return Ok(());
+        }
+        return crate::gui_ac_apps::call(game, gui, screen, what, number, text);
+    }
     if what.starts_with("menu.") || what.starts_with("pit.") || what.starts_with("race.") {
         if crate::gui_seq_menu::menu_input(what, number, text) {
             return Ok(());
