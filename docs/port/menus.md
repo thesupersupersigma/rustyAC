@@ -4,6 +4,9 @@
 
 State after the last commit (v0.30.0):
 
+(Since then Task 31 has ported the ESC menu's pages Setup and Time and the session that
+begins in the ESC menu: see [setup.md](setup.md).)
+
 - **Done, proven against the game's own code and wired into `rustyac.exe`:** the pause menu,
   the pit menu and the pit stop's panel, the end-of-session screen, the shared leaderboard
   table with its three users (TAB, the Leaderboard app, the results), the overlay leaderboard
