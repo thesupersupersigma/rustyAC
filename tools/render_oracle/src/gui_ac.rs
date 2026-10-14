@@ -73,9 +73,20 @@ pub unsafe fn read_wstring(at: *const u8) -> String {
     String::from_utf16_lossy(std::slice::from_raw_parts(data, size))
 }
 
-/// The body of our handler on `evClicked` (slot 2 of a `std::function`'s implementation).
-unsafe extern "C" fn click_recorder(_this: *mut u8, event: *const u8) {
+/// Every control the oracle hooked.
+static KNOWN: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
+
+/// The body of our handler on `evClicked` (slot 2 of a `std::function`'s implementation; the
+/// object of a control's click recorder has the control at +8). A click whose event names no
+/// control the oracle knows is one an app made itself with an event it did not fill in
+/// (`DriverEyesPositioner::render` clicks its held arrows again every frame).
+unsafe extern "C" fn click_recorder(this: *mut u8, event: *const u8) {
     let control: *const u8 = rd(event, 0);
+    let own: *const u8 = rd(this, 8);
+    if !own.is_null() && !control.is_null() && !KNOWN.lock().unwrap().as_ref().is_some_and(|k| k.contains(&(control as usize))) {
+        EVENTS.lock().unwrap().push(format!("click \"{}\" by the app itself", read_wstring(own.add(8))));
+        return;
+    }
     let (x, y): (i32, i32) = (rd(event, 8), rd(event, 0xc));
     let name = if control.is_null() { String::from("<null>") } else { read_wstring(control.add(8)) };
     if crate::gui_ac_esc::synthetic() {
@@ -213,6 +224,7 @@ impl Side<'_> {
         if !self.hooked.insert(control as usize) {
             return;
         }
+        KNOWN.lock().unwrap().get_or_insert_with(HashSet::new).insert(control as usize);
         self.hook_event(control, 0xc8, click_recorder);
         for (offset, callback) in crate::gui_ac2::class_events(self.class_of(control)) {
             self.hook_event(control, offset, callback);
@@ -235,8 +247,15 @@ impl Side<'_> {
     }
 
     unsafe fn hook_event(&mut self, control: *mut u8, at: usize, callback: crate::gui_ac2::Callback) {
-        let recorder = self.recorder(callback);
+        let mut recorder = self.recorder(callback);
         let acs = &self.game.acs;
+        if at == 0xc8 && callback as *const () as usize == click_recorder as *const () as usize {
+            // the click recorder's own object, with its control
+            let own = acs.alloc(0x10);
+            wr(own, 0, rd::<usize>(recorder, 0));
+            wr(own, 8, control);
+            recorder = own;
+        }
         let (begin, end): (*mut u8, *mut u8) = (rd(control, at), rd(control, at + 8));
         let count = if begin.is_null() { 0 } else { end.offset_from(begin) as usize / 0x28 };
         let fresh = acs.alloc((count + 1) * 0x28);

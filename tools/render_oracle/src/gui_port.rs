@@ -295,7 +295,9 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                 crate::gui_compare::frame_done(args, name, "port", frame, &capture.text, capture.draws, width, height, &pixels, &mut outcome)?;
                 outcome.state.push_str(&format!("frame {frame}\n"));
                 for event in &gui.fired[fired..] {
-                    if event.local_x == i32::MIN {
+                    if event.local_x == i32::MIN + 1 {
+                        outcome.state.push_str(&format!("event click \"{}\" by the app itself\n", crate::gui_port2::name(&gui, event.control)));
+                    } else if event.local_x == i32::MIN {
                         outcome.state.push_str(&format!("event click \"{}\" by the menu itself\n", crate::gui_port2::name(&gui, event.control)));
                     } else {
                         outcome.state.push_str(&format!("event click \"{}\" {} {}\n", crate::gui_port2::name(&gui, event.control), event.local_x, event.local_y));

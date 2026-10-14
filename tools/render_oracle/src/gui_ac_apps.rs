@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 19] = [
+pub const APPS: [(&str, usize, usize, usize); 20] = [
+    ("eyes", 0x290, 0x1_4030_fa60, 0x1_4050_a450),
     ("mgu", 0x1e0, 0x1_402e_b080, 0x1_4050_45b0),
     ("ballast", 0x1c0, 0x1_402f_0ef0, 0x1_4050_50b0),
     ("ffb", 0x268, 0x1_4031_4a10, 0x1_4050_b110),
@@ -41,7 +42,7 @@ pub const APPS: [(&str, usize, usize, usize); 19] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 8] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast"];
+const TAKES_CAR: [&str; 9] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -90,6 +91,17 @@ struct Ffb {
 
 static FFB: Mutex<Option<Ffb>> = Mutex::new(None);
 
+/// Onboard settings' session: the avatar, `CameraOnBoard`, the messages, the last line.
+#[derive(Default)]
+struct EyesGame {
+    avatar: usize,
+    cob: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static EYES: Mutex<Option<EyesGame>> = Mutex::new(None);
+
 /// The player's `Car` block of the MGU and ballast apps, the last line of `effects_game.txt`.
 static BALLAST: Mutex<Option<(usize, String)>> = Mutex::new(None);
 
@@ -115,6 +127,8 @@ unsafe extern "C" fn add_message(_this: *mut u8, title: *const u8, text: *const 
     let line = format!("message {}|{}", crate::gui_ac::read_wstring(title), crate::gui_ac::read_wstring(text));
     if let Some(f) = FFB.lock().unwrap().as_mut() {
         f.log.push(line);
+    } else if let Some(e) = EYES.lock().unwrap().as_mut() {
+        e.log.push(line);
     }
 }
 
@@ -539,6 +553,32 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(first_car, 0x1168, car);
                 *BALLAST.lock().unwrap() = Some((car as usize, String::new()));
             }
+            if text == "eyes" {
+                // Sim: the render-finished node event (+0x170, its evOnRender at +0xe0), the
+                // camera manager (+0x188: cameraOnBoard +0x88 with onBoardFov +0x90 and one
+                // customCameraSettings {pitch, yaw} per car at +0xc8; sim +0x110; mode +0x120 =
+                // 1, not on board), the system message (+0x198); the avatar's eye point (+0x218)
+                let (e, fov, pitch) = crate::gui_seq_apps::script(|s| s.eyes).ok_or("app.eyes first")?;
+                let cars = GAME.lock().unwrap().as_ref().map(|g| g.cars.len()).unwrap_or(1);
+                wr(sim, 0x170, a.alloc(0x200));
+                if rd::<usize>(sim, 0x188) == 0 {
+                    wr(sim, 0x188, a.alloc(0x200));
+                }
+                let camera: *mut u8 = rd(sim, 0x188);
+                let cob = a.alloc(0x200);
+                wr(cob, 0x90, fov);
+                let settings = a.alloc(cars.max(1) * 8);
+                wr(settings, 0, pitch);
+                wr(cob, 0xc8, settings);
+                wr(cob, 0xd0, settings.add(cars * 8));
+                wr(cob, 0xd8, settings.add(cars * 8));
+                wr(camera, 0x88, cob);
+                wr(camera, 0x110, sim);
+                wr(camera, 0x120, 1i32);
+                wr(sim, 0x198, a.alloc(0x100));
+                wr(first_car, 0x218, e);
+                *EYES.lock().unwrap() = Some(EyesGame { avatar: first_car as usize, cob: cob as usize, ..EyesGame::default() });
+            }
             if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
@@ -690,6 +730,12 @@ pub unsafe fn update() {
         wr(*avatar as *mut u8, 0x1288, c.ers_recovery);
         wr(*avatar as *mut u8, 0x127c, c.engine_brake_setting);
         wr(*avatar as *mut u8, 0x1280, c.ers_heat_charging as u8);
+    }
+    if let Some(e) = EYES.lock().unwrap().as_mut() {
+        let eyes: [f32; 3] = rd(e.avatar as *mut u8, 0x218);
+        let line = crate::gui_port_apps::eyes_line(eyes, rd(e.cob as *mut u8, 0x90), rd(rd::<*mut u8>(e.cob as *mut u8, 0xc8), 0));
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut e.log), &line, &mut e.last);
     }
     if let Some((car, last)) = BALLAST.lock().unwrap().as_mut() {
         let line = format!("ballast {:08x}", rd::<f32>(*car as *mut u8, 0x3e30).to_bits());

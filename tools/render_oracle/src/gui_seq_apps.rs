@@ -101,6 +101,9 @@ pub struct AppScript {
     /// the apps), its cockpit's ERS power index, recovery, engine brake and heat charging
     pub ers_names: Vec<String>,
     pub ers_state: [i32; 4],
+    /// the player's car's eye point, the on-board camera's field of view and pitch (radians)
+    /// at the start
+    pub eyes: Option<([f32; 3], f32, f32)>,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -255,6 +258,17 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.focus" => script(|s| s.focused = number as usize),
         "app.drivers" => script(|s| s.drivers = text.split('|').map(str::to_string).collect()),
         "app.ffMult" => script(|s| s.ff_mult = number),
+        "app.eyes" => {
+            // "x,y,z|fov|pitch in degrees" (car.ini's ON_BOARD_PITCH_ANGLE * 0.017453f)
+            let parts: Vec<&str> = text.split('|').collect();
+            let e: Vec<f32> = parts.first().map(|p| p.split(',').filter_map(|v| v.trim().parse().ok()).collect()).unwrap_or_default();
+            let fov: f32 = parts.get(1).and_then(|v| v.parse().ok()).ok_or("app.eyes: x,y,z|fov|pitch")?;
+            let pitch: f32 = parts.get(2).and_then(|v| v.parse().ok()).ok_or("app.eyes: x,y,z|fov|pitch")?;
+            if e.len() != 3 {
+                return Err("app.eyes: x,y,z|fov|pitch".to_string());
+            }
+            script(|s| s.eyes = Some(([e[0], e[1], e[2]], fov, pitch * f32::from_bits(0x3c8e_f998))));
+        }
         "app.ersNames" => script(|s| s.ers_names = text.split('|').map(str::to_string).collect()),
         "app.ersState" => {
             let v: Vec<i32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
@@ -430,6 +444,11 @@ pub fn link() -> AppLink {
             use_mph: s.use_mph,
             game_dt: DT,
             ff_upgrades: s.ff_upgrades,
+            driver_eyes: s.eyes.map_or([0.0; 3], |e| e.0),
+            onboard_fov: s.eyes.map_or(0.0, |e| e.1),
+            onboard_pitch: s.eyes.map_or(0.0, |e| e.2),
+            auto_eyes: None,
+            ctrl_down: false,
             camera_sounds: s.camera.clone(),
             audio_drivers: s.drivers.clone(),
             audio_ini: None,
@@ -441,6 +460,27 @@ pub fn link() -> AppLink {
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
 /// its pixels, and `data\map.ini`, byte for byte).
 pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if name.starts_with("app_eyes") {
+        let mut same = true;
+        let docs = args.root.join("documents/Assetto Corsa/cfg");
+        let port = args.root.join("port_files/documents/Assetto Corsa/cfg");
+        for (what, a, b) in [
+            ("cfg/cars/ks_ferrari_f2004/view.ini", docs.join("cars/ks_ferrari_f2004/view.ini"), port.join("cars/ks_ferrari_f2004/view.ini")),
+            ("cfg/camera_onboard.ini", docs.join("camera_onboard.ini"), port.join("camera_onboard.ini")),
+            ("content/cars/ks_ferrari_f2004/data/car.ini", args.root.join("content/cars/ks_ferrari_f2004/data/car.ini"), args.root.join("port_files/content/cars/ks_ferrari_f2004/data/car.ini")),
+            ("content/cars/ks_ferrari_f2004/data/dash_cam.ini", args.root.join("content/cars/ks_ferrari_f2004/data/dash_cam.ini"), args.root.join("port_files/content/cars/ks_ferrari_f2004/data/dash_cam.ini")),
+            ("the on-board camera's settings (the eye point, the field of view, the pitch, the messages)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
+        ] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if name.starts_with("app_ballast") {
         let (a, b) = (std::fs::read(args.root.join("effects_game.txt")), std::fs::read(args.root.join("effects_port.txt")));
         return Ok(match (a, b) {
@@ -641,7 +681,17 @@ FF_GAIN=0.85
     // car.ini a loose file (FFBForm's "Auto FFB" and "Quick Adjust" are only for such a car)
     std::fs::copy(docs.join("controls.ini"), port_docs.join("controls.ini")).map_err(|e| e.to_string())?;
     let car_ini = "content/cars/ks_ferrari_f2004/data/car.ini";
-    if name.starts_with("app_ffb") {
+    // the Onboard settings' files: the game folder's cfg/camera_onboard.ini, no view.ini, no
+    // dash_cam.ini and no Documents camera_onboard.ini on either side
+    std::fs::copy(args.game.join("cfg/camera_onboard.ini"), args.root.join("cfg/camera_onboard.ini")).map_err(|e| format!("camera_onboard.ini: {e}"))?;
+    for dir in [&docs, &port_docs] {
+        let _ = std::fs::remove_file(dir.join("cars/ks_ferrari_f2004/view.ini"));
+        let _ = std::fs::remove_file(dir.join("camera_onboard.ini"));
+    }
+    for root in [args.root.clone(), args.root.join("port_files")] {
+        let _ = std::fs::remove_file(root.join("content/cars/ks_ferrari_f2004/data/dash_cam.ini"));
+    }
+    if name.starts_with("app_ffb") || name.starts_with("app_eyes") {
         for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
             std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
             std::fs::copy("cardata/ks_ferrari_f2004/car.ini", &to).map_err(|e| format!("car.ini: {e}"))?;
@@ -864,6 +914,37 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             click(&mut o, 200, 301);
             o.extend([hud("app.focus", 0.0, ""), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "volumes"), Op::Frame(DT), hud("app.visible", 1.0, "volumes"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
+        }
+        "app_eyes" => {
+            // Onboard settings of the F2004 (car.ini DRIVEREYES, ON_BOARD_PITCH_ANGLE -5.264918,
+            // the game's camera_onboard.ini FOV 56), its car.ini a loose file
+            race(&mut o, 6);
+            o.push(hud("app.eyes", 0.0, "0.000573,0.682822,-0.0663019|56|-5.264918"));
+            o.push(hud("app.new", 0.0, "eyes"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "eyes"));
+            play(&mut o, 0, 60, 20);
+            let (x, y) = FFB_AT;
+            let hold = |o: &mut Vec<Op>, cx: i32, cy: i32, frames: usize| {
+                o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy)]);
+                o.extend(std::iter::repeat_n(Op::Frame(DT), frames));
+                o.extend([Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            };
+            let long = rest != "short";
+            // the eye up, left; the seat back; the field of view wider, narrower; the view down
+            for (cx, cy, n) in [(90, 80, 20), (40, 130, 10), (339, 145, 15), (339, 75, 30), (210, 75, 10), (210, 180, 20), (140, 130, 6), (90, 180, 8)] {
+                hold(&mut o, cx, cy, if long { n * 3 } else { n });
+            }
+            // Save car.ini, Save Dash (both delete view.ini), more, then Save (view.ini and
+            // camera_onboard.ini), Reset
+            hold(&mut o, 105, 221, 1);
+            hold(&mut o, 305, 221, 1);
+            hold(&mut o, 339, 145, 9);
+            hold(&mut o, 125, 260, 1);
+            play(&mut o, 60, 120, 10);
+            hold(&mut o, 275, 260, 1);
+            o.extend([Op::MouseMove(600, 400), Op::Frame(DT)]);
+            o.extend([hud("app.visible", 0.0, "eyes"), Op::Frame(DT), hud("app.visible", 1.0, "eyes"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
         "app_ballast" => {
             // the ballast spinner of the player's car: up 3, its arrows held, down to 0 and below

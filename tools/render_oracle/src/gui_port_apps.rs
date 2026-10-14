@@ -54,6 +54,21 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "realtime" => gui.new_realtime_app(painter),
         "volumes" => gui.new_volumes_app(painter),
         "mgu" => gui.new_mgu_app(painter),
+        "eyes" => {
+            let (e, fov, pitch) = crate::gui_seq_apps::script(|s| s.eyes).ok_or("app.eyes first")?;
+            *EYES.lock().unwrap() = Some(EyesPort { eyes: e, fov, pitch, log: Vec::new(), last: String::new() });
+            sync(gui);
+            let unix = gui.apps.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
+            let car_ini = game_folder.join(format!("content/cars/{unix}/data/car.ini"));
+            let car = read(car_ini.clone());
+            let onboard = read(game_folder.join("cfg/camera_onboard.ini"));
+            let defaults = rustyac_gui::app_eyes::EyesDefaults {
+                eyes: car.as_ref().map(|i| i.get_float3("GRAPHICS", "DRIVEREYES").unwrap_or([0.0; 3])),
+                pitch_degrees: car.as_ref().map(|i| i.get_float("GRAPHICS", "ON_BOARD_PITCH_ANGLE").unwrap_or(0.0)),
+                fov: onboard.as_ref().map(|i| i.get_float("MODE", "FOV").unwrap_or(0.0)),
+            };
+            gui.new_eyes_app(painter, defaults, car_ini.is_file())
+        }
         "ballast" => {
             *BALLAST.lock().unwrap() = Some((0.0, String::new()));
             gui.new_ballast_app(painter)
@@ -96,7 +111,9 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
     for action in std::mem::take(&mut gui.apps.actions) {
         match action {
             AppAction::WriteFile { path, bytes } => {
-                let target = root.join("port_files").join(path.replace('\\', "/"));
+                // (a settings file under Documents, a track's map under the game's folder)
+                let path = path.replace('\\', "/");
+                let target = if path.starts_with("cfg/") { docs.join(&path) } else { root.join("port_files").join(&path) };
                 std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
                 std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
             }
@@ -138,6 +155,24 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     u[which.min(3)] = value;
                 }
             }),
+            AppAction::DeleteFile { path } => {
+                let _ = std::fs::remove_file(docs.join(path));
+            }
+            AppAction::SetDriverEyes(e) => {
+                if let Some(s) = EYES.lock().unwrap().as_mut() {
+                    s.eyes = e;
+                }
+            }
+            AppAction::SetOnboardFov(f) => {
+                if let Some(s) = EYES.lock().unwrap().as_mut() {
+                    s.fov = f;
+                }
+            }
+            AppAction::SetOnboardPitch(p) => {
+                if let Some(s) = EYES.lock().unwrap().as_mut() {
+                    s.pitch = p;
+                }
+            }
             AppAction::SetBallastKg(kg) => {
                 if let Some(b) = BALLAST.lock().unwrap().as_mut() {
                     b.0 = kg;
@@ -146,6 +181,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             AppAction::AddMessage { title, text } => ffb(|f| {
                 if let Some(f) = f {
                     f.log.push(format!("message {title}|{text}"));
+                } else if let Some(s) = EYES.lock().unwrap().as_mut() {
+                    s.log.push(format!("message {title}|{text}"));
                 }
             }),
         }
@@ -204,6 +241,22 @@ impl FfbPort {
 
 static FFB: std::sync::Mutex<Option<FfbPort>> = std::sync::Mutex::new(None);
 
+/// Onboard settings' session on the port's side.
+pub struct EyesPort {
+    pub eyes: [f32; 3],
+    pub fov: f32,
+    pub pitch: f32,
+    pub log: Vec<String>,
+    pub last: String,
+}
+
+static EYES: std::sync::Mutex<Option<EyesPort>> = std::sync::Mutex::new(None);
+
+/// The on-board camera's settings as a line of `effects_*.txt`.
+pub fn eyes_line(e: [f32; 3], fov: f32, pitch: f32) -> String {
+    format!("eyes {:08x} {:08x} {:08x} fov {:08x} pitch {:08x}", e[0].to_bits(), e[1].to_bits(), e[2].to_bits(), fov.to_bits(), pitch.to_bits())
+}
+
 /// The ballast app's: the player's car's ballast as the port's app set it, the last line.
 static BALLAST: std::sync::Mutex<Option<(f32, String)>> = std::sync::Mutex::new(None);
 
@@ -247,6 +300,13 @@ pub fn sync(gui: &mut Gui) {
                 append_effects(&path, std::mem::take(&mut f.log), &line, &mut f.last);
             }
         });
+    }
+    if let Some(s) = EYES.lock().unwrap().as_mut() {
+        gui.apps.driver_eyes = s.eyes;
+        gui.apps.onboard_fov = s.fov;
+        gui.apps.onboard_pitch = s.pitch;
+        let line = eyes_line(s.eyes, s.fov, s.pitch);
+        append_effects(&root.join("effects_port.txt"), std::mem::take(&mut s.log), &line, &mut s.last);
     }
     if let Some((kg, last)) = BALLAST.lock().unwrap().as_mut() {
         let line = format!("ballast {:08x}", kg.to_bits());
