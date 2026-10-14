@@ -49,7 +49,8 @@ pub unsafe fn make_car(game: &Game, name: &str) -> *mut u8 {
         init();
     }
     let set_locale: extern "C" fn(*mut u8) -> bool = std::mem::transmute(acs.va(0x1_4024_0980));
-    assert!(set_locale(wstring(acs, "en")), "acLocaleSetLocale(en)");
+    let language = crate::gui_seq::language_or_en();
+    assert!(set_locale(wstring(acs, &language)), "acLocaleSetLocale({language})");
     let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
     srand(1);
     let engine = acs.alloc(PE_SIZE);

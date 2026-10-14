@@ -242,6 +242,13 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
     let mut graphics = graphics(args)?;
     let mut renderer = GuiRenderer::new(&graphics);
     let mut outcome = Outcome::default();
+    // Task 33: the language's tables before anything is made, as on the game's side
+    let locale = crate::gui_seq::language().map(|language| {
+        if let Some(font_locale) = rustyac_gui::locale::font_locale(&language) {
+            renderer.fonts.set_locale(font_locale);
+        }
+        rustyac_gui::locale::Locale::load(&args.game, &language)
+    });
     // what the game's side reads from its scratch root: the same texts here
     let read = |path: std::path::PathBuf| IniReader::load(&path).ok().filter(|ini| ini.ready);
     let files = GuiFiles {
@@ -254,6 +261,9 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
         let mut painter = renderer.painter(&mut graphics);
         Gui::new(&mut painter, files)
     };
+    if let Some(locale) = locale {
+        gui.locale = locale;
+    }
     let screen = {
         let mut painter = renderer.painter(&mut graphics);
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");

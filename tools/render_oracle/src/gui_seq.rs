@@ -999,7 +999,25 @@ fn text() -> Vec<Op> {
     o
 }
 
+/// The language a sequence runs in (`<sequence>#<language>`): the game's own `acTranslate` with
+/// `acLocaleSetLocale(<language>)` on the game's side, `Locale::load` on the port's (none: the
+/// strings as they are on both sides, as before Task 33).
+static LANGUAGE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn language() -> Option<String> {
+    LANGUAGE.lock().unwrap().clone()
+}
+
+/// The language of the setup editor's tables and the help app: the sequence's, else English.
+pub fn language_or_en() -> String {
+    language().unwrap_or_else(|| "en".to_string())
+}
+
 pub fn sequence(name: &str) -> Result<Sequence, String> {
+    if let Some((base, language)) = name.split_once('#') {
+        *LANGUAGE.lock().unwrap() = Some(language.to_string());
+        return sequence(base);
+    }
     let plain = |ops: Vec<Op>| Sequence { ops, cfg: &[], acos: None, allow_overlapping: false };
     if let Some(ops) = crate::gui_seq_setup::sequence(name) {
         return Ok(plain(ops));

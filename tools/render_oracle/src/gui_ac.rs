@@ -467,6 +467,7 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
         }
     }
     copy_tree(&args.game.join("content/gui"), &args.root.join("content/gui"))?;
+    copy_tree(&args.game.join("system/locales"), &args.root.join("system/locales"))?;
     // the HUD's pictures besides the GUI's: a car's logo, the damage pictures, the wrong-way sign
     for file in ["content/cars/ks_ferrari_f2004/logo.png", "content/texture/wrongway.png", "content/texture/mini_finish.png", "content/cars/ks_ferrari_f2004/skins/00_official/livery.png", "content/cars/ks_ferrari_f2004/skins/01_ferrari_1/livery.png", "content/cars/ks_ferrari_f2004/skins/02_ferrari_2/livery.png"] {
         let (from, to) = (args.game.join(file), args.root.join(file));
@@ -529,6 +530,17 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
         let init: extern "C" fn() = std::mem::transmute(acs.va(VA_FONT_WRAPPERS_INIT));
         init();
         crate::gui_ac2::static_initialisers(&game);
+        // Task 33: initLocalization's acLocaleSetLocale, before anything is made
+        if let Some(language) = crate::gui_seq::language() {
+            for va in [0x1_4001_1060usize, 0x1_4001_1070, 0x1_4001_1090, 0x1_4001_10c0, 0x1_4001_10f0] {
+                let init: extern "C" fn() = std::mem::transmute(acs.va(va));
+                init();
+            }
+            let set_locale: extern "C" fn(*mut u8) -> bool = std::mem::transmute(acs.va(0x1_4024_0980));
+            if !set_locale(wstring(acs, &language)) {
+                return Err(format!("acLocaleSetLocale({language}) failed"));
+            }
+        }
 
         // Game::Game: the GUI, with the keyboard manager it adds itself to
         let keyboard = acs.alloc(0x30);

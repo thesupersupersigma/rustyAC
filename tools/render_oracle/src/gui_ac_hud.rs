@@ -205,7 +205,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         jump(game, VA_RACE_MANAGER_GET_TIME_TO_SESSION_START, get_time_to_session_start as *const () as usize);
         jump(game, VA_RACE_MANAGER_GET_CAR_LEADERBOARD_POSITION, get_car_leaderboard_position as *const () as usize);
         jump(game, VA_RACE_MANAGER_GET_LAST_LAP, get_last_lap as *const () as usize);
-        jump(game, VA_AC_TRANSLATE, ac_translate as *const () as usize);
+        if crate::gui_seq::language().is_none() {
+            jump(game, VA_AC_TRANSLATE, ac_translate as *const () as usize);
+        }
 
         let game_block = acs_ref.alloc(0x300);
         wr(game_block, 0x138, game.graphics);

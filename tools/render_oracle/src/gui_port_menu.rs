@@ -199,7 +199,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
     sync(hud, gui);
     match what {
         "menu.setupCar" => {
-            gui.locale = rustyac_gui::locale::Locale::load(root, "en");
+            gui.locale = rustyac_gui::locale::Locale::load(root, &crate::gui_seq::language_or_en());
             gui.setup.track_name = "nowhere".to_string();
             (gui.setup.tc_assist, gui.setup.abs_assist) = (1, 1);
             gui.setup.tracks = crate::gui_seq_setup::tracks(root);

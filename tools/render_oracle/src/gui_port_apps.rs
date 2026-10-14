@@ -24,7 +24,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "pedals" => gui.new_pedals_app(painter, read(game_folder.join("documents/Assetto Corsa/cfg/controls.ini")).as_ref()),
         "electronics" => gui.new_electronics_app(painter),
         "help" => {
-            let text = std::fs::read(game_folder.join("system/locales/help/en.tag")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            let text = std::fs::read(game_folder.join(format!("system/locales/help/{}.tag", crate::gui_seq::language_or_en()))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
             gui.new_help_app(painter, &text)
         }
         "hideall" => gui.new_hide_all_app(painter, screen),

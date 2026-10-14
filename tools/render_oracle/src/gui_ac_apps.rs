@@ -310,7 +310,7 @@ unsafe fn install(game: &Game) {
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_5240));
     init();
     // the language (acLocaleGetCurrentLocale's `currentLocale`): ACHelp reads help/<it>.tag
-    crate::ac::write_wstring(&game.acs, game.acs.va(0x1_4151_d190) as *mut u8, "en");
+    crate::ac::write_wstring(&game.acs, game.acs.va(0x1_4151_d190) as *mut u8, &crate::gui_seq::language_or_en());
     // FormGear.obj's own `gears` ("R", "N", "1" … "10")
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_2b60));
     init();
@@ -339,7 +339,6 @@ unsafe fn install(game: &Game) {
         (0x1_4013_7ee0, get_car_leaderboard_position as *const () as usize),
         (0x1_4013_7f90, get_car_real_time_position as *const () as usize),
         (0x1_4013_8570, get_lap_count as *const () as usize),
-        (0x1_4024_0cf0, crate::gui_ac_hud::ac_translate as *const () as usize),
         (0x1_401f_bdf0, set_volume as *const () as usize),
         (0x1_4012_1f20, execute_on_physics_thread as *const () as usize),
         (0x1_401b_61c0, add_message as *const () as usize),
@@ -351,6 +350,9 @@ unsafe fn install(game: &Game) {
         (0x1_401f_96d0, get_driver_info as *const () as usize),
     ] {
         jump(game, va, to);
+    }
+    if crate::gui_seq::language().is_none() {
+        jump(game, 0x1_4024_0cf0, crate::gui_ac_hud::ac_translate as *const () as usize);
     }
 }
 
