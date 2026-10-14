@@ -569,6 +569,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     call0(VA_GRAPHICS_BEGIN_SCENE);
                     crate::gui_ac_hud::update(&game, *dt);
                     crate::gui_ac_apps::update();
+                    crate::gui_seq_tele::update(&game);
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     crate::gui_ac_menu::client_present(true);
                     crate::gui_ac_esc::sun(&game, true);

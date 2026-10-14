@@ -202,6 +202,10 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &HudGame, what: &str, number: f
                     if va == VA_SETUP_SCREEN_CTOR && !crate::gui_ac_setup::car().is_null() {
                         continue;
                     }
+                    // (Task 33: the page "Telemetry" is the game's own in its sequence)
+                    if va == VA_COMPARATIVE_TELEMETRY_CTOR && crate::gui_seq_tele::active() {
+                        continue;
+                    }
                     // (and a script with laps has the game's own time table)
                     if va == VA_TIME_TABLE_CTOR && crate::gui_seq_setup::time_seed() != 0.0 {
                         continue;

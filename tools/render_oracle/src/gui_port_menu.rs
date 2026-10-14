@@ -375,6 +375,10 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             fn telemetry(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
                 gui.new_form(painter, "COMPARATIVE_TELEMETRY", false)
             }
+            fn comparative_telemetry(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                gui.new_comparative_telemetry(painter)
+            }
+            let telemetry = if crate::gui_seq_tele::active() { comparative_telemetry } else { telemetry };
             fn table(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
                 gui.new_control(painter, "ESC_MENU_TIME_TABLE")
             }

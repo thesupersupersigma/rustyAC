@@ -1025,6 +1025,9 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
     if let Some(ops) = crate::gui_seq_apps::sequence(name) {
         return Ok(plain(ops));
     }
+    if let Some(ops) = crate::gui_seq_tele::sequence(name) {
+        return Ok(plain(ops));
+    }
     Ok(match name {
         "base" => plain(base()),
         "text" => plain(text()),

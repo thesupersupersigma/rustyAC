@@ -19,6 +19,12 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if what.starts_with("tele.") {
+        crate::gui_seq_tele::input(what, number, text)?;
+        let player = hud.input.cars.first().map(|c| c.driver_name.clone()).unwrap_or_default();
+        crate::gui_seq_tele::port_sync(gui, &player);
+        return Ok(());
+    }
     if what.starts_with("app.") {
         if crate::gui_seq_apps::app_input(what, number, text)? {
             crate::gui_port_apps::sync(gui);
@@ -68,6 +74,8 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
 
 pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
     crate::gui_port_menu::sync(hud, gui);
+    let player = hud.input.cars.first().map(|c| c.driver_name.clone()).unwrap_or_default();
+    crate::gui_seq_tele::port_sync(gui, &player);
     crate::gui_port_apps::sync(gui);
     let (Some(message), Some(notification)) = (&mut hud.message, &mut hud.notification) else { return };
     message.update(gui, dt, &hud.input);

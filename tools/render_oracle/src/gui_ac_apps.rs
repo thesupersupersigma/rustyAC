@@ -52,7 +52,10 @@ const VA_INIREADERDOCUMENTS_BASE_PATH: usize = 0x1_4151_d100;
 
 /// The apps' tables for `gui_ac::class_of`: every app's form is a "Form" in the dumps.
 pub fn classes() -> Vec<(&'static str, usize, usize, usize)> {
-    APPS.iter().filter(|a| a.3 != 0).map(|a| ("Form", a.1, a.2, a.3)).collect()
+    let mut out: Vec<_> = APPS.iter().filter(|a| a.3 != 0).map(|a| ("Form", a.1, a.2, a.3)).collect();
+    // Task 33: ComparativeTelemetry, the ESC menu's page "Telemetry"
+    out.push(("Form", 0x258, 0x1_4006_dff0, 0x1_404a_f980));
+    out
 }
 
 struct AppGame {
