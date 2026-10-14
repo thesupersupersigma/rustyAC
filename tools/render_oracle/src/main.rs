@@ -39,6 +39,7 @@ mod gui_seq_apps;
 mod gui_seq_menu;
 mod gui_seq_setup;
 mod gui_seq_tele;
+mod gui_seq_console;
 mod text_fallback;
 mod port;
 mod root;

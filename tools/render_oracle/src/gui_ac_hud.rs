@@ -169,6 +169,9 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
+    if what.starts_with("console.") {
+        return crate::gui_seq_console::game_call(game, what, number, text);
+    }
     if what.starts_with("tele.") {
         crate::gui_seq_tele::input(what, number, text)?;
         return crate::gui_seq_tele::game_call(game, what);
@@ -312,6 +315,8 @@ pub unsafe fn render_hud(game: &Game, dt: f32) {
     render(h.message, dt);
     crate::gui_ac_pit::render_menu(game, h, dt);
     crate::gui_ac_hud2::render_hud(game, h, dt);
+    // Task 33: Console::renderHUD, the last of the HUD objects
+    crate::gui_seq_console::game_render(game, dt);
 }
 
 pub unsafe fn dump(game: &Game, out: &mut String) {

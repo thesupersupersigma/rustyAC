@@ -19,6 +19,10 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if what.starts_with("console.") {
+        let unix = hud.input.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
+        return crate::gui_seq_console::port_call(gui, painter, game_folder, &unix, what, number, text);
+    }
     if what.starts_with("tele.") {
         crate::gui_seq_tele::input(what, number, text)?;
         let player = hud.input.cars.first().map(|c| c.driver_name.clone()).unwrap_or_default();
@@ -93,6 +97,8 @@ pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
     message.render_hud(gui, painter, dt, &hud.input);
     crate::gui_port_pit::render_menu(hud, gui, painter, dt);
     crate::gui_port_hud2::render_hud(hud, gui, painter, dt);
+    // Task 33: the console, the last of the HUD objects
+    crate::gui_seq_console::port_render(gui, painter);
 }
 
 pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {

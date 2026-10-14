@@ -112,7 +112,7 @@ static BALLAST: Mutex<Option<(usize, String)>> = Mutex::new(None);
 /// `PhysicsAvatar::executeOnPhysicsThread(std::function<void()>)` 0x140121f20: the job done at
 /// once (the oracle has no physics thread), the function given by value destroyed as the
 /// game's does it (`_Do_call` +0x10, `_Delete_this` +0x20 of its implementation at +0x18).
-unsafe extern "C" fn execute_on_physics_thread(_this: *mut u8, f: *mut u8) {
+pub unsafe extern "C" fn execute_on_physics_thread(_this: *mut u8, f: *mut u8) {
     let imp: *mut u8 = rd(f, 0x18);
     if imp.is_null() {
         return;

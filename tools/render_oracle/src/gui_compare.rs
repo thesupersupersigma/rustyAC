@@ -78,6 +78,7 @@ pub fn compare(args: &Args) -> Result<(), String> {
         crate::gui_seq_setup::seed(args, &sequence)?;
         crate::gui_seq_apps::prepare_root(args, name)?;
         crate::gui_seq_tele::prepare_root(args, name)?;
+        crate::gui_seq_console::prepare_root(args, name);
     }
     run_sides(args, name, &args.dump)?;
     let read = |side: &str, kind: &str| {
@@ -189,6 +190,9 @@ pub fn compare(args: &Args) -> Result<(), String> {
         println!("frame {frame}: {differing} of {} pixels differ", pa.len() / 4);
     }
     if !crate::gui_seq_apps::compare_files(args, name)? {
+        failed = true;
+    }
+    if !crate::gui_seq_console::compare_files(args, name)? {
         failed = true;
     }
     if failed {
