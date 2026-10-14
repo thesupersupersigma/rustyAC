@@ -172,6 +172,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
     if what.starts_with("app.") {
         if crate::gui_seq_apps::app_input(what, number, text)? {
             crate::gui_ac_apps::update();
+            crate::gui_ac_apps::announce_laps(game);
             return Ok(());
         }
         return crate::gui_ac_apps::call(game, gui, screen, what, number, text);

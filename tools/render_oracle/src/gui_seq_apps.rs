@@ -46,6 +46,11 @@ pub struct AppScript {
     pub tc: bool,
     pub session_count: u32,
     pub time_to_wait: f64,
+    /// the AI spline's length (m); air, road, grip, wind (m/s), the wind's direction
+    pub spline_length: f32,
+    pub env: [f32; 5],
+    /// laps finished since the last frame the script went to: (car, time)
+    pub pending_laps: Vec<(u32, u32)>,
     /// every car's timing at every frame of the tapes
     pub timing: Vec<Vec<Timing>>,
     /// the frame of the tapes the session is at
@@ -158,7 +163,28 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
                 s.timing = timing;
             });
         }
-        "app.at" => script(|s| s.frame = number as usize),
+        "app.at" => script(|s| {
+            let to = number as usize;
+            // the laps finished on the way (RaceManager::evOnLapCompleted)
+            let mut laps = Vec::new();
+            for (car, tape) in s.tapes.iter().enumerate() {
+                let at = |f: usize| CarPhysicsState::from_game_bytes(&tape[f.min(tape.len().saturating_sub(1))]).unwrap_or_default();
+                if tape.is_empty() {
+                    continue;
+                }
+                let (old, new) = (at(s.frame), at(to));
+                if new.lap_count > old.lap_count && to > s.frame {
+                    laps.push((car as u32, new.last_lap));
+                }
+            }
+            s.pending_laps.extend(laps);
+            s.frame = to;
+        }),
+        "app.spline" => script(|s| s.spline_length = number),
+        "app.env" => {
+            let k = ["air", "road", "grip", "wind", "windDirection"].iter().position(|n| *n == text).ok_or("app.env: air, road, grip, wind or windDirection")?;
+            script(|s| s.env[k] = number);
+        }
         "app.focus" => script(|s| s.focused = number as usize),
         "app.session" => script(|s| s.session_type = number as i32),
         "app.timed" => script(|s| s.is_timed_race = on),
@@ -210,6 +236,16 @@ pub fn raw_state(s: &AppScript, car: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// The name of a car of the tapes.
+pub fn driver_name(car: usize) -> String {
+    ["Kimi Raikkonen", "Driver Number Two", "Lewis", "A Driver With A Very Long Name", "Mika", "Juan Pablo"].get(car).map(|n| n.to_string()).unwrap_or_else(|| format!("Driver {}", car + 1))
+}
+
+/// The laps the script's last move finished, for each side to announce.
+pub fn take_laps() -> Vec<(u32, u32)> {
+    script(|s| std::mem::take(&mut s.pending_laps))
+}
+
 /// The tapes' clock (ms) at a frame.
 pub fn now(frame: usize) -> f64 {
     frame as f64 * (1000.0 / 60.0)
@@ -248,7 +284,8 @@ pub fn link() -> AppLink {
                     abs_in_action: s.abs && state.brake > 0.1 && state.slip_ratio.iter().any(|r| *r < -0.1),
                     tc_enabled: s.tc,
                     tc_in_action: s.tc && s.tcs.get(i).and_then(|t| t.get(s.frame.min(t.len().saturating_sub(1)))).is_some_and(|b| *b != 0),
-                    driver_name: format!("Driver {}", i + 1),
+                    driver_name: driver_name(i),
+                    connected: true,
                     ..AppCar::default()
                 }
             })
@@ -267,6 +304,12 @@ pub fn link() -> AppLink {
             session_time_left: if s.in_replay { -1.0 } else { ((s.duration_minutes as f64 * 60.0 * 1000.0) + s.start_time) - now },
             time_to_session_start: s.start_time - now,
             in_replay: s.in_replay,
+            ai_spline_length: s.spline_length,
+            ambient_temperature: s.env[0],
+            road_temperature: s.env[1],
+            grip: s.env[2],
+            wind_speed: s.env[3],
+            wind_direction_deg: s.env[4],
             game_time: now,
             use_mph: s.use_mph,
             actions: Vec::new(),
@@ -297,6 +340,8 @@ fn race(o: &mut Vec<Op>, cars: usize) {
     o.extend([hud("app.session", 3.0, ""), hud("app.laps", 3.0, ""), hud("app.start", 5000.0, ""), hud("app.duration", 0.0, ""), hud("app.sessions", 1.0, "")]);
     // the F2004's tank and engine (car.ini [FUEL] MAX_FUEL, engine.ini [DAMAGE] RPM_THRESHOLD)
     o.extend([hud("app.maxFuel", 150.0, ""), hud("app.damageRpm", 20200.0, ""), hud("app.abs", 0.0, ""), hud("app.tc", 1.0, "")]);
+    // Magione's AI spline, the car oracle's weather (26 C air, 30 C road, no wind)
+    o.extend([hud("app.spline", 2507.6, ""), hud("app.env", 26.0, "air"), hud("app.env", 30.0, "road"), hud("app.env", 0.97, "grip"), hud("app.env", 0.0, "wind"), hud("app.env", 0.0, "windDirection")]);
 }
 
 /// Mouse clicks and drags on an app: moved by its title, pinned, scaled up and down, hidden
@@ -338,6 +383,8 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 handle(&mut o, 0, 80, 300);
                 o.extend([hud("app.replay", 1.0, ""), Op::Frame(DT), hud("app.replay", 0.0, ""), hud("app.timed", 1.0, ""), hud("app.duration", 2.0, ""), Op::Frame(DT)]);
                 play(&mut o, 12000, 12600, 30);
+                // some wind, a car in the pits
+                o.extend([hud("app.env", 4.2, "wind"), hud("app.env", 137.0, "windDirection"), Op::Frame(DT), hud("app.env", 11.9, "wind"), hud("app.env", 290.5, "windDirection"), Op::Frame(DT)]);
                 o.extend([hud("app.session", 1.0, ""), Op::Frame(DT), hud("app.sessions", 3.0, ""), Op::Frame(DT), hud("app.session", 2.0, ""), Op::Frame(DT), hud("app.duration", 0.0, ""), Op::Frame(DT), hud("app.session", 4.0, ""), Op::Frame(DT), hud("app.session", 0.0, ""), Op::Frame(DT)]);
                 o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
             }

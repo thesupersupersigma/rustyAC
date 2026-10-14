@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 4] = [
+pub const APPS: [(&str, usize, usize, usize); 5] = [
+    ("realtime", 0x318, 0x1_4032_b8a0, 0x1_4050_efb8),
     ("laps", 0x2f8, 0x1_402d_9660, 0x1_4050_1e50),
     ("position", 0x200, 0x1_402f_e0f0, 0x1_4050_7100),
     ("essentials", 0x2a0, 0x1_4031_bc60, 0x1_4050_c430),
@@ -183,6 +184,29 @@ fn app(name: &str) -> Result<*mut u8, String> {
     GAME.lock().unwrap().as_ref().and_then(|g| g.made.iter().find(|a| a.0 == name).map(|a| a.1 as *mut u8)).ok_or(format!("no app {name:?} was made"))
 }
 
+/// `RaceManager::evOnLapCompleted` for the laps the script's last move finished: the game's
+/// handlers of the apps that listen (`FormRealTimeTiming`'s lambda 0x14032c7b0, its object
+/// {form, sim}).
+pub unsafe fn announce_laps(game: &Game) {
+    let laps = crate::gui_seq_apps::take_laps();
+    let made: Vec<(String, usize)> = GAME.lock().unwrap().as_ref().map(|g| g.made.clone()).unwrap_or_default();
+    let sim = GAME.lock().unwrap().as_ref().map(|g| g.sim).unwrap_or(0);
+    for (car, time) in laps {
+        for (name, form) in &made {
+            if name == "realtime" {
+                let lambda = game.acs.alloc(0x10);
+                wr(lambda, 0, *form);
+                wr(lambda, 8, sim);
+                let event = game.acs.alloc(0x8);
+                wr(event, 0, car);
+                wr(event, 4, time);
+                let f: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(game.acs.va(0x1_4032_c7b0));
+                f(lambda, event);
+            }
+        }
+    }
+}
+
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let a = &game.acs;
     if what == "app.create" {
@@ -198,6 +222,15 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         wr(sim, 0x1a8, a.alloc(0x400));
         // MicroSectors (0x90), switched off: its strip is not ported
         wr(sim, 0x1f0, a.alloc(0x90));
+        // the track: its AI spline (TrackAvatar+0x178 -> AISplineRecorder, getBestLapSpline = +0xf0,
+        // its Spline at +0x50: points begin / end, length at +0x20)
+        let track = a.alloc(0x200);
+        let recorder = a.alloc(0x200);
+        wr(track, 0x178, recorder);
+        wr(recorder, 0x140 + 8, 1usize);
+        wr(recorder, 0x140 + 0x10, 2usize);
+        wr(sim, 0x150, track);
+        wr(sim, 0x1b8, a.alloc(0x500));
         let replay = a.alloc(0x200);
         wr(sim, 0x1b0, replay);
         let count = number as usize;
@@ -211,6 +244,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             for at in [0x10b8, 0x178, 0x138, 0x198, 0x1138] {
                 empty_wstring(avatar.add(at));
             }
+            crate::ac::write_wstring(a, avatar.add(0x10b8), &crate::gui_seq_apps::driver_name(i));
+            // the car's node: "connected" at +0xd8
+            wr(avatar, 0x210, a.alloc(0x100));
             wr(list, i * 8, avatar);
             cars.push(avatar as usize);
         }
@@ -264,10 +300,21 @@ pub unsafe fn update() {
             // physicsInfo (+0xe40): maxFuel, engineDamageRPM
             wr(*avatar as *mut u8, 0xec8, s.max_fuel);
             wr(*avatar as *mut u8, 0xf70, s.damage_rpm);
+            if let Some(c) = l.cars.get(i) {
+                wr(rd::<*mut u8>(*avatar as *mut u8, 0x210), 0xd8, c.connected as u8);
+                wr(*avatar as *mut u8, 0x129c, c.in_pitlane as u8);
+            }
         }
     });
     let sim = g.sim as *mut u8;
     wr(sim, 0x220, l.focused_car as u32);
+    let track: *mut u8 = rd(sim, 0x150);
+    wr(rd::<*mut u8>(track, 0x178), 0x140 + 0x20, l.ai_spline_length);
+    let physics: *mut u8 = rd(sim, 0x1b8);
+    wr(physics, 0x310, l.wind_speed);
+    wr(physics, 0x314, l.wind_direction_deg);
+    wr(physics, 0x408, [l.ambient_temperature, l.road_temperature]);
+    wr(physics, 0x470 + 4, l.grip);
     wr(sim, 0x1fc, l.connected_cars_count);
     wr(g.replay as *mut u8, 0x148, l.in_replay as u8);
     wr(g.game_block as *mut u8, 0x18, l.game_time);

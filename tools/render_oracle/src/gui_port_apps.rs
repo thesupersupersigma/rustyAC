@@ -23,6 +23,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "position" => gui.new_race_position_app(painter),
         "essentials" => gui.new_essentials_app(painter),
         "delta" => gui.new_performance_delta_app(painter),
+        "realtime" => gui.new_realtime_app(painter),
         _ => return Err(format!("no app {name:?} in the port")),
     })
 }

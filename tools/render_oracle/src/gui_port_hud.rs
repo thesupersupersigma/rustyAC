@@ -22,6 +22,9 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
     if what.starts_with("app.") {
         if crate::gui_seq_apps::app_input(what, number, text)? {
             crate::gui_port_apps::sync(gui);
+            for (car, time) in crate::gui_seq_apps::take_laps() {
+                gui.apps_on_lap_completed(car, time);
+            }
             return Ok(());
         }
         return crate::gui_port_apps::call(&mut hud.apps, gui, painter, game_folder, screen, what, number, text);
