@@ -28,9 +28,11 @@ a mod maker encrypted was opened or decoded. Raw data: `re/scratch/csp1/content_
 |---|---|---|
 | `urd_darche_992_23` | **Its data is encrypted for CSP.** Every file in its `data.acd` decodes to one comment line of scramble (30 files unreadable); `car.ini [_EXTENSION] REQUIRED_VERSION` and `VERSION=extendedV2-2` are the only readable markers; it also carries three Lua scripts (`a_urd_brake_bias.lua`, `a_urd_pits.lua`, `script.lua`) in its extension and data folders and a `ext_car_controls.ini`. CSP reads such content through `FolderEncrypter::decryptFile` (hooked, see [`attach.md`](attach.md)) | Nothing: its data was **not** touched or decoded. Listed as "cannot be supported", as asked |
 
-No other installed item is encrypted: the `vrc_*_csp` cars' data decodes with the ordinary
-AC key; their **scripts** are the part that earlier tasks recorded as closed (`prior/alpha2026_csp.md`),
-and they were not opened here.
+No other installed item is encrypted in the CSP sense. The `vrc_*_csp` cars' data decodes with the
+ordinary AC key, but their **physics script** (`data/script.lua` inside `data.acd`) is scrambled and
+was not touched. Their plain `extension/` Lua (visual, audio, displays, a signal-bus reader; 70 files
+in three cars) was read by the Lua area: it calls 92 SDK functions and contains no physics write, but
+it cannot run without the physics script's published layout (`lua.md` section 7.3).
 
 ## 3. Content that needs CSP physics (the part that decides "does it drive right")
 
