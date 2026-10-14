@@ -45,9 +45,11 @@ its replacement functions, the briefs the area files were written from.
 - It resolves `acs.exe` functions **by name from `acs.pdb`** (the Kunos symbol file that ships in the
   game folder) through `dbghelp.dll`. It refuses to start on an `acs.exe` other than 1.16.3 / 1.16.4
   (64-bit) or without `acs.pdb`. The log line is "All 1542 functions were found successfully".
-- 1,441 registration records name **1,368 distinct acs.exe symbols**: **934 are hooked** (CSP puts a
-  replacement in front; it calls the original through a saved pointer when it wants to) and **507
-  are looked up** (CSP only calls or reads them). 1,215 of the 1,377 `Class::method`-shaped
+- 1,441 registration records name **1,368 distinct acs.exe symbols**: **1,026 are hooked** (CSP puts
+  a replacement in front; it calls the original through a saved pointer when it wants to) and **415
+  are looked up** (CSP only calls or reads them). The first extraction counted 934 / 507: 92
+  registration stubs load the replacement into a register *before* the name, which the first scan
+  missed; the correction is in [`attach.md`](attach.md). 1,215 of the 1,377 `Class::method`-shaped
   strings in the DLL exist in `acs.exe`; the others are CSP's own type names.
 - The hooked functions cover physics (`ksPhysicsAC.lib` 155), the renderer and scene graph
   (`KunosSim.lib` 156, `kgl.lib`, `CarAvatar`, `TrackAvatar`, cameras), apps and GUI (`SystemApps.lib`

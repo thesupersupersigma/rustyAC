@@ -7,6 +7,14 @@ through `acs.pdb`** (or a cache of it), and each replaced function is detoured w
 This file is the core of the CSP atlas (see the README). Addresses: `dwrite.dll RVA 0x...` (add `0x180000000` for a VA);
 `acs.exe` addresses are `0x14....` VAs. Markers: `[dll]` seen in dwrite.dll, `[log-csp]`, `[ini]`, `[prior]`, `[interp]` inference.
 
+> **Correction (applied after the tyre / suspension area was read).** The table this file was
+> written from classed 934 registration rows as hooks and 507 as lookups. For 92 rows the compiler
+> emitted `lea rdi,[replacement]` *before* the name load, and the first scan only looked after it, so
+> those hooks were counted as lookups (verified on `SCTM::solve`, replacement RVA `0x69d700`, stub at
+> `0x2572c1`). The corrected totals are **1,026 hooks and 415 lookups** (1,441 rows, 1,368 distinct
+> names unchanged). Per-class tables below still show the old split; the per-area files use the
+> corrected `csp_hook_table.tsv` where they say so, and `physics_tyres_suspension.md` lists the first 76.
+
 ## 1. What it does
 
 ### 1.1 How dwrite.dll gets into acs.exe
