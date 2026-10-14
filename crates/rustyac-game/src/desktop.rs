@@ -1504,6 +1504,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                     };
                     let key = key as i32;
                     if let Some(gui) = renderer.gui() {
+                        // Sim::onKeyDown 0x14019a940, Home (not with Ctrl and Shift; in a
+                        // rustyAC replay Home is its own "back to the start")
+                        if key == 0x24 && !(ctrl && shift) && transport.is_none() {
+                            gui.console_toggle();
+                        }
                         gui.key_down(key as u32);
                     }
                     // Sim::onKeyDown 0x14019a940, the replay's commands: with Ctrl, whatever
@@ -1720,6 +1725,10 @@ fn run_window(options: &Options) -> Result<(), String> {
                         gui.telemetry_laps(recorder);
                     }
                 }
+            }
+            // the console's exit (Game::shutdown)
+            if gui.exit_requested {
+                break 'frames;
             }
             // the force feedback app's jobs to the physics thread (its command queue)
             {

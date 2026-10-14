@@ -13,6 +13,7 @@ pub mod ac;
 pub mod dds;
 pub mod font;
 pub mod gui;
+pub mod console;
 pub mod gui_apps;
 pub mod hud;
 pub mod models;

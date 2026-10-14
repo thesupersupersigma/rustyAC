@@ -124,7 +124,7 @@ pub struct GameGui {
     pub flags: FlagDisplay,
     pub fuel: FuelLight,
     pub input: HudInput,
-    setup: GuiSetup,
+    pub setup: GuiSetup,
     black_flagged: bool,
     last_focus: usize,
     aids: Option<Aids>,
@@ -176,6 +176,9 @@ pub struct GameGui {
     pub leaderboard_app: Id,
     /// the other apps (made at the first frame), `Speed::useMPH`
     pub apps: super::gui_apps::GameApps,
+    /// Task 33: AC's console (Home), and its `exit`
+    pub console: rustyac_gui::console::Console,
+    pub exit_requested: bool,
     use_mph: bool,
     /// what the tables read of every car that never changes (names, nation, folder, skin)
     race_static: Vec<RaceCar>,
@@ -232,6 +235,9 @@ impl GameGui {
         let mut painter = renderer.painter(graphics);
         let mut gui = Gui::new(&mut painter, files);
         gui.locale = locale;
+        // Console::Console (Sim::Sim makes it first), its tables as the session registers them
+        let mut console = rustyac_gui::console::Console::new(&mut painter);
+        super::console::register(&mut console, &setup);
         // MicroSectors::MicroSectors 0x14009e9d0: Documents cfg/gameplay.ini [GUI] SHOW_SECTORS
         gui.micro_sectors = rustyac_gui::micro_sectors::MicroSectors::new(gameplay.as_ref().filter(|ini| ini.has_key("GUI", "SHOW_SECTORS")).map(|ini| ini.get_int("GUI", "SHOW_SECTORS").unwrap_or(0)));
         let screen = gui.new_game_screen(&mut painter, "SIM_GAME_SCREEN");
@@ -429,7 +435,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -654,6 +660,10 @@ impl GameGui {
         self.apps.update(&mut self.gui, world, focus, info, &self.setup, self.use_mph, time_ms);
         // MicroSectors::update, a game object updated every frame (Task 33)
         self.gui.micro_sectors_update();
+        // what the console was asked since the last frame
+        if super::console::carry_out(self) {
+            self.exit_requested = true;
+        }
     }
 
     /// `ksgui::GUI::render` 0x140254c10: the 2D pass's states, the game screen with its forms
@@ -755,6 +765,10 @@ impl GameGui {
             client.render_hud(gui, &mut painter, welcome, online.disconnect.as_deref(), input.game_time_now);
             qos.render_hud(gui, &mut painter, online.ping);
         }
+        // Console::renderHUD 0x14018c550, the last of the HUD objects
+        let (width, _) = rustyac_gui::painter::Painter::screen(&painter);
+        let now = self.gui.time_ms;
+        self.console.render_hud(&mut painter, width, now);
     }
 
     // ----- the window's input (`ksgui::GUI`'s listeners of the mouse and the keyboard) -----
@@ -799,12 +813,22 @@ impl GameGui {
         self.end.on_mouse_wheel(&mut self.gui, &e);
     }
 
+    /// KeyboardManager: the focused listener first (the console, while it is shown), then
+    /// the others (the GUI hears every key whatever the focus).
     pub fn key_down(&mut self, key: u32) {
+        self.console.on_key_down(key);
         self.gui.key_down(key);
     }
 
     pub fn key_char(&mut self, key: u32) {
+        self.console.on_key_char(key);
         self.gui.key_char(key);
+    }
+
+    /// `Sim::onKeyDown`, Home: `Console::show(!isVisible)`.
+    pub fn console_toggle(&mut self) {
+        let shown = self.console.shown;
+        self.console.show(!shown);
     }
 
     // ----- the table on TAB -----
@@ -996,7 +1020,7 @@ impl GameGui {
     /// `mouse:X:Y`, `click:X:Y`, `wheel:X:Y:N`, `key:VK`, `apps` (Ctrl+H), `desktop` (Ctrl+U),
     /// `names` (Ctrl+L), `damage` (Ctrl+J), `hidedamage` (Ctrl+Q), `message:Title|Text`,
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
-    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden).
+    /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden), `console` (Home), `type:<text>` (typed into the console, then Enter).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
         for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
             let mut parts = command.splitn(2, ':');
@@ -1019,6 +1043,14 @@ impl GameGui {
                     self.mouse_wheel(v[0], v[1], v[2] as f32);
                 }
                 "key" => self.key_down(need(1)?[0] as u32),
+                // Task 33: Home (the console), a line typed into it with Enter
+                "console" => self.console_toggle(),
+                "type" => {
+                    for unit in rest.encode_utf16() {
+                        self.key_char(unit as u32);
+                    }
+                    self.key_char(13);
+                }
                 "apps" => self.hide_show_apps(),
                 "desktop" => {
                     self.cycle_desktop();
