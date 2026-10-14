@@ -101,6 +101,56 @@ unsafe extern "C" fn execute_on_physics_thread(_this: *mut u8, function: *mut u8
     }
 }
 
+fn time_link() -> rustyac_gui::time_table::TimeLink {
+    let race = crate::gui_ac_race::race();
+    crate::gui_seq_setup::time_link(race.cars.len(), race.current_session_index, 0)
+}
+
+/// A `std::vector<Lap>` of the game from the script's laps.
+unsafe fn write_laps(out: *mut u8, laps: &[rustyac_gui::time_table::TimeLap]) {
+    let acs = crate::gui_ac_hud::acs();
+    let block = acs.alloc(laps.len().max(1) * 0x48);
+    for (i, lap) in laps.iter().enumerate() {
+        let at = block.add(i * 0x48);
+        crate::gui_ac_race::write_lap(at, &rustyac_gui::leaderboard::RaceLap { time: lap.time, splits: lap.splits.clone(), is_valid: lap.is_valid });
+        wr(at, 0x20, lap.cuts);
+        crate::ac::write_wstring(acs, at.add(0x28), &lap.compound);
+    }
+    wr(out, 0, block);
+    wr(out, 8, block.add(laps.len() * 0x48));
+    wr(out, 0x10, block.add(laps.len() * 0x48));
+}
+
+/// In place of `RaceManager::getLaps` 0x1401386b0: the running session's laps of a car.
+unsafe extern "C" fn get_laps(_this: *mut u8, out: *mut u8, car: *mut u8, _replay: bool) -> *mut u8 {
+    let index = rd::<i32>(car, 0x1158) as usize;
+    write_laps(out, time_link().laps.get(index).map_or(&[][..], |laps| laps.as_slice()));
+    out
+}
+
+/// In place of `RaceManager::getSessionHistory` 0x140139cf0: an `OnSessionEndEvent` (0xe8
+/// bytes) with every car's laps and best lap (an empty one for a session there is none of).
+unsafe extern "C" fn get_session_history(_this: *mut u8, out: *mut u8, id: *const i32) -> *mut u8 {
+    let acs = crate::gui_ac_hud::acs();
+    std::ptr::write_bytes(out, 0, 0xe8);
+    for at in [0x18usize, 0x38] {
+        wr(out, at + 0x18, 7usize);
+    }
+    let link = time_link();
+    if let Some(history) = usize::try_from(*id).ok().and_then(|i| link.history.get(i)) {
+        let cars = history.laps.len();
+        let lists = acs.alloc(cars.max(1) * 0x18);
+        for (i, laps) in history.laps.iter().enumerate() {
+            write_laps(lists.add(i * 0x18), laps);
+        }
+        wr(out, 0x70, lists);
+        wr(out, 0x78, lists.add(cars * 0x18));
+        wr(out, 0x80, lists.add(cars * 0x18));
+        write_laps(out.add(0x88), &history.best_laps);
+    }
+    out
+}
+
 /// A menu call of the script's that is the setup editor's.
 pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, what: &str, number: f32, text: &str) -> Result<(), String> {
     match what {
@@ -143,6 +193,20 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
             wr(h.cars[0], 0x1288, port.ers_recovery());
             wr(h.cars[0], 0xa18, port.turbo_boost_level());
             wr(h.sim, 0x1e4, 1u8);
+        }
+        "menu.timeLaps" => {
+            crate::gui_seq_setup::set_time_seed(number);
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !DONE.swap(true, Ordering::SeqCst) {
+                crate::gui_ac_hud::jump(game, 0x1_4013_86b0, get_laps as *const () as usize);
+                crate::gui_ac_hud::jump(game, 0x1_4013_9cf0, get_session_history as *const () as usize);
+                // TrackAvatar::physicsTrack.sectorsNormalizedPositions: three sectors
+                let track: *mut u8 = rd(h.sim, 0x150);
+                let sectors = game.acs.alloc(12);
+                wr(track, 0x228, sectors);
+                wr(track, 0x230, sectors.add(12));
+                wr(track, 0x238, sectors.add(12));
+            }
         }
         "menu.setupState" => {
             crate::gui_seq_setup::set_car_state(number);

@@ -50,6 +50,45 @@ pub fn car_state() -> rustyac_gui::setup_car::SetupCarState {
     state
 }
 
+static TIME: std::sync::Mutex<f32> = std::sync::Mutex::new(0.0);
+
+/// `Hud("menu.timeLaps", seed, "")`: the laps the page "Time" shows (0: the page is the
+/// stand-in of the older scripts).
+pub fn set_time_seed(seed: f32) {
+    *TIME.lock().unwrap() = seed;
+}
+
+pub fn time_seed() -> f32 {
+    *TIME.lock().unwrap()
+}
+
+/// The laps of every car in the running session and in the sessions before it, made from
+/// the script's seed: some invalid, some cars with none, some laps without sector times.
+pub fn time_link(cars: usize, current_session: i32, focused: usize) -> rustyac_gui::time_table::TimeLink {
+    use rustyac_gui::time_table::{TimeHistory, TimeLap, TimeLink};
+    let seed = time_seed() as usize;
+    let laps_of = |car: usize, session: usize| -> Vec<TimeLap> {
+        let n = (seed * 3 + car * 5 + session * 7) % 23;
+        (0..n)
+            .map(|k| {
+                let time = 80_000 + ((k * 7919 + car * 104_729 + (seed + session) * 31) % 9000) as u32;
+                let (a, b) = (time / 3 - 500 + (k as u32 * 37) % 300, time / 3 + 200 - (k as u32 * 53) % 250);
+                let valid = (k + car + session) % 6 != 5;
+                TimeLap { time: if k % 11 == 10 { 0 } else { time }, splits: if (k + car) % 9 == 8 { Vec::new() } else { vec![a, b, time - a - b] }, cuts: !valid as u32, is_valid: valid, compound: ["S", "M", "H", ""][(car + k / 7) % 4].to_string() }
+            })
+            .collect()
+    };
+    let session_laps = |session: usize| -> Vec<Vec<TimeLap>> { (0..cars).map(|car| laps_of(car, session)).collect() };
+    let history = (0..current_session.max(0) as usize)
+        .map(|session| {
+            let laps = session_laps(session + 1);
+            let best_laps = laps.iter().map(|laps| laps.iter().filter(|lap| lap.is_valid && lap.time != 0).min_by_key(|lap| lap.time).cloned().unwrap_or_default()).collect();
+            TimeHistory { laps, best_laps }
+        })
+        .collect();
+    TimeLink { laps: session_laps(0), history, focused_car: focused, sector_count: 3, track_config: String::new(), out_dir: std::path::PathBuf::new(), time_stamp: String::new() }
+}
+
 /// The car a script's setup editor is for.
 pub fn car_of(ops: &[Op]) -> Option<&'static str> {
     ops.iter().find_map(|op| match op {
@@ -286,6 +325,43 @@ fn io(car: &'static str) -> Vec<Op> {
     o
 }
 
+/// The ESC menu's page "Time": the laps of the focused car in the running session and in
+/// the ones before it, page by page; another car focused; the session picked on the page
+/// "Race control"; the menu gone and back.
+fn time_page() -> Vec<Op> {
+    let mut o = Vec::new();
+    field(&mut o, 3);
+    o.extend([hud("race.sessions", 0.0, "1:0:Practice:0:30:0|2:0:Qualifying:0:15:0|3:0:Quick Race:5:0:0"), hud("race.history", 0.0, crate::gui_seq_menu::board(3, false, 4)), hud("race.current", 1.0, ""), hud("race.board", 0.0, crate::gui_seq_menu::board(3, false, 1)), hud("session", 2.0, ""), hud("timeLeft", 1_234_567.0, ""), hud("menu.timeLaps", 5.0, "")]);
+    o.extend([hud("menu.escMenu", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    let time = |o: &mut Vec<Op>| click(o, 50, 325 + 48);
+    time(&mut o);
+    o.push(Op::Frame(DT));
+    // the pages of the laps: next until past the end, then back
+    for _ in 0..3 {
+        click(&mut o, 100 + 466 + 20, 658);
+    }
+    for _ in 0..4 {
+        click(&mut o, 100 + 416 + 20, 658);
+    }
+    for car in [1.0, 2.0, 0.0] {
+        o.extend([hud("focus", car, ""), Op::Frame(DT), Op::Frame(DT)]);
+        click(&mut o, 100 + 466 + 20, 658);
+    }
+    // other laps come in while the page shows; the menu goes and comes
+    o.extend([hud("menu.timeLaps", 6.0, ""), Op::Frame(DT), hud("menu.resume", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    // the sessions before: picked on the page "Race control" (its bars at the top), then "Time" again
+    for session in 0..2 {
+        click(&mut o, 50, 525 + 48);
+        click(&mut o, 425 + 150 * session + 20, 55 + 20 + 12);
+        time(&mut o);
+        o.push(Op::Frame(DT));
+        o.extend([hud("focus", 1.0, ""), Op::Frame(DT), hud("focus", 0.0, ""), Op::Frame(DT)]);
+        click(&mut o, 100 + 466 + 20, 658);
+        time(&mut o);
+    }
+    o
+}
+
 pub fn sequence(name: &str) -> Option<Vec<Op>> {
     let rest = name.strip_prefix("setup_")?;
     let (kind, car) = rest.split_once('@').unwrap_or((rest, "ks_ferrari_f2004"));
@@ -293,6 +369,7 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
     Some(match kind {
         "probe" => open(car),
         "tabs" => tabs(car, 14),
+        "time" => time_page(),
         "io" => io(car),
         _ => return None,
     })

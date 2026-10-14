@@ -165,6 +165,8 @@ pub struct SimLink {
     pub wind_direction_deg: f32,
     /// what the replay's bar reads of `ReplayManager` and `ACCameraManager`
     pub replay: crate::replay_interface::ReplayLink,
+    /// what the ESC menu's page "Time" reads besides `race`
+    pub time: crate::time_table::TimeLink,
 }
 
 /// `PauseMenu`'s own members.
@@ -188,6 +190,7 @@ pub enum Menu {
     SetupScreen(Box<crate::setup_screen::SetupScreen>),
     SetupTab(Box<crate::setup_tab::SetupTab>),
     SetupInfo(Box<crate::setup_info::SetupInformation>),
+    TimeTable(Box<crate::time_table::TimeTable>),
 }
 
 impl Gui {
@@ -481,6 +484,7 @@ impl Gui {
                 Menu::SetupScreen(_) => self.setup_screen_render(id, dt, painter),
                 Menu::SetupTab(_) => self.setup_tab_render(id, dt, painter),
                 Menu::SetupInfo(_) => self.setup_information_render(id, dt, painter),
+                Menu::TimeTable(_) => self.time_table_render(id, dt, painter),
             },
             _ => self.control_render(id, dt, painter),
         }
@@ -494,6 +498,7 @@ impl Gui {
                 Menu::Esc(_) => self.esc_menu_on_visible_changed(id, visible),
                 Menu::Replay(_) => self.replay_on_visible_changed(id),
                 Menu::SetupTab(_) => self.setup_tab_on_visible_changed(id, visible),
+                Menu::TimeTable(_) => self.time_table_on_visible_changed(id, visible),
                 _ => self.control_on_visible_changed(id, visible),
             },
             _ => self.control_on_visible_changed(id, visible),

@@ -298,8 +298,11 @@ impl Gui {
         // time (0x1400fd9c0)
         self.controls[but_time].ev_clicked.push(Rc::new(move |gui: &mut Gui, ev: &Clicked| {
             let Some(table) = gui.esc_menu(menu).time_table else { return };
-            // (the game hands the page the session the race control's table shows:
-            // `race_control_shown_session_id`; the page is not ported)
+            // the page shows the session the race control's table shows
+            if matches!(&gui.controls[table].kind, Kind::Menu(m) if matches!(**m, Menu::TimeTable(_))) {
+                let session = gui.race_control_shown_session_id(gui.esc_menu(menu).race_control);
+                gui.time_table_mut(table).session_id = session;
+            }
             let shown = gui.controls[table].visible;
             gui.set_visible(table, !shown);
             gui.esc_menu_select_button(menu, ev.control);

@@ -560,7 +560,7 @@ pub(crate) fn field(o: &mut Vec<Op>, cars: usize) {
 
 /// A board of `cars` entries: `race` by laps and total time, else by best lap; some cars have
 /// no time yet. `seed` moves the numbers.
-fn board(cars: usize, race: bool, seed: usize) -> &'static str {
+pub(crate) fn board(cars: usize, race: bool, seed: usize) -> &'static str {
     let mut out = Vec::new();
     for place in 0..cars {
         let car = (place * 7 + seed) % cars;

@@ -55,6 +55,9 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
         hud.input.end_session_active = end.is_active;
     }
     gui.sim.session_count = s.session_count;
+    if crate::gui_seq_setup::time_seed() != 0.0 {
+        gui.sim.time = crate::gui_seq_setup::time_link(gui.sim.race.cars.len(), gui.sim.race.current_session_index, hud.input.focused_car_index.max(0) as usize);
+    }
     if let Some(car) = hud.input.cars.first() {
         crate::gui_port_setup::set_state(&car.body_matrix);
     }
@@ -205,6 +208,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             gui.setup_car = Some(Box::new(crate::gui_port_setup::make_car(root, text, number as i32)?));
         }
         "menu.setupState" => crate::gui_seq_setup::set_car_state(number),
+        "menu.timeLaps" => crate::gui_seq_setup::set_time_seed(number),
         "menu.lb" => {
             let board = gui.new_leaderboard(painter, number as i32, text == "focus");
             gui.add_root(painter, board);
@@ -378,6 +382,10 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
                 gui.new_setup_screen(painter, None)
             }
             let setup = if gui.setup_car.is_some() { setup_editor } else { setup };
+            fn time_table(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+                gui.new_time_table(painter)
+            }
+            let table = if crate::gui_seq_setup::time_seed() != 0.0 { time_table } else { table };
             // (the game's side hears the widgets only once they are made)
             let heard = gui.widget_events.len();
             let id = gui.new_esc_menu(painter, fades.as_ref(), EscPages { setup_screen: Some(setup), comparative_telemetry: Some(telemetry), time_table: Some(table) });
@@ -410,6 +418,7 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
             rustyac_gui::menus::Menu::Pause(_) => "PauseMenu",
             rustyac_gui::menus::Menu::SetupScreen(_) => "SetupScreen",
             rustyac_gui::menus::Menu::SetupInfo(_) => "SetupInformation",
+            rustyac_gui::menus::Menu::TimeTable(_) => "EscMenuTimeTable",
             rustyac_gui::menus::Menu::SetupTab(tab) => match tab.kind {
                 rustyac_gui::setup_tab::TabKind::Generic => "SetupTab",
                 rustyac_gui::setup_tab::TabKind::Io(_) => "SetupIOManager",
