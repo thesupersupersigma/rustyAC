@@ -308,7 +308,7 @@ pub struct Options {
     /// `--pit-window <open>,<close>`: a mandatory pit window (the leader's laps; minutes in a
     /// timed race)
     pub pit_window: Option<(u16, u16)>,
-    /// `--pit-key <key>@<s>` (repeatable; left, up, right, down): the pit menu's keys, pressed
+    /// `--pit-key <key>@<s>` (repeatable; left, up, right, down; Task 31: drive, the ESC menu's "Drive"): the pit menu's keys, pressed
     /// at a time of the run (unattended checks)
     pub pit_keys: Vec<(f64, u32)>,
     /// `--ai-pit-at <s>` (repeatable): the AI driver of your car (`--ai-drive`) is called in
@@ -1001,13 +1001,15 @@ impl Options {
                 }
                 "--pit-key" => {
                     let text = value("--pit-key")?;
-                    let wrong = || format!("--pit-key: <left|up|right|down>@<seconds> expected, got {text:?}");
+                    let wrong = || format!("--pit-key: <left|up|right|down|drive>@<seconds> expected, got {text:?}");
                     let (key, at) = text.split_once('@').ok_or_else(wrong)?;
                     let bit = match key {
                         "left" => crate::input_file::event::PIT_LEFT,
                         "up" => crate::input_file::event::PIT_UP,
                         "right" => crate::input_file::event::PIT_RIGHT,
                         "down" => crate::input_file::event::PIT_DOWN,
+                        // Task 31: the ESC menu's "Drive" (a session that begins in the menu)
+                        "drive" => crate::input_file::event::PITS_DRIVE,
                         _ => return Err(wrong()),
                     };
                     o.pit_keys.push((at.parse().map_err(|_| wrong())?, bit));
