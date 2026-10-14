@@ -19,6 +19,7 @@ pub mod app_realtime;
 pub mod app_small;
 pub mod app_track_map;
 pub mod app_tyres;
+pub mod app_volumes;
 pub mod apps;
 pub mod control;
 pub mod end_session;

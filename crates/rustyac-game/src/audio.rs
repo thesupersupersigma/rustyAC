@@ -329,6 +329,9 @@ pub struct AudioOptions {
     /// `--audio-script <log>`: answers of another run to the event state queries (see
     /// `rustyac_audio::fmod::log::start_scripted`)
     pub script: Option<PathBuf>,
+    /// rustyAC's own `cfg` folder: its `audio.ini` and `camera_manager.ini` (the Audio app's)
+    /// come before Documents'
+    pub cfg_dir: Option<PathBuf>,
 }
 
 impl AudioOptions {
@@ -355,6 +358,8 @@ pub struct GameAudio {
     feed: Arc<Mutex<Feed>>,
     last: Option<Vec<CarFrame>>,
     camera: Option<(i32, i32)>,
+    /// the sound cards' names (`AudioEngine::getDriverInfo`)
+    drivers: Vec<String>,
     bonnet_external: bool,
     bumper_external: bool,
     paused: bool,
@@ -413,9 +418,10 @@ impl GameAudio {
             _ => {}
         }
         log::mark("setup");
+        let own = |name: &str| options.cfg_dir.as_ref().map(|dir| dir.join(name)).filter(|file| file.is_file());
         let audio_ini = match &options.ini {
             Some(file) => file.clone(),
-            None => documents().map(|d| d.join("cfg/audio.ini")).unwrap_or_default(),
+            None => own("audio.ini").or_else(|| documents().map(|d| d.join("cfg/audio.ini"))).unwrap_or_default(),
         };
         let files = EngineFiles { content_root: ac.clone(), audio_engine_ini: ac.join("system/cfg/audio_engine.ini"), audio_ini: audio_ini.clone() };
         let mut engine = AudioEngine::new(files)?;
@@ -461,8 +467,8 @@ impl GameAudio {
         let has_bank = sounds.first().is_some_and(|car| car.audio.is_some());
         let silent: Vec<&str> = cars.iter().zip(&sounds).skip(1).filter(|(_, sound)| sound.audio.is_none()).map(|(car, _)| car.0.as_str()).collect();
         // CameraDrivableManager: the bonnet's and the bumper's view may count as outside
-        let manager = match documents() {
-            Some(d) => IniReader::load(&d.join("cfg/camera_manager.ini"))?,
+        let manager = match own("camera_manager.ini").or_else(|| documents().map(|d| d.join("cfg/camera_manager.ini"))) {
+            Some(file) => IniReader::load(&file)?,
             None => IniReader::default(),
         };
         let flag = |key: &str| manager.has_key("AUDIO", key) && manager.get_int("AUDIO", key).unwrap_or(0) != 0;
@@ -470,7 +476,8 @@ impl GameAudio {
             Some(name) => Some((OracleCamera::parse(name)?, None)),
             None => None,
         };
-        let devices = if options.wav.is_none() && !options.null { engine.driver_names().len() } else { 0 };
+        let drivers = if options.wav.is_none() && !options.null { engine.driver_names() } else { Vec::new() };
+        let devices = drivers.len();
         println!(
             "audio: FMOD {:#x} from {}; {}; car bank {}; track: {}",
             engine.version,
@@ -499,6 +506,7 @@ impl GameAudio {
             feed,
             last: None,
             camera: None,
+            drivers,
             bonnet_external: flag("BONNET_EXTERNAL"),
             bumper_external: flag("BUMPER_EXTERNAL"),
             paused: false,
@@ -638,6 +646,44 @@ impl GameAudio {
     /// game, the louder tyres and engine of an outside view stay with the car that was focused
     /// when the camera mode last changed (`ACCameraManager::setAudioDistanceScale` is not
     /// called for a change of the focus).
+    /// The sound as the Audio app reads it.
+    pub fn app_sound(&self) -> crate::render::gui_apps::AppSound {
+        crate::render::gui_apps::AppSound { drivers: self.drivers.clone(), camera: [self.bonnet_external, self.bumper_external] }
+    }
+
+    /// The Audio app's calls: `AudioEngine::setVolume` 0x1401fbdf0, a level of every car's
+    /// `mixVolumes` (the transmission's -1: the engine's level now, else times 3), the views'
+    /// sounds (the game's are a car's `DrivableCameraDef`; rustyAC's camera has one pair).
+    pub fn app_action(&mut self, action: &rustyac_gui::apps::AppAction) {
+        use rustyac_gui::apps::{AppAction, MixLevel};
+        match action {
+            AppAction::SetMasterVolume(v) => self.world.engine.set_volume(*v),
+            AppAction::SetMixLevel { level, value } => {
+                for car in self.world.cars.iter_mut() {
+                    let Some(audio) = car.audio.as_mut() else { continue };
+                    let m = &mut audio.mix_volumes;
+                    match level {
+                        MixLevel::Wind => m.wind = *value,
+                        MixLevel::Tyres => m.tyres = *value,
+                        MixLevel::Surfaces => m.surfaces = *value,
+                        MixLevel::Dirt => m.dirt = *value,
+                        MixLevel::Engine => m.engine = *value,
+                        MixLevel::Transmission => m.transmission = if *value == -1.0 { m.engine } else { *value * 3.0 },
+                        MixLevel::Opponents => m.opponents = *value,
+                    }
+                }
+            }
+            AppAction::SetCameraSound { which, external, .. } => {
+                if *which == 0 {
+                    self.bonnet_external = *external;
+                } else {
+                    self.bumper_external = *external;
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn set_focus(&mut self, focus: usize) {
         self.focus = focus;
     }

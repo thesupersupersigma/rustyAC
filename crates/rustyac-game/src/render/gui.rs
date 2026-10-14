@@ -581,7 +581,7 @@ impl GameGui {
             self.apps.make(&mut self.gui, &mut painter, self.screen, &self.setup, self.leaderboard_app);
         }
         self.gui.render_all(dt, &mut painter);
-        super::gui_apps::GameApps::write_files(&mut self.gui, &self.setup);
+        self.apps.write_files(&mut self.gui, &self.setup);
     }
 
     /// `Game::renderHUD` 0x140242e30 over the HUD objects, in the order `Sim::Sim` made them.

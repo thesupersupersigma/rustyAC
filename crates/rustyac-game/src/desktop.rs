@@ -451,7 +451,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                     key("SHORT_NAME").or_else(|| key("SCREEN_NAME")).unwrap_or_else(|| car.name.clone())
                 })
                 .collect(),
-            cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
+            cfg_dir: cfg_dir(options),
             // (not over a recorded drive: its jobs are the recording's)
             setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
@@ -498,6 +498,11 @@ fn audio_feed(options: &Options, headless: bool) -> Option<Arc<Mutex<Feed>>> {
     Some(Arc::new(Mutex::new(if audio.clockless() { Feed::with_grid() } else { Feed::default() })))
 }
 
+/// rustyAC's own `cfg` folder (`--cfg-dir`, else `cfg` beside the exe): the files the apps write.
+fn cfg_dir(options: &Options) -> PathBuf {
+    options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg"))
+}
+
 /// The sound of the car that was built (the engine, the track's sounds, the car's).
 fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Option<GameAudio> {
     let feed = feed.as_ref()?;
@@ -507,7 +512,10 @@ fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustya
         .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
         .collect();
     let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
-    let mut audio = GameAudio::start(&options.audio, Arc::clone(feed), &cars, track)?;
+    // the Audio app's files in rustyAC's own cfg folder come before Documents'
+    let mut audio_options = options.audio.clone();
+    audio_options.cfg_dir = Some(cfg_dir(options));
+    let mut audio = GameAudio::start(&audio_options, Arc::clone(feed), &cars, track)?;
     audio.set_focus(options.focus.min(others.len()));
     Some(audio)
 }
@@ -2007,6 +2015,13 @@ fn run_window(options: &Options) -> Result<(), String> {
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
+            // the Audio app: what it reads of the sound, what it asked of it in this frame
+            if let Some(gui) = renderer.gui() {
+                gui.apps.sound = sound.app_sound();
+                for action in std::mem::take(&mut gui.apps.sound_actions) {
+                    sound.app_action(&action);
+                }
+            }
             sound.set_focus(focus.index);
             if options.audio.clockless() {
                 sound.grid_frames(|_| (camera, frame.matrix));

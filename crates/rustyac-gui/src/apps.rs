@@ -27,6 +27,99 @@ pub enum AppAction {
     /// a file the app writes: its name as the game names it (under `Documents\Assetto Corsa\`
     /// for a settings file, under the game's folder for a track's map) and its bytes
     WriteFile { path: String, bytes: Vec<u8> },
+    /// `WritePrivateProfileStringW(section, key, value, <Documents>\Assetto Corsa\<file>)`
+    /// (see [`write_profile_string`])
+    WriteProfileString { file: String, section: String, key: String, value: String },
+    /// `AudioEngine::setVolume` 0x1401fbdf0 (the master level, 0..1)
+    SetMasterVolume(f32),
+    /// one level of every car's `CarAudioFMOD::mixVolumes`; for the transmission -1 means
+    /// "the engine's level now", any other value is stored times 3
+    SetMixLevel { level: MixLevel, value: f32 },
+    /// `CameraDrivableManager::setDrivableCameraDefAt`: a car's bonnet (0) or bumper (1) view
+    /// hears the car from outside
+    SetCameraSound { car: usize, which: usize, external: bool },
+}
+
+/// A level of `MixVolumes` (`CarAudioFMOD+0x118`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MixLevel {
+    Wind,
+    Tyres,
+    Surfaces,
+    Dirt,
+    Engine,
+    Transmission,
+    Opponents,
+}
+
+/// What Windows' `WritePrivateProfileStringW` makes of a file (`None`: there is none) when it
+/// sets `key` of `section` to `value`, as the game's settings apps write: the first section of
+/// that name (no case, blanks around it ignored) gets it; a line of that key (no case, blanks
+/// ignored, an `=` in it) keeps everything up to its `=` and takes the value up to its line's
+/// end; a new key goes after the section's last line that is not empty, or at the file's end
+/// when the section is the file's last; a new section goes at the end. New lines end in CRLF.
+pub fn write_profile_string(file: Option<&[u8]>, section: &str, key: &str, value: &str) -> Vec<u8> {
+    let text = file.unwrap_or_default();
+    // the lines with their ends
+    let mut lines: Vec<(usize, usize, usize)> = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        let end = text[at..].iter().position(|b| *b == b'\n').map_or(text.len(), |p| at + p + 1);
+        let mut body = end;
+        while body > at && (text[body - 1] == b'\n' || text[body - 1] == b'\r') {
+            body -= 1;
+        }
+        lines.push((at, body, end));
+        at = end;
+    }
+    let trim = |b: &[u8]| -> String { String::from_utf8_lossy(b).trim().to_ascii_lowercase() };
+    let header = |l: &(usize, usize, usize)| -> Option<String> {
+        let t = String::from_utf8_lossy(&text[l.0..l.1]).trim_start().to_string();
+        let t = t.strip_prefix('[')?;
+        let close = t.find(']')?;
+        Some(t[..close].trim().to_ascii_lowercase())
+    };
+    let new_line = format!("{key}={value}\r\n").into_bytes();
+    let terminated = |out: &mut Vec<u8>| {
+        if !out.is_empty() && !out.ends_with(b"\n") {
+            out.extend_from_slice(b"\r\n");
+        }
+    };
+    let Some(start) = lines.iter().position(|l| header(l).as_deref() == Some(&section.trim().to_ascii_lowercase())) else {
+        let mut out = text.to_vec();
+        terminated(&mut out);
+        out.extend_from_slice(format!("[{section}]\r\n").as_bytes());
+        out.extend_from_slice(&new_line);
+        return out;
+    };
+    let next = lines[start + 1..].iter().position(|l| header(l).is_some()).map(|p| start + 1 + p);
+    for l in &lines[start + 1..next.unwrap_or(lines.len())] {
+        let body = &text[l.0..l.1];
+        if let Some(eq) = body.iter().position(|b| *b == b'=') {
+            if trim(&body[..eq]) == key.trim().to_ascii_lowercase() {
+                let mut out = text[..l.0 + eq + 1].to_vec();
+                out.extend_from_slice(value.as_bytes());
+                out.extend_from_slice(&text[l.1..]);
+                return out;
+            }
+        }
+    }
+    let mut out;
+    match next {
+        None => {
+            out = text.to_vec();
+            terminated(&mut out);
+            out.extend_from_slice(&new_line);
+        }
+        Some(next) => {
+            let last = (start..next).rev().find(|i| !trim(&text[lines[*i].0..lines[*i].1]).is_empty()).unwrap_or(start);
+            out = text[..lines[last].2].to_vec();
+            terminated(&mut out);
+            out.extend_from_slice(&new_line);
+            out.extend_from_slice(&text[lines[last].2..]);
+        }
+    }
+    out
 }
 
 /// One car as the apps read it.
@@ -128,6 +221,12 @@ pub struct AppLink {
     pub time_mult: Option<f32>,
     /// `GameplaySettings` / `ksIsMPH`: speeds in miles an hour
     pub use_mph: bool,
+    /// a car's `DrivableCameraDef` `bonnetExternalSound` (+0x35), `bumperExternalSound` (+0x34)
+    pub camera_sounds: Vec<[bool; 2]>,
+    /// `AudioEngine::getDriverNum` / `getDriverInfo`: the sound cards' names
+    pub audio_drivers: Vec<String>,
+    /// Documents `cfg/audio.ini` as it is now (`None`: there is none)
+    pub audio_ini: Option<String>,
     pub actions: Vec<AppAction>,
 }
 
@@ -267,4 +366,38 @@ impl Gui {
 /// `ksgui::Form::setSize`'s callers in the apps call it through the vtable (+0x38).
 pub fn form_size(gui: &mut Gui, id: Id, w: f32, h: f32) {
     gui.set_size(id, w, h);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_profile_string;
+
+    /// What Windows 10's `WritePrivateProfileStringW(L"LEVELS", L"MASTER", L"0.700000", file)`
+    /// made of each file. (Not followed: a key line without `=` in the last section, before
+    /// which Windows puts the new key.)
+    #[test]
+    fn as_windows_writes() {
+        let cases: [(Option<&[u8]>, &[u8]); 16] = [
+            (None, b"[LEVELS]\r\nMASTER=0.700000\r\n"),
+            (Some(b"[A]\r\nX=1\r\n"), b"[A]\r\nX=1\r\n[LEVELS]\r\nMASTER=0.700000\r\n"),
+            (Some(b"[A]\r\nX=1"), b"[A]\r\nX=1\r\n[LEVELS]\r\nMASTER=0.700000\r\n"),
+            (Some(b"[A]\r\nX=1\r\n\r\n"), b"[A]\r\nX=1\r\n\r\n[LEVELS]\r\nMASTER=0.700000\r\n"),
+            (Some(b"[LEVELS]\r\nmaster = 1\r\nWIND=0.5\r\n"), b"[LEVELS]\r\nmaster =0.700000\r\nWIND=0.5\r\n"),
+            (Some(b"[LEVELS]\nMASTER=1\nWIND=0.5\n"), b"[LEVELS]\nMASTER=0.700000\nWIND=0.5\n"),
+            (Some(b"[levels]\r\nWIND=0.5\r\n"), b"[levels]\r\nWIND=0.5\r\nMASTER=0.700000\r\n"),
+            (Some(b"[ LEVELS ]\r\nWIND=0.5\r\n"), b"[ LEVELS ]\r\nWIND=0.5\r\nMASTER=0.700000\r\n"),
+            (Some(b"[LEVELS]\r\n;c\r\nWIND=0.5\r\n;d\r\n\r\n"), b"[LEVELS]\r\n;c\r\nWIND=0.5\r\n;d\r\n\r\nMASTER=0.700000\r\n"),
+            (Some(b"[LEVELS]\r\nWIND=1\r\n\r\n[B]\r\nY=2\r\n"), b"[LEVELS]\r\nWIND=1\r\nMASTER=0.700000\r\n\r\n[B]\r\nY=2\r\n"),
+            (Some(b"[LEVELS]\r\nWIND=1"), b"[LEVELS]\r\nWIND=1\r\nMASTER=0.700000\r\n"),
+            (Some(b"[LEVELS]\r\nWIND=1\r\n\r\n\r\n[B]\r\nY=2\r\n"), b"[LEVELS]\r\nWIND=1\r\nMASTER=0.700000\r\n\r\n\r\n[B]\r\nY=2\r\n"),
+            (Some(b"[LEVELS]\nWIND=1\n\n[B]\nY=2\n"), b"[LEVELS]\nWIND=1\nMASTER=0.700000\r\n\n[B]\nY=2\n"),
+            (Some(b"x\r\n[LEVELS]\r\n  MASTER  =  9 ;c\r\n"), b"x\r\n[LEVELS]\r\n  MASTER  =0.700000\r\n"),
+            (Some(b"[LEVELS]\r\nWIND=1\r\n[LEVELS]\r\nMASTER=2\r\n"), b"[LEVELS]\r\nWIND=1\r\nMASTER=0.700000\r\n[LEVELS]\r\nMASTER=2\r\n"),
+            (Some(b"[LEVELS]\r\n\r\n"), b"[LEVELS]\r\n\r\nMASTER=0.700000\r\n"),
+        ];
+        for (i, (file, want)) in cases.iter().enumerate() {
+            let got = write_profile_string(*file, "LEVELS", "MASTER", "0.700000");
+            assert_eq!(String::from_utf8_lossy(&got), String::from_utf8_lossy(want), "case {i}");
+        }
+    }
 }

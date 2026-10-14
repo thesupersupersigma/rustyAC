@@ -41,6 +41,13 @@ pub struct GameApps {
     ai_spline_length: f32,
     has_drs: Vec<bool>,
     ff_gain: f32,
+    /// the Audio app's calls on the sound (master level, mix levels, views), for the sound to
+    /// carry out
+    pub sound_actions: Vec<AppAction>,
+    /// the sound as the Audio app reads it: the sound cards' names, the views' "external" flags
+    pub sound: AppSound,
+    /// `cfg/audio.ini` as it is (rustyAC's own, else Documents'), kept as the app writes it
+    audio_ini: Option<String>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -83,6 +90,10 @@ impl GameApps {
         gui.game_screen_add_control(painter, screen, leaderboard, true);
         let id = gui.new_laps_app(painter);
         add(gui, painter, "laps", id);
+        // FormVolumes (after FormHDR, made only with a Yebis camera)
+        self.audio_ini = own_or_documents_text(setup, "audio.ini").map(|b| String::from_utf8_lossy(&b).into_owned());
+        let id = gui.new_volumes_app(painter);
+        add(gui, painter, "volumes", id);
         let help = std::fs::read(setup.game.join("system/locales/help/en.tag")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let id = gui.new_help_app(painter, &help);
         add(gui, painter, "help", id);
@@ -120,7 +131,7 @@ impl GameApps {
                 gui.set_visible(id, visible);
             }
         }
-        Self::write_files(gui, setup);
+        self.write_files(gui, setup);
     }
 
     /// `TrackMap::TrackMap` 0x1402ee8e0 with the track's files; a track without `map.png` has
@@ -138,9 +149,27 @@ impl GameApps {
 
     /// What the apps asked to write: into rustyAC's own cfg folder (a track's map under
     /// `maps\`, a settings file under its own name), never into the game's folders.
-    pub fn write_files(gui: &mut Gui, setup: &GuiSetup) {
+    /// A settings line the game writes with `WritePrivateProfileStringW` goes into rustyAC's own
+    /// copy of the file (made from Documents' the first time). The sound's calls wait in
+    /// [`GameApps::sound_actions`].
+    pub fn write_files(&mut self, gui: &mut Gui, setup: &GuiSetup) {
         for action in std::mem::take(&mut gui.apps.actions) {
-            let AppAction::WriteFile { path, bytes } = action;
+            let (path, bytes) = match action {
+                AppAction::WriteFile { path, bytes } => (path, bytes),
+                AppAction::WriteProfileString { file, section, key, value } => {
+                    let name = file.strip_prefix("cfg/").unwrap_or(&file).to_string();
+                    let old = own_or_documents_text(setup, &name);
+                    let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
+                    if name == "audio.ini" {
+                        self.audio_ini = Some(String::from_utf8_lossy(&bytes).into_owned());
+                    }
+                    (file, bytes)
+                }
+                other => {
+                    self.sound_actions.push(other);
+                    continue;
+                }
+            };
             let relative = path.replace('\\', "/");
             let target = match relative.strip_prefix("content/tracks/") {
                 Some(track) => setup.cfg_dir.join("maps").join(track),
@@ -236,6 +265,9 @@ impl GameApps {
             sun_angle: gui.sim.sun_angle,
             time_mult: None,
             use_mph,
+            camera_sounds: vec![self.sound.camera; world.len()],
+            audio_drivers: self.sound.drivers.clone(),
+            audio_ini: self.audio_ini.clone(),
             actions,
         };
         // Sim::evOnReplayStatusChanged (going in, coming out)
@@ -267,4 +299,17 @@ impl GameApps {
 pub fn use_mph(cfg_dir: &Path, documents_cfg: Option<&PathBuf>) -> bool {
     let ini = read(cfg_dir.join("gameplay.ini")).or_else(|| documents_cfg.and_then(|d| read(d.join("gameplay.ini"))));
     ini.is_some_and(|ini| ini.get_int("OPTIONS", "USE_MPH").unwrap_or(0) != 0)
+}
+
+/// The sound as the Audio app reads it.
+#[derive(Clone, Debug, Default)]
+pub struct AppSound {
+    pub drivers: Vec<String>,
+    /// the bonnet's and the bumper's views heard from outside
+    pub camera: [bool; 2],
+}
+
+/// A settings file's bytes: rustyAC's own copy, else Documents'.
+fn own_or_documents_text(setup: &GuiSetup, name: &str) -> Option<Vec<u8>> {
+    std::fs::read(setup.cfg_dir.join(name)).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|folder| std::fs::read(folder.join(name)).ok()))
 }
