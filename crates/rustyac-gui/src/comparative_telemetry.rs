@@ -333,6 +333,7 @@ impl Gui {
             self.set_text(title, &translate("Select the record"));
         }
         self.form_set_icon(painter, os, "content/gui/ctelemetry/close.png");
+        self.form_set_icon_size(os, 23.0, 23.0);
         self.controls[os].back_color = [0.0, 0.0, 0.0, 1.0];
         let list = self.new_list_box(painter, "OS_LISTBOX", 10, 1);
         if self.sim.telemetry.has_recorder {
@@ -591,18 +592,30 @@ impl App for ComparativeTelemetry {
     }
 
     fn render(&mut self, gui: &mut Gui, id: Id, dt: f32, painter: &mut dyn Painter) {
-        gui.set_app(id, Box::new(std::mem::replace(self, placeholder())));
-        gui.ct_render(id, dt, painter);
-        restore(gui, id, self);
+        lend(self, gui, id, |gui| gui.ct_render(id, dt, painter));
+    }
+
+    // (the children's handlers read the page's members: they are lent back to the form while
+    // the mouse reaches them)
+    fn on_mouse_down(&mut self, gui: &mut Gui, id: Id, e: &MouseEvent) -> bool {
+        lend(self, gui, id, |gui| gui.control_on_mouse_down(id, e))
+    }
+
+    fn on_mouse_up(&mut self, gui: &mut Gui, id: Id, e: &MouseEvent) {
+        lend(self, gui, id, |gui| gui.control_on_mouse_up(id, e));
+    }
+
+    fn on_mouse_wheel(&mut self, gui: &mut Gui, id: Id, e: &MouseEvent) {
+        lend(self, gui, id, |gui| gui.control_on_mouse_wheel(id, e));
     }
 
     /// `ComparativeTelemetry::onVisibleChanged` 0x140070cb0: neither Form's nor Control's.
     fn on_visible_changed(&mut self, gui: &mut Gui, id: Id, visible: bool) {
         if visible {
-            gui.set_app(id, Box::new(std::mem::replace(self, placeholder())));
-            gui.ct_update_best_player_data(id, true);
-            gui.ct_update_last_player_data(id, true);
-            restore(gui, id, self);
+            lend(self, gui, id, |gui| {
+                gui.ct_update_best_player_data(id, true);
+                gui.ct_update_last_player_data(id, true);
+            });
         }
     }
 
@@ -623,11 +636,19 @@ impl App for ComparativeTelemetry {
         } else {
             0.0
         };
-        gui.form_on_mouse_move(id, e);
+        lend(self, gui, id, |gui| gui.form_on_mouse_move(id, e));
     }
 
     /// vtable +0xa8: nothing (the page is never dragged).
     fn on_title_clicked(&mut self, _gui: &mut Gui, _id: Id, _ev: &Clicked) {}
+}
+
+/// `f` with the page's members back on its form.
+fn lend<R>(ct: &mut ComparativeTelemetry, gui: &mut Gui, id: Id, f: impl FnOnce(&mut Gui) -> R) -> R {
+    gui.set_app(id, Box::new(std::mem::replace(ct, placeholder())));
+    let r = f(gui);
+    restore(gui, id, ct);
+    r
 }
 
 /// An empty stand-in while the members are lent back to the form.

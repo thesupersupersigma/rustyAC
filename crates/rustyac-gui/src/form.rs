@@ -352,6 +352,13 @@ impl Gui {
     }
 
     /// `Form::setIconVisible` 0x140246cc0.
+    /// `Form::setIconSize` 0x140246cb0: the icon's `setSize`.
+    pub fn form_set_icon_size(&mut self, id: Id, w: f32, h: f32) {
+        if let Some(icon) = self.form_data(id).icon {
+            self.set_size(icon, w, h);
+        }
+    }
+
     pub fn form_set_icon_visible(&mut self, id: Id, visible: bool) {
         let (blocked, can_be_scaled, icon, pin, zoom_in, zoom_out) = {
             let d = self.form_data(id);
