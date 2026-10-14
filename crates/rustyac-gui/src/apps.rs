@@ -57,6 +57,11 @@ pub struct AppCar {
     pub abs_in_action: bool,
     pub tc_enabled: bool,
     pub tc_in_action: bool,
+    /// `physicsInfo`: `hasKERS`, `hasERS`, `kersMaxJ`, `ersMaxJ`
+    pub has_kers: bool,
+    pub has_ers: bool,
+    pub kers_max_j: f32,
+    pub ers_max_j: f32,
     /// `CarAvatar::isEdlEnabled`, `getEdlOutLevel`; `physicsInfo.hasDRS`
     pub edl_enabled: bool,
     pub edl_out_level: f32,

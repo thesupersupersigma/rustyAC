@@ -11,6 +11,7 @@
 pub mod acos;
 pub mod app_delta;
 pub mod app_essentials;
+pub mod app_gears;
 pub mod app_laps;
 pub mod app_pedals;
 pub mod app_position;
