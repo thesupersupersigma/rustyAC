@@ -193,6 +193,9 @@ pub struct RefereeHud {
     /// `RaceManager::fixedSetup` (race.ini `[RACE] FIXED_SETUP`): the ESC menu's Setup button
     /// is dimmed and answers "Blocked"
     pub fixed_setup: bool,
+    /// changes whenever `Sim::evOnNewSession` fires (another session, a restart, a rebuilt
+    /// world): the ESC menu a session begins in comes up again
+    pub new_sessions: u32,
     /// Task 30: what the ESC menu's "Race control" says of the day: the track's grip, the
     /// air's and the road's temperature, the wind's speed (m/s) and direction (degrees)
     pub env: [f32; 5],

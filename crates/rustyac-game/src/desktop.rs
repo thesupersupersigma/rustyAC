@@ -426,7 +426,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                 Some(list) => list.split(',').filter(|s| !s.trim().is_empty()).count() as u32,
                 None => race_reader.as_ref().map_or(1, |ini| (0..32).take_while(|n| ini.has_section(&format!("SESSION_{n}"))).count().max(1) as u32),
             },
-            online: options.join.is_some(),
+            online: options.join.is_some() || options.online_session,
             replay: !options.no_ac_replay && options.replay.is_none(),
             player_data: info.data_path.clone(),
             skins: cars
@@ -452,7 +452,8 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                 })
                 .collect(),
             cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
-            setup_snapshot: info.setup.as_deref().cloned(),
+            // (not over a recorded drive: its jobs are the recording's)
+            setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -854,7 +855,7 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
 /// the wheel in a window, and not for a replay, a drive nobody sits at, a picture, a run
 /// without AC's GUI, or online (where rustyAC has no ESC menu yet).
 fn esc_start(options: &Options) -> bool {
-    if options.replay.is_some() || options.join.is_some() || options.no_gui || options.no_hud || options.debug_view {
+    if options.replay.is_some() || options.join.is_some() || options.online_session || options.no_gui || options.no_hud || options.debug_view {
         return false;
     }
     if let Some(asked) = options.esc_start {
@@ -920,6 +921,7 @@ fn join_server(options: &Options) -> Result<Option<(Options, rustyac_game::onlin
         online.spawn_given = true;
     }
     online.no_race_cars = true;
+    online.online_session = true;
     online.cars = None;
     online.opponents.clear();
     if online.sun.is_none() {
@@ -1241,6 +1243,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         Some(session) => (online_setup(options, session)?, None),
         None => drive(options)?,
     };
+    let setup_esc_start = setup.esc_start && replay.is_none();
     let mut notes = Vec::new();
     let bindings = Bindings::load(options, &mut notes);
     for note in &notes {
@@ -1407,6 +1410,11 @@ fn run_window(options: &Options) -> Result<(), String> {
     let mut debug_hud = options.debug_hud || renderer.gui().is_none();
     if let (Some(commands), Some(gui)) = (&options.gui_do, renderer.gui()) {
         gui.script(commands)?;
+    }
+    // a session that begins in the ESC menu, and AC's GUI did not come up (the debug view
+    // is drawn instead): nobody could press "Drive", so it is pressed here
+    if setup_esc_start && !renderer.gui().is_some_and(|gui| gui.has_esc_menu()) {
+        shared.requests.fetch_or(event::PITS_DRIVE, Ordering::Relaxed);
     }
     'frames: loop {
         for event in window.pump() {

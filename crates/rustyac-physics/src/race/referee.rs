@@ -123,6 +123,9 @@ pub struct Referee {
     /// how much the player's car points against the road (the last frame's `FlagCar`): the
     /// wrong-way sign reads it
     pub player_against_road: f32,
+    /// how often `Sim::evOnNewSession` has fired (a restart fires it too): the ESC menu that a
+    /// session begins in comes up at each
+    pub new_session_count: u32,
     /// the stops that began and ended in the last frame (`evPitStopCommit`, `evPitStopOver`):
     /// the pit crew and the sounds listen
     pub pit_began: Option<PitStopStart>,
@@ -207,6 +210,7 @@ impl Referee {
             pit_avatar: PitAvatar::default(),
             pit_window: (0, 0),
             player_against_road: 0.0,
+            new_session_count: 0,
             pit_began: None,
             pit_over: false,
             mandatory_pit_now: false,
@@ -387,6 +391,9 @@ impl Referee {
         if new_session && self.manager.current_session.session_type == SESSION_RACE && self.next_start_delay_ms >= 0.0 {
             // (the click that ends the session's intro, at once)
             self.start_race(self.next_start_delay_ms, world);
+        }
+        if new_session {
+            self.new_session_count = self.new_session_count.wrapping_add(1);
         }
         if new_session && self.next_start_delay_ms < 0.0 {
             // the ESC menu comes up again (the handler of the new session, 0x140195c60)

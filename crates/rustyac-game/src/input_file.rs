@@ -1121,8 +1121,12 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
         let words: Vec<&str> = line.split_whitespace().collect();
         let bad = || format!("setup jobs: {line:?}");
         let int = |i: usize| words.get(i).and_then(|w| w.parse::<i64>().ok()).ok_or_else(bad);
-        let float = |i: usize| words.get(i).and_then(|w| u32::from_str_radix(w, 16).ok()).map(f32::from_bits).ok_or_else(bad);
-        let step = int(0)? as u64;
+        let float = |i: usize| words.get(i).and_then(|w| u32::from_str_radix(w, 16).ok()).map(f32::from_bits).filter(|v| v.is_finite()).ok_or_else(bad);
+        let step = u64::try_from(int(0)?).map_err(|_| bad())?;
+        // (the jobs are done in the file's order: a step may not be before the one above it)
+        if jobs.last().is_some_and(|(before, _): &(u64, SetupJob)| *before > step) {
+            return Err(bad());
+        }
         let job = match words.get(1).copied().ok_or_else(bad)? {
             "attach" => SetupJob::Attach { item: int(2)? as usize },
             "value" => SetupJob::SetNewValue { item: int(2)? as usize, value: float(3)? },
@@ -1147,7 +1151,8 @@ pub fn read_setup_jobs(input: &Path) -> Result<Vec<(u64, SetupJob)>, String> {
     let path = setup_jobs_path(input);
     match std::fs::read_to_string(&path) {
         Ok(text) => parse_setup_jobs(&text).map_err(|e| format!("{}: {e}", path.display())),
-        Err(_) => Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
 
@@ -1217,5 +1222,9 @@ mod setup_jobs_tests {
         assert_eq!(setup_jobs_text(&back), text);
         assert!(parse_setup_jobs("something else\n").is_err());
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n3 nonsense 1\n").is_err());
+        // a step before the one above it, a negative step, a number that is none
+        assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n5 tc 1\n4 tc 1\n").is_err());
+        assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n-1 tc 1\n").is_err());
+        assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n1 turbo 7fc00000\n").is_err());
     }
 }

@@ -140,6 +140,9 @@ pub struct SetupLink {
 /// What [`SetupCar`] says of a car, read from the physics car at one moment.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SetupSnapshot {
+    /// how many of the editor's jobs the car had done when the picture was taken (the
+    /// physics thread's count; 0 where jobs are done at once)
+    pub applied_jobs: u64,
     pub unix_name: String,
     pub data_path: PathBuf,
     pub items: Vec<SetupItemInfo>,
@@ -194,6 +197,7 @@ impl SetupSnapshot {
             *radius = tyre.data.radius;
         }
         SetupSnapshot {
+            applied_jobs: 0,
             unix_name: unix_name.to_string(),
             data_path: chassis.data_path.clone(),
             items: manager.items.iter().map(|item| SetupItemInfo { name: item.name.clone(), units: item.units.clone(), label_multiplier: item.label_multiplier }).collect(),
@@ -204,7 +208,8 @@ impl SetupSnapshot {
             front_wheel_drive: drivetrain.is_some_and(|d| d.base().traction_type == rustyac_physics::car::drivetrain::TractionType::Fwd),
             tyre_radius,
             limiter_rpm: drivetrain.map_or(0, |d| d.engine().get_limiter_rpm()),
-            tyre_compounds: chassis.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default(),
+            // (`Car::Car` copies the names only when the four tyres have as many compounds)
+            tyre_compounds: chassis.tyres.first().filter(|first| chassis.tyres.iter().all(|tyre| tyre.compound_defs.len() == first.compound_defs.len())).map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default(),
             max_fuel: chassis.max_fuel,
             requested_fuel: chassis.requested_fuel,
             fuel_per_lap: chassis.fuel_lap_evaluator.fuel_per_lap(),

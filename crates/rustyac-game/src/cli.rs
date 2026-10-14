@@ -125,6 +125,9 @@ pub struct Options {
     pub setups_dir: Option<PathBuf>,
     /// `--no-ac-setups`: the setups of `Documents\Assetto Corsa\setups` are not listed
     pub no_ac_setups: bool,
+    /// set by the program, not by an option: the drive is on a server (joined with `--join`
+    /// or through race.ini's `[REMOTE]`)
+    pub online_session: bool,
     /// `--gui-do <commands>`: mouse moves, keys and a few events for AC's GUI, done before the
     /// first frame (`render::gui::GameGui::script`)
     pub gui_do: Option<String>,
@@ -370,6 +373,7 @@ impl Default for Options {
             esc_start: None,
             setups_dir: None,
             no_ac_setups: false,
+            online_session: false,
             gui_do: None,
             free_camera: None,
             debug_view: false,

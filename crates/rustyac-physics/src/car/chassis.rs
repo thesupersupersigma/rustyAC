@@ -1717,7 +1717,12 @@ impl RollingChassis {
                     self.set_tyre_compound(tyre, index);
                 }
             }
-            SetupJob::SetRequestedFuel { value, .. } => {
+            SetupJob::SetRequestedFuel { value, spinner_value } => {
+                // the fuel spinner's job @ 0x14016e450: another number than the car's
+                // restarts the wait for the setup's check
+                if spinner_value as f32 != self.requested_fuel {
+                    self.setup_manager.wait_time = self.setup_manager.max_wait_time;
+                }
                 // Car::setRequestedFuel @ 0x140275cb0
                 self.fuel = value as f64;
                 self.requested_fuel = value;

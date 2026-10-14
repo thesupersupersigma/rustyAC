@@ -214,16 +214,15 @@ impl Shared {
         world
     }
 
-    /// Puts a fresh start of the session before the display: nothing to blend through.
     /// The player's car as the setup editor sees it, as of now.
     pub fn publish_setup(&self, sim: &GameSim) {
-        let name = std::path::Path::new(&sim.setup.car).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let mut snapshot = rustyac_gui::setup_car::SetupSnapshot::of(&sim.car.car, &name);
-        snapshot.fuel_per_lap = sim.fuel_evaluator.fuel_per_lap();
+        let mut snapshot = rustyac_gui::setup_car::SetupSnapshot::of(&sim.car.car, &sim.setup_car_name());
+        snapshot.applied_jobs = sim.setup_log.len() as u64;
         let mut slot = self.setup_snapshot.lock().unwrap();
         *slot = (slot.0 + 1, Some(snapshot));
     }
 
+    /// Puts a fresh start of the session before the display: nothing to blend through.
     fn publish_start(&self, sim: &GameSim) {
         let view = CarView::capture(sim, 0.0);
         let others = capture_others(sim);

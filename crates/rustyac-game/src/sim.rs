@@ -1324,14 +1324,22 @@ impl GameSim {
         }
     }
 
+    /// The car's folder name, as the setups' folders have it (`CarAvatar::unixName`): the
+    /// folder above `data` when the car was named by its data folder.
+    pub fn setup_car_name(&self) -> String {
+        if !self.car.car.unix_name.is_empty() {
+            return self.car.car.unix_name.clone();
+        }
+        car_name(&self.data_path)
+    }
+
     /// What the display needs to know of the car once: where its data is and where its
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
         let info =
             CarInfo { setup: None, data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len() + self.remote_count(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
         let mut info = Self::with_wheels(info, &self.car.car);
-        let name = Path::new(&self.setup.car).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &name)));
+        info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info
     }
 
@@ -1553,7 +1561,11 @@ impl GameSim {
 
     /// Task 28: what the referee says, for the display.
     pub fn referee_hud(&self) -> Option<crate::referee::RefereeHud> {
-        self.referee.as_ref().map(|referee| crate::referee::hud_of(referee, &self.car.car))
+        self.referee.as_ref().map(|referee| {
+            let mut hud = crate::referee::hud_of(referee, &self.car.car);
+            hud.new_sessions = (self.new_sessions << 16) | (referee.new_session_count & 0xffff);
+            hud
+        })
     }
 
     /// Task 28: the end of the program (`RaceManager::shutdown`, `Sim::writeOutputJson`,
@@ -1846,6 +1858,11 @@ impl GameSim {
         }
         for job in std::mem::take(&mut self.setup_jobs) {
             self.car.car.apply_setup_job(&job);
+            // (the lap a refuel falls in is no measure of the fuel a lap takes: the HUD's own
+            // evaluator hears it too)
+            if matches!(job, SetupJob::SetRequestedFuel { .. }) {
+                self.fuel_evaluator.ignore_lap = true;
+            }
             self.setup_log.push((self.steps, job));
         }
         let (mut events, bias_clicks) = self.car.device.source.take_events();

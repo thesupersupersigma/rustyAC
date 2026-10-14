@@ -137,9 +137,14 @@ pub struct GameGui {
     /// pictures of it that is
     setup_data: Option<std::rc::Rc<std::cell::RefCell<rustyac_gui::setup_car::SnapshotData>>>,
     setup_generation: u64,
+    /// how many jobs the editor has handed over (a picture of the car that holds fewer of
+    /// them is not taken: it would put a spinner back for a moment)
+    setup_jobs_sent: u64,
     /// a new session began since the window last asked (the car is its own again: a lock of
     /// the controls the ESC menu wants has to be asked for anew)
     pub pits_lock_stale: bool,
+    /// the referee's count of new sessions when last looked at
+    new_sessions_seen: Option<u32>,
     /// the `OverlayLeaderboard` (with more than one car, outside a drag race)
     pub overlay: Option<OverlayLeaderboard>,
     /// `Sim::leaderboard`: the table held on TAB (with more than one car, or online)
@@ -337,7 +342,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -416,10 +421,17 @@ impl GameGui {
                 self.last_session_index = index;
                 self.gui.sim_on_new_session();
                 self.pits_lock_stale = true;
-                // the handler of `Sim::evOnNewSession` (0x140195c60): the ESC menu comes up
-                if self.setup.esc_start && self.esc_menu.is_some() {
-                    self.gui.sim_activate_esc_menu();
+            }
+            // the handler of `Sim::evOnNewSession` (0x140195c60): the ESC menu comes up, at
+            // another session and at a restart alike (the referee has locked the controls)
+            if let Some(referee) = &info.referee {
+                if self.new_sessions_seen.is_some_and(|seen| seen != referee.new_sessions) {
+                    self.pits_lock_stale = true;
+                    if self.setup.esc_start && self.esc_menu.is_some() {
+                        self.gui.sim_activate_esc_menu();
+                    }
                 }
+                self.new_sessions_seen = Some(referee.new_sessions);
             }
         }
         // an online session's overlays; the countdown of a driver who was put out
@@ -791,6 +803,11 @@ impl GameGui {
         self.disconnect_time > 10.0
     }
 
+    /// There is an ESC menu (none online).
+    pub fn has_esc_menu(&self) -> bool {
+        self.esc_menu.is_some()
+    }
+
     /// The ESC menu (the menu of the pits) shows.
     pub fn esc_menu_visible(&self) -> bool {
         self.esc_menu.is_some_and(|esc| self.gui.controls[esc].visible)
@@ -960,7 +977,9 @@ impl GameGui {
         let Some(data) = &self.setup_data else { return Vec::new() };
         let mut data = data.borrow_mut();
         let jobs = std::mem::take(&mut data.jobs);
-        if let (true, true, Some(snapshot)) = (jobs.is_empty(), newest.0 != self.setup_generation, &newest.1) {
+        self.setup_jobs_sent += jobs.len() as u64;
+        let sent = self.setup_jobs_sent;
+        if let (true, true, Some(snapshot)) = (jobs.is_empty(), newest.0 != self.setup_generation, newest.1.as_ref().filter(|snapshot| snapshot.applied_jobs >= sent)) {
             self.setup_generation = newest.0;
             data.snapshot = snapshot.clone();
             self.gui.sim.setup_state = snapshot.setup_state;
