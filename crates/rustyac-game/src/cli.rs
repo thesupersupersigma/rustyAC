@@ -116,6 +116,11 @@ pub struct Options {
     /// `--cfg-dir <folder>`: where rustyAC keeps its own `acos.ini` and `gameplay.ini`
     /// (default: `cfg` beside rustyac.exe; never Assetto Corsa's own folders)
     pub cfg_dir: Option<PathBuf>,
+    /// `--setups-dir <folder>`: where the setup editor saves (default: `setups` beside
+    /// rustyac.exe; never Assetto Corsa's own folders)
+    pub setups_dir: Option<PathBuf>,
+    /// `--no-ac-setups`: the setups of `Documents\Assetto Corsa\setups` are not listed
+    pub no_ac_setups: bool,
     /// `--gui-do <commands>`: mouse moves, keys and a few events for AC's GUI, done before the
     /// first frame (`render::gui::GameGui::script`)
     pub gui_do: Option<String>,
@@ -358,6 +363,8 @@ impl Default for Options {
             debug_hud: false,
             no_gui: false,
             cfg_dir: None,
+            setups_dir: None,
+            no_ac_setups: false,
             gui_do: None,
             free_camera: None,
             debug_view: false,
@@ -837,6 +844,8 @@ impl Options {
                 "--debug-hud" => o.debug_hud = true,
                 "--no-gui" => o.no_gui = true,
                 "--cfg-dir" => o.cfg_dir = Some(PathBuf::from(value("--cfg-dir")?)),
+                "--setups-dir" => o.setups_dir = Some(PathBuf::from(value("--setups-dir")?)),
+                "--no-ac-setups" => o.no_ac_setups = true,
                 "--gui-do" => o.gui_do = Some(value("--gui-do")?),
                 "--supersample" => o.supersample = value("--supersample")?.parse().ok().filter(|n| (1..=4).contains(n)).ok_or("--supersample <1 to 4>")?,
                 "--free-camera" => o.free_camera = Some(FreeCamera::parse(&value("--free-camera")?)?),

@@ -56,7 +56,7 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     }
     gui.sim.session_count = s.session_count;
     if let Some(car) = hud.input.cars.first() {
-        crate::gui_port_setup::BODY.with(|body| *body.borrow_mut() = car.body_matrix);
+        crate::gui_port_setup::set_state(&car.body_matrix);
     }
     gui.sim.time_to_session_start = hud.input.time_to_session_start;
     gui.sim.has_replay_manager = s.replay_manager;

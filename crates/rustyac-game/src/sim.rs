@@ -5,6 +5,7 @@
 //! reports. Live driving, `--replay` and the tests all go through [`GameSim::step`]; there is
 //! no other way the game touches the car.
 
+use rustyac_physics::car::setup::SetupJob;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -625,6 +626,8 @@ pub struct CarInfo {
     pub track_layout: String,
     /// The setup's `render_seed`.
     pub render_seed: u32,
+    /// Task 31: the player's car as the setup editor sees it when the session starts
+    pub setup: Option<Box<rustyac_gui::setup_car::SetupSnapshot>>,
     /// Another car of the session: the skin it was asked for (`None`: the car's first)
     pub skin: Option<String>,
     /// How many cars the session has (`RaceManager::carsToBeLoaded`)
@@ -698,6 +701,13 @@ pub struct GameSim {
     pub solo_ai: rustyac_physics::ai::SoloAi,
     /// Task 28: the referee (AC's `RaceManager` and what hangs on it); `None`: no race rules.
     pub referee: Option<Box<rustyac_physics::race::Referee>>,
+    /// Task 31: the setup editor's jobs for the player's car (the game's
+    /// `PhysicsAvatar::commandQueue`), done before the next step
+    pub setup_jobs: Vec<SetupJob>,
+    /// the jobs of a recording: each with the step it is done before
+    pub setup_schedule: std::collections::VecDeque<(u64, SetupJob)>,
+    /// every job done so far, with its step (a recording keeps them beside its input file)
+    pub setup_log: Vec<(u64, SetupJob)>,
 }
 
 /// Another car of the session with its driver.
@@ -1255,7 +1265,8 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new() };
+        sim.setup_schedule = sim.setup.setup_jobs.iter().cloned().collect();
         sim.start_ai()?;
         sim.start_referee();
         Ok(sim)
@@ -1313,8 +1324,11 @@ impl GameSim {
     /// wheels sit.
     pub fn car_info(&self) -> CarInfo {
         let info =
-            CarInfo { data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len() + self.remote_count(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
-        Self::with_wheels(info, &self.car.car)
+            CarInfo { setup: None, data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len() + self.remote_count(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
+        let mut info = Self::with_wheels(info, &self.car.car);
+        let name = Path::new(&self.setup.car).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &name)));
+        info
     }
 
     /// The same of the session's other cars, in creation order.
@@ -1323,7 +1337,7 @@ impl GameSim {
         self.opponents
             .iter()
             .map(|other| {
-                let info = CarInfo { data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars, ..CarInfo::default() };
+                let info = CarInfo { setup: None, data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars, ..CarInfo::default() };
                 Self::with_wheels(info, &other.car.car)
             })
             .chain(self.remote_infos())
@@ -1820,6 +1834,16 @@ impl GameSim {
     /// One physics step with whatever the driver's source says; returns what it said (the
     /// step's line in an input file).
     pub fn step(&mut self) -> Result<StepInput, String> {
+        // PhysicsAvatar::stepCommandQueue: the setup editor's jobs
+        while self.setup_schedule.front().is_some_and(|(step, _)| *step <= self.steps) {
+            if let Some((_, job)) = self.setup_schedule.pop_front() {
+                self.setup_jobs.push(job);
+            }
+        }
+        for job in std::mem::take(&mut self.setup_jobs) {
+            self.car.car.apply_setup_job(&job);
+            self.setup_log.push((self.steps, job));
+        }
         let (mut events, bias_clicks) = self.car.device.source.take_events();
         if self.setup.ai.hand_over_step == self.steps as i64 {
             events |= event::AI_ON;

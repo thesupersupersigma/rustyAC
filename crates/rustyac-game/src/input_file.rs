@@ -14,6 +14,7 @@ use std::io::Write;
 use std::path::Path;
 
 use rustyac_physics::car::replay::{Ground, RunSetup};
+use rustyac_physics::car::setup::SetupJob;
 use rustyac_physics::track::DynamicTrack;
 use rustyac_physics::car::{CarControls, ChassisEnvironment};
 
@@ -570,6 +571,9 @@ pub struct SimSetup {
     pub drs_zones: bool,
     /// `getFFGlobalGain` of the driver's device (a wheel's force-feedback gain; else 1).
     pub ff_gain: f32,
+    /// Task 31: the setup editor's jobs of the drive, each with the step it is done before.
+    /// Not in the header: they are the file beside the input file (`<input>.setup`).
+    pub setup_jobs: Vec<(u64, SetupJob)>,
     pub oracle: Option<OracleSetup>,
     /// The track: a folder, or a name under the game's `content/tracks`. Empty: the endless
     /// flat road.
@@ -620,6 +624,7 @@ impl Default for SimSetup {
             session_starts_at_spawn: false,
             drs_zones: false,
             ff_gain: 1.0,
+            setup_jobs: Vec::new(),
             oracle: None,
             track: String::new(),
             layout: String::new(),
@@ -1041,7 +1046,9 @@ pub struct InputFile {
 impl InputFile {
     pub fn read(path: &Path) -> Result<InputFile, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        InputFile::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        let mut file = InputFile::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        file.setup.setup_jobs = read_setup_jobs(path)?;
+        Ok(file)
     }
 
     pub fn parse(bytes: &[u8]) -> Result<InputFile, String> {
@@ -1064,6 +1071,86 @@ impl InputFile {
     pub fn write(&self, path: &Path) -> Result<(), String> {
         std::fs::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
     }
+}
+
+/// The file beside an input file that holds the setup editor's jobs (`<input>.setup`): none
+/// when the drive had none.
+pub fn setup_jobs_path(input: &Path) -> std::path::PathBuf {
+    let mut name = input.as_os_str().to_os_string();
+    name.push(".setup");
+    std::path::PathBuf::from(name)
+}
+
+/// One job a line: the step it is done before, its kind, its numbers (floats as their bits).
+pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
+    let mut out = String::from("RUSTYAC-SETUP-JOBS 1\n");
+    for (step, job) in jobs {
+        let line = match *job {
+            SetupJob::Attach { item } => format!("attach {item}"),
+            SetupJob::SetNewValue { item, value } => format!("value {item} {:08x}", value.to_bits()),
+            SetupJob::SetTyreCompound { tyre, index } => format!("compound {tyre} {index}"),
+            SetupJob::SetRequestedFuel { value, spinner_value } => format!("fuel {:08x} {spinner_value}", value.to_bits()),
+            SetupJob::CycleTc { dir } => format!("tc {dir}"),
+            SetupJob::CycleAbs { dir } => format!("abs {dir}"),
+            SetupJob::SetTurboBoostLevel { level } => format!("turbo {:08x}", level.to_bits()),
+            SetupJob::CycleErsPower { dir } => format!("ers_power {dir}"),
+            SetupJob::CycleErsRecovery { dir } => format!("ers_recovery {dir}"),
+            SetupJob::CycleErsHeatCharging => "ers_heat".to_string(),
+            SetupJob::CycleEngineBrake { dir } => format!("engine_brake {dir}"),
+        };
+        out.push_str(&format!("{step} {line}\n"));
+    }
+    out
+}
+
+pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("RUSTYAC-SETUP-JOBS 1") {
+        return Err("not a setup jobs file".to_string());
+    }
+    let mut jobs = Vec::new();
+    for line in lines.filter(|line| !line.trim().is_empty()) {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let bad = || format!("setup jobs: {line:?}");
+        let int = |i: usize| words.get(i).and_then(|w| w.parse::<i64>().ok()).ok_or_else(bad);
+        let float = |i: usize| words.get(i).and_then(|w| u32::from_str_radix(w, 16).ok()).map(f32::from_bits).ok_or_else(bad);
+        let step = int(0)? as u64;
+        let job = match words.get(1).copied().ok_or_else(bad)? {
+            "attach" => SetupJob::Attach { item: int(2)? as usize },
+            "value" => SetupJob::SetNewValue { item: int(2)? as usize, value: float(3)? },
+            "compound" => SetupJob::SetTyreCompound { tyre: int(2)? as usize, index: int(3)? as i32 },
+            "fuel" => SetupJob::SetRequestedFuel { value: float(2)?, spinner_value: int(3)? as i32 },
+            "tc" => SetupJob::CycleTc { dir: int(2)? as i32 },
+            "abs" => SetupJob::CycleAbs { dir: int(2)? as i32 },
+            "turbo" => SetupJob::SetTurboBoostLevel { level: float(2)? },
+            "ers_power" => SetupJob::CycleErsPower { dir: int(2)? as i32 },
+            "ers_recovery" => SetupJob::CycleErsRecovery { dir: int(2)? as i32 },
+            "ers_heat" => SetupJob::CycleErsHeatCharging,
+            "engine_brake" => SetupJob::CycleEngineBrake { dir: int(2)? as i32 },
+            _ => return Err(bad()),
+        };
+        jobs.push((step, job));
+    }
+    Ok(jobs)
+}
+
+/// The jobs of the drive recorded in `input` (none: the drive had none).
+pub fn read_setup_jobs(input: &Path) -> Result<Vec<(u64, SetupJob)>, String> {
+    let path = setup_jobs_path(input);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => parse_setup_jobs(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Written when a recording ends; an old file of a drive without jobs is taken away.
+pub fn write_setup_jobs(input: &Path, jobs: &[(u64, SetupJob)]) -> Result<(), String> {
+    let path = setup_jobs_path(input);
+    if jobs.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    std::fs::write(&path, setup_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Writes an input file step by step while a drive runs.

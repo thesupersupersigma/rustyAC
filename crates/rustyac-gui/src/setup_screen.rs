@@ -358,9 +358,9 @@ impl Gui {
     }
 
     /// `ESCMenu::onShutdown` 0x1400fdf80: the setup as it is goes to
-    /// `setups\<car>\generic\last.ini` under `folder` (the game's is `Documents\Assetto Corsa`;
-    /// rustyAC's own is beside its exe).
-    pub fn esc_menu_on_shutdown(&mut self, menu: Id, folder: &Path) {
+    /// `<car>\generic\last.ini` under the `setups` folder (the game's is in `Documents\Assetto
+    /// Corsa`; rustyAC's own is beside its exe).
+    pub fn esc_menu_on_shutdown(&mut self, menu: Id, setups: &Path) {
         let Some(screen) = self.esc_menu(menu).setup_screen else { return };
         if !matches!(&self.controls[screen].kind, Kind::Menu(m) if matches!(**m, Menu::SetupScreen(_))) {
             return;
@@ -369,7 +369,7 @@ impl Gui {
         if self.sim.replay.has_loaded_replay {
             return;
         }
-        let generic = folder.join("setups").join(car.unix_name()).join("generic");
+        let generic = setups.join(car.unix_name()).join("generic");
         let _ = std::fs::create_dir_all(&generic);
         self.setup_screen_save_setup_absolute_path(screen, &generic.join("last.ini"));
     }

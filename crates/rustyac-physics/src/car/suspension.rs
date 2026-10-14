@@ -174,6 +174,11 @@ pub enum SuspensionType {
 /// snake_case. The rigid bodies live in the [`PhysicsCore`], which every method that touches
 /// one is handed.
 pub trait SuspensionModel: Send {
+    /// `RaceEngineer::getCasterRAD` @ 0x14027bb20 for this suspension: the lean of the line
+    /// through the upright's two joints (a double wishbone and a strut have it; the others 0).
+    fn caster_rad(&self) -> f32 {
+        0.0
+    }
     /// +0x08 `getHubWorldMatrix`: the hub's world matrix with the static camber applied.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f;
     /// +0x10 `getPointVelocity`: velocity of the hub body at a world point.
@@ -515,6 +520,11 @@ pub(super) fn add(a: &Vec3f, b: &Vec3f) -> Vec3f {
 }
 
 impl SuspensionModel for VanillaDwb {
+    fn caster_rad(&self) -> f32 {
+        let d = &self.data_rel_to_wheel;
+        crate::math::atanf((d.tyre_top_wb.z - d.tyre_bottom_wb.z) / (d.tyre_top_wb.y - d.tyre_bottom_wb.y))
+    }
+
     /// `Suspension::getHubWorldMatrix` @ 0x1402c4c50: `rotation((0,0,1), staticCamber) x hub`.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f {
         let hub = core.get_world_matrix(self.hub);

@@ -161,6 +161,10 @@ pub struct Shared {
     pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
     /// Task 28c: the session's track, for the replay's playback on the display thread
     pub track: Mutex<Option<Arc<rustyac_physics::track::Track>>>,
+    /// Task 31: the setup editor's jobs (the game's `PhysicsAvatar::commandQueue`), and the
+    /// player's car as the editor sees it, with a count of how often it was taken
+    pub setup_jobs: Mutex<Vec<rustyac_physics::car::setup::SetupJob>>,
+    pub setup_snapshot: Mutex<(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)>,
 }
 
 impl Shared {
@@ -182,6 +186,8 @@ impl Shared {
             online_gui: Mutex::new(None),
             referee_hud: Mutex::new(None),
             track: Mutex::new(None),
+            setup_jobs: Mutex::new(Vec::new()),
+            setup_snapshot: Mutex::new((0, None)),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -209,6 +215,15 @@ impl Shared {
     }
 
     /// Puts a fresh start of the session before the display: nothing to blend through.
+    /// The player's car as the setup editor sees it, as of now.
+    pub fn publish_setup(&self, sim: &GameSim) {
+        let name = std::path::Path::new(&sim.setup.car).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut snapshot = rustyac_gui::setup_car::SetupSnapshot::of(&sim.car.car, &name);
+        snapshot.fuel_per_lap = sim.fuel_evaluator.fuel_per_lap();
+        let mut slot = self.setup_snapshot.lock().unwrap();
+        *slot = (slot.0 + 1, Some(snapshot));
+    }
+
     fn publish_start(&self, sim: &GameSim) {
         let view = CarView::capture(sim, 0.0);
         let others = capture_others(sim);
@@ -304,7 +319,10 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         shared.publish_start(&sim);
         *shared.track.lock().unwrap() = sim.track.clone();
         *shared.other_infos.lock().unwrap() = sim.opponent_infos();
-        *shared.car_info.lock().unwrap() = Some(sim.car_info());
+        shared.publish_setup(&sim);
+        let mut info = sim.car_info();
+        info.setup = shared.setup_snapshot.lock().unwrap().1.clone().map(Box::new);
+        *shared.car_info.lock().unwrap() = Some(info);
     }
     // closes the current stretch of paced steps: n steps own n periods of wall time from the
     // first step's due time on, or more if the last step ended later than that
@@ -375,6 +393,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             if requests != 0 {
                 sim.car.device.source.request(requests);
             }
+            sim.setup_jobs.append(&mut shared.setup_jobs.lock().unwrap());
             let clicks = shared.bias_requests.swap(0, Ordering::Relaxed);
             if clicks != 0 {
                 sim.car.device.source.request_bias(clicks);
@@ -423,6 +442,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         }
         let begin = Instant::now();
+        let jobs_before = sim.setup_log.len();
         let input = match sim.step() {
             Ok(input) => input,
             Err(message) => {
@@ -430,6 +450,10 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 break;
             }
         };
+        // the car as the setup editor sees it: after its jobs, and a few times a second
+        if sim.setup_log.len() != jobs_before || sim.steps % 64 == 0 {
+            shared.publish_setup(&sim);
+        }
         if input.events & (event::RESET | event::REBUILD) != 0 {
             flipped = 0;
         }
@@ -564,20 +588,36 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     result.map(|()| (sim, timing))
 }
 
-/// The recorder of `--record`.
-pub struct Recorder(pub Option<crate::input_file::InputWriter>);
+/// The recorder of `--record`: the input file, and beside it the setup editor's jobs.
+pub struct Recorder {
+    pub writer: Option<crate::input_file::InputWriter>,
+    pub path: std::path::PathBuf,
+    pub setup_jobs: Vec<(u64, rustyac_physics::car::setup::SetupJob)>,
+}
+
+impl Recorder {
+    pub fn new(path: &std::path::Path, writer: crate::input_file::InputWriter) -> Recorder {
+        Recorder { writer: Some(writer), path: path.to_path_buf(), setup_jobs: Vec::new() }
+    }
+}
 
 impl StepSink for Recorder {
-    fn after_step(&mut self, _sim: &GameSim, input: &StepInput) -> Result<(), String> {
-        match &mut self.0 {
+    fn after_step(&mut self, sim: &GameSim, input: &StepInput) -> Result<(), String> {
+        if sim.setup_log.len() > self.setup_jobs.len() {
+            self.setup_jobs.extend_from_slice(&sim.setup_log[self.setup_jobs.len()..]);
+        }
+        match &mut self.writer {
             Some(writer) => writer.push(input),
             None => Ok(()),
         }
     }
 
     fn finish(&mut self) -> Result<(), String> {
-        match self.0.take() {
-            Some(writer) => writer.finish().map(|_| ()),
+        match self.writer.take() {
+            Some(writer) => {
+                writer.finish()?;
+                crate::input_file::write_setup_jobs(&self.path, &self.setup_jobs)
+            }
             None => Ok(()),
         }
     }

@@ -280,6 +280,11 @@ impl VanillaStrut {
 }
 
 impl SuspensionModel for VanillaStrut {
+    fn caster_rad(&self) -> f32 {
+        let d = &self.data_rel_to_wheel;
+        crate::math::atanf((d.car_strut.z - d.tyre_strut.z) / (d.car_strut.y - d.tyre_strut.y))
+    }
+
     /// `Suspension::getHubWorldMatrix` @ 0x1402c4c50 (the strut's vtable has the same
     /// function): `rotation((0,0,1), staticCamber) x hub`.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f {

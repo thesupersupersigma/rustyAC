@@ -58,6 +58,14 @@ pub struct GuiSetup {
     /// every car: its skin's folder, and its short name (`car.ini [INFO] SHORT_NAME`)
     pub skins: Vec<String>,
     pub short_names: Vec<String>,
+    /// Task 31: the player's car as the setup editor sees it (none: no editor)
+    pub setup_snapshot: Option<rustyac_gui::setup_car::SetupSnapshot>,
+    /// rustyAC's own `setups` folder (everything the editor writes), and the game's
+    /// `Documents\Assetto Corsa\setups` (read only: its setups can be loaded)
+    pub setups_dir: PathBuf,
+    pub documents_setups: Option<PathBuf>,
+    /// the track's folder name ("" for none)
+    pub track_name: String,
 }
 
 /// The state of the player's car a message is made from when it changes.
@@ -117,6 +125,10 @@ pub struct GameGui {
     pub replay_bar: Option<Id>,
     /// `Sim::escMenu` (off line; an online session has none yet)
     pub esc_menu: Option<Id>,
+    /// the player's car as the setup editor sees it, and which of the physics thread's
+    /// pictures of it that is
+    setup_data: Option<std::rc::Rc<std::cell::RefCell<rustyac_gui::setup_car::SnapshotData>>>,
+    setup_generation: u64,
     /// a new session began since the window last asked (the car is its own again: a lock of
     /// the controls the ESC menu wants has to be asked for anew)
     pub pits_lock_stale: bool,
@@ -234,12 +246,49 @@ impl GameGui {
         // ESCMenu, hidden, the next top-level control (Sim::Sim 0x1401942ae). Its pages
         // "Setup", "Telemetry" and "Time table" are not made: their buttons cannot be used.
         gui.sim.setup_state = 1;
+        // the page "Setup": the editor on the player's car. What its making would ask of the
+        // car (every item attached and sent once, the default compound) the session's start
+        // has done already (`RollingChassis::session_start`): those jobs are not sent again.
+        let mut setup_data = None;
+        let mut pages = rustyac_gui::esc_menu::EscPages::default();
+        if let (false, Some(snapshot)) = (setup.online, setup.setup_snapshot.clone()) {
+            fn editor(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
+                gui.new_setup_screen(painter, None)
+            }
+            let assists = own_or_documents(&setup, "assists.ini");
+            let assist = |key: &str| assists.as_ref().map_or(0, |ini| ini.get_int("ASSISTS", key).unwrap_or(0));
+            let mut tracks: Vec<String> = std::fs::read_dir(setup.game.join("content/tracks")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+            tracks.sort_by_key(|name| name.to_uppercase());
+            gui.locale = rustyac_gui::locale::Locale::load(&setup.game, "en");
+            gui.setup = rustyac_gui::setup_car::SetupLink {
+                track_name: setup.track_name.clone(),
+                tracks,
+                setups_save: setup.setups_dir.clone(),
+                setups_read: setup.documents_setups.clone(),
+                use_mouse_pitstop: true,
+                tc_assist: assist("TRACTION_CONTROL"),
+                abs_assist: assist("ABS"),
+                ..Default::default()
+            };
+            let car = rustyac_gui::setup_car::SnapshotCar::default();
+            {
+                let mut data = car.data.borrow_mut();
+                data.snapshot = snapshot;
+                data.muted = true;
+            }
+            setup_data = Some(car.data.clone());
+            gui.setup_car = Some(Box::new(car));
+            pages.setup_screen = Some(editor);
+        }
         let esc_menu = (!setup.online).then(|| {
-            let id = gui.new_esc_menu(&mut painter, system("fades.ini").as_ref(), rustyac_gui::esc_menu::EscPages::default());
+            let id = gui.new_esc_menu(&mut painter, system("fades.ini").as_ref(), pages);
             gui.add_root(&mut painter, id);
             gui.sim.esc_menu = Some(id);
             id
         });
+        if let Some(data) = &setup_data {
+            data.borrow_mut().muted = false;
+        }
         gui.sim.actions.clear();
         // the apps (Sim::addForm): of the game's 56 only the Leaderboard so far
         let leaderboard_app = gui.new_leaderboard_app(&mut painter);
@@ -265,7 +314,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, pits_lock_stale: false, overlay, tab, leaderboard_app, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -285,6 +334,23 @@ impl GameGui {
             car.sus_damage = view.suspension_damage;
             car.engine_life_left = view.engine_life;
         }
+        // the car's state for the editor's status panel, while the ESC menu shows
+        if let (Some(data), Some(view), true) = (&self.setup_data, world.first(), self.esc_menu_visible()) {
+            let state = view.physics_state();
+            let mut data = data.borrow_mut();
+            let s = &data.snapshot;
+            let state = rustyac_gui::setup_car::SetupCarState {
+                camber_rad: state.camber_rad,
+                caster: s.caster,
+                suspension_matrix: state.suspension_matrix,
+                body_matrix: Mat44f { m: view.body },
+                tyres: s.tyres,
+                ride_height: s.ride_height,
+                min_height_m: s.minimum_height_m,
+            };
+            data.state = state;
+        }
+        let input = &mut self.input;
         input.pause_menu_visible = self.gui.controls[self.pause_menu].visible;
         input.in_replay = info.replay;
         input.focused_car_index = focus as i32;
@@ -852,6 +918,20 @@ impl GameGui {
         self.message.add_message(&mut self.gui, title, description, MESSAGE_DEFAULT);
     }
 
+    /// The setup editor's jobs since the last call, for the physics thread; and the physics
+    /// thread's newest picture of the car (with its count) for the editor.
+    pub fn setup_exchange(&mut self, newest: &(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)) -> Vec<rustyac_physics::car::setup::SetupJob> {
+        let Some(data) = &self.setup_data else { return Vec::new() };
+        let mut data = data.borrow_mut();
+        let jobs = std::mem::take(&mut data.jobs);
+        if let (true, true, Some(snapshot)) = (jobs.is_empty(), newest.0 != self.setup_generation, &newest.1) {
+            self.setup_generation = newest.0;
+            data.snapshot = snapshot.clone();
+            self.gui.sim.setup_state = snapshot.setup_state;
+        }
+        jobs
+    }
+
     /// What the game does at its end (`GameScreen::shutdown` 0x1402510c0, `GUI::serializeForms`
     /// 0x1402551e0, `DriverNameDisplayer::shutdown` 0x14008e080, `DamageDisplayer::shutdown`
     /// 0x14007b800, `OverlayLeaderboard::shutdown` 0x1401c1a30), into rustyAC's own cfg folder: the forms' layout, and the two switches in
@@ -878,6 +958,15 @@ impl GameGui {
         }
         std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         written.push(path);
+        // ESCMenu::onShutdown 0x1400fdf80: the setup as it is, as `last.ini` (rustyAC's own folder)
+        if let (Some(menu), Some(car)) = (self.esc_menu, &self.gui.setup_car) {
+            let last = self.setup.setups_dir.join(car.unix_name()).join("generic").join("last.ini");
+            let root = self.setup.setups_dir.clone();
+            self.gui.esc_menu_on_shutdown(menu, &root);
+            if last.is_file() {
+                written.push(last);
+            }
+        }
         Ok(written)
     }
 }

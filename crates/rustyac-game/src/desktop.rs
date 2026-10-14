@@ -447,6 +447,10 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
                 })
                 .collect(),
             cfg_dir: options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg")),
+            setup_snapshot: info.setup.as_deref().cloned(),
+            setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
+            documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
+            track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             game: game.clone(),
         };
@@ -816,7 +820,7 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
         sinks.push(Box::new(AudioSink::new(Arc::clone(feed))));
     }
     if let Some(path) = &options.record {
-        sinks.push(Box::new(Recorder(Some(InputWriter::create(path, setup)?))));
+        sinks.push(Box::new(Recorder::new(path, InputWriter::create(path, setup)?)));
         println!("recording the inputs of every step to {}", path.display());
     }
     if !options.no_shm {
@@ -1628,6 +1632,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
+            // the setup editor's jobs to the physics thread, the car's newest picture back
+            {
+                let newest = shared.setup_snapshot.lock().unwrap().clone();
+                let jobs = gui.setup_exchange(&newest);
+                if !jobs.is_empty() {
+                    shared.setup_jobs.lock().unwrap().extend(jobs);
+                }
+            }
             use rustyac_gui::menus::SimAction;
             for action in gui.take_actions() {
                 match action {
@@ -2091,6 +2103,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
             }
             if let Some(writer) = writer.take() {
                 println!("{} steps of the drive written to {}", writer.finish()?, options.record.as_ref().unwrap().display());
+                rustyac_game::input_file::write_setup_jobs(options.record.as_ref().unwrap(), &sim.setup_log)?;
             }
         }
     }

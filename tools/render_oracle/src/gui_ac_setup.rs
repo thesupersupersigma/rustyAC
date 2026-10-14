@@ -40,9 +40,6 @@ pub fn car() -> *mut u8 {
     CAR.load(Ordering::SeqCst) as *mut u8
 }
 
-pub fn engine() -> *mut u8 {
-    ENGINE.load(Ordering::SeqCst) as *mut u8
-}
 
 /// The game's own `PhysicsEngine`, `Track` ("flat": no files) and `Car` of that folder name.
 pub unsafe fn make_car(game: &Game, name: &str) -> *mut u8 {
