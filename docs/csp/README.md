@@ -15,10 +15,10 @@ Read-only work: nothing in the game folder, `Documents\Assetto Corsa`, the Ghidr
 
 | Step | State |
 |---|---|
-| README, attach and hook mechanism | in progress (indexes and the hook table exist; the attach brief is being written) |
-| Physics extensions | in progress |
-| `content_needs.md` | data collected (`content_scan`), write-up pending |
-| Lua | not started |
+| README, attach and hook mechanism | done: [`attach.md`](attach.md) |
+| Physics extensions | overview + config/API + car core done; tyres/suspension and powertrain/aero in progress |
+| `content_needs.md` | data collected (`content_scan.json`, 6 `fa_2026` layouts with extended physics found); write-up pending |
+| Lua | in progress |
 | Rendering | not started |
 | UI / apps, online, audio, input / FFB, VR / screens, misc | not started |
 | `plan.md` | not started |
@@ -116,8 +116,8 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 
 | Area | File | Status |
 |---|---|---|
-| Attach and hook mechanism | [`attach.md`](attach.md) | pending |
-| Physics extensions | [`physics.md`](physics.md) | pending |
+| Attach and hook mechanism | [`attach.md`](attach.md) | done |
+| Physics extensions | [`physics.md`](physics.md) (+ 4 detail files) | overview done; 2 detail files pending |
 | Lua | [`lua.md`](lua.md) | pending |
 | Rendering | [`rendering.md`](rendering.md) | pending |
 | UI and apps | [`ui_apps.md`](ui_apps.md) | pending |
