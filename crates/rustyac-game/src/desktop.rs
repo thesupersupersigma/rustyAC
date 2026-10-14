@@ -2207,7 +2207,12 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     world.iter_mut().for_each(dress);
     let previous = if focus == 0 { previous } else { world[focus] };
     let view = world[focus];
-    let shape = CarShape::of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() });
+    let mut shape = CarShape::of(&if focus == 0 { sim.car_info() } else { other_infos[focus - 1].clone() });
+    // what the Onboard settings app saved in rustyAC's own cfg (the player's car)
+    if focus == 0 {
+        let unix = Path::new(&sim.car_info().name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        shape.apply_own_onboard(&cfg_dir(options), &unix);
+    }
     // --supersample: the picture is drawn larger and averaged down at the end
     let supersample = options.supersample.max(1);
     let mut renderer = make_picture(options, options.width * supersample, options.height * supersample, &sim.car_info(), &other_infos)?;
