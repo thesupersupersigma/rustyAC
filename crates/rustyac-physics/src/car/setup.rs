@@ -270,6 +270,9 @@ pub enum SetupJob {
     /// the force feedback app's spinners' jobs (0x140317040 …): a gain of the wheel's
     /// `DICarControl::ffUpgrades` (0 curbs, 1 road (g-forces), 2 slips, 3 ABS)
     SetFfUpgrade { which: usize, value: f32 },
+    /// the ballast app's job of `CarAvatar::setBallastKG` @ 0x1400d9de0 (`_Do_call`
+    /// @ 0x1400d05a0): `Car::setBallastKG`, the body's mass at its next update
+    SetBallastKg { kg: f32 },
 }
 
 /// One value `SetupManager::step` changed.

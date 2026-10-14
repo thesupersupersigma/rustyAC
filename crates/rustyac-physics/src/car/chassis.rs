@@ -1759,6 +1759,8 @@ impl RollingChassis {
             SetupJob::SetFfMult { value } => self.ff_mult = value,
             // (the controls' own: the game's DICarControl, here the driver's source)
             SetupJob::SetFfUpgrade { .. } => {}
+            // Car::setBallastKG @ 0x1402759e0
+            SetupJob::SetBallastKg { kg } => self.ballast_kg = kg,
             _ => self.setup_manager.apply_job(job),
         }
     }

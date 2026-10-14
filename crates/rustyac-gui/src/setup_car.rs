@@ -272,7 +272,7 @@ impl SetupSnapshot {
             SetupJob::CycleErsRecovery { dir } => self.ers_recovery = cycle(self.ers_recovery, dir, 11),
             SetupJob::CycleErsHeatCharging => self.ers_heat_charging = !self.ers_heat_charging,
             SetupJob::CycleEngineBrake { dir } => self.engine_brake_setting = cycle(self.engine_brake_setting, dir, self.engine_brake_settings_count),
-            SetupJob::Attach { .. } | SetupJob::SetTyreCompound { .. } | SetupJob::SetUserFfGain { .. } | SetupJob::SetFfMult { .. } | SetupJob::SetFfUpgrade { .. } => {}
+            SetupJob::Attach { .. } | SetupJob::SetTyreCompound { .. } | SetupJob::SetUserFfGain { .. } | SetupJob::SetFfMult { .. } | SetupJob::SetFfUpgrade { .. } | SetupJob::SetBallastKg { .. } => {}
         }
     }
 }

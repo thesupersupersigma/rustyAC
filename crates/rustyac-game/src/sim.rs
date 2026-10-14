@@ -1868,6 +1868,10 @@ impl GameSim {
             if let SetupJob::SetFfUpgrade { which, value } = job {
                 self.car.device.source.set_ff_upgrade(which, value);
             }
+            // (the job's own line, `_Do_call` @ 0x1400d05a0)
+            if let SetupJob::SetBallastKg { kg } = job {
+                println!("Setting ballast for car 0 to {:.6} Kg", kg as f64);
+            }
             self.car.car.apply_setup_job(&job);
             // (the lap a refuel falls in is no measure of the fuel a lap takes: the HUD's own
             // evaluator hears it too)

@@ -1108,6 +1108,7 @@ pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
             SetupJob::SetUserFfGain { value } => format!("user_ff {:08x}", value.to_bits()),
             SetupJob::SetFfMult { value } => format!("ff_mult {:08x}", value.to_bits()),
             SetupJob::SetFfUpgrade { which, value } => format!("ff_upgrade {which} {:08x}", value.to_bits()),
+            SetupJob::SetBallastKg { kg } => format!("ballast {:08x}", kg.to_bits()),
         };
         out.push_str(&format!("{step} {line}\n"));
     }
@@ -1145,6 +1146,7 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
             "user_ff" => SetupJob::SetUserFfGain { value: float(2)? },
             "ff_mult" => SetupJob::SetFfMult { value: float(2)? },
             "ff_upgrade" => SetupJob::SetFfUpgrade { which: int(2)? as usize, value: float(3)? },
+            "ballast" => SetupJob::SetBallastKg { kg: float(2)? },
             _ => return Err(bad()),
         };
         jobs.push((step, job));
@@ -1220,6 +1222,7 @@ mod setup_jobs_tests {
             (u64::from(u32::MAX) + 6, SetupJob::SetUserFfGain { value: 1.25 }),
             (u64::from(u32::MAX) + 6, SetupJob::SetFfMult { value: 0.0027 }),
             (u64::from(u32::MAX) + 7, SetupJob::SetFfUpgrade { which: 2, value: 0.5 }),
+            (u64::from(u32::MAX) + 8, SetupJob::SetBallastKg { kg: 35.0 }),
         ];
         let text = setup_jobs_text(&jobs);
         let back = parse_setup_jobs(&text).unwrap();

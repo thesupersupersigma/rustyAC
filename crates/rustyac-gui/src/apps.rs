@@ -46,6 +46,8 @@ pub enum AppAction {
     SetFfUpgrade { which: usize, value: f32 },
     /// `SystemMessage::addMessage(title, text, eDefault)` 0x1401b61c0
     AddMessage { title: String, text: String },
+    /// the player's car's `Car::ballastKG` (`CarAvatar::setBallastKG`'s job)
+    SetBallastKg(f32),
 }
 
 /// A level of `MixVolumes` (`CarAudioFMOD+0x118`).
@@ -180,6 +182,12 @@ pub struct AppCar {
     pub ff_mult: f32,
     pub steer_assist: f32,
     pub config_name: String,
+    /// `CarAvatar::getERSPower`'s name, `currentERSRecovery`, `currentEngineBrakeSetting`,
+    /// `isHeatChargingBatteries`
+    pub ers_power_name: String,
+    pub ers_recovery: i32,
+    pub engine_brake_setting: i32,
+    pub ers_heat_charging: bool,
     /// `CarAvatar::getCurrentCompoundShortName`, `getCurrentCompoundIdealPressure(tyre)`
     pub compound_short_name: String,
     pub ideal_pressure: [i32; 4],

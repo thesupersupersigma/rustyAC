@@ -135,6 +135,13 @@ impl GameApps {
         add(gui, painter, "trackmap", id);
         let id = gui.new_electronics_app(painter);
         add(gui, painter, "electronics", id);
+        let id = gui.new_mgu_app(painter);
+        add(gui, painter, "mgu", id);
+        // FormBallast: offline only (no ACClient)
+        if !setup.online {
+            let id = gui.new_ballast_app(painter);
+            add(gui, painter, "ballast", id);
+        }
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
@@ -202,6 +209,10 @@ impl GameApps {
                         gains[which.min(3)] = value;
                     }
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetFfUpgrade { which, value });
+                    continue;
+                }
+                AppAction::SetBallastKg(kg) => {
+                    self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetBallastKg { kg });
                     continue;
                 }
                 AppAction::AddMessage { title, text } => {
@@ -284,6 +295,10 @@ impl GameApps {
                     ff_mult: view.ff_mult,
                     steer_assist: view.steer_assist,
                     config_name: String::new(),
+                    ers_power_name: view.hybrid.power_name.as_str().to_string(),
+                    ers_recovery: view.hybrid.recovery,
+                    engine_brake_setting: view.hybrid.engine_brake,
+                    ers_heat_charging: view.hybrid.heat_charging,
                 }
             })
             .collect::<Vec<AppCar>>();
