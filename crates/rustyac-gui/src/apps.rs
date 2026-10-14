@@ -38,6 +38,14 @@ pub enum AppAction {
     /// `CameraDrivableManager::setDrivableCameraDefAt`: a car's bonnet (0) or bumper (1) view
     /// hears the car from outside
     SetCameraSound { car: usize, which: usize, external: bool },
+    /// the player's car's `Car::userFFGain` (`CarAvatar::setUserFFGain`'s job)
+    SetUserFfGain(f32),
+    /// the player's car's `Car::ffMult` (`CarAvatar::setFFMult`'s job)
+    SetFfMult(f32),
+    /// a gain of the wheel's `DICarControl::ffUpgrades` (0 curbs, 1 road, 2 slips, 3 ABS)
+    SetFfUpgrade { which: usize, value: f32 },
+    /// `SystemMessage::addMessage(title, text, eDefault)` 0x1401b61c0
+    AddMessage { title: String, text: String },
 }
 
 /// A level of `MixVolumes` (`CarAudioFMOD+0x118`).
@@ -165,6 +173,13 @@ pub struct AppCar {
     /// `raceEngineer->car->userFFGain` (none: no race engineer)
     pub ff_global_gain: Option<f32>,
     pub user_ff_gain: Option<f32>,
+    /// the car has physics (`CarAvatar+0x1168`); `CarAvatar::userFFGain` (the avatar's copy of
+    /// the user's gain), `Car::ffMult`, `Car::steerAssist`; `CarAvatar::configName`
+    pub has_physics: bool,
+    pub avatar_ff_gain: f32,
+    pub ff_mult: f32,
+    pub steer_assist: f32,
+    pub config_name: String,
     /// `CarAvatar::getCurrentCompoundShortName`, `getCurrentCompoundIdealPressure(tyre)`
     pub compound_short_name: String,
     pub ideal_pressure: [i32; 4],
@@ -227,6 +242,10 @@ pub struct AppLink {
     pub audio_drivers: Vec<String>,
     /// Documents `cfg/audio.ini` as it is now (`None`: there is none)
     pub audio_ini: Option<String>,
+    /// `Game::gameTime.deltaT` (s); the wheel's `DICarControl::ffUpgrades` (curbs, road, slips,
+    /// ABS; none: the player drives without a wheel)
+    pub game_dt: f32,
+    pub ff_upgrades: Option<[f32; 4]>,
     pub actions: Vec<AppAction>,
 }
 

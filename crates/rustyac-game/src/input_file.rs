@@ -1105,6 +1105,9 @@ pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
             SetupJob::CycleErsRecovery { dir } => format!("ers_recovery {dir}"),
             SetupJob::CycleErsHeatCharging => "ers_heat".to_string(),
             SetupJob::CycleEngineBrake { dir } => format!("engine_brake {dir}"),
+            SetupJob::SetUserFfGain { value } => format!("user_ff {:08x}", value.to_bits()),
+            SetupJob::SetFfMult { value } => format!("ff_mult {:08x}", value.to_bits()),
+            SetupJob::SetFfUpgrade { which, value } => format!("ff_upgrade {which} {:08x}", value.to_bits()),
         };
         out.push_str(&format!("{step} {line}\n"));
     }
@@ -1139,6 +1142,9 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
             "ers_recovery" => SetupJob::CycleErsRecovery { dir: int(2)? as i32 },
             "ers_heat" => SetupJob::CycleErsHeatCharging,
             "engine_brake" => SetupJob::CycleEngineBrake { dir: int(2)? as i32 },
+            "user_ff" => SetupJob::SetUserFfGain { value: float(2)? },
+            "ff_mult" => SetupJob::SetFfMult { value: float(2)? },
+            "ff_upgrade" => SetupJob::SetFfUpgrade { which: int(2)? as usize, value: float(3)? },
             _ => return Err(bad()),
         };
         jobs.push((step, job));
@@ -1211,6 +1217,9 @@ mod setup_jobs_tests {
             (92, SetupJob::CycleErsRecovery { dir: -1 }),
             (93, SetupJob::CycleErsHeatCharging),
             (u64::from(u32::MAX) + 5, SetupJob::CycleEngineBrake { dir: 1 }),
+            (u64::from(u32::MAX) + 6, SetupJob::SetUserFfGain { value: 1.25 }),
+            (u64::from(u32::MAX) + 6, SetupJob::SetFfMult { value: 0.0027 }),
+            (u64::from(u32::MAX) + 7, SetupJob::SetFfUpgrade { which: 2, value: 0.5 }),
         ];
         let text = setup_jobs_text(&jobs);
         let back = parse_setup_jobs(&text).unwrap();

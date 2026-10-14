@@ -48,6 +48,14 @@ pub struct GameApps {
     pub sound: AppSound,
     /// `cfg/audio.ini` as it is (rustyAC's own, else Documents'), kept as the app writes it
     audio_ini: Option<String>,
+    /// the force feedback app's jobs for the physics thread (`PhysicsAvatar::executeOnPhysicsThread`)
+    pub ffb_jobs: Vec<rustyac_physics::car::setup::SetupJob>,
+    /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
+    /// app's changes); the messages the apps asked for (title, text)
+    ff_upgrades: Option<[f32; 4]>,
+    pub messages: Vec<(String, String)>,
+    /// `Game::gameTime.deltaT` of this frame
+    pub game_dt: f32,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -99,6 +107,21 @@ impl GameApps {
         add(gui, painter, "help", id);
         let id = gui.new_time_flow_app(painter);
         add(gui, painter, "timeflow", id);
+        // FFBForm (after DriverEyesPositioner, not ported): the player's car; its car.ini a
+        // loose file of the game's folder or not, its wheel's effects
+        let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
+        let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
+        self.ff_upgrades = match &controls {
+            Some(ini) if ini.get_string("HEADER", "INPUT_METHOD") == "WHEEL" => {
+                let enhancement = ini.has_section("FF_ENHANCEMENT");
+                let get = |key: &str| if enhancement { ini.get_float("FF_ENHANCEMENT", key).unwrap_or(0.0) } else { 0.0 };
+                Some([get("CURBS"), get("ROAD"), get("SLIPS"), if ini.has_key("FF_ENHANCEMENT", "ABS") { ini.get_float("FF_ENHANCEMENT", "ABS").unwrap_or(0.0) } else { 0.0 }])
+            }
+            _ => None,
+        };
+        gui.apps.ff_upgrades = self.ff_upgrades;
+        let id = gui.new_ffb_app(painter, loose, self.ff_upgrades);
+        add(gui, painter, "ffb", id);
         let id = gui.new_pedals_app(painter, own_or_documents("controls.ini").as_ref());
         add(gui, painter, "pedals", id);
         let id = gui.new_realtime_app(painter);
@@ -158,12 +181,32 @@ impl GameApps {
                 AppAction::WriteFile { path, bytes } => (path, bytes),
                 AppAction::WriteProfileString { file, section, key, value } => {
                     let name = file.strip_prefix("cfg/").unwrap_or(&file).to_string();
-                    let old = own_or_documents_text(setup, &name);
+                    // (a car's car.ini: rustyAC's copy, else the game's loose file)
+                    let old = if file.starts_with("content/") { std::fs::read(setup.cfg_dir.join(&file)).ok().or_else(|| std::fs::read(setup.game.join(&file)).ok()) } else { own_or_documents_text(setup, &name) };
                     let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
                     if name == "audio.ini" {
                         self.audio_ini = Some(String::from_utf8_lossy(&bytes).into_owned());
                     }
                     (file, bytes)
+                }
+                AppAction::SetUserFfGain(value) => {
+                    self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetUserFfGain { value });
+                    continue;
+                }
+                AppAction::SetFfMult(value) => {
+                    self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetFfMult { value });
+                    continue;
+                }
+                AppAction::SetFfUpgrade { which, value } => {
+                    if let Some(gains) = self.ff_upgrades.as_mut() {
+                        gains[which.min(3)] = value;
+                    }
+                    self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetFfUpgrade { which, value });
+                    continue;
+                }
+                AppAction::AddMessage { title, text } => {
+                    self.messages.push((title, text));
+                    continue;
                 }
                 other => {
                     self.sound_actions.push(other);
@@ -236,6 +279,11 @@ impl GameApps {
                     unix_name: setup.cars.get(i).map(|c| c[2].clone()).unwrap_or_default(),
                     gui_name: setup.cars.get(i).map(|c| c[1].clone()).unwrap_or_default(),
                     gui_short_name: setup.short_names.get(i).cloned().unwrap_or_default(),
+                    has_physics: true,
+                    avatar_ff_gain: view.user_ff_gain,
+                    ff_mult: view.ff_mult,
+                    steer_assist: view.steer_assist,
+                    config_name: String::new(),
                 }
             })
             .collect::<Vec<AppCar>>();
@@ -265,6 +313,8 @@ impl GameApps {
             sun_angle: gui.sim.sun_angle,
             time_mult: None,
             use_mph,
+            game_dt: self.game_dt,
+            ff_upgrades: self.ff_upgrades,
             camera_sounds: vec![self.sound.camera; world.len()],
             audio_drivers: self.sound.drivers.clone(),
             audio_ini: self.audio_ini.clone(),

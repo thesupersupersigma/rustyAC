@@ -350,6 +350,17 @@ impl DiCarControl {
         extra.mguh_mode = hybrid[6];
     }
 
+    /// The force feedback app's jobs on `ffUpgrades` (0 curbs, 1 road, 2 slips, 3 ABS).
+    pub fn set_ff_upgrade(&mut self, which: usize, value: f32) {
+        match which {
+            0 => self.curbs_gain = value,
+            1 => self.gforce_gain = value,
+            2 => self.slips_gain = value,
+            3 => self.abs_gain = value,
+            _ => {}
+        }
+    }
+
     /// `DICarControl::setVibrations` @ 0x140081010: the mix that is added to the steering force.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn set_vibrations(&mut self, d: &VibrationDef) {

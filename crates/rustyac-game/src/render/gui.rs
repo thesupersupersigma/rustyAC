@@ -580,7 +580,20 @@ impl GameGui {
         if self.apps.made.is_empty() {
             self.apps.make(&mut self.gui, &mut painter, self.screen, &self.setup, self.leaderboard_app);
         }
+        // Game::gameTime.deltaT (the force feedback app's arrows)
+        self.apps.game_dt = dt;
+        self.gui.apps.game_dt = dt;
         self.gui.render_all(dt, &mut painter);
+        self.apps.write_files(&mut self.gui, &self.setup);
+        for (title, text) in std::mem::take(&mut self.apps.messages) {
+            self.message.add_message(&mut self.gui, &title, &text, MESSAGE_DEFAULT);
+        }
+    }
+
+    /// `GameScreen::shutdown` 0x1402510c0 (from `Sim::shutdown`): every app's `shutdown` (the
+    /// force feedback app saves the car's car.ini), its files written.
+    pub fn shutdown_apps(&mut self) {
+        self.gui.shutdown_apps();
         self.apps.write_files(&mut self.gui, &self.setup);
     }
 

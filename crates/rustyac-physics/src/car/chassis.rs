@@ -1755,6 +1755,10 @@ impl RollingChassis {
             SetupJob::CycleEngineBrake { dir } => {
                 self.cycle_engine_brake(dir);
             }
+            SetupJob::SetUserFfGain { value } => self.user_ff_gain = value,
+            SetupJob::SetFfMult { value } => self.ff_mult = value,
+            // (the controls' own: the game's DICarControl, here the driver's source)
+            SetupJob::SetFfUpgrade { .. } => {}
             _ => self.setup_manager.apply_job(job),
         }
     }

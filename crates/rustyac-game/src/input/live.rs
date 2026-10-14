@@ -293,6 +293,12 @@ impl DriverSource for LiveSource {
         }
     }
 
+    fn set_ff_upgrade(&mut self, which: usize, value: f32) {
+        if let Some(wheel) = &mut self.wheel {
+            wheel.control.set_ff_upgrade(which, value);
+        }
+    }
+
     fn device_id(&self) -> u32 {
         self.active
     }

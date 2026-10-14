@@ -49,6 +49,10 @@ pub trait DriverSource: Send {
 
     fn set_vibrations(&mut self, _def: &VibrationDef) {}
 
+    /// A gain of the wheel's `DICarControl::ffUpgrades` (0 curbs, 1 road, 2 slips, 3 ABS): the
+    /// force feedback app's spinners.
+    fn set_ff_upgrade(&mut self, _which: usize, _value: f32) {}
+
     fn set_engine_rpm(&mut self, _rpm: f32, _low: f32, _high: f32) {}
 
     /// Which device drove in the last `acquire` (a note in the input file).
@@ -314,6 +318,10 @@ impl<S: DriverSource> DriverSource for SpawnSequence<S> {
 
     fn set_vibrations(&mut self, def: &VibrationDef) {
         self.inner.set_vibrations(def);
+    }
+
+    fn set_ff_upgrade(&mut self, which: usize, value: f32) {
+        self.inner.set_ff_upgrade(which, value);
     }
 
     fn set_engine_rpm(&mut self, rpm: f32, low: f32, high: f32) {
@@ -1857,6 +1865,9 @@ impl GameSim {
             }
         }
         for job in std::mem::take(&mut self.setup_jobs) {
+            if let SetupJob::SetFfUpgrade { which, value } = job {
+                self.car.device.source.set_ff_upgrade(which, value);
+            }
             self.car.car.apply_setup_job(&job);
             // (the lap a refuel falls in is no measure of the fuel a lap takes: the HUD's own
             // evaluator hears it too)

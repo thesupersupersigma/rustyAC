@@ -1677,6 +1677,13 @@ fn run_window(options: &Options) -> Result<(), String> {
             gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
+            // the force feedback app's jobs to the physics thread (its command queue)
+            {
+                let jobs = std::mem::take(&mut gui.apps.ffb_jobs);
+                if !jobs.is_empty() {
+                    shared.setup_jobs.lock().unwrap().extend(jobs);
+                }
+            }
             // the setup editor's jobs to the physics thread, the car's newest picture back
             {
                 let newest = shared.setup_snapshot.lock().unwrap().clone();
@@ -2076,6 +2083,10 @@ fn run_window(options: &Options) -> Result<(), String> {
             Ok(files) => println!("GUI: wrote {}", files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")),
             Err(message) => eprintln!("WARNING: the GUI's files were not written ({message})"),
         }
+    }
+    // Sim::shutdown: the apps' last files
+    if let Some(gui) = renderer.gui() {
+        gui.shutdown_apps();
     }
     shared.quit.store(true, Ordering::Relaxed);
     let outcome = thread.join().map_err(|_| "the physics thread panicked".to_string())?;

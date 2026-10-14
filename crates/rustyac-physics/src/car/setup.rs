@@ -262,6 +262,14 @@ pub enum SetupJob {
     CycleErsRecovery { dir: i32 },
     CycleErsHeatCharging,
     CycleEngineBrake { dir: i32 },
+    /// the force feedback app's (and the numpad keys') job of `CarAvatar::setUserFFGain` /
+    /// `modifyUserFFGain` @ 0x1400dad50 / 0x1400d90f0: `Car::userFFGain`
+    SetUserFfGain { value: f32 },
+    /// the job of `CarAvatar::setFFMult` @ 0x1400da160: `Car::ffMult`
+    SetFfMult { value: f32 },
+    /// the force feedback app's spinners' jobs (0x140317040 …): a gain of the wheel's
+    /// `DICarControl::ffUpgrades` (0 curbs, 1 road (g-forces), 2 slips, 3 ABS)
+    SetFfUpgrade { which: usize, value: f32 },
 }
 
 /// One value `SetupManager::step` changed.
