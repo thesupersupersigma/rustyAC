@@ -17,8 +17,11 @@ fn app(apps: &AppsPort, name: &str) -> Result<Id, String> {
 
 /// The game's folder (`content/...` and `system/cfg/...` are read from there by the apps).
 pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, name: &str) -> Result<Id, String> {
-    let _ = game_folder;
+    let read = |path: std::path::PathBuf| rustyac_physics::data::ini::IniReader::load(&path).ok().filter(|ini| ini.ready);
     Ok(match name {
+        "tyres" => gui.new_tyres_app(painter, read(game_folder.join("system/cfg/tyres_app.ini")).as_ref()),
+        "pedals" => gui.new_pedals_app(painter, read(game_folder.join("documents/Assetto Corsa/cfg/controls.ini")).as_ref()),
+        "electronics" => gui.new_electronics_app(painter),
         "laps" => gui.new_laps_app(painter),
         "position" => gui.new_race_position_app(painter),
         "essentials" => gui.new_essentials_app(painter),

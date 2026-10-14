@@ -76,6 +76,7 @@ pub fn compare(args: &Args) -> Result<(), String> {
         let sequence = crate::gui_seq::sequence(name)?;
         crate::gui_seq_setup::prepare_root(args, &sequence)?;
         crate::gui_seq_setup::seed(args, &sequence)?;
+        crate::gui_seq_apps::prepare_root(args, name)?;
     }
     run_sides(args, name, &args.dump)?;
     let read = |side: &str, kind: &str| {

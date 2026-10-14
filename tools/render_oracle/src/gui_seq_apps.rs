@@ -51,6 +51,14 @@ pub struct AppScript {
     pub env: [f32; 5],
     /// laps finished since the last frame the script went to: (car, time)
     pub pending_laps: Vec<(u32, u32)>,
+    /// the compound's short name and ideal pressure (psi); EDL there and its output; DRS there;
+    /// the player's force feedback gain (controls) and the user's
+    pub compound: String,
+    pub ideal_pressure: i32,
+    pub edl: Option<f32>,
+    pub drs: bool,
+    pub ff_gain: f32,
+    pub user_ff_gain: f32,
     /// every car's timing at every frame of the tapes
     pub timing: Vec<Vec<Timing>>,
     /// the frame of the tapes the session is at
@@ -181,6 +189,14 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             s.frame = to;
         }),
         "app.spline" => script(|s| s.spline_length = number),
+        "app.compound" => script(|s| {
+            s.compound = text.to_string();
+            s.ideal_pressure = number as i32;
+        }),
+        "app.edl" => script(|s| s.edl = if text == "off" { None } else { Some(number) }),
+        "app.drs" => script(|s| s.drs = on),
+        "app.ff" => script(|s| s.ff_gain = number),
+        "app.userFf" => script(|s| s.user_ff_gain = number),
         "app.env" => {
             let k = ["air", "road", "grip", "wind", "windDirection"].iter().position(|n| *n == text).ok_or("app.env: air, road, grip, wind or windDirection")?;
             script(|s| s.env[k] = number);
@@ -214,7 +230,7 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
 }
 
 /// A member of the game's `CarPhysicsState` a script may change: name, offset, kind.
-const STATE_FIELDS: [(&str, usize, char); 0] = [];
+const STATE_FIELDS: [(&str, usize, char); 3] = [("statusBytes", 0xb58, 'i'), ("gas", 0x260, 'f'), ("lastFF", 0x668, 'f')];
 
 /// The bytes of one car's state as the session stands (the tape's frame, then the script's
 /// changes); none: the script has no tapes.
@@ -286,6 +302,14 @@ pub fn link() -> AppLink {
                     tc_in_action: s.tc && s.tcs.get(i).and_then(|t| t.get(s.frame.min(t.len().saturating_sub(1)))).is_some_and(|b| *b != 0),
                     driver_name: driver_name(i),
                     connected: true,
+                    compound_short_name: s.compound.clone(),
+                    // (only the player's car has the physics the getter asks)
+                    ideal_pressure: if i == 0 { [s.ideal_pressure; 4] } else { [0; 4] },
+                    edl_enabled: s.edl.is_some(),
+                    edl_out_level: s.edl.unwrap_or(0.0),
+                    has_drs: s.drs,
+                    ff_global_gain: (i == 0).then_some(s.ff_gain),
+                    user_ff_gain: (i == 0).then_some(s.user_ff_gain),
                     ..AppCar::default()
                 }
             })
@@ -358,6 +382,26 @@ fn handle(o: &mut Vec<Op>, x: i32, y: i32, w: i32) {
     click(o, x + w - 13 - 26, y - 14);
 }
 
+/// The files the apps read, the same for both sides: `system/cfg/tyres_app.ini` of the game,
+/// and a `cfg/controls.ini` in the stand-in Documents.
+pub fn prepare_root(args: &crate::Args, name: &str) -> Result<(), String> {
+    if !name.starts_with("app_") {
+        return Ok(());
+    }
+    let cfg = args.root.join("system/cfg");
+    std::fs::create_dir_all(&cfg).map_err(|e| e.to_string())?;
+    std::fs::copy(args.game.join("system/cfg/tyres_app.ini"), cfg.join("tyres_app.ini")).map_err(|e| format!("tyres_app.ini: {e}"))?;
+    let docs = args.root.join("documents/Assetto Corsa/cfg");
+    std::fs::create_dir_all(&docs).map_err(|e| e.to_string())?;
+    std::fs::write(docs.join("controls.ini"), "[HEADER]
+INPUT_METHOD=WHEEL
+
+[STEER]
+FF_GAIN=0.85
+").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn sequence(name: &str) -> Option<Vec<Op>> {
     let mut o = Vec::new();
     let (app, rest) = name.split_once('@').unwrap_or((name, ""));
@@ -386,6 +430,32 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 // some wind, a car in the pits
                 o.extend([hud("app.env", 4.2, "wind"), hud("app.env", 137.0, "windDirection"), Op::Frame(DT), hud("app.env", 11.9, "wind"), hud("app.env", 290.5, "windDirection"), Op::Frame(DT)]);
                 o.extend([hud("app.session", 1.0, ""), Op::Frame(DT), hud("app.sessions", 3.0, ""), Op::Frame(DT), hud("app.session", 2.0, ""), Op::Frame(DT), hud("app.duration", 0.0, ""), Op::Frame(DT), hud("app.session", 4.0, ""), Op::Frame(DT), hud("app.session", 0.0, ""), Op::Frame(DT)]);
+                o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
+            }
+        }
+        "app_tyres" | "app_pedals" | "app_electronics" => {
+            let which = leak(app[4..].to_string());
+            race(&mut o, 6);
+            o.extend([hud("app.compound", 23.0, "S"), hud("app.ff", 0.85, ""), hud("app.userFf", 1.0, "")]);
+            o.push(hud("app.new", 0.0, which));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, which));
+            play(&mut o, 0, 600, 60);
+            play(&mut o, 600, 1400, 4);
+            if rest != "short" {
+                play(&mut o, 1400, 21000, 97);
+                // the focus elsewhere (Pedals follows it, the others keep the first car), a
+                // stronger force, the gas held (its light), EDL and DRS
+                o.push(hud("app.focus", 2.0, ""));
+                play(&mut o, 9000, 9300, 10);
+                o.extend([hud("app.focus", 0.0, ""), hud("app.ff", 2.6, ""), hud("app.userFf", 1.4, "")]);
+                play(&mut o, 9300, 9600, 10);
+                o.extend([hud("app.set", 1.0, "0:gas"), Op::Frame(DT), hud("app.set", 0.4, "0:gas"), Op::Frame(DT)]);
+                o.extend([hud("app.edl", 0.05, ""), hud("app.drs", 1.0, ""), Op::Frame(DT), hud("app.edl", 0.6, ""), hud("app.set", 2.0, "0:statusBytes"), Op::Frame(DT), hud("app.set", 6.0, "0:statusBytes"), Op::Frame(DT), hud("app.edl", 0.0, "off"), hud("app.drs", 0.0, ""), Op::Frame(DT)]);
+                o.extend([hud("app.compound", 26.0, "M"), Op::Frame(DT), hud("app.abs", 1.0, ""), Op::Frame(DT)]);
+                play(&mut o, 15000, 15300, 5);
+                handle(&mut o, 0, 80, 240);
+                o.extend([hud("app.replay", 1.0, ""), Op::Frame(DT), Op::Frame(DT), hud("app.replay", 0.0, ""), Op::Frame(DT)]);
                 o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
             }
         }

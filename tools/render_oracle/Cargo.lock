@@ -121,6 +121,7 @@ version = "0.31.0"
 name = "rustyac-gui"
 version = "0.31.0"
 dependencies = [
+ "rustyac-math",
  "rustyac-physics",
 ]
 

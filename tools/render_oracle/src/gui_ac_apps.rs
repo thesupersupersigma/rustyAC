@@ -19,7 +19,10 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 5] = [
+pub const APPS: [(&str, usize, usize, usize); 8] = [
+    ("tyres", 0x4f0, 0x1_4033_8860, 0x1_4051_1d38),
+    ("pedals", 0x1f0, 0x1_402d_bc80, 0x1_4050_2340),
+    ("electronics", 0x1e0, 0x1_402e_a500, 0x1_4050_42e8),
     ("realtime", 0x318, 0x1_4032_b8a0, 0x1_4050_efb8),
     ("laps", 0x2f8, 0x1_402d_9660, 0x1_4050_1e50),
     ("position", 0x200, 0x1_402f_e0f0, 0x1_4050_7100),
@@ -27,7 +30,7 @@ pub const APPS: [(&str, usize, usize, usize); 5] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 1] = ["delta"];
+const TAKES_CAR: [&str; 4] = ["delta", "tyres", "pedals", "electronics"];
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
 
 /// The apps' tables for `gui_ac::class_of`: every app's form is a "Form" in the dumps.
@@ -151,6 +154,42 @@ unsafe extern "C" fn get_time_to_wait(_this: *mut u8) -> f64 {
     link().time_to_wait
 }
 
+unsafe extern "C" fn get_current_compound_short_name(this: *mut u8, out: *mut u8) -> *mut u8 {
+    empty_wstring(out);
+    crate::ac::write_wstring(crate::gui_ac_hud::acs(), out, &with_car(this, |c| c.compound_short_name.clone()));
+    out
+}
+
+unsafe extern "C" fn get_current_compound_ideal_pressure(this: *mut u8, tyre: u16) -> i32 {
+    with_car(this, |c| c.ideal_pressure.get(tyre as usize).copied().unwrap_or(0))
+}
+
+unsafe extern "C" fn is_edl_enabled(this: *mut u8) -> bool {
+    with_car(this, |c| c.edl_enabled)
+}
+
+unsafe extern "C" fn get_edl_out_level(this: *mut u8) -> f32 {
+    with_car(this, |c| c.edl_out_level)
+}
+
+/// The controls provider of the cars that have one: an object whose table's slot +0x28
+/// (`getFFGlobalGain`) answers the script's gain.
+static PROVIDERS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn ff_global_gain(this: *mut u8) -> f32 {
+    let index = PROVIDERS.lock().unwrap().iter().position(|p| *p == this as usize).unwrap_or(0);
+    link().cars.get(index).and_then(|c| c.ff_global_gain).unwrap_or(0.0)
+}
+
+unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
+    let index = car_index(this);
+    if link().cars.get(index).is_some_and(|c| c.ff_global_gain.is_some()) {
+        PROVIDERS.lock().unwrap().get(index).copied().unwrap_or(0) as *mut u8
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 unsafe fn install(game: &Game) {
     // the static `gears` of ACEssentials.obj ("R", "N", "1" …)
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_5240));
@@ -161,6 +200,11 @@ unsafe fn install(game: &Game) {
         (0x1_400d_8db0, is_tc_enabled as *const () as usize),
         (0x1_400d_8de0, is_tc_in_action as *const () as usize),
         (0x1_4013_9ca0, get_session_count as *const () as usize),
+        (0x1_400d_3200, get_current_compound_short_name as *const () as usize),
+        (0x1_400d_3180, get_current_compound_ideal_pressure as *const () as usize),
+        (0x1_400d_8ba0, is_edl_enabled as *const () as usize),
+        (0x1_400d_3470, get_edl_out_level as *const () as usize),
+        (0x1_400d_3160, get_controls_provider as *const () as usize),
         (0x1_4013_a130, get_time_to_wait as *const () as usize),
         (0x1_4013_8220, get_current_session as *const () as usize),
         (0x1_4013_8300, get_current_session_type as *const () as usize),
@@ -247,6 +291,18 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             crate::ac::write_wstring(a, avatar.add(0x10b8), &crate::gui_seq_apps::driver_name(i));
             // the car's node: "connected" at +0xd8
             wr(avatar, 0x210, a.alloc(0x100));
+            // a controls provider (its table: getFFGlobalGain at +0x28), a race engineer (+0xf80)
+            // whose car (+8) has the user's gain at +0xec
+            let table = a.alloc(0x100);
+            for slot in 0..32 {
+                wr(table, slot * 8, ff_global_gain as *const () as usize);
+            }
+            let provider = a.alloc(0x40);
+            wr(provider, 0, table);
+            PROVIDERS.lock().unwrap().push(provider as usize);
+            let engineer = a.alloc(0x40);
+            wr(engineer, 8, a.alloc(0x200));
+            wr(avatar, 0xf80, engineer);
             wr(list, i * 8, avatar);
             cars.push(avatar as usize);
         }
@@ -303,6 +359,17 @@ pub unsafe fn update() {
             if let Some(c) = l.cars.get(i) {
                 wr(rd::<*mut u8>(*avatar as *mut u8, 0x210), 0xd8, c.connected as u8);
                 wr(*avatar as *mut u8, 0x129c, c.in_pitlane as u8);
+                wr(*avatar as *mut u8, 0xf66, c.has_drs as u8);
+                match c.user_ff_gain {
+                    Some(gain) => {
+                        let engineer: *mut u8 = rd(*avatar as *mut u8, 0xf80);
+                        let engineer = if engineer.is_null() { std::ptr::null_mut() } else { engineer };
+                        if !engineer.is_null() {
+                            wr(rd::<*mut u8>(engineer, 8), 0xec, gain);
+                        }
+                    }
+                    None => wr(*avatar as *mut u8, 0xf80, 0usize),
+                }
             }
         }
     });
