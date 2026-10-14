@@ -62,6 +62,10 @@ pub struct AppScript {
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
     pub unix: String,
     pub hybrid: [f32; 4],
+    /// the track's folder and layout
+    pub track: (String, String),
+    /// the AI line's points (the track map of a track without map.png draws it)
+    pub ai_points: Vec<[f32; 3]>,
     /// every car's timing at every frame of the tapes
     pub timing: Vec<Vec<Timing>>,
     /// the frame of the tapes the session is at
@@ -200,6 +204,15 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.drs" => script(|s| s.drs = on),
         "app.ff" => script(|s| s.ff_gain = number),
         "app.unix" => script(|s| s.unix = text.to_string()),
+        "app.aiLine" => {
+            let spline = rustyac_physics::track::spline::AiSpline::load(std::path::Path::new(text))?;
+            let points = spline.spline.points.iter().map(|p| p.point).collect();
+            script(|s| s.ai_points = points);
+        }
+        "app.track" => {
+            let (name, config) = text.split_once('|').unwrap_or((text, ""));
+            script(|s| s.track = (name.to_string(), config.to_string()));
+        }
         "app.hybrid" => {
             let k = ["hasKers", "hasErs", "kersMaxJ", "ersMaxJ"].iter().position(|n| *n == text).ok_or("app.hybrid: hasKers, hasErs, kersMaxJ or ersMaxJ")?;
             script(|s| s.hybrid[k] = number);
@@ -293,6 +306,7 @@ pub fn link() -> AppLink {
                 let place = order.iter().position(|c| *c == i).unwrap_or(0) as i32;
                 AppCar {
                     state: *state,
+                    body_matrix: state.world_matrix,
                     current_lap: RaceLap { time: state.lap_time, splits: t.current_splits.clone(), is_valid: false },
                     best_lap: t.best.clone(),
                     last_lap: t.last.clone(),
@@ -354,6 +368,51 @@ pub fn link() -> AppLink {
     })
 }
 
+/// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
+/// its pixels, and `data\map.ini`, byte for byte).
+pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if !name.contains("ailine") {
+        return Ok(true);
+    }
+    let game = args.root.join("content/tracks/t32_ai_line");
+    let port = args.root.join("port_files/content/tracks/t32_ai_line");
+    let mut same = true;
+    let (a, b) = (std::fs::read(game.join("data/map.ini")), std::fs::read(port.join("data/map.ini")));
+    match (a, b) {
+        (Ok(a), Ok(b)) if a == b => println!("file data/map.ini: IDENTICAL ({} bytes)", a.len()),
+        (a, b) => {
+            same = false;
+            println!("file data/map.ini: DIFFERENT (game {:?} bytes, port {:?})", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+        }
+    }
+    let pixels = |path: std::path::PathBuf| -> Result<(u32, u32, Vec<u8>), String> {
+        let decoder = png::Decoder::new(std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?);
+        let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+        buf.truncate(info.buffer_size());
+        let rgba = match info.color_type {
+            png::ColorType::Rgba => buf,
+            png::ColorType::Rgb => buf.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+            other => return Err(format!("{}: colour type {other:?}", path.display())),
+        };
+        Ok((info.width, info.height, rgba))
+    };
+    match (pixels(game.join("map.png")), pixels(port.join("map.png"))) {
+        (Ok(a), Ok(b)) if a == b => println!("file map.png: pixels IDENTICAL ({} x {})", a.0, a.1),
+        (Ok(a), Ok(b)) => {
+            same = false;
+            let differing = a.2.chunks(4).zip(b.2.chunks(4)).filter(|(x, y)| x != y).count();
+            println!("file map.png: pixels DIFFERENT (game {} x {}, port {} x {}, {differing} pixels differ)", a.0, a.1, b.0, b.1);
+        }
+        (a, b) => {
+            same = false;
+            println!("file map.png: missing ({:?} / {:?})", a.err(), b.err());
+        }
+    }
+    Ok(same)
+}
+
 /// The frames `from..to` of the tapes, one drawn every `every`.
 pub fn play(o: &mut Vec<Op>, from: usize, to: usize, every: usize) {
     let mut f = from;
@@ -376,7 +435,7 @@ fn race(o: &mut Vec<Op>, cars: usize) {
     o.push(hud("app.tape", 0.0, tape("oracle/t32/race/rc_race")));
     o.extend([hud("app.session", 3.0, ""), hud("app.laps", 3.0, ""), hud("app.start", 5000.0, ""), hud("app.duration", 0.0, ""), hud("app.sessions", 1.0, "")]);
     // the F2004's tank and engine (car.ini [FUEL] MAX_FUEL, engine.ini [DAMAGE] RPM_THRESHOLD)
-    o.extend([hud("app.maxFuel", 150.0, ""), hud("app.damageRpm", 20200.0, ""), hud("app.abs", 0.0, ""), hud("app.tc", 1.0, ""), hud("app.unix", 0.0, "ks_ferrari_f2004")]);
+    o.extend([hud("app.maxFuel", 150.0, ""), hud("app.damageRpm", 20200.0, ""), hud("app.abs", 0.0, ""), hud("app.tc", 1.0, ""), hud("app.unix", 0.0, "ks_ferrari_f2004"), hud("app.track", 0.0, "magione")]);
     // Magione's AI spline, the car oracle's weather (26 C air, 30 C road, no wind)
     o.extend([hud("app.spline", 2507.6, ""), hud("app.env", 26.0, "air"), hud("app.env", 30.0, "road"), hud("app.env", 0.97, "grip"), hud("app.env", 0.0, "wind"), hud("app.env", 0.0, "windDirection")]);
 }
@@ -419,6 +478,23 @@ FF_GAIN=0.85
         let file = format!("content/texture/{name}.png");
         std::fs::copy(args.game.join(&file), args.root.join(&file)).map_err(|e| format!("{file}: {e}"))?;
     }
+    // the track map's files: system/cfg/map.ini, the road's picture, every test track's map
+    std::fs::copy(args.game.join("system/cfg/map.ini"), cfg.join("map.ini")).map_err(|e| format!("map.ini: {e}"))?;
+    std::fs::copy(args.game.join("content/texture/mapRoad.png"), tex.join("mapRoad.png")).map_err(|e| format!("mapRoad.png: {e}"))?;
+    for track in ["magione", "spa", "ks_laguna_seca"] {
+        let to = args.root.join("content/tracks").join(track);
+        std::fs::create_dir_all(to.join("data")).map_err(|e| e.to_string())?;
+        for file in ["map.png", "data/map.ini"] {
+            std::fs::copy(args.game.join("content/tracks").join(track).join(file), to.join(file)).map_err(|e| format!("{track} {file}: {e}"))?;
+        }
+    }
+    // a track with no map.png: the map is drawn from the AI line, written by each side into
+    // its own place (the game's into the scratch root, the port's into port_files)
+    let ai_track = args.root.join("content/tracks/t32_ai_line");
+    let _ = std::fs::remove_dir_all(&ai_track);
+    let _ = std::fs::remove_dir_all(args.root.join("port_files"));
+    std::fs::create_dir_all(ai_track.join("data")).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(args.root.join("port_files/content/tracks/t32_ai_line/data")).map_err(|e| e.to_string())?;
     // the cars' engine.ini (the repo's cardata): FormGear reads [TURBO_n] DISPLAY_MAX_BOOST
     for car in ["ks_ferrari_f2004", "ks_ferrari_sf15t"] {
         let to = args.root.join("content/cars").join(car).join("data");
@@ -479,6 +555,38 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 play(&mut o, 2300, 2500, 6);
                 handle(&mut o, 0, 80, 196);
                 o.extend([hud("app.visible", 0.0, which), Op::Frame(DT), hud("app.visible", 1.0, which), Op::Frame(DT), Op::Save]);
+            }
+        }
+        "app_trackmap" => {
+            match rest.split('.').next().unwrap_or("") {
+                "spa" => {
+                    o.push(hud("app.create", 1.0, ""));
+                    o.push(hud("app.tape", 0.0, tape("oracle/t32/sf15t/spa_hybrid_lap")));
+                    o.extend([hud("app.session", 1.0, ""), hud("app.track", 0.0, "spa")]);
+                }
+                "laguna" => {
+                    o.push(hud("app.create", 6.0, ""));
+                    o.push(hud("app.tape", 0.0, tape("oracle/t32/laguna/mc_field")));
+                    o.extend([hud("app.session", 1.0, ""), hud("app.track", 0.0, "ks_laguna_seca")]);
+                }
+                "ailine" => {
+                    race(&mut o, 6);
+                    let line = std::path::Path::new(r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa\content\tracks\magione\ai\fast_lane.ai");
+                    o.extend([hud("app.aiLine", 0.0, leak(line.to_string_lossy().into_owned())), hud("app.track", 0.0, "t32_ai_line")]);
+                }
+                _ => race(&mut o, 6),
+            }
+            o.push(hud("app.new", 0.0, "trackmap"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "trackmap"));
+            play(&mut o, 0, 600, 30);
+            play(&mut o, 600, 1200, 3);
+            if !rest.ends_with("short") {
+                play(&mut o, 1200, 9000, 31);
+                // dragged (the map follows), hidden and back
+                o.extend([Op::MouseMove(150, 200), Op::MouseDown(150, 200), Op::MouseMove(400, 300), Op::Frame(DT), Op::MouseMove(700, 380), Op::Frame(DT), Op::MouseUp(700, 380), Op::Frame(DT)]);
+                play(&mut o, 9000, 9600, 10);
+                o.extend([hud("app.visible", 0.0, "trackmap"), Op::Frame(DT), hud("app.visible", 1.0, "trackmap"), Op::Frame(DT), Op::Save]);
             }
         }
         "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {

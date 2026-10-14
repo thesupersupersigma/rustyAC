@@ -22,6 +22,15 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "tyres" => gui.new_tyres_app(painter, read(game_folder.join("system/cfg/tyres_app.ini")).as_ref()),
         "pedals" => gui.new_pedals_app(painter, read(game_folder.join("documents/Assetto Corsa/cfg/controls.ini")).as_ref()),
         "electronics" => gui.new_electronics_app(painter),
+        "trackmap" => {
+            let (track, config) = crate::gui_seq_apps::script(|s| s.track.clone());
+            let map_ini = read(game_folder.join("system/cfg/map.ini"));
+            let folder = if config.is_empty() { game_folder.join("content/tracks").join(&track) } else { game_folder.join("content/tracks").join(&track).join(&config) };
+            let track_map_ini = read(folder.join("data/map.ini"));
+            let points = crate::gui_seq_apps::script(|s| s.ai_points.clone());
+            let files = rustyac_gui::app_track_map::TrackMapFiles { map_ini: map_ini.as_ref(), track_map_ini: track_map_ini.as_ref(), track: &track, config: &config, ai_points: &points };
+            gui.new_track_map_app(painter, &files)
+        }
         "gears" => {
             let engines: Vec<_> = gui.apps.cars.iter().map(|c| read(game_folder.join("content/cars").join(&c.unix_name).join("data/engine.ini"))).collect();
             gui.new_gears_app(painter, &engines)
@@ -42,6 +51,7 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
         "app.new" => {
             let form = make(gui, painter, game_folder, text)?;
             gui.game_screen_add_control(painter, screen, form, number == 0.0);
+            write_files(gui, game_folder)?;
             apps.made.push((text.to_string(), form));
         }
         "app.visible" => {
@@ -49,6 +59,17 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
             gui.set_visible(form, number != 0.0);
         }
         other => return Err(format!("the port's side knows no {other:?}")),
+    }
+    Ok(())
+}
+
+/// The files the apps asked to write, into `port_files` of the scratch root.
+fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
+    for action in std::mem::take(&mut gui.apps.actions) {
+        let rustyac_gui::apps::AppAction::WriteFile { path, bytes } = action;
+        let target = root.join("port_files").join(path.replace('\\', "/"));
+        std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
+        std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
     }
     Ok(())
 }

@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 9] = [
+pub const APPS: [(&str, usize, usize, usize); 10] = [
+    ("trackmap", 0x368, 0x1_402e_e8e0, 0x1_4050_4db0),
     ("gears", 0x3d8, 0x1_402e_8280, 0x1_4050_3dd0),
     ("tyres", 0x4f0, 0x1_4033_8860, 0x1_4051_1d38),
     ("pedals", 0x1f0, 0x1_402d_bc80, 0x1_4050_2340),
@@ -191,6 +192,13 @@ unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
     }
 }
 
+/// `TrackAvatar::getAISpline` 0x1401c8010: the fake track's recorder's best lap spline.
+static RECORDER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "C" fn get_ai_spline(_this: *mut u8) -> *mut u8 {
+    (RECORDER.load(std::sync::atomic::Ordering::SeqCst) as *mut u8).add(0xf0)
+}
+
 unsafe fn install(game: &Game) {
     // the static `gears` of ACEssentials.obj ("R", "N", "1" …)
     let init: extern "C" fn() = std::mem::transmute(game.acs.va(0x1_4001_5240));
@@ -209,6 +217,7 @@ unsafe fn install(game: &Game) {
         (0x1_400d_8ba0, is_edl_enabled as *const () as usize),
         (0x1_400d_3470, get_edl_out_level as *const () as usize),
         (0x1_400d_3160, get_controls_provider as *const () as usize),
+        (0x1_401c_8010, get_ai_spline as *const () as usize),
         (0x1_4013_a130, get_time_to_wait as *const () as usize),
         (0x1_4013_8220, get_current_session as *const () as usize),
         (0x1_4013_8300, get_current_session_type as *const () as usize),
@@ -275,6 +284,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         let track = a.alloc(0x200);
         let recorder = a.alloc(0x200);
         wr(track, 0x178, recorder);
+        RECORDER.store(recorder as usize, std::sync::atomic::Ordering::SeqCst);
+        empty_wstring(track.add(0x10));
+        empty_wstring(track.add(0xa0));
         wr(recorder, 0x140 + 8, 1usize);
         wr(recorder, 0x140 + 0x10, 2usize);
         wr(sim, 0x150, track);
@@ -293,8 +305,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 empty_wstring(avatar.add(at));
             }
             crate::ac::write_wstring(a, avatar.add(0x10b8), &crate::gui_seq_apps::driver_name(i));
-            // the car's node: "connected" at +0xd8
+            // the car's node: "connected" at +0xd8; its body's node (bodyTransform, matrix at +8)
             wr(avatar, 0x210, a.alloc(0x100));
+            wr(avatar, 0x1b8, a.alloc(0x100));
             // a controls provider (its table: getFFGlobalGain at +0x28), a race engineer (+0xf80)
             // whose car (+8) has the user's gain at +0xec
             let table = a.alloc(0x100);
@@ -325,7 +338,13 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             let form = a.alloc(*size);
             let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(*ctor));
             let first_car = GAME.lock().unwrap().as_ref().and_then(|g| g.cars.first().copied()).unwrap_or(0) as *mut u8;
-            ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
+            if text == "trackmap" {
+                // TrackMap::TrackMap(GUI*, Sim*, bool)
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
+                ctor(form, gui, sim, false);
+            } else {
+                ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
+            }
             // Sim::addForm: GameScreen::addControl(form, true)
             let screen: *mut u8 = rd(sim, 0x108);
             let table: *const usize = rd(screen, 0);
@@ -370,6 +389,7 @@ pub unsafe fn update() {
                     crate::ac::write_wstring(crate::gui_ac_hud::acs(), (*avatar as *mut u8).add(0x138), &c.unix_name);
                 }
                 wr(rd::<*mut u8>(*avatar as *mut u8, 0x210), 0xd8, c.connected as u8);
+                wr(rd::<*mut u8>(*avatar as *mut u8, 0x1b8), 8, c.body_matrix.m);
                 wr(*avatar as *mut u8, 0x129c, c.in_pitlane as u8);
                 wr(*avatar as *mut u8, 0xf66, c.has_drs as u8);
                 match c.user_ff_gain {
@@ -389,6 +409,25 @@ pub unsafe fn update() {
     wr(sim, 0x220, l.focused_car as u32);
     let track: *mut u8 = rd(sim, 0x150);
     wr(rd::<*mut u8>(track, 0x178), 0x140 + 0x20, l.ai_spline_length);
+    let (name, config) = crate::gui_seq_apps::script(|s| s.track.clone());
+    // the AI line's points (20-byte SplinePoints: x, y, z, length, tag) in the spline's vector
+    let points = crate::gui_seq_apps::script(|s| s.ai_points.clone());
+    let spline = rd::<*mut u8>(track, 0x178).add(0x140);
+    if !points.is_empty() && rd::<usize>(spline, 0x10).wrapping_sub(rd::<usize>(spline, 8)) != points.len() * 20 {
+        let block = crate::gui_ac_hud::acs().alloc(points.len() * 20);
+        for (i, p) in points.iter().enumerate() {
+            wr(block, i * 20, *p);
+        }
+        wr(spline, 8, block);
+        wr(spline, 0x10, block.add(points.len() * 20));
+        wr(spline, 0x18, block.add(points.len() * 20));
+    }
+    if crate::gui_ac::read_wstring(track.add(0x10)) != name {
+        crate::ac::write_wstring(crate::gui_ac_hud::acs(), track.add(0x10), &name);
+    }
+    if crate::gui_ac::read_wstring(track.add(0xa0)) != config {
+        crate::ac::write_wstring(crate::gui_ac_hud::acs(), track.add(0xa0), &config);
+    }
     let physics: *mut u8 = rd(sim, 0x1b8);
     wr(physics, 0x310, l.wind_speed);
     wr(physics, 0x314, l.wind_direction_deg);

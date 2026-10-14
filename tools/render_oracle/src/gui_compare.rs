@@ -187,6 +187,9 @@ pub fn compare(args: &Args) -> Result<(), String> {
         let differing = pa.chunks(4).zip(pb.chunks(4)).filter(|(x, y)| x != y).count();
         println!("frame {frame}: {differing} of {} pixels differ", pa.len() / 4);
     }
+    if !crate::gui_seq_apps::compare_files(args, name)? {
+        failed = true;
+    }
     if failed {
         return Err(format!("{name}: the port does not match the game"));
     }
