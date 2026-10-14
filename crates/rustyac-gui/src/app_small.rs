@@ -238,7 +238,8 @@ impl App for RunningTime {
             gui.set_text(self.time_left, "TIME:TEST ENDED");
         } else {
             let mut c = [1.0; 4];
-            if rem < 30000 && (rem / 1000) % 2 != 0 {
+            // (half seconds: the division is by 500)
+            if rem < 30000 && (rem / 500) % 2 != 0 {
                 c = [1.0, 0.0, 0.0, 1.0];
             }
             gui.controls[self.time_left].fore_color = c;
