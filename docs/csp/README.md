@@ -19,9 +19,9 @@ Read-only work: nothing in the game folder, `Documents\Assetto Corsa`, the Ghidr
 | Physics extensions | done: overview + 4 detail files |
 | `content_needs.md` | done (15 cars with `VERSION=extended-N`, 6 extended track layouts, 1 encrypted car); re-check after the rendering files |
 | Lua | done: [`lua.md`](lua.md) |
-| Rendering | in progress (config, core hooks, content hooks being written) |
+| Rendering | config + core hooks done; content hooks in progress |
 | UI / apps, online, audio, input / FFB, VR / screens, misc | in progress |
-| `plan.md` | not started |
+| `plan.md` | first full draft written (finalise after the last area briefs) |
 
 Scratch (not committed, gitignored): `re/scratch/csp1/` — index tables of `dwrite.dll`, decompiles of
 its replacement functions, the briefs the area files were written from.
@@ -124,9 +124,9 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 | Rendering | [`rendering.md`](rendering.md) | pending |
 | UI and apps | [`ui_apps.md`](ui_apps.md) | pending |
 | Online | [`online.md`](online.md) | pending |
-| Audio | [`audio.md`](audio.md) | pending |
+| Audio | [`audio.md`](audio.md) | done |
 | Input and FFB | [`input_ffb.md`](input_ffb.md) | pending |
 | VR and screens | [`vr_screens.md`](vr_screens.md) | pending |
 | Misc | [`misc.md`](misc.md) | pending |
 | Content needs | [`content_needs.md`](content_needs.md) | done |
-| Plan | [`plan.md`](plan.md) | pending |
+| Plan | [`plan.md`](plan.md) | draft |
