@@ -376,6 +376,38 @@ impl Gui {
 }
 
 /// `path.substr(0, size - 4) + L".sp"`.
+/// What `ACClient::onSetupReceived` 0x140050090's job (lambda_027ec0, 0x14003caf0) writes
+/// into `setups\server_temp.ini`: the server's values in a `std::map<std::string, float>` (by
+/// name; a name given twice keeps the last value), each as `[NAME]` and `VALUE=` with the
+/// float as `ostream << float` prints it (`std::endl` in text mode: CR LF).
+pub fn server_setup_text(values: &[(String, f32)]) -> Vec<u8> {
+    let mut map = std::collections::BTreeMap::new();
+    for (name, value) in values {
+        map.insert(name.as_bytes(), *value);
+    }
+    let mut out = Vec::new();
+    for (name, value) in map {
+        out.push(b'[');
+        out.extend_from_slice(name);
+        out.extend_from_slice(b"]\r\nVALUE=");
+        out.extend_from_slice(crate::acos::format_g6(value).as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out
+}
+
+impl Gui {
+    /// lambda_027ec0 0x14003caf0, the server's setup on the main thread: written into
+    /// `server_temp.ini` of the setups folder (the game's `Documents\Assetto Corsa\setups`;
+    /// rustyAC's own), then loaded with `fixed`: every spinner it names turns read-only for
+    /// good. The folder is not made (the game's `std::ofstream` makes none).
+    pub fn setup_screen_load_server_setup(&mut self, id: Id, values: &[(String, f32)], setups: &Path) -> bool {
+        let path = setups.join("server_temp.ini");
+        write_file(&path, &server_setup_text(values));
+        self.setup_screen_load_setup_absolute_path(id, &path, true)
+    }
+}
+
 pub fn sp_path(path: &Path) -> std::path::PathBuf {
     let text = path.to_string_lossy();
     let cut: String = text.chars().take(text.chars().count().saturating_sub(4)).collect();

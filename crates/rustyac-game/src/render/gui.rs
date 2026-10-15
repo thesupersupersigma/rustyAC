@@ -334,7 +334,8 @@ impl GameGui {
         // has done already (`RollingChassis::session_start`): those jobs are not sent again.
         let mut setup_data = None;
         let mut pages = rustyac_gui::esc_menu::EscPages::default();
-        if let (false, Some(snapshot)) = (setup.online, setup.setup_snapshot.clone()) {
+        // (online too: Task 34; the server's setup locks what it names)
+        if let Some(snapshot) = setup.setup_snapshot.clone() {
             fn editor(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
                 gui.new_setup_screen(painter, None)
             }
@@ -1058,6 +1059,14 @@ impl GameGui {
                     self.vote_output(vec![out]);
                 }
                 OnlineGuiEvent::Message { title, text, kind } => self.message.add_message(&mut self.gui, &title, &text, kind),
+                // (the game's Documents\Assetto Corsa\setups is always there; rustyAC's own
+                // setups folder is made for it)
+                OnlineGuiEvent::Setup { values } => {
+                    if let Some(screen) = self.esc_menu.and_then(|menu| self.gui.esc_menu(menu).setup_screen) {
+                        let _ = std::fs::create_dir_all(&self.setup.setups_dir);
+                        self.gui.setup_screen_load_server_setup(screen, &values, &self.setup.setups_dir);
+                    }
+                }
             }
         }
     }

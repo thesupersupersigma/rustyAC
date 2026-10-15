@@ -211,6 +211,8 @@ pub enum OnlineGuiEvent {
     VoteNotPassed,
     /// `SystemMessage::addMessage(title, description, type)` of the client's messages
     Message { title: String, text: String, kind: i32 },
+    /// `ACClient::onSetupReceived` 0x140050090: the server's setup (its first byte unread)
+    Setup { values: Vec<(String, f32)> },
 }
 
 /// Task 34: what the GUI asks of the client.
@@ -619,6 +621,7 @@ impl OnlineSession {
                         self.gui_events.push(OnlineGuiEvent::Vote { kind: *kind as i32, target, time_left_ms: *time_left_ms as i32, is_me: *last_voter == self.net.client.session_id });
                     }
                 }
+                Event::Message(Message::Setup { values, .. }) => self.gui_events.push(OnlineGuiEvent::Setup { values: values.clone() }),
                 Event::Message(Message::VoteNotPassed) => {
                     self.say("Voting ended. Not passed".to_string());
                     self.gui_events.push(OnlineGuiEvent::VoteNotPassed);
