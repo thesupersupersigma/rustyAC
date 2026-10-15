@@ -1045,8 +1045,10 @@ impl GameGui {
         for event in events {
             match event {
                 OnlineGuiEvent::Chat { session, text } => {
-                    let driver = self.online.as_ref().and_then(|online| online.net_cars.iter().find(|car| car.0 == session).map(|car| car.2.clone()));
-                    self.gui.chats_on_chat_message(session as u32, &text, driver.as_deref());
+                    let net = self.online.as_ref().and_then(|online| online.net_cars.iter().find(|car| car.0 == session).map(|car| (car.2.clone(), car.1)));
+                    // (the Chat app's handler was hung up before the page's)
+                    self.gui.chat_apps_on_chat_message(session as u32, &text, net.as_ref().map(|(name, guid)| (name.as_str(), *guid)));
+                    self.gui.chats_on_chat_message(session as u32, &text, net.as_ref().map(|(name, _)| name.as_str()));
                 }
                 OnlineGuiEvent::Vote { kind, target, time_left_ms, is_me } => {
                     VotingManager::on_vote_received(&mut self.gui.sim.online_link.vote, &ReceivedVote { vote_type: kind, time_left_ms, is_me, target });

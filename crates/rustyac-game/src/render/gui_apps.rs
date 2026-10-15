@@ -112,6 +112,9 @@ impl GameApps {
         add(gui, painter, "hideall", id);
         let id = gui.new_essentials_app(painter);
         add(gui, painter, "essentials", id);
+        // FormChat: made in Sim::Sim after ACEssentials, before the tyres' app (Task 34)
+        let id = gui.new_chat_app(painter, system("chat_app.ini").as_ref(), chat_clock);
+        add(gui, painter, "chat", id);
         let id = gui.new_tyres_app(painter, system("tyres_app.ini").as_ref());
         add(gui, painter, "tyres", id);
         add(gui, painter, "leaderboard", leaderboard);
@@ -322,6 +325,8 @@ impl GameApps {
                 (Some(track), _) => setup.cfg_dir.join("maps").join(track),
                 // Driver performances' records: rustyAC's own savedData beside its cfg
                 (_, Some(saved)) => saved_data_dir(setup).join(saved),
+                // the Chat app's export: rustyAC's own out folder, not Documents\Assetto Corsa\out
+                _ if relative.starts_with("out/") => setup.out_dir.join(&relative[4..]),
                 _ => setup.cfg_dir.join(relative.strip_prefix("cfg/").unwrap_or(&relative)),
             };
             if let Some(parent) = target.parent() {
@@ -512,6 +517,13 @@ pub fn saved_car_jobs(cfg_dir: &Path, unix_name: &str) -> Vec<rustyac_physics::c
 pub fn use_mph(cfg_dir: &Path, documents_cfg: Option<&PathBuf>) -> bool {
     let ini = read(cfg_dir.join("gameplay.ini")).or_else(|| documents_cfg.and_then(|d| read(d.join("gameplay.ini"))));
     ini.is_some_and(|ini| ini.get_int("OPTIONS", "USE_MPH").unwrap_or(0) != 0)
+}
+
+/// The Chat app's clock: `_localtime64(_time64(0))`'s year, month, day, hour, minute, second.
+fn chat_clock() -> [i32; 6] {
+    let t = crate::ac_replay::local_time();
+    // (the replay's date keeps two digits of the year)
+    [2000 + t.year as i32, t.month as i32, t.day as i32, t.hour as i32, t.minute as i32, t.second as i32]
 }
 
 /// rustyAC's own `savedData` folder: beside its `cfg` folder.

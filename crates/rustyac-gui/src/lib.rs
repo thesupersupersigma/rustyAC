@@ -53,6 +53,7 @@ pub mod overlay_leaderboard;
 pub mod painter;
 pub mod pit_menu;
 pub mod race_control_online;
+pub mod app_chat;
 pub mod replay_interface;
 pub mod setup_car;
 pub mod setup_electronics;
