@@ -30,8 +30,18 @@ State after the last commit (update after every commit):
   `QuickMenu::load_fixed_setup` (0x1400b0850). In the game the page edits a copy of the
   referee's (or online session's) pit menu and sends it to the physics thread; the arrow keys'
   changes come back. Only with pitstop.ini `USE_MOUSE_PITSTOP=0` (the shipped value).
-- **Next, in the task's order:** the camera at the start and F7, Ctrl+M, the old mouse pit
-  menu; then the live run against a local acServer copy and the end checks.
+- **Done and proven against the game's code:** Ctrl+M mouse steering (`KeyboardCarControl`
+  `MOUSE_STEER` / `MOUSE_SPEED` / `MOUSE_ACCELERATOR_BRAKE`, `setMouseSteering` 0x140111350,
+  `getMouseSteering` 0x14010fb70): `car_oracle mouse-micro --root re/scratch/task34/mouse_root`
+  then `cargo run --release -p rustyac-game --example mouse_steering_check --
+  re/scratch/task34/mouse_root/mouse.tape` → IDENTICAL. The camera of a session that starts in
+  the ESC menu (`CameraModeStart` 0x140060470, the C library's `rand` from seed 1) and F7's free
+  camera (`CameraMouseControlBase::update` 0x14020ff30; only with assetto_corsa.ini
+  `[CAMERA] ALLOW_FREE_CAMERA=1`, shipped 0): `car_oracle start-camera-micro --root
+  re/scratch/task34/camera_root` then `--example start_camera_check -- <start_camera.tape>
+  <free_camera.tape>` → both IDENTICAL (seeds 7 and 34).
+- **Next, in the task's order:** the old mouse pit menu (`re/scratch/task34/spec_mousepit.md`);
+  then the live run against a local acServer copy and the end checks.
 - **Code:** `crates/rustyac-gui/src/race_control_online.rs` (panels, `OnlineLink`,
   `VotingManager`), `esc_menu.rs` (online branch), `crates/rustyac-game/src/online.rs`
   (`OnlineGui`, events, requests, messages), `physics_thread.rs`, `render/gui.rs`,
