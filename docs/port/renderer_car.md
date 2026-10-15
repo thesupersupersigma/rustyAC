@@ -46,8 +46,8 @@ smoke and the following reflection map are read from your `video.ini`.
 
 **Not done** (each is also in section 7 or 8):
 
-1. `DigitalPanels` (the extra display pages some cars have) and three kinds of display item (`RPM_GRAPH`,
-   `DELTA_GRAPH`, `GEAR_TX`) are not ported. The plain digital instruments are.
+1. ~~`DigitalPanels` and the display items `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`~~: ported in Task 22
+   (`rustyac-render` `panels.rs`, `digital.rs`); proven in `renderer_scene.md` and `apps_car_data.md`.
 2. The high-quality mirror (`[MIRROR] HQ=1`, a multisampled target) is not ported; the plain mirror is drawn
    in its place and `rustyac.exe` says so.
 3. Flames of "version 1" (cars without `flame_presets.ini`) are not ported: no car of the game has them.
@@ -303,8 +303,8 @@ Carried over from Task 20, with what this task leaves:
       particle shader), track grooves, the ideal line (the mirror hides it), more than one car (every car's
       mirror shows the focused car's rear view; the smoke caps at 4000 particles above 25 cars).
 - [ ] The high-quality mirror (`[MIRROR] HQ`: a multisampled target, a resolve, the whole transparent pass).
-- [ ] `DigitalPanels` and the display items `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`; the LED series
-      `DRS_SERIE`, `KERS_LOAD_SERIE`, `POWER_918`, `KERS_RECHARGE_SERIE`.
+- [x] `DigitalPanels` and the display items `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`; the LED series
+      `DRS_SERIE`, `KERS_LOAD_SERIE`, `POWER_918`, `KERS_RECHARGE_SERIE` (Task 22; see `renderer_scene.md`).
 - [ ] Flames version 1; `CarFakeShadow::generateFakeShadow`.
 - [ ] Replays and the pause menu as the car's objects see them (the flags exist on `CarAvatar`:
       `replay_mode`, `replay_scale`, `pause_menu`; nothing sets them yet).

@@ -77,7 +77,7 @@ extra panels; see "Not done".
 | Tyre tester | `TyreTesterForm` | **not done** |
 | Tyre debug | `TyreWearingDebug` | **not done** |
 | Setup debug | `SetupDebug` | **not done** |
-| Dashboard pages | `DigitalPanels`, `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX` | **not done** |
+| Dashboard pages | `DigitalPanels`, `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX` | done in Task 22 (see `apps_car_data.md`) |
 
 ## What is ported, with the game's addresses
 
@@ -332,7 +332,8 @@ No picture of a digital panel: the panels are not done.
   `suspension_app.md`, `carphys_apps.md`, `tyre_apps.md`.
 - **GPUProfilerApp** and the D3D11 timestamp queries (`GPUProfiler`, the pass names): brief
   `stats.md` section 5.
-- **DigitalPanels** and the display items `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`: not read.
+- **DigitalPanels** and the display items `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`: were already ported in
+  Task 22 (`rustyac-render` `panels.rs`, `digital.rs`); see `apps_car_data.md`.
 - **Render Stats' FMOD usage and the audio time:** `Game::stats.renderAudioTime` and the FMOD
   update usage are not measured in rustyac.exe (0, as the game shows them without an audio
   engine).
