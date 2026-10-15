@@ -86,7 +86,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         // (the start 12 s after the session's: the car is already rolling when the window
         // before the start opens, in which the gearbox is locked and nobody may move)
         "rc_pass_front" | "rc_pass_rev" => spec("r3", true, Some(1)),
-        "pit_box" | "pit_box_repair" | "pit_box_none" | "pit_box_wing" | "pit_feed" => spec("p20", true, None),
+        "pit_box" | "pit_box_repair" | "pit_box_none" | "pit_box_wing" | "pit_feed" | "pit_mouse" => spec("p20", true, None),
         "pit_ai_race" | "pit_window_served" | "pit_window_missed" | "pit_window_early" => spec("r4", true, None),
         "pit_window_timed" => spec("rt5", true, None),
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
@@ -537,6 +537,14 @@ pub fn scenarios() -> Vec<MultiScenario> {
             cars: |track, cars| pit_boxes(track, cars, 2, 20.0),
         },
         MultiScenario {
+            name: "pit_mouse",
+            about: "Task 34: as pit_feed with the old mouse pit menu (Sim::useMousePitstop): the game's own button handlers, fuel gauge and confirm are clicked at made-up moments from the seed, and its state \"choosing\" waits for them",
+            seconds: 120.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| pit_boxes(track, cars, 2, 20.0),
+        },
+        MultiScenario {
             name: "pit_box_repair",
             about: "Task 28b: as pit_box with a car that starts damaged (four body zones, the engine, a bent suspension): a repair stop (body, suspension, engine), no fuel, the tyres stay",
             seconds: 125.0,
@@ -801,7 +809,7 @@ pub fn pit_of(scenario: &str) -> Option<PitSpec> {
     // seventh line on a car with four pressures)
     const WING: &[u32] = &[DOWN, DOWN, RIGHT, RIGHT, RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, RIGHT, RIGHT, RIGHT];
     match scenario {
-        "pit_box" | "pit_feed" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
+        "pit_box" | "pit_feed" | "pit_mouse" => Some(PitSpec { window: (0, 0), keys: FUEL_TYRES, damage: false, calls: &[] }),
         "pit_box_repair" => Some(PitSpec { window: (0, 0), keys: REPAIRS, damage: true, calls: &[] }),
         "pit_box_none" => Some(PitSpec { window: (0, 0), keys: NOTHING, damage: false, calls: &[] }),
         "pit_box_wing" => Some(PitSpec { window: (0, 0), keys: WING, damage: false, calls: &[] }),
@@ -1357,6 +1365,15 @@ impl<'a> MultiWorld<'a> {
                         recording.set("pit_feed", seed.to_string());
                         if let Some(game_pit) = &mut whole.pit {
                             game_pit.feed = Some(std::cell::RefCell::new(rustyac_physics::race::pitstop::PitFeed::new(seed)));
+                        }
+                    }
+                    if scenario.name == "pit_mouse" {
+                        recording.set("pit_mouse", seed.to_string());
+                        if let Some(game_pit) = &mut whole.pit {
+                            let mut feed = rustyac_physics::race::pitstop::PitFeed::new(seed);
+                            feed.mouse = true;
+                            game_pit.feed = Some(std::cell::RefCell::new(feed));
+                            game_pit.enable_mouse();
                         }
                     }
                 }

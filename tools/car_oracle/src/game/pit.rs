@@ -20,7 +20,7 @@
 //! of `update` takes its online path, which this harness cannot give it. That block is
 //! written out here a second time from the listing ([`GamePit::window`]).
 
-use rustyac_physics::race::pitstop::QuickMenu;
+use rustyac_physics::race::pitstop::{FeedClick, MousePitClick, QuickMenu, FEED_GAUGE};
 
 use super::race_ini::{rd, wr, write_wstring, zeroed};
 use crate::acs::Acs;
@@ -32,6 +32,20 @@ const VA_PITSTOP_NEW_SESSION: usize = 0x1_400a_7ce0; // the handler of Sim::evOn
 const VA_UPDATE_IN_PITLANE_STATE: usize = 0x1_400d_d6d0; // void CarAvatar::updateInPitlaneState(float)
 const VA_SET_BLACK_FLAG: usize = 0x1_400d_9e70; // void CarAvatar::setBlackFlag(PenaltyDescription)
 const VA_GET_ESTIMATED_TIME: usize = 0x1_400a_9600; // float PitStop::getEstimatedTime()
+// Task 34: the old mouse menu's handlers (lambdas' `operator()` take the capture, the
+// `_Do_call`s the std::function, whose capture is at +8)
+const VA_PITSTOP_FUEL_VTABLE: usize = 0x1_404b_7988;
+const VA_FUEL_ON_MOUSE_DOWN: usize = 0x1_400a_9ce0; // bool PitStopFuel::onMouseDown(OnMouseDownEvent&)
+const VA_NO_CHANGE: usize = 0x1_400a_8530; // _Do_call {this, button}
+const VA_TYRE: usize = 0x1_400a_7c60; // operator() {this, wstring compound, button}
+const VA_FUEL_DOWN: usize = 0x1_400a_7940; // operator() {this}
+const VA_FUEL_UP: usize = 0x1_400a_79d0; // operator() {this}
+const VA_FUEL_FILL: usize = 0x1_400a_85e0; // _Do_call {this}
+const VA_REPAIR_SUSP: usize = 0x1_400a_8490; // _Do_call {this}
+const VA_REPAIR_BODY: usize = 0x1_400a_8650; // _Do_call {this}
+const VA_REPAIR_ENGINE: usize = 0x1_400a_8510; // _Do_call {this}
+const VA_CONFIRM: usize = 0x1_400a_7740; // operator() {this}
+const CA_TYRE_COMPOUNDS: usize = 0xf18; // CarAvatar::physicsInfo.tyreCompounds
 
 const SIM_GAME_OBJECTS: usize = 0x40;
 const SIM_GAME_SCREEN: usize = 0x108;
@@ -57,6 +71,9 @@ const TYRE_SIZE: usize = 0x858;
 const TYRE_COMPOUND_DEFS: usize = 0x500;
 const TYRE_CURRENT_COMPOUND: usize = 0x648;
 const COMPOUND_SIZE: usize = 0x3f0;
+
+/// `Control::onVisibleChanged` and the rest of the stand-in parent's table
+extern "C" fn nothing() {}
 
 thread_local! {
     /// the pit stop's block and the lambda's address, for the new-session handler
@@ -143,6 +160,10 @@ pub struct GamePit<'a> {
     fuel_control: *mut u8,
     buttons: [*mut u8; 3],
     estimate: std::cell::Cell<f32>,
+    /// Task 34: the old mouse menu: its parent control and tyre buttons (null: none)
+    parent: *mut u8,
+    tyre_buttons: Vec<*mut u8>,
+    compounds: Vec<String>,
 }
 
 impl<'a> GamePit<'a> {
@@ -244,7 +265,81 @@ impl<'a> GamePit<'a> {
         let client = zeroed(0x10818);
         write_wstring(client.add(CLIENT_CURRENT_SESSION), "");
         PIT.with(|p| p.set((pit as usize, acs.va(VA_PITSTOP_NEW_SESSION))));
-        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window, feed: None, port_menu: port.clone(), pit_position, fuel_control, buttons, estimate: std::cell::Cell::new(0.0) }
+        GamePit { acs, pit, menu, sim, manager, avatar, car, client, screen, indicator, presets, items: count, window, feed: None, port_menu: port.clone(), pit_position, fuel_control, buttons, estimate: std::cell::Cell::new(0.0), parent: std::ptr::null_mut(), tyre_buttons: Vec::new(), compounds: Vec::new() }
+    }
+
+    /// Task 34: `Sim::useMousePitstop` on, and the controls of the old mouse menu as far as
+    /// the stop and the handlers read them: `isActive`, the parent control (its `visible`,
+    /// a table whose `onVisibleChanged` does nothing), the tyre buttons (`selected`), the
+    /// fuel gauge as `PitStopFuel` with the world rectangle of [`FEED_GAUGE`] (no parent),
+    /// and the avatar's `physicsInfo.tyreCompounds` (the names the tyre buttons ask for).
+    pub unsafe fn enable_mouse(&mut self) {
+        wr(self.sim, SIM_USE_MOUSE_PITSTOP, 1u8);
+        wr(self.pit, 0x30, 1u8);
+        let table = Box::leak(vec![nothing as *const () as usize; 64].into_boxed_slice());
+        let parent = zeroed(0x200);
+        wr(parent, 0, table.as_ptr());
+        wr(self.pit, 0x128, parent);
+        self.parent = parent;
+        let (_, names) = menu_car(self.car);
+        let buttons = zeroed(8 * (names.len() + 1));
+        for n in 0..=names.len() {
+            let button = zeroed(0x200);
+            wr(buttons, 8 * n, button);
+            self.tyre_buttons.push(button);
+        }
+        wr(self.pit, 0x130, buttons);
+        wr(self.pit, 0x138, buttons.add(8 * (names.len() + 1)));
+        wr(self.pit, 0x140, buttons.add(8 * (names.len() + 1)));
+        let list = zeroed(0x20 * names.len().max(1));
+        for (n, name) in names.iter().enumerate() {
+            write_wstring(list.add(0x20 * n), name);
+        }
+        wr(self.avatar, CA_TYRE_COMPOUNDS, list);
+        wr(self.avatar, CA_TYRE_COMPOUNDS + 8, list.add(0x20 * names.len()));
+        wr(self.avatar, CA_TYRE_COMPOUNDS + 16, list.add(0x20 * names.len()));
+        self.compounds = names;
+        let ([left, right, top, bottom], _) = FEED_GAUGE;
+        wr(self.fuel_control, 0, self.acs.va(VA_PITSTOP_FUEL_VTABLE));
+        wr(self.fuel_control, 0x28, [left, right, top, bottom]);
+    }
+
+    /// Task 34: a click of the feed on the mouse menu, through the window's handlers (only
+    /// while active, shown and "choosing") into the control's own.
+    unsafe fn mouse_click(&self, click: FeedClick) {
+        if rd::<u8>(self.pit, 0x30) == 0 || rd::<u8>(self.parent, 0x150) == 0 || rd::<i32>(self.pit, 0x120) != 2 {
+            return;
+        }
+        let event = [0u8; 0x40];
+        let operator = |va: usize, capture: &[usize]| {
+            let call: extern "C" fn(*const usize, *const u8) = std::mem::transmute(self.acs.va(va));
+            call(capture.as_ptr(), event.as_ptr());
+        };
+        let pit = self.pit as usize;
+        match click {
+            FeedClick::Gauge(x, y) => {
+                let down = [x, y, 0];
+                let call: extern "C" fn(*mut u8, *const i32) -> u8 = std::mem::transmute(self.acs.va(VA_FUEL_ON_MOUSE_DOWN));
+                call(self.fuel_control, down.as_ptr());
+            }
+            FeedClick::Button(MousePitClick::Tyre(0)) => operator(VA_NO_CHANGE, &[0, pit, self.tyre_buttons[0] as usize]),
+            FeedClick::Button(MousePitClick::Tyre(n)) => {
+                let capture = zeroed(0x30);
+                wr(capture, 0, pit);
+                write_wstring(capture.add(8), &self.compounds[n - 1]);
+                wr(capture, 0x28, self.tyre_buttons[n]);
+                let call: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(self.acs.va(VA_TYRE));
+                call(capture, event.as_ptr());
+            }
+            FeedClick::Button(MousePitClick::FuelDown) => operator(VA_FUEL_DOWN, &[pit]),
+            FeedClick::Button(MousePitClick::FuelUp) => operator(VA_FUEL_UP, &[pit]),
+            FeedClick::Button(MousePitClick::FuelFill) => operator(VA_FUEL_FILL, &[0, pit]),
+            FeedClick::Button(MousePitClick::RepairSuspension) => operator(VA_REPAIR_SUSP, &[0, pit]),
+            FeedClick::Button(MousePitClick::RepairBody) => operator(VA_REPAIR_BODY, &[0, pit]),
+            FeedClick::Button(MousePitClick::RepairEngine) => operator(VA_REPAIR_ENGINE, &[0, pit]),
+            FeedClick::Button(MousePitClick::Confirm) => operator(VA_CONFIRM, &[pit]),
+            FeedClick::Button(MousePitClick::FuelGauge(_)) => {}
+        }
     }
 
     /// The handler `PitStop::PitStop` adds to `Sim::evOnNewSession`.
@@ -315,12 +410,20 @@ impl<'a> GamePit<'a> {
             wr(self.car, 0x710, life);
         }
         // PitStop::getEstimatedTime, of what the mouse menu's controls say
-        let (share, tyres, body, engine, suspension) = fed.estimate;
-        wr(self.fuel_control, 0x17c, share);
-        write_wstring(self.pit.add(0xf0), if tyres { "x" } else { "" });
-        wr(self.buttons[0], 0x1e8, suspension as u8);
-        wr(self.buttons[1], 0x1e8, body as u8);
-        wr(self.buttons[2], 0x1e8, engine as u8);
+        if self.parent.is_null() {
+            let (share, tyres, body, engine, suspension) = fed.estimate;
+            wr(self.fuel_control, 0x17c, share);
+            write_wstring(self.pit.add(0xf0), if tyres { "x" } else { "" });
+            wr(self.buttons[0], 0x1e8, suspension as u8);
+            wr(self.buttons[1], 0x1e8, body as u8);
+            wr(self.buttons[2], 0x1e8, engine as u8);
+        } else {
+            // Task 34: the mouse menu is clicked instead
+            let click = feed.borrow_mut().mouse_click(self.compounds.len());
+            if let Some(click) = click {
+                self.mouse_click(click);
+            }
+        }
         let estimated: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(self.acs.va(VA_GET_ESTIMATED_TIME));
         self.estimate.set(estimated(self.pit));
         let kept: (f32, f32, u8, u8) = (rd(self.avatar, 0x4d8), rd(self.avatar, 0x9fc), rd(self.avatar, CA_IN_PITLANE), rd(self.avatar, 0x1000));
@@ -334,6 +437,15 @@ impl<'a> GamePit<'a> {
         wr(self.avatar, 0x9fc, kept.1);
         wr(self.avatar, CA_IN_PITLANE, kept.2);
         wr(self.avatar, 0x1000, kept.3);
+    }
+
+    /// Task 34: the mouse menu now: shown, new tyres chosen, fuel asked for, a repair chosen.
+    pub unsafe fn mouse_seen(&self) -> Option<[bool; 4]> {
+        if self.parent.is_null() {
+            return None;
+        }
+        let repairs = self.buttons.iter().any(|b| rd::<u8>(*b, 0x1e8) != 0);
+        Some([rd::<u8>(self.parent, 0x150) != 0, !super::race_ini::text(self.pit.add(0xf0)).is_empty(), rd::<f32>(self.fuel_control, 0x17c) > 0.0, repairs])
     }
 
     /// The three lines the port's `Referee::dump` has for the stop, out of the game's blocks.
@@ -379,6 +491,22 @@ impl<'a> GamePit<'a> {
         let mut out = vec![("pit".to_string(), text), ("pitMenu".to_string(), menu), ("pitAvatar".to_string(), avatar)];
         if self.feed.is_some() {
             out.push(("pitEstimate".to_string(), format!("{:08x}", self.estimate.get().to_bits())));
+        }
+        if !self.parent.is_null() {
+            let fuel = self.fuel_control;
+            let mouse = format!(
+                "desired {:?} tyres {} repairs {}{}{} fuel {:08x} req {:08x} steering {} visible {}",
+                super::race_ini::text(pit.add(0xf0)),
+                self.tyre_buttons.iter().map(|b| rd::<u8>(*b, 0x1e8).to_string()).collect::<String>(),
+                rd::<u8>(self.buttons[0], 0x1e8),
+                rd::<u8>(self.buttons[1], 0x1e8),
+                rd::<u8>(self.buttons[2], 0x1e8),
+                rd::<u32>(fuel, 0x178),
+                rd::<u32>(fuel, 0x17c),
+                rd::<u8>(pit, 0xc1),
+                rd::<u8>(self.parent, 0x150)
+            );
+            out.push(("pitMouse".to_string(), mouse));
         }
         out
     }

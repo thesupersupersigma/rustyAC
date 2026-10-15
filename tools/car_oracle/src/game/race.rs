@@ -927,7 +927,7 @@ pub struct WholeReferee<'a> {
     pub pit: Option<super::pit::GamePit<'a>>,
     /// frames in which the stop's countdown ran, and in which the mandatory stop was done;
     /// stops begun, stops finished (the choices applied), frames waiting in the box
-    pub pit_seen: [u64; 5],
+    pub pit_seen: [u64; 9],
     pit_state: i32,
 }
 
@@ -953,7 +953,7 @@ impl<'a> WholeReferee<'a> {
         }
         game.start_race(setup.first_start_delay_ms);
         REFEREE_RAND_ON.with(|on| on.set(false));
-        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 5], pit_state: 5 };
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 9], pit_state: 5 };
         referee.note();
         referee
     }
@@ -1086,6 +1086,11 @@ impl<'a> WholeReferee<'a> {
             self.pit_seen[2] += (state == 3 && self.pit_state != 3) as u64;
             self.pit_seen[3] += (state == 4 && self.pit_state == 3) as u64;
             self.pit_seen[4] += (state == 1) as u64;
+            if let Some(seen) = pit.mouse_seen() {
+                for (n, s) in seen.iter().enumerate() {
+                    self.pit_seen[5 + n] += *s as u64;
+                }
+            }
             self.pit_state = state;
         }
         REFEREE_RAND_ON.with(|on| on.set(false));

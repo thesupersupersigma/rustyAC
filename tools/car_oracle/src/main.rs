@@ -703,6 +703,9 @@ fn multi(args: &Args) -> Result<(), String> {
         println!("  the first car: {} frames with a time penalty, {} with a drive-through pending, {} with its controls locked for a time, {} black-flagged; most cuts in a lap {}", referee.seen[0], referee.seen[1], referee.seen[2], referee.seen[3], referee.seen[4]);
         if referee.pit.is_some() {
             println!("  the first car's pit stop: {} begun, {} finished (the choices applied), {} frames counting down, {} waiting in the box; {} frames with the mandatory stop done", referee.pit_seen[2], referee.pit_seen[3], referee.pit_seen[0], referee.pit_seen[4], referee.pit_seen[1]);
+            if referee.pit_seen[5..].iter().any(|n| *n > 0) {
+                println!("  the mouse menu: {} frames shown, {} with new tyres chosen, {} with fuel asked for, {} with a repair chosen", referee.pit_seen[5], referee.pit_seen[6], referee.pit_seen[7], referee.pit_seen[8]);
+            }
         }
         for (frame, line) in referee.log.iter().filter(|(_, line)| !line.starts_with("SessionEnd")) {
             println!("  frame {frame} ({:.1} s): {line}", *frame as f64 * 0.009);
