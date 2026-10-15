@@ -10,6 +10,7 @@
 
 pub mod acos;
 pub mod app_delta;
+pub mod app_driver_perf;
 pub mod comparative_telemetry;
 pub mod console;
 pub mod app_essentials;

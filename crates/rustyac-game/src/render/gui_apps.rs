@@ -117,6 +117,9 @@ impl GameApps {
         self.audio_ini = own_or_documents_text(setup, "audio.ini").map(|b| String::from_utf8_lossy(&b).into_owned());
         let id = gui.new_volumes_app(painter);
         add(gui, painter, "volumes", id);
+        // RaceFuelMonitor (a developers' app)
+        let id = gui.new_race_fuel_monitor_app(painter);
+        add(gui, painter, "fuelmonitor", id);
         // ACHelp reads help/<acLocaleGetCurrentLocale>.tag
         let help = std::fs::read(setup.game.join(format!("system/locales/help/{}.tag", setup.language))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let id = gui.new_help_app(painter, &help);
@@ -183,6 +186,15 @@ impl GameApps {
         add(gui, painter, "gamestats", id);
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
+        // ACDriverPerformance (a developers' app): its records from rustyAC's own savedData,
+        // else the game's (Documents, read only)
+        let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
+        let layout = if setup.track_layout.is_empty() { String::new() } else { format!("{}/", setup.track_layout) };
+        let rel = format!("savedData/driverPerformances/{}/{}{}.ini", setup.track_name, layout, unix);
+        let own = saved_data_dir(setup).join(rel.strip_prefix("savedData/").unwrap_or(&rel));
+        let records = std::fs::read(&own).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|cfg| cfg.parent()).and_then(|docs| std::fs::read(docs.join(&rel)).ok())).map(|b| String::from_utf8_lossy(&b).into_owned());
+        let id = gui.new_driver_performance_app(painter, system("driver_performances.ini").as_ref(), records.as_deref());
+        add(gui, painter, "driverperf", id);
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
         let id = gui.new_track_description_app(painter, sections);
         add(gui, painter, "trackdescription", id);
@@ -286,9 +298,11 @@ impl GameApps {
                 }
             };
             let relative = path.replace('\\', "/");
-            let target = match relative.strip_prefix("content/tracks/") {
-                Some(track) => setup.cfg_dir.join("maps").join(track),
-                None => setup.cfg_dir.join(relative.strip_prefix("cfg/").unwrap_or(&relative)),
+            let target = match (relative.strip_prefix("content/tracks/"), relative.strip_prefix("savedData/")) {
+                (Some(track), _) => setup.cfg_dir.join("maps").join(track),
+                // Driver performances' records: rustyAC's own savedData beside its cfg
+                (_, Some(saved)) => saved_data_dir(setup).join(saved),
+                _ => setup.cfg_dir.join(relative.strip_prefix("cfg/").unwrap_or(&relative)),
             };
             if let Some(parent) = target.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -346,6 +360,10 @@ impl GameApps {
                     ideal_pressure: if i == 0 { view.render.ideal_pressure } else { [0; 4] },
                     connected: !view.disconnected,
                     pit_position: view.pit_position,
+                    // (Car::aiLapsToComplete: -1 unless an AI driver took the car with a lap count;
+                    // rustyAC's AI drivers race without one)
+                    ai_laps_to_complete: Some(-1),
+                    requesting_pit_stop: false,
                     in_pit: view.lap.in_pit_lane,
                     in_pitlane: view.lap.in_pit_lane,
                     driver_name: setup.cars.get(i).map(|c| c[0].clone()).unwrap_or_default(),
@@ -400,6 +418,8 @@ impl GameApps {
             ctrl_down: self.ctrl_down,
             penalties_enabled: setup.penalties,
             stats: self.stats.clone(),
+            track_name: setup.track_name.clone(),
+            track_config: setup.track_layout.clone(),
             camera_sounds: vec![self.sound.camera; world.len()],
             audio_drivers: self.sound.drivers.clone(),
             audio_ini: self.audio_ini.clone(),
@@ -460,6 +480,11 @@ pub fn saved_car_jobs(cfg_dir: &Path, unix_name: &str) -> Vec<rustyac_physics::c
 pub fn use_mph(cfg_dir: &Path, documents_cfg: Option<&PathBuf>) -> bool {
     let ini = read(cfg_dir.join("gameplay.ini")).or_else(|| documents_cfg.and_then(|d| read(d.join("gameplay.ini"))));
     ini.is_some_and(|ini| ini.get_int("OPTIONS", "USE_MPH").unwrap_or(0) != 0)
+}
+
+/// rustyAC's own `savedData` folder: beside its `cfg` folder.
+fn saved_data_dir(setup: &GuiSetup) -> PathBuf {
+    setup.cfg_dir.parent().map(|p| p.join("savedData")).unwrap_or_else(|| PathBuf::from("savedData"))
 }
 
 /// The sound as the Audio app reads it.

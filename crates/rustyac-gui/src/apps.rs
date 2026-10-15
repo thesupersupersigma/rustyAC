@@ -202,6 +202,9 @@ pub struct AppCar {
     pub connected: bool,
     /// `CarAvatar::pitPosition`'s place (M41, M42, M43): `isInPit` measures from it
     pub pit_position: [f32; 3],
+    /// `CarAvatar::getAILapsToComplete` (none: -1, the car has no physics), `isRequestingPitStop`
+    pub ai_laps_to_complete: Option<i32>,
+    pub requesting_pit_stop: bool,
     /// `CarAvatar::isInPit`, `isInPitlane`
     pub in_pit: bool,
     pub in_pitlane: bool,
@@ -275,6 +278,9 @@ pub struct AppLink {
     pub penalties_enabled: bool,
     /// Task 33: what the statistics apps read
     pub stats: crate::app_stats::AppStats,
+    /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
+    pub track_name: String,
+    pub track_config: String,
     pub actions: Vec<AppAction>,
 }
 
