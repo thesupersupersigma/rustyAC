@@ -306,6 +306,7 @@ fn main() {
         "replay-file" => replay_file(&args),
         "race-ini" => race_ini(&args),
         "race-micro" => race_micro(&args),
+        "mouse-micro" => mouse_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -460,6 +461,26 @@ fn race_ini(args: &Args) -> Result<(), String> {
         }
         Err("the game and the port read the file differently".to_string())
     }
+}
+
+/// Task 34: `car_oracle mouse-micro [--seed <n>] [--steps <calls>] [--root <dir>]` (tape: `<root>/mouse.tape`):
+/// the game's own mouse steering (`KeyboardCarControl`) on made-up cursors and windows, as a
+/// tape for the port's `mouse_steering_check` example.
+fn mouse_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    let out = root.join("mouse.tape");
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    acs::set_extra_overrides(game::mouse::overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let tape = unsafe { game::mouse::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("mouse-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    Ok(())
 }
 
 /// Task 28: `car_oracle race-micro [--seed <n>] [--kind <session list 0..7>] [--count <cars>]

@@ -8,6 +8,7 @@
 
 pub mod ghost;
 pub mod telemetry;
+pub mod mouse;
 pub mod multi;
 pub mod net;
 pub mod pit;
