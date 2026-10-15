@@ -37,6 +37,18 @@ pub struct Timing {
     pub split: i32,
 }
 
+/// Task 33b: FormTelemetry's stand-in car (an AWD2 with both dynamic anti-roll bars), the same
+/// for both sides.
+pub const TELEMETRY_CAR: rustyac_gui::app_telemetry::TelemetryCar = rustyac_gui::app_telemetry::TelemetryCar { limiter_rpm: 7800, clutch_max_torque: 450.0, awd2: true, arb_ready: [true, true] };
+
+/// FormTelemetry's raw channel values of a frame: five physics steps 3 ms apart (16 ms a frame:
+/// the 12 ms rule takes about one in four), then the frame's own.
+pub fn telemetry_feed(frame: usize) -> rustyac_gui::app_telemetry::TelemetryFeed {
+    let n = rustyac_gui::app_telemetry::channels(&TELEMETRY_CAR).len();
+    let raw = |k: usize| -> Vec<f32> { (0..n).map(|c| (((k.wrapping_mul(31) + c * 17) % 101) as f32 - 50.0) * 0.05 * ((c % 7) + 1) as f32).collect() };
+    rustyac_gui::app_telemetry::TelemetryFeed { graphics: raw(frame * 8 + 7), steps: (0..5).map(|j| (frame as f64 * 16.0 + j as f64 * 3.0, raw(frame * 8 + j))).collect() }
+}
+
 #[derive(Default)]
 pub struct AppScript {
     /// every car's frames: the game's `CarPhysicsState` bytes
@@ -483,6 +495,7 @@ pub fn link() -> AppLink {
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
+            telemetry: telemetry_feed(s.frame),
             track_name: s.track.0.clone(),
             track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
@@ -681,6 +694,16 @@ INPUT_METHOD=WHEEL
 [STEER]
 FF_GAIN=0.85
 ").map_err(|e| e.to_string())?;
+    // FormTelemetry's presets; its user file only for "app_telemetry_user" (the "AI Debug" preset)
+    std::fs::copy(args.game.join("system/cfg/telemetry_presets.ini"), cfg.join("telemetry_presets.ini")).map_err(|e| format!("telemetry_presets.ini: {e}"))?;
+    let user = docs.join("telemetry_user.ini");
+    if name.starts_with("app_telemetry_user") {
+        std::fs::write(&user, "[USER]
+PRESET=AI Debug
+").map_err(|e| e.to_string())?;
+    } else if user.exists() {
+        std::fs::remove_file(&user).map_err(|e| e.to_string())?;
+    }
     // the gauges' pictures of FormGear
     let tex = args.root.join("content/texture");
     std::fs::create_dir_all(&tex).map_err(|e| e.to_string())?;
@@ -1080,6 +1103,36 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 60, 400, 20);
             o.extend([Op::MouseMove(150, 75), Op::Frame(DT), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "ballast"), Op::Frame(DT), hud("app.visible", 1.0, "ballast"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
+        }
+        "app_telemetry" | "app_telemetry_user" => {
+            // the form is 600 x 700, its controls from (0, 20): the presets spinner (2, 50) 400 x 30 has its plus
+            // at 372..402, graph k's spinner ((600 - 200) / 2, 100 + 150 k) 200 x 30 its minus at
+            // 200..230 and plus at 370..400
+            let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::Frame(DT), Op::MouseUp(x, y), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "telemetry"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "telemetry"));
+            play(&mut o, 0, 600, 3);
+            if app == "app_telemetry_user" {
+                // graph 0: AI_PUSH, then ARB_FRONT (an auto range), back and forth
+                click(&mut o, 385, 20 + 115);
+                play(&mut o, 600, 900, 3);
+                click(&mut o, 215, 20 + 115);
+                click(&mut o, 385, 20 + 115);
+                play(&mut o, 900, 1200, 3);
+            } else {
+                // the next presets, one after another; graph 3's channel by hand
+                for k in 0..4 {
+                    click(&mut o, 387, 20 + 65);
+                    play(&mut o, 600 + k * 100, 700 + k * 100, 4);
+                }
+                click(&mut o, 385, 20 + 565);
+                play(&mut o, 1000, 1200, 4);
+            }
+            o.extend([hud("app.visible", 0.0, "telemetry"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "telemetry")]);
+            play(&mut o, 1200, 1300, 4);
+            o.push(Op::Save);
         }
         "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" | "app_sustelemetry" => {
             let which = leak(app[4..].to_string());

@@ -640,6 +640,8 @@ pub struct CarInfo {
     pub skin: Option<String>,
     /// How many cars the session has (`RaceManager::carsToBeLoaded`)
     pub cars: usize,
+    /// Task 33b: what the Telemetry app reads of the player's car once
+    pub telemetry: rustyac_gui::app_telemetry::TelemetryCar,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -1347,6 +1349,7 @@ impl GameSim {
         let info =
             CarInfo { setup: None, data_path: self.data_path.clone(), name: self.setup.car.clone(), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars: 1 + self.opponents.len() + self.remote_count(), skin: self.setup.player_skin.clone(), ..CarInfo::default() };
         let mut info = Self::with_wheels(info, &self.car.car);
+        info.telemetry = crate::view::telemetry_car(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info
     }

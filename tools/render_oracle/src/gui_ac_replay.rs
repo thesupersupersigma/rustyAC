@@ -181,7 +181,7 @@ pub unsafe fn around_render(h: &HudGame, on: bool) {
 
 /// Every listener of an event (a vector of 0x28-byte entries, the `std::function`'s
 /// implementation the last word of each) hears `argument`.
-unsafe fn fire(event: *const u8, argument: *const u8) {
+pub unsafe fn fire(event: *const u8, argument: *const u8) {
     let (begin, end): (*const u8, *const u8) = (rd(event, 0), rd(event, 0x8));
     if begin.is_null() {
         return;

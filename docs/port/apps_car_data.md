@@ -4,7 +4,10 @@
 
 - Item 1 (digital panels, `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`): **done.** It was already ported in
   Task 22; `DELTA_GRAPH` was the one item no proof had reached, and it is now proven (table 1).
-- Next: item 2, FormTelemetry.
+- Item 2 (FormTelemetry): **done.** The app, its presets and `cfg/telemetry_user.ini`, in the GUI
+  oracle (table 2) and in rustyac.exe (the physics thread records the channels while the app is shown).
+- Next: item 3, the car-data apps.
+- GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
 - Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
   results in `re/scratch/task33b/scene_result.txt`.
 
@@ -46,10 +49,47 @@ a made-up `digital_instruments.ini` (`re/scratch/task33b/cars/488_delta/`): its 
   `performance_meter.rs`); `DIRECTION` picks the plain or the inverted drawing, `DELTA_MAX` the full
   scale, `DEBUG` above 0 draws it full.
 
+### Item 2: FormTelemetry (the developers' "Telemetry")
+
+`crates/rustyac-gui/src/app_telemetry.rs`: `FormTelemetry::FormTelemetry(CarAvatar&)` 0x14032f660,
+`render` 0x140335b50, `~FormTelemetry` 0x1403306a0, `initChannels` 0x140332ff0, `applyPreset`
+0x1403327d0, `getValuesFromPhysics` 0x140332ef0, `getValuesFromGraphics` 0x140332e10, the handlers
+0x1403317f0 (a graph's spinner), 0x140331740 (presets), 0x1403316e0 (`OnPhysicsStepCompleted`: a
+sample at most every 12 ms of physics time, only while the form is visible). Four graphs of 500 values,
+each with a spinner over every channel (the map's sorted names), its live and smoothed value
+(smoothing 0.003 a sample); the presets of `system/cfg/telemetry_presets.ini`; the preset of the
+Documents' `cfg/telemetry_user.ini` at the start (none there: the first preset), written back to
+rustyAC's own cfg when the game ends.
+
+The channels: 104, plus `AWD2_LOCK` on an AWD2 car and `ARB_FRONT` / `ARB_REAR` with a dynamic anti-roll
+bar controller (these two range themselves: min and max both 0). Every channel's min, max, scale,
+physics-or-graphics flag and frame skip is checked against the game's own map in the oracle.
+
+In rustyac.exe the physics thread reads each channel after every step while the app is shown
+(`view::telemetry_values`); the display hands the steps to the app each frame and the newest step's
+values are what it reads for the graphics channels.
+
+**Channels with no source in rustyAC (they show 0):** `AI_PUSH`, `AI_LIVE_OFFSET`, `AI_DIST_CORNER`
+(the player's car has no AI driver in rustyAC's telemetry path), `ERS_TORQUE`, `OVERSTEER_FACTOR`,
+`STEER_DEG_*` (the game's `getWheelSterAngleDEG`), `SKID_VOL_*` / `SKID_PITCH_*` (the sound's skid
+voices live on the audio thread), `FF_FINAL`, `RIDE_HEIGHT_F` / `RIDE_HEIGHT_R`. The others read the
+Rust car's fields that port the game's ones (`TyreStatus`, `TyreInputs::brakeTorque`, the thermal
+model, `SuspensionStatus`, the drivetrain's clutch torque, root velocity and AWD2 lock, the ERS, the
+brake discs, `Car::lastFF`, `accG`, the water temperature, the anti-roll bars' `k`). The values of each
+channel were not compared with the game's car (the oracle feeds both sides the same made-up values).
+
 ## How it is proven
 
-Scene sequences of the render oracle (`render_oracle compare`): the game's own car objects and the port's
-draw the same car on WARP, the command logs and the pixels compared every frame.
+Item 1: scene sequences of the render oracle (`render_oracle compare`): the game's own car objects and
+the port's draw the same car on WARP, the command logs and the pixels compared every frame.
+
+Item 2: GUI sequences of the render oracle (`render_oracle gui`): the game's own `FormTelemetry` is built
+on a stand-in car (an `Engine` with the game's vtable for `getLimiterRPM`, a clutch torque, AWD2, both
+anti-roll bar controllers ready), its channel map is walked and checked against the port's table, then
+each channel is pointed at a value the sequence writes; physics steps go through the game's own
+`OnPhysicsStepCompleted` handler (five a frame, 3 ms apart). The port gets the same values. Command
+logs, WARP pixels, control state and events are compared every frame. The game's `telemetry_user.ini`
+is read from the oracle's own Documents folder; the form is never destroyed, so the game writes nothing.
 
 ## Results
 
@@ -61,6 +101,22 @@ draw the same car on WARP, the command logs and the pixels compared every frame.
 | 2 | magione, Formula Lithium with a made-up `digital_panels.ini` (race position, push-to-pass, `P2P_DASH`, `POSITION_CAR`), pause at frame 30 | 39 | identical | identical |
 | 3 | imola, 488 GT3, `RPM_GRAPH` through its range, TC 3, ABS 5 | 29 | identical | identical |
 | 4 | magione, Aventador SV, `GEAR_TX` through R, N, 1, 4 (the neutral delay) | 49 | identical | identical |
+
+### Table 2: FormTelemetry
+
+| Sequence | What happens | Frames | Command log | Pixels | State and events |
+|---|---|---|---|---|---|
+| `app_telemetry` | no `telemetry_user.ini` (preset 0, Slip Angles); each graph's spinner forward and back, the presets forward; hidden and shown | 388 | identical | identical | identical (36 events) |
+| `app_telemetry_user` | `telemetry_user.ini` says AI Debug; graph 0 forward onto `ARB_FRONT` (auto range), back, forward; hidden and shown | 434 | identical | identical | identical (12 events) |
+
+## Pictures
+
+Taken on the user's graphics card with `rustyac.exe --screenshot`.
+
+| | |
+|---|---|
+| ![telemetry](apps_car_data_telemetry.jpg) | ![panel](apps_car_data_panel.jpg) |
+| The Telemetry app, Slip Angles, Monza's first chicane (F2004, `--dev-apps --gui-do app:telemetry --at 34 --lead-in 6`) | The 488 GT3's display with its `RPM_GRAPH` bar, Imola (`--camera dash`) |
 
 ## Disk space
 

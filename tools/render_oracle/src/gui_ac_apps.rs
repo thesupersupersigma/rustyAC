@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 26] = [
+pub const APPS: [(&str, usize, usize, usize); 27] = [
+    ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("sustelemetry", 0x1e0, 0x1_4030_2180, 0x1_4050_7a38),
     ("driverperf", 0x2a8, 0x1_4030_3bd0, 0x1_4050_81b8),
     ("fuelmonitor", 0x1c0, 0x1_4033_8250, 0x1_4051_1b70),
@@ -48,7 +49,7 @@ pub const APPS: [(&str, usize, usize, usize); 26] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 11] = ["sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 12] = ["telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -407,6 +408,9 @@ static SUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static RSTATS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Task 33: the game's `MicroSectors` of the sequence (0: none).
+/// FormTelemetry: the raw values its channels read (in `app_telemetry::channels`' order) and
+/// the physics avatar's `evOnStepCompleted`
+static TELEMETRY: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
@@ -656,6 +660,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(first_car, 0x218, e);
                 *EYES.lock().unwrap() = Some(EyesGame { avatar: first_car as usize, cob: cob as usize, ..EyesGame::default() });
             }
+            if text == "telemetry" {
+                telemetry_car(a, first_car);
+            }
             if text == "rstats" {
                 // FormRenderStats(GUI*, GameTime*): Game::gameTime (Game+0x10)
                 let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
@@ -677,6 +684,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, gui);
             } else {
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
+            }
+            if text == "telemetry" {
+                telemetry_channels(a, form, sim)?;
             }
             if text == "volumes" {
                 // INIReaderDocuments::basePath (the oracle skips its making, which leaves it
@@ -749,6 +759,18 @@ pub unsafe fn update() {
             }
         }
     });
+    // FormTelemetry: the physics steps since the last frame (each heard by the step handler),
+    // then the values its render reads
+    if let Some((raw, event)) = *TELEMETRY.lock().unwrap() {
+        let raw = raw as *mut f32;
+        let mut argument = [0u8; 0x40];
+        for (pt, values) in &l.telemetry.steps {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), raw, values.len());
+            argument[..8].copy_from_slice(&pt.to_le_bytes());
+            crate::gui_ac_replay::fire(event as *const u8, argument.as_ptr());
+        }
+        std::ptr::copy_nonoverlapping(l.telemetry.graphics.as_ptr(), raw, l.telemetry.graphics.len());
+    }
     let sim = g.sim as *mut u8;
     wr(sim, 0x220, l.focused_car as u32);
     let track: *mut u8 = rd(sim, 0x150);
@@ -858,4 +880,58 @@ pub unsafe fn update() {
         let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut s.log), &line, &mut s.last);
     }
+}
+
+/// FormTelemetry's `Car` (CarAvatar+0x1168), what `initChannels` reads of it: the engine
+/// (Car+0x3f0, its table for `getLimiterRPM`: `(int)((f32)limiter * mult)`), `clutchMaxTorque`
+/// (+0x7e0), `tractionType` (+0x890), the dynamic anti-roll bars' `isReady` (+0x3478, +0x34c0;
+/// the byte at +0x20); and INIReaderDocuments::basePath for `cfg/telemetry_user.ini`.
+unsafe fn telemetry_car(a: &crate::acs::Acs, avatar: *mut u8) {
+    let c = crate::gui_seq_apps::TELEMETRY_CAR;
+    let car = a.alloc(0x4000);
+    wr(car, 0x3f0, a.va(0x1_404f_8fd8) as usize);
+    wr(car, 0x3f0 + 0x11c, c.limiter_rpm);
+    wr(car, 0x3f0 + 0x14c, 1.0f32);
+    wr(car, 0x7e0, c.clutch_max_torque);
+    wr(car, 0x890, if c.awd2 { 3i32 } else { 0 });
+    wr(car, 0x3478 + 0x20, c.arb_ready[0] as u8);
+    wr(car, 0x34c0 + 0x20, c.arb_ready[1] as u8);
+    wr(avatar, 0x1168, car);
+    let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
+    crate::ac::write_wstring(a, a.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+}
+
+/// FormTelemetry's `channels` map (+0x1d8: head, size; the nodes' key at +0x20, the
+/// `TelemetryChannelDef` at +0x40) against `app_telemetry::channels`: the same names, limits,
+/// scales, threads, skips and auto ranges. Then every channel reads its raw value from one
+/// float of ours (`inputValue`, the lambda emptied: `scale * value` either way).
+unsafe fn telemetry_channels(a: &crate::acs::Acs, form: *mut u8, sim: *mut u8) -> Result<(), String> {
+    let port = rustyac_gui::app_telemetry::channels(&crate::gui_seq_apps::TELEMETRY_CAR);
+    let head: *mut u8 = rd(form, 0x1d8);
+    let size: usize = rd(form, 0x1e0);
+    if size != port.len() {
+        return Err(format!("FormTelemetry has {size} channels, the port {}", port.len()));
+    }
+    let raw = a.alloc(port.len() * 4);
+    let mut stack = vec![rd::<*mut u8>(head, 8)];
+    while let Some(node) = stack.pop() {
+        if rd::<u8>(node, 0x19) != 0 {
+            continue;
+        }
+        stack.push(rd(node, 0));
+        stack.push(rd(node, 0x10));
+        let name = crate::gui_ac::read_wstring(node.add(0x20));
+        let def = node.add(0x40);
+        let i = port.iter().position(|d| d.name == name).ok_or(format!("the port has no channel {name:?}"))?;
+        let p = &port[i];
+        let game = (rd::<f32>(def, 0x28).to_bits(), rd::<f32>(def, 0x2c).to_bits(), rd::<f32>(def, 0x30).to_bits(), rd::<u8>(def, 0x34) != 0, rd::<i32>(def, 0x38), rd::<u8>(def, 0x40) != 0);
+        if game != (p.min.to_bits(), p.max.to_bits(), p.scale.to_bits(), p.physics, p.jump, p.auto_range) {
+            return Err(format!("channel {name}: the game's {game:?}, the port's {p:?}"));
+        }
+        wr(def, 0, raw.add(i * 4));
+        wr(def, 0x20, 0usize);
+    }
+    let physics_avatar: *mut u8 = rd(sim, 0x1b8);
+    *TELEMETRY.lock().unwrap() = Some((raw as usize, physics_avatar.add(0x2d0) as usize));
+    Ok(())
 }

@@ -957,6 +957,80 @@ impl CarView {
     }
 }
 
+/// What the Telemetry app (`FormTelemetry::initChannels`) reads of the player's car once.
+pub fn telemetry_car(sim: &GameSim) -> rustyac_gui::app_telemetry::TelemetryCar {
+    let car = &sim.car.car;
+    let d = car.drivetrain.as_ref();
+    rustyac_gui::app_telemetry::TelemetryCar {
+        limiter_rpm: d.map_or(0, |d| d.engine().get_limiter_rpm()),
+        clutch_max_torque: d.map_or(0.0, |d| d.base().clutch_max_torque),
+        awd2: d.is_some_and(|d| d.base().traction_type == rustyac_physics::car::drivetrain::TractionType::AwdNew),
+        arb_ready: [car.antiroll_bars[0].ctrl.ready, car.antiroll_bars[1].ctrl.ready],
+    }
+}
+
+/// The Telemetry app's channels (`names`, in its order) of the player's car after the last
+/// step, before their scale. A channel rustyAC has no source for reads 0 (see
+/// docs/port/apps_car_data.md).
+pub fn telemetry_values(sim: &GameSim, names: &[String]) -> Vec<f32> {
+    let car = &sim.car.car;
+    let d = car.drivetrain.as_ref();
+    names
+        .iter()
+        .map(|name| {
+            let (base, wheel) = match name.rsplit_once('_') {
+                Some((b, "LF")) => (b, 0),
+                Some((b, "RF")) => (b, 1),
+                Some((b, "LR")) => (b, 2),
+                Some((b, "RR")) => (b, 3),
+                _ => (name.as_str(), 0),
+            };
+            let tyre = car.tyres.get(wheel);
+            let s = tyre.map(|t| &t.status);
+            let sus = car.suspensions.get(wheel).map(|s| s.get_status());
+            match base {
+                "AWD2_LOCK" => d.map_or(0.0, |d| d.base().awd2.current_lock_torque),
+                "ENGINE_RPM" => d.map_or(0.0, |d| d.get_engine_rpm()),
+                "CLUTCH_TORQUE" => d.map_or(0.0, |d| d.base().current_clutch_torque),
+                "DRV_ROOT_VEL" => d.map_or(0.0, |d| d.base().root_velocity as f32),
+                "YAW_RATE" => car.core.get_local_angular_velocity(car.body).y,
+                "LOAD" => s.map_or(0.0, |s| s.load),
+                "AVEL" => s.map_or(0.0, |s| s.angular_velocity),
+                "SA" => s.map_or(0.0, |s| s.slip_angle_rad),
+                "SR" => s.map_or(0.0, |s| s.slip_ratio),
+                "MZ" => s.map_or(0.0, |s| s.mz),
+                "DY" => s.map_or(0.0, |s| s.dy),
+                "FY" => s.map_or(0.0, |s| s.fy),
+                "DX" => s.map_or(0.0, |s| s.dx),
+                "CAMBER_DEG" => s.map_or(0.0, |s| s.camber_rad),
+                "NDSLIP" => s.map_or(0.0, |s| s.nd_slip),
+                "SUSTRVL" => sus.map_or(0.0, |s| s.travel),
+                "DAMP_VEL" => sus.map_or(0.0, |s| s.damper_speed_ms),
+                "CORE_TEMP" => tyre.map_or(0.0, |t| t.thermal_model.core_temp),
+                // (the lambda: the 36 patches' sum times 1/36)
+                "AVG_SURF_TEMP" => tyre.map_or(0.0, |t| t.thermal_model.patches.iter().take(36).fold(0.0f32, |sum, p| sum + p.t) * 0.027777778),
+                "PRACT_TEMP" => tyre.map_or(0.0, |t| t.thermal_model.get_practical_temp(0.0)),
+                "TEMP_MULT" => tyre.map_or(0.0, |t| t.thermal_model.thermal_mult_d),
+                "BRAKE_PAD_INPUT" => tyre.map_or(0.0, |t| t.inputs.brake_torque),
+                "ERS_KINETIC_REC" => car.ers.as_ref().map_or(0.0, |e| e.status_kinetic_recovery),
+                "ERS_HEAT_REC" => car.ers.as_ref().map_or(0.0, |e| e.status_heat_recovery),
+                "ERS_CHARGE" => car.ers.as_ref().map_or(0.0, |e| e.charge as f32),
+                "AVG_REAR_TRAVEL" => (car.suspensions.get(2).map_or(0.0, |s| s.get_status().travel) + car.suspensions.get(3).map_or(0.0, |s| s.get_status().travel)) * 0.5,
+                "BRAKE_DISC_T" => car.brake_system.as_deref().map_or(0.0, |b| b.disc_temperatures()[wheel]),
+                "FF_PURE" => car.last_ff,
+                "WATER_TEMP" => car.water.t,
+                "ACC_LAT" => car.acc_g.x,
+                "ACC_LON" => car.acc_g.z,
+                "ARB_FRONT" => car.antiroll_bars[0].k,
+                "ARB_REAR" => car.antiroll_bars[1].k,
+                // AI_PUSH AI_LIVE_OFFSET AI_DIST_CORNER ERS_TORQUE OVERSTEER_FACTOR STEER_DEG
+                // SKID_VOL SKID_PITCH FF_FINAL RIDE_HEIGHT_F RIDE_HEIGHT_R
+                _ => 0.0,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

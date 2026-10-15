@@ -454,6 +454,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             cfg_dir: cfg_dir(options),
             // (not over a recorded drive: its jobs are the recording's)
             setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
+            telemetry_car: info.telemetry,
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -1737,6 +1738,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                     shared.setup_jobs.lock().unwrap().extend(jobs);
                 }
             }
+            // the Telemetry app's steps from the physics thread
+            {
+                let steps = std::mem::take(&mut *shared.telemetry.lock().unwrap());
+                shared.telemetry_on.store(gui.telemetry_exchange(steps), Ordering::Relaxed);
+            }
             // the setup editor's jobs to the physics thread, the car's newest picture back
             {
                 let newest = shared.setup_snapshot.lock().unwrap().clone();
@@ -2203,6 +2209,10 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     let lead_from = total.saturating_sub((options.lead_in / 0.003).round() as usize);
     let mut lead: Vec<Vec<CarView>> = Vec::new();
     let mut lead_due = 0.0f64;
+    // the Telemetry app's steps of the lead-in, handed over with each of its frames
+    let telemetry_names: Vec<String> = rustyac_gui::app_telemetry::channels(&rustyac_game::view::telemetry_car(&sim)).into_iter().map(|c| c.name).collect();
+    let mut telemetry_steps: Vec<(f64, Vec<f32>)> = Vec::new();
+    let mut lead_telemetry: Vec<Vec<(f64, Vec<f32>)>> = Vec::new();
     let mut drive_start = 0;
     let mut previous = CarView::capture(&sim, 0.0);
     match &steps {
@@ -2223,9 +2233,13 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
                     if lead_due >= 1.0 / 60.0 {
                         lead_due -= 1.0 / 60.0;
                         lead.push(CarView::capture_world(&sim, sim.steps.saturating_sub(drive_start) as f64 * 0.003));
+                        lead_telemetry.push(std::mem::take(&mut telemetry_steps));
                     }
                 }
                 let input = sim.step()?;
+                if options.lead_in > 0.0 && i >= lead_from {
+                    telemetry_steps.push((sim.sim_seconds() * 1000.0, rustyac_game::view::telemetry_values(&sim, &telemetry_names)));
+                }
                 if let Some(writer) = &mut writer {
                     writer.push(&input)?;
                 }
@@ -2285,7 +2299,10 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
         gui.script(commands)?;
     }
     let lead_info = HudInfo { fps: 0.0, fps_counter: options.show_fps, camera: camera.name(), replay: steps.is_some(), hidden: text_hidden, referee: sim.referee_hud(), ..HudInfo::default() };
-    for old_world in &lead {
+    for (k, old_world) in lead.iter().enumerate() {
+        if let Some(gui) = renderer.gui() {
+            gui.telemetry_exchange(lead_telemetry.get(k).cloned().unwrap_or_default());
+        }
         let old = &old_world[focus.min(old_world.len() - 1)];
         let frame = camera.update(old, &shape, old.acc_g, 1.0 / 60.0);
         let frame = free.unwrap_or(frame);
@@ -2302,6 +2319,9 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     // (the motion blur smears by the camera's movement since the frame before: the second draw
     // starts from the same "frame before" as the first)
     let blur = renderer.blur_history();
+    if let Some(gui) = renderer.gui() {
+        gui.telemetry_exchange(telemetry_steps);
+    }
     renderer.draw_world(&world, focus, &shape, &camera, &frame, &info, dt);
     renderer.set_blur_history(blur);
     renderer.draw_world(&world, focus, &shape, &camera, &frame, &info, dt);

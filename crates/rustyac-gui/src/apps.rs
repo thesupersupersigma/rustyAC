@@ -280,6 +280,8 @@ pub struct AppLink {
     pub penalties_enabled: bool,
     /// Task 33: what the statistics apps read
     pub stats: crate::app_stats::AppStats,
+    /// Task 33b: `FormTelemetry`'s channels of the player's car
+    pub telemetry: crate::app_telemetry::TelemetryFeed,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,

@@ -64,6 +64,8 @@ pub struct GameApps {
     pub ctrl_down: bool,
     /// Task 33: what the statistics apps read this frame
     pub stats: rustyac_gui::app_stats::AppStats,
+    /// Task 33b: the Telemetry app's values of this frame
+    pub telemetry: rustyac_gui::app_telemetry::TelemetryFeed,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -120,6 +122,9 @@ impl GameApps {
         // RaceFuelMonitor (a developers' app)
         let id = gui.new_race_fuel_monitor_app(painter);
         add(gui, painter, "fuelmonitor", id);
+        // (SetupDebug and TyreWearingDebug come between: not ported)
+        let id = gui.new_telemetry_app(painter, &setup.telemetry_car, system("telemetry_presets.ini").as_ref(), own_or_documents("telemetry_user.ini").as_ref());
+        add(gui, painter, "telemetry", id);
         // ACHelp reads help/<acLocaleGetCurrentLocale>.tag
         let help = std::fs::read(setup.game.join(format!("system/locales/help/{}.tag", setup.language))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let id = gui.new_help_app(painter, &help);
@@ -422,6 +427,7 @@ impl GameApps {
             ctrl_down: self.ctrl_down,
             penalties_enabled: setup.penalties,
             stats: self.stats.clone(),
+            telemetry: self.telemetry.clone(),
             track_name: setup.track_name.clone(),
             track_config: setup.track_layout.clone(),
             camera_sounds: vec![self.sound.camera; world.len()],

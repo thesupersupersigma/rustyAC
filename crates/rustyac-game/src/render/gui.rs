@@ -58,6 +58,8 @@ pub struct GuiSetup {
     /// every car: its skin's folder, and its short name (`car.ini [INFO] SHORT_NAME`)
     pub skins: Vec<String>,
     pub short_names: Vec<String>,
+    /// Task 33b: what the Telemetry app reads of the player's car once
+    pub telemetry_car: rustyac_gui::app_telemetry::TelemetryCar,
     /// Task 31: the player's car as the setup editor sees it (none: no editor)
     pub setup_snapshot: Option<rustyac_gui::setup_car::SetupSnapshot>,
     /// rustyAC's own `setups` folder (everything the editor writes), and the game's
@@ -1161,6 +1163,17 @@ impl GameGui {
     /// A message of rustyAC's own on AC's banner.
     pub fn add_message(&mut self, title: &str, description: &str) {
         self.message.add_message(&mut self.gui, title, description, MESSAGE_DEFAULT);
+    }
+
+    /// The Telemetry app's physics steps since the last frame (the newest step's values are
+    /// also what it reads in the frame); true while it is shown, the physics thread then
+    /// records the steps.
+    pub fn telemetry_exchange(&mut self, steps: Vec<(f64, Vec<f32>)>) -> bool {
+        if let Some(last) = steps.last() {
+            self.apps.telemetry.graphics = last.1.clone();
+        }
+        self.apps.telemetry.steps = steps;
+        self.apps.app("telemetry").is_some_and(|id| self.gui.controls[id].visible)
     }
 
     /// The setup editor's jobs since the last call, for the physics thread; and the physics

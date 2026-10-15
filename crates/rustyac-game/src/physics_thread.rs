@@ -173,6 +173,10 @@ pub struct Shared {
     /// player's car as the editor sees it, with a count of how often it was taken
     pub setup_jobs: Mutex<Vec<rustyac_physics::car::setup::SetupJob>>,
     pub setup_snapshot: Mutex<(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)>,
+    /// Task 33b: the Telemetry app is shown; the steps' channel values (physics time in ms)
+    /// since the display took them
+    pub telemetry_on: AtomicBool,
+    pub telemetry: Mutex<Vec<(f64, Vec<f32>)>>,
 }
 
 impl Shared {
@@ -196,6 +200,8 @@ impl Shared {
             track: Mutex::new(None),
             setup_jobs: Mutex::new(Vec::new()),
             setup_snapshot: Mutex::new((0, None)),
+            telemetry_on: AtomicBool::new(false),
+            telemetry: Mutex::new(Vec::new()),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -321,6 +327,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     let initial_setup = config.replay.as_ref().map(|_| sim.setup.clone());
     let mut last_speed = 1.0f32;
     let mut chat_at = 0;
+    let mut telemetry_names: Option<Vec<String>> = None;
     let mut result = Ok(());
     {
         shared.publish_start(&sim);
@@ -465,6 +472,15 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         // the car as the setup editor sees it: after its jobs, and a few times a second
         if sim.setup_log.len() != jobs_before || sim.steps.is_multiple_of(64) {
             shared.publish_setup(&sim);
+        }
+        if shared.telemetry_on.load(Ordering::Relaxed) {
+            let names = telemetry_names.get_or_insert_with(|| rustyac_gui::app_telemetry::channels(&crate::view::telemetry_car(&sim)).into_iter().map(|c| c.name).collect());
+            let mut steps = shared.telemetry.lock().unwrap();
+            // (a display that stopped taking them: keep the newest second)
+            if steps.len() >= 333 {
+                steps.remove(0);
+            }
+            steps.push((sim.sim_seconds() * 1000.0, crate::view::telemetry_values(&sim, names)));
         }
         if input.events & (event::RESET | event::REBUILD) != 0 {
             flipped = 0;
