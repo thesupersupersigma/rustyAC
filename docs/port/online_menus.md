@@ -22,9 +22,16 @@ State after the last commit (update after every commit):
   `ACClient::onSetupReceived` on a made-up packet, every frame identical, `server_temp.ini`
   byte-identical, the named spinners read-only on both sides. The Setup page is made online
   too; the file goes into rustyAC's own `setups` folder.
-- **Next, in the task's order:** the pit strategy page and `.sp` files, the
-  camera at the start and F7, Ctrl+M, the old mouse pit menu; then the live run against a local
-  acServer copy and the end checks.
+- **Done and proven in the render oracle:** the setup editor's page "PITSTOP STRATEGY"
+  (`SetupPitstopPresets`, `setup_presets.rs`): `setup_pit@bmw_z4_gt3` (302 frames: every preset
+  changed, saved with a setup, changed again, loaded back, the server's fixed setup, saved
+  again) every frame identical and the `.sp` files byte-identical; `setup_pitprobe@bmw_z4_gt3`
+  (11). The `.sp` writer no longer writes the blank line the game does not;
+  `QuickMenu::load_fixed_setup` (0x1400b0850). In the game the page edits a copy of the
+  referee's (or online session's) pit menu and sends it to the physics thread; the arrow keys'
+  changes come back. Only with pitstop.ini `USE_MOUSE_PITSTOP=0` (the shipped value).
+- **Next, in the task's order:** the camera at the start and F7, Ctrl+M, the old mouse pit
+  menu; then the live run against a local acServer copy and the end checks.
 - **Code:** `crates/rustyac-gui/src/race_control_online.rs` (panels, `OnlineLink`,
   `VotingManager`), `esc_menu.rs` (online branch), `crates/rustyac-game/src/online.rs`
   (`OnlineGui`, events, requests, messages), `physics_thread.rs`, `render/gui.rs`,

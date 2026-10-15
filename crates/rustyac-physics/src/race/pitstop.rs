@@ -408,7 +408,8 @@ impl QuickMenu {
         }
     }
 
-    /// `SetupPitstopPresets::savePresets` @ 0x14017a8b0: the `.sp` file's text.
+    /// `SetupPitstopPresets::savePresets` @ 0x14017a8b0: the `.sp` file's text (no blank line
+    /// between the presets or at the end).
     pub fn save_presets(&self) -> String {
         let mut out = String::new();
         for (n, preset) in self.presets.iter().enumerate().take(self.presets_count.max(0) as usize) {
@@ -416,9 +417,45 @@ impl QuickMenu {
             for item in self.items.iter().filter(|item| item.kind != ITEM_REPAIR) {
                 out.push_str(&format!("{}={}\n", item.setup_name, super::output::stream_float(preset.get(item.index.max(0) as usize).copied().unwrap_or(0.0))));
             }
-            out.push('\n');
         }
         out
+    }
+
+    /// `QuickMenuPitstop::loadFixedSetup` @ 0x1400b0850: a server's fixed setup. Every preset
+    /// is made again from the items' starting values; then a `[FUEL]` section's `VALUE` is the
+    /// most fuel there is to add, a wing named there is fixed at 0 clicks and a tyre pressure
+    /// at that value (its limits too). A file that does not load leaves no preset at all.
+    pub fn load_fixed_setup(&mut self, ini: &IniReader, car: &QuickMenuCar) {
+        self.presets.clear();
+        if ini.ready {
+            for preset in 0..self.presets_count.max(0) {
+                self.presets.push(vec![0.0; self.items.len()]);
+                self.current_preset = preset;
+                for index in 0..self.items.len() {
+                    self.item_function(0, index, car);
+                    let item = &mut self.items[index];
+                    if !ini.has_section(&item.setup_name) {
+                        continue;
+                    }
+                    let fixed = ini.get_float(&item.setup_name, "VALUE").unwrap_or(0.0);
+                    match item.kind {
+                        ITEM_FUEL => item.max_value = fixed,
+                        ITEM_WING => {
+                            item.is_fixed = true;
+                            self.presets[preset as usize][index] = 0.0;
+                        }
+                        ITEM_TYRE_PRESSURE => {
+                            item.is_fixed = true;
+                            item.min_value = fixed;
+                            item.max_value = fixed;
+                            self.presets[preset as usize][index] = fixed;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.current_preset = 0;
     }
 
     /// One item's value as the menu words it.

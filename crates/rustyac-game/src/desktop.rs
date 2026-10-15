@@ -454,6 +454,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             cfg_dir: cfg_dir(options),
             // (not over a recorded drive: its jobs are the recording's)
             setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
+            pit_page: if options.replay.is_some() { None } else { info.pit_page.as_deref().cloned() },
             telemetry_car: info.telemetry,
             car_physics: info.car_physics,
             engineer_masses: info.engineer_masses,
@@ -1763,6 +1764,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                 let jobs = gui.setup_exchange(&newest);
                 if !jobs.is_empty() {
                     shared.setup_jobs.lock().unwrap().extend(jobs);
+                }
+                if let Some(menu) = gui.pit_page_exchange() {
+                    *shared.pit_page.lock().unwrap() = Some(menu);
                 }
             }
             use rustyac_gui::menus::SimAction;

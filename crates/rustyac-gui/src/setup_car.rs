@@ -135,6 +135,20 @@ pub struct SetupLink {
     pub session_total_time: i32,
     /// `QuickMenuPitstop::buildControls` was asked of these pit menus (the runner does it)
     pub quick_menu_build_controls: Vec<crate::control::Id>,
+    /// the player's `QuickMenuPitstop` as the pit strategy page reads and writes it (none: no
+    /// pit menu to edit)
+    pub pit: Option<SetupPit>,
+}
+
+/// The pit menu's data the pit strategy page edits: the game's page writes into the
+/// `QuickMenuPitstop` itself; rustyAC's lives on the physics side, so the page edits this copy
+/// and `edits` counts the changes for the runner to send on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SetupPit {
+    pub menu: rustyac_physics::race::QuickMenu,
+    /// what the menu's item functions read of the car
+    pub car: rustyac_physics::race::QuickMenuCar,
+    pub edits: u64,
 }
 
 /// What [`SetupCar`] says of a car, read from the physics car at one moment.

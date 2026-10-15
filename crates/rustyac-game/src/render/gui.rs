@@ -65,6 +65,8 @@ pub struct GuiSetup {
     pub engineer_masses: rustyac_gui::app_car_engineer::CarEngineer,
     /// Task 31: the player's car as the setup editor sees it (none: no editor)
     pub setup_snapshot: Option<rustyac_gui::setup_car::SetupSnapshot>,
+    /// Task 34: the player's pit menu for the page "PITSTOP STRATEGY" (none: no pit stop)
+    pub pit_page: Option<rustyac_gui::setup_car::SetupPit>,
     /// rustyAC's own `setups` folder (everything the editor writes), and the game's
     /// `Documents\Assetto Corsa\setups` (read only: its setups can be loaded)
     pub setups_dir: PathBuf,
@@ -171,6 +173,10 @@ pub struct GameGui {
     /// how many jobs the editor has handed over (a picture of the car that holds fewer of
     /// them is not taken: it would put a spinner back for a moment)
     setup_jobs_sent: u64,
+    /// Task 34: the page "PITSTOP STRATEGY": how many of its changes went to the physics
+    /// thread, and the pit menu's presets and items as the referee last showed them
+    pit_edits_sent: u64,
+    pit_seen: Option<(Vec<Vec<f32>>, Vec<rustyac_physics::race::pitstop::QuickMenuItem>)>,
     /// a new session began since the window last asked (the car is its own again: a lock of
     /// the controls the ESC menu wants has to be asked for anew)
     pub pits_lock_stale: bool,
@@ -336,8 +342,15 @@ impl GameGui {
         let mut pages = rustyac_gui::esc_menu::EscPages::default();
         // (online too: Task 34; the server's setup locks what it names)
         if let Some(snapshot) = setup.setup_snapshot.clone() {
+            // (the editor's own `QuickMenuPitstop` and its labels: rustyAC's pit menu is the
+            // referee's, drawn by the HUD; the page keeps a control that stands for it)
+            fn quick_menu(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
+                let id = gui.new_control(painter, "QUICK_MENU_PITSTOP");
+                gui.controls[id].visible = false;
+                id
+            }
             fn editor(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter) -> Id {
-                gui.new_setup_screen(painter, None)
+                gui.new_setup_screen(painter, Some(quick_menu))
             }
             let assists = own_or_documents(&setup, "assists.ini");
             let assist = |key: &str| assists.as_ref().map_or(0, |ini| ini.get_int("ASSISTS", key).unwrap_or(0));
@@ -348,7 +361,10 @@ impl GameGui {
                 tracks,
                 setups_save: setup.setups_dir.clone(),
                 setups_read: setup.documents_setups.clone(),
-                use_mouse_pitstop: true,
+                // Sim::useMousePitstop: pitstop.ini [SETTINGS] USE_MOUSE_PITSTOP (without a
+                // pit menu to edit, no page either)
+                use_mouse_pitstop: setup.pit_page.is_none() || system("pitstop.ini").is_some_and(|ini| ini.get_int("SETTINGS", "USE_MOUSE_PITSTOP").unwrap_or(0) != 0),
+                pit: setup.pit_page.clone(),
                 tc_assist: assist("TRACTION_CONTROL"),
                 abs_assist: assist("ABS"),
                 ..Default::default()
@@ -450,7 +466,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -494,6 +510,15 @@ impl GameGui {
         input.camera_matrix = *camera.0;
         input.game_time_now = time_ms;
         self.pit = info.referee.as_ref().and_then(|referee| referee.pit_gui.clone());
+        // Task 34: what the arrow keys changed of the pit menu, into the page "PITSTOP
+        // STRATEGY"'s copy (its spinners follow at the page's next showing, as the game's)
+        if let (Some(pit), Some(page)) = (&self.pit, &mut self.gui.setup.pit) {
+            if self.pit_seen.as_ref().is_none_or(|(presets, items)| *presets != pit.menu.presets || *items != pit.menu.items) {
+                page.menu.presets = pit.menu.presets.clone();
+                page.menu.items = pit.menu.items.clone();
+                self.pit_seen = Some((pit.menu.presets.clone(), pit.menu.items.clone()));
+            }
+        }
         // the standings: the referee's, with what the picture's side knows of every car
         self.gui.sim.in_replay = info.replay;
         self.gui.sim.camera_mode = camera_mode;
@@ -1296,6 +1321,14 @@ impl GameGui {
             self.gui.sim.setup_state = snapshot.setup_state;
         }
         jobs
+    }
+
+    /// Task 34: the pit menu as the page "PITSTOP STRATEGY" changed it since the last call,
+    /// for the physics thread.
+    pub fn pit_page_exchange(&mut self) -> Option<rustyac_physics::race::QuickMenu> {
+        let page = self.gui.setup.pit.as_ref().filter(|page| page.edits != self.pit_edits_sent)?;
+        self.pit_edits_sent = page.edits;
+        Some(page.menu.clone())
     }
 
     /// What the game does at its end (`GameScreen::shutdown` 0x1402510c0, `GUI::serializeForms`

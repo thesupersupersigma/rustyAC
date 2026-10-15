@@ -636,6 +636,8 @@ pub struct CarInfo {
     pub render_seed: u32,
     /// Task 31: the player's car as the setup editor sees it when the session starts
     pub setup: Option<Box<rustyac_gui::setup_car::SetupSnapshot>>,
+    /// Task 34: the player's pit menu as the editor's page "PITSTOP STRATEGY" starts with
+    pub pit_page: Option<Box<rustyac_gui::setup_car::SetupPit>>,
     /// Another car of the session: the skin it was asked for (`None`: the car's first)
     pub skin: Option<String>,
     /// How many cars the session has (`RaceManager::carsToBeLoaded`)
@@ -1357,7 +1359,34 @@ impl GameSim {
         info.car_physics = crate::view::car_physics(self);
         info.engineer_masses = crate::view::engineer_masses(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
+        info.pit_page = self.pit_page().map(Box::new);
         info
+    }
+
+    /// Task 34: the player's pit menu for the setup editor's page "PITSTOP STRATEGY": the
+    /// referee's, or online the menu the session makes at its first frame (none: no pit stop).
+    fn pit_page(&self) -> Option<rustyac_gui::setup_car::SetupPit> {
+        let menu = match (&self.referee, &self.online) {
+            (Some(referee), _) => referee.menu.clone()?,
+            (None, Some(_)) => rustyac_physics::race::QuickMenu::for_car(&self.car.car, &crate::online::PIT_SETTINGS).ok()?,
+            (None, None) => return None,
+        };
+        Some(rustyac_gui::setup_car::SetupPit { menu, car: rustyac_physics::race::QuickMenuCar::of(&self.car.car), edits: 0 })
+    }
+
+    /// Task 34: what the page "PITSTOP STRATEGY" changed of the pit menu (the game's page
+    /// writes into the one `QuickMenuPitstop`): the presets, and the items a server's fixed
+    /// setup locks.
+    pub fn apply_pit_page(&mut self, page: &rustyac_physics::race::QuickMenu) {
+        let menu = match (&mut self.referee, &mut self.online) {
+            (Some(referee), _) => referee.menu.as_mut(),
+            (None, Some(session)) => session.pit.as_mut().map(|pit| &mut pit.menu),
+            (None, None) => None,
+        };
+        if let Some(menu) = menu {
+            menu.presets = page.presets.clone();
+            menu.items = page.items.clone();
+        }
     }
 
     /// The same of the session's other cars, in creation order.

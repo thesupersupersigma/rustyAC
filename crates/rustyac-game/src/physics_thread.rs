@@ -176,6 +176,8 @@ pub struct Shared {
     /// player's car as the editor sees it, with a count of how often it was taken
     pub setup_jobs: Mutex<Vec<rustyac_physics::car::setup::SetupJob>>,
     pub setup_snapshot: Mutex<(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)>,
+    /// Task 34: the pit menu as the page "PITSTOP STRATEGY" last changed it
+    pub pit_page: Mutex<Option<rustyac_physics::race::QuickMenu>>,
     /// Task 33b: the Telemetry app is shown; the steps' channel values (physics time in ms)
     /// since the display took them
     pub telemetry_on: AtomicBool,
@@ -208,6 +210,7 @@ impl Shared {
             track: Mutex::new(None),
             setup_jobs: Mutex::new(Vec::new()),
             setup_snapshot: Mutex::new((0, None)),
+            pit_page: Mutex::new(None),
             telemetry_on: AtomicBool::new(false),
             telemetry: Mutex::new(Vec::new()),
             setup_debug_on: AtomicBool::new(false),
@@ -418,6 +421,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 sim.car.device.source.request(requests);
             }
             sim.setup_jobs.append(&mut shared.setup_jobs.lock().unwrap());
+            if let Some(page) = shared.pit_page.lock().unwrap().take() {
+                sim.apply_pit_page(&page);
+            }
             let clicks = shared.bias_requests.swap(0, Ordering::Relaxed);
             if clicks != 0 {
                 sim.car.device.source.request_bias(clicks);
