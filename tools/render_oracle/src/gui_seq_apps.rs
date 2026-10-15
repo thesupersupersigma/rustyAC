@@ -108,6 +108,8 @@ pub struct AppScript {
     pub penalties: bool,
     /// Task 33: `MicroSectors` on (`gameplay.ini [GUI] SHOW_SECTORS=1`)
     pub sectors: bool,
+    /// Task 33: the numbers of the statistics apps
+    pub stats: rustyac_gui::app_stats::AppStats,
 }
 
 static SCRIPT: Mutex<Option<AppScript>> = Mutex::new(None);
@@ -275,6 +277,30 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         }
         "app.penalties" => script(|s| s.penalties = on),
         "app.sectors" => script(|s| s.sectors = on),
+        "app.stats" => {
+            // "fps|dip|tri|scene|cpu|update|hud|render|audio|occupancy|late|fmod" (fmod "-": none)
+            let v: Vec<&str> = text.split('|').collect();
+            if v.len() != 12 {
+                return Err("app.stats wants 12 values".to_string());
+            }
+            let f = |i: usize| v[i].parse::<f64>().map_err(|e| format!("app.stats {}: {e}", v[i]));
+            let stats = rustyac_gui::app_stats::AppStats {
+                fps: f(0)? as f32,
+                delta_t: DT,
+                dip_calls: f(1)? as i32,
+                triangles: f(2)? as i32,
+                scene_triangles: f(3)? as i32,
+                cpu_time: f(4)?,
+                update_time: f(5)?,
+                render_hud_time: f(6)?,
+                render_time: f(7)?,
+                render_audio_time: f(8)?,
+                occupancy: f(9)? as i32,
+                physics_late_loops: f(10)? as u32,
+                fmod_update_usage: if v[11] == "-" { None } else { Some(f(11)? as f32) },
+            };
+            script(|s| s.stats = stats);
+        }
         "app.ersNames" => script(|s| s.ers_names = text.split('|').map(str::to_string).collect()),
         "app.ersState" => {
             let v: Vec<i32> = text.split(',').filter_map(|v| v.trim().parse().ok()).collect();
@@ -456,6 +482,7 @@ pub fn link() -> AppLink {
             auto_eyes: None,
             ctrl_down: false,
             penalties_enabled: s.penalties,
+            stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
             camera_sounds: s.camera.clone(),
             audio_drivers: s.drivers.clone(),
             audio_ini: None,
@@ -841,6 +868,27 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 click(&mut o, 1250, 60);
                 o.extend([Op::MouseMove(600, 400), Op::Frame(DT), Op::Frame(DT), Op::Save]);
             }
+        }
+        "app_stats" => {
+            // Render Stats and the developers' Graphics stats on the race, the numbers moving
+            race(&mut o, 6);
+            o.push(hud("app.stats", 0.0, "60|1800|900000|700000|9.5|2.25|1.5|5.75|0.8|35|0|1.6"));
+            for app in ["rstats", "gamestats"] {
+                o.push(hud("app.new", 0.0, app));
+            }
+            o.push(Op::Frame(DT));
+            for app in ["rstats", "gamestats"] {
+                o.push(hud("app.visible", 1.0, app));
+            }
+            play(&mut o, 0, 300, 10);
+            let rows = ["144.5|2400|1350000|1000000|5.25|1.5|1.25|2.5|0.6|12|1|2.4", "31|300|20000|0|31|6|8|17|4|250|7|-", "59.9|0|0|0|0|0|0|0|0|0|20000|0.0", "60|1800|900001|700000|16.7|4|3|9.7|1.1|98|3|11.5"];
+            let long = rest != "short";
+            for row in rows {
+                o.push(hud("app.stats", 0.0, row));
+                play(&mut o, 300, if long { 600 } else { 330 }, 5);
+            }
+            handle(&mut o, 0, 80, 160);
+            o.extend([hud("app.visible", 0.0, "rstats"), Op::Frame(DT), hud("app.visible", 1.0, "rstats"), Op::Frame(DT), Op::Save]);
         }
         "app_ffb" => {
             // the force feedback app of the F2004 (car.ini FFMULT 3.752, STEER_ASSIST 0.86) with

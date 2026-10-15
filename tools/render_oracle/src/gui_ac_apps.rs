@@ -19,7 +19,9 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 21] = [
+pub const APPS: [(&str, usize, usize, usize); 23] = [
+    ("rstats", 0x1f0, 0x1_402d_69d0, 0x1_4050_17b8),
+    ("gamestats", 0x1e8, 0x1_402e_7a10, 0x1_4050_3ba0),
     ("friends", 0x270, 0x1_4032_4fc0, 0x1_4050_d7b8),
     ("eyes", 0x290, 0x1_4030_fa60, 0x1_4050_a450),
     ("mgu", 0x1e0, 0x1_402e_b080, 0x1_4050_45b0),
@@ -398,11 +400,26 @@ pub unsafe fn announce_laps(game: &Game) {
 
 static SUN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// Task 33: the game's `FormRenderStats` (0: none).
+static RSTATS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Task 33: the game's `MicroSectors` of the sequence (0: none).
 static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
 pub unsafe fn frame(game: &Game) {
+    // Sim::update's statistics block on FormRenderStats' members (+0x1b8 cpuTime, +0x1bc
+    // simulationOccupancy, +0x1c0 renderAudioTime, +0x1c4 physicsLate, +0x1c8 fmodUpdateUsage)
+    let form = RSTATS.load(std::sync::atomic::Ordering::SeqCst) as *mut u8;
+    if !form.is_null() {
+        let mut s = rustyac_gui::app_stats::SimStats { cpu_time: rd(form, 0x1b8), simulation_occupancy: rd(form, 0x1bc), render_audio_time: rd(form, 0x1c0), physics_late: rd(form, 0x1c4), fmod_update_usage: rd(form, 0x1c8) };
+        s.update(crate::gui_seq_apps::DT, &link().stats);
+        wr(form, 0x1b8, s.cpu_time);
+        wr(form, 0x1bc, s.simulation_occupancy);
+        wr(form, 0x1c0, s.render_audio_time);
+        wr(form, 0x1c4, s.physics_late);
+        wr(form, 0x1c8, s.fmod_update_usage);
+    }
     let ms = MICRO.load(std::sync::atomic::Ordering::SeqCst);
     if ms == 0 {
         return;
@@ -636,7 +653,20 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 wr(first_car, 0x218, e);
                 *EYES.lock().unwrap() = Some(EyesGame { avatar: first_car as usize, cob: cob as usize, ..EyesGame::default() });
             }
-            if text == "trackmap" {
+            if text == "rstats" {
+                // FormRenderStats(GUI*, GameTime*): Game::gameTime (Game+0x10)
+                let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_402d_69d0));
+                ctor(form, gui, (game_block as *mut u8).add(0x10));
+                RSTATS.store(form as usize, std::sync::atomic::Ordering::SeqCst);
+            } else if text == "gamestats" {
+                let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
+                let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_7a10));
+                ctor(form, game_block as *mut u8);
+                // (its render looks PhysicsAvatar up among the game objects by their classes
+                // and never uses it: the hand-laid Sim has no classes, the member is filled)
+                wr(form, 0x1c0, a.alloc(0x400));
+            } else if text == "trackmap" {
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
                 ctor(form, gui, sim, false);
@@ -779,6 +809,17 @@ pub unsafe fn update() {
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut f.log), &line, &mut f.last);
     }
     wr(g.game_block as *mut u8, 0x20, l.game_dt);
+    // Task 33: GameTime::fps, Game::stats, GraphicsManager::stats (after beginScene's reset)
+    wr(g.game_block as *mut u8, 0x28, l.stats.fps);
+    for (at, v) in [(0x150, l.stats.cpu_time), (0x158, l.stats.update_time), (0x160, l.stats.render_hud_time), (0x168, l.stats.render_time), (0x170, l.stats.render_audio_time)] {
+        wr(g.game_block as *mut u8, at, v);
+    }
+    let graphics: *mut u8 = rd(g.game_block as *mut u8, 0x138);
+    if !graphics.is_null() && RSTATS.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+        wr(graphics, 0x60, l.stats.dip_calls);
+        wr(graphics, 0x68, l.stats.triangles);
+        wr(graphics, 0x6c, l.stats.scene_triangles);
+    }
     // RaceManager::penaltiesEnabled
     wr(rd::<*mut u8>(sim, 0x1a8), 0xa0, l.penalties_enabled as u8);
     // the player's ERS cockpit (CarAvatar: power index +0x1284, recovery +0x1288, engine brake
