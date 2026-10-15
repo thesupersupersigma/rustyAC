@@ -831,7 +831,7 @@ impl GameGui {
         self.last_frame = Some(now);
         // PhysicsDriveThread::run: the step's milliseconds as a share of its 3 ms, cut, at most 300
         let occ = (timing.last_step_ms as f32 * f32::from_bits(0x3eaa_aaab)) * 100.0;
-        let occ = if occ.is_nan() || occ >= 2_147_483_648.0 || occ < -2_147_483_648.0 { i32::MIN } else { occ as i32 };
+        let occ = if !(-2_147_483_648.0..2_147_483_648.0).contains(&occ) { i32::MIN } else { occ as i32 };
         self.apps.stats = rustyac_gui::app_stats::AppStats {
             fps: self.game_time.fps,
             delta_t: self.game_time.delta_t,
