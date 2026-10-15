@@ -19,7 +19,7 @@ Read-only work: nothing in the game folder, `Documents\Assetto Corsa`, the Ghidr
 | Physics extensions | done: overview + 4 detail files |
 | `content_needs.md` | done (15 cars with `VERSION=extended-N`, 6 extended track layouts, 1 encrypted car); re-check after the rendering files |
 | Lua | done: [`lua.md`](lua.md) |
-| Rendering | config + core hooks done; content hooks in progress |
+| Rendering | done: [`rendering.md`](rendering.md) + 3 detail files |
 | UI / apps, online, audio, input / FFB, VR / screens, misc | in progress |
 | `plan.md` | first full draft written (finalise after the last area briefs) |
 
@@ -121,11 +121,11 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 | Attach and hook mechanism | [`attach.md`](attach.md) | done |
 | Physics extensions | [`physics.md`](physics.md) (+ 4 detail files) | done |
 | Lua | [`lua.md`](lua.md) | done |
-| Rendering | [`rendering.md`](rendering.md) | pending |
-| UI and apps | [`ui_apps.md`](ui_apps.md) | pending |
+| Rendering | [`rendering.md`](rendering.md) (+ config, core, content) | done |
+| UI and apps | [`ui_apps.md`](ui_apps.md) | done |
 | Online | [`online.md`](online.md) | pending |
 | Audio | [`audio.md`](audio.md) | done |
-| Input and FFB | [`input_ffb.md`](input_ffb.md) | pending |
+| Input and FFB | [`input_ffb.md`](input_ffb.md) | done |
 | VR and screens | [`vr_screens.md`](vr_screens.md) | pending |
 | Misc | [`misc.md`](misc.md) | pending |
 | Content needs | [`content_needs.md`](content_needs.md) | done |
