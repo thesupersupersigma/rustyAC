@@ -113,20 +113,22 @@ on disk are 172-byte placeholders ("actual content has been moved to dwrite.dll"
 
 ## 6. Index of the areas
 
-Filled in as the area files are written; sizes are hooked functions (H) / looked-up (L) in `acs.exe`,
-config files, Lua files and functions; difficulty S (smallest) to XL, a relative guess.
+Size: hooked / looked-up functions of `acs.exe` (corrected totals, rows of
+`re/scratch/csp1/hook_groups.tsv`), then config and Lua size. Difficulty: S (smallest) to XL, a relative
+guess for a Rust rewrite; the reasons are in each file's section 7. The proof column is the tier of
+[`plan.md`](plan.md) section 1.
 
-| Area | File | Status |
-|---|---|---|
-| Attach and hook mechanism | [`attach.md`](attach.md) | done |
-| Physics extensions | [`physics.md`](physics.md) (+ 4 detail files) | done |
-| Lua | [`lua.md`](lua.md) | done |
-| Rendering | [`rendering.md`](rendering.md) (+ config, core, content) | done |
-| UI and apps | [`ui_apps.md`](ui_apps.md) | done |
-| Online | [`online.md`](online.md) | done |
-| Audio | [`audio.md`](audio.md) | done |
-| Input and FFB | [`input_ffb.md`](input_ffb.md) | done |
-| VR and screens | [`vr_screens.md`](vr_screens.md) | done |
-| Misc | [`misc.md`](misc.md) | pending |
-| Content needs | [`content_needs.md`](content_needs.md) | done |
-| Plan | [`plan.md`](plan.md) | draft |
+| Area | File | Hooked / looked-up | Other size | Difficulty | Status |
+|---|---|---|---|---|---|
+| Attach and hook mechanism | [`attach.md`](attach.md) | all 1,441 rows: 1,026 / 415 | 77,058 functions, 7 embedded zips | S (nothing to port; seams L-XL) | done |
+| Physics extensions | [`physics.md`](physics.md) + [config and API](physics_config_and_api.md), [car core](physics_car_core.md), [tyres and suspension](physics_tyres_suspension.md), [powertrain and aero](physics_powertrain_aero.md) | ~190 / ~56 (`ksPhysicsAC.lib`, ODE core, surfaces) | 170 physics keys, 992-function car-script API (197 own) | always-on part S-M; CSP's ODE and contacts L; COSMIC, Lua car scripts, tyre model v4 XL | done |
+| Lua | [`lua.md`](lua.md) | 1 entry (`Car::pollControls`) + ~30 host functions | 19 SDK modules, 2,729 functions, 355 shipped scripts, 135 precompiled libraries | host M, whole API XL | done |
+| Rendering | [`rendering.md`](rendering.md) + [config](rendering_config.md), [core hooks](rendering_core.md), [content hooks](rendering_content.md) | ~300 / ~70 | 25 graphics ini (977 keys), 57 weather files, 6,683 shaders | config machinery M, true night M, materials / lights L, WeatherFX + RainFX XL | done |
+| UI and apps | [`ui_apps.md`](ui_apps.md) | 177 / 30 | 18 native ImGui apps, 397 `ui.*` functions, 213 `ac.ext_*` Python functions | XL (independent parts) | done |
+| Online | [`online.md`](online.md) | 34 / 3 | ~75 server config keys | staying joinable M, parity XL | done |
+| Audio | [`audio.md`](audio.md) | ~50 / ~6 + 97 FMOD names | 6 banks, 23 MB | M front end, L car audio | done |
+| Input and FFB | [`input_ffb.md`](input_ffb.md) | ~36 / ~4 | gamepad / FFB / mouse Lua kinds (3 SDK modules) | M (S slice matters on this PC) | done |
+| VR and screens | [`vr_screens.md`](vr_screens.md) | 26 / 6 | `vr_tweaks.ini`, OpenVR + OpenXR | XL VR, M triple screen | done |
+| Misc (AI, race logic, replay, pits, session; config, sim, camera, shared memory, Steam, Python bridge) | [`misc.md`](misc.md) | ~118 / ~40 and ~134 / ~200 (many are CSP's own type names) | 10 new-mode Lua kinds | S-L | in progress |
+| Content needs | [`content_needs.md`](content_needs.md) | | 204 cars, 26 tracks scanned | | done |
+| Plan | [`plan.md`](plan.md) | | 20 tasks | | draft |
