@@ -62,6 +62,7 @@ pub struct GuiSetup {
     pub telemetry_car: rustyac_gui::app_telemetry::TelemetryCar,
     /// Task 33b: what the Car physics app reads of the player's car once
     pub car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra,
+    pub engineer_masses: rustyac_gui::app_car_engineer::CarEngineer,
     /// Task 31: the player's car as the setup editor sees it (none: no editor)
     pub setup_snapshot: Option<rustyac_gui::setup_car::SetupSnapshot>,
     /// rustyAC's own `setups` folder (everything the editor writes), and the game's

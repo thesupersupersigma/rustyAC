@@ -130,22 +130,7 @@ pub enum Widget2 {
 /// "-1.#IND", "1.#QNAN" with the characters after the point rounded like digits ("-1.#IO" at 3).
 pub fn format_fixed(value: f64, precision: usize) -> String {
     if !value.is_finite() {
-        let text = crate::acos::format_g6(value as f32);
-        let (whole, mantissa) = text.split_once('.').unwrap_or((&text, ""));
-        let mut digits: Vec<u8> = mantissa.bytes().chain(std::iter::repeat(b'0')).take(precision + 1).collect();
-        let next = digits.pop().unwrap_or(b'0');
-        let mut out = whole.to_string();
-        if next >= b'5' {
-            match digits.last_mut() {
-                Some(d) => *d += 1,
-                None => out = out.replace('1', "2"),
-            }
-        }
-        if precision > 0 {
-            out.push('.');
-            out.push_str(std::str::from_utf8(&digits).unwrap_or(""));
-        }
-        return out;
+        return crate::acos::format_special(value, precision);
     }
     let exact = format!("{:.330}", value.abs());
     let (whole, fraction) = exact.split_once('.').unwrap_or((&exact, ""));

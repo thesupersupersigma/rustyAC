@@ -19,7 +19,8 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 30] = [
+pub const APPS: [(&str, usize, usize, usize); 31] = [
+    ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
     ("setupdebug", 0x1c8, 0x1_4031_7a80, 0x1_4050_b8c8),
@@ -418,9 +419,10 @@ static TELEMETRY: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 static TYRE_DEBUG: Mutex<Option<usize>> = Mutex::new(None);
 /// SetupDebug's `Car` (every avatar's `raceEngineer->car`)
 static SETUP_DEBUG: Mutex<Option<(usize, usize)>> = Mutex::new(None);
-/// CarPhysicsForm's `Car` (the player's avatar's `raceEngineer->car` and physics), its body and
-/// four suspensions (stand-ins whose value sits at +0x180)
-static CAR_PHYSICS: Mutex<Option<(usize, usize, [usize; 4])>> = Mutex::new(None);
+/// CarPhysicsForm's and ACDCarEngineer's `Car` (the player's avatar's `raceEngineer->car` and
+/// physics), its body and four suspensions (stand-ins whose values sit at +0x180), its engineer,
+/// which app
+static CAR_PHYSICS: Mutex<Option<(usize, usize, [usize; 4], usize, &'static str)>> = Mutex::new(None);
 static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
@@ -679,8 +681,8 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "setupdebug" {
                 setup_debug_car(a);
             }
-            if text == "carphysics" {
-                car_physics_car(a, first_car);
+            if text == "carphysics" || text == "carengineer" {
+                car_physics_car(a, first_car, if text == "carphysics" { "carphysics" } else { "carengineer" });
             }
             if text == "rstats" {
                 // FormRenderStats(GUI*, GameTime*): Game::gameTime (Game+0x10)
@@ -827,7 +829,36 @@ pub unsafe fn update() {
     }
     // CarPhysicsForm: getDynamicIndex's inputs, the fuel evaluator (Car+0x3af8: totalM +0x20,
     // totalLiters +0x28), CarAvatar::filteredSpeed (+0x1278)
-    if let Some((car, body, suspensions)) = *CAR_PHYSICS.lock().unwrap() {
+    if let Some((car, body, suspensions, engineer, "carengineer")) = *CAR_PHYSICS.lock().unwrap() {
+        // ACDCarEngineer: getK (+0x188), getDamper (+0x190: reboundSlow, bumpSlow +8), the front
+        // heave spring (Car+0x3b40: isPresent, k +0xc, reboundSlow +0x24, bumpSlow +0x2c);
+        // physicsInfo's totalMass (+0xe6c), bodyMass, unsprungWeights
+        let e = crate::gui_seq_apps::car_engineer(crate::gui_seq_apps::script(|s| s.frame));
+        let (car, body) = (car as *mut u8, body as *mut u8);
+        for (j, k) in [0, 2].into_iter().enumerate() {
+            let p = suspensions[k] as *mut u8;
+            wr(p, 0x180, e.z[j]);
+            wr(p, 0x188, e.k[j]);
+            wr(p, 0x190, e.dampers[j][0]);
+            wr(p, 0x198, e.dampers[j][1]);
+        }
+        wr(body, 0x180, e.mass);
+        let h = e.heave.unwrap_or_default();
+        wr(car, 0x3b40, e.heave.is_some() as u8);
+        wr(car, 0x3b4c, h[0]);
+        wr(car, 0x3b64, h[1]);
+        wr(car, 0x3b6c, h[2]);
+        if let Some(avatar) = g.cars.first() {
+            let avatar = *avatar as *mut u8;
+            wr(avatar, 0xf80, engineer);
+            wr(avatar, 0xe6c, e.total_mass);
+            wr(avatar, 0xe70, e.body_mass);
+            for i in 0..4 {
+                wr(avatar, 0xe74 + i * 4, e.unsprung[i]);
+            }
+        }
+    }
+    if let Some((car, body, suspensions, _, "carphysics")) = *CAR_PHYSICS.lock().unwrap() {
         let (z, mass, iyy, total_m, total_liters) = crate::gui_seq_apps::car_physics_raw(crate::gui_seq_apps::script(|s| s.frame));
         wr(suspensions[0] as *mut u8, 0x180, z[0]);
         wr(suspensions[2] as *mut u8, 0x180, z[1]);
@@ -1036,6 +1067,16 @@ unsafe extern "C" fn stand_in_base_position(this: *mut u8, out: *mut f32) -> *mu
     out
 }
 
+/// `ISuspension::getK` (+0x58) of the stand-in
+unsafe extern "C" fn stand_in_k(this: *mut u8) -> f32 {
+    rd(this, 0x188)
+}
+
+/// `ISuspension::getDamper` (+0x60) of the stand-in
+unsafe extern "C" fn stand_in_damper(this: *mut u8) -> *mut u8 {
+    this.add(0x190)
+}
+
 /// `IRigidBody::getMass` (+0x28) of the stand-in
 unsafe extern "C" fn stand_in_mass(this: *mut u8) -> f32 {
     rd(this, 0x180)
@@ -1052,12 +1093,14 @@ unsafe extern "C" fn stand_in_inertia(this: *mut u8, out: *mut f32) -> *mut f32 
 /// CarPhysicsForm's car: the player's avatar's `raceEngineer` (+0xf80, read by the
 /// constructor) and `physics` (+0x1168) are one `Car` with a body (+0x118) and suspensions
 /// (+0x2c88) that answer `getDynamicIndex`.
-unsafe fn car_physics_car(a: &crate::acs::Acs, avatar: *mut u8) {
+unsafe fn car_physics_car(a: &crate::acs::Acs, avatar: *mut u8, app: &'static str) {
     let car = a.alloc(0x4000);
     let table = a.alloc(0x100);
     wr(table, 0x28, stand_in_mass as *const () as usize);
     wr(table, 0x40, stand_in_inertia as *const () as usize);
     wr(table, 0x50, stand_in_base_position as *const () as usize);
+    wr(table, 0x58, stand_in_k as *const () as usize);
+    wr(table, 0x60, stand_in_damper as *const () as usize);
     let body = a.alloc(0x200);
     wr(body, 0, table);
     wr(car, 0x118, body);
@@ -1076,7 +1119,7 @@ unsafe fn car_physics_car(a: &crate::acs::Acs, avatar: *mut u8) {
     wr(avatar, 0xf80, engineer);
     wr(avatar, 0x1168, car);
     // (the constructor's getDynamicIndex divides zeros: render overwrites it before drawing)
-    *CAR_PHYSICS.lock().unwrap() = Some((car as usize, body as usize, suspensions));
+    *CAR_PHYSICS.lock().unwrap() = Some((car as usize, body as usize, suspensions, engineer as usize, app));
 }
 
 /// FormTelemetry's `channels` map (+0x1d8: head, size; the nodes' key at +0x20, the

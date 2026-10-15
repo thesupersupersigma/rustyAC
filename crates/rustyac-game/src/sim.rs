@@ -644,6 +644,8 @@ pub struct CarInfo {
     pub telemetry: rustyac_gui::app_telemetry::TelemetryCar,
     /// Task 33b: the Car physics app's dynamic index inputs (the rest is per frame)
     pub car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra,
+    /// Task 33b: the Car engineer app's masses (`physicsInfo`, set once)
+    pub engineer_masses: rustyac_gui::app_car_engineer::CarEngineer,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -1353,6 +1355,7 @@ impl GameSim {
         let mut info = Self::with_wheels(info, &self.car.car);
         info.telemetry = crate::view::telemetry_car(self);
         info.car_physics = crate::view::car_physics(self);
+        info.engineer_masses = crate::view::engineer_masses(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info
     }

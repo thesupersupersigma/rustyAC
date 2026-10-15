@@ -58,6 +58,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "tyredebug" => gui.new_tyre_debug_app(painter),
         "setupdebug" => gui.new_setup_debug_app(painter),
         "carphysics" => gui.new_car_physics_app(painter),
+        "carengineer" => gui.new_car_engineer_app(painter),
         "telemetry" => {
             let presets = read(game_folder.join("system/cfg/telemetry_presets.ini"));
             let user = read(game_folder.join("documents/Assetto Corsa/cfg/telemetry_user.ini"));

@@ -212,6 +212,9 @@ impl GameApps {
         let records = std::fs::read(&own).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|cfg| cfg.parent()).and_then(|docs| std::fs::read(docs.join(&rel)).ok())).map(|b| String::from_utf8_lossy(&b).into_owned());
         let id = gui.new_driver_performance_app(painter, system("driver_performances.ini").as_ref(), records.as_deref());
         add(gui, painter, "driverperf", id);
+        // ACDCarEngineer (a developers' app, after ACDriverPerformance)
+        let id = gui.new_car_engineer_app(painter);
+        add(gui, painter, "carengineer", id);
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
         let id = gui.new_track_description_app(painter, sections);
         add(gui, painter, "trackdescription", id);
@@ -445,6 +448,7 @@ impl GameApps {
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
             setup_debug: self.setup_debug.clone(),
+            car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },
             car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra { km_per_liter: world.first().map_or(0.0, |v| v.km_per_liter), filtered_speed: self.filtered_speed, ..setup.car_physics },
             track_name: setup.track_name.clone(),
             track_config: setup.track_layout.clone(),

@@ -288,6 +288,8 @@ pub struct AppLink {
     pub setup_debug: Option<crate::app_setup_debug::SetupDebugCar>,
     /// `CarPhysicsForm`'s numbers of the player's car beside its physics state
     pub car_physics: crate::app_car_physics::CarPhysicsExtra,
+    /// `ACDCarEngineer`'s inputs of the player's car
+    pub car_engineer: crate::app_car_engineer::CarEngineer,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,

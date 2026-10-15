@@ -19,31 +19,61 @@ use crate::gui::{FormPlace, Gui};
 
 /// A float as `std::wostream << float` writes it: `%g` with six significant digits.
 pub fn format_g6(value: f32) -> String {
-    let v = value as f64;
-    if v.is_nan() {
-        return if v.is_sign_negative() { "-1.#IND".into() } else { "1.#QNAN".into() };
+    format_g(value as f64, 6)
+}
+
+/// MSVC 12's infinity and NaN ("1.#INF", "-1.#IND", "1.#QNAN") with `digits` characters after the
+/// point, rounded like digits: "-1.#IO" at three, "1.#J" at two, "1.$" at one.
+pub fn format_special(v: f64, digits: usize) -> String {
+    let (whole, mantissa) = match (v.is_nan(), v.is_sign_negative()) {
+        (true, true) => ("-1", "#IND"),
+        (true, false) => ("1", "#QNAN"),
+        (false, true) => ("-1", "#INF"),
+        (false, false) => ("1", "#INF"),
+    };
+    let mut d: Vec<u8> = mantissa.bytes().chain(std::iter::repeat(b'0')).take(digits + 1).collect();
+    let next = d.pop().unwrap_or(b'0');
+    let mut out = whole.to_string();
+    if next >= b'5' {
+        match d.last_mut() {
+            Some(c) => *c += 1,
+            None => out = out.replace('1', "2"),
+        }
     }
-    if v.is_infinite() {
-        return if v < 0.0 { "-1.#INF".into() } else { "1.#INF".into() };
+    if digits > 0 {
+        out.push('.');
+        out.push_str(std::str::from_utf8(&d).unwrap_or(""));
+    }
+    out
+}
+
+/// `%g` with that many significant digits (a stream's `precision`), MSVC 12's way: three exponent
+/// digits, "1.#INF", "-1.#IND", "1.#QNAN".
+pub fn format_g(v: f64, precision: usize) -> String {
+    let p = precision.max(1);
+    if !v.is_finite() {
+        // (%g drops the zeros at the end)
+        let s = format_special(v, p - 1);
+        return if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
     }
     if v == 0.0 {
         return if v.is_sign_negative() { "-0".into() } else { "0".into() };
     }
-    // the exact decimal digits, rounded half away from zero at the sixth
+    // the exact decimal digits, rounded half away from zero at the last
     let exact = format!("{:.80e}", v.abs());
     let (mantissa, exponent) = exact.split_once('e').unwrap_or((&exact, "0"));
     let mut exponent: i32 = exponent.parse().unwrap_or(0);
     let mut digits: Vec<u8> = mantissa.bytes().filter(|b| b.is_ascii_digit()).map(|b| b - b'0').collect();
-    let round_up = digits.get(6).is_some_and(|d| *d >= 5);
-    digits.truncate(6);
+    let round_up = digits.get(p).is_some_and(|d| *d >= 5);
+    digits.truncate(p);
     if round_up {
-        let mut i = 5;
+        let mut i = p - 1;
         loop {
             if digits[i] == 9 {
                 digits[i] = 0;
                 if i == 0 {
                     digits.insert(0, 1);
-                    digits.truncate(6);
+                    digits.truncate(p);
                     exponent += 1;
                     break;
                 }
@@ -59,7 +89,7 @@ pub fn format_g6(value: f32) -> String {
         out.push('-');
     }
     let text: String = digits.iter().map(|d| (b'0' + d) as char).collect();
-    if !(-4..6).contains(&exponent) {
+    if !(-4..p as i32).contains(&exponent) {
         // d.ddddde+XXX, zeros at the end dropped
         let rest = text[1..].trim_end_matches('0');
         out.push_str(&text[..1]);
@@ -230,5 +260,16 @@ mod tests {
         for (value, text) in [(0.0, "0"), (60.0, "60"), (697.5, "697.5"), (1.3, "1.3"), (1.25, "1.25"), (80.0, "80"), (-12.0, "-12"), (1234567.0, "1.23457e+006"), (0.00001, "1e-005"), (123456.5, "123457"), (0.1, "0.1"), (1919.0, "1919"), (0.75, "0.75"), (100000.0, "100000"), (999999.5, "1e+006")] {
             assert_eq!(format_g6(value), text, "{value}");
         }
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    #[test]
+    fn g_with_two_digits() {
+        let g = |v: f64| super::format_g(v, 2);
+        assert_eq!([g(1.5463), g(12.34), g(0.62), g(0.05), g(123.0), g(0.0), g(9.96)], ["1.5", "12", "0.62", "0.05", "1.2e+002", "0", "10"]);
+        assert_eq!(super::format_g6(1234567.0), "1.23457e+006");
+        assert_eq!([g(f64::INFINITY), super::format_g6(f32::INFINITY), super::format_g6(-f32::NAN), super::format_g6(f32::NAN)], ["1.$", "1.#INF", "-1.#IND", "1.#QNAN"]);
     }
 }

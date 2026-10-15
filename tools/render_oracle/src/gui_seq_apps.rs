@@ -92,6 +92,24 @@ pub fn car_physics_extra(frame: usize) -> rustyac_gui::app_car_physics::CarPhysi
     rustyac_gui::app_car_physics::CarPhysicsExtra { base_z, mass, iyy, km_per_liter: (m * 0.001 / l) as f32, filtered_speed: (frame as f32 * 0.37).sin() * 40.0 + 120.0 }
 }
 
+/// ACDCarEngineer's inputs of a frame: the front heave spring standing in for a zero front spring
+/// for the first 60 frames, a zero rear spring (infinite ratios) for the next 60, then springs and
+/// dampers moving through the precision-2 `%g`'s shapes.
+pub fn car_engineer(frame: usize) -> rustyac_gui::app_car_engineer::CarEngineer {
+    let f = frame as f32;
+    let k = [if frame < 60 { 0.0 } else { 80000.0 + f * 37.0 }, if (60..120).contains(&frame) { 0.0 } else { 95000.0 - f * 21.0 }];
+    rustyac_gui::app_car_engineer::CarEngineer {
+        total_mass: 1234.5 + f * 0.01,
+        body_mass: 1120.0,
+        unsprung: [27.25, 27.5, 30.125, 1234567.0],
+        k,
+        z: [1.31 + f * 0.0001, -(1.42 - f * 0.0002)],
+        mass: 1100.0 + f * 0.75,
+        dampers: [[4500.0 + f * 3.0, 2800.0 + f], [5200.0 - f * 2.0, 99.0 + f * 9.0]],
+        heave: (frame < 60).then_some([120000.0, 3000.0, 1500.0 + f * 11.0]),
+    }
+}
+
 /// FormTelemetry's raw channel values of a frame: five physics steps 3 ms apart (16 ms a frame:
 /// the 12 ms rule takes about one in four), then the frame's own.
 pub fn telemetry_feed(frame: usize) -> rustyac_gui::app_telemetry::TelemetryFeed {
@@ -550,6 +568,7 @@ pub fn link() -> AppLink {
             tyre_debug: Some(tyre_debug_rows(s.frame)),
             setup_debug: Some(setup_debug_car(s.frame)),
             car_physics: car_physics_extra(s.frame),
+            car_engineer: car_engineer(s.frame),
             track_name: s.track.0.clone(),
             track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
@@ -1209,6 +1228,16 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             o.push(hud("app.visible", 1.0, "carphysics"));
             play(&mut o, 0, 1200, 3);
             o.extend([hud("app.visible", 0.0, "carphysics"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "carphysics")]);
+            play(&mut o, 1200, 1300, 4);
+            o.push(Op::Save);
+        }
+        "app_carengineer" => {
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "carengineer"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "carengineer"));
+            play(&mut o, 0, 1200, 3);
+            o.extend([hud("app.visible", 0.0, "carengineer"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "carengineer")]);
             play(&mut o, 1200, 1300, 4);
             o.push(Op::Save);
         }

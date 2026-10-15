@@ -106,6 +106,8 @@ pub struct CarView {
     pub performance_meter: (f32, f32),
     /// `TyreWearingDebug`'s rows of each tyre (Task 33b)
     pub tyre_debug: [rustyac_gui::app_tyre_debug::TyreDebugRow; 4],
+    /// Task 33b: what `RaceEngineer` reads for the Car engineer app (no masses: see `car_physics`)
+    pub engineer: rustyac_gui::app_car_engineer::CarEngineer,
     /// `CarAvatar::pitPosition`'s place (the pit box)
     pub pit_position: [f32; 3],
     /// every suspension's `getPackerRange`
@@ -330,6 +332,7 @@ impl Default for CarView {
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
             tyre_debug: Default::default(),
+            engineer: Default::default(),
             pit_position: [0.0; 3],
             packer_range: [0.0; 4],
             steps: 0,
@@ -680,6 +683,18 @@ impl CarView {
                     active: t.thermal_model.is_active,
                 })
             }),
+            engineer: {
+                let s = |k: usize| car.suspensions.get(k);
+                let h = &car.heave_springs[0];
+                rustyac_gui::app_car_engineer::CarEngineer {
+                    k: [s(0).map_or(0.0, |s| s.get_k()), s(2).map_or(0.0, |s| s.get_k())],
+                    z: [s(0).map_or(0.0, |s| s.get_base_position().z), s(2).map_or(0.0, |s| s.get_base_position().z)],
+                    mass: car.core.get_mass(car.body),
+                    dampers: [0, 2].map(|k| s(k).map_or([0.0; 2], |s| [s.damper().rebound_slow, s.damper().bump_slow])),
+                    heave: h.is_present.then_some([h.k, h.damper.rebound_slow, h.damper.bump_slow]),
+                    ..Default::default()
+                }
+            },
             pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
             packer_range: [0, 1, 2, 3].map(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_packer_range())),
             speed_kmh: car.speed * 3.6,
@@ -988,6 +1003,18 @@ pub fn setup_debug(sim: &GameSim) -> rustyac_gui::app_setup_debug::SetupDebugCar
 /// What `RaceEngineer::getDynamicIndex` reads of the player's car (the Car physics app): the
 /// base positions' z of suspensions 0 and 2, the body's mass and inertia y (`getLocalInertia`:
 /// `dMass::I[5]`).
+pub fn engineer_masses(sim: &GameSim) -> rustyac_gui::app_car_engineer::CarEngineer {
+    // CarAvatar::initPhysics 0x1400d7660: bodyMass = totalMass = the body's, then each hub's added
+    let car = &sim.car.car;
+    let body_mass = car.core.get_mass(car.body);
+    let unsprung: [f32; 4] = std::array::from_fn(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_mass(&car.core)));
+    let mut total_mass = body_mass;
+    for u in unsprung {
+        total_mass += u;
+    }
+    rustyac_gui::app_car_engineer::CarEngineer { total_mass, body_mass, unsprung, ..Default::default() }
+}
+
 pub fn car_physics(sim: &GameSim) -> rustyac_gui::app_car_physics::CarPhysicsExtra {
     let car = &sim.car.car;
     let z = |k: usize| car.suspensions.get(k).map_or(0.0, |s| s.get_base_position().z);

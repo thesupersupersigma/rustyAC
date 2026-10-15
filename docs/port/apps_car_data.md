@@ -6,8 +6,8 @@
   Task 22; `DELTA_GRAPH` was the one item no proof had reached, and it is now proven (table 1).
 - Item 2 (FormTelemetry): **done.** The app, its presets and `cfg/telemetry_user.ini`, in the GUI
   oracle (table 2) and in rustyac.exe (the physics thread records the channels while the app is shown).
-- Item 3 (car-data apps): TyreWearingDebug, SetupDebug and CarPhysicsForm **done** (table 3). Next:
-  ACDCarEngineer, then the 3D ones (ACSuspension, FormWings), TyreTesterForm.
+- Item 3 (car-data apps): TyreWearingDebug, SetupDebug, CarPhysicsForm and ACDCarEngineer **done**
+  (table 3). Next: TyreTesterForm, then the 3D ones (ACSuspension, FormWings).
 - GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
 - Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
   results in `re/scratch/task33b/scene_result.txt`.
@@ -101,6 +101,16 @@ channel were not compared with the game's car (the oracle feeds both sides the s
   `getKmPerLiter`, the dynamic track's grip and `CarAvatar::filteredSpeed` (`CarAvatar::update`'s end,
   `k = clamp(dt * 0.2, 0, 1)`, now kept by rustyac.exe's apps) are read as the game does. rustyac.exe:
   `view::car_physics` once at the start, the fuel evaluator's km per litre each frame.
+- `ACDCarEngineer` ("Car engineer", `crates/rustyac-gui/src/app_car_engineer.rs`): ctor 0x14031a0f0,
+  `render` 0x14031a750 (draws first: its texts are a frame old), `RaceEngineer::getFrontNaturalFrequencyHZ`
+  0x14027bf20, `getRearNaturalFrequencyHZ` 0x14027c8f0, `getFrontDampingRatio` 0x14027bd60,
+  `getRearDampingRatio` 0x14027c6d0, `getWeightDistribution` 0x14027cb90, each in the machine's order
+  (the front ones fall back on the front heave spring when the front spring is zero). The masses are
+  `physicsInfo`'s, set once at the start (`CarAvatar::initPhysics` 0x1400d7660: the body's mass, plus
+  each hub's); the ride frequencies and damping ratios with `%g` of precision 2. rustyac.exe:
+  `view::engineer_masses` once, `CarView::engineer` every frame.
+- `acos::format_g(value, precision)`: the `%g` of `format_g6` with any precision (`format_g6` is now
+  `format_g(v, 6)`), and MSVC's infinity and NaN texts rounded the same way: `1.$` at precision 2.
 - `format_fixed` (every `std::fixed` number of the GUI) now writes MSVC's infinity and NaN texts with
   the characters after the point rounded like digits: `-1.#IO` at three decimals, `1.#J` at two (the
   game's text when the fuel evaluator has no litres yet: 0 / 0). It wrote `-1.#IND` at every precision.
@@ -126,7 +136,9 @@ as for the other apps. CarPhysicsForm: a stand-in `Car` behind the player's race
 physics, whose body and suspensions are objects with a table of three of the oracle's own functions
 (`getMass`, `getLocalInertia`, `getBasePosition`), so the game's `getDynamicIndex` runs on the
 sequence's numbers; its fuel evaluator's metres and litres are 0 / 0 for the first 100 frames, then
-metres / 0, then both.
+metres / 0, then both. ACDCarEngineer: the same stand-in `Car`, its suspensions also answering
+`getK` and `getDamper`, its front heave spring and the avatar's `physicsInfo` written each frame; the
+front spring is zero for 60 frames (the heave spring's numbers), then the rear one (infinite ratios).
 
 ## Results
 
@@ -152,6 +164,7 @@ metres / 0, then both.
 |---|---|---|---|---|---|
 | `app_tyredebug` | four tyres, the distance past the curve's end, temperatures through %g's shapes, the thermal model on and off; hidden and shown | 428 | identical | identical | identical |
 | `app_carphysics` | 0 / 0 and m / 0 km per litre (NaN, infinity) at first; the dynamic index, the weight distribution, the filtered speed through the tape; hidden and shown | 428 | identical | identical | identical |
+| `app_carengineer` | the front heave spring standing in, a zero rear spring (`1.$`), springs, dampers and masses through `%g`'s shapes (`1.23457e+006`); hidden and shown | 428 | identical | identical | identical |
 | `app_setupdebug` | negative and fractional values through the four-decimal floor, three wings, six gears; the focus to car 2 at frame 900; hidden and shown | 428 | identical | identical | identical |
 
 ## Pictures
