@@ -1742,6 +1742,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             {
                 let steps = std::mem::take(&mut *shared.telemetry.lock().unwrap());
                 shared.telemetry_on.store(gui.telemetry_exchange(steps), Ordering::Relaxed);
+                let car = shared.setup_debug.lock().unwrap().take();
+                shared.setup_debug_on.store(gui.setup_debug_exchange(car), Ordering::Relaxed);
             }
             // the setup editor's jobs to the physics thread, the car's newest picture back
             {

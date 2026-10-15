@@ -104,6 +104,8 @@ pub struct CarView {
     /// `CarPhysicsState::performanceMeter` (s) and `performanceMeterSpeedDiffMS` (m/s): the
     /// car's `PerformanceMeter` (Task 33)
     pub performance_meter: (f32, f32),
+    /// `TyreWearingDebug`'s rows of each tyre (Task 33b)
+    pub tyre_debug: [rustyac_gui::app_tyre_debug::TyreDebugRow; 4],
     /// `CarAvatar::pitPosition`'s place (the pit box)
     pub pit_position: [f32; 3],
     /// every suspension's `getPackerRange`
@@ -327,6 +329,7 @@ impl Default for CarView {
             other_car_count: 0,
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
+            tyre_debug: Default::default(),
             pit_position: [0.0; 3],
             packer_range: [0.0; 4],
             steps: 0,
@@ -669,6 +672,14 @@ impl CarView {
             other_car_count: if player { sim.opponents.len().min(OTHER_CARS) as u8 } else { 0 },
             new_sessions: sim.new_sessions,
             performance_meter: car.performance_meter_state(),
+            tyre_debug: std::array::from_fn(|k| {
+                car.tyres.get(k).map_or(Default::default(), |t| rustyac_gui::app_tyre_debug::TyreDebugRow {
+                    virtual_km: t.status.virtual_km,
+                    wear_value: t.model_data.wear_curve.get_value(t.status.virtual_km as f32),
+                    core_temp: t.thermal_model.core_temp,
+                    active: t.thermal_model.is_active,
+                })
+            }),
             pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
             packer_range: [0, 1, 2, 3].map(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_packer_range())),
             speed_kmh: car.speed * 3.6,
@@ -954,6 +965,23 @@ impl CarView {
         out.speed_kmh = lerp(a.speed_kmh, b.speed_kmh, t);
         out.rpm = lerp(a.rpm, b.rpm, t);
         out
+    }
+}
+
+/// What the Setup debug app reads of the player's `Car` (the game's: the focused car's).
+pub fn setup_debug(sim: &GameSim) -> rustyac_gui::app_setup_debug::SetupDebugCar {
+    let car = &sim.car.car;
+    let d = car.drivetrain.as_ref().map(|d| d.base());
+    let gear_ratios: Vec<f64> = d.map_or(Vec::new(), |d| d.gears.iter().map(|g| g.ratio).collect());
+    rustyac_gui::app_setup_debug::SetupDebugCar {
+        pressure_static: std::array::from_fn(|k| car.tyres.get(k).map_or(0.0, |t| t.status.pressure_static)),
+        wing_angles: car.aero.as_ref().map_or(Vec::new(), |a| a.base().wings.iter().map(|w| w.status.angle).collect()),
+        rod_lengths: std::array::from_fn(|k| car.suspensions.get(k).map_or(0.0, |s| s.base().rod_length)),
+        // physicsInfo.maxGear: the forward gears (R and N lead the list)
+        max_gear: gear_ratios.len().saturating_sub(2) as i32,
+        gear_ratios,
+        final_ratio: d.map_or(0.0, |d| d.final_ratio),
+        tyre_compound: car.tyres.first().and_then(|t| t.compound_defs.get(t.current_compound_index as usize)).map_or(String::new(), |c| c.name.clone()),
     }
 }
 

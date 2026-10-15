@@ -41,6 +41,42 @@ pub struct Timing {
 /// for both sides.
 pub const TELEMETRY_CAR: rustyac_gui::app_telemetry::TelemetryCar = rustyac_gui::app_telemetry::TelemetryCar { limiter_rpm: 7800, clutch_max_torque: 450.0, awd2: true, arb_ready: [true, true] };
 
+/// TyreWearingDebug's wear curve (km, grip), every tyre's: the game's own `Curve` on its side.
+pub const TYRE_WEAR_CURVE: [(f32, f32); 5] = [(0.0, 0.98), (10.0, 1.0), (25.0, 0.985), (60.0, 0.93), (120.0, 0.81)];
+
+/// TyreWearingDebug's tyres of a frame: the distance runs past the curve's end, the core
+/// temperatures through the ranges where %g changes its shape, the thermal model on and off.
+pub fn tyre_debug_rows(frame: usize) -> [rustyac_gui::app_tyre_debug::TyreDebugRow; 4] {
+    let mut curve = rustyac_physics::curve::Curve::new();
+    for (x, y) in TYRE_WEAR_CURVE {
+        curve.add_value(x, y);
+    }
+    std::array::from_fn(|k| {
+        let virtual_km = frame as f64 * 0.37 + k as f64 * 5.3;
+        rustyac_gui::app_tyre_debug::TyreDebugRow {
+            virtual_km,
+            wear_value: curve.get_value(virtual_km as f32),
+            core_temp: ((frame * 7 + k * 13) % 90) as f32 * 1.37 - 4.0,
+            active: (frame / 40 + k) % 2 == 0,
+        }
+    })
+}
+
+/// SetupDebug's members of the `Car`: pressures and rod lengths through the floor-to-four-decimals
+/// rounding (negative ones too), three wings, R, N and six gears.
+pub fn setup_debug_car(frame: usize) -> rustyac_gui::app_setup_debug::SetupDebugCar {
+    let f = frame as f32;
+    rustyac_gui::app_setup_debug::SetupDebugCar {
+        pressure_static: [26.5 + f * 0.0137, 26.623456 + f * 0.0011, 27.0, -(f * 0.0731)],
+        wing_angles: vec![f * 0.05 - 5.0, 12.25, -3.333333],
+        rod_lengths: [0.01234, 0.013441, -0.004321 * (frame % 5) as f32, 0.1 + f * 0.00007],
+        gear_ratios: vec![-3.2, 0.0, 3.1, 2.4, 1.9, 1.55, 1.3, 1.1],
+        final_ratio: 3.875 + f * 0.001,
+        max_gear: 6,
+        tyre_compound: "Semislicks (SM)".to_string(),
+    }
+}
+
 /// FormTelemetry's raw channel values of a frame: five physics steps 3 ms apart (16 ms a frame:
 /// the 12 ms rule takes about one in four), then the frame's own.
 pub fn telemetry_feed(frame: usize) -> rustyac_gui::app_telemetry::TelemetryFeed {
@@ -496,6 +532,8 @@ pub fn link() -> AppLink {
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
             telemetry: telemetry_feed(s.frame),
+            tyre_debug: Some(tyre_debug_rows(s.frame)),
+            setup_debug: Some(setup_debug_car(s.frame)),
             track_name: s.track.0.clone(),
             track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
@@ -1131,6 +1169,30 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 play(&mut o, 1000, 1200, 4);
             }
             o.extend([hud("app.visible", 0.0, "telemetry"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "telemetry")]);
+            play(&mut o, 1200, 1300, 4);
+            o.push(Op::Save);
+        }
+        "app_setupdebug" => {
+            race(&mut o, 6);
+            o.push(hud("app.userFf", 1.0, ""));
+            o.push(hud("app.new", 0.0, "setupdebug"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "setupdebug"));
+            play(&mut o, 0, 900, 3);
+            // the focus elsewhere: that car's state, the same Car
+            o.push(hud("app.focus", 2.0, ""));
+            play(&mut o, 900, 1200, 3);
+            o.extend([hud("app.visible", 0.0, "setupdebug"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "setupdebug")]);
+            play(&mut o, 1200, 1300, 4);
+            o.push(Op::Save);
+        }
+        "app_tyredebug" => {
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "tyredebug"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "tyredebug"));
+            play(&mut o, 0, 1200, 3);
+            o.extend([hud("app.visible", 0.0, "tyredebug"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "tyredebug")]);
             play(&mut o, 1200, 1300, 4);
             o.push(Op::Save);
         }

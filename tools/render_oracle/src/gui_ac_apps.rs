@@ -19,8 +19,10 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 27] = [
+pub const APPS: [(&str, usize, usize, usize); 29] = [
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
+("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
+("setupdebug", 0x1c8, 0x1_4031_7a80, 0x1_4050_b8c8),
     ("sustelemetry", 0x1e0, 0x1_4030_2180, 0x1_4050_7a38),
     ("driverperf", 0x2a8, 0x1_4030_3bd0, 0x1_4050_81b8),
     ("fuelmonitor", 0x1c0, 0x1_4033_8250, 0x1_4051_1b70),
@@ -411,6 +413,10 @@ static RSTATS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::
 /// FormTelemetry: the raw values its channels read (in `app_telemetry::channels`' order) and
 /// the physics avatar's `evOnStepCompleted`
 static TELEMETRY: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+/// TyreWearingDebug's `Car` (PhysicsEngine::cars[0])
+static TYRE_DEBUG: Mutex<Option<usize>> = Mutex::new(None);
+/// SetupDebug's `Car` (every avatar's `raceEngineer->car`)
+static SETUP_DEBUG: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
@@ -663,6 +669,12 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "telemetry" {
                 telemetry_car(a, first_car);
             }
+            if text == "tyredebug" {
+                tyre_debug_car(a, sim);
+            }
+            if text == "setupdebug" {
+                setup_debug_car(a);
+            }
             if text == "rstats" {
                 // FormRenderStats(GUI*, GameTime*): Game::gameTime (Game+0x10)
                 let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
@@ -770,6 +782,41 @@ pub unsafe fn update() {
             crate::gui_ac_replay::fire(event as *const u8, argument.as_ptr());
         }
         std::ptr::copy_nonoverlapping(l.telemetry.graphics.as_ptr(), raw, l.telemetry.graphics.len());
+    }
+    // TyreWearingDebug: its car's tyres (Car+0xb28, 0x858 each: status.virtualKM +0x350,
+    // thermalModel.coreTemp +0x45c, isActive +0x4e0)
+    if let (Some(car), Some(rows)) = (*TYRE_DEBUG.lock().unwrap(), l.tyre_debug) {
+        for (i, t) in rows.iter().enumerate() {
+            let tyre = (car as *mut u8).add(0xb28 + i * 0x858);
+            wr(tyre, 0x350, t.virtual_km);
+            wr(tyre, 0x45c, t.core_temp);
+            wr(tyre, 0x4e0, t.active as u8);
+        }
+    }
+    // SetupDebug: the Car's tyres' pressureStatic (+0x344), wings' status.angle (+0x25c),
+    // suspensions' rodLength (+0x24), gears' ratios, finalRatio (+0x314); physicsInfo.maxGear
+    if let (Some((car, engineer)), Some(c)) = (*SETUP_DEBUG.lock().unwrap(), l.setup_debug.as_ref()) {
+        let car = car as *mut u8;
+        // (the cars without a force feedback gain lost theirs above)
+        for avatar in &g.cars {
+            wr(*avatar as *mut u8, 0xf80, engineer);
+        }
+        for i in 0..4 {
+            wr(car, 0xb28 + i * 0x858 + 0x344, c.pressure_static[i]);
+            wr(rd::<*mut u8>(rd::<*mut u8>(car, 0x2c88), i * 8), 0x24, c.rod_lengths[i]);
+        }
+        let wings: *mut u8 = rd(car, 0xaf0);
+        for (w, angle) in c.wing_angles.iter().enumerate() {
+            wr(wings, w * 0x310 + 0x25c, *angle);
+        }
+        let gears: *mut u8 = rd(car, 0x310 + 0x98);
+        for (k, ratio) in c.gear_ratios.iter().enumerate() {
+            wr(gears, k * 0x28, *ratio);
+        }
+        wr(car, 0x314, c.final_ratio);
+        for avatar in &g.cars {
+            wr(*avatar as *mut u8, 0xe44, c.max_gear);
+        }
     }
     let sim = g.sim as *mut u8;
     wr(sim, 0x220, l.focused_car as u32);
@@ -899,6 +946,65 @@ unsafe fn telemetry_car(a: &crate::acs::Acs, avatar: *mut u8) {
     wr(avatar, 0x1168, car);
     let base = format!("{}/Assetto Corsa/", crate::root::documents().to_string_lossy());
     crate::ac::write_wstring(a, a.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &base);
+}
+
+/// TyreWearingDebug's car: `PhysicsEngine::cars` (PhysicsAvatar+0x58+8) holds one `Car` whose
+/// tyres have the game's own wear `Curve` (`Curve::Curve` 0x1402058b0, `addValue` 0x140205ae0);
+/// every avatar gets a `physicsStateProvider` (+0x11b8), which the app only tests.
+unsafe fn tyre_debug_car(a: &crate::acs::Acs, sim: *mut u8) {
+    let car = a.alloc(0x4000);
+    let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4020_58b0));
+    let add: extern "C" fn(*mut u8, f32, f32) = std::mem::transmute(a.va(0x1_4020_5ae0));
+    for i in 0..4 {
+        let curve = car.add(0xb28 + i * 0x858 + 0xb0);
+        ctor(curve);
+        for (x, y) in crate::gui_seq_apps::TYRE_WEAR_CURVE {
+            add(curve, x, y);
+        }
+    }
+    let cars = a.alloc(16);
+    wr(cars, 0, car);
+    let physics: *mut u8 = rd(sim, 0x1b8);
+    wr(physics, 0x60, cars);
+    wr(physics, 0x68, cars.add(8));
+    wr(physics, 0x70, cars.add(8));
+    for avatar in GAME.lock().unwrap().as_ref().map(|g| g.cars.clone()).unwrap_or_default() {
+        wr(avatar as *mut u8, 0x11b8, a.alloc(0x100));
+    }
+    *TYRE_DEBUG.lock().unwrap() = Some(car as usize);
+}
+
+/// SetupDebug's car, every avatar's `raceEngineer->car` (one engineer for all): its wings (`aeroMap.wings`, 0x310
+/// each, at +0xaf0), suspensions (pointers at +0x2c88), gears (`drivetrain.gears`, 0x28 each, at
+/// +0x310+0x98) as many as the script's; `physicsInfo.tyreCompounds` (+0xf18) holds the
+/// compound's name, `currentTyreCompoundIndex[0]` (+0x1260) is 0.
+unsafe fn setup_debug_car(a: &crate::acs::Acs) {
+    let c = crate::gui_seq_apps::setup_debug_car(0);
+    let car = a.alloc(0x4000);
+    let wings = a.alloc(c.wing_angles.len().max(1) * 0x310);
+    wr(car, 0xaf0, wings);
+    wr(car, 0xaf8, wings.add(c.wing_angles.len() * 0x310));
+    let suspensions = a.alloc(32);
+    for i in 0..4 {
+        wr(suspensions, i * 8, a.alloc(0x100));
+    }
+    wr(car, 0x2c88, suspensions);
+    wr(car, 0x2c90, suspensions.add(32));
+    let gears = a.alloc(c.gear_ratios.len().max(1) * 0x28);
+    wr(car, 0x310 + 0x98, gears);
+    wr(car, 0x310 + 0xa0, gears.add(c.gear_ratios.len() * 0x28));
+    let names = a.alloc(0x20);
+    empty_wstring(names);
+    crate::ac::write_wstring(a, names, &c.tyre_compound);
+    let engineer = a.alloc(0x40);
+    wr(engineer, 8, car);
+    for avatar in GAME.lock().unwrap().as_ref().map(|g| g.cars.clone()).unwrap_or_default() {
+        let avatar = avatar as *mut u8;
+        wr(avatar, 0xf80, engineer);
+        wr(avatar, 0xf18, names);
+        wr(avatar, 0x1260, 0i32);
+    }
+    *SETUP_DEBUG.lock().unwrap() = Some((car as usize, engineer as usize));
 }
 
 /// FormTelemetry's `channels` map (+0x1d8: head, size; the nodes' key at +0x20, the

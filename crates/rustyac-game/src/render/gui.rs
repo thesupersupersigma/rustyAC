@@ -1176,6 +1176,14 @@ impl GameGui {
         self.apps.app("telemetry").is_some_and(|id| self.gui.controls[id].visible)
     }
 
+    /// The Setup debug app's newest car from the physics thread; true while it is shown.
+    pub fn setup_debug_exchange(&mut self, car: Option<rustyac_gui::app_setup_debug::SetupDebugCar>) -> bool {
+        if car.is_some() {
+            self.apps.setup_debug = car;
+        }
+        self.apps.app("setupdebug").is_some_and(|id| self.gui.controls[id].visible)
+    }
+
     /// The setup editor's jobs since the last call, for the physics thread; and the physics
     /// thread's newest picture of the car (with its count) for the editor.
     pub fn setup_exchange(&mut self, newest: &(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)) -> Vec<rustyac_physics::car::setup::SetupJob> {

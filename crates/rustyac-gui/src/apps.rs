@@ -282,6 +282,10 @@ pub struct AppLink {
     pub stats: crate::app_stats::AppStats,
     /// Task 33b: `FormTelemetry`'s channels of the player's car
     pub telemetry: crate::app_telemetry::TelemetryFeed,
+    /// `TyreWearingDebug`'s four tyres of the player's car (None: no car)
+    pub tyre_debug: Option<[crate::app_tyre_debug::TyreDebugRow; 4]>,
+    /// `SetupDebug`'s members of the focused car's `Car` (None: no car)
+    pub setup_debug: Option<crate::app_setup_debug::SetupDebugCar>,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,
