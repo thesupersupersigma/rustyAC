@@ -273,6 +273,8 @@ pub struct AppLink {
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,
+    /// Task 33: what the statistics apps read
+    pub stats: crate::app_stats::AppStats,
     pub actions: Vec<AppAction>,
 }
 
