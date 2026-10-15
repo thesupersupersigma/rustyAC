@@ -115,3 +115,32 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
         out.push_str(&format!("pitstop state={}\n", pit.state));
     }
 }
+
+/// What the pit strategy page's setup editor makes its pit menu of (Task 34): the cfg's looks
+/// and the car's `setup.ini`, kept by `menu.setupPit` for the page maker.
+static SETUP_PIT: std::sync::Mutex<Option<(PitMenuLooks, IniReader)>> = std::sync::Mutex::new(None);
+
+/// `menu.setupPit`: the setup editor gets the pit menu of the arrow keys (no
+/// `USE_MOUSE_PITSTOP`), and with it the page "PITSTOP STRATEGY".
+pub fn setup_pit(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
+    let car = gui.setup_car.as_ref().ok_or("no setup car")?;
+    let s = script().pit;
+    let quick = QuickMenuCar { max_fuel: car.max_fuel() as f32, compounds: car.tyre_compound_names().len(), static_pressure: s.pressure, wing_angle: s.wing.to_vec() };
+    let ini = IniReader::load(&root.join("system/cfg/pitstop.ini")).ok();
+    let settings = ini.as_ref().map_or_else(QuickMenuSettings::default, QuickMenuSettings::from_ini);
+    let setup = IniReader::load(&car.data_path().join("setup.ini")).unwrap_or_default();
+    let menu = QuickMenu::build(&quick, car.tyre_compound_names(), &setup, &settings);
+    *SETUP_PIT.lock().unwrap() = Some((PitMenuLooks::from_ini(ini.as_ref()), setup));
+    gui.setup.use_mouse_pitstop = false;
+    gui.setup.pit = Some(rustyac_gui::setup_car::SetupPit { menu, car: quick, edits: 0 });
+    Ok(())
+}
+
+/// The setup editor's `new QuickMenuPitstop` and its `buildControls` (never shown here).
+pub fn setup_pit_menu(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
+    let (looks, setup) = SETUP_PIT.lock().unwrap().clone().unwrap_or_else(|| (PitMenuLooks::from_ini(None), IniReader::default()));
+    let menu = gui.setup.pit.as_ref().map(|pit| pit.menu.clone()).unwrap_or_else(|| QuickMenu::build(&quick_car(), Vec::new(), &setup, &QuickMenuSettings::default()));
+    let s = script().pit;
+    let car = PitMenuCar { has_race_engineer: true, compounds: menu.compounds.clone(), wing_angle: s.wing.to_vec(), ..PitMenuCar::default() };
+    PitMenu::build(gui, painter, looks, &menu, &setup, &car).root
+}

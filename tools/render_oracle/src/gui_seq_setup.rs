@@ -390,6 +390,84 @@ fn server(car: &'static str) -> Vec<Op> {
     o
 }
 
+/// The page "PITSTOP STRATEGY" from "Setup I/O" and back: it is the last page, and the tab
+/// bar's arrows go round.
+fn to_pit_page(o: &mut Vec<Op>) {
+    previous_tab(o);
+}
+
+fn to_io_page(o: &mut Vec<Op>) {
+    next_tab(o);
+}
+
+/// The editor with the pit menu of the arrow keys, and its page in front.
+fn open_pit(car: &'static str) -> Vec<Op> {
+    let mut o = open(car);
+    let at = o.iter().position(|op| matches!(op, Op::Hud("menu.setupCar", ..))).unwrap_or(0) + 1;
+    let pit = [hud("pit.pressure0", 26.0, ""), hud("pit.pressure1", 27.0, ""), hud("pit.pressure2", 25.0, ""), hud("pit.pressure3", 24.0, ""), hud("pit.wing1", 3.0, ""), hud("menu.setupPit", 0.0, "")];
+    o.splice(at..at, pit);
+    to_pit_page(&mut o);
+    o
+}
+
+/// On the page "PITSTOP STRATEGY": a preset's button, and plus or minus of its spinners.
+fn preset_button(o: &mut Vec<Op>, preset: i32) {
+    click(o, TAB_X + 20 + preset * 137 + 60, TAB_Y + 60 + 10);
+}
+
+fn pit_spinner(o: &mut Vec<Op>, spinner: usize, plus: bool, times: usize) {
+    let (x, y, w) = [(133, 120, 184), (50, 180, 350), (20, 240, 184), (246, 240, 184), (20, 300, 184), (246, 300, 184)][spinner];
+    for _ in 0..times {
+        click(o, TAB_X + x + if plus { w - 21 + 10 } else { 10 }, TAB_Y + y + 10);
+    }
+}
+
+fn poke_presets(o: &mut Vec<Op>, round: usize) {
+    for preset in 0..3 {
+        preset_button(o, preset);
+        pit_spinner(o, 0, true, preset as usize + 2 + round);
+        pit_spinner(o, 0, false, 1);
+        pit_spinner(o, 1, true, preset as usize + 1);
+        pit_spinner(o, 2, true, 1);
+        pit_spinner(o, 3, false, 2);
+        pit_spinner(o, 4, true, 3 + round);
+        pit_spinner(o, 5, false, 1);
+        o.extend([Op::MouseMove(640, 700), Op::Frame(DT)]);
+    }
+    for preset in [0, 2, 1] {
+        preset_button(o, preset);
+    }
+}
+
+/// Task 34: the page "PITSTOP STRATEGY": every preset changed, saved with a setup (its `.sp`),
+/// changed again and loaded back; the server's fixed setup (its pressures locked, its fuel the
+/// most to add, its wing fixed), the page shown again, saved once more.
+fn pit_page(car: &'static str) -> Vec<Op> {
+    let mut o = open_pit(car);
+    poke_presets(&mut o, 0);
+    o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    to_io_page(&mut o);
+    list_row(&mut o, 0, 1);
+    type_text(&mut o, "strategy");
+    button(&mut o, SAVE);
+    to_pit_page(&mut o);
+    poke_presets(&mut o, 1);
+    to_io_page(&mut o);
+    list_row(&mut o, 1, 0);
+    button(&mut o, LOAD);
+    to_pit_page(&mut o);
+    o.extend([hud("menu.setupServer", 0.0, "PRESSURE_LF=27|PRESSURE_RR=23.5|FUEL=30|WING_1=2|ARB_FRONT=3"), Op::Frame(DT), Op::Frame(DT)]);
+    poke_presets(&mut o, 2);
+    previous_tab(&mut o);
+    next_tab(&mut o);
+    poke_presets(&mut o, 3);
+    to_io_page(&mut o);
+    list_row(&mut o, 0, 0);
+    type_text(&mut o, "fixed");
+    button(&mut o, SAVE);
+    o
+}
+
 /// The ESC menu's page "Time": the laps of the focused car in the running session and in
 /// the ones before it, page by page; another car focused; the session picked on the page
 /// "Race control"; the menu gone and back.
@@ -437,6 +515,8 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
         "time" => time_page(),
         "io" => io(car),
         "server" => server(car),
+        "pit" => pit_page(car),
+        "pitprobe" => open_pit(car),
         "server1" => {
             // (only the first message: its file is the one left)
             let mut o = server(car);

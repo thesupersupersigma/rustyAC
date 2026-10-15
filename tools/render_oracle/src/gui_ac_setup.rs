@@ -199,6 +199,13 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
             wr(h.cars[0], 0xa18, port.turbo_boost_level());
             wr(h.sim, 0x1e4, 1u8);
         }
+        "menu.setupPit" => {
+            // the pit menu of the arrow keys (Sim::useMousePitstop off): the setup editor makes
+            // its own QuickMenuPitstop and the page "PITSTOP STRATEGY"; the car's pressures and
+            // wing angles are the script's
+            crate::gui_ac_pit::car_stand_ins(game);
+            wr(h.sim, 0x1e4, 0u8);
+        }
         "menu.timeLaps" => {
             crate::gui_seq_setup::set_time_seed(number);
             static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

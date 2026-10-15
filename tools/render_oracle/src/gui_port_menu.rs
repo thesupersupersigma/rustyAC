@@ -218,6 +218,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             gui.setup.use_mouse_pitstop = true;
             gui.setup_car = Some(Box::new(crate::gui_port_setup::make_car(root, text, number as i32)?));
         }
+        "menu.setupPit" => crate::gui_port_pit::setup_pit(gui, root)?,
         "menu.setupState" => crate::gui_seq_setup::set_car_state(number),
         "menu.setupServer" => {
             let menu = gui.sim.esc_menu.ok_or("no ESC menu")?;
@@ -400,7 +401,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
                 gui.new_control(painter, "ESC_MENU_TIME_TABLE")
             }
             fn setup_editor(gui: &mut Gui, painter: &mut dyn Painter) -> Id {
-                gui.new_setup_screen(painter, None)
+                gui.new_setup_screen(painter, Some(crate::gui_port_pit::setup_pit_menu))
             }
             let setup = if gui.setup_car.is_some() { setup_editor } else { setup };
             fn time_table(gui: &mut Gui, painter: &mut dyn Painter) -> Id {

@@ -50,6 +50,14 @@ unsafe extern "C" fn get_session_total_time(_this: *mut u8, _session: u32) -> i3
     script().pit.total_time
 }
 
+/// `CarAvatar::getTyreCompound`, `getWingAngle` and `getCurrentCompoundStaticPressure`
+/// answered from the script.
+pub unsafe fn car_stand_ins(game: &Game) {
+    jump(game, VA_CAR_GET_TYRE_COMPOUND, get_tyre_compound as *const () as usize);
+    jump(game, VA_CAR_GET_WING_ANGLE, get_wing_angle as *const () as usize);
+    jump(game, VA_CAR_GET_STATIC_PRESSURE, get_static_pressure as *const () as usize);
+}
+
 /// The script's car, written where the game's code reads it.
 unsafe fn sync(h: &HudGame) {
     let s = script().pit;
