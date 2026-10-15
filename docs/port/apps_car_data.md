@@ -6,7 +6,7 @@
   Task 22; `DELTA_GRAPH` was the one item no proof had reached, and it is now proven (table 1).
 - Item 2 (FormTelemetry): **done.** The app, its presets and `cfg/telemetry_user.ini`, in the GUI
   oracle (table 2) and in rustyac.exe (the physics thread records the channels while the app is shown).
-- Item 3 (car-data apps): TyreWearingDebug and SetupDebug **done** (table 3). Next: CarPhysicsForm,
+- Item 3 (car-data apps): TyreWearingDebug, SetupDebug and CarPhysicsForm **done** (table 3). Next:
   ACDCarEngineer, then the 3D ones (ACSuspension, FormWings), TyreTesterForm.
 - GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
 - Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
@@ -94,6 +94,16 @@ channel were not compared with the game's car (the oracle feeds both sides the s
   gears' ratios, the final ratio, the compound's name. rustyac.exe: the physics thread fills
   `view::setup_debug` after each step while the app is shown (the player's car: rustyAC's focus moves
   only the camera, the game's app reads the focused car's `Car`).
+- `CarPhysicsForm` ("Car physics", `crates/rustyac-gui/src/app_car_physics.rs`): ctor 0x1402d7680,
+  `render` 0x1402d9500, `RaceEngineer::getDynamicIndex` 0x14027bc60 (`Iyy / ((|z0| * |z2|) * mass)`, the
+  suspensions' base positions and the body's inertia). The compound's short name, 35 numbers of the
+  player's car (`cars[0]`) with three decimals, and a graph of `|lastFF_Pure|`. The weight distribution,
+  `getKmPerLiter`, the dynamic track's grip and `CarAvatar::filteredSpeed` (`CarAvatar::update`'s end,
+  `k = clamp(dt * 0.2, 0, 1)`, now kept by rustyac.exe's apps) are read as the game does. rustyac.exe:
+  `view::car_physics` once at the start, the fuel evaluator's km per litre each frame.
+- `format_fixed` (every `std::fixed` number of the GUI) now writes MSVC's infinity and NaN texts with
+  the characters after the point rounded like digits: `-1.#IO` at three decimals, `1.#J` at two (the
+  game's text when the fuel evaluator has no litres yet: 0 / 0). It wrote `-1.#IND` at every precision.
 
 
 Item 1: scene sequences of the render oracle (`render_oracle compare`): the game's own car objects and
@@ -112,7 +122,11 @@ Item 3: GUI sequences, as item 2. TyreWearingDebug: the game's form reads a stan
 `addValue`); the port computes the wear value with rustyAC's `Curve` from the same points, so the curve
 lookup is compared too. SetupDebug: one stand-in `Car` behind every avatar's race engineer, with
 wings, suspensions and gears the sequence writes each frame; the physics state comes from the tapes,
-as for the other apps.
+as for the other apps. CarPhysicsForm: a stand-in `Car` behind the player's race engineer and
+physics, whose body and suspensions are objects with a table of three of the oracle's own functions
+(`getMass`, `getLocalInertia`, `getBasePosition`), so the game's `getDynamicIndex` runs on the
+sequence's numbers; its fuel evaluator's metres and litres are 0 / 0 for the first 100 frames, then
+metres / 0, then both.
 
 ## Results
 
@@ -137,6 +151,7 @@ as for the other apps.
 | Sequence | What happens | Frames | Command log | Pixels | State and events |
 |---|---|---|---|---|---|
 | `app_tyredebug` | four tyres, the distance past the curve's end, temperatures through %g's shapes, the thermal model on and off; hidden and shown | 428 | identical | identical | identical |
+| `app_carphysics` | 0 / 0 and m / 0 km per litre (NaN, infinity) at first; the dynamic index, the weight distribution, the filtered speed through the tape; hidden and shown | 428 | identical | identical | identical |
 | `app_setupdebug` | negative and fractional values through the four-decimal floor, three wings, six gears; the focus to car 2 at frame 900; hidden and shown | 428 | identical | identical | identical |
 
 ## Pictures

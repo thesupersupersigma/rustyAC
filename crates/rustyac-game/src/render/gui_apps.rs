@@ -56,6 +56,8 @@ pub struct GameApps {
     pub messages: Vec<(String, String)>,
     /// `Game::gameTime.deltaT` of this frame
     pub game_dt: f32,
+    /// `CarAvatar::filteredSpeed` of the player's car (`CarAvatar::update`'s end)
+    filtered_speed: f32,
     /// the player's car's eye point (model frame), the cockpit view's field of view and pitch
     /// (the camera's, given at the start; then as Onboard settings changes them), changed in
     /// this frame; Ctrl held
@@ -190,6 +192,9 @@ impl GameApps {
             let id = gui.new_ballast_app(painter);
             add(gui, painter, "ballast", id);
         }
+        // CarPhysicsForm (a developers' app, before TelemetryApp)
+        let id = gui.new_car_physics_app(painter);
+        add(gui, painter, "carphysics", id);
         // TelemetryApp ("SusTelemetry", a developers' app)
         let id = gui.new_sus_telemetry_app(painter);
         add(gui, painter, "sustelemetry", id);
@@ -330,6 +335,12 @@ impl GameApps {
     #[allow(clippy::too_many_arguments)]
     pub fn update(&mut self, gui: &mut Gui, world: &[CarView], focus: usize, info: &HudInfo, setup: &GuiSetup, use_mph: bool, time_ms: f64) {
         let referee = info.referee.as_ref();
+        // CarAvatar::update 0x1400db830's end: k = clamp(dt * 0.2, 0, 1)
+        let k = self.game_dt * f32::from_bits(0x3e4c_cccd);
+        let k = if k > 1.0 { 1.0 } else if k >= 0.0 { k } else { 0.0 };
+        if let Some(v) = world.first() {
+            self.filtered_speed = (v.physics_state().speed - self.filtered_speed) * k + self.filtered_speed;
+        }
         let race = &gui.sim.race;
         let r = referee.map(|r| &r.gui);
         let session = race.session_info(race.current_session_index);
@@ -434,6 +445,7 @@ impl GameApps {
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
             setup_debug: self.setup_debug.clone(),
+            car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra { km_per_liter: world.first().map_or(0.0, |v| v.km_per_liter), filtered_speed: self.filtered_speed, ..setup.car_physics },
             track_name: setup.track_name.clone(),
             track_config: setup.track_layout.clone(),
             camera_sounds: vec![self.sound.camera; world.len()],

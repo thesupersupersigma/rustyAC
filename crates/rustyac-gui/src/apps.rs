@@ -286,6 +286,8 @@ pub struct AppLink {
     pub tyre_debug: Option<[crate::app_tyre_debug::TyreDebugRow; 4]>,
     /// `SetupDebug`'s members of the focused car's `Car` (None: no car)
     pub setup_debug: Option<crate::app_setup_debug::SetupDebugCar>,
+    /// `CarPhysicsForm`'s numbers of the player's car beside its physics state
+    pub car_physics: crate::app_car_physics::CarPhysicsExtra,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,

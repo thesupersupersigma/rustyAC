@@ -985,6 +985,15 @@ pub fn setup_debug(sim: &GameSim) -> rustyac_gui::app_setup_debug::SetupDebugCar
     }
 }
 
+/// What `RaceEngineer::getDynamicIndex` reads of the player's car (the Car physics app): the
+/// base positions' z of suspensions 0 and 2, the body's mass and inertia y (`getLocalInertia`:
+/// `dMass::I[5]`).
+pub fn car_physics(sim: &GameSim) -> rustyac_gui::app_car_physics::CarPhysicsExtra {
+    let car = &sim.car.car;
+    let z = |k: usize| car.suspensions.get(k).map_or(0.0, |s| s.get_base_position().z);
+    rustyac_gui::app_car_physics::CarPhysicsExtra { base_z: [z(0), z(2)], mass: car.core.get_mass(car.body), iyy: car.core.world.body(car.body.id).mass.i[5], ..Default::default() }
+}
+
 /// What the Telemetry app (`FormTelemetry::initChannels`) reads of the player's car once.
 pub fn telemetry_car(sim: &GameSim) -> rustyac_gui::app_telemetry::TelemetryCar {
     let car = &sim.car.car;

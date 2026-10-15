@@ -19,10 +19,11 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 29] = [
+pub const APPS: [(&str, usize, usize, usize); 30] = [
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
-("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
-("setupdebug", 0x1c8, 0x1_4031_7a80, 0x1_4050_b8c8),
+    ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
+    ("setupdebug", 0x1c8, 0x1_4031_7a80, 0x1_4050_b8c8),
+    ("carphysics", 0x1f8, 0x1_402d_7680, 0x1_4050_1a10),
     ("sustelemetry", 0x1e0, 0x1_4030_2180, 0x1_4050_7a38),
     ("driverperf", 0x2a8, 0x1_4030_3bd0, 0x1_4050_81b8),
     ("fuelmonitor", 0x1c0, 0x1_4033_8250, 0x1_4051_1b70),
@@ -51,7 +52,7 @@ pub const APPS: [(&str, usize, usize, usize); 29] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 12] = ["telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 13] = ["carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -417,6 +418,9 @@ static TELEMETRY: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 static TYRE_DEBUG: Mutex<Option<usize>> = Mutex::new(None);
 /// SetupDebug's `Car` (every avatar's `raceEngineer->car`)
 static SETUP_DEBUG: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+/// CarPhysicsForm's `Car` (the player's avatar's `raceEngineer->car` and physics), its body and
+/// four suspensions (stand-ins whose value sits at +0x180)
+static CAR_PHYSICS: Mutex<Option<(usize, usize, [usize; 4])>> = Mutex::new(None);
 static MICRO: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Once a frame before the GUI (`Game::update`): `MicroSectors::update` 0x14009fe20.
@@ -675,6 +679,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "setupdebug" {
                 setup_debug_car(a);
             }
+            if text == "carphysics" {
+                car_physics_car(a, first_car);
+            }
             if text == "rstats" {
                 // FormRenderStats(GUI*, GameTime*): Game::gameTime (Game+0x10)
                 let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
@@ -816,6 +823,20 @@ pub unsafe fn update() {
         wr(car, 0x314, c.final_ratio);
         for avatar in &g.cars {
             wr(*avatar as *mut u8, 0xe44, c.max_gear);
+        }
+    }
+    // CarPhysicsForm: getDynamicIndex's inputs, the fuel evaluator (Car+0x3af8: totalM +0x20,
+    // totalLiters +0x28), CarAvatar::filteredSpeed (+0x1278)
+    if let Some((car, body, suspensions)) = *CAR_PHYSICS.lock().unwrap() {
+        let (z, mass, iyy, total_m, total_liters) = crate::gui_seq_apps::car_physics_raw(crate::gui_seq_apps::script(|s| s.frame));
+        wr(suspensions[0] as *mut u8, 0x180, z[0]);
+        wr(suspensions[2] as *mut u8, 0x180, z[1]);
+        wr(body as *mut u8, 0x180, mass);
+        wr(body as *mut u8, 0x184, iyy);
+        wr(car as *mut u8, 0x3b18, total_m);
+        wr(car as *mut u8, 0x3b20, total_liters);
+        if let Some(avatar) = g.cars.first() {
+            wr(*avatar as *mut u8, 0x1278, l.car_physics.filtered_speed);
         }
     }
     let sim = g.sim as *mut u8;
@@ -1005,6 +1026,57 @@ unsafe fn setup_debug_car(a: &crate::acs::Acs) {
         wr(avatar, 0x1260, 0i32);
     }
     *SETUP_DEBUG.lock().unwrap() = Some((car as usize, engineer as usize));
+}
+
+/// `ISuspension::getBasePosition` (+0x50) of the stand-in: (0, 0, z)
+unsafe extern "C" fn stand_in_base_position(this: *mut u8, out: *mut f32) -> *mut f32 {
+    *out = 0.0;
+    *out.add(1) = 0.0;
+    *out.add(2) = rd(this, 0x180);
+    out
+}
+
+/// `IRigidBody::getMass` (+0x28) of the stand-in
+unsafe extern "C" fn stand_in_mass(this: *mut u8) -> f32 {
+    rd(this, 0x180)
+}
+
+/// `IRigidBody::getLocalInertia` (+0x40) of the stand-in: (0, iyy, 0)
+unsafe extern "C" fn stand_in_inertia(this: *mut u8, out: *mut f32) -> *mut f32 {
+    *out = 0.0;
+    *out.add(1) = rd(this, 0x184);
+    *out.add(2) = 0.0;
+    out
+}
+
+/// CarPhysicsForm's car: the player's avatar's `raceEngineer` (+0xf80, read by the
+/// constructor) and `physics` (+0x1168) are one `Car` with a body (+0x118) and suspensions
+/// (+0x2c88) that answer `getDynamicIndex`.
+unsafe fn car_physics_car(a: &crate::acs::Acs, avatar: *mut u8) {
+    let car = a.alloc(0x4000);
+    let table = a.alloc(0x100);
+    wr(table, 0x28, stand_in_mass as *const () as usize);
+    wr(table, 0x40, stand_in_inertia as *const () as usize);
+    wr(table, 0x50, stand_in_base_position as *const () as usize);
+    let body = a.alloc(0x200);
+    wr(body, 0, table);
+    wr(car, 0x118, body);
+    let list = a.alloc(32);
+    let mut suspensions = [0usize; 4];
+    for (i, s) in suspensions.iter_mut().enumerate() {
+        let p = a.alloc(0x200);
+        wr(p, 0, table);
+        wr(list, i * 8, p);
+        *s = p as usize;
+    }
+    wr(car, 0x2c88, list);
+    wr(car, 0x2c90, list.add(32));
+    let engineer = a.alloc(0x40);
+    wr(engineer, 8, car);
+    wr(avatar, 0xf80, engineer);
+    wr(avatar, 0x1168, car);
+    // (the constructor's getDynamicIndex divides zeros: render overwrites it before drawing)
+    *CAR_PHYSICS.lock().unwrap() = Some((car as usize, body as usize, suspensions));
 }
 
 /// FormTelemetry's `channels` map (+0x1d8: head, size; the nodes' key at +0x20, the
