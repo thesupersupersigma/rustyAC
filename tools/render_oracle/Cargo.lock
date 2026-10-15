@@ -115,11 +115,11 @@ dependencies = [
 
 [[package]]
 name = "rustyac-content"
-version = "0.33.0"
+version = "0.33.1"
 
 [[package]]
 name = "rustyac-gui"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "rustyac-math",
  "rustyac-physics",
@@ -127,18 +127,18 @@ dependencies = [
 
 [[package]]
 name = "rustyac-math"
-version = "0.33.0"
+version = "0.33.1"
 
 [[package]]
 name = "rustyac-ode"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "rustyac-math",
 ]
 
 [[package]]
 name = "rustyac-physics"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-render"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "rustyac-content",
  "rustyac-gui",

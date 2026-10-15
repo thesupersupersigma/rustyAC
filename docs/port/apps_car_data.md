@@ -2,6 +2,7 @@
 
 ## Resume here
 
+- Released as **v0.33.1** (tag `v0.33.1`, not pushed).
 - Item 1 (digital panels, `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`): **done.** It was already ported in
   Task 22; `DELTA_GRAPH` was the one item no proof had reached, and it is now proven (table 1).
 - Item 2 (FormTelemetry): **done.** The app, its presets and `cfg/telemetry_user.ini`, in the GUI
