@@ -102,6 +102,13 @@ pub fn register(console: &mut Console, setup: &GuiSetup) {
     console.add_var("engineDamageLevel", Lambda, 1.0);
     // SteamInterface
     console.add_command("rSsA", "Resets Steam Achievements");
+    // ACClientVotingManager::ACClientVotingManager 0x140054460 (online; vote_kick's help is
+    // vote_restart's: the game's two lambdas were merged into one)
+    if setup.online {
+        console.add_command("vote_next", "Start skip to next session voting");
+        console.add_command("vote_restart", "Start restart session voting");
+        console.add_command("vote_kick", "Start restart session voting");
+    }
 }
 
 /// What the console asked, carried out: on the session's own objects (the player's cockpit
@@ -136,7 +143,7 @@ pub fn carry_out(gui: &mut super::gui::GameGui) -> bool {
 }
 
 /// A command other than `set`.
-fn run(gui: &mut super::gui::GameGui, name: &str, _line: &str, index: usize) {
+fn run(gui: &mut super::gui::GameGui, name: &str, line: &str, index: usize) {
     match name {
         "getSteerAssist" => {
             // the registration's car: the n-th getSteerAssist is the n-th car's
@@ -173,6 +180,16 @@ fn run(gui: &mut super::gui::GameGui, name: &str, _line: &str, index: usize) {
             // ksGenerateCrash: the game raises the SEH exception 0x29a and its crash handler
             // ends it; rustyAC says so and goes on
             println!("console: testCrash: Assetto Corsa would raise the exception 0x0000029a here (ksGenerateCrash) and close with its crash report; rustyAC carries on");
+        }
+        // the voting manager's commands (0x140054c40, 0x140054cc0, 0x1400549c0): vote_kick's
+        // name is what follows the first space; the last car of that driver wins; nobody:
+        // still a vote (guid -1)
+        "vote_next" => gui.console_vote(0, -1),
+        "vote_restart" => gui.console_vote(1, -1),
+        "vote_kick" => {
+            let name = line.find(' ').map_or(line, |pos| &line[pos + 1..]);
+            let guid = gui.gui.sim.race.cars.iter().enumerate().rfind(|(_, car)| car.driver_name == name).map_or(-1, |(i, _)| i as i32);
+            gui.console_vote(2, guid);
         }
         // SteamInterface::resetAchievements: rustyAC has no Steam achievements
         "rSsA" => println!("RESETTING STEAM ACHIEVEMENTS"),

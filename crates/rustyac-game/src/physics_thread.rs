@@ -165,6 +165,9 @@ pub struct Shared {
     pub online_hud: Mutex<Vec<String>>,
     /// Task 30: what AC's own online overlays show
     pub online_gui: Mutex<Option<crate::online::OnlineGui>>,
+    /// Task 34: what the client heard for the GUI, what the GUI asks of the client
+    pub online_events: Mutex<Vec<crate::online::OnlineGuiEvent>>,
+    pub online_requests: Mutex<Vec<crate::online::OnlineRequest>>,
     /// Task 28: what the referee says, for the HUD.
     pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
     /// Task 28c: the session's track, for the replay's playback on the display thread
@@ -199,6 +202,8 @@ impl Shared {
             replay_restart: AtomicBool::new(false),
             online_hud: Mutex::new(Vec::new()),
             online_gui: Mutex::new(None),
+            online_events: Mutex::new(Vec::new()),
+            online_requests: Mutex::new(Vec::new()),
             referee_hud: Mutex::new(None),
             track: Mutex::new(None),
             setup_jobs: Mutex::new(Vec::new()),
@@ -565,7 +570,25 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 }
                 chat_at += 1;
             }
-            if steps.is_multiple_of(64) {
+            // the GUI's chat lines and votes (ACChat, RaceControlVoting, the keys Y and N)
+            for request in std::mem::take(&mut *shared.online_requests.lock().unwrap()) {
+                match request {
+                    crate::online::OnlineRequest::Chat { text, now } => {
+                        if text == "/client_list" {
+                            for line in session.hud_lines() {
+                                println!("online: {line}");
+                            }
+                        } else {
+                            session.net.client.send_chat(&text, now);
+                        }
+                    }
+                    crate::online::OnlineRequest::Vote { kind, yes, guid } => session.send_vote(kind, yes, guid),
+                }
+            }
+            if !session.gui_events.is_empty() {
+                shared.online_events.lock().unwrap().append(&mut session.gui_events);
+            }
+            if steps.is_multiple_of(64) || shared.online_gui.lock().unwrap().is_none() {
                 *shared.online_hud.lock().unwrap() = session.hud_lines();
                 *shared.online_gui.lock().unwrap() = Some(session.gui_state());
             }

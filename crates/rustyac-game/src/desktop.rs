@@ -1719,6 +1719,16 @@ fn run_window(options: &Options) -> Result<(), String> {
             // has the keyboard; here only rustyAC's own)
             // SAFETY: a plain call.
             gui.overlay_poll(shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x78) } != 0);
+            // Task 34: what the client heard (chat, votes, its messages), then
+            // ACClientVotingManager::update: Y and N (asked of the OS, whichever window has the
+            // keyboard, as the game does)
+            if is_online {
+                let heard = std::mem::take(&mut *shared.online_events.lock().unwrap());
+                gui.online_heard(heard);
+                // SAFETY: plain calls.
+                let (y, n) = unsafe { (windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x59) != 0, windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x4e) != 0) };
+                gui.voting_update(y, n, last.elapsed().as_secs_f32());
+            }
             // MouseHider::update, once a frame
             mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
             // Task 33: the recorder's best and last laps for the ESC menu's page "Telemetry"
@@ -1779,8 +1789,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                     }
                     SimAction::Shutdown => shutdown = true,
                     SimAction::ClearMessage | SimAction::FadeIn(_) => {}
-                    // (the tables' clicks: the camera to a car; a vote to kick is the
-                    // online client's, which has no voting yet)
+                    // (the tables' clicks: the camera to a car; off line a vote has no client)
                     SimAction::SetFocusedCarIndex(car) => {
                         if (car as usize) < world.len() {
                             focus.index = car as usize;
@@ -1810,6 +1819,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // (nobody listens yet: the drag race and the pit crew's lollipop man;
                     // the camera a driver chose in the last session is not kept)
                     SimAction::DriveMenuPressed | SimAction::LoadPreviousSessionUserCamera => {}
+                    // (online the chat's lines and the votes went to the client already)
                     SimAction::AddMessage { .. } | SimAction::SendChat(_) => {}
                     // the replay bar's buttons, its time line and its save box
                     SimAction::Replay(asked) => {
@@ -1826,6 +1836,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                     SimAction::SetCameraModeKept(mode) => camera.set_mode_kept(mode),
                     SimAction::SetTrackCameraSet(_) => {}
                 }
+            }
+            // Task 34: the chat's lines and the votes to the client (the physics thread's)
+            let requests = gui.take_online_requests();
+            if !requests.is_empty() {
+                shared.online_requests.lock().unwrap().extend(requests);
             }
             // ACClient::update's last lines: ten seconds after the player was put out the game
             // closes

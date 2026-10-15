@@ -159,8 +159,11 @@ pub struct GameGui {
     disconnect_time: f32,
     /// `ReplayManager::replayInterface`: the replay's bar (when the session has a replay)
     pub replay_bar: Option<Id>,
-    /// `Sim::escMenu` (off line; an online session has none yet)
+    /// `Sim::escMenu` (online too: Task 34)
     pub esc_menu: Option<Id>,
+    /// Task 34: `ACClientVotingManager` (online), what the GUI asks of the client
+    voting: rustyac_gui::race_control_online::VotingManager,
+    online_requests: Vec<crate::online::OnlineRequest>,
     /// the player's car as the setup editor sees it, and which of the physics thread's
     /// pictures of it that is
     setup_data: Option<std::rc::Rc<std::cell::RefCell<rustyac_gui::setup_car::SnapshotData>>>,
@@ -405,12 +408,13 @@ impl GameGui {
             gui.sim.time.out_dir = setup.out_dir.clone();
             gui.sim.time.track_config = setup.track_layout.clone();
         }
-        let esc_menu = (!setup.online).then(|| {
+        // (online the page "Race control" has the server's rules, the votes and the chat)
+        let esc_menu = {
             let id = gui.new_esc_menu(&mut painter, system("fades.ini").as_ref(), pages);
             gui.add_root(&mut painter, id);
             gui.sim.esc_menu = Some(id);
-            id
-        });
+            Some(id)
+        };
         if let Some(data) = &setup_data {
             data.borrow_mut().muted = false;
         }
@@ -445,7 +449,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -541,6 +545,17 @@ impl GameGui {
         self.online = info.online.clone();
         if self.online.as_ref().is_some_and(|online| online.disconnect.is_some()) {
             self.disconnect_time += dt;
+        }
+        // what the page "Race control" reads of the client and of the server's rules
+        if let Some(online) = &self.online {
+            let link = &mut self.gui.sim.online_link;
+            link.server_name.clone_from(&online.server_name);
+            if let Some(rules) = &online.rules {
+                (link.tc, link.abs, link.stability, link.auto_clutch) = (rules.tc, rules.abs, rules.stability, rules.auto_clutch);
+                (link.damage_rate, link.fuel_rate, link.tyre_wear_rate) = (rules.damage_rate, rules.fuel_rate, rules.tyre_wear_rate);
+                (link.tyre_blankets, link.jump_start_mode) = (rules.tyre_blankets, rules.jump_start_mode);
+            }
+            self.gui.sim.race.inverted_grid_positions = online.inverted_grid_positions;
         }
         // what the ESC menu and its page read
         self.gui.sim.game_time = time_ms;
@@ -981,7 +996,7 @@ impl GameGui {
         self.disconnect_time > 10.0
     }
 
-    /// There is an ESC menu (none online).
+    /// There is an ESC menu.
     pub fn has_esc_menu(&self) -> bool {
         self.esc_menu.is_some()
     }
@@ -1005,10 +1020,79 @@ impl GameGui {
                 SimAction::ClearMessage => self.message.clear_message(),
                 SimAction::AddMessage { title, text } => self.message.add_message(&mut self.gui, &title, &text, MESSAGE_DEFAULT),
                 SimAction::FadeIn(total) => self.menu_fade = Some((0.0, total)),
+                // ACClient::sendChat 0x140052a90 (it sets `lastChatMessage`), ACClient::sendVote
+                // 0x140052ba0 (it sets `hasVoted`, whatever the vote); off line no client
+                SimAction::SendChat(text) if self.setup.online => {
+                    self.gui.sim.online_link.last_chat_message = self.gui.sim.game_time;
+                    self.online_requests.push(crate::online::OnlineRequest::Chat { text, now: self.gui.sim.game_time });
+                }
+                SimAction::SendVote { kind, value, guid } if self.setup.online => {
+                    self.gui.sim.online_link.vote.has_voted = true;
+                    self.online_requests.push(crate::online::OnlineRequest::Vote { kind, yes: value, guid });
+                }
                 other => out.push(other),
             }
         }
         out
+    }
+
+    /// Task 34: what the client heard since the last frame, in order: the chat lines
+    /// (`ACClient::evOnChatMessage`, every `ACChat`), the votes (`ACClientVotingManager`'s
+    /// handlers) and the client's system messages.
+    pub fn online_heard(&mut self, events: Vec<crate::online::OnlineGuiEvent>) {
+        use crate::online::OnlineGuiEvent;
+        use rustyac_gui::race_control_online::{ReceivedVote, VotingManager};
+        for event in events {
+            match event {
+                OnlineGuiEvent::Chat { session, text } => {
+                    let driver = self.online.as_ref().and_then(|online| online.net_cars.iter().find(|car| car.0 == session).map(|car| car.2.clone()));
+                    self.gui.chats_on_chat_message(session as u32, &text, driver.as_deref());
+                }
+                OnlineGuiEvent::Vote { kind, target, time_left_ms, is_me } => {
+                    VotingManager::on_vote_received(&mut self.gui.sim.online_link.vote, &ReceivedVote { vote_type: kind, time_left_ms, is_me, target });
+                }
+                OnlineGuiEvent::VoteNotPassed => {
+                    let out = VotingManager::on_vote_not_passed(&self.gui.sim.online_link.vote);
+                    self.vote_output(vec![out]);
+                }
+                OnlineGuiEvent::Message { title, text, kind } => self.message.add_message(&mut self.gui, &title, &text, kind),
+            }
+        }
+    }
+
+    /// Task 34: `ACClientVotingManager::update` 0x140055600, once a frame online: the keys Y and
+    /// N (`GetAsyncKeyState`), the vote's time, the prompt.
+    pub fn voting_update(&mut self, y_down: bool, n_down: bool, dt: f32) {
+        if !self.setup.online {
+            return;
+        }
+        let esc = self.esc_menu_visible();
+        let out = self.voting.update(&mut self.gui.sim.online_link.vote, dt, y_down, n_down, esc);
+        self.vote_output(out);
+    }
+
+    fn vote_output(&mut self, out: Vec<rustyac_gui::race_control_online::VoteOutput>) {
+        use rustyac_gui::race_control_online::VoteOutput;
+        for out in out {
+            match out {
+                VoteOutput::ClearMessage => self.message.clear_message(),
+                VoteOutput::Message { title, text, kind } => self.message.add_message(&mut self.gui, &title, &text, kind),
+                VoteOutput::SendVote { kind, yes, guid } => {
+                    self.gui.sim.online_link.vote.has_voted = true;
+                    self.online_requests.push(crate::online::OnlineRequest::Vote { kind, yes, guid });
+                }
+            }
+        }
+    }
+
+    /// The console's `vote_next`, `vote_restart`, `vote_kick`: `ACClient::sendVote(kind, true, guid)`.
+    pub fn console_vote(&mut self, kind: i32, guid: i32) {
+        self.vote_output(vec![rustyac_gui::race_control_online::VoteOutput::SendVote { kind, yes: true, guid }]);
+    }
+
+    /// Task 34: what the GUI asked of the client since the last call.
+    pub fn take_online_requests(&mut self) -> Vec<crate::online::OnlineRequest> {
+        std::mem::take(&mut self.online_requests)
     }
 
     /// `ACCameraManager`'s handler of `Game::evOnPostGui` (the lambda 0x140032770) for a fade a

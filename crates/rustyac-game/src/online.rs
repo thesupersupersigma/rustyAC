@@ -188,6 +188,38 @@ pub struct OnlineGui {
     pub ping: i32,
     pub welcome: String,
     pub disconnect: Option<String>,
+    /// Task 34: what the ESC menu's page "Race control" reads of `ACClient` and of the rules
+    /// the server wrote into the physics
+    pub server_name: String,
+    pub rules: Option<ServerRules>,
+    pub inverted_grid_positions: i32,
+    /// `ACClient::sessionID`; `netCars`: each car's session id, guid (its index among the
+    /// cars) and driver
+    pub session_id: u8,
+    pub net_cars: Vec<(u8, i32, String)>,
+}
+
+/// Task 34: what the client heard that the GUI acts on at once (in arrival order).
+#[derive(Clone, Debug, PartialEq)]
+pub enum OnlineGuiEvent {
+    /// `ACClient::evOnChatMessage` {session id, message}
+    Chat { session: u8, text: String },
+    /// `ACClient::evOnVoteReceived` (a kick vote against the player is not passed on)
+    /// (`target`: the car of the target's session id at that moment, its driver and guid)
+    Vote { kind: i32, target: Option<(String, i32)>, time_left_ms: i32, is_me: bool },
+    /// `ACClient::evOnVoteNotPassed`
+    VoteNotPassed,
+    /// `SystemMessage::addMessage(title, description, type)` of the client's messages
+    Message { title: String, text: String, kind: i32 },
+}
+
+/// Task 34: what the GUI asks of the client.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OnlineRequest {
+    /// `ACClient::sendChat` (`now`: the game's clock, ms)
+    Chat { text: String, now: f64 },
+    /// `ACClient::sendVote` (`guid`: the car's, -1 for none)
+    Vote { kind: i32, yes: bool, guid: i32 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -252,6 +284,8 @@ pub struct OnlineSession {
     /// menu could not be made)
     pub pit: Option<OnlinePit>,
     pub pit_failed: bool,
+    /// Task 34: what the GUI hears of (taken every step)
+    pub gui_events: Vec<OnlineGuiEvent>,
 }
 
 /// `system/cfg/pitstop.ini` as the game ships it (a server session reads no file here).
@@ -331,7 +365,7 @@ impl OnlineSession {
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
         let session = mirror_session(&client.current_session, client.session_start_time);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new() }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -349,6 +383,31 @@ impl OnlineSession {
         let damage = entry.damage_zone_level;
         self.net.cars.push(provider);
         self.remote.push(RemoteCar { entry, data_path, damage });
+    }
+
+    /// A system message of the client's (`SystemMessage::addMessage`), its words in the chat
+    /// lines of the HUD too.
+    fn message(&mut self, title: String, text: String, kind: i32) {
+        self.say(if text.is_empty() { title.clone() } else { format!("{title} {text}") });
+        self.gui_events.push(OnlineGuiEvent::Message { title, text, kind });
+    }
+
+    /// The driver of a session id as `ACClient::getCarAvatarFromSessionID` finds it (the
+    /// player's own, a net car's; nobody's: `None`), with its guid.
+    fn avatar_of(&self, slot: u8) -> Option<(String, i32)> {
+        if slot == self.net.client.session_id {
+            return Some((self.driver_of(slot), 0));
+        }
+        self.net.cars.iter().find(|car| car.session_id == slot).map(|car| (self.driver_of(slot), car.guid as i32))
+    }
+
+    /// `ACClient::sendVote` 0x140052ba0: the car's guid to its session id
+    /// (`getSessionIdFromCarAvatarID`: nobody's 0xff).
+    pub fn send_vote(&mut self, kind: i32, yes: bool, guid: i32) {
+        let target = if guid == 0 { self.net.client.session_id } else { self.net.cars.iter().find(|car| car.guid as i32 == guid).map_or(0xff, |car| car.session_id) };
+        if (0..=2).contains(&kind) {
+            self.net.client.send_event(&rustyac_net::messages::ClientEvent::Vote { kind: kind as u8, yes, target: Some(target) });
+        }
     }
 
     fn say(&mut self, line: String) {
@@ -405,8 +464,9 @@ impl OnlineSession {
         for event in std::mem::take(&mut self.net.events) {
             match &event {
                 Event::Message(Message::Chat { slot, text }) => {
-                    let who = self.driver_of(*slot);
+                    let who = if *slot == 0xff { "SERVER".to_string() } else { self.driver_of(*slot) };
                     self.say(format!("{who}: {text}"));
+                    self.gui_events.push(OnlineGuiEvent::Chat { session: *slot, text: text.clone() });
                 }
                 Event::Message(Message::NewSession(info)) => {
                     // the handler of the client's new-session event (lambda @ 0x1401337d0):
@@ -417,7 +477,8 @@ impl OnlineSession {
                     if let Some(pit) = &mut self.pit {
                         pit.new_session = true;
                     }
-                    self.say(format!("New Session : {}", info.name));
+                    // (D.9: not at the join, which the handshake carries)
+                    self.message("New Session :".to_string(), info.name.clone(), 0);
                     for entry in &mut self.roster {
                         entry.laps = 0;
                         entry.last_lap_ms = 0;
@@ -453,9 +514,14 @@ impl OnlineSession {
                         entry.connected = false;
                         entry.driver.clear();
                     }
-                    self.say(format!("Player {who} disconnected from the server"));
+                    // (only for a net car of that session id)
+                    if self.net.cars.iter().any(|car| car.session_id == *slot) {
+                        self.message("Server Communication".to_string(), format!("Player {who} disconnected from the server"), 2);
+                    } else {
+                        self.say(format!("Player {who} disconnected from the server"));
+                    }
                 }
-                Event::Message(Message::DriverConnected { name, slot, .. }) => {
+                Event::Message(Message::DriverConnected { name, slot, nation_code }) => {
                     if let Some(entry) = self.roster.iter_mut().find(|entry| entry.slot == *slot) {
                         entry.driver = name.clone();
                         entry.connected = true;
@@ -463,7 +529,7 @@ impl OnlineSession {
                     if let Some(remote) = self.remote.iter_mut().find(|remote| remote.entry.session_id == *slot) {
                         remote.damage = [0.0; 5];
                     }
-                    self.say(format!("Car {slot} is now driven by {name}"));
+                    self.message(format!("Car {slot} is now driven by {name} ({nation_code})"), String::new(), 3);
                 }
                 Event::Message(Message::DriverNames(names)) => {
                     for (slot, name) in names {
@@ -518,13 +584,13 @@ impl OnlineSession {
                 Event::Message(Message::Kicked { slot, reason }) => {
                     let who = self.driver_of(*slot);
                     let why = match reason {
-                        0 => "voted out",
-                        1 => "banned until the server restarts",
-                        2 => "blacklisted",
-                        3 => "checksum failed",
-                        _ => "kicked by the admin",
+                        0 => "Kicked from the race",
+                        1 => "Kicked until the server restarts",
+                        2 => "Kicked and put on blacklist",
+                        3 => "Checksum failed",
+                        _ => "Kicked from the server",
                     };
-                    self.say(format!("{who} was removed from the server: {why}"));
+                    self.message(format!("Kicked Driver {who}"), why.to_string(), 4);
                 }
                 Event::Message(Message::RaceOver { standings, .. }) => {
                     // the server's results of the race (RemoteSessionResume: what the game's
@@ -545,7 +611,18 @@ impl OnlineSession {
                     let who = self.driver_of(*slot);
                     self.say(format!("[SERVER] Jumpstart detected for {who}"));
                 }
-                Event::Message(Message::VoteNotPassed) => self.say("Voting ended. Not passed".to_string()),
+                // (the panel, the prompt and the "not passed" message are the GUI's voting
+                // manager's; a kick vote against the player never reaches it)
+                Event::Message(Message::Vote { kind, target, time_left_ms, last_voter, .. }) => {
+                    if !(*kind == 2 && *target == self.net.client.session_id) {
+                        let target = if *kind == 2 { self.avatar_of(*target) } else { None };
+                        self.gui_events.push(OnlineGuiEvent::Vote { kind: *kind as i32, target, time_left_ms: *time_left_ms as i32, is_me: *last_voter == self.net.client.session_id });
+                    }
+                }
+                Event::Message(Message::VoteNotPassed) => {
+                    self.say("Voting ended. Not passed".to_string());
+                    self.gui_events.push(OnlineGuiEvent::VoteNotPassed);
+                }
                 Event::RaceStart(start) => {
                     // (the server repeats it to make sure it arrives)
                     let line = format!("online: the session starts at {:.1} s of the server's clock", start / 1000.0);
@@ -555,7 +632,7 @@ impl OnlineSession {
                     }
                 }
                 Event::Associated => self.console.push("online: the server answers on UDP, car updates flow".to_string()),
-                Event::ServerSilent => self.say("The server seems to be unavailable.".to_string()),
+                Event::ServerSilent => self.message("Connection Issue".to_string(), "The server seems to be unavailable.".to_string(), 0),
                 Event::ConnectionLost(message) => self.say(format!("Connection lost: {message}")),
                 _ => {}
             }
@@ -594,7 +671,18 @@ impl OnlineSession {
 
     /// What AC's own online overlays show.
     pub fn gui_state(&self) -> OnlineGui {
-        OnlineGui { ping: self.net.client.ping as i32, welcome: self.welcome.clone(), disconnect: self.disconnect.clone() }
+        let accepted = &self.net.client.accepted;
+        let net_cars = self.net.cars.iter().map(|car| (car.session_id, car.guid as i32, self.driver_of(car.session_id))).collect();
+        OnlineGui {
+            ping: self.net.client.ping as i32,
+            welcome: self.welcome.clone(),
+            disconnect: self.disconnect.clone(),
+            server_name: accepted.server_name.clone(),
+            rules: Some(ServerRules::of(accepted)),
+            inverted_grid_positions: accepted.inverted_grid_positions as i32,
+            session_id: self.net.client.session_id,
+            net_cars,
+        }
     }
 
     /// The lines of the player list and the chat, for the HUD.

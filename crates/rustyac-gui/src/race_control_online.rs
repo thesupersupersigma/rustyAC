@@ -573,3 +573,105 @@ impl Gui {
         }
     }
 }
+
+/// A vote the server tells of (`ReceivedVoteDef`, messages 0x64 / 0x65 / 0x66): its kind, its
+/// time, whether the last voter is the player (`isMe`), and the car voted on (`target`: its
+/// driver's name and guid, `None` when the session id is nobody's).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReceivedVote {
+    pub vote_type: i32,
+    pub time_left_ms: i32,
+    pub is_me: bool,
+    pub target: Option<(String, i32)>,
+}
+
+/// What the voting manager asks of the session.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VoteOutput {
+    /// `SystemMessage::clearMessage` 0x1401b6400
+    ClearMessage,
+    /// `SystemMessage::addMessage(title, description, type)` 0x1401b61c0
+    Message { title: String, text: String, kind: i32 },
+    /// `ACClient::sendVote` 0x140052ba0 (`guid`: the car's, -1 for none)
+    SendVote { kind: i32, yes: bool, guid: i32 },
+}
+
+/// `ACClientVotingManager` (0x90 bytes: constructor 0x140054460, `update` 0x140055600): the
+/// vote that runs (`currentVote`, held in [`OnlineLink::vote`]), the keys Y and N.
+#[derive(Clone, Debug, Default)]
+pub struct VotingManager {
+    /// `btYesTrigger`, `btNoTrigger` (`Trigger::ignoreSubsequentTrue` 0x14023b3a0)
+    yes_down: bool,
+    no_down: bool,
+}
+
+/// `Trigger::ignoreSubsequentTrue` 0x14023b3a0: true at the first poll after the key went down.
+fn trigger(was_down: &mut bool, down: bool) -> bool {
+    let edge = down && !*was_down;
+    *was_down = down;
+    edge
+}
+
+impl VotingManager {
+    /// The handler of `ACClient::evOnVoteReceived` (lambda 0x140054930): a vote that does not
+    /// run yet starts (the asker's own vote counts), every message sets the time again.
+    pub fn on_vote_received(vote: &mut VoteLink, def: &ReceivedVote) {
+        if !(0.0 < vote.time_left) {
+            vote.has_voted = def.is_me;
+            vote.max_time = def.time_left_ms as f32 * 0.001;
+        }
+        vote.vote_type = def.vote_type;
+        if vote.vote_type == 2 {
+            // ACClient::getCarAvatarFromSessionID (nobody's: null)
+            let (name, guid) = def.target.clone().unwrap_or((String::new(), -1));
+            vote.target_name = name;
+            vote.target_guid = guid;
+        }
+        vote.time_left = def.time_left_ms as f32 * 0.001;
+    }
+
+    /// The handler of `ACClient::evOnVoteNotPassed` (lambda 0x140054720).
+    pub fn on_vote_not_passed(vote: &VoteLink) -> VoteOutput {
+        let (title, kind) = match vote.vote_type {
+            0 => ("Skip session voting ended.", 5),
+            1 => ("Restart session voting ended.", 5),
+            2 => ("Kick user voting ended.", 6),
+            _ => ("Voting unknown ended.", 6),
+        };
+        VoteOutput::Message { title: title.to_string(), text: "Not passed".to_string(), kind }
+    }
+
+    /// `update` 0x140055600, once a frame: `y_down` / `n_down` what `GetAsyncKeyState` says of
+    /// the keys Y and N, `esc_menu_visible` whether the ESC menu shows.
+    pub fn update(&mut self, vote: &mut VoteLink, dt: f32, y_down: bool, n_down: bool, esc_menu_visible: bool) -> Vec<VoteOutput> {
+        let mut out = Vec::new();
+        let yes = trigger(&mut self.yes_down, y_down) && !esc_menu_visible;
+        let no = trigger(&mut self.no_down, n_down) && !esc_menu_visible;
+        if 0.0 < vote.time_left && !vote.has_voted {
+            let guid = if vote.vote_type == 2 { vote.target_guid } else { -1 };
+            // (Y and N in the same frame: two votes)
+            for (pressed, value, title) in [(yes, true, "You voted YES"), (no, false, "You voted NO")] {
+                if pressed {
+                    out.push(VoteOutput::ClearMessage);
+                    out.push(VoteOutput::SendVote { kind: vote.vote_type, yes: value, guid });
+                    out.push(VoteOutput::Message { title: title.to_string(), text: "Your vote has been submitted".to_string(), kind: 7 });
+                    vote.has_voted = true;
+                }
+            }
+        }
+        vote.time_left -= dt;
+        if !(vote.time_left > 0.0) || vote.has_voted {
+            return out;
+        }
+        // the prompt, every frame while the player has not voted
+        let text = format!("Seconds remaining {}", vote.time_left as i32);
+        let (title, kind) = match vote.vote_type {
+            0 => ("Skip session voting in progress. Press key \"Y\" or \"N\" to vote ".to_string(), 5),
+            1 => ("Restart session voting in progress. Press key \"Y\" or \"N\" to vote ".to_string(), 5),
+            2 => (format!("Kick {} voting in progress. Press key \"Y\" or \"N\" to vote ", vote.target_name), 6),
+            _ => ("Voting unknown vote: ".to_string(), 7),
+        };
+        out.push(VoteOutput::Message { title, text, kind });
+        out
+    }
+}
