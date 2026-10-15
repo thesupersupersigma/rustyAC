@@ -128,6 +128,9 @@ pub struct Bindings {
     /// `[ACTIVATE_AI] KEY`: with Ctrl, an AI driver takes the car (`CommandManager`: C when
     /// the key is missing)
     pub key_activate_ai: i32,
+    /// `[MOUSE_STEERING] KEY`: with Ctrl, the keyboard steers with the mouse
+    /// (`CommandManager`: M when the section is missing)
+    pub key_mouse_steering: i32,
     /// `[NEXT_CAR]`, `[PREVIOUS_CAR]`, `[PLAYER_CAR]` `KEY`: with Ctrl, the camera goes to the
     /// car ahead on the track, to the one behind, back to yours (`CommandManager`: numpad 3, 1
     /// and 2 when the section is missing)
@@ -333,6 +336,7 @@ impl Bindings {
             key_ideal_line: if ini.has_section("IDEAL_LINE") { ini.get_hex("IDEAL_LINE", "KEY") } else { 0x49 },
             // (AC's own default for "Activate AI" is Ctrl+C)
             key_activate_ai: if ini.has_key("ACTIVATE_AI", "KEY") { ini.get_hex("ACTIVATE_AI", "KEY") } else { 0x43 },
+            key_mouse_steering: if ini.has_section("MOUSE_STEERING") { ini.get_hex("MOUSE_STEERING", "KEY") } else { 0x4d },
             key_next_car: if ini.has_section("NEXT_CAR") { ini.get_hex("NEXT_CAR", "KEY") } else { 0x63 },
             key_previous_car: if ini.has_section("PREVIOUS_CAR") { ini.get_hex("PREVIOUS_CAR", "KEY") } else { 0x61 },
             key_player_car: if ini.has_section("PLAYER_CAR") { ini.get_hex("PLAYER_CAR", "KEY") } else { 0x62 },
@@ -496,6 +500,7 @@ impl Bindings {
         );
         row("automatic gearbox", "-", format!("{ctrl}+{}", key_name(self.key_auto_shifter)));
         row("ideal line", "-", format!("{ctrl}+{}", key_name(self.key_ideal_line)));
+        row("mouse steering (keyboard)", "-", format!("{ctrl}+{}", key_name(self.key_mouse_steering)));
         row("camera to the car ahead / behind / yours", "-", format!("{ctrl}+{} / {} / {}", key_name(self.key_next_car), key_name(self.key_previous_car), key_name(self.key_player_car)));
         row("replay: play / pause", "-", format!("{ctrl}+{} (or P)", key_name(self.key_pause_replay)));
         row("replay: slow motion", "-", format!("{ctrl}+{}", key_name(self.key_slowmo)));

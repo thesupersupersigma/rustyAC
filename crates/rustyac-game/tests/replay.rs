@@ -294,7 +294,7 @@ impl DriverSource for ScriptedKeyboard {
             _ => false,
         };
         let mut extra = Extra::default();
-        self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, &key_down);
+        self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, &key_down, &mut rustyac_game::input::keyboard::NoMouse);
     }
 
     fn headlights(&mut self) -> bool {

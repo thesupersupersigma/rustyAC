@@ -1336,7 +1336,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             }
             let wheel = WheelDevice::open(&bindings, window_handle, ffb);
             print!("{}", list_devices(&bindings, &wheel));
-            Box::new(SpawnSequence::new(LiveSource::new(bindings, shared, rumble, wheel), true))
+            Box::new(SpawnSequence::new(LiveSource::new(bindings, shared, rumble, wheel, window_handle), true))
         }
     };
     let thread = start_physics(setup, source, &shared, sinks, config, online)?;
@@ -1627,6 +1627,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                         // app for it). F alone is the keyboard's second DRS key, hence F12 too
                         // (F9, which it was until v0.29, is the game's gap display)
                         fps_counter = !fps_counter;
+                    } else if let (true, Some(gui)) = (ctrl && key == bindings.key_mouse_steering, renderer.gui()) {
+                        // Sim::onKeyDown 0x14019a940, the command "Mouse Steering": only while
+                        // the pause menu is hidden and the keyboard's class drives the car;
+                        // the banner tells the new state (5 s, not translated)
+                        if !gui.pause_menu_visible() && shared.keyboard_drives.load(Ordering::Relaxed) {
+                            let pending = shared.mouse_steering_toggles.fetch_add(1, Ordering::Relaxed) + 1;
+                            let on = shared.mouse_steering.load(Ordering::Relaxed) != (pending % 2 == 1);
+                            gui.add_message("Mouse Steering", if on { "Activated" } else { "Deactivated" });
+                        }
                     } else if ctrl && key == bindings.key_traction_control {
                         request(if shift { event::TC_DN } else { event::TC_UP });
                     } else if ctrl && key == bindings.key_abs {
@@ -1731,7 +1740,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                 gui.voting_update(y, n, last.elapsed().as_secs_f32());
             }
             // MouseHider::update, once a frame
-            mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed));
+            mouse_hider.mouse_steering = shared.mouse_steering.load(Ordering::Relaxed);
+            let menu_up = gui.esc_menu_visible() || gui.pause_menu_visible();
+            mouse_hider.update(&mut gui.gui, started.elapsed().as_secs_f64() * 1000.0, shared.focused.load(Ordering::Relaxed), menu_up, rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some());
             // Task 33: the recorder's best and last laps for the ESC menu's page "Telemetry"
             if let Some(rig) = &telemetry {
                 if let Ok(rig) = rig.try_lock() {

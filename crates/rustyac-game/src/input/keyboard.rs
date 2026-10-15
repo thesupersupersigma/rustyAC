@@ -7,8 +7,10 @@
 //! tyres slip, the brake that goes straight to the pedal the tyres can take.
 //!
 //! Not AC's: the look-ahead on the AI line (there is no track; its term is zero here, see
-//! [`KeyboardCarControl::step_steer`]), mouse steering (not ported), a second key per
-//! action and a clutch key.
+//! [`KeyboardCarControl::step_steer`]), a second key per action and a clutch key.
+//!
+//! Mouse steering (`getMouseSteering` 0x14010fb70, Ctrl+M) is the game's: each step adds the
+//! cursor's distance from the window's middle, over `MOUSE_SPEED`, and puts the cursor back.
 
 use rustyac_physics::car::{CarControls, CarControlsInput};
 
@@ -169,6 +171,38 @@ pub struct KeyboardCarControl {
     pub keys: Keys,
     /// Not AC's: a second key for each action (WASD beside the arrows).
     pub keys2: Keys,
+    /// `mouseSteering` (+0x71): `[KEYBOARD] MOUSE_STEER`, and Ctrl+M
+    pub mouse_steering: bool,
+    /// `mouseAcceleratorBrake` (+0x72): the mouse's left and right buttons are gas and brake
+    pub mouse_accelerator_brake: bool,
+    /// `oldMouseValue` (+0x74)
+    pub old_mouse_value: f32,
+    /// `mouseSpeed` (+0x78): pixels for the whole of one side
+    pub mouse_speed: f32,
+}
+
+/// What mouse steering asks of the window: where the cursor is, where the window is, and
+/// the cursor put back.
+pub trait MouseSteeringWindow {
+    /// `GetCursorPos`: x
+    fn cursor_x(&mut self) -> i32;
+    /// `GetWindowRect`: left, top, right, bottom
+    fn window_rect(&mut self) -> [i32; 4];
+    /// `SetCursorPos`
+    fn set_cursor(&mut self, x: i32, y: i32);
+}
+
+/// No window (replays, the browser): the cursor stays in the middle.
+pub struct NoMouse;
+
+impl MouseSteeringWindow for NoMouse {
+    fn cursor_x(&mut self) -> i32 {
+        0
+    }
+    fn window_rect(&mut self) -> [i32; 4] {
+        [0; 4]
+    }
+    fn set_cursor(&mut self, _x: i32, _y: i32) {}
 }
 
 fn sat(x: f32) -> f32 {
@@ -211,6 +245,10 @@ impl KeyboardCarControl {
             old_steer: 0.0,
             keys: Keys::AC_DEFAULT,
             keys2: Keys::NONE,
+            mouse_steering: false,
+            mouse_accelerator_brake: false,
+            old_mouse_value: 0.0,
+            mouse_speed: 1000.0,
         }
     }
 
@@ -225,8 +263,44 @@ impl KeyboardCarControl {
             look_ahead: ini.get_float("KEYBOARD", "LOOKAHEAD_POINTS"),
             keys: Keys::from_ini(ini),
             keys2: Keys::second_from_ini(ini),
+            mouse_steering: ini.get_int("KEYBOARD", "MOUSE_STEER") > 0,
+            // getFloat * 10000.0f; 0 (or NaN) -> 1000
+            mouse_speed: {
+                let speed = ini.get_float("KEYBOARD", "MOUSE_SPEED") * 10000.0;
+                if speed != 0.0 && !speed.is_nan() {
+                    speed
+                } else {
+                    1000.0
+                }
+            },
+            mouse_accelerator_brake: ini.get_int("KEYBOARD", "MOUSE_ACCELERATOR_BRAKE") > 0,
             ..KeyboardCarControl::defaults()
         }
+    }
+
+    /// `KeyboardCarControl::setMouseSteering` 0x140111350 (Ctrl+M).
+    pub fn set_mouse_steering(&mut self, on: bool) {
+        self.mouse_steering = on;
+    }
+
+    /// `KeyboardCarControl::getMouseSteering` @ 0x14010fb70: an integrator of the cursor's
+    /// distance from the window's middle column; the cursor goes back there, 100 pixels above
+    /// the window's bottom, every step.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn get_mouse_steering(&mut self, window: &mut dyn MouseSteeringWindow) -> f32 {
+        let x = window.cursor_x();
+        let [left, _, right, bottom] = window.window_rect();
+        let cx = (right.wrapping_sub(left)) / 2 + left;
+        let v = (x as f32 - cx as f32) / self.mouse_speed + self.old_mouse_value;
+        self.old_mouse_value = if v > 1.0 {
+            1.0
+        } else if v >= -1.0 {
+            v
+        } else {
+            -1.0
+        };
+        window.set_cursor(cx as f32 as i32, bottom.wrapping_sub(100));
+        self.old_mouse_value
     }
 
     /// `KeyboardCarControl::stepSteer` @ 0x140111650: in the game, a steering wish from a
@@ -350,11 +424,12 @@ impl KeyboardCarControl {
         input: &CarControlsInput,
         probe: &CarProbe,
         key_down: &dyn Fn(i32) -> bool,
+        mouse: &mut dyn MouseSteeringWindow,
     ) {
         let (k1, k2) = (self.keys, self.keys2);
         let key = |pick: fn(&Keys) -> i32| key_down(pick(&k1)) || key_down(pick(&k2));
         self.old_steer = controls.steer;
-        let s = self.get_keyboard_steering(dt, input, key(|k| k.left), key(|k| k.right));
+        let s = if self.mouse_steering { self.get_mouse_steering(mouse) } else { self.get_keyboard_steering(dt, input, key(|k| k.left), key(|k| k.right)) };
         controls.steer = if s > 1.0 {
             1.0
         } else if s >= -1.0 {
@@ -362,13 +437,16 @@ impl KeyboardCarControl {
         } else {
             -1.0
         };
-        if key(|k| k.gas) {
+        // the mouse's buttons (1 left, 2 right): not held back with the keyboard
+        let mouse_pedals = self.mouse_steering && self.mouse_accelerator_brake;
+        let button = |vk: i32| mouse_pedals && key_down(vk);
+        if key(|k| k.gas) || button(1) {
             controls.gas = sat(self.compute_gas_coefficient(probe, input.speed, dt));
         } else {
             controls.gas = 0.0;
             self.int_gas = 0.0;
         }
-        controls.brake = if key(|k| k.brake) { sat(probe.optimal_brake) } else { 0.0 };
+        controls.brake = if key(|k| k.brake) || button(2) { sat(probe.optimal_brake) } else { 0.0 };
         controls.kers = key(|k| k.kers);
         controls.drs = key(|k| k.drs);
         controls.hand_brake = key(|k| k.handbrake) as i32 as f32;
@@ -396,6 +474,10 @@ impl KeyboardCarControl {
     /// not count even where they are bound (AC's own files put gear-down on Left Ctrl): a
     /// modifier pressed for a command must not take the car away from the pad.
     pub fn in_use(&self, key_down: &dyn Fn(i32) -> bool) -> bool {
+        // steering with the mouse is driving with this class
+        if self.mouse_steering {
+            return true;
+        }
         let modifier = |key: i32| (0x10..=0x12).contains(&key) || (0xa0..=0xa5).contains(&key);
         [self.keys, self.keys2]
             .iter()
@@ -414,6 +496,61 @@ mod tests {
 
     fn bits(x: f32) -> u32 {
         x.to_bits()
+    }
+
+    use NoMouse as Still;
+
+    /// A window at (100, 50)-(1381, 770) and a cursor that moves by `dx` before each look.
+    struct Moving {
+        x: i32,
+        dx: i32,
+        set: Vec<(i32, i32)>,
+    }
+
+    impl MouseSteeringWindow for Moving {
+        fn cursor_x(&mut self) -> i32 {
+            self.x += self.dx;
+            self.x
+        }
+        fn window_rect(&mut self) -> [i32; 4] {
+            [100, 50, 1381, 770]
+        }
+        fn set_cursor(&mut self, x: i32, y: i32) {
+            self.x = x;
+            self.set.push((x, y));
+        }
+    }
+
+    #[test]
+    fn mouse_steering_adds_up_the_cursor_and_puts_it_back() {
+        let mut k = KeyboardCarControl::from_ini(&ControlsIni::parse("[KEYBOARD]
+STEERING_SPEED=1.75
+MOUSE_STEER=1
+MOUSE_SPEED=0.05
+MOUSE_ACCELERATOR_BRAKE=1
+"));
+        assert!(k.mouse_steering && k.mouse_accelerator_brake);
+        assert_eq!(k.mouse_speed, 500.0);
+        // the middle column: (1381 - 100) / 2 + 100 = 740, rounded toward zero
+        let mut window = Moving { x: 740, dx: 50, set: Vec::new() };
+        let first = k.get_mouse_steering(&mut window);
+        assert_eq!(bits(first), 0.1f32.to_bits());
+        assert_eq!(window.set, [(740, 670)]);
+        for _ in 0..20 {
+            k.get_mouse_steering(&mut window);
+        }
+        assert_eq!(k.old_mouse_value, 1.0);
+        // a missing MOUSE_SPEED: 1000 pixels
+        assert_eq!(KeyboardCarControl::from_ini(&ControlsIni::parse("[KEYBOARD]
+")).mouse_speed, 1000.0);
+        // the left button is the gas, the right one the brake, only with mouse steering
+        let (mut controls, mut extra) = (CarControls::default(), Extra::default());
+        let probe = CarProbe { optimal_brake: 0.8, ..CarProbe::default() };
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, &|key| key == 2, &mut window);
+        assert_eq!((controls.gas, controls.brake), (0.0, 0.8));
+        k.set_mouse_steering(false);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, &|key| key == 2, &mut Still);
+        assert_eq!(controls.brake, 0.0);
     }
 
     const DT: f32 = 0.003;
@@ -580,7 +717,7 @@ mod tests {
         // gas (Up), brake (Down), gear up (Space), headlights (L)
         let held = [0x26, 0x28, 0x20, 0x4c];
         let key_down: &dyn Fn(i32) -> bool = &|key| held.contains(&key);
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, key_down);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, key_down, &mut Still);
         assert_eq!(bits(controls.gas), 0x3c449ba6);
         // spec H.37: the brake is the optimal pedal, at once
         assert_eq!(controls.brake, 0.675);
@@ -591,20 +728,20 @@ mod tests {
         assert_eq!(controls.requested_gear_index, -1);
         // released: no throttle, the ramp starts again; a pedal beyond 1 is 1
         let none: &dyn Fn(i32) -> bool = &|_| false;
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, none);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, none, &mut Still);
         assert_eq!((controls.gas, controls.brake, k.int_gas), (0.0, 0.0, 0.0));
         let strong = CarProbe { optimal_brake: 1.53, ..probe };
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &strong, &|key| key == 0x28);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &strong, &|key| key == 0x28, &mut Still);
         assert_eq!(controls.brake, 1.0);
         let nan = CarProbe { optimal_brake: f32::NAN, ..probe };
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &nan, &|key| key == 0x28);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &nan, &|key| key == 0x28, &mut Still);
         assert_eq!(controls.brake, 0.0);
         // rustyAC's second keys and clutch key
         k.keys2 = Keys { gas: 0x57, clutch: 0xa0, ..Keys::NONE };
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, &|key| key == 0x57 || key == 0xa0);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, &|key| key == 0x57 || key == 0xa0, &mut Still);
         assert!(controls.gas > 0.0);
         assert_eq!(controls.clutch, 0.0);
-        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, none);
+        k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, none, &mut Still);
         assert_eq!(controls.clutch, 1.0);
     }
 }

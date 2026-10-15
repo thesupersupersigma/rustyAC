@@ -11,7 +11,7 @@ use rustyac_physics::car::{CarControls, CarControlsInput, VibrationDef};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 use super::bindings::Bindings;
-use super::keyboard::KeyboardCarControl;
+use super::keyboard::{KeyboardCarControl, MouseSteeringWindow};
 use super::pad::{self, JoypadCarControl, PadButton, PadState, XInput};
 use super::wheel::WheelDevice;
 use super::{Extra, ResetCombo, DEVICE_KEYBOARD, DEVICE_PAD, DEVICE_WHEEL};
@@ -51,10 +51,36 @@ pub struct LiveSource {
     /// When the pad's own buttons were last looked at.
     meta_at: std::time::Instant,
     rumbling: bool,
+    /// `activeWindow` of the keyboard's class: the game's window
+    window: isize,
+}
+
+/// The cursor and the game's window, for the keyboard's mouse steering.
+struct CursorOnWindow(isize);
+
+impl MouseSteeringWindow for CursorOnWindow {
+    fn cursor_x(&mut self) -> i32 {
+        let mut point = windows::Win32::Foundation::POINT::default();
+        // SAFETY: a plain query; on failure the point stays as it was (the game's too).
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut point) };
+        point.x
+    }
+
+    fn window_rect(&mut self) -> [i32; 4] {
+        let mut rect = windows::Win32::Foundation::RECT::default();
+        // SAFETY: a plain query on the game's own window.
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(windows::Win32::Foundation::HWND(self.0 as *mut _), &mut rect) };
+        [rect.left, rect.top, rect.right, rect.bottom]
+    }
+
+    fn set_cursor(&mut self, x: i32, y: i32) {
+        // SAFETY: a plain call.
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
+    }
 }
 
 impl LiveSource {
-    pub fn new(bindings: Bindings, shared: Arc<Shared>, rumble: bool, wheel: Option<WheelDevice>) -> LiveSource {
+    pub fn new(bindings: Bindings, shared: Arc<Shared>, rumble: bool, wheel: Option<WheelDevice>, window: isize) -> LiveSource {
         let pad = JoypadCarControl::from_ini(&bindings.ini, bindings.use_legacy_gamepad_code);
         let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
         let xinput = XInput::new();
@@ -83,6 +109,7 @@ impl LiveSource {
             reset: ResetCombo::default(),
             meta_at: std::time::Instant::now(),
             rumbling: false,
+            window,
         }
     }
 
@@ -189,6 +216,12 @@ impl DriverSource for LiveSource {
         }
         let state = self.pad_state;
         self.meta_buttons(state.as_ref(), false);
+        // Ctrl+M (Sim::onKeyDown): the keyboard's mouse steering on or off
+        if self.shared.mouse_steering_toggles.swap(0, Ordering::Relaxed) % 2 == 1 {
+            self.keyboard.set_mouse_steering(!self.keyboard.mouse_steering);
+        }
+        self.shared.mouse_steering.store(self.keyboard.mouse_steering, Ordering::Relaxed);
+        self.shared.keyboard_drives.store(self.active == DEVICE_KEYBOARD, Ordering::Relaxed);
         self.choose(controls, self.keyboard.in_use(key_down));
         let mut extra = Extra::default();
         match self.active {
@@ -201,7 +234,7 @@ impl DriverSource for LiveSource {
                     wheel.acquire_controls(controls, &mut extra, dt, input, key_down);
                 }
             }
-            _ => self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down),
+            _ => self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down, &mut CursorOnWindow(self.window)),
         }
         self.reset.apply(&mut extra);
         // the cockpit keys of the hybrid system work whichever device drives: rustyAC's own

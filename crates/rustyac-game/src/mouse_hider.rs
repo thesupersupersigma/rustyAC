@@ -9,8 +9,8 @@
 //! `forceMouseHide` 0x1401992d0, `getForceMouseHide` 0x140199340.
 //!
 //! The game looks once, when it is made, whether the player's car is driven with the keyboard
-//! (`KeyboardCarControl`), and treats the keyboard's mouse steering apart. rustyAC has no mouse
-//! steering, so of those branches only "the keyboard drives" is left ([`MouseHider::keyboard`]).
+//! (`KeyboardCarControl`), and treats the keyboard's mouse steering (Ctrl+M) apart: the cursor
+//! is hidden while the mouse steers, and shown while a menu is up.
 
 use rustyac_gui::gui::Gui;
 use rustyac_physics::data::ini::IniReader;
@@ -30,6 +30,8 @@ pub struct MouseHider {
     /// `forceHide`
     force_hide: bool,
     window: HWND,
+    /// `keyboardControls->mouseSteering`, as the physics thread last told it
+    pub mouse_steering: bool,
 }
 
 /// `GetCursorInfo`: the cursor shows (`None`: the call failed).
@@ -52,7 +54,7 @@ impl MouseHider {
         if let Some(ini) = ini.filter(|ini| ini.ready) {
             hide_interval = ini.get_int("SETTINGS", "HIDE_INTERVAL").unwrap_or(0) >> 1;
         }
-        MouseHider { keyboard, last_point: (i32::MIN, i32::MIN), last_time: 0, interval: hide_interval, hide_interval, force_hide: false, window }
+        MouseHider { keyboard, last_point: (i32::MIN, i32::MIN), last_time: 0, interval: hide_interval, hide_interval, force_hide: false, window, mouse_steering: false }
     }
 
     /// `MouseHider::forceMouseHide` 0x1401992d0.
@@ -84,13 +86,15 @@ impl MouseHider {
 
     /// The handler of the window's mouse-move event (0x140114c10).
     pub fn on_mouse_move(&mut self, gui: &mut Gui, now_ms: f64) {
-        self.woke(gui);
+        if !(self.keyboard && self.mouse_steering) {
+            self.woke(gui);
+        }
         self.last_time = now_ms as i64 as u32;
     }
 
     /// The handler of the window's mouse-up event (0x140114b60).
     pub fn on_mouse_up(&mut self, gui: &mut Gui, now_ms: f64) {
-        if self.keyboard {
+        if self.keyboard && !self.mouse_steering {
             self.woke(gui);
         }
         self.last_time = now_ms as i64 as u32;
@@ -120,8 +124,20 @@ impl MouseHider {
     }
 
     /// `MouseHider::update` 0x140114ed0, once a frame: a cursor over the window that showed
-    /// and stood still from one look to the next (they are `interval` apart) is hidden.
-    pub fn update(&mut self, gui: &mut Gui, now_ms: f64, has_focus: bool) {
+    /// and stood still from one look to the next (they are `interval` apart) is hidden. With
+    /// mouse steering the cursor shows while the ESC or pause menu is up (`menu_up`), and is
+    /// hidden otherwise (not in a replay).
+    pub fn update(&mut self, gui: &mut Gui, now_ms: f64, has_focus: bool, menu_up: bool, replay: bool) {
+        if self.keyboard && self.mouse_steering {
+            if menu_up {
+                self.woke(gui);
+                return;
+            }
+            if !replay {
+                self.show_cursor(gui, false);
+                return;
+            }
+        }
         if (self.interval as f64) < now_ms - self.last_time as f64 && has_focus {
             let (mut point, mut rect) = (POINT::default(), RECT::default());
             // SAFETY: plain calls on the game's own window.

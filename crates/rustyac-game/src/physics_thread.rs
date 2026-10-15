@@ -153,6 +153,12 @@ pub struct Shared {
     pub driver_text: Mutex<String>,
     /// Presses of a device's camera button (the display counts them).
     pub camera_toggles: AtomicU32,
+    /// Task 34: Ctrl+M presses not yet given to the keyboard's mouse steering
+    pub mouse_steering_toggles: AtomicU32,
+    /// Task 34: the keyboard steers with the mouse (for the window, which leaves the cursor alone then)
+    pub mouse_steering: std::sync::atomic::AtomicBool,
+    /// Task 34: the player's car is driven by the keyboard's class (Ctrl+M acts only then)
+    pub keyboard_drives: std::sync::atomic::AtomicBool,
     /// The car's unchanging facts, once it is built.
     pub car_info: Mutex<Option<crate::sim::CarInfo>>,
     /// The same of the session's other cars (car 1, 2, …), set before `car_info`.
@@ -219,6 +225,9 @@ impl Shared {
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
             camera_toggles: AtomicU32::new(0),
+            mouse_steering_toggles: AtomicU32::new(0),
+            mouse_steering: std::sync::atomic::AtomicBool::new(false),
+            keyboard_drives: std::sync::atomic::AtomicBool::new(false),
             car_info: Mutex::new(None),
         })
     }

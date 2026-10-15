@@ -77,7 +77,8 @@ impl WebSource {
     pub fn with_controls(input: SharedInput, ini: &ControlsIni, origin: &str) -> WebSource {
         let bindings = Bindings::from_ini(ini, origin.to_string());
         let pad = JoypadCarControl::from_ini(&bindings.ini, bindings.use_legacy_gamepad_code);
-        let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
+        // (the browser has no mouse steering: MOUSE_STEER would leave the car unsteered)
+        let keyboard = KeyboardCarControl { mouse_steering: false, ..KeyboardCarControl::from_ini(&bindings.ini) };
         WebSource {
             input,
             bindings,
@@ -100,7 +101,8 @@ impl WebSource {
     pub fn set_controls(&mut self, ini: &ControlsIni, origin: &str) {
         let bindings = Bindings::from_ini(ini, origin.to_string());
         let pad = JoypadCarControl::from_ini(&bindings.ini, bindings.use_legacy_gamepad_code);
-        let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
+        // (the browser has no mouse steering: MOUSE_STEER would leave the car unsteered)
+        let keyboard = KeyboardCarControl { mouse_steering: false, ..KeyboardCarControl::from_ini(&bindings.ini) };
         self.pad = JoypadCarControl {
             last_max_steer: self.pad.last_max_steer,
             last_raw: self.pad.last_raw,
@@ -227,7 +229,7 @@ impl DriverSource for WebSource {
         if self.active == DEVICE_PAD {
             self.pad.acquire_controls(&pad_state.unwrap_or_default(), controls, &mut extra, input, key_down);
         } else {
-            self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down);
+            self.keyboard.acquire_controls(controls, &mut extra, dt, input, &self.probe, key_down, &mut rustyac_game::input::keyboard::NoMouse);
         }
         // Back held: the D-pad's up / down are the ABS's
         self.reset.apply(&mut extra);
@@ -417,7 +419,8 @@ mod tests {
         fn new(ini: &ControlsIni, pad_there: bool) -> Desktop {
             let bindings = Bindings::from_ini(ini, "the desktop".to_string());
             let pad = JoypadCarControl::from_ini(&bindings.ini, bindings.use_legacy_gamepad_code);
-            let keyboard = KeyboardCarControl::from_ini(&bindings.ini);
+            // (the browser has no mouse steering: MOUSE_STEER would leave the car unsteered)
+            let keyboard = KeyboardCarControl { mouse_steering: false, ..KeyboardCarControl::from_ini(&bindings.ini) };
             let active = if pad_there && bindings.input_method != "KEYBOARD" { DEVICE_PAD } else { DEVICE_KEYBOARD };
             Desktop { pad, keyboard, active }
         }
@@ -446,7 +449,7 @@ mod tests {
             if self.active == DEVICE_PAD {
                 self.pad.acquire_controls(&step.pad.unwrap_or_default(), controls, &mut extra, input, key_down);
             } else {
-                self.keyboard.acquire_controls(controls, &mut extra, dt, input, probe, key_down);
+                self.keyboard.acquire_controls(controls, &mut extra, dt, input, probe, key_down, &mut rustyac_game::input::keyboard::NoMouse);
             }
         }
     }
