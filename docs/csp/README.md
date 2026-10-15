@@ -11,17 +11,23 @@ Read-only work: nothing in the game folder, `Documents\Assetto Corsa`, the Ghidr
 
 ## Resume here
 
-> Updated after each commit. Branch `csp` (worktree `rustyAC-csp`), docs only.
+> Updated after each commit. Branch `csp` (worktree `rustyAC-csp`), docs only. **All planned files exist.**
 
 | Step | State |
 |---|---|
 | README, attach and hook mechanism | done: [`attach.md`](attach.md) |
-| Physics extensions | done: overview + 4 detail files |
-| `content_needs.md` | done (15 cars with `VERSION=extended-N`, 6 extended track layouts, 1 encrypted car); re-check after the rendering files |
+| Physics extensions | done: [`physics.md`](physics.md) + 4 detail files |
+| `content_needs.md` | done |
 | Lua | done: [`lua.md`](lua.md) |
 | Rendering | done: [`rendering.md`](rendering.md) + 3 detail files |
-| UI / apps, online, audio, input / FFB, VR / screens, misc | in progress |
-| `plan.md` | first full draft written (finalise after the last area briefs) |
+| UI / apps, online, audio, input / FFB, VR / screens, misc | done |
+| `plan.md` | done (20 tasks, proof method) |
+
+Not mapped, next pass: about 150 `dwrite.dll` RVAs listed under "Decompile requests" in the area
+files (the registry walker and hook library bytes, CSP's `Tyre::step` bodies, the COSMIC and tyre
+loaders, the car-script caller chain, the near-ground temperature helper `0xaf7010`, audio helpers);
+the ~100 hashed key names; the closed VRC physics scripts and the encrypted `urd_darche_992_23`;
+the in-process (tier 3) feasibility spike. See [`plan.md`](plan.md) section 3-4.
 
 Scratch (not committed, gitignored): `re/scratch/csp1/` — index tables of `dwrite.dll`, decompiles of
 its replacement functions, the briefs the area files were written from.
