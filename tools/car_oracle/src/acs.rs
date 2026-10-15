@@ -299,7 +299,7 @@ extern "system" fn fake_get_system_time_as_file_time(out: *mut u64) {
 }
 
 /// Imports that are replaced instead of bound: (dll, function, stand-in).
-fn overrides() -> Vec<(&'static str, &'static str, usize)> {
+fn overrides_shared() -> Vec<(&'static str, &'static str, usize)> {
     vec![
         ("msvcr120.dll", "exit", game_exit as *const () as usize),
         ("msvcr120.dll", "_exit", game_exit as *const () as usize),
@@ -609,8 +609,9 @@ impl Acs {
     unsafe fn bind_imports(&self) -> Result<(), String> {
         let opt = self.nt_headers() + 24;
         let import_rva = self.read::<u32>(opt + 112 + 8) as usize;
-        let mut overrides = overrides();
-        overrides.extend(EXTRA_OVERRIDES.get().cloned().unwrap_or_default());
+        // (a tool's own stand-ins first: they win over the shared ones)
+        let mut overrides = EXTRA_OVERRIDES.get().cloned().unwrap_or_default();
+        overrides.extend(overrides_shared());
         let mut unbound = Vec::new();
         let mut desc = import_rva;
         let mut bound = 0;

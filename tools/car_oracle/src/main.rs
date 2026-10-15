@@ -307,6 +307,7 @@ fn main() {
         "race-ini" => race_ini(&args),
         "race-micro" => race_micro(&args),
         "mouse-micro" => mouse_micro(&args),
+        "start-camera-micro" => start_camera_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
                 println!("{:18} {:6.1} s  {} cars  {}", s.name, s.seconds, s.default_cars.len(), s.about);
@@ -480,6 +481,30 @@ fn mouse_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::mouse::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("mouse-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    Ok(())
+}
+
+/// Task 34: `car_oracle start-camera-micro [--seed <n>] [--steps <frames>] [--root <dir>]`
+/// (tapes: `<root>/start_camera.tape`, `<root>/free_camera.tape`): the game's own
+/// session-start camera on made-up cars and F7's free camera on made-up keys and cursors, for
+/// the port's `start_camera_check` example.
+fn start_camera_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let out = root.join("start_camera.tape");
+    acs::set_extra_overrides(game::camera::overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let tape = unsafe { game::camera::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("start-camera-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    let out = root.join("free_camera.tape");
+    let tape = unsafe { game::camera::free_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("free camera: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 
