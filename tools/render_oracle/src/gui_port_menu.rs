@@ -219,6 +219,12 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             gui.setup_car = Some(Box::new(crate::gui_port_setup::make_car(root, text, number as i32)?));
         }
         "menu.setupState" => crate::gui_seq_setup::set_car_state(number),
+        "menu.setupServer" => {
+            let menu = gui.sim.esc_menu.ok_or("no ESC menu")?;
+            let screen = gui.esc_menu(menu).setup_screen.ok_or("no setup screen")?;
+            let values = crate::gui_seq_setup::server_values(text);
+            gui.setup_screen_load_server_setup(screen, &values, &root.join("port_documents/Assetto Corsa/setups"));
+        }
         "menu.timeLaps" => crate::gui_seq_setup::set_time_seed(number),
         "menu.lb" => {
             let board = gui.new_leaderboard(painter, number as i32, text == "focus");

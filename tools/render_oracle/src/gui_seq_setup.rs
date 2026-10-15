@@ -159,6 +159,27 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), String>
     Ok(())
 }
 
+/// The server's setup of a script: `NAME=value|...`.
+pub fn server_values(text: &str) -> Vec<(String, f32)> {
+    text.split('|').filter(|pair| !pair.is_empty()).map(|pair| {
+        let (name, value) = pair.split_once('=').unwrap_or((pair, "0"));
+        (name.to_string(), value.parse().unwrap_or(0.0))
+    }).collect()
+}
+
+/// The TCP message 0x52 past its id: a byte the game does not use, the count, each name (a
+/// byte of length and its bytes) and value.
+pub fn server_packet(first: u8, text: &str) -> Vec<u8> {
+    let values = server_values(text);
+    let mut out = vec![first, values.len() as u8];
+    for (name, value) in values {
+        out.push(name.len() as u8);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
 fn click(o: &mut Vec<Op>, x: i32, y: i32) {
     o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
 }
@@ -325,6 +346,50 @@ fn io(car: &'static str) -> Vec<Op> {
     o
 }
 
+/// Plus and minus on every place a spinner can be on the page in front.
+fn poke_page(o: &mut Vec<Op>) {
+    for row in 0..9 {
+        for column in 0..3 {
+            let (x, y) = (TAB_X + 23 + column * 110, TAB_Y + 70 + row * 60);
+            click(o, x + 163 + 10, y + 10);
+            click(o, x + 10, y + 10);
+        }
+    }
+    for (x, y) in [(50 + 329 + 10, 100 + 10), (50 + 10, 100 + 10), (133 + 163 + 10, 100 + 10), (133 + 10, 100 + 10), (133 + 163 + 10, 80 + 10), (133 + 10, 80 + 10)] {
+        click(o, TAB_X + x, TAB_Y + y);
+    }
+    for gear in 0..8 {
+        click(o, TAB_X + 135 + 163 + 10, TAB_Y + 55 + 72 * gear + 10);
+    }
+    o.extend([Op::MouseMove(640, 700), Op::Frame(DT)]);
+}
+
+/// Online (Task 34): the server's setup arrives (TCP 0x52) and locks what it names, a name
+/// twice, a name no item has, values that are no whole numbers; every page poked; a saved
+/// setup loaded over it; a second message; the menu gone and back.
+fn server(car: &'static str) -> Vec<Op> {
+    let mut o = open(car);
+    o.extend([hud("menu.setupServer", 0.0, "PRESSURE_LF=27.5|CAMBER_LF=-25|FUEL=42.9|ARB_FRONT=3|WING_1=1e-05|NOT_AN_ITEM=5|PRESSURE_LF=26|TYRES=1|FINAL_GEAR_RATIO=2|GEAR_3=4|DAMP_BUMP_LF=12345678|TOE_OUT_RR=-0.75"), Op::Frame(DT), Op::Frame(DT)]);
+    for _ in 0..6 {
+        poke_page(&mut o);
+        next_tab(&mut o);
+    }
+    for _ in 0..6 {
+        previous_tab(&mut o);
+    }
+    list_row(&mut o, 0, 1);
+    list_row(&mut o, 1, 0);
+    button(&mut o, LOAD);
+    o.extend([hud("menu.setupServer", 1.0, "PRESSURE_RF=25|FUEL=10|ARB_REAR=2|DIFF_POWER=40"), Op::Frame(DT), Op::Frame(DT)]);
+    for _ in 0..6 {
+        poke_page(&mut o);
+        next_tab(&mut o);
+    }
+    o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT)]);
+    poke_page(&mut o);
+    o
+}
+
 /// The ESC menu's page "Time": the laps of the focused car in the running session and in
 /// the ones before it, page by page; another car focused; the session picked on the page
 /// "Race control"; the menu gone and back.
@@ -371,6 +436,15 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
         "tabs" => tabs(car, 14),
         "time" => time_page(),
         "io" => io(car),
+        "server" => server(car),
+        "server1" => {
+            // (only the first message: its file is the one left)
+            let mut o = server(car);
+            let at = o.iter().position(|op| matches!(op, Op::Hud("menu.setupServer", ..))).unwrap_or(0);
+            o.truncate(at + 3);
+            poke_page(&mut o);
+            o
+        }
         _ => return None,
     })
 }

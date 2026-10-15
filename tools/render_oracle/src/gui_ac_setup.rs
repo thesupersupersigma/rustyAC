@@ -100,6 +100,12 @@ unsafe extern "C" fn execute_on_physics_thread(_this: *mut u8, function: *mut u8
     }
 }
 
+/// In place of `Sim::executeOnMainThread` 0x140199240: the job is done at once (the main
+/// thread would do it at the start of its next update).
+unsafe extern "C" fn execute_on_main_thread(_this: *mut u8, function: *mut u8) {
+    execute_on_physics_thread(_this, function);
+}
+
 fn time_link() -> rustyac_gui::time_table::TimeLink {
     let race = crate::gui_ac_race::race();
     crate::gui_seq_setup::time_link(race.cars.len(), race.current_session_index, 0)
@@ -206,6 +212,23 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, h: &crate::gui_ac_hud::HudGame, w
                 wr(track, 0x230, sectors.add(12));
                 wr(track, 0x238, sectors.add(12));
             }
+        }
+        "menu.setupServer" => {
+            // the server's setup (TCP 0x52) through ACClient::onSetupReceived 0x140050090: a
+            // UDPPacket (data +0x10, read position +0x18, size +0x1c) past the message's id
+            crate::gui_ac_hud::jump(game, 0x1_4019_9240, execute_on_main_thread as *const () as usize);
+            let bytes = crate::gui_seq_setup::server_packet(number as u8, text);
+            let data = game.acs.alloc(bytes.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+            let packet = game.acs.alloc(0x40);
+            wr(packet, 0x10, data);
+            wr(packet, 0x18, 0u32);
+            wr(packet, 0x1c, bytes.len() as u32);
+            // (the job reads sim->escMenu->setupScreen through the client's ACClient::sim +0x3f0)
+            let client = game.acs.alloc(0x400);
+            wr(client, 0x3f0, h.sim);
+            let received: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(game.acs.va(0x1_4005_0090));
+            received(client, packet);
         }
         "menu.setupState" => {
             crate::gui_seq_setup::set_car_state(number);
