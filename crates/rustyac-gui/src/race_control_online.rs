@@ -200,7 +200,8 @@ impl Gui {
         quad(painter, COL_DARK_BAR, t);
         let mut flag = false;
         let link = self.sim.online_link.clone();
-        self.fonts[data_font].set_color(1.0, 1.0, 1.0, 1.0);
+        // (a vec4f of (1, 1, 0, 1): the name is yellow)
+        self.fonts[data_font].set_color4(&[1.0, 1.0, 0.0, 1.0]);
         if link.server_name.encode_utf16().count() <= 30 {
             self.fonts[data_font].blit_string(painter, l + 30.0, t + 6.1, &link.server_name, 1.0, ALIGN_LEFT);
         } else {
@@ -210,6 +211,7 @@ impl Gui {
             self.fonts[data_font].blit_string(painter, l + 30.0, (t + 6.1) + 7.0, &b, 0.8, ALIGN_LEFT);
         }
         t = t + ROW;
+        // RaceManager::getInvertedGridPositions 0x140138550 (online: the client's)
         let inverted = self.sim.race.inverted_grid_positions;
         let col = if inverted != 0 {
             quad(painter, COL_DARK_TRANSP, t);

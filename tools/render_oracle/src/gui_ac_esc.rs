@@ -128,7 +128,109 @@ pub unsafe fn sync(game: &Game, h: &HudGame) {
     wr(avatar, 0x314, e.wind_direction);
     wr(avatar, 0x408, e.ambient);
     wr(avatar, 0x40c, e.road);
+    sync_online(h);
     let _ = game;
+}
+
+const VA_CLIENT_SEND_CHAT: usize = 0x1_4005_2a90;
+static CLIENT: AtomicUsize = AtomicUsize::new(0);
+
+/// In place of `ACClient::sendChat` 0x140052a90: the line, and `lastChatMessage = now`.
+unsafe extern "C" fn send_chat(this: *mut u8, text: *const u8) {
+    action(format!("sendChat {}", crate::gui_ac::read_wstring(text)));
+    wr(this, 0x420, rd::<f64>(rd::<*mut u8>(this, 0x8), 0x18));
+}
+
+/// Online (Task 34): the HUD's stand-in `ACClient` grows to the size of the real one, with a
+/// voting manager.
+pub unsafe fn online_client(game: &Game, h: &mut HudGame) {
+    if !input(|i| i.online) || CLIENT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let a = acs();
+    jump(game, VA_CLIENT_SEND_CHAT, send_chat as *const () as usize);
+    let client = a.alloc(0x11000);
+    if !h.more.cars.client.is_null() {
+        std::ptr::copy_nonoverlapping(h.more.cars.client, client, 0x100);
+    }
+    wr(client, 0x8, rd::<usize>(h.sim, 0x8));
+    wr(client, 0x400, a.alloc(0x90));
+    wr(client, 0x3f0, h.sim);
+    h.more.cars.client = client;
+    CLIENT.store(client as usize, Ordering::SeqCst);
+    sync_online(h);
+}
+
+/// The script's server state where the game's code reads it.
+unsafe fn sync_online(h: &HudGame) {
+    let client = CLIENT.load(Ordering::SeqCst) as *mut u8;
+    if client.is_null() {
+        return;
+    }
+    let a = acs();
+    let o = script().online;
+    crate::ac::write_wstring(a, client.add(0x100), &o.server_name);
+    wr(client, 0x21c, o.tc);
+    wr(client, 0x220, o.abs);
+    wr(client, 0x224, o.stability as u8);
+    wr(client, 0x225, o.auto_clutch as u8);
+    // (PhysicsAvatar::engine is a member, at +0x58: the menu's own copy of the avatar)
+    let engine: *mut u8 = rd::<*mut u8>(h.sim, 0x1b8).add(0x58);
+    wr(engine, 0xb8, o.blankets as u8);
+    wr(engine, 0xc8, o.fuel);
+    wr(engine, 0xcc, o.tyre);
+    wr(engine, 0xd8, o.jump_start);
+    wr(engine, 0x108, o.damage);
+    let manager: *mut u8 = rd(client, 0x400);
+    wr(manager, 0x60, o.vote_type);
+    wr(manager, 0x64, o.has_voted as u8);
+    wr(manager, 0x68, o.time_left);
+    wr(manager, 0x6c, o.max_time);
+    let target = h.cars.get(o.target as usize).copied().filter(|_| o.target >= 0).unwrap_or(std::ptr::null_mut());
+    if !target.is_null() {
+        wr(target, 0x1158, o.target);
+    }
+    wr(manager, 0x70, target);
+    // netCars: a NetCarStateProvider of its own for each (its session id, name and guid)
+    let count = (rd::<usize>(client, 0x450) - rd::<usize>(client, 0x448)) / 8;
+    if count != o.net_cars.len() {
+        let list = a.alloc(8 * o.net_cars.len().max(1));
+        let names = input(|i| i.cars.iter().map(|c| c.driver_name.clone()).collect::<Vec<_>>());
+        for (k, (sid, car)) in o.net_cars.iter().enumerate() {
+            let net = a.alloc(0x1600);
+            wr(net, 0x78, *sid);
+            crate::ac::write_wstring(a, net.add(0x80), names.get(*car).map_or("", |n| n.as_str()));
+            wr(net, 0x10c, *car as i32);
+            wr(list, 8 * k, net);
+        }
+        wr(client, 0x448, list);
+        wr(client, 0x450, list.add(8 * o.net_cars.len()));
+        wr(client, 0x458, list.add(8 * o.net_cars.len()));
+    }
+}
+
+/// `ACClient::evOnChatMessage` (+0x58) fired as the client's TCP handler of 'G' does: every
+/// handler, in the order they were hung up, with {session id, message}.
+pub unsafe fn chat_message(session: i32, text: &str) {
+    let client = CLIENT.load(Ordering::SeqCst) as *mut u8;
+    if client.is_null() {
+        return;
+    }
+    let ev = acs().alloc(0x28);
+    wr(ev, 0, session);
+    crate::ac::write_wstring(acs(), ev.add(8), text);
+    let (begin, end) = (rd::<usize>(client, 0x58), rd::<usize>(client, 0x60));
+    let sim: *mut u8 = rd(client, 0x3f0);
+    wr(sim, 0x1c8, client);
+    let mut at = begin;
+    while at < end {
+        let implementation: *mut u8 = rd(at as *const u8, 0x20);
+        let table: *const usize = rd(implementation, 0);
+        let call: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(*table.add(2));
+        call(implementation, ev);
+        at += 0x28;
+    }
+    wr(sim, 0x1c8, 0usize);
 }
 
 static SUN: AtomicUsize = AtomicUsize::new(0);
@@ -178,7 +280,7 @@ pub unsafe fn fade_done(h: &HudGame, run: impl FnOnce()) {
 }
 
 /// A menu call of the script's that is the ESC menu's (false: it is not).
-pub unsafe fn call(game: &Game, gui: *mut u8, h: &HudGame, what: &str, number: f32, _text: &str) -> bool {
+pub unsafe fn call(game: &Game, gui: *mut u8, h: &mut HudGame, what: &str, number: f32, _text: &str) -> bool {
     let a = &game.acs;
     let sim = h.sim;
     match what {
@@ -224,9 +326,18 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &HudGame, what: &str, number: f
             wr(h.cars[0], 0xa40, script().esc.setup_state);
             wr(rd::<*mut u8>(sim, 0x1a8), 0xa2, script().esc.fixed_setup as u8);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_ESC_MENU_CTOR));
+            // (online the page "Race control" makes its server panel, votes and chat on the client)
+            online_client(game, h);
+            let client = CLIENT.load(Ordering::SeqCst);
+            if client != 0 {
+                wr(sim, 0x1c8, client);
+            }
             SYNTHETIC.store(true, Ordering::SeqCst);
             ctor(menu, sim, gui);
             SYNTHETIC.store(false, Ordering::SeqCst);
+            if client != 0 {
+                wr(sim, 0x1c8, 0usize);
+            }
             sync(game, h);
             wr(sim, 0x118, menu);
             // Sim::Sim: the menu is a top-level control of the GUI, and its coming and going
@@ -256,6 +367,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &HudGame, what: &str, number: f
             let set: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(VA_ESC_MENU_SET_DRIVE_BUTTON_ENABLED));
             set(menu(), number != 0.0);
         }
+        "menu.chat" => chat_message(number as i32, _text),
         "menu.raceControl" => {
             let set: extern "C" fn(*mut u8) = std::mem::transmute(a.va(VA_ESC_MENU_SET_RACE_CONTROL_SCREEN));
             set(menu());

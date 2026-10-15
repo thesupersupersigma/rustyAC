@@ -1093,6 +1093,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "esc_menu" => plain(crate::gui_seq_menu::esc_menu(0)),
         "esc_menu_race" => plain(crate::gui_seq_menu::esc_menu(1)),
         "esc_menu_fixed" => plain(crate::gui_seq_menu::esc_menu(2)),
+        "esc_menu_online" => plain(crate::gui_seq_menu::esc_menu_online()),
         "replay_bar_2" => plain(crate::gui_seq_menu::replay_bar(2)),
         "replay_bar_12" => plain(crate::gui_seq_menu::replay_bar(12)),
         "online_overlays" => plain(crate::gui_seq_menu::online_overlays()),

@@ -42,12 +42,15 @@ const VA_GUI_ON_MOUSE_MOVE: usize = 0x1_4025_4320;
 const VA_GUI_ON_MOUSE_UP: usize = 0x1_4025_45c0;
 
 /// class, size, constructor, table (see `gui_ac::CLASSES`)
-pub const CLASSES: [(&str, usize, usize, usize); 9] = [
+pub const CLASSES: [(&str, usize, usize, usize); 12] = [
     ("ReplayInterface", 0x330, crate::gui_ac_replay::VA_REPLAY_INTERFACE_CTOR, crate::gui_ac_replay::VA_REPLAY_INTERFACE_VTABLE),
     ("ESCMenu", 0x260, crate::gui_ac_esc::VA_ESC_MENU_CTOR, crate::gui_ac_esc::VA_ESC_MENU_VTABLE),
     ("RaceControlScreen", 0x1b8, 0x1_400b_2370, 0x1_404b_96e0),
     ("RaceControlSPSession", 0x1a8, 0x1_400b_7e90, 0x1_404b_a318),
     ("RaceControlSessionInfo", 0x2b8, 0x1_400b_3660, 0x1_404b_99f0),
+    ("RaceControlSessionServer", 0x1a0, 0x1_400b_5df0, 0x1_404b_9ed0),
+    ("RaceControlVoting", 0x1c0, 0x1_400b_8a50, 0x1_404b_a738),
+    ("ACChat", 0x200, 0x1_4003_4aa0, 0x1_404a_6b80),
     ("PauseMenu", 0x200, VA_PAUSE_MENU_CTOR, VA_PAUSE_MENU_VTABLE), ("Leaderboard", 0x2e8, VA_LEADERBOARD_CTOR, VA_LEADERBOARD_VTABLE), ("EndCommon", 0x1c0, 0x1_4009_1ed0, 0x1_404b_4998), ("Form", 0x1b8, VA_LEADERBOARD_APP_CTOR, 0x1_4050_e8c0)];
 const VA_LEADERBOARD_APP_CTOR: usize = 0x1_4032_9bf0;
 const VA_SESSION_LEADERBOARD_CTOR: usize = 0x1_400b_af60;
@@ -259,6 +262,19 @@ pub unsafe fn client_present(present: bool) {
     wr(h.sim, 0x1c8, if present && input(|i| i.online) { h.more.cars.client as usize } else { 0 });
 }
 
+/// Online, with the ESC menu made (Task 34): `Sim::client` is there while `f` runs.
+pub unsafe fn online_input<T>(f: impl FnOnce() -> T) -> T {
+    let Some(h) = hud() else { return f() };
+    if !input(|i| i.online) || crate::gui_ac_esc::menu().is_null() {
+        return f();
+    }
+    let before: usize = rd(h.sim, 0x1c8);
+    wr(h.sim, 0x1c8, h.more.cars.client);
+    let out = f();
+    wr(h.sim, 0x1c8, before);
+    out
+}
+
 unsafe extern "C" fn get_session_count(_this: *mut u8) -> u32 {
     script().session_count
 }
@@ -386,7 +402,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
     if what.starts_with("menu.setup") || what == "menu.timeLaps" {
         return crate::gui_ac_setup::call(game, gui, h, what, number, text);
     }
-    if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl") {
+    if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl" | "menu.chat") {
         crate::gui_ac_race::install(game);
         crate::gui_ac_race::sync(h);
         install(game, sim);
@@ -501,8 +517,10 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
                 let event = a.alloc(0x40);
                 let boards = MENUS.lock().unwrap().boards.clone();
                 for i in 0..end.offset_from(begin) as usize / 0x28 {
-                    // (only the tables' handlers: an entry's first word is who hung it up)
-                    if !boards.contains(&rd::<usize>(begin.add(i * 0x28), 0)) {
+                    // (only the tables' and the votes' handlers: an entry's first word is who
+                    // hung it up)
+                    let owner = rd::<usize>(begin.add(i * 0x28), 0);
+                    if !boards.contains(&owner) && rd::<usize>(owner as *const u8, 0) != a.va(0x1_404b_a738) {
                         continue;
                     }
                     let implementation: *mut u8 = rd(begin.add(i * 0x28), 0x20);
@@ -649,7 +667,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
 pub unsafe fn extra(control: *const u8, class: &str) -> Option<String> {
     match class {
         "PauseMenu" => Some(format!(" pause={} fade={:08x}", rd::<i32>(control, 0x1f0), rd::<u32>(control, 0x1f4))),
-        "EndCommon" | "RaceControlScreen" | "RaceControlSPSession" | "RaceControlSessionInfo" => Some(String::new()),
+        "EndCommon" | "RaceControlScreen" | "RaceControlSPSession" | "RaceControlSessionInfo" | "RaceControlSessionServer" | "RaceControlVoting" | "ACChat" => Some(String::new()),
         "ESCMenu" => Some(crate::gui_ac_esc::extra(control)),
         "ReplayInterface" => Some(crate::gui_ac_replay::extra(control)),
         "Leaderboard" => {

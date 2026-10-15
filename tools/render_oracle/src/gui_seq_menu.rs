@@ -28,6 +28,33 @@ pub struct MenuScript {
     pub own_ping: i32,
     pub welcome: String,
     pub disconnect: String,
+    /// what the online pages read of `ACClient` and of the server's rules (Task 34)
+    pub online: OnlineScript,
+}
+
+#[derive(Clone, Debug)]
+pub struct OnlineScript {
+    /// `ACClient::serverName`, `serverDrivingAssists`, `invertedGridPositions`
+    pub server_name: String,
+    pub tc: i32,
+    pub abs: i32,
+    pub stability: bool,
+    pub auto_clutch: bool,
+    pub inverted_grid: i32,
+    /// `PhysicsEngine`'s rates, tyre blankets and false start's penalty
+    pub damage: f32,
+    pub fuel: f32,
+    pub tyre: f32,
+    pub blankets: bool,
+    pub jump_start: i32,
+    /// `ACClientVotingManager::currentVote`; the target is a car's index (-1: none)
+    pub vote_type: i32,
+    pub has_voted: bool,
+    pub time_left: f32,
+    pub max_time: f32,
+    pub target: i32,
+    /// the client's `netCars`: (session id, car's index)
+    pub net_cars: Vec<(u8, usize)>,
 }
 
 /// What a script says of the session for the ESC menu.
@@ -79,6 +106,7 @@ static SCRIPT: Mutex<MenuScript> = Mutex::new(MenuScript {
     own_ping: 0,
     welcome: String::new(),
     disconnect: String::new(),
+    online: OnlineScript { server_name: String::new(), tc: 0, abs: 0, stability: false, auto_clutch: false, inverted_grid: 0, damage: 0.0, fuel: 0.0, tyre: 0.0, blankets: false, jump_start: 0, vote_type: 3, has_voted: false, time_left: 0.0, max_time: 0.0, target: -1, net_cars: Vec::new() },
     replay: ReplayScript { lap_marks: Vec::new(), camera_manager: false, camera_sets: Vec::new(), camera_index: 0 },
     esc: EscScript { setup_state: 1, fixed_setup: false, time_to_wait: 0.0, game_time: 0.0, in_pit: false, grip: 1.0, sun_angle: 0.0, ambient: 0.0, road: 0.0, wind_speed: 0.0, wind_direction: 0.0 },
 });
@@ -188,6 +216,35 @@ pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
             "windDirection" => s.esc.wind_direction = number,
             _ => return false,
         },
+        "menu.serverName" => s.online.server_name = _text.to_string(),
+        "menu.server" => {
+            let o = &mut s.online;
+            match _text {
+                "tc" => o.tc = number as i32,
+                "abs" => o.abs = number as i32,
+                "stability" => o.stability = number != 0.0,
+                "autoClutch" => o.auto_clutch = number != 0.0,
+                "inverted" => o.inverted_grid = number as i32,
+                "damage" => o.damage = number,
+                "fuel" => o.fuel = number,
+                "tyre" => o.tyre = number,
+                "blankets" => o.blankets = number != 0.0,
+                "jumpStart" => o.jump_start = number as i32,
+                _ => return false,
+            }
+        }
+        "menu.vote" => {
+            let o = &mut s.online;
+            match _text {
+                "type" => o.vote_type = number as i32,
+                "voted" => o.has_voted = number != 0.0,
+                "left" => o.time_left = number,
+                "max" => o.max_time = number,
+                "target" => o.target = number as i32,
+                _ => return false,
+            }
+        }
+        "menu.netCar" => s.online.net_cars.push((number as u8, _text.parse().unwrap_or(0))),
         "pit.maxFuel" => s.pit.max_fuel = number,
         "pit.compounds" => s.pit.compounds = _text.split('|').filter(|c| !c.is_empty()).map(str::to_string).collect(),
         "pit.inPitlane" => s.pit.in_pitlane = number != 0.0,
@@ -951,6 +1008,74 @@ pub fn esc_menu(kind: u32) -> Vec<Op> {
     o.extend([hud("menu.raceControl", 0.0, ""), Op::Frame(DT), hud("menu.raceControl", 0.0, ""), Op::Frame(DT)]);
     // "Exit"
     click(&mut o, 50, exit);
+    o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// The ESC menu of an online session: its header, and the page "Race control" with the
+/// server's rules, the votes and the chat (Task 34). The server's state is made up.
+pub fn esc_menu_online() -> Vec<Op> {
+    let mut o = Vec::new();
+    let cars = 12;
+    field(&mut o, cars);
+    o.extend([hud("online", 1.0, ""), hud("race.sessions", 0.0, "1:0:Practice:0:30:0|2:0:Qualifying:0:15:0|3:0:Race:10:0:20000"), hud("race.current", 0.0, ""), hud("race.board", 0.0, board(cars, false, 0)), hud("session", 1.0, ""), hud("timeLeft", 1_234_567.0, "")]);
+    for (what, value) in [("grip", 0.9734), ("sun", -32.5), ("ambient", 26.4), ("road", 31.9), ("wind", 3.3), ("windDirection", 135.0), ("now", 61_000.0)] {
+        o.push(hud("menu.env", value, what));
+    }
+    o.push(hud("menu.serverName", 0.0, "rustyAC test server"));
+    for (what, value) in [("tc", 1.0), ("abs", 2.0), ("stability", 0.0), ("autoClutch", 1.0), ("damage", 0.5), ("fuel", 1.0), ("tyre", 2.25), ("blankets", 1.0), ("jumpStart", 1.0)] {
+        o.push(hud("menu.server", value, what));
+    }
+    for (sid, car) in [(3.0, "1"), (4.0, "2"), (7.0, "5")] {
+        o.push(hud("menu.netCar", sid, car));
+    }
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    // made, hidden; shown: online too the page "Race control" opens by itself
+    o.extend([hud("menu.escMenu", 0.0, ""), Op::Frame(DT), hud("menu.escShow", 0.0, ""), Op::Frame(DT), Op::Frame(DT)]);
+    // the server's rules, one by one; a long name; the grid turned round
+    for (what, value) in [("tc", 0.0), ("abs", 1.0), ("stability", 1.0), ("autoClutch", 0.0), ("damage", 1.0), ("fuel", 0.0), ("tyre", 0.333), ("blankets", 0.0), ("jumpStart", 2.0), ("jumpStart", 0.0), ("tc", 2.0), ("abs", 0.0), ("jumpStart", 5.0)] {
+        o.extend([hud("menu.server", value, what), Op::Frame(DT)]);
+    }
+    o.extend([hud("race.inverted", 8.0, ""), Op::Frame(DT), hud("menu.serverName", 0.0, "rustyAC test server number two | sprint races every hour"), Op::Frame(DT)]);
+    // the chat: other drivers, the server, a session no car has (red from then on)
+    for (sid, text) in [(3.0, "hello"), (255.0, "Welcome to the server"), (4.0, "gl hf"), (9.0, "my own line"), (7.0, "after the red one")] {
+        o.extend([hud("menu.chat", sid, text), Op::Frame(DT)]);
+    }
+    for i in 0..20 {
+        o.push(hud("menu.chat", 3.0, leak(format!("line {i} of a long chat"))));
+    }
+    o.push(Op::Frame(DT));
+    // the input: a click gives it the keys, Enter sends; too soon after: kept
+    // (the page is at x 100; the chat's input at (10, 363 - 40) in the chat at (325, 425))
+    click(&mut o, 100 + 325 + 110, 425 + 323 + 12);
+    for c in "hi all".chars() {
+        o.push(Op::KeyChar(c as u32));
+    }
+    o.extend([Op::Frame(DT), Op::KeyChar(13), Op::Frame(DT)]);
+    for c in "again".chars() {
+        o.push(Op::KeyChar(c as u32));
+    }
+    o.extend([Op::KeyChar(13), Op::Frame(DT), hud("menu.env", 63_000.0, "now"), Op::Frame(DT), Op::KeyChar(13), Op::Frame(DT)]);
+    // the votes: asked for (each request locks the two buttons longer), the server's, a kick
+    let (vx, vy) = (100 + 20 + 45 + 20, 55 + 203 + 15 + 325 + 15 + 20 + 20);
+    click(&mut o, vx, vy);
+    o.extend([hud("menu.env", 100_000.0, "now"), Op::Frame(DT)]);
+    click(&mut o, vx + 140, vy);
+    o.extend([hud("menu.env", 125_000.0, "now"), Op::Frame(DT)]);
+    click(&mut o, vx + 140, vy);
+    o.extend([hud("menu.env", 300_000.0, "now"), Op::Frame(DT)]);
+    click(&mut o, vx, vy);
+    o.extend([hud("menu.vote", 1.0, "type"), hud("menu.vote", 15.0, "max"), hud("menu.vote", 12.5, "left"), Op::Frame(DT)]);
+    click(&mut o, vx, vy + 80);
+    o.extend([hud("menu.vote", 1.0, "voted"), hud("menu.vote", 7.25, "left"), Op::Frame(DT)]);
+    o.extend([hud("menu.vote", 0.0, "voted"), hud("menu.vote", 0.0, "type"), Op::Frame(DT), hud("menu.vote", 1.0, "voted"), Op::Frame(DT)]);
+    o.extend([hud("menu.vote", 0.0, "voted"), hud("menu.vote", 2.0, "type"), hud("menu.vote", 4.0, "target"), hud("menu.vote", 3.0, "left"), Op::Frame(DT)]);
+    click(&mut o, vx + 140, vy + 80);
+    o.extend([hud("menu.vote", 1.0, "voted"), Op::Frame(DT), hud("menu.vote", 7.0, "type"), hud("menu.vote", 0.0, "voted"), Op::Frame(DT), hud("menu.vote", 0.0, "left"), hud("menu.vote", 3.0, "type"), Op::Frame(DT)]);
+    // a new session lets the requests go; the votes go in the last 30 s of a practice
+    o.extend([hud("menu.newSession", 0.0, ""), Op::Frame(DT), hud("timeLeft", 29_000.0, ""), Op::Frame(DT), hud("session", 3.0, ""), Op::Frame(DT)]);
+    // the header: waiting, a countdown
+    o.extend([hud("menu.env", 70_000.0, "wait"), Op::Frame(DT), hud("menu.env", 0.0, "wait"), hud("tts", 8000.0, ""), Op::Frame(DT), hud("tts", 0.0, ""), Op::Frame(DT)]);
     o.extend([hud("menu.resume", 0.0, ""), Op::Frame(DT)]);
     o
 }

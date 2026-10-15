@@ -85,6 +85,13 @@ pub fn sync(hud: &mut HudPort, gui: &mut Gui) {
     gui.sim.game_time = e.game_time;
     gui.sim.player_in_pit = e.in_pit;
     gui.sim.session_time_left = hud.input.session_time_left;
+    let o = &s.online;
+    let link = &mut gui.sim.online_link;
+    link.server_name = o.server_name.clone();
+    (link.tc, link.abs, link.stability, link.auto_clutch) = (o.tc, o.abs, o.stability, o.auto_clutch);
+    (link.damage_rate, link.fuel_rate, link.tyre_wear_rate, link.tyre_blankets, link.jump_start_mode) = (o.damage, o.fuel, o.tyre, o.blankets, o.jump_start);
+    let target = hud.input.cars.get(o.target as usize).filter(|_| o.target >= 0);
+    link.vote = rustyac_gui::race_control_online::VoteLink { vote_type: o.vote_type, has_voted: o.has_voted, time_left: o.time_left, max_time: o.max_time, target_name: target.map_or(String::new(), |c| c.driver_name.clone()), target_guid: if target.is_some() { o.target } else { -1 } };
     gui.sim.track_grip = e.grip;
     gui.sim.sun_angle = e.sun_angle;
     gui.sim.ambient_temperature = e.ambient;
@@ -120,6 +127,10 @@ pub fn drain(hud: &mut HudPort, gui: &mut Gui) {
             SimAction::StartReplayMode => action("startReplayMode 0".into()),
             SimAction::Shutdown => action("shutdown".into()),
             SimAction::SendVote { kind, value, guid } => action(format!("sendVote {kind} {} {guid}", value as u8)),
+            SimAction::SendChat(text) => {
+                action(format!("sendChat {text}"));
+                gui.sim.online_link.last_chat_message = gui.sim.game_time;
+            }
             SimAction::SetFocusedCarIndex(car) => action(format!("setFocusedCarIndex {car}")),
             SimAction::SetCameraMode(mode) => action(format!("setMode {mode}")),
             SimAction::SetIntroMode(on) => action(format!("setIntroMode {}", on as u8)),
@@ -391,9 +402,12 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             }
             let table = if crate::gui_seq_setup::time_seed() != 0.0 { time_table } else { table };
             // (the game's side hears the widgets only once they are made)
+            // (nor the click on "Race control" an online menu makes in its constructor)
             let heard = gui.widget_events.len();
+            let fired = gui.fired.len();
             let id = gui.new_esc_menu(painter, fades.as_ref(), EscPages { setup_screen: Some(setup), comparative_telemetry: Some(telemetry), time_table: Some(table) });
             gui.widget_events.truncate(heard);
+            gui.fired.truncate(fired);
             gui.add_root(painter, id);
             gui.sim.esc_menu = Some(id);
             hud.more.menus.pits = Some(id);
@@ -405,6 +419,11 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
         "menu.driveEnabled" => {
             let id = hud.more.menus.pits.ok_or("no ESC menu")?;
             gui.esc_menu_set_drive_button_enabled(id, number != 0.0);
+        }
+        "menu.chat" => {
+            let o = crate::gui_seq_menu::script().online;
+            let driver = o.net_cars.iter().find(|(sid, _)| *sid == number as i32 as u8).map(|(_, car)| hud.input.cars.get(*car).map_or(String::new(), |c| c.driver_name.clone()));
+            gui.chats_on_chat_message(number as i32 as u32, text, driver.as_deref());
         }
         "menu.raceControl" => {
             let id = hud.more.menus.pits.ok_or("no ESC menu")?;
@@ -439,6 +458,9 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
             rustyac_gui::menus::Menu::RaceControl(_) => "RaceControlScreen",
             rustyac_gui::menus::Menu::SpSession(_) => "RaceControlSPSession",
             rustyac_gui::menus::Menu::SessionInfo(_) => "RaceControlSessionInfo",
+            rustyac_gui::menus::Menu::SessionServer(_) => "RaceControlSessionServer",
+            rustyac_gui::menus::Menu::Voting(_) => "RaceControlVoting",
+            rustyac_gui::menus::Menu::AcChat(_) => "ACChat",
         },
         _ => "?",
     }

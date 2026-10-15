@@ -130,9 +130,17 @@ impl Gui {
 
     /// The widget's event: handed to its handlers, then remembered in [`Gui::widget_events`]
     /// (after what the handlers themselves set off, as a listener hung on last hears it).
-    pub fn fire_widget(&mut self, handlers: Vec<WidgetHandler>, event: WidgetEvent) {
+    /// A text input's events hand over a reference to its own text: each listener hears the text
+    /// as the ones before it left it (the chat's Enter empties it).
+    pub fn fire_widget(&mut self, handlers: Vec<WidgetHandler>, mut event: WidgetEvent) {
         for handler in handlers {
+            if let WidgetEvent::Text { control, text, .. } = &mut event {
+                text.clone_from(&self.controls[*control].text);
+            }
             handler(self, &event);
+        }
+        if let WidgetEvent::Text { control, text, .. } = &mut event {
+            text.clone_from(&self.controls[*control].text);
         }
         self.widget_events.push(event);
     }

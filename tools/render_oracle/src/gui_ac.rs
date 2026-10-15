@@ -421,21 +421,22 @@ impl Side<'_> {
                     other => return crate::gui_ac2::call(self.game, self.gui, object, other, *number, text),
                 }
             }
-            Op::MouseMove(x, y) => self.mouse(VA_GUI_ON_MOUSE_MOVE, *x, *y, -1, 0.0),
-            Op::MouseDown(x, y) => self.mouse(VA_GUI_ON_MOUSE_DOWN, *x, *y, 0, 0.0),
-            Op::MouseUp(x, y) => self.mouse(VA_GUI_ON_MOUSE_UP, *x, *y, 0, 0.0),
+            // (online the clicks and keys reach handlers that read `Sim::client`, as in the game)
+            Op::MouseMove(x, y) => crate::gui_ac_menu::online_input(|| self.mouse(VA_GUI_ON_MOUSE_MOVE, *x, *y, -1, 0.0)),
+            Op::MouseDown(x, y) => crate::gui_ac_menu::online_input(|| self.mouse(VA_GUI_ON_MOUSE_DOWN, *x, *y, 0, 0.0)),
+            Op::MouseUp(x, y) => crate::gui_ac_menu::online_input(|| self.mouse(VA_GUI_ON_MOUSE_UP, *x, *y, 0, 0.0)),
             Op::Wheel(x, y, delta) => self.mouse(VA_GUI_ON_MOUSE_WHEEL, *x, *y, -1, *delta),
             Op::KeyDown(code) => {
                 self.hook_all();
                 let event = acs.alloc(8);
                 wr(event, 0, *code);
                 let handler: extern "C" fn(*mut u8, *mut u8) = self.va(VA_GUI_ON_KEY_DOWN);
-                handler(self.gui, event);
+                crate::gui_ac_menu::online_input(|| handler(self.gui, event));
             }
             Op::KeyChar(code) => {
                 self.hook_all();
                 let handler: extern "C" fn(*mut u8, u32) = self.va(VA_GUI_ON_KEY_CHAR);
-                handler(self.gui, *code);
+                crate::gui_ac_menu::online_input(|| handler(self.gui, *code));
             }
             Op::Font(kind, scale, italic, bold) => {
                 let font = acs.alloc(0x20);
