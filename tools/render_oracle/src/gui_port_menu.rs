@@ -204,7 +204,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
     if crate::gui_seq_menu::menu_input(what, number, text) {
         return Ok(());
     }
-    if hud.message.is_none() {
+    if hud.message.is_none() && what != "menu.chat" {
         return Err("the HUD was not made".into());
     }
     sync(hud, gui);
@@ -422,9 +422,14 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
         }
         "menu.chat" => {
             let o = crate::gui_seq_menu::script().online;
-            let driver = o.net_cars.iter().find(|(sid, _)| *sid == number as i32 as u8).map(|(_, car)| hud.input.cars.get(*car).map_or(String::new(), |c| c.driver_name.clone()));
+            // (the Chat app's sequences make no HUD: the apps' drivers)
+            let driver = o.net_cars.iter().find(|(sid, _)| *sid == number as i32 as u8).map(|(_, car)| hud.input.cars.get(*car).map_or_else(|| crate::gui_seq_apps::driver_name(*car), |c| c.driver_name.clone()));
+            // (the Chat app's handler was hung up before the page's)
+            let guid = o.net_cars.iter().find(|(sid, _)| *sid == number as i32 as u8).map(|(_, car)| *car as i32);
+            gui.chat_apps_on_chat_message(number as i32 as u32, text, driver.as_deref().zip(guid));
             gui.chats_on_chat_message(number as i32 as u32, text, driver.as_deref());
         }
+        "menu.client" => {}
         "menu.raceControl" => {
             let id = hud.more.menus.pits.ok_or("no ESC menu")?;
             gui.esc_menu_set_race_control_screen(id);

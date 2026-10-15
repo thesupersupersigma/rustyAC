@@ -390,6 +390,11 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
         return Ok(());
     }
     let a = &game.acs;
+    if what == "menu.chat" && hud().is_none() {
+        // (the Chat app's sequences: no HUD, the apps' client)
+        crate::gui_ac_esc::chat_message(number as i32, text);
+        return Ok(());
+    }
     let h = hud().ok_or("the HUD was not made (Hud(\"create\", cars, \"\") first)")?;
     let sim = h.sim;
     if matches!(what, "menu.replay" | "menu.replayShow" | "menu.replaySet" | "menu.cameraIndex" | "menu.replaySaved") {
@@ -402,7 +407,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, what: &str, number: f32, text: &st
     if what.starts_with("menu.setup") || what == "menu.timeLaps" {
         return crate::gui_ac_setup::call(game, gui, h, what, number, text);
     }
-    if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl" | "menu.chat") {
+    if matches!(what, "menu.escMenu" | "menu.escShow" | "menu.driveEnabled" | "menu.raceControl" | "menu.chat" | "menu.client") {
         crate::gui_ac_race::install(game);
         crate::gui_ac_race::sync(h);
         install(game, sim);

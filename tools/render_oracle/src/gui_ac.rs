@@ -96,7 +96,13 @@ unsafe extern "C" fn click_recorder(this: *mut u8, event: *const u8) {
     EVENTS.lock().unwrap().push(format!("click \"{name}\" {x} {y}"));
 }
 
+/// The game's end: a destructor lets go of the oracle's handlers with its controls.
+pub static DESTROYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 unsafe extern "C" fn not_called() {
+    if DESTROYING.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     eprintln!("oracle: the game copied or destroyed the oracle's event handler");
     std::process::abort();
 }

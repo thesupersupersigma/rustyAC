@@ -582,6 +582,34 @@ pub fn link() -> AppLink {
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
 /// its pixels, and `data\map.ini`, byte for byte).
 pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
+    if name.starts_with("app_chat") {
+        // FormChat's export: Documents\Assetto Corsa\out\chat[_<time>].txt
+        let (game, port) = (args.root.join("documents/Assetto Corsa/out"), args.root.join("port_files/out"));
+        let list = |d: &std::path::Path| {
+            let mut v: Vec<String> = std::fs::read_dir(d).map(|r| r.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+            v.sort();
+            v
+        };
+        let (a, b) = (list(&game), list(&port));
+        if a != b {
+            println!("file out/: DIFFERENT\n  game: {a:?}\n  port: {b:?}");
+            return Ok(false);
+        }
+        if a.is_empty() {
+            println!("file out/: IDENTICAL (no export on either side)");
+        }
+        let mut same = true;
+        for f in a {
+            match (std::fs::read(game.join(&f)), std::fs::read(port.join(&f))) {
+                (Ok(x), Ok(y)) if x == y => println!("file out/{f}: IDENTICAL ({} bytes)", x.len()),
+                (x, y) => {
+                    same = false;
+                    println!("file out/{f}: DIFFERENT\n  game: {:?}\n  port: {:?}", x.map(|x| String::from_utf8_lossy(&x).into_owned()), y.map(|y| String::from_utf8_lossy(&y).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if name.starts_with("app_eyes") {
         let mut same = true;
         let docs = args.root.join("documents/Assetto Corsa/cfg");
@@ -758,6 +786,20 @@ pub fn prepare_root(args: &crate::Args, name: &str) -> Result<(), String> {
     }
     let cfg = args.root.join("system/cfg");
     std::fs::create_dir_all(&cfg).map_err(|e| e.to_string())?;
+    // FormChat's settings (Task 34): the shipped ones, or with the times shown, the export on,
+    // other fonts and colours; no export left from before
+    let shipped = std::fs::read_to_string(args.game.join("system/cfg/chat_app.ini")).map_err(|e| format!("chat_app.ini: {e}"))?;
+    let chat_ini = match name.split('@').next().unwrap_or(name) {
+        // (the same size as the shipped file: the root's copy is left alone)
+        "app_chat_export" => shipped.replace("SHOW_TIME=0", "SHOW_TIME=1").replace("EXPORT_ON_CLOSE=0", "EXPORT_ON_CLOSE=1").replace("OVERWRITE_EXPORT=0", "OVERWRITE_EXPORT=1").replace("BOLD=0", "BOLD=1").replace("ROW_COUNT=10", "ROW_COUNT=6").replace("FADE_MULT=5", "FADE_MULT=0.5").replace("PREFADE_MULT=10", "PREFADE_MULT=1").replace("SINGLE_ROW_W=300", "SINGLE_ROW_W=250"),
+        // (the same size as the shipped file: the root's copy is left alone)
+        "app_chat_online" => shipped.replace("EXPORT_ON_CLOSE=0", "EXPORT_ON_CLOSE=1").replace("ITALIC=0", "ITALIC=1").replace("BG_INTENSITY_MAIN=0.2", "TIME_TO_LOSE_FOCUS=02").replace("FORECOLOR_4=", "FORECOLOR_Y="),
+        _ => shipped,
+    };
+    std::fs::write(cfg.join("chat_app.ini"), chat_ini).map_err(|e| e.to_string())?;
+    // (an empty out folder, as the game's start leaves it: its wofstream makes no folders)
+    let _ = std::fs::remove_dir_all(args.root.join("documents/Assetto Corsa/out"));
+    std::fs::create_dir_all(args.root.join("documents/Assetto Corsa/out")).map_err(|e| e.to_string())?;
     std::fs::copy(args.game.join("system/cfg/tyres_app.ini"), cfg.join("tyres_app.ini")).map_err(|e| format!("tyres_app.ini: {e}"))?;
     let docs = args.root.join("documents/Assetto Corsa/cfg");
     std::fs::create_dir_all(&docs).map_err(|e| e.to_string())?;
@@ -849,10 +891,86 @@ PRESET=AI Debug
     Ok(())
 }
 
+/// FormChat's clock (`_localtime64`): the same moment for both sides.
+pub fn chat_clock() -> [i32; 6] {
+    [2024, 5, 17, 13, 4, 9]
+}
+
+/// The Chat app (Task 34): off line its typed lines echoed, scrolled, faded and brought back by
+/// the mouse; online (made up) the drivers', the server's and the player's lines, the player's
+/// sent; the export at the end.
+fn chat(o: &mut Vec<Op>, app: &str) {
+    let online = app == "app_chat_online";
+    if online {
+        o.push(hud("online", 1.0, ""));
+        for (sid, car) in [(3.0, "1"), (4.0, "2"), (7.0, "5"), (9.0, "6")] {
+            o.push(hud("menu.netCar", sid, car));
+        }
+        o.extend([hud("menu.env", 61_000.0, "now"), Op::Frame(DT)]);
+    }
+    o.push(hud("app.create", 1.0, ""));
+    o.push(Op::Frame(DT));
+    o.push(hud("app.new", 0.0, "chat"));
+    o.push(Op::Frame(DT));
+    o.push(hud("app.visible", 1.0, "chat"));
+    o.push(Op::Frame(DT));
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::MouseDown(x, y), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let typed = |o: &mut Vec<Op>, text: &str| {
+        for c in text.chars() {
+            o.push(Op::KeyChar(c as u32));
+        }
+        o.extend([Op::Frame(DT), Op::KeyChar(13), Op::Frame(DT)]);
+    };
+    // a click on the form gives the line the keys
+    click(o, 60, 80 + 40);
+    if online {
+        for (sid, text) in [(3.0, "hello everyone"), (255.0, "Welcome to the server, races every hour"), (4.0, "gl hf"), (9.0, "a rather long line from the driver of car six that wraps twice over the rows"), (7.0, "colour"), (11.0, "nobody's session")] {
+            o.extend([hud("menu.chat", sid, text), Op::Frame(DT)]);
+        }
+        typed(o, "hi all");
+        // too soon after: kept (the game sends nothing)
+        typed(o, "again");
+        o.extend([hud("menu.env", 63_000.0, "now"), Op::KeyChar(13), Op::Frame(DT)]);
+        for i in 0..14 {
+            o.push(hud("menu.chat", [3.0, 4.0, 7.0, 9.0, 255.0][i % 5], leak(format!("line {i} of the chat"))));
+        }
+        o.push(Op::Frame(DT));
+    } else {
+        for text in ["hello", "  a line with blanks around  ", "a long line of more than forty two characters to be cut in two", "nospacesinthislineatallsoitiscutatthewidthofrowsandagain", "", "   ", "last"] {
+            typed(o, text);
+        }
+        for i in 0..12 {
+            typed(o, leak(format!("row {i}")));
+        }
+    }
+    // the scroll buttons (top, up, a page up, a page down, down, bottom) on the right edge
+    let w = if app == "app_chat_export" { 250 + 70 + 17 } else { 300 + 17 };
+    let rows = if app == "app_chat_export" { 6 } else { 10 };
+    let x = w - 8;
+    let top = 80 + 22;
+    let h = top + rows * 17 + 17;
+    for y in [top + 8, top + 17 + 8, top + 34 + 8, h - 51 - 8, h - 51 + 8, h - 34 + 8, top + 8, top + 8, h - 34 + 8] {
+        click(o, x, y);
+    }
+    // the input loses the keys; the lines fade; the mouse over the form brings them back
+    for _ in 0..34 {
+        o.push(Op::Frame(0.5));
+    }
+    o.extend([Op::MouseMove(100, top + 30), Op::Frame(DT), Op::Frame(DT), Op::MouseMove(700, 500), Op::Frame(DT)]);
+    for _ in 0..30 {
+        o.push(Op::Frame(0.5));
+    }
+    o.extend([Op::Save, hud("app.shutdown", 0.0, "chat")]);
+}
+
 pub fn sequence(name: &str) -> Option<Vec<Op>> {
     let mut o = Vec::new();
     let (app, rest) = name.split_once('@').unwrap_or((name, ""));
     match app {
+        "app_chat" | "app_chat_export" | "app_chat_online" => {
+            let _ = rest;
+            chat(&mut o, app);
+        }
         "app_laps" | "app_position" | "app_essentials" | "app_delta" | "app_realtime" | "app_delta_sectors" => {
             // (Task 33: the delta with its micro-sectors)
             if app == "app_delta_sectors" {

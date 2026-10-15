@@ -141,6 +141,47 @@ unsafe extern "C" fn send_chat(this: *mut u8, text: *const u8) {
     wr(this, 0x420, rd::<f64>(rd::<*mut u8>(this, 0x8), 0x18));
 }
 
+/// The stand-in `ACClient` once [`online_client`] made it (else null).
+pub fn client() -> *mut u8 {
+    CLIENT.load(Ordering::SeqCst) as *mut u8
+}
+
+/// The Chat app's sequences (Task 34): an `ACClient` of its own beside the apps' `Sim`, its
+/// `game` a block whose clock (+0x18) is the script's; `netCars` with the apps' drivers.
+pub unsafe fn apps_client(game: &Game, sim: *mut u8) {
+    if CLIENT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let a = acs();
+    jump(game, VA_CLIENT_SEND_CHAT, send_chat as *const () as usize);
+    let client = a.alloc(0x11000);
+    wr(client, 0x8, a.alloc(0x100));
+    wr(client, 0x400, a.alloc(0x90));
+    wr(client, 0x3f0, sim);
+    let cars = script().online.net_cars;
+    let list = a.alloc(8 * cars.len().max(1));
+    for (k, (sid, car)) in cars.iter().enumerate() {
+        let net = a.alloc(0x1600);
+        wr(net, 0x78, *sid);
+        crate::ac::write_wstring(a, net.add(0x80), &crate::gui_seq_apps::driver_name(*car));
+        wr(net, 0x10c, *car as i32);
+        wr(list, 8 * k, net);
+    }
+    wr(client, 0x448, list);
+    wr(client, 0x450, list.add(8 * cars.len()));
+    wr(client, 0x458, list.add(8 * cars.len()));
+    CLIENT.store(client as usize, Ordering::SeqCst);
+    apps_client_sync();
+}
+
+/// The script's clock where the Chat app's client reads it.
+pub unsafe fn apps_client_sync() {
+    let client = client();
+    if !client.is_null() {
+        wr(rd::<*mut u8>(client, 0x8), 0x18, script().esc.game_time);
+    }
+}
+
 /// Online (Task 34): the HUD's stand-in `ACClient` grows to the size of the real one, with a
 /// voting manager.
 pub unsafe fn online_client(game: &Game, h: &mut HudGame) {
@@ -221,6 +262,7 @@ pub unsafe fn chat_message(session: i32, text: &str) {
     crate::ac::write_wstring(acs(), ev.add(8), text);
     let (begin, end) = (rd::<usize>(client, 0x58), rd::<usize>(client, 0x60));
     let sim: *mut u8 = rd(client, 0x3f0);
+    let before: usize = rd(sim, 0x1c8);
     wr(sim, 0x1c8, client);
     let mut at = begin;
     while at < end {
@@ -230,7 +272,7 @@ pub unsafe fn chat_message(session: i32, text: &str) {
         call(implementation, ev);
         at += 0x28;
     }
-    wr(sim, 0x1c8, 0usize);
+    wr(sim, 0x1c8, before);
 }
 
 static SUN: AtomicUsize = AtomicUsize::new(0);
@@ -368,6 +410,8 @@ pub unsafe fn call(game: &Game, gui: *mut u8, h: &mut HudGame, what: &str, numbe
             set(menu(), number != 0.0);
         }
         "menu.chat" => chat_message(number as i32, _text),
+        // (the client without the ESC menu: the Chat app's sequences)
+        "menu.client" => online_client(game, h),
         "menu.raceControl" => {
             let set: extern "C" fn(*mut u8) = std::mem::transmute(a.va(VA_ESC_MENU_SET_RACE_CONTROL_SCREEN));
             set(menu());

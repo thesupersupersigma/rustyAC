@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 31] = [
+pub const APPS: [(&str, usize, usize, usize); 32] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -51,6 +51,7 @@ pub const APPS: [(&str, usize, usize, usize); 31] = [
     ("position", 0x200, 0x1_402f_e0f0, 0x1_4050_7100),
     ("essentials", 0x2a0, 0x1_4031_bc60, 0x1_4050_c430),
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
+    ("chat", 0x3e0, 0x1_4030_8190, 0x1_4050_8ca0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 const TAKES_CAR: [&str; 13] = ["carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
@@ -675,6 +676,15 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "telemetry" {
                 telemetry_car(a, first_car);
             }
+            if text == "chat" {
+                // FormChat (Task 34): the clock it stamps the lines with, the script's; online
+                // `Sim::client` the HUD's stand-in client (its handler of evOnChatMessage)
+                chat_clock(game);
+                if !crate::gui_seq_menu::script().online.net_cars.is_empty() {
+                    crate::gui_ac_esc::apps_client(game, sim);
+                }
+                wr(sim, 0x1c8, crate::gui_ac_esc::client());
+            }
             if text == "tyredebug" {
                 tyre_debug_car(a, sim);
             }
@@ -724,6 +734,12 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 g.made.push((text.to_string(), form as usize));
             }
         }
+        "app.shutdown" if text == "chat" => {
+            // ~FormChat 0x14030a2c0: its export (the game's end)
+            let destroy: extern "C" fn(*mut u8) = std::mem::transmute(a.va(0x1_4030_a2c0));
+            crate::gui_ac::DESTROYING.store(true, std::sync::atomic::Ordering::SeqCst);
+            destroy(app("chat")?);
+        }
         "app.shutdown" => {
             // ~ACDriverPerformance's saveDriverRecords 0x140306df0 (the game's end)
             let save: extern "C" fn(*mut u8) -> bool = std::mem::transmute(a.va(0x1_4030_6df0));
@@ -739,10 +755,33 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
     Ok(())
 }
 
+/// FormChat's `_time64` / `_localtime64` (their import slots 0x1404a4a90 / 0x1404a4a88): the
+/// script's clock, the same the port's chat app reads.
+unsafe fn chat_clock(game: &Game) {
+    unsafe extern "C" fn time64(out: *mut i64) -> i64 {
+        if !out.is_null() {
+            *out = 1;
+        }
+        1
+    }
+    unsafe extern "C" fn localtime64(_t: *const i64) -> *mut i32 {
+        static mut TM: [i32; 9] = [0; 9];
+        let c = crate::gui_seq_apps::chat_clock();
+        let tm = std::ptr::addr_of_mut!(TM) as *mut i32;
+        for (k, v) in [c[5], c[4], c[3], c[2], c[1] - 1, c[0] - 1900, 0, 0, 0].into_iter().enumerate() {
+            *tm.add(k) = v;
+        }
+        tm
+    }
+    game.acs.patch(game.acs.va(0x1_404a_4a90), &(time64 as *const () as usize).to_le_bytes());
+    game.acs.patch(game.acs.va(0x1_404a_4a88), &(localtime64 as *const () as usize).to_le_bytes());
+}
+
 /// The session's state where the game's apps read it themselves: every car's
 /// `physicsState`, `Sim::focusedCarIndex`, `Sim::connectedCarsCount`, the replay manager's
 /// "in replay", the game's clock.
 pub unsafe fn update() {
+    crate::gui_ac_esc::apps_client_sync();
     let guard = GAME.lock().unwrap();
     let Some(g) = guard.as_ref() else { return };
     let l = link();
