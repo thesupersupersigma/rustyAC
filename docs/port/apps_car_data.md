@@ -10,9 +10,10 @@
   (table 3). TyreTesterForm, ACSuspension and FormWings are not started (see "Not done").
 - Items 4, 5, 6: not started (the time budget ran out; see "Not done"). Next: TyreTesterForm, then
   item 4's console variables, item 5's GPU profiler, item 6's PerformanceMeter readers.
-- End checks: `sh re/scratch/task33b/end_all.sh` (v0.33.0 built into `tgt_old` from a worktree, then
-  `end_a.sh`: clippy four ways, `--locked` builds, tests, tools, physics dumps, multiplayer tapes; then
-  `end_b.sh`: every GUI sequence of Tasks 29-33b). Results in `re/scratch/task33b/end/`.
+- End checks: **all pass** (table 4). `sh re/scratch/task33b/end_all.sh` builds v0.33.0 into `tgt_old`
+  from a worktree, then runs `end_a.sh` (clippy four ways, `--locked` builds, tests, tools, physics dumps,
+  multiplayer tapes) and `end_b.sh` (every GUI sequence of Tasks 29-33b). Results are in
+  `re/scratch/task33b/end/`. `tgt_old`, `tgt` and the state dumps were deleted afterwards.
 - GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
 - Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
   results in `re/scratch/task33b/scene_result.txt`.
@@ -204,6 +205,17 @@ front spring is zero for 60 frames (the heave spring's numbers), then the rear o
 | `app_carengineer` | the front heave spring standing in, a zero rear spring (`1.$`), springs, dampers and masses through `%g`'s shapes (`1.23457e+006`); hidden and shown | 428 | identical | identical | identical |
 | `app_setupdebug` | negative and fractional values through the four-decimal floor, three wings, six gears; the focus to car 2 at frame 900; hidden and shown | 428 | identical | identical | identical |
 
+Table 4, the end checks (against v0.33.0, built from a worktree):
+
+| Check | Result |
+|---|---|
+| clippy `-D warnings --all-targets`, native, CI's line, wasm32-unknown-unknown, wasm32-wasip1 | clean |
+| `cargo build --release --locked`, the web build, the 8 tools `--locked` | pass |
+| tests | 60 suites, 303 passed, 0 failed (Task 33: 298; the 5 new ones are the formatter and app tests) |
+| physics dumps `served`, `spa`, `missed`, `practice` | byte-identical to v0.33.0 (09953746b56c9a6d, 4238c5617a2e49ce, 8c2fe6e41d7e4dee, a21587be85a4a9ba), the same state hash with 0 and 8 workers |
+| multiplayer tapes, four ways | 20 of 20. In the batch run, 4 tapes failed only the gateway way, after 0 s with "No port free for both TCP and UDP on 127.0.0.1" (local ports still held by the run before). Rerun alone, all 4 were identical four ways |
+| GUI sequences of Tasks 29-33b (`end_b.sh`) | 103 of 103 identical: command log, pixels, state and events, every frame |
+
 ## Pictures
 
 Taken on the user's graphics card with `rustyac.exe --screenshot`.
@@ -216,7 +228,7 @@ Taken on the user's graphics card with `rustyac.exe --screenshot`.
 ## Disk space
 
 - Start: 39 GB free.
-- End: (filled in at the end).
+- End: 36 GB free, after deleting `tgt_old` (249 MB), `tgt` (644 MB) and the oracle's state dumps (3.8 GB; the result texts are kept). The scratch folder is now 52 MB; the 3 GB gap to the start is build output in the repo's own `target/` folders.
 
 ## Console variables
 
