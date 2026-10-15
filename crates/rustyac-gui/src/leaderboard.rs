@@ -461,6 +461,7 @@ impl Gui {
         for id in self.sim.leaderboards.clone() {
             self.leaderboard_mut(id).session_id = current;
         }
+        self.votings_on_new_session();
     }
 
     /// `ACStandardLeaderboard::setLastSession` 0x1402d6990.

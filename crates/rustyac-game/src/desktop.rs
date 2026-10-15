@@ -1810,7 +1810,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                     // (nobody listens yet: the drag race and the pit crew's lollipop man;
                     // the camera a driver chose in the last session is not kept)
                     SimAction::DriveMenuPressed | SimAction::LoadPreviousSessionUserCamera => {}
-                    SimAction::AddMessage { .. } => {}
+                    SimAction::AddMessage { .. } | SimAction::SendChat(_) => {}
                     // the replay bar's buttons, its time line and its save box
                     SimAction::Replay(asked) => {
                         if let Some(rig) = &rig {

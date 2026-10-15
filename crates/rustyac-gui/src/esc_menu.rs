@@ -21,8 +21,8 @@
 //! Not ported: the pages "Setup" (`SetupScreen`), "Telemetry" (`ComparativeTelemetry`) and
 //! "Time table" (`EscMenuTimeTable`): whoever makes the menu hands it a control for each (the
 //! game's own stand where they are), or none, and then the page's button is drawn as a button
-//! that cannot be used and hears no click. Of an online session's "Race control" only the
-//! session's panel and the table are made (no server panel, no votes, no chat).
+//! that cannot be used and hears no click. An online session's "Race control" has the
+//! server's panel, the votes and the chat of `race_control_online` (Task 34).
 
 use std::rc::Rc;
 
@@ -75,6 +75,8 @@ pub struct RaceControlScreen {
     pub title_font: usize,
     pub leaderboard: Id,
     pub session_info: Id,
+    /// online: `RaceControlVoting` (the server's panel and the chat are children only)
+    pub voting: Option<Id>,
 }
 
 /// `RaceControlSPSession`'s own members.
@@ -543,6 +545,7 @@ impl Gui {
         self.control_add_control(id, session_info);
         let leaderboard;
         let table_height;
+        let mut voting = None;
         if !self.sim.online {
             let sp = self.new_sp_session(painter);
             let bottom = self.controls[session_info].rect.bottom;
@@ -558,6 +561,28 @@ impl Gui {
             leaderboard = self.new_leaderboard(painter, rows, false);
             table_height = rows as f32 * 30.5 + 20.0;
         } else {
+            let server = self.new_session_server(painter);
+            let bottom = self.controls[session_info].rect.bottom;
+            self.set_position(server, 20.0, bottom + 15.0);
+            self.set_size(server, 290.0, 325.0);
+            self.controls[server].draw_background = false;
+            self.controls[server].draw_border = false;
+            self.control_add_control(id, server);
+            let v = self.new_race_control_voting(painter);
+            let bottom = self.controls[server].rect.bottom;
+            self.set_position(v, 20.0, bottom + 15.0);
+            self.set_size(v, 290.0, 175.0);
+            self.controls[v].back_color = [0.12, 0.12, 0.12, 0.8];
+            self.controls[v].draw_border = false;
+            self.control_add_control(id, v);
+            voting = Some(v);
+            let chat = self.new_ac_chat(painter);
+            self.set_position(chat, 325.0, 425.0);
+            let h = self.controls[v].rect.bottom - self.controls[chat].rect.top;
+            self.set_size(chat, 780.0, h);
+            self.controls[chat].back_color = [0.12, 0.12, 0.12, 0.8];
+            self.controls[chat].draw_border = false;
+            self.control_add_control(id, chat);
             leaderboard = self.new_leaderboard(painter, 10, false);
             table_height = 325.0;
         }
@@ -567,7 +592,7 @@ impl Gui {
         self.control_add_control(id, leaderboard);
         self.fonts.push(Font::new(painter, "", FontType::Monospaced, 25.0, true, true));
         let title_font = self.fonts.len() - 1;
-        self.controls[id].kind = Kind::Menu(Box::new(Menu::RaceControl(RaceControlScreen { title_font, leaderboard, session_info })));
+        self.controls[id].kind = Kind::Menu(Box::new(Menu::RaceControl(RaceControlScreen { title_font, leaderboard, session_info, voting })));
         id
     }
 
@@ -621,6 +646,11 @@ impl Gui {
             self.fonts[title_font].blit_string(painter, x0 + 145.0, y0, &out, 1.0, ALIGN_CENTER);
             x0 = x0 + 308.0;
             i += 1;
+        }
+        // online: no votes in the last 30 seconds of a practice or a qualifying
+        if let Some(voting) = self.race_control(id).voting {
+            let show = if self.sim.session_type == SESSION_RACE { true } else { self.sim.session_time_left > 30000.0 };
+            self.set_visible(voting, show);
         }
     }
 

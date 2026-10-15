@@ -76,6 +76,8 @@ pub enum SimAction {
     SetControlsLock(bool),
     /// `SystemMessage::addMessage(title, text, eDefault)` 0x1401b61c0
     AddMessage { title: String, text: String },
+    /// `ACClient::sendChat` 0x140052a90 (the chat's line, as it was written)
+    SendChat(String),
     /// `RaceManager::startRace` 0x140141470 (the wait before the start, in ms)
     StartRace(f32),
     /// `Sim::focusedCarIndex = 0` (the member is written, no function is called)
@@ -169,6 +171,8 @@ pub struct SimLink {
     pub time: crate::time_table::TimeLink,
     /// what the ESC menu's page "Telemetry" reads (Task 33)
     pub telemetry: crate::comparative_telemetry::TelemetryLink,
+    /// what the online pages read of `ACClient` (Task 34)
+    pub online_link: crate::race_control_online::OnlineLink,
 }
 
 /// `PauseMenu`'s own members.
@@ -187,6 +191,9 @@ pub enum Menu {
     Esc(Box<crate::esc_menu::EscMenu>),
     RaceControl(crate::esc_menu::RaceControlScreen),
     SpSession(crate::esc_menu::SpSession),
+    SessionServer(crate::race_control_online::SessionServer),
+    Voting(crate::race_control_online::Voting),
+    AcChat(Box<crate::race_control_online::AcChat>),
     SessionInfo(Box<crate::esc_menu::SessionInfo>),
     Replay(Box<crate::replay_interface::ReplayInterface>),
     SetupScreen(Box<crate::setup_screen::SetupScreen>),
@@ -481,6 +488,9 @@ impl Gui {
                 Menu::Esc(_) => self.esc_menu_render(id, dt, painter),
                 Menu::RaceControl(_) => self.race_control_render(id, dt, painter),
                 Menu::SpSession(_) => self.sp_session_render(id, dt, painter),
+                Menu::SessionServer(_) => self.session_server_render(id, dt, painter),
+                Menu::Voting(_) => self.voting_render(id, dt, painter),
+                Menu::AcChat(_) => self.ac_chat_render(id, dt, painter),
                 Menu::SessionInfo(_) => self.session_info_render(id, dt, painter),
                 Menu::Replay(_) => self.replay_render(id, dt, painter),
                 Menu::SetupScreen(_) => self.setup_screen_render(id, dt, painter),
