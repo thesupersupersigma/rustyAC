@@ -83,6 +83,8 @@ Number of installed items (cars + tracks) whose CSP config uses each family, by 
 | Real / smart mirrors, local cubemaps, reflections | 7 | 2 | Smart Mirror, Reflections FX | [`rendering.md`](rendering.md) |
 | Fake shadows, shadowed driver | 3 | 2 | Fake shadows | [`rendering.md`](rendering.md) |
 
+RainFX has a second source: the DLL embeds 100 per-track `[RAIN_FX]` configs, and the rendering brief counts 19 of the 26 installed tracks as covered by them (`rendering_config.md`), so the RainFX row understates the tracks that get wet-road visuals.
+
 All of these degrade gracefully in plain AC (unknown sections are ignored) and in rustyAC today;
 the cost of not having CSP is **look only**.
 

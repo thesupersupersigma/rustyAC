@@ -129,6 +129,6 @@ guess for a Rust rewrite; the reasons are in each file's section 7. The proof co
 | Audio | [`audio.md`](audio.md) | ~50 / ~6 + 97 FMOD names | 6 banks, 23 MB | M front end, L car audio | done |
 | Input and FFB | [`input_ffb.md`](input_ffb.md) | ~36 / ~4 | gamepad / FFB / mouse Lua kinds (3 SDK modules) | M (S slice matters on this PC) | done |
 | VR and screens | [`vr_screens.md`](vr_screens.md) | 26 / 6 | `vr_tweaks.ini`, OpenVR + OpenXR | XL VR, M triple screen | done |
-| Misc (AI, race logic, replay, pits, session; config, sim, camera, shared memory, Steam, Python bridge) | [`misc.md`](misc.md) + [AI / race](misc_ai_race.md), [core](misc_core.md) | ~118 / ~40 and ~134 / ~200 (many are CSP's own type names) | 10 new-mode Lua kinds | M-L | done |
+| Misc (AI, race logic, replay, pits, session; config, sim, camera, shared memory, Steam, Python bridge) | [`misc.md`](misc.md) + [AI / race](misc_ai_race.md), [core](misc_core.md) | ~118 / ~40 and ~134 / ~200 (many are CSP's own type names) | 11 shipped new-mode folders | M-L | done |
 | Content needs | [`content_needs.md`](content_needs.md) | | 204 cars, 26 tracks scanned | | done |
 | Plan | [`plan.md`](plan.md) | | 20 tasks | | done |
