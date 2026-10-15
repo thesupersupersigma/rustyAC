@@ -13,6 +13,7 @@ State after the last commit (update after every commit):
   TyreTesterForm, TyreWearingDebug, SetupDebug, GPUProfilerApp, DigitalPanels and the three
   display items (see "Not done"). Their reader briefs are in `re/scratch/task33/*.md`
   (git-ignored).
+- **Version:** v0.33.0, all end checks passed (see "Results").
 - **End checks:** `sh re/scratch/task33/end_b.sh` (every oracle sequence of Tasks 29 to 33,
   results in `re/scratch/task33/end/`), `sh re/scratch/task33/end_a.sh` (clippy, `--locked`
   builds and tests, tools, physics dumps against v0.32.0 in `re/scratch/task33/tgt_old`, the
@@ -197,7 +198,68 @@ physics step: `car_oracle multi --scenario rc_race --track magione --steps 11200
 
 ## Results
 
-RESULTS_PLACEHOLDER
+Final run of every sequence of this task on the final code (`re/scratch/task33/end/task33.txt`):
+
+| Sequence | Frames | Command log | Pixels | State and events | Files |
+|---|---|---|---|---|---|
+| esc_telemetry | 49 | IDENTICAL | IDENTICAL | IDENTICAL (9861 lines, 58 events) | - |
+| app_delta_sectors | 613 | IDENTICAL | IDENTICAL | IDENTICAL (15332 lines, 7 events) | layout 0: IDENTICAL (349 bytes) |
+| console | 67 | IDENTICAL | IDENTICAL | IDENTICAL (3618 lines, 0 events) | the game's objects the console set (fov, maxLayer, the eye point, ffMult): IDENTICAL (474 bytes); content/cars/ks_ferrari_f2004/data/car.ini: IDENTICAL (1547 bytes) |
+| app_stats | 280 | IDENTICAL | IDENTICAL | IDENTICAL (11765 lines, 5 events) | layout 0: IDENTICAL (635 bytes) |
+| app_driverperf | 1802 | IDENTICAL | IDENTICAL | IDENTICAL (43248 lines, 0 events) | layout 0: IDENTICAL (716 bytes); savedData/driverPerformances/magione/ks_ferrari_f2004.ini: IDENTICAL (1035 bytes) |
+| app_sustelemetry | 554 | IDENTICAL | IDENTICAL | IDENTICAL (11640 lines, 6 events) | layout 0: IDENTICAL (361 bytes) |
+| esc_menu#it | 61 | IDENTICAL | IDENTICAL | IDENTICAL (9133 lines, 41 events) | - |
+| pause_menu#de | 88 | IDENTICAL | IDENTICAL | IDENTICAL (4834 lines, 26 events) | - |
+| hud_messages#it | 90 | IDENTICAL | IDENTICAL | IDENTICAL (4860 lines, 0 events) | - |
+| app_essentials#it | 613 | IDENTICAL | IDENTICAL | IDENTICAL (20235 lines, 6 events) | layout 0: IDENTICAL (361 bytes) |
+| app_tyres#de | 554 | IDENTICAL | IDENTICAL | IDENTICAL (33247 lines, 7 events) | layout 0: IDENTICAL (345 bytes) |
+| app_volumes#it | 414 | IDENTICAL | IDENTICAL | IDENTICAL (49041 lines, 188 events) | layout 0: IDENTICAL (355 bytes); cfg/audio.ini: IDENTICAL (209 bytes); cfg/camera_manager.ini: IDENTICAL (47 bytes); the sound's settings (master level calls, every car's mix, the views' sounds): IDENTICAL (12013 bytes) |
+| app_ffb@short#de | 131 | IDENTICAL | IDENTICAL | IDENTICAL (8567 lines, 183 events) | layout 0: IDENTICAL (339 bytes); cfg/controls.ini: IDENTICAL (129 bytes); content/cars/ks_ferrari_f2004/data/car.ini: IDENTICAL (1544 bytes); the force feedback's settings (the gains, the FF mult, the wheel's effects, the messages): IDENTICAL (4919 bytes) |
+| setup_tabs#it | 1898 | IDENTICAL | IDENTICAL | IDENTICAL (1818584 lines, 5863 events) | - |
+| setup_io#de | 179 | IDENTICAL | IDENTICAL | IDENTICAL (172250 lines, 1273 events) | - |
+| esc_menu_race#de | 65 | IDENTICAL | IDENTICAL | IDENTICAL (9733 lines, 41 events) | - |
+| tab_12#it | 18 | IDENTICAL | IDENTICAL | IDENTICAL (2296 lines, 10 events) | - |
+| end_race_12#de | 36 | IDENTICAL | IDENTICAL | IDENTICAL (4752 lines, 24 events) | - |
+
+The PerformanceMeter in the car oracle (`CAR_ORACLE_PERF_METER=1 car_oracle multi --scenario rc_race
+--track magione --steps 112000 --threads 0`): **IDENTICAL** in all 112,000 steps (141,568,000 values,
+the meter's three columns among them); the meter moved in 89,150 steps (up to 46.0 s and 82.8 m/s
+in size), so the comparison is not one of zeros.
+
+The earlier GUI sequences on the final oracle (`re/scratch/task33/end_b.sh`, `end_b2.sh`, `end_b3.sh`):
+
+| Task | Sequences | Result |
+|---|---|---|
+| Task 32 (apps) | 22 | all identical (files and effects too) |
+| Task 30 (menus) | 38 | all identical |
+| Task 29 (GUI, HUD) | 14 | all identical |
+| Task 31 (setup editor) | 5 | all identical |
+
+Unchanged elsewhere (`re/scratch/task33/end_a.sh`):
+
+| Check | Result |
+|---|---|
+| clippy `--workspace --all-targets -D warnings` | clean |
+| clippy CI line | clean |
+| clippy wasm32-unknown-unknown | clean |
+| clippy wasm32-wasip1 | clean |
+| `cargo build --release --workspace --locked` | builds |
+| `cargo test --release --workspace --locked` | 60 suites, 298 passed, 0 failed |
+| web build (`python web/build.py`) | built |
+| tool audio_oracle `--locked` | builds |
+| tool car_oracle `--locked` | builds |
+| tool chassis_compare `--locked` | builds |
+| tool math_proof `--locked` | builds |
+| tool ode_oracle `--locked` | builds |
+| tool sctm_oracle `--locked` | builds |
+| tool tyre_oracle `--locked` | builds |
+| tool web_pack `--locked` | builds |
+| physics dump served.ryin | v0.32.0 09953746b56c9a6d, now 09953746b56c9a6d; state hash bebb73dd826046ac (0 workers), state hash bebb73dd826046ac (8 workers) |
+| physics dump spa.ryin | v0.32.0 4238c5617a2e49ce, now 4238c5617a2e49ce; state hash b4c7538a6fa7289c (0 workers), state hash b4c7538a6fa7289c (8 workers) |
+| physics dump missed.ryin | v0.32.0 8c2fe6e41d7e4dee, now 8c2fe6e41d7e4dee; state hash a528aca4ee0fa29d (0 workers), state hash a528aca4ee0fa29d (8 workers) |
+| physics dump practice.ryin | v0.32.0 a21587be85a4a9ba, now a21587be85a4a9ba; state hash 889a180a3ae928bf (0 workers), state hash 889a180a3ae928bf (8 workers) |
+| multiplayer tapes (desktop, desktop-browser, desktop-gateway, wasm) | 20 of 20 tapes: all four ways identical |
+
 
 ## The console
 
@@ -258,7 +320,7 @@ No picture of a digital panel: the panels are not done.
 
 ## Disk space
 
-DISK_PLACEHOLDER
+57 GB free at the start; 41 GB free at the end. This task's scratch folder holds 39 MB (the v0.32.0 build, its worktree, the scratch build target and the oracle pictures are deleted). The drop of 15 GB fell mostly in a pause in which other work ran on the PC (42 GB free when the task went on); the rest is the repository's own `target` folder, which grew with this task's builds (clippy for the two wasm targets, the tools).
 
 ## Not done
 
