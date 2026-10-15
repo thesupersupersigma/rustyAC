@@ -17,7 +17,12 @@ State after the last commit (update after every commit):
   `app_chat_export` (times shown, export with a time stamp in its name), `app_chat_online`
   (drivers', server's and player's lines; `out/chat.txt`), every frame identical and the exports
   byte-identical. In the game it is made after Essentials and writes into rustyAC's `out`.
-- **Next, in the task's order:** the server's fixed setup (TCP 0x52), the pit strategy page and `.sp` files, the
+- **Done and proven in the render oracle:** the server's fixed setup (TCP 0x52):
+  `setup_server@bmw_z4_gt3` (1036 frames) and `setup_server1@bmw_z4_gt3` (75) run the game's own
+  `ACClient::onSetupReceived` on a made-up packet, every frame identical, `server_temp.ini`
+  byte-identical, the named spinners read-only on both sides. The Setup page is made online
+  too; the file goes into rustyAC's own `setups` folder.
+- **Next, in the task's order:** the pit strategy page and `.sp` files, the
   camera at the start and F7, Ctrl+M, the old mouse pit menu; then the live run against a local
   acServer copy and the end checks.
 - **Code:** `crates/rustyac-gui/src/race_control_online.rs` (panels, `OnlineLink`,
