@@ -7,14 +7,49 @@
 - Item 2 (FormTelemetry): **done.** The app, its presets and `cfg/telemetry_user.ini`, in the GUI
   oracle (table 2) and in rustyac.exe (the physics thread records the channels while the app is shown).
 - Item 3 (car-data apps): TyreWearingDebug, SetupDebug, CarPhysicsForm and ACDCarEngineer **done**
-  (table 3). Next: TyreTesterForm, then the 3D ones (ACSuspension, FormWings).
+  (table 3). TyreTesterForm, ACSuspension and FormWings are not started (see "Not done").
+- Items 4, 5, 6: not started (the time budget ran out; see "Not done"). Next: TyreTesterForm, then
+  item 4's console variables, item 5's GPU profiler, item 6's PerformanceMeter readers.
+- End checks: `sh re/scratch/task33b/end_all.sh` (v0.33.0 built into `tgt_old` from a worktree, then
+  `end_a.sh`: clippy four ways, `--locked` builds, tests, tools, physics dumps, multiplayer tapes; then
+  `end_b.sh`: every GUI sequence of Tasks 29-33b). Results in `re/scratch/task33b/end/`.
 - GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
 - Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
   results in `re/scratch/task33b/scene_result.txt`.
 
 ## In plain English
 
-(Filled in at the end.)
+The dashboards' screens were already drawn like the game's since Task 22; the one kind of screen item
+no test had reached, the lap-delta bar, is now checked against the game's own code, and it matches.
+
+Five of the game's developer apps are now in rustyAC and match the game pixel for pixel: the
+**Telemetry** app (four live graphs, each of any of about a hundred channels of the car: tyre loads,
+slip angles, temperatures, engine, clutch, ERS, force feedback, with the game's presets and the last
+preset remembered), **Tyre debug** (tyre wear and temperature), **Setup debug** (a long text dump of the
+car's state and setup), **Car physics** (35 numbers of the car and a force-feedback graph) and **Car
+engineer** (masses, ride frequencies and damping ratios). They work in rustyac.exe with the real car's
+numbers; twenty of the Telemetry channels (eight kinds) have no counterpart in rustyAC yet and show 0.
+
+Two small formatting slips that the new apps showed up were fixed for every app: how the game writes
+"not a number" and "infinity" when it rounds them.
+
+The time ran out before the tyre tester, the 3D suspension and wing apps, the console variables, the
+GPU profiler and the other readers of the lap-delta meter: they are listed under "Not done".
+
+## The apps
+
+| App | Game class | Status |
+|---|---|---|
+| Telemetry | `FormTelemetry` | **ported**, proven (table 2), live in rustyac.exe |
+| Tyre debug | `TyreWearingDebug` | **ported**, proven (table 3), live |
+| Setup debug | `SetupDebug` | **ported**, proven (table 3), live |
+| Car physics | `CarPhysicsForm` | **ported**, proven (table 3), live |
+| Car engineer | `ACDCarEngineer` | **ported**, proven (table 3), live |
+| Tyre tester | `TyreTesterForm` (+ `TyreTester`) | not done |
+| Suspension | `ACSuspension` (3D wireframe) | not done |
+| Wings | `FormWings` (3D outlines) | not done |
+| GPU profiler | `GPUProfilerApp` | not done |
+| Dashboard panels | `DigitalPanels`, `RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX` | ported in Task 22, all four now proven (table 1) |
 
 ## Which cars have digital panels and the three items
 
@@ -116,6 +151,8 @@ channel were not compared with the game's car (the oracle feeds both sides the s
   game's text when the fuel evaluator has no litres yet: 0 / 0). It wrote `-1.#IND` at every precision.
 
 
+## How it is proven
+
 Item 1: scene sequences of the render oracle (`render_oracle compare`): the game's own car objects and
 the port's draw the same car on WARP, the command logs and the pixels compared every frame.
 
@@ -181,10 +218,40 @@ Taken on the user's graphics card with `rustyac.exe --screenshot`.
 - Start: 39 GB free.
 - End: (filled in at the end).
 
+## Console variables
+
+Unchanged from Task 33 (the table in `docs/port/apps_telemetry.md`): item 4 was not reached, so
+`aiLookAhead`, `aiPush`, `aiSteerGain`, the head values, the analog-instrument calibration,
+`observe*`, `bodyDamageLevel0..4` / `engineDamageLevel` / `debugDamage`, the free camera's, `exposure`,
+`minExposure` and the HDR levels are still registered and echoed as in the game with no effect;
+`aiLookAheadSpeed`, `TURBO_STEP` and `TURBO_ZERO` do nothing in the game either. The online vote
+commands are still not registered.
+
 ## Not done
 
-(Filled in at the end.)
+1. **TyreTesterForm** ("Tyre tester"): needs a `TyreTester` (a Rust `Suspension` and ray provider for
+   one private tyre), its three sweeps of 200 real tyre steps a frame, the getDY / cambered-DY series
+   and the friction ellipse drawn with GL on top. The brief is `re/scratch/task33/tyre_apps.md`
+   sections 2-3.
+2. **ACSuspension** (the suspension geometry wireframe) and **FormWings** (the wing outlines on the
+   car): both need a 3D GUI pass ported the game's way. Hence no wireframe picture.
+3. **Item 4**, the console variables without effect (above), each with an oracle proof.
+4. **Item 5**, `GPUProfilerApp` with D3D11 timestamp queries, and Render Stats' FMOD usage and audio
+   time (still 0 in rustyac.exe).
+5. **Item 6**, the PerformanceMeter's other readers: the shared-memory page, the online car updates,
+   the "recover time" penalty. No dump or tape field changed in this task.
+6. The Telemetry channels with no source in rustyAC (they show 0): `AI_PUSH`, `AI_LIVE_OFFSET`,
+   `AI_DIST_CORNER`, `ERS_TORQUE`, `OVERSTEER_FACTOR`, `STEER_DEG_*`, `SKID_VOL_*`, `SKID_PITCH_*`,
+   `FF_FINAL`, `RIDE_HEIGHT_F` / `RIDE_HEIGHT_R`. The other channels' values were not compared one by
+   one with the game's car (the oracle feeds both sides the same made-up values).
+7. `SetupDebug` in rustyac.exe shows the player's car's `Car` members whatever the focus (the game:
+   the focused car's).
 
 ## Open questions
 
-(Filled in at the end.)
+- `system/cfg/telemetry_presets.ini` has two `[PRESET_7]` sections; the reader keeps the first, so the
+  "Damper vel" preset can't be picked, in the game and in the port. Intended?
+- The game's `getValuesFromGraphics` / `getValuesFromPhysics` read a graph's channel without checking
+  it is set; the port skips such a graph. The game can't reach that state (each graph gets a channel
+  from the first preset), but a presets file whose first preset names an unknown channel would crash
+  the game and not the port (not tried).
