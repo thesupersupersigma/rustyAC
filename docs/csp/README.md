@@ -123,10 +123,10 @@ config files, Lua files and functions; difficulty S (smallest) to XL, a relative
 | Lua | [`lua.md`](lua.md) | done |
 | Rendering | [`rendering.md`](rendering.md) (+ config, core, content) | done |
 | UI and apps | [`ui_apps.md`](ui_apps.md) | done |
-| Online | [`online.md`](online.md) | pending |
+| Online | [`online.md`](online.md) | done |
 | Audio | [`audio.md`](audio.md) | done |
 | Input and FFB | [`input_ffb.md`](input_ffb.md) | done |
-| VR and screens | [`vr_screens.md`](vr_screens.md) | pending |
+| VR and screens | [`vr_screens.md`](vr_screens.md) | done |
 | Misc | [`misc.md`](misc.md) | pending |
 | Content needs | [`content_needs.md`](content_needs.md) | done |
 | Plan | [`plan.md`](plan.md) | draft |
