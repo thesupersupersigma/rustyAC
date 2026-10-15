@@ -19,7 +19,7 @@ use rustyac_game::audio::{AudioSink, Feed, GameAudio};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
-use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera};
+use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
 use rustyac_game::ghost::{GhostOptions, GhostRig};
@@ -876,6 +876,24 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
 /// for or refused with `--esc-start` / `--no-esc-start`; left alone, it is so for a drive at
 /// the wheel in a window, and not for a replay, a drive nobody sits at, a picture, a run
 /// without AC's GUI, or online (where rustyAC has no ESC menu yet).
+/// F1 (`setMode(eCockpit)`): from the free or the start camera back to the last driving view,
+/// otherwise the next one.
+fn camera_f1(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>) {
+    if start.take().is_some() | free.take().is_some() {
+        camera.back_to_driving();
+    } else {
+        camera.f1();
+    }
+}
+
+/// F6 (`setMode(eCar)`, or the car's next camera when one shows already).
+fn camera_f6(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, count: usize) {
+    if (start.take().is_some() | free.take().is_some()) && camera.mode == rustyac_game::render::scene::CameraMode::Car {
+        return;
+    }
+    camera.f6(count);
+}
+
 fn esc_start(options: &Options) -> bool {
     if options.replay.is_some() || options.join.is_some() || options.online_session || options.no_gui || options.no_hud || options.debug_view {
         return false;
@@ -1406,6 +1424,16 @@ fn run_window(options: &Options) -> Result<(), String> {
             return Err(message);
         }
     };
+    // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
+    // (without AC's GUI "Drive" is pressed at once, so there is none)
+    let mut start_camera = (setup_esc_start && renderer.gui().is_some_and(|gui| gui.has_esc_menu()))
+        .then(|| StartCamera::new(car_info.track_folder.as_deref().map_or(-1.0, |folder| StartCamera::crew_side(folder, &car_info.track_layout))));
+    // F7: AC's free camera, if the game's assetto_corsa.ini allows it (`Sim.allowFreeCamera`)
+    let allow_free_camera = rustyac_content::install::ac_root()
+        .and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/assetto_corsa.ini")).ok())
+        .is_some_and(|ini| ini.ready && ini.has_section("AC_APPS") && ini.get_int("CAMERA", "ALLOW_FREE_CAMERA").unwrap_or(0) > 0);
+    let mut mouse_camera: Option<MouseCamera> = None;
+    let mut last_frame: Option<CameraFrame> = None;
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
     if let (Some(file), Some(rig)) = (&options.ac_replay, &rig) {
@@ -1551,9 +1579,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                         // Task 28c: a replay of recorded frames shows: its keys
                         if !ac_replay_key(rig, &shared, &bindings, key, ctrl, alt, is_online) && !ctrl && !alt {
                             match key {
-                                0x70 | 0x43 => camera.f1(),
+                                0x70 | 0x43 => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
                                 0x73 => focus.command(FocusCommand::Player, &world, &car_names),
-                                0x75 => camera.f6(shapes[focus.index].car_cameras.len()),
+                                0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
                                 _ => {}
                             }
                         }
@@ -1684,10 +1712,17 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // Shift+R: back onto the track where the car is, N: a new car
                             // F1 (and C, as before): AC's driving views in turn; F6: the
                             // cameras of the car's cameras.ini
-                            0x70 | 0x43 => camera.f1(),
+                            0x70 | 0x43 => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
                             // F4: back to your car (with other cars only; through the fade)
                             0x73 => focus.command(FocusCommand::Player, &world, &car_names),
-                            0x75 => camera.f6(shapes[focus.index].car_cameras.len()),
+                            0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
+                            // F7: the free camera (`setMode(eFree)`; again: the same, kept)
+                            0x76 if allow_free_camera => {
+                                start_camera = None;
+                                if mouse_camera.is_none() {
+                                    mouse_camera = last_frame.as_ref().map(MouseCamera::new);
+                                }
+                            }
                             // F11: AC's virtual mirror
                             0x7a => match renderer.toggle_virtual_mirror() {
                                 Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
@@ -1831,9 +1866,15 @@ fn run_window(options: &Options) -> Result<(), String> {
                         shared.requests.fetch_or(event::PITS_DRIVE, Ordering::Relaxed);
                     }
                     SimAction::FocusPlayerCar => focus.index = 0,
-                    // (nobody listens yet: the drag race and the pit crew's lollipop man;
-                    // the camera a driver chose in the last session is not kept)
-                    SimAction::DriveMenuPressed | SimAction::LoadPreviousSessionUserCamera => {}
+                    // (nobody listens yet: the drag race and the pit crew's lollipop man)
+                    SimAction::DriveMenuPressed => {}
+                    // the first "Drive": the camera of the driver's (the one of the last
+                    // session is not kept: the one driven with)
+                    SimAction::LoadPreviousSessionUserCamera => {
+                        start_camera = None;
+                        mouse_camera = None;
+                        camera.back_to_driving();
+                    }
                     // (online the chat's lines and the votes went to the client already)
                     SimAction::AddMessage { .. } | SimAction::SendChat(_) => {}
                     // the replay bar's buttons, its time line and its save box
@@ -1899,7 +1940,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         if toggles != camera_toggles {
             camera_toggles = toggles;
             // the pad's camera button is F1 in the game too
-            camera.f1();
+            camera_f1(&mut camera, &mut start_camera, &mut mouse_camera);
         }
         if thread.is_finished() || STOP.load(Ordering::Relaxed) || options.duration.is_some_and(|d| started.elapsed().as_secs_f64() >= d) {
             break;
@@ -2003,7 +2044,26 @@ fn run_window(options: &Options) -> Result<(), String> {
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
         }
-        let frame = camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32());
+        let frame = if let Some(start) = start_camera.as_mut() {
+            start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())
+        } else if let Some(free) = mouse_camera.as_mut() {
+            if shared.focused.load(Ordering::Relaxed) {
+                // SAFETY: plain calls.
+                let input = unsafe {
+                    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+                    let mut cursor = windows::Win32::Foundation::POINT::default();
+                    let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor);
+                    let held = |vk: i32| GetAsyncKeyState(vk) != 0;
+                    MouseCameraInput { shift: held(0x10), ctrl: held(0x11), up: held(0x26), down: held(0x28), left: held(0x25), right: held(0x27), look: held(0x02), cursor: (cursor.x, cursor.y) }
+                };
+                free.update(&input, dt.as_secs_f32())
+            } else {
+                free.frame()
+            }
+        } else {
+            camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
+        };
+        last_frame = Some(frame);
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);
         // --new-session-at: N by the clock

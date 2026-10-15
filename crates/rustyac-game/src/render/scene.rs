@@ -6,6 +6,7 @@
 
 use std::path::Path;
 
+use rustyac_physics::session::MsvcRand;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
 use crate::input::ini::ControlsIni;
@@ -89,6 +90,32 @@ pub fn create_target(position: [f32; 3], target: [f32; 3]) -> Mat {
         u = times(u, -1.0);
     }
     set_from_heading_up(f, u, position)
+}
+
+/// `mat44f::createTarget` @ 0x14005ff50 and `setFromHeadingUp` @ 0x1400602f0 as the machine
+/// adds them up, bit for bit (Task 34's start camera; [`create_target`] is the older one the
+/// debug view's chase camera has).
+pub fn create_target_exact(position: [f32; 3], target: [f32; 3]) -> Mat {
+    let unit = |v: [f32; 3], length: f32| if length != 0.0 { times(v, 1.0 / length) } else { v };
+    let mut f = sub(target, position);
+    f = unit(f, ((f[0] * f[0] + f[1] * f[1]) + f[2] * f[2]).sqrt());
+    // the heading across the world's up (0, 1, 0)
+    let a = [f[1] * 0.0 - f[2], f[2] * 0.0 - f[0] * 0.0, f[0] - f[1] * 0.0];
+    let a = unit(a, ((a[1] * a[1] + a[0] * a[0]) + a[2] * a[2]).sqrt());
+    let v = [a[2] * f[1] - f[2] * a[1], a[0] * f[2] - a[2] * f[0], f[0] * a[1] - a[0] * f[1]];
+    let mut u = unit(v, ((v[1] * v[1] + v[0] * v[0]) + v[2] * v[2]).sqrt());
+    // (`comiss`/`jae`: a NaN is turned too)
+    if u[1] < 0.0 || u[1].is_nan() {
+        u = times(u, -1.0);
+    }
+    let s = [u[2] * f[1] - u[1] * f[2], u[0] * f[2] - f[0] * u[2], f[0] * u[1] - u[0] * f[1]];
+    let s = unit(s, ((s[1] * s[1] + s[0] * s[0]) + s[2] * s[2]).sqrt());
+    [
+        [s[0], s[1], s[2], 0.0],
+        [u[0], u[1], u[2], 0.0],
+        [-f[0], -f[1], -f[2], 0.0],
+        [position[0], position[1], position[2], 1.0],
+    ]
 }
 
 /// rustyAC's own camera of `--free-camera` (not one of AC's): it stands `eye` metres to the
@@ -499,6 +526,14 @@ impl DrivingCamera {
         self.started = false;
     }
 
+    /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
+    /// that is not a driving one is `lastDrivingMode`, without moving on.
+    pub fn back_to_driving(&mut self) {
+        if self.mode == CameraMode::Car {
+            self.mode = self.last_driving;
+        }
+    }
+
     /// `ACCameraManager::currentGlobalCameraIndex` as `setMode` leaves it: 0 the cockpit, 1 to
     /// 5 the views that drive with the car; a camera of the car's own leaves it as it was.
     pub fn global_index(&self) -> Option<i32> {
@@ -611,6 +646,215 @@ impl DrivingCamera {
         let look = add(p, times(row(body, 2), 4.0));
         let matrix = rotate_pitch(&create_target(eye, look), pitch);
         CameraFrame { matrix, fov: 60.0, near: 1.0 }
+    }
+}
+
+/// `CameraModeStart` (`eStart`, ctor 0x14005f940, `updateCar` 0x140060470): the camera of a
+/// session that begins in the ESC menu, until "Drive". It stands 3 m to the driver's side of
+/// car 0 and 2 m behind it, 1.75 m above the first tyre's contact point, and looks at the car
+/// with a slow random drift. Its random numbers are the C library's `rand()`; the game shares
+/// that generator with others and its seed is not known, so the drift is the same kind, not
+/// the same numbers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StartCamera {
+    /// the C library's generator (the game's is the process's one)
+    pub rand: MsvcRand,
+    target_car_pos: [f32; 3],
+    current_target: [f32; 3],
+    target_car_pos_blend: f32,
+    pan_vel: f32,
+    /// never read by the game; only its two `rand()` calls count
+    target_pos: [f32; 3],
+    pos_blend: f32,
+    first_frames: u32,
+    /// `crew.ini [HEADER] SIDE`, negated: the side the camera stands on in the pit box
+    crew_side: f32,
+}
+
+/// `rand()` to 0..1 (0x38000100)
+const RAND_UNIT: f32 = f32::from_bits(0x3800_0100);
+
+impl StartCamera {
+    /// The ctor's values; `crew_side` from [`StartCamera::crew_side`].
+    pub fn new(crew_side: f32) -> StartCamera {
+        StartCamera {
+            rand: MsvcRand(1),
+            target_car_pos: [0.0; 3],
+            current_target: [0.0; 3],
+            target_car_pos_blend: 2.0,
+            pan_vel: 0.4,
+            target_pos: [0.0; 3],
+            pos_blend: -2.0,
+            first_frames: 0,
+            crew_side,
+        }
+    }
+
+    /// The ctor's `crew.ini`: `content/tracks/<track>/[<layout>/]data/crew.ini`, `-[HEADER] SIDE`;
+    /// -1 when the file cannot be read.
+    pub fn crew_side(track_folder: &Path, layout: &str) -> f32 {
+        let path = if layout.is_empty() { track_folder.join("data/crew.ini") } else { track_folder.join(layout).join("data/crew.ini") };
+        match ControlsIni::load(&path) {
+            Ok(ini) => -ini.get_float("HEADER", "SIDE"),
+            Err(_) => -1.0,
+        }
+    }
+
+    /// `update` 0x140060420 on car 0, whose driver's eyes are `eye_x` across the 3D model
+    /// (`CarAvatar::driverEyesPosition.x`).
+    pub fn update(&mut self, car: &CarView, eye_x: f32, dt: f32) -> CameraFrame {
+        let m = &car.body;
+        let contact = &car.render.contact_point;
+        let (mut sum_x, mut sum_z) = (0.0f32, 0.0f32);
+        for p in contact {
+            sum_x += p[0];
+            sum_z += p[2];
+        }
+        let y0 = contact[0][1];
+        sum_x *= 0.25;
+        sum_z *= 0.25;
+        let c = [m[3][0], m[3][1], m[3][2]];
+        let mut s = if eye_x < 0.0 { -1.0f32 } else { 1.0 };
+        // CarAvatar::isInPit 0x1400d8bd0
+        let d = sub(c, car.pit_position);
+        // (`setb`: a NaN distance is in the pit too)
+        let distance = ((d[1] * d[1] + d[0] * d[0]) + d[2] * d[2]).sqrt();
+        if distance < 1.5 || distance.is_nan() {
+            s = self.crew_side;
+        }
+        let eye = [-m[2][0] * 2.0 + (m[0][0] * 3.0 * s + sum_x), y0 + 1.75, -m[2][2] * 2.0 + (m[0][2] * 3.0 * s + sum_z)];
+        let dt = if dt > 0.5 { 0.5 } else { dt };
+        if 0.0 > self.pos_blend {
+            self.pos_blend = 2.0;
+            self.target_pos = eye;
+            self.target_car_pos = c;
+        }
+        if self.target_car_pos_blend > 1.0 || self.first_frames < 100 {
+            self.current_target = self.target_car_pos;
+            let r1 = self.rand.next() as f32 * RAND_UNIT;
+            self.target_car_pos[2] = r1 * 0.2 - 0.1 + c[2];
+            let r2 = self.rand.next() as f32 * RAND_UNIT;
+            self.target_car_pos[1] = r2 * 0.0 - 0.1 + c[1];
+            let r3 = self.rand.next() as f32 * RAND_UNIT;
+            self.target_car_pos[0] = r3 * 0.2 - 0.1 + c[0];
+            if self.first_frames < 100 {
+                self.first_frames += 1;
+                self.target_car_pos = c;
+                self.current_target = c;
+            }
+            self.target_car_pos_blend = 0.0;
+            let r4 = self.rand.next() as f32 * RAND_UNIT;
+            self.pan_vel = r4 * f32::from_bits(0x3e4c_ccce) + 0.1;
+        }
+        if self.pos_blend > 1.0 {
+            self.pos_blend = 0.0;
+            let r1 = self.rand.next() as f32 * RAND_UNIT;
+            self.target_pos[2] = r1 * 0.6 - 0.3 + eye[2];
+            let r2 = self.rand.next() as f32 * RAND_UNIT;
+            self.target_pos[0] = r2 * 0.6 - 0.3 + eye[0];
+            self.target_pos[1] = eye[1];
+        }
+        let t = self.target_car_pos_blend;
+        let sm = (3.0 - t * 2.0) * (t * t);
+        let mut look = [0.0; 3];
+        for (i, look) in look.iter_mut().enumerate() {
+            *look = (self.target_car_pos[i] - self.current_target[i]) * sm + self.current_target[i];
+        }
+        if dt < 0.5 {
+            self.target_car_pos_blend += dt * self.pan_vel;
+        }
+        self.pos_blend += dt * f32::from_bits(0x3d23_d70a);
+        CameraFrame { matrix: create_target_exact(eye, look), fov: 40.0, near: 0.1 }
+    }
+}
+
+/// What the free camera reads of the keyboard and the mouse in a frame (`GetAsyncKeyState`,
+/// `GetCursorPos`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MouseCameraInput {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+    /// the right mouse button
+    pub look: bool,
+    pub cursor: (i32, i32),
+}
+
+/// F7 (`eFree`, only with `system/cfg/assetto_corsa.ini [CAMERA] ALLOW_FREE_CAMERA` above 0):
+/// `CameraMouseControl` (ctor 0x14023fda0, update 0x140240040). It starts where the last
+/// camera was and keeps its field of view; the arrows move it 25 m/s (Shift x0.05, Ctrl x50),
+/// the mouse turns it while the right button is held.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MouseCamera {
+    pub matrix: Mat,
+    pub fov: f32,
+    last_mouse: (i32, i32),
+    last_down: bool,
+}
+
+impl MouseCamera {
+    /// `setMode(eFree)`: the shared camera as the last mode left it, near plane 0.05.
+    pub fn new(last: &CameraFrame) -> MouseCamera {
+        MouseCamera { matrix: last.matrix, fov: last.fov, last_mouse: (0, 0), last_down: false }
+    }
+
+    /// The camera without a step (the window has no focus: the game does not run it).
+    pub fn frame(&self) -> CameraFrame {
+        CameraFrame { matrix: self.matrix, fov: self.fov, near: 0.05 }
+    }
+
+    /// `CameraMouseControlBase::update` 0x14020ff30: `stepKeyboard` 0x14020fe00, then
+    /// `mouseLook` 0x14020fcc0.
+    pub fn update(&mut self, input: &MouseCameraInput, dt: f32) -> CameraFrame {
+        let mut speed = 25.0f32;
+        if input.shift {
+            speed *= 0.05;
+        }
+        if input.ctrl {
+            speed *= 50.0;
+        }
+        // Camera::moveForward 0x14020f0a0, moveRight 0x14020f0f0
+        let forward = |m: &mut Mat, d: f32| {
+            let axis = m[2];
+            for (p, a) in m[3].iter_mut().zip(axis).take(3) {
+                *p += -a * d;
+            }
+        };
+        let right = |m: &mut Mat, d: f32| {
+            let axis = m[0];
+            for (p, a) in m[3].iter_mut().zip(axis).take(3) {
+                *p += a * d;
+            }
+        };
+        if input.up {
+            forward(&mut self.matrix, dt * speed);
+        }
+        if input.down {
+            forward(&mut self.matrix, -(dt * speed));
+        }
+        if input.left {
+            right(&mut self.matrix, -(dt * speed));
+        }
+        if input.right {
+            right(&mut self.matrix, dt * speed);
+        }
+        let (x, y) = input.cursor;
+        if input.look && self.last_down {
+            let per = f32::from_bits(0x3c88_8889);
+            self.matrix = rotate_pitch(&self.matrix, -((y.wrapping_sub(self.last_mouse.1) as f32 * 0.01) * self.fov * per));
+            // Camera::rotateOnAxis 0x14020f9f0 about row 1 of the inverse of the matrix after
+            // the pitch (XMMatrixInverse's second row, returned in xmm1)
+            let inverse = rustyac_physics::vecmath::xm_matrix_inverse(&Mat44f { m: self.matrix }).m;
+            let axis = Vec3f::new(inverse[1][0], inverse[1][1], inverse[1][2]);
+            let turn = Mat44f::create_from_axis_angle(&axis, (self.last_mouse.0.wrapping_sub(x) as f32 * 0.01) * self.fov * per);
+            self.matrix = xm_matrix_multiply(&turn, &Mat44f { m: self.matrix }).m;
+        }
+        self.last_down = input.look;
+        self.last_mouse = (x, y);
+        self.frame()
     }
 }
 
