@@ -49,6 +49,12 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         }
         "laps" => gui.new_laps_app(painter),
         "rstats" => gui.new_render_stats_app(painter),
+        "driverperf" => {
+            let ini = read(game_folder.join("system/cfg/driver_performances.ini"));
+            gui.new_driver_performance_app(painter, ini.as_ref(), None)
+        }
+        "fuelmonitor" => gui.new_race_fuel_monitor_app(painter),
+        "sustelemetry" => gui.new_sus_telemetry_app(painter),
         "gamestats" => gui.new_game_stats_app(painter),
         "position" => gui.new_race_position_app(painter),
         "essentials" => gui.new_essentials_app(painter),
@@ -101,6 +107,10 @@ pub fn call(apps: &mut AppsPort, gui: &mut Gui, painter: &mut dyn Painter, game_
             gui.game_screen_add_control(painter, screen, form, number == 0.0);
             write_files(gui, game_folder)?;
             apps.made.push((text.to_string(), form));
+        }
+        "app.shutdown" => {
+            gui.shutdown_apps();
+            write_files(gui, game_folder)?;
         }
         "app.visible" => {
             let form = app(apps, text)?;

@@ -19,7 +19,10 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 23] = [
+pub const APPS: [(&str, usize, usize, usize); 26] = [
+    ("sustelemetry", 0x1e0, 0x1_4030_2180, 0x1_4050_7a38),
+    ("driverperf", 0x2a8, 0x1_4030_3bd0, 0x1_4050_81b8),
+    ("fuelmonitor", 0x1c0, 0x1_4033_8250, 0x1_4051_1b70),
     ("rstats", 0x1f0, 0x1_402d_69d0, 0x1_4050_17b8),
     ("gamestats", 0x1e8, 0x1_402e_7a10, 0x1_4050_3ba0),
     ("friends", 0x270, 0x1_4032_4fc0, 0x1_4050_d7b8),
@@ -45,7 +48,7 @@ pub const APPS: [(&str, usize, usize, usize); 23] = [
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 9] = ["delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 11] = ["sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -689,6 +692,11 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if let Some(g) = GAME.lock().unwrap().as_mut() {
                 g.made.push((text.to_string(), form as usize));
             }
+        }
+        "app.shutdown" => {
+            // ~ACDriverPerformance's saveDriverRecords 0x140306df0 (the game's end)
+            let save: extern "C" fn(*mut u8) -> bool = std::mem::transmute(a.va(0x1_4030_6df0));
+            save(app("driverperf")?);
         }
         "app.visible" => {
             let set: extern "C" fn(*mut u8, bool) = std::mem::transmute(a.va(0x1_4024_51a0));

@@ -483,6 +483,8 @@ pub fn link() -> AppLink {
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
+            track_name: s.track.0.clone(),
+            track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
             audio_drivers: s.drivers.clone(),
             audio_ini: None,
@@ -514,6 +516,20 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
             }
         }
         return Ok(same);
+    }
+    if name.starts_with("app_driverperf") {
+        let rel = "savedData/driverPerformances/magione/ks_ferrari_f2004.ini";
+        let (a, b) = (std::fs::read(args.root.join("documents/Assetto Corsa").join(rel)), std::fs::read(args.root.join("port_files").join(rel)));
+        return Ok(match (a, b) {
+            (Ok(a), Ok(b)) if a == b => {
+                println!("file {rel}: IDENTICAL ({} bytes)", a.len());
+                true
+            }
+            (a, b) => {
+                println!("file {rel}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                false
+            }
+        });
     }
     if name.starts_with("app_ballast") {
         let (a, b) = (std::fs::read(args.root.join("effects_game.txt")), std::fs::read(args.root.join("effects_port.txt")));
@@ -711,6 +727,7 @@ FF_GAIN=0.85
     for file in ["effects_game.txt", "effects_port.txt"] {
         let _ = std::fs::remove_file(args.root.join(file));
     }
+    let _ = std::fs::remove_dir_all(args.root.join("documents/Assetto Corsa/savedData"));
     // the force feedback app's: the same controls.ini for the port's writes; the F2004's
     // car.ini a loose file (FFBForm's "Auto FFB" and "Quick Adjust" are only for such a car)
     std::fs::copy(docs.join("controls.ini"), port_docs.join("controls.ini")).map_err(|e| e.to_string())?;
@@ -868,6 +885,24 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
                 click(&mut o, 1250, 60);
                 o.extend([Op::MouseMove(600, 400), Op::Frame(DT), Op::Frame(DT), Op::Save]);
             }
+        }
+        "app_driverperf" => {
+            // Driver performances and Race Fuel Monitor on the race from the grid: the wait, the
+            // runs to 50 ... 160 km/h and 100 m ... 1 km, the records written at the end
+            race(&mut o, 6);
+            for app in ["driverperf", "fuelmonitor"] {
+                o.push(hud("app.new", 0.0, app));
+            }
+            o.push(Op::Frame(DT));
+            for app in ["driverperf", "fuelmonitor"] {
+                o.push(hud("app.visible", 1.0, app));
+            }
+            play(&mut o, 0, 600, 2);
+            if rest != "short" {
+                play(&mut o, 600, 5000, 4);
+                play(&mut o, 5000, 21000, 40);
+            }
+            o.extend([hud("app.shutdown", 0.0, ""), Op::Frame(DT), Op::Save]);
         }
         "app_stats" => {
             // Render Stats and the developers' Graphics stats on the race, the numbers moving
@@ -1046,7 +1081,7 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             o.extend([Op::MouseMove(150, 75), Op::Frame(DT), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "ballast"), Op::Frame(DT), hud("app.visible", 1.0, "ballast"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
-        "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" => {
+        "app_tyres" | "app_pedals" | "app_electronics" | "app_gears" | "app_mgu" | "app_sustelemetry" => {
             let which = leak(app[4..].to_string());
             race(&mut o, 6);
             o.extend([hud("app.compound", 23.0, "S"), hud("app.ff", 0.85, ""), hud("app.userFf", 1.0, "")]);
