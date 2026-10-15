@@ -25,6 +25,7 @@ pub mod app_position;
 pub mod app_realtime;
 pub mod app_small;
 pub mod app_stats;
+pub mod app_sus_telemetry;
 pub mod app_track_map;
 pub mod app_tyres;
 pub mod app_volumes;

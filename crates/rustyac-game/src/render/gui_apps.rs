@@ -181,6 +181,9 @@ impl GameApps {
             let id = gui.new_ballast_app(painter);
             add(gui, painter, "ballast", id);
         }
+        // TelemetryApp ("SusTelemetry", a developers' app)
+        let id = gui.new_sus_telemetry_app(painter);
+        add(gui, painter, "sustelemetry", id);
         // FormGameStats (a developers' app, after TelemetryApp)
         let id = gui.new_game_stats_app(painter);
         add(gui, painter, "gamestats", id);
@@ -364,6 +367,7 @@ impl GameApps {
                     // rustyAC's AI drivers race without one)
                     ai_laps_to_complete: Some(-1),
                     requesting_pit_stop: false,
+                    packer_range: Some(view.packer_range),
                     in_pit: view.lap.in_pit_lane,
                     in_pitlane: view.lap.in_pit_lane,
                     driver_name: setup.cars.get(i).map(|c| c[0].clone()).unwrap_or_default(),

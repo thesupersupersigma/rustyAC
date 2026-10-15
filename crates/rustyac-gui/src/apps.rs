@@ -205,6 +205,8 @@ pub struct AppCar {
     /// `CarAvatar::getAILapsToComplete` (none: -1, the car has no physics), `isRequestingPitStop`
     pub ai_laps_to_complete: Option<i32>,
     pub requesting_pit_stop: bool,
+    /// `CarAvatar::getPackerRange` of each wheel (none: the car has no physics: 0)
+    pub packer_range: Option<[f32; 4]>,
     /// `CarAvatar::isInPit`, `isInPitlane`
     pub in_pit: bool,
     pub in_pitlane: bool,

@@ -106,6 +106,8 @@ pub struct CarView {
     pub performance_meter: (f32, f32),
     /// `CarAvatar::pitPosition`'s place (the pit box)
     pub pit_position: [f32; 3],
+    /// every suspension's `getPackerRange`
+    pub packer_range: [f32; 4],
     /// Each wheel's world matrix with its spin (`localWheelRotation` x the hub's matrix),
     /// in the order LF, RF, LR, RR.
     pub wheels: [Mat; 4],
@@ -326,6 +328,7 @@ impl Default for CarView {
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
             pit_position: [0.0; 3],
+            packer_range: [0.0; 4],
             steps: 0,
             sim_seconds: 0.0,
             drive_seconds: 0.0,
@@ -667,6 +670,7 @@ impl CarView {
             new_sessions: sim.new_sessions,
             performance_meter: car.performance_meter_state(),
             pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
+            packer_range: [0, 1, 2, 3].map(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_packer_range())),
             speed_kmh: car.speed * 3.6,
             speed_ms: car.speed,
             gas: car.controls.gas,
