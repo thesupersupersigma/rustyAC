@@ -1023,6 +1023,8 @@ impl AcRenderer {
     /// (`Sim::focusedCarIndex`): the camera is its, and so are the mirror, the dashboard that
     /// lives and the HUD.
     pub fn draw(&mut self, world: &[CarView], focus: usize, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
+        // Game::onIdle's clock (ksGetQPTTime) for Game::stats (Task 33)
+        let frame_start = std::time::Instant::now();
         let view = &world[0];
         let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
         // the game camera of the moment
@@ -1339,6 +1341,7 @@ impl AcRenderer {
         if let Some(semaphore) = &mut self.semaphore {
             semaphore.update(&mut self.scene, tts);
         }
+        let update_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
         // Sim::renderScene: the mirror before the picture (MirrorTextureRenderer::render
@@ -1368,6 +1371,11 @@ impl AcRenderer {
         self.triangles = self.graphics.stats.triangles;
         self.graphics.set_screen_space_mode();
         // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
+        // the statistics apps' numbers: Game::stats so far, GraphicsManager::stats of the 3D part
+        let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - update_ms;
+        if let Some(gui) = &mut self.gui {
+            gui.frame_stats(update_ms, render_ms, &self.graphics.stats, &info.timing);
+        }
         if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
             self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
         }
@@ -1417,6 +1425,9 @@ impl AcRenderer {
         // fuel light)
         if let Some(gui) = &mut self.gui {
             gui.render_hud(&mut self.graphics, dt);
+            // Game::stats.cpuTime and renderHUDTime: the frame up to here
+            let cpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+            gui.frame_end(cpu_ms, cpu_ms - update_ms - render_ms);
         }
         // Game::evOnPostGui: the camera manager's fade, over everything of the game's 2D pass
         if let Some((time, total)) = info.focus_fade {

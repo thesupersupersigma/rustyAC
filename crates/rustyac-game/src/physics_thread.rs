@@ -74,6 +74,14 @@ pub struct Timing {
     pub restarts: u64,
     /// Wall time the paced steps were given (pauses and spawn sequences left out), s.
     pub wall_seconds: f64,
+    /// Task 33: the last step's own time (`PhysicsEngine::step` alone), ms, as
+    /// `PhysicsDriveThread::run` 0x140123150 measures it for `occupancy`
+    pub last_step_ms: f64,
+    /// Task 33: `physicsLateLoops`: the times the steps fell more than one step behind and had
+    /// to catch up, after the first 30 s of the physics clock (one a run of late steps)
+    pub late_loops: u32,
+    /// the previous step started late by more than a step
+    pub was_late: bool,
 }
 
 impl Timing {
@@ -434,6 +442,10 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             timing.late_max_us = timing.late_max_us.max(late);
             timing.late_over_1ms += (late > 1000.0) as u64;
             timing.late_over_3ms += (late > 3000.0) as u64;
+            if late > 3000.0 && !timing.was_late && sim.steps * 3 > 30_000 {
+                timing.late_loops += 1;
+            }
+            timing.was_late = late > 3000.0;
         }
         for (at, bits) in &config.session_script {
             if (at / 0.003).round() as u64 == sim.steps {
@@ -449,6 +461,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 break;
             }
         };
+        timing.last_step_ms = begin.elapsed().as_secs_f64() * 1000.0;
         // the car as the setup editor sees it: after its jobs, and a few times a second
         if sim.setup_log.len() != jobs_before || sim.steps.is_multiple_of(64) {
             shared.publish_setup(&sim);

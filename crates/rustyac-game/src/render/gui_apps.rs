@@ -62,6 +62,8 @@ pub struct GameApps {
     pub onboard: ([f32; 3], f32, f32),
     pub onboard_changed: bool,
     pub ctrl_down: bool,
+    /// Task 33: what the statistics apps read this frame
+    pub stats: rustyac_gui::app_stats::AppStats,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -78,9 +80,16 @@ impl GameApps {
     pub fn make(&mut self, gui: &mut Gui, painter: &mut dyn Painter, screen: Id, setup: &GuiSetup, leaderboard: Id) {
         let system = |name: &str| read(setup.game.join("system/cfg").join(name));
         let own_or_documents = |name: &str| read(setup.cfg_dir.join(name)).or_else(|| setup.documents_cfg.as_ref().and_then(|folder| read(folder.join(name))));
+        // Sim::addForm 0x140197ae0: a developers' app without ENABLE_DEV_APPS gets no icon and
+        // is hidden
+        let dev_apps = setup.dev_apps;
         let mut add = |gui: &mut Gui, painter: &mut dyn Painter, name: &'static str, id: Id| {
+            let dev = gui.form_data(id).dev_app && name != "hideall";
             if name != "leaderboard" {
-                gui.game_screen_add_control(painter, screen, id, true);
+                gui.game_screen_add_control(painter, screen, id, !dev || dev_apps);
+            }
+            if dev && !dev_apps {
+                gui.set_visible(id, false);
             }
             self.made.push((name, id));
         };
@@ -146,6 +155,9 @@ impl GameApps {
         add(gui, painter, "eyes", id);
         let id = gui.new_ffb_app(painter, loose, self.ff_upgrades);
         add(gui, painter, "ffb", id);
+        // FormRenderStats (made early in Sim::Sim, added here)
+        let id = gui.new_render_stats_app(painter);
+        add(gui, painter, "rstats", id);
         let id = gui.new_pedals_app(painter, own_or_documents("controls.ini").as_ref());
         add(gui, painter, "pedals", id);
         let id = gui.new_realtime_app(painter);
@@ -166,6 +178,9 @@ impl GameApps {
             let id = gui.new_ballast_app(painter);
             add(gui, painter, "ballast", id);
         }
+        // FormGameStats (a developers' app, after TelemetryApp)
+        let id = gui.new_game_stats_app(painter);
+        add(gui, painter, "gamestats", id);
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
@@ -384,6 +399,7 @@ impl GameApps {
             auto_eyes: None,
             ctrl_down: self.ctrl_down,
             penalties_enabled: setup.penalties,
+            stats: self.stats.clone(),
             camera_sounds: vec![self.sound.camera; world.len()],
             audio_drivers: self.sound.drivers.clone(),
             audio_ini: self.audio_ini.clone(),

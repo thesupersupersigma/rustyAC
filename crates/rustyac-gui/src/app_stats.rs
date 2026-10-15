@@ -43,6 +43,29 @@ pub struct AppStats {
     pub fmod_update_usage: Option<f32>,
 }
 
+/// `GameTime` (`Game::gameTime`): the frame's time, smoothed, and the frames per second.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GameTime {
+    pub delta_t: f32,
+    pub smooth_delta_t: f32,
+    pub fps: f32,
+}
+
+impl GameTime {
+    /// `GameTime::update` 0x14044c250 after its clock: `d` the milliseconds since the last
+    /// frame (no stabiliser, no frame cap).
+    pub fn update(&mut self, d: f64) {
+        let d = if d < 0.0 { 0.0 } else { d };
+        let dt = (d * f64::from_bits(0x3f50_624d_d2f1_a9fc)) as f32;
+        self.delta_t = if dt > f32::from_bits(0x3e4c_cccd) { f32::from_bits(0x3e4c_cccd) } else { dt };
+        let smooth = self.delta_t * f32::from_bits(0x3c23_d70a) + self.smooth_delta_t * f32::from_bits(0x3f7d_70a4);
+        self.smooth_delta_t = smooth;
+        let smooth2 = smooth * f32::from_bits(0x3f66_6666) + self.delta_t * f32::from_bits(0x3dcc_cccd);
+        self.smooth_delta_t = smooth2;
+        self.fps = if smooth2 == 0.0 { 1.0 } else { 1.0 / smooth2 };
+    }
+}
+
 /// `FormRenderStats`'s own members.
 pub struct RenderStats {
     pub cpu_time: f32,
