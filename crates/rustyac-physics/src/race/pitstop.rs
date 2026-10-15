@@ -11,8 +11,9 @@
 //! `CarAvatar` ([`PitCarView`]) and answers with what it would do to the rest of the game
 //! ([`PitAction`]), in the game's order. The menu it reads is the game's quick menu
 //! (`QuickMenuPitstop`, the one a wheel or pad driver gets): its items and presets are
-//! [`QuickMenu`], whatever draws them. The old mouse menu (`Sim::useMousePitstop`) is not
-//! ported.
+//! [`QuickMenu`], whatever draws them. The old mouse menu (`Sim::useMousePitstop`: the state
+//! "choosing", its buttons and fuel gauge, the confirm click) is [`MousePitstop`]; whatever
+//! draws it sends the clicks ([`PitStop::mouse_click`]).
 
 // (a NaN falls through the game's `comiss` + jump as it does here)
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
@@ -517,6 +518,146 @@ impl QuickMenu {
     }
 }
 
+/// The old mouse menu's part of `PitStop` (`Sim::useMousePitstop` @ Sim+0x1e4): what its
+/// controls hold (the buttons' `selected`, the fuel gauge `PitStopFuel`), and what the stop
+/// reads of the rest of the game for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MousePitstop {
+    /// `desiredTyreCompound` ("": the tyres stay)
+    pub desired_tyre_compound: String,
+    /// `btTyres[i]->selected`: [0] "NO CHANGE", then one per compound
+    pub tyre_selected: Vec<bool>,
+    /// `btRepairSusp`, `btRepairBody`, `btRepairEngine` `->selected`
+    pub repair_suspension: bool,
+    pub repair_body: bool,
+    pub repair_engine: bool,
+    /// `PitStopFuel::fuelPercentage` (the tank now) and `requestedFuelToAddPercentage`
+    pub fuel_percentage: f32,
+    pub requested_fuel_percentage: f32,
+    /// `mouseSteeringEnabled` (+0xc1)
+    pub mouse_steering_enabled: bool,
+    /// `parentControl->visible`
+    pub parent_visible: bool,
+    /// `physicsInfo.tyreCompounds`: the compounds' names (the buttons, `setTyreCompound`)
+    pub compounds: Vec<String>,
+    /// `physicsInfo.maxFuel` (a double, read as `cvtpd2ps`)
+    pub max_fuel: f32,
+    /// `SetupScreen::isFixedFuel` / `getFixedFuel`: the server's fixed setup's fuel
+    pub fixed_fuel: Option<f32>,
+    /// `KeyboardCarControl::mouseSteering` of the player's controls (None: not a keyboard);
+    /// the stop's [`PitAction::MouseSteering`] change it
+    pub keyboard_mouse_steering: Option<bool>,
+}
+
+/// A click on the mouse menu (the handlers of its controls).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MousePitClick {
+    /// a tyre button: 0 "NO CHANGE" (lambda @ 0x1400a8530), n compound n - 1 (@ 0x1400a7c60)
+    Tyre(usize),
+    /// `BUT_FUEL_DOWN` @ 0x1400a7940, `BUT_FUEL_UP` @ 0x1400a79d0, `BUT_FUEL_FILL` @ 0x1400a85e0
+    FuelDown,
+    FuelUp,
+    FuelFill,
+    /// `PitStopFuel::onMouseDown` @ 0x1400a9ce0 inside the gauge: where, as a share of it
+    /// ([`fuel_gauge_share`])
+    FuelGauge(f32),
+    /// the repair buttons' toggles (@ 0x1400a8490, 0x1400a8650, 0x1400a8510)
+    RepairSuspension,
+    RepairBody,
+    RepairEngine,
+    /// `BUT_VOTE_NEXT_PAGE`, the confirm button (@ 0x1400a7740)
+    Confirm,
+}
+
+/// `PitStopFuel::onMouseDown` @ 0x1400a9ce0: a click at window (`x`, `y`) on the gauge whose
+/// world rectangle is `world` (left, right, top, bottom) and whose own rectangle is `width`
+/// wide; the share of the gauge left of it, when inside.
+pub fn fuel_gauge_share(world: [f32; 4], width: f32, x: i32, y: i32) -> Option<f32> {
+    let (mx, my) = (x as f32, y as f32);
+    if mx > world[0] && mx < world[1] && my > world[2] && my < world[3] {
+        Some((mx - world[0]) / width)
+    } else {
+        None
+    }
+}
+
+impl MousePitstop {
+    /// The controls as `PitStop::PitStop` @ 0x1400a55d0 leaves them.
+    pub fn new(compounds: Vec<String>, max_fuel: f32) -> MousePitstop {
+        MousePitstop {
+            desired_tyre_compound: String::new(),
+            tyre_selected: vec![false; compounds.len() + 1],
+            repair_suspension: false,
+            repair_body: false,
+            repair_engine: false,
+            fuel_percentage: 0.0,
+            requested_fuel_percentage: 0.0,
+            mouse_steering_enabled: false,
+            parent_visible: false,
+            compounds,
+            max_fuel,
+            fixed_fuel: None,
+            keyboard_mouse_steering: None,
+        }
+    }
+
+    /// `PitStop::getRealMaxFuel` @ 0x1400a97d0
+    pub fn real_max_fuel(&self) -> f32 {
+        self.fixed_fuel.unwrap_or(self.max_fuel)
+    }
+
+    /// `PitStop::isChangingTyres` @ 0x1400a9870 (the mouse menu's way)
+    pub fn is_changing_tyres(&self) -> bool {
+        !self.desired_tyre_compound.is_empty()
+    }
+
+    fn clamp_fuel(&mut self) {
+        let room = 1.0 - self.fuel_percentage;
+        let asked = self.requested_fuel_percentage;
+        if asked > room {
+            self.requested_fuel_percentage = room;
+        } else if !(asked >= 0.0) {
+            self.requested_fuel_percentage = 0.0;
+        }
+    }
+
+    /// `PitStop::getEstimatedTime` @ 0x1400a9600 of what the controls say now.
+    pub fn estimated_time(&self, chassis: &RollingChassis) -> f32 {
+        get_estimated_time(chassis, self.real_max_fuel(), self.requested_fuel_percentage, self.is_changing_tyres(), self.repair_body, self.repair_engine, self.repair_suspension)
+    }
+
+    /// The controls in words (what `tools/car_oracle` reads out of the game's own).
+    pub fn text(&self) -> String {
+        format!(
+            "desired {:?} tyres {} repairs {}{}{} fuel {:08x} req {:08x} steering {} visible {}",
+            self.desired_tyre_compound,
+            self.tyre_selected.iter().map(|s| (*s as u8).to_string()).collect::<String>(),
+            self.repair_suspension as u8,
+            self.repair_body as u8,
+            self.repair_engine as u8,
+            self.fuel_percentage.to_bits(),
+            self.requested_fuel_percentage.to_bits(),
+            self.mouse_steering_enabled as u8,
+            self.parent_visible as u8
+        )
+    }
+}
+
+/// What the mouse menu's stop hands the physics thread when its countdown ends
+/// (`PitStop::commitChanges` @ 0x1400a93e0: `CarAvatar::setTyreCompound` of the four tyres,
+/// then the lambda @ 0x1400a7ac0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MouseApply {
+    /// the compound's name ("": the tyres stay), and the car's names to find it among
+    pub tyre_compound: String,
+    pub compounds: Vec<String>,
+    /// `getRealMaxFuel() * requestedFuelToAddPercentage`: litres added to what is in the tank
+    pub fuel_to_add: f32,
+    pub repair_body: bool,
+    pub repair_suspension: bool,
+    pub repair_engine: bool,
+}
+
 /// `PitStopStart`: what `evPitStopCommit` tells (the pit crew listens).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PitStopStart {
@@ -549,6 +690,10 @@ pub enum PitAction {
     Over,
     /// the choices, for the physics thread ([`apply`])
     Apply(PitApply),
+    /// the mouse menu's choices, for the physics thread ([`apply_mouse`])
+    MouseApply(MouseApply),
+    /// `KeyboardCarControl::setMouseSteering` of the player's controls
+    MouseSteering(bool),
 }
 
 /// What `PitStop` reads of the player's `CarAvatar` in a frame.
@@ -640,6 +785,10 @@ pub struct PitStop {
     pub overs: u32,
     pub last_start: PitStopStart,
     pub last_changing_tyres: bool,
+    /// `Sim::useMousePitstop`: the old mouse menu (None: the quick menu)
+    pub mouse: Option<MousePitstop>,
+    /// what `isInPitPosition` did to the rest of the game, for this frame's actions
+    pending: Vec<PitAction>,
 }
 
 /// `PitStopStrategy` (12 bytes; constructor @ 0x1400a7590).
@@ -688,6 +837,8 @@ impl PitStop {
             overs: 0,
             last_start: PitStopStart { tyre_change_time: 0.0, total_time: 0.0, force_change_camera: false },
             last_changing_tyres: false,
+            mouse: None,
+            pending: Vec::new(),
         }
     }
 
@@ -718,9 +869,11 @@ impl PitStop {
         true
     }
 
-    /// `PitStop::isInPitPosition` @ 0x1400a98c0 (the quick menu's way): in the box and
-    /// slower than 1.5 km/h; once there, until 2 km/h.
+    /// `PitStop::isInPitPosition` @ 0x1400a98c0: in the box and slower than 1.5 km/h; once
+    /// there, until 2 km/h. With the mouse menu, arriving resets its controls (and turns
+    /// mouse steering off), and the menu shows.
     pub fn is_in_pit_position(&mut self, car: &PitCarView) -> bool {
+        let old = self.displaying_pit_menu;
         let inside = self.is_inside_pit_area(car);
         let mut displaying = false;
         if inside && (car.speed * 3.6 < 1.5 || self.displaying_pit_menu) {
@@ -730,12 +883,103 @@ impl PitStop {
         if displaying && !(car.speed * 3.6 < 2.0) {
             self.displaying_pit_menu = false;
         }
-        self.displaying_pit_menu
+        let Some(mouse) = &mut self.mouse else { return self.displaying_pit_menu };
+        if !old && self.displaying_pit_menu {
+            if let Some(steering) = mouse.keyboard_mouse_steering {
+                mouse.mouse_steering_enabled = steering;
+                if steering {
+                    mouse.keyboard_mouse_steering = Some(false);
+                    self.pending.push(PitAction::MouseSteering(false));
+                }
+            }
+            mouse.fuel_percentage = car.fuel / mouse.real_max_fuel();
+            mouse.requested_fuel_percentage = 0.0;
+            for selected in &mut mouse.tyre_selected {
+                *selected = false;
+            }
+            if let Some(first) = mouse.tyre_selected.first_mut() {
+                *first = true;
+            }
+            mouse.desired_tyre_compound.clear();
+            mouse.repair_body = false;
+            mouse.repair_engine = false;
+            mouse.repair_suspension = false;
+        }
+        if !self.displaying_pit_menu {
+            return false;
+        }
+        mouse.parent_visible = true;
+        true
     }
 
-    /// `PitStop::isChangingTyres` @ 0x1400a9870 (the quick menu's way)
+    /// `PitStop::isChangingTyres` @ 0x1400a9870
     pub fn is_changing_tyres(&self) -> bool {
-        self.new_compound > -1
+        match &self.mouse {
+            Some(mouse) => mouse.is_changing_tyres(),
+            None => self.new_compound > -1,
+        }
+    }
+
+    /// A click on the mouse menu: the window's handlers (`isActive`, the menu shown, the state
+    /// "choosing") and then the control's own. `chassis` and `rand` as for [`Self::update`].
+    pub fn mouse_click(&mut self, click: MousePitClick, chassis: &RollingChassis, rand: &mut MsvcRand, out: &mut Vec<PitAction>) {
+        let state = self.state;
+        let Some(mouse) = &mut self.mouse else { return };
+        if !mouse.parent_visible || state != STATE_CHOOSING {
+            return;
+        }
+        match click {
+            MousePitClick::Tyre(n) => {
+                mouse.desired_tyre_compound = if n == 0 { String::new() } else { mouse.compounds.get(n - 1).cloned().unwrap_or_default() };
+                for selected in &mut mouse.tyre_selected {
+                    *selected = false;
+                }
+                if let Some(selected) = mouse.tyre_selected.get_mut(n) {
+                    *selected = true;
+                }
+            }
+            MousePitClick::FuelDown => {
+                // (the tank's size, also with a fixed setup)
+                mouse.requested_fuel_percentage -= 1.0 / mouse.max_fuel;
+                mouse.clamp_fuel();
+            }
+            MousePitClick::FuelUp => {
+                // (1 / max + req: an addition, the same either way round)
+                mouse.requested_fuel_percentage += 1.0 / mouse.real_max_fuel();
+                mouse.clamp_fuel();
+            }
+            MousePitClick::FuelFill => mouse.requested_fuel_percentage = 1.0 - mouse.fuel_percentage,
+            MousePitClick::FuelGauge(share) => {
+                if share > mouse.fuel_percentage {
+                    mouse.requested_fuel_percentage = share - mouse.fuel_percentage;
+                }
+            }
+            MousePitClick::RepairSuspension => mouse.repair_suspension = !mouse.repair_suspension,
+            MousePitClick::RepairBody => mouse.repair_body = !mouse.repair_body,
+            MousePitClick::RepairEngine => mouse.repair_engine = !mouse.repair_engine,
+            MousePitClick::Confirm => {
+                let body = mouse.repair_body || mouse.repair_suspension;
+                let fuel = mouse.real_max_fuel() * mouse.requested_fuel_percentage;
+                // CarAvatar::getPitstopTime @ 0x1400d3570
+                let fuel = if fuel > 0.0 { fuel } else { 0.0 };
+                let time: PitStopTime = chassis.get_pitstop_time(fuel, mouse.is_changing_tyres(), body, mouse.repair_engine, mouse.repair_suspension, true, rand);
+                self.pit_timer = time.total;
+                self.tyre_time = time.tyres;
+                self.repair_time = time.repair;
+                self.fuel_time = time.fuel;
+                self.max_pit_timer = self.pit_timer;
+                if self.pit_timer > 0.0 {
+                    let start = PitStopStart { tyre_change_time: time.tyres, total_time: self.pit_timer, force_change_camera: false };
+                    out.push(PitAction::Commit(start));
+                    self.commits += 1;
+                    self.last_start = start;
+                    self.last_changing_tyres = self.is_changing_tyres();
+                    self.state = STATE_OPERATING;
+                } else {
+                    self.state = STATE_FINISHED;
+                }
+            }
+        }
     }
 
     /// `PitStop::getPitStopFuelingPercentage` @ 0x1400a9730
@@ -780,7 +1024,11 @@ impl PitStop {
             }
             STATE_WAITING_FOR_DRIVER => {
                 if self.is_in_pit_position(car) {
-                    self.read_menu(car, menu, chassis, rand, out);
+                    if self.mouse.is_some() {
+                        self.state = STATE_CHOOSING;
+                    } else {
+                        self.read_menu(car, menu, chassis, rand, out);
+                    }
                 }
                 // (the code of Choosing follows in the machine code)
                 if !self.is_in_pit_position(car) {
@@ -821,6 +1069,7 @@ impl PitStop {
         if !car.is_in_pitlane && self.state != STATE_UNDEFINED {
             self.state = STATE_IDLE;
         }
+        out.append(&mut self.pending);
     }
 
     /// The quick menu's branch of the state `WaitingForDriver`: the choices are read, the
@@ -892,6 +1141,24 @@ impl PitStop {
         if self.pit_timer > 0.0 {
             self.pit_timer -= dt;
             if self.pit_timer <= 0.0 {
+                if let Some(mouse) = &mut self.mouse {
+                    out.append(&mut self.pending);
+                    mouse.parent_visible = false;
+                    out.push(PitAction::MouseApply(MouseApply {
+                        tyre_compound: mouse.desired_tyre_compound.clone(),
+                        compounds: mouse.compounds.clone(),
+                        fuel_to_add: mouse.real_max_fuel() * mouse.requested_fuel_percentage,
+                        repair_body: mouse.repair_body,
+                        repair_suspension: mouse.repair_suspension,
+                        repair_engine: mouse.repair_engine,
+                    }));
+                    if mouse.mouse_steering_enabled && mouse.keyboard_mouse_steering.is_some() {
+                        mouse.keyboard_mouse_steering = Some(true);
+                        out.push(PitAction::MouseSteering(true));
+                    }
+                    self.app_interaction_enabled = true;
+                    return 0.0 >= self.pit_timer;
+                }
                 let max = menu.get_max_fuel();
                 let sum = car.fuel + self.get_fuel;
                 let final_fuel = if sum > max {
@@ -985,6 +1252,23 @@ pub struct PitFeed {
     spell: u32,
     dt: f32,
     black: bool,
+    /// Task 34: the old mouse menu's clicks too (header key `pit_mouse`), from a stream of
+    /// their own
+    pub mouse: bool,
+    rand_mouse: MsvcRand,
+}
+
+/// The fuel gauge of the mouse menu as [`PitFeed`] clicks it: its world rectangle (left,
+/// right, top, bottom) in a 1920 pixels wide window, and its own width.
+pub const FEED_GAUGE: ([f32; 4], f32) = ([725.0, 1026.0, 290.0, 309.0], 301.0);
+
+/// A click of a [`PitFeed`] on the mouse menu.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FeedClick {
+    /// a button
+    Button(MousePitClick),
+    /// the window at (x, y), somewhere about the fuel gauge ([`FEED_GAUGE`])
+    Gauge(i32, i32),
 }
 
 /// One frame of a [`PitFeed`].
@@ -1003,7 +1287,26 @@ pub struct Fed {
 
 impl PitFeed {
     pub fn new(seed: u32) -> PitFeed {
-        PitFeed { rand: MsvcRand(seed), rand_estimate: MsvcRand(seed ^ 0x2b28), left: 0, spell: 0, dt: 0.009, black: false }
+        PitFeed { rand: MsvcRand(seed), rand_estimate: MsvcRand(seed ^ 0x2b28), left: 0, spell: 0, dt: 0.009, black: false, mouse: false, rand_mouse: MsvcRand(seed ^ 0x3434) }
+    }
+
+    /// This frame's click on the mouse menu, if any, for a car with `compounds` compounds.
+    pub fn mouse_click(&mut self, compounds: usize) -> Option<FeedClick> {
+        let r = &mut self.rand_mouse;
+        if r.next() % 9 != 0 {
+            return None;
+        }
+        Some(match r.next() % 20 {
+            0..=3 => FeedClick::Button(MousePitClick::Tyre(r.next() as usize % (compounds + 1))),
+            4..=5 => FeedClick::Button(MousePitClick::FuelDown),
+            6..=8 => FeedClick::Button(MousePitClick::FuelUp),
+            9 => FeedClick::Button(MousePitClick::FuelFill),
+            10..=12 => FeedClick::Gauge(700 + r.next() % 350, 285 + r.next() % 30),
+            13 => FeedClick::Button(MousePitClick::RepairSuspension),
+            14 => FeedClick::Button(MousePitClick::RepairBody),
+            15 => FeedClick::Button(MousePitClick::RepairEngine),
+            _ => FeedClick::Button(MousePitClick::Confirm),
+        })
     }
 
     fn unit(&mut self) -> f32 {
@@ -1071,6 +1374,39 @@ impl PitFeed {
         let estimate = (share, e.next() % 2 == 0, e.next() % 3 == 0, e.next() % 3 == 0, e.next() % 3 == 0);
         Fed { car, dt, menu: fed_menu, damage, estimate }
     }
+}
+
+/// The mouse menu's stop on the physics thread: `CarAvatar::setTyreCompound` @ 0x1400dabd0
+/// of the four tyres (a job per compound of that name), then the lambda @ 0x1400a7ac0 (the
+/// fuel added to what is in the tank then, not held to the tank's size; no pressures, no
+/// wings).
+pub fn apply_mouse(car: &mut RollingChassis, choices: &MouseApply) {
+    for wheel in 0..4 {
+        for (index, name) in choices.compounds.iter().enumerate() {
+            if *name == choices.tyre_compound && wheel < car.tyres.len() {
+                car.set_tyre_compound(wheel, index as i32);
+            }
+        }
+    }
+    // Car::setRequestedFuel(fuel, false) @ 0x140275cb0
+    car.fuel = (choices.fuel_to_add as f64 + car.fuel) as f32 as f64;
+    car.fuel_lap_evaluator.ignore_lap = true;
+    if choices.repair_engine {
+        if let Some(drivetrain) = &mut car.drivetrain {
+            drivetrain.engine_mut().reset();
+        }
+    }
+    if choices.repair_body {
+        car.set_damage_level(0.0);
+    }
+    if choices.repair_suspension {
+        car.set_damage_level(0.0);
+        car.reset_suspension_damage_level();
+    }
+    if car.penalty_manager.is_serving_pit_penalty {
+        car.penalty_manager.rearm_pit_penalty = true;
+    }
+    car.lock_controls(false);
 }
 
 /// The lambda @ 0x1400a7da0, on the physics thread: the stop's choices go into the car.

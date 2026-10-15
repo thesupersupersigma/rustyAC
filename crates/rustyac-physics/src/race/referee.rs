@@ -134,6 +134,9 @@ pub struct Referee {
     pub mandatory_pit_now: bool,
     /// proofs only: the stop is fed made-up states instead of the car's
     pub pit_feed: Option<pitstop::PitFeed>,
+    /// the mouse menu's stop turned the player's mouse steering on or off (for the game to
+    /// pass on to the keyboard's controls)
+    pub mouse_steering: Option<bool>,
     /// proofs only: what `PitStop::getEstimatedTime` said of the last fed frame
     pub pit_estimate: f32,
 }
@@ -215,6 +218,7 @@ impl Referee {
             pit_over: false,
             mandatory_pit_now: false,
             pit_feed: None,
+            mouse_steering: None,
             pit_estimate: 0.0,
             manager,
         };
@@ -542,9 +546,27 @@ impl Referee {
                     drivetrain.engine_mut().base_mut().life_left = life;
                 }
             }
-            let (share, tyres, body, engine, suspension) = fed.estimate;
             let chassis = world.car(0);
-            self.pit_estimate = pitstop::get_estimated_time(chassis, chassis.max_fuel as f32, share, tyres, body, engine, suspension);
+            if feed.mouse {
+                // Task 34: a click on the old mouse menu, then what it would take
+                let mut out = Vec::new();
+                let compounds = pit.mouse.as_ref().map_or(0, |mouse| mouse.compounds.len());
+                let click = match feed.mouse_click(compounds) {
+                    Some(pitstop::FeedClick::Button(click)) => Some(click),
+                    Some(pitstop::FeedClick::Gauge(x, y)) => pitstop::fuel_gauge_share(pitstop::FEED_GAUGE.0, pitstop::FEED_GAUGE.1, x, y).map(pitstop::MousePitClick::FuelGauge),
+                    None => None,
+                };
+                if let Some(click) = click {
+                    let mut rand = self.rand;
+                    pit.mouse_click(click, chassis, &mut rand, &mut out);
+                    self.rand = rand;
+                }
+                self.pit_estimate = pit.mouse.as_ref().map_or(0.0, |mouse| mouse.estimated_time(chassis));
+                self.apply_pit(out, world);
+            } else {
+                let (share, tyres, body, engine, suspension) = fed.estimate;
+                self.pit_estimate = pitstop::get_estimated_time(chassis, chassis.max_fuel as f32, share, tyres, body, engine, suspension);
+            }
         }
         let mut out = Vec::new();
         let mut rand = self.rand;
@@ -582,6 +604,8 @@ impl Referee {
                     self.pit_over = true;
                 }
                 PitAction::Apply(choices) => world.car_mut(0).queue(move |car| pitstop::apply(car, &choices)),
+                PitAction::MouseApply(choices) => world.car_mut(0).queue(move |car| pitstop::apply_mouse(car, &choices)),
+                PitAction::MouseSteering(on) => self.mouse_steering = Some(on),
             }
         }
     }
@@ -803,6 +827,9 @@ impl Referee {
             out.push(("pitAvatar".to_string(), self.pit_avatar.text()));
             if self.pit_feed.is_some() {
                 out.push(("pitEstimate".to_string(), format!("{:08x}", self.pit_estimate.to_bits())));
+            }
+            if let Some(mouse) = &pit.mouse {
+                out.push(("pitMouse".to_string(), mouse.text()));
             }
         }
         out

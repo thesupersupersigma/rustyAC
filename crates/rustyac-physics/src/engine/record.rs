@@ -681,6 +681,17 @@ impl ReplayWorld {
                 if let Some(seed) = recording.get("pit_feed") {
                     referee.pit_feed = Some(crate::race::pitstop::PitFeed::new(seed.parse().map_err(|_| format!("pit_feed: a seed expected, got {seed:?}"))?));
                 }
+                // (Task 34: the same with the old mouse menu and its clicks, `pit_mouse`)
+                if let Some(seed) = recording.get("pit_mouse") {
+                    let mut feed = crate::race::pitstop::PitFeed::new(seed.parse().map_err(|_| format!("pit_mouse: a seed expected, got {seed:?}"))?);
+                    feed.mouse = true;
+                    referee.pit_feed = Some(feed);
+                    let car = &world.cars[0];
+                    let compounds = car.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default();
+                    if let Some(pit) = &mut referee.pit {
+                        pit.mouse = Some(crate::race::pitstop::MousePitstop::new(compounds, car.max_fuel as f32));
+                    }
+                }
             }
             referee.hash_frames = true;
             world.referee = Some(Box::new(referee));

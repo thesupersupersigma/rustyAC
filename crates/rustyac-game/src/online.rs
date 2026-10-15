@@ -310,6 +310,8 @@ pub struct OnlinePit {
     step_in_frame: u32,
     /// a new session began since the last frame
     new_session: bool,
+    /// the mouse menu's stop turned mouse steering on or off
+    pub mouse_steering: Option<bool>,
 }
 
 impl OnlinePit {
@@ -319,7 +321,7 @@ impl OnlinePit {
         let mut pit = rustyac_physics::race::PitStop::new([m[3][0], m[3][1], m[3][2]]);
         pit.state = rustyac_physics::race::pitstop::STATE_UNDEFINED;
         let sessions = rustyac_physics::race::SessionsIni::from_list("p1", 1, false, None, 3)?;
-        Ok(OnlinePit { pit, menu, avatar: Default::default(), window, manager: rustyac_physics::race::RaceManager::new(&sessions, 1, 0, 1.5), rand: rustyac_physics::session::MsvcRand(28), step_in_frame: 0, new_session: false })
+        Ok(OnlinePit { pit, menu, avatar: Default::default(), window, manager: rustyac_physics::race::RaceManager::new(&sessions, 1, 0, 1.5), rand: rustyac_physics::session::MsvcRand(28), step_in_frame: 0, new_session: false, mouse_steering: None })
     }
 
     /// The pit lines of the HUD (the menu, the countdown, the window).
@@ -409,6 +411,25 @@ impl OnlineSession {
         let target = if guid == 0 { self.net.client.session_id } else { self.net.cars.iter().find(|car| car.guid as i32 == guid).map_or(0xff, |car| car.session_id) };
         if (0..=2).contains(&kind) {
             self.net.client.send_event(&rustyac_net::messages::ClientEvent::Vote { kind: kind as u8, yes, target: Some(target) });
+        }
+    }
+
+    /// rustyAC's test hook `--chat "/vote next|restart|kick <driver> yes|no@<s>"` (headless
+    /// runs have no console, no keys Y and N): the vote as the console's commands send it.
+    pub fn scripted_vote(&mut self, line: &str) {
+        let words: Vec<&str> = line.split(' ').collect();
+        let yes = words.last() == Some(&"yes");
+        match words.get(1).copied() {
+            Some("next") => self.send_vote(0, yes, -1),
+            Some("restart") => self.send_vote(1, yes, -1),
+            Some("kick") if words.len() >= 4 => {
+                let name = words[2..words.len() - 1].join(" ");
+                let slot = self.roster.iter().rev().find(|entry| entry.driver == name).map(|entry| entry.slot);
+                let guid = slot.and_then(|slot| self.avatar_of(slot)).map_or(-1, |(_, guid)| guid);
+                self.console.push(format!("online: vote kick {name} (guid {guid}) {}", if yes { "yes" } else { "no" }));
+                self.send_vote(2, yes, guid);
+            }
+            _ => self.console.push(format!("online: not a vote: {line}")),
         }
     }
 
@@ -621,7 +642,11 @@ impl OnlineSession {
                         self.gui_events.push(OnlineGuiEvent::Vote { kind: *kind as i32, target, time_left_ms: *time_left_ms as i32, is_me: *last_voter == self.net.client.session_id });
                     }
                 }
-                Event::Message(Message::Setup { values, .. }) => self.gui_events.push(OnlineGuiEvent::Setup { values: values.clone() }),
+                Event::Message(Message::Setup { values, .. }) => {
+                    let named: Vec<String> = values.iter().map(|(name, value)| format!("{name}={value}")).collect();
+                    self.console.push(format!("online: the server's fixed setup: {}", named.join(" ")));
+                    self.gui_events.push(OnlineGuiEvent::Setup { values: values.clone() });
+                }
                 Event::Message(Message::VoteNotPassed) => {
                     self.say("Voting ended. Not passed".to_string());
                     self.gui_events.push(OnlineGuiEvent::VoteNotPassed);
@@ -786,6 +811,8 @@ impl OnlineSession {
                 PitAction::Commit(start) => said.push(format!("Pit stop: {:.1} s", start.total_time)),
                 PitAction::Over => said.push("Pit stop over".to_string()),
                 PitAction::Apply(choices) => car.queue(move |car| pitstop::apply(car, &choices)),
+                PitAction::MouseApply(choices) => car.queue(move |car| pitstop::apply_mouse(car, &choices)),
+                PitAction::MouseSteering(on) => pit.mouse_steering = Some(on),
             }
         }
         if counted {

@@ -580,6 +580,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                     for line in session.hud_lines() {
                         println!("online: {line}");
                     }
+                } else if config.chat[chat_at].0.starts_with("/vote ") {
+                    let line = config.chat[chat_at].0.clone();
+                    session.scripted_vote(&line);
                 } else {
                     session.net.client.send_chat(&config.chat[chat_at].0, seconds * 1000.0);
                 }
