@@ -28,7 +28,8 @@ race.ini `[REMOTE]` (`SERVER_IP`, `SERVER_PORT`, `SERVER_NAME`, `SERVER_HTTP_POR
   `aclobby2.grecian.net:10080` for good.
 - `getserver`: `lobby.ashx/single?ip=..&port=..&guid=..`. `getservercached`: the count of the
   last list (the real list is over .NET's 2 MB JSON limit, so the original throws, and so does the port).
-- `pingserver`: 12 tries, 150 ms apart, a 1-byte-less UDP probe to the server's port; the answer
+- `pingserver`: up to 12 tries, 150 ms apart: 4 bytes (200) by UDP to the server's port, the 3-byte answer
+  (200, http port) timed; the answer
   is `[ms, http port]`, `[-1,-1]` without one.
 - `getlanservers`: one UDP broadcast probe (4 bytes, 200) per local address to every port from
   9000 to 10000, then `/INFO` of each one that answers, `"l":true`. The same server shows once per
