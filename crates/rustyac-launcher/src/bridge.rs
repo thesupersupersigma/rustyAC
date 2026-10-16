@@ -213,6 +213,8 @@ impl Bridge {
             "listtracks" => self.list_tracks(p, ev),
             "listseasons" => self.list_seasons(),
             "listfiles" => self.list_files(path, p),
+            "listreplays" => crate::replays::list(&f.user_replay_dir, self.host.as_ref(), p),
+            "addreplay" | "delreplay" | "updreplay" | "storereplay" => crate::replays::change(host, &f.user_replay_dir, &crate::sys::now_stamp().replace('-', ""), p),
             "listspecialevents" => self.list_special_events(),
             "listshowrooms" => self.list_showrooms(),
             "savecombo" | "playsound" => Ok(Answer::plain(true)),
@@ -281,8 +283,8 @@ impl Bridge {
             "uimessage" | "loading" | "resizewindow" | "uiready" | "cleanup" => Ok(Answer::message("OK")),
             // left for later (docs/port/launcher.md, Not done): they answer "OK"
             "runtest" | "calibrate" | "showroom" | "requestcode" | "checklicense" | "requestlicense" | "copytoclipboard" | "openforum" | "browseto"
-            | "sendbenchmark" | "sendcrash" | "print" | "addtoleaderboard" | "initjslibs" | "js" | "getscripts" | "addreplay" | "listreplays"
-            | "delreplay" | "updreplay" | "storereplay" | "getvideopage" | "gethash" | "getcars" => {
+            | "sendbenchmark" | "sendcrash" | "print" | "addtoleaderboard" | "initjslibs" | "js" | "getscripts"
+            | "getvideopage" | "gethash" | "getcars" => {
                 self.not_ported.push(host.to_string());
                 Ok(Answer::plain(true))
             }

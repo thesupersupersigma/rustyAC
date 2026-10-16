@@ -41,6 +41,7 @@ static class Program
         "getresults", "loadjson", "savejson", "delfile", "getplayersetups", "getthememodules",
         "utility", "getscripts", "js", "initjslibs", "getvideopage", "getplayername", "formatfile",
         "gethash", "getcars", "generatecss", "getvideomodes",
+        "listreplays", "addreplay", "delreplay", "updreplay", "storereplay",
         "uimessage", "loading", "resizewindow", "beforeLoadModules", "loadModules", "uiready", "cleanup",
     };
 

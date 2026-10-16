@@ -300,7 +300,12 @@ impl App {
                 let race = IniFile::new(appini::get(f, "race"));
                 // an online join: rustyac.exe takes it from [REMOTE] when it is given no car or track
                 let remote = race.read(Some("REMOTE"), Some("ACTIVE")) == "1";
-                for (flag, key) in [("--car", "MODEL"), ("--track", "TRACK"), ("--layout", "CONFIG_TRACK")].into_iter().filter(|_| !remote) {
+                // a replay of the replays page: the file names its own track and cars
+                let replay = race.read(Some("REPLAY"), Some("ACTIVE")) == "1";
+                if replay {
+                    cmd.arg("--replay").arg(format!("{}{}", f.user_replay_dir, race.read(Some("REPLAY"), Some("FILENAME"))));
+                }
+                for (flag, key) in [("--car", "MODEL"), ("--track", "TRACK"), ("--layout", "CONFIG_TRACK")].into_iter().filter(|_| !remote && !replay) {
                     let value = race.read(Some("RACE"), Some(key));
                     if !value.is_empty() {
                         cmd.arg(flag).arg(value);

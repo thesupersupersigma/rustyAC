@@ -3,7 +3,7 @@
 ## Resume here
 
 Done: the three small fixes; the online pages (lobby list, LAN, details, ping, password,
-join). Next: the replays page (listreplays, rename, delete, play).
+join); the replays page. Next: stats and the PB manager (`--import-pbs`).
 
 ## The three small fixes
 
@@ -53,3 +53,24 @@ track then.
 
 | ![Server list](launcher_server_list.jpg) | ![Server details](launcher_server_details.jpg) |
 |---|---|
+
+## The replays page
+
+How the original works: `__AC.js` asks `ac://listreplays?bytime=true` (newest first) for the list,
+`delreplay?name=`, `updreplay?oldname=&newname=` (the page strips `|&;?$%"<>()+,` first),
+`storereplay?files=a,b` (from `temp/`, the autosaved ones) and `addreplay?car=&track=` (moves the
+game's last replay `cr` to `car@track_yyyyMMddHHmmss`). Each row is
+`[name, "dd/MM/yyyy HH:mm", MB "0.00", ms since 1970, bytes]`; the launcher joins them with commas
+and splits them again, so a comma in a file name splits the name too (kept). Load writes race.ini
+`[REPLAY] ACTIVE=1`, `FILENAME=<name>` and starts the game. Only the player's `replay\` folder
+(and its `temp/`) is ever touched.
+
+What's ported: `crates/rustyac-launcher/src/replays.rs`; the launcher starts rustyac.exe with
+`--replay <replay folder>\<FILENAME>` when `[REPLAY] ACTIVE=1` (the file names its track and cars).
+
+| Proof | How | Result |
+|---|---|---|
+| The five handlers | A made-up replay folder (sizes 0 to 1 MB, a name with a comma, `cr`, two in `temp/`), 14 requests: list, list by time, temp, rename (ok, to a name already there, a missing file), delete (twice, none), store (ok, a missing one, none), list again | transcripts **identical**, the folders left behind identical |
+| The page | The real theme in the port, scripted: Replay → rename `x.acreplay` → delete `zero.acreplay` → Load | the list and files change as asked; rustyac.exe starts with `--replay ...barth500@magione_t36.acreplay` and reads it (`AC replay version 16: abarth500 on magione`) |
+
+![Replays](launcher_replays.jpg)
