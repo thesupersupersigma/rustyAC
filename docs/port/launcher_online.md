@@ -2,9 +2,29 @@
 
 ## Resume here
 
-Done: the three small fixes; the online pages (lobby list, LAN, details, ping, password,
-join); the replays page; stats, the PB manager and `--import-pbs`. the first-run language picker; special events,
-career and championships. Next: the end checks and the release.
+Task 36 is done (v0.36.0): the three small fixes, the online pages, the replays page, stats and
+`--import-pbs`, the first-run language picker, special events, career and championships, and the
+end checks. Next: Task 36b (see "Not done").
+
+## In plain English
+
+`rustyac-launcher.exe` now does almost everything AC's launcher does. The **Online** tab lists
+Kunos' servers and the LAN servers, pings them and shows a server's details. **Join** writes
+race.ini `[REMOTE]` as the original does, and rustyac.exe joins the server (password or not). The
+**Replay** page lists, renames, deletes and plays replays. **Stats** and the PB manager work,
+and `--import-pbs` copies the personal bests of an existing AC install in, when asked.
+The **first run** asks for the language. **Special events**, the **career** and
+**championships** write their race.ini, start the game and do their scoring afterwards.
+
+Every handler was checked against the original's own code (`AssettoCorsa.exe` loaded by
+`tools/launcher_oracle`): same answers byte for byte, same files. Long scripted runs of the real
+pages came out identical: a career event (3,755 requests), a special event (3,823) and a
+championship round (4,011). One bug of the port's was behind most of it: the pages save race.ini
+by posting to `http://ac/...`, which the original's browser turns into `ac://`. The port caught
+only `ac://`, so those saves never arrived. It catches both now.
+
+Three small fixes: `getguid` gives the same id rustyac.exe uses online; race_out.json names the
+player's skin in a one-car race.ini; the video-mode list comes in acVideoModes.dll's order.
 
 ## The three small fixes
 
@@ -159,3 +179,85 @@ judges them) are Task 40.
 ![Championship](launcher_champs.jpg)
 
 ![Championship results](launcher_champs_results.jpg)
+
+## How to use it
+
+- `rustyac-launcher.exe` as before. New:
+  - `--import-pbs [<folder>]`: reads `<folder>\personalbest.ini` (default: your
+    `Documents\Assetto Corsa`; that folder is only read), copies every combo whose time beats
+    ours into `<docs>\personalbest.ini`, prints how many, and exits. `<docs>` is the folder
+    `--docs` names (default: the exe's own folder, as in Task 35).
+  - `--lobby <host:port>`: the server list from there instead of Kunos' lobby (for checks: a
+    recording served by `launcher_oracle --serve <folder> --port <n>`).
+- Online: Drive → Online → Server List or LAN Session. Join writes `<docs>\cfg\race.ini`
+  `[REMOTE]` and starts `rustyac.exe --documents <docs>` without car and track; rustyac.exe
+  reads `[REMOTE]` and joins. The id it sends is the one `getguid` answers (Steam's, else
+  `rustyac_net.ini` beside the exe).
+- Replays: the Replay page works on `<docs>\replay\` (and `replay\temp\`) only. Load starts
+  `rustyac.exe --replay <docs>\replay\<file>`.
+- The first run (launcher.ini `[WINDOW] LANGUAGE` empty) asks English or Italiano and writes
+  that key.
+- Career progress: `<docs>\launcherdata\filestore\career.ini`. Championships: `<docs>\champs\*.champ`
+  and `launcherdata\filestore\champs.ini`. Special event tiers live in the page's own storage
+  (`launcherdata\`), as in the original.
+- Checks: `tools/launcher_oracle` takes `--lobby`, `--serve`, `--port`, `--log`; a fake
+  Documents folder must sit under `re\scratch\`.
+
+## Nothing else changed
+
+| Check | Result |
+|---|---|
+| clippy `-D warnings`: workspace `--all-targets`, CI's line, wasm32-unknown-unknown, wasm32-wasip1 (`--locked`) | clean, all four |
+| `cargo build --release --workspace --locked`; `cargo test --release --workspace --locked` | built; 63 suites, 308 passed, 0 failed |
+| web build (`web/build.py`) | built |
+| tools `--locked`: audio_oracle, car_oracle, chassis_compare, math_proof, ode_oracle, render_oracle, sctm_oracle, tyre_oracle, web_pack; launcher_oracle `--locked-mode` | all built, 0 warnings |
+| physics dumps vs v0.35.0 (built once in `re/scratch/task36/tgt_old`), fresh recordings: Spa 60 s; Magione with 3 AI cars, a 2-lap race | **byte-identical** dumps (`c175020dafc14eeb`, `726ded63cbc5848b`), the same state hash old and new, with 0 and 8 physics workers |
+| the committed net tape (`laguna_join_3000.netgold`) | IDENTICAL at all 3000 steps three ways: desktop, browser transport, through a real gateway |
+| plain CLI (no race.ini); a Content Manager race.ini | both run (333.33 Hz; the CM file's AI car and Quick Race session read) |
+| Task 35's launcher answers (its 8 request lists, run again through the oracle and the port) | 9,828 of 9,829 requests identical (the 8 request lists kept in `re/scratch/task35/req`); the one left is Task 35's: the `"date"` of `getresults` after a race is the file's time stamp, "now" on each side; every written file identical; real Documents unchanged (260 files) after every run |
+| GUI sequences of Tasks 29 to 34 (the GUI oracle, game vs port) | 41 sequences (35 HUD / app / menu, 6 setup): command log, pixels, state and events **IDENTICAL** in all 41 |
+
+## Not done (→ Task 36b)
+
+- The 20 multiplayer tapes of Tasks 25/26 four ways: their gold files (`re/scratch/task26/gold`)
+  and the wasmtime used for the wasm way are no longer on disk, so only the committed tape was
+  run (three ways). Task 35 had the same limit.
+- Special events' Steam achievements (`getachievements` runs `SteamStatisticsReader.exe`): still
+  `{}`. The page then says "Synchronization failed" and keeps its tiers in its own storage.
+  Special event tiers as the game judges them are Task 40.
+- The original's WPF intro screen (English / Italiano buttons, then its own menu); the theme's
+  wizard asks instead.
+- An import of the stats journal: the original's CEF storage on this PC holds no IndexedDB, so
+  there was nothing to import or to test with.
+- The showroom, splash and intro, music, controls window, benchmark, calibration, dev tools,
+  licences / forum / upload / print (not in this task).
+- `getservercached` with the full lobby list throws the original's own `maxJsonLength` error
+  (the list is 7.7 MB); the port gives the same answer. The theme does not use that call.
+
+## Open questions
+
+- **Real servers were contacted during the first page runs (an incident).** Before the script
+  blocked them, the online page did what it does in the original: it pinged about 2,400 real
+  servers from the recorded list (one 4-byte UDP packet each, a few tries) and fetched one real
+  server's `/JSON` page (51.195.176.104:9001). A loose filter then let 4 more pings through. No
+  admin command, no join, no tsss-server or rustyac.com. Later runs block every non-local
+  address, and the strict filter is in `re/scratch/task36/scripts/block.txt`.
+- The lobby answers a made-up guid with an SQL error, so the recording was made with the
+  player's own id (the one `getguid` gives). The id is not written anywhere in the repo.
+- `--import-pbs` copies a combo only when its time is better, and the date goes with it. The
+  original has no import at all; the PB manager itself keeps the better of the two when it
+  reads the file, so this is the same rule.
+- The language picker: the theme's own wizard, not a native window. It asks the same two
+  languages and writes the same key, so no new window was written.
+- The video modes: the original keeps DXGI's own order and sorts nothing. The port makes the
+  same calls (`CreateDXGIFactory`, adapter 0, output 0, `R8G8B8A8_UNORM`), so another driver
+  gives the same order on both. A mode with a refresh denominator of 0 gives 0 Hz in the port;
+  the original would divide by zero (never seen).
+- The gateway check sometimes finds no local port free for both TCP and UDP: Windows reserves
+  19 UDP port ranges on this PC (Hyper-V). A second try passes. Nothing in the code changed.
+- Server favourites: the online module has none; the Drive page's favourites (Task 35) are the
+  only ones.
+
+## Disk
+
+Free on C: 54 GB at the start, 49 GB at the end (the tools' and the workspace's release builds grew; the v0.35.0 build in `re/scratch/task36/tgt_old` and the big outputs are deleted, `re/scratch/task36` keeps 480 MB of fake folders, recordings and scripts, git-ignored).
