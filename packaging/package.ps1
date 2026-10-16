@@ -6,7 +6,7 @@
 #   cargo build --release --workspace
 #   packaging\package.ps1 -Version 0.14.0 -OutDir dist
 #
-# The zip holds rustyac.exe, the README, the license files and HOW_TO_RUN.txt, and nothing else:
+# The zip holds rustyac.exe, rustyac-launcher.exe (AC's launcher), the README, the license files and HOW_TO_RUN.txt, and nothing else:
 # the list below is the whole content, and the zip is read back and compared with it. No Assetto
 # Corsa file is ever packed.
 param(
@@ -28,6 +28,7 @@ $name = "rustyAC-$tag-windows-x64"
 # one LICENSING.md names.
 $files = [ordered]@{
     "target/release/rustyac.exe"     = "rustyac.exe"
+    "target/release/rustyac-launcher.exe" = "rustyac-launcher.exe"
     "README.md"                      = "README.md"
     "LICENSING.md"                   = "LICENSING.md"
     "LICENSE-GPL"                    = "LICENSE-GPL"

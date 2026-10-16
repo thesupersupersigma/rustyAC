@@ -70,7 +70,8 @@ Cargo's downloads and the build output are cached between runs.
 1. stops if the tag does not exist, is not of the form `vX.Y.Z`, or is not `v` + the version in `Cargo.toml`
 2. stops if a release for that tag already exists (a release is never deleted or overwritten)
 3. builds and tests from scratch (no cache)
-4. `packaging/package.ps1` makes `rustyAC-vX.Y.Z-windows-x64.zip` with `rustyac.exe`, `README.md`,
+4. `packaging/package.ps1` makes `rustyAC-vX.Y.Z-windows-x64.zip` with `rustyac.exe`, `rustyac-launcher.exe` (Assetto Corsa's
+   launcher, `docs/port/launcher.md`), `README.md`,
    `LICENSING.md`, the four license files (ODE's under `crates/rustyac-ode/`, where `LICENSING.md` says it
    is) and `HOW_TO_RUN.txt` (from `packaging/HOW_TO_RUN.txt`), reads the zip back to check that nothing else
    is in it, and writes `rustyAC-vX.Y.Z-windows-x64.zip.sha256`

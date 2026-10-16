@@ -75,6 +75,14 @@ Open a console (cmd or PowerShell) in this folder.
     rustyac.exe --list-devices               the pads and wheels found, and the bindings
     rustyac.exe --help                       every option
 
+Or start Assetto Corsa's own launcher, with your game's own theme:
+
+    rustyac-launcher.exe                     pick car, track and session, then Start:
+                                             rustyac.exe drives, the results come back
+
+It needs Microsoft Edge WebView2 (part of Windows 10 and 11). Its settings and
+its race.ini are in this folder's cfg\, never in Documents\Assetto Corsa.
+
 The weather is your Assetto Corsa's: air and road temperature, track grip,
 wind and the driving aids are read from the session you last set up in the
 game (Documents\Assetto Corsa\cfg\race.ini and assists.ini). To change them:
