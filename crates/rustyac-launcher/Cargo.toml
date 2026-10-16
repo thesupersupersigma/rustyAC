@@ -19,6 +19,10 @@ rustyac-content = { path = "../rustyac-content" }
 [target.'cfg(windows)'.dependencies]
 # the player's id (getguid), the one rustyac.exe sends to a server
 rustyac-game = { path = "../rustyac-game" }
+# MD5 of the lobby's list request
+rustyac-net = { path = "../rustyac-net" }
+# the lobby's gzip answer (HttpWebRequest's AutomaticDecompression)
+flate2 = "1.1"
 # Microsoft's WebView2, the browser the theme runs in (the launcher has CEF 3)
 webview2-com = "0.39"
 
@@ -30,6 +34,9 @@ features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",

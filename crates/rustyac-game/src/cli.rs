@@ -1113,7 +1113,8 @@ impl Options {
         if o.layout.is_some() && o.track.is_none() {
             return Err("--layout needs --track <name>".to_string());
         }
-        if o.autodrive && o.track.is_none() && o.join.is_none() {
+        // no car and no track: a launcher's start, which may be a join from race.ini's [REMOTE]
+        if o.autodrive && o.track.is_none() && o.join.is_none() && (o.car_given || o.replay.is_some()) {
             return Err("--autodrive needs --track <folder>: the driver follows the track's AI line".to_string());
         }
         if o.cars.is_some_and(|n| n == 0 || n > 64) {

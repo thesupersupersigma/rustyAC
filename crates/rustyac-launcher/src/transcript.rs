@@ -27,10 +27,11 @@ fn record(out: &mut Vec<u8>, request: &str, mime: &str, ok: bool, body: &[u8]) {
 }
 
 /// Runs `requests` against the player's folder `docs` and the game in `ac_root`.
-pub fn run(ac_root: &str, docs: &str, requests: &str, out_file: &str) -> std::io::Result<()> {
+pub fn run(ac_root: &str, docs: &str, requests: &str, out_file: &str, lobby: Option<String>) -> std::io::Result<()> {
     let folders = AppFolder::new(ac_root, docs);
     // no Steam: GetPersonaName's own answer
     let mut bridge = Bridge::new(folders.clone(), Box::new(sys::Windows { player_name: "You, the player".into() }));
+    bridge.lobby = std::sync::Arc::new(std::sync::Mutex::new(crate::online::Lobby::new(lobby)));
     let text = std::fs::read_to_string(requests)?;
     let mut out = Vec::new();
     for line in text.lines() {

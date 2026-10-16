@@ -33,7 +33,7 @@ use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CON
 use windows::Win32::UI::Shell::{SHCreateMemStream, SHCreateStreamOnFileEx};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::bridge::{split_url, Bridge, Event};
+use crate::bridge::{split_url, Answer, Bridge, Event};
 use crate::folders::AppFolder;
 use crate::ini::IniFile;
 use crate::{appini, net, setup, sys};
@@ -54,6 +54,8 @@ pub struct Options {
     pub log: Option<PathBuf>,
     /// The window's size in pixels, off the screen (the checks); else as launcher.ini says.
     pub offscreen: Option<(i32, i32)>,
+    /// `--lobby`: where the server list comes from instead of Kunos' lobby.
+    pub lobby: Option<String>,
 }
 
 /// The launcher's theme (`Theme`): the default one, or launcher.ini's `[WINDOW] THEME`.
@@ -174,6 +176,9 @@ struct App {
     acticks: u32,
     pinging: bool,
     queue: VecDeque<String>,
+    /// The online requests out on their threads: number, url, the request and its deferral.
+    waiting: Vec<(u64, String, ICoreWebView2WebResourceRequestedEventArgs, ICoreWebView2Deferral)>,
+    next_job: u64,
     steps: VecDeque<Step>,
     running: Running,
     log: Option<std::fs::File>,
@@ -185,6 +190,10 @@ const TIMER_PING: usize = 1;
 const TIMER_SCRIPT: usize = 2;
 /// Handles the host names queued by the request handler, after the request has its answer.
 const WM_APP_EVENTS: u32 = WM_APP + 1;
+/// An online request's thread is done: its answer is in [`DONE`].
+const WM_APP_DONE: u32 = WM_APP + 2;
+
+static DONE: std::sync::Mutex<Vec<(u64, Answer)>> = std::sync::Mutex::new(Vec::new());
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -289,7 +298,9 @@ impl App {
                 cmd.arg("--documents").arg(f.user_data_path.trim_end_matches('\\')).arg("--out-dir").arg(f.user_out_dir.trim_end_matches('\\'));
                 // acs.exe takes car and track from race.ini; rustyac.exe from its command line
                 let race = IniFile::new(appini::get(f, "race"));
-                for (flag, key) in [("--car", "MODEL"), ("--track", "TRACK"), ("--layout", "CONFIG_TRACK")] {
+                // an online join: rustyac.exe takes it from [REMOTE] when it is given no car or track
+                let remote = race.read(Some("REMOTE"), Some("ACTIVE")) == "1";
+                for (flag, key) in [("--car", "MODEL"), ("--track", "TRACK"), ("--layout", "CONFIG_TRACK")].into_iter().filter(|_| !remote) {
                     let value = race.read(Some("RACE"), Some(key));
                     if !value.is_empty() {
                         cmd.arg(flag).arg(value);
@@ -498,6 +509,26 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             }
             LRESULT(0)
         }
+        WM_APP_DONE => {
+            let done: Vec<_> = DONE.lock().unwrap().drain(..).collect();
+            for (id, answer) in done {
+                let waiting = with_app(|app| {
+                    let i = app.waiting.iter().position(|w| w.0 == id)?;
+                    let (_, url, args, deferral) = app.waiting.remove(i);
+                    app.log(&format!("bridge {url} -> {} {} {}", answer.mime, answer.ok, answer.body.len()));
+                    app.queue.push_back(url);
+                    Some((args, deferral, app.env.clone()))
+                });
+                if let Some(Some((args, deferral, env))) = waiting {
+                    let _ = respond(&args, &env, &answer);
+                    unsafe {
+                        let _ = deferral.Complete();
+                        let _ = PostMessageW(Some(hwnd), WM_APP_EVENTS, WPARAM(0), LPARAM(0));
+                    }
+                }
+            }
+            LRESULT(0)
+        }
         WM_CLOSE => {
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -541,6 +572,26 @@ fn answer_request(args: &ICoreWebView2WebResourceRequestedEventArgs) -> windows:
     } else {
         None
     };
+    // the online requests wait on the network: answered later, from a thread of their own
+    let deferred = with_app(|app| {
+        let job = app.bridge.job(&url, body.as_deref())?;
+        let deferral = unsafe { args.GetDeferral() }.ok()?;
+        app.next_job += 1;
+        let (id, hwnd) = (app.next_job, app.hwnd.0 as isize);
+        app.waiting.push((id, url.clone(), args.clone(), deferral));
+        app.log(&format!("bridge {url} waits"));
+        std::thread::spawn(move || {
+            let answer = job();
+            DONE.lock().unwrap().push((id, answer));
+            unsafe {
+                let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_DONE, WPARAM(0), LPARAM(0));
+            }
+        });
+        Some(())
+    });
+    if deferred.flatten().is_some() {
+        return Ok(());
+    }
     let answered = with_app(|app| {
         let (answer, events) = app.bridge.request(&url, body.as_deref());
         let line = format!("bridge {url}{} -> {} {} {}", body.as_ref().map_or(String::new(), |b| format!(" POST {b}")), answer.mime, answer.ok, answer.body.len());
@@ -555,14 +606,18 @@ fn answer_request(args: &ICoreWebView2WebResourceRequestedEventArgs) -> windows:
         (answer, events, app.env.clone())
     });
     let Some((answer, events, env)) = answered else { return Ok(()) };
-    let stream = unsafe { SHCreateMemStream(Some(&answer.body)) };
-    let headers = format!("Content-Type: {}; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store", answer.mime);
-    let response = unsafe { env.CreateWebResourceResponse(stream.as_ref(), 200, w!("OK"), &HSTRING::from(headers))? };
-    unsafe { args.SetResponse(&response)? };
+    respond(args, &env, &answer)?;
     for event in events {
         with_app(|app| app.event(event));
     }
     Ok(())
+}
+
+fn respond(args: &ICoreWebView2WebResourceRequestedEventArgs, env: &ICoreWebView2Environment, answer: &Answer) -> windows::core::Result<()> {
+    let stream = unsafe { SHCreateMemStream(Some(&answer.body)) };
+    let headers = format!("Content-Type: {}; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store", answer.mime);
+    let response = unsafe { env.CreateWebResourceResponse(stream.as_ref(), 200, w!("OK"), &HSTRING::from(headers))? };
+    unsafe { args.SetResponse(&response) }
 }
 
 /// Starts the launcher: the player's folder is set up, the window opens with the theme, and
@@ -681,13 +736,15 @@ pub fn run(options: Options) -> Result<i32, String> {
     let url = theme.url();
     let scripted = options.script.is_some();
     let host = sys::Windows { player_name: options.player_name.clone() };
+    let mut bridge = Bridge::new(folders, Box::new(host));
+    bridge.lobby = std::sync::Arc::new(std::sync::Mutex::new(crate::online::Lobby::new(options.lobby.clone())));
     APP.with(|a| {
         *a.borrow_mut() = Some(App {
             hwnd,
             env,
             controller,
             webview: webview.clone(),
-            bridge: Bridge::new(folders, Box::new(host)),
+            bridge,
             theme,
             launcher_ini,
             options,
@@ -696,6 +753,8 @@ pub fn run(options: Options) -> Result<i32, String> {
             acticks: 0,
             pinging: false,
             queue: VecDeque::new(),
+            waiting: Vec::new(),
+            next_job: 0,
             steps,
             running: Running::Idle,
             log,

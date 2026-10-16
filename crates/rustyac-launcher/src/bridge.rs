@@ -11,8 +11,10 @@ use crate::folders::{create_if_non_existant, AppFolder};
 use crate::ini::IniFile;
 use crate::jss::{self, Value};
 use crate::net;
+use crate::online;
 use crate::query::{html_encode, parse_query_string, url_decode, Params};
 use crate::sort;
+use std::sync::{Arc, Mutex};
 
 /// An exception a handler throws, as `ACSchemeHandler.DoProcess` answers it.
 #[derive(Clone, Debug, PartialEq)]
@@ -26,7 +28,7 @@ pub enum Thrown {
 }
 
 impl Thrown {
-    fn answer(&self) -> Answer {
+    pub(crate) fn answer(&self) -> Answer {
         match self {
             Thrown::ArgumentOutOfRange => Answer::message(&html_encode("A name/value pair is required: ac://setsetting/<inifile>?[<section>/]<name>=<value>")),
             Thrown::FileNotFound(name) => Answer::message(&format!("No such file: {name}")),
@@ -79,16 +81,16 @@ impl Answer {
     }
 
     /// `ACRequestData(returnValue)`: "OK" as text/html.
-    fn plain(ok: bool) -> Answer {
+    pub(crate) fn plain(ok: bool) -> Answer {
         Answer::new(ok, "text/html", "OK")
     }
 
     /// `Message(text)`.
-    fn message(text: &str) -> Answer {
+    pub(crate) fn message(text: &str) -> Answer {
         Answer::new(true, "text/html", text)
     }
 
-    fn json(text: &str) -> Answer {
+    pub(crate) fn json(text: &str) -> Answer {
         Answer::new(true, "application/json", text)
     }
 }
@@ -138,6 +140,7 @@ pub struct Bridge {
     event_count: String,
     /// Requests whose handler is not ported (they answer "OK"); the shell logs them.
     pub not_ported: Vec<String>,
+    pub lobby: Arc<Mutex<online::Lobby>>,
 }
 
 /// One request split as `new Uri(url)` has it: host (lower case), `AbsolutePath`, `Query`.
@@ -161,16 +164,31 @@ fn split_once_slash(s: &str) -> Vec<&str> {
 
 impl Bridge {
     pub fn new(folders: AppFolder, host: Box<dyn Host>) -> Bridge {
-        Bridge { folders, host, generated_css: String::new(), car_count: String::new(), event_count: "0".into(), not_ported: Vec::new() }
+        Bridge { folders, host, generated_css: String::new(), car_count: String::new(), event_count: "0".into(), not_ported: Vec::new(), lobby: Arc::new(Mutex::new(online::Lobby::new(None))) }
     }
 
-    /// `ACSchemeHandler.DoProcess`: the answer and what the window has to do.
-    pub fn request(&mut self, url: &str, post: Option<&str>) -> (Answer, Vec<Event>) {
+    fn params(url: &str, post: Option<&str>) -> (String, String, Params) {
         let (host, path, query) = split_url(url);
         let mut params = parse_query_string(&query);
         if let Some(body) = post {
             params.add_all(&parse_query_string(&url_decode(body)));
         }
+        (host, path, params)
+    }
+
+    /// The request when it waits on the network (the online handlers), to be run off the
+    /// window's thread; it raises no event.
+    pub fn job(&self, url: &str, post: Option<&str>) -> Option<online::Job> {
+        let (host, _, params) = Bridge::params(url, post);
+        online::job(&host, &params, &self.lobby, || self.host.player_id(), &format!("{}launcher.ini", self.folders.user_config_dir))
+    }
+
+    /// `ACSchemeHandler.DoProcess`: the answer and what the window has to do.
+    pub fn request(&mut self, url: &str, post: Option<&str>) -> (Answer, Vec<Event>) {
+        if let Some(job) = self.job(url, post) {
+            return (job(), Vec::new());
+        }
+        let (host, path, params) = Bridge::params(url, post);
         let mut events = Vec::new();
         let answer = match self.handle(&host, &path, &params, &mut events) {
             Some(Ok(a)) => a,
@@ -264,8 +282,7 @@ impl Bridge {
             // left for later (docs/port/launcher.md, Not done): they answer "OK"
             "runtest" | "calibrate" | "showroom" | "requestcode" | "checklicense" | "requestlicense" | "copytoclipboard" | "openforum" | "browseto"
             | "sendbenchmark" | "sendcrash" | "print" | "addtoleaderboard" | "initjslibs" | "js" | "getscripts" | "addreplay" | "listreplays"
-            | "delreplay" | "updreplay" | "storereplay" | "getserver" | "getserverlist" | "getlanservers" | "getservercached" | "pingserver"
-            | "getvideopage" | "gethash" | "getcars" => {
+            | "delreplay" | "updreplay" | "storereplay" | "getvideopage" | "gethash" | "getcars" => {
                 self.not_ported.push(host.to_string());
                 Ok(Answer::plain(true))
             }

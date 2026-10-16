@@ -695,8 +695,10 @@ dependencies = [
 name = "rustyac-launcher"
 version = "0.35.0"
 dependencies = [
+ "flate2",
  "rustyac-content",
  "rustyac-game",
+ "rustyac-net",
  "webview2-com",
  "windows",
  "windows-core",

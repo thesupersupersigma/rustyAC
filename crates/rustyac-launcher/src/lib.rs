@@ -9,6 +9,7 @@
 //! * [`ini`], [`appini`]: `IniFile` (the Win32 profile functions) and `AppIniFile`.
 //! * [`jss`], [`query`], [`net`], [`sort`]: the .NET pieces the answers depend on, byte for
 //!   byte (`JavaScriptSerializer`, `HttpUtility`, string and file helpers, `Array.Sort`).
+//! * [`online`]: the server list, a server's details, ping and the LAN scan.
 //! * [`shell`]: `MainWindow`, the window with the browser in it, and starting rustyac.exe.
 //! * [`transcript`]: the answers to a list of requests, as the launcher oracle writes them.
 //!
@@ -24,6 +25,7 @@ pub mod folders;
 pub mod ini;
 pub mod jss;
 pub mod net;
+pub mod online;
 pub mod query;
 pub mod setup;
 pub mod shell;

@@ -15,6 +15,7 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --script <file>        steps that drive the page (wait / js / click / until / shot / game-exit / log)
   --log <file>           every request, event and script error
   --offscreen <w>x<h>    the window off the screen, at that size (with --script)
+  --lobby <host:port>    the server list from there instead of Kunos' lobby (a recording)
   --transcript <requests> <out>   no window: the bridge's answers to a list of requests";
 
 #[cfg(windows)]
@@ -32,6 +33,7 @@ fn main() {
     let mut log = None;
     let mut offscreen = None;
     let mut transcript = None;
+    let mut lobby = None;
     let mut args = std::env::args().skip(1);
     let fail = |m: String| -> ! {
         eprintln!("{m}\n{USAGE}");
@@ -52,6 +54,7 @@ fn main() {
                 let size = v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
                 offscreen = Some(size.unwrap_or_else(|| fail(format!("--offscreen {v}: <w>x<h>"))));
             }
+            "--lobby" => lobby = Some(value()),
             "--transcript" => {
                 let requests = value();
                 transcript = Some((requests, value()));
@@ -68,7 +71,7 @@ fn main() {
     let absolute = |p: PathBuf| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned();
     let (root, docs) = (absolute(root), absolute(docs));
     if let Some((requests, out)) = transcript {
-        if let Err(e) = rustyac_launcher::transcript::run(&root, &docs, &requests, &out) {
+        if let Err(e) = rustyac_launcher::transcript::run(&root, &docs, &requests, &out, lobby) {
             fail(format!("transcript: {e}"));
         }
         return;
@@ -82,7 +85,7 @@ fn main() {
         })
         .unwrap_or_else(|| "You, the player".into());
     let script = script.map(|s| std::fs::read_to_string(&s).unwrap_or_else(|e| fail(format!("{}: {e}", s.display()))).lines().map(str::to_string).collect());
-    let options = rustyac_launcher::shell::Options { ac_root: root, docs, game, game_args, player_name, script, log, offscreen };
+    let options = rustyac_launcher::shell::Options { ac_root: root, docs, game, game_args, player_name, script, log, offscreen, lobby };
     match rustyac_launcher::shell::run(options) {
         Ok(code) => std::process::exit(code),
         Err(e) => fail(format!("rustyac-launcher: {e}")),

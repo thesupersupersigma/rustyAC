@@ -7,7 +7,10 @@
 // transcript the Rust port writes too; the files the handlers write stay in the fake folder.
 // See docs/port/launcher.md.
 //
-//   launcher_oracle --docs <fake folder> --requests <file> --out <transcript>
+//   launcher_oracle --docs <fake folder> --requests <file> --out <transcript> [--lobby 127.0.0.1:<port>]
+//
+// --lobby moves the launcher's lobby host (ACRequestHandler._lobbyserver) to the stand-in of
+// LobbyServer.cs and lets the online handlers run; without it they are refused.
 //
 // A request file has one line a request: `GET <url>`, `POST <url><TAB><body>`, or
 // `FORMAT <name>` (AppIniFile.Format of cfg\<name>.ini, what "start" does before it starts the
@@ -61,7 +64,8 @@ static class Program
 
     static int Main(string[] args)
     {
-        string docs = null, requests = null, outFile = null;
+        string docs = null, requests = null, outFile = null, lobby = null, serve = null, log = null;
+        int port = 0;
         for (int i = 0; i + 1 < args.Length; i += 2)
         {
             switch (args[i])
@@ -69,13 +73,30 @@ static class Program
                 case "--docs": docs = Path.GetFullPath(args[i + 1]).TrimEnd('\\') + "\\"; break;
                 case "--requests": requests = args[i + 1]; break;
                 case "--out": outFile = args[i + 1]; break;
+                case "--lobby": lobby = args[i + 1]; break;
+                case "--serve": serve = args[i + 1]; break;
+                case "--port": port = int.Parse(args[i + 1]); break;
+                case "--log": log = args[i + 1]; break;
                 default: Console.Error.WriteLine("unknown option " + args[i]); return 2;
             }
         }
+        if (serve != null && port > 0 && log != null)
+            return LobbyServer.Serve(serve, port, log);
         if (docs == null || requests == null || outFile == null)
         {
-            Console.Error.WriteLine("usage: launcher_oracle --docs <fake folder> --requests <file> --out <transcript>");
+            Console.Error.WriteLine("usage: launcher_oracle --docs <fake folder> --requests <file> --out <transcript> [--lobby 127.0.0.1:<port>]");
+            Console.Error.WriteLine("       launcher_oracle --serve <recordings> --port <n> --log <file>");
             return 2;
+        }
+        // The online handlers run only with the lobby moved to the stand-in on this machine.
+        if (lobby != null)
+        {
+            if (!lobby.StartsWith("127.0.0.1:"))
+            {
+                Console.Error.WriteLine("refused: --lobby must be 127.0.0.1:<port>");
+                return 2;
+            }
+            Allowed.UnionWith(new[] { "getserverlist", "getserver", "getservercached", "getlanservers", "pingserver" });
         }
         string personal = Environment.GetFolderPath(Environment.SpecialFolder.Personal).TrimEnd('\\') + "\\";
         if (docs.StartsWith(personal, StringComparison.OrdinalIgnoreCase) || docs.IndexOf("\\re\\scratch\\",StringComparison.OrdinalIgnoreCase) < 0)
@@ -121,6 +142,8 @@ static class Program
             }
         }
         Type handlerType = launcher.GetType("AC.Launcher.ACRequestHandler", true);
+        if (lobby != null)
+            handlerType.GetField("_lobbyserver", Any).SetValue(null, lobby);
         Type appIni = launcher.GetType("AC.Launcher.Utility.AppIniFile", true);
         MethodInfo message = handlerType.GetMethod("Message", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(string), typeof(bool) }, null);
 
