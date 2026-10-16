@@ -16,6 +16,9 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --log <file>           every request, event and script error
   --offscreen <w>x<h>    the window off the screen, at that size (with --script)
   --lobby <host:port>    the server list from there instead of Kunos' lobby (a recording)
+  --import-pbs [<folder>] copy the personal bests of an Assetto Corsa Documents folder (default:
+                         Documents\\Assetto Corsa) into <docs>\\personalbest.ini, where they beat
+                         ours, then exit; that folder is only read
   --transcript <requests> <out>   no window: the bridge's answers to a list of requests";
 
 #[cfg(windows)]
@@ -34,7 +37,8 @@ fn main() {
     let mut offscreen = None;
     let mut transcript = None;
     let mut lobby = None;
-    let mut args = std::env::args().skip(1);
+    let mut import_pbs = None;
+    let mut args = std::env::args().skip(1).peekable();
     let fail = |m: String| -> ! {
         eprintln!("{m}\n{USAGE}");
         std::process::exit(2)
@@ -55,6 +59,7 @@ fn main() {
                 offscreen = Some(size.unwrap_or_else(|| fail(format!("--offscreen {v}: <w>x<h>"))));
             }
             "--lobby" => lobby = Some(value()),
+            "--import-pbs" => import_pbs = Some(args.next_if(|v| !v.starts_with("--")).map(PathBuf::from)),
             "--transcript" => {
                 let requests = value();
                 transcript = Some((requests, value()));
@@ -65,6 +70,18 @@ fn main() {
             }
             _ => fail(format!("unknown option {a}")),
         }
+    }
+    if let Some(from) = import_pbs {
+        let Some(from) = from.or_else(rustyac_content::install::documents) else { fail("--import-pbs: no Documents\\Assetto Corsa folder found: name it".into()) };
+        let (from, to) = (from.join("personalbest.ini"), docs.join("personalbest.ini"));
+        if !from.is_file() {
+            fail(format!("--import-pbs: no {}", from.display()));
+        }
+        match rustyac_launcher::pbs::import(&from.to_string_lossy(), &std::path::absolute(&to).unwrap_or(to.clone()).to_string_lossy()) {
+            Ok((copied, kept)) => println!("personal bests from {}: {copied} copied into {}, {kept} of ours as good or better kept", from.display(), to.display()),
+            Err(e) => fail(format!("--import-pbs: {e:?}")),
+        }
+        return;
     }
     rustyac_content::install::set_ac_root(ac_root);
     let Some(root) = rustyac_content::install::ac_root() else { fail(rustyac_content::install::not_found_hint()) };

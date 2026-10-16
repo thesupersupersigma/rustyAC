@@ -3,7 +3,8 @@
 ## Resume here
 
 Done: the three small fixes; the online pages (lobby list, LAN, details, ping, password,
-join); the replays page. Next: stats and the PB manager (`--import-pbs`).
+join); the replays page; stats, the PB manager and `--import-pbs`. Next: the first-run wizard and the
+language picker.
 
 ## The three small fixes
 
@@ -74,3 +75,30 @@ What's ported: `crates/rustyac-launcher/src/replays.rs`; the launcher starts rus
 | The page | The real theme in the port, scripted: Replay → rename `x.acreplay` → delete `zero.acreplay` → Load | the list and files change as asked; rustyac.exe starts with `--replay ...barth500@magione_t36.acreplay` and reads it (`AC replay version 16: abarth500 on magione`) |
 
 ![Replays](launcher_replays.jpg)
+
+## Stats, personal bests and `--import-pbs`
+
+How the original works: stats and the PB manager are page code only. They keep an IndexedDB
+database `Stats` (stores `personalBest` and `journal`) in the browser's storage. At every start
+the PB manager reads `personalbest.ini` of the player's folder (`ac://getiniasjson/personalbest`)
+into it, keeping the better time of each `car@track`. After a new PB and when the launcher
+closes, it writes its whole list back to that file (`http://ac/savejson/personalbest/?format=ini`).
+acs.exe writes the same file. Both handlers are Task 35's, already proven identical.
+
+Where the original's CEF keeps its storage: `CachePath = AppFolder.UserLauncherDataDir`
+(`App.xaml.cs`), that is `Documents\Assetto Corsa\launcherdata\`. On this PC that folder holds
+only `filestore\champs.ini`: no IndexedDB, so no stats journal to bring over. The PBs are in
+`Documents\Assetto Corsa\personalbest.ini`, which the page itself loads at every start.
+
+What's ported: `rustyac-launcher --import-pbs [<Documents\Assetto Corsa>]`
+(`crates/rustyac-launcher/src/pbs.rs`). It runs only when asked and only reads the other folder.
+For each combo in its `personalbest.ini` it copies `DATE` and `TIME` into ours, unless ours is as
+good or better. It writes with the launcher's own ini writer, then exits; the page picks the PBs
+up on its next start.
+
+| Proof | How | Result |
+|---|---|---|
+| The import | A copy of the real `personalbest.ini` (27 combos) into a folder that already has 2 combos, one of them faster than the real one | `26 copied, 1 of ours as good or better kept`; a second run: `0 copied, 27 kept`; the source byte-identical before and after |
+| The page | Made-up PBs imported, then the launcher started, scripted | the PB manager logs `new pb for` each of the 3 combos; Stats shows the last PB `1:24.321 BMW Z4 GT3 @ Laguna Seca` |
+
+![Stats](launcher_stats.jpg)

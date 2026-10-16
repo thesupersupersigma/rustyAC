@@ -10,6 +10,7 @@
 //! * [`jss`], [`query`], [`net`], [`sort`]: the .NET pieces the answers depend on, byte for
 //!   byte (`JavaScriptSerializer`, `HttpUtility`, string and file helpers, `Array.Sort`).
 //! * [`online`]: the server list, a server's details, ping and the LAN scan.
+//! * [`pbs`]: `--import-pbs`, the personal bests of an Assetto Corsa install.
 //! * [`replays`]: the replays page's files.
 //! * [`shell`]: `MainWindow`, the window with the browser in it, and starting rustyac.exe.
 //! * [`transcript`]: the answers to a list of requests, as the launcher oracle writes them.
@@ -27,6 +28,7 @@ pub mod ini;
 pub mod jss;
 pub mod net;
 pub mod online;
+pub mod pbs;
 pub mod query;
 pub mod replays;
 pub mod setup;

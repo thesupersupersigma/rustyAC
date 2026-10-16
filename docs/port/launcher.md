@@ -268,4 +268,5 @@ Free on C: at the start 33 GB, at the end 27 GB (after deleting the old build, s
 - `getvideomodes` comes from DXGI because `acVideoModes.dll` is 32-bit; its list matched the
   oracle's on this PC, another driver could order modes differently.
 - The theme's personal bests live in WebView2's storage under `launcherdata\`; the original
-  kept them in CEF's. Nothing moves them from an existing AC install.
+  kept them in CEF's. `rustyac-launcher --import-pbs` brings an install's in (Task 36,
+  docs/port/launcher_online.md).
