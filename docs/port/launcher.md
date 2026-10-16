@@ -2,10 +2,9 @@
 
 ## Resume here
 
-- Task 35 is done up to the end checks: the launcher (`crates/rustyac-launcher`), its proofs
+- Task 35 is done and released as v0.35.0: the launcher (`crates/rustyac-launcher`), its proofs
   (`tools/launcher_oracle`, `re/scratch/task35/cmp.sh`), all four sessions and Options driven
-  by scripts, this report. Left: the end checks' results in the tables below
-  (`re/scratch/task35/end_a.sh`, `end_b.sh`), then the release (v0.35.0).
+  by scripts, the end checks (tables below), this report. Next is Task 36 (see Not done).
 - To redo a proof: `sh re/scratch/task35/cmp.sh req/<name>.txt <name>` then
   `python re/scratch/task35/tdiff.py out/<name>_o.txt out/<name>_r.txt` (in `re/scratch/task35`).
 - To redo a scripted run: `re/scratch/task35/sessions.sh`, or the command under
@@ -195,7 +194,7 @@ original; the shots below are compared with the theme itself.
 | the committed net tape (`laguna_join_3000.netgold`) | IDENTICAL at all 3000 steps three ways: desktop, browser transport, through a real gateway |
 | plain CLI, `--no-race-ini --car abarth500 --track magione` | runs, exit 0 |
 | a Content Manager race.ini, `--race-ini <file>` with a `[CAR_1]` AI car | runs: the AI car and the Quick Race session from the file |
-| GUI sequences of Tasks 29–34 | (end_b) |
+| GUI sequences of Tasks 29–34 (41: 35 HUD/app/menu, 6 setup) | command log, pixels, state and events IDENTICAL in all 41 |
 
 One thing the checks caught: `graphics.documents_folder` now means `Documents\Assetto Corsa`
 (for `--documents`), and render_oracle's port side still handed it the Documents folder;
@@ -247,7 +246,7 @@ launcher has no other DLC check.
 
 ## Disk
 
-Free on C: at the start 33 GB, at the end (filled in).
+Free on C: at the start 33 GB, at the end 27 GB (after deleting the old build, see below).
 
 ## Not done
 
