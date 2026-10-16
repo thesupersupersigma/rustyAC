@@ -65,6 +65,27 @@ everything that links the car physics is GPL.
   keep their own licenses. They are not in this repository. The browser preview's build also
   downloads the programs `wasm-bindgen` and binaryen's `wasm-opt` (`web/build.py`).
 
+## FMOD (additional permission)
+
+rustyAC plays Assetto Corsa's sound through FMOD, a closed-source audio engine by
+Firelight Technologies Pty Ltd. On Windows it uses the FMOD DLLs from the player's own
+Assetto Corsa install. In the browser it uses FMOD's HTML5 (WebAssembly) build, served by
+the website next to the game. FMOD is not part of this repository or its releases and is
+not covered by the GPL: it is under the FMOD End User License Agreement
+(https://www.fmod.com/legal).
+
+**Additional permission under GNU GPL version 3 section 7.** If you modify this Program,
+or any covered work, by linking or combining it with the FMOD Engine (or a modified
+version of that library), containing parts covered by the terms of the FMOD End User
+License Agreement, the licensors of this Program grant you additional permission to
+convey the resulting work. The FMOD Engine itself is not part of the Corresponding Source.
+
+This permission applies to the files licensed GPL-3.0-or-later. The MIT / Apache-2.0 and
+BSD-3-Clause files need no exception.
+
+Where rustyAC plays sound through FMOD it shows the credit FMOD's licence asks for:
+"Audio engine: FMOD Studio by Firelight Technologies Pty Ltd."
+
 ## No Assetto Corsa files
 
 No file of Assetto Corsa is in this repository: not the executable, not its content, cars or

@@ -1,45 +1,92 @@
-# rustyAC
+# rustyAC — Assetto Corsa rewritten in Rust
 
 [![CI](https://github.com/thesupersupersigma/rustyAC/actions/workflows/ci.yml/badge.svg)](https://github.com/thesupersupersigma/rustyAC/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/thesupersupersigma/rustyAC)](https://github.com/thesupersupersigma/rustyAC/releases)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSING.md)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2)](https://discord.gg/trvtVNWzaf)
 
-assetto corsa rust rewrite
+**rustyAC** is an open-source rewrite of the racing simulator **Assetto Corsa** (Kunos Simulazioni, 2014) in **Rust**. It aims to be a 1:1, **bit-exact** copy of the original game, `acs.exe` 1.16: the same physics, renderer, sound, AI, multiplayer, HUD and launcher. Every part is checked against the original game's own code.
 
-**Download:** the Windows builds are on the [Releases page](https://github.com/thesupersupersigma/rustyAC/releases) (you need your own Assetto Corsa install).
+It runs on Windows with your own Assetto Corsa install, and in the browser through WebAssembly at **[rustyac.com](https://rustyac.com)**.
 
-**In a browser (a preview):** the same physics as WebAssembly, with a small picture, keyboard and gamepad. Each release has a `-web.zip` with the site; you open your own Assetto Corsa folder in the page. How to build and host it: [docs/web.md](docs/web.md).
+> Not affiliated with or endorsed by Kunos Simulazioni or 505 Games. No game files are included: rustyAC loads the cars, tracks, sounds and shaders from **your own legal copy** of Assetto Corsa.
 
-very experimental, join the [very experimental discord](https://discord.gg/trvtVNWzaf) too (https://discord.gg/trvtVNWzaf)
+---
 
-idk rust, if ur gonna hate on me using claude for this msg me on discord at thesuper2sigma 
+## Download and play
 
-## What it can do so far
+**Windows**
+1. Get the newest zip from the **[Releases page](https://github.com/thesupersupersigma/rustyAC/releases)** and unzip it somewhere you can write to (not `Program Files`).
+2. Run **`rustyac-launcher.exe`**. It opens Assetto Corsa's own launcher menu, so you can pick a car, track and session (practice, quick race, race weekend, hotlap, online, special events, career), then press Drive.
+3. `rustyac.exe` also runs on its own from the command line, or from a Content Manager `race.ini`. Run `rustyac.exe --help` for the options.
 
-it renders the car model and map model from assetto corsa installation kinda good now. tyre physics are improving from what ive tested.
-Doing a fat burnout (no smoke yet) pops both rear tyres (unless u have damage off), and it just about adds up with how the actual cars handles in the real game (WITHOUT CSP, if you have CSP enabled in assetto corsa the cars wont handle the same).
+**Browser:** play at **[rustyac.com/play](https://rustyac.com/play)**. Same physics as the desktop build, compiled to WebAssembly, with keyboard and gamepad. Each release also has a `-web.zip` you can host yourself (see [docs/web.md](docs/web.md)).
 
-## WASM build
+---
 
-wasm build has basically same stuff but it currently doesnt use assetto corsa asctual renderer, it also has no sounds. its basically a shittier version of the exe.
+## What works
 
-## What i want it to do once its done
+| Area | Status |
+|---|---|
+| **Physics** | Bit-exact with the original: tyres, suspension, drivetrain, aero, electronics (TC, ABS, ERS/KERS, DRS), damage. **119 of 123 cars** and **44 track layouts** load. |
+| **Collisions** | ODE 0.13.1 ported to Rust; car-vs-car and car-vs-track contacts, the original's thread pool (same result at any thread count). |
+| **Renderer** | Assetto Corsa's own D3D11 renderer with its own shaders: lighting, shadows, sky, cars, dashboards, mirrors, smoke, skid marks, MSAA / FXAA / motion blur. Post-processing (YEBIS) is not done yet. |
+| **Sound** | AC's own FMOD sound banks, every car. |
+| **Racing** | AI drivers, sessions, flags, penalties, results, pit stops and pit crew, replays (your real `.acreplay` files), ghost car. |
+| **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
+| **Launcher** | AC's own launcher, with Kunos' theme from your install. |
+| **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
+| **Browser** | Bit-exact physics in WebAssembly, browser multiplayer. AC's full renderer, HUD and sound in the browser are being worked on. |
 
-i wanna shoot someone while driving or shoot someone that is driving, or run over someone skating idk. OR use tnt or like lava
+Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't load, and cars handle like **vanilla** Assetto Corsa (CSP changes the physics).
 
-also wanna give it better crash physics bcus vanilla assetto corsa crash physics is pure shit. also better tyre, aero, + other things physics bcus why not.
-ill prob have like 2 versions where 1 is just pure vanilla ac and another version where its the "enhanced version", as claude likes to call it.
+---
 
-## Will i work on this every day
+## How it's verified
 
-no. i have SAT's and shit to stufy for, plus i need some tokens to study.
+rustyAC isn't "inspired by" Assetto Corsa: each part is ported from the original game's code and then **proven identical**.
 
-## Contributing
+- **Oracles:** test tools load the original `acs.exe` into the same process and run its own functions side by side with the Rust port, comparing every value bit for bit (physics, AI, referee, pit stops, replays).
+- **Renderer and UI:** every D3D11 call and every pixel (on Microsoft's WARP software renderer) is compared frame by frame against the original.
+- **Sound:** every FMOD call is logged and compared.
+- **Multiplayer:** network traffic is compared message by message with the original client.
+- **Launcher:** a .NET harness runs the original launcher's own code and compares every answer and every file written.
 
-idk make a pull request, claude is 100% gonna review (i will too) it so idk if it works, it works.
+Each task's proof is written up in [`docs/port/`](docs/port).
+
+---
+
+## Roadmap
+
+- **Vanilla** (now): a complete 1:1 Assetto Corsa. Left: the full renderer, HUD and sound in the browser; AC's Python app API; dev and modding tools; game modes; the rest of the cameras; VR and triple screens; Content Manager support.
+- **Enhanced** (later): the same game with upgraded physics (tyres, aero, soft-body crash damage), plus some chaos (yes, tnt and lava).
+
+---
+
+## Build from source
+
+Windows, Rust stable:
+
+```
+git clone https://github.com/thesupersupersigma/rustyAC
+cd rustyAC
+cargo build --release
+```
+
+The release and browser builds are described in [docs/release.md](docs/release.md) and [docs/web.md](docs/web.md).
+
+---
+
+## Contributing and community
+
+Pull requests are welcome. Questions, bugs and ideas: the **[rustyAC Discord](https://discord.gg/trvtVNWzaf)**, or GitHub issues.
+
+rustyAC is a hobby project, so updates come in bursts. Much of the code is written with AI help (Claude), and every port is checked against the original game rather than trusted.
+
+---
 
 ## License
 
-Every file is licensed: GPL-3.0-or-later for the game and the physics, MIT OR Apache-2.0 for the small standalone libraries and tools, BSD-3-Clause for the ODE port. See [LICENSING.md](LICENSING.md).
+GPL-3.0-or-later for the game and the physics, MIT OR Apache-2.0 for the small standalone libraries and tools, BSD-3-Clause for the ODE port. Details, and the FMOD exception, in [LICENSING.md](LICENSING.md).
 
-# Hi
-
-hi
+*Assetto Corsa is a trademark of Kunos Simulazioni / 505 Games. rustyAC is an independent fan project.*
