@@ -169,7 +169,6 @@ struct App {
     webview: ICoreWebView2,
     bridge: Bridge,
     theme: Theme,
-    launcher_ini: IniFile,
     options: Options,
     game: Option<Child>,
     ac_active: bool,
@@ -272,12 +271,8 @@ impl App {
                     unsafe { SetTimer(Some(self.hwnd), TIMER_PING, 2000, None) };
                 }
                 // the launcher's own screen comes first: the languages to choose from the first
-                // time, then its menu, whose buttons enter the theme. Here the theme is entered
-                // at once, in English the first time.
-                if self.launcher_ini.read(Some("WINDOW"), Some("LANGUAGE")).is_empty() {
-                    let _ = self.launcher_ini.write(Some("WINDOW"), Some("LANGUAGE"), Some("en"));
-                    self.exec("$.setLanguage('en')");
-                }
+                // time (see WIZARD_JS), then its menu, whose buttons enter the theme. Here the
+                // theme is entered at once.
                 self.enter_theme("ACIntroEvent");
             }
             "forcetotheme" => self.enter_theme("ACIntroEvent"),
@@ -484,6 +479,13 @@ const REPORT_JS: &str = "(function(){var post=function(k,m){try{window.chrome.we
 window.addEventListener('error',function(e){post('error',e.message+' @ '+e.filename+':'+e.lineno)});\
 window.addEventListener('unhandledrejection',function(e){post('error','unhandled rejection '+e.reason)});\
 ['log','warn','error'].forEach(function(l){var o=console[l];console[l]=function(){post('console.'+l,Array.prototype.map.call(arguments,String).join(' '));return o.apply(console,arguments)}});})();";
+
+/// The original asks the language the first time on its own WPF screen (English, Italiano) and
+/// writes launcher.ini [WINDOW] LANGUAGE. The theme's own first-run wizard asks the same two and
+/// writes the same key, but the default theme never loads it: loaded with the theme's modules, it
+/// shows itself only while that key is empty.
+// jQuery's trigger("loadModules") also calls document.onloadModules, which needs no jQuery yet
+const WIZARD_JS: &str = "document.onloadModules=function(){__AC.loadModule('FirstRunWizard','body > .modules','en',null,true)};";
 
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
@@ -751,7 +753,6 @@ pub fn run(options: Options) -> Result<i32, String> {
             webview: webview.clone(),
             bridge,
             theme,
-            launcher_ini,
             options,
             game: None,
             ac_active: false,
@@ -802,6 +803,7 @@ pub fn run(options: Options) -> Result<i32, String> {
         }));
         webview.add_NewWindowRequested(&handler, &mut token).map_err(|e| e.to_string())?;
         webview.AddScriptToExecuteOnDocumentCreated(&HSTRING::from(REPORT_JS), None).map_err(|e| e.to_string())?;
+        webview.AddScriptToExecuteOnDocumentCreated(&HSTRING::from(WIZARD_JS), None).map_err(|e| e.to_string())?;
         webview.Navigate(&HSTRING::from(url)).map_err(|e| e.to_string())?;
         if scripted {
             SetTimer(Some(hwnd), TIMER_SCRIPT, 100, None);

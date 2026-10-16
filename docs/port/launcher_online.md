@@ -3,8 +3,8 @@
 ## Resume here
 
 Done: the three small fixes; the online pages (lobby list, LAN, details, ping, password,
-join); the replays page; stats, the PB manager and `--import-pbs`. Next: the first-run wizard and the
-language picker.
+join); the replays page; stats, the PB manager and `--import-pbs`. the first-run language picker. Next: special
+events, career and championships.
 
 ## The three small fixes
 
@@ -102,3 +102,25 @@ up on its next start.
 | The page | Made-up PBs imported, then the launcher started, scripted | the PB manager logs `new pb for` each of the 3 combos; Stats shows the last PB `1:24.321 BMW Z4 GT3 @ Laguna Seca` |
 
 ![Stats](launcher_stats.jpg)
+
+## The first-run wizard and the language picker
+
+How the original works: when launcher.ini `[WINDOW] LANGUAGE` is empty, the WPF window shows
+two buttons, English and Italiano, on its own intro screen (`MainWindow.xaml` `Languages`,
+`SelectLanguage`). A click refreshes the window's texts, calls `$.setLanguage(...)` in the page
+and writes `[WINDOW] LANGUAGE`. The theme also ships a first-run wizard
+(`modules/firstrunwizard`) with the same two languages. It writes the same key
+(`ac://setsetting/launcher?WINDOW/language=<it>`), calls `setlanguage/<it>` and `home`. But the
+default theme's `ui.js` never loads it.
+
+What's ported: rustyAC has no WPF intro screen, so the picker is the theme's own wizard. The
+launcher loads it along with the theme's modules (`WIZARD_JS` in
+`crates/rustyac-launcher/src/shell.rs`), and it shows itself only while the key is empty. The
+port no longer writes `en` silently on the first run.
+
+| Proof | How | Result |
+|---|---|---|
+| First run | A fake Documents folder whose launcher.ini has no `LANGUAGE`, scripted: wait for the flags, click Italiano | the flags are `en,it`; `setsetting/launcher?WINDOW/language=it`, `setlanguage /it`, `home`; launcher.ini then has `LANGUAGE=it` |
+| Later runs | The page reloaded by `home` | the wizard loads and stays hidden (no second language selection) |
+
+![First run](launcher_wizard.jpg)

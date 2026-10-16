@@ -251,10 +251,10 @@ Free on C: at the start 33 GB, at the end 27 GB (after deleting the old build, s
 ## Not done
 
 - Task 36's part: online (server lists, `getserver`, ping), special events and career pages
-  beyond their lists, championships, stats, the replays page (`listreplays` answers OK and is
-  logged), the first-run wizard, the showroom (`showroom`).
-- The WPF parts around the browser: the splash and intro animation, the language picker (the
-  port writes `en` when none is set), the controls window (`showcontrols`: rustyAC has its own
+  beyond their lists, championships, stats, the replays page, the first-run wizard (those
+  four: Task 36, docs/port/launcher_online.md), the showroom (`showroom`).
+- The WPF parts around the browser: the splash and intro animation, the language picker (Task 36:
+  the theme's first-run wizard asks instead), the controls window (`showcontrols`: rustyAC has its own
   bindings), the music player (`startmusic` / `stopmusic` / `setvolume`), the benchmark
   (`runtest`), wheel calibration (`calibrate`), the dev tools window, messages boxes for
   content errors (logged instead).
