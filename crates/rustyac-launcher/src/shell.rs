@@ -572,9 +572,12 @@ fn answer_request(args: &ICoreWebView2WebResourceRequestedEventArgs) -> windows:
     let mut uri = PWSTR::null();
     unsafe { request.Uri(&mut uri)? };
     let url = take_pwstr(uri);
+    // CefWebRequestHandler.OnBeforeResourceLoad: http://ac/... is ac://..., as a POST
+    let posted = url.starts_with("http://ac/");
+    let url = if posted { url.replacen("http://ac/", "ac://", 1) } else { url };
     let mut method = PWSTR::null();
     unsafe { request.Method(&mut method)? };
-    let body = if take_pwstr(method) == "POST" {
+    let body = if posted || take_pwstr(method) == "POST" {
         unsafe { request.Content() }.ok().map(|s| String::from_utf8_lossy(&read_stream(&s)).into_owned())
     } else {
         None
@@ -771,6 +774,7 @@ pub fn run(options: Options) -> Result<i32, String> {
     unsafe {
         let mut token = 0i64;
         webview.AddWebResourceRequestedFilter(w!("ac://*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL).map_err(|e| e.to_string())?;
+        webview.AddWebResourceRequestedFilter(w!("http://ac/*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL).map_err(|e| e.to_string())?;
         let handler = WebResourceRequestedEventHandler::create(Box::new(|_, args| {
             if let Some(args) = args {
                 answer_request(&args)?;

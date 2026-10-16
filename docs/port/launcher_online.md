@@ -3,8 +3,8 @@
 ## Resume here
 
 Done: the three small fixes; the online pages (lobby list, LAN, details, ping, password,
-join); the replays page; stats, the PB manager and `--import-pbs`. the first-run language picker. Next: special
-events, career and championships.
+join); the replays page; stats, the PB manager and `--import-pbs`. the first-run language picker; special events,
+career and championships. Next: the end checks and the release.
 
 ## The three small fixes
 
@@ -124,3 +124,38 @@ port no longer writes `en` silently on the first run.
 | Later runs | The page reloaded by `home` | the wizard loads and stays hidden (no second language selection) |
 
 ![First run](launcher_wizard.jpg)
+
+## Special events, career and championships
+
+How the original works: all three are page code. A special event writes race.ini with
+`http://ac/savejson/race/?format=ini&clear=false&ignore=EVENT,ASSISTS` (the event's own
+`[SPECIAL_EVENT] GUID`, sessions and conditions), and then the player's car and skin. Career
+(`career2`) writes the event's race.ini the same way, `clear=true`. Its progress (series, event,
+tiers, unlocks) goes to `ac://setdata/career?...`, which is Documents\Assetto Corsa\launcherdata\
+filestore\career.ini. Championships are `.champ` JSON files in `Documents\Assetto Corsa\champs\`
+(`savejson/champs/<guid>.champ`), with standings in `setdata/champs?...`. After a race the page
+reads `ac://getresults` (race_out.json). It then scores the event (career tiers from the event's
+objectives, championship points from the points table), saves the scores and writes the next
+round's race.ini. The `http://ac/` requests: the original's CEF request handler
+(`CefWebRequestHandler.OnBeforeResourceLoad`) turns any `http://ac/...` into `ac://...` as a POST.
+
+What's ported: the handlers were Task 35's. The missing piece was that `http://ac/` turn: the
+port caught only `ac://`, so every `ACSaveToCfgIni` (special events, career, championships, the
+PB manager's save) never reached the launcher. Career's Start button stayed disabled.
+`crates/rustyac-launcher/src/shell.rs` now catches `http://ac/*` too and answers it as the `ac://`
+POST. The rules inside the game (a special event's tiers, the career's objectives, as acs.exe
+judges them) are Task 40.
+
+| Proof | How | Result |
+|---|---|---|
+| Career | First run, Career → Novice Series 1 → the first event → Start; rustyac.exe drives 20 s (`--autodrive`); the results page; continue | the page scores the event (`Objectives:100,1500,3000`); the request list of the whole run (3,755 requests, `race_out.json` of the run seeded) through the original's handlers and the port's: transcripts **identical**, the folders left behind identical (race.ini, career.ini, the rest) |
+| Special event | Drive → Challenges → Special Events (203 events) → Showdown (a drag race) → Start → results | 3,823 requests: **identical**, folders identical (race.ini with `[SPECIAL_EVENT] GUID=9`) |
+| Championship | Drive → Championships → create (the theme's default: 4 cars, Magione then Imola) → save → compete → Start; rustyac.exe runs practice, qualifying and race (`--next-session-at`) → results | the page gives out the points (10, 8, 6, the player 3) and writes round 2's race.ini; 4,011 requests: **identical**, folders identical (the `.champ` file, champs.ini standings, race.ini) |
+
+![Career](launcher_career.jpg)
+
+![Special events](launcher_special_list.jpg)
+
+![Championship](launcher_champs.jpg)
+
+![Championship results](launcher_champs_results.jpg)
