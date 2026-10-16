@@ -218,7 +218,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         camera.cube_map_renderer.set_camera_near_far_planes(f32::from_bits(0x3c23_d70a), crate::root::profile().cubemap_far_plane);
     }
     camera.set_cubemap_size(&graphics, crate::root::profile().cubemap_size);
-    graphics.documents_folder = crate::root::documents();
+    graphics.documents_folder = crate::root::documents().join("Assetto Corsa");
     // (the game's side seeds rand() again where the car is loaded: only with a car)
     if frame.car.is_some() {
         graphics.crt_rand = rustyac_physics::session::MsvcRand(crate::frames::RAND_SEED);
