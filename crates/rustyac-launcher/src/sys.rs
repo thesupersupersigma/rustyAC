@@ -7,7 +7,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
 use windows::Win32::Globalization::{GetLocaleInfoEx, LOCALE_SABBREVMONTHNAME1};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_MODE_DESC};
-use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1, DXGI_ENUM_MODES};
+use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory, IDXGIFactory, DXGI_ENUM_MODES};
 use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_DISPLAY_SETTINGS_MODE};
 use windows::Win32::System::Com::CoCreateGuid;
 use windows::Win32::System::SystemInformation::GetLocalTime;
@@ -71,11 +71,12 @@ impl Host for Windows {
     }
 
     fn video_modes(&self) -> Option<Vec<(i32, i32, f32)>> {
-        // acVideoModes.dll (32-bit, so a 64-bit launcher cannot load it): the first output of
-        // the first adapter
+        // acVideoModes.dll (32-bit, so a 64-bit launcher cannot load it), call for call:
+        // CreateDXGIFactory, EnumAdapters(0), EnumOutputs(0), GetDisplayModeList(R8G8B8A8_UNORM,
+        // 0), the modes kept in DXGI's own order (acInitVideoModes sorts nothing)
         unsafe {
-            let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
-            let output = factory.EnumAdapters1(0).ok()?.EnumOutputs(0).ok()?;
+            let factory: IDXGIFactory = CreateDXGIFactory().ok()?;
+            let output = factory.EnumAdapters(0).ok()?.EnumOutputs(0).ok()?;
             let mut n = 0u32;
             output.GetDisplayModeList(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_ENUM_MODES(0), &mut n, None).ok()?;
             let mut modes = vec![DXGI_MODE_DESC::default(); n as usize];
@@ -107,12 +108,18 @@ impl Host for Windows {
         self.player_name.clone()
     }
 
-    fn new_guid(&self) -> String {
-        let g = unsafe { CoCreateGuid() }.unwrap_or_default();
-        let d4 = g.data4;
-        format!(
-            "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            g.data1, g.data2, g.data3, d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]
-        )
-    }
-}
+    fn player_id(&self) -> String {
+        // rustyac.exe's own rule (it sits beside the launcher, so rustyac_net.ini is the same file)
+        match rustyac_game::identity::resolve(None, true, rustyac_content::install::ac_root().as_deref(), None) {
+            Ok(id) => id.guid,
+            // what the launcher answers without Steam
+            Err(_) => {
+                let g = unsafe { CoCreateGuid() }.unwrap_or_default();
+                let d4 = g.data4;
+                format!(
+                    "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    g.data1, g.data2, g.data3, d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]
+                )
+            }
+        }
+    }}

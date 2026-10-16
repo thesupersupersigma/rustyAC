@@ -3,7 +3,7 @@
 // Launcher oracle: Assetto Corsa's launcher (AssettoCorsa.exe) loaded as an assembly, never run
 // as a program. Its own ACRequestHandler answers the theme's ac:// requests the way
 // ACSchemeHandler.DoProcess hands them over, with every folder of the player's
-// (Documents\Assetto Corsa) moved to a fake one under re\scratch\task35. The answers go to a
+// (Documents\Assetto Corsa) moved to a fake one under re\scratch. The answers go to a
 // transcript the Rust port writes too; the files the handlers write stay in the fake folder.
 // See docs/port/launcher.md.
 //
@@ -78,9 +78,9 @@ static class Program
             return 2;
         }
         string personal = Environment.GetFolderPath(Environment.SpecialFolder.Personal).TrimEnd('\\') + "\\";
-        if (docs.StartsWith(personal, StringComparison.OrdinalIgnoreCase) || docs.IndexOf("\\re\\scratch\\task35\\", StringComparison.OrdinalIgnoreCase) < 0)
+        if (docs.StartsWith(personal, StringComparison.OrdinalIgnoreCase) || docs.IndexOf("\\re\\scratch\\",StringComparison.OrdinalIgnoreCase) < 0)
         {
-            Console.Error.WriteLine("refused: the fake folder must be under re\\scratch\\task35 and not in Documents: " + docs);
+            Console.Error.WriteLine("refused: the fake folder must be under re\\scratch and not in Documents: " + docs);
             return 2;
         }
         string acRoot = Environment.GetEnvironmentVariable("AC_ROOT") ?? @"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa";

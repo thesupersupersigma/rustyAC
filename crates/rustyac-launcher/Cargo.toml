@@ -17,6 +17,8 @@ path = "src/main.rs"
 rustyac-content = { path = "../rustyac-content" }
 
 [target.'cfg(windows)'.dependencies]
+# the player's id (getguid), the one rustyac.exe sends to a server
+rustyac-game = { path = "../rustyac-game" }
 # Microsoft's WebView2, the browser the theme runs in (the launcher has CEF 3)
 webview2-com = "0.39"
 

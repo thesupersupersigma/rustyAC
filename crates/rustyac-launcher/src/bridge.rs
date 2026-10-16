@@ -124,8 +124,9 @@ pub trait Host {
     fn month_abbrev(&self, month: u32) -> String;
     /// `SteamFriends.GetPersonaName`: rustyAC's player name.
     fn player_name(&self) -> String;
-    /// `GetGuid`: no Steam, so `Guid.NewGuid()`.
-    fn new_guid(&self) -> String;
+    /// `GetGuid`: the Steam id, else (where the launcher makes a new `Guid.NewGuid()` each
+    /// time) rustyAC's own id, the one rustyac.exe sends when it joins.
+    fn player_id(&self) -> String;
 }
 
 /// The handlers with the state the launcher keeps in static fields.
@@ -244,7 +245,7 @@ impl Bridge {
                     Answer::message("OK")
                 })
             }
-            "getguid" | "getid" => Ok(Answer::message(&self.host.new_guid())),
+            "getguid" | "getid" => Ok(Answer::message(&self.host.player_id())),
             "getresults" => Ok(self.get_results()),
             "getplayername" => Ok(Answer::message(&self.host.player_name())),
             // Steam's UserHasLicenseForApp: the game is installed, so it is owned
