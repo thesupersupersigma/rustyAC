@@ -543,8 +543,8 @@ fn replay_rig(options: &Options, window: bool) -> Option<Arc<Mutex<ReplayRig>>> 
     let mut ini = None;
     if options.race_ini != Some(false) {
         let mut files = Vec::new();
-        if let Some(home) = std::env::var_os("USERPROFILE") {
-            files.push(PathBuf::from(home).join("Documents/Assetto Corsa/cfg/replay.ini"));
+        if let Some(documents) = rustyac_content::install::documents() {
+            files.push(documents.join("cfg/replay.ini"));
         }
         if let Some(game) = rustyac_content::install::ac_root() {
             files.push(game.join("cfg/replay.ini"));
@@ -2570,6 +2570,9 @@ pub fn main() {
             std::process::exit(2);
         }
     };
+    if options.documents.is_some() {
+        rustyac_content::install::set_documents(options.documents.clone());
+    }
     // SAFETY: the handler only touches two atomics.
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(console_handler), true);

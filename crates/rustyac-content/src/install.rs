@@ -32,6 +32,24 @@ pub fn set_ac_root(root: Option<PathBuf>) {
     *GIVEN_ROOT.write().unwrap() = root;
 }
 
+static GIVEN_DOCUMENTS: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Says which folder stands for `Documents\Assetto Corsa` (`None`: the user's own again).
+/// rustyac.exe `--documents`: the launcher's folder, so a drive it starts reads the files it
+/// wrote.
+pub fn set_documents(folder: Option<PathBuf>) {
+    *GIVEN_DOCUMENTS.write().unwrap() = folder;
+}
+
+/// `Documents\Assetto Corsa` of the current user, where the game keeps the player's `cfg`,
+/// `setups`, `replay` and `out`, or the folder [`set_documents`] named. Read only.
+pub fn documents() -> Option<PathBuf> {
+    if let Some(folder) = GIVEN_DOCUMENTS.read().unwrap().clone() {
+        return Some(folder);
+    }
+    Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents").join("Assetto Corsa"))
+}
+
 /// Assetto Corsa's own folder, or `None` when it is not found. Read only.
 pub fn ac_root() -> Option<PathBuf> {
     if let Some(root) = GIVEN_ROOT.read().unwrap().clone() {

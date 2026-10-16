@@ -18,7 +18,7 @@ use crate::input_file::SimSetup;
 
 /// `Documents\Assetto Corsa` of the current user.
 pub fn documents_folder() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join("Documents").join("Assetto Corsa"))
+    rustyac_content::install::documents()
 }
 
 /// The game's last session file.

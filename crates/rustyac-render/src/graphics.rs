@@ -115,7 +115,7 @@ pub struct Graphics {
     /// (`ksRand`): one stream for all of them, in the order they ask. The game seeds it from
     /// the clock; whoever needs a run to repeat sets it.
     pub crt_rand: rustyac_physics::session::MsvcRand,
-    /// The user's Documents folder (`Path::getDocumentPath`), where `Assetto Corsa/cfg` is.
+    /// The user's `Documents\Assetto Corsa` (`Path::getDocumentPath`), where `cfg` is.
     pub documents_folder: std::path::PathBuf,
     /// rustyAC's own folder of generated ground shadows (`rustyac_cache/shadows`): a car without
     /// `body_shadow.png` whose pictures are there, and whose files have not changed since, is
@@ -224,7 +224,7 @@ impl Graphics {
 
         let mut graphics = Graphics {
             crt_rand: rustyac_physics::session::MsvcRand(1),
-            documents_folder: std::env::var_os("USERPROFILE").map(|p| std::path::PathBuf::from(p).join("Documents")).unwrap_or_default(),
+            documents_folder: rustyac_content::install::documents().unwrap_or_default(),
             shadow_cache: None,
             kgl,
             game_folder: game_folder.to_path_buf(),

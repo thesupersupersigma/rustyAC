@@ -305,8 +305,7 @@ fn usable(ini: &ControlsIni) -> bool {
 
 /// AC's own bindings file of the current user.
 pub fn ac_controls_path() -> Option<PathBuf> {
-    let home = std::env::var_os("USERPROFILE")?;
-    Some(PathBuf::from(home).join("Documents").join("Assetto Corsa").join("cfg").join("controls.ini"))
+    Some(rustyac_content::install::documents()?.join("cfg").join("controls.ini"))
 }
 
 /// `rustyac_controls.ini` next to the program.

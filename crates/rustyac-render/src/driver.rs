@@ -194,7 +194,7 @@ impl DriverModel {
         let mut skins_handled = false;
         let mut need_skin_folder = true;
         if guid == 0 {
-            if let Ok(skin_ini) = IniReader::load(&graphics.documents_folder.join("Assetto Corsa/cfg/driverskin.ini")) {
+            if let Ok(skin_ini) = IniReader::load(&graphics.documents_folder.join("cfg/driverskin.ini")) {
                 if skin_ini.has_section(&model_name) {
                     for part in ["SUIT", "GLOVES", "HELMET"] {
                         load_driver_skin(&mut kn5, &game, &skin_ini, &model_name, part);

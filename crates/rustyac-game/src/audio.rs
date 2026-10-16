@@ -377,7 +377,7 @@ pub struct GameAudio {
 
 /// Documents `Assetto Corsa`, where the game keeps `cfg/audio.ini`.
 fn documents() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("Documents").join("Assetto Corsa"))
+    rustyac_content::install::documents()
 }
 
 impl GameAudio {

@@ -330,6 +330,9 @@ pub struct Options {
     /// `--out-dir <folder>`: where `race_out.json` and `laps.ini` go (default: `out` beside
     /// rustyac.exe; never Assetto Corsa's own folders)
     pub out_dir: Option<PathBuf>,
+    /// `--documents <folder>`: that folder stands for `Documents\Assetto Corsa` (its `cfg`,
+    /// `setups`, `replay`); the launcher names its own
+    pub documents: Option<PathBuf>,
     pub ai_seed: Option<u32>,
     /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
     pub stand_in_drivers: bool,
@@ -488,6 +491,7 @@ impl Default for Options {
             next_session_at: Vec::new(),
             restart_session_at: Vec::new(),
             out_dir: None,
+            documents: None,
             ai_seed: None,
             stand_in_drivers: false,
             physics_threads: None,
@@ -794,6 +798,8 @@ for checks, without anybody at the controls:
                         console (Home: AC's console)  type:<text> (typed into it, then Enter)
   --cfg-dir <folder>    where rustyAC keeps its own acos.ini (the apps' layout) and gameplay.ini
                         (default: cfg beside rustyac.exe; Assetto Corsa's files are only read)
+  --documents <folder>  that folder instead of Documents\\Assetto Corsa (its cfg, setups, replay):
+                        the launcher names its own, so a drive reads the files it wrote
                         and without the virtual mirror
   --supersample <n>     with --screenshot: draw the picture n times wider and higher (2, 3 or 4) and
                         average it down to --width x --height: smoother edges and finer detail than
@@ -1038,6 +1044,7 @@ impl Options {
                 "--next-session-at" => o.next_session_at.push(value("--next-session-at")?.parse().map_err(|e| format!("--next-session-at: {e}"))?),
                 "--restart-session-at" => o.restart_session_at.push(value("--restart-session-at")?.parse().map_err(|e| format!("--restart-session-at: {e}"))?),
                 "--out-dir" => o.out_dir = Some(PathBuf::from(value("--out-dir")?)),
+                "--documents" => o.documents = Some(PathBuf::from(value("--documents")?)),
                 "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
                 "--stand-in-drivers" => o.stand_in_drivers = true,
                 "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),

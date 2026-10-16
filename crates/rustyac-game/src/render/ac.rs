@@ -313,7 +313,7 @@ fn video_ini_of(options: &AcOptions) -> Result<(Option<IniReader>, String), Stri
         let ini = IniReader::load(file).map_err(|e| format!("--video-ini {}: {e}", file.display()))?;
         return Ok((Some(ini), file.display().to_string()));
     }
-    let documents = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/video.ini"));
+    let documents = rustyac_content::install::documents().map(|p| p.join("cfg/video.ini"));
     Ok((documents.and_then(|p| IniReader::load(&p).ok()), "video.ini".to_string()))
 }
 
@@ -688,7 +688,7 @@ impl AcRenderer {
             }
         };
         let virtual_mirror = mirror.as_ref().map(|_| {
-            let ini = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents/Assetto Corsa/cfg/gameplay.ini")).and_then(|p| IniReader::load(&p).ok());
+            let ini = rustyac_content::install::documents().map(|p| p.join("cfg/gameplay.ini")).and_then(|p| IniReader::load(&p).ok());
             let active = match options.preset {
                 // every picture there is / the fewest
                 Some(preset) => preset == GraphicsPreset::Max,
@@ -915,7 +915,7 @@ impl AcRenderer {
             if let Some(pit) = pits.first() {
                 // cfg/gameplay.ini [PIT_INDICATOR] ONLY_IN_PITLINE: on when the key is missing
                 let mut only_in_pitline = true;
-                let gameplay = self.graphics.documents_folder.join("Assetto Corsa/cfg/gameplay.ini");
+                let gameplay = self.graphics.documents_folder.join("cfg/gameplay.ini");
                 if gameplay.is_file() {
                     if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&gameplay) {
                         if ini.has_key("PIT_INDICATOR", "ONLY_IN_PITLINE") {

@@ -251,8 +251,8 @@ impl CarShape {
     /// from AC's own `camera_onboard.ini` (read only) where that file exists.
     pub fn of(info: &crate::sim::CarInfo) -> CarShape {
         let mut shape = CarShape::load(&info.data_path, &info.wheel_positions, &info.tyre_width, &info.tyre_radius);
-        if let Some(home) = std::env::var_os("USERPROFILE") {
-            let path = Path::new(&home).join("Documents").join("Assetto Corsa").join("cfg").join("camera_onboard.ini");
+        if let Some(documents) = rustyac_content::install::documents() {
+            let path = documents.join("cfg").join("camera_onboard.ini");
             if let Ok(ini) = ControlsIni::load(&path) {
                 // `CameraOnBoard::CameraOnBoard`: a field of view of 0 means the default
                 let fov = ini.get_float("MODE", "FOV");
