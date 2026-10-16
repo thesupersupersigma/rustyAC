@@ -304,7 +304,9 @@ for something that is not ported, it says so here.
 1. **Step 2, the old mouse pit menu** (`PitStop`'s "Choosing" panel, which the game gives a
    keyboard driver instead of the arrow-key menu). It needs the pit stop's state machine of
    Task 28b to grow a state, which would change the physics side. Everybody gets the
-   arrow-key menu, as before.
+   arrow-key menu, as before. (Task 34: its state and clicks are ported in the physics and
+   proven against the game, `MousePitstop`; it is still not drawn or used, see
+   [online_menus.md](online_menus.md).)
 2. **Step 3, the banners at the end of a time attack, a drift session and a drag race**
    (rustyAC has none of the three session kinds).
 3. **Step 5, three pages of the ESC menu:** Setup (`SetupScreen`), Telemetry
@@ -329,9 +331,11 @@ for something that is not ported, it says so here.
    online system messages beyond those of Task 25. Online there is **no ESC menu at all**
    (its "Race control" page would lack those panels): "Back to pits" online works as in
    v0.29.0. The header of the ESC menu for online sessions is ported but drawn nowhere.
+   (Task 34: all of this item is done; see [online_menus.md](online_menus.md).)
 8. **Step 8, the browser's wgpu painter.** The browser preview still draws its own HUD.
 9. Smaller things the game has and rustyAC has not: the row of micro-sector boxes under the
-   overlay leaderboard's cells (`MicroSectors`), F7's free camera, Ctrl+M mouse steering,
+   overlay leaderboard's cells (`MicroSectors`), F7's free camera, Ctrl+M mouse steering
+   (Task 34: both done),
    JPEG screenshots, the delta column's performance meter (it shows zero), the free camera
    the results screen turns to.
 

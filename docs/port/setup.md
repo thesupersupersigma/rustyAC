@@ -346,12 +346,15 @@ Taken by `rustyac.exe` on the graphics card (not the oracle's software renderer)
    are therefore of the editor without it. No `.sp` file is written beside a saved setup.
    The brief also found that Task 28b's `QuickMenu::save_presets` writes a blank line after
    each preset which the game does not; it is not fixed, as nothing writes that file yet.
+   (Task 34: the page, the `.sp` files and the blank line are done; see
+   [online_menus.md](online_menus.md).)
 2. **The server's fixed setup online** (TCP message 0x52, `ACClient::onSetupReceived`
    0x140050090 and its job 0x14003caf0). The message is parsed (Task 25) and still ignored.
    The loader's `fixed` path (`setValueToSpinner`, read-only spinners) is ported and is run
    by nothing yet. Online, rustyAC has no ESC menu at all, so there is no editor there.
+   (Task 34: done.)
 3. **The start camera** (`eStart`) while the menu shows at the beginning; rustyAC shows the
-   camera it would drive with.
+   camera it would drive with. (Task 34: done.)
 4. **`CarPhysicsState.setupState`** stays 0 in the state dumps (the game writes 1 for
    "legal"), so that dumps stay equal to v0.30.0's; the editor reads the true state through
    its snapshot. The "SETUP VALIDATING" text of the Drive button is in the menu (Task 30) and
