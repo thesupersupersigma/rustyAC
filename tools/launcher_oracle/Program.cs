@@ -41,6 +41,24 @@ static class Program
         "uimessage", "loading", "resizewindow", "beforeLoadModules", "loadModules", "uiready", "cleanup",
     };
 
+    // Every name in ACRequestHandler.Handlers: a name not in it runs nothing (the answer is
+    // ACRequestData(false)), so the oracle lets it through.
+    static readonly HashSet<string> KnownHosts = new HashSet<string> {
+        "exit", "home", "listcars", "listtracks", "listseasons", "listfiles", "listspecialevents",
+        "listshowrooms", "savecombo", "start", "runtest", "calibrate", "showroom", "getsetting",
+        "getsettings", "setsetting", "delsetting", "initdata", "setdata", "getdata", "deldata",
+        "stopmusic", "startmusic", "setvolume", "utility", "copyini", "generatecss", "playsound",
+        "showcontrols", "getiniasjson", "savejsontoini", "savetofile", "requestcode", "checklicense",
+        "requestlicense", "copytoclipboard", "openforum", "browseto", "sendbenchmark", "sendcrash",
+        "print", "addtoleaderboard", "getvideomodes", "initjslibs", "getcfg", "js", "getskinmeta",
+        "carcount", "eventcount", "getscripts", "addreplay", "listreplays", "delreplay", "updreplay",
+        "storereplay", "getserver", "getserverlist", "getlanservers", "getservercached", "formatfile",
+        "pingserver", "getguid", "getresults", "getplayername", "getid", "isowner", "loadjson",
+        "savejson", "getachievements", "getthememodules", "getplayersetups", "getvideopage",
+        "showsteamoverlay", "gethash", "listseries", "listinis", "getcars", "delfile", "uimessage",
+        "loading", "resizewindow", "uiready", "cleanup",
+    };
+
     static int Main(string[] args)
     {
         string docs = null, requests = null, outFile = null;
@@ -153,7 +171,7 @@ static class Program
                 // ACSchemeHandler.DoProcess
                 Uri uri = new Uri(url);
                 string host = uri.Host;
-                if (!Allowed.Contains(host))
+                if (!Allowed.Contains(host) && KnownHosts.Contains(host))
                 {
                     Console.Error.WriteLine("refused: the oracle does not run ac://" + host);
                     return 2;
@@ -190,7 +208,7 @@ static class Program
                 }
                 else
                 {
-                    data = Activator.CreateInstance(launcher.GetType("AC.Launcher.ACRequestData", true), false);
+                    data = Activator.CreateInstance(launcher.GetType("AC.Launcher.ACRequestData", true), new object[] { false });
                 }
                 Type dataType = data.GetType();
                 string mime = (string)dataType.GetField("MimeType").GetValue(data);

@@ -1,0 +1,44 @@
+[package]
+name = "rustyac-launcher"
+description = "rustyAC: Assetto Corsa's launcher (AssettoCorsa.exe), ported 1:1: the ac:// bridge the launcher's HTML theme talks to, the player's folder it sets up and the cfg files it writes, shown in WebView2 with the player's own theme. Drive starts rustyac.exe and the results page reads what it wrote."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+# A 1:1 port of Assetto Corsa's launcher (AssettoCorsa.exe, Kunos Simulazioni); see LICENSING.md.
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "rustyac-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# where Assetto Corsa is installed
+rustyac-content = { path = "../rustyac-content" }
+
+[target.'cfg(windows)'.dependencies]
+# Microsoft's WebView2, the browser the theme runs in (the launcher has CEF 3)
+webview2-com = "0.39"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_System_WindowsProgramming",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[target.'cfg(windows)'.dependencies.windows-core]
+version = "0.62"
