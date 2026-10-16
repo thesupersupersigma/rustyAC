@@ -29,3 +29,6 @@ web/my_pack.toml
 
 # The server pack (server/make_server_pack.py): Kunos acServer and content, never commit
 dist-server/
+
+# ilspycmd (Task 35), installed into the repo
+tools/ilspy/
