@@ -36,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::bridge::{split_url, Bridge, Event};
 use crate::folders::AppFolder;
 use crate::ini::IniFile;
-use crate::{net, setup, sys};
+use crate::{appini, net, setup, sys};
 
 /// How the launcher is started.
 pub struct Options {
@@ -157,7 +157,7 @@ enum Running {
     /// An `until` check is out; `Some(true)` when it came back true.
     Checking { deadline: Instant, expr: String, answer: Rc<RefCell<Option<bool>>> },
     Busy(Rc<RefCell<bool>>),
-    GameExit(Instant),
+    GameExit(Instant, bool),
 }
 
 struct App {
@@ -287,6 +287,14 @@ impl App {
                 let f = &self.bridge.folders;
                 let mut cmd = Command::new(&self.options.game);
                 cmd.arg("--documents").arg(f.user_data_path.trim_end_matches('\\')).arg("--out-dir").arg(f.user_out_dir.trim_end_matches('\\'));
+                // acs.exe takes car and track from race.ini; rustyac.exe from its command line
+                let race = IniFile::new(appini::get(f, "race"));
+                for (flag, key) in [("--car", "MODEL"), ("--track", "TRACK"), ("--layout", "CONFIG_TRACK")] {
+                    let value = race.read(Some("RACE"), Some(key));
+                    if !value.is_empty() {
+                        cmd.arg(flag).arg(value);
+                    }
+                }
                 cmd.args(&self.options.game_args);
                 if let Some(dir) = self.options.game.parent() {
                     cmd.current_dir(dir);
@@ -382,12 +390,14 @@ impl App {
                     None => return self.running = Running::Checking { deadline, expr, answer },
                 }
             }
-            Running::GameExit(deadline) => {
-                if self.game.is_some() || self.ac_active {
+            Running::GameExit(deadline, started) => {
+                // the game first has to start (the click's request may still be on its way)
+                let running = self.game.is_some() || self.ac_active;
+                if !started || running {
                     if now >= deadline {
                         self.fail("game-exit");
                     } else {
-                        return self.running = Running::GameExit(deadline);
+                        return self.running = Running::GameExit(deadline, started || running);
                     }
                 }
             }
@@ -438,7 +448,7 @@ impl App {
                     Err(e) => self.fail(&format!("shot {file}: {e}")),
                 }
             }
-            Step::GameExit(ms) => self.running = Running::GameExit(now + Duration::from_millis(ms)),
+            Step::GameExit(ms) => self.running = Running::GameExit(now + Duration::from_millis(ms), false),
             Step::Log(text) => self.log(&format!("log {text}")),
         }
     }
