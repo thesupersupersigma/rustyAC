@@ -90,6 +90,18 @@ fn last_name(text: &str) -> String {
     Path::new(text).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The player's skin when the other cars of race.ini are not made: the first car of
+/// `RaceManager::initOffline`, the file's skin or the game's pick, on a copy of `rand()` so no
+/// later draw moves. Only when race.ini's first car is the one of `--car`.
+fn player_skin(ini: &IniReader, car: &str, mut rand: MsvcRand) -> Option<String> {
+    use rustyac_physics::session;
+    let cars_folder = rustyac_content::install::ac_root()?.join("content").join("cars");
+    // (the first car is the same for any number of pit boxes)
+    let grid = session::race_grid(ini, 1, &|model| session::model_skins(&cars_folder, model), &|model, skin| session::skin_available(&cars_folder, model, skin), &mut || rand.next()).ok()?;
+    let first = grid.cars.first()?;
+    (!first.skin.is_empty() && first.model == last_name(car)).then(|| first.skin.clone())
+}
+
 /// The cars of race.ini as `RaceManager::initOffline` makes them
 /// (`rustyac_physics::session::race_grid`): every car but the first becomes another car of the
 /// session, with the model, the skin, the ballast, the restrictor, the pit box and the grid
@@ -174,7 +186,6 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, options: &Options, rand: &mu
     }
     if others.is_empty() {
         // alone after all: the first slot as before, but a race's grid place stays
-        setup.player_skin = None;
         if !(grid.first_session_type == 3 && setup.player_place.is_some_and(|place| place.start > 0)) {
             setup.player_place = None;
         }
@@ -311,6 +322,8 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                     Ok(lines) => car_notes = lines,
                     Err(message) => car_notes.push(format!("WARNING: the other cars of race.ini are left out: {message}")),
                 }
+            } else if !setup.track.is_empty() {
+                setup.player_skin = player_skin(&ini, &setup.car, rand);
             }
             if !race.penalties {
                 line.push_str("; penalties off (any number of tyres may leave the track)");
