@@ -42,7 +42,7 @@ pub fn io_thrown(path: &str, e: &std::io::Error) -> Thrown {
         std::io::ErrorKind::NotFound => {
             let parent = std::path::Path::new(path).parent();
             if parent.is_some_and(|p| p.is_dir()) {
-                Thrown::FileNotFound(path.to_string())
+                Thrown::FileNotFound(net::full_path(path))
             } else {
                 dir_missing(path)
             }
