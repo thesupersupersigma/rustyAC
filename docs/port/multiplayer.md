@@ -284,6 +284,58 @@ disconnected` for both.
 | `rustyac-net` unit tests (13) | packet strings, framing, tape round trip, handshake layout and refusals, MD5 vectors, update layout, wheel bytes, pong, mega packet, lap message, repeated records, reads past the end | pass |
 | whole workspace `cargo test --release --workspace` | 50 test programs (doc tests counted), 242 tests | all pass, 0 failed |
 
+### Golden tapes: where they live and how to make them again (Task 37)
+
+Task 25's scratch folder (and with it the five tapes and 20 goldens above) was gone by
+Task 37, so they were made again on v0.36.0, the same way, and now live in a folder that
+stays: **`re/gold/net/`** (git-ignored, like all of `re/`; never delete it).
+
+| What | Where |
+|---|---|
+| the five tapes (`laguna_a`, `laguna_b`, `rich_a`, `rich_b`, `rich_c`) | `re/gold/net/tapes/<name>.nettape` |
+| the 20 goldens (each tape in `net_watch`, `net_block`, `net_drive`, `net_pit`, every step) | `re/gold/net/<tape>_<scenario>.netgold` |
+| what the game's client said when it made them | `re/gold/net/gold.log` |
+
+To make them again (all three scripts are committed, under `tools/net_gold/`):
+
+1. `sh tools/net_gold/record.sh` (about 7 minutes): the two live sessions on 127.0.0.1, a
+   fresh copy of `dist-server/`'s acServer each (made-up admin password, no lobby) and
+   copies of `target/release/rustyac.exe` as clients, as in "2. Live" above. Work files
+   in `re/scratch/task37/net_work/` (or `$NET_GOLD_WORK`).
+2. `sh tools/net_gold/gold.sh`: the game's own client (`tools/car_oracle` built with
+   `cargo build --release` in its folder) replays every tape in the four scenarios; it writes
+   a golden only when its own replay matches the tape (IDENTICAL).
+3. `sh tools/net_gold/check.sh [golden ...]`: the port against all 20 four ways: the
+   desktop transport, the browser's WebSocket transport, through a real gateway, and the
+   wasm build (`wasm32-wasip1`) under wasmtime. Every way must say IDENTICAL and print the
+   same numbers; one line per golden and way in `re/scratch/task37/net_check/check.log`.
+
+**wasmtime** is inside the repo, not on the system: `target/web-tools/wasmtime/bin/wasmtime.exe`,
+installed with
+
+```sh
+CARGO_TARGET_DIR=re/scratch/task37/wasmtime_build cargo install wasmtime-cli --locked --root target/web-tools/wasmtime
+```
+
+(wasmtime-cli 49.0.3; Task 26's 25.0.3 no longer builds with rustc 1.97: an `ALIGN32`
+assertion in `wasmtime-wasi`. Delete the build folder afterwards: 1.9 GB.)
+
+The gateway way takes a port below Windows' dynamic range and outside every range
+`netsh int ipv4 show excludedportrange protocol=udp` (and `=tcp`) lists, free for both TCP
+and UDP, instead of trying random ports (the old "no port free for both TCP and UDP" flake:
+a free TCP port can be a UDP port Windows keeps).
+
+**Results on v0.36.0 (before Task 37's code):** 19 of the 20 new goldens were made; the game's
+own client and the port disagreed on `rich_b` + `net_block` at step 8,335, in a collision
+report (`0x82`): the game sent a 22.3 km/h hit, the port a 35.7 km/h one. All 19 others, four
+ways each: 76 of 76 IDENTICAL. The cause: in the game, `ACClient`'s collision handler runs
+inside `Car::onCollisionCallBack`, in the step's collision pass, *before* the step's
+`onPhysicsStep` can send the five-second report; the port added the step's hits after it, so a
+hit on a report's own step went into the next report. **Fixed** (`rustyac-net`'s session takes
+the hits at the start of its before-cars hook). With the fix: **20 of 20 goldens made, 80 of 80
+IDENTICAL** (desktop, WebSocket, gateway, wasm). The other tapes' digests changed with it too
+(the port's own numbers; every step still the same as the game's).
+
 ### 4. Nothing offline changed (v0.24.1 against this version)
 
 | Check | v0.24.1 | now |

@@ -84,17 +84,36 @@ mod through_gateway {
         tick: u64,
     }
 
+    /// The port ranges Windows keeps for itself (`netsh int ipv4 show excludedportrange
+    /// protocol=<tcp|udp>`, lines of "start end"); none when netsh cannot tell.
+    fn kept_ports(protocol: &str) -> Vec<(u16, u16)> {
+        let protocol = format!("protocol={protocol}");
+        let Ok(out) = std::process::Command::new("netsh").args(["int", "ipv4", "show", "excludedportrange", &protocol]).output() else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                Some((words.next()?.parse().ok()?, words.next()?.parse().ok()?))
+            })
+            .collect()
+    }
+
     impl GatewayPipe {
         pub fn new(tape: &Tape) -> Result<GatewayPipe, String> {
             let e = |e: std::io::Error| e.to_string();
-            // TCP and UDP on one port number, as an acServer has them
-            let (listener, server_udp) = (0..50)
-                .find_map(|_| {
-                    let tcp = TcpListener::bind("127.0.0.1:0").ok()?;
-                    let udp = UdpSocket::bind(tcp.local_addr().ok()?).ok()?;
+            // TCP and UDP on one port number, as an acServer has them: a port below the dynamic
+            // range and outside the ranges Windows keeps (a free TCP port can be a kept UDP one)
+            let kept: Vec<(u16, u16)> = kept_ports("tcp").into_iter().chain(kept_ports("udp")).collect();
+            let (listener, server_udp) = (20000..49152u16)
+                .filter(|port| !kept.iter().any(|&(first, last)| (first..=last).contains(port)))
+                .find_map(|port| {
+                    let tcp = TcpListener::bind(("127.0.0.1", port)).ok()?;
+                    let udp = UdpSocket::bind(("127.0.0.1", port)).ok()?;
                     Some((tcp, udp))
                 })
-                .ok_or("no port free for both TCP and UDP on 127.0.0.1")?;
+                .ok_or("no port outside the kept ranges free for both TCP and UDP on 127.0.0.1")?;
             let gateway = Gateway::start(Config { name: "proof".to_string(), listen: "127.0.0.1:0".to_string(), server: listener.local_addr().map_err(e)?.to_string(), quiet: true, ..Config::default() })?;
             let url = WsUrl::parse(&format!("ws://{}/net/proof", gateway.address))?;
             let transport: WsTransport<WsPipe<TcpStream>> = connect_ws(&url, &[], 5000)?;

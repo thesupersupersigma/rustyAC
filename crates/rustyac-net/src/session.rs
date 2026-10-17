@@ -149,6 +149,27 @@ impl<T: Transport> StepHooks for NetSession<T> {
             return;
         };
         let car = &*slot.car;
+        // the handler ACClient hangs on the local car's collision event, which the game calls in
+        // the collision pass, before this step's report can go out: the remote car that
+        // was hit keeps part of the solver's velocity for a second, and every hit goes into
+        // the next report (a hit of anything that is no remote car as a hit of the
+        // surroundings)
+        for event in &car.collision_events {
+            let other = event.body.and_then(|body| self.cars.iter_mut().find(|remote| remote.body == body));
+            let other_slot = match other {
+                Some(remote) => {
+                    remote.on_local_collision();
+                    Some(remote.session_id)
+                }
+                None => None,
+            };
+            self.client.add_collision(CollisionReport {
+                other_slot,
+                speed: event.rel_speed,
+                world_pos: [event.world_pos.x, event.world_pos.y, event.world_pos.z],
+                rel_pos: [event.rel_pos.x, event.rel_pos.y, event.rel_pos.z],
+            });
+        }
         let horn = self.horn;
         // the wall clock of the pong and of the frame's work is the physics clock here: the
         // two run alike, and a session then repeats exactly from a tape
@@ -178,26 +199,6 @@ impl<T: Transport> StepHooks for NetSession<T> {
             return;
         };
         let car = &*slot.car;
-        // the handler ACClient hangs on the local car's collision event: the remote car that
-        // was hit keeps part of the solver's velocity for a second, and every hit goes into
-        // the next report (a hit of anything that is no remote car as a hit of the
-        // surroundings)
-        for event in &car.collision_events {
-            let other = event.body.and_then(|body| self.cars.iter_mut().find(|remote| remote.body == body));
-            let other_slot = match other {
-                Some(remote) => {
-                    remote.on_local_collision();
-                    Some(remote.session_id)
-                }
-                None => None,
-            };
-            self.client.add_collision(CollisionReport {
-                other_slot,
-                speed: event.rel_speed,
-                world_pos: [event.world_pos.x, event.world_pos.y, event.world_pos.z],
-                rel_pos: [event.rel_pos.x, event.rel_pos.y, event.rel_pos.z],
-            });
-        }
         let Some(track) = self.track.clone() else {
             return;
         };
