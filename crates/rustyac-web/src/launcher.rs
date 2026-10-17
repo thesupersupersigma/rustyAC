@@ -92,8 +92,10 @@ fn read_only() -> Error {
     Error::from(ErrorKind::PermissionDenied)
 }
 
+/// A time in ms since 1970 with its fraction kept (the launcher sorts special events by their
+/// folders' times, and two can share a millisecond).
 fn time_of(ms: f64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_millis(ms.max(0.0) as u64)
+    UNIX_EPOCH + Duration::from_nanos((ms.max(0.0) * 1e6).round() as u64)
 }
 
 impl Files for PageFiles {

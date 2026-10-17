@@ -167,6 +167,34 @@ async function packTree(pack, tree, report) {
   }
 }
 
+// A file's bytes from a synchronous request's x-user-defined text. A byte-order mark wins over
+// that charset, and the text is then the decoded file: made bytes again, as UTF-8 or UTF-16LE,
+// whichever gives the file's length (null: neither).
+function rawBytes(text, length) {
+  if (text.length === length) {
+    const out = new Uint8Array(length);
+    for (let i = 0; i < length; i++) out[i] = text.charCodeAt(i) & 0xff;
+    return out;
+  }
+  const utf8 = enc.encode(text);
+  if (utf8.length + 3 === length) {
+    const out = new Uint8Array(length);
+    out.set([0xef, 0xbb, 0xbf]);
+    out.set(utf8, 3);
+    return out;
+  }
+  if (2 + 2 * text.length === length) {
+    const out = new Uint8Array(length);
+    out.set([0xff, 0xfe]);
+    for (let i = 0; i < text.length; i++) {
+      out[2 + 2 * i] = text.charCodeAt(i) & 0xff;
+      out[3 + 2 * i] = text.charCodeAt(i) >> 8;
+    }
+    return out;
+  }
+  return null;
+}
+
 async function readAll(source, path) {
   const file = await source.open(path);
   const reader = file.stream.getReader();
@@ -240,11 +268,11 @@ export async function startLauncher(env) {
       xhr.overrideMimeType('text/plain; charset=x-user-defined');
       xhr.send();
       if (xhr.status === 200) {
-        const text = xhr.responseText;
-        const out = new Uint8Array(text.length);
-        for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
-        tree.bytes.set(lower, out);
-        return out;
+        const out = rawBytes(xhr.responseText, Number(xhr.getResponseHeader('Content-Length')));
+        if (out) {
+          tree.bytes.set(lower, out);
+          return out;
+        }
       }
     }
     misses.push(rel);

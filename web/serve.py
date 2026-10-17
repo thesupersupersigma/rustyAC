@@ -73,7 +73,8 @@ def make_handler(mounts):
                 entries = []
                 with os.scandir(full) as it:
                     for entry in it:
-                        entries.append({'name': entry.name, 'dir': entry.is_dir(), 'size': 0 if entry.is_dir() else entry.stat().st_size})
+                        stat = entry.stat()
+                        entries.append({'name': entry.name, 'dir': entry.is_dir(), 'size': 0 if entry.is_dir() else stat.st_size, 'mtime': stat.st_mtime_ns / 1_000_000})
                 return self.send(200, json.dumps(entries).encode(), 'application/json')
             if os.path.isdir(full):
                 full = os.path.join(full, 'index.html')
