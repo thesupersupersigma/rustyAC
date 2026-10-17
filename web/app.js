@@ -712,7 +712,10 @@ async function loadServers() {
   // (a server from the address bar is a test hook: only on this computer, so that a link
   // to the real site cannot send a visitor's player id to somebody's gateway)
   const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
-  if (params.get('server') && local) servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars: [] });
+  if (params.get('server') && local) {
+    const cars = (params.get('servercars') || '').split(',').filter(Boolean);
+    servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars, track: params.get('servertrack') || '', password: params.get('serverpass') === '1' });
+  }
   state.servers = servers.filter((s) => s && s.id && s.url);
   $('mp-server').replaceChildren(...state.servers.map((s) => new Option(s.name || s.id, s.id)));
   $('mp-server').disabled = state.servers.length === 0;
@@ -1567,6 +1570,48 @@ async function useFolder(handle, remember) {
 // ?launcher=1: AC's launcher theme (web/launcher.js) instead of this page's menu.
 const launcherMode = params.get('launcher') === '1';
 
+// The theme's online page in the browser: this site's servers (servers.json) are its lobby's
+// entries, Kunos' lobby is never asked. A server's own HTTP port (details, CANJOIN, booking) is
+// answered here too: the gateway carries the game's protocol only. Every server is in pickup
+// mode (no booking), its player count unknown (0).
+const lobbyIp = (index) => `10.37.0.${index + 1}`;
+function launcherLobby() {
+  const entry = (s, i) => ({
+    ip: lobbyIp(i), port: 9600 + i, cport: 8081 + i, tport: 9600 + i, name: s.name || s.id, clients: 0, maxclients: Math.max(1, (s.cars || []).length),
+    track: s.track ? (s.layout ? `${s.track}-${s.layout}` : s.track) : '', cars: s.cars || [], session: 0, sessiontypes: ['1'], durations: ['0'], timeleft: 0,
+    timestamp: 0, lastupdate: 0, country: ['', ''], pass: !!s.password, pickup: true, timed: false, extra: false, l: false, inverted: false, pit: false, timeofday: 0,
+  });
+  const json = (value) => ({ status: 200, text: JSON.stringify(value), mime: 'application/json' });
+  const text = (value) => ({ status: 200, text: value, mime: 'text/plain' });
+  const serverAt = (url) => state.servers.findIndex((s, i) => url.startsWith(`http://${lobbyIp(i)}:`));
+  return {
+    answers: (host) => ['getserverlist', 'getlanservers', 'getserver', 'pingserver'].includes(host),
+    request(host, url) {
+      if (host === 'getserverlist') return json(state.servers.map(entry));
+      if (host === 'getlanservers') return json([]);
+      const ip = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('ip');
+      const i = state.servers.findIndex((s, n) => lobbyIp(n) === ip);
+      if (host === 'getserver') return json(i < 0 ? null : entry(state.servers[i], i));
+      // (no ping through the gateway: "n/a", as the theme shows a server that does not answer)
+      return json(['-1']);
+    },
+    owns: (url) => serverAt(url) >= 0,
+    http(url) {
+      const server = state.servers[serverAt(url)];
+      let what = url.slice(url.indexOf('/', 'http://'.length) + 1);
+      try {
+        what = decodeURIComponent(what);
+      } catch {
+        // as it is
+      }
+      if (what.startsWith('JSON')) return json({ Cars: (server.cars || []).map((model) => ({ Model: model, Skin: '', DriverName: '', DriverTeam: '', DriverNation: '', IsConnected: false, IsRequestedGUID: false, IsEntryList: true })) });
+      if (what.startsWith('CANJOIN')) return text('YES');
+      if (what.startsWith('SUB') || what.startsWith('UNSUB')) return text('OK,0');
+      return { status: 404, text: '', mime: 'text/plain' };
+    },
+  };
+}
+
 function launcherReport(kind, text) {
   const l = window.rustyac.launcher;
   if (kind === 'progress') $('content-line').textContent = text;
@@ -1598,7 +1643,8 @@ async function openLauncher() {
       const raceKey = (name) => (new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'im').exec(race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '') || [])[1] || '';
       // other cars (AI drivers) are not driven in the browser yet: the theme says so, as it
       // says it of what the game cannot do, and stays where it is
-      if (Number(raceKey('CARS') || '1') > 1) {
+      const remote = /^\s*ACTIVE\s*=\s*1\s*$/im.test(race.split(/^\[/m).find((p) => /^REMOTE\]/i.test(p)) || '');
+      if (!remote && Number(raceKey('CARS') || '1') > 1) {
         window.rustyac.launcher.refused = (window.rustyac.launcher.refused || 0) + 1;
         api.exec("$('html,body').removeClass('ACactive');");
         api.notice('Sessions with AI opponents are not available in the browser version yet.');
@@ -1624,7 +1670,7 @@ async function openLauncher() {
       : null,
     onControls: openControls,
     report: launcherReport,
-    lobby: null,
+    lobby: launcherLobby(),
   });
   $('menu').hidden = true;
   host.hidden = false;
@@ -1646,7 +1692,20 @@ async function driveFromLauncher() {
     return line ? line.slice(line.indexOf('=') + 1).trim() : '';
   };
   window.rustyac.launch = { race_ini: race };
-  if (key('REMOTE', 'ACTIVE') === '1') throw new Error('a server of race.ini [REMOTE]: not in the browser yet');
+  if (key('REMOTE', 'ACTIVE') === '1') {
+    // the theme's Join: the server of [REMOTE] is one of servers.json's (see launcherLobby),
+    // joined as the page's own multiplayer join does it
+    const index = state.servers.findIndex((s, i) => lobbyIp(i) === key('REMOTE', 'SERVER_IP'));
+    if (index < 0) throw new Error(`race.ini's server ${key('REMOTE', 'SERVER_IP')} is not one of this site's servers`);
+    state.launch = { online: true };
+    $('mp-server').value = state.servers[index].id;
+    $('mp-name').value = key('REMOTE', 'NAME');
+    $('mp-password').value = key('REMOTE', 'PASSWORD');
+    markServers();
+    $('mp-car').value = key('REMOTE', 'REQUESTED_CAR');
+    await joinServer();
+    return;
+  }
   state.launch = { car: key('RACE', 'MODEL'), track: key('RACE', 'TRACK'), layout: key('RACE', 'CONFIG_TRACK'), race, assists: text('cfg/assists.ini') };
   // the car's skin folders, as the launcher listed them (only their names are looked at)
   try {
@@ -1663,7 +1722,8 @@ async function driveFromLauncher() {
 async function returnToLauncher() {
   state.running = false;
   window.rustyac.state = 'returning';
-  const json = state.game ? state.game.finish_race() : null;
+  const json = state.game && !state.online ? state.game.finish_race() : null;
+  leaveServer(false);
   let docs = await loadDocuments();
   if (json) docs = snapshotWith(docs, rac.Launcher.roots()[1], 'out/race_out.json', json, Date.now());
   await saveDocuments(docs);
@@ -1769,6 +1829,7 @@ async function main() {
     }
   }
   if (launcherMode && ready) {
+    await loadServers();
     if (sessionStorage.getItem('rustyac.launch')) {
       sessionStorage.removeItem('rustyac.launch');
       await driveFromLauncher();

@@ -16,8 +16,12 @@ Task 37b (AC's launcher in the browser page):
   writes `out/race_out.json` (the referee's) and the page reloads into the theme, told
   ACRunningEvent + ACStoppedEvent as the desktop shell does. A new player's `video.ini` gets
   the page's size (else the theme stops every Start for its hidden Options page).
-- Next: the other session kinds (hotlap, quick race / race weekend need AI: refused for now),
-  the plain start page and the folder path, Online, controls page, old menu removal, pad tape.
+- Session kinds: race.ini identical to the desktop launcher's for Practice, Hotlap, Quick Race,
+  Race Weekend (`re/scratch/task37b/desk.sh` + `web.sh`); sessions with AI are refused with
+  the theme's notice. Part 4 working: the theme's Online page lists servers.json's servers
+  (`launcherLobby` in web/app.js), Join starts the page's multiplayer join from race.ini
+  [REMOTE] (local acServer copy `re/scratch/task37b/server` + gateway, flow `online.json`).
+- Next: the plain start page and the folder path, controls page, old menu removal, pad tape.
 - Scratch: `re/scratch/task37b/` (test pack `pack/`, readers' notes `theme_internals.md`,
   `web_game_raceini.md`, `pad_oracle.md`). Serve: `python web/serve.py --pack
   re/scratch/task37b/pack --port 8137`; check: `node web/check.mjs --url
