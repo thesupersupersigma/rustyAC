@@ -345,13 +345,21 @@ async function rememberedFolder() {
 // a folder with tens of thousands of files (skins, sounds, previews, apps) is never kept.
 function listedPathWanted(parts) {
   const lower = parts.map((part) => part.toLowerCase());
-  if (lower[0] === 'system') return (lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3;
+  const name = lower[lower.length - 1];
+  // AC's launcher: its cfg, the themes (no videos), the weathers (web/launcher.js walkFolder)
+  if (lower[0] === 'cfg') return parts.length <= 6;
+  if (lower[0] === 'launcher') return lower[1] === 'themes' && parts.length <= 11 && !name.endsWith('.ogv');
+  if (lower[0] === 'system') return ((lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3) || (lower[1] === 'cfg' && parts.length === 4);
   if (lower[0] !== 'content') return false;
+  if (lower[1] === 'weather') return parts.length <= 4 && name.endsWith('.ini');
   if (lower[1] === 'cars') {
     if (parts.length === 4) return lower[3] === 'data.acd' || lower[3].endsWith('.kn5');
-    return parts.length === 5 && (lower[3] === 'data' || (lower[3] === 'ui' && lower[4] === 'ui_car.json'));
+    if (lower[3] === 'ui') return parts.length <= 7;
+    if (lower[3] === 'skins') return parts.length === 6 && ['ui_skin.json', 'preview.jpg', 'livery.png'].includes(name);
+    return parts.length === 5 && lower[3] === 'data';
   }
   if (lower[1] !== 'tracks') return false;
+  if (lower[3] === 'ui') return parts.length <= 7 && !name.endsWith('.ogv');
   return parts.length <= 7 && !lower.slice(3, -1).some((part) => ['skins', 'extension', 'sfx', 'texture'].includes(part));
 }
 
