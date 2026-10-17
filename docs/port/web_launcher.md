@@ -97,3 +97,74 @@ only read. `--player-cfg <folder|none>` names another one.
 Checked (`re/scratch/task37/seed.sh`, a fake "real" cfg folder): first start, `controls.ini`
 and `video.ini` came from it, a `.txt` did not; second start, the launcher's own changed
 `controls.ini` was kept; the real `Documents\Assetto Corsa` hashed the same before and after.
+
+## Part B.1: the bridge without Win32
+
+### The pure-Rust copy of the ini calls
+
+`crates/rustyac-launcher/src/profile.rs` is rustyAC's own copy of what
+`GetPrivateProfileStringW` and `WritePrivateProfileStringW` do with a file of the ANSI code
+page (1252): the trimming, the quotes, comments, the first matching section only, ASCII-only
+case, the list mode and its short-buffer rules, where a new key or section goes, what a
+deletion takes with it (and what it leaves: comment lines at a section's end), the line
+endings Windows adds. Every rule came from Windows itself (PowerShell probes in
+`re/scratch/task37/ini_probe*.ps1`), not from a guess.
+
+`crates/rustyac-launcher/tests/profile.rs` generates files (sections, keys, values, quotes,
+comments, blanks, odd lines, all line endings, characters of 1252 and ones outside it),
+makes every read the launcher makes plus short buffers 0 to 8, then up to five random writes
+and deletions, and compares buffers, answers and the files' bytes with Windows' own calls on
+a real file:
+
+| Files | Reads | Writes | Result |
+|---|---|---|---|
+| 3,000 (the test's default) | 77,844 | 7,387 | all the same as Windows |
+| 20,000 (`PROFILE_CASES=20000`) | 519,272 | 49,575 | all the same as Windows |
+
+Left out (28 of the 20,000 files): files Windows itself takes for UTF-16 (it guesses so for
+some tiny files, such as `[` and a line feed); the copy reads every file as ANSI, as the
+launcher's files are (shortcut, commented in the code).
+
+`ini.rs` uses the copy where there is no Win32 (the browser); the desktop keeps Win32, and
+`rustyac-launcher --pure-ini` switches it to the copy. Task 35 and 36's request lists through
+the desktop bridge twice, Win32 and `--pure-ini` (`re/scratch/task37/pure_cmp.sh`, the 12
+lists that need no server): **every answer and every file of the player's folder the same**,
+except the one answer that carries a time (`getresults`' date is `race_out.json`'s write
+time, made during each run).
+
+### The bridge builds for the browser
+
+- Every file call of the bridge goes through `files.rs`: the disk (`Disk`), or files the page
+  mounts (`files::mount`; `MemFiles` is an in-memory store with Windows' rules: any case,
+  `\` or `/`, folders must be made, names listed in NTFS's order).
+- `lib.rs` is no longer Windows-only: the shell (WebView2), `sys.rs` (the Win32 host) and the
+  online jobs' network code stay `cfg(windows)`; in the browser `online::job` has nothing to
+  do (the page's own server list, Part B.5). The backup of the launcher's browser data is
+  desktop-only (the browser launcher has none).
+- `transcript::Fixed` is a host with the same screen, times and player everywhere, and
+  `examples/transcript.rs` runs a request list with it: built for `wasm32-wasip1`, it is the
+  bridge's wasm build with a real file system under it.
+
+Task 35 and 36's 12 request lists, the desktop (`transcript.exe`, Win32 ini) against the wasm
+build under wasmtime 49.0.3 (pure ini), the AC folder and the player's folder given to it as
+`/acroot` and `/player` (`re/scratch/task37/wasm_cmp.sh`; the folders' names are made one
+token, and `getresults`' date is left out):
+
+| List | Answers | Player's folder |
+|---|---|---|
+| hotlap | 1,974 of 1,974 identical | identical |
+| options | 1,843 of 1,843 | identical |
+| practice | 1,956 of 1,956 | identical |
+| quickrace | 1,974 of 1,974 | identical |
+| raceweekend | 2,007 of 2,007 | identical |
+| results | 6 of 6 | identical |
+| career | 3,756 of 3,756 | identical |
+| champs | 4,012 of 4,012 | identical |
+| guid | 3 of 3 | identical |
+| replays | 14 of 14 | identical |
+| special | 3,824 of 3,824 | identical |
+| videomodes | 2 of 2 | identical |
+
+Under node's own WASI (node 26.4.0, `re/scratch/task37/wasi_node.mjs`) the same module can't
+list a folder on Windows (`fd_readdir` answers ENOSYS, os error 52), so every list that reads
+the content folders differs; that is node's, not the bridge's. The browser itself is Part B.2.

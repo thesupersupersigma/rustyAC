@@ -1,0 +1,108 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- rustyAC's own controls page (not the launcher's): the steering's speed sensitivity and the
+     steering keys' speeds, saved to the launcher's cfg\controls.ini for the next drive.
+     The desktop launcher shows it for the theme's controls button; the browser's too. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rustyAC controls</title>
+<style>
+  :root { --bg: #16181c; --panel: #20242a; --text: #e8e8e8; --dim: #9aa0a8; --accent: #e0a030; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.note { color: var(--dim); margin: 0 0 20px; }
+  section { background: var(--panel); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .row { display: grid; grid-template-columns: 1fr 160px 52px auto; gap: 10px; align-items: center; margin: 10px 0; }
+  .row label { color: var(--text); }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  button { background: #2e343c; color: var(--text); border: 1px solid #444b55; border-radius: 6px; padding: 6px 14px; font: inherit; cursor: pointer; }
+  button:hover, button:focus-visible { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #111; border-color: var(--accent); }
+  .bar { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+  #status { color: var(--dim); margin-right: auto; }
+  small { color: var(--dim); display: block; margin-top: -4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Controls</h1>
+  <p class="note">rustyAC's own settings. Speed sensitivity 1 is Assetto Corsa's own rule; the keyboard's is a rustyAC setting, not part of vanilla AC. Changes take effect on the next drive.</p>
+  <section>
+    <h2>Keyboard</h2>
+    <div class="row" data-key="KEYBOARD/RUSTYAC_SPEED_SENSITIVITY" data-min="0" data-max="1" data-step="0.01" data-default="1" data-off>
+      <label>Speed sensitivity</label></div>
+    <small>How much the speed limits and slows the steering. 0: not at all.</small>
+    <div class="row" data-key="KEYBOARD/STEERING_SPEED" data-min="0.1" data-max="3" data-step="0.05" data-default="1.75"><label>Steering speed</label></div>
+    <div class="row" data-key="KEYBOARD/STEERING_OPPOSITE_DIRECTION_SPEED" data-min="0.1" data-max="5" data-step="0.05" data-default="2.5"><label>Opposite direction speed</label></div>
+    <div class="row" data-key="KEYBOARD/STEER_RESET_SPEED" data-min="0.1" data-max="5" data-step="0.05" data-default="1.8"><label>Return to centre speed</label></div>
+  </section>
+  <section>
+    <h2>Gamepad</h2>
+    <div class="row" data-key="X360/SPEED_SENSITIVITY" data-min="0" data-max="1" data-step="0.01" data-default="0.5" data-off>
+      <label>Speed sensitivity</label></div>
+    <div class="row" data-key="X360/STEER_SPEED" data-min="0.01" data-max="1" data-step="0.01" data-default="0.2"><label>Steering speed</label></div>
+    <div class="row" data-key="X360/STEER_FILTER" data-min="0" data-max="1" data-step="0.01" data-default="0.7"><label>Steering filter</label></div>
+  </section>
+  <div class="bar">
+    <span id="status" role="status"></span>
+    <button id="back">Back</button>
+    <button id="save" class="primary">Save</button>
+  </div>
+</main>
+<script>
+// the launcher's bridge: on desktop http://ac/... reaches it, the browser page sets its own
+const bridge = window.rustyacBridge || (path => fetch('http://ac/' + path, { method: 'POST' }).then(r => r.text()));
+const rows = [...document.querySelectorAll('.row')];
+const status = text => { document.getElementById('status').textContent = text; };
+
+for (const row of rows) {
+  const id = row.dataset.key.replace('/', '_');
+  const input = Object.assign(document.createElement('input'), { type: 'range', id, min: row.dataset.min, max: row.dataset.max, step: row.dataset.step, value: row.dataset.default });
+  const out = document.createElement('output');
+  row.querySelector('label').htmlFor = id;
+  const show = () => { out.value = Number(input.value).toFixed(2); };
+  input.addEventListener('input', show);
+  row.append(input, out);
+  if ('off' in row.dataset) {
+    const off = Object.assign(document.createElement('button'), { textContent: 'Off', title: 'No speed effect: 0' });
+    off.addEventListener('click', () => { input.value = 0; show(); });
+    row.append(off);
+  } else {
+    row.append(document.createElement('span'));
+  }
+  row.input = input;
+  row.show = show;
+  show();
+}
+
+async function load() {
+  try {
+    const ini = JSON.parse(await bridge('getiniasjson/cfg/controls'));
+    for (const row of rows) {
+      const [section, key] = row.dataset.key.split('/');
+      const value = parseFloat(ini?.[section]?.[key]);
+      if (Number.isFinite(value)) { row.input.value = value; row.show(); }
+    }
+  } catch (e) {
+    status('No controls.ini yet: the defaults are shown.');
+  }
+}
+
+document.getElementById('save').addEventListener('click', async () => {
+  const query = rows.map(row => {
+    const [section, key] = row.dataset.key.split('/');
+    return encodeURIComponent(`${section}[${key}]`) + '=' + encodeURIComponent(String(Number(row.input.value)));
+  }).join('&');
+  const answer = await bridge('savejsontoini/cfg/controls.ini?' + query).catch(() => '');
+  status(answer.includes('"true"') ? 'Saved: the next drive uses it.' : 'Not saved.');
+});
+document.getElementById('back').addEventListener('click', () => bridge('home'));
+load();
+</script>
+</body>
+</html>

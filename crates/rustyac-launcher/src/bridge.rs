@@ -42,8 +42,8 @@ impl Thrown {
 pub fn io_thrown(path: &str, e: &std::io::Error) -> Thrown {
     match e.kind() {
         std::io::ErrorKind::NotFound => {
-            let parent = std::path::Path::new(path).parent();
-            if parent.is_some_and(|p| p.is_dir()) {
+            let parent = path.rfind(['\\', '/']).map(|i| &path[..i]);
+            if parent.is_some_and(net::dir_exists) {
                 Thrown::FileNotFound(net::full_path(path))
             } else {
                 dir_missing(path)
@@ -214,7 +214,7 @@ impl Bridge {
             "listseasons" => self.list_seasons(),
             "listfiles" => self.list_files(path, p),
             "listreplays" => crate::replays::list(&f.user_replay_dir, self.host.as_ref(), p),
-            "addreplay" | "delreplay" | "updreplay" | "storereplay" => crate::replays::change(host, &f.user_replay_dir, &crate::sys::now_stamp().replace('-', ""), p),
+            "addreplay" | "delreplay" | "updreplay" | "storereplay" => crate::replays::change(host, &f.user_replay_dir, &now_stamp(self.host.as_ref()), p),
             "listspecialevents" => self.list_special_events(),
             "listshowrooms" => self.list_showrooms(),
             "savecombo" | "playsound" => Ok(Answer::plain(true)),
@@ -430,7 +430,7 @@ impl Bridge {
         let source = format!("{src}{}.ini", p.get("source").unwrap_or_default());
         let target = format!("{dst}{}.ini", p.get("target").unwrap_or_default());
         if net::file_exists(&source) {
-            std::fs::copy(&source, &target).map_err(|e| io_thrown(&target, &e))?;
+            net::copy(&source, &target).map_err(|e| io_thrown(&target, &e))?;
         }
         Ok(Answer::message(if net::file_exists(&source) { "True" } else { "False" }))
     }
@@ -603,7 +603,7 @@ impl Bridge {
 
     fn del_file(&self, path: &str) -> Answer {
         let file = format!("{}{}", self.folders.user_data_path, url_decode(&path.replace('/', "\\")));
-        if net::file_exists(&file) && std::fs::remove_file(&file).is_ok() {
+        if net::file_exists(&file) && net::remove_file(&file).is_ok() {
             return Answer::message("OK");
         }
         Answer::message("ERROR")
@@ -649,8 +649,7 @@ impl Bridge {
                 if !ignore.iter().any(|i| i == section) {
                     if last != section && clear {
                         last = section.to_string();
-                        let mut fh = std::fs::OpenOptions::new().append(true).open(&file).map_err(|e| thrown(io_thrown(&file, &e)))?;
-                        std::io::Write::write_all(&mut fh, b"\n").map_err(|e| e.to_string())?;
+                        net::append(&file, b"\n").map_err(|e| thrown(io_thrown(&file, &e)))?;
                     }
                     ini.write(Some(section), Some(key), p.get(name).as_deref()).map_err(thrown)?;
                 }
@@ -663,7 +662,7 @@ impl Bridge {
             let name = net::file_name(&file);
             let folder = file.replace(&format!("\\{name}"), "");
             if !net::dir_exists(&folder) {
-                std::fs::create_dir_all(&folder).map_err(|e| thrown(io_thrown(&folder, &e)))?;
+                net::create_dir_all(&folder).map_err(|e| thrown(io_thrown(&folder, &e)))?;
             }
             let data = p.at(0).map_err(thrown)?.ok_or_else(|| thrown(Thrown::Other("String reference not set to an instance of a String.\r\nParameter name: s".into())))?;
             net::write_all_text_bom(&file, &data).map_err(|e| thrown(io_thrown(&file, &e)))?;
@@ -934,7 +933,7 @@ impl Bridge {
         let mut folders: Vec<(String, std::time::SystemTime)> = dirs(&base)?
             .into_iter()
             .map(|d| {
-                let t = std::fs::metadata(&d).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                let t = net::modified(&d);
                 (d, t)
             })
             .collect();
@@ -1082,4 +1081,10 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * mp + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe - 719468
+}
+
+/// `DateTime.Now.ToString("yyyyMMddHHmmss")`, from the host's clock.
+fn now_stamp(host: &dyn Host) -> String {
+    let [y, mo, d, h, mi, s, _] = host.local_time(None);
+    format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}")
 }

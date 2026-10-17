@@ -16,7 +16,7 @@ pub fn get(folders: &AppFolder, name: &str) -> String {
     let user = format!("{}{name}", folders.user_config_dir);
     let default = format!("{}{name}", folders.default_config_dir);
     if !net::file_exists(&user) && net::file_exists(&default) {
-        let _ = std::fs::copy(&default, &user);
+        let _ = net::copy(&default, &user);
     }
     user
 }
@@ -49,7 +49,7 @@ pub fn merge(source: &str, target: &str) -> Result<(), crate::bridge::Thrown> {
     let tgt = IniFile::new(target);
     let version = src.read(Some("HEADER"), Some("VERSION"));
     if !version.is_empty() && version != tgt.read(Some("HEADER"), Some("VERSION")) {
-        std::fs::copy(source, target).map_err(|e| crate::bridge::Thrown::Other(e.to_string()))?;
+        net::copy(source, target).map_err(|e| crate::bridge::Thrown::Other(e.to_string()))?;
         return Ok(());
     }
     for cat in src.categories()? {

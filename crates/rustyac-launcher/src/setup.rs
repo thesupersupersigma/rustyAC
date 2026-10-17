@@ -41,8 +41,29 @@ fn ini_files(folder: &str, out: &mut Vec<String>) {
 /// templates.
 fn delete_user_data(f: &AppFolder) {
     for dir in [&f.user_config_dir, &f.user_launcher_data_dir, &f.user_template_dir] {
-        let _ = std::fs::remove_dir_all(dir.trim_end_matches('\\'));
+        let _ = net::remove_dir_all(dir.trim_end_matches('\\'));
     }
+}
+
+/// rustyAC's own, not the launcher's: the launcher's player folder is `Documents\Assetto Corsa`,
+/// rustyAC's is the folder of rustyac.exe, so before the merge each `*.ini` of the player's
+/// real cfg folder (`player_cfg`, only read) that ours has not got yet is copied over, and a
+/// game started from here drives with the player's own controls. Returns the names copied.
+pub fn seed_from_player(f: &AppFolder, player_cfg: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(player_cfg) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.to_ascii_lowercase().ends_with(".ini"))
+        .collect();
+    names.sort();
+    let _ = create_if_non_existant(&f.user_config_dir);
+    names.retain(|name| {
+        let to = format!("{}{name}", f.user_config_dir);
+        !net::file_exists(&to) && std::fs::copy(player_cfg.join(name), &to).is_ok()
+    });
+    names
 }
 
 pub fn setup_user_directory(f: &AppFolder, ask: &dyn Ask) -> Result<(), Exit> {
@@ -90,6 +111,8 @@ pub fn setup_user_directory(f: &AppFolder, ask: &dyn Ask) -> Result<(), Exit> {
         let _ = appini::merge(&text5, &text6);
         appini::format(&text6);
     }
+    // the browser's launcher has no browser data of its own to back up
+    #[cfg(windows)]
     backup(f);
     if flag {
         return Err(Exit);
@@ -98,24 +121,25 @@ pub fn setup_user_directory(f: &AppFolder, ask: &dyn Ask) -> Result<(), Exit> {
     let tracks = format!("{}cfg\\templates\\tracks.ini", f.app_path);
     let user_tracks = format!("{}tracks.ini", f.user_template_dir);
     if net::file_exists(&tracks) && net::file_exists(&user_tracks) {
-        let _ = std::fs::copy(&tracks, &user_tracks);
+        let _ = net::copy(&tracks, &user_tracks);
     }
     let _ = create_if_non_existant(&format!("{}ppfilters", f.user_config_dir));
     let index = format!("{}index", f.user_launcher_data_dir);
     if net::file_exists(&index) {
-        let _ = std::fs::remove_file(&index);
+        let _ = net::remove_file(&index);
     }
     Ok(())
 }
 
 /// The newest ten backups of the launcher's browser data are kept, and a new one is made.
+#[cfg(windows)]
 fn backup(f: &AppFolder) {
     let Ok(dirs) = net::list(&f.user_launcher_data_backup_dir, true) else { return };
     let mut dirs: Vec<(String, std::time::SystemTime)> =
-        dirs.into_iter().map(|d| (d.clone(), std::fs::metadata(&d).and_then(|m| m.created()).unwrap_or(std::time::UNIX_EPOCH))).collect();
+        dirs.into_iter().map(|d| (d.clone(), net::created(&d))).collect();
     dirs.sort_by_key(|d| std::cmp::Reverse(d.1));
     for (dir, _) in dirs.iter().skip(10) {
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = net::remove_dir_all(dir);
     }
     let stamp = crate::sys::now_stamp();
     for name in ["databases", "IndexedDB", "Local Storage"] {
@@ -126,6 +150,7 @@ fn backup(f: &AppFolder) {
 }
 
 /// `FileSystem.CopyDirectory(source, dest)`: everything, files already there kept.
+#[cfg(windows)]
 fn copy_directory(source: &str, dest: &str) -> std::io::Result<()> {
     if !net::dir_exists(source) {
         return Err(std::io::ErrorKind::NotFound.into());
@@ -134,7 +159,7 @@ fn copy_directory(source: &str, dest: &str) -> std::io::Result<()> {
     for file in net::list(source, false)? {
         let target = format!("{dest}\\{}", net::file_name(&file));
         if !net::file_exists(&target) {
-            std::fs::copy(&file, &target)?;
+            net::copy(&file, &target)?;
         }
     }
     for dir in net::list(source, true)? {

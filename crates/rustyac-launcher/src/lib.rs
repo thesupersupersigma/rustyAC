@@ -19,20 +19,22 @@
 //! the folder of rustyac.exe, so the files the theme writes are rustyAC's own cfg files.
 //! See docs/port/launcher.md.
 
-#![cfg(windows)]
-
 pub mod appini;
 pub mod bridge;
+pub mod files;
 pub mod folders;
 pub mod ini;
 pub mod jss;
 pub mod net;
 pub mod online;
 pub mod pbs;
+pub mod profile;
 pub mod query;
 pub mod replays;
 pub mod setup;
+#[cfg(windows)]
 pub mod shell;
 pub mod sort;
+#[cfg(windows)]
 pub mod sys;
 pub mod transcript;

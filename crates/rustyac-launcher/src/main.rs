@@ -10,6 +10,8 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --ac-root <folder>     Assetto Corsa's folder (default: AC_ROOT, else Steam's)
   --game <exe>           what Drive starts (default: rustyac.exe beside this exe)
   --game-arg <arg>       one more argument for it (again for more)
+  --player-cfg <folder|none>  where the launcher's own cfg files that are missing are first
+                         copied from, only read (default: Documents\\Assetto Corsa\\cfg)
   --player-name <name>   the player's name (default: [PROFILE] NAME of <docs>\\cfg\\profile.ini,
                          else [CAR_0] DRIVER_NAME of Documents\\Assetto Corsa\\cfg\\race.ini)
   --script <file>        steps that drive the page (wait / js / click / until / shot / game-exit / log)
@@ -19,7 +21,10 @@ const USAGE: &str = "rustyac-launcher [options]: Assetto Corsa's launcher, with 
   --import-pbs [<folder>] copy the personal bests of an Assetto Corsa Documents folder (default:
                          Documents\\Assetto Corsa) into <docs>\\personalbest.ini, where they beat
                          ours, then exit; that folder is only read
-  --transcript <requests> <out>   no window: the bridge's answers to a list of requests";
+  --transcript <requests> <out>   no window: the bridge's answers to a list of requests
+  --pure-ini             ini files through rustyAC's pure copy of the Win32 calls, as in the browser
+  --fixed-host           with --transcript: the same screen, times and player everywhere, as the
+                         transcript example does in wasm";
 
 #[cfg(windows)]
 fn main() {
@@ -32,10 +37,12 @@ fn main() {
     let mut game = exe_dir.join("rustyac.exe");
     let mut game_args = Vec::new();
     let mut player_name = None;
+    let mut player_cfg = rustyac_content::install::documents().map(|d| d.join("cfg"));
     let mut script = None;
     let mut log = None;
     let mut offscreen = None;
     let mut transcript = None;
+    let mut fixed_host = false;
     let mut lobby = None;
     let mut import_pbs = None;
     let mut args = std::env::args().skip(1).peekable();
@@ -51,6 +58,9 @@ fn main() {
             "--game" => game = PathBuf::from(value()),
             "--game-arg" => game_args.push(value()),
             "--player-name" => player_name = Some(value()),
+            "--pure-ini" => rustyac_launcher::ini::use_pure(true),
+            "--fixed-host" => fixed_host = true,
+            "--player-cfg" => player_cfg = Some(value()).filter(|v| v != "none").map(PathBuf::from),
             "--script" => script = Some(PathBuf::from(value())),
             "--log" => log = Some(PathBuf::from(value())),
             "--offscreen" => {
@@ -88,7 +98,10 @@ fn main() {
     let absolute = |p: PathBuf| std::path::absolute(&p).unwrap_or(p).to_string_lossy().into_owned();
     let (root, docs) = (absolute(root), absolute(docs));
     if let Some((requests, out)) = transcript {
-        if let Err(e) = rustyac_launcher::transcript::run(&root, &docs, &requests, &out, lobby) {
+        // no Steam: GetPersonaName's own answer
+        let host: Box<dyn rustyac_launcher::bridge::Host> =
+            if fixed_host { Box::new(rustyac_launcher::transcript::Fixed) } else { Box::new(rustyac_launcher::sys::Windows { player_name: "You, the player".into() }) };
+        if let Err(e) = rustyac_launcher::transcript::run(&root, &docs, &requests, &out, lobby, host) {
             fail(format!("transcript: {e}"));
         }
         return;
@@ -102,7 +115,7 @@ fn main() {
         })
         .unwrap_or_else(|| "You, the player".into());
     let script = script.map(|s| std::fs::read_to_string(&s).unwrap_or_else(|e| fail(format!("{}: {e}", s.display()))).lines().map(str::to_string).collect());
-    let options = rustyac_launcher::shell::Options { ac_root: root, docs, game, game_args, player_name, script, log, offscreen, lobby };
+    let options = rustyac_launcher::shell::Options { ac_root: root, docs, game, game_args, player_name, player_cfg, script, log, offscreen, lobby };
     match rustyac_launcher::shell::run(options) {
         Ok(code) => std::process::exit(code),
         Err(e) => fail(format!("rustyac-launcher: {e}")),

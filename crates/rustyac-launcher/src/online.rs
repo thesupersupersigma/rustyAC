@@ -7,23 +7,33 @@
 //! on a thread of its own (CEF ran them off its UI thread too). The lobby's host is
 //! `ACRequestHandler._lobbyserver`, with its fallback when the lobby does not answer.
 
-use crate::bridge::{Answer, Thrown};
+use crate::bridge::Answer;
+#[cfg(windows)]
+use crate::bridge::Thrown;
+#[cfg(windows)]
 use crate::ini::IniFile;
+#[cfg(windows)]
 use crate::net;
 use crate::query::Params;
+#[cfg(windows)]
 use std::collections::HashSet;
+#[cfg(windows)]
 use std::io::{Read, Write};
+#[cfg(windows)]
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
+#[cfg(windows)]
 use std::time::Duration;
 
 /// A request that waits on the network, answered on another thread.
 pub type Job = Box<dyn FnOnce() -> Answer + Send>;
 
 const MAIN: &str = "lobby.assettocorsa.net";
+#[cfg(windows)]
 const FALLBACK: &str = "aclobby2.grecian.net:10080";
 
 /// The launcher's static lobby fields: `_lobbyserver`, `_usefallback`, `_serverlist`.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct Lobby {
     server: String,
     use_fallback: bool,
@@ -37,12 +47,14 @@ impl Lobby {
         Lobby { server: moved.clone().unwrap_or(MAIN.into()), use_fallback: false, list: None, moved }
     }
 
+    #[cfg(windows)]
     fn host(&self, fallback: bool) -> String {
         self.moved.clone().unwrap_or(if fallback { FALLBACK } else { MAIN }.into())
     }
 }
 
 /// The job of an online request, or `None` when `host` is not one.
+#[cfg(windows)]
 pub fn job(host: &str, p: &Params, lobby: &Arc<Mutex<Lobby>>, guid: impl FnOnce() -> String, launcher_ini: &str) -> Option<Job> {
     let lobby = lobby.clone();
     Some(match host {
@@ -77,13 +89,21 @@ pub fn job(host: &str, p: &Params, lobby: &Arc<Mutex<Lobby>>, guid: impl FnOnce(
     })
 }
 
+/// The browser's launcher has no network of its own: its server list is the page's (rustyAC's).
+#[cfg(not(windows))]
+pub fn job(_host: &str, _p: &Params, _lobby: &Arc<Mutex<Lobby>>, _guid: impl FnOnce() -> String, _launcher_ini: &str) -> Option<Job> {
+    None
+}
+
 /// `int.TryParse`.
+#[cfg(windows)]
 fn try_parse(s: Option<&str>) -> Option<i32> {
     s.map(str::trim).and_then(|s| s.parse().ok())
 }
 
 /// `GetServer` / `GetServerList`: the lobby's answer as it is, else the fallback host's, else
 /// "networkerror" (and the main host again next time).
+#[cfg(windows)]
 fn lobby_get(lobby: &Mutex<Lobby>, authkey: &str, what: &str, guid: &str, list: bool) -> Answer {
     loop {
         let server = lobby.lock().unwrap().server.clone();
@@ -118,12 +138,14 @@ fn lobby_get(lobby: &Mutex<Lobby>, authkey: &str, what: &str, guid: &str, list: 
 }
 
 /// `ACUtility.Hash`: MD5 of the ASCII bytes, upper-case hex.
+#[cfg(windows)]
 fn ac_hash(s: &str) -> String {
     let ascii: Vec<u8> = s.chars().map(|c| if c.is_ascii() { c as u8 } else { b'?' }).collect();
     net::to_upper(&rustyac_net::md5::hex(&rustyac_net::md5::digest(&ascii)))
 }
 
 /// `GetServerListCached`: how many fields the first server of the last list has.
+#[cfg(windows)]
 fn server_list_cached(text: Option<&str>) -> Answer {
     let thrown = match text {
         None => Thrown::Other("Value cannot be null.\r\nParameter name: input".into()),
@@ -146,11 +168,13 @@ fn server_list_cached(text: Option<&str>) -> Answer {
 /// The `host:port`s that answered as HTTP/1.1 servers: .NET's `ServicePoint` sends them no
 /// `Connection: Keep-Alive`. shortcut: a ServicePoint is never let go (.NET drops it after
 /// 100 s idle and sends Keep-Alive again), upgrade if a proof catches it.
+#[cfg(windows)]
 static HTTP11: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 /// `HttpWebRequest` GET with `UserAgent = "Assetto Corsa Launcher"` and the given headers, the
 /// body read with `StreamReader` (UTF-8 unless a BOM says otherwise). `Err` stands for the
 /// `WebException`. shortcut: redirects are not followed (.NET follows them), nothing redirects here.
+#[cfg(windows)]
 fn http_get(url: &str, headers: &[(&str, &str)], decompress: bool, timeout_ms: u64) -> Result<String, String> {
     let rest = url.strip_prefix("http://").ok_or("not http")?;
     let (authority, target) = rest.find('/').map_or((rest, "/"), |i| (&rest[..i], &rest[i..]));
@@ -240,6 +264,7 @@ fn http_get(url: &str, headers: &[(&str, &str)], decompress: bool, timeout_ms: u
     Ok(net::decode(&body))
 }
 
+#[cfg(windows)]
 fn dechunk(mut b: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     while let Some(i) = b.windows(2).position(|w| w == b"\r\n") {
@@ -254,12 +279,14 @@ fn dechunk(mut b: &[u8]) -> Vec<u8> {
 }
 
 /// `DateTime.Now` in ticks: the system clock, as coarse as .NET Framework reads it.
+#[cfg(windows)]
 fn now_ticks() -> i64 {
     let t = unsafe { windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime() };
     ((t.dwHighDateTime as i64) << 32) | t.dwLowDateTime as i64
 }
 
 /// `pingServer`: 200 as 4 bytes to the server's UDP port, 3 bytes back (200 and its HTTP port).
+#[cfg(windows)]
 fn ping_once(ip: Ipv4Addr, port: i32) -> [i32; 2] {
     let mut b = [0u8; 3];
     let (mut t0, mut t1) = (now_ticks(), now_ticks());
@@ -279,6 +306,7 @@ fn ping_once(ip: Ipv4Addr, port: i32) -> [i32; 2] {
 }
 
 /// `PingServer`: up to 12 tries, 150 ms apart.
+#[cfg(windows)]
 fn ping_server(ip: Option<&str>, port: i32) -> Answer {
     // shortcut: dotted IPv4 only, IPAddress.Parse takes more forms, the theme sends the lobby's dotted ones
     let Some(ip) = ip.and_then(|s| s.parse::<Ipv4Addr>().ok()) else {
@@ -298,6 +326,7 @@ fn ping_server(ip: Option<&str>, port: i32) -> Answer {
 /// the subnet's broadcast address pinged on every port of `from..to`; each server that
 /// answers is asked for its `/INFO`. The original adds them as its threads finish; the port
 /// in port order.
+#[cfg(windows)]
 fn lan_servers(from: i32, to: i32) -> Answer {
     let mut servers = Vec::new();
     for ip in host_addresses() {
@@ -331,6 +360,7 @@ fn lan_servers(from: i32, to: i32) -> Answer {
 }
 
 /// `Dns.GetHostEntry(Dns.GetHostName()).AddressList`, the IPv4 ones.
+#[cfg(windows)]
 fn host_addresses() -> Vec<Ipv4Addr> {
     use windows::Win32::System::SystemInformation::{ComputerNameDnsHostname, GetComputerNameExW};
     let mut buf = [0u16; 256];
@@ -349,6 +379,7 @@ fn host_addresses() -> Vec<Ipv4Addr> {
 }
 
 /// `GetSubnetMask`: the mask of the network interface with that address.
+#[cfg(windows)]
 fn subnet_mask(ip: Ipv4Addr) -> Option<Ipv4Addr> {
     use windows::Win32::NetworkManagement::IpHelper::{GetAdaptersAddresses, GAA_FLAG_INCLUDE_GATEWAYS, IP_ADAPTER_ADDRESSES_LH};
     use windows::Win32::Networking::WinSock::{AF_INET, AF_UNSPEC, SOCKADDR_IN};
@@ -386,6 +417,7 @@ fn subnet_mask(ip: Ipv4Addr) -> Option<Ipv4Addr> {
 
 /// `BCastPing`: 200 sent to the broadcast address with `DontRoute` (no `SO_BROADCAST`, as the
 /// original), 50 ms for an answer; "ip:port:httpport", or ending in -1 without one.
+#[cfg(windows)]
 fn bcast_ping(bcast: Ipv4Addr, port: i32) -> String {
     use std::os::windows::io::AsRawSocket;
     use windows::Win32::Networking::WinSock::{sendto, setsockopt, IPPROTO_UDP, MSG_DONTROUTE, SOCKADDR, SOCKADDR_IN, SOCKET};
@@ -410,11 +442,13 @@ fn bcast_ping(bcast: Ipv4Addr, port: i32) -> String {
 }
 
 /// `GetServerInfo`: the server's `/INFO`, with its address put in and marked as a LAN one.
+#[cfg(windows)]
 fn server_info(ip: &str, port: &str) -> Result<String, String> {
     let text = http_get(&format!("http://{ip}:{port}/INFO"), &[], false, 30_000)?;
     Ok(text.replace("\"ip\":\"\"", &format!("\"ip\":\"{ip}\"")).replace("\"l\":false", "\"l\":true"))
 }
 
+#[cfg(windows)]
 #[cfg(test)]
 mod tests {
     use super::*;

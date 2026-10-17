@@ -5,7 +5,7 @@
 //! .NET behaviour: `String.Trim`, `ToUpper` / `ToLowerInvariant`, `File.ReadAllText` (byte
 //! order marks) and `File.WriteAllText` (with or without one).
 
-use std::path::Path;
+use crate::files;
 
 /// `String.Trim()`: .NET's white space is Rust's.
 pub fn trim(s: &str) -> &str {
@@ -67,12 +67,12 @@ pub fn decode(bytes: &[u8]) -> String {
 
 /// `File.ReadAllText(path)`.
 pub fn read_all_text(path: &str) -> std::io::Result<String> {
-    Ok(decode(&std::fs::read(path)?))
+    Ok(decode(&files::with(|f| f.read(path))?))
 }
 
 /// `File.WriteAllText(path, text)`: UTF-8 without a byte order mark.
 pub fn write_all_text(path: &str, text: &str) -> std::io::Result<()> {
-    std::fs::write(path, text.as_bytes())
+    files::with(|f| f.write(path, text.as_bytes()))
 }
 
 /// `File.WriteAllText(path, text, Encoding.UTF8)`: UTF-8 behind a byte order mark, which
@@ -80,17 +80,17 @@ pub fn write_all_text(path: &str, text: &str) -> std::io::Result<()> {
 pub fn write_all_text_bom(path: &str, text: &str) -> std::io::Result<()> {
     let mut bytes = vec![0xef, 0xbb, 0xbf];
     bytes.extend_from_slice(text.as_bytes());
-    std::fs::write(path, bytes)
+    files::with(|f| f.write(path, &bytes))
 }
 
 /// `File.Exists`.
 pub fn file_exists(path: &str) -> bool {
-    Path::new(path).is_file()
+    files::with(|f| f.is_file(path))
 }
 
 /// `Directory.Exists`.
 pub fn dir_exists(path: &str) -> bool {
-    Path::new(path).is_dir()
+    files::with(|f| f.is_dir(path))
 }
 
 /// `Path.GetFileName`: what follows the last `\` or `/`.
@@ -128,11 +128,9 @@ pub fn file_stem(path: &str) -> &str {
 pub fn list(folder: &str, dirs: bool) -> std::io::Result<Vec<String>> {
     let mut out = Vec::new();
     let base = if folder.ends_with('\\') || folder.ends_with('/') { folder.to_string() } else { format!("{folder}\\") };
-    for entry in std::fs::read_dir(folder)? {
-        let entry = entry?;
-        let is_dir = entry.file_type()?.is_dir();
+    for (name, is_dir) in files::with(|f| f.list(folder))? {
         if is_dir == dirs {
-            out.push(format!("{base}{}", entry.file_name().to_string_lossy()));
+            out.push(format!("{base}{name}"));
         }
     }
     Ok(out)
@@ -158,4 +156,48 @@ pub fn uri_path(path: &str) -> String {
         }
     }
     out
+}
+
+/// `File.Copy(from, to, true)`.
+pub fn copy(from: &str, to: &str) -> std::io::Result<()> {
+    files::with(|f| f.copy(from, to))
+}
+
+/// `File.Delete`.
+pub fn remove_file(path: &str) -> std::io::Result<()> {
+    files::with(|f| f.remove_file(path))
+}
+
+/// `Directory.Delete(path, true)`.
+pub fn remove_dir_all(path: &str) -> std::io::Result<()> {
+    files::with(|f| f.remove_dir_all(path))
+}
+
+/// `Directory.CreateDirectory`.
+pub fn create_dir_all(path: &str) -> std::io::Result<()> {
+    files::with(|f| f.create_dir_all(path))
+}
+
+/// `File.Move(from, to)`: never over a file that is there.
+pub fn rename(from: &str, to: &str) -> std::io::Result<()> {
+    files::with(|f| f.rename(from, to))
+}
+
+/// `File.AppendAllText` of bytes.
+pub fn append(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    files::with(|f| f.append(path, bytes))
+}
+
+/// `FileInfo.Length` (0 when there is no such file).
+pub fn len(path: &str) -> u64 {
+    files::with(|f| f.len(path)).unwrap_or(0)
+}
+
+/// `File.GetLastWriteTime` / `GetCreationTime` (the epoch when there is no such file).
+pub fn modified(path: &str) -> std::time::SystemTime {
+    files::with(|f| f.modified(path)).unwrap_or(std::time::UNIX_EPOCH)
+}
+
+pub fn created(path: &str) -> std::time::SystemTime {
+    files::with(|f| f.created(path)).unwrap_or(std::time::UNIX_EPOCH)
 }

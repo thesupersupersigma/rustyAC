@@ -16,7 +16,7 @@ pub fn list(dir: &str, host: &dyn Host, p: &Params) -> Result<Answer, Thrown> {
     let files = net::list(&folder, false).map_err(|e| io_thrown(&folder, &e))?;
     let mut rows: Vec<(i64, Value)> = Vec::new();
     for f in files.iter().filter(|f| net::file_name(f) != "cr") {
-        let len = std::fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+        let len = net::len(f);
         let [y, mo, d, h, mi, s, ms] = host.local_time(Some(f));
         let since = days_from_civil(y, mo, d) * 86_400_000 + ((h * 60 + mi) * 60 + s) * 1000 + ms;
         let row = format!("{},{d:02}/{mo:02}/{y:04} {h:02}:{mi:02},{},{since},{len}", net::file_name(f), mb(len));
@@ -49,7 +49,7 @@ pub fn change(host: &str, dir: &str, stamp: &str, p: &Params) -> Result<Answer, 
             let path = format!("{dir}{}", name("name"));
             if !net::file_exists(&path) {
                 "ERROR,No such file".to_string()
-            } else if std::fs::remove_file(&path).is_ok() {
+            } else if net::remove_file(&path).is_ok() {
                 "OK".to_string()
             } else {
                 format!("ERROR,Unable to delete {}", name("name"))
@@ -86,7 +86,7 @@ pub fn change(host: &str, dir: &str, stamp: &str, p: &Params) -> Result<Answer, 
 
 /// `File.Move`: never over a file that is there (Rust's rename would replace it).
 fn move_file(from: &str, to: &str) -> bool {
-    !std::path::Path::new(to).exists() && std::fs::rename(from, to).is_ok()
+    net::rename(from, to).is_ok()
 }
 
 /// `((float)len / 1024f / 1024f).ToString("0.00")`: .NET Framework formats a float from its

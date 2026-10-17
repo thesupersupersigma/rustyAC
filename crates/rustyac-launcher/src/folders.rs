@@ -73,7 +73,7 @@ impl AppFolder {
 /// `AppFolder.CreateIfNonExistant`.
 pub fn create_if_non_existant(path: &str) -> std::io::Result<()> {
     if !crate::net::dir_exists(path) {
-        std::fs::create_dir_all(path)?;
+        crate::net::create_dir_all(path)?;
     }
     Ok(())
 }
@@ -94,13 +94,13 @@ pub fn mirror_folder(source: &str, dest: &str, delete: bool, overwrite: bool) ->
     for file in crate::net::list(source, false)? {
         let target = combine(dest, crate::net::file_name(&file));
         if !crate::net::file_exists(&target) || overwrite {
-            std::fs::copy(&file, &target)?;
+            crate::net::copy(&file, &target)?;
         }
     }
     if delete {
         for file in crate::net::list(dest, false)? {
             if !crate::net::file_exists(&combine(source, crate::net::file_name(&file))) {
-                std::fs::remove_file(&file)?;
+                crate::net::remove_file(&file)?;
             }
         }
     }

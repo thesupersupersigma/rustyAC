@@ -6,58 +6,99 @@
 //! come out byte for byte as the launcher writes them. The launcher turns a name or value into
 //! UTF-8 bytes and reads those bytes as ANSI before it writes; Windows then writes the ANSI
 //! file back as those bytes, which is UTF-8 again. Reading undoes it.
+//!
+//! Where there is no Win32 (the browser) the same calls are [`profile`]'s pure copy of them, on
+//! the mounted [`files`](crate::files); on Windows [`use_pure`] switches to it too, for checks.
 
-use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::GetLastError;
-use windows::Win32::Globalization::{MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
-use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::bridge::Thrown;
-use crate::net;
+use crate::{net, profile};
 
 pub struct IniFile {
     pub path: String,
 }
 
+static PURE: AtomicBool = AtomicBool::new(!cfg!(windows));
+
+/// rustyAC's own: the pure copy instead of Win32 (always so where there is no Win32).
+pub fn use_pure(on: bool) {
+    PURE.store(on || !cfg!(windows), Ordering::Relaxed);
+}
+
+fn pure() -> bool {
+    PURE.load(Ordering::Relaxed)
+}
+
+#[cfg(windows)]
+mod win {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::Foundation::GetLastError;
+    use windows::Win32::Globalization::{MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
+    use windows::Win32::System::WindowsProgramming::{GetPrivateProfileStringW, WritePrivateProfileStringW};
+
+    pub fn utf8_as_ansi(bytes: &[u8]) -> Vec<u16> {
+        if bytes.is_empty() {
+            return Vec::new();
+        }
+        unsafe {
+            let n = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None);
+            let mut out = vec![0u16; n as usize];
+            MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut out));
+            out
+        }
+    }
+
+    pub fn ansi_bytes(units: &[u16]) -> Vec<u8> {
+        if units.is_empty() {
+            return Vec::new();
+        }
+        unsafe {
+            let n = WideCharToMultiByte(CP_ACP, 0, units, None, None, None);
+            let mut out = vec![0u8; n as usize];
+            WideCharToMultiByte(CP_ACP, 0, units, Some(&mut out), None, None);
+            out
+        }
+    }
+
+    fn wide(units: Option<&[u16]>) -> Option<Vec<u16>> {
+        units.map(|u| u.iter().copied().chain([0]).collect())
+    }
+
+    fn ptr(w: &Option<Vec<u16>>) -> PCWSTR {
+        w.as_ref().map_or(PCWSTR::null(), |w| PCWSTR(w.as_ptr()))
+    }
+
+    pub fn get(path: &str, section: Option<&[u16]>, key: Option<&[u16]>, default: Option<&[u16]>, buf: &mut [u16]) {
+        let (s, k, d) = (wide(section), wide(key), wide(default));
+        unsafe {
+            GetPrivateProfileStringW(ptr(&s), ptr(&k), ptr(&d), Some(buf), &HSTRING::from(path));
+        }
+    }
+
+    pub fn write(path: &str, section: Option<&[u16]>, key: Option<&[u16]>, value: Option<&[u16]>) -> Result<(), u32> {
+        let (s, k, v) = (wide(section), wide(key), wide(value));
+        let ok = unsafe { WritePrivateProfileStringW(ptr(&s), ptr(&k), ptr(&v), &HSTRING::from(path)) };
+        ok.map_err(|_| unsafe { GetLastError() }.0)
+    }
+}
+
 /// `Encoding.Default.GetString(Encoding.UTF8.GetBytes(s))`.
 fn utf8_as_ansi(s: &str) -> Vec<u16> {
-    let bytes = s.as_bytes();
-    if bytes.is_empty() {
-        return Vec::new();
+    #[cfg(windows)]
+    if !pure() {
+        return win::utf8_as_ansi(s.as_bytes());
     }
-    unsafe {
-        let n = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None);
-        let mut out = vec![0u16; n as usize];
-        MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut out));
-        out
-    }
+    profile::ansi_to_wide(s.as_bytes())
 }
 
 /// `Encoding.Default.GetBytes(s)`.
 fn ansi_bytes(units: &[u16]) -> Vec<u8> {
-    if units.is_empty() {
-        return Vec::new();
+    #[cfg(windows)]
+    if !pure() {
+        return win::ansi_bytes(units);
     }
-    unsafe {
-        let n = WideCharToMultiByte(CP_ACP, 0, units, None, None, None);
-        let mut out = vec![0u8; n as usize];
-        WideCharToMultiByte(CP_ACP, 0, units, Some(&mut out), None, None);
-        out
-    }
-}
-
-fn wide(units: Option<Vec<u16>>) -> Option<Vec<u16>> {
-    units.map(|mut u| {
-        u.push(0);
-        u
-    })
-}
-
-fn ptr(w: &Option<Vec<u16>>) -> PCWSTR {
-    match w {
-        Some(w) => PCWSTR(w.as_ptr()),
-        None => PCWSTR::null(),
-    }
+    profile::wide_to_ansi(units)
 }
 
 /// `String.Trim` on UTF-16 units.
@@ -73,18 +114,21 @@ impl IniFile {
         IniFile { path: path.into() }
     }
 
+    fn bytes(&self) -> Option<Vec<u8>> {
+        crate::files::with(|f| f.read(&self.path)).ok()
+    }
+
     /// `GetPrivateProfileStringW` into a .NET string of 65535 spaces, as the launcher passes it.
-    fn get(&self, section: &Option<Vec<u16>>, key: &Option<Vec<u16>>, default: Option<&[u16]>, size: u32) -> Vec<u16> {
+    fn get(&self, section: Option<&[u16]>, key: Option<&[u16]>, default: Option<&[u16]>, size: u32) -> Vec<u16> {
         let mut buf = vec![0x20u16; 65536];
         buf[65535] = 0;
-        let default = default.map(|d| {
-            let mut d = d.to_vec();
-            d.push(0);
-            d
-        });
-        let path = HSTRING::from(self.path.as_str());
-        unsafe {
-            GetPrivateProfileStringW(ptr(section), ptr(key), ptr(&default), Some(&mut buf[..size as usize]), &path);
+        let size = size as usize;
+        if pure() {
+            let (written, _) = profile::get_string(self.bytes().as_deref(), section, key, default, size);
+            buf[..written.len()].copy_from_slice(&written);
+        } else {
+            #[cfg(windows)]
+            win::get(&self.path, section, key, default, &mut buf[..size]);
         }
         buf.truncate(65535);
         buf
@@ -94,23 +138,35 @@ impl IniFile {
     pub fn write(&self, section: Option<&str>, key: Option<&str>, value: Option<&str>) -> Result<(), Thrown> {
         let key = key.map(net::to_upper);
         let section = section.map(net::to_upper);
-        let value = wide(value.map(utf8_as_ansi));
-        let key = wide(key.as_deref().map(utf8_as_ansi));
-        let section = wide(section.as_deref().map(utf8_as_ansi));
-        let path = HSTRING::from(self.path.as_str());
-        let ok = unsafe { WritePrivateProfileStringW(ptr(&section), ptr(&key), ptr(&value), &path) };
-        if ok.is_err() {
-            let code = unsafe { GetLastError() }.0;
-            return Err(Thrown::Other(format!("Cannot write to:\n{}\n\n Error code: {code}", self.path)));
-        }
-        Ok(())
+        let value = value.map(utf8_as_ansi);
+        let key = key.as_deref().map(utf8_as_ansi);
+        let section = section.as_deref().map(utf8_as_ansi);
+        let result = if pure() {
+            match section {
+                // Win32 only flushes its cache
+                None => Ok(()),
+                Some(section) => match profile::write_string(self.bytes().as_deref(), &section, key.as_deref(), value.as_deref()) {
+                    None => Ok(()),
+                    // ERROR_PATH_NOT_FOUND, ERROR_ACCESS_DENIED as Windows answers
+                    Some(bytes) => crate::files::with(|f| f.write(&self.path, &bytes)).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { 3 } else { 5 }),
+                },
+            }
+        } else {
+            #[cfg(windows)]
+            {
+                win::write(&self.path, section.as_deref(), key.as_deref(), value.as_deref())
+            }
+            #[cfg(not(windows))]
+            unreachable!()
+        };
+        result.map_err(|code| Thrown::Other(format!("Cannot write to:\n{}\n\n Error code: {code}", self.path)))
     }
 
     /// `IniReadValue(Section, Key)`.
     pub fn read(&self, section: Option<&str>, key: Option<&str>) -> String {
-        let key = wide(key.map(utf8_as_ansi));
-        let section = wide(section.map(utf8_as_ansi));
-        let text = self.get(&section, &key, Some(&[]), 65535);
+        let key = key.map(utf8_as_ansi);
+        let section = section.map(utf8_as_ansi);
+        let text = self.get(section.as_deref(), key.as_deref(), Some(&[]), 65535);
         let bytes = ansi_bytes(trim_units(&text));
         let text = String::from_utf8_lossy(&bytes).replace('\0', "");
         let mut text = net::trim(&text).to_string();
@@ -144,15 +200,14 @@ impl IniFile {
 
     /// `GetKeys(category)`.
     pub fn keys(&self, category: &str) -> Result<Vec<String>, Thrown> {
-        let mut c: Vec<u16> = category.encode_utf16().collect();
-        c.push(0);
-        let text = self.get(&Some(c), &None, None, 32768);
+        let c: Vec<u16> = category.encode_utf16().collect();
+        let text = self.get(Some(&c), None, None, 32768);
         IniFile::split_names(&text)
     }
 
     /// `GetCategories()`.
     pub fn categories(&self) -> Result<Vec<String>, Thrown> {
-        let text = self.get(&None, &None, None, 65535);
+        let text = self.get(None, None, None, 65535);
         IniFile::split_names(&text)
     }
 }

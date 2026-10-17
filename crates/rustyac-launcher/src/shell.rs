@@ -48,6 +48,9 @@ pub struct Options {
     pub game: PathBuf,
     pub game_args: Vec<String>,
     pub player_name: String,
+    /// The player's real cfg folder the launcher's own is first filled from
+    /// ([`setup::seed_from_player`]), only read; `None`: not.
+    pub player_cfg: Option<PathBuf>,
     /// Steps that drive the page (see [`Step`]); the launcher closes after the last one.
     pub script: Option<Vec<String>>,
     /// Every request, event and script error, one line each.
@@ -57,6 +60,9 @@ pub struct Options {
     /// `--lobby`: where the server list comes from instead of Kunos' lobby.
     pub lobby: Option<String>,
 }
+
+/// rustyAC's controls page (`showcontrols`), not the launcher's.
+const CONTROLS_PAGE: &str = include_str!("controls.html");
 
 /// The launcher's theme (`Theme`): the default one, or launcher.ini's `[WINDOW] THEME`.
 struct Theme {
@@ -329,7 +335,12 @@ impl App {
                 // the launcher shows a message box; the log has it
                 self.log(&format!("ERRORS with content: {list} view log for details"));
             }
-            Event::OpenControls | Event::StartMusic | Event::StopMusic | Event::SetVolume => {}
+            // the launcher's WPF controls window is rustyAC's own page here, in this window;
+            // its Back goes home to the theme
+            Event::OpenControls => {
+                let _ = unsafe { self.webview.NavigateToString(&HSTRING::from(CONTROLS_PAGE)) };
+            }
+            Event::StartMusic | Event::StopMusic | Event::SetVolume => {}
         }
     }
 
@@ -646,6 +657,9 @@ pub fn run(options: Options) -> Result<i32, String> {
         fn setup_error(&self, text: &str) {
             unsafe { MessageBoxW(None, &HSTRING::from(text), w!("Error setting up user folders"), MB_OK | MB_ICONHAND) };
         }
+    }
+    if let Some(player_cfg) = &options.player_cfg {
+        setup::seed_from_player(&folders, player_cfg);
     }
     if setup::setup_user_directory(&folders, &Boxes).is_err() {
         return Ok(0);
