@@ -356,8 +356,10 @@ export async function startLauncher(env) {
     [uri(roots[0]) + '/', `${acfsBase}ac/`],
     [uri(roots[1]) + '/', `${acfsBase}docs/`],
   ];
+  // (in any case: the skins' generated CSS has the paths in lower case)
+  const prefixRes = prefixes.map(([from, to]) => [new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), to]);
   const rewrite = (text) => {
-    for (const [from, to] of prefixes) if (text.includes(from)) text = text.split(from).join(to);
+    for (const [from, to] of prefixRes) text = text.replace(from, to);
     return text;
   };
 

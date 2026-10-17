@@ -54,6 +54,20 @@
     return { status: 0, text: '', mime: 'text/plain' };
   }
 
+  // A stylesheet the theme links from the bridge (`<link href="ac://generatecss">`, the skins'
+  // previews): WebView2 loads it through the ac scheme, a page cannot; its text goes into a
+  // <style> in its place.
+  function bridgeStyles(nodes) {
+    for (const node of nodes) {
+      if (node.nodeName !== 'LINK' || !/^(ac:|http:\/\/ac\/)/i.test(node.getAttribute('href') || '')) continue;
+      const a = T.request(node.getAttribute('href'), 'GET');
+      const style = document.createElement('style');
+      style.textContent = a.text;
+      node.replaceWith(style);
+    }
+  }
+  new MutationObserver((list) => list.forEach((m) => bridgeStyles(m.addedNodes))).observe(document, { childList: true, subtree: true });
+
   const Real = window.XMLHttpRequest;
   class Xhr extends Real {
     open(method, url, async) {
@@ -207,6 +221,12 @@
     },
     true,
   );
+
+  // As the desktop launcher (crates/rustyac-launcher shell.rs WIZARD_JS): the theme's own
+  // first-run wizard asks the language while launcher.ini [WINDOW] LANGUAGE is empty
+  document.onloadModules = function () {
+    window.__AC.loadModule('FirstRunWizard', 'body > .modules', 'en', null, true);
+  };
 
   document.addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
