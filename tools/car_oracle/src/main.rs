@@ -307,6 +307,7 @@ fn main() {
         "race-ini" => race_ini(&args),
         "race-micro" => race_micro(&args),
         "mouse-micro" => mouse_micro(&args),
+        "steer-micro" => steer_micro(&args),
         "start-camera-micro" => start_camera_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
@@ -481,6 +482,34 @@ fn mouse_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::mouse::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("mouse-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    Ok(())
+}
+
+/// Task 37: `car_oracle steer-micro [--seed <n>] [--steps <calls>] [--root <dir>]` (tapes:
+/// `<root>/steer_line.tape` on Laguna Seca's AI line, `<root>/steer_none.tape` without one): the
+/// game's own keyboard steering look-ahead (`KeyboardCarControl::stepSteer`) on a game body put
+/// somewhere new every call, for the port's `keyboard_steering_check` example.
+fn steer_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    // the game's AISpline::load may write the line again: it reads a copy in the oracle's folder
+    let ac = args.acs.parent().ok_or("no AC folder")?;
+    let line = root.join("fast_lane.ai");
+    std::fs::copy(ac.join("content/tracks/ks_laguna_seca/ai/fast_lane.ai"), &line).map_err(|e| format!("fast_lane.ai: {e}"))?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    acs::set_extra_overrides(game::steer::overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let steps = args.steps.unwrap_or(20_000);
+    for (name, file) in [("steer_line.tape", Some(line.to_string_lossy().into_owned())), ("steer_none.tape", None)] {
+        let tape = unsafe { game::steer::micro(&acs, args.seed as u32, steps, file.as_deref())? };
+        let out = root.join(name);
+        std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+        println!("steer-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    }
     Ok(())
 }
 

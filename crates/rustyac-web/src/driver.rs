@@ -120,6 +120,9 @@ impl WebSource {
             int_gas: self.keyboard.int_gas,
             int_steer: self.keyboard.int_steer,
             old_steer: self.keyboard.old_steer,
+            understeer_steer_correction: self.keyboard.understeer_steer_correction,
+            current_spline_pos: self.keyboard.current_spline_pos,
+            line: self.keyboard.line.take(),
             ..keyboard
         };
         self.bindings = bindings;
@@ -183,6 +186,7 @@ impl DriverSource for WebSource {
 
     fn set_track(&mut self, track: &Arc<Track>) {
         self.auto.set_track(track);
+        self.keyboard.line = rustyac_game::input::keyboard::ai_line(track);
     }
 
     fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {

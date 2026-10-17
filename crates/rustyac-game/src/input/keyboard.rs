@@ -6,17 +6,39 @@
 //! towards a speed-dependent limit, the throttle that ramps and backs off when the driven
 //! tyres slip, the brake that goes straight to the pedal the tyres can take.
 //!
-//! Not AC's: the look-ahead on the AI line (there is no track; its term is zero here, see
-//! [`KeyboardCarControl::step_steer`]), a second key per action and a clutch key.
+//! The look-ahead on the track's AI line ([`KeyboardCarControl::step_steer`]) is the game's.
+//! Not AC's: a second key per action and a clutch key.
 //!
 //! Mouse steering (`getMouseSteering` 0x14010fb70, Ctrl+M) is the game's: each step adds the
 //! cursor's distance from the window's middle, over `MOUSE_SPEED`, and puts the cursor back.
 
+use std::sync::Arc;
+
 use rustyac_physics::car::{CarControls, CarControlsInput};
+use rustyac_physics::track::spline::InterpolatingSpline;
 
 use super::ini::ControlsIni;
 use super::{CarProbe, Extra};
 use crate::crt::expf;
+
+/// What the keyboard's look-ahead follows on a track: its AI line as the track loaded it
+/// (`AISplineRecorder::load` puts `ai/fast_lane.ai` in `bestLapSpline`); none without one.
+pub fn ai_line(track: &rustyac_physics::track::Track) -> Option<Arc<InterpolatingSpline>> {
+    track.ai_spline.as_ref().map(|line| Arc::new(line.spline.clone()))
+}
+
+/// `[KEYBOARD] RUSTYAC_SPEED_SENSITIVITY` (not AC's): missing is 1, AC's rule; kept to 0..1.
+pub fn speed_sensitivity(ini: &ControlsIni) -> f32 {
+    if !ini.has_key("KEYBOARD", "RUSTYAC_SPEED_SENSITIVITY") {
+        return 1.0;
+    }
+    let s = ini.get_float("KEYBOARD", "RUSTYAC_SPEED_SENSITIVITY");
+    if s.is_nan() {
+        1.0
+    } else {
+        s.clamp(0.0, 1.0)
+    }
+}
 
 /// The key codes (Windows virtual keys; 0 or -1 = none).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,6 +201,17 @@ pub struct KeyboardCarControl {
     pub old_mouse_value: f32,
     /// `mouseSpeed` (+0x78): pixels for the whole of one side
     pub mouse_speed: f32,
+    /// `understeerSteerCorrection` (+0x64): steps left of a slowed steering wish (0: the
+    /// game never sets it)
+    pub understeer_steer_correction: f32,
+    /// `currentSplinePos` (+0x68)
+    pub current_spline_pos: i32,
+    /// The track's AI line (`aiSpline->bestLapSpline`): `fast_lane.ai`; none without one
+    pub line: Option<Arc<InterpolatingSpline>>,
+    /// Not AC's: `[KEYBOARD] RUSTYAC_SPEED_SENSITIVITY`, 0 to 1, scales the speed in the
+    /// steering limit and in the slower steering at speed. 1 (the default) is AC's rule, 0
+    /// takes the speed out of both.
+    pub speed_sensitivity: f32,
 }
 
 /// What mouse steering asks of the window: where the cursor is, where the window is, and
@@ -249,6 +282,10 @@ impl KeyboardCarControl {
             mouse_accelerator_brake: false,
             old_mouse_value: 0.0,
             mouse_speed: 1000.0,
+            understeer_steer_correction: 0.0,
+            current_spline_pos: -1,
+            line: None,
+            speed_sensitivity: 1.0,
         }
     }
 
@@ -274,6 +311,7 @@ impl KeyboardCarControl {
                 }
             },
             mouse_accelerator_brake: ini.get_int("KEYBOARD", "MOUSE_ACCELERATOR_BRAKE") > 0,
+            speed_sensitivity: speed_sensitivity(ini),
             ..KeyboardCarControl::defaults()
         }
     }
@@ -303,14 +341,101 @@ impl KeyboardCarControl {
         self.old_mouse_value
     }
 
-    /// `KeyboardCarControl::stepSteer` @ 0x140111650: in the game, a steering wish from a
-    /// point ahead on the AI line; only its size is used, and only to raise the steering
-    /// limit. Without a track there is no line. (On a track without one the game uses the
-    /// world's origin as that point, and on a track with one a frozen index makes it follow
-    /// the line's first points: neither is a behaviour worth having.) rustyAC's term is 0,
-    /// so the limit is the speed rule alone. **Approximated.**
-    pub fn step_steer(&self) -> f32 {
-        0.0
+    /// `KeyboardCarControl::getCarPositionOnSpline` @ 0x14010f8e0: the car's position put
+    /// on the line's segment ending at `currentSplinePos` (in the ground plane).
+    fn car_position_on_spline(&self, line: &InterpolatingSpline, pos: &[f32; 3]) -> [f32; 3] {
+        if line.points_count() == 0 {
+            return [0.0; 3];
+        }
+        let a = line.point_at(line.wrap_index(self.current_spline_pos.wrapping_sub(1)) as u32);
+        let b = line.point_at(line.wrap_index(self.current_spline_pos) as u32);
+        let (mut dx, mut dz, mut dy) = (b[0] - a[0], b[2] - a[2], 0.0f32);
+        let len = (dz * dz + dx * dx).sqrt();
+        // `ucomiss len, 0; je`: 0 or NaN leaves the direction as it is
+        if !(len == 0.0 || len.is_nan()) {
+            let inv = 1.0 / len;
+            dx *= inv;
+            dz *= inv;
+            dy = inv * 0.0;
+        }
+        let t = ((pos[0] - a[0]) * dx + dy * 0.0) + (pos[2] - a[2]) * dz;
+        [dx * t + a[0], t * dy + a[1], dz * t + a[2]]
+    }
+
+    /// `KeyboardCarControl::getPointAtDistance` @ 0x14010fc50: the first point of the line
+    /// at least `dist` (in the ground plane) beyond the car, moved back along its segment.
+    fn point_at_distance(&self, line: &InterpolatingSpline, pos: &[f32; 3], dist: f32) -> [f32; 3] {
+        if line.points_count() == 0 {
+            return [0.0; 3];
+        }
+        // `ucomiss s, 0; je`: 0 or NaN is a distance of 0
+        let root = |s: f32| if s == 0.0 || s.is_nan() { 0.0 } else { s.sqrt() };
+        let mut i = line.wrap_index(self.current_spline_pos.wrapping_add(1));
+        let c = self.car_position_on_spline(line, pos);
+        let p = line.point_at(i as u32);
+        let (z, x) = (c[2] - p[2], c[0] - p[0]);
+        let mut d = root(z * z + x * x);
+        // `comiss d, dist; jb`: a NaN goes on. shortcut: the game never stops when no point
+        // is far enough (or on a NaN); rustyAC stops after one lap of the line.
+        let mut left = line.points_count();
+        while !(d >= dist) && left > 0 {
+            left -= 1;
+            i = line.wrap_index(i.wrapping_add(1));
+            let b = line.point_at(i as u32);
+            let (z, x) = (b[2] - c[2], b[0] - c[0]);
+            d = root(z * z + x * x);
+        }
+        let a = line.point_at(line.wrap_index(i.wrapping_sub(1)) as u32);
+        let q = line.point_at(i as u32);
+        let diff = [a[0] - q[0], a[1] - q[1], a[2] - q[2]];
+        let len = root((diff[1] * diff[1] + diff[0] * diff[0]) + diff[2] * diff[2]);
+        let f = (d - dist) / len;
+        [diff[0] * f + q[0], diff[1] * f + q[1], diff[2] * f + q[2]]
+    }
+
+    /// `KeyboardCarControl::stepSteer` @ 0x140111650: a steering wish towards the point
+    /// `LOOKAHEAD_POINTS` metres ahead on the track's AI line (`STEER_GAIN` per metre to the
+    /// side, at most 0.9); [`Self::get_keyboard_steering`] uses its size to raise the limit.
+    /// As in the game: without a line the point is the world's origin, and with one
+    /// `currentSplinePos` stays at -1 (only an empty line sets it), so the point is found
+    /// from the line's first points.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn step_steer(&mut self, probe: &CarProbe) -> f32 {
+        let empty = InterpolatingSpline::default();
+        let line = self.line.clone();
+        let line = line.as_deref().unwrap_or(&empty);
+        let pos = probe.position;
+        if line.points_count() == 0 {
+            self.current_spline_pos = line.closest_point_index(&pos) as i32;
+        }
+        let pt = self.point_at_distance(line, &pos, self.look_ahead);
+        // the body's `worldToLocal` (`dBodyGetPosRelPoint`): x is along the left axis
+        let q = [pt[0] - pos[0], pt[1] - pos[1], pt[2] - pos[2]];
+        let local_x = probe.left[0] * q[0] + probe.left[1] * q[1] + probe.left[2] * q[2];
+        let mut s = -(local_x * self.steer_gain);
+        if !s.is_finite() {
+            s = 0.0;
+        }
+        if s <= 0.9 {
+            if s < -0.9 {
+                s = -0.9;
+            }
+        } else {
+            s = 0.9;
+        }
+        if 0.0 < self.understeer_steer_correction {
+            s = (s - self.old_steer) * 0.1 + self.old_steer;
+            self.understeer_steer_correction -= 1.0;
+        }
+        if s <= 0.9 {
+            if -0.9 <= s {
+                s
+            } else {
+                -0.9
+            }
+        } else {
+            0.9
+        }
     }
 
     /// `KeyboardCarControl::steeringMovement` @ 0x140111360.
@@ -373,9 +498,11 @@ impl KeyboardCarControl {
 
     /// `KeyboardCarControl::getKeyboardSteering` @ 0x14010faa0.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    pub fn get_keyboard_steering(&mut self, dt: f32, input: &CarControlsInput, left: bool, right: bool) -> f32 {
-        self.min_steering = (1.0 / (input.speed * 0.5 + 1.0)) * 3.141_592_7;
-        let mut m = self.step_steer().abs();
+    pub fn get_keyboard_steering(&mut self, dt: f32, input: &CarControlsInput, probe: &CarProbe, left: bool, right: bool) -> f32 {
+        // rustyAC's sensitivity: at 1, v * 1.0 is the game's speed bit for bit
+        let v = input.speed * self.speed_sensitivity;
+        self.min_steering = (1.0 / (v * 0.5 + 1.0)) * 3.141_592_7;
+        let mut m = self.step_steer(probe).abs();
         if !(m >= self.min_steering) {
             m = self.min_steering;
         }
@@ -386,7 +513,7 @@ impl KeyboardCarControl {
         } else {
             0.0
         };
-        self.steering_movement(target, dt, input.speed)
+        self.steering_movement(target, dt, v)
     }
 
     /// `KeyboardCarControl::computeGasCoefficient` @ 0x14010f6f0: the pedal ramps up, and
@@ -429,7 +556,7 @@ impl KeyboardCarControl {
         let (k1, k2) = (self.keys, self.keys2);
         let key = |pick: fn(&Keys) -> i32| key_down(pick(&k1)) || key_down(pick(&k2));
         self.old_steer = controls.steer;
-        let s = if self.mouse_steering { self.get_mouse_steering(mouse) } else { self.get_keyboard_steering(dt, input, key(|k| k.left), key(|k| k.right)) };
+        let s = if self.mouse_steering { self.get_mouse_steering(mouse) } else { self.get_keyboard_steering(dt, input, probe, key(|k| k.left), key(|k| k.right)) };
         controls.steer = if s > 1.0 {
             1.0
         } else if s >= -1.0 {
@@ -612,7 +739,7 @@ MOUSE_ACCELERATOR_BRAKE=1
         // spec G.25
         let mut k = user();
         for (speed, expected) in [(0.0, 0x40490fdb), (10.0, 0x3f060a92), (20.0, 0x3e923a14), (30.0, 0x3e490fdb), (50.0, 0x3df775fa)] {
-            k.get_keyboard_steering(DT, &input(speed), false, false);
+            k.get_keyboard_steering(DT, &input(speed), &CarProbe::default(), false, false);
             assert_eq!(bits(k.min_steering), expected, "{speed} m/s");
         }
     }
@@ -622,38 +749,38 @@ MOUSE_ACCELERATOR_BRAKE=1
         // spec G.26, G.27: at a standstill every factor is 1
         let mut k = user();
         assert_eq!(bits(DT * k.steer_speed), 0x3bac0831);
-        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), false, true)), 0x3bac0831);
-        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), false, true)), 0x3c2c0831);
+        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), &CarProbe::default(), false, true)), 0x3bac0831);
+        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), &CarProbe::default(), false, true)), 0x3c2c0831);
         let mut steps = 2;
         while k.int_steer < 1.0 {
-            k.get_keyboard_steering(DT, &input(0.0), false, true);
+            k.get_keyboard_steering(DT, &input(0.0), &CarProbe::default(), false, true);
             steps += 1;
         }
         assert_eq!(steps, 191);
         // G.28: 20 m/s
         let mut k = user();
-        let first = k.get_keyboard_steering(DT, &input(20.0), false, true);
+        let first = k.get_keyboard_steering(DT, &input(20.0), &CarProbe::default(), false, true);
         same(k.speed_decelering_factor, 0x3f09b2b0);
         assert_eq!(bits(k.turn_decelering_factor), 0x3e3a2e8c);
         same(k.steer_decelerator, 0x3eb83e53);
         same(first, 0x3af79f8a);
         let mut steps = 1;
         while k.int_steer < k.min_steering {
-            k.get_keyboard_steering(DT, &input(20.0), false, true);
+            k.get_keyboard_steering(DT, &input(20.0), &CarProbe::default(), false, true);
             steps += 1;
         }
         assert!((150..=152).contains(&steps), "{steps} steps to the limit");
         assert_eq!(k.int_steer, k.min_steering, "it stops at the limit");
         // G.29: above 100 km/h only the speed factor counts; left is the mirror image
         let mut k = user();
-        let right = k.get_keyboard_steering(DT, &input(30.0), false, true);
+        let right = k.get_keyboard_steering(DT, &input(30.0), &CarProbe::default(), false, true);
         same(k.steer_decelerator, 0x3ebacdc4);
         same(right, 0x3afb1074);
         let mut k = user();
-        assert_eq!(k.get_keyboard_steering(DT, &input(30.0), true, false), -right);
+        assert_eq!(k.get_keyboard_steering(DT, &input(30.0), &CarProbe::default(), true, false), -right);
         // left wins when both are held
         let mut k = user();
-        assert!(k.get_keyboard_steering(DT, &input(0.0), true, true) < 0.0);
+        assert!(k.get_keyboard_steering(DT, &input(0.0), &CarProbe::default(), true, true) < 0.0);
     }
 
     #[test]
@@ -661,16 +788,16 @@ MOUSE_ACCELERATOR_BRAKE=1
         // spec G.30: against the steering
         let mut k = user();
         k.int_steer = 0.5;
-        assert_eq!(bits(k.get_keyboard_steering(DT, &input(20.0), true, false)), 0x3ef947ae);
+        assert_eq!(bits(k.get_keyboard_steering(DT, &input(20.0), &CarProbe::default(), true, false)), 0x3ef947ae);
         // G.31: no key
         for (from, expected) in [(0.5f32, 0x3efb295fu32), (-0.5, 0xbefb295f), (0.006, 0), (0.004, 0)] {
             let mut k = user();
             k.int_steer = from;
-            assert_eq!(bits(k.get_keyboard_steering(DT, &input(20.0), false, false)), expected, "from {from}");
+            assert_eq!(bits(k.get_keyboard_steering(DT, &input(20.0), &CarProbe::default(), false, false)), expected, "from {from}");
         }
         // G.32: no file
         let mut k = KeyboardCarControl::defaults();
-        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), false, true)), 0x3b5844d1);
+        assert_eq!(bits(k.get_keyboard_steering(DT, &input(0.0), &CarProbe::default(), false, true)), 0x3b5844d1);
     }
 
     #[test]
@@ -743,5 +870,53 @@ MOUSE_ACCELERATOR_BRAKE=1
         assert_eq!(controls.clutch, 0.0);
         k.acquire_controls(&mut controls, &mut extra, DT, &input(10.0), &probe, none, &mut Still);
         assert_eq!(controls.clutch, 1.0);
+    }
+
+    #[test]
+    fn speed_sensitivity_one_is_ac_s_rule_and_zero_takes_the_speed_out() {
+        let ini = |text: &str| ControlsIni::parse(&format!("[KEYBOARD]
+STEERING_SPEED=1.75
+STEERING_OPPOSITE_DIRECTION_SPEED=2.5
+STEER_RESET_SPEED=1.8
+{text}"));
+        let run = |k: &mut KeyboardCarControl, speed: f32| (0..400).map(|n| bits(k.get_keyboard_steering(DT, &input(speed), &CarProbe::default(), n % 150 > 90, n % 150 < 60))).collect::<Vec<_>>();
+        let (mut ac, mut one) = (KeyboardCarControl::from_ini(&ini("")), KeyboardCarControl::from_ini(&ini("RUSTYAC_SPEED_SENSITIVITY=1")));
+        assert_eq!(ac.speed_sensitivity, 1.0);
+        for speed in [0.0, 12.0, 45.0, 80.0] {
+            assert_eq!(run(&mut ac, speed), run(&mut one, speed));
+        }
+        // at 0: the same steering at 80 m/s as standing still, the limit and the slow-down gone
+        let (mut off, mut still) = (KeyboardCarControl::from_ini(&ini("RUSTYAC_SPEED_SENSITIVITY=0")), KeyboardCarControl::from_ini(&ini("")));
+        assert_eq!(run(&mut off, 80.0), run(&mut still, 0.0));
+        let mut fast = KeyboardCarControl::from_ini(&ini(""));
+        let held = |k: &mut KeyboardCarControl| (0..400).map(|_| k.get_keyboard_steering(DT, &input(80.0), &CarProbe::default(), false, true)).last().unwrap();
+        let mut off = KeyboardCarControl::from_ini(&ini("RUSTYAC_SPEED_SENSITIVITY=0"));
+        // AC's limit at 80 m/s: pi / 41
+        let (fast, off) = (held(&mut fast), held(&mut off));
+        assert!(fast < 0.08 && off == 1.0, "{fast} {off}");
+        // out of range is kept to 0..1
+        assert_eq!(speed_sensitivity(&ini("RUSTYAC_SPEED_SENSITIVITY=3")), 1.0);
+        assert_eq!(speed_sensitivity(&ini("RUSTYAC_SPEED_SENSITIVITY=-1")), 0.0);
+    }
+
+    #[test]
+    fn the_look_ahead_follows_the_line_as_the_game_does() {
+        use rustyac_physics::track::spline::SplinePoint;
+        // no line: the point is the world's origin; 10 m to the car's left of it at 0.18 per metre
+        let mut k = KeyboardCarControl::defaults();
+        let probe = CarProbe { position: [0.0, 0.0, -10.0], left: [0.0, 0.0, 1.0], ..CarProbe::default() };
+        assert_eq!(k.step_steer(&probe), -0.9);
+        assert_eq!(k.current_spline_pos, 0);
+        let probe = CarProbe { position: [3.0, 0.0, 0.0], left: [1.0, 0.0, 0.0], ..CarProbe::default() };
+        assert_eq!(bits(k.step_steer(&probe)), bits(3.0f32 * 0.18));
+        // a line: the index stays where it was (-1 from the start), the point is 8 m along it
+        let mut k = KeyboardCarControl::defaults();
+        let points = (0..20).map(|i| SplinePoint { point: [0.0, 0.0, i as f32 * 5.0], ..SplinePoint::default() }).collect();
+        let mut line = InterpolatingSpline::default();
+        line.points = points;
+        k.line = Some(Arc::new(line));
+        let probe = CarProbe { position: [2.0, 0.0, 0.0], left: [1.0, 0.0, 0.0], ..CarProbe::default() };
+        assert_eq!(bits(k.step_steer(&probe)), bits(0.36));
+        assert_eq!(k.current_spline_pos, -1);
     }
 }

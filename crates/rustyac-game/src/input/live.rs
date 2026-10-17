@@ -207,6 +207,10 @@ impl DriverSource for LiveSource {
         self.probe = *probe;
     }
 
+    fn set_track(&mut self, track: &Arc<rustyac_physics::track::Track>) {
+        self.keyboard.line = super::keyboard::ai_line(track);
+    }
+
     fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
         let focused = self.focused();
         let key_down: &dyn Fn(i32) -> bool = &|key| focused && key_is_down(key);
