@@ -7,10 +7,70 @@
   fixed on the way (collision reports); 80 of 80 checks identical.
 - Part A done: the keyboard's `stepSteer` is the game's, proven against the game in-process;
   speed sensitivity; the controls page; the launcher's cfg seeding.
-- Part B.1: the pure-Rust ini copy (`crates/rustyac-launcher/src/profile.rs`) and the bridge
-  building for wasm; proven against Windows and the desktop bridge. B.2 onward: see below.
+- Part B.1 done: the pure-Rust ini copy (`crates/rustyac-launcher/src/profile.rs`) and the
+  bridge building for wasm; proven against Windows and the desktop bridge.
+- **Next (Task 37b): B.2 to B.6**, the theme in the browser page, nothing of it started (see
+  "Not done" at the end). Start from `re/scratch/task37/theme_menu.md` (which of the theme's
+  JS decides the menu, what Drive and Online call) and `web_now.md` (the page today, the pack,
+  the game's start); the wasm bridge needs a browser `Host` and a `files::Files` on OPFS.
 - Notes from reading (not committed): `re/scratch/task37/launcher_split.md`,
   `theme_menu.md`, `web_now.md`.
+
+## Summary
+
+- **Multiplayer goldens back.** The five tapes and 20 goldens Tasks 25–26 checked against
+  were gone; they were recorded again from live sessions and now live in `re/gold/net/`,
+  with the scripts to remake and check them in `tools/net_gold/`. Doing so found a port bug
+  (a collision on the very step of a collision report went into the next report); fixed.
+  All 20, four ways each: identical to the game.
+- **Keyboard steering is the game's now.** The look-ahead along the track's AI line
+  (`stepSteer`) was missing (it gave 0); it is ported 1:1 and checked against the game's own
+  code run in-process: 120,000 calls, identical.
+- **A speed-sensitivity setting** for the keyboard (rustyAC's own; 1 = AC exactly, 0 = speed
+  doesn't limit or slow the steering) and a **controls page** to set it and the pad's, opened
+  by the launcher theme's controls button.
+- **The launcher fills its cfg from the player's real AC cfg** on first start (missing files
+  only, the real folder only read).
+- **The launcher's bridge runs without Windows**: a pure-Rust copy of Windows' ini calls
+  (identical to Windows on 20,000 generated files) and a file layer, so the bridge builds for
+  the browser; its wasm build answers Task 35–36's 12 request lists exactly as the desktop.
+- **Not done:** the theme inside the browser page (B.2 to B.6): the browser still has the old
+  menu, unchanged. See "Not done".
+
+## How to use it
+
+Desktop:
+
+- Keyboard steering needs nothing: the look-ahead is on whenever the track has an AI line.
+- In the launcher (`rustyac-launcher.exe`), the theme's controls button opens the controls
+  page: move "Speed sensitivity" (or press "Off" for 0), Save, Back. It writes the launcher's
+  `cfg\controls.ini` (`[KEYBOARD] RUSTYAC_SPEED_SENSITIVITY`, `[X360] SPEED_SENSITIVITY`, ...);
+  the next drive uses it. The same key can be set by hand in `cfg\controls.ini`.
+- First start of the launcher: the player's `Documents\Assetto Corsa\cfg\*.ini` that the
+  launcher's own `cfg` lacks are copied in. `--player-cfg <folder>` names another folder,
+  `--player-cfg none` turns it off.
+- `rustyac-launcher.exe --pure-ini` uses the pure ini copy instead of Win32 (for checks).
+
+Multiplayer goldens: `sh tools/net_gold/record.sh`, `sh tools/net_gold/gold.sh`,
+`sh tools/net_gold/check.sh` (docs/port/multiplayer.md, "Golden tapes").
+
+Browser: nothing new yet (the old menu is as it was).
+
+## New or renamed files in the web zip
+
+None: nothing under `web/` changed in this task.
+
+## Disk space
+
+44 GB free at the start, 34 GB at the end (see "End checks").
+
+## Part 0: the multiplayer tapes
+
+Where they live, how to rerun them and the results: docs/port/multiplayer.md, "Golden tapes:
+where they live and how to make them again (Task 37)". In short: `re/gold/net/tapes/` (five
+tapes), `re/gold/net/*.netgold` (20 goldens); on v0.36.0 19 of 20 were made and 76 of 76 checks
+identical; the 20th showed the collision-report bug; after the fix 20 of 20 and **80 of 80
+identical** (desktop, WebSocket, gateway, wasm under wasmtime 49.0.3).
 
 ## Part A: the keyboard's steering
 
@@ -168,3 +228,57 @@ token, and `getresults`' date is left out):
 Under node's own WASI (node 26.4.0, `re/scratch/task37/wasi_node.mjs`) the same module can't
 list a folder on Windows (`fd_readdir` answers ENOSYS, os error 52), so every list that reads
 the content folders differs; that is node's, not the bridge's. The browser itself is Part B.2.
+
+## End checks (nothing else changed)
+
+On the final code (`re/scratch/task37/end_a.sh`, `end_b.sh`, `drives.sh`; v0.36.0 built into
+`re/scratch/task37/tgt_old` for the comparisons, deleted afterwards):
+
+| Check | Result |
+|---|---|
+| clippy `-D warnings --all-targets`, the CI line, wasm32-unknown-unknown, wasm32-wasip1 | clean |
+| `cargo build` / `cargo test --release --workspace --locked` | built; 65 suites, 313 passed, 0 failed |
+| `python web/build.py`, the nine tools, the .NET launcher oracle | built |
+| physics dumps against v0.36.0: `spa.ryin` | the same (`c175020dafc14eeb`); state hash `af262162d7ae332b` with 0 and 8 workers, both versions |
+| physics dumps against v0.36.0: `magione_ai.ryin` | the same (`726ded63cbc5848b`); state hash `b0d997d76d84e9cd` with 0 and 8 workers, both versions |
+| the 20 multiplayer goldens, four ways | 80 of 80 identical (Part 0) |
+| the committed multiplayer tape, desktop / browser / gateway | identical, 3,000 steps |
+| plain command line, Content Manager's race.ini | run, exit 0 |
+| Tasks 35 and 36's launcher answers against the .NET launcher | hotlap 1,974/1,974, options 1,843/1,843, practice 1,956/1,956, probe 59/59, quick race 1,974/1,974, race weekend 2,007/2,007, results 5/6 (the date, as before), smoke 10/10, career 3,756/3,756, championships 4,012/4,012, replays 14/14, special events 3,824/3,824, video modes 2/2; the player's folders identical; the real Documents folder unchanged |
+| the keyboard tapes (Part A), 0 and 8 workers | 12 of 12 identical |
+| GUI sequences of Tasks 29 to 34 (41 sequences, setup pages included) | all exit 0, 82 of 82 comparisons IDENTICAL, none different |
+| recorded drives (`oracle/game/*.ryin` and Task 36's two), desktop against wasm32-wasip1 under wasmtime 49.0.3 | 158 of 158 identical at every step, 1,659,570 steps (two needed their setup file mounted: a copy of the player's `god.ini` and `re/scratch/task15/god_tc4.ini`) |
+
+Disk: 44 GB free at the start, 34 GB at the end.
+
+## Not done (Task 37b)
+
+Parts B.2 to B.6 were not started: the time went to Part 0 (one port bug found in the
+goldens, fixed), the ini copy's many Windows rules, and the end checks. The browser's page is
+unchanged: its old menu is still the default and still works (nothing half-wired in it).
+
+- **B.2** the launcher's theme in the page, from the preview pack (and "Open your AC folder"),
+  the `.base` libraries injected as `JSIncludeDefaultLibs` does, `ac://` routed to the wasm
+  bridge; `tools/web_pack` taking `launcher/themes/` (the pack's files to add are not yet
+  listed).
+- **B.3** only Drive (practice, quick race, race weekend, hotlap) and Online reachable. From
+  the reading: `getthememodules` only feeds the module manager; the menu and Drive's tabs are
+  in the theme's `index.html` and `js/ui.js`, so the page has to hide or refuse the others
+  (career, special events, time attack, drift, drag, replays, options' other pages,
+  `ACGotoCareerEvent` and its kind).
+- **B.4** race.ini from the theme to the in-page game and back with results (the page's game
+  takes no race.ini today: `rustyac-web`'s `content::setup` fixes the session).
+- **B.5** Online from `web/servers.json` through the gateway, as lobby entries (the theme also
+  asks servers' own HTTP ports, which the page cannot reach: a proxy is needed).
+- **B.6** the old menu removed; and the controls page in the browser (A.4's browser half: the
+  page is ready to be served, it takes `window.rustyacBridge`).
+- Proofs 5 (in a headless Chrome; node's WASI cannot list folders on Windows), 6 (the page's
+  screenshots) and the browser half of 4.
+
+## Open questions
+
+- The pad's `SPEED_SENSITIVITY` is AC's own key; is a pad oracle (like the keyboard's) wanted,
+  to prove the slider's 0 against the game?
+- The keyboard look-ahead without a track line aims at the world's origin, as the game's
+  does (nothing loaded = no `fast_lane.ai`): keep it the game's, or give rustyAC its own
+  fallback (the old 0)?
