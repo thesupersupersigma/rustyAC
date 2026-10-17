@@ -2,6 +2,21 @@
 
 ## Resume here
 
+Task 37b (AC's launcher in the browser page):
+
+- Part 1 working behind `?launcher=1` (the old menu is still the default): the theme from
+  the preview pack in a frame (`web/sw.js` serves it, `web/theme_glue.js` runs in it,
+  `web/launcher.js` holds it), its `ac://` requests answered by the desktop bridge built for
+  wasm (`crates/rustyac-web/src/launcher.rs`), the player's documents in OPFS. Only the Drive
+  tile shows. `tools/web_pack` packs the launcher's files (`launcher` in the manifest).
+- Next: the plain start page and the folder path, then Drive Start → game → results.
+- Scratch: `re/scratch/task37b/` (test pack `pack/`, readers' notes `theme_internals.md`,
+  `web_game_raceini.md`, `pad_oracle.md`). Serve: `python web/serve.py --pack
+  re/scratch/task37b/pack --port 8137`; check: `node web/check.mjs --url
+  "http://127.0.0.1:8137/?launcher=1" --launcher --profile target/web-check-37b`.
+
+Task 37:
+
 - Part 0 done (commit fd4fb66): the 20 multiplayer goldens made again under `re/gold/net/`
   (`tools/net_gold/`, see docs/port/multiplayer.md "Golden tapes"); one port bug found and
   fixed on the way (collision reports); 80 of 80 checks identical.

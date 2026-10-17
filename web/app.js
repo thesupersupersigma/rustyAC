@@ -44,6 +44,7 @@
 //                      the desktop's selftest takes the same list with `--hold`)
 
 import init, * as rac from './pkg/rustyac_web.js';
+import { startLauncher } from './launcher.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -80,6 +81,9 @@ function fail(error) {
   $('refusal').textContent = text;
   $('progress').hidden = true;
   $('drive').disabled = !state.source;
+  // the launcher's frame gives way to the menu, where the refusal is
+  if ($('launcher')) $('launcher').hidden = true;
+  $('menu').hidden = false;
 }
 
 const megabytes = (bytes) => (bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0) + ' MB';
@@ -107,6 +111,8 @@ async function openPack(base) {
   return {
     kind: 'pack',
     manifest,
+    // (the launcher reads a file it did not read before at once, over HTTP)
+    urlOf: (path) => base + path.split('/').map(encodeURIComponent).join('/'),
     sizes: new Map(manifest.files.map((f) => [f.path, f.bytes])),
     cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes, pinned: !!c.pinned })),
     tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes, pinned: !!t.pinned })),
@@ -236,6 +242,7 @@ async function openFolder(root) {
   const source = {
     kind: 'folder',
     name: root.name,
+    root,
     sizes,
     find(path) {
       const handle = handles.get(path) || [...handles].find(([p]) => p.toLowerCase() === path.toLowerCase())?.[1];
@@ -1540,6 +1547,44 @@ async function useFolder(handle, remember) {
   await useSource(source, `${handle.name}: ${source.cars.length} cars, ${source.tracks.length} tracks and layouts`);
 }
 
+// ---------------------------------------------------------------- AC's launcher
+
+// ?launcher=1: AC's launcher theme (web/launcher.js) instead of this page's menu.
+const launcherMode = params.get('launcher') === '1';
+
+function launcherReport(kind, text) {
+  const l = window.rustyac.launcher;
+  if (kind === 'progress') $('content-line').textContent = text;
+  else if (kind === 'state') window.rustyac.state = 'launcher';
+  else if (kind === 'error') {
+    console.error(`launcher: ${text}`);
+    l.errors.push(text);
+  } else (l[kind] || (l[kind] = [])).push(text);
+}
+
+async function openLauncher() {
+  if (!navigator.serviceWorker) throw new Error('this browser has no service workers: AC\'s launcher cannot run in it');
+  window.rustyac.launcher = { errors: [], blocked: [], notice: [], content: [], starts: 0 };
+  await navigator.serviceWorker.register('sw.js');
+  await navigator.serviceWorker.ready;
+  const host = $('launcher');
+  const name = params.get('name') || localStorage.getItem('rustyac.player-name') || 'rustyAC driver';
+  state.theme = await startLauncher({
+    rac,
+    source: state.source,
+    frameHost: host,
+    player: { name, id: playerId() },
+    onStart: () => {
+      window.rustyac.launcher.starts++;
+    },
+    onControls: openControls,
+    report: launcherReport,
+    lobby: null,
+  });
+  $('menu').hidden = true;
+  host.hidden = false;
+}
+
 async function main() {
   await init();
   $('version').textContent = rac.version();
@@ -1636,6 +1681,10 @@ async function main() {
         $('content-line').textContent = 'no preview pack on this server: open your own Assetto Corsa folder';
       }
     }
+  }
+  if (launcherMode && ready) {
+    await openLauncher();
+    return;
   }
   await loadServers();
   if (ready && params.get('join') && !$('mp-join').disabled) {

@@ -27,6 +27,8 @@ pub mod session;
 #[cfg(target_arch = "wasm32")]
 mod gpu;
 #[cfg(target_arch = "wasm32")]
+mod launcher;
+#[cfg(target_arch = "wasm32")]
 mod net;
 #[cfg(target_arch = "wasm32")]
 mod web;

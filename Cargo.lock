@@ -753,6 +753,7 @@ dependencies = [
  "js-sys",
  "rustyac-content",
  "rustyac-game",
+ "rustyac-launcher",
  "rustyac-math",
  "rustyac-net",
  "rustyac-physics",

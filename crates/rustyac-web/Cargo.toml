@@ -32,3 +32,5 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "console", "Performance"] }
 console_error_panic_hook = "0.1"
+# AC's launcher in the page: the desktop launcher's own ac:// bridge on the page's files
+rustyac-launcher = { path = "../rustyac-launcher" }

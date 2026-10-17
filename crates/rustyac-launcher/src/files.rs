@@ -183,6 +183,25 @@ impl MemFiles {
         entries.0.iter().filter_map(|(k, e)| e.bytes.as_ref().map(|b| (path(k), b.clone()))).collect()
     }
 
+    /// Every folder made, as made, for the page to keep with [`MemFiles::files`].
+    pub fn folders(&self) -> Vec<String> {
+        let entries = self.entries.lock().unwrap();
+        let names = |k: &str| -> String {
+            let mut out = Vec::new();
+            let mut at = k;
+            while let Some(e) = entries.0.get(at) {
+                out.push(e.name.clone());
+                at = parent(at);
+            }
+            if !at.is_empty() {
+                out.push(at.to_string());
+            }
+            out.reverse();
+            out.join("\\")
+        };
+        entries.0.iter().filter(|(_, e)| e.bytes.is_none()).map(|(k, _)| names(k)).collect()
+    }
+
     fn folder_there(map: &BTreeMap<String, Entry>, key: &str) -> bool {
         // a key without `\` is a drive or a root the page names, always there
         !key.contains('\\') || map.get(key).is_some_and(|e| e.bytes.is_none())

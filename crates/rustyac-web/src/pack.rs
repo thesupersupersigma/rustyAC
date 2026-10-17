@@ -50,6 +50,9 @@ pub struct Manifest {
     pub tracks: Vec<PackItem>,
     /// The game's own tables every drive reads (`system/data/...`): indices into `files`.
     pub shared: Vec<usize>,
+    /// AC's launcher: its theme and what the launcher reads to fill it (menu entries, skins,
+    /// previews, `cfg`): indices into `files`. Empty in a pack made before Task 37b.
+    pub launcher: Vec<usize>,
     pub files: Vec<PackFile>,
 }
 
@@ -109,7 +112,11 @@ impl Manifest {
             }
             out.push_str("\n  ]");
         }
-        let _ = write!(out, ",\n  \"shared\": [{}],\n  \"bytes\": {},\n  \"files\": [", list(&self.shared), self.total_bytes());
+        let _ = write!(out, ",\n  \"shared\": [{}]", list(&self.shared));
+        if !self.launcher.is_empty() {
+            let _ = write!(out, ",\n  \"launcher\": [{}]", list(&self.launcher));
+        }
+        let _ = write!(out, ",\n  \"bytes\": {},\n  \"files\": [", self.total_bytes());
         for (n, file) in self.files.iter().enumerate() {
             out.push_str(if n == 0 { "\n    {\"path\": " } else { ",\n    {\"path\": " });
             json_text(&mut out, &file.path);

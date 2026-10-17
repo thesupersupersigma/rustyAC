@@ -22,6 +22,7 @@
 //        [--end kill]                   end by killing the browser (a tab that just vanishes),
 //                                       not by closing it
 //        [--menu]          do not wait for a drive: the menu with its content is enough
+//        [--launcher]      do not wait for a drive: AC's launcher in the page (?launcher=1) is enough
 //        [--script <file.js>]   run that file's text in the page at the end (the body of an
 //                          async function; what it returns is the report's `script`)
 //        [--pick-folder <folder>]   with --menu: press "Open it as a file list" and answer the
@@ -92,6 +93,12 @@ const flags = [
   '--disable-background-timer-throttling',
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
+  // this machine only: every address that is not this machine's goes to a proxy that is not
+  // there, and no name but localhost resolves (the page, the launcher's theme and the service
+  // worker reach no other server, whatever they ask for)
+  '--proxy-server=http://127.0.0.1:9',
+  '--proxy-bypass-list=127.0.0.1;localhost;[::1]',
+  '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1',
   ...option('--flags', '').split(' ').filter(Boolean),
   'about:blank',
 ];
@@ -204,6 +211,7 @@ try {
     lastLine = now?.last || lastLine;
     if (now && ['driving', 'selftest', 'error'].includes(now.state)) break;
     if (now && now.state === 'menu' && args.includes('--menu')) break;
+    if (now && now.state === 'launcher' && args.includes('--launcher')) break;
     if (Date.now() - started > timeout) throw new Error(`the page did not start driving within ${timeout / 1000} s (state: ${now?.state}, last: ${now?.last})`);
   }
   if (process.stderr.isTTY) process.stderr.write('\n');

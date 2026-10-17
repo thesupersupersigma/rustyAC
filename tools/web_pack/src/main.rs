@@ -161,6 +161,48 @@ impl Item {
     }
 }
 
+/// Every file under `folder` (relative to `root`, `/` between names), the ones `keep` takes.
+fn files_under(root: &Path, folder: &str, keep: &dyn Fn(&str) -> bool, out: &mut BTreeMap<String, u64>) {
+    let Ok(entries) = std::fs::read_dir(root.join(folder)) else { return };
+    let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|e| e.file_name().to_string_lossy().to_ascii_lowercase());
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => files_under(root, &path, keep, out),
+            Ok(kind) if kind.is_file() && keep(&path.to_ascii_lowercase()) => {
+                out.insert(path, entry.metadata().map(|m| m.len()).unwrap_or(0));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// AC's launcher in the page: its default theme and the shared scripts the launcher puts into
+/// it, the game's `cfg` (the player's settings start as copies of it), the weather list, and
+/// for every car and track in the pack what the launcher shows of it: menu entries, brand
+/// badges, skins' previews and liveries, track previews and outlines. Videos are left out.
+fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    let all = |_: &str| true;
+    files_under(root, "cfg", &all, &mut out);
+    // the official post-processing filters the Video options list (ui.js listfiles ... root=true)
+    files_under(root, "system/cfg", &all, &mut out);
+    files_under(root, "launcher/themes/.base", &all, &mut out);
+    files_under(root, "launcher/themes/default", &|p: &str| !p.ends_with(".ogv"), &mut out);
+    files_under(root, "content/weather", &|p: &str| p.ends_with(".ini"), &mut out);
+    for car in cars {
+        files_under(root, &format!("content/cars/{car}/ui"), &all, &mut out);
+        let skin = |p: &str| p.ends_with("/ui_skin.json") || p.ends_with("/preview.jpg") || p.ends_with("/livery.png");
+        files_under(root, &format!("content/cars/{car}/skins"), &skin, &mut out);
+    }
+    for track in tracks {
+        files_under(root, &format!("content/tracks/{track}/ui"), &|p: &str| !p.ends_with(".ogv"), &mut out);
+    }
+    out
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|at| args.get(at + 1)).cloned();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
@@ -409,6 +451,12 @@ fn run(args: &[String]) -> Result<(), String> {
     eprintln!();
     let shared_files: Vec<(String, u64)> = shared.iter().map(|(file, bytes)| (file.clone(), *bytes)).collect();
     manifest.shared = add(&mut manifest, &shared_files)?;
+    let pack_cars: Vec<String> = manifest.cars.iter().map(|c| c.id.clone()).collect();
+    let mut pack_tracks: Vec<String> = manifest.tracks.iter().map(|t| t.id.clone()).collect();
+    pack_tracks.dedup();
+    let launcher: Vec<(String, u64)> = launcher_files(&root, &pack_cars, &pack_tracks).into_iter().collect();
+    manifest.launcher = add(&mut manifest, &launcher)?;
+    println!("AC's launcher: {} in {} files (its theme, cfg, and the cars' and tracks' menu pictures)", megabytes(manifest.bytes_of(&manifest.launcher)), manifest.launcher.len());
     if manifest.cars.is_empty() || manifest.tracks.is_empty() {
         return Err("no car or no track could be copied: no pack was written".to_string());
     }

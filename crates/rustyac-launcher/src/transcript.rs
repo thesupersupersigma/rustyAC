@@ -11,7 +11,8 @@ use crate::bridge::{Bridge, Host};
 use crate::folders::AppFolder;
 use crate::{appini, net, setup};
 
-struct NoQuestions;
+/// The setup's questions answered as a check wants them: no version prompt, errors ignored.
+pub struct NoQuestions;
 
 impl setup::Ask for NoQuestions {
     fn version_mismatch(&self, _: &str) -> bool {
@@ -75,10 +76,16 @@ impl Host for Fixed {
 
 /// Runs `requests` against the player's folder `docs` and the game in `ac_root`.
 pub fn run(ac_root: &str, docs: &str, requests: &str, out_file: &str, lobby: Option<String>, host: Box<dyn Host>) -> std::io::Result<()> {
+    let text = std::fs::read_to_string(requests)?;
+    let out = run_text(ac_root, docs, &text, lobby, host);
+    std::fs::File::create(out_file)?.write_all(&out)
+}
+
+/// [`run`] on the request list's text, the transcript returned (the browser's check).
+pub fn run_text(ac_root: &str, docs: &str, text: &str, lobby: Option<String>, host: Box<dyn Host>) -> Vec<u8> {
     let folders = AppFolder::new(ac_root, docs);
     let mut bridge = Bridge::new(folders.clone(), host);
     bridge.lobby = std::sync::Arc::new(std::sync::Mutex::new(crate::online::Lobby::new(lobby)));
-    let text = std::fs::read_to_string(requests)?;
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim_end_matches('\r');
@@ -108,5 +115,5 @@ pub fn run(ac_root: &str, docs: &str, requests: &str, out_file: &str, lobby: Opt
             }
         }
     }
-    std::fs::File::create(out_file)?.write_all(&out)
+    out
 }
