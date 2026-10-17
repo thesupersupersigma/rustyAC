@@ -1594,13 +1594,22 @@ async function openLauncher() {
     // the theme's Start: the player's documents are kept, the page starts again into the drive
     // (a page builds one drive: a second one needs a fresh page, as the menu's Drive does)
     onStart: async (api) => {
+      const race = new TextDecoder().decode(api.launcher.read_doc('cfg\\race.ini') || new Uint8Array(0));
+      const raceKey = (name) => (new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'im').exec(race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '') || [])[1] || '';
+      // other cars (AI drivers) are not driven in the browser yet: the theme says so, as it
+      // says it of what the game cannot do, and stays where it is
+      if (Number(raceKey('CARS') || '1') > 1) {
+        window.rustyac.launcher.refused = (window.rustyac.launcher.refused || 0) + 1;
+        api.exec("$('html,body').removeClass('ACactive');");
+        api.notice('Sessions with AI opponents are not available in the browser version yet.');
+        return;
+      }
       window.rustyac.launcher.starts++;
       window.rustyac.state = 'launching';
       await api.saveNow();
       // the game picks the player's skin among the car's skin folders (as the desktop does):
       // the game's files after the reload hold only what driving reads, so the names go along
-      const race = new TextDecoder().decode(api.launcher.read_doc('cfg\\race.ini') || new Uint8Array(0));
-      const car = (/^\s*MODEL\s*=\s*(.*?)\s*$/im.exec(race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '') || [])[1] || '';
+      const car = raceKey('MODEL');
       const skins = car ? api.list(`content/cars/${car}/skins`).filter(([, dir]) => dir).map(([name]) => name) : [];
       sessionStorage.setItem('rustyac.skins', JSON.stringify({ car, skins }));
       sessionStorage.setItem('rustyac.launch', '1');

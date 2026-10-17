@@ -181,8 +181,9 @@
   const NOT_HERE = { timeattack: 'Time Attack', drift: 'Drift', dragrace: 'Drag Race' };
 
   function notice(text) {
+    // (reported too, for the checks)
+    T.report('notice', text);
     if (window.UI && typeof window.UI.displayDialog === 'function') window.UI.displayDialog('.notice', text, null, null, 'OK');
-    else T.report('notice', text);
   }
 
   document.addEventListener(

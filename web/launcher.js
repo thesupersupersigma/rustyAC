@@ -376,6 +376,9 @@ export async function startLauncher(env) {
     report: (kind, text) => env.report(kind, text),
     isOnline: (url) => !!(env.lobby && env.lobby.owns(url)),
     online: (url, method, body) => env.lobby.http(url, method, body),
+    // the theme's own notice dialog, and a script run in the theme's frame
+    notice: (text) => call((g) => g.notice(text)),
+    exec: (src, name) => call((g) => g.exec(src, name || 'rustyac')),
     // a folder of the game's folder as the bridge sees it: [[name, isFolder]]
     list: (rel) => base.list(rel),
     text(path) {
