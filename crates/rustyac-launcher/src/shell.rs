@@ -696,6 +696,11 @@ pub fn run(options: Options) -> Result<i32, String> {
     if options.offscreen.is_some() {
         args.push_str(" --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding");
     }
+    // a scripted run (a check) reaches this computer only: the theme's news and video feeds,
+    // Kunos' lobby and servers' pings never leave it (as web/check.mjs does for the page)
+    if options.script.is_some() {
+        args.push_str(" --proxy-server=http://127.0.0.1:9 --proxy-bypass-list=127.0.0.1;localhost;[::1] --host-resolver-rules=\"MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1\"");
+    }
     unsafe { env_options.set_additional_browser_arguments(args) };
     let scheme = CoreWebView2CustomSchemeRegistration::new("ac".into());
     unsafe {
