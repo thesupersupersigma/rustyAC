@@ -308,6 +308,7 @@ fn main() {
         "race-micro" => race_micro(&args),
         "mouse-micro" => mouse_micro(&args),
         "steer-micro" => steer_micro(&args),
+        "pad-micro" => pad_micro(&args),
         "start-camera-micro" => start_camera_micro(&args),
         "multi-list" => {
             for s in game::multi::scenarios() {
@@ -482,6 +483,27 @@ fn mouse_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::mouse::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("mouse-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
+    Ok(())
+}
+
+/// Task 37b: `car_oracle pad-micro [--seed <n>] [--steps <calls>] [--root <dir>]` (tape:
+/// `<root>/pad.tape`): the game's own gamepad car control (`JoypadCarControl`) read from
+/// made-up controls.ini files and fed made-up XInput states, for the port's
+/// `pad_steering_check` example.
+fn pad_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    let out = root.join("pad.tape");
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    acs::set_extra_overrides(game::pad::overrides());
+    let acs = acs::Acs::load(&args.acs)?;
+    acs.silence_game_stdout();
+    let tape = unsafe { game::pad::micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("pad-micro seed {}: {} lines of the game into {}", args.seed, tape.lines().count(), out.display());
     Ok(())
 }
 
