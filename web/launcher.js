@@ -424,8 +424,10 @@ export async function startLauncher(env) {
   };
   window.rustyacTheme = api;
 
-  // the service worker asks for the frame's files here
-  navigator.serviceWorker.addEventListener('message', async (event) => {
+  // the service worker asks for the frame's files here (a launcher started again on another
+  // source takes the place of the one before)
+  if (window.rustyacAcfs) navigator.serviceWorker.removeEventListener('message', window.rustyacAcfs);
+  window.rustyacAcfs = async (event) => {
     const data = event.data;
     if (!data || data.kind !== 'rustyac-acfs' || !event.ports[0]) return;
     const port = event.ports[0];
@@ -449,7 +451,8 @@ export async function startLauncher(env) {
       env.report('error', `${path}: ${e}`);
       port.postMessage({ bytes: null });
     }
-  });
+  };
+  navigator.serviceWorker.addEventListener('message', window.rustyacAcfs);
   navigator.serviceWorker.startMessages();
 
   env.frameHost.replaceChildren(frame);

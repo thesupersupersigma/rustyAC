@@ -10,6 +10,10 @@
 <body>
 <canvas id="view"></canvas>
 <div id="launcher" hidden></div>
+<div id="corner" hidden>
+  <button id="source-switch" hidden></button>
+  <button id="gear" title="Steering and controls" aria-label="Steering and controls"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.4 1l.3 1.8c.4.1.8.3 1.1.5l1.5-1 1.4 1.4-1 1.5c.2.3.4.7.5 1.1l1.8.3v2l-1.8.3c-.1.4-.3.8-.5 1.1l1 1.5-1.4 1.4-1.5-1c-.3.2-.7.4-1.1.5L9.4 15h-2l-.3-1.8c-.4-.1-.8-.3-1.1-.5l-1.5 1-1.4-1.4 1-1.5c-.2-.3-.4-.7-.5-1.1L1.8 9.4v-2l1.8-.3c.1-.4.3-.8.5-1.1l-1-1.5 1.4-1.4 1.5 1c.3-.2.7-.4 1.1-.5L7.4 1h2zM8.4 5.6a2.8 2.8 0 100 5.6 2.8 2.8 0 000-5.6z"/></svg></button>
+</div>
 
 <div id="hud" hidden>
   <div id="hud-main">
@@ -54,6 +58,10 @@
     works at once, also while you drive. The defaults are the built-in layout: AC's default
     keys, and the pad numbers this page has always used.
   </p>
+  <p><label>Picture <select id="backend">
+    <option value="auto">WebGPU, else WebGL2</option>
+    <option value="webgl">WebGL2</option>
+  </select></label></p>
   <p id="controls-error" class="refusal" hidden></p>
   <div id="controls-list"></div>
   <table id="controls-layout"></table>
@@ -68,29 +76,33 @@
     AC's own look: this is a preview.
   </p>
 
-  <section>
+  <section id="content">
     <h2>1. Content</h2>
     <p id="pack-line" hidden></p>
-    <p>
+    <p class="folder-only">
       <button id="open-folder">Open your Assetto Corsa folder</button>
       <button id="reopen-folder" hidden></button>
       <button id="open-folder-list" hidden>Open it as a file list</button>
       <input id="folder-input" type="file" webkitdirectory hidden>
     </p>
-    <p id="folder-list-hint" class="hint" hidden>
+    <p id="folder-list-hint" class="hint folder-only" hidden>
       Chrome refuses folders under Program Files: use this instead. The browser asks whether to
       "upload" the folder's files: nothing is uploaded, the page reads them on this computer.
       It has to be picked again on every visit.
     </p>
-    <p class="hint">
+    <p class="hint folder-only">
       The folder is the one with <code>content</code> and <code>system</code> in it
       (<code>...\steamapps\common\assettocorsa</code>). Its files are read on this computer by
       this page only; nothing is uploaded and nothing is changed.
     </p>
     <p id="content-line" class="status"></p>
+    <p id="refusal" class="refusal" hidden></p>
+    <div id="progress" hidden><div id="progress-bar"></div></div>
+    <p id="status" class="status"></p>
+    <pre id="notes" hidden></pre>
   </section>
 
-  <section>
+  <section class="old">
     <h2>2. Car and track</h2>
     <div class="row">
       <label>Car <input id="car-search" type="search" placeholder="search" autocomplete="off" hidden><select id="car" disabled></select></label>
@@ -103,24 +115,16 @@
         <option value="start">on the grid</option>
       </select></label>
       <label><input id="auto-shifter" type="checkbox" checked> automatic gearbox</label>
-      <label>Picture <select id="backend">
-        <option value="auto">WebGPU, else WebGL2</option>
-        <option value="webgl">WebGL2</option>
-      </select></label>
     </div>
-    <p id="refusal" class="refusal" hidden></p>
     <details id="refused-list" hidden><summary></summary><ul></ul></details>
   </section>
 
-  <section>
+  <section class="old">
     <h2>3. Drive</h2>
     <p><button id="drive" disabled>Drive</button></p>
-    <div id="progress" hidden><div id="progress-bar"></div></div>
-    <p id="status" class="status"></p>
-    <pre id="notes" hidden></pre>
   </section>
 
-  <section>
+  <section class="old">
     <h2>Controls</h2>
     <p>
       <button id="controls-open">Steering and controls ...</button>
@@ -132,7 +136,7 @@
     </p>
   </section>
 
-  <section id="multiplayer">
+  <section id="multiplayer" class="old">
     <h2>Multiplayer</h2>
     <p class="hint">
       Race on a real Assetto Corsa server (Kunos' own <code>acServer</code>) against other
@@ -150,7 +154,7 @@
     <p id="mp-status" class="status"></p>
   </section>
 
-  <section class="small">
+  <section class="small old">
     <h2>Keys</h2>
     <table>
       <tr><td>throttle, brake</td><td>Up / W, Down / S</td><td>RT, LT</td></tr>

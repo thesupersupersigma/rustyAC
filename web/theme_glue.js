@@ -216,6 +216,18 @@
   });
   window.addEventListener('load', () => {
     if (T.theme.loadDefault) includeDefaultLibs();
+    // The other tiles and the logo's way back to the intro page stop every click on themselves,
+    // jQuery's too (.click() from a script never reaches the capture listener above): a
+    // handler on the element runs before the theme's, which all listen on the document
+    if (typeof window.$ !== 'undefined') {
+      const stop = (e) => {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        return false;
+      };
+      window.$('#menu li[data-panel]').not('[data-panel=drive]').addClass('disabled').on('click', stop);
+      window.$('.home').off('click').on('click', stop);
+    }
     T.loaded();
   });
 

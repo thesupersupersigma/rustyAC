@@ -83,6 +83,7 @@ function fail(error) {
   $('drive').disabled = !state.source;
   // the launcher's frame gives way to the menu, where the refusal is
   if ($('launcher')) $('launcher').hidden = true;
+  if ($('corner')) $('corner').hidden = true;
   $('menu').hidden = false;
 }
 
@@ -218,6 +219,8 @@ async function scanFolder(root, report) {
   }
   const system = await children(top.get('system').handle);
   if (system.has('data')) await walk(system.get('data').handle, 'system/data', 0, []);
+  // the game's rules a drive from AC's launcher reads (system/cfg: the race's over time, the pits)
+  if (system.has('cfg')) await walk(system.get('cfg').handle, 'system/cfg', 0, []);
   return files;
 }
 
@@ -342,7 +345,7 @@ async function rememberedFolder() {
 // a folder with tens of thousands of files (skins, sounds, previews, apps) is never kept.
 function listedPathWanted(parts) {
   const lower = parts.map((part) => part.toLowerCase());
-  if (lower[0] === 'system') return lower[1] === 'data' && parts.length === 3;
+  if (lower[0] === 'system') return (lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3;
   if (lower[0] !== 'content') return false;
   if (lower[1] === 'cars') {
     if (parts.length === 4) return lower[3] === 'data.acd' || lower[3].endsWith('.kn5');
@@ -1563,12 +1566,55 @@ async function useFolder(handle, remember) {
   const source = await openFolder(handle);
   if (remember) await rememberFolder(handle);
   await useSource(source, `${handle.name}: ${source.cars.length} cars, ${source.tracks.length} tracks and layouts`);
+  if (launcherMode && !state.starting) {
+    // the player's own folder from now on (the source switch under the theme goes back)
+    try {
+      localStorage.setItem('rustyac.source', 'folder');
+    } catch {
+      // for this visit only, then
+    }
+    await launcherStart();
+  }
 }
 
 // ---------------------------------------------------------------- AC's launcher
 
-// ?launcher=1: AC's launcher theme (web/launcher.js) instead of this page's menu.
-const launcherMode = params.get('launcher') === '1';
+// AC's launcher theme (web/launcher.js) is the page. The URL test hooks of a drive without it
+// (?go=1, ?join, ?selftest, ?launcher=0) still use the page's own controls, kept hidden.
+const launcherMode = params.get('launcher') !== '0' && !['go', 'join', 'selftest'].some((key) => params.has(key));
+
+// The launcher on the source in state.source: the drive it started (after its Start the page
+// is loaded again), else its theme.
+async function launcherStart() {
+  document.body.classList.add('has-source');
+  if (sessionStorage.getItem('rustyac.launch')) {
+    sessionStorage.removeItem('rustyac.launch');
+    await driveFromLauncher();
+  } else {
+    await openLauncher();
+  }
+}
+
+// The bar under the theme: the controls page (a gear) and the switch between the site's pack
+// and the player's own folder.
+function showCorner() {
+  const button = $('source-switch');
+  const onPack = state.source.kind === 'pack';
+  button.hidden = !onPack && !state.packAvailable;
+  button.textContent = onPack ? 'Open your Assetto Corsa folder' : 'Use the preview pack';
+  button.onclick = onPack
+    ? pickFolder
+    : () => {
+        try {
+          localStorage.setItem('rustyac.source', 'pack');
+        } catch {
+          // nothing kept: the pack is the default anyway
+        }
+        location.reload();
+      };
+  $('gear').onclick = openControls;
+  $('corner').hidden = false;
+}
 
 // The theme's online page in the browser: this site's servers (servers.json) are its lobby's
 // entries, Kunos' lobby is never asked. A server's own HTTP port (details, CANJOIN, booking) is
@@ -1674,6 +1720,7 @@ async function openLauncher() {
   });
   $('menu').hidden = true;
   host.hidden = false;
+  showCorner();
 }
 
 // The drive AC's launcher started (a reload after its Start, see openLauncher): race.ini and
@@ -1782,17 +1829,37 @@ async function main() {
   if (params.get('spawn')) $('spawn').value = params.get('spawn');
 
   let ready = false;
+  // (useFolder opens the launcher by itself only for a folder picked later)
+  state.starting = true;
+  if (launcherMode) document.body.classList.add('launcher-page');
+  const base = (params.get('pack') || 'preview/').replace(/([^/])$/, '$1/');
+  // the player chose their own folder over the site's pack before: that folder, while the
+  // browser still lets the page read it
+  let remembered = window.showDirectoryPicker ? await rememberedFolder().catch(() => null) : null;
+  let wantFolder = false;
+  try {
+    wantFolder = launcherMode && localStorage.getItem('rustyac.source') === 'folder';
+  } catch {
+    // no storage: the pack
+  }
   if (params.has('testfolder')) {
     // the folder picker's path without the picker (it needs a click a test cannot give)
     await useFolder(new HttpFolder(params.get('testfolder'), 'assettocorsa (test hook)'), false);
     ready = true;
-  } else {
-    const base = params.get('pack') || 'preview/';
-    const pack = await openPack(base.endsWith('/') ? base : base + '/').catch((error) => {
+    state.packAvailable = await fetch(`${base}manifest.json`, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
+  } else if (wantFolder && remembered && (await remembered.queryPermission({ mode: 'read' })) === 'granted') {
+    await useFolder(remembered, false).catch(fail);
+    ready = !!state.source;
+    remembered = null;
+    state.packAvailable = await fetch(`${base}manifest.json`, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
+  }
+  if (!ready) {
+    const pack = await openPack(base).catch((error) => {
       console.warn(error);
       return null;
     });
     if (pack) {
+      state.packAvailable = true;
       rac.fs_list(pack.manifest.files.map((f) => f.path).join('\n'));
       const few = pack.cars.length + pack.tracks.length <= 8;
       const line = few
@@ -1803,7 +1870,7 @@ async function main() {
       await useSource(pack, line);
       ready = true;
     } else {
-      const handle = window.showDirectoryPicker ? await rememberedFolder() : null;
+      const handle = remembered;
       if (handle) {
         const granted = (await handle.queryPermission({ mode: 'read' })) === 'granted';
         if (granted) {
@@ -1823,22 +1890,18 @@ async function main() {
         }
       }
       if (!ready) {
+        // the start page: no pack, no folder
         window.rustyac.state = 'menu';
         $('content-line').textContent = 'no preview pack on this server: open your own Assetto Corsa folder';
       }
     }
   }
-  if (launcherMode && ready) {
-    await loadServers();
-    if (sessionStorage.getItem('rustyac.launch')) {
-      sessionStorage.removeItem('rustyac.launch');
-      await driveFromLauncher();
-    } else {
-      await openLauncher();
-    }
+  await loadServers();
+  state.starting = false;
+  if (launcherMode) {
+    if (ready) await launcherStart();
     return;
   }
-  await loadServers();
   if (ready && params.get('join') && !$('mp-join').disabled) {
     await joinServer();
   } else if (ready && params.get('go') === '1' && !$('drive').disabled) {

@@ -40,13 +40,33 @@ html, body {
 
 #menu[hidden] { display: none; }
 
-/* AC's launcher (?launcher=1): the theme's page fills the window */
+/* AC's launcher: the theme's page fills the window but a thin bar of ours at the bottom */
 #launcher {
   position: fixed;
-  inset: 0;
+  inset: 0 0 28px 0;
   z-index: 5;
   background: #000;
 }
+#corner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  z-index: 6;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: #0d1014;
+}
+#corner[hidden] { display: none; }
+#corner button { font-size: 12px; padding: 2px 10px; }
+#gear { display: flex; align-items: center; padding: 2px 6px; }
+/* the start page (no pack, no folder) and the loading of a drive: only the Content section */
+body.launcher-page #menu > section.old { display: none; }
+body.launcher-page.has-source #menu .folder-only { display: none; }
 #launcher[hidden] { display: none; }
 #launcher iframe {
   width: 100%;
