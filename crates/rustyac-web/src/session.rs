@@ -68,6 +68,10 @@ pub struct Session {
     remote_curr: Vec<CarView>,
     /// Online: what the session printed (joins, laps, chat ...), until the page takes it.
     pub console: Vec<String>,
+    /// A drive from AC's launcher: what its race.ini made of the session (for the page's
+    /// notes), and the drive as `key=value` lines (car, skin, track, layout, spawn, session).
+    pub race_notes: Vec<String>,
+    pub drive: String,
 }
 
 impl Session {
@@ -90,6 +94,44 @@ impl Session {
             setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: 1.2, first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 28_000, wind_base: None, driver_names: Vec::new(), pit: Some(rustyac_game::input_file::PitHeader { window: (0, 0), settings: rustyac_physics::race::QuickMenuSettings { stay_in_car: false, auto_app_on_pitlane: true, presets_count: 3, visibility_max_time: 5.0 , cursor_start: 0}, values: None, presets_ini: None }) });
         }
         Session::build(setup, None)
+    }
+
+    /// Task 37b: the drive AC's launcher asked for: the session of its `race.ini` (and
+    /// `assists.ini`), as `rustyac.exe` makes it from the same files ([`crate::race`]).
+    /// `seed`: the game's `rand()` seed (the desktop takes the clock's milliseconds).
+    pub fn from_race(race_text: &str, assists_text: Option<&str>, seed: u32) -> Result<Session, String> {
+        use rustyac_physics::data::ini::IniReader;
+        // (as IniReader::load reads a file: CR LF as LF)
+        let race = IniReader::from_text(std::path::Path::new("race.ini"), &race_text.replace("\r\n", "\n"));
+        let assists = assists_text.map(|text| IniReader::from_text(std::path::Path::new("assists.ini"), &text.replace("\r\n", "\n")));
+        let (car, track, layout) = crate::race::car_and_track(&race);
+        if car.is_empty() || track.is_empty() {
+            return Err("race.ini names no car or no track ([RACE] MODEL, TRACK)".to_string());
+        }
+        let mut setup = crate::content::setup(&car, &track, &layout, false, "pit");
+        let root = rustyac_content::install::ac_root().unwrap_or_else(|| std::path::PathBuf::from("ac"));
+        let race_notes = crate::race::apply(&mut setup, &race, assists.as_ref(), seed, &root);
+        let drive = format!(
+            "car={}
+skin={}
+track={}
+layout={}
+spawn={}
+session_type={}
+sessions={}
+",
+            setup.car,
+            setup.player_skin.as_deref().unwrap_or(""),
+            setup.track,
+            setup.layout,
+            setup.spawn,
+            setup.session.session_type.unwrap_or(0),
+            setup.referee.as_ref().map(|r| r.sessions.sessions.iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(",")).unwrap_or_default()
+        );
+        let mut session = Session::build(setup, None)?;
+        session.race_notes = race_notes;
+        session.drive = drive;
+        Ok(session)
     }
 
     /// The same on a server: the server's car and track, in the pit box of the player's
@@ -154,6 +196,8 @@ impl Session {
             remote_prev: remote.clone(),
             remote_curr: remote,
             console: Vec::new(),
+            race_notes: Vec::new(),
+            drive: String::new(),
         })
     }
 

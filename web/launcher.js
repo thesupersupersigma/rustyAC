@@ -298,6 +298,16 @@ export async function startLauncher(env) {
     launcher.write_doc('cfg\\launcher.ini', enc.encode(ini));
     save();
   }
+  // The game's picture is this page: a new player's video.ini has no size, and the theme then
+  // stops every Start to send the player to its Options page (hidden in the browser). The
+  // page's size is written as that page would write it, once, through the bridge.
+  const setting = (key) => dec.decode(launcher.request(`ac://getsetting/video?VIDEO/${key}`).body).trim();
+  if (!setting('WIDTH') || !setting('HEIGHT')) {
+    launcher.request(`ac://setsetting/video?VIDEO/WIDTH=${screen.width}`);
+    launcher.request(`ac://setsetting/video?VIDEO/HEIGHT=${screen.height}`);
+    launcher.request('ac://setsetting/video?VIDEO/FULLSCREEN=0');
+    save();
+  }
   const named = (/^\s*theme\s*=\s*(.*)$/im.exec(ini.split(/^\[/m).find((s) => /^window\]/i.test(s)) || '') || [])[1];
   const themeOf = (id) => {
     const folder = `launcher/themes/${id}`;
@@ -360,11 +370,14 @@ export async function startLauncher(env) {
     trigger,
     frame,
     misses,
+    requests: [],
     save,
     saveNow,
     report: (kind, text) => env.report(kind, text),
     isOnline: (url) => !!(env.lobby && env.lobby.owns(url)),
     online: (url, method, body) => env.lobby.http(url, method, body),
+    // a folder of the game's folder as the bridge sees it: [[name, isFolder]]
+    list: (rel) => base.list(rel),
     text(path) {
       const lower = path.toLowerCase();
       if (lower.startsWith('ac/')) {
@@ -382,6 +395,9 @@ export async function startLauncher(env) {
       const acUrl = posted ? url.replace('http://ac/', 'ac://') : url;
       const post = posted || method === 'POST' ? String(body ?? '') : undefined;
       const host = hostOf(acUrl);
+      // (the last requests, for the checks)
+      api.requests.push(`${post === undefined ? 'GET' : 'POST'} ${acUrl}`);
+      if (api.requests.length > 400) api.requests.shift();
       if (env.lobby && env.lobby.answers(host)) return env.lobby.request(host, acUrl, post);
       const a = launcher.request(acUrl, post);
       const text = rewrite(dec.decode(a.body));
@@ -479,6 +495,8 @@ export function snapshotFile(snap, rel) {
 export function snapshotWith(snap, root, rel, bytes, ms) {
   const { files, folders } = parseSnapshot(snap);
   const kept = files.filter((f) => !sameDoc(f.path, rel));
+  const folder = `${root}\\${rel.replace(/\//g, '\\')}`.replace(/\\[^\\]*$/, '');
+  if (!folders.some((f) => f.toLowerCase() === folder.toLowerCase())) folders.push(folder);
   kept.push({ path: `${root}\\${rel.replace(/\//g, '\\')}`, ms, bytes });
   const parts = folders.map((f) => enc.encode(`D ${f}\n`));
   for (const f of kept) parts.push(enc.encode(`F ${f.path}\t${f.ms}\t${f.bytes.length}\n`), f.bytes);

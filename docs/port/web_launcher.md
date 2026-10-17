@@ -9,7 +9,15 @@ Task 37b (AC's launcher in the browser page):
   `web/launcher.js` holds it), its `ac://` requests answered by the desktop bridge built for
   wasm (`crates/rustyac-web/src/launcher.rs`), the player's documents in OPFS. Only the Drive
   tile shows. `tools/web_pack` packs the launcher's files (`launcher` in the manifest).
-- Next: the plain start page and the folder path, then Drive Start → game → results.
+- Part 3 working (Practice proven, flow `re/scratch/task37b/flows/practice.json`): the
+  theme's Start writes race.ini through the bridge, the page reloads into the in-page game
+  made from race.ini + assists.ini (`crates/rustyac-web/src/race.rs`, the desktop's
+  `conditions::apply` order and `rand()` draws, player only; `Game.create_race`), leaving
+  writes `out/race_out.json` (the referee's) and the page reloads into the theme, told
+  ACRunningEvent + ACStoppedEvent as the desktop shell does. A new player's `video.ini` gets
+  the page's size (else the theme stops every Start for its hidden Options page).
+- Next: the other session kinds (hotlap, quick race / race weekend need AI: refused for now),
+  the plain start page and the folder path, Online, controls page, old menu removal, pad tape.
 - Scratch: `re/scratch/task37b/` (test pack `pack/`, readers' notes `theme_internals.md`,
   `web_game_raceini.md`, `pad_oracle.md`). Serve: `python web/serve.py --pack
   re/scratch/task37b/pack --port 8137`; check: `node web/check.mjs --url

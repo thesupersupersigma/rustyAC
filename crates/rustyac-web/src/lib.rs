@@ -10,6 +10,7 @@
 //! * [`controls`]: the page's Controls panel: the values those classes read from `controls.ini`.
 //! * [`model`], [`bc`]: kn5 models and their textures, ready for a graphics card.
 //! * [`pack`]: the preview pack's manifest (`tools/web_pack` writes it, the page reads it).
+//! * [`race`]: a drive from AC's launcher: the session of its race.ini.
 //! * `gpu`, `web` (wasm only): the wgpu picture and what the page calls.
 //! * `net` (wasm only): multiplayer: the page's WebSocket to a gateway as the transport of
 //!   `rustyac-net`'s client, the join as the page steps it.
@@ -22,6 +23,7 @@ pub mod controls;
 pub mod driver;
 pub mod model;
 pub mod pack;
+pub mod race;
 pub mod session;
 
 #[cfg(target_arch = "wasm32")]

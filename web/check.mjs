@@ -93,6 +93,8 @@ const flags = [
   '--disable-background-timer-throttling',
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
+  // (as the desktop launcher's WebView2: the theme plays its sounds without a click first)
+  '--autoplay-policy=no-user-gesture-required',
   // this machine only: every address that is not this machine's goes to a proxy that is not
   // there, and no name but localhost resolves (the page, the launcher's theme and the service
   // worker reach no other server, whatever they ask for)
@@ -200,6 +202,48 @@ try {
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
   const started = Date.now();
   await send('Page.navigate', { url });
+
+  // --flow <file.json>: steps across the page's reloads (AC's launcher starts a drive by
+  // starting the page again): [{ until: "<state>" }, { js: "<expression>" }, { wait: s },
+  // { shot: "<file>" }]; each step's result goes into the report's `flow`
+  const flowFile = option('--flow');
+  if (flowFile) {
+    const flow = JSON.parse(readFileSync(resolve(flowFile), 'utf8'));
+    const report = { url, flow: [] };
+    let failed = false;
+    for (const step of flow) {
+      const at = (Date.now() - started) / 1000;
+      try {
+        if (step.until) {
+          let now = null;
+          for (;;) {
+            await sleep(250);
+            now = await evaluate('window.rustyac ? window.rustyac.state + "|" + (window.rustyac.error || "") : ""').catch(() => '');
+            if (now.split('|')[0] === step.until) break;
+            if (now.startsWith('error|')) throw new Error(`the page failed: ${now.slice(6)}`);
+            if (Date.now() - started > timeout) throw new Error(`no state ${step.until} within ${timeout / 1000} s (state: ${now})`);
+          }
+          report.flow.push({ at, until: step.until });
+        } else if (step.js) {
+          report.flow.push({ at, js: step.js.slice(0, 80), value: await evaluate(step.js) });
+        } else if (step.wait) {
+          await sleep(step.wait * 1000);
+        } else if (step.shot) {
+          const { data } = await send('Page.captureScreenshot', { format: step.shot.toLowerCase().endsWith('.png') ? 'png' : 'jpeg', quality: 80 });
+          mkdirSync(dirname(resolve(step.shot)), { recursive: true });
+          writeFileSync(step.shot, Buffer.from(data, 'base64'));
+          report.flow.push({ at, shot: step.shot });
+        }
+      } catch (error) {
+        report.flow.push({ at, failed: String(error.message || error) });
+        failed = true;
+        break;
+      }
+    }
+    report.console = messages.filter((m) => !m.startsWith('log:')).slice(0, 30);
+    console.log(JSON.stringify(report, null, 2));
+    await close(failed ? 1 : 0);
+  }
 
   const page = () => evaluate('JSON.stringify(window.rustyac ? { state: window.rustyac.state, error: window.rustyac.error, hud: window.rustyac.hud, perf: window.rustyac.perf, notes: window.rustyac.notes, content: window.rustyac.content || null, selftest: window.rustyac.selftest || null, last: window.rustyac.log.slice(-1)[0] } : null)').then((text) => JSON.parse(text));
   let now = null;

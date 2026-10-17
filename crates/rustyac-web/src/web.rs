@@ -322,6 +322,30 @@ impl Game {
         Ok(Game::finish(gpu, session, texture_size, None))
     }
 
+    /// Task 37b: the drive AC's launcher asked for: `race_ini` and `assists_ini` are the
+    /// player's `cfg/race.ini` and `cfg/assists.ini` as the launcher wrote them; the car and
+    /// the track are race.ini's (their files have to be here). `seed`: the game's `rand()`
+    /// seed (the page gives the clock's milliseconds, as the game takes them).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_race(canvas: web_sys::HtmlCanvasElement, race_ini: String, assists_ini: Option<String>, seed: u32, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
+        let gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
+        let session = Session::from_race(&race_ini, assists_ini.as_deref(), seed)?;
+        Ok(Game::finish(gpu, session, texture_size, None))
+    }
+
+    /// The drive of [`Game::create_race`] as `key=value` lines (car, skin, track, layout,
+    /// spawn, session_type, sessions); empty for another drive.
+    pub fn drive(&self) -> String {
+        self.session.drive.clone()
+    }
+
+    /// The end of a drive with a session list: the referee's `race_out.json` (what the game
+    /// writes to `out/` when it closes, and AC's launcher shows on its results page), or
+    /// nothing without a referee.
+    pub fn finish_race(&mut self) -> Option<Vec<u8>> {
+        self.session.sim.finish_referee().map(|(json, _, _)| json)
+    }
+
     /// The same on a server: `join` is a join that is done ([`crate::net::NetJoin`]); the
     /// car, the track and the other cars are the server's. The files have to be here
     /// (`NetJoin::status` lists what the server runs; [`files_wanted`] per car).
@@ -350,6 +374,7 @@ impl Game {
         }
         let mut notes = vec![format!("picture: {}{}", gpu.backend, if gpu.compressed_textures { "" } else { ", no compressed textures (they are unpacked, at half the size)" })];
         // (without the loader's timing line: a browser's wasm has no clock of its own)
+        notes.extend(session.race_notes.iter().cloned());
         notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);

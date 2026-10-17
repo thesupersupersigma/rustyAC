@@ -190,9 +190,9 @@
     (e) => {
       const target = e.target && e.target.closest ? e.target.closest('[data-mode], [data-panel], a.home') : null;
       if (!target) return;
-      const panel = target.getAttribute('data-panel');
-      const inMenu = target.closest('#menu');
-      if ((inMenu && panel && panel !== 'drive') || target.matches('a.home')) {
+      // (the left column's tiles are the menu's `li`s; buttons inside Drive have a data-panel too)
+      const tile = target.matches('#menu li[data-panel]');
+      if ((tile && target.getAttribute('data-panel') !== 'drive') || target.matches('a.home')) {
         e.stopImmediatePropagation();
         e.preventDefault();
         return;
