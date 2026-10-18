@@ -226,6 +226,15 @@ try {
           report.flow.push({ at, until: step.until });
         } else if (step.js) {
           report.flow.push({ at, js: step.js.slice(0, 80), value: await evaluate(step.js) });
+        } else if (step.pick) {
+          // { pick: "<folder>", button: "<id>" }: that button's file chooser answered with the folder
+          await send('Page.setInterceptFileChooserDialog', { enabled: true });
+          fileChooser = null;
+          await send('Runtime.evaluate', { expression: `document.getElementById(${JSON.stringify(step.button || 'open-folder-list')}).click()`, userGesture: true });
+          for (let i = 0; i < 100 && !fileChooser; i++) await sleep(100);
+          if (!fileChooser) throw new Error('the page opened no file chooser');
+          await send('DOM.setFileInputFiles', { files: [resolve(step.pick)], backendNodeId: fileChooser.backendNodeId });
+          report.flow.push({ at, pick: step.pick });
         } else if (step.wait) {
           await sleep(step.wait * 1000);
         } else if (step.shot) {

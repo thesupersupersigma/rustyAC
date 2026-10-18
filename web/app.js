@@ -1577,7 +1577,7 @@ async function useFolder(handle, remember) {
   if (launcherMode && !state.starting) {
     // the player's own folder from now on (the source switch under the theme goes back)
     try {
-      localStorage.setItem('rustyac.source', 'folder');
+      localStorage.setItem('rustyac.source', state.fromList ? 'filelist' : 'folder');
     } catch {
       // for this visit only, then
     }
@@ -1620,6 +1620,10 @@ function showCorner() {
         }
         location.reload();
       };
+  // (the picker refuses a folder under Program Files: the file-list way beside it, as on the
+  // start page)
+  $('source-list').hidden = !onPack || !window.showDirectoryPicker;
+  $('source-list').onclick = () => $('folder-input').click();
   $('gear').onclick = openControls;
   $('corner').hidden = false;
 }
@@ -1811,6 +1815,7 @@ async function main() {
       $('content-line').textContent = `reading the folder: ${event.target.files.length} files listed ...`;
       await nextPaint();
       const folder = folderFromFiles(event.target.files);
+      state.fromList = true;
       window.rustyac.listed.tree_ms = performance.now() - started;
       await useFolder(folder, false);
       window.rustyac.listed.ready_ms = performance.now() - started;
@@ -1849,6 +1854,22 @@ async function main() {
     wantFolder = launcherMode && localStorage.getItem('rustyac.source') === 'folder';
   } catch {
     // no storage: the pack
+  }
+  // A folder opened as a file list is not kept by the browser over the reload of a drive's start
+  // or end: the player opens it again (one click: the browser needs it), then the page goes on.
+  let againList = false;
+  try {
+    againList = launcherMode && localStorage.getItem('rustyac.source') === 'filelist' && !!(sessionStorage.getItem('rustyac.launch') || sessionStorage.getItem('rustyac.returned'));
+  } catch {
+    // no storage: the pack
+  }
+  if (againList && !params.has('testfolder')) {
+    window.rustyac.state = 'menu';
+    $('content-line').textContent = 'Open the same Assetto Corsa folder again ("Open it as a file list") to go on: the browser does not keep a folder opened that way.';
+    state.packAvailable = await fetch(`${base}manifest.json`, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
+    await loadServers();
+    state.starting = false;
+    return;
   }
   if (params.has('testfolder')) {
     // the folder picker's path without the picker (it needs a click a test cannot give)
