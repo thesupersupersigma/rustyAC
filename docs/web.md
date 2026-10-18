@@ -120,8 +120,10 @@ or from your folder, with only its **Drive** tile (Practice, Challenges, Race, O
 car, the track and the session there and press **Start**, as on the desktop). The drive starts in the page;
 Esc leaves it and the launcher shows its results page. Without a pack and without a folder the page shows a
 small start page of its own with the folder buttons; with a pack, the button at the bottom right switches to
-your own folder (and back). Sessions with AI opponents, Time Attack, Drift and Drag show a notice: they are
-not in the browser yet. Online lists this site's servers (`web/servers.json`). How it works:
+your own folder (and back). Quick Race and Race Weekend with AI opponents run as on the desktop (since
+v0.37.2: the same AI drivers, sessions, referee and results); Time Attack, Drift and Drag show a notice: they
+are not in the browser yet. Each drive starts and ends in the same page (no reload). Away from Windows the
+theme's Segoe UI is replaced by Selawik, Microsoft's open look-alike. Online lists this site's servers (`web/servers.json`). How it works:
 [docs/port/web_launcher.md](port/web_launcher.md). `?launcher=0` still opens the old menu (kept for the
 test hooks `?go=1`, `?join=`, `?selftest=`, which also skip the launcher).
 

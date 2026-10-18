@@ -1,12 +1,27 @@
-# AC's launcher in the browser (Tasks 37 and 37b)
+# AC's launcher in the browser (Tasks 37, 37b and 37c)
 
 ## Resume here
 
-Task 37b is done (v0.37.1). The browser page is now AC's own launcher: the theme of the
-player's game (from the preview pack, or from the player's own AC folder) with only the Drive
-tile, driving offline and online from it, results back on the theme's results page. The old
-web menu is hidden (its elements stay for the URL test hooks). Next: Task 37c, see "Not done
-(Task 37c)" below; Tasks 38-39 (the browser renderer) are separate.
+Task 37c is done (v0.37.2): AI opponents in the browser (Quick Race, Race Weekend, any race.ini
+with `CARS>1`) as on the desktop, byte for byte; drives without a page reload; Selawik where
+Segoe UI is missing. Online sessions still end without race_out.json (the desktop writes
+none either). See "Task 37c" below, its "Not done". Next: Tasks 38-41 (renderer, HUD, apps,
+sound in the page), Task 45 (Time Attack, Drift, Drag).
+
+- Task 37c code: `crates/rustyac-game/src/race_cars.rs` (race.ini's cars, shared),
+  `crates/rustyac-web/src/race.rs` (`apply`, `setup_of`, `replay_race`), `session.rs`
+  (opponents drawn like remote cars), `web.rs` (`race_proof`, `race_speed`),
+  `examples/race_proof.rs`, `web/app.js` (`driveFromLauncher`, `returnToLauncher`,
+  `freshCanvas`), `web/theme_glue.js` (Selawik), `web/fonts/`.
+- Task 37c scratch (not committed): `re/scratch/task37c/` (`rec.sh` desktop recordings,
+  `proof.sh` / `chrome_proof.sh` four-way replays, `flows.py` + `flows/*.json` click runs,
+  `speed.sh`, `end.sh`, `drives.sh`; `qr/`, `rw/` the race.ini files, tapes and outputs). The
+  test pack was deleted; remake it as below with `--out re/scratch/task37c/pack`.
+
+Task 37b (v0.37.1): the browser page is AC's own launcher: the theme of the player's game
+(from the preview pack, or from the player's own AC folder) with only the Drive tile, driving
+offline and online from it, results back on the theme's results page. The old web menu is
+hidden (its elements stay for the URL test hooks).
 
 - Code: `crates/rustyac-web/src/launcher.rs` (the desktop bridge on the page's files),
   `race.rs` (race.ini to the session), `web/launcher.js`, `web/theme_glue.js`, `web/sw.js`,
@@ -27,6 +42,195 @@ web menu is hidden (its elements stay for the URL test hooks). Next: Task 37c, s
 Task 37 (history): Part 0 (the 20 multiplayer goldens remade in `re/gold/net/`), Part A (the
 keyboard's `stepSteer`, speed sensitivity, the controls page, cfg seeding) and Part B.1 (the
 bridge without Win32) are described under "Task 37" below.
+
+# Task 37c: AI opponents in the browser
+
+## Summary
+
+Quick Race, Race Weekend and any other race.ini drive with AI opponents now run in the browser
+page exactly as on the desktop: the same AI drivers (names, skins, grid places, pit boxes,
+levels), the same sessions, referee, pit stops and results. Played from the same race.ini,
+the same seed and the same input tape, every physics step of every car and the race_out.json
+are byte-identical between `rustyac.exe`, a native build, wasmtime and headless Chrome. The
+theme's results page shows the browser race's results as it shows the desktop's. Drives now
+start and end inside the same page (no reload), so a folder opened as a file list stays
+usable. Away from Windows the theme's Segoe UI becomes Selawik. Time Attack, Drift and Drag
+still show the notice (Task 45). Online sessions still end without a race_out.json, because
+the desktop game writes none either (see "Not done").
+
+## What kept AI out of the browser, and the fix
+
+- `conditions::race_cars` (race.ini's `[CAR_n]` → opponents, grid, skins, pit boxes, AI
+  levels) lived in `rustyac-game/src/conditions.rs`, which is Windows-only, and listed skin
+  folders with `std::fs` (the page has no file system). It is now
+  `crates/rustyac-game/src/race_cars.rs` (cross-platform, folders through `rustyac_content::vfs`,
+  the page's files in the browser); `conditions.rs` calls it. The body is unchanged.
+- `crates/rustyac-web/src/race.rs` refused `CARS>1`; it now calls `race_cars` under the
+  desktop's own condition, gives the referee every car's driver name and seeds the AI as the
+  desktop does.
+- The page's session drew and stepped other cars only when online: opponents are now captured
+  and drawn like remote cars (`session.rs`), and their models load in `Game::finish`.
+- The AI's files (`ai/fast_lane.ai`, `ai/pit_lane.ai`, `data/ai_hints.ini`,
+  `data/ideal_line.ai`, the car's `ai.ini`, `system/setups/<car>/<track>/ai_default.ini`) are
+  now in the drive's file list (`content.rs`), and `GameSim`'s AI setup lookup goes through the
+  page's files (`sim.rs`).
+- Threads: none needed. The AI runs in the physics step; in the page `available_parallelism`
+  fails, so the engine uses 0 workers, and the result has the same bits as the desktop's 8
+  workers (proved below). Wasm threads (COOP/COEP + SharedArrayBuffer) would only make big
+  grids faster, never different; not done.
+- Seeds: the desktop seeds race.ini's draws with the clock. For the proofs, `rustyac.exe
+  --race-seed n --ai-seed n-28000` draws exactly as a browser drive of seed n (the page's
+  `?seed=n` test hook). Without them nothing changed.
+
+## Proofs
+
+Desktop recordings (`rustyac.exe --race-ini <theirs> --car bmw_z4_gt3 --track ks_laguna_seca
+--headless --autodrive --record … --race-seed n --ai-seed n-28000`) of the race.ini files that
+Task 37b's desktop launcher clicks wrote (Quick Race: Z4 GT3 at Laguna Seca, one AI at 98 %,
+2 laps from the back of the grid; Race Weekend: Practice 30 min and Qualifying 30 min, both
+skipped with `--next-session-at`, then a 5-lap race), then the same tape replayed four ways from
+the same race.ini and seed: `rustyac.exe --replay --headless --state-hash` (8 workers), the
+`race_proof` example natively, `race_proof.wasm` (wasm32-wasip1) under wasmtime, and
+`window.rustyac.raceProof` in headless Chrome (the page's wasm, 0 workers).
+
+| drive | steps | cars | state hash (chained over every step) | per-step hash list | race_out.json | four ways |
+|---|---|---|---|---|---|---|
+| Quick Race (seed 28005) | 93,774 | 2 | `7aea29db0a574b43` | `e51e4a3075709752` | 1,264 B, = the desktop's live run | identical (Chrome 35.4 s) |
+| Race Weekend (seed 31337) | 213,771 | 2 | `476234cd03620453` | `2ffa9a6b0a09b5f1` | 2,699 B, = the desktop's live run | identical (Chrome 222.9 s) |
+| fault: one AI constant changed in the wasm build only (`driver.rs` genome spread 0.04 → 0.041) | 93,774 | 2 | `69ce17da52d2ca01` | first different step 12,244 | differs | caught |
+
+The setup each replay builds from race.ini (opponents, skins, grid, pit boxes, seeds) is the
+recording's header text byte for byte, natively and in the page.
+
+Clicked in headless Chrome (`check.mjs --flow`, the theme's own buttons: Drive → Race → Quick
+Race / Race Weekend → opponents → Start, `?seed=n&autodrive=1`):
+
+| | Quick Race | Race Weekend |
+|---|---|---|
+| race.ini the theme wrote | = the desktop launcher's, byte for byte | = the desktop launcher's |
+| notice | none | none |
+| drive notes | "1 other car(s) from race.ini ([RACE] CARS=2, 24 pit boxes) … car 1: bmw_z4_gt3, skin assetto_z, pit box 1, grid slot 0, Steve Douglas"; "other cars: 1 (1 AI, 0 on the server)" | same, three sessions |
+| race_out.json written into the player's out folder | = the desktop's live run, byte for byte | 2,699 B, same size, other lap times (see below) |
+| results page | Steve Douglas 1st 2:59.954, rustyAC driver +45.792, fastest lap Steve Douglas 1:25.503 | Steve Douglas 1st 7:17.489, rustyAC driver +1:47.315, fastest lap 1:25.495 |
+
+- The grid of the Quick Race in the page, the AI's Z4 beside the player (HUD "Quick Race (1/1)
+  POS 2/2"): ![Quick Race grid with the AI car](web_ai_grid.jpg)
+- The theme's results page after it: ![Quick Race results](web_ai_results.jpg)
+- The Race Weekend's results page: ![Race Weekend results](web_ai_weekend_results.jpg)
+
+The Race Weekend click run skips Practice and Qualifying with F7 from the page, which lands on
+a drawn frame (steps 13,472 and 26,888) and not on the desktop's `--next-session-at` step, so
+its race differs from the desktop's live run; the tape replay above is the byte-for-byte proof
+for the weekend. A live click run is bit-equal to the desktop only when the page keeps up: the
+first Quick Race run on a busy machine (6 fps, dropped seconds) gave other lap times, the rerun
+at 60 fps matched the desktop byte for byte.
+
+## Speed
+
+Physics only (no drawing), Quick Race at Laguna Seca with n AI Z4 GT3s, the player on the
+autodriver, 6,667 steps (20 s) timed after the 20 s countdown, headless Chrome 155 on this PC
+(16 threads, wasm single-threaded):
+
+| AI cars | ms per step | real-time factor (physics) |
+|---|---|---|
+| 1 | 0.332 | 9.0× |
+| 5 | 0.821 | 3.7× |
+| 10 | 1.191 | 2.5× |
+| 20 | 2.509 | 1.2× |
+
+Drawing costs about 5 ms a frame on top (the drive's `work_ms_per_frame` at 60 fps with one
+AI: 6-8 ms). So on this PC up to about 15 AI cars run in real time; 20 run just below real
+time (slow motion, never other physics). On a machine half as fast, about 5-8 AI cars keep
+real time; 10 and more run in slow motion. Wasm threads (COOP/COEP headers, SharedArrayBuffer,
+the engine's workers) would spread the cars over cores; the result is the same bits for any
+number of workers (desktop 0 vs 8 above). Not done.
+
+## Drives without a page reload
+
+The launcher's Start no longer reloads the page: the documents are saved, the theme is told
+the game is running and hidden, the drive runs in a fresh canvas, and leaving it writes
+`out/race_out.json` into the player's documents, saves them and shows the theme again
+(`ACStoppedEvent`), which opens its results page. A folder opened as a file list stays
+picked. Tested in headless Chrome: the AC folder opened once as a file list ("Open it as a
+file list"), then three Practice drives in a row (Start, drive, Esc, results): each drive
+from the file list (source `filelist`), the launcher back each time (starts 1, 2, 3), no
+errors, no second pick.
+
+## Selawik
+
+`web/theme_glue.js` checks whether the system has "Segoe UI" (canvas text widths). Only when it
+has not, it adds `@font-face` rules naming "Segoe UI" (400 / 300 light / 700 bold) and
+"Segoe UI Light" with `local()` first and Selawik from `fonts/` second. Kunos' theme files are
+unchanged; Windows with Segoe UI renders as before. `?font=selawik` (test hook) uses Selawik
+anyway. The fonts are built with `fontmake -o ttf` from the sources of
+github.com/microsoft/Selawik (commit 89362e8; the repository holds only sources); OFL-1.1, see
+LICENSING.md. Tested in headless Chrome with `?font=selawik` (Segoe UI blocked: no
+`local()`): `rustyacTheme.fonts` = `selawik`, the theme's document has the four faces loaded
+(Segoe UI 400/300/700, Segoe UI Light 400) and the Drive screen is drawn in Selawik
+![Drive screen in Selawik](web_selawik_drive.jpg)
+
+## How to use it
+
+Open the page, Drive, Race: Quick Race or Race Weekend, pick opponents as in AC, Start. The
+race runs in the page; leaving it (Esc, or the end of the last session) shows the theme's
+results. Same for the player's own AC folder. A slower machine draws fewer frames and the race
+runs in slow motion (`MAX_FRAME_SECONDS`); the physics never changes.
+
+Test hooks: `?seed=n` (race.ini's draws, see above), `window.rustyac.raceProof(race, assists,
+seed, tape_base64)`, `window.rustyac.raceSpeed(race, assists, seed, skip, steps)`; example
+`cargo run -p rustyac-web --example race_proof -- --race <ini> --assists <ini> --seed n
+--tape <ryin> [--out dir]` (also builds for wasm32-wasip1).
+
+## New files in the web zip; files the preview pack must gain
+
+New in the site zip: `fonts/selawik-regular.ttf`, `fonts/selawik-light.ttf`,
+`fonts/selawik-bold.ttf`, `fonts/Selawik-OFL.txt` (a new `fonts/` folder beside
+`acfs/`). Changed: `app.js`, `theme_glue.js`, `pkg/rustyac_web.js`, `pkg/rustyac_web_bg.wasm`.
+rustyACSite's `scripts/fetch-web-preview.mjs` allowlist needs the four fonts files.
+
+The preview pack (`tools/web_pack`, unchanged: it packs whole track folders) holds per track
+`ai/fast_lane.ai`, `ai/pit_lane.ai`, `data/ai_hints.ini`, `data/ideal_line.ai`; the cars' AI
+data is inside their `data.acd`. AC has no `system/setups/*/*/ai_default.ini` for the pack's
+cars (looked up, optional). Pack: 1483.3 MB, 675 files.
+
+## Unchanged
+
+| check | result |
+|---|---|
+| clippy `-D warnings --all-targets` native; wasm32-unknown-unknown (`rustyac-web --all-targets`, CI's crate list `--lib`); wasm32-wasip1 (`rustyac-web --all-targets`, CI's crate list) | clean. `--all-targets` for the other crates on the wasm targets fails at v0.37.1 too (`net_probe` example and `input/bindings.rs` tests are desktop-only) |
+| `cargo build/test --release --workspace --locked` | 65 suites, 314 passed, 0 failed |
+| the nine tools `--locked` | built |
+| physics dumps of Task 36's two fresh recordings (spa, magione with 3 AI) against v0.37.1 | identical (`c175020dafc14eeb`, `726ded63cbc5848b`); state hash the same with 0 and 8 workers |
+| the committed net tape three ways; the 20 net goldens four ways | identical |
+| plain CLI, a Content Manager race.ini | as before (333.33 Hz; 1 other car from race.ini) |
+| keyboard tapes (3 × 2 × 2), pad tapes (5 × 2) | identical |
+| recorded drives (`oracle/game/*.ryin` and Task 36's two), desktop against wasm32-wasip1 under wasmtime 49 | 158 of 158 identical at every step, 1,659,570 steps (two with their setup file mounted, as in Task 37b) |
+| Task 37b's 12 request lists through the bridge in headless Chrome | 12 of 12 identical to the desktop's transcripts, written files' trees identical |
+
+## Disk space
+
+36 GB free at the start, 37 GB at the end (the test pack, the v0.37.1 build `tgt_old`, the
+font build's venv and clone, the drives' hash files and the copied setup file deleted).
+
+## Not done
+
+- **Results of an online session.** Desktop `rustyac.exe` writes no race_out.json after an
+  online session either: its online game has no referee, and the end-of-session results
+  message (0x4b) is read but not written out. The page can only match the desktop once the
+  desktop writes it (port `onlineEndSession`'s output first).
+- Time Attack, Drift, Drag (Task 45); renderer, HUD, apps, sound (Tasks 38-41); the showroom;
+  removing the old web menu code.
+- Wasm threads for big grids (see the speed table).
+
+## Open questions (decided without asking)
+
+- A live browser drive is bit-equal to the desktop's only when the page keeps up (no dropped
+  seconds): the first Quick Race click run on a busy machine (6 fps, slow motion) gave other
+  lap times. The byte-identical guarantee is the tape replay; the full-speed click run matched
+  the desktop byte for byte anyway.
+- Selawik only where Segoe UI is missing (not always), so Windows keeps its own font.
+- `--race-seed` added to `rustyac.exe` (default unchanged: the clock) instead of a page-side
+  copy of the desktop's clock seed.
 
 # Task 37b: AC's launcher in the browser page
 
@@ -302,6 +506,9 @@ these files (24.2 MB, 638 files for the two cars and two tracks): `cfg/**`, `sys
 build `tgt_old`, the headless browser profile and the drives' hash files deleted).
 
 ## Not done (Task 37c)
+
+(As left by Task 37b. Task 37c did the AI opponents, the fonts and the drives without the
+reload; see "Task 37c" above.)
 
 - **AI opponents in the browser.** rustyac-physics' AI builds for wasm, but the page's
   session draws and drives the player's car only (no opponent cars' models, no
