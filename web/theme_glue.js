@@ -228,10 +228,37 @@
     window.__AC.loadModule('FirstRunWizard', 'body > .modules', 'en', null, true);
   };
 
+  // The theme's fonts are Windows' "Segoe UI" and "Segoe UI Light". A system without them gets
+  // Selawik, Microsoft's open look-alike, from this site under those names (local() still
+  // first); a system with them is left as it is. (?font=selawik, a test hook: Selawik anyway.)
+  const forceSelawik = new URLSearchParams(window.parent.location.search).get('font') === 'selawik';
+  const hasFont = (name) => {
+    const c = document.createElement('canvas').getContext('2d');
+    const text = 'mmmmmmmmmmlli1WQ@#';
+    return ['monospace', 'serif'].some((base) => {
+      c.font = `72px ${base}`;
+      const width = c.measureText(text).width;
+      c.font = `72px "${name}", ${base}`;
+      return c.measureText(text).width !== width;
+    });
+  };
+  const fonts = new URL('../fonts/', acfs).href;
+  const face = (family, local, file, weight) =>
+    `@font-face { font-family: "${family}"; src: ${forceSelawik ? '' : `local("${local}"), `}url("${fonts}selawik-${file}.ttf") format("truetype"); font-weight: ${weight}; }`;
+  const selawik = () =>
+    [
+      face('Segoe UI', 'Segoe UI', 'regular', 400),
+      face('Segoe UI', 'Segoe UI Light', 'light', 300),
+      face('Segoe UI', 'Segoe UI Bold', 'bold', 700),
+      face('Segoe UI Light', 'Segoe UI Light', 'light', 400),
+    ].join('\n');
+
   document.addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
     style.id = 'rustyac-drive-only';
-    style.textContent = DRIVE_ONLY;
+    const fallback = forceSelawik || !hasFont('Segoe UI');
+    T.fonts = fallback ? 'selawik' : 'system';
+    style.textContent = DRIVE_ONLY + (fallback ? '\n' + selawik() : '');
     document.head.appendChild(style);
   });
   window.addEventListener('load', () => {

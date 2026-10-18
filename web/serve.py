@@ -19,7 +19,7 @@ import posixpath
 import urllib.parse
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-MIME = {'.wasm': 'application/wasm', '.js': 'text/javascript', '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.json': 'application/json'}
+MIME = {'.wasm': 'application/wasm', '.js': 'text/javascript', '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.ttf': 'font/ttf'}
 
 
 def make_handler(mounts):
