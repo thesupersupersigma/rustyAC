@@ -1,49 +1,357 @@
-# AC's launcher in the browser, keyboard steering (Task 37)
+# AC's launcher in the browser (Tasks 37 and 37b)
 
 ## Resume here
 
-Task 37b (AC's launcher in the browser page):
+Task 37b is done (v0.37.1). The browser page is now AC's own launcher: the theme of the
+player's game (from the preview pack, or from the player's own AC folder) with only the Drive
+tile, driving offline and online from it, results back on the theme's results page. The old
+web menu is hidden (its elements stay for the URL test hooks). Next: Task 37c, see "Not done
+(Task 37c)" below; Tasks 38-39 (the browser renderer) are separate.
 
-- Part 1 working behind `?launcher=1` (the old menu is still the default): the theme from
-  the preview pack in a frame (`web/sw.js` serves it, `web/theme_glue.js` runs in it,
-  `web/launcher.js` holds it), its `ac://` requests answered by the desktop bridge built for
-  wasm (`crates/rustyac-web/src/launcher.rs`), the player's documents in OPFS. Only the Drive
-  tile shows. `tools/web_pack` packs the launcher's files (`launcher` in the manifest).
-- Part 3 working (Practice proven, flow `re/scratch/task37b/flows/practice.json`): the
-  theme's Start writes race.ini through the bridge, the page reloads into the in-page game
-  made from race.ini + assists.ini (`crates/rustyac-web/src/race.rs`, the desktop's
-  `conditions::apply` order and `rand()` draws, player only; `Game.create_race`), leaving
-  writes `out/race_out.json` (the referee's) and the page reloads into the theme, told
-  ACRunningEvent + ACStoppedEvent as the desktop shell does. A new player's `video.ini` gets
-  the page's size (else the theme stops every Start for its hidden Options page).
-- Session kinds: race.ini identical to the desktop launcher's for Practice, Hotlap, Quick Race,
-  Race Weekend (`re/scratch/task37b/desk.sh` + `web.sh`); sessions with AI are refused with
-  the theme's notice. Part 4 working: the theme's Online page lists servers.json's servers
-  (`launcherLobby` in web/app.js), Join starts the page's multiplayer join from race.ini
-  [REMOTE] (local acServer copy `re/scratch/task37b/server` + gateway, flow `online.json`).
-- Next: the plain start page and the folder path, controls page, old menu removal, pad tape.
-- Scratch: `re/scratch/task37b/` (test pack `pack/`, readers' notes `theme_internals.md`,
-  `web_game_raceini.md`, `pad_oracle.md`). Serve: `python web/serve.py --pack
-  re/scratch/task37b/pack --port 8137`; check: `node web/check.mjs --url
-  "http://127.0.0.1:8137/?launcher=1" --launcher --profile target/web-check-37b`.
+- Code: `crates/rustyac-web/src/launcher.rs` (the desktop bridge on the page's files),
+  `race.rs` (race.ini to the session), `web/launcher.js`, `web/theme_glue.js`, `web/sw.js`,
+  `web/app.js` (`openLauncher`, `driveFromLauncher`, `returnToLauncher`, `launcherLobby`),
+  `tools/web_pack` (`launcher` in the manifest), pad tape `tools/car_oracle/src/game/pad.rs`
+  + `crates/rustyac-game/examples/pad_steering_check.rs`.
+- Scratch (not committed): `re/scratch/task37b/` (readers' notes `theme_internals.md`,
+  `web_game_raceini.md`, `pad_oracle.md`; desktop click scripts `scripts/`, `desk.sh`; browser
+  flows `flows/make.py`, `web.sh`; bridge in Chrome `bridge/bridge.sh`; pad tapes `pad/`;
+  end checks `end_a.sh`, `end_b.sh`, `drives.sh`). The test pack and the acServer copy were
+  deleted at the end; remake the pack with `tools/web_pack/target/release/web_pack.exe
+  --config web/preview.toml --out re/scratch/task37b/pack` (always pass `--config`:
+  `web/my_pack.toml`, when present, packs every car).
+- Serve and check: `python web/serve.py --pack re/scratch/task37b/pack --port 8137`, then
+  `node web/check.mjs --url http://127.0.0.1:8137/ --launcher --profile target/web-check-37b`
+  (`--flow <file.json>` runs steps across the page's reloads).
 
-Task 37:
+Task 37 (history): Part 0 (the 20 multiplayer goldens remade in `re/gold/net/`), Part A (the
+keyboard's `stepSteer`, speed sensitivity, the controls page, cfg seeding) and Part B.1 (the
+bridge without Win32) are described under "Task 37" below.
 
-- Part 0 done (commit fd4fb66): the 20 multiplayer goldens made again under `re/gold/net/`
-  (`tools/net_gold/`, see docs/port/multiplayer.md "Golden tapes"); one port bug found and
-  fixed on the way (collision reports); 80 of 80 checks identical.
-- Part A done: the keyboard's `stepSteer` is the game's, proven against the game in-process;
-  speed sensitivity; the controls page; the launcher's cfg seeding.
-- Part B.1 done: the pure-Rust ini copy (`crates/rustyac-launcher/src/profile.rs`) and the
-  bridge building for wasm; proven against Windows and the desktop bridge.
-- **Next (Task 37b): B.2 to B.6**, the theme in the browser page, nothing of it started (see
-  "Not done" at the end). Start from `re/scratch/task37/theme_menu.md` (which of the theme's
-  JS decides the menu, what Drive and Online call) and `web_now.md` (the page today, the pack,
-  the game's start); the wasm bridge needs a browser `Host` and a `files::Files` on OPFS.
-- Notes from reading (not committed): `re/scratch/task37/launcher_split.md`,
-  `theme_menu.md`, `web_now.md`.
+# Task 37b: AC's launcher in the browser page
 
 ## Summary
+
+- **The page opens AC's launcher.** With the site's preview pack, the page shows the
+  launcher's own theme (`launcher/themes/default` with its `.base` libraries, injected after
+  load as the desktop does), at once, no button. A small bar at the page's bottom edge
+  (outside the theme) has "Open your Assetto Corsa folder" (and back: "Use the preview
+  pack") and a gear for the controls page. With no pack and no folder, a plain page of our own
+  shows only the open-folder button. No Kunos file is in the repo or the release zip: the
+  theme comes from the pack or the player's folder.
+- **The theme's requests go to the desktop launcher's own bridge**, built for the browser:
+  the same Rust code answers every `ac://` request as on the desktop. Task 35 and 36's request
+  lists, run in headless Chrome through it: every answer and every written file identical to
+  the desktop's (table below).
+- **Only the Drive tile.** Career, replays, settings and quit are hidden and refuse clicks (by
+  a script, a click on the logo too); Drive opens at once and keeps all its tabs. Time Attack,
+  Drift and Drag Race show "... is not available in the browser version yet." in the theme's
+  own dialog; sessions with AI opponents (Quick Race, Race Weekend with opponents) the same
+  ("Sessions with AI opponents are not available in the browser version yet.").
+- **Drive offline:** the theme writes race.ini through the bridge as on the desktop
+  (byte-identical to the desktop launcher's for the same clicks: Practice, Hotlap, Quick Race,
+  Race Weekend); the page then starts its game from that race.ini (car, skin, track, layout,
+  session, conditions, assists, the desktop's own order of random draws), and when the player
+  leaves, the referee's `race_out.json` goes to the player's `out` folder and the theme opens
+  on its results page.
+- **Online:** the site's own servers (`web/servers.json`, through the gateway, no UDP) are the
+  entries of the theme's own server list, with their details and the password prompt; Join
+  starts the page's multiplayer client from race.ini's `[REMOTE]`.
+- **Pad proof:** the game's own gamepad car control (`JoypadCarControl`) run in-process on
+  made-up controls.ini files and XInput states, `[X360] SPEED_SENSITIVITY` at the controls
+  page's default 0.5, at 0, AC's 0.1, 1 and missing: 5 seeds x 20,000 calls, identical in
+  the port.
+- **Unchanged:** all earlier proofs pass (table "End checks").
+
+## How the theme runs in the page
+
+**Files.** `web/sw.js` is a service worker under the site's folder (`/play/app/` on the site).
+It answers `<site>/acfs/ac/<path>` (the game's folder) and `<site>/acfs/docs/<path>` (the
+player's documents) by asking the page for the bytes (a `MessageChannel`). The page reads them
+from the preview pack (its manifest's `launcher` files, read once and kept in the pack's OPFS
+cache) or from the player's folder (directory handles: `cfg`, `system/cfg`, `launcher/themes`
+minus videos, `content/weather` ini files, every car's `ui` and skins' `ui_skin.json`,
+`preview.jpg`, `livery.png`, every track's `ui`). The theme runs in an iframe at
+`acfs/ac/launcher/themes/<theme>/index.html`; the worker puts `theme_glue.js` at the top of
+its `<head>`. The theme is the one launcher.ini `[WINDOW] THEME` names, else `default`.
+
+**`ac://` routing.** jQuery 1.9.1's requests (the theme's `$.ACCall`, `ACGet`/`ACSet` are
+synchronous) go through the glue's `XMLHttpRequest`: `ac://...` and `http://ac/...` (posted)
+go to the page's `Launcher.request` (the bridge in wasm) synchronously, as WebView2's custom
+scheme does; files of the theme go to the worker; anything else (the theme's YouTube and
+news feeds, the Kunos lobby) is blocked and reported. Answers carry the bridge's own
+`file:///C:/assettocorsa/...` and `file:///C:/Documents/Assetto%20Corsa/...` URLs; the page
+rewrites those two prefixes to `acfs/ac/` and `acfs/docs/`. The shell's events are the
+desktop's: `uiready` enters the theme with `ACIntroEvent` and `ACVisible`, `Start` starts
+the game, `Home` reloads the theme, `showcontrols` opens the controls page; the first-run
+wizard (language) is loaded as the desktop's `WIZARD_JS` does.
+
+**Storage.** The bridge sees the game's folder as `C:\assettocorsa` (read only) and the
+player's as `C:\Documents\Assetto Corsa`, an in-memory `MemFiles` set up by the desktop's
+own `setup_user_directory`. The page keeps it in OPFS (`rustyac-documents-1/documents.bin`,
+saved 300 ms after each request that wrote, and before a drive starts). A new player's
+`video.ini` gets the page's size (else the theme stops every Start for its video check).
+A saved Drive tab the browser can't run (Time Attack, Drift, Drag Race) is set back to
+Practice.
+
+**The main-screen limit.** Nothing the bridge answers decides the left column's tiles (they
+are fixed in the theme's `index.html`), so the glue hides them with CSS (`#menu ul
+li:not([data-panel=drive])`), gives each a click handler that stops it (the theme's handlers
+are on the document, so they never run), and turns off the logo's way to the intro page.
+Drive is opened as soon as the theme is entered. Kunos files are never changed.
+
+**Drive offline.** Start writes race.ini through the bridge; the page saves the documents,
+reloads, reads `cfg/race.ini` and `cfg/assists.ini` and starts `Game.create_race`
+(`crates/rustyac-web/src/race.rs`: the desktop's `conditions::apply` order: race.ini's
+environment, spawn, session, the seed's `rand()` draws for the dynamic track, wind and the
+gearbox, the player's skin as the desktop picks it, the referee's sessions and pit rules,
+assists.ini; player only). Leaving writes the referee's `race_out.json` into the documents'
+`out` folder and reloads into the theme, which is told `ACRunningEvent` then `ACStoppedEvent`
+(the desktop shell's events): the theme shows its results page.
+
+**Online.** `launcherLobby` (web/app.js) answers `getserverlist`, `getserver`, `pingserver`,
+`getlanservers` from servers.json: each server is an entry with a made-up address
+`10.37.0.<n>` (the page never connects to it), its track, cars and whether it has a
+password. The theme's own requests to `http://10.37.0.<n>:<port>/JSON|...` (details, booking)
+are answered by the page too. Join writes race.ini `[REMOTE]`; the page reloads and joins the
+matching server through its gateway with the car, name and password from race.ini.
+
+**Controls.** The gear opens the page's controls panel (Task 37's settings, the pad's
+`[X360] SPEED_SENSITIVITY` among them, and the picture options that were on the old menu).
+
+## Pad tape (Part 6)
+
+`car_oracle pad-micro --seed <n> --root <dir>` (`tools/car_oracle/src/game/pad.rs`) runs the
+game's `JoypadCarControl` constructor 0x1401d9280 (it reads `cfg/controls.ini` `[X360]`,
+`[ADVANCED]` and the 27 action sections, and `system/cfg/assetto_corsa.ini [GAMEPAD]
+USE_LEGACY_CODE`) and `acquireControls` 0x1401dbce0 on the game's `X360Joypad`, with
+`XInputGetState` and `GetAsyncKeyState` answered by the oracle. Every 500 calls a new
+controls.ini (SPEED_SENSITIVITY 0.5, 0, 0.1, 1, missing in turn; the other keys, the buttons
+and keys of each action and the legacy switch random); every call random triggers, sticks
+(the dead zone's edge too), buttons, keys, steer lock, speed and last steering. The tape holds
+what the constructor read and every call's output (hex bits). `pad_steering_check` plays it
+through the port (`crates/rustyac-game/src/input/pad.rs`):
+
+| Seed | Calls | Settings | SPEED_SENSITIVITY 0.5 / 0 | Workers 0 | Workers 8 |
+|---|---|---|---|---|---|
+| 1 | 20,000 | 40 | 8 / 8 groups | IDENTICAL | IDENTICAL (8 runs) |
+| 2 | 20,000 | 40 | 8 / 8 | IDENTICAL | IDENTICAL |
+| 3 | 20,000 | 40 | 8 / 8 | IDENTICAL | IDENTICAL |
+| 4 | 20,000 | 40 | 8 / 8 | IDENTICAL | IDENTICAL |
+| 5 | 20,000 | 40 | 8 / 8 | IDENTICAL | IDENTICAL |
+
+Fault test (`--fault`, SPEED_SENSITIVITY one bit off after reading): caught at call 2. One
+thing found: the game keeps the action buttons in its own order (glance back before glance
+right, the "up" before the "down" of brake balance, ABS, TC and turbo); the port keeps the
+order it reads them in, which changes nothing it does (each button is looked up by name).
+
+## Results
+
+**The bridge in a real browser (proof 1).** Task 35 and 36's request lists (those that need
+no server), run in headless Chrome through the bridge built for the browser
+(`launcher_transcript`, the game's folder read from `web/serve.py --ac` over HTTP, an empty
+player's folder) and through the desktop bridge (`transcript.exe`); answers and every file
+the bridge wrote compared (`re/scratch/task37b/bridge/bridge.sh`):
+
+| List | Requests | Answers identical | Written files |
+|---|---|---|---|
+| career | 3,756 | 3,756 | identical |
+| champs | 4,012 | 4,012 | identical |
+| guid | 3 | 3 | identical |
+| hotlap | 1,974 | 1,974 | identical |
+| options | 1,843 | 1,843 | identical |
+| practice | 1,956 | 1,956 | identical |
+| quickrace | 1,974 | 1,974 | identical |
+| raceweekend | 2,007 | 2,007 | identical |
+| replays | 14 | 14 | identical |
+| results | 6 | 6 | identical |
+| special | 3,824 | 3,824 | identical |
+| videomodes | 2 | 2 | identical |
+
+Two things this found, both fixed in the page: a synchronous request's text loses a file's
+byte-order mark (Chrome decodes it even with `x-user-defined`), so the page makes the bytes
+again from the file's length; and the special events are sorted by their folders' write
+times, two of which share a millisecond in AC's folder, so the page keeps the times'
+fraction.
+
+**Session kinds (the desktop launcher against the page, same clicks, same test pack):**
+
+| Session | race.ini | In-page game |
+|---|---|---|
+| Practice (Ferrari F2004, Spa) | identical (desktop `rustyac-launcher.exe` script vs page flow) | drove `ks_ferrari_f2004`, skin `00_official`, `spa`, pit; results page after leaving |
+| Hotlap (BMW Z4 GT3, Laguna Seca) | identical | drove `bmw_z4_gt3`, skin `0_bmw_motorsport_2013_black`, `ks_laguna_seca`, hotlap start; results page |
+| Quick Race (with AI) | identical | refused with the notice (AI not in the browser yet) |
+| Race Weekend (with AI) | identical | refused with the notice |
+| Online (local acServer copy + gateway) | `[REMOTE]` written by the theme | joined: server log "Dispatching TCP message to ks_ferrari_f2004 (0) [rustyAC driver []]", left cleanly, back on the theme |
+
+The same Practice flow from a player's folder (`?testfolder=`, the test hook for "Open your
+AC folder") gave the same race.ini and drive. Every run: no JavaScript error; the only
+blocked requests are the theme's YouTube and news feeds.
+
+**Nothing outside Drive is reachable:** clicking career, replay, options, exit and the logo
+(jQuery `.click()` as the tests do, and DOM clicks) leaves the Drive panel the only one shown.
+
+**Desktop launcher and page, Drive -> Practice summary** (left the desktop's
+`rustyac-launcher.exe`, right the page; the same apart from the missing tiles and the
+page's bottom bar):
+
+![Desktop and browser](web_launcher_side_by_side.jpg)
+
+**Screenshots (the page, 1600x900):**
+
+- Start page (no pack, no folder): ![Start page (no pack, no folder)](web_launcher_start.jpg)
+- Main screen: Drive only: ![Main screen: Drive only](web_launcher_main.jpg)
+- Car select: ![Car select](web_launcher_car.jpg)
+- Track select: ![Track select](web_launcher_track.jpg)
+- Race setup (Practice summary): ![Race setup (Practice summary)](web_launcher_race_setup.jpg)
+- Online list (the site's servers): ![Online list (the site's servers)](web_launcher_online.jpg)
+- Controls page (the gear): ![Controls page (the gear)](web_launcher_controls.jpg)
+- Results page after a drive: ![Results page after a drive](web_launcher_results.jpg)
+
+**End checks (nothing else changed).** On the final code (`re/scratch/task37b/end_a.sh`,
+`end_b.sh`, `drives.sh`; v0.37.0 built once into `re/scratch/task37b/tgt_old` for the
+comparisons, deleted afterwards):
+
+| Check | Result |
+|---|---|
+| clippy `-D warnings --all-targets` native, the CI line, wasm32-unknown-unknown, wasm32-wasip1 | clean |
+| `cargo build` / `cargo test --release --workspace --locked` | built; 65 suites, 314 passed, 0 failed |
+| `python web/build.py`, the nine tools (`--locked`), the .NET launcher oracle | built |
+| physics dumps against v0.37.0: `spa.ryin` | the same (`c175020dafc14eeb`); state hash `af262162d7ae332b` with 0 and 8 workers, both versions |
+| physics dumps against v0.37.0: `magione_ai.ryin` | the same (`726ded63cbc5848b`); state hash `b0d997d76d84e9cd` with 0 and 8 workers, both versions |
+| the 20 multiplayer goldens, four ways (desktop, WebSocket, gateway, wasm) | 80 of 80 identical |
+| the committed multiplayer tape, desktop / browser / gateway | identical, 3,000 steps |
+| plain command line, Content Manager's race.ini | run, exit 0 |
+| Tasks 35 and 36's launcher answers against the .NET launcher | hotlap 1,974/1,974, options 1,843/1,843, practice 1,956/1,956, probe 59/59, quick race 1,974/1,974, race weekend 2,007/2,007, results 5/6 (the date, as at v0.37.0), smoke 10/10, career 3,756/3,756, championships 4,012/4,012, replays 14/14, special events 3,824/3,824, video modes 2/2 (`guid`: the oracle refuses it, as at v0.37.0); the player's folders identical; the real Documents folder unchanged |
+| the keyboard tapes (Task 37), 0 and 8 workers | 12 of 12 identical |
+| the pad tapes (this task), 0 and 8 workers | 10 of 10 identical; the fault run caught at call 2 |
+| GUI sequences of Tasks 29 to 34 (41 sequences, setup pages included) | all exit 0, 82 of 82 comparisons IDENTICAL, none different |
+| recorded drives (`oracle/game/*.ryin` and Task 36's two), desktop against wasm32-wasip1 under wasmtime 49.0.3 | 158 of 158 identical at every step, 1,659,570 steps (two needed their setup file mounted, as in Task 37) |
+
+## How to use it in the browser
+
+- Open the site's play page (or locally `python web/serve.py`, then
+  `http://127.0.0.1:8080/`). With the preview pack the launcher opens at once; Drive is the
+  only tile. Pick a tab (Practice, Hotlap, ...), the car and track, press Start: the game starts
+  in the page; Esc leaves and the results page shows.
+- "Open your Assetto Corsa folder" (bottom bar) uses your own game folder instead (Chrome or
+  Edge; it is remembered); "Use the preview pack" goes back. For a folder under Program Files
+  (refused by Chrome's picker) "Open it as a file list" works too: tested on the whole AC
+  folder (32,490 files listed, 8,595 kept, launcher up in 8.3 s, 182 cars in the theme).
+- Online: Drive -> Online lists the site's servers; pick one, a car, Join (password if it has
+  one).
+- The gear (bottom right) opens the controls (keyboard and pad speed sensitivity, steering
+  speeds, the picture options).
+- Test hooks still work: `?go=1&autodrive=1&car=..&track=..`, `?join=..`, `?selftest=N`
+  open the old page; `?launcher=0` too.
+
+## New or renamed files in the web zip; files the preview pack must gain
+
+New in the site zip (all GPL, ours): `launcher.js`, `theme_glue.js`, `sw.js` (the service
+worker must be served from the play page's own folder, `/play/app/sw.js`, so its scope
+covers `/play/app/acfs/`). Changed: `index.html`, `app.js`, `style.css`, `servers.json`
+(entries have `track`). rustyACSite's `scripts/fetch-web-preview.mjs` allowlist needs the three
+new files.
+
+The preview pack (made by `tools/web_pack`) gains a `launcher` list in `manifest.json` and
+these files (24.2 MB, 638 files for the two cars and two tracks): `cfg/**`, `system/cfg/**`,
+`launcher/themes/.base/**`, `launcher/themes/default/**` without `video/intro.ogv`,
+`content/weather/**/*.ini`, per car `content/cars/<car>/ui/**` and
+`content/cars/<car>/skins/*/{ui_skin.json,preview.jpg,livery.png}`, per track
+`content/tracks/<track>/ui/**` without videos.
+
+## Notes from Task 37's reading (moved here from re/scratch/task37)
+
+- `getthememodules` is not the menu: it only feeds the Options page's module manager. The
+  theme's modules are loaded by name in `js/ui.js:366-385` (`__AC.loadModule`); Profile is
+  needed by Drive's Start and Online's Join, Online by Online.
+- The left column is hard-coded in `index.html:52-110` (drive, career `nonselect`, replay,
+  options, exit); `ui.js:553-600` handles `#menu li:not(.disabled)` clicks on the document;
+  the logo (`ui.js:500-512`) calls `ac://home` when the intro panel is already shown.
+- Drive's tabs (`index.html:215-278`, `ui.js` `modeHandler` 4394-5119): practice, challenges
+  (hotlap, special events, time attack, drift), race (quick race, race weekend, drag race),
+  online, favorites. The last tab is restored from `launcher.ini [SAVED] DRIVE`.
+- Other ways to other pages: the host events `ACGotoCareerEvent`, `ACGotoChamps`,
+  `ACGotoSpecialEvent` (never raised by the page), the "verify your video settings" dialog
+  (opens Options: avoided by giving `video.ini` a size), the intro panel's links.
+- Transport (`.base/ac.utils.js`): `$.ACCall(m, params)` is a synchronous `$.ajax` to
+  `ac://m?params` (10 s timeout); `ACGet`/`ACSet`/`ACClear` are `getsetting`/`setsetting`/
+  `delsetting`; `listcars`/`listtracks`/`getskinmeta` are asynchronous.
+- Start: `ui.js:807-1228` writes race.ini with `ACSet` (opponents' names and skins with
+  `Math.random`), then `ac://start/?...` after 1.5 s; `ACStoppedEvent` (`ui.js:1397-1426`)
+  needs no earlier state and ends in `_returnFromGame` -> results (`getresults`:
+  `race_out.json`, `results.js:620-690`).
+- Online (`modules/online/online.js`): `getserverlist` entries `{ip, port, cport, tport,
+  name, clients, maxclients, track, cars, session, sessiontypes, durations, timeleft, pass,
+  pickup, ...}`, details from `http://ip:cport/JSON|<guid>`, Join writes `[REMOTE]`
+  `SERVER_IP`, `SERVER_PORT`, `SERVER_NAME`, `SERVER_HTTP_PORT`, `REQUESTED_CAR`, `NAME`, `TEAM`,
+  `PASSWORD`, `GUID` and `ACTIVE=1` (`online.js:400-480`); the password comes from
+  `.serverpass` or localStorage `serverpass_<name>`.
+- Fonts: the theme uses the system's "Segoe UI" (no font files), so the page looks like the
+  desktop only where that font exists (Windows).
+- The page before this task (`web_now.md`): `web/build.py` builds the site from a fixed list of
+  files (anything else stops the build); `web/serve.py` serves only 127.0.0.1 (pack at
+  `/preview/`, `--ac` folder at `/ac-test/` with `?list=1`); the pack format
+  `rustyac-preview-pack-1` (manifest `cars`, `tracks`, `shared`, `files[{path, bytes,
+  sha256}]`, now `launcher`); `web/check.mjs` runs headless Chrome and waits on
+  `window.rustyac.state`.
+
+## Disk space
+
+33 GB free at the start, 40 GB at the end (the test pack, the acServer copy, the old-version
+build `tgt_old`, the headless browser profile and the drives' hash files deleted).
+
+## Not done (Task 37c)
+
+- **AI opponents in the browser.** rustyac-physics' AI builds for wasm, but the page's
+  session draws and drives the player's car only (no opponent cars' models, no
+  `conditions::race_cars` port, which reads the cars folder and the track's pits). Quick Race,
+  Race Weekend and any session with `[RACE] CARS>1` stop at Start with the notice.
+- **Time Attack, Drift, Drag Race** (Challenges) stop with the notice; Special Events are
+  listed by the theme but those with AI stop at Start like the races (the pack has none).
+- **The renderer, HUD, apps, sound in the page** (Tasks 38-41): the in-page game's picture is
+  still Task 26's; skins are set in the session but not drawn.
+- **The showroom** (`ac://showroom`) answers as on the desktop's not-ported list.
+- **Results of an online session**: leaving an online drive returns to the theme without a
+  `race_out.json` (the client keeps no referee of its own).
+- **The theme's intro video** (`video/intro.ogv`, 169 MB) is left out of the pack and of the
+  folder walk; the theme skips it.
+- **Fonts away from Windows**: the theme asks for "Segoe UI"; other systems show their own
+  sans-serif.
+- **The old web menu's code** is still in `index.html` / `app.js` (hidden): the URL test
+  hooks (`?go=1`, `?join`, `?selftest`, `?launcher=0`) use it. Moving the hooks onto the
+  launcher and deleting it is left.
+- **Firefox and Safari**: "Open your Assetto Corsa folder" needs the File System Access API
+  (Chrome, Edge); elsewhere only the pack (and the folder picker's file list, as before).
+- **A folder opened as a file list** (Chrome's way for a folder under Program Files, and
+  Firefox's / Safari's only way) is not kept by the browser over the page's reload when a
+  drive starts and ends: the page asks for the same folder again (one click each time; tested:
+  whole AC folder, Practice, drive, results). A drive without the reload would remove this.
+
+## Open questions (Task 37b, decided without asking)
+
+- The "... is not available in the browser version yet." notices are our text in the
+  theme's own dialog (`UI.displayDialog`): the original launcher has no such message for these
+  modes (it would just start the game).
+- Hiding the other tiles is done by our glue (CSS and a click handler), because nothing the
+  bridge answers decides them: the least intrusive way without changing Kunos files.
+- The service worker (not blob URLs) serves the theme, so its relative paths, CSS `url()`s
+  and the bridge's `file:///` URLs (rewritten to `acfs/`) all work unchanged; it needs the
+  site to serve `sw.js` from the play page's folder.
+- The online server list gives every site server a made-up address `10.37.0.<n>`: the theme
+  wants an IP and ports, the page never connects to them (only to the gateway).
+- A drive starts by reloading the page (as the old page did for a second drive): the
+  documents are saved to OPFS first. A drive in the same page without the reload would need
+  the game's GPU objects freed; not tried.
+- The first-run wizard (language) shows for a new browser player, as the desktop launcher
+  shows it on fresh documents.
+- The pad tape uses made-up controls.ini files and XInput states (no real pad), and the
+  game's own button order differs from the port's in four pairs; that changes nothing
+  measurable (each button is found by name), so the port keeps its order.
+
+# Task 37: keyboard steering, the bridge without Win32
+
+## Summary (Task 37)
 
 - **Multiplayer goldens back.** The five tapes and 20 goldens Tasks 25–26 checked against
   were gone; they were recorded again from live sessions and now live in `re/gold/net/`,
@@ -278,7 +586,7 @@ On the final code (`re/scratch/task37/end_a.sh`, `end_b.sh`, `drives.sh`; v0.36.
 
 Disk: 44 GB free at the start, 34 GB at the end.
 
-## Not done (Task 37b)
+## Not done in Task 37 (done by Task 37b unless listed under Task 37c)
 
 Parts B.2 to B.6 were not started: the time went to Part 0 (one port bug found in the
 goldens, fixed), the ini copy's many Windows rules, and the end checks. The browser's page is
@@ -302,7 +610,7 @@ unchanged: its old menu is still the default and still works (nothing half-wired
 - Proofs 5 (in a headless Chrome; node's WASI cannot list folders on Windows), 6 (the page's
   screenshots) and the browser half of 4.
 
-## Open questions
+## Open questions (Task 37)
 
 - The pad's `SPEED_SENSITIVITY` is AC's own key; is a pad oracle (like the keyboard's) wanted,
   to prove the slider's 0 against the game?

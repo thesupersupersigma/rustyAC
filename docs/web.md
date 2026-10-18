@@ -115,9 +115,18 @@ python web/serve.py
 and open `http://127.0.0.1:8080/` in Chrome or Edge. The server serves `dist-web/site/` and, when it exists,
 `dist-web/preview/` at `/preview/`, to this computer only. `--port <n>` changes the port.
 
-In the page: pick the folder (or use the pack), pick a car and a track, press **Drive**. R puts the car back
-in the pits, Shift+R back on the track where it is, F1 changes the view, Esc goes back to the menu; the page
-lists the rest (H shows the list while driving).
+The page is **Assetto Corsa's own launcher** (since v0.37.1): the theme of the game you have, from the pack
+or from your folder, with only its **Drive** tile (Practice, Challenges, Race, Online, Favorites; pick the
+car, the track and the session there and press **Start**, as on the desktop). The drive starts in the page;
+Esc leaves it and the launcher shows its results page. Without a pack and without a folder the page shows a
+small start page of its own with the folder buttons; with a pack, the button at the bottom right switches to
+your own folder (and back). Sessions with AI opponents, Time Attack, Drift and Drag show a notice: they are
+not in the browser yet. Online lists this site's servers (`web/servers.json`). How it works:
+[docs/port/web_launcher.md](port/web_launcher.md). `?launcher=0` still opens the old menu (kept for the
+test hooks `?go=1`, `?join=`, `?selftest=`, which also skip the launcher).
+
+While driving: R puts the car back in the pits, Shift+R back on the track where it is, F1 changes the view,
+Esc goes back to the launcher; H shows the key list.
 
 ### Chrome and a folder under Program Files
 
@@ -132,7 +141,8 @@ What was tested and what was not is in [the report](port/web_controls_pack.md).
 
 ### Steering and controls (your own controls.ini)
 
-The **Controls** panel (the button in the menu; the **O** key while driving; Esc closes it) has every value
+The **Controls** page (the small gear at the bottom right of the launcher; the **O** key while driving; Esc
+closes it) has every value
 Assetto Corsa's pad and keyboard classes read from `controls.ini`, under AC's own names: the pad's speed
 sensitivity (0 = off), steering gamma, filter, dead zone, speed and rumble intensity, which stick steers, and
 the keyboard's steering speed, opposite-direction speed and return speed.
