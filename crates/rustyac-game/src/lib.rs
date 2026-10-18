@@ -38,6 +38,7 @@ pub mod input_file;
 #[cfg(windows)]
 pub mod join;
 pub mod online;
+pub mod race_cars;
 #[cfg(windows)]
 pub mod mouse_hider;
 #[cfg(windows)]

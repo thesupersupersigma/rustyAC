@@ -1642,7 +1642,8 @@ impl GameSim {
         let own = crate::conditions::documents_folder().map(|folder| folder.join("setups").join(&relative)).filter(|file| file.is_file());
         #[cfg(not(windows))]
         let own: Option<PathBuf> = None;
-        own.or_else(|| ac_root().map(|root| root.join("system").join("setups").join(&relative)).filter(|file| file.is_file()))
+        // (the game's folder through the page's files in the browser)
+        own.or_else(|| ac_root().map(|root| root.join("system").join("setups").join(&relative)).filter(|file| file.vfs_is_file()))
     }
 
     /// Task 27: makes the session's AI drivers as the game does once all cars are there, in

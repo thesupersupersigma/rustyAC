@@ -334,6 +334,10 @@ pub struct Options {
     /// `setups`, `replay`); the launcher names its own
     pub documents: Option<PathBuf>,
     pub ai_seed: Option<u32>,
+    /// `--race-seed <n>`: what the game's `rand()` starts from for race.ini's draws (the
+    /// track's grip, the wind, the grid's skins); without it the clock's milliseconds, as the
+    /// game. The browser's drives name theirs, so a desktop run can draw the same.
+    pub race_seed: Option<u32>,
     /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
     pub stand_in_drivers: bool,
     /// `--physics-threads <n>`: worker threads of the physics engine with several cars
@@ -493,6 +497,7 @@ impl Default for Options {
             out_dir: None,
             documents: None,
             ai_seed: None,
+            race_seed: None,
             stand_in_drivers: false,
             physics_threads: None,
             state_hash: false,
@@ -641,6 +646,9 @@ usage: rustyac [options]
                         (the AI drivers rev and wait for it; your gearbox is free)
   --ai-seed <n>         what the AI drivers' random numbers start from (a live session
                         takes the clock; pictures and unattended runs 0)
+  --race-seed <n>       what race.ini's draws start from (track grip, wind, grid skins;
+                        default: the clock, as the game). --race-seed n with --ai-seed
+                        n-28000 draws as a browser drive of seed n
   --stand-in-drivers    race.ini's other cars with rustyAC's line follower, not the AI
   --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split
                         leaves the worker nothing). Default: as the game, [PHYSICS_THREADING]
@@ -1046,6 +1054,7 @@ impl Options {
                 "--out-dir" => o.out_dir = Some(PathBuf::from(value("--out-dir")?)),
                 "--documents" => o.documents = Some(PathBuf::from(value("--documents")?)),
                 "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
+                "--race-seed" => o.race_seed = Some(value("--race-seed")?.parse().map_err(|e| format!("--race-seed: {e}"))?),
                 "--stand-in-drivers" => o.stand_in_drivers = true,
                 "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),
                 "--state-hash" => o.state_hash = true,

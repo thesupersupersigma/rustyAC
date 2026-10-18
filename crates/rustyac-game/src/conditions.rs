@@ -102,115 +102,11 @@ fn player_skin(ini: &IniReader, car: &str, mut rand: MsvcRand) -> Option<String>
     (!first.skin.is_empty() && first.model == last_name(car)).then(|| first.skin.clone())
 }
 
-/// The cars of race.ini as `RaceManager::initOffline` makes them
-/// (`rustyac_physics::session::race_grid`): every car but the first becomes another car of the
-/// session, with the model, the skin, the ballast, the restrictor, the pit box and the grid
-/// slot the game gives it. The first is the player's: its car stays the one of `--car`, its
-/// place is the file's. Until there are AI drivers (Task 25) every other car is driven by the
-/// line follower. Returns the lines for the console.
+/// The cars of race.ini (`crate::race_cars::race_cars`, shared with the browser), with the
+/// command line's `--ai-level`, `--ai-aggression` and `--stand-in-drivers`.
 fn race_cars(ini: &IniReader, setup: &mut SimSetup, options: &Options, rand: &mut dyn FnMut() -> i32) -> Result<Vec<String>, String> {
-    use crate::input_file::{GridPlace, Opponent, OpponentDrive};
-    use rustyac_physics::session;
-    let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found")?;
-    let cars_folder = ac.join("content").join("cars");
-    // TrackAvatar::getMaxSlotsAvailable("PIT"): the pit boxes of the track, counted once by
-    // the track itself and once more for every session that starts in the pits
-    let track_folder = crate::sim::find_track(&setup.track)?;
-    let (track, _) = rustyac_physics::track::load_track(&track_folder, &setup.layout)?;
-    let pit_slots = session::pit_slots_listed(ini, track.spawn_slots("PIT"));
-    let grid = session::race_grid(ini, pit_slots, &|model| session::model_skins(&cars_folder, model), &|model, skin| session::skin_available(&cars_folder, model, skin), rand)?;
-    let mut lines = Vec::new();
-    let place = |car: &session::RaceCar| GridPlace { pit: car.index, start: car.start_index, ballast_kg: car.ballast_kg, restrictor: car.restrictor };
-    let mut others = Vec::new();
-    for car in &grid.cars {
-        if car.index == 0 {
-            setup.player_place = Some(place(car));
-            // (the skin of the file, or the game's pick: only when the car is the file's car)
-            if !car.skin.is_empty() && last_name(&setup.car) == car.model {
-                setup.player_skin = Some(car.skin.clone());
-            }
-            if !car.model.is_empty() && last_name(&setup.car) != car.model {
-                lines.push(format!("  (race.ini's first car is {}; yours is the one of --car, {})", car.model, last_name(&setup.car)));
-            }
-            continue;
-        }
-        if car.model.is_empty() {
-            lines.push(format!("  car {}: race.ini names no car for it (the game would stop there): left out", car.index));
-            continue;
-        }
-        // a car rustyAC cannot load or draw would end the session or the picture: left out
-        match crate::sim::find_car_data(&car.model) {
-            Ok(data) if crate::sim::find_car_model(&car.model, &data).is_some() => {}
-            Ok(_) => {
-                lines.push(format!("  car {}: {} has no 3D model in Assetto Corsa's folder: left out", car.index, car.model));
-                continue;
-            }
-            Err(message) => {
-                lines.push(format!("  car {}: {} cannot be loaded ({message}): left out", car.index, car.model));
-                continue;
-            }
-        }
-        lines.push(format!(
-            "  car {}: {}, skin {}{}, pit box {}, grid slot {}{}{}{}",
-            car.index,
-            car.model,
-            if car.skin.is_empty() { "-" } else { &car.skin },
-            if car.skin_was_picked { " (picked as the game picks one: the file's is not a skin of the car)" } else { "" },
-            car.index,
-            car.start_index,
-            if car.ballast_kg > 0.0 { format!(", ballast {} kg", car.ballast_kg) } else { String::new() },
-            if car.restrictor > 0.0 { format!(", restrictor {}", car.restrictor) } else { String::new() },
-            if car.driver_name.is_empty() { String::new() } else { format!(", {}", car.driver_name) }
-        ));
-        // RaceManager::initOffline's closure @ 0x140133e00: the driver's level from the
-        // file's [RACE] AI_LEVEL and the car's own AI_LEVEL, its aggression from AI_AGGRESSION
-        let drive = if options.stand_in_drivers {
-            OpponentDrive::Auto
-        } else {
-            let race_level = options.ai_level.unwrap_or(grid.ai_level);
-            let level = if car.ai_level != 0.0 { (car.ai_level * 0.01) * race_level } else { race_level } * 0.01;
-            let push = if level > 1.0 {
-                1.0
-            } else if level >= 0.0 {
-                level
-            } else {
-                0.0
-            };
-            let aggression = match options.ai_aggression {
-                Some(percent) => (percent * 0.01).clamp(0.0, 1.0) * 0.95,
-                None => car.ai_aggression,
-            };
-            OpponentDrive::Ai { push, aggression }
-        };
-        others.push(Opponent { car: car.model.clone(), skin: car.skin.clone(), drive, place: Some(place(car)) });
-    }
-    if others.is_empty() {
-        // alone after all: the first slot as before, but a race's grid place stays
-        if !(grid.first_session_type == 3 && setup.player_place.is_some_and(|place| place.start > 0)) {
-            setup.player_place = None;
-        }
-        return Ok(lines);
-    }
-    lines.insert(
-        0,
-        format!(
-            "{} other car(s) from race.ini ([RACE] CARS={}, {} pit boxes), each with {}. --no-race-cars leaves them out; --opponent names cars of your own",
-            others.len(),
-            ini.get_int("RACE", "CARS").unwrap_or(0),
-            pit_slots,
-            if options.stand_in_drivers {
-                "rustyAC's stand-in line follower (--stand-in-drivers), which knows nothing of other cars".to_string()
-            } else {
-                format!("Assetto Corsa's AI driver ([RACE] AI_LEVEL={}; --ai-level and --ai-aggression change them, --stand-in-drivers gives the old line follower)", options.ai_level.unwrap_or(grid.ai_level))
-            }
-        ),
-    );
-    // the session's length as the AI drivers are told it
-    let laps = ini.get_int("SESSION_0", "LAPS").unwrap_or(0);
-    setup.ai.laps = if laps > 0 { laps } else { ini.get_int("RACE", "RACE_LAPS").unwrap_or(0) };
-    setup.ai.time_secs = (ini.get_float("SESSION_0", "DURATION_MINUTES").unwrap_or(0.0) * 60.0) as f64;
-    setup.opponents = others;
-    Ok(lines)
+    let drivers = crate::race_cars::DriverOptions { ai_level: options.ai_level, ai_aggression: options.ai_aggression, stand_in_drivers: options.stand_in_drivers };
+    crate::race_cars::race_cars(ini, setup, &drivers, rand)
 }
 
 /// Fills the session of a live drive. Returns what was done, for the console.
@@ -265,7 +161,8 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             session.ballast_kg = race.ballast_kg;
             session.restrictor = race.restrictor;
             // the game seeds its `rand()` from the clock: every session draws anew
-            let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1);
+            // (--race-seed fixes it)
+            let seed = options.race_seed.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u32).unwrap_or(1));
             let mut rand = MsvcRand(seed);
             let mut line = format!("conditions from {}: air {} C, road {} C", path.display(), setup.env.ambient_temperature, setup.env.road_temperature);
             if let Some(ini_track) = race.dynamic_track {
