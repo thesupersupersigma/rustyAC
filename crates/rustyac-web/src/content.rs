@@ -187,6 +187,8 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
     out.extend(car_model);
     out.extend(track_models.into_iter().map(|(file, _)| file));
     files_below(&root.join("system").join("data"), &[], 0, &mut out);
+    // an AI driver's setup of the car for the track, where the game has one
+    out.push(root.join("system").join("setups").join(car).join(track).join("ai_default.ini"));
     out.retain(|path| path.vfs_is_file());
     out.sort();
     out.dedup();
@@ -223,6 +225,13 @@ pub fn files_read_by_drive(root: &Path, car: &str, track: &str, layout: &str) ->
         // and what the picture reads: the car's shape, the model files (whole)
         let info = sim.car_info();
         let _ = rustyac_game::render::scene::CarShape::of(&info);
+        // and what an AI driver of the car reads on the track: the lines, the hints, the
+        // car's ai.ini, the fuel guess's ideal line
+        if let Some(track) = &sim.track {
+            let _ = track.init_ai();
+            let _ = track.data_folder.join("data").join("ideal_line.ai").vfs_is_file();
+        }
+        let _ = rustyac_physics::data::exists(&sim.data_path.join("ai.ini"));
         let (car_model, track_models) = model_files(root, car, track, layout);
         for file in car_model.into_iter().chain(track_models.into_iter().map(|(file, _)| file)) {
             let _ = file.vfs_is_file();

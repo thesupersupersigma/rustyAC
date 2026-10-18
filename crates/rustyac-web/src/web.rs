@@ -63,6 +63,50 @@ pub fn start() {
     files();
 }
 
+/// Task 37c's proof in the page (`window.rustyac.raceProof`): a drive of the launcher's files
+/// with the inputs of a drive the desktop recorded, as `examples/race_proof` runs it. JSON:
+/// the chained state hash, the hash of the list of every step's hash, the steps, the cars,
+/// whether the page's setup is the recording's, and race_out.json.
+#[wasm_bindgen]
+pub fn race_proof(race: &str, assists: Option<String>, seed: u32, tape: &[u8]) -> Result<String, JsError> {
+    files();
+    let proof = crate::race::replay_race(race, assists.as_deref(), seed, tape).map_err(|e| JsError::new(&e))?;
+    let steps: Vec<u8> = proof.step_hashes.iter().flat_map(|h| h.to_le_bytes()).collect();
+    let fnv = |bytes: &[u8]| bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3));
+    let json = |text: &str| format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t"));
+    Ok(format!(
+        "{{\"chain\":\"{:016x}\",\"steps_hash\":\"{:016x}\",\"steps\":{},\"cars\":{},\"same_setup\":{},\"race_out\":{}}}",
+        proof.chain,
+        fnv(&steps),
+        proof.step_hashes.len(),
+        proof.cars,
+        proof.header == proof.tape_header,
+        proof.race_out.map_or("null".to_string(), |bytes| json(&String::from_utf8_lossy(&bytes)))
+    ))
+}
+
+/// Task 37c's speed test (`window.rustyac.raceSpeed`): the physics of a race.ini drive, the
+/// player on the autodriver: `skip` steps (the grid's countdown), then `steps` steps timed, as
+/// fast as they go, without drawing. JSON: the cars and the timed milliseconds.
+#[wasm_bindgen]
+pub fn race_speed(race: &str, assists: Option<String>, seed: u32, skip: u32, steps: u32) -> Result<String, JsError> {
+    files();
+    let mut session = crate::session::Session::from_race(race, assists.as_deref(), seed).map_err(|e| JsError::new(&e))?;
+    session.input.lock().unwrap().autodrive = true;
+    let mut run = |n: u32| -> Result<(), JsError> {
+        let mut done = 0;
+        while done < n {
+            done += session.advance(0.09).map_err(|e| JsError::new(&e))?.steps;
+        }
+        Ok(())
+    };
+    run(skip)?;
+    let started = now_ms();
+    run(steps)?;
+    let ms = now_ms() - started;
+    Ok(format!("{{\"cars\":{},\"ms\":{ms:.1}}}", 1 + session.sim.opponents.len()))
+}
+
 /// The version of the build, for the page's footer.
 #[wasm_bindgen]
 pub fn version() -> String {
@@ -391,14 +435,15 @@ impl Game {
             },
             None => notes.push("the car has no model file here: boxes instead".to_string()),
         }
-        // the other players' cars: one model per kind of car (the driver's own kind is on
-        // the card already), with smaller textures: they are seen from outside and afar
+        // the other cars (race.ini's AI cars, then the other players'): one model per kind of
+        // car (the driver's own kind is on the card already), with smaller textures: they are
+        // seen from outside and afar
         let mut remote_models = Vec::new();
-        if session.sim.online.is_some() {
+        let infos = session.sim.opponent_infos();
+        if !infos.is_empty() {
             let mut loaded: Vec<(PathBuf, Option<usize>)> = car_model.iter().map(|file| (file.clone(), gpu.car_model())).collect();
             // (one budget for all of them: a server with ten kinds of car must not take ten
             // times the memory)
-            let infos = session.sim.remote_infos();
             let mut kinds: Vec<&str> = infos.iter().map(|info| info.name.as_str()).filter(|name| *name != setup.car).collect();
             kinds.sort_unstable();
             kinds.dedup();
@@ -427,7 +472,7 @@ impl Game {
                 remote_models.push(model);
             }
             let limits = gpu.other_cars;
-            notes.push(format!("other cars: {} on the server; drawn with their model up to {:.0} m ({} at once), as boxes up to {:.0} m", remote_models.len(), limits.model_m, limits.models, limits.box_m));
+            notes.push(format!("other cars: {} ({} AI, {} on the server); drawn with their model up to {:.0} m ({} at once), as boxes up to {:.0} m", remote_models.len(), session.sim.opponents.len(), remote_models.len() - session.sim.opponents.len(), limits.model_m, limits.models, limits.box_m));
         }
         if let Some(wanted) = Some(files().take_wanted()).filter(|w| !w.is_empty()) {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
@@ -704,7 +749,8 @@ impl Game {
             .net
             .cars
             .iter()
-            .zip(self.session.remote_views())
+            // (the views list race.ini's AI cars first)
+            .zip(self.session.remote_views().into_iter().skip(self.session.sim.opponents.len()))
             .zip(&session.remote)
             .map(|((car, view), remote)| {
                 let p = view.body[3];

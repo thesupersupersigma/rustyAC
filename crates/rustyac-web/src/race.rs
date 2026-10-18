@@ -7,8 +7,9 @@
 //! the game's folder through the page's files (`system/cfg/assetto_corsa.ini`,
 //! `system/cfg/pitstop.ini`).
 //!
-//! Only the player's car: the other cars of race.ini are not made in the browser yet (the
-//! page refuses such a session before it starts, see `opponents`).
+//! The other cars of race.ini get Assetto Corsa's AI drivers, as on the desktop. `seed`
+//! stands for the desktop's `--race-seed S --ai-seed <S - 28000>` (wrapping; the desktop's
+//! referee seed is the AI seed + 28000): the same seeds, the same draws.
 
 use std::path::Path;
 
@@ -86,35 +87,39 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
     }
     // RaceManager::initOffline: the time the gearbox stays locked before a race start
     rand.next();
-    // the player's skin as the desktop's conditions::player_skin finds it: the first car of
-    // RaceManager::initOffline's grid (the launcher writes `[CAR_0] MODEL=-`, the player's
-    // car), on a copy of rand() so no later draw moves; the skins folder through the page's files
-    if opponents(ini) == 0 {
-        let cars = root.join("content").join("cars");
-        let skins = |model: &str| -> Vec<String> {
-            rustyac_content::vfs::read_dir(&cars.join(model).join("skins")).map(|l| l.into_iter().filter(|(_, dir)| *dir).map(|(n, _)| n).collect()).unwrap_or_default()
-        };
-        let exists = |model: &str, skin: &str| rustyac_content::vfs::is_dir(&cars.join(model).join("skins").join(skin));
-        let mut copy = MsvcRand(rand.0);
-        if let Ok(grid) = rustyac_physics::session::race_grid(ini, 1, &skins, &exists, &mut || copy.next()) {
-            if let Some(first) = grid.cars.first().filter(|c| !c.skin.is_empty() && c.model == setup.car) {
-                setup.player_skin = Some(first.skin.clone());
-            }
-        }
-    }
+    // the cars of the file as the desktop's conditions::apply makes them (the same function,
+    // `rustyac_game::race_cars`, through the page's files), else the player's skin as its
+    // conditions::player_skin finds it: the first car of RaceManager::initOffline's grid (the
+    // launcher writes `[CAR_0] MODEL=-`, the player's car), on a copy of rand() so no later
+    // draw moves
     let alone_on_a_grid = ini.get_int("SESSION_0", "TYPE").unwrap_or(0) == 3 && ini.get_int("SESSION_0", "STARTING_POSITION").unwrap_or(0) > 1;
-    if alone_on_a_grid {
-        notes.push("race.ini's grid place of the player is not used in the browser yet: the car starts first".to_string());
+    if !setup.track.is_empty() && (opponents(ini) > 0 || alone_on_a_grid) {
+        match rustyac_game::race_cars::race_cars(ini, setup, &rustyac_game::race_cars::DriverOptions::default(), &mut || rand.next()) {
+            Ok(lines) => notes.extend(lines),
+            Err(message) => notes.push(format!("WARNING: the other cars of race.ini are left out: {message}")),
+        }
+    } else if !setup.track.is_empty() {
+        let cars = root.join("content").join("cars");
+        let mut copy = MsvcRand(rand.0);
+        let grid = rustyac_physics::session::race_grid(ini, 1, &|model| rustyac_game::race_cars::model_skins(&cars, model), &|model, skin| rustyac_game::race_cars::skin_available(&cars, model, skin), &mut || copy.next());
+        if let Some(first) = grid.ok().and_then(|grid| grid.cars.into_iter().next()).filter(|c| !c.skin.is_empty() && c.model == rustyac_game::race_cars::last_name(&setup.car)) {
+            setup.player_skin = Some(first.skin);
+        }
     }
     if ini.has_section("SESSION_0") {
         let sessions = SessionsIni::from_ini(ini, setup.env.base_pit_penalty_laps);
         if let Some(mode) = sessions.jump_start_penalty_mode {
             setup.env.jump_start_penalty_mode = mode;
         }
-        let driver_names = vec![ini.get_string("CAR_0", "DRIVER_NAME")];
+        let driver_names = (0..1 + setup.opponents.len()).map(|n| ini.get_string(&format!("CAR_{n}"), "DRIVER_NAME")).collect();
         let window = (ini.get_int("RACE", "RACE_PIT_WINDOW_START").unwrap_or(0).clamp(0, 65535) as u16, ini.get_int("RACE", "RACE_PIT_WINDOW_END").unwrap_or(0).clamp(0, 65535) as u16);
         let pit = Some(pit_header(root, window));
         setup.referee = Some(RefereeHeader { sessions, over_time_mult: over_time_mult(root), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit });
+    }
+    // the AI drivers' random numbers. The desktop gives the referee `--ai-seed` + 28000, so a
+    // desktop run of `--race-seed S --ai-seed <S - 28000>` draws as this drive
+    if !setup.opponents.is_empty() {
+        setup.ai.seed = seed.wrapping_sub(28_000);
     }
     notes.push(format!(
         "race.ini: {} at {}{}, air {} C, road {} C, grip {:.1} %, wind {:.1} km/h",
@@ -138,6 +143,59 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
         notes.push(format!("assists.ini: ABS {}, traction control {}, stability {} %, automatic gearbox {}", assists.abs, assists.traction_control, assists.stability_control, assists.auto_shifter));
     }
     notes
+}
+
+/// The drive of the launcher's files: the page's car and track (`content::setup`) with the
+/// session of `race_text` (and `assists_text`) on top. What `Session::from_race` drives.
+pub fn setup_of(race_text: &str, assists_text: Option<&str>, seed: u32) -> Result<(SimSetup, Vec<String>), String> {
+    // (as IniReader::load reads a file: CR LF as LF)
+    let race = IniReader::from_text(Path::new("race.ini"), &race_text.replace("\r\n", "\n"));
+    let assists = assists_text.map(|text| IniReader::from_text(Path::new("assists.ini"), &text.replace("\r\n", "\n")));
+    let (car, track, layout) = car_and_track(&race);
+    if car.is_empty() || track.is_empty() {
+        return Err("race.ini names no car or no track ([RACE] MODEL, TRACK)".to_string());
+    }
+    let mut setup = crate::content::setup(&car, &track, &layout, false, "pit");
+    let root = rustyac_content::install::ac_root().unwrap_or_else(|| std::path::PathBuf::from("ac"));
+    let notes = apply(&mut setup, &race, assists.as_ref(), seed, &root);
+    Ok((setup, notes))
+}
+
+/// What `replay_race` found.
+pub struct RaceReplay {
+    /// The setup the page made of the files, as a recorded drive's header has it.
+    pub header: String,
+    /// The recorded drive's own header.
+    pub tape_header: String,
+    /// After every step: every car's bodies (`GameSim::state_hash` from a fresh hash).
+    pub step_hashes: Vec<u64>,
+    /// The desktop's `--state-hash`: the same, folded into one hash step after step.
+    pub chain: u64,
+    /// The referee's results at the end (`race_out.json`), if there is a referee.
+    pub race_out: Option<Vec<u8>>,
+    pub cars: usize,
+}
+
+/// The proof that a drive from the launcher's files is the desktop's: the setup the page
+/// makes of `race_text` / `assists_text` / `seed`, driven with the inputs of a drive the
+/// desktop recorded (`rustyac.exe --race-ini … --race-seed S --ai-seed <S - 28000> --record`),
+/// step for step as the desktop's `--replay … --headless --state-hash` does.
+pub fn replay_race(race_text: &str, assists_text: Option<&str>, seed: u32, tape: &[u8]) -> Result<RaceReplay, String> {
+    use rustyac_game::input_file::InputFile;
+    use rustyac_game::sim::{GameSim, ReplaySource};
+    let file = InputFile::parse(tape)?;
+    let (setup, _) = setup_of(race_text, assists_text, seed)?;
+    let header = setup.header();
+    let mut sim = GameSim::new(setup, Box::new(ReplaySource::default()))?;
+    let offset = 0xcbf2_9ce4_8422_2325u64;
+    let (mut chain, mut step_hashes) = (offset, Vec::with_capacity(file.steps.len()));
+    for step in &file.steps {
+        sim.step_recorded(step)?;
+        chain = sim.state_hash(chain);
+        step_hashes.push(sim.state_hash(offset));
+    }
+    let race_out = sim.finish_referee().map(|(json, _, _)| json);
+    Ok(RaceReplay { header, tape_header: file.setup.header(), step_hashes, chain, race_out, cars: 1 + sim.opponents.len() })
 }
 
 #[cfg(test)]

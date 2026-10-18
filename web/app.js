@@ -44,11 +44,21 @@
 //                      the desktop's selftest takes the same list with `--hold`)
 
 import init, * as rac from './pkg/rustyac_web.js';
-import { loadDocuments, saveDocuments, snapshotFile, snapshotWith, startLauncher } from './launcher.js';
+import { startLauncher } from './launcher.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const canvas = $('view');
+let canvas = $('view');
+
+// A new drive in the same page: the last drive's game (and its GPU objects) goes, and a fresh
+// canvas takes the old one's place (a canvas keeps the context it was first given).
+function freshCanvas() {
+  if (state.game) state.game.free();
+  state.game = null;
+  const next = canvas.cloneNode(false);
+  canvas.replaceWith(next);
+  canvas = next;
+}
 
 const state = {
   source: null, // where the files come from: { kind, sizes: Map(path -> bytes), open(path) }
@@ -532,6 +542,19 @@ async function loadFiles(paths, done) {
   }
 }
 
+// The cars of a race.ini: [RACE] MODEL and every [CAR_n] MODEL but the player's `-`, once each.
+function raceModels(race) {
+  const models = [];
+  for (const part of race.split(/^\[/m)) {
+    const section = part.slice(0, part.indexOf(']')).trim().toUpperCase();
+    if (section !== 'RACE' && !/^CAR_\d+$/.test(section)) continue;
+    const line = part.split(/\r?\n/).find((l) => l.split('=')[0].trim().toUpperCase() === 'MODEL');
+    const model = line ? line.slice(line.indexOf('=') + 1).trim() : '';
+    if (model && model !== '-' && !models.includes(model)) models.push(model);
+  }
+  return models;
+}
+
 // `launch`: a drive AC's launcher asked for ({ car, track, layout, race, assists }), else the
 // menu's choice
 async function drive(launch) {
@@ -549,8 +572,10 @@ async function drive(launch) {
     // ones are there (the model a lods.ini points to), hence the rounds
     const started = performance.now();
     let loaded = 0;
+    // (and the files of race.ini's other cars, which AI drivers drive)
+    const models = [...new Set([car, ...(launch && launch.race ? raceModels(launch.race) : [])])];
     for (let round = 0; round < 8; round++) {
-      const wanted = rac.files_wanted(car, track, layout).split('\n').filter(Boolean);
+      const wanted = [...new Set(models.flatMap((model) => rac.files_wanted(model, track, layout).split('\n').filter(Boolean)))];
       if (!wanted.length) break;
       let total = 0;
       for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
@@ -582,8 +607,9 @@ async function drive(launch) {
     // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart)
     if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
     const game = launch
-      ? // (the game seeds its rand() with the clock's milliseconds)
-        await rac.Game.create_race(canvas, launch.race, launch.assists, Date.now() >>> 0, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
+      ? // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
+        // as rustyac.exe --race-seed n --ai-seed n-28000)
+        await rac.Game.create_race(canvas, launch.race, launch.assists, (params.has('seed') ? Number(params.get('seed')) : Date.now()) >>> 0, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
       : await rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
     if (launch) window.rustyac.drive = Object.fromEntries(game.drive().split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
     rac.fs_forget_models();
@@ -1591,16 +1617,10 @@ async function useFolder(handle, remember) {
 // (?go=1, ?join, ?selftest, ?launcher=0) still use the page's own controls, kept hidden.
 const launcherMode = params.get('launcher') !== '0' && !['go', 'join', 'selftest'].some((key) => params.has(key));
 
-// The launcher on the source in state.source: the drive it started (after its Start the page
-// is loaded again), else its theme.
+// The launcher on the source in state.source (its drives run in this page).
 async function launcherStart() {
   document.body.classList.add('has-source');
-  if (sessionStorage.getItem('rustyac.launch')) {
-    sessionStorage.removeItem('rustyac.launch');
-    await driveFromLauncher();
-  } else {
-    await openLauncher();
-  }
+  await openLauncher();
 }
 
 // The bar under the theme: the controls page (a gear) and the switch between the site's pack
@@ -1683,8 +1703,6 @@ function launcherReport(kind, text) {
 async function openLauncher() {
   if (!navigator.serviceWorker) throw new Error('this browser has no service workers: AC\'s launcher cannot run in it');
   window.rustyac.launcher = { errors: [], blocked: [], notice: [], content: [], starts: 0 };
-  const returned = sessionStorage.getItem('rustyac.returned') === '1';
-  sessionStorage.removeItem('rustyac.returned');
   await navigator.serviceWorker.register('sw.js');
   await navigator.serviceWorker.ready;
   const host = $('launcher');
@@ -1694,38 +1712,26 @@ async function openLauncher() {
     source: state.source,
     frameHost: host,
     player: { name, id: playerId() },
-    // the theme's Start: the player's documents are kept, the page starts again into the drive
-    // (a page builds one drive: a second one needs a fresh page, as the menu's Drive does)
+    // the theme's Start: the player's documents are saved, the theme waits behind the drive
+    // (in this page: nothing is reloaded) and is told the game runs, as the desktop shell
+    // tells it. race.ini's other cars get AI drivers, as on the desktop; Time Attack, Drift
+    // and Drag Race are refused before this, in theme_glue.js.
     onStart: async (api) => {
-      const race = new TextDecoder().decode(api.launcher.read_doc('cfg\\race.ini') || new Uint8Array(0));
-      const raceKey = (name) => (new RegExp(`^\\s*${name}\\s*=\\s*(.*?)\\s*$`, 'im').exec(race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '') || [])[1] || '';
-      // other cars (AI drivers) are not driven in the browser yet: the theme says so, as it
-      // says it of what the game cannot do, and stays where it is
-      const remote = /^\s*ACTIVE\s*=\s*1\s*$/im.test(race.split(/^\[/m).find((p) => /^REMOTE\]/i.test(p)) || '');
-      if (!remote && Number(raceKey('CARS') || '1') > 1) {
-        window.rustyac.launcher.refused = (window.rustyac.launcher.refused || 0) + 1;
-        api.exec("$('html,body').removeClass('ACactive');");
-        api.notice('Sessions with AI opponents are not available in the browser version yet.');
-        return;
-      }
       window.rustyac.launcher.starts++;
       window.rustyac.state = 'launching';
       await api.saveNow();
-      // the game picks the player's skin among the car's skin folders (as the desktop does):
-      // the game's files after the reload hold only what driving reads, so the names go along
-      const car = raceKey('MODEL');
-      const skins = car ? api.list(`content/cars/${car}/skins`).filter(([, dir]) => dir).map(([name]) => name) : [];
-      sessionStorage.setItem('rustyac.skins', JSON.stringify({ car, skins }));
-      sessionStorage.setItem('rustyac.launch', '1');
-      location.reload();
+      api.trigger('ACRunningEvent');
+      host.hidden = true;
+      $('corner').hidden = true;
+      const race = new TextDecoder().decode(api.launcher.read_doc('cfg\\race.ini') || new Uint8Array(0));
+      // the game picks skins among a car's skin folders (as the desktop does), the player's
+      // and the AI cars': the game's own files hold only what driving reads, so the names
+      // go along (only the names are looked at)
+      for (const model of raceModels(race)) {
+        for (const [skin, dir] of api.list(`content/cars/${model}/skins`)) if (dir) rac.fs_put(`content/cars/${model}/skins/${skin}/ui_skin.json`, new Uint8Array(0));
+      }
+      driveFromLauncher(api).catch(fail);
     },
-    // back from a drive: the game ran and stopped, as the desktop shell tells the theme
-    afterIntro: returned
-      ? (api) => {
-          api.trigger('ACRunningEvent');
-          setTimeout(() => api.trigger('ACStoppedEvent'), 200);
-        }
-      : null,
     onControls: openControls,
     report: launcherReport,
     lobby: launcherLobby(),
@@ -1735,14 +1741,14 @@ async function openLauncher() {
   showCorner();
 }
 
-// The drive AC's launcher started (a reload after its Start, see openLauncher): race.ini and
-// assists.ini as the launcher wrote them into the player's documents.
-async function driveFromLauncher() {
-  const docs = await loadDocuments();
+// The drive AC's launcher started (its Start, see openLauncher): race.ini and assists.ini as
+// the launcher wrote them into the player's documents.
+async function driveFromLauncher(api) {
   const text = (rel) => {
-    const bytes = snapshotFile(docs, rel);
+    const bytes = api.launcher.read_doc(rel.replace(/\//g, '\\'));
     return bytes ? new TextDecoder().decode(bytes) : null;
   };
+  freshCanvas();
   const race = text('cfg/race.ini');
   if (!race) throw new Error("AC's launcher wrote no race.ini");
   const key = (section, name) => {
@@ -1766,28 +1772,27 @@ async function driveFromLauncher() {
     return;
   }
   state.launch = { car: key('RACE', 'MODEL'), track: key('RACE', 'TRACK'), layout: key('RACE', 'CONFIG_TRACK'), race, assists: text('cfg/assists.ini') };
-  // the car's skin folders, as the launcher listed them (only their names are looked at)
-  try {
-    const { car, skins } = JSON.parse(sessionStorage.getItem('rustyac.skins') || '{}');
-    if (car === state.launch.car) for (const skin of skins || []) rac.fs_put(`content/cars/${car}/skins/${skin}/ui_skin.json`, new Uint8Array(0));
-  } catch (e) {
-    console.warn('skins:', e);
-  }
   await drive(state.launch);
 }
 
 // Back to AC's launcher after a drive it started: the referee's race_out.json into the player's
-// out folder (as the game writes it when it closes), then the launcher again, which shows it.
+// out folder (as the game writes it when it closes), then the launcher again, which is told
+// the game stopped and shows the results.
 async function returnToLauncher() {
   state.running = false;
   window.rustyac.state = 'returning';
   const json = state.game && !state.online ? state.game.finish_race() : null;
   leaveServer(false);
-  let docs = await loadDocuments();
-  if (json) docs = snapshotWith(docs, rac.Launcher.roots()[1], 'out/race_out.json', json, Date.now());
-  await saveDocuments(docs);
-  sessionStorage.setItem('rustyac.returned', '1');
-  location.reload();
+  freshCanvas();
+  for (const id of ['hud', 'keys', 'chat']) $(id).hidden = true;
+  state.launch = null;
+  const api = state.theme;
+  if (json) api.launcher.write_doc('out\\race_out.json', json);
+  await api.saveNow();
+  $('launcher').hidden = false;
+  $('corner').hidden = false;
+  window.rustyac.state = 'launcher';
+  api.trigger('ACStoppedEvent');
 }
 
 async function main() {
@@ -1854,22 +1859,6 @@ async function main() {
     wantFolder = launcherMode && localStorage.getItem('rustyac.source') === 'folder';
   } catch {
     // no storage: the pack
-  }
-  // A folder opened as a file list is not kept by the browser over the reload of a drive's start
-  // or end: the player opens it again (one click: the browser needs it), then the page goes on.
-  let againList = false;
-  try {
-    againList = launcherMode && localStorage.getItem('rustyac.source') === 'filelist' && !!(sessionStorage.getItem('rustyac.launch') || sessionStorage.getItem('rustyac.returned'));
-  } catch {
-    // no storage: the pack
-  }
-  if (againList && !params.has('testfolder')) {
-    window.rustyac.state = 'menu';
-    $('content-line').textContent = 'Open the same Assetto Corsa folder again ("Open it as a file list") to go on: the browser does not keep a folder opened that way.';
-    state.packAvailable = await fetch(`${base}manifest.json`, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
-    await loadServers();
-    state.starting = false;
-    return;
   }
   if (params.has('testfolder')) {
     // the folder picker's path without the picker (it needs a click a test cannot give)
@@ -1945,5 +1934,37 @@ window.rustyac.others = () => (state.game && state.online ? JSON.parse(state.gam
 window.rustyac.chat = (text) => !!(state.game && state.online && state.game.chat(text));
 window.rustyac.arrivals = () => (state.online ? state.online.link.arrivals() : '');
 window.rustyac.leave = () => (state.online || state.launch) && stopDriving();
+
+// Task 37c's proof: a race.ini drive with the inputs of a drive the desktop recorded (`tape`, a
+// .ryin's bytes as base64), on the page's files, as `examples/race_proof` runs it natively.
+window.rustyac.raceProof = async (race, assists, seed, tape) => {
+  await loadRaceFiles(race);
+  const bytes = Uint8Array.from(atob(tape), (c) => c.charCodeAt(0));
+  const started = performance.now();
+  const result = JSON.parse(rac.race_proof(race, assists, seed >>> 0, bytes));
+  result.seconds = (performance.now() - started) / 1000;
+  return result;
+};
+
+// Task 37c's speed test: `steps` physics steps of a race.ini drive (the player on the
+// autodriver) as fast as they go, without drawing: how many times real time that is.
+window.rustyac.raceSpeed = async (race, assists, seed, skip, steps) => {
+  await loadRaceFiles(race);
+  const { cars, ms } = JSON.parse(rac.race_speed(race, assists, seed >>> 0, skip, steps));
+  return { cars, steps, ms_per_step: ms / steps, real_time_factor: (steps * 3) / ms };
+};
+
+async function loadRaceFiles(race) {
+  const part = race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '';
+  const key = (name) => ((part.split(/\r?\n/).find((l) => l.split('=')[0].trim().toUpperCase() === name) || '=').split('=')[1] || '').trim();
+  const [track, layout] = [key('TRACK'), key('CONFIG_TRACK')];
+  const models = raceModels(race);
+  for (let round = 0; round < 8; round++) {
+    const wanted = [...new Set(models.flatMap((model) => rac.files_wanted(model, track, layout).split('\n').filter(Boolean)))];
+    if (!wanted.length) break;
+    await loadFiles(wanted, () => {});
+  }
+  await loadFiles(['system/cfg/assetto_corsa.ini', 'system/cfg/pitstop.ini'], () => {}).catch(() => {});
+}
 
 main().catch(fail);

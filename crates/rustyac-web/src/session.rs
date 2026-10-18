@@ -100,17 +100,7 @@ impl Session {
     /// `assists.ini`), as `rustyac.exe` makes it from the same files ([`crate::race`]).
     /// `seed`: the game's `rand()` seed (the desktop takes the clock's milliseconds).
     pub fn from_race(race_text: &str, assists_text: Option<&str>, seed: u32) -> Result<Session, String> {
-        use rustyac_physics::data::ini::IniReader;
-        // (as IniReader::load reads a file: CR LF as LF)
-        let race = IniReader::from_text(std::path::Path::new("race.ini"), &race_text.replace("\r\n", "\n"));
-        let assists = assists_text.map(|text| IniReader::from_text(std::path::Path::new("assists.ini"), &text.replace("\r\n", "\n")));
-        let (car, track, layout) = crate::race::car_and_track(&race);
-        if car.is_empty() || track.is_empty() {
-            return Err("race.ini names no car or no track ([RACE] MODEL, TRACK)".to_string());
-        }
-        let mut setup = crate::content::setup(&car, &track, &layout, false, "pit");
-        let root = rustyac_content::install::ac_root().unwrap_or_else(|| std::path::PathBuf::from("ac"));
-        let race_notes = crate::race::apply(&mut setup, &race, assists.as_ref(), seed, &root);
+        let (setup, race_notes) = crate::race::setup_of(race_text, assists_text, seed)?;
         let drive = format!(
             "car={}
 skin={}
@@ -164,8 +154,9 @@ sessions={}
         while sim.car.device.source.in_spawn_sequence() {
             sim.step()?;
         }
-        let remote_shapes: Vec<CarShape> = sim.remote_infos().iter().map(CarShape::of).collect();
-        let remote: Vec<CarView> = (0..sim.remote_count()).map(|index| CarView::capture_remote(&sim, index)).collect();
+        // the other cars: race.ini's (AI drivers) first, then the server's, as `opponent_infos`
+        let remote_shapes: Vec<CarShape> = sim.opponent_infos().iter().map(CarShape::of).collect();
+        let remote: Vec<CarView> = (0..remote_shapes.len()).map(|index| other_view(&sim, index, 0.0)).collect();
         let shape = CarShape::of(&sim.car_info());
         let (floor, ceiling) = match &sim.track {
             Some(track) if !track.world.meshes.is_empty() => {
@@ -232,13 +223,14 @@ sessions={}
             if session.net.client.is_lost() {
                 return Err("the connection to the server is gone".to_string());
             }
-            // the other cars: only the last two steps of a frame are ever drawn between
-            if self.accumulator < 2.0 * DT as f64 || burst {
-                for index in 0..self.remote_curr.len() {
-                    let view = CarView::capture_remote(&self.sim, index);
-                    self.remote_prev[index] = if burst { view } else { self.remote_curr[index] };
-                    self.remote_curr[index] = view;
-                }
+        }
+        // the other cars: only the last two steps of a frame are ever drawn between
+        if !self.remote_curr.is_empty() && (self.accumulator < 2.0 * DT as f64 || burst) {
+            let seconds = (self.sim.steps - self.drive_start) as f64 * DT as f64;
+            for index in 0..self.remote_curr.len() {
+                let view = other_view(&self.sim, index, seconds);
+                self.remote_prev[index] = if burst { view } else { self.remote_curr[index] };
+                self.remote_curr[index] = view;
             }
         }
         Ok(())
@@ -273,7 +265,8 @@ sessions={}
         CarView::between(&self.prev, &self.curr, (self.accumulator / DT as f64) as f32)
     }
 
-    /// The other players' cars between the last two steps, in the session's order.
+    /// The other cars between the last two steps: race.ini's, then the other players', in the
+    /// session's order.
     pub fn remote_views(&self) -> Vec<CarView> {
         let blend = (self.accumulator / DT as f64) as f32;
         self.remote_prev.iter().zip(&self.remote_curr).map(|(prev, curr)| CarView::between(prev, curr, blend)).collect()
@@ -336,5 +329,13 @@ sessions={}
     /// Clicks of the cockpit's brake-bias control (] forward, [ rearward), before the next step.
     pub fn request_bias(&mut self, clicks: i32) {
         self.input.lock().unwrap().bias_clicks += clicks;
+    }
+}
+
+/// The other car `index` of the session: race.ini's cars (AI drivers) first, then the server's.
+fn other_view(sim: &GameSim, index: usize, drive_seconds: f64) -> CarView {
+    match index.checked_sub(sim.opponents.len()) {
+        None => CarView::capture_opponent(sim, index, drive_seconds),
+        Some(remote) => CarView::capture_remote(sim, remote),
     }
 }

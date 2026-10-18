@@ -22,7 +22,7 @@ rustyac-net = { path = "../rustyac-net" }
 
 # Everything below is the browser side and only exists in a wasm build: the desktop build of
 # the workspace compiles this crate's plain logic and its tests, nothing else.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # the picture: WebGPU where the browser has it, WebGL2 otherwise
 wgpu = { version = "=30.0.1", default-features = false, features = ["webgpu", "webgl", "wgsl"] }
 # the glue to JavaScript; the version must be the one of the wasm-bindgen program that
