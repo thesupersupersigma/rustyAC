@@ -6,7 +6,8 @@ import re
 import sys
 
 LINE = re.compile(r'^bridge (\S+)(?: POST (.*))? -> \S+ (?:true|false) \d+$')
-DROP = {'start', 'getserver', 'getserverlist', 'getservercached', 'getlanservers', 'pingserver'}
+# getguid and getachievements ask Steam: the oracle refuses them (Steam is not loaded there)
+DROP = {'start', 'getguid', 'getachievements', 'getserver', 'getserverlist', 'getservercached', 'getlanservers', 'pingserver'}
 
 out = ['SETUP x']
 record = None

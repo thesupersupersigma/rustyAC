@@ -25,5 +25,6 @@ for name in $names; do
     n=$(python tools/proofs/log2req.py "$out/$name/run.log" "$gold/launcher/$name.req")
     fails=$(grep -cE '^FAIL|nothing matches' "$out/$name/run.log")
     echo "$name: exit $status, $n, $fails failed steps" | tee -a "$log"
-    rm -rf "$docs"
+    # the window's browser lets go of its folder a moment after the window closes
+    for _ in 1 2 3 4 5; do rm -rf "$docs" 2> /dev/null && break; sleep 2; done
 done

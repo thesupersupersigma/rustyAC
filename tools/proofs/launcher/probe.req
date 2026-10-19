@@ -42,9 +42,7 @@ GET ac://getvideomodes
 GET ac://carcount
 GET ac://eventcount
 GET ac://formatfile/race
-GET ac://getguid
 GET ac://getplayername
-GET ac://isowner
 GET ac://getresults
 POST ac://savejson/probe/x.json	{"name":"Jürgen 漢"}
 GET ac://loadjson/probe/x.json
@@ -52,8 +50,6 @@ GET ac://delfile/probe/x.json
 GET ac://delfile/probe/x.json
 GET ac://getplayersetups/abarth500
 GET ac://getthememodules?theme=default
-GET ac://getachievements
-GET ac://runtest
 GET ac://nosuchhandler/x
 GET ac://listreplays
 GET ac://delreplay
