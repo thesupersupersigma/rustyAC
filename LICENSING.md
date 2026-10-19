@@ -15,7 +15,7 @@ Copyright (c) 2026 thesupersupersigma.
 | The Selawik font for the launcher theme in the browser | `web/fonts/` | `OFL-1.1`: [web/fonts/Selawik-OFL.txt](web/fonts/Selawik-OFL.txt) |
 | Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/`<br>`tools/launcher_oracle/` | `GPL-3.0-or-later` |
 | Notes and reports | `docs/` | `GPL-3.0-or-later` |
-| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
+| Small standalone libraries and tools | `crates/rustyac-math/`<br>`crates/rustyac-content/`<br>`crates/rustyac-dxbc/` (reads compiled shaders and writes WGSL; it contains no shader)<br>`tools/ode_oracle/`, `tools/sctm_oracle/`, `tools/math_proof/`<br>the Python scripts `tools/*.py`, `ac_telemetry.py`, `check_telemetry.py`<br>the GitHub workflows `.github/` and the release packaging `packaging/`<br>the server kit `server/` (settings and deploy files for Kunos' `acServer`; no Kunos file)<br>the WebSocket gateway `crates/rustyac-gateway/` (it carries the game's messages without reading them and links none of the game's code) | `MIT OR Apache-2.0`: [LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE) |
 | The ODE port | `crates/rustyac-ode/` | `BSD-3-Clause`: [LICENSE-ODE](crates/rustyac-ode/LICENSE-ODE) |
 
 **What the licenses mean in short:**
@@ -68,7 +68,8 @@ everything that links the car physics is GPL.
   (commit 89362e8, `fontmake -o ttf`). The browser page gives them to the launcher theme only
   where the system has no Segoe UI; Selawik is not changed, so its name is kept.
 - The Rust crates from crates.io (`windows`, `png`, `webview2-com`, and for the browser preview `wgpu`,
-  `wasm-bindgen`, `web-sys` and what they depend on) are downloaded by Cargo at build time and
+  `wasm-bindgen`, `web-sys` and what they depend on; `wgpu` and its shader validator `naga` also
+  for the renderer's wgpu backend on the desktop) are downloaded by Cargo at build time and
   keep their own licenses. They are not in this repository. The browser preview's build also
   downloads the programs `wasm-bindgen` and binaryen's `wasm-opt` (`web/build.py`).
 

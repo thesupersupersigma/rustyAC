@@ -16,6 +16,10 @@ rustyac-physics = { path = "../rustyac-physics" }
 rustyac-content = { path = "../rustyac-content" }
 # AC's widgets and HUD objects: this crate is their painter on Direct3D
 rustyac-gui = { path = "../rustyac-gui" }
+# the game's compiled shaders read without Direct3D: reflection, and WGSL for the wgpu backend
+rustyac-dxbc = { path = "../rustyac-dxbc" }
+# native wgpu: for now only the per-shader proof of the WGSL translation uses it
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "wgsl"], optional = true }
 
 [dependencies.windows]
 version = "0.62"
@@ -36,3 +40,10 @@ features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[features]
+wgpu = ["dep:wgpu"]
+
+[[example]]
+name = "shader_proof"
+required-features = ["wgpu"]

@@ -1,0 +1,14 @@
+[package]
+name = "rustyac-dxbc"
+description = "rustyAC: reads compiled Direct3D shaders (DXBC, shader model 4) and writes them again as WGSL for wgpu, with the reflection D3DReflect gives"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+
+[dev-dependencies]
+# the WGSL front end and validator wgpu itself uses: every translated shader must pass it
+naga = { version = "=30.0.1", features = ["wgsl-in"] }
