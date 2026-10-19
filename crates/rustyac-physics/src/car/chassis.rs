@@ -2622,6 +2622,19 @@ impl RollingChassis {
         self.has_grid_position = true;
     }
 
+    /// Whether `step_jump_start` may send this car to its pit box in the step at `physics_time`:
+    /// its gates without the distance test, which needs the stepped position.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn jump_start_possible(&self, physics_time: f64) -> bool {
+        let lock = self.env.lock_gearbox_at_start_time_ms;
+        self.env.is_first_car
+            && self.env.session_start_time_ms >= physics_time
+            && (lock < 0.0 || lock > 0.0)
+            && 0.0 >= self.lock_controls_time
+            && self.has_grid_position
+            && !(self.env.session_start_time_ms - lock > physics_time)
+    }
+
     /// `PenaltyManager::addJumpStartPenalty` @ 0x140265a90.
     fn add_jump_start_penalty(&mut self) {
         match self.env.jump_start_penalty_mode {

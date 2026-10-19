@@ -609,7 +609,10 @@ impl PhysicsEngine {
     /// `Car::stepPreCacheValues` and `Car::step` of every car.
     fn step_cars(&mut self, dt: f32, physics_time: f64, cars: &mut [CarSlot<'_>]) {
         let mut flags: Vec<Option<bool>> = Vec::new();
-        if cars.iter().any(|slot| slot.device.is_ai()) && !cars.iter().any(|slot| slot.car.black_flagged) {
+        // (a black flag or a jump start puts a car into its pit box in its own step: see below)
+        if cars.iter().any(|slot| slot.device.is_ai())
+            && !cars.iter().any(|slot| slot.car.black_flagged || slot.car.jump_start_possible(physics_time))
+        {
             // An AI driver reads the other cars as they are when its own car is stepped (the
             // ones before it stepped already, the ones after it not yet) and draws from the
             // one `rand()` of the physics thread: the game without its thread pool. Of what a
@@ -657,7 +660,7 @@ impl PhysicsEngine {
                 }
             }
         } else if cars.iter().any(|slot| slot.device.is_ai()) {
-            // A black-flagged car is put into its pit box in the middle of its own step,
+            // A black-flagged or jump-starting car is put into its pit box in the middle of its own step,
             // which the drivers of the cars after it see (and its own driver is told): the
             // cars are stepped one after the other, as the game steps them without its pool.
             for slot in cars.iter_mut() {
