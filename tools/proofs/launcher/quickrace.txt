@@ -1,0 +1,39 @@
+# game args besides --headless --no-steam --autodrive --duration 160: 
+# (re-authored in Task 38c from the theme's code; the scripts of Tasks 35-37b were lost)
+log quickrace
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=drive]').length>0
+wait 3000
+js try{UI.checkVideomode=false}catch(e){}
+click #menu li[data-panel=drive]
+wait 1500
+until 20000 $('.drive .tabs li[data-mode=quickrace]').length>0
+click .drive .tabs li[data-mode=quickrace]
+wait 1500
+click .drive .submenu .button[data-mode="brands,cars"]
+wait 1000
+until 30000 $('#drive .cars .item[data-car=abarth500]').length>0
+click #drive .cars .item[data-car=abarth500]
+wait 1500
+click .drive .submenu .button[data-mode=tracks]
+wait 1000
+until 30000 $('#drive .tracks .item[data-track=magione]').length>0
+click #drive .tracks .item[data-track=magione]
+wait 1500
+click .drive .submenu .button[data-mode=opponents]
+wait 1500
+shot out/quickrace_nogrid.png
+until 20000 $('.opponents .gridtabs > ul li[data-mode=single]').length>0
+click .opponents .gridtabs > ul li[data-mode=single]
+wait 1000
+js $('#singletotal').slider('value',1)
+wait 1000
+js $('#sliderRaceLaps').slider('value',2).triggerSliderEvent('stop')
+wait 1000
+click .drive .submenu .button[data-mode=summary]
+wait 1500
+shot out/quickrace_setup.png
+js $('.drive .submenu .button[data-mode=startrace], .summary .nav .button[data-mode=startrace]').not('.inactive,.disabled').first().click()
+game-exit 240000
+until 120000 !$('body').hasClass('ACactive')&&$('.summary .settings .results:not(.inactive):not(.disabled)').length>0
+wait 8000
+shot out/quickrace_results.png

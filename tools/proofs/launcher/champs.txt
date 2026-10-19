@@ -1,0 +1,30 @@
+# game args besides --headless --no-steam --autodrive --duration 160: --next-session-at 40 --next-session-at 80
+# (re-authored in Task 38c from the theme's code; the scripts of Tasks 35-37b were lost)
+log champs
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=drive]').length>0
+wait 3000
+js try{UI.checkVideomode=false}catch(e){}
+click #menu li[data-panel=drive]
+wait 1500
+until 20000 $('#drive > .tabs li[data-mode=champs]').length>0
+click #drive > .tabs li[data-mode=champs]
+wait 3000
+shot out/champs_list.png
+until 30000 $('#champs .champlist .button[data-mode=create]').length>0
+click #champs .champlist .button[data-mode=create]
+wait 2500
+shot out/champs_create.png
+click #champs .champdetails .button[data-mode=save]
+wait 4000
+until 30000 $('#champs .champlist .list .item').length>0
+click #champs .champlist .list .item
+wait 1500
+js $('#champs .champlist .list .item .compete').first().click()
+wait 3000
+shot out/champs_main.png
+until 60000 $('#champs .mainview .start:not(.disabled)').length>0
+click #champs .mainview .start:not(.disabled)
+game-exit 240000
+until 120000 !$('body').hasClass('ACactive')&&$('.summary .settings .results:not(.inactive):not(.disabled)').length>0
+wait 8000
+shot out/champs_results.png

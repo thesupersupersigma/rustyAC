@@ -1,0 +1,37 @@
+# game args besides --headless --no-steam --autodrive --duration 160: 
+# (re-authored in Task 38c from the theme's code; the scripts of Tasks 35-37b were lost)
+log options
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+click #menu li[data-panel=options]
+wait 1500
+shot out/options_video.png
+until 20000 $('#vsync').length>0
+js $('#vsync').prop('checked',!$('#vsync').prop('checked')).change()
+wait 1000
+js $('#vsync').prop('checked',!$('#vsync').prop('checked')).change()
+wait 1000
+js $('#vsync').prop('checked',!$('#vsync').prop('checked')).change()
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=effects]
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=view]
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=reflections]
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=display]
+wait 1000
+click #options > .tabs > div[data-mode=audio]
+wait 1500
+shot out/options_audio.png
+js var s=$('#music');s.slider('value',0.5);s.triggerSliderEvent('stop')
+wait 1000
+js var s=$('#uilevel');s.slider('value',0.5);s.triggerSliderEvent('stop')
+wait 1000
+click #options > .tabs > div[data-mode=general]
+wait 1500
+shot out/options_general.png
+click #options > .tabs > div[data-mode=video]
+wait 1500
+click #menu li[data-panel=drive]
+wait 1500

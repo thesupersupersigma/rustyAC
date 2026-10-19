@@ -1,0 +1,4 @@
+SETUP x
+GET ac://getguid
+GET ac://getguid
+GET ac://getid

@@ -1,0 +1,7 @@
+SETUP x
+GET ac://getresults
+GET ac://getresults
+GET ac://getiniasjson/out/race_out
+GET ac://loadjson/out/race_out.json
+GET ac://carcount
+GET ac://eventcount

@@ -29,6 +29,9 @@ pit_feed magione bmw_m3_e30,bmw_m3_e30 90000 --seed 7
 pit_feed magione ks_ferrari_f2004,bmw_m3_e30 90000 --seed 8
 # Task 28: the false start with the report's cars (Task 38b ran it with the default F2004s by mistake)
 rc_jump magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 40000
+# Task 38c: the same with the scenario's own F2004s, where car 0 is sent to its pit box while the AI
+# behind it still looks (the port asked the drivers before the jump-start penalty until 38c)
+rc_jump magione - 40000
 # Task 27: a fast lane of file version 6 (made by tools/proofs/ai_v6.py from the installed line; its first
 # copy was lost with re/scratch, so oracle/t27*/v6* cannot be replayed)
 ai_solo ks_vallelunga ks_ferrari_f2004 36000 --layout extended_circuit --ai-line re/gold/fresh/vallelunga_extended_v6.ai

@@ -1,0 +1,30 @@
+# game args besides --headless --no-steam --autodrive --duration 160: --duration 20
+# (re-authored in Task 38c from the theme's code; the scripts of Tasks 35-37b were lost)
+log career
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=career]').length>0
+wait 3000
+js try{UI.checkVideomode=false}catch(e){}
+click #menu li[data-panel=career]
+wait 3000
+js try{UI.closeDialog(true,'videoplayer');UI.closeOverlay(true)}catch(e){}
+shot out/career_list.png
+until 30000 $('#career .series .datalist .item:not(.error)[data-id=series1]').length>0
+click #career .series .datalist .item:not(.error)[data-id=series1]
+wait 2500
+js try{UI.closeDialog(true,'videoplayer');UI.closeOverlay(true)}catch(e){}
+js if($('#career .introview').hasClass('selected'))$('#career .introview .start:not(.disabled)').first().click()
+wait 1500
+shot out/career_series.png
+until 30000 $('#career .events .datalist .item:not(.error)').length>0
+js $('#career .events .datalist .item:not(.error):not(.completed)').first().click()
+wait 2000
+shot out/career_event.png
+until 30000 $('#career .mainview .start:not(.disabled)').length>0
+click #career .mainview .start:not(.disabled)
+game-exit 240000
+until 120000 !$('body').hasClass('ACactive')&&$('.summary .settings .results:not(.inactive):not(.disabled)').length>0
+wait 8000
+shot out/career_results.png
+js $('#career .notification .button.continue').first().click()
+wait 3000
+shot out/career_after.png

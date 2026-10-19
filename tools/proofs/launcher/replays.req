@@ -1,0 +1,15 @@
+SETUP x
+GET ac://listreplays
+GET ac://listreplays?bytime=true
+GET ac://listreplays?temp=true&bytime=true
+GET ac://updreplay?oldname=x.acreplay&newname=y.acreplay
+GET ac://updreplay?oldname=y.acreplay&newname=zero.acreplay
+GET ac://updreplay?oldname=missing.acreplay&newname=z.acreplay
+GET ac://delreplay?name=zero.acreplay
+GET ac://delreplay?name=zero.acreplay
+GET ac://delreplay
+GET ac://storereplay?files=t1.acreplay
+GET ac://storereplay?files=nothere.acreplay
+GET ac://storereplay
+GET ac://listreplays
+GET ac://listreplays?bytime=true
