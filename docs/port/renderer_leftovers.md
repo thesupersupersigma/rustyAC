@@ -1,5 +1,10 @@
 # Task 22c: the scene's leftovers
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -8,7 +13,7 @@ State after the last commit (kept up to date with every commit):
 - The task text is `prompts/22c_scene_leftovers.md` (the "Not done" list of Task 22, eleven items). Nine are
   done and measured against the game; two are not (section 8): the pit stop mechanics (they only show during a
   pit stop, which is Task 26) and the one oracle run with both the game's sound and its flames.
-- To pick the work up again: section 10 has the checks. `sh re/scratch/task22c/batch.sh` runs the 18 new proof
+- To pick the work up again: section 10 has the checks. `RENDER_ONLY='r22c_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task22c/batch.sh`, deleted) runs the 18 new proof
   sequences (about 12 minutes); `batch22.sh`, `batch21.sh`, `batch20.sh` in the same folder run the older ones
   with this task's oracle.
 - On disk, git-ignored: `re/scratch/task22c/` (the seven reader briefs `spec_*.md` with their disassembly
@@ -306,7 +311,7 @@ Run at the end, at version 0.22.2:
 - `cargo build --release --locked` for the workspace, and every tool builds with its updated lock file.
 - **The car oracle**: `chassis_compare run` (the whole Rust car against the twelve recordings of the game's own
   physics): bit-exact, 100 % in every one.
-- **The 18 sound drives of Task 19** (`sh re/scratch/task19/compare_all.sh`): in all 18 the port's FMOD call log
+- **The 18 sound drives of Task 19** (`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh`, kept in re/scratch, not needed)): in all 18 the port's FMOD call log
   with the game's answers is identical to the game's (16,704,486 calls), and all 18 level verdicts are ok (one
   drive repeated twice after FMOD's own known crash).
 - The four golden frames, on the final sources: all four hashes as in the table above.
@@ -476,11 +481,11 @@ cargo test --release --workspace --locked
 cargo build --release --locked
 for m in tools/*/Cargo.toml; do cargo build --release --locked --manifest-path $m; done
 cargo test --release -p rustyac-render --test golden --test golden_car --test golden_scene --test golden_leftovers -- --nocapture
-sh re/scratch/task22c/batch.sh          # the 18 new sequences, about 12 minutes; one: sh re/scratch/task22c/batch.sh "ideal"
-sh re/scratch/task22c/batch22.sh        # the 23 sequences of Task 22
-sh re/scratch/task22c/batch21.sh        # the 27 sequences of Task 21
-sh re/scratch/task22c/batch20.sh        # the 21 frames of Task 20
-sh re/scratch/task19/compare_all.sh     # the 18 sound drives (on a quiet machine)
+RENDER_ONLY='r22c_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task22c/batch.sh (deleted)
+RENDER_ONLY='r22_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task22c/batch22.sh (deleted)
+RENDER_ONLY='r21_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task22c/batch21.sh (deleted)
+RENDER_ONLY='r20_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task22c/batch20.sh (deleted)
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/compare_all.sh (kept in re/scratch, not needed)
 ```
 
 Do not run two `render_oracle compare` on the same scratch folder at once; a second one needs its own exe copy and

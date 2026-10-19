@@ -1,5 +1,10 @@
 # Task 25 (M1): multiplayer on the desktop
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State at `v0.25.0`: **M1 is done and proven** as far as the tables below say. Nothing is
@@ -9,9 +14,9 @@ half-wired. What is left is listed under [Not done](#not-done).
   code; builds for `wasm32-unknown-unknown`); the game's side is `crates/rustyac-game/src/`
   `join.rs`, `identity.rs`, `online.rs` and the online parts of `sim.rs`; the oracle is
   `tools/car_oracle net` (`src/game/net.rs`); the server kit is `server/`.
-- **Proofs to re-run:** `sh re/scratch/task25/batch.sh` (the oracle, about 15 minutes, needs
+- **Proofs to re-run:** `sh tools/proofs/net.sh` (was `sh re/scratch/task25/batch.sh`, deleted) (the oracle, about 15 minutes, needs
   the tapes in `re/scratch/task25/interop` and `rich`, which are git-ignored),
-  `cargo test --release -p rustyac-net` (golden + robustness), `sh re/scratch/task25/run_rich.sh`
+  `cargo test --release -p rustyac-net` (golden + robustness), `sh tools/proofs/net.sh` (was `sh re/scratch/task25/run_rich.sh`, deleted)
   (a live four-client session that records new tapes).
 - **M2 (Task 26) is done:** the browser and the WebSocket gateway are in
   [multiplayer_web.md](multiplayer_web.md). `Client::join` and `car_list` became the

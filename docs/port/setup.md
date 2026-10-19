@@ -1,5 +1,10 @@
 # AC's setup editor (Task 31)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (v0.31.0):
@@ -25,12 +30,12 @@ State after the last commit (v0.31.0):
   `desktop.rs` (`esc_start`). The oracle: `tools/render_oracle/src/gui_seq_setup.rs` (scripts
   and what both sides share), `gui_ac_setup.rs` (the game's side: a real `Car` of the game
   on a flat track, in process), `gui_port_setup.rs` (the port's side).
-- **Proof batch:** `sh re/scratch/task31/final_b.sh` (Task 30's 38 and Task 29's 14 GUI
+- **Proof batch:** `sh tools/proofs/gui.sh` (was `sh re/scratch/task31/final_b.sh`, deleted) (Task 30's 38 and Task 29's 14 GUI
   sequences, then every setup sequence on every car of the table below; a little over an
   hour; result lines in `re/scratch/task31/gui_final_30.txt`, `gui_final_29.txt`,
   `gui_final_31.txt` and `cars2.txt`). One sequence:
-  `sh re/scratch/task31/cmp.sh setup_tabs@bmw_z4_gt3`. Never two at once. The other checks at
-  the end of the task: `sh re/scratch/task31/final_a.sh` (clippy four ways, tests, tools,
+  `sh tools/proofs/gui.sh` (was `sh re/scratch/task31/cmp.sh setup_tabs@bmw_z4_gt3`, deleted). Never two at once. The other checks at
+  the end of the task: the end checks of `docs/release.md` (was `sh re/scratch/task31/final_a.sh`, deleted) (clippy four ways, tests, tools,
   dumps; its dump step needs v0.30.0 built from its tag into `re/scratch/task31/tgt_old`,
   which was deleted at the end) and `python re/scratch/task31/tape_proof.py`.
 - **If `rustyac.exe` is running** (it locks `target/release`): build with

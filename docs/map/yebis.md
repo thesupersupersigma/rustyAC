@@ -1,5 +1,10 @@
 # YEBIS 2 (post-processing): a map
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 Source: `acs.exe` (the build of 2018-01-10, 22,890,776 bytes) and `acs.pdb`, read only through the local
 tools (`tools/disasm.py`, `tools/re_query.py`, the PDB's public symbols and section contributions through
 DIA), plus a read-only look at `system/cfg/ppfilters` and `system/shaders/win` in the game folder. Three

@@ -25,20 +25,31 @@
    for m in tools/*/Cargo.toml; do cargo build --release --manifest-path $m; done
    ```
 
-3. Commit and tag:
+3. Rerun the proofs (a few hours; needs the ignored `oracle/` and `re/gold/` folders and the AC
+   install, nothing in `re/scratch/`):
+
+   ```
+   sh tools/proofs/run_all.sh      # table in target/proofs/table.md; every area must have 0 different
+   ```
+
+   Anything a new proof needs goes into `tools/proofs/` (scripts, lists; committed) or
+   `re/gold/<area>/` (recordings and other game-derived files; ignored, never committed, with a
+   README on how it was made). `docs/port/proofs.md` says what each area compares.
+
+4. Commit and tag:
 
    ```
    git commit -am "chore(release): v0.15.0"
    git tag -a v0.15.0 -m "rustyAC v0.15.0: <what is new>"
    ```
 
-4. Push the commit and the tag together:
+5. Push the commit and the tag together:
 
    ```
    git push --follow-tags
    ```
 
-   `--follow-tags` only pushes annotated tags (`git tag -a`), which is what step 3 makes.
+   `--follow-tags` only pushes annotated tags (`git tag -a`), which is what step 4 makes.
 
 About ten minutes later the release is on the [Releases page](https://github.com/thesupersupersigma/rustyAC/releases).
 

@@ -1,5 +1,10 @@
 # rustyAC in the browser: a WASM preview (Task 20w)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 **Task 20w.2 is done** (`prompts/20w2_web_controls.md`): its report is the last section of this file, "Task
@@ -233,7 +238,7 @@ game's maths.
 
 ### 3.2 The proof
 
-`python re/scratch/task20w/replay_proof.py`: every recorded drive through `replay_hash.exe` (desktop,
+`sh tools/proofs/browser.sh` (was `python re/scratch/task20w/replay_proof.py`, deleted): every recorded drive through `replay_hash.exe` (desktop,
 `MSVCR120.dll`) and `replay_hash.wasm` (`wasm32-wasip1`, pure maths, under wasmtime 25.0.2 with the game's
 folder mounted at `/ac`). The per-step hash covers what `--dump-states` writes: bodies, joints, tyres, every
 traced value of the powertrain, the aids, the telemetry page and the track (rays, lap timer, place on the
@@ -622,7 +627,7 @@ RUSTYAC_MATH=pure cargo test --release --workspace
 # copies of the two binaries in re/scratch/task20w/bin, and the recordings in oracle/game
 CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot <repo>/target/wasm-sysroot" cargo build --release -p rustyac-game --target wasm32-wasip1
 cp target/release/replay_hash.exe target/wasm32-wasip1/release/replay_hash.wasm re/scratch/task20w/bin/
-python re/scratch/task20w/replay_proof.py
+sh tools/proofs/browser.sh   # was: python re/scratch/task20w/replay_proof.py (deleted)
 
 # the browser build
 python web/build.py
@@ -636,7 +641,7 @@ node web/check.mjs --url "http://127.0.0.1:8137/?go=1&autodrive=1&car=bmw_z4_gt3
 cargo run --release -p rustyac-web --example selftest -- bmw_z4_gt3 ks_laguna_seca --steps 10000
 
 # the desktop is what it was: v0.20.0's exe against this one (a worktree of the tag, built, then removed)
-python re/scratch/task20w/desktop_same.py
+sh tools/proofs/dumps.sh   # was: python re/scratch/task20w/desktop_same.py (deleted)
 ```
 
 **The desktop against v0.20.0** (`desktop_same.py`; `rustyac.exe` built from the tag in a temporary worktree
@@ -857,7 +862,7 @@ and neither holds a link (which the unpacker of an older Python would refuse).
 ```
 cargo test --release --workspace --locked
 RUSTYAC_MATH=no-dll cargo test --release --workspace --locked
-python re/scratch/task20w2/desktop_same.py      # needs re/scratch/task20w2/bin/rustyac_v0201.exe and rustyac_new.exe
+sh tools/proofs/dumps.sh   # was: python re/scratch/task20w2/desktop_same.py (deleted)
 python web/build.py && python web/serve.py --port 8137        # the second in another terminal
 cargo run --release -p rustyac-web --example selftest -- bmw_z4_gt3 ks_laguna_seca --steps 10000 --keys "KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"
 node web/check.mjs --url "http://127.0.0.1:8137/?go=1&autodrive=1&car=bmw_z4_gt3&track=ks_laguna_seca&nocache=1&selftest=10000&keys=KeyT@300,Shift+KeyT@600,KeyY@900,BracketRight@1200,BracketLeft@1500"

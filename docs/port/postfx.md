@@ -1,5 +1,10 @@
 # Task 23: the picture after the scene, part 1 (multisampling, FXAA, motion blur, HDR levels, a map of YEBIS)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -7,8 +12,8 @@ State after the last commit (kept up to date with every commit):
 - **The task is finished** but for the points of section 9 ("Not done"). Version 0.23.0, tag `v0.23.0`.
 - The task text is `prompts/23_msaa_fxaa_blur.md`. Its six items: multisampling, FXAA, motion blur, the HDR
   path, the start lights in the HUD pass, the YEBIS map. What is not done is in section 9.
-- To pick the work up again: section 11 has the checks. `sh re/scratch/task23/batch_msaa.sh` and
-  `sh re/scratch/task23/batch_post.sh` run the 24 new proof sequences (about 15 minutes); `batch20.sh`,
+- To pick the work up again: section 11 has the checks. `RENDER_ONLY='r23_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task23/batch_msaa.sh`, deleted) and
+  `RENDER_ONLY='r23_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task23/batch_post.sh`, deleted) run the 24 new proof sequences (about 15 minutes); `batch20.sh`,
   `batch21.sh`, `batch22.sh`, `batch22c.sh` in the same folder run the older ones with this task's oracle.
 - Task 23b (YEBIS itself) starts from `docs/map/yebis.md`, section 6 (the plan) and section 7 (what is ready).
 - On disk, git-ignored: `re/scratch/task23/` (the eight reader briefs `spec_*.md` and `yebis_*.md` with their
@@ -330,7 +335,7 @@ Run at the end, at version 0.23.0:
 - The browser preview's site builds (`python web/build.py`).
 - **The car oracle**: `chassis_compare run` (the whole Rust car against the twelve recordings of the game's own
   physics): bit-exact, 100 % in every one.
-- **The 18 sound drives of Task 19** (`sh re/scratch/task19/compare_all.sh`): in all 18 the port's FMOD call log
+- **The 18 sound drives of Task 19** (`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh`, kept in re/scratch, not needed)): in all 18 the port's FMOD call log
   with the game's answers is identical to the game's (16,704,341 calls), and all 18 level verdicts are ok (one
   drive repeated once after FMOD's own known crash).
 
@@ -548,15 +553,15 @@ cargo test --release --workspace --locked
 cargo build --release --locked
 for m in tools/*/Cargo.toml; do cargo build --release --locked --manifest-path $m; done
 cargo test --release -p rustyac-render --test golden --test golden_car --test golden_scene --test golden_leftovers --test golden_post -- --nocapture
-sh re/scratch/task23/batch_msaa.sh      # 8 multisampling sequences
-sh re/scratch/task23/batch_post.sh      # 16 sequences of the post-processing frame and the HUD pass
-sh re/scratch/task23/batch22c.sh        # the sequences of Task 22c
-sh re/scratch/task23/batch22.sh         # the 23 sequences of Task 22
-sh re/scratch/task23/batch21.sh         # the 27 sequences of Task 21
-sh re/scratch/task23/batch20.sh         # the 21 frames of Task 20
+RENDER_ONLY='r23_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch_msaa.sh (deleted)
+RENDER_ONLY='r23_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch_post.sh (deleted)
+RENDER_ONLY='r22c_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch22c.sh (deleted)
+RENDER_ONLY='r22_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch22.sh (deleted)
+RENDER_ONLY='r21_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch21.sh (deleted)
+RENDER_ONLY='r20_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task23/batch20.sh (deleted)
 sh re/scratch/task23/spk_aa.sh          # the sparkle counts, card against WARP (not while anything else uses the card)
 sh re/scratch/task23/fps.sh             # the frame rates (not while Assetto Corsa is running)
-sh re/scratch/task19/compare_all.sh     # the 18 sound drives (on a quiet machine)
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/compare_all.sh (kept in re/scratch, not needed)
 ```
 
 Do not run two `render_oracle compare` on the same scratch folder at once (a second one needs its own exe

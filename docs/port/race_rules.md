@@ -1,5 +1,10 @@
 # Race rules: sessions, start, timing, flags, penalties, results (Task 28)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State at v0.28.0:
@@ -8,9 +13,9 @@ State at v0.28.0:
   (`crates/rustyac-game/src/referee.rs`), in the browser (`?sessions=`), mirrored online, with a
   text HUD. See "Results" for what was compared with the game and how.
 - **To check the port again** (all read-only on the game):
-  - `sh re/scratch/task28/micro.sh 25`: 200 made-up drives through the game's own referee and
+  - `FRESH_PARTS=micro sh tools/proofs/fresh.sh` (was `sh re/scratch/task28/micro.sh 25`, deleted): 200 made-up drives through the game's own referee and
     the port (`car_oracle race-micro`), about half a minute each.
-  - `sh re/scratch/task28/final_a.sh; sh re/scratch/task28/final_b.sh`: the whole sessions
+  - `sh tools/proofs/physics.sh` / `FRESH_PARTS=multi sh tools/proofs/fresh.sh` (was `sh re/scratch/task28/final_a.sh; sh re/scratch/task28/final_b.sh`, deleted): the whole sessions
     (`car_oracle multi --scenario rc_*`), 10 to 40 minutes each. They need a copy of the oracle
     at `re/scratch/task28/bin/car_oracle_final.exe` (`tools/car_oracle/target/release/car_oracle.exe`).
   - `cargo test --release -p rustyac-physics --test race_rules`: the same without the game

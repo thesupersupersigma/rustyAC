@@ -1,5 +1,10 @@
 # Task 20: AC's real renderer, part 1 (shaders, materials, lighting, sky, shadows, the car)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -146,7 +151,7 @@ filtering. Weather `3_clear`, `SUN_ANGLE` -16 unless the frame says otherwise.
 
 ## 4. Results
 
-`sh re/scratch/task20/batch.sh` (git-ignored; each line is one
+`RENDER_ONLY='r20_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task20/batch.sh`, deleted) (git-ignored; each line is one
 `render_oracle compare --track … --view … [--car … --pose …] [--sun …]`). Cars: the Ferrari F2004 (animated
 suspension, no skinned mesh), the BMW M3 E30 (strut front, physics-driven arms, one skinned mesh), the BMW 1M
 (strut front, multilink rear, two skinned meshes under one node). The Porsche 911 GT3 R of Task 17 is not
@@ -332,7 +337,7 @@ for m in tools/*/Cargo.toml; do cargo build --release --locked --manifest-path $
 cargo test --release -p rustyac-render --test golden -- --nocapture
 tools/render_oracle/target/release/render_oracle.exe compare --track spa --view chase --out re/scratch/task20/out
 tools/render_oracle/target/release/render_oracle.exe compare --track magione --view eyes --car bmw_m3_e30 --pose re/scratch/task20/poses/e30_magione_turn.pose --out re/scratch/task20/out
-sh re/scratch/task20/batch.sh          # all 21 frames, about six minutes; one frame: sh re/scratch/task20/batch.sh "monza, 1M at rest"
+RENDER_ONLY='r20_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task20/batch.sh (deleted)
 ```
 
 `compare` options: `--track <folder> [--layout <name>] --view chase|cockpit|free|eyes|sun|far

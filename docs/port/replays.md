@@ -1,5 +1,10 @@
 # The pit crew, AC's replays, the ghost car, comparative telemetry (Task 28c)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State at v0.28.2:
@@ -27,20 +32,20 @@ State at v0.28.2:
     `re/scratch/task28c/bin/render_oracle_crew.exe`.
   - `tools/audio_oracle/target/release/audio_oracle.exe compare --tape oracle/audio/ks_ferrari_f2004/spa_launch.audiotape --camera chase --frames 700 --crew 20:10 --root re/scratch/task28c/audio_root --out re/scratch/task28c/audio_out`:
     the wheel guns' FMOD calls.
-  - `sh re/scratch/task28c/replay.sh a`, `... b`, `... c`: 14 whole sessions with the game's replay
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/replay.sh a`, deleted), `... b`, `... c`: 14 whole sessions with the game's replay
     code recording, saving, loading and playing beside the port's (about 25 minutes). Needs a copy of
     the car oracle at `re/scratch/task28c/bin/car_oracle_replay.exe`.
-  - `sh re/scratch/task28c/files.sh`: every file of `Documents\Assetto Corsa\replay` loaded by the
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/files.sh`, deleted): every file of `Documents\Assetto Corsa\replay` loaded by the
     game's loader and the port's, and played (read only; `bin/car_oracle_file.exe`).
-  - `sh re/scratch/task28c/render_replay.sh`: frames and sound of a replay's playback in the game's
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/render_replay.sh`, deleted): frames and sound of a replay's playback in the game's
     renderer / sound code and the port's.
-  - `sh re/scratch/task28c/determinism.sh`: rustyac.exe with 0, 1 and 8 workers, and against the
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/determinism.sh`, deleted): rustyac.exe with 0, 1 and 8 workers, and against the
     v0.28.1 exe (`re/scratch/task28c/tgt_v0281/`, built from the tag).
-  - `sh re/scratch/task28c/ghost.sh`: six sessions with the game's ghost recorder beside the
-    port's (`bin/car_oracle_ghost.exe`); `sh re/scratch/task28c/render_ghost.sh`: the ghost's
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/ghost.sh`, deleted): six sessions with the game's ghost recorder beside the
+    port's (`bin/car_oracle_ghost.exe`); `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/render_ghost.sh`, deleted): the ghost's
     picture in the game's renderer and the port's (it needs the `.ghost` file the first leaves in
     `re/scratch/task28c/root_g/`).
-  - `sh re/scratch/task28c/telemetry.sh`: six sessions with the game's telemetry recorder beside
+  - `sh tools/proofs/replays.sh` (was `sh re/scratch/task28c/telemetry.sh`, deleted): six sessions with the game's telemetry recorder beside
     the port's (`bin/car_oracle_tel.exe`).
   - `python re/scratch/task28c/tables.py` prints the tables below from the logs.
   - `cargo test --release -p rustyac-physics --test replays`: made-up drives recorded, saved,

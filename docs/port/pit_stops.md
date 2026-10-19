@@ -1,5 +1,10 @@
 # Pit stops: AC's PitStop, the pit menu, the mandatory pit window (Task 28b)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State at v0.28.1:
@@ -12,12 +17,12 @@ State at v0.28.1:
   and the pit box marker were already there (Task 22c) and now follow the real stop. See
   "Not done" for the whole list and where a follow-up starts.
 - **To check the port again** (all read-only on the game):
-  - `sh re/scratch/task28b/final.sh a`, `... b`, `... c` (three lanes side by side, about
+  - `sh tools/proofs/physics.sh` / `FRESH_PARTS=multi sh tools/proofs/fresh.sh` (was `sh re/scratch/task28b/final.sh a`, deleted), `... b`, `... c` (three lanes side by side, about
     25 minutes): every proof of section 3 below. They need a copy of the oracle at
     `re/scratch/task28b/bin/car_oracle_final.exe`
     (`tools/car_oracle/target/release/car_oracle.exe`). `python re/scratch/task28b/tables.py`
     prints the result table from their logs.
-  - `sh re/scratch/task28b/recheck.sh a|b|c`: the port replayed over the recordings of
+  - `sh tools/proofs/physics.sh` / `FRESH_PARTS=multi sh tools/proofs/fresh.sh` (was `sh re/scratch/task28b/recheck.sh a|b|c`, deleted): the port replayed over the recordings of
     Task 27 (AI) and Task 28 (whole sessions); no acs.exe needed.
   - `cargo test --release -p rustyac-physics --test pit_stops`: two approved excerpts and the
     menu's rules, without the game.
@@ -350,7 +355,7 @@ game's.
 ### 6. Sessions without a pit stop: v0.28.0 against this version
 
 The executable of v0.28.0 (built from the tag in a throw-away worktree) against this one
-(`python re/scratch/task28b/same.py`, `sh re/scratch/task28b/nopit.sh`):
+(`sh tools/proofs/dumps.sh` (was `python re/scratch/task28b/same.py`, deleted), `sh tools/proofs/dumps.sh` (was `sh re/scratch/task28b/nopit.sh`, deleted)):
 
 | Check | Result |
 |---|---|

@@ -1,5 +1,10 @@
 # AI drivers (Task 27)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State: **done**, v0.27.0. Every proof of section 5 is identical; nothing is half-wired. What is left is listed under "Not done".
@@ -16,7 +21,7 @@ State: **done**, v0.27.0. Every proof of section 5 is identical; nothing is half
   `conditions.rs` (race.ini's cars), `desktop.rs` (Ctrl+C).
 - The oracle: `tools/car_oracle/src/game/multi.rs` (`Drive::Ai`, `Drive::Drag`, the `ai_*`
   scenarios), `car_oracle multi --ai-line`.
-- Every proof again: `sh re/scratch/task27/final.sh` (about 12 minutes; delete
+- Every proof again: `sh tools/proofs/physics.sh` (was `sh re/scratch/task27/final.sh`, deleted) (about 12 minutes; delete
   `re/scratch/task27/final/` first, a finished label is skipped), then
   `python re/scratch/task27/fill_report.py "<state>"` rebuilds this file from
   `re/scratch/task27/report_template.md` and the logs. One recording against the port as it

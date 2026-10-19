@@ -1,12 +1,17 @@
 # Assetto Corsa's launcher
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 - Task 35 is done and released as v0.35.0: the launcher (`crates/rustyac-launcher`), its proofs
   (`tools/launcher_oracle`, `re/scratch/task35/cmp.sh`), all four sessions and Options driven
   by scripts, the end checks (tables below), this report. Next is Task 36 (see Not done).
-- To redo a proof: `sh re/scratch/task35/cmp.sh req/<name>.txt <name>` then
-  `python re/scratch/task35/tdiff.py out/<name>_o.txt out/<name>_r.txt` (in `re/scratch/task35`).
+- To redo a proof: `sh tools/proofs/launcher.sh` (was `sh re/scratch/task35/cmp.sh req/<name>.txt <name>`, deleted) then
+  `sh tools/proofs/launcher.sh` (was `python re/scratch/task35/tdiff.py out/<name>_o.txt out/<name>_r.txt`, deleted) (in `re/scratch/task35`).
 - To redo a scripted run: `re/scratch/task35/sessions.sh`, or the command under
   [How it was driven](#how-it-was-driven).
 

@@ -1,5 +1,10 @@
 # Task 16, Step 0: why does rustyAC feel grippier than my Assetto Corsa?
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 Desk work only: nobody drove. Everything here is from files, the disassembly, the oracle and runs
 rustyAC can do alone. The briefs behind it are in the git-ignored `re/scratch/task16/`
 (`csp_survey.md`, `oracle_vs_session.md`).

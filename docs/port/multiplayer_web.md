@@ -1,5 +1,10 @@
 # Task 26 (M2): multiplayer in the browser
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State at `v0.26.0`: **M2 is done and proven** as far as the tables below say. Nothing is
@@ -18,8 +23,8 @@ half-wired. What is left is under [Not done](#not-done).
     section), `web/servers.json`.
   - `server/docker-compose.yml`: a gateway per server, every host port a variable.
 - **Proofs to re-run** (scratch is git-ignored; the tapes are Task 25's):
-  - `sh re/scratch/task25/batch.sh`: Task 25's oracle, 20 runs + 3 faults (15 minutes).
-  - `sh re/scratch/task26/gold.sh` then `python re/scratch/task26/proof.py`: every tape
+  - `sh tools/proofs/net.sh` (was `sh re/scratch/task25/batch.sh`, deleted): Task 25's oracle, 20 runs + 3 faults (15 minutes).
+  - `sh tools/proofs/net.sh` (was `sh re/scratch/task26/gold.sh`, deleted) then `sh tools/proofs/net.sh` (was `python re/scratch/task26/proof.py`, deleted): every tape
     four ways (desktop, the browser's way, through a real gateway, wasm under wasmtime),
     45 minutes. Needs `re/scratch/task26/bin/net_golden.exe` and `.wasm` (built from
     `crates/rustyac-net/examples/net_golden.rs`) and wasmtime in `re/scratch/task20w/tools`.

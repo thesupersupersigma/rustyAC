@@ -1,5 +1,10 @@
 # Task 24b: every car drawn and heard, race.ini's cars, the focused car
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 **Task 24b is finished at v0.24.1** but for the points of section 10 ("Not done"). Nothing is half-wired.
@@ -298,7 +303,7 @@ Its recording replays to the same hash over all six cars with 0 and with 8 worke
 
 ## 7. Nothing old broke
 
-**One car, and the several-car physics, against v0.24.0** (`python re/scratch/task24b/one_car_same.py`: the
+**One car, and the several-car physics, against v0.24.0** (`sh tools/proofs/dumps.sh` (was `python re/scratch/task24b/one_car_same.py`, deleted): the
 program built from the tag `v0.24.0` against the new one):
 
 | Check | What | Old (v0.24.0) against new |

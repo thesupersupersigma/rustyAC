@@ -1,5 +1,10 @@
 # AC's menus (Task 30)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (v0.30.0):
@@ -25,11 +30,11 @@ begins in the ESC menu: see [setup.md](setup.md).)
   `SimAction`s). The oracle: `tools/render_oracle/src/gui_seq_menu.rs` (scripts and what both
   sides share), `gui_ac_menu.rs` / `gui_ac_pit.rs` / `gui_ac_race.rs` / `gui_ac_esc.rs` /
   `gui_ac_replay.rs` (the game's side), `gui_port_menu.rs` / `gui_port_pit.rs` (the port's).
-- **Proof batch:** `sh re/scratch/task30/gui_all.sh` (every GUI sequence of this task; result
+- **Proof batch:** `sh tools/proofs/gui.sh` (was `sh re/scratch/task30/gui_all.sh`, deleted) (every GUI sequence of this task; result
   lines in `re/scratch/task30/gui_all.txt`; about an hour). One sequence:
   `tools/render_oracle/target/release/render_oracle.exe gui --gui <name> --root re/scratch/task30/root --out re/scratch/task30/out`.
-  Task 29's 14 sequences: `sh re/scratch/task29/gui_all.sh`. Never two at once. The checks at
-  the end of the task: `sh re/scratch/task30/end.sh` (its dump step needs v0.29.0 built from
+  Task 29's 14 sequences: `sh tools/proofs/gui.sh` (was `sh re/scratch/task29/gui_all.sh`, deleted). Never two at once. The checks at
+  the end of the task: `sh tools/proofs/gui.sh` (was `sh re/scratch/task30/end.sh`, deleted) (its dump step needs v0.29.0 built from
   its tag into `re/scratch/task30/tgt_v029`, which was deleted at the end: the disk was full).
 - **How a new menu is added to the oracle:** an op `Hud("menu.<name>", number, text)` handled
   on both sides (`gui_ac_menu::call`, `gui_port_menu::call`); what the game's code would need

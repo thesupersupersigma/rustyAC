@@ -1,5 +1,10 @@
 # Task 22: AC's real renderer, part 3 (the rest of the scene)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -7,8 +12,8 @@ State after the last commit (kept up to date with every commit):
 - **The task is finished** but for the points of section 8 ("Not done") and the open questions of section 9. Version 0.22.0, tag `v0.22.0`.
 - The task text is `prompts/22_renderer_scene.md`. The next task is Task 23 (post-processing, MSAA / FXAA,
   HDR, motion blur); its checklist is section 7. What this task did not get to is section 8.
-- To pick the work up again: section 10 has the checks. `sh re/scratch/task22/batch.sh` runs the 23 new proof
-  sequences (about 25 minutes), `sh re/scratch/task21/batch.sh` the 27 of Task 21, `sh re/scratch/task20/batch.sh`
+- To pick the work up again: section 10 has the checks. `RENDER_ONLY='r22_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task22/batch.sh`, deleted) runs the 23 new proof
+  sequences (about 25 minutes), `RENDER_ONLY='r21_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task21/batch.sh`, deleted) the 27 of Task 21, `RENDER_ONLY='r20_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task20/batch.sh`, deleted)
   the 21 frames of Task 20.
 - On disk, git-ignored: `re/scratch/task22/` (the nine reader briefs `spec_*.md` with their disassembly
   listings, the patch scripts `p_*.py`, `batch.sh` and its results, `bench.sh`, the made-up test cars in
@@ -236,7 +241,7 @@ both sides.
 
 The picture's car now runs the one backfire test and the sound takes its trigger from it
 (`CarSound::picture_backfire`); without a picture (the audio oracle, a WAV written headless) the sound tests
-by itself, as before. `sh re/scratch/task19/compare_all.sh`, run again:
+by itself, as before. `sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh`, kept in re/scratch, not needed), run again:
 
 | Car | Track | Drive | Camera | Frames | FMOD calls | Call log, port with the game's answers | Game twice | Port free | Level: game against itself | Level: game against port | |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -465,10 +470,10 @@ cargo test --release --workspace --locked
 cargo build --release --locked
 for m in tools/*/Cargo.toml; do cargo build --release --locked --manifest-path $m; done
 cargo test --release -p rustyac-render --test golden --test golden_car --test golden_scene -- --nocapture
-sh re/scratch/task22/batch.sh          # the 23 new sequences, about 25 minutes; one: sh re/scratch/task22/batch.sh "clouds"
-sh re/scratch/task21/batch.sh          # the 27 sequences of Task 21
-sh re/scratch/task20/batch.sh          # the 21 frames of Task 20
-sh re/scratch/task19/compare_all.sh    # the 18 sound drives (on a quiet machine)
+RENDER_ONLY='r22_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task22/batch.sh (deleted)
+RENDER_ONLY='r21_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task21/batch.sh (deleted)
+RENDER_ONLY='r20_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task20/batch.sh (deleted)
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/compare_all.sh (kept in re/scratch, not needed)
 sh re/scratch/task22/bench.sh          # the performance table (on a quiet machine)
 ```
 

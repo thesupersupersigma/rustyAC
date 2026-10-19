@@ -1,5 +1,10 @@
 # Task 19: sound
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -219,7 +224,7 @@ audio_oracle run --side port    rustyac-audio on the same tape
 
 ### 5.1 The FMOD call log, drive by drive
 
-`sh re/scratch/task19/compare_all.sh` (each drive: the game's side twice, the port free, the port with the
+`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh`, kept in re/scratch, not needed) (each drive: the game's side twice, the port free, the port with the
 game's answers; about a quarter of an hour).
 
 - **Calls**: FMOD calls the game's sound code made in the drive.
@@ -303,7 +308,7 @@ mix is as close to the game's as the game's is to itself.
 
 ### 5.3 End to end: `rustyac.exe` against the game
 
-`sh re/scratch/task19/e2e.sh <scenario> <camera> [car ...]`. The game's side is as above (the game's sound
+`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/e2e.sh <scenario> <camera> [car ...]`, kept in re/scratch, not needed). The game's side is as above (the game's sound
 code on the game's physics). The other side is the real `rustyac.exe`: it replays the same drive from its
 input file (`chassis_compare game-replay` writes it from the recording) with its own physics, takes the
 sound's inputs from its own car after every step, and writes its call log (`--audio-log`, with the oracle's
@@ -510,8 +515,8 @@ cargo build --release --workspace && cargo test --release -p rustyac-audio      
 cargo clippy --workspace -- -D warnings
 cd tools/car_oracle && cargo build --release && cd ../audio_oracle && cargo build --release
 sh re/scratch/task19/record_tapes.sh                                           the 16 tapes (10 min)
-sh re/scratch/task19/compare_all.sh                                            section 5.1 / 5.2 (15 min)
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/compare_all.sh                                            section 5.1 / 5.2 (15 min) (kept in re/scratch, not needed)
 tools/audio_oracle/target/release/audio_oracle.exe dsp --count 2000             section 5.4
 tools/audio_oracle/target/release/audio_oracle.exe survey                       section 6
-sh re/scratch/task19/e2e.sh spa_launch cockpit                                  section 5.3 (needs oracle/audio_e2e, see the script)
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/e2e.sh spa_launch cockpit                                  section 5.3 (needs oracle/audio_e2e, see the script) (kept in re/scratch, not needed)
 ```

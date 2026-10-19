@@ -1,5 +1,10 @@
 # Task 21: AC's real renderer, part 2 (the whole car)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -8,8 +13,8 @@ State after the last commit (kept up to date with every commit):
   section 8. Version 0.21.0, tag `v0.21.0`.
 - The task text is `prompts/21_renderer_car.md`. The next task is Task 22 (the picture after the scene:
   multisampling, post-processing, the game's HUD); its checklist is section 7.
-- To pick the work up again: section 9 has the checks; `sh re/scratch/task21/batch.sh` runs the 27 proof
-  sequences (about 25 minutes), `sh re/scratch/task20/batch.sh` the 21 frames of Task 20.
+- To pick the work up again: section 9 has the checks; `RENDER_ONLY='r21_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task21/batch.sh`, deleted) runs the 27 proof
+  sequences (about 25 minutes), `RENDER_ONLY='r20_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task20/batch.sh`, deleted) the 21 frames of Task 20.
 - On disk, git-ignored: `re/scratch/task21/` (the reader agents' specs `spec_*.md` with their disassembly
   listings, the patch scripts `p_*.py`, the batch script and its results, oracle output in `out/`), the
   recorded car states in `oracle/audio/` and `oracle/render_tapes/` (written by
@@ -354,8 +359,8 @@ cargo test --release --workspace --locked
 cargo build --release --locked
 for m in tools/*/Cargo.toml; do cargo build --release --locked --manifest-path $m; done
 cargo test --release -p rustyac-render --test golden --test golden_car -- --nocapture
-sh re/scratch/task21/batch.sh          # the 27 sequences, about 25 minutes; one: sh re/scratch/task21/batch.sh "launch"
-sh re/scratch/task20/batch.sh          # the 21 frames of Task 20
+RENDER_ONLY='r21_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task21/batch.sh (deleted)
+RENDER_ONLY='r20_.*' sh tools/proofs/render.sh   # was: sh re/scratch/task20/batch.sh (deleted)
 ```
 
 Do not run two `render_oracle compare` at once: they share the scratch game folder and its `video.ini`.

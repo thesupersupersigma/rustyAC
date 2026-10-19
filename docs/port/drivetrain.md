@@ -1,5 +1,10 @@
 # Brakes, engine and 2WD drivetrain, with `DynamicController` (Task 09)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 (Kept up to date while the task ran, so that a cut-off would lose nothing. Newest state first.)

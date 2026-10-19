@@ -1,5 +1,10 @@
 # AC's built-in apps, part 1: the apps players use (Task 32)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (update after every commit):
@@ -14,8 +19,8 @@ State after the last commit (update after every commit):
   settings reach the sound, the physics thread and the cockpit camera.
 - **Oracle:** `tools/render_oracle/src/gui_seq_apps.rs` (scripts and the files compared),
   `gui_ac_apps.rs` (the game's apps on a hand-laid `Sim`), `gui_port_apps.rs`. One sequence:
-  `sh re/scratch/task32/cmp.sh app_volumes` (`@short` for a shorter one). Everything:
-  `sh re/scratch/task32/final_b.sh` (about an hour; results in `re/scratch/task32/end/`).
+  `sh tools/proofs/gui.sh` (was `sh re/scratch/task32/cmp.sh app_volumes`, deleted) (`@short` for a shorter one). Everything:
+  `sh tools/proofs/gui.sh` (was `sh re/scratch/task32/final_b.sh`, deleted) (about an hour; results in `re/scratch/task32/end/`).
   Tapes (git-ignored, under `oracle/t32/`): `race` (`CAR_ORACLE_PERF_METER=1
   tools/car_oracle/target/release/car_oracle.exe multi --scenario rc_race --track magione
   --steps 112000 --threads 0 --audio-tape --out oracle/t32/race --root re/scratch/task32/croot`,

@@ -1,5 +1,10 @@
 # Task 24: several cars on track
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 **Task 24 is finished at v0.24.0** (steps 1 to 4, 6 and 7; step 5 was left for a Task 24b, see "Not done"). Nothing is half-way.
@@ -201,7 +206,7 @@ What happens in them:
   renderer's and the sound's tests, the game's replay tests). The crates of the renderer, the sound,
   the browser preview, the maths and the content were not touched, so their oracle batches were not
   run again. The one-car path of `GameSim` does not use the engine; held against `rustyac.exe` built
-  from v0.23.0 (`python re/scratch/task24/one_car_same.py`):
+  from v0.23.0 (`sh tools/proofs/dumps.sh` (was `python re/scratch/task24/one_car_same.py`, deleted)):
 
   | Check | What | Old (v0.23.0) against new |
   |---|---|---|

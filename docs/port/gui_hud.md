@@ -1,5 +1,10 @@
 # AC's widget library, its fonts and the HUD (Task 29)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (update after every commit):
@@ -13,13 +18,13 @@ State after the last commit (update after every commit):
   `Game::renderHUD`; the window sends mouse, keys and characters; Ctrl+H / U / L / J / Q and
   F10; `--debug-hud`, `--no-gui`, `--cfg-dir`, `--gui-do`. Own files go to `cfg` beside the
   exe (`acos.ini`, `gameplay.ini`).
-- **Proof batch:** `sh re/scratch/task29/gui_all.sh` (all 14 GUI sequences through the oracle,
+- **Proof batch:** `sh tools/proofs/gui.sh` (was `sh re/scratch/task29/gui_all.sh`, deleted) (all 14 GUI sequences through the oracle,
   about 3 minutes; result lines in `re/scratch/task29/gui_all.txt`). One sequence:
   `tools/render_oracle/target/release/render_oracle.exe gui --gui <name> --root re/scratch/task29/root --out re/scratch/task29/out`
   (names: `text base forms forms_layout forms_overlap widgets_a widgets_b widgets_c hud_messages
   hud_flags hud_flags_triple hud_cars hud_cars_simple hud_cars_noflag`). The text backend
   without DirectWrite: `render_oracle.exe text-fallback --root … --out …`. Everything at the
-  end of the task: `sh re/scratch/task29/end.sh` (results in `re/scratch/task29/end/`).
+  end of the task: `sh tools/proofs/gui.sh` (was `sh re/scratch/task29/end.sh`, deleted) (results in `re/scratch/task29/end/`).
 - **Pictures:** `rustyac.exe --no-race-ini --track spa --autodrive --screenshot x.png --at 3
   --gui-do "message:ABS|Set on level : 2/3"` (more in the section "Pictures").
 - **Next (nothing is half done):** see "Not done": the apps themselves (forms), the browser's
@@ -263,7 +268,7 @@ scratch cfg folder (the Documents files are only read).
 
 ### Unchanged, and the usual checks
 
-All from `sh re/scratch/task29/end.sh` on the final code (logs in `re/scratch/task29/end/`).
+All from `sh tools/proofs/gui.sh` (was `sh re/scratch/task29/end.sh`, deleted) on the final code (logs in `re/scratch/task29/end/`).
 
 | check | result |
 |---|---|

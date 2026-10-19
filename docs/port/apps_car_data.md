@@ -1,5 +1,10 @@
 # Task 33b: the car-data apps and the dashboard panels
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 - Released as **v0.33.1** (tag `v0.33.1`, not pushed).
@@ -11,12 +16,12 @@
   (table 3). TyreTesterForm, ACSuspension and FormWings are not started (see "Not done").
 - Items 4, 5, 6: not started (the time budget ran out; see "Not done"). Next: TyreTesterForm, then
   item 4's console variables, item 5's GPU profiler, item 6's PerformanceMeter readers.
-- End checks: **all pass** (table 4). `sh re/scratch/task33b/end_all.sh` builds v0.33.0 into `tgt_old`
+- End checks: **all pass** (table 4). the end checks of `docs/release.md` (was `sh re/scratch/task33b/end_all.sh`, deleted) builds v0.33.0 into `tgt_old`
   from a worktree, then runs `end_a.sh` (clippy four ways, `--locked` builds, tests, tools, physics dumps,
   multiplayer tapes) and `end_b.sh` (every GUI sequence of Tasks 29-33b). Results are in
   `re/scratch/task33b/end/`. `tgt_old`, `tgt` and the state dumps were deleted afterwards.
-- GUI proofs: `sh re/scratch/task33b/cmp.sh app_telemetry` (root `re/scratch/task33b/root`).
-- Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh re/scratch/task33b/scene.sh [filter]`,
+- GUI proofs: `sh tools/proofs/gui.sh` (was `sh re/scratch/task33b/cmp.sh app_telemetry`, deleted) (root `re/scratch/task33b/root`).
+- Scratch: `re/scratch/task33b/` (git-ignored). Scene proofs: `sh tools/proofs/gui.sh` (was `sh re/scratch/task33b/scene.sh [filter]`, deleted),
   results in `re/scratch/task33b/scene_result.txt`.
 
 ## In plain English

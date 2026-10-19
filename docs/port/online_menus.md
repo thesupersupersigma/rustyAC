@@ -1,5 +1,10 @@
 # Online menus, chat, voting, fixed setup, pit strategy (Task 34)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (update after every commit):
@@ -72,7 +77,7 @@ a local copy of acServer with four rustyAC clients.
 
 ### Render oracle (game vs port, every frame: command log, WARP pixels, control state and events)
 
-`sh re/scratch/task34/end_b.sh` on the final code (results in `re/scratch/task34/end/`), WARP:
+`sh tools/proofs/gui.sh` (was `sh re/scratch/task34/end_b.sh`, deleted) on the final code (results in `re/scratch/task34/end/`), WARP:
 
 | Sequence | Frames | Command log | Pixels | State and events | Files |
 |---|---|---|---|---|---|
@@ -102,7 +107,7 @@ Older sequences on the same oracle build (nothing changed):
 | `car_oracle mouse-micro` (9 `controls.ini` variants, `setMouseSteering`, `getMouseSteering` on made-up cursors and windows), seeds 34 and 7 → `mouse_steering_check` | IDENTICAL (20409 lines each) |
 | `car_oracle start-camera-micro` (start camera and free camera) seeds 7 and 34 → `start_camera_check` | both IDENTICAL |
 
-The old mouse pit menu: `sh re/scratch/task34/mousepit.sh`: `car_oracle multi --scenario
+The old mouse pit menu: `FRESH_PARTS=multi sh tools/proofs/fresh.sh` (was `sh re/scratch/task34/mousepit.sh`, deleted): `car_oracle multi --scenario
 pit_mouse` drives the game's own `PitStop` with `useMousePitstop` on and clicks its own button
 handlers, fuel gauge and confirm at made-up moments; workers 0, 1 and 8; Magione.
 
@@ -133,7 +138,7 @@ clients (a, c: F2004; b, d: Z4 GT3), each with scripted chat and votes.
 
 ### Unchanged
 
-`sh re/scratch/task34/end_a.sh` (the machine went down once mid-run with a CPU machine-check
+the end checks of `docs/release.md` (was `sh re/scratch/task34/end_a.sh`, deleted) (the machine went down once mid-run with a CPU machine-check
 error; the multiplayer tapes were rerun on their own with `end_a2.sh`):
 
 | Check | Result |

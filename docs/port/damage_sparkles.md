@@ -1,8 +1,13 @@
 # Task 22b: suspension damage, popped tyres, white sparkles, max graphics, the audio oracle's WAV rule
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
-**Task 22b is finished** and tagged `v0.22.1` (not pushed). Nothing is in work. To pick any part up again: the exact commands are in section 6, the scratch files in `re/scratch/task22b/` (reader and reviewer reports `reader_r0..2.md`, `review_r0..2.md`; result files named in each section), the recordings in `oracle/t22b_*` (git-ignored, about 1.3 GB: delete them when they are no longer wanted; `sh re/scratch/task22b/crash_all.sh` after re-recording brings every table of section 1 back). Left for Task 23: multisampling (which should also end the dotted trees of section 3), FXAA, post-processing, motion blur.
+**Task 22b is finished** and tagged `v0.22.1` (not pushed). Nothing is in work. To pick any part up again: the exact commands are in section 6, the scratch files in `re/scratch/task22b/` (reader and reviewer reports `reader_r0..2.md`, `review_r0..2.md`; result files named in each section), the recordings in `oracle/t22b_*` (git-ignored, about 1.3 GB: delete them when they are no longer wanted; `FRESH_PARTS=crash sh tools/proofs/fresh.sh` (was `sh re/scratch/task22b/crash_all.sh`, deleted) after re-recording brings every table of section 1 back). Left for Task 23: multisampling (which should also end the dotted trees of section 3), FXAA, post-processing, motion blur.
 
 ## Plain-English summary
 
@@ -335,7 +340,7 @@ What each setting costs (Spa, 1280 x 720, `sh re/scratch/task22b/fps_breakdown.s
   `blocks: 1544 / 1536 / 1537 written (game, game again, port), of them 16 / 8 / 9 silent
   start-up blocks; from the first audible block: 1528 / 1528 / 1528`.
 
-All 18 drives, run once more (`sh re/scratch/task19/compare_all.sh re/scratch/task22b/audio_rows.txt`):
+All 18 drives, run once more (`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh re/scratch/task22b/audio_rows.txt`, kept in re/scratch, not needed)):
 **18 of 18 `ok`**, every call log identical to the game's. In this run a drive started with 7 to
 55 silent blocks, and the three runs of one drive differed by up to 43 of them; from the first
 audible block on, the three were equally long in all 18.
@@ -393,7 +398,7 @@ tools/car_oracle/target/release/car_oracle.exe run --track spa --collide --scena
 tools/chassis_compare/target/release/chassis_compare.exe run --dir oracle/t22b_f2004
 tools/chassis_compare/target/release/chassis_compare.exe faults16 spa_crash --dir oracle/t22b_f2004
 tools/chassis_compare/target/release/chassis_compare.exe game-replay spa_crash --dir oracle/t22b_f2004
-sh re/scratch/task22b/crash_all.sh          # all five cars: compare, faults, replay, toe
+FRESH_PARTS=crash sh tools/proofs/fresh.sh   # was: sh re/scratch/task22b/crash_all.sh (deleted)
 python re/scratch/task22b/toe.py oracle/t22b_f2004/spa_crash.carrec
 tools/chassis_compare/target/release/chassis_compare.exe excerpt22b
 cargo test --release -p rustyac-physics --test chassis_golden
@@ -409,7 +414,7 @@ target\release\rustyac.exe --track monza --no-race-ini --autodrive --at 12 --no-
 RENDER_ORACLE_HARDWARE=1 tools/render_oracle/target/release/render_oracle.exe compare --track spa --view chase --car ks_ferrari_f2004 --pose re/scratch/task20/poses/f2004_spa_rest.pose --out re/scratch/task22b/hw
 
 # the 18 sound drives (on a quiet PC)
-sh re/scratch/task19/compare_all.sh re/scratch/task22b/audio_rows.txt
+sh tools/proofs/sound.sh   # was: sh re/scratch/task19/compare_all.sh re/scratch/task22b/audio_rows.txt (kept in re/scratch, not needed)
 ```
 
 ## 7. Everything that worked before still works
@@ -419,10 +424,10 @@ Re-run at the end, with the final code:
 | Proof | Result |
 |---|---|
 | `cargo test --release --workspace --locked` (golden files of the tyre, ODE, chassis, track, contacts, hybrid and suspension work, the game's replays, the renderer's three golden tests, the browser crate) | 207 tests passed, 0 failed |
-| Render frames, Task 20 (`sh re/scratch/task20/batch.sh`, the game's renderer against the port on WARP) | 21 of 21: command log identical, pixels identical |
-| Car render sequences, Task 21 (`sh re/scratch/task21/batch.sh`) | 27 of 27 identical |
-| Scene render sequences, Task 22 (`sh re/scratch/task22/batch.sh`) | 23 of 23 identical (row for row what Task 22 had) |
-| Sound, all 18 drives (`sh re/scratch/task19/compare_all.sh`) | 18 of 18 `ok`, every call log identical |
+| Render frames, Task 20 (`RENDER_ONLY='r20_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task20/batch.sh`, deleted), the game's renderer against the port on WARP) | 21 of 21: command log identical, pixels identical |
+| Car render sequences, Task 21 (`RENDER_ONLY='r21_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task21/batch.sh`, deleted)) | 27 of 27 identical |
+| Scene render sequences, Task 22 (`RENDER_ONLY='r22_.*' sh tools/proofs/render.sh` (was `sh re/scratch/task22/batch.sh`, deleted)) | 23 of 23 identical (row for row what Task 22 had) |
+| Sound, all 18 drives (`sh tools/proofs/sound.sh` (was `sh re/scratch/task19/compare_all.sh`, kept in re/scratch, not needed)) | 18 of 18 `ok`, every call log identical |
 | Crash recordings of this task (five cars: free run, replay in `rustyac.exe`) | 100 % of 12001 steps each |
 | The older contact scenarios, recorded again (`spa_wall_low`, `_high`, `_slide`, `_gravel`) | the zones and bends Task 13 and 17 reported |
 | `cargo clippy --workspace --locked -- -D warnings`, and the same for `wasm32-unknown-unknown` (`rustyac-web`) and `wasm32-wasip1` (math, ODE, content, physics, game) | clean |

@@ -1,5 +1,10 @@
 # AC's launcher in the browser (Tasks 37, 37b and 37c)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 Task 37c is done (v0.37.2): AI opponents in the browser (Quick Race, Race Weekend, any race.ini

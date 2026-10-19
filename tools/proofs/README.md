@@ -25,7 +25,7 @@ process, and two at once make the render oracle's game side flaky.
 | browser | `browser.sh` | every drive of `oracle/game` desktop against wasm32-wasip1 (`replay_hash`); `BROWSER_DIGEST=1` adds `math_proof digest` | `oracle/game`, wasmtime |
 | ai_page | `ai_page.sh` | Task 37c's Quick Race: desktop replay, native `race_proof`, the page in headless Chrome | `re/gold/ai_page/`, `re/gold/web/pack/` |
 | shaders | `shaders.sh` | `dxbc_reflect`, `shader_table`, `shader_proof` on SwiftShader and WARP against Task 38b's tables | `re/gold/shaders/` |
-| launcher | `launcher.sh` | the launcher's request lists, the game's own handlers (`tools/launcher_oracle`) against the port | `re/gold/launcher/` |
+| launcher | `launcher.sh` | the 12 request lists of `re/gold/launcher` (8 recorded from the click scripts of `launcher/` by `launcher_record.sh`, 4 written by hand), the game's own handlers (`tools/launcher_oracle`) against the port, answers and the player folder left behind | `re/gold/launcher/`, the .NET SDK |
 | dumps | `dumps.sh` | every drive's state dump, the last release's rustyac.exe against this one | `oracle/game` |
 
 The lists say for each line where it came from; where a lost script's exact values (a tape frame,

@@ -1,5 +1,10 @@
 # AC's apps, part 2: telemetry, car data, stats, the console, translations (Task 33)
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (update after every commit):
@@ -14,8 +19,8 @@ State after the last commit (update after every commit):
   display items (see "Not done"). Their reader briefs are in `re/scratch/task33/*.md`
   (git-ignored).
 - **Version:** v0.33.0, all end checks passed (see "Results").
-- **End checks:** `sh re/scratch/task33/end_b.sh` (every oracle sequence of Tasks 29 to 33,
-  results in `re/scratch/task33/end/`), `sh re/scratch/task33/end_a.sh` (clippy, `--locked`
+- **End checks:** `sh tools/proofs/gui.sh` (was `sh re/scratch/task33/end_b.sh`, deleted) (every oracle sequence of Tasks 29 to 33,
+  results in `re/scratch/task33/end/`), the end checks of `docs/release.md` (was `sh re/scratch/task33/end_a.sh`, deleted) (clippy, `--locked`
   builds and tests, tools, physics dumps against v0.32.0 in `re/scratch/task33/tgt_old`, the
   multiplayer tapes).
 

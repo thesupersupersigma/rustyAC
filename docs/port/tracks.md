@@ -1,5 +1,10 @@
 # Task 18: every track and layout
 
+> **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
+> most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
+> reruns from `tools/proofs` (`sh tools/proofs/run_all.sh`); `docs/port/proofs.md` lists each path
+> and what replaces it.
+
 ## Resume here
 
 State after the last commit (kept up to date with every commit):
@@ -898,7 +903,7 @@ target\release\rustyac.exe --list-tracks
 
 cd tools\car_oracle && cargo build --release && cd ..\..
 cd tools\chassis_compare && cargo build --release && cd ..\..
-sh re/scratch/task18/rays_all.sh 200000                 (every track; then python re/scratch/task18/rays_table.py)
+FRESH_PARTS=rays sh tools/proofs/fresh.sh   # was: sh re/scratch/task18/rays_all.sh 200000                 (every track; then python re/scratch/task18/rays_table.py) (kept in re/scratch, not needed)
 tools\car_oracle\target\release\car_oracle.exe rays --track magione --count 300000 --space0 5
 tools\car_oracle\target\release\car_oracle.exe rays --track magione --count 300000 --late 40
 
