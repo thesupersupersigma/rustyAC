@@ -69,8 +69,11 @@ everything that links the car physics is GPL.
   where the system has no Segoe UI; Selawik is not changed, so its name is kept.
 - The Rust crates from crates.io (`windows`, `png`, `webview2-com`, and for the browser preview `wgpu`,
   `wasm-bindgen`, `web-sys` and what they depend on; `wgpu` and its shader validator `naga` also
-  for the renderer's wgpu backend on the desktop) are downloaded by Cargo at build time and
-  keep their own licenses. They are not in this repository. The browser preview's build also
+  for the renderer's wgpu backend on the desktop, with `ash` and `spirv` for its Vulkan path) are
+  downloaded by Cargo at build time and keep their own licenses. They are not in this repository.
+  The shader proof's second software rasterizer, Google's SwiftShader (Apache-2.0), is the copy
+  that comes with Chrome, copied into an ignored scratch folder on the machine that runs the
+  proof; it is not in this repository and not in any release. The browser preview's build also
   downloads the programs `wasm-bindgen` and binaryen's `wasm-opt` (`web/build.py`).
 
 ## FMOD (additional permission)

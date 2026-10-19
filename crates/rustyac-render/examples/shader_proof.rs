@@ -9,9 +9,19 @@
 //! The inputs are made up but fixed (a seed from the shader's name): every matrix is the
 //! identity, so the triangle covers the target, every other constant is in 0..1, the
 //! textures are noise with all their mip levels, depth maps are noise in 0..1. Nothing
-//! translated is written anywhere.
+//! translated is written anywhere. Multisampled inputs (4 samples) are drawn by a small
+//! pass of exact numbers on both sides; a pixel shader that writes SV_Depth gets a depth
+//! target as well, read back and compared like the colour targets.
 //!
-//! `cargo run --release -p rustyac-render --features wgpu --example shader_proof -- [--adapter warp|gpu] [name...]`
+//! `cargo run --release -p rustyac-render --features wgpu --example shader_proof -- [--adapter warp|swiftshader|gpu] [--flat] [--ops] [name...]`
+//!
+//! `--adapter swiftshader` is SwiftShader's Vulkan driver, found through VK_DRIVER_FILES.
+//! `--flat`: every texture one value (half floats), so filtering drops out of the
+//! comparison. `--ops`: single instructions alone (exp2, log2, rsqrt, ...) in place of AC's
+//! pairs. For narrowing a difference down: PROOF_DIFF=1 / PROOF_VALUES=1 print values,
+//! PROOF_DUMP=1 the WGSL, PROOF_PS_HLSL=file an HLSL pixel shader in place of the pair's on
+//! both sides, PROOF_PS / PROOF_VS=file a WGSL one on the wgpu side, PROOF_LOG=1 wgpu's
+//! warnings.
 
 use std::collections::BTreeMap;
 use std::ffi::c_void;
@@ -55,6 +65,73 @@ struct Inputs {
     /// slot -> comparison
     samplers: BTreeMap<u32, bool>,
     targets: Vec<u32>,
+    /// multisampled inputs (RGBA16F, SIZE x SIZE, MS_COUNT samples), filled by a pass of [`MS_FILL`]'s numbers
+    ms: Vec<u32>,
+    /// the pixel shader writes SV_Depth: a depth target is drawn and read back as well
+    writes_depth: bool,
+}
+
+const MS_COUNT: u32 = 4;
+
+/// The numbers of a multisampled input, the same in HLSL (Direct3D 11) and WGSL: small
+/// integers over 64, exact in a half float, from the pixel, the sample and the slot.
+fn ms_fill_hlsl(slot: u32) -> String {
+    format!(
+        "float4 vs(uint i : SV_VertexID) : SV_Position {{ return float4(i == 1 ? 3.0 : -1.0, i == 2 ? 3.0 : -1.0, 0.0, 1.0); }}
+         float4 ps(float4 p : SV_Position, uint s : SV_SampleIndex) : SV_Target {{
+             uint4 k = uint4(0, 17, 34, 51) + {slot} * 3;
+             uint b = (uint)p.x * 7 + (uint)p.y * 13 + s * 29;
+             return float4((b + k) & 63) / 64.0;
+         }}"
+    )
+}
+
+fn ms_fill_wgsl(slot: u32) -> String {
+    format!(
+        "@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {{
+             return vec4<f32>(select(-1.0, 3.0, i == 1u), select(-1.0, 3.0, i == 2u), 0.0, 1.0);
+         }}
+         @fragment fn fs(@builtin(position) p: vec4<f32>, @builtin(sample_index) s: u32) -> @location(0) vec4<f32> {{
+             let k = vec4<u32>(0u, 17u, 34u, 51u) + {slot}u * 3u;
+             let b = u32(p.x) * 7u + u32(p.y) * 13u + s * 29u;
+             return vec4<f32>((b + k) & vec4<u32>(63u)) / 64.0;
+         }}"
+    )
+}
+
+/// `--ops`: one instruction alone, compiled from HLSL here, over 4096 inputs (n = the value's
+/// index), for telling which instruction a pair's differences come from
+const OPS: [(&str, &str, &str); 11] = [
+    ("op_exp2_any", "asfloat(((n * 0x9e3779b1u) >> 9) | 0x40000000u) * 4.0 - 12.0", "exp2(x)"),
+    ("op_mad", "asfloat(((n * 0x9e3779b1u) >> 9) | 0x3f800000u) - 1.4", "x * x.yzwx + x.wxyz"),
+    ("op_dp4", "asfloat(((n * 0x9e3779b1u) >> 9) | 0x3f800000u) - 1.4", "dot(x, x.yzwx).xxxx"),
+    ("op_mul_add", "asfloat(((n * 0x9e3779b1u) >> 9) | 0x3f800000u) - 1.4", "x * x.yzwx - x.wxyz * x.zwxy"),
+    ("op_exp2", "((float)n - 2048.0) / 128.0", "exp2(x)"),
+    ("op_log2", "asfloat(0x38000000u + n * 0x10000u)", "log2(x)"),
+    ("op_rsqrt", "asfloat(0x38000000u + n * 0x10000u)", "rsqrt(x)"),
+    ("op_sqrt", "asfloat(0x38000000u + n * 0x10000u)", "sqrt(x)"),
+    ("op_div", "asfloat(0x38000000u + n * 0x10000u)", "asfloat(0x3f800000u + n * 0x0711u) / x"),
+    ("op_sin", "((float)n - 2048.0) / 256.0", "sin(x)"),
+    ("op_cos", "((float)n - 2048.0) / 256.0", "cos(x)"),
+];
+
+fn op_blobs(name: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (_, x, f) = OPS.iter().find(|o| o.0 == name)?;
+    let vs = "float4 vs(float4 p : POSITION) : SV_Position { return p; }";
+    let ps = format!(
+        "float4 ps(float4 p : SV_Position) : SV_Target {{
+             uint4 n = ((uint)p.x + (uint)p.y * 32) * 4 + uint4(0, 1, 2, 3);
+             float4 x = {x};
+             return {f};
+         }}",
+        x = x.replace("n *", "n * uint4(1,1,1,1) *").replace("(float)n", "(float4)n")
+    );
+    Some((hlsl(vs, "vs", "vs_4_1").unwrap(), hlsl(&ps, "ps", "ps_4_1").unwrap()))
+}
+
+/// `--flat` (passed on as PROOF_FLAT to the per-pair processes): textures of one value per mip level
+fn flat() -> bool {
+    std::env::var_os("PROOF_FLAT").is_some()
 }
 
 fn f32s(v: &[f32]) -> Vec<u8> {
@@ -122,11 +199,18 @@ fn inputs(name: &str, vs: &Shader, ps: &Shader, t: &rustyac_dxbc::Translated) ->
         cbuffers.insert(c.slot, bytes);
     }
     let mut textures = BTreeMap::new();
+    let mut ms = Vec::new();
     for u in &t.textures {
+        if u.dimension == 4 {
+            if u.depth || u.return_type != 1 && u.return_type != 5 {
+                return Err("multisampled depth or integer input".into());
+            }
+            ms.push(u.slot);
+            continue;
+        }
         let (cube, levels) = match u.dimension {
             3 => (false, if u.depth { 1 } else { MIPS }),
             6 => (true, if u.depth { 1 } else { MIPS }),
-            4 => return Err("multisampled input".into()),
             other => return Err(format!("texture dimension {other}")),
         };
         if u.return_type != 5 && u.return_type != 1 {
@@ -134,10 +218,20 @@ fn inputs(name: &str, vs: &Shader, ps: &Shader, t: &rustyac_dxbc::Translated) ->
         }
         let faces = if cube { 6 } else { 1 };
         let mut data = Vec::new();
+        // one value for every texel of every level: every filter and every level of detail gives that
+        // value, so only the shader's own arithmetic is left (colour as half floats in 0.125..1: half
+        // to float is exact everywhere, 8-bit unorm to float is not)
+        let texel: Vec<u8> = if u.depth { rng.unit().to_le_bytes().to_vec() } else { (0..4).flat_map(|_| (0x3000 + rng.next() % 0x0c00).to_le_bytes()[..2].to_vec()).collect() };
         for level in 0..levels {
             let n = (TEX >> level).max(1);
             let texels = (n * n * faces) as usize;
-            data.push(if u.depth { (0..texels).flat_map(|_| rng.unit().to_le_bytes()).collect() } else { (0..texels * 4).map(|_| rng.next() as u8).collect() });
+            data.push(if flat() {
+                texel.repeat(texels)
+            } else if u.depth {
+                (0..texels).flat_map(|_| rng.unit().to_le_bytes()).collect()
+            } else {
+                (0..texels * 4).map(|_| rng.next() as u8).collect()
+            });
         }
         textures.insert(u.slot, (cube, u.depth, data));
     }
@@ -145,17 +239,29 @@ fn inputs(name: &str, vs: &Shader, ps: &Shader, t: &rustyac_dxbc::Translated) ->
     let mut targets: Vec<u32> = ps.outputs.iter().filter(|o| o.name.eq_ignore_ascii_case("SV_Target")).map(|o| o.register).collect();
     targets.sort();
     targets.dedup();
-    if ps.outputs.iter().any(|o| o.name.eq_ignore_ascii_case("SV_Depth")) {
-        return Err("writes depth".into());
-    }
-    Ok(Inputs { vertex_stride, elements, vertices, cbuffers, textures, samplers, targets })
+    let writes_depth = ps.outputs.iter().any(|o| o.name.eq_ignore_ascii_case("SV_Depth"));
+    Ok(Inputs { vertex_stride, elements, vertices, cbuffers, textures, samplers, targets, ms, writes_depth })
 }
 
 fn check<T>(what: &str, r: windows::core::Result<T>) -> Result<T, String> {
     r.map_err(|e| format!("{what}: {e}"))
 }
 
-/// The original bytecode on Direct3D 11 WARP: one float picture per target.
+/// HLSL of the harness's own fill pass, compiled by d3dcompiler_47.
+fn hlsl(source: &str, entry: &str, profile: &str) -> Result<Vec<u8>, String> {
+    use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+    let (entry, profile) = (std::ffi::CString::new(entry).unwrap(), std::ffi::CString::new(profile).unwrap());
+    let (mut code, mut errors) = (None, None);
+    let r = unsafe { D3DCompile(source.as_ptr().cast(), source.len(), PCSTR::null(), None, None, PCSTR(entry.as_ptr().cast()), PCSTR(profile.as_ptr().cast()), 0, 0, &mut code, Some(&mut errors)) };
+    let blob = |b: &ID3DBlob| unsafe { std::slice::from_raw_parts(b.GetBufferPointer() as *const u8, b.GetBufferSize()).to_vec() };
+    if let Err(e) = r {
+        return Err(format!("D3DCompile: {e} {}", errors.as_ref().map(|b| String::from_utf8_lossy(&blob(b)).into_owned()).unwrap_or_default()));
+    }
+    Ok(blob(&code.ok_or("no code")?))
+}
+
+/// The original bytecode on Direct3D 11 WARP: one float picture per target (and the depth
+/// target's, last, when the pixel shader writes depth).
 fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, String> {
     unsafe {
         let (mut device, mut context) = (None, None);
@@ -193,13 +299,13 @@ fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, S
         }
         for (slot, (cube, depth, levels)) in &inp.textures {
             let faces = if *cube { 6 } else { 1 };
-            let texel = 4; // R32_FLOAT and RGBA8 alike
+            let texel = if !*depth && flat() { 8 } else { 4 }; // RGBA16F, or R32_FLOAT and RGBA8 alike
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: TEX,
                 Height: TEX,
                 MipLevels: levels.len() as u32,
                 ArraySize: faces,
-                Format: if *depth { DXGI_FORMAT_R32_FLOAT } else { DXGI_FORMAT_R8G8B8A8_UNORM },
+                Format: if *depth { DXGI_FORMAT_R32_FLOAT } else if flat() { DXGI_FORMAT_R16G16B16A16_FLOAT } else { DXGI_FORMAT_R8G8B8A8_UNORM },
                 SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
                 Usage: D3D11_USAGE_DEFAULT,
                 BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
@@ -251,6 +357,67 @@ fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, S
             context.VSSetSamplers(*slot, Some(&[s.clone()]));
             context.PSSetSamplers(*slot, Some(&[s]));
         }
+        for slot in &inp.ms {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: SIZE,
+                Height: SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: MS_COUNT, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            let mut tex = None;
+            check("CreateTexture2D", device.CreateTexture2D(&desc, None, Some(&mut tex)))?;
+            let tex = tex.unwrap();
+            let mut rtv = None;
+            check("CreateRenderTargetView", device.CreateRenderTargetView(&tex, None, Some(&mut rtv)))?;
+            let source = ms_fill_hlsl(*slot);
+            let (mut fvs, mut fps) = (None, None);
+            check("CreateVertexShader", device.CreateVertexShader(&hlsl(&source, "vs", "vs_4_1")?, None, Some(&mut fvs)))?;
+            check("CreatePixelShader", device.CreatePixelShader(&hlsl(&source, "ps", "ps_4_1")?, None, Some(&mut fps)))?;
+            let mut rs = None;
+            check("CreateRasterizerState", device.CreateRasterizerState(&D3D11_RASTERIZER_DESC { FillMode: D3D11_FILL_SOLID, CullMode: D3D11_CULL_NONE, DepthClipEnable: true.into(), ..Default::default() }, Some(&mut rs)))?;
+            context.RSSetState(rs.as_ref());
+            context.OMSetRenderTargets(Some(&[rtv]), None);
+            context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: SIZE as f32, Height: SIZE as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
+            context.IASetInputLayout(None);
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context.VSSetShader(fvs.as_ref(), None);
+            context.PSSetShader(fps.as_ref(), None);
+            context.Draw(3, 0);
+            context.OMSetRenderTargets(None, None);
+            let mut srv = None;
+            check("CreateShaderResourceView", device.CreateShaderResourceView(&tex, None, Some(&mut srv)))?;
+            context.VSSetShaderResources(*slot, Some(&[srv.clone()]));
+            context.PSSetShaderResources(*slot, Some(&[srv]));
+        }
+        let mut depth_target = None;
+        let mut dsv = None;
+        if inp.writes_depth {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: SIZE,
+                Height: SIZE,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_D32_FLOAT,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_DEPTH_STENCIL.0 as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+            check("CreateTexture2D", device.CreateTexture2D(&desc, None, Some(&mut depth_target)))?;
+            check("CreateDepthStencilView", device.CreateDepthStencilView(depth_target.as_ref().unwrap(), None, Some(&mut dsv)))?;
+            context.ClearDepthStencilView(dsv.as_ref().unwrap(), D3D11_CLEAR_DEPTH.0, 0.0, 0);
+            let mut ds = None;
+            let ds_desc = D3D11_DEPTH_STENCIL_DESC { DepthEnable: true.into(), DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ALL, DepthFunc: D3D11_COMPARISON_ALWAYS, ..Default::default() };
+            check("CreateDepthStencilState", device.CreateDepthStencilState(&ds_desc, Some(&mut ds)))?;
+            context.OMSetDepthStencilState(ds.as_ref(), 0);
+        }
         let mut targets = Vec::new();
         let mut views = Vec::new();
         let n_targets = inp.targets.iter().max().map_or(0, |m| m + 1);
@@ -286,7 +453,7 @@ fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, S
         let mut rs = None;
         check("CreateRasterizerState", device.CreateRasterizerState(&rs_desc, Some(&mut rs)))?;
         context.RSSetState(rs.as_ref());
-        context.OMSetRenderTargets(Some(&views), None);
+        context.OMSetRenderTargets(Some(&views), dsv.as_ref());
         context.RSSetViewports(Some(&[D3D11_VIEWPORT { TopLeftX: 0.0, TopLeftY: 0.0, Width: SIZE as f32, Height: SIZE as f32, MinDepth: 0.0, MaxDepth: 1.0 }]));
         context.IASetInputLayout(il.as_ref());
         context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -295,7 +462,7 @@ fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, S
         context.PSSetShader(ps.as_ref(), None);
         context.Draw(3, 0);
         let mut out = Vec::new();
-        for tex in targets.iter().flatten() {
+        for tex in targets.iter().flatten().chain(depth_target.as_ref()) {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             tex.GetDesc(&mut desc);
             desc.Usage = D3D11_USAGE_STAGING;
@@ -308,9 +475,10 @@ fn d3d11(vs_blob: &[u8], ps_blob: &[u8], inp: &Inputs) -> Result<Vec<Vec<u8>>, S
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             check("Map", context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)))?;
             let mut pixels = Vec::new();
+            let texel = if desc.Format == DXGI_FORMAT_D32_FLOAT { 4 } else { 16 };
             for row in 0..SIZE as usize {
                 let p = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize);
-                pixels.extend_from_slice(std::slice::from_raw_parts(p, SIZE as usize * 16));
+                pixels.extend_from_slice(std::slice::from_raw_parts(p, SIZE as usize * texel));
             }
             context.Unmap(&staging, 0);
             out.push(pixels);
@@ -336,9 +504,16 @@ struct Wgpu {
     name: String,
 }
 
-fn open_wgpu(warp: bool) -> Result<Wgpu, String> {
+/// `warp`: Direct3D 12 WARP; `swiftshader`: Vulkan on a CPU adapter (SwiftShader, picked by
+/// VK_DRIVER_FILES); `gpu`: Direct3D 12 on the graphics card.
+fn open_wgpu(adapter: &str) -> Result<Wgpu, String> {
+    let warp = adapter != "gpu";
     let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
-    d.backends = wgpu::Backends::DX12;
+    d.backends = if adapter == "swiftshader" { wgpu::Backends::VULKAN } else { wgpu::Backends::DX12 };
+    // WGPU_VALIDATION=1 / WGPU_DEBUG=1 / WGPU_GPU_BASED_VALIDATION=1 turn on the D3D12 debug layer
+    d.flags = d.flags.with_env();
+    // WGPU_DX12_COMPILER=dxc with dxcompiler.dll on PATH: DXC in place of FXC
+    d.backend_options = d.backend_options.with_env();
     let instance = wgpu::Instance::new(d);
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, force_fallback_adapter: warp, compatible_surface: None, apply_limit_buckets: false })).map_err(|e| e.to_string())?;
     let name = format!("{} ({:?})", adapter.get_info().name, adapter.get_info().backend);
@@ -376,9 +551,13 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
             binding: u.slot,
             visibility: vis(u.vertex, u.pixel),
             ty: wgpu::BindingType::Texture {
-                sample_type: if u.depth { wgpu::TextureSampleType::Depth } else { wgpu::TextureSampleType::Float { filterable: true } },
+                sample_type: if u.depth {
+                    wgpu::TextureSampleType::Depth
+                } else {
+                    wgpu::TextureSampleType::Float { filterable: u.dimension != 4 }
+                },
                 view_dimension: if u.dimension == 6 { wgpu::TextureViewDimension::Cube } else { wgpu::TextureViewDimension::D2 },
-                multisampled: false,
+                multisampled: u.dimension == 4,
             },
             count: None,
         })
@@ -397,21 +576,24 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
     for (slot, (cube, depth, levels)) in &inp.textures {
         let faces = if *cube { 6 } else { 1 };
         let size = wgpu::Extent3d { width: TEX, height: TEX, depth_or_array_layers: faces };
-        let format = if *depth { wgpu::TextureFormat::Depth32Float } else { wgpu::TextureFormat::Rgba8Unorm };
-        let usage = if *depth { wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST };
+        let depth_format = if std::env::var_os("PROOF_D16").is_some() { wgpu::TextureFormat::Depth16Unorm } else { wgpu::TextureFormat::Depth32Float };
+        let format = if *depth { depth_format } else if flat() { wgpu::TextureFormat::Rgba16Float } else { wgpu::TextureFormat::Rgba8Unorm };
+        let usage = if *depth && std::env::var_os("PROOF_NO_FILL").is_none() { wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT } else { wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST };
         let tex = device.create_texture(&wgpu::TextureDescriptor { label: None, size, mip_level_count: levels.len() as u32, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage, view_formats: &[] });
         if *depth {
             if *cube {
                 return Err("depth cube".into());
             }
-            fill_depth.push((tex.clone(), levels[0].clone()));
+            if std::env::var_os("PROOF_NO_FILL").is_none() {
+                fill_depth.push((tex.clone(), levels[0].clone()));
+            }
         } else {
             for (level, data) in levels.iter().enumerate() {
                 let n = (TEX >> level).max(1);
                 g.queue.write_texture(
                     wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                     data,
-                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * if flat() { 8 } else { 4 }), rows_per_image: Some(n) },
                     wgpu::Extent3d { width: n, height: n, depth_or_array_layers: faces },
                 );
             }
@@ -419,12 +601,29 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
         let view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(if *cube { wgpu::TextureViewDimension::Cube } else { wgpu::TextureViewDimension::D2 }), ..Default::default() });
         views.insert(*slot, view);
     }
+    let mut fill_ms = Vec::new();
+    for slot in &inp.ms {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: MS_COUNT,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&Default::default());
+        views.insert(*slot, view.clone());
+        fill_ms.push((*slot, view));
+    }
     let samplers: BTreeMap<u32, wgpu::Sampler> = inp
         .samplers
         .iter()
         .map(|(slot, comparison)| {
             let d = if *comparison {
-                wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, mipmap_filter: wgpu::MipmapFilterMode::Nearest, compare: Some(wgpu::CompareFunction::Less), ..Default::default() }
+                let f = if std::env::var_os("PROOF_CMP_NEAREST").is_some() { wgpu::FilterMode::Nearest } else { wgpu::FilterMode::Linear };
+                wgpu::SamplerDescriptor { mag_filter: f, min_filter: f, mipmap_filter: wgpu::MipmapFilterMode::Nearest, compare: Some(wgpu::CompareFunction::Less), ..Default::default() }
             } else {
                 wgpu::SamplerDescriptor {
                     address_mode_u: wgpu::AddressMode::Repeat,
@@ -471,7 +670,13 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
             buffers: &[Some(wgpu::VertexBufferLayout { array_stride: inp.vertex_stride as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &attributes })],
         },
         primitive: wgpu::PrimitiveState { front_face: wgpu::FrontFace::Cw, cull_mode: None, ..Default::default() },
-        depth_stencil: None,
+        depth_stencil: inp.writes_depth.then(|| wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState { module: &ps, entry_point: Some("main"), compilation_options: Default::default(), targets: &color_targets }),
         multiview_mask: None,
@@ -495,6 +700,19 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
         })
         .collect();
     let target_views: Vec<Option<wgpu::TextureView>> = target_textures.iter().map(|t| t.as_ref().map(|t| t.create_view(&Default::default()))).collect();
+    let depth_target = inp.writes_depth.then(|| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    });
+    let depth_view = depth_target.as_ref().map(|t| t.create_view(&Default::default()));
 
     let mut encoder = device.create_command_encoder(&Default::default());
     // depth maps: written by a small pass from an R32Float copy of the same numbers
@@ -557,12 +775,43 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
+    // multisampled inputs: every sample its own numbers, the same pass as on Direct3D 11
+    for (slot, view) in &fill_ms {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(ms_fill_wgsl(*slot).into()) });
+        let pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: None,
+            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), compilation_options: Default::default(), buffers: &[] },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: MS_COUNT, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba16Float, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store } })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&pipe);
+        pass.draw(0..3, 0..1);
+    }
     {
         let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = target_views
             .iter()
             .map(|v| v.as_ref().map(|view| wgpu::RenderPassColorAttachment { view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store } }))
             .collect();
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &attachments, depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None });
+        let depth_stencil_attachment = depth_view.as_ref().map(|view| wgpu::RenderPassDepthStencilAttachment { view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }), stencil_ops: None });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &attachments, depth_stencil_attachment, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None });
         pass.set_pipeline(&pipeline);
         for (i, group) in groups.iter().enumerate() {
             pass.set_bind_group(i as u32, group, &[]);
@@ -570,18 +819,20 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
         pass.set_vertex_buffer(0, vb.slice(..));
         pass.draw(0..3, 0..1);
     }
-    let row = SIZE * 16;
-    let readbacks: Vec<wgpu::Buffer> = target_textures
+    // (the depth target last, as on Direct3D 11; its 128-byte rows padded to 256 for the copy)
+    let readbacks: Vec<(wgpu::Buffer, u32, u32)> = target_textures
         .iter()
         .flatten()
-        .map(|tex| {
+        .map(|t| (t, SIZE * 16, SIZE * 16, wgpu::TextureAspect::All))
+        .chain(depth_target.iter().map(|t| (t, 256, SIZE * 4, wgpu::TextureAspect::DepthOnly)))
+        .map(|(tex, row, used, aspect)| {
             let buf = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (row * SIZE) as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
             encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect },
                 wgpu::TexelCopyBufferInfo { buffer: &buf, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None } },
                 wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
             );
-            buf
+            (buf, row, used)
         })
         .collect();
     g.queue.submit([encoder.finish()]);
@@ -589,10 +840,11 @@ fn wgpu_draw(g: &Wgpu, t: &rustyac_dxbc::Translated, inp: &Inputs) -> Result<Vec
         return Err(format!("wgpu: {e}"));
     }
     let mut out = Vec::new();
-    for buf in &readbacks {
+    for (buf, row, used) in &readbacks {
         buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
-        out.push(buf.slice(..).get_mapped_range().map_err(|e| e.to_string())?.to_vec());
+        let bytes = buf.slice(..).get_mapped_range().map_err(|e| e.to_string())?.to_vec();
+        out.push(bytes.chunks_exact(*row as usize).flat_map(|r| r[..*used as usize].to_vec()).collect());
         buf.unmap();
     }
     Ok(out)
@@ -617,15 +869,45 @@ fn ulps(a: u32, b: u32) -> u64 {
     (ord(a) - ord(b)).unsigned_abs()
 }
 
+/// wgpu's warnings and the D3D12 debug layer's messages on stderr (PROOF_LOG=1)
+struct Log;
+
+impl log::Log for Log {
+    fn enabled(&self, m: &log::Metadata) -> bool {
+        m.level() <= log::Level::Warn
+    }
+    fn log(&self, r: &log::Record) {
+        if self.enabled(r.metadata()) {
+            eprintln!("{} {}: {}", r.level(), r.target(), r.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
 fn main() {
+    if std::env::var_os("PROOF_LOG").is_some() {
+        let _ = log::set_logger(&Log);
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let warp = args.windows(2).any(|w| w[0] == "--adapter" && w[1] == "warp");
+    if args.iter().any(|a| a == "--flat") {
+        // SAFETY: set before any thread is started
+        unsafe { std::env::set_var("PROOF_FLAT", "1") };
+    }
+    if args.iter().any(|a| a == "--ops") {
+        // SAFETY: as above
+        unsafe { std::env::set_var("PROOF_OPS", "1") };
+    }
+    let adapter = args.windows(2).find(|w| w[0] == "--adapter").map_or("gpu", |w| w[1].as_str()).to_string();
     let only: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--adapter")).map(|(_, a)| a).collect();
     let game = rustyac_content::install::ac_root().expect("an Assetto Corsa install");
     let folder = game.join("system/shaders/win");
-    let g = open_wgpu(warp).expect("a wgpu adapter");
+    let g = open_wgpu(&adapter).expect("a wgpu adapter");
     let mut names: Vec<String> = std::fs::read_dir(&folder).unwrap().filter_map(|e| e.ok()?.file_name().into_string().ok()?.strip_suffix("_vs.fxo").map(str::to_string)).collect();
     names.sort();
+    if std::env::var_os("PROOF_OPS").is_some() {
+        names = OPS.iter().map(|o| o.0.to_string()).collect();
+    }
     let child = args.iter().any(|a| a == "--row");
     if !child {
         println!("D3D11 WARP against wgpu on {}\n", g.name);
@@ -636,7 +918,7 @@ fn main() {
         // one process per pair: after one lost device WARP's DX12 adapter is gone for the whole process
         let (mut exact, mut close, mut not_run) = (0, 0, 0);
         for name in &names {
-            let out = std::process::Command::new(std::env::current_exe().unwrap()).args(["--adapter", if warp { "warp" } else { "gpu" }, "--row", name]).output().unwrap();
+            let out = std::process::Command::new(std::env::current_exe().unwrap()).args(["--adapter", adapter.as_str(), "--row", name]).output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout);
             let row = text.lines().find(|l| l.starts_with(&format!("| {name} |"))).map(str::to_string).unwrap_or(format!("| {name} | | | | | not run: the process failed ({}) |", out.status));
             let cells: Vec<&str> = row.split('|').map(str::trim).collect();
@@ -652,10 +934,23 @@ fn main() {
     }
     let (mut exact, mut close, mut not_run) = (0, 0, 0);
     for name in names.iter().filter(|n| only.is_empty() || only.iter().any(|o| o == n)) {
-        let vs_blob = std::fs::read(folder.join(format!("{name}_vs.fxo"))).unwrap();
-        let ps_blob = std::fs::read(folder.join(format!("{name}_ps.fxo"))).unwrap();
+        let (vs_blob, mut ps_blob) = op_blobs(name).unwrap_or_else(|| (std::fs::read(folder.join(format!("{name}_vs.fxo"))).unwrap(), std::fs::read(folder.join(format!("{name}_ps.fxo"))).unwrap()));
+        // PROOF_PS_HLSL: an HLSL pixel shader (entry `ps`, kept in a scratch folder) in place of the pair's own, on both sides
+        if let Some(f) = std::env::var_os("PROOF_PS_HLSL") {
+            ps_blob = hlsl(&std::fs::read_to_string(f).unwrap(), "ps", "ps_4_1").unwrap();
+        }
         let (vs, ps) = (rustyac_dxbc::parse(&vs_blob).unwrap(), rustyac_dxbc::parse(&ps_blob).unwrap());
-        let t = rustyac_dxbc::translate_pair(&vs, &ps).unwrap();
+        let mut t = rustyac_dxbc::translate_pair(&vs, &ps).unwrap();
+        // PROOF_PS / PROOF_VS: a WGSL file (kept in a scratch folder) drawn in place of the translation, for narrowing a failure down
+        if let Some(f) = std::env::var_os("PROOF_PS") {
+            t.ps = std::fs::read_to_string(f).unwrap();
+        }
+        if let Some(f) = std::env::var_os("PROOF_VS") {
+            t.vs = std::fs::read_to_string(f).unwrap();
+        }
+        if std::env::var_os("PROOF_DUMP").is_some() {
+            eprintln!("{}", t.ps);
+        }
         let result = inputs(name, &vs, &ps, &t).and_then(|inp| Ok((d3d11(&vs_blob, &ps_blob, &inp)?, wgpu_draw(&g, &t, &inp)?)));
         let (a, b) = match result {
             Ok(x) => x,
@@ -665,9 +960,17 @@ fn main() {
                 continue;
             }
         };
+        if std::env::var_os("PROOF_VALUES").is_some() {
+            // PROOF_VALUES=1: the first pixels of both sides, bits of every channel
+            for k in 0..8 {
+                let px = |p: &[u8]| -> Vec<String> { p[k * 16..k * 16 + 16].chunks_exact(4).map(|c| format!("{:08x}", u32::from_le_bytes(c.try_into().unwrap()))).collect() };
+                eprintln!("pixel {k}: {:?} against {:?}", px(&a[0]), px(&b[0]));
+            }
+        }
         let (mut drawn, mut values, mut same, mut worst) = (0, 0, 0, 0u64);
         for (x, y) in a.iter().zip(&b) {
-            for (px, py) in x.chunks_exact(16).zip(y.chunks_exact(16)) {
+            let texel = x.len() / (SIZE * SIZE) as usize;
+            for (px, py) in x.chunks_exact(texel).zip(y.chunks_exact(texel)) {
                 if px.iter().any(|&v| v != 0) {
                     drawn += 1;
                 }
@@ -678,6 +981,10 @@ fn main() {
                         same += 1;
                     }
                     worst = worst.max(ulps(u, v));
+                    if u != v && std::env::var_os("PROOF_DIFF").is_some() && values - same < 12 {
+                        // PROOF_DIFF=1: the first differing values, for narrowing a difference down
+                        eprintln!("value {} (channel {}): {} {:08x} against {} {:08x}", values - 1, (values - 1) % 4, f32::from_bits(u), u, f32::from_bits(v), v);
+                    }
                 }
             }
         }

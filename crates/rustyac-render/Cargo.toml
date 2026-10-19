@@ -17,7 +17,8 @@ rustyac-content = { path = "../rustyac-content" }
 # AC's widgets and HUD objects: this crate is their painter on Direct3D
 rustyac-gui = { path = "../rustyac-gui" }
 # native wgpu: for now only the per-shader proof of the WGSL translation uses it
-wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "wgsl"], optional = true }
+# (Vulkan for SwiftShader, the second software rasterizer of the proof)
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"], optional = true }
 
 [dependencies.windows]
 version = "0.62"
@@ -42,6 +43,8 @@ features = [
 [dev-dependencies]
 # the game's compiled shaders read without Direct3D: the reflection test and the WGSL proof
 rustyac-dxbc = { path = "../rustyac-dxbc" }
+# the proof prints wgpu's and the D3D12 debug layer's messages (already in the lock file through wgpu)
+log = "0.4"
 
 [features]
 wgpu = ["dep:wgpu"]
