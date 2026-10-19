@@ -1360,6 +1360,8 @@ function frame(now) {
   resizeCanvas();
   pollPad();
   if (!state.paused) {
+    // (Task 38's frame-rate check: a slow machine, as busy work in every frame)
+    for (const until = performance.now() + (window.rustyac.slowFrameMs || 0); performance.now() < until; );
     try {
       state.game.frame(now);
     } catch (error) {
@@ -1954,10 +1956,41 @@ window.rustyac.raceSpeed = async (race, assists, seed, skip, steps) => {
   return { cars, steps, ms_per_step: ms / steps, real_time_factor: (steps * 3) / ms };
 };
 
-async function loadRaceFiles(race) {
+// Task 38's frame-rate check: the drive of `race` (seeded by the address's ?seed) in the page's
+// own frame loop, every frame made at least `slowMs` long by busy work (0: as fast as the
+// display goes), playing `tape` (a .ryin as base64) from the session's first step or, with no
+// tape, the autodriver (open the page with ?autodrive=1) until session step `steps`. When the
+// loop stopped: the player's car state hash, the state hash of every car
+// chained over every step, race_out.json and the frame rate.
+window.rustyac.frameProof = async (race, assists, tape, steps, slowMs) => {
+  await drive({ car: raceKey(race, 'MODEL'), track: raceKey(race, 'TRACK'), layout: raceKey(race, 'CONFIG_TRACK'), race, assists });
+  if (!state.game) throw new Error('the drive did not start');
+  await loadRaceFiles(race);
+  window.rustyac.slowFrameMs = slowMs;
+  if (tape) state.game.play_tape(race, assists, Number(params.get('seed')) >>> 0, Uint8Array.from(atob(tape), (c) => c.charCodeAt(0)));
+  else {
+    state.game.set_autodrive(true);
+    state.game.stop_at_step(steps);
+  }
+  const started = performance.now();
+  let frames = 0;
+  while (!JSON.parse(state.game.check_state()).stopped) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    frames++;
+  }
+  const seconds = (performance.now() - started) / 1000;
+  window.rustyac.slowFrameMs = 0;
+  return { ...JSON.parse(state.game.check_state()), race_out: ((bytes) => (bytes ? new TextDecoder().decode(bytes) : null))(state.game.finish_race()), fps: frames / seconds, seconds };
+};
+
+// a [RACE] key of a race.ini
+function raceKey(race, name) {
   const part = race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '';
-  const key = (name) => ((part.split(/\r?\n/).find((l) => l.split('=')[0].trim().toUpperCase() === name) || '=').split('=')[1] || '').trim();
-  const [track, layout] = [key('TRACK'), key('CONFIG_TRACK')];
+  return ((part.split(/\r?\n/).find((l) => l.split('=')[0].trim().toUpperCase() === name) || '=').split('=')[1] || '').trim();
+}
+
+async function loadRaceFiles(race) {
+  const [track, layout] = [raceKey(race, 'TRACK'), raceKey(race, 'CONFIG_TRACK')];
   const models = raceModels(race);
   for (let round = 0; round < 8; round++) {
     const wanted = [...new Set(models.flatMap((model) => rac.files_wanted(model, track, layout).split('\n').filter(Boolean)))];

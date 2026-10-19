@@ -18,16 +18,19 @@
 
 use std::sync::{Arc, Mutex};
 
-use rustyac_game::input_file::{event, GridPlace, SimSetup};
+use rustyac_game::input_file::{event, GridPlace, SimSetup, StepInput};
 use rustyac_game::online::OnlineSession;
 use rustyac_game::render::scene::{CameraFrame, CarShape, DrivingCamera};
-use rustyac_game::sim::{GameSim, SpawnSequence, DT};
+use rustyac_game::sim::{GameSim, ReplaySource, SpawnSequence, DT};
 use rustyac_game::view::CarView;
 
 use crate::driver::{Input, SharedInput, WebSource};
 
 /// The longest stretch of time one frame may hand to the physics, seconds.
 pub const MAX_FRAME_SECONDS: f64 = 0.1;
+
+/// FNV-1a 64's offset basis: where a chained state hash starts.
+pub const CHAIN_START: u64 = 0xcbf2_9ce4_8422_2325;
 
 /// Steps of lying still on its roof or side before the car is put back on the road: 3 s.
 const FLIPPED_STEPS: u32 = 1000;
@@ -72,6 +75,12 @@ pub struct Session {
     /// notes), and the drive as `key=value` lines (car, skin, track, layout, spawn, session).
     pub race_notes: Vec<String>,
     pub drive: String,
+    /// Task 38's frame-rate check: the inputs of a recorded drive played instead of the
+    /// player's (and the next one's index), the step the frame loop stops at, and the state
+    /// hash chained over every step since the check began.
+    tape: Option<(Vec<StepInput>, usize)>,
+    pub stop_at: Option<u64>,
+    pub chain: u64,
 }
 
 impl Session {
@@ -189,11 +198,25 @@ sessions={}
             console: Vec::new(),
             race_notes: Vec::new(),
             drive: String::new(),
+            tape: None,
+            stop_at: None,
+            chain: CHAIN_START,
         })
     }
 
     fn step(&mut self) -> Result<(), String> {
-        self.sim.step()?;
+        match &mut self.tape {
+            Some((steps, next)) => {
+                self.sim.step_recorded(&steps[*next])?;
+                *next += 1;
+            }
+            None => {
+                self.sim.step()?;
+            }
+        }
+        if self.stop_at.is_some() {
+            self.chain = self.sim.state_hash(self.chain);
+        }
         let burst = self.sim.car.device.source.in_spawn_sequence();
         if burst {
             self.drive_start = self.sim.steps;
@@ -245,19 +268,45 @@ sessions={}
         self.total_dropped_seconds += stats.dropped_seconds;
         self.accumulator += counted;
         while self.accumulator >= DT as f64 {
+            if self.stopped() {
+                self.accumulator = 0.0;
+                break;
+            }
             self.accumulator -= DT as f64;
             self.step()?;
             stats.steps += 1;
             // a car that was just put back (R, N) settles unpaced, as on the desktop and as at
             // the start: the 470 steps of the spawn sequence run inside this frame
             let mut burst = 0;
-            while self.sim.car.device.source.in_spawn_sequence() && burst < 2000 {
+            while self.sim.car.device.source.in_spawn_sequence() && burst < 2000 && !self.stopped() {
                 self.step()?;
                 stats.steps += 1;
                 burst += 1;
             }
         }
         Ok(stats)
+    }
+
+    /// Whether the frame loop reached [`Session::stop_at`].
+    pub fn stopped(&self) -> bool {
+        self.stop_at.is_some_and(|step| self.sim.steps >= step)
+    }
+
+    /// Task 38's frame-rate check: the session of `race_text` again from its first step, its
+    /// inputs from a recorded drive of it (a `.ryin`, as `race::replay_race` plays it), and the
+    /// frame loop stops at the drive's end.
+    pub fn play_tape(&mut self, race_text: &str, assists_text: Option<&str>, seed: u32, tape: &[u8]) -> Result<(), String> {
+        let file = rustyac_game::input_file::InputFile::parse(tape)?;
+        let (setup, _) = crate::race::setup_of(race_text, assists_text, seed)?;
+        self.sim = GameSim::new(setup, Box::new(ReplaySource::default()))?;
+        self.stop_at = Some(self.sim.steps + file.steps.len() as u64);
+        self.tape = Some((file.steps, 0));
+        self.chain = CHAIN_START;
+        self.drive_start = self.sim.steps;
+        self.accumulator = 0.0;
+        self.curr = CarView::capture(&self.sim, 0.0);
+        self.prev = self.curr;
+        Ok(())
     }
 
     /// The car between the last two steps, where the page's clock is now.

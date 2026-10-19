@@ -514,6 +514,28 @@ impl Game {
         Ok(())
     }
 
+    /// Task 38's frame-rate check: the frame loop plays a recorded drive of this race.ini
+    /// (a `.ryin`'s bytes) from the session's first step and stops at its end.
+    pub fn play_tape(&mut self, race_ini: &str, assists_ini: Option<String>, seed: u32, tape: &[u8]) -> Result<(), JsError> {
+        self.session.play_tape(race_ini, assists_ini.as_deref(), seed, tape).map_err(|e| JsError::new(&e))?;
+        self.view = self.session.view();
+        Ok(())
+    }
+
+    /// The same check without a tape (the page opened with ?autodrive=1): the frame loop stops
+    /// when the session reaches `step`.
+    pub fn stop_at_step(&mut self, step: u32) {
+        self.session.stop_at = Some(step as u64);
+        self.session.chain = crate::session::CHAIN_START;
+    }
+
+    /// Where the check is, as JSON: the session's step, whether the loop stopped there, the
+    /// state hash of every car chained over every step since the stop was set, and the
+    /// player's car's state hash now.
+    pub fn check_state(&self) -> String {
+        format!("{{\"step\":{},\"stopped\":{},\"chain\":\"{:016x}\",\"car\":\"{}\"}}", self.session.sim.steps, self.session.stopped(), self.session.chain, self.state_hash())
+    }
+
     /// The car's whole state as one number (FNV-1a 64 of `save_state`), hex.
     pub fn state_hash(&self) -> String {
         let mut hash = 0xcbf2_9ce4_8422_2325u64;
