@@ -13,7 +13,7 @@
 #   sh tools/net_gold/record.sh [laguna|rich|all]
 set -eu
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-work=${NET_GOLD_WORK:-$repo/re/scratch/task37/net_work}
+work=${NET_GOLD_WORK:-$repo/target/proofs/net_work}
 out=$repo/re/gold/net/tapes
 what=${1:-all}
 mkdir -p "$work" "$out"

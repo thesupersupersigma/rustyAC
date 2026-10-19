@@ -7,12 +7,12 @@
 # Needs the AC folder, cardata/ and wasmtime (docs/port/multiplayer.md, "Golden tapes").
 #
 #   sh tools/net_gold/check.sh [golden name ...]    (default: all 20; $NET_GOLD_WAYS: which ways)
-#   -> one line per golden and way in $NET_GOLD_OUT/check.log (re/scratch/task37/net_check)
+#   -> one line per golden and way in $NET_GOLD_OUT/check.log (target/proofs/net_check)
 set -eu
 # in Windows form (C:/...): rustc and wasmtime get it in places no path conversion reaches
 repo=$(cd "$(dirname "$0")/../.." && { pwd -W 2>/dev/null || pwd; })
 gold=$repo/re/gold/net
-out=${NET_GOLD_OUT:-$repo/re/scratch/task37/net_check}
+out=${NET_GOLD_OUT:-$repo/target/proofs/net_check}
 ac=${AC_ROOT:-"C:/Program Files (x86)/Steam/steamapps/common/assettocorsa"}
 wasmtime=$repo/target/web-tools/wasmtime/bin/wasmtime.exe
 mkdir -p "$out"

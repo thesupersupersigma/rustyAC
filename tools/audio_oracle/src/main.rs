@@ -100,7 +100,7 @@ fn parse() -> Result<Args, String> {
         frames: None,
         no_track: false,
         acs: PathBuf::from(DEFAULT_ACS),
-        root: repo.join("re/scratch/task19/root"),
+        root: repo.join("re/scratch/audio_oracle/root"),
         count: 200,
         seed: 1,
         out_file: None,

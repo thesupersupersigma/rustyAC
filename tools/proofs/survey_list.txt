@@ -1,0 +1,70 @@
+# Task 18's every-track drives (docs/port/tracks.md): car track layout(- for none) scenarios...
+# Taken from the lists that survived in re/scratch/task18 (list_main, extra, free, full, l1-l3, pit).
+# from Task 18's list_main.txt
+ks_ferrari_f2004 magione - trk_lap trk_kerb_strike
+ks_ferrari_f2004 ks_laguna_seca - trk_lap trk_kerb_strike trk_object
+ks_ferrari_f2004 monza - trk_lap trk_kerb_strike trk_object
+ks_ferrari_f2004 imola - trk_lap trk_kerb_strike
+ks_ferrari_f2004 ks_nurburgring layout_gp_a trk_lap trk_kerb_strike trk_object
+ks_ferrari_f2004 ks_nurburgring layout_sprint_a trk_lap trk_kerb_strike
+ks_ferrari_f2004 trento-bondone - trk_run trk_kerb_strike
+# from Task 18's list_extra.txt
+ks_ferrari_f2004 spa - spa_wall_low spa_kerb_strike trk_object
+ks_ferrari_f2004 ks_monza66 full trk_object
+ks_ferrari_f2004 ks_nordschleife touristenfahrten trk_run
+ks_ferrari_f2004 ks_black_cat_county layout_short trk_lap trk_object
+ks_ferrari_f2004 imola - trk_green_lap
+# from Task 18's list_free.txt
+ks_ferrari_f2004 drift - trk_free
+bmw_m3_e30 drift - trk_free
+ks_ferrari_f2004 ks_drag drag200 trk_free
+bmw_m3_e30 ks_drag drag200 trk_free
+ks_ferrari_f2004 ks_drag drag400 trk_free
+bmw_m3_e30 ks_drag drag400 trk_free
+ks_ferrari_f2004 ks_drag drag500 trk_free
+bmw_m3_e30 ks_drag drag500 trk_free
+ks_ferrari_f2004 ks_drag drag1000 trk_free
+bmw_m3_e30 ks_drag drag1000 trk_free
+ks_ferrari_f2004 ks_drag drag2000 trk_free
+bmw_m3_e30 ks_drag drag2000 trk_free
+# from Task 18's list_full.txt
+ks_ferrari_f2004 trento-bondone - trk_run_full
+# from Task 18's list_l1.txt
+ks_ferrari_f2004 ks_highlands layout_short trk_lap
+ks_ferrari_f2004 ks_zandvoort - trk_lap
+ks_ferrari_f2004 ks_nurburgring layout_gp_b trk_lap
+ks_ferrari_f2004 ks_red_bull_ring layout_gp trk_lap
+ks_ferrari_f2004 mugello - trk_lap
+ks_ferrari_f2004 ks_vallelunga extended_circuit trk_lap
+ks_ferrari_f2004 ks_silverstone gp trk_lap
+ks_ferrari_f2004 ks_monza66 full trk_lap
+ks_ferrari_f2004 ks_black_cat_county layout_long trk_lap
+ks_ferrari_f2004 ks_nordschleife endurance trk_lap
+# from Task 18's list_l2.txt
+ks_ferrari_f2004 ks_nurburgring layout_sprint_b trk_lap
+ks_ferrari_f2004 ks_silverstone international trk_lap
+ks_ferrari_f2004 ks_vallelunga classic_circuit trk_lap
+ks_ferrari_f2004 vhe_interlagos gp trk_lap
+ks_ferrari_f2004 ks_monza66 road trk_lap
+ks_ferrari_f2004 ks_silverstone1967 - trk_lap
+ks_ferrari_f2004 spa - trk_lap
+ks_ferrari_f2004 ks_black_cat_county layout_int trk_lap
+ks_ferrari_f2004 ks_highlands layout_long trk_lap
+ks_ferrari_f2004 ks_nordschleife endurance_cup trk_lap
+# from Task 18's list_l3.txt
+ks_ferrari_f2004 ks_vallelunga club_circuit trk_lap
+ks_ferrari_f2004 ks_monza66 junior trk_lap
+ks_ferrari_f2004 ks_silverstone national trk_lap
+ks_ferrari_f2004 ks_red_bull_ring layout_national trk_lap
+ks_ferrari_f2004 vhe_interlagos norm trk_lap
+ks_ferrari_f2004 montreal - trk_lap
+ks_ferrari_f2004 ks_highlands layout_drift trk_lap
+ks_ferrari_f2004 ks_highlands layout_int trk_lap
+ks_ferrari_f2004 ks_nordschleife nordschleife trk_lap
+# from Task 18's list_pit.txt
+ks_ferrari_f2004 monza - trk_pit
+bmw_m3_e30 monza - trk_pit
+ks_ferrari_f2004 ks_laguna_seca - trk_pit
+bmw_m3_e30 ks_laguna_seca - trk_pit
+ks_ferrari_f2004 ks_nurburgring layout_gp_a trk_pit
+bmw_m3_e30 ks_nurburgring layout_gp_a trk_pit

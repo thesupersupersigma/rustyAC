@@ -1,0 +1,20 @@
+# GUI sequences of Tasks 29-34 (tools/render_oracle/src/gui_seq*.rs), one `render_oracle gui --gui <name>` each.
+# Task 29: HUD and widgets
+base text widgets_a widgets_b widgets_c hud_messages hud_flags hud_flags_triple hud_cars hud_cars_simple hud_cars_noflag forms forms_layout forms_overlap
+# Task 30: menus
+lb_control_2 lb_control_12 lb_control_24 lb_app_12 lb_tab_2 lb_tab_24 lb_online_12 end_race_12 end_race_24 end_qualify_2 end_practice_12 end_online_12
+tab_2 tab_12 tab_24 tab_online_12 app_12 overlay_2 overlay_12 overlay_24 overlay_v_12 overlay_v_24 esc_menu esc_menu_race esc_menu_fixed
+replay_bar_2 replay_bar_12 online_overlays pit_menu pit_menu_small pit_menu_lane pit_menu_looks pit_menu_bottom pit_stop pause_menu pause_menu_online pause_menu_race pause_menu_plain
+# Task 31: setup editor
+setup_probe setup_tabs@ks_ferrari_f2004 setup_tabs@bmw_m3_e30 setup_tabs@bmw_z4_gt3 setup_tabs@ks_alfa_romeo_155_v6 setup_tabs@ks_ferrari_488_gt3 setup_tabs@ks_ferrari_sf70h
+setup_io@ks_ferrari_f2004 setup_io@bmw_m3_e30 setup_io@bmw_z4_gt3 setup_io@ks_ferrari_sf70h setup_io@lotus_49 setup_io@lotus_98t setup_io@lotus_exige_240 setup_io@lotus_exos_125_s1 setup_io@tatuusfa1
+setup_time@ks_ferrari_f2004
+# Task 32: apps
+app_chat app_chat_export app_chat_online app_laps app_position app_essentials app_delta app_realtime app_delta_sectors app_gears_ers app_mgu_ers
+app_trackmap app_trackmap@spa app_trackmap@laguna app_trackmap@ailine app_small app_driverperf app_stats app_ffb app_volumes app_friends app_eyes app_ballast
+# Task 33: telemetry, console, car data apps, translations
+app_telemetry app_telemetry_user app_setupdebug app_carphysics app_carengineer app_tyredebug app_tyres app_pedals app_electronics app_gears app_mgu app_sustelemetry
+esc_telemetry console
+esc_menu#it pause_menu#de hud_messages#it app_essentials#it app_tyres#de app_volumes#it app_ffb@short#de setup_tabs#it setup_io#de esc_menu_race#de tab_12#it end_race_12#de
+# Task 34: online menus and the setup pages of a server
+esc_menu_online setup_server@bmw_z4_gt3 setup_server1@bmw_z4_gt3 setup_pit@bmw_z4_gt3 setup_pitprobe@bmw_z4_gt3

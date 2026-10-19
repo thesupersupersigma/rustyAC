@@ -1,0 +1,32 @@
+# The replay, ghost car and telemetry sessions of Task 28c (docs/port/replays.md, sections 2, 5b, 6),
+# recorded again in the game's physics with the game's recorders beside the port's.
+# scenario track cars steps [more]; "-" = the scenario's own. The scenario behind each table row was
+# in the lost scripts; it is picked here from the row's words (cars, track, what happens).
+rc_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 - --replay
+pit_ai_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 135000 --replay --replay-frames 5000
+mc_pile_up spa - - --replay
+ai_race spa - - --replay --replay-frames 900
+rc_weekend magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 - --replay --replay-frames 3000
+pit_box_repair magione bmw_m3_e30,bmw_m3_e30 42000 --replay
+mc_mixed spa - - --replay
+ai_field spa - 2000 --replay --replay-frames 400
+pit_box_wing magione ks_ferrari_f2004,bmw_m3_e30 30000 --replay
+ai_solo spa - - --replay
+rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 - --replay
+pit_window_served magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 135000 --replay --replay-frames 7000
+pit_box magione ks_ferrari_488_gt3,bmw_m3_e30,ks_audi_r8_plus 30000 --replay --replay-frames 1500
+mc_rear_end spa - - --replay
+# the ghost car
+rc_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 112000 --ghost
+pit_ai_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 135000 --ghost
+rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 100000 --ghost
+rc_weekend magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 150000 --ghost
+ai_solo spa - 84000 --ghost
+rc_timed magione ks_ferrari_f2004,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 112000 --ghost
+# comparative telemetry
+rc_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 112000 --telemetry
+pit_ai_race magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 135000 --telemetry
+rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 100000 --telemetry
+rc_weekend magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 150000 --telemetry
+ai_solo spa - 84000 --telemetry
+rc_timed magione ks_ferrari_f2004,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 112000 --telemetry
