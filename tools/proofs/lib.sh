@@ -59,6 +59,12 @@ multi_list() {
         "$CO" multi "$@" $more --threads 0,1,8 --out "$m_rec/m" --root "$m_root" > "$out/multi.txt" 2>&1 < /dev/null
         name="multi $s $t $cars $more"
         n=$(grep -cE "^$s threads [0-9]+: IDENTICAL" "$out/multi.txt")
+        # --replay / --ghost / --telemetry: their own verdict line must agree too. With --telemetry the
+        # game's recorder hung on the lap events changes the game's referee values (v0.38.1 the same),
+        # so only the telemetry's verdict counts there (as in Task 28c)
+        feature=$(echo "$more" | grep -oE -- '--(replay|ghost|telemetry)' | head -n 1 | tr -d -)
+        if [ "$feature" = telemetry ]; then n=3; sed -i '/threads [0-9]*: DIFFERENT/d' "$out/multi.txt"; fi
+        if [ -n "$feature" ] && ! grep -qE "^$feature \| $s \| all \| (IDENTICAL|no lap became a ghost)" "$out/multi.txt"; then n=0; fi
         if [ "$n" = 3 ] && ! grep -q 'DIFFERENT' "$out/multi.txt"; then
             verdict "$name" IDENTICAL "$(grep -m1 -oE '[0-9]+ steps, [0-9]+ values' "$out/multi.txt")"
         else

@@ -16,7 +16,7 @@ while read -r car scenario camera; do
     "$AO" compare --tape "oracle/audio/$car/$scenario.audiotape" --camera "$camera" --out "$out/cmp" > "$out/row.txt" 2>&1
     cat "$out/row.txt" >> "$out/rows.txt"
     row=$(grep -m1 "^$car |" "$out/row.txt")
-    case "$row" in *"| ok") verdict "$car $scenario $camera" IDENTICAL ;; *) verdict "$car $scenario $camera" DIFFERENT "${row:-$(tail -n 1 "$out/row.txt")}" ;; esac
+    case "$row" in *"| ok"|*"| ok ("*) verdict "$car $scenario $camera" IDENTICAL ;; *) verdict "$car $scenario $camera" DIFFERENT "${row:-$(tail -n 1 "$out/row.txt")}" ;; esac
     rm -rf "$out/cmp"
 done <<ROWS
 ks_ferrari_f2004 spa_launch cockpit

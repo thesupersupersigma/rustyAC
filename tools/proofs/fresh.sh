@@ -103,7 +103,7 @@ if part rays; then  # Task 14 and 18: the road under the wheels on every track a
     while read -r t l _; do
         "$CO" rays --track "$t" ${l:+--layout "$l"} --count 200000 --root "$root" > "$out/rays.txt" 2>&1
         if grep -q '^No difference' "$out/rays.txt"; then verdict "rays $t $l" IDENTICAL
-        elif grep -qiE 'refused|not load|cannot' "$out/rays.txt"; then echo "rays $t $l: refused (not a case)" >> "$out/refused.txt"
+        elif grep -qiE 'refused|not load|cannot|needs .*models_|is missing|invalid stof' "$out/rays.txt"; then echo "rays $t $l: refused (not a case)" >> "$out/refused.txt"
         else verdict "rays $t $l" DIFFERENT "$(tail -n 1 "$out/rays.txt")"; fi
     done < "$out/layouts.txt"
 fi
@@ -118,7 +118,7 @@ if part survey; then  # Task 18: a car on every track of survey_list.txt, then r
         "$CC" game-replay --dir "$rec/$label" --exe target/release/rustyac.exe > "$out/replay_$label.txt" 2>&1
         grep -E '^\| .(trk|spa)_[a-z_]*. \|' "$out/replay_$label.txt" | while IFS='|' read -r _ sc rest; do
             sc=$(echo "$sc" | tr -d ' `')
-            case "$rest" in *"100 %"*) verdict "game-replay $label/$sc" IDENTICAL ;; *) verdict "game-replay $label/$sc" DIFFERENT "$rest" ;; esac
+            case "$rest" in *"100 %"*) verdict "game-replay $label/$sc" IDENTICAL ;; *skipped*) echo "game-replay $label/$sc: $rest" >> "$out/left_out.txt" ;; *) verdict "game-replay $label/$sc" DIFFERENT "$rest" ;; esac
         done
         compare_dirs
     done

@@ -33,7 +33,7 @@ done
 cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
 exe=target/release/rustyac.exe
 $exe --car ks_ferrari_f2004 --track spa --no-race-ini --spawn start --autodrive --headless --duration 60 --no-audio --record "$out/spa.ryin" > "$out/record.txt" 2>&1
-hashes=$(for w in 0 1 8; do $exe --replay "$out/spa.ryin" --headless --state-hash --physics-threads $w 2>&1 | tail -n 1; done | sort -u)
+hashes=$(for w in 0 1 8; do $exe --replay "$out/spa.ryin" --headless --state-hash --physics-threads $w 2>&1 | grep -oE "state hash [0-9a-f]+"; done | sort -u)
 [ "$(echo "$hashes" | wc -l)" = 1 ] && [ -n "$hashes" ] && verdict "rustyac.exe replay at 0, 1, 8 workers" IDENTICAL "$hashes" || verdict "rustyac.exe replay at 0, 1, 8 workers" DIFFERENT "$hashes"
 rm -f "$out/spa.ryin"
 

@@ -11,7 +11,7 @@ wt=$repo/target/web-tools/wasmtime/bin/wasmtime.exe
 need "$wt" "wasmtime (docs/port/web.md)"
 need target/wasm-sysroot "the wasm sysroot (docs/port/web.md)"
 cargo build --release --locked --quiet -p rustyac-game --bin replay_hash || exit 2
-CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo/target/wasm-sysroot" \
+CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2
 docs="$USERPROFILE/Documents/Assetto Corsa"
 for f in oracle/game/*.ryin; do
@@ -25,7 +25,7 @@ for f in oracle/game/*.ryin; do
 done
 if [ -n "$BROWSER_DIGEST" ]; then
     tool math_proof
-    CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo/target/wasm-sysroot" \
+    CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
         cargo build --release --locked --quiet --manifest-path tools/math_proof/Cargo.toml --target wasm32-wasip1 || exit 2
     for i in $(seq 0 15); do
         a=$(tools/math_proof/target/release/math_proof.exe digest --stride 16 --offset "$i" 2>&1 | tail -n 1)
