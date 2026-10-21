@@ -18,7 +18,7 @@ for f in oracle/game/*.ryin; do
     d=$(target/release/replay_hash.exe "$f" 2>&1 | grep -o "hash.*")
     s=$(target/release/replay_hash.exe "$f" 2>&1 | grep -o "^[0-9]* steps")
     # a drive with the user's setup names it under Documents: seen read-only as /docs
-    w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" --dir "$ac::/ac" \
+    w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" --dir "$repo_w::." --dir "$ac::/ac" \
         --dir "$docs::/docs" target/wasm32-wasip1/release/replay_hash.wasm "/repo/$f" \
         --remap "$ac=/ac" --remap "$(cygpath -m "$docs" 2>/dev/null || echo "$docs")=/docs" --remap "$repo_w=/repo" 2>&1 | grep -o "hash.*")
     if [ -n "$d" ] && [ "$d" = "$w" ]; then verdict "$f" IDENTICAL "$s $d"; else verdict "$f" DIFFERENT "desktop [$d] wasm [$w]"; fi

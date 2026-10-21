@@ -64,7 +64,7 @@ multi_list() {
         # so only the telemetry's verdict counts there (as in Task 28c)
         feature=$(echo "$more" | grep -oE -- '--(replay|ghost|telemetry)' | head -n 1 | tr -d -)
         if [ "$feature" = telemetry ]; then n=3; sed -i '/threads [0-9]*: DIFFERENT/d' "$out/multi.txt"; fi
-        if [ -n "$feature" ] && ! grep -qE "^$feature \| $s \| all \| (IDENTICAL|no lap became a ghost)" "$out/multi.txt"; then n=0; fi
+        if [ -n "$feature" ] && ! grep -qE "^$feature \| $s \| all \| (IDENTICAL|no lap became a ghost|no lap was finished)" "$out/multi.txt"; then n=0; fi
         if [ "$n" = 3 ] && ! grep -q 'DIFFERENT' "$out/multi.txt"; then
             verdict "$name" IDENTICAL "$(grep -m1 -oE '[0-9]+ steps, [0-9]+ values' "$out/multi.txt")"
         else

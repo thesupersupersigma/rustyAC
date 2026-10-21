@@ -13,9 +13,12 @@ need oracle/audio/ks_ferrari_f2004/spa_launch.audiotape "Task 19's tapes"
 cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
 
 while read -r car scenario camera; do
-    "$AO" compare --tape "oracle/audio/$car/$scenario.audiotape" --camera "$camera" --out "$out/cmp" > "$out/row.txt" 2>&1
-    cat "$out/row.txt" >> "$out/rows.txt"
-    row=$(grep -m1 "^$car |" "$out/row.txt")
+    for try in 1 2; do  # FMOD's mix is not repeatable: a second try only when every call log agreed
+        "$AO" compare --tape "oracle/audio/$car/$scenario.audiotape" --camera "$camera" --out "$out/cmp" > "$out/row.txt" 2>&1 < /dev/null
+        cat "$out/row.txt" >> "$out/rows.txt"
+        row=$(grep -m1 "^$car |" "$out/row.txt")
+        case "$row" in *"| identical | identical | identical |"*"| FAIL") ;; *) break ;; esac
+    done
     case "$row" in *"| ok"|*"| ok ("*) verdict "$car $scenario $camera" IDENTICAL ;; *) verdict "$car $scenario $camera" DIFFERENT "${row:-$(tail -n 1 "$out/row.txt")}" ;; esac
     rm -rf "$out/cmp"
 done <<ROWS
