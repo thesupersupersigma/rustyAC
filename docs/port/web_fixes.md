@@ -2,9 +2,9 @@
 
 ## Resume here
 
-Steps 0 to 4 are done and committed; every case below was rerun after the last change. Left:
-the `tools/proofs/run_all.sh` table, clippy on every target, version 0.38.3 and the tag. To
-see a case again:
+Done and released as v0.38.3: steps 0 to 4, every proof area (table below), clippy on every
+target, `--locked` builds of the workspace and every tool. Nothing is left open but the
+questions at the end. To see a case again:
 
     sh re/scratch/task38d/dl.sh old|new clean cut wrong zero short 503x5 spoiled   # downloads
     sh re/scratch/task38d/mp.sh old|new cutjoin|cutlate|gwclose|refused|freeze|session
@@ -116,6 +116,31 @@ entry list when it joins, and a new driver can only take one of those slots.
 | 2 | only magione's 10 files are downloaded; the car comes from storage. Clear all: 0.0 MB. |
 | 3 | all 15 files are downloaded again. |
 | Copy diagnostics | headless Chrome refuses the clipboard; the page says so, and the text is in `window.rustyac.diagnostics` |
+
+### Every proof (`tools/proofs/run_all.sh`, full size)
+
+The areas that load the game ran one at a time. browser, dumps, shaders, launcher and net ran
+beside them in a second chain (`PROOF_OUT=target/proofs_b`), which is why some times differ
+from Task 38c's. The telemetry cases now count every thread, with no lines filtered out.
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics | 113 | 113 | 0 | 31m11s |
+| fresh | 657 | 657 | 0 | 2 h 54 min |
+| sound | 22 | 22 | 0 | 3m29s |
+| render | 107 | 107 | 0 | 42m26s |
+| gui | 123 | 123 | 0 | 79m40s |
+| replays | 34 | 34 | 0 | 48m17s |
+| net | 80 | 80 | 0 | 22m15s |
+| browser | 223 | 223 | 0 | 57m17s |
+| ai_page | 3 | 3 | 0 | 7m24s |
+| shaders | 4 | 4 | 0 | 1m26s |
+| launcher | 12 | 12 | 0 | 7m03s |
+| dumps | 223 | 223 | 0 | 97m33s (every drive's states byte-identical to v0.38.2) |
+
+Clippy `-D warnings`: the workspace with `--all-targets`, rustyac-web on wasm32-unknown-unknown
+with `--all-targets`, the game crates on wasm32-wasip1: clean. Disk free: 24 GB at the start,
+30 GB at the end.
 
 ## Redeploying the gateways (tsss-server)
 
