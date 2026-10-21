@@ -862,9 +862,22 @@ async function loadServers() {
   } catch {
     // a site without the file has no server list
   }
+  // the on-demand servers the server panel started (its router behind net/x/*); a test on
+  // this computer names the router's address with ?ondemand=http://127.0.0.1:<port>
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+  const ondemand = (local && params.get('ondemand')) || '';
+  try {
+    const response = await fetch(`${ondemand}${ondemand ? '/' : ''}net/x/servers.json`, { cache: 'no-cache' });
+    if (response.ok) {
+      for (const s of (await response.json()).servers || []) {
+        if (s && /^x-[a-z0-9_-]+$/.test(s.id) && /^\/net\/x\/[a-z0-9_-]+$/.test(s.url)) servers.push({ ...s, url: ondemand ? ondemand.replace(/^http/, 'ws') + s.url : s.url });
+      }
+    }
+  } catch {
+    // no panel on this site: the fixed servers only
+  }
   // (a server from the address bar is a test hook: only on this computer, so that a link
   // to the real site cannot send a visitor's player id to somebody's gateway)
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
   if (params.get('server') && local) {
     const cars = (params.get('servercars') || '').split(',').filter(Boolean);
     servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars, track: params.get('servertrack') || '', password: params.get('serverpass') === '1' });
@@ -1899,11 +1912,11 @@ function showCorner() {
 // The theme's online page in the browser: this site's servers (servers.json) are its lobby's
 // entries, Kunos' lobby is never asked. A server's own HTTP port (details, CANJOIN, booking) is
 // answered here too: the gateway carries the game's protocol only. Every server is in pickup
-// mode (no booking), its player count unknown (0).
+// mode (no booking), its player count unknown (0) but for the panel's on-demand servers.
 const lobbyIp = (index) => `10.37.0.${index + 1}`;
 function launcherLobby() {
   const entry = (s, i) => ({
-    ip: lobbyIp(i), port: 9600 + i, cport: 8081 + i, tport: 9600 + i, name: s.name || s.id, clients: 0, maxclients: Math.max(1, (s.cars || []).length),
+    ip: lobbyIp(i), port: 9600 + i, cport: 8081 + i, tport: 9600 + i, name: s.name || s.id, clients: s.players || 0, maxclients: s.maxPlayers || Math.max(1, (s.cars || []).length),
     track: s.track ? (s.layout ? `${s.track}-${s.layout}` : s.track) : '', cars: s.cars || [], session: 0, sessiontypes: ['1'], durations: ['0'], timeleft: 0,
     timestamp: 0, lastupdate: 0, country: ['', ''], pass: !!s.password, pickup: true, timed: false, extra: false, l: false, inverted: false, pit: false, timeofday: 0,
   });

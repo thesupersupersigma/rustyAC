@@ -5,9 +5,9 @@
 - Done: the panel in `server/panel/` (presets, start/stop through the socket proxy, the
   router of `net/x/<id>`, the Cloudflare Access check), its unit tests (8, all pass), the
   compose services (profile `panel`), `server/.env.example`, `AC_CFG` in the entrypoint.
-- Next: the end-to-end run on 127.0.0.1 (fake Docker API, acServer copy, gateway, headless
-  page), the page's list of on-demand servers, the docs in `server/README.md`, the proofs,
-  the release.
+- Done: the end-to-end run on 127.0.0.1 (`re/scratch/task38e/e2e.sh`, results below), the
+  page's list of on-demand servers (`web/app.js`), the panel docs in `server/README.md`.
+- Next: the proofs (`sh tools/proofs/run_all.sh`), clippy, `--locked` builds, the release.
 
 ## What the panel is
 
@@ -54,3 +54,25 @@ on an internal network.
   `docker compose up -d` starts what it started before).
 - `server/.env.example` (new), `.gitignore` gets `server/.env`.
 - `LICENSING.md`: the panel and its npm packages and images.
+
+## End to end on 127.0.0.1 (`re/scratch/task38e/e2e.sh`)
+
+The panel (`node server/panel/src/main.ts`) against a Docker API stand-in that runs the
+acServer copy from the AC folder's `server\` (in `re/scratch/task38e/acserver/`) and the
+repo's `rustyac-gateway` as local processes, behind an Access stand-in that signs tokens
+with a test key and serves its public key the way `/cdn-cgi/access/certs` does. The page is
+v0.38.3's site with this task's `app.js`; a headless Chrome (`web/check.mjs`) joins.
+
+| Check | Result |
+|---|---|
+| panel without a token / with a made-up token | 403 / 403 |
+| panel through the Access stand-in | 200 |
+| a form post (not JSON) | 403 |
+| "New from the fixed server laguna_seca", idle minutes set to 2 | saved |
+| a preset with a car not in the pack | refused: `car ks_mazda_mx5_cup: not in the pack` |
+| start: `server_cfg.ini` vs the pack's `cfg/laguna_seca/` | only NAME and the three ports differ (pool ports 9620 / 9620 / 9630) |
+| start: `entry_list.ini` vs the pack's | 0 lines differ (comments aside) |
+| router `GET /net/x/servers.json` | the started server, players 0 / 12, no password, no admin password |
+| router WebSocket to an unknown server / to `/net/spa` | 404 / 404 |
+| the page with `?join=x-laguna_seca-x` | joined through the router, Practice, driving at 244 km/h |
+| the panel's player list while the page drove | `panel38e`, idle countdown held at the full 2 min |

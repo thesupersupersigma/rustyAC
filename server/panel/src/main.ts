@@ -86,9 +86,9 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   let m = /^\/api\/logs\/([^/]+)$/.exec(url.pathname);
   if (req.method === 'GET' && m && NAME.test(m[1])) return send(res, 200, await servers.logs(m[1]));
   if (req.method !== 'POST') return send(res, 404, { error: 'no such page' });
-  // changes only from the panel's own page (a JSON body: another site's form cannot send one)
-  const origin = req.headers.origin;
-  if (!String(req.headers['content-type']).startsWith('application/json') || (origin && new URL(origin).host !== req.headers.host)) {
+  // changes only from the panel's own page: a JSON body needs a CORS preflight from another
+  // site, which is never answered (no Origin check: behind the tunnel the Host is the origin's)
+  if (!String(req.headers['content-type']).startsWith('application/json')) {
     return send(res, 403, { error: 'changes come from the panel page only' });
   }
   const body = await readBody(req);
