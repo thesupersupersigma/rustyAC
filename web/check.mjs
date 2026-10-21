@@ -21,6 +21,8 @@
 //                                       within that many metres (at most 8)
 //        [--end kill]                   end by killing the browser (a tab that just vanishes),
 //                                       not by closing it
+//        [--freeze 30@60]               30 s into the drive the page is frozen for 60 s (what
+//                                       a tab in the background or a sleeping laptop gets)
 //        [--menu]          do not wait for a drive: the menu with its content is enough
 //        [--launcher]      do not wait for a drive: AC's launcher in the page (?launcher=1) is enough
 //        [--script <file.js>]   run that file's text in the page at the end (the body of an
@@ -287,10 +289,17 @@ try {
     report.chat_sent = [];
     report.shots = [];
     report.others_seen = 0;
+    const [freezeAt, freezeFor] = option('--freeze', '').split('@').map(Number);
     while (Date.now() < until) {
       await sleep(250);
       now = await page();
       const drove = (Date.now() - drivingSince) / 1000;
+      if (freezeFor && !report.frozen && drove >= freezeAt) {
+        await send('Page.setWebLifecycleState', { state: 'frozen' });
+        await sleep(freezeFor * 1000);
+        await send('Page.setWebLifecycleState', { state: 'active' });
+        report.frozen = { at: drove, seconds: freezeFor };
+      }
       while (chat.length && drove >= chat[0].at) {
         const line = chat.shift();
         report.chat_sent.push({ text: line.text, at: drove, sent: await evaluate(`window.rustyac.chat(${JSON.stringify(line.text)})`) });

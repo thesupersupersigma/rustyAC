@@ -6,6 +6,12 @@
     python web/serve.py --ac "C:/.../assettocorsa"        also serves that folder read-only at
                                                           /ac-test/ (the test hook of the folder
                                                           picker: ?testfolder=/ac-test/)
+    python web/serve.py --fault cut:collider.kn5          a test of the page's downloads: the
+                                                          first answer for a path containing the
+                                                          text goes wrong once (cut: half, then
+                                                          the connection closes; wrong: one byte
+                                                          changed; zero: an empty 200; short: a
+                                                          shorter file than the list says; 503)
 
 Serves dist-web/site/ at / and, when it exists, the preview pack at /preview/ (where the page
 looks for `preview/manifest.json`). It listens on this computer only. It never writes anything.
@@ -82,22 +88,60 @@ def make_handler(mounts):
                 return self.send(404, b'not found')
             size = os.path.getsize(full)
             kind = MIME.get(os.path.splitext(full)[1].lower()) or mimetypes.guess_type(full)[0] or 'application/octet-stream'
-            self.send_response(200)
+            fault = None
+            if self.command == 'GET':
+                for i, (what, text) in enumerate(self.server.faults):
+                    if text in self.path:
+                        fault = what
+                        self.server.faults.pop(i)
+                        self.log_message('fault %s for %s', what, self.path)
+                        break
+            if fault == '503':
+                return self.send(503, b'a test fault')
+            # one range "bytes=N-" (what the page asks for to resume a download)
+            start = 0
+            ranged = (self.headers.get('Range') or '').strip()
+            if ranged.startswith('bytes=') and ranged.endswith('-') and ranged[6:-1].isdigit() and int(ranged[6:-1]) < size:
+                start = int(ranged[6:-1])
+            length = 0 if fault == 'zero' else size - start - (1 if fault == 'short' else 0)
+            self.send_response(206 if start else 200)
             self.send_header('Content-Type', kind)
-            self.send_header('Content-Length', str(size))
+            self.send_header('Content-Length', str(length))
+            self.send_header('Accept-Ranges', 'bytes')
+            if start:
+                self.send_header('Content-Range', f'bytes {start}-{size - 1}/{size}')
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             if self.command == 'HEAD':
                 return
             with open(full, 'rb') as f:
-                while True:
-                    block = f.read(1 << 20)
+                f.seek(start)
+                left = length
+                sent = 0
+                while left > 0:
+                    block = f.read(min(1 << 20, left))
                     if not block:
                         break
+                    if fault == 'wrong' and sent <= length // 2 < sent + len(block):
+                        block = bytearray(block)
+                        block[length // 2 - sent] ^= 0xFF
+                        block = bytes(block)
+                    if fault == 'cut' and sent + len(block) > length // 2:
+                        # half of it, then the connection breaks off
+                        try:
+                            self.wfile.write(block[:length // 2 - sent])
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionError):
+                            pass
+                        self.close_connection = True
+                        self.connection.shutdown(2)
+                        return
                     try:
                         self.wfile.write(block)
                     except (BrokenPipeError, ConnectionError):
                         return
+                    sent += len(block)
+                    left -= len(block)
 
     return Handler
 
@@ -109,6 +153,7 @@ def main():
     parser.add_argument('--ac', help='an Assetto Corsa folder to serve read-only at /ac-test/ (test hook)')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--quiet', action='store_true')
+    parser.add_argument('--fault', action='append', default=[], help='KIND:TEXT, once each (a test of the page; see above)')
     args = parser.parse_args()
     if not os.path.isfile(os.path.join(args.site, 'index.html')):
         raise SystemExit(f'{args.site} has no index.html: run `python web/build.py` first')
@@ -120,6 +165,12 @@ def main():
     mounts.append(('/', os.path.abspath(args.site)))
     server = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), make_handler(mounts))
     server.quiet = args.quiet
+    server.faults = []
+    for fault in args.fault:
+        what, _, text = fault.partition(':')
+        if what not in ('cut', 'wrong', 'zero', 'short', '503') or not text:
+            raise SystemExit(f'--fault {fault}: KIND:TEXT with KIND cut, wrong, zero, short or 503')
+        server.faults.append((what, text))
     server.daemon_threads = True
     print(f'rustyAC browser preview: http://127.0.0.1:{args.port}/', flush=True)
     for prefix, folder in mounts:
