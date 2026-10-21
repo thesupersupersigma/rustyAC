@@ -473,9 +473,14 @@ fn serve(mut stream: TcpStream, shared: &Arc<Shared>) {
                     let _ = send(&writer, ws::OP_CLOSE, &[&ws::close_payload(1003, &why)]);
                     break 'session why;
                 }
-                Frame::Close(..) => {
+                Frame::Close(code, reason) => {
                     let _ = send(&writer, ws::OP_CLOSE, &[&ws::close_payload(ws::CLOSE_NORMAL, "")]);
-                    break 'session "the client closed the WebSocket".to_string();
+                    // (the client's answer to the close the gateway sent when the server went)
+                    if server_gone.load(Ordering::SeqCst) {
+                        break 'session "the game server closed the connection (the client answered the gateway's close)".to_string();
+                    }
+                    // (the reason is the client's text: quoted and escaped, one log line stays one)
+                    break 'session format!("the client closed the WebSocket (code {code}, reason {reason:?})");
                 }
             }
         }
