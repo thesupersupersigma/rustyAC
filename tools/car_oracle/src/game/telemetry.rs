@@ -7,8 +7,9 @@
 //! constructor wants a whole `Sim`); its queue is made by the runtime's own constructor. Two
 //! handlers are hung on the real car's events and call the game's own two closures: the
 //! sample of every step (0x140073820) and the lap's end (0x1400736e0). The game's `update`
-//! 0x140076850 runs after every sixth step (a picture at about 55 a second), with
-//! `RaceManager::getLapCount` standing in as the car's own lap count. The port gets the same
+//! 0x140076850 runs after every sixth step (a picture at about 55 a second); its own call of
+//! `RaceManager::getLapCount` is sent to a stand-in that reads the car's own lap count (Task 38d:
+//! before, the whole function was replaced, which changed the referee's values). The port gets the same
 //! car values at the same moments. At the end: the three laps' slots, the saved file
 //! (`saveBest` 0x140075d50, into the scratch root's stand-in Documents) and the file loaded
 //! again (`loadBest` 0x140074d30).
@@ -27,7 +28,8 @@ const VA_LAP: usize = 0x1_4007_36e0; // the closure of Car::evOnLapCompleted
 const VA_UPDATE: usize = 0x1_4007_6850; // ComparativeTelemetryRecorder::update(float)
 const VA_SAVE_BEST: usize = 0x1_4007_5d50; // saveBest()
 const VA_LOAD_BEST: usize = 0x1_4007_4d30; // loadBest()
-const VA_GET_LAP_COUNT: usize = 0x1_4013_8570; // RaceManager::getLapCount(CarAvatar*)
+const VA_UPDATE_CALL_LAP_COUNT: usize = 0x1_4007_68c2; // update's `call RaceManager::getLapCount`
+const VA_UPDATE_PADDING: usize = 0x1_4007_69c2; // 14 bytes of int3 after update's ret
 const VA_QUEUE_CTOR_IMPORT: usize = 0x1_404a_46c8; // MSVCP120's _Concurrent_queue_base_v4(size_t)
 const VA_QUEUE_VFTABLE: usize = 0x1_404b_02a8; // concurrent_queue<CTData>::`vftable'
 const VA_GET_DOCUMENT_PATH: usize = 0x1_4023_0890;
@@ -149,12 +151,21 @@ extern "C" fn on_step(_this: *mut u8, event: *const u8) {
 
 /// Hangs the game's recorder and the port's on the first car of the session.
 pub unsafe fn install(acs: &Acs, car: *mut u8, car_name: &str, track: &str, config: &str) {
-    // RaceManager::getLapCount: the number this file keeps (mov rax, imm64; mov eax, [rax]; ret)
+    // only the recorder's own call of RaceManager::getLapCount reads the number this file keeps:
+    // a stand-in (mov rax, imm64; mov eax, [rax]; ret) in the int3 padding after `update`; the rest
+    // of the game (referee, standings) keeps every car's own lap count
     let lap_count = Box::leak(Box::new(0u32)) as *mut u32 as usize;
     let mut code = vec![0x48, 0xb8];
     code.extend_from_slice(&(lap_count as u64).to_le_bytes());
     code.extend_from_slice(&[0x8b, 0x00, 0xc3]);
-    acs.patch(acs.va(VA_GET_LAP_COUNT), &code);
+    let stub = acs.va(VA_UPDATE_PADDING);
+    assert!(std::slice::from_raw_parts(stub as *const u8, code.len()).iter().all(|&b| b == 0xcc), "no int3 padding after update");
+    acs.patch(stub, &code);
+    let call = acs.va(VA_UPDATE_CALL_LAP_COUNT);
+    assert_eq!(*(call as *const u8), 0xe8);
+    let mut code = vec![0xe8];
+    code.extend_from_slice(&((stub as i64 - (call as i64 + 5)) as i32).to_le_bytes());
+    acs.patch(call, &code);
     let names = TelemetryNames { driver: "Telemetry Driver".to_string(), track: track.to_string(), car: car_name.to_string(), config: config.to_string() };
     let sim = acs.alloc(0x800);
     let track_avatar = acs.alloc(0x400);

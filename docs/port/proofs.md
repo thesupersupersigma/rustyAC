@@ -128,6 +128,9 @@ run recorded again five times was identical every time, as the saved Task 34 rec
 1. With `--telemetry` the several-car comparison itself differs at the first lap event (the
    game's referee values), in v0.38.1 too; the telemetry's own verdict is identical, which is what
    Task 28c claimed. Probably the oracle's hooks on the game's lap events; not chased.
+   **Answered in Task 38d** (`docs/port/web_fixes.md`): the oracle replaced the game's whole
+   `RaceManager::getLapCount` with car 0's count, so the referee read the wrong laps for every car;
+   now only the recorder's own call is redirected, and the comparison is identical again.
 2. `pit_mouse` seed 2 differed once at step 584 and not in five reruns: something on the game's
    side of that run is not repeatable (the mouse pit menu is driven by clicks; load?). Not chased.
 3. The launcher's career list differed once in `utility/get` (the game's display modes came back
