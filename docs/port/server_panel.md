@@ -76,3 +76,11 @@ v0.38.3's site with this task's `app.js`; a headless Chrome (`web/check.mjs`) jo
 | router WebSocket to an unknown server / to `/net/spa` | 404 / 404 |
 | the page with `?join=x-laguna_seca-x` | joined through the router, Practice, driving at 244 km/h |
 | the panel's player list while the page drove | `panel38e`, idle countdown held at the full 2 min |
+| the idle stop (idle minutes 2, poll every 5 s) | stopped and removed both containers 200 s after the start, about 2 min after the page left (last seen with the player ~80 s after the start); the router list empty, the run folder removed |
+| the stand-in's calls for that stop | `stop` + `DELETE` of the gateway, then of the acServer; nothing else |
+
+Screenshots: `server_panel.jpg` (43 KB, the panel with the started server; the admin
+password is the run's random one) and `server_panel_join.jpg` (149 KB, the page driving on it
+through the router).
+
+![the panel](server_panel.jpg)
