@@ -67,6 +67,22 @@
   <div id="controls-list"></div>
   <table id="controls-layout"></table>
   <p id="controls-not-used" class="hint"></p>
+  <h2>Downloaded data</h2>
+  <p id="storage-total" class="status"></p>
+  <table id="storage-list"></table>
+  <p>
+    <button id="storage-clear-selected">Clear selected</button>
+    <button id="storage-clear-all">Clear all</button>
+  </p>
+  <p class="hint">What is cleared is downloaded again when a drive needs it. "Clear all" leaves
+    your own launcher settings (the last row) alone: tick that row to clear them.</p>
+  <h2>Diagnostics</h2>
+  <p>
+    <button id="copy-diagnostics">Copy diagnostics</button>
+    <span id="diagnostics-copied" class="status"></span>
+  </p>
+  <p class="hint">The page's own log of the last few visits (connections, joins, downloads,
+    errors), for a bug report. Nothing is sent anywhere.</p>
 </div>
 
 <main id="menu">

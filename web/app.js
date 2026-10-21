@@ -76,14 +76,49 @@ const state = {
 // what a test (or the curious) can read from outside
 window.rustyac = { state: 'starting', error: null, hud: null, perf: null, notes: '', log: [] };
 
+// The page's own log for a report (Copy diagnostics): connections, joins, downloads, errors
+// of the last few visits, in the browser's storage.
+const DIAG_KEY = 'rustyac.diagnostics';
+const diagnostics = (() => {
+  let visits = [];
+  try {
+    visits = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+  } catch {
+    visits = [];
+  }
+  if (!Array.isArray(visits)) visits = [];
+  const visit = { started: new Date().toISOString(), page: location.pathname + location.search, browser: navigator.userAgent, events: [] };
+  visits = [...visits.slice(-4), visit];
+  return { visits, visit };
+})();
+
+function diag(kind, text) {
+  const events = diagnostics.visit.events;
+  events.push(`${new Date().toISOString().slice(11, 23)} ${kind}: ${text}`);
+  if (events.length > 300) events.splice(0, 100);
+  try {
+    localStorage.setItem(DIAG_KEY, JSON.stringify(diagnostics.visits));
+  } catch {
+    // no storage: the log lives as long as the page
+  }
+}
+
+const diagnosticsText = () =>
+  diagnostics.visits.map((v) => `== visit ${v.started} ${v.page}\n${v.browser}\n${v.events.join('\n')}`).join('\n\n');
+
 function setStatus(text) {
   $('status').textContent = text;
   window.rustyac.log.push(text);
 }
 
 function fail(error) {
-  const text = String(error && error.message ? error.message : error);
+  let text = String(error && error.message ? error.message : error);
+  // (a pack's files are checked as they arrive: one that does not decrypt is not a broken download)
+  if (state.source && state.source.kind === 'pack' && /do not decrypt|encrypted or unreadable/.test(text) && !/couldn't download/.test(text)) {
+    text += " The files were downloaded whole and match the pack's list: the pack itself holds them this way.";
+  }
   console.error(error);
+  diag('error', text);
   window.rustyac.state = 'error';
   window.rustyac.error = text;
   $('status').textContent = '';
@@ -127,40 +162,65 @@ async function openPack(base) {
     sizes: new Map(manifest.files.map((f) => [f.path, f.bytes])),
     cars: manifest.cars.map((c) => ({ id: c.id, name: c.name, refused: null, bytes: c.bytes, pinned: !!c.pinned })),
     tracks: manifest.tracks.map((t) => ({ track: t.id, layout: t.layout, name: t.name, refused: null, bytes: t.bytes, pinned: !!t.pinned })),
-    async open(path) {
+    // from: resume at this byte (HTTP Range); fresh: not from the browser's storage
+    async open(path, { from = 0, fresh = false } = {}) {
       const entry = entries.get(path.toLowerCase());
       if (!entry) throw new Error(`${path} is not in the preview pack`);
+      const discard = async () => {
+        if (cache) await cache.removeEntry(entry.sha256).catch(() => {});
+      };
       // a file fetched on an earlier visit is in the browser's own storage, under its hash
-      if (cache) {
+      // (and checked against that hash again, as a download is)
+      if (cache && entry.sha256 && !fresh && !from) {
         try {
           const file = await (await cache.getFileHandle(entry.sha256)).getFile();
-          if (file.size === entry.bytes) return { size: file.size, stream: file.stream(), sha256: '', from: 'cache' };
+          if (file.size === entry.bytes) return { size: file.size, stream: file.stream(), sha256: entry.sha256, from: 'cache', discard };
         } catch {
           // not cached yet
         }
       }
-      const got = await fetch(base + entry.path.split('/').map(encodeURIComponent).join('/'));
-      if (!got.ok || !got.body) throw new Error(`${entry.path}: the server answered ${got.status}`);
-      let keep = null;
-      if (cache) {
-        try {
-          keep = await (await cache.getFileHandle(entry.sha256, { create: true })).createWritable();
-        } catch {
-          keep = null;
-        }
+      const got = await fetch(base + entry.path.split('/').map(encodeURIComponent).join('/'), from ? { headers: { Range: `bytes=${from}-` } } : {});
+      if (!got.ok || !got.body) throw new Error(`the server answered ${got.status}`);
+      // (a server that ignores the Range sends the whole file again)
+      const resumed = from > 0 && got.status === 206;
+      const length = Number(got.headers.get('content-length'));
+      const expected = entry.bytes - (resumed ? from : 0);
+      if (got.headers.has('content-length') && length !== expected && !got.headers.has('content-encoding')) {
+        await got.body.cancel().catch(() => {});
+        throw new Error(`the server sent ${length} bytes, the pack's list says ${expected}`);
       }
-      return {
-        size: entry.bytes,
-        stream: got.body,
-        sha256: entry.sha256,
-        from: 'network',
-        keep,
-        async discard() {
-          if (cache) await cache.removeEntry(entry.sha256).catch(() => {});
-        },
-      };
+      return { size: entry.bytes, stream: got.body, sha256: entry.sha256 || '', from: 'network', resumed, discard };
+    },
+    // the browser's storage for a file being downloaded (written while it arrives, closed
+    // only once the whole file passed its check: never a part of one)
+    async keep(path) {
+      const entry = entries.get(path.toLowerCase());
+      if (!cache || !entry || !entry.sha256) return null;
+      try {
+        return await (await cache.getFileHandle(entry.sha256, { create: true })).createWritable();
+      } catch {
+        return null;
+      }
     },
   };
+}
+
+// The files of an older pack (another hash, so another name) are no use: dropped once the
+// pack's list is read.
+async function dropStaleCopies(manifest) {
+  const cache = await packCache();
+  if (!cache) return;
+  const listed = new Set(manifest.files.map((f) => f.sha256));
+  try {
+    for await (const name of cache.keys()) {
+      if (!listed.has(name)) {
+        await cache.removeEntry(name).catch(() => {});
+        diag('cache', `dropped ${name.slice(0, 12)}...: a file of an older pack`);
+      }
+    }
+  } catch {
+    // the storage is gone: nothing to drop
+  }
 }
 
 // ---------------------------------------------------------------- the player's own folder
@@ -505,17 +565,45 @@ async function useSource(source, line) {
 
 // ---------------------------------------------------------------- files into the wasm side
 
+// Each file whole and checked: a download that breaks off goes on where it stopped (HTTP
+// Range), after a pause that grows; one that arrives wrong (or a stored copy that is wrong)
+// is thrown away and fetched again. What cannot be had fails with the file's name and why.
+const DOWNLOAD_TRIES = 5;
+
 async function loadFiles(paths, done) {
-  for (const path of paths) {
-    const file = await state.source.open(path);
-    let writer = new rac.FileWriter(file.size, !!file.sha256);
-    let keep = file.keep || null;
+  for (const path of paths) await loadFile(path, done);
+}
+
+async function loadFile(path, done) {
+  const source = state.source;
+  let tries = 0;
+  let fresh = false;
+  let from = 0;
+  let file = null;
+  let writer = null;
+  let keep = null;
+  const restart = async () => {
+    if (writer) writer.free();
+    if (keep) await keep.abort().catch(() => {});
+    writer = null;
+    keep = null;
+    from = 0;
+  };
+  for (;;) {
     try {
+      file = await source.open(path, { from, fresh });
+      if (from && file.resumed) diag('download', `${path}: goes on from ${megabytes(from)} (HTTP Range)`);
+      else if (from) await restart();
+      if (!writer) {
+        writer = new rac.FileWriter(file.size, !!file.sha256);
+        if (file.from === 'network' && source.keep) keep = await source.keep(path);
+      }
       const reader = file.stream.getReader();
       for (;;) {
         const { done: end, value } = await reader.read();
         if (end) break;
         writer.write(value);
+        from += value.length;
         if (keep) {
           try {
             await keep.write(value);
@@ -523,21 +611,49 @@ async function loadFiles(paths, done) {
             // the browser's storage is full or gone: go on without keeping the file
             await keep.abort().catch(() => {});
             keep = null;
-            if (file.discard) await file.discard();
           }
         }
         done(value.length, path, file.from);
       }
-      // (commit takes the writer; it checks the hash before the file is mounted or kept)
+      // (commit takes the writer; it checks the size and hash before the file is mounted)
       const committing = writer;
       writer = null;
-      committing.commit(path, file.sha256 || '');
+      try {
+        committing.commit(path, file.sha256 || '');
+      } catch (error) {
+        // the whole file arrived and is wrong: no use resuming it
+        from = 0;
+        throw error;
+      }
       if (keep) await keep.close().catch(() => {});
+      keep = null;
+      if (tries || file.from === 'network') diag('download', `${path}: ${megabytes(file.size)} ${file.from === 'cache' ? 'from storage' : 'downloaded'}${tries ? `, ${tries} retries` : ''}`);
+      return;
     } catch (error) {
-      if (writer) writer.free();
-      if (keep) await keep.abort().catch(() => {});
-      if (file.discard) await file.discard();
-      throw error;
+      const why = String(error && error.message ? error.message : error);
+      if (source.kind !== 'pack') {
+        await restart();
+        throw error;
+      }
+      if (file && file.from === 'cache') {
+        // the stored copy is not the file: away with it, and from the network
+        diag('cache', `${path}: the stored copy failed its check (${why}): downloaded again`);
+        await file.discard();
+        await restart();
+        fresh = true;
+        file = null;
+        continue;
+      }
+      tries++;
+      diag('download', `${path}: try ${tries} of ${DOWNLOAD_TRIES} failed at ${megabytes(from)}: ${why}`);
+      if (!from) await restart();
+      if (tries >= DOWNLOAD_TRIES) {
+        await restart();
+        throw new Error(`couldn't download ${path} (${why}; ${DOWNLOAD_TRIES} tries)`);
+      }
+      file = null;
+      setStatus(`downloading ${path.slice(path.lastIndexOf('/') + 1)}: ${why}; trying again ...`);
+      await sleep(500 * 3 ** (tries - 1));
     }
   }
 }
@@ -770,9 +886,39 @@ async function loadServers() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Why a WebSocket closed, in words: the gateway's own reason when it gave one.
+function closeReason(event) {
+  if (event.reason) return `${event.reason} (code ${event.code})`;
+  if (event.code === 1006) return 'the connection to the gateway broke without a goodbye (code 1006: the network, a proxy, or the computer went to sleep)';
+  return `the gateway closed the connection (code ${event.code})`;
+}
+
+// The files of these cars on this track (as many rounds as loading turns up more), and the
+// checksum files: the bytes that came over.
+async function loadServerFiles(cars, track, checksumFiles) {
+  let loaded = 0;
+  for (let round = 0; round < 8; round++) {
+    const wanted = new Set();
+    for (const car of cars) for (const path of rac.files_wanted(car, track.track, track.layout).split('\n')) if (path) wanted.add(path);
+    for (const path of checksumFiles) if (!rac.fs_has(path)) wanted.add(path);
+    if (!wanted.size) break;
+    let total = 0;
+    for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
+    let got = 0;
+    $('progress').hidden = false;
+    await loadFiles([...wanted], (bytes, path, from) => {
+      got += bytes;
+      loaded += bytes;
+      $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
+      setStatus(`${from === 'cache' ? "from this browser's storage" : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
+    });
+  }
+  return loaded;
+}
+
 // Joins the chosen server: the WebSocket to its gateway, the handshake and the car list (the
-// wasm side's client, the desktop's own), then the files of what the server runs, then the
-// drive.
+// wasm side's client, the desktop's own), the files it runs (fetched
+// before the connection when servers.json names them), then the drive.
 async function joinServer() {
   const server = state.servers.find((s) => s.id === $('mp-server').value);
   if (!server || state.loading || state.online) return;
@@ -801,8 +947,15 @@ async function joinServer() {
   let ws = null;
   let join = null;
   let link = null;
+  const started = performance.now();
+  let loaded = 0;
   try {
     const url = gatewayUrl(server.url);
+    // what servers.json says the server runs is fetched (and checked) before the connection:
+    // the server holds a slot only for the drive, never for a download that may break off
+    const listedTrack = state.tracks.find((t) => server.track && t.track.toLowerCase() === server.track.toLowerCase() && (t.layout || '') === (server.layout || ''));
+    const listedCars = (server.cars || []).map((m) => state.cars.find((c) => c.id.toLowerCase() === m.toLowerCase() && !c.refused)).filter(Boolean).map((c) => c.id);
+    if (listedTrack && !listedTrack.refused && listedCars.length) loaded += await loadServerFiles(listedCars, listedTrack, []);
     // one try: a WebSocket to the gateway, the handshake for this model, the car list
     const attempt = async (car) => {
       setMultiplayer(`connecting to ${server.name || server.id} ...`);
@@ -819,20 +972,31 @@ async function joinServer() {
       socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) made.push(new Uint8Array(event.data));
       };
-      socket.onclose = (event) => made.lost(event.reason || (event.code === 1006 ? 'the connection to the gateway broke' : `the gateway closed the connection (code ${event.code})`));
+      socket.onclose = (event) => {
+        const why = closeReason(event);
+        diag('net', `${url}: closed, code ${event.code}${event.reason ? ` (${event.reason})` : ''}, ${event.wasClean ? 'a clean close' : 'not a clean close'}`);
+        made.lost(why);
+        if (state.online && state.online.ws === socket) {
+          state.online.closed = why;
+          setMultiplayer(`${state.online.server.name || state.online.server.id}: connection lost: ${why}`);
+        }
+      };
       await new Promise((resolve, reject) => {
         socket.onopen = resolve;
         socket.onerror = () => reject(new Error(`no connection to ${url}: the gateway is not running there, or it does not let this page's address in`));
       });
+      diag('net', `${url}: open, asking for a ${car}`);
       setMultiplayer(`asking ${server.name || server.id} for a ${car} ...`);
       join = rac.NetJoin.start(made, playerId(), name, car, $('mp-password').value);
       for (;;) {
         const status = JSON.parse(join.status());
         if (status.stage === 'done') {
           link = made;
+          diag('net', `joined ${status.server}: slot ${status.slot}, ${status.car} at ${status.track}, cars ${status.cars.join(', ')}`);
           return status;
         }
         if (status.stage === 'error') {
+          diag('net', `join refused: ${status.error}`);
           join = null;
           socket.close(1000);
           throw new Error(status.error);
@@ -866,26 +1030,9 @@ async function joinServer() {
     window.rustyac.join = status;
 
     // the files: of every car on the server, of the track, and the ones the server wants
-    // checksums of (they are worked out here, from the same files)
-    const started = performance.now();
-    let loaded = 0;
+    // checksums of (they are worked out here, from the same files); normally all here already
     const cars = models.map((m) => state.cars.find((c) => c.id.toLowerCase() === m.toLowerCase()).id);
-    for (let round = 0; round < 8; round++) {
-      const wanted = new Set();
-      for (const car of cars) for (const path of rac.files_wanted(car, track.track, track.layout).split('\n')) if (path) wanted.add(path);
-      for (const path of status.checksum_files) if (!rac.fs_has(path)) wanted.add(path);
-      if (!wanted.size) break;
-      let total = 0;
-      for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
-      let got = 0;
-      $('progress').hidden = false;
-      await loadFiles([...wanted], (bytes, path, from) => {
-        got += bytes;
-        loaded += bytes;
-        $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
-        setStatus(`${from === 'cache' ? "from this browser's storage" : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
-      });
-    }
+    loaded += await loadServerFiles(cars, track, status.checksum_files);
     const fileSeconds = (performance.now() - started) / 1000;
     $('progress').hidden = true;
     setStatus('building the track and the cars (a large track takes some seconds; the page stands still meanwhile) ...');
@@ -916,7 +1063,9 @@ async function joinServer() {
     startDriving();
   } catch (error) {
     state.loading = false;
+    $('progress').hidden = true;
     if (join) {
+      diag('net', `leaving before the drive: ${error && error.message ? error.message : error}`);
       try {
         join.abandon();
       } catch {
@@ -933,10 +1082,11 @@ async function joinServer() {
 
 // Leaves the server: the protocol's goodbye, then the WebSocket. The page starts afresh for
 // the next drive (a drive's picture and memory are not taken apart piece by piece).
-function leaveServer(reload) {
+function leaveServer(reload, why = 'the page left') {
   const online = state.online;
   if (!online) return;
   state.online = null;
+  diag('net', `leaving ${online.server.id}: ${why}`);
   try {
     if (state.game) state.game.leave();
   } catch {
@@ -1166,6 +1316,88 @@ function showControls() {
 function openControls() {
   showControls();
   $('controls').hidden = false;
+  showStorage();
+}
+
+// ---------------------------------------------------------------- downloaded data
+
+const DOCS_STORE = 'rustyac-documents-1'; // launcher.js: the player's own launcher settings
+
+// What this browser keeps: the pack's files (under their hashes) by car, track, launcher
+// theme and the rest, the player's launcher settings, and what the browser says it allows.
+async function storedGroups() {
+  const groups = new Map();
+  const add = (key, label, size, remove) => {
+    const group = groups.get(key) || { key, label, bytes: 0, files: 0, removes: [] };
+    group.bytes += size;
+    group.files += 1;
+    group.removes.push(remove);
+    groups.set(key, group);
+  };
+  const root = navigator.storage && navigator.storage.getDirectory ? await navigator.storage.getDirectory().catch(() => null) : null;
+  if (!root) return [];
+  const manifest = state.source && state.source.kind === 'pack' ? state.source.manifest : null;
+  const byHash = new Map(manifest ? manifest.files.map((f) => [f.sha256, f.path]) : []);
+  const theme = new Set(manifest ? manifest.launcher || [] : []);
+  const pack = await root.getDirectoryHandle('rustyac-pack-1').catch(() => null);
+  if (pack) {
+    for await (const [name, handle] of pack.entries()) {
+      const size = (await handle.getFile().catch(() => ({ size: 0 }))).size;
+      const path = byHash.get(name) || '';
+      const parts = path.split('/');
+      let key = 'other';
+      let label = 'other files';
+      if (/^content\/cars\//i.test(path)) [key, label] = [`car:${parts[2]}`, `car ${parts[2]}`];
+      else if (/^content\/tracks\//i.test(path)) [key, label] = [`track:${parts[2]}`, `track ${parts[2]}`];
+      else if (theme.has(path)) [key, label] = ['theme', 'launcher theme'];
+      else if (!path) [key, label] = manifest ? ['old', 'files of an older pack'] : ['old', 'files downloaded from a pack'];
+      add(key, label, size, () => pack.removeEntry(name));
+    }
+  }
+  const docs = await root.getDirectoryHandle(DOCS_STORE).catch(() => null);
+  if (docs) {
+    for await (const [name, handle] of docs.entries()) {
+      const size = (await handle.getFile().catch(() => ({ size: 0 }))).size;
+      add('documents', 'your launcher settings (Documents)', size, () => docs.removeEntry(name));
+    }
+  }
+  const order = (g) => (g.key === 'documents' ? 2 : g.key.startsWith('car:') || g.key.startsWith('track:') ? 0 : 1);
+  return [...groups.values()].sort((a, b) => order(a) - order(b) || a.label.localeCompare(b.label));
+}
+
+let storageShown = [];
+
+async function showStorage() {
+  storageShown = await storedGroups();
+  const total = storageShown.reduce((sum, g) => sum + g.bytes, 0);
+  const estimate = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate().catch(() => null) : null;
+  $('storage-total').textContent =
+    `${megabytes(total)} kept by this page` + (estimate ? `; the browser counts ${megabytes(estimate.usage || 0)} of ${megabytes(estimate.quota || 0)} allowed for this site` : '');
+  $('storage-list').replaceChildren(
+    ...storageShown.map((g, index) => {
+      const row = document.createElement('tr');
+      const tick = document.createElement('input');
+      tick.type = 'checkbox';
+      tick.dataset.index = String(index);
+      tick.setAttribute('aria-label', g.label);
+      const cells = [tick, g.label, `${g.files} file${g.files === 1 ? '' : 's'}`, megabytes(g.bytes)].map((content) => {
+        const cell = document.createElement('td');
+        cell.append(content);
+        return cell;
+      });
+      row.append(...cells);
+      return row;
+    }),
+  );
+  if (!storageShown.length) $('storage-list').replaceChildren(Object.assign(document.createElement('caption'), { textContent: 'nothing is kept' }));
+}
+
+async function clearStorage(groups) {
+  for (const group of groups) {
+    for (const remove of group.removes) await remove().catch(() => {});
+    diag('cache', `cleared ${group.label} (${megabytes(group.bytes)})`);
+  }
+  await showStorage();
 }
 
 function closeControls() {
@@ -1204,6 +1436,17 @@ function startControls() {
   $('controls-reset').addEventListener('click', () => {
     controlsError('');
     takeControls(rac.controls_reset(), true);
+  });
+  $('storage-clear-selected').addEventListener('click', () =>
+    clearStorage([...$('storage-list').querySelectorAll('input:checked')].map((tick) => storageShown[Number(tick.dataset.index)])),
+  );
+  // (read again: the list on show may still be filling)
+  $('storage-clear-all').addEventListener('click', async () => clearStorage((await storedGroups()).filter((g) => g.key !== 'documents')));
+  $('copy-diagnostics').addEventListener('click', async () => {
+    const text = diagnosticsText();
+    window.rustyac.diagnostics = text;
+    const ok = await navigator.clipboard.writeText(text).then(() => true, () => false);
+    $('diagnostics-copied').textContent = ok ? `copied (${text.split('\n').length} lines)` : 'the browser refused the clipboard: the log is in window.rustyac.diagnostics';
   });
 }
 
@@ -1293,7 +1536,7 @@ function stopDriving() {
     $('chat').hidden = true;
     setMultiplayer(`you left ${state.online.server.name || state.online.server.id}`);
     window.rustyac.state = 'left';
-    leaveServer(true);
+    leaveServer(true, 'the player left (Esc)');
     return;
   }
   state.running = false;
@@ -1346,8 +1589,10 @@ const aidsShown = () => `${$('hud-tc').textContent} | ${$('hud-abs').textContent
 // A drive on a server that broke (the connection is gone, the picture failed): the server
 // is left properly and the page says how to go on.
 function failOnline(error) {
-  const text = String(error && error.message ? error.message : error);
-  leaveServer(false);
+  let text = String(error && error.message ? error.message : error);
+  // (the game only knows the connection is gone: the socket knows why)
+  if (state.online && state.online.closed) text += `: ${state.online.closed}`;
+  leaveServer(false, text);
   $('hud').hidden = true;
   $('chat').hidden = true;
   setMultiplayer('');
@@ -1378,7 +1623,8 @@ function frame(now) {
   } catch (error) {
     state.running = false;
     $('menu').hidden = false;
-    fail(error);
+    if (state.online) failOnline(error);
+    else fail(error);
     return;
   }
   showHud(hud);
@@ -1880,6 +2126,7 @@ async function main() {
     });
     if (pack) {
       state.packAvailable = true;
+      await dropStaleCopies(pack.manifest);
       rac.fs_list(pack.manifest.files.map((f) => f.path).join('\n'));
       const few = pack.cars.length + pack.tracks.length <= 8;
       const line = few
