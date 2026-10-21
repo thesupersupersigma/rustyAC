@@ -2,12 +2,15 @@
 
 ## Resume here
 
-- Done: the panel in `server/panel/` (presets, start/stop through the socket proxy, the
-  router of `net/x/<id>`, the Cloudflare Access check), its unit tests (8, all pass), the
-  compose services (profile `panel`), `server/.env.example`, `AC_CFG` in the entrypoint.
-- Done: the end-to-end run on 127.0.0.1 (`re/scratch/task38e/e2e.sh`, results below), the
-  page's list of on-demand servers (`web/app.js`), the panel docs in `server/README.md`.
-- Next: the proofs (`sh tools/proofs/run_all.sh`), clippy, `--locked` builds, the release.
+- Done and released as v0.38.4: the panel in `server/panel/` (presets, start/stop through
+  the socket proxy, the `net/x/<id>` router, the Cloudflare Access check, auto-stop), its
+  unit tests (8 of 8), the compose services (profile `panel`), `server/.env.example`,
+  `AC_CFG` in the entrypoint, the page's list of on-demand servers (`web/app.js`), the docs
+  in `server/README.md`, the end-to-end run on 127.0.0.1 and the proofs below (net, browser,
+  ai_page; physics from the stopped full run).
+- Not done: the panel was never run against a real Docker daemon or Cloudflare (by the
+  rules); the image tags `node:24.11.1-alpine` and `tecnativa/docker-socket-proxy:0.3.0`
+  were not checked online.
 
 ## What the panel is
 
@@ -84,3 +87,34 @@ password is the run's random one) and `server_panel_join.jpg` (149 KB, the page 
 through the router).
 
 ![the panel](server_panel.jpg)
+
+## Proofs, clippy, builds
+
+`git diff --stat v0.38.3 -- crates` is empty: no Rust crate changed in this task (only
+`server/`, `web/app.js`, docs, `LICENSING.md`, `.gitignore`). So, as decided for this task,
+only the areas the change can reach ran:
+
+- **net**: the multiplayer goldens four ways (the gateway and client code the panel's
+  servers use; the gateway is unchanged, the area checks it still answers the same);
+- **browser**: every drive desktop against wasm32-wasip1 (the page's simulation);
+- **ai_page**: the Quick Race in the page (the page itself runs `web/app.js`, which changed).
+
+The full run was started first and stopped by request after its first area (physics: 113
+cases, 113 identical, 0 different, 35m11s). The other areas (fresh, sound, render, gui,
+replays, shaders, launcher, dumps) were not run: they exercise crates, the desktop game and
+the launcher, none of which changed; the physics dumps were not regenerated for the same
+reason.
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics (the stopped full run) | 113 | 113 | 0 | 35m11s |
+| net | 80 | 80 | 0 | 17m46s |
+| browser | 223 | 223 | 0 | 50m23s |
+| ai_page | 3 | 3 | 0 | 6m44s |
+
+Clippy `-D warnings` (re/scratch/task38e/checks.sh, CI's lists and the Task 38 extras): the
+workspace with `--all-targets`; rustyac-web + rustyac-net `--lib` on wasm32-unknown-unknown;
+math / ode / content / physics / net / game on wasm32-wasip1; rustyac-render `--features
+wgpu --all-targets`; rustyac-web + rustyac-dxbc `--all-targets` on wasm32-unknown-unknown:
+all clean. `cargo build --release --locked` and every `tools/*` manifest with `--locked`:
+pass. Panel: `npx tsc --noEmit` clean, `npm test` 8 of 8.
