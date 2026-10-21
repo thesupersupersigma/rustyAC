@@ -110,7 +110,8 @@ fi
 
 if part survey; then  # Task 18: a car on every track of survey_list.txt, then rustyac.exe replays the game's drive
     cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
-    grep -vE '^\s*(#|$)' tools/proofs/survey_list.txt | while read -r car t l scenarios; do
+    # SURVEY_FROM=<n>: start at the n-th run of the list (to finish a run that was cut off)
+    grep -vE '^\s*(#|$)' tools/proofs/survey_list.txt | tail -n +"${SURVEY_FROM:-1}" | while read -r car t l scenarios; do
         [ "$l" = - ] && l=
         label="t18_${t}_${l}_${car}"
         for s in $scenarios; do record "$label" run --track "$t" ${l:+--layout "$l"} --scenario "$s" --car "$car" --collide; done
