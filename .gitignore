@@ -34,3 +34,6 @@ dist-server/
 tools/ilspy/
 tools/launcher_oracle/bin/
 tools/launcher_oracle/obj/
+
+# the server kit's real settings and passwords
+server/.env

@@ -105,3 +105,64 @@ services:
       GATEWAY_MAX_CLIENTS: ${GATEWAY_MAX_CLIENTS:-12}
     ports:
       - "${GATEWAY_BIND:-127.0.0.1}:${LAGUNA_GATEWAY_PORT:-9611}:9601/tcp"
+
+  # The server panel (profile "panel": `docker compose --profile panel up -d`): a private
+  # page behind Cloudflare Access that starts and stops extra servers from presets, and the
+  # public router of their WebSockets (one tunnel route, net/x/*). It starts containers of
+  # the two images above, so `docker compose build` them first. See README.md.
+  panel:
+    profiles: [panel]
+    build: panel
+    image: rustyac-panel
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - docker-proxy
+    networks: [default, docker-api]
+    environment:
+      GATEWAY_BIND: ${GATEWAY_BIND:-127.0.0.1}
+      GATEWAY_ORIGINS: ${GATEWAY_ORIGINS:-https://rustyac.example.com}
+      PANEL_PORT: ${PANEL_PORT:-9680}
+      PANEL_ROUTER_PORT: ${PANEL_ROUTER_PORT:-9681}
+      PANEL_DATA_DIR: ${PANEL_DATA_DIR:-/srv/rustyac/panel}
+      AC_PACK_DIR: ${AC_PACK_DIR:-/srv/rustyac/dist-server}
+      PANEL_SITE_URL: ${PANEL_SITE_URL:-}
+      PANEL_GAME_HOST: ${PANEL_GAME_HOST:-}
+      PANEL_MAX_SERVERS: ${PANEL_MAX_SERVERS:-3}
+      PANEL_GAME_PORTS: ${PANEL_GAME_PORTS:-9620-9629}
+      PANEL_HTTP_PORTS: ${PANEL_HTTP_PORTS:-9630-9639}
+      PANEL_GATEWAY_PORTS: ${PANEL_GATEWAY_PORTS:-9640-9649}
+      SPA_GAME_PORT: ${SPA_GAME_PORT:-9600}
+      SPA_HTTP_PORT: ${SPA_HTTP_PORT:-8081}
+      SPA_GATEWAY_PORT: ${SPA_GATEWAY_PORT:-9601}
+      LAGUNA_GAME_PORT: ${LAGUNA_GAME_PORT:-9610}
+      LAGUNA_HTTP_PORT: ${LAGUNA_HTTP_PORT:-8082}
+      LAGUNA_GATEWAY_PORT: ${LAGUNA_GATEWAY_PORT:-9611}
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+    volumes:
+      # the run folders are mounted into the servers' containers by this same host path
+      - ${PANEL_DATA_DIR:-/srv/rustyac/panel}:/data
+      - ${AC_PACK_DIR:-/srv/rustyac/dist-server}:/pack:ro
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${PANEL_PORT:-9680}:${PANEL_PORT:-9680}/tcp"
+      - "${GATEWAY_BIND:-127.0.0.1}:${PANEL_ROUTER_PORT:-9681}:${PANEL_ROUTER_PORT:-9681}/tcp"
+
+  # The panel's only way to Docker: containers (list, create, start, stop, remove, logs) and
+  # nothing else (no images, volumes, networks, exec into the host's other parts). Only on
+  # an internal network the panel shares; never published.
+  docker-proxy:
+    profiles: [panel]
+    image: tecnativa/docker-socket-proxy:0.3.0
+    restart: unless-stopped
+    networks: [docker-api]
+    environment:
+      CONTAINERS: 1
+      POST: 1
+      EVENTS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+networks:
+  docker-api:
+    internal: true

@@ -1,0 +1,19 @@
+{
+  "name": "rustyac-panel",
+  "private": true,
+  "description": "rustyAC's server panel: on-demand acServers from presets, behind Cloudflare Access",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}

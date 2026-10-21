@@ -7,13 +7,15 @@ set -eu
 name="${AC_SERVER:-spa}"
 pack="${AC_PACK:-/pack}"
 work="/srv/ac/$name"
+# the panel's on-demand servers bring their own cfg folder; the fixed ones read the pack's
+cfg="${AC_CFG:-$pack/cfg/$name}"
 
 if [ ! -f "$pack/acServer" ]; then
     echo "no acServer in $pack: mount the folder that server/make_server_pack.py made" >&2
     exit 1
 fi
-if [ ! -f "$pack/cfg/$name/server_cfg.ini" ]; then
-    echo "no cfg/$name/server_cfg.ini in $pack (AC_SERVER=$name)" >&2
+if [ ! -f "$cfg/server_cfg.ini" ]; then
+    echo "no server_cfg.ini in $cfg (AC_SERVER=$name)" >&2
     exit 1
 fi
 
@@ -30,8 +32,8 @@ escape() { printf '%s' "$1" | sed -e 's/[|&\\]/\\&/g'; }
 admin="$(escape "${AC_ADMIN_PASSWORD:-}")"
 join="$(escape "${AC_PASSWORD:-}")"
 sed -e "s|@ADMIN_PASSWORD@|$admin|" -e "s|^PASSWORD=.*|PASSWORD=$join|" \
-    "$pack/cfg/$name/server_cfg.ini" > "$work/cfg/server_cfg.ini"
-cp "$pack/cfg/$name/entry_list.ini" "$work/cfg/entry_list.ini"
+    "$cfg/server_cfg.ini" > "$work/cfg/server_cfg.ini"
+cp "$cfg/entry_list.ini" "$work/cfg/entry_list.ini"
 
 cd "$work"
 exec ./acServer
