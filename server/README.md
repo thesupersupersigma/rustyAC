@@ -50,6 +50,8 @@ There are two ways in:
 ```sh
 # on the PC with Assetto Corsa
 python server/make_server_pack.py            # -> dist-server/ (Kunos' files: never commit)
+python server/make_server_pack.py --all      # every car and layout acServer and rustyAC can run (the panel's choices)
+python server/make_server_pack.py --car ks_bmw_m235i_racing --track imola   # add one to the pack that is there
 
 # on the server (the pack copied to /srv/rustyac/dist-server)
 AC_PACK_DIR=/srv/rustyac/dist-server AC_ADMIN_PASSWORD=choose-one \
@@ -84,8 +86,11 @@ that carries the browsers' WebSockets to them. The full report is `docs/port/ser
 - **Presets** are kept in `PANEL_DATA_DIR/presets/`. Each one sets the track and layout,
   the cars (count and skins), practice / qualify / race (minutes or laps), weather, time of
   day, grip, join password, max players, pickup mode and the other `server_cfg.ini` keys.
-  Only the cars and tracks in the pack can be picked. "New from the fixed server spa" copies
-  a fixed server's settings.
+  Only the cars and tracks in the pack can be picked: build it with `--all` for every one
+  acServer and rustyAC can run (DLC that is not owned and CSP-only content are left out, and
+  listed in `dist-server/index.json`). Skins: the ticked ones in turn, one at random for each
+  car, or none (acServer's default). "New from the fixed server spa" copies a fixed
+  server's settings; "Duplicate" copies a preset.
 - **Start** writes `server_cfg.ini` and `entry_list.ini` into `PANEL_DATA_DIR/run/<id>/` and
   starts two containers from the kit's own images: `rustyac-x-<id>-acserver` and
   `rustyac-x-<id>-gateway`. **Stop** stops and removes both. A server that nobody was on
@@ -136,6 +141,15 @@ Cloudflare (Zero Trust):
 4. **Test** in a private window: `https://panel.<your domain>` asks for the Access login,
    and after it shows the panel. Then open `http://<GATEWAY_BIND>:9680/` from the server
    itself: it must answer `403` (no token, no panel).
+
+5. **Web Analytics off for the panel.** Cloudflare's automatic Web Analytics puts a beacon
+   script into proxied pages; the panel's Content-Security-Policy blocks it (a console
+   error, nothing else). To stop it: Cloudflare dashboard > *Analytics & Logs* > *Web
+   Analytics* > your site > *Manage site*, and either turn the automatic setup off or add a
+   rule that excludes `panel.<your domain>`.
+
+When the Access login expires, the panel's next refresh reloads the page once (which logs in
+again); when that does not help it says so instead of "Failed to fetch".
 
 The site's own Access application (if it has one) also covers `net/x/...`, the same as
 `net/spa`.

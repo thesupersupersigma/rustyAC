@@ -854,6 +854,43 @@ function markServers() {
   $('mp-join').disabled = !server || !state.source || state.loading || state.running || !!state.online;
 }
 
+const isLocal = () => ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+// the on-demand servers the server panel started (its router behind net/x/*); a test on
+// this computer names the router's address with ?ondemand=http://127.0.0.1:<port>
+const ondemandBase = () => (isLocal() && params.get('ondemand')) || '';
+const ondemandUrl = () => `${ondemandBase()}${ondemandBase() ? '/' : ''}net/x/servers.json`;
+function onDemandServers(text) {
+  const base = ondemandBase();
+  return (JSON.parse(text).servers || [])
+    .filter((s) => s && /^x-[a-z0-9_-]+$/.test(s.id) && /^\/net\/x\/[a-z0-9_-]+$/.test(s.url))
+    .map((s) => ({ ...s, ondemand: true, url: base ? base.replace(/^http/, 'ws') + s.url : s.url }));
+}
+
+function showServers(wanted) {
+  $('mp-server').replaceChildren(...state.servers.map((s) => new Option(s.name || s.id, s.id)));
+  $('mp-server').disabled = state.servers.length === 0;
+  if (wanted && state.servers.some((s) => s.id === wanted)) $('mp-server').value = wanted;
+}
+
+// The theme asks for its server list each time its online page opens or refreshes, and the
+// panel's servers come and go: they are read again then. Synchronous, as the frame's answer is.
+function reloadOnDemand() {
+  let fresh;
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', ondemandUrl(), false);
+    xhr.send();
+    if (xhr.status !== 200) return;
+    fresh = onDemandServers(xhr.responseText);
+  } catch {
+    return; // no panel on this site, or it did not answer: the list as it was
+  }
+  const fixed = state.servers.filter((s) => !s.ondemand && s.id !== 'address');
+  state.servers = [...fixed, ...fresh, ...state.servers.filter((s) => s.id === 'address')];
+  showServers($('mp-server').value);
+  markServers();
+}
+
 async function loadServers() {
   let servers = [];
   try {
@@ -862,30 +899,20 @@ async function loadServers() {
   } catch {
     // a site without the file has no server list
   }
-  // the on-demand servers the server panel started (its router behind net/x/*); a test on
-  // this computer names the router's address with ?ondemand=http://127.0.0.1:<port>
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
-  const ondemand = (local && params.get('ondemand')) || '';
   try {
-    const response = await fetch(`${ondemand}${ondemand ? '/' : ''}net/x/servers.json`, { cache: 'no-cache' });
-    if (response.ok) {
-      for (const s of (await response.json()).servers || []) {
-        if (s && /^x-[a-z0-9_-]+$/.test(s.id) && /^\/net\/x\/[a-z0-9_-]+$/.test(s.url)) servers.push({ ...s, url: ondemand ? ondemand.replace(/^http/, 'ws') + s.url : s.url });
-      }
-    }
+    const response = await fetch(ondemandUrl(), { cache: 'no-cache' });
+    if (response.ok) servers.push(...onDemandServers(await response.text()));
   } catch {
     // no panel on this site: the fixed servers only
   }
   // (a server from the address bar is a test hook: only on this computer, so that a link
   // to the real site cannot send a visitor's player id to somebody's gateway)
-  if (params.get('server') && local) {
+  if (params.get('server') && isLocal()) {
     const cars = (params.get('servercars') || '').split(',').filter(Boolean);
     servers.push({ id: 'address', name: `the address bar's server (${params.get('server')})`, url: params.get('server'), cars, track: params.get('servertrack') || '', password: params.get('serverpass') === '1' });
   }
   state.servers = servers.filter((s) => s && s.id && s.url);
-  $('mp-server').replaceChildren(...state.servers.map((s) => new Option(s.name || s.id, s.id)));
-  $('mp-server').disabled = state.servers.length === 0;
-  if (params.get('join') && state.servers.some((s) => s.id === params.get('join'))) $('mp-server').value = params.get('join');
+  showServers(params.get('join'));
   try {
     $('mp-name').value = params.get('name') || localStorage.getItem('rustyac.player-name') || 'rustyAC driver';
   } catch {
@@ -1926,7 +1953,10 @@ function launcherLobby() {
   return {
     answers: (host) => ['getserverlist', 'getlanservers', 'getserver', 'pingserver'].includes(host),
     request(host, url) {
-      if (host === 'getserverlist') return json(state.servers.map(entry));
+      if (host === 'getserverlist') {
+        reloadOnDemand();
+        return json(state.servers.map(entry));
+      }
       if (host === 'getlanservers') return json([]);
       const ip = new URLSearchParams(url.slice(url.indexOf('?') + 1)).get('ip');
       const i = state.servers.findIndex((s, n) => lobbyIp(n) === ip);
