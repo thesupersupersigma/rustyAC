@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Presets of on-demand servers: what the pack offers, checking a preset from the page, and the
 // server_cfg.ini / entry_list.ini a preset makes (written the way server/spa/*.ini are).
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export interface Car { model: string; count: number; skins: string[] }
+// skins: the slots take them in turn (random: a random one each); none: acServer's default skin
+export interface Car { model: string; count: number; skins: string[]; random?: boolean }
 export interface Session { minutes: number; open: number }
 export interface Race { laps: number; minutes: number; waitSeconds: number; open: number }
 export interface Weather {
@@ -21,7 +22,11 @@ export interface Preset {
   rules: Record<string, string>; // the other [SERVER] keys
 }
 export interface Ports { game: number; http: number }
-export interface Pack { cars: string[]; tracks: { track: string; layout: string }[] }
+export interface Pack {
+  cars: { model: string; name: string; skins: string[] }[];
+  tracks: { track: string; layout: string; name: string; pitboxes: number }[]; // pitboxes 0: not known
+  weather: { id: string; name: string }[];
+}
 
 // The other [SERVER] keys in the order of the fixed servers' files, with their values there.
 // (the plugin addresses, the lobby and the ports are not the page's to set)
@@ -44,18 +49,23 @@ export const NAME = /^[a-z0-9][a-z0-9_-]{0,31}$/; // preset ids: container names
 const FOLDER = /^[A-Za-z0-9_.-]{1,64}$/; // car, track, layout, skin and weather folder names
 const TEXT = /^[\x20-\x7e]{0,120}$/; // one line of plain text (no line breaks, nothing for the ini to choke on)
 
-// What the pack (server/make_server_pack.py's folder) has: cars with a data.acd, tracks and
-// layouts with a data/surfaces.ini.
+// What the pack (server/make_server_pack.py's folder) has: its index.json (menu names, skins,
+// pit boxes, weathers); a pack made before there was one: cars with a data.acd, tracks and
+// layouts with a data/surfaces.ini, under their folder names.
 export function readPack(dir: string): Pack {
+  if (existsSync(join(dir, 'index.json'))) {
+    const index = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8'));
+    return { cars: index.cars, tracks: index.tracks, weather: index.weather };
+  }
   const dirs = (path: string) => (existsSync(path) ? readdirSync(path, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort() : []);
-  const cars = dirs(join(dir, 'content', 'cars')).filter((c) => existsSync(join(dir, 'content', 'cars', c, 'data.acd')));
+  const cars = dirs(join(dir, 'content', 'cars')).filter((c) => existsSync(join(dir, 'content', 'cars', c, 'data.acd'))).map((model) => ({ model, name: model, skins: [] }));
   const tracks: Pack['tracks'] = [];
   for (const track of dirs(join(dir, 'content', 'tracks'))) {
     const at = join(dir, 'content', 'tracks', track);
-    if (existsSync(join(at, 'data', 'surfaces.ini'))) tracks.push({ track, layout: '' });
-    for (const layout of dirs(at)) if (existsSync(join(at, layout, 'data', 'surfaces.ini'))) tracks.push({ track, layout });
+    if (existsSync(join(at, 'data', 'surfaces.ini'))) tracks.push({ track, layout: '', name: track, pitboxes: 0 });
+    for (const layout of dirs(at)) if (existsSync(join(at, layout, 'data', 'surfaces.ini'))) tracks.push({ track, layout, name: `${track} / ${layout}`, pitboxes: 0 });
   }
-  return { cars, tracks };
+  return { cars, tracks, weather: [] };
 }
 
 // SUN_ANGLE of a time of day as AC's launcher writes it (13:00 is 0, 16 degrees an hour).
@@ -78,15 +88,22 @@ export function checkPreset(p: Preset, pack: Pack): string[] {
   if (typeof p !== 'object' || !p) return ['no preset'];
   if (!NAME.test(String(p.id))) bad.push('id: lower-case letters, digits, - and _ (up to 32)');
   if (typeof p.name !== 'string' || !TEXT.test(p.name) || !p.name.trim()) bad.push('name: one line of plain text');
-  if (!pack.tracks.some((t) => t.track === p.track && t.layout === p.layout)) bad.push(`track: ${p.track}${p.layout ? ' / ' + p.layout : ''} is not in the pack`);
+  const track = pack.tracks.find((t) => t.track === p.track && t.layout === p.layout);
+  if (!track) bad.push(`track: ${p.track}${p.layout ? ' / ' + p.layout : ''} is not in the pack`);
   if (!Array.isArray(p.cars) || !p.cars.length) bad.push('cars: at least one');
   else {
     for (const c of p.cars) {
-      if (!pack.cars.includes(c?.model)) bad.push(`car ${c?.model}: not in the pack`);
+      const known = pack.cars.find((k) => k.model === c?.model);
+      if (!known) bad.push(`car ${c?.model}: not in the pack`);
       int(c?.count, 1, 64, `car ${c?.model}: count`);
       if (!Array.isArray(c?.skins) || !c.skins.every((s) => typeof s === 'string' && FOLDER.test(s))) bad.push(`car ${c?.model}: skins are folder names`);
+      else if (known?.skins.length && !c.skins.every((s) => known.skins.includes(s))) bad.push(`car ${c?.model}: a skin it does not have`);
+      if (c?.random !== undefined && typeof c.random !== 'boolean') bad.push(`car ${c?.model}: random is yes or no`);
+      else if (c?.random && !c.skins?.length) bad.push(`car ${c?.model}: random needs the skins to pick from`);
     }
     if (new Set(p.cars.map((c) => c?.model)).size !== p.cars.length) bad.push('cars: each model once');
+    const slots = p.cars.reduce((n, c) => n + (Number(c?.count) || 0), 0);
+    if (track?.pitboxes && slots > track.pitboxes) bad.push(`cars: ${slots}, but the track has ${track.pitboxes} pit boxes`);
   }
   for (const s of ['practice', 'qualify'] as const) {
     if (p[s] !== null) {
@@ -104,7 +121,7 @@ export function checkPreset(p: Preset, pack: Pack): string[] {
   if (!p.practice && !p.qualify && !p.race) bad.push('sessions: at least one');
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.time)) || Math.abs(sunAngle(p.time)) > 80) bad.push('time: HH:MM from 08:00 to 18:00');
   const w = p.weather;
-  if (!w || !FOLDER.test(String(w.graphics))) bad.push('weather graphics: a weather folder name');
+  if (!w || !FOLDER.test(String(w.graphics)) || (pack.weather.length && !pack.weather.some((x) => x.id === w.graphics))) bad.push('weather graphics: a weather in the pack');
   else {
     int(w.ambient, -20, 50, 'ambient temperature'); int(w.road, -20, 50, 'road temperature (over ambient)');
     int(w.variationAmbient, 0, 20, 'ambient variation'); int(w.variationRoad, 0, 20, 'road variation');
@@ -158,8 +175,9 @@ export function serverCfg(p: Preset, ports: Ports): string {
   return parts.join('\n');
 }
 
-// entry_list.ini: the models take turns (as in the fixed servers' lists), each model's skins in turn.
-export function entryList(p: Preset): string {
+// entry_list.ini: the models take turns (as in the fixed servers' lists), each model's skins in
+// turn or, with random, a random one of them each; no skins: SKIN= empty (acServer's default).
+export function entryList(p: Preset, random = Math.random): string {
   const left = p.cars.map((c) => c.count);
   const used = p.cars.map(() => 0);
   const out: string[] = [];
@@ -167,7 +185,7 @@ export function entryList(p: Preset): string {
     p.cars.forEach((c, i) => {
       if (!left[i]) return;
       left[i]--;
-      const skin = c.skins.length ? c.skins[used[i]++ % c.skins.length] : '';
+      const skin = !c.skins.length ? '' : c.random ? c.skins[Math.floor(random() * c.skins.length)] : c.skins[used[i]++ % c.skins.length];
       out.push(`${section(`CAR_${out.length}`, [['MODEL', c.model], ['SKIN', skin], ['SPECTATOR_MODE', 0], ['DRIVERNAME', ''], ['TEAM', ''], ['GUID', ''], ['BALLAST', 0], ['RESTRICTOR', 0]])}\n`);
     });
   }

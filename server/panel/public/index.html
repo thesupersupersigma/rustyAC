@@ -6,6 +6,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rustyAC servers</title>
+<link rel="icon" href="/favicon.svg">
 <style>
   :root { --bg: #f4f4f2; --card: #fff; --ink: #1d1d1b; --mute: #6b6b66; --line: #ddd; --accent: #c0392b; --ok: #1e7d3a; }
   @media (prefers-color-scheme: dark) { :root { --bg: #161615; --card: #22221f; --ink: #eee; --mute: #9a9a93; --line: #3a3a36; } }
@@ -23,6 +24,10 @@
   input[type=number] { width: 70px; } textarea { width: 100%; box-sizing: border-box; min-height: 90px; }
   fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; } legend { color: var(--mute); }
   #error { position: sticky; top: 0; }
+  label small, small.help { font-size: 11px; color: var(--mute); max-width: 260px; } small.help { display: block; max-width: none; margin: 4px 0; }
+  .car { border-top: 1px solid var(--line); padding: 4px 0; } .skins { padding: 4px 0 2px 78px; gap: 4px 12px; }
+  label.tick { flex-direction: row; align-items: center; gap: 4px; color: var(--ink); } #cars { max-height: 480px; overflow-y: auto; }
+  details { margin: 8px 0; } summary { cursor: pointer; color: var(--mute); }
 </style>
 </head>
 <body>
@@ -36,151 +41,49 @@
   <div class="row"><button id="new">New preset</button><span id="copies"></span></div>
   <form id="editor" class="card" hidden>
     <div class="row">
-      <label>id (the server's path: net/x/&lt;id&gt;)<input name="presetId" required pattern="[a-z0-9][a-z0-9_\-]{0,31}"></label>
-      <label>name<input name="presetName" required size="32"></label>
-      <label>track<select name="track"></select></label>
-      <label>time of day<input name="time" type="time" min="08:00" max="18:00"></label>
-      <label>password (empty: none)<input name="password"></label>
-      <label>max players<input name="maxPlayers" type="number" min="1" max="64"></label>
-      <label>pickup mode<select name="pickup"><option value="1">yes</option><option value="0">no (booking)</option></select></label>
-      <label>idle minutes before it stops<input name="idleMinutes" type="number" min="1" max="1440"></label>
+      <label>name<input name="presetName" required size="32" maxlength="120"><small>The server's name in the players' list of servers.</small></label>
+      <label>track<select name="track"></select><small>Track and layout; its pit boxes are the most cars it can hold.</small></label>
+      <label>time of day<input name="time" type="time" min="08:00" max="18:00"><small>The time at the start, 08:00 to 18:00.</small></label>
+      <label>password<input name="password" maxlength="32"><small>Players type it to join. Empty: no password.</small></label>
+      <label>max players<input name="maxPlayers" type="number" min="1" max="64"><small>How many people can be on at once (at most the number of cars).</small></label>
+      <label>pickup mode<select name="pickup"><option value="1">on</option><option value="0">off (booking)</option></select><small>On: players pick any free car when they join. Off (booking): only the drivers in the entry list can join.</small></label>
+      <label>idle minutes<input name="idleMinutes" type="number" min="1" max="1440"><small>The server stops itself after this many minutes with nobody on it.</small></label>
     </div>
-    <fieldset><legend>cars: count and skins (comma between skin folders)</legend><div id="cars" class="row"></div></fieldset>
-    <fieldset><legend>sessions (0 minutes: no such session)</legend><div class="row">
-      <label>practice minutes<input name="practice" type="number" min="0"></label>
-      <label>qualify minutes<input name="qualify" type="number" min="0"></label>
-      <label>race laps<input name="raceLaps" type="number" min="0"></label>
-      <label>or race minutes<input name="raceMinutes" type="number" min="0"></label>
-      <label>race wait seconds<input name="raceWait" type="number" min="0"></label>
-      <label>race joinable<select name="raceOpen"><option value="0">no</option><option value="1">yes</option><option value="2">first 20 s</option></select></label>
+    <fieldset><legend>cars</legend>
+      <div class="row"><input id="carSearch" type="search" placeholder="search cars" size="30"><span id="carTotal" class="mute"></span></div>
+      <small class="help">How many of each car the server has. Skins: the cars take the ticked skins in turn; random gives each car a random one of them; none ticked: acServer's default skin for every car.</small>
+      <div id="cars"></div>
+    </fieldset>
+    <fieldset><legend>sessions</legend><div class="row">
+      <label>practice minutes<input name="practice" type="number" min="0"><small>0: no practice.</small></label>
+      <label>qualify minutes<input name="qualify" type="number" min="0"><small>0: no qualifying.</small></label>
+      <label>race laps<input name="raceLaps" type="number" min="0"><small>0: a race by time (next), or no race.</small></label>
+      <label>or race minutes<input name="raceMinutes" type="number" min="0"><small>Used when laps is 0; both 0: no race.</small></label>
+      <label>race wait seconds<input name="raceWait" type="number" min="0"><small>Time on the grid before the start.</small></label>
+      <label>join during the race<select name="raceOpen"><option value="0">no</option><option value="1">yes</option><option value="2">first 20 s</option></select><small>Whether players can still join once the race runs.</small></label>
     </div></fieldset>
     <fieldset><legend>weather and grip</legend><div class="row">
-      <label>graphics<input name="graphics"></label>
-      <label>ambient °C<input name="ambient" type="number"></label><label>road +°C<input name="road" type="number"></label>
-      <label>variation ambient<input name="variationAmbient" type="number"></label><label>variation road<input name="variationRoad" type="number"></label>
-      <label>wind min km/h<input name="windMin" type="number"></label><label>wind max<input name="windMax" type="number"></label>
-      <label>wind direction<input name="windDirection" type="number"></label><label>direction variation<input name="windVariation" type="number"></label>
-      <label>grip at start %<input name="start" type="number"></label><label>randomness<input name="randomness" type="number"></label>
-      <label>kept between sessions %<input name="transfer" type="number"></label><label>laps per 1%<input name="lapGain" type="number"></label>
+      <label>weather<select name="graphics"></select><small>The sky and clouds.</small></label>
+      <label>air °C<input name="ambient" type="number"><small>Air temperature.</small></label>
+      <label>road +°C<input name="road" type="number"><small>How much warmer the road is than the air.</small></label>
+      <label>air variation °C<input name="variationAmbient" type="number"><small>The air temperature changes by up to this each session.</small></label>
+      <label>road variation °C<input name="variationRoad" type="number"><small>The same for the road.</small></label>
+      <label>wind min km/h<input name="windMin" type="number"><small>The slowest wind.</small></label>
+      <label>wind max km/h<input name="windMax" type="number"><small>The fastest wind.</small></label>
+      <label>wind direction °<input name="windDirection" type="number"><small>Where it blows from, 0 to 359.</small></label>
+      <label>direction variation °<input name="windVariation" type="number"><small>The direction changes by up to this.</small></label>
+      <label>grip at start %<input name="start" type="number"><small>100: a fully rubbered-in track.</small></label>
+      <label>grip randomness %<input name="randomness" type="number"><small>A random change of the start grip.</small></label>
+      <label>grip kept %<input name="transfer" type="number"><small>How much of the grip gained carries into the next session.</small></label>
+      <label>laps per 1% grip<input name="lapGain" type="number"><small>Laps (of all cars together) for 1% more grip.</small></label>
     </div></fieldset>
-    <label style="display:flex">other server_cfg.ini keys (KEY=value, one a line)<textarea name="rules"></textarea></label>
+    <details><summary>advanced</summary>
+      <label>id<input name="presetId" required pattern="[a-z0-9][a-z0-9_\-]{0,31}"><small>The server's address, net/x/&lt;id&gt;. Made from the name; change it only when you must.</small></label>
+      <label style="display:flex">other server_cfg.ini keys<textarea name="rules"></textarea><small>KEY=value, one a line, as in acServer's own server_cfg.ini.</small></label>
+    </details>
     <div class="row" style="margin-top:8px"><button class="go" type="submit">Save</button><button type="button" id="cancel">Cancel</button></div>
   </form>
 </main>
-<script>
-const $ = (id) => document.getElementById(id);
-const el = (tag, { dataset, ...props } = {}, ...kids) => {
-  const e = Object.assign(document.createElement(tag), props);
-  Object.assign(e.dataset, dataset || {});
-  e.append(...kids);
-  return e;
-};
-let state = null;
-let editing = null;
-
-function error(text) {
-  $('error').hidden = !text;
-  $('error').textContent = text || '';
-}
-async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await r.json().catch(() => ({ error: `${r.status}` }));
-  if (!r.ok) throw new Error(data.error || r.status);
-  return data;
-}
-const act = (path, body = {}) => api(path, body).then(refresh).catch((e) => error(e.message));
-const trackName = (t) => (t.layout ? `${t.track} / ${t.layout}` : t.track);
-const minutes = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-
-function showRunning() {
-  const box = $('running');
-  box.replaceChildren(...state.running.map((r) => {
-    const logs = el('pre', { hidden: true });
-    return el('div', { className: 'card' },
-      el('div', { className: 'row' },
-        el('b', { textContent: r.name }), el('span', { className: r.status === 'running' ? 'ok' : 'bad', textContent: r.status }),
-        el('span', { textContent: `${trackName(r)} · ${r.cars.join(', ')}` }),
-        el('span', { textContent: `players ${r.players ? r.players.length : '?'} / ${r.maxPlayers}${r.players && r.players.length ? ': ' + r.players.join(', ') : ''}` }),
-        el('span', { className: 'mute', textContent: `up ${minutes(Math.round((Date.now() - r.started) / 60000))} h · stops in ${minutes(r.stopsInSeconds)} min if nobody comes` }),
-        el('button', { className: 'stop', textContent: 'Stop', onclick: () => confirm(`Stop ${r.name}?`) && act(`/api/stop/${r.id}`) }),
-        el('button', { textContent: 'Log', onclick: async () => {
-          logs.hidden = !logs.hidden;
-          if (!logs.hidden) { const l = await api(`/api/logs/${r.id}`); logs.textContent = `acServer:\n${l.acserver.join('\n')}\n\ngateway:\n${l.gateway.join('\n')}`; }
-        } })),
-      el('div', { className: 'mute' }, 'browser: ', el('a', { href: r.browser, textContent: r.browser, target: '_blank' })),
-      el('div', { className: 'mute' }, 'desktop: ', el('code', { textContent: r.desktop })),
-      el('div', { className: 'mute', textContent: `ports: game ${r.ports.game} (TCP+UDP), HTTP ${r.ports.http}, gateway ${r.ports.gateway} · admin password ${r.admin}` }),
-      logs);
-  }));
-  if (!state.running.length) box.replaceChildren(el('div', { className: 'card mute', textContent: 'none' }));
-}
-
-function showPresets() {
-  const runs = new Set(state.running.map((r) => r.id));
-  $('presets').replaceChildren(...state.presets.map((p) => el('div', { className: 'card row' },
-    el('b', { textContent: p.name }), el('code', { textContent: `net/x/${p.id}` }),
-    el('span', { textContent: `${trackName(p)} · ${p.cars.map((c) => `${c.count}× ${c.model}`).join(', ')}${p.password ? ' · password' : ''}` }),
-    el('button', { className: 'go', textContent: 'Start', disabled: runs.has(p.id) || state.running.length >= state.maxServers, onclick: () => act(`/api/start/${p.id}`) }),
-    el('button', { textContent: 'Edit', onclick: () => edit(p) }),
-    el('button', { textContent: 'Delete', onclick: () => confirm(`Delete the preset ${p.name}?`) && act(`/api/delete/${p.id}`) }))));
-  $('copies').replaceChildren(...state.fixed.map((f) => el('button', { textContent: `New from the fixed server ${f}`, onclick: () => act(`/api/copy/${f}`) })));
-}
-
-function edit(p) {
-  editing = p;
-  const f = $('editor');
-  f.hidden = false;
-  f.track.replaceChildren(...state.pack.tracks.map((t) => el('option', { value: `${t.track}|${t.layout}`, textContent: trackName(t) })));
-  const set = { presetId: p.id, presetName: p.name, track: `${p.track}|${p.layout}`, time: p.time, password: p.password, maxPlayers: p.maxPlayers, pickup: p.pickup ? '1' : '0', idleMinutes: p.idleMinutes,
-    practice: p.practice ? p.practice.minutes : 0, qualify: p.qualify ? p.qualify.minutes : 0, raceLaps: p.race ? p.race.laps : 0, raceMinutes: p.race ? p.race.minutes : 0,
-    raceWait: p.race ? p.race.waitSeconds : 60, raceOpen: p.race ? p.race.open : 1, ...p.weather, ...p.dynamicTrack,
-    rules: Object.entries(p.rules || {}).map(([k, v]) => `${k}=${v}`).join('\n') };
-  for (const [k, v] of Object.entries(set)) if (f[k]) f[k].value = v;
-  $('cars').replaceChildren(...state.pack.cars.map((model) => {
-    const c = p.cars.find((x) => x.model === model);
-    return el('label', {}, model, el('input', { type: 'number', min: 0, value: c ? c.count : 0, dataset: { model } }), el('input', { value: c ? c.skins.join(',') : '', dataset: { skins: model }, placeholder: 'skins' }));
-  }));
-  f.scrollIntoView();
-}
-
-$('editor').onsubmit = (event) => {
-  event.preventDefault();
-  const f = $('editor');
-  const n = (k) => Number(f[k].value);
-  const [track, layout] = f.track.value.split('|');
-  const cars = [...$('cars').querySelectorAll('input[data-model]')].filter((i) => Number(i.value) > 0).map((i) => ({
-    model: i.dataset.model, count: Number(i.value),
-    skins: $('cars').querySelector(`input[data-skins="${i.dataset.model}"]`).value.split(',').map((s) => s.trim()).filter(Boolean),
-  }));
-  const rules = Object.fromEntries(f.rules.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]));
-  const preset = { id: f.presetId.value, name: f.presetName.value, track, layout, cars,
-    practice: n('practice') ? { minutes: n('practice'), open: editing.practice ? editing.practice.open : 1 } : null,
-    qualify: n('qualify') ? { minutes: n('qualify'), open: editing.qualify ? editing.qualify.open : 1 } : null,
-    race: n('raceLaps') || n('raceMinutes') ? { laps: n('raceLaps'), minutes: n('raceLaps') ? 0 : n('raceMinutes'), waitSeconds: n('raceWait'), open: n('raceOpen') } : null,
-    time: f.time.value, password: f.password.value, maxPlayers: n('maxPlayers'), pickup: f.pickup.value === '1', idleMinutes: n('idleMinutes'),
-    weather: Object.fromEntries(['ambient', 'road', 'variationAmbient', 'variationRoad', 'windMin', 'windMax', 'windDirection', 'windVariation'].map((k) => [k, n(k)]).concat([['graphics', f.graphics.value]])),
-    dynamicTrack: { start: n('start'), randomness: n('randomness'), transfer: n('transfer'), lapGain: n('lapGain') }, rules };
-  api('/api/presets', preset).then(() => { f.hidden = true; error(''); refresh(); }).catch((e) => error(e.message));
-};
-$('cancel').onclick = () => { $('editor').hidden = true; };
-$('new').onclick = () => {
-  const t = state.pack.tracks[0] || { track: '', layout: '' };
-  edit({ id: '', name: '', track: t.track, layout: t.layout, cars: [], practice: { minutes: 20, open: 1 }, qualify: null, race: null, time: '14:00', password: '', maxPlayers: 12, pickup: true, idleMinutes: 30,
-    weather: { graphics: '3_clear', ambient: 22, road: 8, variationAmbient: 1, variationRoad: 1, windMin: 0, windMax: 8, windDirection: 30, windVariation: 15 },
-    dynamicTrack: { start: 96, randomness: 1, transfer: 80, lapGain: 30 }, rules: {} });
-};
-
-async function refresh() {
-  try {
-    state = await api('/api/state');
-    showRunning();
-    showPresets();
-  } catch (e) {
-    error(e.message);
-  }
-}
-refresh();
-setInterval(refresh, 5000);
-</script>
+<script type="module" src="/panel.js"></script>
 </body>
 </html>

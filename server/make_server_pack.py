@@ -65,7 +65,7 @@ def ui_field(path, field):
     """One field of a ui_*.json; read with a pattern because many of them are not valid JSON."""
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
-            found = re.search(rf'"{field}"\s*:\s*"?([^",\r\n]*)', handle.read())
+            found = re.search(rf'"{field}"\s*:\s*"?([^",}}\r\n]*)', handle.read())
     except OSError:
         return ""
     return found.group(1).strip() if found else ""

@@ -26,7 +26,9 @@ const teamKeys = new TeamKeys(config.access.certsUrl);
 const presetsDir = join(config.dataDir, 'presets');
 mkdirSync(presetsDir, { recursive: true });
 const presetFile = (id: string) => join(presetsDir, `${id}.json`);
-const page = readFileSync(new URL('../public/index.html', import.meta.url));
+// the page and its own files; nothing else is served, and the page may load nothing from elsewhere
+const files = new Map<string, { body: Buffer; type: string }>(([['/', 'index.html', 'text/html'], ['/panel.js', 'panel.js', 'text/javascript'], ['/form.js', 'form.js', 'text/javascript'], ['/favicon.svg', 'favicon.svg', 'image/svg+xml']] as const)
+  .map(([path, file, type]) => [path, { body: readFileSync(new URL(`../public/${file}`, import.meta.url)), type: `${type}; charset=utf-8` }]));
 
 const presets = (): Preset[] => readdirSync(presetsDir).filter((f) => f.endsWith('.json')).sort().map((f) => JSON.parse(readFileSync(join(presetsDir, f), 'utf8')));
 const fixedServers = () => {
@@ -78,9 +80,10 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     return send(res, 403, { error: 'refused: open the panel through Cloudflare Access' });
   }
   const url = new URL(req.url ?? '/', 'http://panel');
-  if (req.method === 'GET' && url.pathname === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'" });
-    return res.end(page);
+  const file = req.method === 'GET' ? files.get(url.pathname) : undefined;
+  if (file) {
+    res.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; style-src 'unsafe-inline'" });
+    return res.end(file.body);
   }
   if (req.method === 'GET' && url.pathname === '/api/state') return send(res, 200, state());
   let m = /^\/api\/logs\/([^/]+)$/.exec(url.pathname);

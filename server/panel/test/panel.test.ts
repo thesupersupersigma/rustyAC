@@ -3,7 +3,8 @@
 //   cd server/panel && node --test test/*.test.ts
 import assert from 'node:assert/strict';
 import { createSign, generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as httpServer } from 'node:http';
 import { createServer as tcpServer, connect, type AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -12,7 +13,8 @@ import { test } from 'node:test';
 import { checkToken, keysFromJwks } from '../src/access.ts';
 import { type Config, loadConfig, parsePool, takePorts } from '../src/config.ts';
 import type { Docker } from '../src/docker.ts';
-import { checkPreset, entryList, type Preset, presetFromCfg, serverCfg } from '../src/preset.ts';
+import { checkPreset, entryList, type Pack, type Preset, presetFromCfg, readPack, serverCfg } from '../src/preset.ts';
+import { api, idFromName } from '../public/form.js';
 import { router } from '../src/router.ts';
 import { Idle, type Running, Servers } from '../src/servers.ts';
 
@@ -33,7 +35,14 @@ const spa = (): Preset => ({
   dynamicTrack: { start: 96, randomness: 1, transfer: 80, lapGain: 30 },
   password: '', maxPlayers: 12, pickup: true, idleMinutes: 30, rules: {},
 });
-const pack = { cars: ['bmw_z4_gt3', 'ks_ferrari_f2004'], tracks: [{ track: 'ks_laguna_seca', layout: '' }, { track: 'spa', layout: '' }] };
+const pack: Pack = {
+  cars: [
+    { model: 'bmw_z4_gt3', name: 'BMW Z4 GT3', skins: ['0_bmw_motorsport_2013_black', 'Vita4one', 'bmw_motorsport_2013_white', 'marc_vds_2013', 'scuderia_ecosse', 'walkenhorst_motorsport', 'fanatec'] },
+    { model: 'ks_ferrari_f2004', name: 'Ferrari F2004', skins: ['00_official', '01_ferrari_1', '02_ferrari_2'] },
+  ],
+  tracks: [{ track: 'ks_laguna_seca', layout: '', name: 'Laguna Seca', pitboxes: 24 }, { track: 'spa', layout: '', name: 'Spa', pitboxes: 24 }],
+  weather: [{ id: '3_clear', name: 'Clear' }],
+};
 
 test('a preset with the Spa server choices writes its server_cfg.ini and entry_list.ini', () => {
   assert.deepEqual(checkPreset(spa(), pack), []);
@@ -68,11 +77,125 @@ test('presets with anything the pack lacks or the ini cannot hold are refused', 
     ['cars', (p) => { p.cars = []; }],
     ['time', (p) => { p.time = '23:00'; }],
     ['idle', (p) => { p.idleMinutes = 0; }],
+    ['skin', (p) => { p.cars[0].skins = ['not_its_skin']; }],
+    ['random', (p) => { p.cars[0].skins = []; p.cars[0].random = true; }],
+    ['pit boxes', (p) => { p.cars[0].count = 19; }],
+    ['weather', (p) => { p.weather.graphics = '9_storm'; }],
   ];
   for (const [what, change] of bad) {
     const p = spa();
     change(p);
     assert.notDeepEqual(checkPreset(p, pack), [], `${what}: ${JSON.stringify(p).slice(0, 80)}`);
+  }
+});
+
+test('skins: in turn, all of them, random, or none (acServer\'s default)', () => {
+  const skins = (p: Preset, random?: () => number) => [...entryList(p, random).matchAll(/^SKIN=(.*)$/gm)].map((m) => m[1]);
+  const p = spa();
+  p.cars = [{ model: 'ks_ferrari_f2004', count: 4, skins: ['00_official', '01_ferrari_1'] }];
+  assert.deepEqual(skins(p), ['00_official', '01_ferrari_1', '00_official', '01_ferrari_1']);
+  p.cars[0].skins = [...pack.cars[1].skins]; // "all skins" ticks every one
+  assert.deepEqual(skins(p), ['00_official', '01_ferrari_1', '02_ferrari_2', '00_official']);
+  p.cars[0].random = true;
+  const draws = [0.9, 0.1, 0.5, 0.99];
+  assert.deepEqual(skins(p, () => draws.shift()!), ['02_ferrari_2', '00_official', '01_ferrari_1', '02_ferrari_2']);
+  assert.deepEqual(checkPreset(p, pack), []);
+  p.cars[0] = { model: 'ks_ferrari_f2004', count: 2, skins: [] };
+  assert.deepEqual(skins(p), ['', '']);
+  assert.deepEqual(checkPreset(p, pack), []);
+});
+
+test('preset ids from names', () => {
+  assert.equal(idFromName('Spa: GT3 night!'), 'spa-gt3-night');
+  assert.equal(idFromName('  Ünïcode ✓ '), 'n-code');
+  assert.equal(idFromName('!!!'), 'server');
+  assert.equal(idFromName('Spa GT3', ['spa-gt3', 'spa-gt3-2']), 'spa-gt3-3');
+  const taken = Array.from({ length: 20 }, (_, i) => (i ? `a-very-long-name-for-a-server-${i + 1}` : 'a-very-long-name-for-a-server'));
+  assert.match(idFromName('a very long name for a server that goes on and on', taken), /^[a-z0-9][a-z0-9_-]{0,31}$/);
+});
+
+test('the page\'s fetch: an Access redirect or login page reloads once, then says so; errors keep their message', async () => {
+  const page = (answers: (Partial<Response> | Error)[]) => {
+    const store = new Map<string, string>();
+    const env = {
+      reloads: 0, asked: [] as RequestInit[],
+      fetch: async (_: string, init: RequestInit) => {
+        env.asked.push(init);
+        const a = answers.shift()!;
+        if (a instanceof Error) throw a;
+        return a;
+      },
+      sessionStorage: { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v), removeItem: (k: string) => store.delete(k) },
+      location: { reload: () => { env.reloads++; } },
+    };
+    return env;
+  };
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  const redirect = { type: 'opaqueredirect', status: 0, ok: false, redirected: false, headers: new Headers() } as Partial<Response>;
+  const login = new Response('<html>Cloudflare Access</html>', { status: 200, headers: { 'Content-Type': 'text/html' } });
+  const env = page([redirect, login, json(200, { ok: 1 }), redirect]);
+  await assert.rejects(api('/api/state', undefined, env), /login expired: reloading/);
+  assert.equal(env.reloads, 1);
+  assert.deepEqual([env.asked[0].credentials, env.asked[0].redirect], ['same-origin', 'manual']);
+  await assert.rejects(api('/api/state', undefined, env), /did not log in again/); // after the reload: no second one
+  assert.equal(env.reloads, 1);
+  assert.deepEqual(await api('/api/state', undefined, env), { ok: 1 }); // logged in again
+  await assert.rejects(api('/api/state', undefined, env), /reloading/); // a later expiry reloads again
+  assert.equal(env.reloads, 2);
+  const env2 = page([json(400, { error: 'cars: at least one' }), new TypeError('Failed to fetch')]);
+  await assert.rejects(api('/api/presets', { id: 'x' }, env2), (e: Error) => e.message === 'cars: at least one');
+  assert.equal(env2.asked[0].method, 'POST');
+  await assert.rejects(api('/api/state', undefined, env2), (e: Error) => !e.message.includes('Failed to fetch') && /did not answer/.test(e.message));
+});
+
+test('make_server_pack.py --all: the index of a made-up install, and the panel reads it', () => {
+  const tmp = mkdtempSync(join(fileURLToPath(new URL('.', import.meta.url)), 'tmp-'));
+  try {
+    const ac = join(tmp, 'ac');
+    const put = (rel: string, text = 'x') => {
+      mkdirSync(join(ac, rel, '..'), { recursive: true });
+      writeFileSync(join(ac, rel), text);
+    };
+    put('server/acServer');
+    put('server/system/data/surfaces.ini');
+    for (const car of ['ks_ferrari_f2004', 'bmw_z4_gt3']) put(`content/cars/${car}/data.acd`);
+    for (const track of ['spa', 'ks_laguna_seca']) put(`content/tracks/${track}/data/surfaces.ini`);
+    put('content/cars/test_car/data.acd');
+    put('content/cars/test_car/ui/ui_car.json', '{\n\t"name": "Test Car GT",\n\t"brand": "x",\n}'); // not valid JSON, as many are
+    for (const skin of ['red', 'blue']) mkdirSync(join(ac, 'content/cars/test_car/skins', skin), { recursive: true });
+    put('content/cars/dlc_car/ui/ui_car.json', '{"name": "Not Owned"}');
+    put('content/tracks/test_track/gp/data/surfaces.ini');
+    put('content/tracks/test_track/gp/data/drs_zones.ini');
+    put('content/tracks/test_track/models_gp.ini');
+    put('content/tracks/test_track/ui/gp/ui_track.json', '{"name": "Test Track - GP", "pitboxes": "8"}');
+    put('content/tracks/test_track/short/data/surfaces.ini');
+    put('content/tracks/test_track/ui/short/ui_track.json', '{"name": "Test Track - Short", "pitboxes": 6}');
+    put('content/weather/3_clear/weather.ini');
+    put('content/weather/1_heavy_fog/weather.ini');
+    const out = join(tmp, 'pack');
+    const python = process.env.PYTHON ?? (process.platform === 'win32' ? 'python' : 'python3');
+    const script = fileURLToPath(new URL('make_server_pack.py', kit));
+    execFileSync(python, [script, '--ac', ac, '--out', out, '--all', '--no-check'], { stdio: 'pipe' });
+    const p = readPack(out);
+    assert.deepEqual(p.cars.find((c) => c.model === 'test_car'), { model: 'test_car', name: 'Test Car GT', skins: ['blue', 'red'] });
+    assert.equal(p.cars.length, 3);
+    assert.deepEqual(p.tracks.filter((t) => t.track === 'test_track'), [
+      { track: 'test_track', layout: 'gp', name: 'Test Track - GP', pitboxes: 8 },
+      { track: 'test_track', layout: 'short', name: 'Test Track - Short', pitboxes: 6 },
+    ]);
+    assert.deepEqual(p.weather, [{ id: '1_heavy_fog', name: 'Heavy fog' }, { id: '3_clear', name: 'Clear' }]);
+    const index = JSON.parse(readFileSync(join(out, 'index.json'), 'utf8'));
+    assert.deepEqual(index.skipped.map((s: { id: string }) => s.id), ['dlc_car']);
+    for (const f of ['content/tracks/test_track/gp/data/drs_zones.ini', 'content/tracks/test_track/models_gp.ini', 'content/weather/3_clear/weather.ini', 'cfg/spa/server_cfg.ini']) {
+      assert.ok(readFileSync(join(out, f)), f);
+    }
+    // --car adds one to the pack that is there
+    put('content/cars/late_car/data.acd');
+    execFileSync(python, [script, '--ac', ac, '--out', out, '--car', 'late_car', '--no-check'], { stdio: 'pipe' });
+    assert.deepEqual(readPack(out).cars.map((c) => c.model).sort(), ['bmw_z4_gt3', 'ks_ferrari_f2004', 'late_car', 'test_car']);
+    assert.equal(readPack(out).tracks.length, 4);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
