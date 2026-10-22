@@ -89,7 +89,7 @@ files included.
 
 `re/gold/fresh/rec` is 4.9 GB. 1.2 GB of it (45 `.gz` folders) are the first quick run's recordings,
 kept under the key used before the oracle's lock file left the key. Nothing reads them, and they can
-be deleted. Free disk: 27 GB at the start, 17 GB at the end.
+be deleted (done in Task 38g: `re/gold/fresh/rec` is now 3.8 GB). Free disk: 27 GB at the start, 17 GB at the end.
 
 ## Why
 
