@@ -39,8 +39,10 @@ keep() {
 # again and holds the new recording against the kept one; nothing kept is ever replaced or deleted.
 # Below PROOF_KEEP_MIN_GB (18) of free disk nothing new is kept (the run goes on, recording as before).
 cache=$gold/fresh/rec
-# the oracle's own source is part of every key: a changed oracle records anew
-cache_salt=$({ git rev-parse HEAD:tools/car_oracle; git diff HEAD -- tools/car_oracle; } 2>/dev/null | sha1sum | cut -c1-16)
+# the oracle's own source is part of every key: a changed oracle records anew (not its lock file,
+# which every release changes for rustyAC's version)
+cache_salt=$({ git ls-tree -r HEAD -- tools/car_oracle | grep -v 'Cargo\.lock$'
+    git diff HEAD -- tools/car_oracle ':!tools/car_oracle/Cargo.lock'; } 2>/dev/null | sha1sum | cut -c1-16)
 # cache_key <words...>: the key of one recording (its arguments, the content of any file named in them)
 cache_key() {
     { echo "$cache_salt"; printf '%s
