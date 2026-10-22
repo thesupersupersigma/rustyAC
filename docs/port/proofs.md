@@ -6,12 +6,90 @@ Every proof the reports claim reruns from committed scripts in `tools/proofs/`, 
 the ignored `oracle/` (saved game recordings of Tasks 9 to 34, as they always were) and the ignored
 `re/gold/` (what Task 38c re-made or moved out of scratch). Nothing reads `re/scratch/`.
 
-    sh tools/proofs/run_all.sh            # every area; the table lands in target/proofs/table.md
-    sh tools/proofs/run_all.sh gui        # one area
-    RENDER_ONLY='r21_.*' sh tools/proofs/render.sh    # part of one area
+    bash tools/proofs/run_all.sh --quick            # every area on a sample, ≈ 25 min (Task 38f)
+    bash tools/proofs/run_all.sh --changed v0.38.4  # what the files changed since a tag touch
+    bash tools/proofs/run_all.sh                    # (= --full) every area, every case; table in target/proofs/table.md
+    bash tools/proofs/run_all.sh gui                # one area
+    RENDER_ONLY='r21_.*' bash tools/proofs/render.sh    # part of one area
 
 `tools/proofs/README.md` says what each area compares and needs; `re/gold/README.md` how each
 file under `re/gold/` was made and how to make it again.
+
+## Task 38f: fast proofs (v0.38.5)
+
+A full run took about 10 hours, too long for every task. Now:
+
+- **`--quick`**: every area on a small fixed sample (`tools/proofs/quick/<area>.txt`, one regex a
+  line over each area's case names): one-car and several-car recordings with AI, the referee, a pit
+  case, a jump start, contacts, a few tracks, crashes, 8 referee micro drives, 4 of the 20 net
+  goldens (one of each kind) four ways, two render frames per task, 15 GUI sequences across Tasks
+  29-34, 6 browser drives and 6 dumps, one launcher list, every shader check, 4 sound cases.
+  `ai_page` and `shaders` are small enough to run whole. 23 minutes.
+- **`--changed <tag>`**: the areas the files changed since `<tag>` (committed or not) ask for,
+  each run whole. `tools/proofs/areas.map` maps paths to areas (first match wins); a path no rule
+  matches runs everything; a `Cargo.toml` / `Cargo.lock` whose only change is rustyAC's version asks
+  for nothing. It prints each file, the rule it matched and the areas. `areas_test.sh` checks 20
+  made-up lists.
+- **`--full`** (also the default): every case of every area, as before, plus the game's recordings
+  made again and held against the kept ones. Per-area time and the wall clock in the table.
+
+What makes the slow areas cheaper without weakening them:
+
+- `fresh` records each game recording once into `re/gold/fresh/rec/` (xz, keyed on the oracle's
+  arguments, the files they name and `tools/car_oracle`'s source) and compares the port against
+  that copy. `--full` and `--rerecord` record again and count a case DIFFERENT unless the new bytes
+  equal the kept ones (`same_rec.py`). The only allowed difference is the game's heap address. The
+  game never writes `bounce_vel` into its mesh contact joints, so they take the upper half of a
+  geom's address, which changes every run. It shows in the header lines `mesh_bounce_vel` /
+  `mesh_geom_high` and, in several-car recordings, in the row words `world.contactHash` /
+  `world.meshBounceVel` of the steps where a contact bounces (that word must be each run's own
+  address). The port is fed the value from the recording it compares against, as it always was.
+  Found because the first re-recording of 47 cases gave 10 such differences: 7 in the header only,
+  3 (four-car contact runs) in those two words too.
+- The areas that never load the game (net, browser, ai_page, shaders) run beside the others, which
+  still run one at a time; each lane builds with 4 jobs. The shared oracles and rustyac.exe /
+  replay_hash are built once per run; `browser` runs replay_hash once a drive (it was twice);
+  `dumps` builds the last release's exe once per tag into `target/proofs/old_exe/<tag>/`.
+- `chassis_compare game-replay` rewrites a drive in `oracle/game` only when its bytes change, so
+  `browser` can read the folder while `fresh` runs.
+- The release workflow marks a release latest only when its tag is the highest version.
+
+| Area | Full before (Task 38c) | Full now | Quick now (cases) |
+|---|---|---|---|
+| physics | 32 min | 37 min | 0.5 min (9) |
+| fresh | about 2 h 50 min | 3 h 02 min | 5.6 min (47) |
+| sound | 4 min | 3 min | 0.3 min (4) |
+| render | 39 min | 40 min | 3.4 min (10) |
+| gui | 112 min | 70 min | 8.3 min (15) |
+| replays | 43 min | 45 min | 2.8 min (5) |
+| net | 17 min | 21 min (beside) | 3.5 min (16, beside) |
+| browser | 78 min (50 min in Task 38d) | 42 min (beside) | 0.9 min (6, beside) |
+| ai_page | 8 min | 8 min (beside) | 6.7 min (3, beside) |
+| shaders | 1 min | 1 min (beside) | 0.7 min (4, beside) |
+| launcher | 5 min | 5 min | 0.6 min (1) |
+| dumps | 33 min (156 drives) | 71 min (223 drives) | 2.5 min (6) |
+| **wall clock** | **about 10 h** | **7 h 32 min** | **23 min** |
+
+The full run (on the final code, nothing else building): 1,601 cases, all identical, 0 different.
+That includes `fresh` 657 (Task 38c's 656 plus one, with `pit_mouse` seed 2 identical this time)
+and `dumps` against v0.38.4's exe, 223 drives byte-identical. 25 kept recordings were made again
+and matched their kept bytes; 95 were not kept because free disk fell below 18 GB
+(`PROOF_KEEP_MIN_GB`), so `fresh` records those on the spot, as before, until there is room. A
+quick run with the kept recordings: 126 cases, all identical, 23 minutes (32 minutes the first
+time, when it records them). `fresh` in a full run is a little slower than before (it compresses
+and compares what it records). `dumps` is slower because `oracle/game` has 67 more drives since
+Task 38c. `--changed v0.38.3` on this tree picks every area, correctly, because this task changed
+`lib.sh` and `run_all.sh`, which every area uses. For the files of the v0.38.4 release alone it
+picks `net browser ai_page` (the server panel and `web/app.js`; the lock files changed only the
+version).
+
+Clippy `-D warnings` is clean natively (`--all-targets`), for wasm32-unknown-unknown, for
+wasm32-wasip1 and with the wgpu feature, and every `--locked` build passes, the tools' own lock
+files included.
+
+`re/gold/fresh/rec` is 4.9 GB. 1.2 GB of it (45 `.gz` folders) are the first quick run's recordings,
+kept under the key used before the oracle's lock file left the key. Nothing reads them, and they can
+be deleted. Free disk: 27 GB at the start, 17 GB at the end.
 
 ## Why
 
