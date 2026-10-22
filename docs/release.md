@@ -26,11 +26,13 @@
    for m in tools/*/Cargo.toml; do cargo build --release --manifest-path $m; done
    ```
 
-3. Rerun the proofs (a few hours; needs the ignored `oracle/` and `re/gold/` folders and the AC
-   install, nothing in `re/scratch/`):
+3. Rerun the proofs (needs the ignored `oracle/` and `re/gold/` folders and the AC install,
+   nothing in `re/scratch/`); every area must have 0 different (table in target/proofs/table.md):
 
    ```
-   sh tools/proofs/run_all.sh      # table in target/proofs/table.md; every area must have 0 different
+   bash tools/proofs/run_all.sh --quick                 # every release: a sample of every area (≈ 30 min)
+   bash tools/proofs/run_all.sh --changed <last tag>    # every release: all of what the changed files touch
+   bash tools/proofs/run_all.sh --full                  # milestones only: everything, recordings made again
    ```
 
    Anything a new proof needs goes into `tools/proofs/` (scripts, lists; committed) or

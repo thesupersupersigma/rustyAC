@@ -34,9 +34,10 @@ keep() {
 ' "$1" | grep -qxE -f "$quick_re"
 }
 
-# The game's recordings, kept gzipped in re/gold/fresh/rec/<name>/<key>/ (made once, byte for byte
+# The game's recordings, kept (xz) in re/gold/fresh/rec/<name>/<key>/ (made once, byte for byte
 # the same every time the game records them again). PROOF_RERECORD=1 (--full, --rerecord) records
 # again and holds the new recording against the kept one; nothing kept is ever replaced or deleted.
+# Below PROOF_KEEP_MIN_GB (18) of free disk nothing new is kept (the run goes on, recording as before).
 cache=$gold/fresh/rec
 # the oracle's own source is part of every key: a changed oracle records anew
 cache_salt=$({ git rev-parse HEAD:tools/car_oracle; git diff HEAD -- tools/car_oracle; } 2>/dev/null | sha1sum | cut -c1-16)
@@ -49,7 +50,14 @@ cache_key() {
 cache_get() {
     [ -z "$PROOF_RERECORD" ] && [ -f "$1/done" ] || return 1
     mkdir -p "$2"
-    for f in "$1"/*.gz; do gunzip -c "$f" > "$2/$(basename "$f" .gz)" || return 1; done
+    for f in "$1"/*.xz "$1"/*.gz; do
+        [ -f "$f" ] && { unpack "$f" > "$2/$(basename "${f%.*}")" || return 1; }
+    done
+    return 0
+}
+# unpack <kept file>: its bytes (the first recordings of Task 38f were kept gzipped)
+unpack() {
+    case "$1" in *.gz) gunzip -c "$1" ;; *) xz -dc "$1" ;; esac
 }
 # cache_put <dir> <from> <what>: keeps what was just recorded; when something is kept already the
 # two must be the same bytes (a DIFFERENT case when not)
@@ -57,7 +65,8 @@ cache_put() {
     if [ -f "$1/done" ]; then
         for f in "$2"/*; do
             [ -f "$f" ] || continue
-            if ! gzip -n -1 -c "$f" | cmp -s - "$1/$(basename "$f").gz"; then
+            k=$(ls "$1/$(basename "$f")".* 2>/dev/null | head -n 1)
+            if [ -z "$k" ] || ! unpack "$k" | cmp -s - "$f"; then
                 verdict "re-recorded $3: $(basename "$f")" DIFFERENT "not the bytes kept in ${1#"$repo"/}"
                 return
             fi
@@ -65,8 +74,13 @@ cache_put() {
         echo "re-recorded $3: the same bytes as ${1#"$repo"/}" >> "$out/rerecord.txt"
         return
     fi
+    free=$(df -Pk "$repo" | awk 'NR == 2 { print int($4 / 1048576) }')
+    if [ "$free" -lt "${PROOF_KEEP_MIN_GB:-18}" ]; then
+        echo "not kept (${free} GB free): $3" >> "$out/rerecord.txt"
+        return
+    fi
     mkdir -p "$1"
-    for f in "$2"/*; do [ -f "$f" ] && gzip -n -1 -c "$f" > "$1/$(basename "$f").gz"; done
+    for f in "$2"/*; do [ -f "$f" ] && xz -1 -T4 -c "$f" > "$1/$(basename "$f").xz"; done
     echo "$3" > "$1/what.txt"
     : > "$1/done"
 }

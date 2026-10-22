@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The physics proofs whose recordings lived only in re/scratch, recorded from the game's own code
-# (acs.exe mapped into the oracle's process, never run) once into re/gold/fresh/rec (gzipped, see
+# (acs.exe mapped into the oracle's process, never run) once into re/gold/fresh/rec (xz, see
 # lib.sh) and compared from there; PROOF_RERECORD=1 records them all again and holds each against
 # the kept one. The unpacked copies in target/proofs/fresh/rec are deleted once compared.
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
