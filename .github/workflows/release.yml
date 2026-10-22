@@ -109,12 +109,18 @@ jobs:
       - name: Package the browser preview
         run: python web/build.py --zip "dist/rustyAC-$TAG-web.zip"
 
+      # "Latest" only when this tag is the highest version released so far: an older tag released
+      # by hand (or one that finishes after a newer one) must not take the badge from the newest
       - name: Publish the release
         run: |
           zip="dist/rustyAC-$TAG-windows-x64.zip"
           web="dist/rustyAC-$TAG-web.zip"
+          highest=$( { gh release list --limit 1000 --json tagName --jq '.[].tagName'; echo "$TAG"; } \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ "$highest" = "$TAG" ]; then latest=--latest; else latest=--latest=false; fi
+          echo "highest released version: $highest, this release: $TAG -> $latest"
           gh release create "$TAG" "$zip" "$zip.sha256" "$web" "$web.sha256" \
             --verify-tag \
             --title "rustyAC $TAG" \
             --generate-notes \
-            --latest
+            "$latest"
