@@ -12,6 +12,7 @@ root=$out/root
 
 for name in $(grep -vE '^\s*#' tools/proofs/gui_list.txt); do
     echo "$name" | grep -qE "^(${GUI_ONLY:-.*})$" || continue
+    keep "$name" || continue  # quick keys: the sequence's name
     if [ "$name" = esc_telemetry ] && ! ls "$USERPROFILE/Documents/Assetto Corsa/ctelemetry/player/"*.tc > /dev/null 2>&1; then
         echo "esc_telemetry: no saved laps here, left out" >&2; continue
     fi

@@ -19,6 +19,7 @@ LO=$(ls tools/launcher_oracle/bin/Release/launcher_oracle.exe tools/launcher_ora
 fake=$repo/re/scratch/proofs/launcher
 for req in ${LAUNCHER_LISTS:-$gold/launcher}/*.req; do
     name=$(basename "$req" .req)
+    keep "$name" || continue  # quick keys: the list's name
     # both sides in the same folder (answers name it), one after the other, the folders kept apart after
     rm -rf "$fake"; mkdir -p "$fake/docs"
     "$LO" --docs "$(cygpath -w "$fake/docs")" --requests "$(cygpath -w "$req")" --out "$(cygpath -w "$out/$name.oracle.txt")" > "$out/$name.oracle.log" 2>&1

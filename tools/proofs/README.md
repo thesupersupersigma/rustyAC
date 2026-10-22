@@ -2,16 +2,32 @@
 
 Every proof the reports claim reruns from here, one area at a time or all at once:
 
-    sh tools/proofs/run_all.sh                 # every area, then a table: area, cases, identical, different, time
-    sh tools/proofs/run_all.sh gui net         # only these areas
-    sh tools/proofs/render.sh                  # one area by itself (prints PROOF <area> cases= identical= different=)
+    bash tools/proofs/run_all.sh --quick            # every area on a small sample (tools/proofs/quick/), ≈ 30 min
+    bash tools/proofs/run_all.sh --changed v0.38.4  # the areas the files changed since a tag ask for, every case
+    bash tools/proofs/run_all.sh [--full]           # every area, every case, recordings made again (milestones)
+    bash tools/proofs/run_all.sh gui net            # only these areas (with any of the above)
+    bash tools/proofs/render.sh                     # one area by itself (prints PROOF <area> cases= identical= different=)
+
+Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
+`--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
+the rule of `areas.map` it matched; a file no rule matches runs every area). `bash
+tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
+
+The game's recordings that `fresh` compares against are made once and kept gzipped in
+`re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name and
+the source of `tools/car_oracle`). `--quick` and `--changed` compare against those; `--full` and
+`--rerecord` record every one again and count it DIFFERENT if its bytes are not the kept ones
+(nothing kept is ever replaced). `dumps` builds the last release's rustyac.exe once per tag into
+`target/proofs/old_exe/<tag>/`. The shared oracles are built once per run. The areas that never
+load the game's code (net, browser, ai_page, shaders) run beside the others, which still run one at
+a time; each lane builds with 4 jobs.
 
 What a run needs: this repository, the Assetto Corsa install (read only; `AC_ROOT` if it is not the
 Steam default), the ignored `oracle/` folder (the saved game recordings of Tasks 9 to 34) and the
 ignored `re/gold/` folder (what was re-made in Task 38c, see `re/gold/README.md`). Nothing in
 `re/scratch/` is read. Output goes to `target/proofs/<area>/` (`PROOF_OUT` to move it); each area
-deletes its own output before it starts. One area at a time: the oracles load the game into their own
-process, and two at once make the render oracle's game side flaky.
+deletes its own output before it starts. One game-loading area at a time: the oracles load the game
+into their own process, and two at once make the render oracle's game side flaky.
 
 | Area | Script | What is compared | Inputs |
 |---|---|---|---|

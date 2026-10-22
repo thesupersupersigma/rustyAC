@@ -17,6 +17,7 @@ tracks=$(ls "$ac/content/tracks")
 for f in "$USERPROFILE/Documents/Assetto Corsa/replay/temp/"*.acreplay; do
     [ -f "$f" ] || continue
     b=$(basename "$f" .acreplay)
+    keep "replay-file $b" || continue  # quick keys: "multi ...", "replay-file <name>"
     # the name ends _<track>_<layout>; the longest installed track folder in it wins
     t=$(for x in $tracks; do case "$b" in *"_${x}_"*) echo "${#x} $x" ;; esac; done | sort -rn | head -n 1 | cut -d' ' -f2)
     [ -n "$t" ] || { echo "$b: track not installed, left out" >> "$out/left_out.txt"; continue; }

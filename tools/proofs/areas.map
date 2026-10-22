@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --changed <tag>: which proof areas a changed file asks for. One rule a line:
+# a glob (`*` matches across folders too) and the areas, or `none`. The first rule that matches
+# a file wins; a file no rule matches runs every area.
+
+# what changes nothing the proofs look at
+docs/*                        none
+prompts/*                     none
+.github/*                     none
+packaging/*                   none
+things/*                      none
+LICENSE*                      none
+.gitignore                    none
+*.md                          none
+
+# the proofs themselves
+tools/proofs/quick/*          none
+tools/proofs/physics.sh       physics
+tools/proofs/fresh.sh         fresh
+tools/proofs/multi_fresh.txt  fresh
+tools/proofs/survey_list.txt  fresh
+tools/proofs/sound.sh         sound
+tools/proofs/render.sh        render
+tools/proofs/render_list.txt  render
+tools/proofs/gui.sh           gui
+tools/proofs/gui_list.txt     gui
+tools/proofs/replays.sh       replays
+tools/proofs/replay_list.txt  replays
+tools/proofs/net.sh           net
+tools/proofs/browser.sh       browser
+tools/proofs/ai_page.sh       ai_page
+tools/proofs/ai_v6.py         ai_page
+tools/proofs/shaders.sh       shaders
+tools/proofs/launcher*        launcher
+tools/proofs/log2req.py       launcher
+tools/proofs/tdiff.py         launcher
+tools/proofs/dumps.sh         dumps
+tools/proofs/areas.*          none
+re/gold/fresh/*               fresh
+re/gold/net/*                 net
+re/gold/launcher/*            launcher
+
+# the port
+crates/rustyac-physics/*      physics fresh sound replays net browser ai_page dumps
+crates/rustyac-ode/*          physics fresh sound replays net browser ai_page dumps
+crates/rustyac-render/*       render gui shaders
+crates/rustyac-dxbc/*         render gui shaders
+crates/rustyac-gui/*          gui
+crates/rustyac-audio/*        sound
+crates/rustyac-launcher/*     launcher browser
+crates/rustyac-web/*          browser ai_page
+web/*                         browser ai_page
+crates/rustyac-net/*          net
+crates/rustyac-gateway/*      net
+server/*                      net
+
+# the oracles and checkers
+tools/car_oracle/*            physics fresh sound replays
+tools/chassis_compare/*       physics fresh
+tools/ode_oracle/*            physics
+tools/tyre_oracle/*           physics
+tools/render_oracle/*         render gui
+tools/audio_oracle/*          sound
+tools/launcher_oracle/*       launcher
+tools/net_gold/*              net
+tools/math_proof/*            browser
+tools/web_pack/*              browser ai_page
+
+# rustyac-game, rustyac-math, rustyac-content, Cargo.toml / Cargo.lock, tools/proofs/lib.sh,
+# run_all.sh and anything else: no rule, so every area

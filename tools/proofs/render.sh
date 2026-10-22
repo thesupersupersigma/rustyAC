@@ -13,6 +13,7 @@ root=$out/root
 # shellcheck disable=SC2086
 grep -vE '^\s*(#|$)' tools/proofs/render_list.txt | grep -E "^(${RENDER_ONLY:-.*}) " | while IFS='|' read -r name args; do
     name=$(echo "$name" | tr -d ' ')
+    keep "$name" || continue  # quick keys: the row's name
     # POSE:<tape>:<frame> -> a pose cut from the tape
     for p in $(echo "$args" | grep -oE 'POSE:[^ ]+'); do
         spec=${p#POSE:}; tape=${spec%:*}; frame=${spec##*:}

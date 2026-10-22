@@ -11,8 +11,10 @@ tool chassis_compare
 tool car_oracle
 need oracle/car "the Task 9 recordings"
 
+# quick keys: the folder (oracle/car_wc) or the recording (oracle/t28/jump/rc_jump.mcrec)
 for dir in oracle/car*/; do
     dir=${dir%/}
+    keep "$dir" || continue
     "$CC" run --dir "$dir" > "$out/$(basename "$dir").txt" 2>&1
     # "<scenario>: <n> steps" then "  bit-exact: 100 % (n/n)" or "first difference ..."
     awk -v d="$dir" '
@@ -23,6 +25,7 @@ for dir in oracle/car*/; do
 done
 
 find oracle -name '*.mcrec' | sort | while read -r rec; do
+    keep "$rec" || continue
     name=$(echo "$rec" | tr '/' '_')
     # not proofs: a recording the game made while the port was still wrong (its own saved result
     # says DIFFERENT), and Task 27's version-6 line, whose made-up file was lost (fresh.sh re-records it)

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
+# whole key; see the area script for what its keys look like).
+# one single-car folder of the game's recordings, then several cars and AI, the referee, a pit stop, a jump
+oracle/car_wc
+oracle/multi/mc_side_by_side.mcrec
+oracle/t27/no_fuel_cons/ai_solo.mcrec
+oracle/t28/golden/rc_race.mcrec
+oracle/t34/mp_d/pit_mouse.mcrec
+oracle/t28/jump_short/rc_jump.mcrec

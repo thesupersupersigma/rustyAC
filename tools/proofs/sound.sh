@@ -12,7 +12,9 @@ tool audio_oracle
 need oracle/audio/ks_ferrari_f2004/spa_launch.audiotape "Task 19's tapes"
 cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
 
+# quick keys: "<car> <scenario> <camera>", "dsp", "e2e <scenario> <camera>"
 while read -r car scenario camera; do
+    keep "$car $scenario $camera" || continue
     for try in 1 2; do  # FMOD's mix is not repeatable: a second try only when every call log agreed
         "$AO" compare --tape "oracle/audio/$car/$scenario.audiotape" --camera "$camera" --out "$out/cmp" > "$out/row.txt" 2>&1 < /dev/null
         cat "$out/row.txt" >> "$out/rows.txt"
@@ -42,12 +44,13 @@ ks_ferrari_488_gt3 trk_lap cockpit
 ks_ferrari_f2004 trk_lap cockpit
 ROWS
 
-"$AO" dsp --count 2000 > "$out/dsp.txt" 2>&1 && verdict "dsp plug-ins" IDENTICAL || verdict "dsp plug-ins" DIFFERENT "$(tail -n 1 "$out/dsp.txt")"
+keep dsp && { "$AO" dsp --count 2000 > "$out/dsp.txt" 2>&1 && verdict "dsp plug-ins" IDENTICAL || verdict "dsp plug-ins" DIFFERENT "$(tail -n 1 "$out/dsp.txt")"; }
 
 # end to end: the game's sound on the game's physics, then rustyac.exe replaying the same drive with
 # the game's answers to its sound calls (the "scripted" column of section 5.3)
 root=$out/root_e2e
 while read -r scenario camera; do
+    keep "e2e $scenario $camera" || continue
     "$AO" run --side ac --tape "oracle/audio_e2e/$scenario.audiotape" --camera "$camera" --out "$out/e2e" --root "$root" > "$out/e2e.txt" 2>&1
     game_log=$(ls "$out"/e2e/*_"${scenario}_${camera}"_ac.log 2>/dev/null | head -n 1)
     target/release/rustyac.exe --replay "oracle/game/audio_e2e_$scenario.ryin" --headless --no-shm \

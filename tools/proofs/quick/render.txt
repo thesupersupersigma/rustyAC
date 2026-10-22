@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
+# whole key; see the area script for what its keys look like).
+# two sequences of each renderer task (20, 21, 22, 22c, 23)
+r20_01
+r20_21
+r21_01
+r21_27
+r22_01
+r22_23
+r22c_01
+r22c_18
+r23_01
+r23_24

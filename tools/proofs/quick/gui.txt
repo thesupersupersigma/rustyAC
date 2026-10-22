@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
+# whole key; see the area script for what its keys look like).
+# one or two sequences of each GUI task (29 to 34)
+hud_cars
+forms
+lb_control_12
+end_race_12
+esc_menu
+pit_menu
+setup_tabs@bmw_m3_e30
+setup_io@ks_ferrari_f2004
+app_essentials
+app_trackmap@spa
+app_telemetry
+console
+esc_menu#it
+esc_menu_online
+setup_pit@bmw_z4_gt3

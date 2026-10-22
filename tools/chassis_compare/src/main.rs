@@ -1875,7 +1875,11 @@ fn game_replay_command(names: &[String], dir: Option<&Path>, exe: Option<&Path>,
             });
         }
         let input = inputs.join(format!("{folder_name}_{name}.ryin"));
-        input_file::InputFile { setup, steps }.write(&input)?;
+        let file = input_file::InputFile { setup, steps };
+        // the same bytes are not written again: the proofs' browser area may be reading the file meanwhile
+        if std::fs::read(&input).ok() != Some(file.to_bytes()) {
+            file.write(&input)?;
+        }
         let started = std::time::Instant::now();
         let mut child = Command::new(&exe)
             .args(["--replay", &input.to_string_lossy(), "--headless", "--no-shm", "--dump-states", "-"])

@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
+# whole key; see the area script for what its keys look like).
+# one golden of each kind (block, drive, pit, watch), each still checked four ways
+laguna_a_net_block
+rich_a_net_drive
+rich_b_net_pit
+laguna_b_net_watch

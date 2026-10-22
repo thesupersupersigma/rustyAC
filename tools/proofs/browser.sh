@@ -15,8 +15,10 @@ CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2
 docs="$USERPROFILE/Documents/Assetto Corsa"
 for f in oracle/game/*.ryin; do
-    d=$(target/release/replay_hash.exe "$f" 2>&1 | grep -o "hash.*")
-    s=$(target/release/replay_hash.exe "$f" 2>&1 | grep -o "^[0-9]* steps")
+    keep "$f" || continue  # quick keys: oracle/game/<drive>.ryin
+    r=$(target/release/replay_hash.exe "$f" 2>&1)
+    d=$(echo "$r" | grep -o "hash.*")
+    s=$(echo "$r" | grep -o "^[0-9]* steps")
     # a drive with the user's setup names it under Documents: seen read-only as /docs
     w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" --dir "$repo_w::." --dir "$ac::/ac" \
         --dir "$docs::/docs" target/wasm32-wasip1/release/replay_hash.wasm "/repo/$f" \

@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
+# whole key; see the area script for what its keys look like).
+oracle/game/car_random.ryin
+oracle/game/conditions_spa_cold_green_wind.ryin
+oracle/game/t17_col_bmw_m3_e30_spa_kerb_strike.ryin
+oracle/game/t22b_bmw_m3_e30_spa_crash.ryin
+oracle/game/t18_ks_laguna_seca__bmw_m3_e30_trk_pit.ryin
+oracle/game/spa_autodrive_300s.ryin
