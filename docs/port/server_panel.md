@@ -2,15 +2,13 @@
 
 ## Resume here
 
-- Done and released as v0.38.4: the panel in `server/panel/` (presets, start/stop through
-  the socket proxy, the `net/x/<id>` router, the Cloudflare Access check, auto-stop), its
-  unit tests (8 of 8), the compose services (profile `panel`), `server/.env.example`,
-  `AC_CFG` in the entrypoint, the page's list of on-demand servers (`web/app.js`), the docs
-  in `server/README.md`, the end-to-end run on 127.0.0.1 and the proofs below (net, browser,
-  ai_page; physics from the stopped full run).
+- Task 38g (v0.38.6, the last part of this file) is done: the pack with every car and layout
+  (`make_server_pack.py --all`), the new preset form, the Access-proof fetches, the favicon,
+  the online page's re-read list. Its end-to-end run, proofs and builds are below.
 - Not done: the panel was never run against a real Docker daemon or Cloudflare (by the
   rules); the image tags `node:24.11.1-alpine` and `tecnativa/docker-socket-proxy:0.3.0`
-  were not checked online.
+  were not checked online; the Cloudflare Web Analytics switch is described, not tried.
+- Task 38e (v0.38.4) below: the panel itself.
 
 ## What the panel is
 
@@ -118,3 +116,132 @@ math / ode / content / physics / net / game on wasm32-wasip1; rustyac-render `--
 wgpu --all-targets`; rustyac-web + rustyac-dxbc `--all-targets` on wasm32-unknown-unknown:
 all clean. `cargo build --release --locked` and every `tools/*` manifest with `--locked`:
 pass. Panel: `npx tsc --noEmit` clean, `npm test` 8 of 8.
+
+# Task 38g: every car and track, a clearer form, Access fixes (v0.38.6)
+
+## The pack: `make_server_pack.py --all`
+
+The 38e pack held only the fixed servers' content (2 tracks, 2 cars), so the panel could
+offer nothing else. Now:
+
+- `--all`: every installed car and track layout, kept only when **both** acServer and
+  rustyAC can run it. acServer needs a car's `data.acd` (it checks the players' cars
+  against it), so a car without one (a DLC that is not owned) is left out. rustyAC's
+  verdict comes from the browser pack's own check (`tools/web_pack --dry-run`, the same
+  reasons as the browser pack: CSP-encrypted or COSMIC-suspension cars, CSP-only layouts).
+  `--no-check` skips that check.
+- `--car X` / `--track t[/layout]` add single ones to the pack that is there.
+- Per car only `data.acd`; per layout `data/surfaces.ini`, `data/drs_zones.ini` (when there)
+  and `models[_layout].ini` (acServer globs `models*.ini`). No AI files: acServer's strings
+  read none. Per weather `content/weather/<id>/weather.ini` (for the weather list).
+- `index.json`: each car's UI name and skin folders, each layout's UI name and pit boxes,
+  each weather's id and readable name, and what was left out and why. The panel reads it
+  (a pack without it still works: names are the ids, no pit-box check, any weather).
+
+On this PC (`re/scratch/task38g/pack_all.txt`): **133 cars, 52 tracks and layouts, 7
+weathers, 47.6 MB** (41.8 MB without the Windows `acServer.exe`, which the Linux image does
+not use); 2m27s. Left out 80: 70 DLC cars without `data.acd`, `urd_darche_992_23` (CSP
+encrypted), 3 `vrc_formula_*_csp` (COSMIC), 2 DLC layouts and 5 `*_fa_2026` layouts (CSP
+only). The same 133 / 52 as the browser pack's dry run of everything.
+
+## The form
+
+- Track and layout: one dropdown with UI names, layouts grouped under their track, each with
+  its pit boxes; the cars' total may not pass them (also checked by the panel).
+- Cars: a searchable list (UI name and folder), a count per car, its skins as tick boxes
+  with "all skins" / "none" and "random" (each car a random one of the ticked skins). No
+  skin ticked: `SKIN=` empty, acServer's default skin.
+- Weather: a dropdown with readable names from the pack (`4_mid_clear` → "Mid clear").
+- Preset id: made from the name (lowercase, dashes, `-2` when taken), editable under
+  "advanced" (with the extra rules). "Duplicate" copies a preset.
+- One plain-English help line under every field; new presets start with practice 20 min,
+  qualify 10 min, race 10 laps, 14:00, 12 players, pickup on, idle 30 min, clear weather.
+
+![the form, editing](server_panel_form.jpg)
+![the form, a new preset](server_panel_new.jpg)
+
+## Access, favicon, refresh
+
+- Every fetch goes through `api()` in `public/form.js`: `credentials: 'same-origin'`,
+  `redirect: 'manual'`. An answer that was redirected (Access sends an expired session to
+  its login page) or is not JSON reloads the page once, saying "your Cloudflare Access
+  login expired: reloading"; if that comes back the same, it says to reload by hand. A
+  network failure says "the panel did not answer ..."; panel errors show their message.
+  Never "Failed to fetch".
+- The page's script is now in `panel.js` / `form.js`: the CSP is `default-src 'self';
+  style-src 'unsafe-inline'` (no inline scripts at all, stricter than 38e). `favicon.svg`.
+- Cloudflare's automatic Web Analytics beacon is blocked by that CSP on purpose;
+  `server/README.md` step 5 says how to turn it off for the panel.
+- The running list refreshes every second while a server is starting (else every 5 s).
+- The browser page (`web/app.js`) re-reads `net/x/servers.json` every time AC's launcher
+  asks for the server list (each time its online page opens), not once at load.
+
+## End to end on 127.0.0.1 (`re/scratch/task38g/e2e.sh`)
+
+38e's stand-ins (Docker API, Access, local acServer copy and gateway), the panel on the
+`--all` pack, and a browser pack with only the GT86 and Magione
+(`re/scratch/task38g/webpack`, made by `web_pack`): a car and a track the old pack did not
+have.
+
+| Check | Result |
+|---|---|
+| panel without a token / through the Access stand-in | 403 / 200 |
+| `/panel.js`, `/form.js`, `/favicon.svg`, `/nope.js` | 200, 200, 200 (svg), 404 |
+| CSP / inline scripts in the page | `default-src 'self'; style-src 'unsafe-inline'` / 0 |
+| the pack in the panel | 133 cars, 52 tracks and layouts, 7 weathers; GT86 12 skins; Magione 18 pit boxes |
+| preset "GT86 at Magione": 6 GT86, 4 skins, random | saved |
+| MX-5 Cup (DLC not owned) / 19 cars on 18 pit boxes / unknown skin / `9_storm` | refused, each with its own message |
+| start: `server_cfg.ini` | `CARS=ks_toyota_gt86`, `TRACK=magione`, `MAX_CLIENTS=6`, `GRAPHICS=4_mid_clear` |
+| start: `entry_list.ini` | 6 GT86, skins crystal_black ×3, dark_grey ×2, crystal_white_pearl (random of the 4) |
+| AC's launcher in the page, opened before the start | online list before: Spa, Laguna Seca; after: + "GT86 at Magione", 4 s after the start, no reload |
+| router list | the server, 0 / 6 players, no password |
+| a headless Chrome joins `x-gt86-magione` | joined through the router, Practice, the server's weather (air 20 C, 4_mid_clear) |
+| the idle stop (2 min) | stopped 118 s after the page left; router list empty; no containers left |
+
+The joined car stood at 0 km/h: autodrive drives into the pit wall leaving Magione's pit
+boxes. It does the same offline (`?go=1&car=ks_toyota_gt86&track=magione&autodrive=1&
+spawn=pit`: 0 km/h, full lock; `spawn=start`: 92 km/h), so it is the browser autodrive's,
+not the panel's (Not done). Starting went straight to "running" with the Docker stand-in
+(it reports a container running at once), so the 1 s refresh while starting is only
+covered by reading the code.
+
+## Unit tests
+
+`npm test` 12 of 12, `npx tsc --noEmit` clean. New: the pack index from a made-up AC
+folder (`make_server_pack.py --all`, then `--car` adding one), bad presets (skin, random,
+pit boxes, weather), entry lists with skins in turn / all / random (drawn numbers given) /
+none, the id from the name, and `api()` reloading once on a redirected answer. The pack test
+found a bug: a bare number in a `ui_track.json` (`"pitboxes": 6}`) was read as 0.
+
+## Proofs, clippy, builds
+
+No Rust crate changed (`server/`, `web/app.js`, docs). Both runs from
+`tools/proofs/run_all.sh`, one after the other:
+
+| area | `--quick` cases | identical | different | time | `--changed v0.38.5` cases | identical | different | time |
+|---|---|---|---|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0m57s | | | | |
+| fresh | 47 | 47 | 0 | 7m30s | | | | |
+| sound | 4 | 4 | 0 | 0m46s | | | | |
+| render | 10 | 10 | 0 | 6m36s | | | | |
+| gui | 15 | 15 | 0 | 9m19s | | | | |
+| replays | 5 | 5 | 0 | 2m51s | | | | |
+| net | 16 | 16 | 0 | 5m28s | 80 | 80 | 0 | 16m31s |
+| browser | 6 | 6 | 0 | 1m29s | 223 | 223 | 0 | 42m12s |
+| ai_page | 3 | 3 | 0 | 7m47s | 3 | 3 | 0 | 7m07s |
+| shaders | 4 | 4 | 0 | 1m12s | | | | |
+| launcher | 1 | 1 | 0 | 0m44s | | | | |
+| dumps | 6 | 6 | 0 | 4m25s | | | | |
+| all (wall clock) | | | | 33m | | | | 1h05m |
+
+`--changed v0.38.5` mapped `server/*` to net and `web/app.js` to browser and ai_page.
+
+Clippy `-D warnings` (`re/scratch/task38g/checks.sh`: the workspace `--all-targets`; web +
+net `--lib` on wasm32-unknown-unknown; math / ode / content / physics / net / game on
+wasm32-wasip1; render `--features wgpu --all-targets`; web + dxbc `--all-targets` on
+wasm32-unknown-unknown): all clean. `cargo build --release --locked` and every `tools/*`
+manifest with `--locked`: pass (car_oracle's 7 dead-code warnings are the old ones, as in
+38f).
+
+Disk: 23 GB free at the start; the 25 old-key fresh recordings (1.2 GB, pre-38f key, list
+in `re/scratch/task38g/oldkeys.txt`) were deleted as allowed; 26 GB free at the end.
