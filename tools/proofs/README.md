@@ -10,14 +10,18 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
 
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
 `--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
-the rule of `areas.map` it matched; a file no rule matches runs every area). `bash
+the rule of `areas.map` it matched; a file no rule matches runs every area; a `Cargo.toml` or
+`Cargo.lock` whose only change is rustyAC's own version asks for nothing). `bash
 tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
 
 The game's recordings that `fresh` compares against are made once and kept (xz) in
 `re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name and
 the source of `tools/car_oracle`). `--quick` and `--changed` compare against those; `--full` and
-`--rerecord` record every one again and count it DIFFERENT if its bytes are not the kept ones
-(nothing kept is ever replaced; below 18 GB of free disk, `PROOF_KEEP_MIN_GB`, nothing new is
+`--rerecord` record every one again and count it DIFFERENT if its bytes are not the kept ones,
+apart from the game's heap address (the `bounce_vel` the game never writes into its mesh contact
+joints: the header lines `mesh_bounce_vel` / `mesh_geom_high`, and in a several-car recording the
+words `world.contactHash` / `world.meshBounceVel` of a step where that word is each run's own
+address; `same_rec.py`) and the port's own `*.result.txt` (nothing kept is ever replaced; below 18 GB of free disk, `PROOF_KEEP_MIN_GB`, nothing new is
 kept and those cases are recorded on the spot as before). `dumps` builds the last release's rustyac.exe once per tag into
 `target/proofs/old_exe/<tag>/`. The shared oracles are built once per run. The areas that never
 load the game's code (net, browser, ai_page, shaders) run beside the others, which still run one at

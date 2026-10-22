@@ -60,17 +60,21 @@ unpack() {
     case "$1" in *.gz) gunzip -c "$1" ;; *) xz -dc "$1" ;; esac
 }
 # cache_put <dir> <from> <what>: keeps what was just recorded; when something is kept already the
-# two must be the same bytes (a DIFFERENT case when not)
+# two must be the same bytes (a DIFFERENT case when not), apart from the game's heap address in the
+# header (tools/proofs/same_rec.py) and the port's own *.result.txt (it has timings)
 cache_put() {
     if [ -f "$1/done" ]; then
         for f in "$2"/*; do
             [ -f "$f" ] || continue
+            case "$f" in *.result.txt) continue ;; esac
             k=$(ls "$1/$(basename "$f")".* 2>/dev/null | head -n 1)
-            if [ -z "$k" ] || ! unpack "$k" | cmp -s - "$f"; then
-                verdict "re-recorded $3: $(basename "$f")" DIFFERENT "not the bytes kept in ${1#"$repo"/}"
+            if [ -z "$k" ] || ! { unpack "$k" > "$out/kept.tmp" && python "$repo/tools/proofs/same_rec.py" "$out/kept.tmp" "$f" > "$out/same.txt"; }; then
+                verdict "re-recorded $3: $(basename "$f")" DIFFERENT "not the bytes kept in ${1#"$repo"/}: $(cat "$out/same.txt" 2>/dev/null)"
+                rm -f "$out/kept.tmp"
                 return
             fi
         done
+        rm -f "$out/kept.tmp"
         echo "re-recorded $3: the same bytes as ${1#"$repo"/}" >> "$out/rerecord.txt"
         return
     fi

@@ -28,4 +28,7 @@ check "$all" Cargo.lock
 check "$all" some/new/folder/file.rs
 check "$all" tools/proofs/lib.sh docs/port/proofs.md
 check "" tools/proofs/quick/gui.txt tools/proofs/areas.map
+# since v0.38.3 the lock files changed only rustyAC's version; Cargo.toml without a tag still asks for all
+PROOF_SINCE=v0.38.3 check "" Cargo.lock tools/car_oracle/Cargo.lock tools/render_oracle/Cargo.lock
+PROOF_SINCE=v0.38.3 check "net" Cargo.lock crates/rustyac-gateway/Cargo.toml server/panel/src/main.ts
 exit $bad

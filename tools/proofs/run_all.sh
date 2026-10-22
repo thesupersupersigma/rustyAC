@@ -42,7 +42,7 @@ case $mode in
         git -C "$repo" rev-parse -q --verify "$tag^{commit}" > /dev/null || { echo "no tag $tag" >&2; exit 2; }
         echo "files changed since $tag:"
         # committed since <tag> and not committed yet
-        picked=$(git -C "$repo" diff --name-only "$tag" | bash "$here/areas.sh" 2> "$out/changed.txt")
+        picked=$(git -C "$repo" diff --name-only "$tag" | PROOF_SINCE=$tag bash "$here/areas.sh" 2> "$out/changed.txt")
         sed 's/^/  /' "$out/changed.txt"
         areas=$(for a in $areas; do case " $picked " in *" $a "*) printf '%s ' "$a" ;; esac; done)
         ;;

@@ -35,7 +35,8 @@ tools/proofs/launcher*        launcher
 tools/proofs/log2req.py       launcher
 tools/proofs/tdiff.py         launcher
 tools/proofs/dumps.sh         dumps
-tools/proofs/areas.*          none
+tools/proofs/areas*           none
+tools/proofs/same_rec.py      fresh
 re/gold/fresh/*               fresh
 re/gold/net/*                 net
 re/gold/launcher/*            launcher
