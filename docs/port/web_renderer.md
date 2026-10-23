@@ -1,4 +1,4 @@
-# AC's renderer in the browser, part 1 (Tasks 38, 38b and 38h, v0.38.0, v0.38.1 and v0.38.7)
+# AC's renderer in the browser, part 1 (Tasks 38, 38b, 38h and 38i, v0.38.0, v0.38.1, v0.38.7 and v0.38.8)
 
 > **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
 > most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
@@ -7,15 +7,19 @@
 
 ## Resume here
 
-Task 38h (v0.38.7) did steps 1–2 of the Full-mode brief and the first part of step 3: kgl has a
-wgpu backend beside Direct3D 11 (Cargo feature `backend-wgpu` of rustyac-render; Direct3D 11
-stays the default and is unchanged, the render proofs say so), both backends write the same kgl
-call log, and the render oracle runs the port on wgpu (`render_oracle` feature `wgpu`,
-`tools/proofs/render_wgpu.sh`): the kgl call log is identical to the Direct3D 11 port's in all
-71 cases run, the pixels 22–77 dB PSNR from the game's (median 31). rustyac-render builds for
-`wasm32-unknown-unknown` and the translator gives the same WGSL in wasm. **Not done (Task 38i):
-Full mode in the page**, its mode switch and the headless-Chrome proof; the page still draws with
-its debug renderer. Read the Task 38h part at the end ("Not done (Task 38i)") first.
+Task 38i (v0.38.8) finished the Full-mode brief: the page draws with AC's own renderer
+(`AcRenderer` of rustyac-game, kgl on WebGPU), Full is the default where the browser has WebGPU
+and the debug view the fallback (the gear page's Picture menu, kept per browser). The page's
+fixed frame (`?fullproof=3`) writes the same kgl call log as the same drive natively on wgpu and
+on Direct3D 11, and the same pixels as native wgpu (Spa from the install, Magione from the test
+pack); on this PC's GPU Full runs at 60 fps in Chrome. jpg and bmp decode on wgpu, and a
+Cargo.lock change picks only the areas of the crates it reaches. **Not done (Task 38j):**
+race.ini's sun and weather in Full, the HUD and apps, sound, YEBIS, Hybrid; a second large-track
+Full drive in one visit can run out of wasm memory. Read the Task 38i part at the end first.
+
+Task 38h (v0.38.7) did steps 1–2 of the brief: kgl's wgpu backend beside Direct3D 11 (Cargo
+feature `backend-wgpu`), the same kgl call log on both, and the render oracle on wgpu
+(`tools/proofs/render_wgpu.sh`, 71 cases identical logs, 22–77 dB PSNR from the game's).
 
 ## In plain English
 
@@ -801,3 +805,178 @@ Disk: 26 GB free at the start, 22 GB at the end (v0.38.6's build deleted; `targe
   keeps the count asked for, so the logs stay comparable).
 - jpg and bmp textures are not decoded on wgpu (dds and png are; on the desktop WIC reads them).
 - No HUD text on wgpu: fw1 (DirectWrite) is a stub there that draws nothing.
+
+# Task 38i (v0.38.8)
+
+## In plain English (38i)
+
+The page now draws its game with Assetto Corsa's own renderer, the one the desktop game uses:
+**Full mode**. The same Rust code that sets up the track, the cars, the sky, the shadows and the
+pit crew on the desktop builds for the browser and runs on WebGPU, reading the files from the
+content pack or the player's own folder. Full is the default wherever the browser has WebGPU;
+without it the page falls back to the debug view and says why. The gear page has the switch.
+
+The proof: the page's first frames of a drive write the same list of calls into the renderer's
+graphics layer (the kgl call log) as the same drive run natively on wgpu, and natively on
+Direct3D 11 too, and the page's picture is the native wgpu picture to the last bit (both on
+SwiftShader). Against the Direct3D 11 software renderer (WARP) it is 31 to 35 dB PSNR, the same
+as Task 38h measured for wgpu against Direct3D. On this PC's graphics card (AMD Radeon Pro
+5500M) Full mode runs at 60 frames a second in Chrome, the screen's own rate.
+
+Finding the page and the desktop on the same calls turned up two bugs that the desktop game had
+too, and one place where the port now does what the game does whatever its folder looks like
+(below, "What the proof found").
+
+## Step 1: the glue
+
+- `rustyac-game`'s `render/ac.rs` (the scene, track, car and pit crew setup, `AcRenderer`) and
+  `render/hud.rs`'s `HudInfo` build for `wasm32-unknown-unknown`. Windows-only stays Windows-only:
+  the HUD pass (Direct3D's own shader compiler), the game GUI, the gpu log, the DXGI adapter name,
+  the swap chain and the frame timing (`std::time::Instant` panics in wasm). In wasm the renderer
+  takes the page's device (`AcRenderer::give_device`, kgl's `give_device`) and draws into the
+  page's canvas (`present_to`: kgl's screen texture resolved and copied to the canvas).
+- `rustyac-game` has a Cargo feature `wgpu` (kgl on wgpu natively; proofs only: such a
+  `rustyac.exe` is a replay-only build, no window, no sound) and `rustyac-web` a feature `wgpu`
+  that turns it on.
+- Every file the renderer looks for goes through `rustyac_content::vfs` (`vfs_is_file` /
+  `vfs_is_dir` in place of `is_file` / `is_dir` in 18 files of rustyac-render): the desktop asks
+  the disk as before, the page asks the pack or the folder.
+- `AcRenderer::load_car_info`: a car from what the simulation knows of it (its folder, steer lock,
+  tyre widths, gears), shared by the desktop (`desktop.rs`) and the page.
+- `crates/rustyac-web/src/full.rs`: the page's renderer made as rustyac.exe makes it without a
+  race.ini (midday sun, clear sky, the sun moving), one frame of the page's game, and the fixed
+  frame (below).
+- The files: `content::files_of_picture` lists what the renderer reads besides the drive's files
+  (shaders, `system/cfg`, weather, `content/texture` and its clouds, `objects3D`, fonts, the car's
+  models, textures, animations, first skin and driver model, the track's `data/` settings). The
+  page fetches them first; whatever the renderer still asks for and does not find
+  (`Game::files_missing`) is fetched and the drive starts again, up to 6 rounds. With the
+  player's folder the page lists the extra folders it needs (`listMore`). `tools/web_pack` puts
+  the same files into a pack: the test pack (2 cars, 2 tracks) grew from 1.2 GB to 1.37 GB (78 MB
+  of shared files, 521 files).
+
+## Step 2: jpg and bmp on wgpu
+
+`texture_fallback.rs` decodes jpg (`jpeg-decoder` 0.3.2, a new dependency of the `backend-wgpu`
+feature only) and bmp (written here: 1, 4, 8-bit palettes, 16, 24, 32 bits, bit fields, alpha only
+when a mask says so) where the Direct3D path has Windows' WIC. The test `same_texels_as_wic` reads
+real files of the install with both: bmp and png give the same bytes, jpg (Brands_Crew.jpg,
+512 x 256) differs by at most 3 steps in 0.6 % of the bytes (two JPEG decoders round the colour
+conversion differently; the limit is 4).
+
+## Step 3: the switch
+
+The gear page's Picture menu: **Full: AC's own renderer (needs WebGPU; else Debug)** (the
+default), **Debug: WebGPU, else WebGL2**, **Debug: WebGL2**. The choice is kept in the browser
+(`localStorage` `rustyac.picture`); `?backend=full|auto|webgl` overrides it. Without a WebGPU
+adapter Full gives the debug view on WebGL2 and the first note says "Full mode needs WebGPU, and
+this browser offers none: the debug view draws instead (WebGL2)."; if the renderer cannot start
+(a file it needs is not there, the device lacks something), the note says "Full mode could not
+start, the debug view draws instead: <why>". A drive in Full mode says so in its notes ("picture:
+Full mode, AC's own renderer on WebGPU").
+
+## Step 4: the proof in the page
+
+The fixed frame: a drive as it starts (`Session::new`, no physics step), the renderer made for it,
+3 frames 1/60 s apart, HUD hidden, 1280 x 720, the kgl call log from the renderer's making to the
+last frame. The page runs it with `?fullproof=3` (`full_proof_next`, `Game::full_proof`,
+`window.rustyac.fullProof()`), natively the example `full_frame` runs the same code
+(`crates/rustyac-web/examples/full_frame.rs`: Direct3D 11 without features, kgl on wgpu with
+`--features wgpu`; it points Documents at an empty folder, as the page has none, and writes the
+log, the picture and the files it read). Chrome is headless with `--use-webgpu-adapter=swiftshader`;
+the native wgpu run uses the same SwiftShader (Vulkan ICD of Task 38b).
+
+| Drive (ks_ferrari_f2004 from the pit) | files from | kgl log page = native wgpu | native wgpu = native D3D11 | PSNR page vs native wgpu | PSNR page vs WARP (largest diff) | JS errors |
+|---|---|---|---|---|---|---|
+| Spa | the install as the test folder | IDENTICAL (17,409 lines) | IDENTICAL | identical pixels | 31.14 dB (231) | none |
+| Magione | **the test pack** (`tools/web_pack`) | IDENTICAL (15,736 lines) | IDENTICAL | identical pixels | 35.17 dB (254) | none |
+
+The 193 files the native Magione run read are all in the test pack's manifest.
+
+![Spa: page, native wgpu, WARP](web_renderer_38i_spa.jpg)
+![Magione from the test pack: page, native wgpu, WARP](web_renderer_38i_magione_pack.jpg)
+
+The page's drives (the test pack, 10–20 s of driving each):
+
+| Run | Chrome | picture | frames a second | page work per frame | JS errors |
+|---|---|---|---|---|---|
+| default menu, f2004 at Magione | SwiftShader | Full | 2.1 | | none |
+| `?backend=auto`, f2004 at Magione | SwiftShader | Debug (WebGPU) | 0.7 | | none |
+| default menu, `--disable-gpu` | no WebGPU adapter | Debug (WebGL2), the note says why | 10.9 | | none |
+| default menu, f2004 at Magione, 1920 x 1080 | **GPU** (Radeon Pro 5500M) | Full | **59.9** | 10.6 ms | none |
+| default menu, bmw_z4_gt3 at Laguna Seca, 1920 x 1080 | GPU | Full | **59.9** | 11.8 ms | none |
+| `?backend=auto`, f2004 at Magione, 1920 x 1080 | GPU | Debug (WebGPU) | 59.9 | 1.3 ms | none |
+
+![Full on the GPU at Laguna Seca, and the fallback without WebGPU](web_renderer_38i_gpu_and_fallback.jpg)
+
+## What the proof found
+
+1. **A missing `Documents\Assetto Corsa\cfg\video.ini` was read as an empty file** (an empty
+   ini, so anisotropic filtering 0, no cube map, and so on) instead of the game's defaults:
+   `video_ini_of` now treats a missing file as no file.
+2. **The car's own shadow pictures were looked for on the disk only** (`fake_shadow.rs`), so the
+   page made the shadows every start instead of reading `body_shadow.png`: now through vfs.
+3. **The track's own pit crew meshes (`AC_CREW_n`) keep the track's texture, as in acs.exe**:
+   the game splits their texture name `<game folder>::<file>` at its first `:`, the drive letter of
+   its absolute folder, finds no file and never dresses them in the car's colours. The port did the
+   same on the desktop, but the page's folder is relative (`ac`), so there the split found the
+   file and the page dressed them. The dressing is gone (it can never happen in the game). A first
+   try split at `::` instead; the render proofs caught it (r22c_13 and r22c_14 DIFFERENT, the
+   game's texture against the car's) and now match again.
+
+## Step 5: `--changed` and Cargo.lock
+
+`tools/proofs/lock_crates.py <Cargo.lock> <tag> [<rev>]` compares the lock with the one at `<tag>`
+and prints the folders of the path crates whose own entry changed (a dependency added, dropped
+or moved; their version is ignored) or that reach a changed outside package through outside
+packages only; the folders come from `cargo metadata --no-deps`. `areas.sh` gives a `Cargo.lock`
+no rule names the areas of those crates' own rules, and every area when it can't tell (no tag,
+no lock at the tag, a crate without a rule, cargo metadata failing).
+
+| Lock change | areas |
+|---|---|
+| this task's (jpeg-decoder for rustyac-render; png and rustyac-render for rustyac-web) | render gui shaders browser ai_page (before: all 12) |
+| the same with `png`'s checksum changed too (made up, then undone) | every area: png reaches rustyac-game, which has no rule |
+| v0.38.3 to v0.38.4 (rustyAC's version only) | none |
+| no `--changed` tag / a tag that does not exist | every area |
+
+`areas_test.sh` checks the last two kinds and the tag-to-tag lock of this release.
+
+## Not done (Task 38j)
+
+- race.ini's sun, weather and groove in Full mode (the page's renderer takes rustyac.exe's
+  defaults without a race.ini).
+- The HUD and apps in Full mode (the wgpu text renderer is a stub), sound, YEBIS, Hybrid mode.
+- A second Full drive in one page visit can run out of wasm memory on a large track (Spa's
+  421 MB model is copied while loading); the page reloads nothing between drives today.
+- Online drives in Full mode were wired (the server's cars' files are fetched) but not proven.
+
+## New or renamed files in the web zip (38i)
+
+None: `index.html`, `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 8.18 MB).
+
+## Open questions (38i, decided without asking)
+
+- Full is the default as soon as WebGPU is there (step 3), now that the page proves it; without
+  WebGPU the page shows why it draws the debug view, also when the menu was never touched.
+- The fixed frame is the drive's own first renderer (`?fullproof=N` before the drive), not a
+  second one made later: a second Spa in one visit ran out of wasm memory.
+- The page frame and the native frame share Session and renderer code (`full.rs`), so the proof
+  checks the page's file layer, wgpu in the browser and the glue, not two copies of the setup.
+- Native wgpu frames ran on SwiftShader like the page; the GPU numbers are frame rates only.
+- `run_all.sh --changed v0.38.7` asks for every area (rustyac-game changed and has no rule:
+  about 7.5 h); it ran with the areas the renderer and the page reach (render gui shaders browser
+  ai_page), and `--quick` covered every area. rustyac-game's other changes are build gating, the
+  shared `load_car_info` and the fixes above, which render and gui draw.
+
+## End checks (38i)
+
+| Check | Result |
+|---|---|
+| `run_all.sh --quick` | 126 cases, 126 identical, 27 min |
+| `run_all.sh --changed v0.38.7 render gui shaders browser ai_page` | 460 cases, 1 h 52 min: render 105 of 107 (r22c_13, r22c_14: the `::` try above), gui 123/123, shaders 4/4, browser 223/223, ai_page 3/3 |
+| r22c_13 and r22c_14 again after the crew fix | 2 of 2 identical |
+| the page proofs again after the crew fix | Spa and Magione: kgl logs identical, pixels identical to native wgpu |
+| clippy `-D warnings`: rustyac-game, -render, -web (lib, bins, examples); with `rustyac-web/wgpu`; rustyac-render `backend-wgpu` (lib, tests); rustyac-web for wasm32 | clean |
+| tests: rustyac-web, -render, -content; `texture_fallback` on wgpu | 0 failures |
+| `areas_test.sh` | AREAS_RESULT |

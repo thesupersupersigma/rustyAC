@@ -28,8 +28,10 @@ A full run took about 10 hours, too long for every task. Now:
 - **`--changed <tag>`**: the areas the files changed since `<tag>` (committed or not) ask for,
   each run whole. `tools/proofs/areas.map` maps paths to areas (first match wins); a path no rule
   matches runs everything; a `Cargo.toml` / `Cargo.lock` whose only change is rustyAC's version asks
-  for nothing. It prints each file, the rule it matched and the areas. `areas_test.sh` checks 20
-  made-up lists.
+  for nothing. Another `Cargo.lock` change asks for the rules of the crates whose dependencies
+  changed or reach a changed outside package (`tools/proofs/lock_crates.py`, Task 38i), every area
+  when it can't tell. It prints each file, the rule it matched and the areas. `areas_test.sh`
+  checks 20 made-up lists and two tag-to-tag locks.
 - **`--full`** (also the default): every case of every area, as before, plus the game's recordings
   made again and held against the kept ones. Per-area time and the wall clock in the table.
 
