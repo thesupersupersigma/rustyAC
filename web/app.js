@@ -718,7 +718,8 @@ async function listPictureFiles(models) {
   const parts = [
     ['system/shaders/win', 0, []],
     ['content/weather', 1, []],
-    ['content/texture', 1, []],
+    // (the driver's and the crew's suits, helmets and gloves: content/texture/<kind>/<name>/<colour>/_nm)
+    ['content/texture', 4, []],
     ['content/driver', 1, []],
     ['content/fonts', 0, []],
     ['content/objects3D', 0, []],
@@ -2158,7 +2159,8 @@ async function returnToLauncher() {
 }
 
 async function main() {
-  await init();
+  const wasm = await init();
+  window.rustyac.memory = () => ({ wasm_mb: wasm.memory.buffer.byteLength / 2 ** 20, files_mb: rac.fs_megabytes() });
   $('version').textContent = rac.version();
   rac.full_proof_next(Number(params.get('fullproof')) || 0);
   startControls();
@@ -2368,6 +2370,10 @@ window.rustyac.fullProof = async () => {
   const [size, ...log] = text.split('\n');
   return { size, log: log.join('\n') };
 };
+
+// Task 38j's test hooks: the drive of this race.ini (and assists.ini) after the last one, as the
+// launcher's Start makes it; the wasm memory and the files in it, MB
+window.rustyac.driveRace = (race, assists) => freshCanvas() || drive({ car: raceKey(race, 'MODEL'), track: raceKey(race, 'TRACK'), layout: raceKey(race, 'CONFIG_TRACK'), race, assists });
 
 // a [RACE] key of a race.ini
 function raceKey(race, name) {

@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use rustyac_game::input_file::{event, GridPlace, SimSetup, StepInput};
 use rustyac_game::online::OnlineSession;
+use rustyac_game::render::ac::RaceLook;
 use rustyac_game::render::scene::{CameraFrame, CarShape, DrivingCamera};
 use rustyac_game::sim::{GameSim, ReplaySource, SpawnSequence, DT};
 use rustyac_game::view::CarView;
@@ -75,6 +76,8 @@ pub struct Session {
     /// notes), and the drive as `key=value` lines (car, skin, track, layout, spawn, session).
     pub race_notes: Vec<String>,
     pub drive: String,
+    /// What race.ini gives Full mode's renderer (sun, weather, groove); without one, rustyAC's defaults.
+    pub look: RaceLook,
     /// Task 38's frame-rate check: the inputs of a recorded drive played instead of the
     /// player's (and the next one's index), the step the frame loop stops at, and the state
     /// hash chained over every step since the check began.
@@ -130,6 +133,9 @@ sessions={}
         let mut session = Session::build(setup, None)?;
         session.race_notes = race_notes;
         session.drive = drive;
+        // (as IniReader::load reads a file: CR LF as LF)
+        let race_text = race_text.replace('\r', "");
+        session.look = RaceLook::of(Some(&rustyac_physics::data::ini::IniReader::from_text(std::path::Path::new("race.ini"), &race_text)));
         Ok(session)
     }
 
@@ -198,6 +204,7 @@ sessions={}
             console: Vec::new(),
             race_notes: Vec::new(),
             drive: String::new(),
+            look: RaceLook::of(None),
             tape: None,
             stop_at: None,
             chain: CHAIN_START,

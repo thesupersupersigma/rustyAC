@@ -288,13 +288,7 @@ fn load_models(renderer: &mut DebugRenderer, options: &Options, info: &rustyac_g
 /// AC's own renderer with the track and the car loaded.
 fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<AcRenderer, String> {
     let game = rustyac_content::install::ac_root().ok_or_else(rustyac_content::install::not_found_hint)?;
-    // the sun and the weather of race.ini; without one, midday and clear
-    let (mut sun_angle, mut weather, mut skin) = (-16.0f32, "3_clear".to_string(), options.skin.clone());
-    // without a race.ini: the time runs at its own pace and the clouds drift
-    let mut sun_animation = Some((1.0f32, 0.2f32));
-    let mut groove = None;
-    let mut race_session = false;
-    let mut session_type = None;
+    let mut skin = options.skin.clone();
     let race = match (&options.race_ini_file, options.race_ini) {
         (Some(file), _) => Some(file.clone()),
         (None, Some(false)) => None,
@@ -302,19 +296,12 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     };
     let assists_file = race.as_ref().map(|p| p.with_file_name("assists.ini")).filter(|p| p.is_file());
     let race_reader = race.as_ref().and_then(|p| rustyac_physics::data::ini::IniReader::load(p).ok());
-    if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
-        if ini.has_section("LIGHTING") {
-            sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(sun_angle);
-            sun_animation = Some((ini.get_float("LIGHTING", "TIME_MULT").unwrap_or(0.0), ini.get_float("LIGHTING", "CLOUD_SPEED").unwrap_or(0.0)));
-        } else {
-            sun_animation = None;
-        }
-        race_session = ini.get_int("SESSION_0", "TYPE").unwrap_or(0) == 3;
-        session_type = ini.get_int("SESSION_0", "TYPE").ok().filter(|t| *t > 0);
-        weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
-        if ini.has_section("GROOVE") {
-            groove = Some((ini.get_float("GROOVE", "MAX_LAPS").unwrap_or(0.0), ini.get_float("GROOVE", "STARTING_LAPS").unwrap_or(0.0)));
-        }
+    // the sun, the weather and the groove of race.ini
+    let look = rustyac_game::render::ac::RaceLook::of(race_reader.as_ref());
+    // a race start: --start-lights <seconds>, or race.ini's race
+    let start_lights = options.start_lights.or(look.start_lights());
+    let rustyac_game::render::ac::RaceLook { mut sun_angle, mut sun_animation, mut weather, groove, session_type } = look;
+    if let Some(ini) = &race_reader {
         if skin.is_none() {
             let name = ini.get_string("CAR_0", "SKIN");
             if !name.is_empty() {
@@ -339,9 +326,6 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     if options.skin.is_none() && info.skin.is_some() {
         skin = info.skin.clone();
     }
-    // a race start: --start-lights <seconds>, or the 20 s of RaceManager::startRace when
-    // race.ini's session is a race
-    let start_lights = options.start_lights.or(race_session.then_some(20.0));
     if let Some(name) = &options.weather {
         weather = name.clone();
     }

@@ -305,6 +305,42 @@ pub struct AcOptions {
     pub hdr_levels: bool,
 }
 
+/// What `race.ini` gives the renderer (rustyac.exe and the page's Full mode read it the same
+/// way); without the file: rustyAC's own defaults, midday and clear with the sun moving.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaceLook {
+    pub sun_angle: f32,
+    pub sun_animation: Option<(f32, f32)>,
+    pub weather: String,
+    pub groove: Option<(f32, f32)>,
+    /// `[SESSION_0] TYPE` when above 0
+    pub session_type: Option<i32>,
+}
+
+impl RaceLook {
+    pub fn of(race: Option<&IniReader>) -> RaceLook {
+        let mut look = RaceLook { sun_angle: -16.0, sun_animation: Some((1.0, 0.2)), weather: "3_clear".to_string(), groove: None, session_type: None };
+        let Some(ini) = race else { return look };
+        if ini.has_section("LIGHTING") {
+            look.sun_angle = ini.get_float("LIGHTING", "SUN_ANGLE").unwrap_or(look.sun_angle);
+            look.sun_animation = Some((ini.get_float("LIGHTING", "TIME_MULT").unwrap_or(0.0), ini.get_float("LIGHTING", "CLOUD_SPEED").unwrap_or(0.0)));
+        } else {
+            look.sun_animation = None;
+        }
+        look.session_type = ini.get_int("SESSION_0", "TYPE").ok().filter(|t| *t > 0);
+        look.weather = if ini.has_section("WEATHER") { ini.get_string("WEATHER", "NAME") } else { String::new() };
+        if ini.has_section("GROOVE") {
+            look.groove = Some((ini.get_float("GROOVE", "MAX_LAPS").unwrap_or(0.0), ini.get_float("GROOVE", "STARTING_LAPS").unwrap_or(0.0)));
+        }
+        look
+    }
+
+    /// A race start: the 20 s of `RaceManager::startRace` when the session is a race.
+    pub fn start_lights(&self) -> Option<f32> {
+        (self.session_type == Some(3)).then_some(20.0)
+    }
+}
+
 /// `--graphics max|low`: every setting of `video.ini` this renderer knows at the highest / the
 /// lowest value Assetto Corsa's own launcher offers for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

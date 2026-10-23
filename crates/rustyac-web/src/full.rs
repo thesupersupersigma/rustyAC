@@ -20,8 +20,8 @@ use crate::session::Session;
 /// A frame's time in the fixed frame.
 pub const FIXED_SECONDS: f32 = 1.0 / 60.0;
 
-/// AC's renderer with the session's track and cars, as rustyac.exe makes it without a race.ini
-/// (midday, clear, the sun moving). `warp`: Direct3D's or wgpu's WARP natively (the page has its
+/// AC's renderer with the session's track and cars, as rustyac.exe makes it from the same
+/// race.ini (its sun, weather, groove and race start; without one, midday and clear). `warp`: Direct3D's or wgpu's WARP natively (the page has its
 /// own device); `log`: the kgl call log's names (kgl on wgpu gives them out only then).
 pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: bool, log: bool, notes: &mut Vec<String>) -> Result<Box<AcRenderer>, String> {
     let sim = &session.sim;
@@ -29,26 +29,26 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
     let others = sim.opponent_infos();
     // (Direct3D 11's gpu_log is its own command log below kgl: not wanted here)
     let wgpu = cfg!(any(target_arch = "wasm32", feature = "wgpu"));
-    // shortcut: rustyac.exe's defaults without a race.ini, not race.ini's sun, weather and groove; read them once the page's races need them
+    let look = &session.look;
     let options = AcOptions {
         warp,
         gpu_log: (log && wgpu).then(PathBuf::new),
         game: root.to_path_buf(),
-        sun_angle: -16.0,
-        weather: "3_clear".to_string(),
+        sun_angle: look.sun_angle,
+        weather: look.weather.clone(),
         skin: None,
         video_exact: false,
         cube_faces: None,
         mirror_size: None,
-        sun_animation: Some((1.0, 0.2)),
-        groove: None,
+        sun_animation: look.sun_animation,
+        groove: look.groove,
         mirror_hq: None,
         world_detail: None,
         render_seed: info.render_seed,
         cube_size: None,
         ideal_line: false,
-        session_type: if sim.setup.spawn == "hotlap" { 4 } else { 1 },
-        start_lights: None,
+        session_type: look.session_type.unwrap_or(if sim.setup.spawn == "hotlap" { 4 } else { 1 }),
+        start_lights: look.start_lights(),
         video_ini: None,
         preset: None,
         aa_samples: None,
