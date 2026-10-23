@@ -12,6 +12,7 @@
 //! (`createAndSaveOverlays` 0x1401b9b00); this port only reads it: a track that has none shows
 //! no gate.
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_math::sqrtf;
@@ -40,7 +41,7 @@ pub struct Overlay {
 /// `sectors` time lines (a missing section gives zeros). Empty without the file.
 pub fn read_overlays(data_folder: &Path, sectors: usize) -> Vec<Overlay> {
     let file = data_folder.join("data/overlays.ini");
-    if !file.is_file() {
+    if !file.vfs_is_file() {
         return Vec::new();
     }
     let Ok(ini) = IniReader::load(&file) else { return Vec::new() };

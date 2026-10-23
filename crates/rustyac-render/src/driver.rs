@@ -14,6 +14,7 @@
 //! (paddles) play at a gear change, blended with the steering pose; the head leans with the
 //! car's acceleration.
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_physics::data::ini::IniReader;
@@ -101,12 +102,12 @@ fn load_driver_skin(kn5: &mut Kn5Io, game: &str, ini: &IniReader, model: &str, p
     }
     let value = ini.get_string(model, part);
     let path = format!("{game}/content/texture/driver_{part}{value}");
-    if Path::new(&path).is_dir() {
+    if Path::new(&path).vfs_is_dir() {
         kn5.skin_override_path.push(path.clone());
     }
     if let Some(at) = path.rfind('\\') {
         let nm = format!("{}_nm", &path[..at + 1]);
-        if Path::new(&nm).is_dir() {
+        if Path::new(&nm).vfs_is_dir() {
             kn5.skin_override_path.push(nm);
         }
     }
@@ -175,14 +176,14 @@ impl DriverModel {
         }
         // the model
         let knh = folder.join("driver_base_pos.knh");
-        if !knh.is_file() {
+        if !knh.vfs_is_file() {
             return Err(format!("{} is missing: the game cannot seat a driver without it", knh.display()));
         }
         println!("USING DEFAULT DRIVER SYSTEM");
         let model_name = ini.get_string("MODEL", "NAME");
         let mut is_hr = is_hr;
         let mut file = format!("{game}/content/driver/{model_name}{}.kn5", if is_hr { "" } else { "_B" });
-        if !Path::new(&file).is_file() {
+        if !Path::new(&file).vfs_is_file() {
             if !is_hr {
                 is_hr = true;
                 file = format!("{game}/content/driver/{model_name}.kn5");
@@ -205,7 +206,7 @@ impl DriverModel {
             }
         }
         let skin_folder = format!("{folder_text}/skins/{skin}");
-        if !skins_handled && folder.join("skins").join(skin).join("skin.ini").is_file() {
+        if !skins_handled && folder.join("skins").join(skin).join("skin.ini").vfs_is_file() {
             if let Ok(skin_ini) = IniReader::load(&folder.join("skins").join(skin).join("skin.ini")) {
                 if skin_ini.has_section(&model_name) {
                     for part in ["SUIT", "GLOVES", "HELMET"] {
@@ -265,13 +266,13 @@ impl DriverModel {
         // the animations, of the car's folder
         let animations = folder.join("animations");
         let steer_path = animations.join("steer.ksanim");
-        if steer_path.is_file() {
+        if steer_path.vfs_is_file() {
             let a = Animation::load(&steer_path);
             driver.steer_player = Some(AnimationPlayer::with_mode(&a, scene, driver_root, 0));
             driver.animation_lock = ini.get_float("STEER_ANIMATION", "LOCK").unwrap_or(0.0);
         }
         let mut shift_path = animations.join("shift.ksanim");
-        if !shift_path.is_file() {
+        if !shift_path.vfs_is_file() {
             shift_path = animations.join("shift_up.ksanim");
             let a = Animation::load(&animations.join("shift_dw.ksanim"));
             let mut player = AnimationPlayer::with_mode(&a, scene, driver_root, 0);
@@ -283,7 +284,7 @@ impl DriverModel {
             driver.shift_down_player = Some(player);
             driver.paddle_shifts = true;
         }
-        if shift_path.is_file() {
+        if shift_path.vfs_is_file() {
             let a = Animation::load(&shift_path);
             let mut player = AnimationPlayer::with_mode(&a, scene, driver_root, 0);
             if driver.paddle_shifts {

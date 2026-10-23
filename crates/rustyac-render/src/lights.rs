@@ -16,6 +16,7 @@
 //!   `update` 0x140091ac0): the dirt on the paint, which grows while a tyre runs over a
 //!   surface that makes dirt.
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_math::sqrtf;
@@ -554,7 +555,7 @@ impl AnimatedLights {
     pub fn new(scene: &Scene, folder: &Path, body_transform: NodeId) -> AnimatedLights {
         let mut lights = AnimatedLights::default();
         let path = folder.join("animations/lights.ksanim");
-        if path.is_file() {
+        if path.vfs_is_file() {
             let animation = Animation::load(&path);
             lights.lights.push(AnimationPlayer::new(&animation, scene, body_transform));
         }

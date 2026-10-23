@@ -15,6 +15,7 @@
 //!
 //! The lollipop men are on layer 5: they only show with `WORLD_DETAIL` 5.
 
+use rustyac_content::vfs::PathExt;
 use std::path::{Path, PathBuf};
 
 use rustyac_math::sqrtf;
@@ -60,12 +61,12 @@ pub(crate) fn load_crew_skin(io: &mut Kn5Io, game: &str, ini: &IniReader, key: &
     }
     let value = ini.get_string("CREW", key);
     let path = format!("{game}/content/texture/crew_{key}{value}");
-    if Path::new(&path).is_dir() {
+    if Path::new(&path).vfs_is_dir() {
         io.skin_override_path.push(path.clone());
     }
     if let Some(at) = path.rfind('\\') {
         let nm = format!("{}_nm", &path[..at + 1]);
-        if Path::new(&nm).is_dir() {
+        if Path::new(&nm).vfs_is_dir() {
             io.skin_override_path.push(nm);
         }
     }
@@ -93,7 +94,7 @@ impl LollipopCrew {
         let mut io = Kn5Io::new();
         let skin_folder = car.folder.join("skins").join(&car.skin);
         let skin_ini = skin_folder.join("skin.ini");
-        let ini = if skin_ini.is_file() { IniReader::load(&skin_ini).ok().filter(|ini| ini.has_section("CREW")) } else { None };
+        let ini = if skin_ini.vfs_is_file() { IniReader::load(&skin_ini).ok().filter(|ini| ini.has_section("CREW")) } else { None };
         match &ini {
             Some(ini) => {
                 for key in ["SUIT", "HELMET", "BRAND"] {
@@ -217,7 +218,8 @@ pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, 
         };
         let Some(material) = material else { continue };
         let Some(name) = scene.materials[material.0 as usize].resources.first().map(|r| r.texture.file_name.clone()) else { continue };
-        let Some(p) = name.find(':') else { continue };
+        // (the game's folder is relative there: "C:/..." here must not be taken for "folder::file")
+        let Some(p) = name.find("::") else { continue };
         let mut tex = name.get(p + 2..).unwrap_or("").to_string();
         if tex == "DRIVER_Suit.dds" {
             // (the label of the material the track's meshes share, not what it shows)
@@ -227,18 +229,18 @@ pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, 
         let skin_folder = car.folder.join("skins").join(&car.skin);
         let mut file = format!("{}/skins/{}/{tex}", car.folder_text, car.skin);
         let skin_ini = skin_folder.join("skin.ini");
-        if skin_ini.is_file() {
+        if skin_ini.vfs_is_file() {
             if let Ok(ini) = IniReader::load(&skin_ini) {
                 if ini.has_section("CREW") && ini.has_key("CREW", "SUIT") {
                     let folder = format!("{game}/content/texture/crew_SUIT{}", ini.get_string("CREW", "SUIT"));
                     let candidate = format!("{folder}/{tex}");
-                    if Path::new(&folder).is_dir() && Path::new(&candidate).is_file() {
+                    if Path::new(&folder).vfs_is_dir() && Path::new(&candidate).vfs_is_file() {
                         file = candidate;
                     }
                 }
             }
         }
-        if Path::new(&file).is_file() {
+        if Path::new(&file).vfs_is_file() {
             let mut clone = scene.materials[material.0 as usize].clone_material(graphics)?;
             let texture = graphics.resources.get_texture(&graphics.kgl, &file);
             clone.resources[0].texture = texture;

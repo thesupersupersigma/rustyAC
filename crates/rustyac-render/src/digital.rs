@@ -16,6 +16,7 @@
 //! The items drawn by a `DisplayNode` (`RPM_GRAPH`, `DELTA_GRAPH`, `GEAR_TX`) have theirs in
 //! `panels.rs`, next to `DigitalPanels`.
 
+use rustyac_content::vfs::PathExt;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
@@ -642,7 +643,7 @@ impl DigitalInstruments {
                     let mut texture = |key: &str, null_test: bool| -> Texture {
                         let name = ini.get_string(&section, key);
                         let path = format!("{folder_text}/texture/{name}");
-                        if !(null_test && name == "NULL") && Path::new(&path).is_file() {
+                        if !(null_test && name == "NULL") && Path::new(&path).vfs_is_file() {
                             graphics.resources.get_texture(&graphics.kgl, &path)
                         } else {
                             println!("[ERROR]: {key} {path} NOT FOUND");

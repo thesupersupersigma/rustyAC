@@ -13,6 +13,8 @@
 
 use std::path::Path;
 
+use rustyac_content::vfs::PathExt;
+
 use rustyac_math::sqrtf;
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::Mat44f;
@@ -139,13 +141,13 @@ impl CarFakeShadow {
             from_cache: false,
         };
         let cached = match &graphics.shadow_cache {
-            Some(cache) if !folder.join("body_shadow.png").is_file() => cached_shadows(cache, folder),
+            Some(cache) if !folder.join("body_shadow.png").vfs_is_file() => cached_shadows(cache, folder),
             _ => None,
         };
         if let Some(own) = cached {
             shadow.load_shadows(graphics, &crate::model::path_text(&own));
             shadow.from_cache = true;
-        } else if folder.join("body_shadow.png").is_file() {
+        } else if folder.join("body_shadow.png").vfs_is_file() {
             // loadShadows 0x1400e1eb0
             shadow.tx_body = graphics.resources.get_texture(&graphics.kgl, &format!("{folder_text}/body_shadow.png"));
             for i in 0..4 {

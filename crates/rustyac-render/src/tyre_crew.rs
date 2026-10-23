@@ -17,6 +17,7 @@
 // (and the states of `pitCrewUpdate` are kept apart as the game's switch has them)
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments, clippy::collapsible_match, clippy::collapsible_if)]
 
+use rustyac_content::vfs::PathExt;
 use rustyac_math::sqrtf;
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f};
@@ -261,7 +262,7 @@ impl PitCrew {
         let mut io = Kn5Io::new();
         let skin_folder = car.folder.join("skins").join(&car.skin);
         let skin_ini = skin_folder.join("skin.ini");
-        let ini = if skin_ini.is_file() { IniReader::load(&skin_ini).ok().filter(|ini| ini.has_section("CREW")) } else { None };
+        let ini = if skin_ini.vfs_is_file() { IniReader::load(&skin_ini).ok().filter(|ini| ini.has_section("CREW")) } else { None };
         match &ini {
             Some(ini) => {
                 for key in ["SUIT", "HELMET", "BRAND"] {
@@ -273,7 +274,7 @@ impl PitCrew {
         let pitcrews = scene.node("PIT_CREWS");
         let objects = graphics.game_folder.join("content/objects3D");
         let ini_file = objects.join("pitcrewtyre.ini");
-        if !ini_file.is_file() {
+        if !ini_file.vfs_is_file() {
             return Err("ERROR! Problems reading ini pitcrewtyre file".to_string());
         }
         let ini = IniReader::load(&ini_file)?;

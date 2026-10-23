@@ -9,6 +9,7 @@
 //! show is what was drawn once at load: a small model (`content/objects3D/cubemap_model.kn5`,
 //! a ground and a ring of trees) and the sky, seen from where the scene camera was then.
 
+use rustyac_content::vfs::PathExt;
 use rustyac_physics::vecmath::Mat44f;
 
 use crate::camera::Camera;
@@ -140,7 +141,7 @@ pub fn load_static_cubemap_model(graphics: &mut Graphics, scene: &mut Scene, tra
         Some(folder) => format!("{folder}/cubemap_model.kn5"),
         None => String::new(),
     };
-    if name.is_empty() || !std::path::Path::new(&name).is_file() {
+    if name.is_empty() || !std::path::Path::new(&name).vfs_is_file() {
         name = format!("{game}/content/objects3D/cubemap_model.kn5");
     }
     let io = Kn5Io::new();

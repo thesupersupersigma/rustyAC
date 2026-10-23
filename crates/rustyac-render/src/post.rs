@@ -19,6 +19,7 @@
 //! field. Everything else is the game's call for call, and the render oracle runs the game's
 //! own `CameraForwardYebis` with that one function swapped for the same copy.
 
+use rustyac_content::vfs::PathExt;
 use crate::kgl::{FORMAT_R32F as DXGI_FORMAT_R32_FLOAT, FORMAT_RGBA16F as DXGI_FORMAT_R16G16B16A16_FLOAT, FORMAT_RGBA8 as DXGI_FORMAT_R8G8B8A8_UNORM};
 
 use crate::forward::{blur_target, CameraForward};
@@ -244,7 +245,7 @@ pub struct HdrLevels {
 pub fn init_hdr_levels(game_folder: &std::path::Path) -> HdrLevels {
     let mut levels = HdrLevels { min_exposure: 0.0, max_exposure: 10000.0 };
     let path = game_folder.join("system/cfg/lighting.ini");
-    if path.is_file() {
+    if path.vfs_is_file() {
         if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&path) {
             levels.min_exposure = ini.get_float("HDR", "MIN_EXPOSURE").unwrap_or(0.0);
             levels.max_exposure = ini.get_float("HDR", "MAX_EXPOSURE").unwrap_or(0.0);

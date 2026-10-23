@@ -14,15 +14,15 @@
 //!
 //! So with the fallback the picture is not bit-identical to the game's.
 
-#[cfg(not(feature = "backend-wgpu"))]
+#[cfg(all(windows, any(not(feature = "backend-wgpu"), test)))]
 use windows::core::Interface;
 #[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D11::*;
 #[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Dxgi::Common::*;
-#[cfg(not(feature = "backend-wgpu"))]
+#[cfg(all(windows, any(not(feature = "backend-wgpu"), test)))]
 use windows::Win32::Graphics::Imaging::*;
-#[cfg(not(feature = "backend-wgpu"))]
+#[cfg(all(windows, any(not(feature = "backend-wgpu"), test)))]
 use windows::Win32::System::Com::*;
 
 #[cfg(feature = "backend-wgpu")]
@@ -38,6 +38,9 @@ pub fn create(kgl: &Kgl, bytes: &[u8]) -> Result<View, String> {
     if bytes.len() >= 128 && &bytes[0..4] == b"DDS " {
         dds(kgl, bytes)
     } else {
+        #[cfg(feature = "backend-wgpu")]
+        let (width, height, rgba) = decode_image(bytes)?;
+        #[cfg(not(feature = "backend-wgpu"))]
         let (width, height, rgba) = decode_with_wic(bytes)?;
         rgba_with_mips(kgl, width, height, rgba)
     }
@@ -196,10 +199,107 @@ fn dds(kgl: &Kgl, bytes: &[u8]) -> Result<View, String> {
     rgba_with_mips(kgl, width, height, rgba)
 }
 
-/// png through the png crate, as straight 8-bit RGBA (kgl on wgpu has no WIC).
-/// shortcut: jpg and bmp are not read here, add a decoder when a sequence needs one.
+/// png / jpg / bmp without WIC (kgl on wgpu, also in the browser), as straight 8-bit RGBA.
 #[cfg(feature = "backend-wgpu")]
-fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+fn decode_image(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        decode_jpg(bytes)
+    } else if bytes.starts_with(b"BM") {
+        decode_bmp(bytes)
+    } else {
+        decode_png(bytes)
+    }
+}
+
+/// jpg through the jpeg-decoder crate. Its IDCT and chroma upsampling are not WIC's: the
+/// texels can differ by a few steps (the test below measures it).
+#[cfg(feature = "backend-wgpu")]
+fn decode_jpg(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let mut decoder = jpeg_decoder::Decoder::new(bytes);
+    let pixels = decoder.decode().map_err(|e| format!("not a jpg: {e}"))?;
+    let info = decoder.info().ok_or("jpg without a header")?;
+    let rgba = match info.pixel_format {
+        jpeg_decoder::PixelFormat::RGB24 => pixels.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        jpeg_decoder::PixelFormat::L8 => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        jpeg_decoder::PixelFormat::L16 => pixels.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], 255]).collect(),
+        // shortcut: CMYK as 255 - (c + k) per channel, not WIC's colour handling; no AC texture seen is CMYK
+        jpeg_decoder::PixelFormat::CMYK32 => pixels.chunks_exact(4).flat_map(|p| [255 - p[0].saturating_add(p[3]), 255 - p[1].saturating_add(p[3]), 255 - p[2].saturating_add(p[3]), 255]).collect(),
+    };
+    Ok((info.width as u32, info.height as u32, rgba))
+}
+
+/// Uncompressed bmp (1 / 4 / 8 bits through the palette, 16 / 24 / 32 bits, bit fields), as
+/// WIC reads it: alpha only where the header has an alpha mask.
+#[cfg(feature = "backend-wgpu")]
+fn decode_bmp(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let short = || "bmp file shorter than its header says".to_string();
+    if bytes.len() < 54 {
+        return Err(short());
+    }
+    let offset = u32_at(bytes, 10) as usize;
+    let header = u32_at(bytes, 14) as usize;
+    let width = u32_at(bytes, 18) as i32;
+    let height = u32_at(bytes, 22) as i32;
+    let bits = u16::from_le_bytes([bytes[28], bytes[29]]) as usize;
+    let compression = u32_at(bytes, 30);
+    if width <= 0 || height == 0 || header < 40 {
+        return Err(format!("bmp of {width} x {height} with a {header}-byte header is not read"));
+    }
+    if compression != 0 && compression != 3 {
+        return Err(format!("compressed bmp (type {compression}) is not read"));
+    }
+    if ![1, 4, 8, 16, 24, 32].contains(&bits) {
+        return Err(format!("bmp with {bits} bits per pixel is not read"));
+    }
+    let (w, h) = (width as usize, height.unsigned_abs() as usize);
+    // bit fields: right after a 40-byte header, else inside the longer header (alpha from 56 bytes on)
+    let mask = |i: usize| if 54 + 4 * i + 4 <= bytes.len() { u32_at(bytes, 54 + 4 * i) } else { 0 };
+    let masks = match (compression, bits) {
+        (3, _) => [mask(0), mask(1), mask(2), if header >= 56 { mask(3) } else { 0 }],
+        (_, 16) => [0x7c00, 0x3e0, 0x1f, 0],
+        _ => [0xff_0000, 0xff00, 0xff, 0],
+    };
+    let colours = match u32_at(bytes, 46) as usize {
+        0 => 1usize << bits.min(8),
+        n => n,
+    };
+    let palette = 14 + header + if compression == 3 && header == 40 { 12 } else { 0 };
+    let stride = (w * bits).div_ceil(32) * 4;
+    if offset + stride * h > bytes.len() || (bits <= 8 && palette + 4 * colours > bytes.len()) {
+        return Err(short());
+    }
+    let channel = |pixel: u32, mask: u32| -> u8 {
+        if mask == 0 {
+            return 255;
+        }
+        let shift = mask.trailing_zeros();
+        let max = (mask >> shift) as u64;
+        (((pixel & mask) >> shift) as u64 * 255 / max) as u8
+    };
+    let mut rgba = vec![0u8; w * h * 4];
+    for y in 0..h {
+        // rows are stored bottom-up unless the height is negative
+        let row = &bytes[offset + stride * if height > 0 { h - 1 - y } else { y }..];
+        for x in 0..w {
+            let out = &mut rgba[(y * w + x) * 4..][..4];
+            if bits <= 8 {
+                let bit = x * bits;
+                let index = ((row[bit / 8] as usize) >> (8 - bits - bit % 8)) & ((1 << bits) - 1);
+                let at = palette + 4 * index.min(colours - 1);
+                out.copy_from_slice(&[bytes[at + 2], bytes[at + 1], bytes[at], 255]);
+            } else {
+                let n = bits / 8;
+                let pixel = row[x * n..][..n].iter().rev().fold(0u32, |v, &b| v << 8 | b as u32);
+                out.copy_from_slice(&[channel(pixel, masks[0]), channel(pixel, masks[1]), channel(pixel, masks[2]), channel(pixel, masks[3])]);
+            }
+        }
+    }
+    Ok((w as u32, h as u32, rgba))
+}
+
+/// png through the png crate.
+#[cfg(feature = "backend-wgpu")]
+fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut decoder = png::Decoder::new(bytes);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|e| format!("not a png: {e}"))?;
@@ -217,7 +317,7 @@ fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 /// png / jpg / bmp through the Windows Imaging Component, as straight 8-bit RGBA.
-#[cfg(not(feature = "backend-wgpu"))]
+#[cfg(all(windows, any(not(feature = "backend-wgpu"), test)))]
 fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
@@ -234,5 +334,55 @@ fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
         let source: IWICBitmapSource = converter.cast().map_err(|e| format!("WIC: {e}"))?;
         source.CopyPixels(std::ptr::null(), width * 4, &mut rgba).map_err(|e| format!("WIC pixels: {e}"))?;
         Ok((width, height, rgba))
+    }
+}
+
+/// kgl on wgpu's readers against WIC (what the Direct3D 11 path without D3DX reads) on the
+/// install's own png, jpg and bmp files.
+#[cfg(all(test, windows, feature = "backend-wgpu"))]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn is(path: &Path, ext: &str) -> bool {
+        path.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext))
+    }
+
+    fn files(folder: &Path, ext: &str, n: usize, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+            if out.iter().filter(|p| is(p, ext)).count() >= n {
+                return;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                files(&path, ext, n, out);
+            } else if is(&path, ext) {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn same_texels_as_wic() {
+        let game = PathBuf::from(std::env::var("AC_ROOT").unwrap_or_else(|_| r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa".to_string()));
+        if !game.join("content").is_dir() {
+            eprintln!("no Assetto Corsa install at {}: skipped", game.display());
+            return;
+        }
+        let mut found = Vec::new();
+        for (folder, ext, n) in [("content/texture", "jpg", 8), ("content/fonts", "bmp", 3), ("content/cars", "bmp", 6), ("content/texture", "png", 4)] {
+            files(&game.join(folder), ext, n, &mut found);
+        }
+        assert!(found.iter().any(|p| is(p, "bmp")) && found.iter().any(|p| is(p, "jpg")), "no bmp or jpg found");
+        for path in &found {
+            let bytes = std::fs::read(path).unwrap();
+            let Ok((ww, wh, wic)) = decode_with_wic(&bytes) else { continue };
+            let (w, h, mine) = decode_image(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert_eq!((w, h), (ww, wh), "{}", path.display());
+            let worst = wic.iter().zip(&mine).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+            let differ = wic.iter().zip(&mine).filter(|(a, b)| a != b).count();
+            println!("{}: {w} x {h}, {differ} of {} bytes differ, largest difference {worst}", path.display(), wic.len());
+            assert!(if is(path, "jpg") { worst <= 4 } else { worst == 0 }, "{}: largest difference {worst}", path.display());
+        }
     }
 }

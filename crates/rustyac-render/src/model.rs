@@ -5,6 +5,7 @@
 //! 0x140216240, `loadTexture` 0x1402171a0, `loadBinaryV2` 0x140215aa0,
 //! `getSkinOverridenTexturePath` 0x140214f90. The file itself is read by `rustyac-content`.
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_content::kn5::{Kn5, NodeClass};
@@ -52,7 +53,7 @@ impl Kn5Io {
     fn skin_overriden_texture_path(&self, name: &str) -> String {
         for folder in &self.skin_override_path {
             let p = format!("{folder}/{name}");
-            if Path::new(&p).is_file() {
+            if Path::new(&p).vfs_is_file() {
                 println!("SKINNED TEXTURE {p} FOUND, OVERRIDING");
                 return p;
             }

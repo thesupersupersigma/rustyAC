@@ -12,6 +12,7 @@
 //! The file is `data/digital_panels.ini`: `FULLPOSITION_SERIES_n`, `PUSH2PASS_SERIES_n` and
 //! `PUSH2PASS_LED_n`, read in that order.
 
+use rustyac_content::vfs::PathExt;
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
@@ -216,7 +217,7 @@ impl DigitalPanels {
                     let mut i = start;
                     while i <= end {
                         let file = format!("{folder_text}/texture/display_panel/{prefix}{i}.dds");
-                        if Path::new(&file).is_file() {
+                        if Path::new(&file).vfs_is_file() {
                             let node = scene.object_node(&format!("{prefix}{i}"));
                             let mut display = DisplayNode::new(node);
                             display.tx_base = graphics.resources.get_texture(&graphics.kgl, &file);

@@ -4,6 +4,7 @@
 //! the game's own classes (`GraphicsManager`, `GLRenderer`, `ResourceStore`, kgl's fonts), so
 //! that the widgets ask Direct3D for exactly what the game's ask.
 
+use rustyac_content::vfs::PathExt;
 use rustyac_gui::painter::{GlId, Painter, Texture};
 
 use crate::fw1::Fonts;
@@ -144,7 +145,7 @@ impl Painter for GuiPainter<'_> {
     }
 
     fn file_exists(&self, path: &str) -> bool {
-        self.graphics.game_folder.join(path).is_file()
+        self.graphics.game_folder.join(path).vfs_is_file()
     }
 
     fn create_gl(&mut self, max_vertices: u32) -> GlId {

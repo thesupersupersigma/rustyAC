@@ -25,9 +25,14 @@ fn with<R>(f: impl FnOnce(&mut Log) -> R) -> R {
     f(guard.get_or_insert_with(|| Log { names: HashMap::new(), counters: HashMap::new(), text: None }))
 }
 
-/// Starts keeping lines (names are given out whether or not a capture runs).
+/// Starts keeping lines (names are given out whether or not a capture runs). The names start
+/// again from 1: a capture is meant to begin before the device is made.
 pub fn begin(title: &str) {
-    with(|l| l.text = Some(format!("# kgl log: {title}\n")));
+    with(|l| {
+        l.names.clear();
+        l.counters.clear();
+        l.text = Some(format!("# kgl log: {title}\n"));
+    });
     ON.store(true, Ordering::Relaxed);
 }
 

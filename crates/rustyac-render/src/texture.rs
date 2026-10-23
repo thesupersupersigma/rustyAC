@@ -12,6 +12,7 @@
 //! where D3DX would have filtered (generated mips, resized or converted images) the fallback's
 //! texels are close but not the same bits.
 
+use rustyac_content::vfs::PathExt;
 use std::collections::HashMap;
 #[cfg(not(feature = "backend-wgpu"))]
 use std::ffi::c_void;
@@ -345,7 +346,7 @@ impl ResourceStore {
             return found.clone();
         }
         let path = Path::new(name);
-        if !path.is_file() {
+        if !path.vfs_is_file() {
             return Texture { kid: None, file_name: String::new() };
         }
         let kid = self.add(KglTexture::from_file(kgl, path));

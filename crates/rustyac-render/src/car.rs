@@ -10,6 +10,7 @@
 //! Not here yet (Task 21): the driver, lights, blurred rims, brake-disc glow, damage, dirt,
 //! mirrors. Their meshes are drawn as the model file has them.
 
+use rustyac_content::vfs::PathExt;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -248,7 +249,7 @@ impl CarAvatar {
         let body_transform = scene.node("BODYTR");
         // CarAvatar::initDriver 0x1400d7380: the two driver models, the first children of BODYTR
         let (mut driver_hr, mut driver_lr) = (None, None);
-        if folder.join("data/driver3d.ini").is_file() || rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")).is_ok() {
+        if folder.join("data/driver3d.ini").vfs_is_file() || rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")).is_ok() {
             driver_hr = DriverModel::new(graphics, scene, folder_text, folder, skin, guid, true)?;
             if let Some(d) = &driver_hr {
                 scene.add_child(body_transform, d.driver_root);

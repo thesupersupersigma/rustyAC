@@ -373,6 +373,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+
+[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -884,6 +890,7 @@ dependencies = [
 name = "rustyac-render"
 version = "0.38.7"
 dependencies = [
+ "jpeg-decoder",
  "log",
  "png",
  "rustyac-content",
@@ -901,12 +908,14 @@ version = "0.38.7"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
+ "png",
  "rustyac-content",
  "rustyac-game",
  "rustyac-launcher",
  "rustyac-math",
  "rustyac-net",
  "rustyac-physics",
+ "rustyac-render",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

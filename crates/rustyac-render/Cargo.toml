@@ -23,6 +23,8 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vul
 rustyac-dxbc = { path = "../rustyac-dxbc", optional = true }
 # png textures without WIC (kgl on wgpu)
 png = { version = "0.17", optional = true }
+# and jpg (pure Rust, no threads: it also runs in the browser)
+jpeg-decoder = { version = "0.3.2", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
@@ -53,7 +55,7 @@ log = "0.4"
 [features]
 wgpu = ["dep:wgpu"]
 # kgl on wgpu instead of Direct3D 11 (kgl_wgpu.rs): the same renderer above it
-backend-wgpu = ["wgpu", "dep:rustyac-dxbc", "dep:png"]
+backend-wgpu = ["wgpu", "dep:rustyac-dxbc", "dep:png", "dep:jpeg-decoder"]
 
 [[example]]
 name = "shader_proof"

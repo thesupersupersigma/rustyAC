@@ -6,6 +6,7 @@
 //! `KGLShader::reflectVars` 0x14001f5f0, `getInputLayout` 0x14001eb00, `Shader::reflectVars`
 //! 0x14021a550, `CBuffer`, `ShaderVariable`. No shader is compiled, rewritten or translated.
 
+use rustyac_content::vfs::PathExt;
 use std::collections::BTreeMap;
 #[cfg(not(feature = "backend-wgpu"))]
 use std::ffi::c_void;
@@ -278,7 +279,7 @@ impl ShaderManager {
         }
         let ps = self.folder.join(format!("{name}_ps.fxo"));
         let vs = self.folder.join(format!("{name}_vs.fxo"));
-        if !(ps.is_file() && vs.is_file()) {
+        if !(ps.vfs_is_file() && vs.vfs_is_file()) {
             println!("ERROR: Shader {name} NOT FOUND, RETURNING NULL");
             return Err(format!("the shader {name} is not in {}", self.folder.display()));
         }

@@ -9,6 +9,7 @@
 //! `getGhostCarOpacity` 0x140105480. The lap itself is `GhostCarRecorder`'s
 //! (`rustyac_physics::replay::ghost`).
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_physics::data::ini::IniReader;
@@ -63,7 +64,7 @@ impl GhostCar {
         // loadGhostCarParameters: when the file is there every key is read (a missing one is 0)
         let (mut min_distance, mut max_distance, mut gc_color, mut max_opacity) = (1.0f32, 100.0f32, [1.0f32; 3], 0.6f32);
         let parameters = graphics.game_folder.join("system/cfg/ghost_car.ini");
-        if parameters.is_file() {
+        if parameters.vfs_is_file() {
             if let Ok(ini) = IniReader::load(&parameters) {
                 min_distance = ini.get_float("GHOST_CAR", "MIN_DISTANCE").unwrap_or(0.0);
                 max_distance = ini.get_float("GHOST_CAR", "MAX_DISTANCE").unwrap_or(0.0);

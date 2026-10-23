@@ -17,6 +17,7 @@
 //! * `RotatingObjects` (0x78 bytes; constructor 0x1400ba560, `update` 0x1400bae20): the
 //!   `[ROTATING_OBJECT_n]` of `data/extra_animations.ini` (a fan).
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_math::{sinf, sqrtf};
@@ -177,7 +178,7 @@ impl AnalogInstruments {
             }
         }
         let lut = folder.join("data/analog_speed_curve.lut");
-        if lut.is_file() {
+        if lut.vfs_is_file() {
             let _ = a.speed_lut.load(&lut);
         }
         // initTurbo
@@ -451,7 +452,7 @@ impl CarAnimations {
         let animations = folder.join("animations");
         let load_one = |name: &str| -> Option<AnimationPlayer> {
             let path = animations.join(name);
-            if !path.is_file() {
+            if !path.vfs_is_file() {
                 return None;
             }
             let a = Animation::load(&path);

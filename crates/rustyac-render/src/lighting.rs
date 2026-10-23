@@ -10,6 +10,7 @@
 //! high), a gamma and a factor for when post-processing is off. Everything the shaders get is
 //! one blend between the low and the high colour by how high the sun stands.
 
+use rustyac_content::vfs::PathExt;
 use std::path::Path;
 
 use rustyac_math::{powf, sqrtf, wcstod};
@@ -258,12 +259,12 @@ impl Graphics {
                 m = get_float(&c, "HEADER", "HDR_OFF_MULT");
             }
         }
-        if weather_ini.is_file() {
+        if weather_ini.vfs_is_file() {
             self.load_weather_preset(&weather_ini, m);
         } else {
             println!("ERROR: Could not find: {}", weather_ini.display());
         }
-        if curves_ini.is_file() {
+        if curves_ini.vfs_is_file() {
             self.load_lighting_settings(&curves_ini);
         } else {
             println!("ERROR: Could not find: {}", curves_ini.display());
