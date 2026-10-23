@@ -359,6 +359,7 @@ pub struct GameAudio {
     last: Option<Vec<CarFrame>>,
     camera: Option<(i32, i32)>,
     /// the sound cards' names (`AudioEngine::getDriverInfo`)
+    #[cfg_attr(feature = "wgpu", allow(dead_code))]
     drivers: Vec<String>,
     bonnet_external: bool,
     bumper_external: bool,
@@ -647,6 +648,7 @@ impl GameAudio {
     /// when the camera mode last changed (`ACCameraManager::setAudioDistanceScale` is not
     /// called for a change of the focus).
     /// The sound as the Audio app reads it.
+    #[cfg(not(feature = "wgpu"))]
     pub fn app_sound(&self) -> crate::render::gui_apps::AppSound {
         crate::render::gui_apps::AppSound { drivers: self.drivers.clone(), camera: [self.bonnet_external, self.bumper_external] }
     }

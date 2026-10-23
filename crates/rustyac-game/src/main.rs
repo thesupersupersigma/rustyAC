@@ -4,15 +4,15 @@
 //! is only the replay runner, which is how a wasm build of the physics is held against the
 //! desktop's: `rustyac --replay <file.ryin> --headless [--dump-states <file>]`.
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "wgpu")))]
 mod desktop;
 
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "wgpu")))]
 fn main() {
     desktop::main()
 }
 
-#[cfg(not(windows))]
+#[cfg(any(not(windows), feature = "wgpu"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|at| args.get(at + 1));

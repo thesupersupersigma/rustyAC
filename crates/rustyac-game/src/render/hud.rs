@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The text HUD of the debug view: speed, gear, revs, pedals, aids, timer, frame rate.
+//! In the browser only [`HudInfo`] is used (the page has no HUD yet: the HUD task).
+#![cfg_attr(any(not(windows), feature = "wgpu"), allow(dead_code, unused_imports))]
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 use super::font::{FontBitmap, SOLID};
 use crate::input::device_name;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use crate::physics_thread::Timing;
 use crate::view::CarView;
 
@@ -28,6 +32,7 @@ pub struct HudInfo {
     pub fps_counter: bool,
     pub frame_ms: f32,
     pub frame_max_ms: f32,
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub timing: Timing,
     pub paused: bool,
     pub camera: String,
@@ -63,11 +68,13 @@ const BLUE: Color = [0.25, 0.55, 0.95, 1.0];
 const YELLOW: Color = [0.98, 0.82, 0.12, 1.0];
 const OFF: Color = [0.25, 0.27, 0.30, 1.0];
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 pub struct Hud<'a> {
     font: &'a FontBitmap,
     pub vertices: Vec<HudVertex>,
 }
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 impl<'a> Hud<'a> {
     pub fn new(font: &'a FontBitmap) -> Hud<'a> {
         Hud { font, vertices: Vec::with_capacity(4096) }
@@ -199,6 +206,7 @@ fn hybrid_lines(view: &CarView) -> Vec<String> {
     lines
 }
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 pub fn build(font: &FontBitmap, view: &CarView, info: &HudInfo, width: f32, height: f32) -> Vec<HudVertex> {
     if info.hidden {
         return Vec::new();

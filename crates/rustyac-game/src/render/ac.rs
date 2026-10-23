@@ -15,21 +15,49 @@ use rustyac_render::kgl::DeviceOptions;
 use rustyac_render::model::{path_text, Kn5Io};
 use rustyac_render::scene::{NodeId, Scene};
 use rustyac_render::sky::SkyBox;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::core::{Interface, PCSTR};
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Foundation::HWND;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Graphics::Direct3D::ID3DBlob;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Graphics::Direct3D11::*;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Graphics::Dxgi::Common::*;
+#[cfg(all(windows, not(feature = "wgpu")))]
 use windows::Win32::Graphics::Dxgi::*;
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 use super::font::FontBitmap;
-use super::hud::{self, HudInfo, HudVertex};
+use super::hud::HudInfo;
+#[cfg(all(windows, not(feature = "wgpu")))]
+use super::hud::{self, HudVertex};
 use super::scene::{CameraFrame, CameraMode, Drivable, DrivingCamera};
 use crate::view::CarView;
+#[cfg(all(windows, not(feature = "wgpu")))]
+use std::time::Instant;
 
+/// shortcut: std's clock panics in the browser, so the load and frame times read 0 there; use the
+/// page's `performance.now()` once those times are shown in the page (the HUD task).
+#[cfg(any(not(windows), feature = "wgpu"))]
+struct Instant;
+#[cfg(any(not(windows), feature = "wgpu"))]
+impl Instant {
+    fn now() -> Instant {
+        Instant
+    }
+    fn elapsed(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+}
+
+#[cfg(all(windows, not(feature = "wgpu")))]
 const HUD_CAPACITY: usize = 24_000;
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 const HUD_SHADERS: &str = r#"
 cbuffer PerHud : register(b0) { float4 Viewport; };
 Texture2D FontTexture : register(t0);
@@ -50,10 +78,12 @@ float4 ps_hud(HudOut i) : SV_TARGET {
 }
 "#;
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 fn err(what: &str) -> impl Fn(windows::core::Error) -> String + '_ {
     move |e| format!("{what}: {e}")
 }
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 fn compile(entry: &str, target: &str) -> Result<Vec<u8>, String> {
     let entry_z = format!("{entry}\0");
     let target_z = format!("{target}\0");
@@ -70,6 +100,7 @@ fn compile(entry: &str, target: &str) -> Result<Vec<u8>, String> {
 }
 
 /// rustyAC's own text and bars, drawn over the finished 3D picture.
+#[cfg(all(windows, not(feature = "wgpu")))]
 struct HudPass {
     vs: ID3D11VertexShader,
     ps: ID3D11PixelShader,
@@ -84,6 +115,7 @@ struct HudPass {
     font: FontBitmap,
 }
 
+#[cfg(all(windows, not(feature = "wgpu")))]
 impl HudPass {
     fn new(device: &ID3D11Device) -> Result<HudPass, String> {
         let vs_code = compile("vs_hud", "vs_4_0")?;
@@ -201,6 +233,20 @@ impl HudPass {
     }
 }
 
+/// kgl on wgpu's adapter: in the page the page's device (given to kgl beforehand, this is not
+/// looked at); natively (the proofs) WARP with `warp`, else RUSTYAC_WGPU_ADAPTER=gpu (the
+/// default) or swiftshader (Vulkan on the CPU, picked by VK_DRIVER_FILES).
+#[cfg(any(not(windows), feature = "wgpu"))]
+fn wgpu_adapter(warp: bool) -> Result<rustyac_render::kgl::Adapter, String> {
+    use rustyac_render::kgl::Adapter;
+    Ok(match (warp, std::env::var("RUSTYAC_WGPU_ADAPTER").as_deref()) {
+        (true, _) => Adapter::Warp,
+        (_, Ok("gpu") | Err(_)) => Adapter::Gpu,
+        (_, Ok("swiftshader")) => Adapter::SwiftShader,
+        (_, Ok(other)) => return Err(format!("RUSTYAC_WGPU_ADAPTER={other:?} is not gpu or swiftshader")),
+    })
+}
+
 /// What the game was asked for and what the player's `video.ini` says.
 #[derive(Clone, Debug)]
 pub struct AcOptions {
@@ -313,7 +359,8 @@ fn video_ini_of(options: &AcOptions) -> Result<(Option<IniReader>, String), Stri
         let ini = IniReader::load(file).map_err(|e| format!("--video-ini {}: {e}", file.display()))?;
         return Ok((Some(ini), file.display().to_string()));
     }
-    let documents = rustyac_content::install::documents().map(|p| p.join("cfg/video.ini"));
+    // (a missing file is the game's defaults, not an empty file: IniReader::load would give one)
+    let documents = rustyac_content::install::documents().map(|p| p.join("cfg/video.ini")).filter(|p| p.is_file());
     Ok((documents.and_then(|p| IniReader::load(&p).ok()), "video.ini".to_string()))
 }
 
@@ -519,8 +566,10 @@ pub struct AcRenderer {
     dynamic_objects: Vec<rustyac_render::crowds::DynamicTrackObject>,
     track_folder: Option<String>,
     options: AcOptions,
+    #[cfg(all(windows, not(feature = "wgpu")))]
     hud: HudPass,
     /// AC's GUI and HUD (none: only the 2D pass's states are set, as with no form on the screen)
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub gui: Option<Box<super::gui::GameGui>>,
     /// the picture `ScreenCapturer` took this frame (the scene before the GUI and the HUD)
     pub pre_gui_shot: Option<ScreenShot>,
@@ -601,10 +650,18 @@ impl AcRenderer {
         if let Some(faces) = options.cube_faces {
             cube_faces = faces.clamp(0, 6);
         }
-        let mut graphics = Graphics::new(video, DeviceOptions { warp: options.warp, window: None, log: options.gpu_log.is_some() }, &options.game)?;
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        let device = DeviceOptions { warp: options.warp, window: None, log: options.gpu_log.is_some() };
+        // (the page's device, given to kgl beforehand: the adapter is the page's choice)
+        #[cfg(any(not(windows), feature = "wgpu"))]
+        let device = DeviceOptions { adapter: wgpu_adapter(options.warp)?, log: options.gpu_log.is_some() };
+        #[cfg(any(not(windows), feature = "wgpu"))]
+        let adapter = format!("{:?} on wgpu", device.adapter);
+        let mut graphics = Graphics::new(video, device, &options.game)?;
         // Sim::Sim: srand(the time in milliseconds)
         graphics.crt_rand = rustyac_physics::session::MsvcRand(options.render_seed);
         // SAFETY: COM calls on the live device.
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let adapter = unsafe {
             graphics
                 .kgl
@@ -672,6 +729,7 @@ impl AcRenderer {
             camera.cube_map_renderer.diagnosis_no_mips = true;
             notes.push("RUSTYAC_DIAG_NO_CUBE_MIPS=1: NOT Assetto Corsa, a diagnosis switch: the reflection cube map's mip levels are made once, not every frame".into());
         }
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let hud = HudPass::new(&graphics.kgl.device)?;
         // CarAvatar::initCommonPostPhysics: the cockpit switches of video.ini
         let cockpit_flags = {
@@ -696,10 +754,11 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, hud, gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn enable_gui(&mut self, setup: super::gui::GuiSetup) -> Result<(), String> {
         self.gui = Some(Box::new(super::gui::GameGui::new(&mut self.graphics, setup)?));
         Ok(())
@@ -716,7 +775,7 @@ impl AcRenderer {
 
     /// `TrackAvatar::init3D` 0x1401c8740 and the lighting part of `TrackAvatar::TrackAvatar`.
     pub fn load_track(&mut self, folder: &Path, layout: &str) -> Result<String, String> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let models = rustyac_physics::track::loader::track_models(folder, layout)?;
         let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let model = self.scene.node(&format!("TRACK {name}"));
@@ -855,11 +914,11 @@ impl AcRenderer {
     /// `initCommonPostPhysics`. `folder` is the car's folder in the game. The first car loaded
     /// is the player's (guid 0), the next ones get guid 1, 2, … as the game counts them.
     pub fn load_car(&mut self, folder: &Path, steer_lock: f32, tyre_width: [f32; 4], max_gear: i32) -> Result<String, String> {
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         let skin = match &self.options.skin {
             Some(skin) => skin.clone(),
             None => {
-                let mut skins: Vec<String> = std::fs::read_dir(folder.join("skins")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+                let mut skins: Vec<String> = rustyac_content::vfs::read_dir(&folder.join("skins")).map(|d| d.into_iter().filter(|(_, dir)| *dir).map(|(name, _)| name).collect()).unwrap_or_default();
                 skins.sort();
                 skins.first().cloned().unwrap_or_default()
             }
@@ -884,6 +943,28 @@ impl AcRenderer {
     /// By wheel: the wheel gun the mechanic there is on while a stop runs (the member's state
     /// 2: unscrewing, 4: screwing), which is the event `PitCrew::updateCurrentPosition` asks
     /// about in this frame.
+    /// `Sim::addCar`'s picture part for a car of the physics: its folder (where its model is),
+    /// its skin (one the car does not have: the first), and what the picture reads of its data.
+    /// `None`: the car has no 3D model in the game's folder.
+    pub fn load_car_info(&mut self, info: &crate::sim::CarInfo, skin: Option<String>) -> Result<Option<String>, String> {
+        let Some(folder) = crate::sim::find_car_model(&info.name, &info.data_path).and_then(|kn5| kn5.parent().map(|p| p.to_path_buf())) else {
+            return Ok(None);
+        };
+        let skin = skin.filter(|s| rustyac_content::vfs::is_dir(&folder.join("skins").join(s)));
+        self.set_skin(skin);
+        let steer_lock = IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
+        // CarPhysicsInfo::tyreWidth
+        let mut tyre_width = [0.0f32; 4];
+        if let Ok(tyres) = IniReader::load(&info.data_path.join("tyres.ini")) {
+            let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
+            let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
+            tyre_width = [front, front, rear, rear];
+        }
+        // CarPhysicsInfo::maxGear
+        let max_gear = IniReader::load(&info.data_path.join("drivetrain.ini")).ok().and_then(|ini| ini.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
+        self.load_car(&folder, steer_lock, tyre_width, max_gear).map(Some)
+    }
+
     pub fn crew_guns_wanted(&self) -> [Option<bool>; 4] {
         let mut wanted = [None; 4];
         if let Some(crew) = self.tyre_crew.as_ref().filter(|crew| crew.pit_stop_on) {
@@ -916,7 +997,7 @@ impl AcRenderer {
                 // cfg/gameplay.ini [PIT_INDICATOR] ONLY_IN_PITLINE: on when the key is missing
                 let mut only_in_pitline = true;
                 let gameplay = self.graphics.documents_folder.join("cfg/gameplay.ini");
-                if gameplay.is_file() {
+                if rustyac_content::vfs::is_file(&gameplay) {
                     if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&gameplay) {
                         if ini.has_key("PIT_INDICATOR", "ONLY_IN_PITLINE") {
                             only_in_pitline = ini.get_int("PIT_INDICATOR", "ONLY_IN_PITLINE").unwrap_or(0) > 0;
@@ -1003,6 +1084,33 @@ impl AcRenderer {
         (self.graphics.video.width as u32, self.graphics.video.height as u32)
     }
 
+    /// The page's device for the next [`AcRenderer::new`] (the renderer cannot open one in a
+    /// browser): the features kgl uses that the adapter has.
+    #[cfg(any(not(windows), feature = "wgpu"))]
+    pub fn give_device(device: rustyac_render::wgpu::Device, queue: rustyac_render::wgpu::Queue, adapter: rustyac_render::wgpu::Features) {
+        rustyac_render::kgl::Kgl::give_device(device, queue, rustyac_render::kgl::wanted_features(adapter));
+    }
+
+    /// The features to ask the adapter for (see [`AcRenderer::give_device`]).
+    #[cfg(any(not(windows), feature = "wgpu"))]
+    pub fn wanted_features(adapter: rustyac_render::wgpu::Features) -> rustyac_render::wgpu::Features {
+        rustyac_render::kgl::wanted_features(adapter)
+    }
+
+    /// The last picture into the page's canvas, and the frame's work to the device.
+    #[cfg(any(not(windows), feature = "wgpu"))]
+    pub fn present_to(&mut self, target: &rustyac_render::wgpu::TextureView, format: rustyac_render::wgpu::TextureFormat) {
+        self.graphics.kgl.present_to(target, format);
+        self.graphics.kgl.swap_buffers();
+    }
+
+    /// The canvas has a new size.
+    #[cfg(any(not(windows), feature = "wgpu"))]
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
+        self.graphics.on_resize(width.max(16) as i32, height.max(16) as i32)?;
+        self.camera.on_resize(&mut self.graphics)
+    }
+
     /// F11, `VirtualMirrorRenderer::update` 0x1401d2190: the virtual mirror on or off. The
     /// answer is what it is now; `None`: `video.ini` has no mirrors.
     pub fn toggle_virtual_mirror(&mut self) -> Option<bool> {
@@ -1024,7 +1132,8 @@ impl AcRenderer {
     /// lives and the HUD.
     pub fn draw(&mut self, world: &[CarView], focus: usize, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         // Game::onIdle's clock (ksGetQPTTime) for Game::stats (Task 33)
-        let frame_start = std::time::Instant::now();
+        #[cfg(all(windows, not(feature = "wgpu")))]
+        let frame_start = Instant::now();
         let view = &world[0];
         let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
         // the game camera of the moment
@@ -1326,7 +1435,9 @@ impl AcRenderer {
             grooves.update(&mut self.scene, dt, view.dynamic_track.then_some(view.grip), &laps);
         }
         self.frames += 1;
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let logging = self.options.gpu_log.is_some() && self.frames == 2;
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if logging {
             rustyac_render::gpulog::begin_capture("rustyac.exe");
         }
@@ -1341,6 +1452,7 @@ impl AcRenderer {
         if let Some(semaphore) = &mut self.semaphore {
             semaphore.update(&mut self.scene, tts);
         }
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let update_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
@@ -1372,10 +1484,13 @@ impl AcRenderer {
         self.graphics.set_screen_space_mode();
         // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
         // the statistics apps' numbers: Game::stats so far, GraphicsManager::stats of the 3D part
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - update_ms;
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.frame_stats(update_ms, render_ms, &self.graphics.stats, &info.timing);
         }
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
             self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
         }
@@ -1385,6 +1500,13 @@ impl AcRenderer {
         // ksgui::GUI::render -> doRender2D 0x1402539d0: the states of the 2D pass, then the game
         // screen with its forms and the app bar (the HUD objects' update pass runs right before:
         // nothing between here and the game's place for it reads what they change)
+        #[cfg(any(not(windows), feature = "wgpu"))]
+        {
+            self.graphics.reset_render_states();
+            self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
+            self.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
+        }
+        #[cfg(all(windows, not(feature = "wgpu")))]
         match &mut self.gui {
             Some(gui) => {
                 let camera = &self.camera.forward.base.camera;
@@ -1423,6 +1545,7 @@ impl AcRenderer {
         }
         // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
         // fuel light)
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.render_hud(&mut self.graphics, dt);
             // Game::stats.cpuTime and renderHUDTime: the frame up to here
@@ -1451,9 +1574,11 @@ impl AcRenderer {
             }
         }
         // (the same handler, for a fade one of the menus asked for)
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.post_gui(&mut self.graphics, dt);
         }
+        #[cfg(all(windows, not(feature = "wgpu")))]
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
             if let Some(path) = &self.options.gpu_log {
@@ -1466,7 +1591,9 @@ impl AcRenderer {
         // the 2D drawing: GraphicsManager::resetRenderStates, then rustyAC's own HUD
         self.graphics.reset_render_states();
         self.graphics.kgl.set_screen_render_targets(true);
+        #[cfg(all(windows, not(feature = "wgpu")))]
         let (width, height) = self.size();
+        #[cfg(all(windows, not(feature = "wgpu")))]
         self.hud.draw(&self.graphics.kgl.context, &world[focus], info, width, height);
     }
 
@@ -1481,6 +1608,7 @@ impl AcRenderer {
     }
 
     /// The last picture as RGBA bytes, rows from the top.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read_pixels(&mut self) -> Result<Vec<u8>, String> {
         let (_, _, mut pixels) = self.graphics.kgl.read_screen()?;
         for pixel in pixels.chunks_exact_mut(4) {
@@ -1490,6 +1618,7 @@ impl AcRenderer {
     }
 
     /// Waits until the card has really drawn what was asked for.
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn finish(&self) {
         // SAFETY: a query created, issued and polled on the live context.
         unsafe {
@@ -1521,6 +1650,7 @@ impl AcRenderer {
     }
 
     /// A swap chain on a window, for [`AcRenderer::present`].
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn swap_chain(&self, window: HWND) -> Result<IDXGISwapChain1, String> {
         // SAFETY: COM calls on the live device with a valid window handle.
         unsafe {
@@ -1544,6 +1674,7 @@ impl AcRenderer {
     }
 
     /// The window changed its size: the swap chain and the picture follow.
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn resize_swap_chain(&mut self, chain: &IDXGISwapChain1, width: u32, height: u32) -> Result<(), String> {
         // SAFETY: nothing holds the back buffers between two frames.
         unsafe {
@@ -1555,6 +1686,7 @@ impl AcRenderer {
     }
 
     /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised.
+    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn present(&self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
         // SAFETY: the back buffer and the picture have the same size and format.
         unsafe {

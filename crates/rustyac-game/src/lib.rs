@@ -44,13 +44,19 @@ pub mod mouse_hider;
 #[cfg(windows)]
 pub mod physics_thread;
 pub mod referee;
-#[cfg(windows)]
+#[cfg(all(windows, not(feature = "wgpu")))]
 pub mod render;
 pub mod replay_manager;
-/// The part of the debug view that is plain maths and file parsing (no Direct3D).
-#[cfg(not(windows))]
+/// The part of the debug view that is plain maths and file parsing (no Direct3D), and in the
+/// browser AC's renderer on kgl's wgpu backend (`ac`, Full mode) with the HUD's inputs.
+/// (With the `wgpu` feature on Windows the same: the native proofs of Full mode.)
+#[cfg(any(not(windows), feature = "wgpu"))]
 pub mod render {
+    #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
+    pub mod ac;
     pub mod dds;
+    #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
+    pub mod hud;
     pub mod scene;
 }
 #[cfg(windows)]

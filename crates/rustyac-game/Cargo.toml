@@ -74,3 +74,15 @@ rustyac-render = { path = "../rustyac-render" }
 # system's TLS is used.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
+
+# The page's Full mode: AC's renderer on kgl's wgpu backend (WebGPU is turned on by rustyac-web,
+# which gives kgl the page's device).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+rustyac-render = { path = "../rustyac-render", features = ["backend-wgpu"] }
+
+[features]
+# AC's renderer (`render::ac`) on kgl's wgpu backend on Windows too, as in the page: only for
+# the native proofs of Full mode (rustyac-web's full_frame example). It leaves out the window,
+# the debug view, the GUI, the sound and the command line, so rustyac.exe is the replay-only
+# build with it.
+wgpu = ["rustyac-render/backend-wgpu"]

@@ -371,24 +371,11 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
     // Sim::addCar for every car in the order of the physics: the player's first. A car's folder
     // in the game holds its models (its data may come from elsewhere).
     let load = |renderer: &mut AcRenderer, info: &rustyac_game::sim::CarInfo, skin: Option<String>| -> Result<bool, String> {
-        let Some(folder) = rustyac_game::sim::find_car_model(&info.name, &info.data_path).and_then(|kn5| kn5.parent().map(|p| p.to_path_buf())) else {
-            return Ok(false);
-        };
-        // a skin that the car does not have: the first one
-        let skin = skin.filter(|s| folder.join("skins").join(s).is_dir());
-        renderer.set_skin(skin);
-        let steer_lock = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float("CONTROLS", "STEER_LOCK").ok()).unwrap_or(0.0);
-        // CarPhysicsInfo::tyreWidth
-        let mut tyre_width = [0.0f32; 4];
-        if let Ok(tyres) = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("tyres.ini")) {
-            let front = tyres.get_float("FRONT", "WIDTH").unwrap_or(0.0);
-            let rear = tyres.get_float("REAR", "WIDTH").unwrap_or(0.0);
-            tyre_width = [front, front, rear, rear];
+        let loaded = renderer.load_car_info(info, skin)?;
+        if let Some(summary) = &loaded {
+            println!("{summary}");
         }
-        // CarPhysicsInfo::maxGear
-        let max_gear = rustyac_physics::data::ini::IniReader::load(&info.data_path.join("drivetrain.ini")).ok().and_then(|ini| ini.get_int("GEARS", "COUNT").ok()).unwrap_or(0);
-        println!("{}", renderer.load_car(&folder, steer_lock, tyre_width, max_gear)?);
-        Ok(true)
+        Ok(loaded.is_some())
     };
     if load(&mut renderer, info, skin)? {
         for (number, other) in others.iter().enumerate() {
