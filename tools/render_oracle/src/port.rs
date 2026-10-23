@@ -69,8 +69,38 @@ fn feed(car: &mut rustyac_render::car::CarAvatar, spec: &crate::frames::CarSpec,
     }
 }
 
-pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String> {
+/// The port's device: Direct3D 11 (WARP, or the card with RENDER_ORACLE_HARDWARE=1) on a hidden
+/// window.
+#[cfg(not(feature = "wgpu"))]
+pub fn device_options(args: &Args) -> Result<DeviceOptions, String> {
     let window = unsafe { crate::ac::hidden_window(args.width, args.height)? };
+    Ok(DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: !crate::timing() })
+}
+
+/// The port's device on kgl's wgpu backend: RENDER_ORACLE_ADAPTER=swiftshader (the default,
+/// Vulkan on the CPU, picked by VK_DRIVER_FILES), gpu or warp (Direct3D 12 WARP).
+#[cfg(feature = "wgpu")]
+pub fn device_options(_args: &Args) -> Result<DeviceOptions, String> {
+    use rustyac_render::kgl::Adapter;
+    let adapter = match std::env::var("RENDER_ORACLE_ADAPTER").as_deref() {
+        Ok("gpu") => Adapter::Gpu,
+        Ok("warp") => Adapter::Warp,
+        Ok("swiftshader") | Err(_) => Adapter::SwiftShader,
+        Ok(other) => return Err(format!("RENDER_ORACLE_ADAPTER={other:?} is not swiftshader, gpu or warp")),
+    };
+    Ok(DeviceOptions { adapter, log: true })
+}
+
+pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String> {
+    // the kgl call log, the same text for both backends: from the device to the last frame
+    rustyac_render::kgl_log::begin(&frame.name);
+    let result = render_frames(args, frame);
+    let log = rustyac_render::kgl_log::end();
+    std::fs::write(args.out.join(format!("{}.port.kgllog", frame.name)), log).map_err(|e| e.to_string())?;
+    result
+}
+
+fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String> {
     let video = VideoSettings {
         aa_samples: crate::root::profile().aa_samples,
         width: args.width as i32,
@@ -91,7 +121,7 @@ pub fn render(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), String>
         triple_buffer: false,
     };
     rustyac_render::gpulog::capture_from_install(true);
-    let mut graphics = Graphics::new(video, DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: !crate::timing() }, &args.game)?;
+    let mut graphics = Graphics::new(video, device_options(args)?, &args.game)?;
     let init = rustyac_render::gpulog::end_capture();
 
     // the splash screen's frame (see the game's side)

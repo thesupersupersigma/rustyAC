@@ -27,6 +27,10 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+[features]
+# the port side on kgl's wgpu backend (a binary of its own: build it into its own target folder)
+wgpu = ["rustyac-render/backend-wgpu"]
+
 [profile.release]
 opt-level = 2
 

@@ -441,7 +441,8 @@ impl Kgl {
             Err(_) => None,
         };
         if let Some(k) = com(&sampler) {
-            let name = kgl_log::new_name(k, "sampler");
+            let name = kgl_log::sampler_name(kind, clamp, max_anisotropy, mip_lod_bias);
+            kgl_log::set_name(k, &name);
             kgl_log::line(format_args!("create_sampler {kind} {clamp} {max_anisotropy} {mip_lod_bias} = {name}"));
         }
         sampler

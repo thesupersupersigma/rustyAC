@@ -335,6 +335,8 @@ pub struct Kgl {
     dummy_2d: wgpu::TextureView,
     dummy_cube: wgpu::TextureView,
     dummy_depth: wgpu::TextureView,
+    /// depth targets for pixel shaders that write depth with none bound, by size and samples
+    scratch_depths: RefCell<HashMap<(u32, u32, u32), View>>,
     dummy_ms: wgpu::TextureView,
     default_sampler: Sampler,
     next_id: Cell<u32>,
@@ -477,6 +479,7 @@ impl Kgl {
             dummy_2d,
             dummy_cube,
             dummy_depth,
+            scratch_depths: RefCell::new(HashMap::new()),
             dummy_ms,
             default_sampler,
             next_id: Cell::new(0),
@@ -659,7 +662,8 @@ impl Kgl {
         let plain = self.device.create_sampler(&base);
         let comparison = self.device.create_sampler(&wgpu::SamplerDescriptor { compare: Some(if kind == 3 { wgpu::CompareFunction::Less } else { wgpu::CompareFunction::Never }), anisotropy_clamp: 1, ..base });
         let sampler = Sampler(Rc::new(SamplerInner { plain, comparison }));
-        let name = kgl_log::new_name(key(&sampler.0), "sampler");
+        let name = kgl_log::sampler_name(kind, clamp, max_anisotropy, mip_lod_bias);
+        kgl_log::set_name(key(&sampler.0), &name);
         kgl_log::line(format_args!("create_sampler {kind} {clamp} {max_anisotropy} {mip_lod_bias} = {name}"));
         Some(sampler)
     }
@@ -1211,13 +1215,25 @@ impl Kgl {
         (at as u64, size as u64)
     }
 
-    fn program(&self, vs: &VertexShader, ps: &PixelShader) -> Option<Rc<Program>> {
-        let k = (vs.0.id, ps.0.id);
+    /// `cover`: alpha to coverage on one sample, which WebGPU does not have: the pixel is kept
+    /// where the alpha is at least a half, as Direct3D 11 does.
+    fn program(&self, vs: &VertexShader, ps: &PixelShader, cover: bool) -> Option<Rc<Program>> {
+        let k = (vs.0.id, ps.0.id | if cover { 1 << 31 } else { 0 });
         if let Some(p) = self.replay.borrow().programs.get(&k) {
             return p.clone();
         }
         let made = match rustyac_dxbc::translate_pair(&vs.0.shader, &ps.0.shader) {
-            Ok(t) => {
+            Ok(mut t) => {
+                if cover && t.ps.contains("output.o0 =") {
+                    t.ps = t.ps.replacen("    run();
+    var output: Out;
+", "    run();
+    if (bitcast<vec4<f32>>(o0).w < 0.5) {
+        discard;
+    }
+    var output: Out;
+", 1);
+                }
                 let device = &self.device;
                 let vis = |v: bool, p: bool| match (v, p) {
                     (true, true) => wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -1551,7 +1567,7 @@ impl Kgl {
         let (Some(vs), Some(ps)) = (b.vs.clone(), b.ps.clone()) else {
             return;
         };
-        let (rtv, dsv) = (b.rtv.clone(), b.dsv.clone());
+        let (rtv, mut dsv) = (b.rtv.clone(), b.dsv.clone());
         if rtv.is_none() && dsv.is_none() {
             return;
         }
@@ -1581,9 +1597,19 @@ impl Kgl {
         let cbuffers = b.cbuffers.clone();
         let ib = b.ib.clone();
         drop(b);
-        let Some(program) = self.program(&vs, &ps) else {
+        let cover = blend == 2 && samples == 1 && !EXPERIMENT_NO_ALPHA_TO_COVERAGE.load(std::sync::atomic::Ordering::Relaxed);
+        let Some(program) = self.program(&vs, &ps, cover) else {
             return;
         };
+        // a pixel shader that writes depth with no depth target bound: Direct3D 11 drops the
+        // depth, WebGPU wants an attachment, so it gets one of its own with the test off
+        let mut depth = depth;
+        if dsv.is_none() && program.t.ps.contains("frag_depth") {
+            if let Some(c) = &rtv {
+                dsv = Some(self.scratch_depth(c.0.tex.width, c.0.tex.height, c.0.tex.samples));
+                depth = 2;
+            }
+        }
         let indexed = matches!(call, Call::Indexed(..));
         let key = PipelineKey {
             program: (vs.0.id, ps.0.id),
@@ -1674,6 +1700,28 @@ impl Kgl {
         replay.pass.as_mut().unwrap().draws.push(draw);
     }
 
+    /// A depth target no kgl call made (it is not in the kgl log).
+    fn scratch_depth(&self, width: u32, height: u32, samples: u32) -> View {
+        self.scratch_depths
+            .borrow_mut()
+            .entry((width, height, samples))
+            .or_insert_with(|| {
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("kgl scratch depth"),
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Depth32Float,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                });
+                let tex = Rc::new(Tex { texture, format: wgpu::TextureFormat::Depth32Float, width, height, samples, depth: true, written: Cell::new(0), copy: RefCell::new(None) });
+                self.view(&tex, None, false, 0, 1, 0, 1)
+            })
+            .clone()
+    }
+
     /// Encodes the pass being recorded.
     fn end_pass(&self) {
         let mut replay = self.replay.borrow_mut();
@@ -1708,7 +1756,7 @@ impl Kgl {
         let color = pass.color.as_ref().map(|v| wgpu::RenderPassColorAttachment { view: &v.0.view, depth_slice: None, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } });
         let depth = pass.depth.as_ref().map(|v| wgpu::RenderPassDepthStencilAttachment { view: &v.0.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }), stencil_ops: None });
         {
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("kgl pass"), color_attachments: &[color], depth_stencil_attachment: depth, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None });
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("kgl pass"), color_attachments: &color.into_iter().map(Some).collect::<Vec<_>>(), depth_stencil_attachment: depth, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None });
             for (d, g) in pass.draws.iter().zip(&groups) {
                 rp.set_pipeline(&d.pipeline);
                 for (i, group) in g.iter().enumerate() {
@@ -1750,7 +1798,7 @@ impl Kgl {
             ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: rgba[0] as f64, g: rgba[1] as f64, b: rgba[2] as f64, a: rgba[3] as f64 }), store: wgpu::StoreOp::Store },
         });
         let d = depth.map(|(v, z)| wgpu::RenderPassDepthStencilAttachment { view: &v.0.view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(z), store: wgpu::StoreOp::Store }), stencil_ops: None });
-        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("kgl clear"), color_attachments: &[c], depth_stencil_attachment: d, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None }));
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("kgl clear"), color_attachments: &c.into_iter().map(Some).collect::<Vec<_>>(), depth_stencil_attachment: d, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None }));
         if let Some((v, _)) = depth {
             v.0.tex.written.set(v.0.tex.written.get() + 1);
         }

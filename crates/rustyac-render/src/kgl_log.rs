@@ -77,6 +77,12 @@ pub fn name(key: Option<usize>) -> String {
     }
 }
 
+/// A sampler's name is its description: Direct3D 11 gives one object for two samplers described
+/// alike, wgpu two.
+pub fn sampler_name(kind: i32, clamp: bool, max_anisotropy: i32, mip_lod_bias: f32) -> String {
+    format!("sampler{kind}.{}.{max_anisotropy}.{mip_lod_bias}", clamp as i32)
+}
+
 /// FNV-1a of bytes, for the data a call carries.
 pub fn hash(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;

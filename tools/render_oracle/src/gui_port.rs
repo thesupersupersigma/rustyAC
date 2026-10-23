@@ -11,13 +11,11 @@ use rustyac_gui::widgets::Widget;
 use rustyac_physics::data::ini::IniReader;
 use rustyac_render::graphics::{Graphics, VideoSettings};
 use rustyac_render::gui_paint::GuiRenderer;
-use rustyac_render::kgl::DeviceOptions;
 
 use crate::gui_seq::{ControlState, Op, Outcome, Sequence, Val};
 use crate::Args;
 
 pub fn graphics(args: &Args) -> Result<Graphics, String> {
-    let window = unsafe { crate::ac::hidden_window(args.width, args.height)? };
     let video = VideoSettings {
         aa_samples: crate::root::profile().aa_samples,
         width: args.width as i32,
@@ -37,7 +35,7 @@ pub fn graphics(args: &Args) -> Result<Graphics, String> {
         ldr_levels: crate::root::profile().ldr_levels,
         triple_buffer: false,
     };
-    Graphics::new(video, DeviceOptions { warp: !crate::ac::hardware(), window: Some(window), log: !crate::timing() }, &args.game)
+    Graphics::new(video, crate::port::device_options(args)?, &args.game)
 }
 
 fn class_name(gui: &Gui, id: Id) -> &'static str {
