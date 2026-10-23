@@ -1,4 +1,4 @@
-# AC's renderer in the browser, part 1 (Tasks 38 and 38b, v0.38.0 and v0.38.1)
+# AC's renderer in the browser, part 1 (Tasks 38, 38b and 38h, v0.38.0, v0.38.1 and v0.38.7)
 
 > **Task 38c:** the `re/scratch/task…` paths below are history: those folders were scratch and
 > most were deleted in the disk cleanups of 2026-10-15 and 2026-10-18. Every proof of this report
@@ -7,14 +7,15 @@
 
 ## Resume here
 
-Task 38b (v0.38.1) did step 1: every one of the 72 shader pairs is now compared on a software
-rasterizer (SwiftShader through Vulkan, since WARP's Direct3D 12 driver cannot run 37 of them),
-40 with the same bits and 32 within 1–51 ULP, each difference traced to its cause. Not started:
-step 2 (kgl behind one interface with a wgpu backend), step 3 (render oracle sequences through
-native wgpu) and step 4 (the page's Full mode): Task 38c starts at step 2, read "Steps 2–4: not
-done (Task 38c)" in the Task 38b part at the end first. The page still draws with its debug
-renderer only. Step 5 (every end-to-end check) passed except a fresh `rc_jump` recording: see
-the Task 38b open questions.
+Task 38h (v0.38.7) did steps 1–2 of the Full-mode brief and the first part of step 3: kgl has a
+wgpu backend beside Direct3D 11 (Cargo feature `backend-wgpu` of rustyac-render; Direct3D 11
+stays the default and is unchanged, the render proofs say so), both backends write the same kgl
+call log, and the render oracle runs the port on wgpu (`render_oracle` feature `wgpu`,
+`tools/proofs/render_wgpu.sh`): the kgl call log is identical to the Direct3D 11 port's in all
+71 cases run, the pixels 22–77 dB PSNR from the game's (median 31). rustyac-render builds for
+`wasm32-unknown-unknown` and the translator gives the same WGSL in wasm. **Not done (Task 38i):
+Full mode in the page**, its mode switch and the headless-Chrome proof; the page still draws with
+its debug renderer. Read the Task 38h part at the end ("Not done (Task 38i)") first.
 
 ## In plain English
 
@@ -521,3 +522,282 @@ None. `web/` and `crates/rustyac-web` did not change.
   game's inputs.
 - "Tracks" was rerun as rays on three tracks, contacts and the per-track drives in `oracle/game`;
   Task 18's every-track survey scripts are gone with their scratch folder.
+
+# Task 38h (v0.38.7)
+
+## In plain English (38h)
+
+AC's renderer in rustyAC talks to the graphics card through one small layer, kgl (named after the
+game's own). Until now that layer was Direct3D 11 only. It now has a second implementation on
+wgpu, the library the browser build already uses, chosen when the renderer is built: the
+Direct3D 11 one is still the default and draws exactly what it drew before (the render proofs
+below say so call by call and pixel by pixel). The wgpu one runs AC's own compiled shaders through
+the translator of Tasks 38 and 38b.
+
+To check the wgpu side, both implementations now write the same kind of log of every kgl call (which
+object, which state, which bytes). For every case the render proofs know, the wgpu port makes
+exactly the same calls as the Direct3D 11 port, line for line. Its pictures are compared against
+the game's own pixels (WARP): they look the same; they are not the same bits, mostly in texture
+filtering of fine detail (asphalt grain, leaf edges, fences) and in the car paint's reflections.
+
+The renderer now also builds for the browser (`wasm32-unknown-unknown`), and the shader
+translator gives the same text there as on the desktop for all 144 of AC's shader files. Not done:
+drawing with it in the page (Full mode) and the mode switch; the page still draws with its debug
+renderer. That is Task 38i.
+
+## Step 1: kgl behind one interface
+
+- `crates/rustyac-render/src/kgl.rs` (Direct3D 11) is unchanged in behaviour. Its additions: the
+  kgl call log lines, and the names the rest of the renderer now uses instead of Direct3D types:
+  `Format` (a DXGI format number), `Sampler`, `View`, `FORMAT_RGBA8` / `FORMAT_RGBA16F` /
+  `FORMAT_R32F`, `view_key`.
+- `crates/rustyac-render/src/kgl_wgpu.rs` (new): the same struct names, fields and methods on
+  wgpu, chosen by the feature `backend-wgpu` of rustyac-render (`lib.rs` swaps the module). Since
+  Direct3D 11 runs each call at once and wgpu records command buffers, each draw takes a snapshot
+  of the bound state: the cbuffer bytes and dynamic vertex data of that moment go into one upload
+  buffer per pass, pipelines are cached by (shader pair, input layout, stride, blend, depth, cull,
+  topology, target formats, samples), a pass ends when the targets change, clears are their own
+  passes. Shaders bind through `rustyac_dxbc::translate_pair` (cbuffer `b<n>` = group 0 binding n,
+  texture `t<n>` group 1, sampler `s<n>` group 2). Depth targets read as textures are copied to an
+  R32F texture first.
+- What Direct3D 11 does that WebGPU does not, and how kgl_wgpu.rs does it:
+  - alpha to coverage with one sample (AC's trees, fences, grass): the pixel is dropped where the
+    alpha is below a half, which is what Direct3D 11 does with one sample;
+  - a pixel shader that writes depth with no depth target bound (the post-processing pass): the
+    draw gets a depth target of its own with the test off (Direct3D drops the value);
+  - a draw reaching past the end of its vertex or index buffer is left out (Direct3D reads zeros),
+    with a warning, and a viewport outside its target is cut to it.
+- `shader.rs`, `texture.rs`, `texture_fallback.rs`: both backends; on wgpu the shader reflection
+  comes from rustyac-dxbc (the same answers as `D3DReflect`, Task 38), textures from the dds reader
+  and png (shortcut: jpg / bmp, read by WIC on the desktop, are not read on wgpu).
+- `fw1.rs` (DirectWrite text) stays Direct3D 11 only; on wgpu `fw1_wgpu.rs` draws no text
+  (the HUD's text in Full mode is Task 38i).
+- `gpulog.rs` (the Direct3D 11 log of the render oracle) is compiled on Windows only; the six
+  golden tests are Direct3D 11 tests and are left out of a `backend-wgpu` build.
+- The kgl call log (`kgl_log.rs`): between `kgl_log::begin` and `end` every kgl call writes one
+  line; objects are named by kind and creation order (`rt3`, `cb12`, `vb40`), textures by file,
+  samplers by their description (Direct3D 11 gives one object for two samplers described alike,
+  wgpu two), data by an FNV-1a hash.
+
+## Step 2: the render oracle through native wgpu
+
+`render_oracle` gained the feature `wgpu` (the port side on kgl's wgpu backend, built into its own
+target folder) and writes `<frame>.port.kgllog` for every run on either backend.
+`RENDER_ORACLE_ADAPTER=gpu|swiftshader|warp` picks the adapter. `tools/proofs/render_wgpu.sh` runs
+every case of `render_list.txt` (header: options), `render_wgpu.py table` makes the tables below.
+
+Every case of `render_list.txt` that is one frame (34) ran on the GPU (this PC's graphics card
+through Direct3D 12) and on SwiftShader (Vulkan on the CPU, the copy beside Chrome); every second
+sequence (37 of 73, `SEQ_EVERY=2`, for time) ran on the GPU, comparing its middle and last frame.
+Each case also ran the game and the Direct3D 11 port first (`render_oracle compare`): command log
+and pixels the same bits in all 71, after the changes of steps 1 and 3.
+
+| adapter | cases | kgl log identical | D3D11 port = game | frames compared | PSNR min / median (dB) |
+|---|---|---|---|---|---|
+| gpu | 71 | 71 | 71 | 108 | 22.35 / 30.91 |
+| swiftshader | 34 | 34 | 34 | 34 | 22.40 / 31.37 |
+
+- **kgl call log: identical in all 71 cases on both adapters**, from 6,353 lines (one frame with
+  post-processing) to 1,160,639 (298 frames of the F40 at Monza with smoke): the wgpu port makes
+  the same calls with the same states, objects and bytes as the Direct3D 11 port.
+- Pixels against the game's WARP frame: median PSNR 31 dB, the lowest 22.4 dB (r20_09 / r20_10,
+  Monza under trees); 3–9 % of the pixels are off by more than 8 of 255, nearly all on fine
+  texture detail (asphalt grain, leaves, fence wire: the two rasterizers' texture filtering and
+  mip choice), the car paint's cube-map reflection and the edges of alpha-tested leaves. The
+  largest single difference is always such an edge pixel. GPU and SwiftShader give nearly the same
+  numbers (within 0.4 dB), so the differences are from WARP vs the WebGPU rules, not from one
+  driver.
+- Before the fixes of this task the numbers were worse in three ways, each found by this batch:
+  trees and fences were solid blocks (one-sample alpha to coverage, PSNR 19 dB at Monza), the
+  post-processing frames failed validation (depth written without a depth target) and AC's 2x / 8x
+  anti-aliasing failed on WebGPU's sample counts (now drawn with 4).
+- Time: the wgpu port is faster than the game on WARP plus the Direct3D 11 port (the
+  "s (d3d / wgpu)" column: the first number is both of those).
+
+<details><summary>Every case</summary>
+
+| case | adapter | D3D11 port vs game | kgl log D3D11 vs wgpu | frames | PSNR min (dB) | largest diff | pixels off >8 | s (d3d / wgpu) |
+|---|---|---|---|---|---|---|---|---|
+| r20_01 | gpu | same bits | IDENTICAL (7362 lines) | 1 | 30.91 | 231 | 7.7 % | 13 / 5 |
+| r20_01 | swiftshader | same bits | IDENTICAL (7362 lines) | 1 | 30.53 | 231 | 8.0 % | 6 / 6 |
+| r20_02 | gpu | same bits | IDENTICAL (6280 lines) | 1 | 30.90 | 241 | 3.6 % | 12 / 4 |
+| r20_02 | swiftshader | same bits | IDENTICAL (6280 lines) | 1 | 30.68 | 241 | 3.2 % | 5 / 6 |
+| r20_03 | gpu | same bits | IDENTICAL (4914 lines) | 1 | 34.72 | 211 | 4.2 % | 10 / 4 |
+| r20_03 | swiftshader | same bits | IDENTICAL (4914 lines) | 1 | 34.06 | 242 | 3.6 % | 4 / 6 |
+| r20_04 | gpu | same bits | IDENTICAL (7686 lines) | 1 | 29.23 | 248 | 2.1 % | 16 / 6 |
+| r20_04 | swiftshader | same bits | IDENTICAL (7686 lines) | 1 | 28.77 | 248 | 1.8 % | 6 / 9 |
+| r20_05 | gpu | same bits | IDENTICAL (12868 lines) | 1 | 31.83 | 238 | 7.0 % | 18 / 6 |
+| r20_05 | swiftshader | same bits | IDENTICAL (12868 lines) | 1 | 31.78 | 238 | 6.3 % | 8 / 9 |
+| r20_06 | gpu | same bits | IDENTICAL (13416 lines) | 1 | 30.32 | 248 | 6.6 % | 22 / 6 |
+| r20_06 | swiftshader | same bits | IDENTICAL (13416 lines) | 1 | 30.22 | 254 | 6.8 % | 9 / 12 |
+| r20_07 | gpu | same bits | IDENTICAL (13985 lines) | 1 | 32.00 | 246 | 4.8 % | 18 / 6 |
+| r20_07 | swiftshader | same bits | IDENTICAL (13985 lines) | 1 | 31.86 | 250 | 4.4 % | 8 / 9 |
+| r20_08 | gpu | same bits | IDENTICAL (13485 lines) | 1 | 62.27 | 1 | 0.0 % | 15 / 6 |
+| r20_08 | swiftshader | same bits | IDENTICAL (13485 lines) | 1 | 76.50 | 1 | 0.0 % | 7 / 7 |
+| r20_09 | gpu | same bits | IDENTICAL (11507 lines) | 1 | 22.35 | 243 | 4.3 % | 17 / 6 |
+| r20_09 | swiftshader | same bits | IDENTICAL (11507 lines) | 1 | 22.40 | 255 | 4.2 % | 7 / 9 |
+| r20_10 | gpu | same bits | IDENTICAL (13008 lines) | 1 | 22.67 | 244 | 6.0 % | 19 / 6 |
+| r20_10 | swiftshader | same bits | IDENTICAL (13008 lines) | 1 | 22.78 | 245 | 5.7 % | 7 / 11 |
+| r20_11 | gpu | same bits | IDENTICAL (9044 lines) | 1 | 28.16 | 245 | 5.0 % | 15 / 6 |
+| r20_11 | swiftshader | same bits | IDENTICAL (9044 lines) | 1 | 28.10 | 245 | 5.1 % | 7 / 7 |
+| r20_12 | gpu | same bits | IDENTICAL (14846 lines) | 1 | 24.95 | 242 | 3.3 % | 18 / 6 |
+| r20_12 | swiftshader | same bits | IDENTICAL (14846 lines) | 1 | 24.96 | 255 | 3.3 % | 8 / 9 |
+| r20_13 | gpu | same bits | IDENTICAL (11407 lines) | 1 | 30.65 | 227 | 6.4 % | 14 / 5 |
+| r20_13 | swiftshader | same bits | IDENTICAL (11407 lines) | 1 | 30.45 | 242 | 5.8 % | 6 / 7 |
+| r20_14 | gpu | same bits | IDENTICAL (11865 lines) | 1 | 30.96 | 240 | 3.6 % | 14 / 5 |
+| r20_14 | swiftshader | same bits | IDENTICAL (11865 lines) | 1 | 30.53 | 239 | 3.8 % | 6 / 7 |
+| r20_15 | gpu | same bits | IDENTICAL (12774 lines) | 1 | 59.69 | 103 | 0.0 % | 13 / 5 |
+| r20_15 | swiftshader | same bits | IDENTICAL (12774 lines) | 1 | 50.83 | 220 | 0.0 % | 5 / 7 |
+| r20_16 | gpu | same bits | IDENTICAL (14215 lines) | 1 | 32.84 | 237 | 2.7 % | 17 / 6 |
+| r20_16 | swiftshader | same bits | IDENTICAL (14215 lines) | 1 | 31.99 | 250 | 2.6 % | 7 / 9 |
+| r20_17 | gpu | same bits | IDENTICAL (13613 lines) | 1 | 29.25 | 236 | 2.2 % | 22 / 6 |
+| r20_17 | swiftshader | same bits | IDENTICAL (13613 lines) | 1 | 28.74 | 243 | 2.5 % | 9 / 12 |
+| r20_18 | gpu | same bits | IDENTICAL (13993 lines) | 1 | 27.92 | 242 | 3.3 % | 21 / 7 |
+| r20_18 | swiftshader | same bits | IDENTICAL (13993 lines) | 1 | 27.78 | 242 | 3.5 % | 8 / 12 |
+| r20_19 | gpu | same bits | IDENTICAL (13064 lines) | 1 | 29.23 | 249 | 2.2 % | 20 / 7 |
+| r20_19 | swiftshader | same bits | IDENTICAL (13064 lines) | 1 | 28.82 | 252 | 2.5 % | 8 / 12 |
+| r20_20 | gpu | same bits | IDENTICAL (13080 lines) | 1 | 62.40 | 1 | 0.0 % | 17 / 7 |
+| r20_20 | swiftshader | same bits | IDENTICAL (13080 lines) | 1 | 76.75 | 1 | 0.0 % | 7 / 9 |
+| r20_21 | gpu | same bits | IDENTICAL (11243 lines) | 1 | 34.24 | 227 | 0.5 % | 13 / 5 |
+| r20_21 | swiftshader | same bits | IDENTICAL (11243 lines) | 1 | 34.17 | 227 | 0.6 % | 5 / 7 |
+| r21_01 | gpu | same bits | IDENTICAL (302609 lines) | 2 | 33.06 | 223 | 6.3 % | 34 / 8 |
+| r21_03 | gpu | same bits | IDENTICAL (222952 lines) | 2 | 27.47 | 250 | 5.1 % | 29 / 8 |
+| r21_05 | gpu | same bits | IDENTICAL (160834 lines) | 2 | 22.95 | 234 | 5.6 % | 21 / 8 |
+| r21_07 | gpu | same bits | IDENTICAL (272644 lines) | 2 | 27.08 | 229 | 3.4 % | 34 / 11 |
+| r21_09 | gpu | same bits | IDENTICAL (359495 lines) | 2 | 24.94 | 247 | 3.9 % | 37 / 10 |
+| r21_11 | gpu | same bits | IDENTICAL (256117 lines) | 2 | 27.23 | 246 | 6.7 % | 25 / 7 |
+| r21_13 | gpu | same bits | IDENTICAL (284048 lines) | 2 | 31.54 | 235 | 7.1 % | 24 / 8 |
+| r21_15 | gpu | same bits | IDENTICAL (2074699 lines) | 2 | 31.79 | 253 | 7.6 % | 137 / 22 |
+| r21_17 | gpu | same bits | IDENTICAL (424949 lines) | 2 | 30.55 | 242 | 3.8 % | 53 / 9 |
+| r21_19 | gpu | same bits | IDENTICAL (1160639 lines) | 2 | 29.49 | 241 | 5.8 % | 108 / 15 |
+| r21_21 | gpu | same bits | IDENTICAL (195345 lines) | 2 | 30.25 | 220 | 6.4 % | 22 / 7 |
+| r21_23 | gpu | same bits | IDENTICAL (134664 lines) | 2 | 29.89 | 238 | 5.5 % | 17 / 6 |
+| r21_25 | gpu | same bits | IDENTICAL (231398 lines) | 2 | 28.84 | 249 | 12.1 % | 25 / 7 |
+| r21_27 | gpu | same bits | IDENTICAL (153409 lines) | 2 | 27.66 | 224 | 9.3 % | 22 / 6 |
+| r22_02 | gpu | same bits | IDENTICAL (328198 lines) | 2 | 27.99 | 242 | 2.0 % | 34 / 8 |
+| r22_03 | gpu | same bits | IDENTICAL (10171 lines) | 1 | 35.93 | 163 | 1.0 % | 14 / 4 |
+| r22_03 | swiftshader | same bits | IDENTICAL (10171 lines) | 1 | 35.66 | 164 | 1.1 % | 6 / 7 |
+| r22_05 | gpu | same bits | IDENTICAL (251105 lines) | 2 | 32.62 | 216 | 5.6 % | 23 / 7 |
+| r22_07 | gpu | same bits | IDENTICAL (10416 lines) | 1 | 36.39 | 132 | 0.8 % | 16 / 5 |
+| r22_07 | swiftshader | same bits | IDENTICAL (10416 lines) | 1 | 35.87 | 133 | 0.9 % | 6 / 9 |
+| r22_09 | gpu | same bits | IDENTICAL (128270 lines) | 2 | 33.34 | 214 | 6.2 % | 22 / 7 |
+| r22_11 | gpu | same bits | IDENTICAL (232594 lines) | 2 | 27.33 | 220 | 7.8 % | 30 / 6 |
+| r22_13 | gpu | same bits | IDENTICAL (177285 lines) | 2 | 28.65 | 240 | 6.6 % | 23 / 6 |
+| r22_15 | gpu | same bits | IDENTICAL (257512 lines) | 2 | 31.70 | 234 | 7.1 % | 25 / 7 |
+| r22_17 | gpu | same bits | IDENTICAL (286851 lines) | 2 | 29.66 | 239 | 6.3 % | 26 / 8 |
+| r22_22 | gpu | same bits | IDENTICAL (291871 lines) | 2 | 23.46 | 242 | 3.5 % | 24 / 7 |
+| r22_23 | gpu | same bits | IDENTICAL (7789 lines) | 1 | 39.77 | 83 | 1.7 % | 17 / 5 |
+| r22_23 | swiftshader | same bits | IDENTICAL (7789 lines) | 1 | 39.20 | 182 | 1.8 % | 10 / 6 |
+| r22c_02 | gpu | same bits | IDENTICAL (142653 lines) | 2 | 30.91 | 255 | 4.6 % | 18 / 7 |
+| r22c_03 | gpu | same bits | IDENTICAL (6305 lines) | 1 | 26.89 | 242 | 7.7 % | 18 / 4 |
+| r22c_03 | swiftshader | same bits | IDENTICAL (6305 lines) | 1 | 27.54 | 244 | 7.1 % | 12 / 5 |
+| r22c_04 | gpu | same bits | IDENTICAL (7075 lines) | 1 | 31.03 | 240 | 6.2 % | 13 / 4 |
+| r22c_04 | swiftshader | same bits | IDENTICAL (7075 lines) | 1 | 30.94 | 241 | 4.8 % | 7 / 6 |
+| r22c_07 | gpu | same bits | IDENTICAL (338038 lines) | 2 | 30.91 | 231 | 7.7 % | 36 / 8 |
+| r22c_09 | gpu | same bits | IDENTICAL (79941 lines) | 2 | 31.11 | 241 | 2.8 % | 13 / 3 |
+| r22c_11 | gpu | same bits | IDENTICAL (18855 lines) | 2 | 39.78 | 83 | 1.7 % | 9 / 5 |
+| r22c_13 | gpu | same bits | IDENTICAL (504959 lines) | 2 | 33.50 | 234 | 2.2 % | 43 / 11 |
+| r22c_15 | gpu | same bits | IDENTICAL (39264 lines) | 2 | 33.84 | 234 | 1.6 % | 11 / 5 |
+| r22c_18 | gpu | same bits | IDENTICAL (71594 lines) | 2 | 30.93 | 255 | 4.5 % | 14 / 6 |
+| r23_01 | gpu | same bits | IDENTICAL (6280 lines) | 1 | 33.38 | 178 | 5.5 % | 14 / 5 |
+| r23_01 | swiftshader | same bits | IDENTICAL (6280 lines) | 1 | 33.28 | 165 | 5.0 % | 5 / 9 |
+| r23_03 | gpu | same bits | IDENTICAL (6280 lines) | 1 | 35.18 | 135 | 4.5 % | 14 / 4 |
+| r23_03 | swiftshader | same bits | IDENTICAL (6280 lines) | 1 | 35.17 | 104 | 4.5 % | 6 / 8 |
+| r23_04 | gpu | same bits | IDENTICAL (361292 lines) | 2 | 36.89 | 110 | 4.9 % | 35 / 8 |
+| r23_06 | gpu | same bits | IDENTICAL (10416 lines) | 1 | 43.76 | 58 | 0.9 % | 19 / 5 |
+| r23_06 | swiftshader | same bits | IDENTICAL (10416 lines) | 1 | 41.92 | 63 | 1.8 % | 7 / 11 |
+| r23_07 | gpu | same bits | IDENTICAL (95242 lines) | 2 | 34.91 | 145 | 3.7 % | 16 / 7 |
+| r23_09 | gpu | same bits | IDENTICAL (7420 lines) | 1 | 29.24 | 235 | 8.6 % | 14 / 4 |
+| r23_09 | swiftshader | same bits | IDENTICAL (7420 lines) | 1 | 28.86 | 235 | 8.5 % | 6 / 7 |
+| r23_10 | gpu | same bits | IDENTICAL (7441 lines) | 1 | 32.29 | 191 | 8.1 % | 15 / 5 |
+| r23_10 | swiftshader | same bits | IDENTICAL (7441 lines) | 1 | 31.37 | 200 | 8.5 % | 6 / 9 |
+| r23_11 | gpu | same bits | IDENTICAL (193711 lines) | 2 | 31.94 | 189 | 8.4 % | 20 / 7 |
+| r23_13 | gpu | same bits | IDENTICAL (187483 lines) | 2 | 29.65 | 232 | 7.7 % | 28 / 7 |
+| r23_15 | gpu | same bits | IDENTICAL (15050 lines) | 2 | 29.33 | 210 | 8.9 % | 6 / 5 |
+| r23_16 | gpu | same bits | IDENTICAL (6338 lines) | 1 | 30.86 | 241 | 3.6 % | 12 / 4 |
+| r23_16 | swiftshader | same bits | IDENTICAL (6338 lines) | 1 | 30.64 | 241 | 3.2 % | 5 / 7 |
+| r23_17 | gpu | same bits | IDENTICAL (6353 lines) | 1 | 35.30 | 187 | 3.3 % | 12 / 4 |
+| r23_17 | swiftshader | same bits | IDENTICAL (6353 lines) | 1 | 35.14 | 186 | 3.2 % | 5 / 7 |
+| r23_18 | gpu | same bits | IDENTICAL (10510 lines) | 1 | 35.59 | 151 | 4.7 % | 18 / 5 |
+| r23_18 | swiftshader | same bits | IDENTICAL (10510 lines) | 1 | 34.21 | 136 | 5.3 % | 6 / 11 |
+| r23_20 | gpu | same bits | IDENTICAL (258589 lines) | 2 | 29.20 | 196 | 14.2 % | 41 / 8 |
+| r23_22 | gpu | same bits | IDENTICAL (160808 lines) | 2 | 30.46 | 223 | 8.0 % | 36 / 6 |
+| r23_24 | gpu | same bits | IDENTICAL (91125 lines) | 2 | 36.84 | 163 | 2.6 % | 20 / 6 |
+
+</details>
+
+Game (WARP) | port on wgpu | difference x8, one frame each:
+
+![Spa, chase camera, GPU](web_renderer_38h_spa_chase.jpg)
+![Monza, F40 with smoke, frame 149 of 298, GPU](web_renderer_38h_monza_f40.jpg)
+![Monza under the trees, the lowest PSNR (22.4 dB), GPU](web_renderer_38h_monza_trees.jpg)
+![Monza, mirrors and virtual mirror, frame 29, GPU](web_renderer_38h_mirrors.jpg)
+![Monza with post-processing, LDR levels and FXAA, SwiftShader](web_renderer_38h_post_swiftshader.jpg)
+
+## Step 3: the browser side
+
+- The `windows` crate is now a Windows-only dependency of rustyac-render; off Windows the crate
+  needs `backend-wgpu` (a `compile_error!` says so). `cargo clippy -p rustyac-render --features
+  backend-wgpu,wgpu/webgpu --target wasm32-unknown-unknown -- -D warnings` is clean.
+- In the browser kgl takes the page's device (`Kgl::give_device` before `Graphics::new`);
+  reading back the screen or a render target is desktop only.
+- The renderer reads its files through `rustyac_content::vfs` (the same `std::fs` calls on the
+  desktop, the content pack in the page).
+- The translator in wasm: `shader_table` built for `wasm32-wasip1` and run under wasmtime over
+  AC's `system/shaders/win`, `--dump`ing every translated shader, against the same example run
+  natively: 72 of 72 pairs translate and validate in both, and the 144 WGSL files are byte
+  identical (sha256 of all of them in name order `6435d04f…7d001`). The dumps were deleted after
+  the comparison (translated AC shaders are never kept).
+
+## Not done (Task 38i)
+
+- Full mode in the page: rustyac-web drawing with rustyac-render (the game's glue, `rustyac-game`'s
+  `render/ac.rs`, is Windows only: its HUD pass, swap chain and timing would have to be split off
+  for wasm, and the content pack needs AC's `system/shaders`, `content/texture` and
+  `objects3D` files), the mode switch on the controls page (remembered per browser, Full when
+  WebGPU is there, else Debug with the reason shown), the headless-Chrome screenshot of a
+  Practice drive in Full mode and its frame rate.
+- HUD text on wgpu (fw1 is DirectWrite), jpg / bmp textures on wgpu.
+- SwiftShader on sequences (minutes each) and every second sequence of `render_list.txt` on the
+  GPU (SEQ_EVERY=2, for time).
+
+## New or renamed files in the web zip (38h)
+
+None: `web/` and `crates/rustyac-web` did not change.
+
+## End checks (38h)
+
+| Check | Result |
+|---|---|
+| `run_all.sh --quick` (every area, 126 cases) | all identical, 0h29m |
+| `run_all.sh --changed v0.38.6 render gui shaders` (render 107, gui 123, shaders 4) | all identical, 1h44m |
+| `dumps` against v0.38.6's rustyac.exe (in `--quick`) | 6 of 6 identical |
+| `git diff v0.38.6 -- crates/rustyac-physics crates/rustyac-ode crates/rustyac-game crates/rustyac-web web` | empty |
+| clippy `-D warnings`: workspace `--all-targets`; rustyac-render `--all-targets` with `wgpu` and with `backend-wgpu`; rustyac-render `backend-wgpu,wgpu/webgpu` on wasm32-unknown-unknown; rustyac-web, rustyac-dxbc `--all-targets` and rustyac-web, rustyac-net `--lib` on wasm32-unknown-unknown; the wasm32-wasip1 crates | clean |
+| `--locked` builds: workspace, every `tools/*`, render_oracle with `wgpu` | pass |
+
+Disk: 26 GB free at the start, 22 GB at the end (v0.38.6's build deleted; `target/ro_wgpu` kept for
+`render_wgpu.sh`).
+
+## Open questions (38h, decided without asking)
+
+- The backend is chosen when the renderer is built (a Cargo feature), not at run time: the
+  desktop game and every Direct3D proof keep the exact code they had, and the browser has only
+  wgpu anyway. The desktop binary has no wgpu path.
+- "kgl call logs identical": kgl's calls are logged by kgl itself, the same way in both backends;
+  the Direct3D 11 command log of the render oracle stays as it was and still decides game = port.
+- One-sample alpha to coverage on wgpu is a discard below alpha one half in the pixel shader;
+  that is what WARP does with one sample, but a GPU's own Direct3D 11 driver may dither.
+- Full mode was not started: steps 1–2 and their proofs took the time, the brief's order puts
+  them first and says nothing half-wired, and step 4's proofs had to run.
+- `run_all.sh --changed v0.38.6` asks for every area (the new `png` line in `Cargo.lock` matches
+  no rule of `areas.map`, about 7.5 hours); it ran with the areas the brief names, `render gui
+  shaders`, and `--quick` covered every area. The physics code did not change (`git diff v0.38.6
+  -- crates/rustyac-physics crates/rustyac-ode crates/rustyac-game crates/rustyac-web web` is
+  empty), and `dumps` against v0.38.6 is in the quick run.
+- Sequences ran on the GPU only and every second one of the list (SwiftShader takes minutes per
+  frame of a sequence); every single frame ran on both adapters.
+- WebGPU has 1 and 4 samples only: AC's 2x and 8x anti-aliasing draw with 4 on wgpu (the kgl log
+  keeps the count asked for, so the logs stay comparable).
+- jpg and bmp textures are not decoded on wgpu (dds and png are; on the desktop WIC reads them).
+- No HUD text on wgpu: fw1 (DirectWrite) is a stub there that draws nothing.
