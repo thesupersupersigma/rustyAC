@@ -117,3 +117,28 @@ fn on_magione_a_lap_adds_grip_and_a_new_session_carries_part_of_it_over() {
     assert_eq!(sim.car.car.env.dynamic_grip_level, -0.0f32 + carried, "half of the gain is carried over");
     assert_eq!(CarView::capture(&sim, 0.0).lap.laps, 0, "a new session, a new lap list");
 }
+
+/// Task 38j: from Magione's first pit box the line follower takes the pit lane out (the
+/// racing line is beyond the pit wall there: before, the GT86 stood against it at full lock)
+/// and is on the racing line at speed in a minute. (Later it runs wide at the first fast bend,
+/// as it does from the grid: its margins are a racing car's.)
+#[test]
+fn from_a_pit_box_on_magione_the_line_follower_leaves_by_the_pit_lane() {
+    if !ready() {
+        return;
+    }
+    if let Err(message) = find_track("magione") {
+        eprintln!("NOT TESTED: {message}");
+        return;
+    }
+    let setup = SimSetup { car: "ks_toyota_gt86".to_string(), track: "magione".to_string(), auto_shifter: true, spawn: "pit".to_string(), ..SimSetup::default() };
+    let mut sim = GameSim::new(setup, Box::new(SpawnSequence::new(AutoDriver::new(), true))).unwrap();
+    let start = steps(&mut sim, 3);
+    let mut view = start;
+    let mut seconds = 0;
+    while seconds < 60 && !(view.speed_kmh > 80.0 && sim.car.car.spline_locator.offset.abs() < 3.0) {
+        view = steps(&mut sim, 333);
+        seconds += 1;
+    }
+    assert!(view.speed_kmh > 80.0 && sim.car.car.spline_locator.offset.abs() < 3.0, "on the racing line at speed after {seconds} s: {} km/h, {} m beside it", view.speed_kmh, sim.car.car.spline_locator.offset);
+}

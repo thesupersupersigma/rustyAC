@@ -45,6 +45,8 @@ use rustyac_math::{atan2f as atan2, atanf as atan, sinf as sin};
 pub struct AutoDriver {
     track: Option<Arc<Track>>,
     probe: CarProbe,
+    /// It has reached the racing line (from a pit box it follows the pit lane's line first).
+    on_line: bool,
 }
 
 impl AutoDriver {
@@ -68,6 +70,12 @@ fn curvature(spline: &AiSpline, i: usize, span: usize) -> f32 {
     } else {
         2.0 * cross / (ab * bc * ac)
     }
+}
+
+/// How far `position` is from the line, seen from above (squared metres).
+fn gap(spline: &AiSpline, position: &[f32; 3]) -> f32 {
+    let q = spline.spline.points[spline.spline.closest_point_index(position) as usize].point;
+    (q[0] - position[0]).powi(2) + (q[2] - position[2]).powi(2)
 }
 
 /// The speed the bends ahead allow, m/s: for every point up to 320 m ahead the speed its
@@ -112,13 +120,17 @@ impl DriverSource for AutoDriver {
 
     fn acquire(&mut self, controls: &mut CarControls, _dt: f32, input: &CarControlsInput) {
         *controls = CarControls { clutch: 1.0, ..CarControls::default() };
-        let Some(spline) = self.track.as_ref().and_then(|track| track.ai_spline.as_ref()) else { return };
-        if spline.point_count() < 16 {
-            return;
-        }
-        let car = &self.probe;
+        let Some(track) = self.track.clone() else { return };
+        let Some(fast) = track.ai_spline.as_ref().filter(|line| line.point_count() >= 16) else { return };
+        let car = self.probe;
+        // from a pit box the racing line is beyond the pit wall: the pit lane's line while it is the nearer one
+        let pit = track.pit_lane_spline.as_ref().filter(|pit| !self.on_line && pit.point_count() >= 16 && gap(pit, &car.position) < gap(fast, &car.position));
+        self.on_line = pit.is_none();
+        let (spline, npos) = match pit {
+            Some(pit) => (pit, pit.spline.world_to_spline(&car.position, -1)),
+            None => (fast, if car.npos >= 0.0 { car.npos } else { fast.spline.world_to_spline(&car.position, -1) }),
+        };
         let length = spline.length();
-        let npos = if car.npos >= 0.0 { car.npos } else { spline.spline.world_to_spline(&car.position, -1) };
         let index = spline.spline.closest_point_index(&car.position) as usize;
 
         // the wheel: at a point of the line ahead
@@ -134,7 +146,8 @@ impl DriverSource for AutoDriver {
         controls.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
 
         // the pedals
-        let error = allowed_speed(spline, index) - input.speed;
+        // (in the pit lane at most 60 km/h, under any pit limiter)
+        let error = allowed_speed(spline, index).min(if pit.is_some() { 16.7 } else { TOP_SPEED }) - input.speed;
         if error >= 0.0 {
             controls.gas = (0.25 + error * 0.4).clamp(0.0, 1.0);
         } else {
