@@ -214,8 +214,8 @@ impl SkyBox {
         }
         // Path::getFiles: the files of the folder itself, in the order of their names
         let folder = graphics.game_folder.join("content/texture/clouds");
-        let mut names: Vec<String> = std::fs::read_dir(&folder)
-            .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.to_ascii_lowercase().ends_with(".dds")).collect())
+        let mut names: Vec<String> = rustyac_content::vfs::read_dir(&folder)
+            .map(|d| d.into_iter().filter(|(_, is_dir)| !is_dir).map(|(n, _)| n).filter(|n| n.to_ascii_lowercase().ends_with(".dds")).collect())
             .unwrap_or_default();
         names.sort_by_key(|n| n.to_ascii_lowercase());
         for name in names {

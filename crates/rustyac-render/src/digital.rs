@@ -52,7 +52,7 @@ impl StringBlitter3D {
         let (tex_width, size_y) = graphics.resources.size(&texture).map(|(w, h)| (w as f32, h as f32)).unwrap_or((0.0, 0.0));
         // initCoords: 96 lines are asked for; the files have 95, the last read gives 0
         let mut offsets = Vec::with_capacity(96);
-        let text = std::fs::read_to_string(graphics.game_folder.join(format!("content/fonts/{font}.txt"))).unwrap_or_default();
+        let text = rustyac_content::vfs::read_to_string(&graphics.game_folder.join(format!("content/fonts/{font}.txt"))).unwrap_or_default();
         let mut lines = text.lines();
         for _ in 0..96 {
             offsets.push(lines.next().map(|l| l.trim().parse::<f64>().unwrap_or(0.0) as f32).unwrap_or(0.0));

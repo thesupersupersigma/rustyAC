@@ -220,7 +220,7 @@ impl DriverModel {
         }
         let driver_root = kn5.load(graphics, scene, &file, Path::new(&file))?;
         scene.compile(graphics, driver_root);
-        if let Ok(bytes) = std::fs::read(&knh) {
+        if let Ok(bytes) = rustyac_content::vfs::read(&knh) {
             let mut at = 0usize;
             let _ = load_driver_base_pos(&bytes, &mut at, scene, driver_root, is_hr);
         }

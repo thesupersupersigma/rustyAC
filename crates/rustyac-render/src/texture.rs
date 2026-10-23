@@ -134,7 +134,7 @@ impl KglTexture {
 
     /// `KGLTexture::KGLTexture(const std::wstring&)` 0x140023820 with the fallback reader.
     pub fn from_file(kgl: &Kgl, path: &Path) -> KglTexture {
-        match std::fs::read(path) {
+        match rustyac_content::vfs::read(path) {
             Ok(bytes) => KglTexture::from_file_bytes(kgl, &bytes),
             Err(e) => {
                 println!("ERROR: texture {} not readable without d3dx11_43.dll: {e}", path.display());

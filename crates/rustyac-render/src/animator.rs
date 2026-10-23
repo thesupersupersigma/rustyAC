@@ -312,7 +312,7 @@ impl Animation {
     pub fn load(path: &Path) -> Animation {
         println!("LOADING ANIMATION: {}", path.display());
         let mut animation = Animation::default();
-        let Ok(bytes) = std::fs::read(path) else {
+        let Ok(bytes) = rustyac_content::vfs::read(path) else {
             println!("VERSION: 1");
             return animation;
         };

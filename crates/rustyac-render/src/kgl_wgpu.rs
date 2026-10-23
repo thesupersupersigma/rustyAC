@@ -373,11 +373,32 @@ struct V { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> }
 }
 ";
 
+thread_local! {
+    static GIVEN: RefCell<Option<(wgpu::Device, wgpu::Queue, wgpu::Features)>> = const { RefCell::new(None) };
+}
+
 impl Kgl {
     /// `kglInit` 0x1400184b0 on a wgpu adapter: the device, the screen (a texture) and its depth
     /// buffer. The state objects are plain numbers here: each draw's pipeline is made from them.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn init(video: KglVideoSettings, options: DeviceOptions) -> Result<Kgl, String> {
+        if let Some((device, queue, features)) = GIVEN.with(|g| g.borrow_mut().take()) {
+            return Kgl::with_device(device, queue, features, video, options);
+        }
+        Kgl::open(video, options)
+    }
+
+    /// The device the next [`Kgl::init`] takes instead of opening one (the page's).
+    pub fn give_device(device: wgpu::Device, queue: wgpu::Queue, features: wgpu::Features) {
+        GIVEN.with(|g| *g.borrow_mut() = Some((device, queue, features)));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn open(_video: KglVideoSettings, _options: DeviceOptions) -> Result<Kgl, String> {
+        Err("in the browser kgl takes the page's device (Kgl::give_device)".into())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open(video: KglVideoSettings, options: DeviceOptions) -> Result<Kgl, String> {
         let mut d = wgpu::InstanceDescriptor::new_without_display_handle();
         d.backends = match options.adapter {
             Adapter::SwiftShader => wgpu::Backends::VULKAN,
@@ -1061,6 +1082,12 @@ impl Kgl {
         kgl_log::line(format_args!("read_render_target {}", log_name(view_key(&target.render_target_view))));
         let tex = target.texture.as_ref().ok_or("the render target has no texture")?;
         self.read_texture(&tex.0)
+    }
+
+    /// No reading back in the browser (it would have to wait for the GPU).
+    #[cfg(target_arch = "wasm32")]
+    pub fn read_render_target(&self, _target: &KglRenderTarget) -> Result<Vec<u8>, String> {
+        Err("render targets are not read back in the browser".into())
     }
 
     /// `kglResolveRenderTarget` 0x140019650: the multisampled colour target into a plain one.

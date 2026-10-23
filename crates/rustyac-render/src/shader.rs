@@ -328,7 +328,7 @@ impl ShaderManager {
         let mut shader = KglShader { vs: None, ps: None, input_layout: None, is_alpha_tested, il_type, cbuffers: Vec::new(), vars: Vec::new(), textures: Vec::new() };
 
         // createVertexShader 0x14001f490: reflect, create, then the input layout
-        let blob = std::fs::read(vs_path).map_err(|e| format!("{}: {e}", vs_path.display()))?;
+        let blob = rustyac_content::vfs::read(vs_path).map_err(|e| format!("{}: {e}", vs_path.display()))?;
         #[cfg(feature = "backend-wgpu")]
         {
             reflect_vars(&mut shader, &blob)?;
@@ -350,7 +350,7 @@ impl ShaderManager {
             }
         }
         // createPixelShader 0x14001f550
-        let blob = std::fs::read(ps_path).map_err(|e| format!("{}: {e}", ps_path.display()))?;
+        let blob = rustyac_content::vfs::read(ps_path).map_err(|e| format!("{}: {e}", ps_path.display()))?;
         #[cfg(feature = "backend-wgpu")]
         {
             reflect_vars(&mut shader, &blob)?;

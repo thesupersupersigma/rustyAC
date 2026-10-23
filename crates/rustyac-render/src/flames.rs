@@ -292,8 +292,8 @@ impl Flames {
     fn load_textures(&mut self, graphics: &mut Graphics, dir: &Path) {
         if self.version != 2 {
             // version 1: every png, in the folder's order
-            let mut names: Vec<String> = std::fs::read_dir(dir)
-                .map(|entries| entries.flatten().filter(|e| e.path().is_file()).filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.to_ascii_lowercase().ends_with(".png")).collect())
+            let mut names: Vec<String> = rustyac_content::vfs::read_dir(dir)
+                .map(|entries| entries.into_iter().filter(|(_, is_dir)| !is_dir).map(|(n, _)| n).filter(|n| n.to_ascii_lowercase().ends_with(".png")).collect())
                 .unwrap_or_default();
             names.sort_by_key(|n| n.to_uppercase());
             let dir_text = crate::model::path_text(dir);
@@ -303,8 +303,8 @@ impl Flames {
             }
             return;
         }
-        let mut names: Vec<String> = std::fs::read_dir(dir)
-            .map(|entries| entries.flatten().filter(|e| e.path().is_file()).filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.to_ascii_lowercase().ends_with(".dds")).collect())
+        let mut names: Vec<String> = rustyac_content::vfs::read_dir(dir)
+            .map(|entries| entries.into_iter().filter(|(_, is_dir)| !is_dir).map(|(n, _)| n).filter(|n| n.to_ascii_lowercase().ends_with(".dds")).collect())
             .unwrap_or_default();
         names.sort_by_key(|n| n.to_uppercase());
         let dir_text = crate::model::path_text(dir);

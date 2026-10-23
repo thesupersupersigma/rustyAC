@@ -24,7 +24,7 @@ rustyac-dxbc = { path = "../rustyac-dxbc", optional = true }
 # png textures without WIC (kgl on wgpu)
 png = { version = "0.17", optional = true }
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",

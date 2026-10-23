@@ -24,6 +24,8 @@ pub mod digital;
 pub mod driver;
 pub mod fake_shadow;
 pub mod forward;
+#[cfg(all(not(windows), not(feature = "backend-wgpu")))]
+compile_error!("rustyac-render off Windows needs the feature backend-wgpu (Direct3D 11 is Windows only)");
 #[cfg(not(feature = "backend-wgpu"))]
 pub mod fw1;
 #[cfg(feature = "backend-wgpu")]
@@ -32,6 +34,7 @@ pub mod fw1;
 pub mod flames;
 pub mod ghost_car;
 pub mod gl;
+#[cfg(windows)]
 pub mod gpulog;
 pub mod gui_paint;
 pub mod graphics;
