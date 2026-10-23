@@ -60,8 +60,9 @@
     keys, and the pad numbers this page has always used.
   </p>
   <p><label>Picture <select id="backend">
-    <option value="auto">WebGPU, else WebGL2</option>
-    <option value="webgl">WebGL2</option>
+    <option value="full" selected>Full: AC's own renderer (needs WebGPU; else Debug)</option>
+    <option value="auto">Debug: WebGPU, else WebGL2</option>
+    <option value="webgl">Debug: WebGL2</option>
   </select></label></p>
   <p id="controls-error" class="refusal" hidden></p>
   <div id="controls-list"></div>

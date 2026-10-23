@@ -195,6 +195,51 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
     out
 }
 
+/// Full mode: what AC's renderer reads besides the drive's files, as far as can be told
+/// before it runs: the shaders, the game's settings, the weather, the sky's and the pits'
+/// textures and models, the fonts, the car's models, textures, first skin and driver, the
+/// track's settings (lights, groove, crew side). What it reads past these (another skin, a
+/// driver's own suit folders) the page's folder source gets from its load
+/// ([`vfs::MemFs::take_wanted`]); a pack (`tools/web_pack`) has only these.
+pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    files_below(&root.join("system/shaders/win"), &[], 0, &mut out);
+    files_below(&root.join("system/cfg"), &[], 0, &mut out);
+    files_below(&root.join("content/weather"), &[], 1, &mut out);
+    files_below(&root.join("content/texture"), &[], 0, &mut out);
+    files_below(&root.join("content/texture/clouds"), &[], 0, &mut out);
+    files_below(&root.join("content/objects3D"), &[], 0, &mut out);
+    files_below(&root.join("content/fonts"), &[], 0, &mut out);
+    let folder = car_folder(root, car);
+    // the skin AC's renderer takes when none is named (the first by name); another one's files
+    // come in the page's next round (Game::files_missing)
+    let mut skins: Vec<String> = vfs::read_dir(&folder.join("skins")).unwrap_or_default().into_iter().filter(|(_, dir)| *dir).map(|(name, _)| name).collect();
+    skins.sort();
+    if let Some(skin) = skins.first() {
+        files_below(&folder.join("skins").join(skin), &[], 0, &mut out);
+    }
+    files_below(&folder, &[], 0, &mut out);
+    files_below(&folder.join("texture"), &[], 1, &mut out);
+    files_below(&folder.join("animations"), &[], 1, &mut out);
+    // DriverModel: content/driver/<MODEL NAME>.kn5 and its far-away _B
+    if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")) {
+        let name = ini.get_string("MODEL", "NAME");
+        if !name.is_empty() {
+            out.push(root.join(format!("content/driver/{name}.kn5")));
+            out.push(root.join(format!("content/driver/{name}_B.kn5")));
+        }
+    }
+    let track_folder = track_folder(root, track);
+    files_below(&track_folder.join("data"), &[], 0, &mut out);
+    if !layout.is_empty() {
+        files_below(&track_folder.join(layout).join("data"), &[], 0, &mut out);
+    }
+    out.retain(|path| path.vfs_is_file());
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Runs a load with the file log on and returns every file that was read. A loader that
 /// panics on a file it cannot make sense of (a mod's) is an error like any other.
 fn files_read_by(load: impl FnOnce() -> Result<(), String>) -> Result<Vec<PathBuf>, String> {

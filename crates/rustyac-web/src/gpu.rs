@@ -139,6 +139,8 @@ pub struct Gpu {
     /// The card takes block-compressed textures as they are.
     pub compressed_textures: bool,
     pub samples: u32,
+    /// The device is AC's renderer's too ([`Gpu::new`]'s `full`).
+    pub full: bool,
     max_texture_size: u32,
     color: Option<wgpu::TextureView>,
     depth: wgpu::TextureView,
@@ -246,7 +248,9 @@ fn depth_state(mode: u8) -> wgpu::DepthStencilState {
 
 impl Gpu {
     /// Opens the picture on a canvas. `prefer_webgl`: do not use WebGPU even where it is there.
-    pub async fn new(canvas: web_sys::HtmlCanvasElement, prefer_webgl: bool, samples: u32) -> Result<Gpu, String> {
+    /// `full`: the device is also AC's renderer's (WebGPU only: kgl's features and the
+    /// adapter's limits; [`Gpu::full`] says whether it is).
+    pub async fn new(canvas: web_sys::HtmlCanvasElement, prefer_webgl: bool, samples: u32, full: bool) -> Result<Gpu, String> {
         let (width, height) = (canvas.width().max(16), canvas.height().max(16));
         let mut attempts = Vec::new();
         if !prefer_webgl {
@@ -280,17 +284,26 @@ impl Gpu {
         };
         let info = adapter.get_info();
         let compressed_textures = adapter.features().contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
-        let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+        let full = full && backends == wgpu::Backends::BROWSER_WEBGPU;
+        let mut limits = if full { adapter.limits() } else { wgpu::Limits::downlevel_webgl2_defaults() };
         limits.max_texture_dimension_2d = adapter.limits().max_texture_dimension_2d.min(8192);
+        let required_features = match (full, compressed_textures) {
+            (true, _) => rustyac_game::render::ac::AcRenderer::wanted_features(adapter.features()),
+            (false, true) => wgpu::Features::TEXTURE_COMPRESSION_BC,
+            (false, false) => wgpu::Features::empty(),
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: if compressed_textures { wgpu::Features::TEXTURE_COMPRESSION_BC } else { wgpu::Features::empty() },
+                required_features,
                 required_limits: limits.clone(),
                 ..Default::default()
             })
             .await
             .map_err(|e| format!("the graphics device could not be opened: {e}"))?;
+        if full {
+            rustyac_game::render::ac::AcRenderer::give_device(device.clone(), queue.clone(), adapter.features());
+        }
         let caps = surface.get_capabilities(&adapter);
         // the colours are written as they are (no sRGB step), as the debug view does
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).or(caps.formats.first().copied()).ok_or("the canvas offers no pixel format")?;
@@ -365,6 +378,7 @@ impl Gpu {
             backend: format!("{}{}", if backends == wgpu::Backends::BROWSER_WEBGPU { "WebGPU" } else { "WebGL2" }, if info.name.is_empty() { String::new() } else { format!(" ({})", info.name) }),
             compressed_textures,
             samples,
+            full,
             max_texture_size: limits.max_texture_dimension_2d,
             color,
             depth,
@@ -444,6 +458,22 @@ impl Gpu {
             self.surface.configure(&self.device, &self.config);
             (self.color, self.depth) = Gpu::targets(&self.device, &self.config, self.samples);
         }
+    }
+
+    /// Full mode's frame: `draw` puts AC's renderer's picture into the canvas's texture.
+    pub fn present_full(&mut self, draw: impl FnOnce(&wgpu::TextureView, wgpu::TextureFormat)) -> Result<(), String> {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return Ok(()),
+            other => return Err(format!("the canvas gave no picture to draw into ({other:?})")),
+        };
+        draw(&frame.texture.create_view(&wgpu::TextureViewDescriptor::default()), self.config.format);
+        self.queue.present(frame);
+        Ok(())
     }
 
     fn pipeline(&mut self, key: PipelineKey) {

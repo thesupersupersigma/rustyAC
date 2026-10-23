@@ -13,7 +13,9 @@
 //   ?spawn=pit|hotlap|start             where the car starts
 //   ?go=1              start driving as soon as the content is there (no click)
 //   ?autodrive=1       a line follower drives (starts from the hot-lap point)
-//   ?backend=webgl     do not use WebGPU
+//   ?backend=auto      the debug view (WebGPU, else WebGL2)
+//   ?backend=webgl     the debug view on WebGL2
+//   ?backend=full      Full mode: AC's own renderer draws (WebGPU only; else the debug view)
 //   ?tex=<pixels>      longest texture side kept (default: 1024, or 512 where textures are unpacked)
 //   ?msaa=1            no multisampling
 //   ?nocache=1         do not keep the pack's files in the browser's storage
@@ -332,6 +334,26 @@ async function openFolder(root) {
       sizes.set(path, file.size);
       return { size: file.size, stream: file.stream(), sha256: '', from: 'folder' };
     },
+    // Full mode: more of the folder than the first walk took ([folder, depth, folders to skip]
+    // each): AC's renderer reads the shaders, the sky's and the pits' files, a car's skins
+    async listMore(parts) {
+      const added = [];
+      const walk = async (folder, at, depth, skip) => {
+        for (const [lower, { name, handle }] of await children(folder)) {
+          const path = `${at}/${name}`;
+          if (handle.kind === 'file') {
+            if (!handles.has(path)) added.push(path);
+            handles.set(path, handle);
+          } else if (depth > 0 && !skip.includes(lower)) await walk(handle, path, depth - 1, skip);
+        }
+      };
+      for (const [path, depth, skip] of parts) {
+        let folder = root;
+        for (const name of path.split('/')) folder = folder && (await children(folder)).get(name.toLowerCase())?.handle;
+        if (folder && folder.kind === 'directory') await walk(folder, path, depth, skip);
+      }
+      if (added.length) rac.fs_list(added.join('\n'));
+    },
   };
   const index = [...handles.keys()].filter(isIndexFile);
   let read = 0;
@@ -419,13 +441,16 @@ function listedPathWanted(parts) {
   // AC's launcher: its cfg, the themes (no videos), the weathers (web/launcher.js walkFolder)
   if (lower[0] === 'cfg') return parts.length <= 6;
   if (lower[0] === 'launcher') return lower[1] === 'themes' && parts.length <= 11 && !name.endsWith('.ogv');
-  if (lower[0] === 'system') return ((lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3) || (lower[1] === 'cfg' && parts.length === 4);
+  if (lower[0] === 'system') return ((lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3) || (lower[1] === 'cfg' && parts.length === 4) || (lower[1] === 'shaders' && lower[2] === 'win' && parts.length === 4);
   if (lower[0] !== 'content') return false;
-  if (lower[1] === 'weather') return parts.length <= 4 && name.endsWith('.ini');
+  // (and what Full mode's renderer reads: the weathers, the sky's, the pits' and the drivers' files)
+  if (lower[1] === 'weather') return parts.length <= 4;
+  if (['texture', 'driver', 'fonts', 'objects3d'].includes(lower[1])) return parts.length <= 5;
   if (lower[1] === 'cars') {
-    if (parts.length === 4) return lower[3] === 'data.acd' || lower[3].endsWith('.kn5');
+    if (parts.length === 4) return true;
     if (lower[3] === 'ui') return parts.length <= 7;
-    if (lower[3] === 'skins') return parts.length === 6 && ['ui_skin.json', 'preview.jpg', 'livery.png'].includes(name);
+    if (lower[3] === 'skins') return parts.length <= 7;
+    if (lower[3] === 'texture' || lower[3] === 'animations') return parts.length <= 6;
     return parts.length === 5 && lower[3] === 'data';
   }
   if (lower[1] !== 'tracks') return false;
@@ -671,6 +696,37 @@ function raceModels(race) {
   return models;
 }
 
+// The picture a drive gets: ?backend=, else the Picture menu (kept in this browser). Full mode
+// and WebGPU need an adapter; without one the debug view on WebGL2, and why.
+async function pictureBackend() {
+  let backend = params.get('backend') || $('backend').value;
+  let why = '';
+  if (backend !== 'webgl') {
+    const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
+    if (!adapter) {
+      if (backend === 'full') why = 'Full mode needs WebGPU, and this browser offers none: the debug view draws instead (WebGL2).';
+      backend = 'webgl';
+    }
+  }
+  state.pictureWhy = why;
+  return { backend, why };
+}
+
+// Full mode: lists the folder's parts AC's renderer reads (a pack lists what it holds already)
+async function listPictureFiles(models) {
+  if (!state.source.listMore) return;
+  const parts = [
+    ['system/shaders/win', 0, []],
+    ['content/weather', 1, []],
+    ['content/texture', 1, []],
+    ['content/driver', 1, []],
+    ['content/fonts', 0, []],
+    ['content/objects3D', 0, []],
+    ...models.map((model) => [`content/cars/${model}`, 3, ['sfx', 'data', 'ui']]),
+  ];
+  await state.source.listMore(parts);
+}
+
 // `launch`: a drive AC's launcher asked for ({ car, track, layout, race, assists }), else the
 // menu's choice
 async function drive(launch) {
@@ -690,9 +746,11 @@ async function drive(launch) {
     let loaded = 0;
     // (and the files of race.ini's other cars, which AI drivers drive)
     const models = [...new Set([car, ...(launch && launch.race ? raceModels(launch.race) : [])])];
-    for (let round = 0; round < 8; round++) {
-      const wanted = [...new Set(models.flatMap((model) => rac.files_wanted(model, track, layout).split('\n').filter(Boolean)))];
-      if (!wanted.length) break;
+    const picture = await pictureBackend();
+    const filesWanted = picture.backend === 'full' ? rac.files_wanted_full : rac.files_wanted;
+    if (picture.backend === 'full') await listPictureFiles(models);
+    const wantedNow = () => [...new Set(models.flatMap((model) => filesWanted(model, track, layout).split('\n').filter(Boolean)))];
+    const fetchWanted = async (wanted) => {
       let total = 0;
       for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
       let got = 0;
@@ -703,6 +761,11 @@ async function drive(launch) {
         $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
         setStatus(`${from === 'cache' ? 'from this browser\'s storage' : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
       });
+    };
+    for (let round = 0; round < 8; round++) {
+      const wanted = wantedNow();
+      if (!wanted.length) break;
+      await fetchWanted(wanted);
     }
     if (launch) {
       // what the session reads of the game's folder besides the car and the track
@@ -715,23 +778,32 @@ async function drive(launch) {
     await nextPaint();
     resizeCanvas();
     const built = performance.now();
-    let backend = params.get('backend') || $('backend').value;
-    if (backend !== 'webgl') {
-      const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
-      if (!adapter) backend = 'webgl';
-    }
+    const backend = picture.backend;
     // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart)
     if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
-    const game = launch
-      ? // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
-        // as rustyac.exe --race-seed n --ai-seed n-28000)
-        await rac.Game.create_race(canvas, launch.race, launch.assists, (params.has('seed') ? Number(params.get('seed')) : Date.now()) >>> 0, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
-      : await rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
+    // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
+    // as rustyac.exe --race-seed n --ai-seed n-28000)
+    const seed = (params.has('seed') ? Number(params.get('seed')) : Date.now()) >>> 0;
+    const create = () =>
+      launch
+        ? rac.Game.create_race(canvas, launch.race, launch.assists, seed, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
+        : rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
+    let game = await create();
+    // Full mode: the renderer names files of its own as it loads (the driver's model, a skin's
+    // textures); those, and the game made again
+    for (let round = 0; backend === 'full' && round < 6; round++) {
+      const wanted = game.files_missing().split('\n').filter(Boolean);
+      if (!wanted.length) break;
+      await fetchWanted(wanted);
+      $('progress').hidden = true;
+      game.free();
+      game = await create();
+    }
     if (launch) window.rustyac.drive = Object.fromEntries(game.drive().split('\n').filter(Boolean).map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
     rac.fs_forget_models();
     state.game = game;
     game.set_autodrive(autodrive);
-    const notes = `${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
+    const notes = `${state.pictureWhy ? state.pictureWhy + '\n' : ''}${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
     window.rustyac.notes = notes;
     $('notes').textContent = notes;
     $('notes').hidden = false;
@@ -939,7 +1011,10 @@ async function loadServerFiles(cars, track, checksumFiles) {
   let loaded = 0;
   for (let round = 0; round < 8; round++) {
     const wanted = new Set();
-    for (const car of cars) for (const path of rac.files_wanted(car, track.track, track.layout).split('\n')) if (path) wanted.add(path);
+    const full = (await pictureBackend()).backend === 'full';
+    if (full && round === 0) await listPictureFiles(cars);
+    const filesWanted = full ? rac.files_wanted_full : rac.files_wanted;
+    for (const car of cars) for (const path of filesWanted(car, track.track, track.layout).split('\n')) if (path) wanted.add(path);
     for (const path of checksumFiles) if (!rac.fs_has(path)) wanted.add(path);
     if (!wanted.size) break;
     let total = 0;
@@ -1079,11 +1154,7 @@ async function joinServer() {
     await nextPaint();
     resizeCanvas();
     const built = performance.now();
-    let backend = params.get('backend') || $('backend').value;
-    if (backend !== 'webgl') {
-      const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
-      if (!adapter) backend = 'webgl';
-    }
+    const { backend } = await pictureBackend();
     const autodrive = params.get('autodrive') === '1';
     const spawn = params.get('spawn') || 'pit';
     // (create_online takes the join: from here on the game owns the session)
@@ -1094,7 +1165,7 @@ async function joinServer() {
     state.game = game;
     state.online = { ws, link, server };
     game.set_autodrive(autodrive);
-    const notes = `${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
+    const notes = `${state.pictureWhy ? state.pictureWhy + '\n' : ''}${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
     window.rustyac.notes = notes;
     $('notes').textContent = notes;
     $('notes').hidden = false;
@@ -2089,6 +2160,7 @@ async function returnToLauncher() {
 async function main() {
   await init();
   $('version').textContent = rac.version();
+  rac.full_proof_next(Number(params.get('fullproof')) || 0);
   startControls();
   for (const item of (params.get('set') || '').split(',').filter(Boolean)) {
     const [name, value] = [item.slice(0, item.indexOf('=')), item.slice(item.indexOf('=') + 1)];
@@ -2134,7 +2206,20 @@ async function main() {
   $('mp-server').addEventListener('change', markServers);
   $('mp-join').addEventListener('click', joinServer);
   window.addEventListener('resize', resizeCanvas);
-  if (params.get('backend') === 'webgl') $('backend').value = 'webgl';
+  try {
+    const kept = localStorage.getItem('rustyac.picture');
+    if (kept && [...$('backend').options].some((option) => option.value === kept)) $('backend').value = kept;
+  } catch (error) {
+    console.warn(error);
+  }
+  $('backend').addEventListener('change', () => {
+    try {
+      localStorage.setItem('rustyac.picture', $('backend').value);
+    } catch (error) {
+      console.warn(error);
+    }
+  });
+  if (['webgl', 'full'].includes(params.get('backend'))) $('backend').value = params.get('backend');
   if (params.get('spawn')) $('spawn').value = params.get('spawn');
 
   let ready = false;
@@ -2271,6 +2356,17 @@ window.rustyac.frameProof = async (race, assists, tape, steps, slowMs) => {
   const seconds = (performance.now() - started) / 1000;
   window.rustyac.slowFrameMs = 0;
   return { ...JSON.parse(state.game.check_state()), race_out: ((bytes) => (bytes ? new TextDecoder().decode(bytes) : null))(state.game.finish_race()), fps: frames / seconds, seconds };
+};
+
+// Full mode's proof (?fullproof=<frames>, Game.full_proof): the drive's fixed frame stays on the
+// canvas; with nothing over it, its kgl call log
+window.rustyac.fullProof = async () => {
+  const text = state.game && state.game.full_proof();
+  if (!text) throw new Error('this drive is not a Full proof (?fullproof=<frames>&backend=full)');
+  for (const node of document.body.children) if (node.id !== 'view') node.style.visibility = 'hidden';
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const [size, ...log] = text.split('\n');
+  return { size, log: log.join('\n') };
 };
 
 // a [RACE] key of a race.ini

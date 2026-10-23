@@ -284,8 +284,10 @@ fn run(args: &[String]) -> Result<(), String> {
             if !folder.join("data.acd").is_file() && !folder.join("data").join("car.ini").is_file() {
                 return Err("not installed: the folder has neither data.acd nor a data folder (a DLC that is not owned, or a mod without its data)".to_string());
             }
-            let read = content::files_read_by_drive(&root, car, "", "")?;
+            let mut read = content::files_read_by_drive(&root, car, "", "")?;
             content::check_car_model(&root, car)?;
+            // and what Full mode (AC's renderer) reads: shaders, sky, pits, the car's skin and driver
+            read.extend(content::files_of_picture(&root, car, "", ""));
             let own = format!("content/cars/{}/", car.to_ascii_lowercase());
             let mut files = Vec::new();
             for file in read.iter().filter_map(|file| relative(file)) {
@@ -324,7 +326,8 @@ fn run(args: &[String]) -> Result<(), String> {
         let probe = guarded(|| -> Result<Item, String> {
             let entry = catalog::entry_of(&root.join("content").join("tracks").join(track), track, layout);
             catalog::check(&entry).map_err(|refusal| refusal.to_string())?;
-            let read = content::files_read_by_drive(&root, &probe_car, track, layout)?;
+            let mut read = content::files_read_by_drive(&root, &probe_car, track, layout)?;
+            read.extend(content::files_of_picture(&root, &probe_car, track, layout));
             let own = format!("content/tracks/{}/", track.to_ascii_lowercase());
             let car = format!("content/cars/{}/", probe_car.to_ascii_lowercase());
             let mut files = Vec::new();

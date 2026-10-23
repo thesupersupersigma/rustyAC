@@ -26,6 +26,8 @@ pub mod pack;
 pub mod race;
 pub mod session;
 
+#[cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))]
+pub mod full;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod gpu;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]

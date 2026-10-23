@@ -33,6 +33,7 @@ pub fn set_sessions(list: String) {
     SESSIONS.with(|s| *s.borrow_mut() = Some(list));
 }
 use crate::gpu::{Gpu, OtherCar};
+use rustyac_game::render::ac::AcRenderer;
 use crate::session::Session;
 
 /// The folder the page's files sit under (a name only: nothing is on a disk).
@@ -259,6 +260,18 @@ pub fn files_wanted(car: &str, track: &str, layout: &str) -> String {
     wanted.join("\n")
 }
 
+/// [`files_wanted`] for Full mode: also what AC's renderer reads
+/// ([`content::files_of_picture`]), and what its last load asked for. After a Full
+/// [`Game::create`] a list that is not empty: those files, and the game made again.
+#[wasm_bindgen]
+pub fn files_wanted_full(car: &str, track: &str, layout: &str) -> String {
+    let mut wanted: Vec<String> = content::files_of_drive(Path::new(ROOT), car, track, layout).into_iter().chain(content::files_of_picture(Path::new(ROOT), car, track, layout)).map(|path| relative(&path)).filter(|path| !fs_has(path)).collect();
+    wanted.extend(files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path) && ["content/", "system/"].iter().any(|prefix| path.to_ascii_lowercase().starts_with(prefix))));
+    wanted.sort();
+    wanted.dedup();
+    wanted.join("\n")
+}
+
 /// Gives the memory of the big model files back once a drive is loaded. The car's collider
 /// stays: it is a few kilobytes, and a new car (N) reads it again.
 #[wasm_bindgen]
@@ -269,6 +282,19 @@ pub fn fs_forget_models() {
             files().forget(&path);
         }
     }
+}
+
+/// The next Full drive ([`Game::create`] and the others) is Full mode's proof
+/// ([`crate::full::fixed_frame`]): the drive as it starts, drawn `frames` times 1/60 s apart,
+/// that stays on the screen ([`Game::full_proof`]). 0: drives as usual again.
+#[wasm_bindgen]
+pub fn full_proof_next(frames: u32) {
+    *full_proof_frames().lock().unwrap() = (frames > 0).then_some(frames);
+}
+
+fn full_proof_frames() -> &'static Mutex<Option<u32>> {
+    static FRAMES: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
+    FRAMES.get_or_init(|| Mutex::new(None))
 }
 
 /// The Controls panel's settings and where they came from; `None`: the built-in layout.
@@ -343,6 +369,13 @@ pub struct Game {
     work_ms: f64,
     dropped_seconds: f64,
     drawn: crate::gpu::DrawStats,
+    /// Full mode: AC's own renderer draws the picture (the debug view's models are not loaded).
+    full: Option<Box<AcRenderer>>,
+    /// Full mode's fixed frame is on the screen, and this its proof ([`Game::full_proof`]): the
+    /// frame loop only shows it again.
+    proof: Option<String>,
+    /// Full mode could not start for want of these files (paths in the game's folder).
+    missing: Vec<String>,
     /// Online: the model on the card of every other player's car (the session's order).
     remote_models: Vec<Option<usize>>,
     /// Online: the WebSocket's end in here.
@@ -360,7 +393,7 @@ impl Game {
     /// `webgl` forces WebGL2. `texture_size`: 0 = what suits the device. `samples`: 4 or 1.
     #[allow(clippy::too_many_arguments)]
     pub async fn create(canvas: web_sys::HtmlCanvasElement, car: String, track: String, layout: String, spawn: String, auto_shifter: bool, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
-        let gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
+        let gpu = Gpu::new(canvas, backend == "webgl", samples, backend == "full").await?;
         let sessions = SESSIONS.with(|s| s.borrow_mut().take());
         let session = Session::with_sessions(&car, &track, &layout, auto_shifter, &spawn, sessions.as_deref())?;
         Ok(Game::finish(gpu, session, texture_size, None))
@@ -372,7 +405,7 @@ impl Game {
     /// seed (the page gives the clock's milliseconds, as the game takes them).
     #[allow(clippy::too_many_arguments)]
     pub async fn create_race(canvas: web_sys::HtmlCanvasElement, race_ini: String, assists_ini: Option<String>, seed: u32, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
-        let gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
+        let gpu = Gpu::new(canvas, backend == "webgl", samples, backend == "full").await?;
         let session = Session::from_race(&race_ini, assists_ini.as_deref(), seed)?;
         Ok(Game::finish(gpu, session, texture_size, None))
     }
@@ -397,7 +430,7 @@ impl Game {
     /// default).
     #[allow(clippy::too_many_arguments)]
     pub async fn create_online(canvas: web_sys::HtmlCanvasElement, join: crate::net::NetJoin, spawn: String, auto_shifter: bool, backend: String, texture_size: u32, samples: u32, other_car_distance: f32) -> Result<Game, JsValue> {
-        let mut gpu = Gpu::new(canvas, backend == "webgl", samples).await?;
+        let mut gpu = Gpu::new(canvas, backend == "webgl", samples, backend == "full").await?;
         if other_car_distance > 0.0 {
             gpu.other_cars.model_m = other_car_distance;
         }
@@ -420,6 +453,35 @@ impl Game {
         // (without the loader's timing line: a browser's wasm has no clock of its own)
         notes.extend(session.race_notes.iter().cloned());
         notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
+        let (width, height) = gpu.size();
+        let mut proof = None;
+        let proof_frames = *full_proof_frames().lock().unwrap();
+        let made = match (gpu.full, proof_frames) {
+            (false, _) => None,
+            (true, None) => Some(crate::full::renderer(Path::new(ROOT), width, height, &session, false, false, &mut notes)),
+            (true, Some(frames)) => Some(crate::full::fixed_frame(Path::new(ROOT), &mut session, width, height, frames, false, &mut notes).map(|(renderer, log)| {
+                proof = Some(format!("{width} {height}\n{log}"));
+                renderer
+            })),
+        };
+        let full = match made {
+            Some(Ok(renderer)) => Some(renderer),
+            Some(Err(why)) => {
+                notes.push(format!("Full mode could not start, the debug view draws instead: {why}"));
+                None
+            }
+            None => None,
+        };
+        if full.is_some() {
+            notes[0] = format!("picture: Full mode, AC's own renderer on {}", gpu.backend);
+        }
+        // (what the renderer asked for and did not find: the page fetches it and starts again)
+        // (and what it drew without: a texture of the skin, a font)
+        let missing: Vec<String> = if gpu.full { files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path)).collect() } else { Vec::new() };
+        if full.is_some() {
+            let view = session.view();
+            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link };
+        }
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
         let options = gpu.model_options(texture_size);
@@ -478,7 +540,13 @@ impl Game {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
         }
         let view = session.view();
-        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), remote_models, link }
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link }
+    }
+
+    /// Full mode did not start for want of these files, one per line: fetch them and make the
+    /// game again.
+    pub fn files_missing(&self) -> String {
+        self.missing.join("\n")
     }
 
     /// What loading found, one line each.
@@ -488,6 +556,9 @@ impl Game {
 
     /// One frame: `now` is `requestAnimationFrame`'s time stamp, milliseconds.
     pub fn frame(&mut self, now: f64) -> Result<(), JsValue> {
+        if let (Some(_), Some(full)) = (&self.proof, &mut self.full) {
+            return Ok(self.gpu.present_full(|target, format| full.present_to(target, format))?);
+        }
         let seconds = self.last_ms.map_or(0.0, |last| (now - last) / 1000.0);
         self.last_ms = Some(now);
         let started = now_ms();
@@ -496,12 +567,24 @@ impl Game {
         let camera = self.session.camera_frame(&self.view, seconds);
         let remote = self.session.remote_views();
         let others: Vec<OtherCar> = remote.iter().zip(&self.session.remote_shapes).zip(&self.remote_models).map(|((view, shape), model)| OtherCar { view, shape, model: *model }).collect();
-        self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?;
+        match &mut self.full {
+            Some(full) => {
+                crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &Default::default());
+                self.gpu.present_full(|target, format| full.present_to(target, format))?;
+            }
+            None => self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?,
+        }
         self.frames += 1;
         self.steps += stats.steps;
         self.dropped_seconds += stats.dropped_seconds;
         self.work_ms += now_ms() - started;
         Ok(())
+    }
+
+    /// Full mode's proof after [`full_proof_next`]: "width height", then the kgl call log of
+    /// the fixed frame on the screen. `None`: this drive was not one.
+    pub fn full_proof(&self) -> Option<String> {
+        self.proof.clone()
     }
 
     /// Runs physics steps without drawing or waiting (a check: the same number of steps
@@ -549,6 +632,14 @@ impl Game {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
+        if let Some(full) = &mut self.full {
+            let size = self.gpu.size();
+            if full.size() != size {
+                if let Err(why) = full.resize(size.0, size.1) {
+                    web_sys::console::warn_1(&format!("Full mode: the new size failed: {why}").into());
+                }
+            }
+        }
     }
 
     /// A key went down or up: a Windows virtual-key code.

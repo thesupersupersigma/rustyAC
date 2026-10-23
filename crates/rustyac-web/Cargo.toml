@@ -20,6 +20,19 @@ rustyac-game = { path = "../rustyac-game" }
 # multiplayer: the client of a Kunos acServer, here through a WebSocket gateway
 rustyac-net = { path = "../rustyac-net" }
 
+# Full mode: AC's renderer (rustyac-game's `render::ac`); here only for the kgl call log of the
+# fixed frame (`full.rs`). In the page kgl runs on wgpu; natively on Direct3D 11, or on wgpu with
+# the `wgpu` feature (the full_frame example).
+[target.'cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
+rustyac-render = { path = "../rustyac-render" }
+
+[features]
+wgpu = ["rustyac-game/wgpu"]
+
+[dev-dependencies]
+# the full_frame example's picture (already in the lock file through rustyac-game)
+png = "0.17"
+
 # Everything below is the browser side and only exists in a wasm build: the desktop build of
 # the workspace compiles this crate's plain logic and its tests, nothing else.
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
