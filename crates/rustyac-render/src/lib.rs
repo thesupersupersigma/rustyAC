@@ -24,6 +24,10 @@ pub mod digital;
 pub mod driver;
 pub mod fake_shadow;
 pub mod forward;
+#[cfg(not(feature = "backend-wgpu"))]
+pub mod fw1;
+#[cfg(feature = "backend-wgpu")]
+#[path = "fw1_wgpu.rs"]
 pub mod fw1;
 pub mod flames;
 pub mod ghost_car;
@@ -32,7 +36,12 @@ pub mod gpulog;
 pub mod gui_paint;
 pub mod graphics;
 pub mod ideal_line;
+#[cfg(not(feature = "backend-wgpu"))]
 pub mod kgl;
+#[cfg(feature = "backend-wgpu")]
+#[path = "kgl_wgpu.rs"]
+pub mod kgl;
+pub mod kgl_log;
 pub mod lighting;
 pub mod lights;
 pub mod material;

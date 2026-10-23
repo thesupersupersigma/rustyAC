@@ -191,7 +191,7 @@ impl Painter for GuiPainter<'_> {
     fn begin_map_target(&mut self, w: i32, h: i32, wf: f32, hf: f32) -> bool {
         let g = &mut *self.graphics;
         // RenderTarget::RenderTarget(gm, eR8G8B8A8, w, h, colour, no depth, 1) 0x14021c030
-        let target = g.kgl.create_render_target(windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT(0x1c), w, h, 1, 1);
+        let target = g.kgl.create_render_target(crate::kgl::FORMAT_RGBA8, w, h, 1, 1);
         g.kgl.set_render_targets(Some(&target), None);
         g.set_viewport(0, 0, w, h);
         g.clear_render_target(&[0.0; 4]);

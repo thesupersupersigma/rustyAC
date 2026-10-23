@@ -14,20 +14,27 @@
 //!
 //! So with the fallback the picture is not bit-identical to the game's.
 
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::core::Interface;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D11::*;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Dxgi::Common::*;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Imaging::*;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::System::Com::*;
 
-use crate::kgl::Kgl;
+#[cfg(feature = "backend-wgpu")]
+use crate::kgl::dxgi::*;
+use crate::kgl::{Kgl, View};
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
 /// A texture from the bytes of an image file, read without D3DX.
-pub fn create(kgl: &Kgl, bytes: &[u8]) -> Result<ID3D11ShaderResourceView, String> {
+pub fn create(kgl: &Kgl, bytes: &[u8]) -> Result<View, String> {
     if bytes.len() >= 128 && &bytes[0..4] == b"DDS " {
         dds(kgl, bytes)
     } else {
@@ -36,7 +43,13 @@ pub fn create(kgl: &Kgl, bytes: &[u8]) -> Result<ID3D11ShaderResourceView, Strin
     }
 }
 
-fn upload(kgl: &Kgl, width: u32, height: u32, format: DXGI_FORMAT, levels: &[(Vec<u8>, u32)]) -> Result<ID3D11ShaderResourceView, String> {
+#[cfg(feature = "backend-wgpu")]
+fn upload(kgl: &Kgl, width: u32, height: u32, format: DXGI_FORMAT, levels: &[(Vec<u8>, u32)]) -> Result<View, String> {
+    kgl.create_texture(format, width, height, levels)
+}
+
+#[cfg(not(feature = "backend-wgpu"))]
+fn upload(kgl: &Kgl, width: u32, height: u32, format: DXGI_FORMAT, levels: &[(Vec<u8>, u32)]) -> Result<View, String> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: width,
         Height: height,
@@ -61,7 +74,7 @@ fn upload(kgl: &Kgl, width: u32, height: u32, format: DXGI_FORMAT, levels: &[(Ve
 }
 
 /// R8G8B8A8 with a full mip chain, each level the 2x2 box average of the one above.
-fn rgba_with_mips(kgl: &Kgl, width: u32, height: u32, rgba: Vec<u8>) -> Result<ID3D11ShaderResourceView, String> {
+fn rgba_with_mips(kgl: &Kgl, width: u32, height: u32, rgba: Vec<u8>) -> Result<View, String> {
     let mut levels = vec![(rgba, width * 4)];
     let (mut w, mut h) = (width, height);
     while w > 1 || h > 1 {
@@ -85,7 +98,7 @@ fn rgba_with_mips(kgl: &Kgl, width: u32, height: u32, rgba: Vec<u8>) -> Result<I
     upload(kgl, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, &levels)
 }
 
-fn dds(kgl: &Kgl, bytes: &[u8]) -> Result<ID3D11ShaderResourceView, String> {
+fn dds(kgl: &Kgl, bytes: &[u8]) -> Result<View, String> {
     let height = u32_at(bytes, 12);
     let width = u32_at(bytes, 16);
     let mip_count = u32_at(bytes, 28).max(1);
@@ -183,7 +196,28 @@ fn dds(kgl: &Kgl, bytes: &[u8]) -> Result<ID3D11ShaderResourceView, String> {
     rgba_with_mips(kgl, width, height, rgba)
 }
 
+/// png through the png crate, as straight 8-bit RGBA (kgl on wgpu has no WIC).
+/// shortcut: jpg and bmp are not read here, add a decoder when a sequence needs one.
+#[cfg(feature = "backend-wgpu")]
+fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    let mut decoder = png::Decoder::new(bytes);
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().map_err(|e| format!("not a png: {e}"))?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| format!("png: {e}"))?;
+    let (w, h) = (info.width, info.height);
+    let n = (w * h) as usize;
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf[..n * 4].to_vec(),
+        png::ColorType::Rgb => buf[..n * 3].chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf[..n * 2].chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        _ => buf[..n].iter().flat_map(|&g| [g, g, g, 255]).collect(),
+    };
+    Ok((w, h, rgba))
+}
+
 /// png / jpg / bmp through the Windows Imaging Component, as straight 8-bit RGBA.
+#[cfg(not(feature = "backend-wgpu"))]
 fn decode_with_wic(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);

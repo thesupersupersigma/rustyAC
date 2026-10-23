@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden frame of several cars: two Ferrari F2004 and a BMW M3 E30 two and a half seconds
 //! after a start at Magione, from the chase camera of the last car (the focused one), with
 //! everything a session of several cars adds to the picture: every car's own avatar with its

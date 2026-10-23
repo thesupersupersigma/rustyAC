@@ -7,15 +7,39 @@
 //! 0x14021a550, `CBuffer`, `ShaderVariable`. No shader is compiled, rewritten or translated.
 
 use std::collections::BTreeMap;
+#[cfg(not(feature = "backend-wgpu"))]
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use rustyac_physics::data::ini::IniReader;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::core::{Interface, PCSTR};
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D::Fxc::D3DReflect;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D::D3D_SIT_TEXTURE;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D11::*;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Dxgi::Common::*;
+
+#[cfg(not(feature = "backend-wgpu"))]
+type VertexShader = ID3D11VertexShader;
+#[cfg(not(feature = "backend-wgpu"))]
+type PixelShader = ID3D11PixelShader;
+#[cfg(not(feature = "backend-wgpu"))]
+type InputLayout = ID3D11InputLayout;
+#[cfg(feature = "backend-wgpu")]
+use crate::kgl::{InputLayout, PixelShader, VertexShader};
+
+/// One `D3D11_INPUT_ELEMENT_DESC` as kgl on wgpu takes it (slot 0, per vertex).
+#[cfg(feature = "backend-wgpu")]
+pub struct InputElement {
+    pub semantic: &'static str,
+    pub index: u32,
+    pub format: crate::kgl::Format,
+    pub offset: u32,
+}
 
 use crate::kgl::{Kgl, KglCBuffer};
 
@@ -102,9 +126,9 @@ pub struct KglShaderTexture {
 
 /// `KGLShader` (0x90 bytes).
 pub struct KglShader {
-    pub vs: Option<ID3D11VertexShader>,
-    pub ps: Option<ID3D11PixelShader>,
-    pub input_layout: Option<ID3D11InputLayout>,
+    pub vs: Option<VertexShader>,
+    pub ps: Option<PixelShader>,
+    pub input_layout: Option<InputLayout>,
     pub is_alpha_tested: bool,
     pub il_type: i32,
     pub cbuffers: Vec<KglShaderCBuffer>,
@@ -200,7 +224,7 @@ pub struct ShaderManager {
     folder: PathBuf,
     pub shaders: Vec<Shader>,
     /// `inputLayouts` 0x141560f30: one layout per vertex kind for the whole process
-    input_layouts: BTreeMap<i32, Option<ID3D11InputLayout>>,
+    input_layouts: BTreeMap<i32, Option<InputLayout>>,
     /// `Shader::guidCount`
     guid_count: i32,
 }
@@ -210,10 +234,21 @@ pub fn is_system_cbuffer(name: &str) -> bool {
     matches!(name, "cbCamera" | "cbLighting" | "cbShadowMaps" | "cbPerObject")
 }
 
+/// A shader the D3D11 device made, in the kgl log as kgl on wgpu logs it.
+#[cfg(not(feature = "backend-wgpu"))]
+fn log_created<T: Interface>(object: &Option<T>, prefix: &'static str, call: &str, blob: &[u8]) {
+    if let Some(o) = object {
+        let name = crate::kgl_log::new_name(o.as_raw() as usize, prefix);
+        crate::kgl_log::line(format_args!("{call} {:016x} = {name}", crate::kgl_log::hash(blob)));
+    }
+}
+
+#[cfg(not(feature = "backend-wgpu"))]
 fn element(name: PCSTR, index: u32, format: DXGI_FORMAT, offset: u32) -> D3D11_INPUT_ELEMENT_DESC {
     D3D11_INPUT_ELEMENT_DESC { SemanticName: name, SemanticIndex: index, Format: format, InputSlot: 0, AlignedByteOffset: offset, InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA, InstanceDataStepRate: 0 }
 }
 
+#[cfg(not(feature = "backend-wgpu"))]
 unsafe fn text(p: PCSTR) -> String {
     if p.is_null() {
         return String::new();
@@ -294,20 +329,43 @@ impl ShaderManager {
 
         // createVertexShader 0x14001f490: reflect, create, then the input layout
         let blob = std::fs::read(vs_path).map_err(|e| format!("{}: {e}", vs_path.display()))?;
-        unsafe {
+        #[cfg(feature = "backend-wgpu")]
+        {
             reflect_vars(&mut shader, &blob)?;
-            if kgl.device.CreateVertexShader(&blob, None, Some(&mut shader.vs)).is_err() {
+            shader.vs = kgl.create_vertex_shader(&blob);
+            if shader.vs.is_none() {
                 println!("ERROR: CreateVertexShader failed ({name})");
             } else {
                 shader.input_layout = self.input_layout(kgl, &blob, il_type);
             }
         }
+        #[cfg(not(feature = "backend-wgpu"))]
+        unsafe {
+            reflect_vars(&mut shader, &blob)?;
+            if kgl.device.CreateVertexShader(&blob, None, Some(&mut shader.vs)).is_err() {
+                println!("ERROR: CreateVertexShader failed ({name})");
+            } else {
+                log_created(&shader.vs, "vs", "create_vertex_shader", &blob);
+                shader.input_layout = self.input_layout(kgl, &blob, il_type);
+            }
+        }
         // createPixelShader 0x14001f550
         let blob = std::fs::read(ps_path).map_err(|e| format!("{}: {e}", ps_path.display()))?;
+        #[cfg(feature = "backend-wgpu")]
+        {
+            reflect_vars(&mut shader, &blob)?;
+            shader.ps = kgl.create_pixel_shader(&blob);
+            if shader.ps.is_none() {
+                println!("ERROR: CreatePixelShader failed ({name})");
+            }
+        }
+        #[cfg(not(feature = "backend-wgpu"))]
         unsafe {
             reflect_vars(&mut shader, &blob)?;
             if kgl.device.CreatePixelShader(&blob, None, Some(&mut shader.ps)).is_err() {
                 println!("ERROR: CreatePixelShader failed ({name})");
+            } else {
+                log_created(&shader.ps, "ps", "create_pixel_shader", &blob);
             }
         }
         Ok(shader)
@@ -315,6 +373,27 @@ impl ShaderManager {
 
     /// `getInputLayout` 0x14001eb00: made once per vertex kind, with the bytecode of the first
     /// vertex shader of that kind.
+    #[cfg(feature = "backend-wgpu")]
+    fn input_layout(&mut self, kgl: &Kgl, bytecode: &[u8], il_type: i32) -> Option<InputLayout> {
+        if let Some(layout) = self.input_layouts.get(&il_type) {
+            return layout.clone();
+        }
+        use crate::kgl::Format;
+        // DXGI_FORMAT_R32G32B32_FLOAT, R32G32_FLOAT, R32G32B32A32_FLOAT
+        let (f3, f2, f4) = (Format(6), Format(16), Format(2));
+        let e = |semantic, index, format, offset| InputElement { semantic, index, format, offset };
+        let elements = match il_type {
+            0 => vec![e("POSITION", 0, f3, 0), e("NORMAL", 0, f3, 12), e("TEXCOORD", 0, f2, 24), e("TANGENT", 0, f3, 32)],
+            1 => vec![e("POSITION", 0, f3, 0), e("NORMAL", 0, f3, 12), e("TEXCOORD", 0, f2, 24), e("TANGENT", 0, f3, 32), e("TEXCOORD", 1, f4, 44), e("TEXCOORD", 2, f4, 60)],
+            2 => vec![e("POSITION", 0, f3, 0), e("COLOR", 0, f4, 12), e("TEXCOORD", 0, f2, 28)],
+            _ => return None,
+        };
+        let layout = kgl.create_input_layout(&elements, bytecode);
+        self.input_layouts.insert(il_type, layout.clone());
+        layout
+    }
+
+    #[cfg(not(feature = "backend-wgpu"))]
     unsafe fn input_layout(&mut self, kgl: &Kgl, bytecode: &[u8], il_type: i32) -> Option<ID3D11InputLayout> {
         if let Some(layout) = self.input_layouts.get(&il_type) {
             return layout.clone();
@@ -342,13 +421,43 @@ impl ShaderManager {
         };
         let mut layout = None;
         let _ = kgl.device.CreateInputLayout(&elements, bytecode, Some(&mut layout));
+        if let Some(l) = &layout {
+            let name = crate::kgl_log::new_name(l.as_raw() as usize, "layout");
+            crate::kgl_log::line(format_args!("create_input_layout {} = {name}", elements.len()));
+        }
         self.input_layouts.insert(il_type, layout.clone());
         layout
     }
 }
 
+/// `KGLShader::reflectVars` 0x14001f5f0 on rustyac-dxbc's reading of the `RDEF` chunk (the
+/// same descriptions `ID3D11ShaderReflection` gives, in the same order).
+#[cfg(feature = "backend-wgpu")]
+fn reflect_vars(shader: &mut KglShader, blob: &[u8]) -> Result<(), String> {
+    let parsed = rustyac_dxbc::parse(blob).map_err(|e| format!("D3DReflect: {e}"))?;
+    let r = &parsed.reflection;
+    for cb in &r.constant_buffers {
+        let slot = r.binding(&cb.name).map_or(0, |b| b.bind_point);
+        if !shader.cbuffers.iter().any(|c| c.name == cb.name || c.slot == slot) {
+            shader.cbuffers.push(KglShaderCBuffer { name: cb.name.clone(), size: cb.size, slot });
+        }
+        for v in &cb.variables {
+            if !shader.vars.iter().any(|x| x.name == v.name) {
+                shader.vars.push(KglShaderVar { name: v.name.clone(), cbuffer_name: cb.name.clone(), cbuffer_slot: slot, size: v.size, offset: v.offset });
+            }
+        }
+    }
+    for b in &r.bindings {
+        if b.kind == rustyac_dxbc::SIT_TEXTURE && !(6..=19).contains(&b.bind_point) {
+            shader.textures.push(KglShaderTexture { name: b.name.clone(), slot: b.bind_point });
+        }
+    }
+    Ok(())
+}
+
 /// `KGLShader::reflectVars` 0x14001f5f0, for one blob (the vertex shader's first, then the
 /// pixel shader's).
+#[cfg(not(feature = "backend-wgpu"))]
 unsafe fn reflect_vars(shader: &mut KglShader, blob: &[u8]) -> Result<(), String> {
     let mut reflection: Option<ID3D11ShaderReflection> = None;
     D3DReflect(blob.as_ptr() as *const c_void, blob.len(), &ID3D11ShaderReflection::IID, &mut reflection as *mut _ as *mut *mut c_void).map_err(|e| format!("D3DReflect: {e}"))?;

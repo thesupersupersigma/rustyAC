@@ -8,9 +8,8 @@ use std::path::{Path, PathBuf};
 
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::Mat44f;
-use windows::Win32::Graphics::Direct3D11::*;
 
-use crate::kgl::{DeviceOptions, Kgl, KglIndexBuffer, KglRenderTarget, KglVertexBuffer, KglVideoSettings};
+use crate::kgl::{DeviceOptions, Sampler, Kgl, KglIndexBuffer, KglRenderTarget, KglVertexBuffer, KglVideoSettings};
 use crate::lighting::LightingSettings;
 use crate::shader::{CBuffer, ShaderId, ShaderManager};
 use crate::texture::{ResourceStore, Texture};
@@ -100,13 +99,13 @@ pub struct RenderStats {
 }
 
 pub struct Samplers {
-    pub aniso: Option<ID3D11SamplerState>,
-    pub shadow: Option<ID3D11SamplerState>,
-    pub point: Option<ID3D11SamplerState>,
-    pub point_clamp: Option<ID3D11SamplerState>,
-    pub linear_clamp: Option<ID3D11SamplerState>,
-    pub linear_shadow: Option<ID3D11SamplerState>,
-    pub linear_simple: Option<ID3D11SamplerState>,
+    pub aniso: Option<Sampler>,
+    pub shadow: Option<Sampler>,
+    pub point: Option<Sampler>,
+    pub point_clamp: Option<Sampler>,
+    pub linear_clamp: Option<Sampler>,
+    pub linear_shadow: Option<Sampler>,
+    pub linear_simple: Option<Sampler>,
 }
 
 /// `GraphicsManager` (0x4e0 bytes).

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden post-processing frame (Task 23): Magione from behind the first grid slot, no car,
 //! four samples a pixel, the post-processing camera's frame (`CameraForwardYebis` without YEBIS:
 //! a 16-bit multisampled scene target, the motion blur's two branches and its solve, the

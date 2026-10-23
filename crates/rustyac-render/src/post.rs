@@ -19,7 +19,7 @@
 //! field. Everything else is the game's call for call, and the render oracle runs the game's
 //! own `CameraForwardYebis` with that one function swapped for the same copy.
 
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM};
+use crate::kgl::{FORMAT_R32F as DXGI_FORMAT_R32_FLOAT, FORMAT_RGBA16F as DXGI_FORMAT_R16G16B16A16_FLOAT, FORMAT_RGBA8 as DXGI_FORMAT_R8G8B8A8_UNORM};
 
 use crate::forward::{blur_target, CameraForward};
 use crate::graphics::{Graphics, RenderTarget, BLEND_OPAQUE, DEPTH_OFF};
@@ -207,7 +207,7 @@ impl CameraForwardYebis {
 }
 
 /// `RenderTarget(graphics, format, width, height, colour, no depth, 1)` with one sample.
-fn color_target(graphics: &Graphics, format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT, width: i32, height: i32) -> RenderTarget {
+fn color_target(graphics: &Graphics, format: crate::kgl::Format, width: i32, height: i32) -> RenderTarget {
     let color = graphics.kgl.create_render_target(format, width, height, 1, 1);
     RenderTarget { kid_color: Some(color), kid_depth: None, width, height }
 }

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden leftovers frame: the golden car frame's BMW M3 E30 at Magione in a race about to
 //! start, with what Task 22c added: the ideal line, the track's start lights counting down,
 //! the lollipop man, the track's crew meshes and the pit box marker, and a time-attack gate,

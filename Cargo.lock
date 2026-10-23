@@ -885,6 +885,7 @@ name = "rustyac-render"
 version = "0.38.6"
 dependencies = [
  "log",
+ "png",
  "rustyac-content",
  "rustyac-dxbc",
  "rustyac-gui",

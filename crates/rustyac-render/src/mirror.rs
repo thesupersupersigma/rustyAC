@@ -15,7 +15,7 @@
 
 use rustyac_physics::data::ini::IniReader;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT;
+use crate::kgl::FORMAT_RGBA16F as DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 use crate::camera::Camera;
 use crate::gl::{GlRenderer, GL_QUADS};

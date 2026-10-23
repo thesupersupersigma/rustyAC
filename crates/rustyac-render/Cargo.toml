@@ -19,6 +19,10 @@ rustyac-gui = { path = "../rustyac-gui" }
 # native wgpu: for now only the per-shader proof of the WGSL translation uses it
 # (Vulkan for SwiftShader, the second software rasterizer of the proof)
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"], optional = true }
+# the game's compiled shaders read and translated to WGSL: kgl on wgpu (backend-wgpu)
+rustyac-dxbc = { path = "../rustyac-dxbc", optional = true }
+# png textures without WIC (kgl on wgpu)
+png = { version = "0.17", optional = true }
 
 [dependencies.windows]
 version = "0.62"
@@ -48,6 +52,8 @@ log = "0.4"
 
 [features]
 wgpu = ["dep:wgpu"]
+# kgl on wgpu instead of Direct3D 11 (kgl_wgpu.rs): the same renderer above it
+backend-wgpu = ["wgpu", "dep:rustyac-dxbc", "dep:png"]
 
 [[example]]
 name = "shader_proof"

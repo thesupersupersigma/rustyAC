@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden frame: Magione from the chase camera's place on the first grid slot, no car, on
 //! the Task 20 profile and the software rasteriser (WARP). `tools/render_oracle` has shown the
 //! command log and the pixels of this frame to be the game's own, byte for byte

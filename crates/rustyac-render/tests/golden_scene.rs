@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden scene frame: the golden car frame's BMW M3 E30 at Magione, with what Task 22
 //! added around it: the heavy clouds' billboards, the crowds and the grooves of the track, its
 //! loose objects, and the high-quality mirror (512, four samples), on the Task 20 profile with

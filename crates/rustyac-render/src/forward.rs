@@ -20,7 +20,7 @@ use crate::kgl::KglCubeMap;
 use crate::material::{MaterialFilter, PASS_OPAQUE, PASS_TRANSPARENT};
 use crate::scene::{NodeId, RenderContext, Scene};
 use crate::shader::ShaderId;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R16G16B16A16_FLOAT;
+use crate::kgl::FORMAT_RGBA16F as DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 /// `CubeMapRenderer` (0x3e0 bytes): the camera that looks along the six axes.
 pub struct CubeMapRenderer {

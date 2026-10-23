@@ -13,17 +13,21 @@
 //! texels are close but not the same bits.
 
 use std::collections::HashMap;
+#[cfg(not(feature = "backend-wgpu"))]
 use std::ffi::c_void;
 use std::path::Path;
 
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::core::{s, w, Interface};
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT;
+#[cfg(not(feature = "backend-wgpu"))]
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
-use crate::kgl::Kgl;
+use crate::kgl::{Format, Kgl, View};
 
 /// `D3DX11_IMAGE_INFO`.
+#[cfg(not(feature = "backend-wgpu"))]
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 struct D3dxImageInfo {
@@ -39,6 +43,7 @@ struct D3dxImageInfo {
 }
 
 /// `D3DX11_IMAGE_LOAD_INFO`.
+#[cfg(not(feature = "backend-wgpu"))]
 #[repr(C)]
 struct D3dxImageLoadInfo {
     width: u32,
@@ -56,11 +61,15 @@ struct D3dxImageLoadInfo {
     src_info: *mut D3dxImageInfo,
 }
 
+#[cfg(not(feature = "backend-wgpu"))]
 type GetImageInfoFromMemory = unsafe extern "system" fn(*const c_void, usize, *mut c_void, *mut D3dxImageInfo, *mut i32) -> i32;
+#[cfg(not(feature = "backend-wgpu"))]
 type CreateSrvFromFile = unsafe extern "system" fn(*mut c_void, *const u16, *const D3dxImageLoadInfo, *mut c_void, *mut *mut c_void, *mut i32) -> i32;
+#[cfg(not(feature = "backend-wgpu"))]
 type CreateSrvFromMemory = unsafe extern "system" fn(*mut c_void, *const c_void, usize, *const D3dxImageLoadInfo, *mut c_void, *mut *mut c_void, *mut i32) -> i32;
 
 /// The two D3DX11 functions the game's texture constructor calls.
+#[cfg(not(feature = "backend-wgpu"))]
 #[derive(Clone, Copy)]
 struct D3dx {
     get_image_info_from_memory: GetImageInfoFromMemory,
@@ -68,6 +77,7 @@ struct D3dx {
     create_srv_from_file: CreateSrvFromFile,
 }
 
+#[cfg(not(feature = "backend-wgpu"))]
 fn d3dx() -> Option<D3dx> {
     static D3DX: std::sync::OnceLock<Option<D3dx>> = std::sync::OnceLock::new();
     *D3DX.get_or_init(|| unsafe {
@@ -80,8 +90,15 @@ fn d3dx() -> Option<D3dx> {
 }
 
 /// Whether the player's `d3dx11_43.dll` is used (else the fallback reader).
+#[cfg(not(feature = "backend-wgpu"))]
 pub fn d3dx_available() -> bool {
     d3dx().is_some() && !FORCE_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// kgl on wgpu has no D3DX: every texture goes through the fallback reader.
+#[cfg(feature = "backend-wgpu")]
+pub fn d3dx_available() -> bool {
+    false
 }
 
 static FORCE_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -93,11 +110,55 @@ pub fn force_fallback(on: bool) {
 
 /// `KGLTexture` (0x40 bytes): the view first, then the file name and the size.
 pub struct KglTexture {
-    pub shader_resource_view: Option<ID3D11ShaderResourceView>,
+    pub shader_resource_view: Option<View>,
     pub width: i32,
     pub height: i32,
 }
 
+#[cfg(feature = "backend-wgpu")]
+impl KglTexture {
+    /// `KGLTexture::KGLTexture(void*, int)` 0x140023970 with the fallback reader.
+    pub fn from_memory(kgl: &Kgl, bytes: &[u8]) -> KglTexture {
+        KglTexture::from_file_bytes(kgl, bytes)
+    }
+
+    pub fn from_file_bytes(kgl: &Kgl, bytes: &[u8]) -> KglTexture {
+        let mut texture = KglTexture { shader_resource_view: None, width: 0, height: 0 };
+        match crate::texture_fallback::create(kgl, bytes) {
+            Ok(view) => texture.shader_resource_view = Some(view),
+            Err(message) => println!("ERROR: texture not readable without d3dx11_43.dll: {message}"),
+        }
+        texture.init_size();
+        texture
+    }
+
+    /// `KGLTexture::KGLTexture(const std::wstring&)` 0x140023820 with the fallback reader.
+    pub fn from_file(kgl: &Kgl, path: &Path) -> KglTexture {
+        match std::fs::read(path) {
+            Ok(bytes) => KglTexture::from_file_bytes(kgl, &bytes),
+            Err(e) => {
+                println!("ERROR: texture {} not readable without d3dx11_43.dll: {e}", path.display());
+                KglTexture { shader_resource_view: None, width: 0, height: 0 }
+            }
+        }
+    }
+
+    /// `KGLTexture::initSize` 0x140023c10.
+    fn init_size(&mut self) {
+        if let Some((w, h, _, _)) = self.describe() {
+            self.width = w as i32;
+            self.height = h as i32;
+        }
+    }
+
+    /// The size, mip count and format of the texture behind the view.
+    pub fn describe(&self) -> Option<(u32, u32, u32, Format)> {
+        // shortcut: no caller reads the format, so it is left empty here
+        self.shader_resource_view.as_ref().map(Kgl::describe_view).map(|(w, h, m)| (w, h, m, Format::default()))
+    }
+}
+
+#[cfg(not(feature = "backend-wgpu"))]
 impl KglTexture {
     /// `KGLTexture::KGLTexture(void*, int)` 0x140023970: the image's own format, a full mip
     /// chain (missing levels made with the triangle filter), immutable.
@@ -206,7 +267,7 @@ impl KglTexture {
     }
 
     /// The format and mip count of the texture behind the view (for surveys and tests).
-    pub fn describe(&self) -> Option<(u32, u32, u32, DXGI_FORMAT)> {
+    pub fn describe(&self) -> Option<(u32, u32, u32, Format)> {
         let view = self.shader_resource_view.as_ref()?;
         unsafe {
             let texture = view.GetResource().ok()?.cast::<ID3D11Texture2D>().ok()?;
@@ -247,12 +308,15 @@ impl ResourceStore {
         ResourceStore { textures: Vec::new(), by_name: HashMap::new() }
     }
 
-    pub fn view(&self, id: TextureId) -> Option<ID3D11ShaderResourceView> {
+    pub fn view(&self, id: TextureId) -> Option<View> {
         self.textures[id.0 as usize].shader_resource_view.clone()
     }
 
     /// A texture D3DX could not make is kept all the same, with no view (the game does so).
     fn add(&mut self, texture: KglTexture) -> Option<TextureId> {
+        if let Some(k) = crate::kgl::view_key(&texture.shader_resource_view) {
+            crate::kgl_log::new_name(k, "tex");
+        }
         self.textures.push(texture);
         Some(TextureId(self.textures.len() as u32 - 1))
     }

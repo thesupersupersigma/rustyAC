@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+// the Direct3D 11 renderer against its recordings
+#![cfg(not(feature = "backend-wgpu"))]
+
 //! The golden car frame: a BMW M3 E30 at Magione from the chase camera, with everything
 //! `CarAvatar` hangs on a car (driver, dials, lights, ground shadows, blur, damage, skid
 //! marks, smoke, flames, mirror materials), on the Task 20 profile with smoke at Normal and

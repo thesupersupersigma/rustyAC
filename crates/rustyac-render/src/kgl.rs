@@ -14,6 +14,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 
+use crate::kgl_log;
+
 /// `KGLVideoSettings`: what kgl keeps of the video settings.
 #[derive(Clone, Copy, Debug)]
 pub struct KglVideoSettings {
@@ -219,6 +221,9 @@ impl Kgl {
             };
             let mut rtv = None;
             err("CreateRenderTargetView", kgl.device.CreateRenderTargetView(&texture, None, Some(&mut rtv)))?;
+            if let Some(k) = com(&rtv) {
+                kgl_log::new_name(k, "screen");
+            }
             kgl.screen_render_target = KglRenderTarget { texture: kept, render_target_view: rtv, samples: -1, ..Default::default() };
             kgl.active_render_target_view = kgl.screen_render_target.render_target_view.clone();
             kgl.active_depth_stencil_view = kgl.screen_depth_target.depth_view.clone();
@@ -290,6 +295,10 @@ impl Kgl {
         sd.Anonymous.Texture2D = D3D11_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1 };
         let mut srv = None;
         let _ = self.device.CreateShaderResourceView(&texture, Some(&sd), Some(&mut srv));
+        if let (Some(d), Some(s)) = (com(&dsv), com(&srv)) {
+            let name = kgl_log::new_name(d, "depth");
+            kgl_log::set_name(s, &name);
+        }
         Ok(KglRenderTarget { texture: Some(texture), render_target_view: None, shader_resource_view: srv, depth_view: dsv, format: DXGI_FORMAT_R32_TYPELESS, width, height, samples: -1 })
     }
 
@@ -354,6 +363,7 @@ impl Kgl {
 
     /// `kglSetDefaultState` 0x140018920.
     pub fn set_default_state(&mut self) {
+        kgl_log::line(format_args!("set_default_state"));
         unsafe {
             self.context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             self.context.GSSetShader(None, None);
@@ -371,32 +381,38 @@ impl Kgl {
 
     /// `kglSetBlendState` 0x140018ff0.
     pub fn set_blend_state(&self, index: i32) {
+        kgl_log::line(format_args!("set_blend_state {index}"));
         unsafe { self.context.OMSetBlendState(self.blend_states[index as usize].as_ref(), None, 0xffff_ffff) }
     }
 
     /// `kglSetDepthState` 0x140019020.
     pub fn set_depth_state(&self, index: i32) {
+        kgl_log::line(format_args!("set_depth_state {index}"));
         unsafe { self.context.OMSetDepthStencilState(self.depth_states[index as usize].as_ref(), 0) }
     }
 
     /// `kglSetCullState` 0x140019050.
     pub fn set_cull_state(&self, index: i32) {
+        kgl_log::line(format_args!("set_cull_state {index}"));
         unsafe { self.context.RSSetState(self.cull_states[index as usize].as_ref()) }
     }
 
     /// `kglFlush` 0x140018df0.
     pub fn flush(&self) {
+        kgl_log::line(format_args!("flush"));
         unsafe { self.context.Flush() }
     }
 
     /// `kglSetViewport` 0x140018ee0.
     pub fn set_viewport(&self, x: f32, y: f32, width: f32, height: f32) {
+        kgl_log::line(format_args!("set_viewport {x} {y} {width} {height}"));
         let viewport = D3D11_VIEWPORT { TopLeftX: x, TopLeftY: y, Width: width, Height: height, MinDepth: 0.0, MaxDepth: 1.0 };
         unsafe { self.context.RSSetViewports(Some(&[viewport])) }
     }
 
     /// `kglSetSamplerPS` 0x140018cf0.
     pub fn set_sampler_ps(&self, sampler: &Option<ID3D11SamplerState>, slot: u32) {
+        kgl_log::line(format_args!("set_sampler_ps {} {slot}", log_name(com(sampler))));
         unsafe { self.context.PSSetSamplers(slot, Some(std::slice::from_ref(sampler))) }
     }
 
@@ -420,14 +436,20 @@ impl Kgl {
         desc.MinLOD = 0.0;
         desc.MaxLOD = f32::MAX;
         let mut sampler = None;
-        match unsafe { self.device.CreateSamplerState(&desc, Some(&mut sampler)) } {
+        let sampler = match unsafe { self.device.CreateSamplerState(&desc, Some(&mut sampler)) } {
             Ok(()) => sampler,
             Err(_) => None,
+        };
+        if let Some(k) = com(&sampler) {
+            let name = kgl_log::new_name(k, "sampler");
+            kgl_log::line(format_args!("create_sampler {kind} {clamp} {max_anisotropy} {mip_lod_bias} = {name}"));
         }
+        sampler
     }
 
     /// `kglSetRenderTarget` 0x140018d20: keeps the depth view that is active.
     pub fn set_render_target(&mut self, target: Option<&KglRenderTarget>) {
+        kgl_log::line(format_args!("set_render_target {}", log_name(target.and_then(|t| com(&t.render_target_view)))));
         unsafe {
             match target {
                 Some(rt) => {
@@ -448,6 +470,7 @@ impl Kgl {
         let dsv = depth.and_then(|d| d.depth_view.clone());
         self.active_depth_stencil_view = dsv.clone();
         let rtv = target.and_then(|t| t.render_target_view.clone());
+        kgl_log::line(format_args!("set_render_targets {} {}", log_name(com(&rtv)), log_name(com(&dsv))));
         unsafe { self.context.OMSetRenderTargets(Some(std::slice::from_ref(&rtv)), dsv.as_ref()) };
         self.active_render_target_view = rtv;
     }
@@ -455,6 +478,7 @@ impl Kgl {
     /// `kglSetRenderTargets(kglGetScreenRenderTarget(), kglGetScreenDepthTarget())`, or with no
     /// depth target.
     pub fn set_screen_render_targets(&mut self, with_depth: bool) {
+        kgl_log::line(format_args!("set_screen_render_targets {with_depth}"));
         let dsv = if with_depth { self.screen_depth_target.depth_view.clone() } else { None };
         self.active_depth_stencil_view = dsv.clone();
         let rtv = self.screen_render_target.render_target_view.clone();
@@ -464,6 +488,7 @@ impl Kgl {
 
     /// `kglClearColor` 0x140018f80.
     pub fn clear_color(&self, rgba: &[f32; 4]) {
+        kgl_log::line(format_args!("clear_color {rgba:?}"));
         if let Some(view) = &self.active_render_target_view {
             unsafe { self.context.ClearRenderTargetView(view, rgba) }
         }
@@ -471,6 +496,7 @@ impl Kgl {
 
     /// `kglClearDepth` 0x140018fb0.
     pub fn clear_depth(&self, depth: f32) {
+        kgl_log::line(format_args!("clear_depth {depth}"));
         if let Some(view) = &self.active_depth_stencil_view {
             unsafe { self.context.ClearDepthStencilView(view, D3D11_CLEAR_DEPTH.0, depth, 0) }
         }
@@ -478,6 +504,7 @@ impl Kgl {
 
     /// `kglRenderTargetClear` 0x140018d90.
     pub fn render_target_clear(&self, target: &KglRenderTarget, rgba: &[f32; 4], depth: f32) {
+        kgl_log::line(format_args!("render_target_clear {} {} {rgba:?} {depth}", log_name(com(&target.render_target_view)), log_name(com(&target.depth_view))));
         unsafe {
             if let Some(view) = &target.render_target_view {
                 self.context.ClearRenderTargetView(view, rgba);
@@ -491,11 +518,13 @@ impl Kgl {
     /// `kglSetTexture` 0x140019380 / `kglSetTextureRT` 0x140018ec0 / `kglSetTextureCubeMap`
     /// 0x1400192c0: one pixel-shader slot.
     pub fn set_texture(&self, slot: u32, view: &Option<ID3D11ShaderResourceView>) {
+        kgl_log::line(format_args!("set_texture {slot} {}", log_name(com(view))));
         unsafe { self.context.PSSetShaderResources(slot, Some(std::slice::from_ref(view))) }
     }
 
     /// `kglSetShader` 0x140019dc0.
     pub fn set_shader(&mut self, layout: &Option<ID3D11InputLayout>, vs: &Option<ID3D11VertexShader>, ps: &Option<ID3D11PixelShader>) {
+        kgl_log::line(format_args!("set_shader {} {} {}", log_name(com(layout)), log_name(com(vs)), log_name(com(ps))));
         let raw = layout.as_ref().map_or(std::ptr::null_mut(), |l| l.as_raw());
         unsafe {
             if raw != self.current_layout {
@@ -517,11 +546,16 @@ impl Kgl {
         if buffer.is_none() {
             eprintln!("ERROR: CBuffer CreateBuffer failed size={size}");
         }
+        if let Some(k) = com(&buffer) {
+            let name = kgl_log::new_name(k, "cb");
+            kgl_log::line(format_args!("create_cbuffer {size} = {name}"));
+        }
         KglCBuffer { buffer, size }
     }
 
     /// `kglCBufferMap` 0x140019bb0: `UpdateSubresource` of the whole buffer.
     pub fn cbuffer_map(&self, cbuffer: &KglCBuffer, data: &[u8]) {
+        kgl_log::line(format_args!("cbuffer_map {} {:016x}", log_name(com(&cbuffer.buffer)), kgl_log::hash(&data[..data.len().min(cbuffer.size.max(0) as usize)])));
         if let Some(buffer) = &cbuffer.buffer {
             unsafe { self.context.UpdateSubresource(buffer, 0, None, data.as_ptr() as *const c_void, 0, 0) }
         }
@@ -529,6 +563,7 @@ impl Kgl {
 
     /// `kglCBufferBind` 0x140019bf0: the vertex stage, then the pixel stage.
     pub fn cbuffer_bind(&self, cbuffer: &KglCBuffer, slot: i32) {
+        kgl_log::line(format_args!("cbuffer_bind {} {slot}", log_name(com(&cbuffer.buffer))));
         unsafe {
             self.context.VSSetConstantBuffers(slot as u32, Some(std::slice::from_ref(&cbuffer.buffer)));
             self.context.PSSetConstantBuffers(slot as u32, Some(std::slice::from_ref(&cbuffer.buffer)));
@@ -553,6 +588,11 @@ impl Kgl {
                 eprintln!("FAILED TO CREATE VERTEX BUFFER size:{byte_size} stride:{stride} dynamic:{}", dynamic as i32);
             }
         }
+        let name = match com(&buffer) {
+            Some(k) => kgl_log::new_name(k, "vb"),
+            None => "-".into(),
+        };
+        kgl_log::line(format_args!("create_vertex_buffer {byte_size} {stride} {dynamic} {:016x} = {name}", kgl_log::hash(bytes)));
         KglVertexBuffer { buffer, stride }
     }
 
@@ -564,11 +604,18 @@ impl Kgl {
         unsafe {
             let _ = self.device.CreateBuffer(&desc, Some(&init), Some(&mut buffer));
         }
+        let name = match com(&buffer) {
+            Some(k) => kgl_log::new_name(k, "ib"),
+            None => "-".into(),
+        };
+        let bytes: Vec<u8> = indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+        kgl_log::line(format_args!("create_index_buffer {} {:016x} = {name}", indices.len(), kgl_log::hash(&bytes)));
         KglIndexBuffer { buffer }
     }
 
     /// `kglSetVertexBuffer` 0x14001a0d0.
     pub fn set_vertex_buffer(&self, vb: &KglVertexBuffer) {
+        kgl_log::line(format_args!("set_vertex_buffer {} {}", log_name(com(&vb.buffer)), vb.stride));
         let offset = 0u32;
         unsafe { self.context.IASetVertexBuffers(0, 1, Some(&vb.buffer), Some(&vb.stride), Some(&offset)) }
     }
@@ -576,6 +623,7 @@ impl Kgl {
     /// `kglVertexBufferMap` 0x14001a090 (`KGLVertexBuffer::map` 0x140023e30): the bytes go
     /// into a dynamic buffer whose old content is thrown away.
     pub fn vertex_buffer_map(&self, vb: &KglVertexBuffer, data: &[u8]) {
+        kgl_log::line(format_args!("vertex_buffer_map {} {:016x}", log_name(com(&vb.buffer)), kgl_log::hash(data)));
         let Some(buffer) = &vb.buffer else {
             return;
         };
@@ -592,6 +640,7 @@ impl Kgl {
     /// 0x140023ec0): `length` bytes at `offset` of `data` go to the same place in the buffer,
     /// the rest of the buffer stays.
     pub fn vertex_buffer_map_no_overwrite(&self, vb: &KglVertexBuffer, data: &[u8], offset: usize, length: usize) {
+        kgl_log::line(format_args!("vertex_buffer_map_no_overwrite {} {offset} {length} {:016x}", log_name(com(&vb.buffer)), kgl_log::hash(&data[offset..offset + length])));
         let Some(buffer) = &vb.buffer else {
             return;
         };
@@ -607,6 +656,7 @@ impl Kgl {
     /// `kglSetPrimitiveType` 0x140019340: 0 a triangle list, 1 a line list, 2 a line strip,
     /// 3 a triangle strip.
     pub fn set_primitive_type(&self, kind: i32) {
+        kgl_log::line(format_args!("set_primitive_type {kind}"));
         let topology = match kind {
             0 => D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             1 => D3D_PRIMITIVE_TOPOLOGY_LINELIST,
@@ -619,16 +669,19 @@ impl Kgl {
 
     /// `kglDraw` 0x14001a1b0.
     pub fn draw(&self, vertex_count: i32, start_vertex: i32) {
+        kgl_log::line(format_args!("draw {vertex_count} {start_vertex}"));
         unsafe { self.context.Draw(vertex_count as u32, start_vertex as u32) }
     }
 
     /// `kglSetIndexBuffer` 0x14001a170.
     pub fn set_index_buffer(&self, ib: &KglIndexBuffer) {
+        kgl_log::line(format_args!("set_index_buffer {}", log_name(com(&ib.buffer))));
         unsafe { self.context.IASetIndexBuffer(ib.buffer.as_ref(), DXGI_FORMAT_R16_UINT, 0) }
     }
 
     /// `kglDrawIndexed` 0x14001a190.
     pub fn draw_indexed(&self, index_count: i32, start_index: i32, base_vertex: i32) {
+        kgl_log::line(format_args!("draw_indexed {index_count} {start_index} {base_vertex}"));
         unsafe { self.context.DrawIndexed(index_count as u32, start_index as u32, base_vertex) }
     }
 
@@ -657,6 +710,11 @@ impl Kgl {
                 let _ = self.device.CreateRenderTargetView(texture, None, Some(&mut rtv));
                 let _ = self.device.CreateShaderResourceView(texture, None, Some(&mut srv));
             }
+            if let (Some(r), Some(s)) = (com(&rtv), com(&srv)) {
+                let name = kgl_log::new_name(r, "rt");
+                kgl_log::set_name(s, &name);
+            }
+            kgl_log::line(format_args!("create_render_target {} {width} {height} {samples} {mips} = {}", format.0, log_name(com(&rtv))));
             KglRenderTarget { texture, render_target_view: rtv, shader_resource_view: srv, depth_view: None, format, width, height, samples }
         }
     }
@@ -667,12 +725,14 @@ impl Kgl {
             let _ = self.device.CheckMultisampleQualityLevels(DXGI_FORMAT_R32_TYPELESS, samples as u32);
             let mut target = self.depth_target(width, height, samples)?;
             target.samples = samples;
+            kgl_log::line(format_args!("create_render_target_depth {width} {height} {samples} = {}", log_name(com(&target.depth_view))));
             Ok(target)
         }
     }
 
     /// `kglSwapBuffers` 0x140019080.
     pub fn swap_buffers(&self) {
+        kgl_log::line(format_args!("swap_buffers"));
         if let Some(chain) = &self.swap_chain {
             unsafe {
                 let result = chain.Present(if self.video.v_sync { 1 } else { 0 }, DXGI_PRESENT(0));
@@ -686,6 +746,7 @@ impl Kgl {
     /// The screen target's pixels, as RGBA rows (the back buffer, or the texture that stands
     /// in for it). Not a kgl function: `--screenshot` and the oracle read the frame with it.
     pub fn read_screen(&self) -> Result<(u32, u32, Vec<u8>), String> {
+        kgl_log::line(format_args!("read_screen"));
         unsafe {
             let source: ID3D11Texture2D = match (&self.swap_chain, &self.screen_render_target.texture) {
                 (Some(chain), _) => err("GetBuffer", chain.GetBuffer(0))?,
@@ -785,12 +846,26 @@ impl Kgl {
                 let _ = self.device.CreateShaderResourceView(texture, Some(&sd), Some(&mut cube.srv_cube));
             }
         }
+        let name = match com(&cube.srv_cube) {
+            Some(k) => kgl_log::new_name(k, "cube"),
+            None => "-".into(),
+        };
+        for (face, v) in cube.rtv_face.iter().enumerate() {
+            if let Some(k) = com(v) {
+                kgl_log::set_name(k, &format!("{name}.{face}"));
+            }
+        }
+        if let Some(k) = com(&cube.dsv_depth) {
+            kgl_log::set_name(k, &format!("{name}.depth"));
+        }
+        kgl_log::line(format_args!("create_cube_map {size} {hdr} {mips} = {name}"));
         cube
     }
 
     /// `kglCubeMapBeginFace` 0x140018b30. The viewport is set behind the manager's back (the
     /// lighting buffer's 1/width, 1/height do not follow).
     pub fn cube_map_begin_face(&mut self, cube: &KglCubeMap, face: usize) {
+        kgl_log::line(format_args!("cube_map_begin_face {} {face}", log_name(com(&cube.srv_cube))));
         unsafe {
             self.context.OMSetRenderTargets(Some(std::slice::from_ref(&cube.rtv_face[face])), cube.dsv_depth.as_ref());
         }
@@ -802,6 +877,7 @@ impl Kgl {
 
     /// The pixels of a colour render target of four bytes a pixel, rows from the top.
     pub fn read_render_target(&self, target: &KglRenderTarget) -> Result<Vec<u8>, String> {
+        kgl_log::line(format_args!("read_render_target {}", log_name(com(&target.render_target_view))));
         unsafe {
             let source = target.texture.clone().ok_or("the render target has no texture")?;
             let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -829,6 +905,7 @@ impl Kgl {
     /// `kglResolveRenderTarget` 0x140019650: the multisampled colour target into a plain one.
     /// `code`: 0 R8G8B8A8, 1 R16G16B16A16F, 2 and 4 R32F, 3 R16F.
     pub fn resolve_render_target(&self, source: &KglRenderTarget, target: &KglRenderTarget, code: i32) {
+        kgl_log::line(format_args!("resolve_render_target {} {} {code}", log_name(com(&source.render_target_view)), log_name(com(&target.render_target_view))));
         let format = match code {
             0 => DXGI_FORMAT(0x1c),
             1 => DXGI_FORMAT(0xa),
@@ -842,6 +919,7 @@ impl Kgl {
 
     /// `kglCubeMapGenerateMips` 0x140019310.
     pub fn cube_map_generate_mips(&self, cube: &KglCubeMap, face: i32) {
+        kgl_log::line(format_args!("cube_map_generate_mips {} {face}", log_name(com(&cube.srv_cube))));
         if cube.mips > 1 && face == -1 {
             unsafe { self.context.GenerateMips(cube.srv_cube.as_ref()) }
         }
@@ -849,6 +927,7 @@ impl Kgl {
 
     /// `kglSetTextureCubeMap` 0x1400192c0.
     pub fn set_texture_cube_map(&self, cube: Option<&KglCubeMap>, slot: u32) {
+        kgl_log::line(format_args!("set_texture_cube_map {} {slot}", log_name(cube.and_then(|c| com(&c.srv_cube)))));
         let view = cube.and_then(|c| c.srv_cube.clone());
         self.set_texture(slot, &view);
     }
@@ -858,6 +937,7 @@ impl Kgl {
     /// `kglResizeBuffers` 0x1400193d0 for a screen that is a texture: nothing stays bound, the
     /// screen's colour and depth targets are made again and bound.
     pub fn resize_screen(&mut self, width: i32, height: i32) -> Result<(), String> {
+        kgl_log::line(format_args!("resize_screen {width} {height}"));
         if self.swap_chain.is_some() {
             return Err("resizing a swap chain's buffers is the window's business here".into());
         }
@@ -882,10 +962,35 @@ impl Kgl {
             let texture = texture.ok_or("no screen texture")?;
             let mut rtv = None;
             err("CreateRenderTargetView", self.device.CreateRenderTargetView(&texture, None, Some(&mut rtv)))?;
+            if let Some(k) = com(&rtv) {
+                kgl_log::new_name(k, "screen");
+            }
             self.screen_render_target = KglRenderTarget { texture: Some(texture), render_target_view: rtv, samples: -1, ..Default::default() };
             self.create_depth_buffer()?;
         }
         self.set_screen_render_targets(true);
         Ok(())
     }
+}
+
+/// The kgl log's key of a COM object (its pointer while it lives).
+fn com<T: Interface>(object: &Option<T>) -> Option<usize> {
+    object.as_ref().map(|o| o.as_raw() as usize)
+}
+
+fn log_name(key: Option<usize>) -> String {
+    kgl_log::name(key)
+}
+
+// The names the renderer above uses for kgl's objects, the same in kgl_wgpu.rs.
+pub type Sampler = ID3D11SamplerState;
+pub type View = ID3D11ShaderResourceView;
+pub type Format = DXGI_FORMAT;
+pub const FORMAT_RGBA8: Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+pub const FORMAT_RGBA16F: Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+pub const FORMAT_R32F: Format = DXGI_FORMAT_R32_FLOAT;
+
+/// The kgl log's key of a view (its COM pointer while it lives).
+pub fn view_key(view: &Option<View>) -> Option<usize> {
+    com(view)
 }

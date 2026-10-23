@@ -173,7 +173,7 @@ impl CarFakeShadow {
     /// back instead. Nothing is put back afterwards, as in the game (the next frame's start
     /// does that).
     fn generate_fake_shadow(&mut self, graphics: &mut Graphics, scene: &mut Scene, wheels: [Option<NodeId>; 4]) -> Result<Vec<Vec<u8>>, String> {
-        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM;
+        use crate::kgl::FORMAT_RGBA8 as DXGI_FORMAT_R8G8B8A8_UNORM;
         let k = f32::from_bits(0x3f7a_e148); // 0.98
         // an orthographic projection of +-w by +-l, near 0.1, far 500
         let ortho = |w: f32, l: f32| -> Mat44f {
