@@ -7,7 +7,7 @@
 //! (`LollipopCrew` 0xd8 bytes: constructor 0x140112bf0, `loadCrewSkin` 0x1401136d0,
 //! `setMeshProperties` 0x140113a10, `update` 0x140113ab0, `updateCurrentPosition`
 //! 0x140113b40), and the track's own crew meshes `AC_CREW_<n>…`, switched on for the boxes
-//! that have a car and dressed in the car's colours.
+//! that have a car (the game's dressing of them in the car's colours never finds its file).
 //!
 //! The marker: `pit_indicator.kn5`, loaded by `PitStop::PitStop` 0x1400a55d0 and shown or
 //! hidden by `PitStop::update` 0x1400ab190 and `PitStop::renderHUD` 0x1400aa300 (the parts of
@@ -24,9 +24,8 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
 
 use crate::animator::{Animation, AnimationPlayer};
 use crate::graphics::Graphics;
-use crate::material::MaterialId;
 use crate::model::Kn5Io;
-use crate::scene::{NodeId, NodeKind, Scene};
+use crate::scene::{NodeId, Scene};
 
 /// `Track::rayCast` straight down from a point, for so many metres: where it hits.
 pub type RayDown<'a> = &'a dyn Fn(&[f32; 3], f32) -> Option<[f32; 3]>;
@@ -184,7 +183,6 @@ pub fn is_in_pit(car_position: &[f32; 3], pit_position: &[f32; 3]) -> bool {
 /// `AC_PIT_<n>` nodes as `initRespawnPositionSet` left them (on the road); `cars`: the cars, by
 /// pit box. The answer: the lollipop men, by pit box.
 pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, data_folder: &Path, pit_matrices: &[Mat44f], cars: &[CrewCar], ray: RayDown) -> Result<Vec<LollipopCrew>, String> {
-    let game = crate::model::path_text(&graphics.game_folder);
     let mut side = -1.0f32;
     let crew_ini = data_folder.join("data/crew.ini");
     if rustyac_physics::data::exists(&crew_ini) {
@@ -199,59 +197,18 @@ pub fn init_pit_crew(graphics: &mut Graphics, scene: &mut Scene, model: NodeId, 
         scene.add_child(model, crew.node);
         crews.push(crew);
     }
-    // the track's own crew meshes: on for the boxes that have a car, in the car's colours
+    // the track's own crew meshes: on for the boxes that have a car
     let mut nodes = Vec::new();
     scene.find_children_by_prefix(model, "AC_CREW_", &mut nodes);
     for x in nodes {
         let digits: String = scene.nodes[x].name[8..].chars().take_while(|c| c.is_ascii_digit()).collect();
         // (a name without a number: the game throws; here the node is left as it is)
         let Ok(n) = digits.parse::<usize>() else { continue };
-        let Some(car) = cars.get(n) else {
-            scene.nodes[x].is_active = false;
-            continue;
-        };
-        scene.nodes[x].is_active = true;
-        let material = match &scene.nodes[x].kind {
-            NodeKind::Mesh(mesh) => mesh.material,
-            NodeKind::SkinnedMesh(mesh) => mesh.material,
-            _ => continue,
-        };
-        let Some(material) = material else { continue };
-        let Some(name) = scene.materials[material.0 as usize].resources.first().map(|r| r.texture.file_name.clone()) else { continue };
-        // (the game's folder is relative there: "C:/..." here must not be taken for "folder::file")
-        let Some(p) = name.find("::") else { continue };
-        let mut tex = name.get(p + 2..).unwrap_or("").to_string();
-        if tex == "DRIVER_Suit.dds" {
-            // (the label of the material the track's meshes share, not what it shows)
-            scene.materials[material.0 as usize].resources[0].texture.file_name = format!("{}::DRIVER_Suit2.dds", &name[..p]);
-            tex = "DRIVER_Suit2.dds".to_string();
-        }
-        let skin_folder = car.folder.join("skins").join(&car.skin);
-        let mut file = format!("{}/skins/{}/{tex}", car.folder_text, car.skin);
-        let skin_ini = skin_folder.join("skin.ini");
-        if skin_ini.vfs_is_file() {
-            if let Ok(ini) = IniReader::load(&skin_ini) {
-                if ini.has_section("CREW") && ini.has_key("CREW", "SUIT") {
-                    let folder = format!("{game}/content/texture/crew_SUIT{}", ini.get_string("CREW", "SUIT"));
-                    let candidate = format!("{folder}/{tex}");
-                    if Path::new(&folder).vfs_is_dir() && Path::new(&candidate).vfs_is_file() {
-                        file = candidate;
-                    }
-                }
-            }
-        }
-        if Path::new(&file).vfs_is_file() {
-            let mut clone = scene.materials[material.0 as usize].clone_material(graphics)?;
-            let texture = graphics.resources.get_texture(&graphics.kgl, &file);
-            clone.resources[0].texture = texture;
-            let id = MaterialId(scene.materials.len() as u32);
-            scene.materials.push(clone);
-            match &mut scene.nodes[x].kind {
-                NodeKind::Mesh(mesh) => mesh.material = Some(id),
-                NodeKind::SkinnedMesh(mesh) => mesh.material = Some(id),
-                _ => {}
-            }
-        }
+        scene.nodes[x].is_active = n < cars.len();
+        // The game then dresses the mesh in the car's skin: it splits the texture's name
+        // "<folder>::<file>" at its first ':', which is the drive letter of acs.exe's absolute
+        // folder, finds no such file and keeps the track's texture. So does the port, whatever
+        // its folder looks like (the page's is relative): the dressing never happens.
     }
     Ok(crews)
 }
