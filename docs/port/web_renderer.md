@@ -953,7 +953,7 @@ no lock at the tag, a crate without a rule, cargo metadata failing).
 
 ## New or renamed files in the web zip (38i)
 
-None: `index.html`, `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 8.18 MB).
+None: `index.html`, `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 6.00 MB after wasm-opt, 8.17 MB before).
 
 ## Open questions (38i, decided without asking)
 
@@ -979,4 +979,4 @@ None: `index.html`, `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 
 | the page proofs again after the crew fix | Spa and Magione: kgl logs identical, pixels identical to native wgpu |
 | clippy `-D warnings`: rustyac-game, -render, -web (lib, bins, examples); with `rustyac-web/wgpu`; rustyac-render `backend-wgpu` (lib, tests); rustyac-web for wasm32 | clean |
 | tests: rustyac-web, -render, -content; `texture_fallback` on wgpu | 0 failures |
-| `areas_test.sh` | AREAS_RESULT |
+| `areas_test.sh` | every check ok, the v0.38.7 to v0.38.8 lock among them (crates/rustyac-render, crates/rustyac-web) |

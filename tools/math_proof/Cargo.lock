@@ -12,11 +12,11 @@ dependencies = [
 
 [[package]]
 name = "rustyac-math"
-version = "0.38.7"
+version = "0.38.8"
 
 [[package]]
 name = "rustyac-ode"
-version = "0.38.7"
+version = "0.38.8"
 dependencies = [
  "rustyac-math",
 ]
