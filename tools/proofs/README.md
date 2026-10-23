@@ -11,8 +11,9 @@ Every proof the reports claim reruns from here, one area at a time or all at onc
 Each task runs `--quick` and `--changed <the previous tag>`; `--full` is for milestones.
 `--dry-run` only says which areas would run (and, with `--changed`, why: each changed file and
 the rule of `areas.map` it matched; a file no rule matches runs every area; a `Cargo.toml` or
-`Cargo.lock` whose only change is rustyAC's own version asks for nothing). `bash
-tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
+`Cargo.lock` whose only change is rustyAC's own version asks for nothing; any other `Cargo.lock`
+change asks for the areas of the crates it reaches, `lock_crates.py`, or every area when it
+can't tell). `bash tools/proofs/areas_test.sh` checks the rules on made-up lists of files.
 
 The game's recordings that `fresh` compares against are made once and kept (xz) in
 `re/gold/fresh/rec/<name>/<key>/` (the key covers the oracle's arguments, the files they name and

@@ -37,6 +37,7 @@ tools/proofs/log2req.py       launcher
 tools/proofs/tdiff.py         launcher
 tools/proofs/dumps.sh         dumps
 tools/proofs/areas*           none
+tools/proofs/lock_crates.py   none
 tools/proofs/same_rec.py      fresh
 re/gold/fresh/*               fresh
 re/gold/net/*                 net
@@ -68,5 +69,6 @@ tools/net_gold/*              net
 tools/math_proof/*            browser
 tools/web_pack/*              browser ai_page
 
-# rustyac-game, rustyac-math, rustyac-content, Cargo.toml / Cargo.lock, tools/proofs/lib.sh,
-# run_all.sh and anything else: no rule, so every area
+# rustyac-game, rustyac-math, rustyac-content, Cargo.toml, tools/proofs/lib.sh, run_all.sh and
+# anything else: no rule, so every area. Cargo.lock: the rules of the crates whose dependencies
+# changed in it (areas.sh, lock_crates.py), every area when that can't be told.

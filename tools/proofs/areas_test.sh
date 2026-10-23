@@ -28,7 +28,15 @@ check "$all" Cargo.lock
 check "$all" some/new/folder/file.rs
 check "$all" tools/proofs/lib.sh docs/port/proofs.md
 check "" tools/proofs/quick/gui.txt tools/proofs/areas.map
-# since v0.38.3 the lock files changed only rustyAC's version; Cargo.toml without a tag still asks for all
-PROOF_SINCE=v0.38.3 check "" Cargo.lock tools/car_oracle/Cargo.lock tools/render_oracle/Cargo.lock
-PROOF_SINCE=v0.38.3 check "net" Cargo.lock crates/rustyac-gateway/Cargo.toml server/panel/src/main.ts
+# since v0.38.3 car_oracle's lock changed only rustyAC's version; Cargo.toml without a tag still asks for all
+PROOF_SINCE=v0.38.3 check "" tools/car_oracle/Cargo.lock
+PROOF_SINCE=v0.38.3 check "net" crates/rustyac-gateway/Cargo.toml server/panel/src/main.ts
+# a Cargo.lock change: the crates whose dependencies changed (v0.38.8: jpeg-decoder for rustyac-render,
+# rustyac-render and png for rustyac-web); v0.38.3 to v0.38.4 changed only the version
+lock() {  # lock "<expected crates>" <tag> <rev>
+    got=$(python "$here/lock_crates.py" Cargo.lock "$2" "$3" | tr -d '\015' | tr '\n' ' ')
+    if [ "$got" = "$1" ]; then echo "ok    [Cargo.lock $2..$3] -> [$got]"; else echo "WRONG [Cargo.lock $2..$3] -> [$got], want [$1]"; bad=1; fi
+}
+lock "" v0.38.3 v0.38.4
+lock "crates/rustyac-render crates/rustyac-web " v0.38.7 v0.38.8
 exit $bad
