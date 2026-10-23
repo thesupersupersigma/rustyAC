@@ -49,6 +49,12 @@ into their own process, and two at once make the render oracle's game side flaky
 | launcher | `launcher.sh` | the 12 request lists of `re/gold/launcher` (8 recorded from the click scripts of `launcher/` by `launcher_record.sh`, 4 written by hand), the game's own handlers (`tools/launcher_oracle`) against the port, answers and the player folder left behind | `re/gold/launcher/`, the .NET SDK |
 | dumps | `dumps.sh` | every drive's state dump, the last release's rustyac.exe against this one | `oracle/game` |
 
+Not an area (no same-or-different verdict, a GPU and SwiftShader differ by rounding):
+`render_wgpu.sh` (Task 38h) draws the cases of `render_list.txt` once more with the port on kgl's
+wgpu backend and gives, per case, the kgl call log against the Direct3D 11 port's (must be
+identical) and PSNR / largest difference against the game's WARP pixels, with side-by-side
+pictures. `ADAPTERS`, `SWIFTSHADER`, `SEQ_EVERY` and `ONLY` are in its header.
+
 The lists say for each line where it came from; where a lost script's exact values (a tape frame,
 a `--set` frame) could not be read back from the reports they were chosen anew, so call counts can
 differ from a report's numbers while the proof (game = port) is the same. `docs/port/proofs.md`

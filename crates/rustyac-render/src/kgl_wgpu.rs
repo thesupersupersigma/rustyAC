@@ -373,6 +373,16 @@ struct V { @builtin(position) p: vec4<f32>, @location(0) uv: vec2<f32> }
 }
 ";
 
+/// WebGPU has one and four samples a pixel: kgl's 2 and 8 (AC's AA settings) are drawn with 4.
+/// The targets keep the number asked for (the renderer and the kgl log see that one).
+fn physical_samples(samples: u32) -> u32 {
+    if samples > 1 {
+        4
+    } else {
+        1
+    }
+}
+
 thread_local! {
     static GIVEN: RefCell<Option<(wgpu::Device, wgpu::Queue, wgpu::Features)>> = const { RefCell::new(None) };
 }
@@ -456,11 +466,6 @@ impl Kgl {
                 ..Default::default()
             }),
         }));
-        let mut video = video;
-        if !matches!(video.aa_samples, 1 | 4) {
-            // WebGPU has one and four samples a pixel
-            video.aa_samples = if video.aa_samples > 1 { 4 } else { 1 };
-        }
         let mut kgl = Kgl {
             device,
             queue,
@@ -557,13 +562,13 @@ impl Kgl {
             label: Some(label),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: layers },
             mip_level_count: mips,
-            sample_count: samples,
+            sample_count: physical_samples(samples),
             dimension: wgpu::TextureDimension::D2,
             format,
             usage,
             view_formats: &[],
         });
-        Ok(Rc::new(Tex { texture, format, width, height, samples, depth: false, written: Cell::new(0), copy: RefCell::new(None) }))
+        Ok(Rc::new(Tex { texture, format, width, height, samples: physical_samples(samples), depth: false, written: Cell::new(0), copy: RefCell::new(None) }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -591,13 +596,13 @@ impl Kgl {
             label: Some("depth"),
             size: wgpu::Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
             mip_level_count: 1,
-            sample_count: samples as u32,
+            sample_count: physical_samples(samples as u32),
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let tex = Rc::new(Tex { texture, format: wgpu::TextureFormat::Depth32Float, width: width as u32, height: height as u32, samples: samples as u32, depth: true, written: Cell::new(0), copy: RefCell::new(None) });
+        let tex = Rc::new(Tex { texture, format: wgpu::TextureFormat::Depth32Float, width: width as u32, height: height as u32, samples: physical_samples(samples as u32), depth: true, written: Cell::new(0), copy: RefCell::new(None) });
         let dsv = self.view(&tex, None, false, 0, 1, 0, 1);
         let srv = self.view(&tex, None, false, 0, 1, 0, 1);
         let name = kgl_log::new_name(key(&dsv.0), "depth");

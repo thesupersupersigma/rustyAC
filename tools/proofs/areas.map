@@ -22,6 +22,7 @@ tools/proofs/survey_list.txt  fresh
 tools/proofs/sound.sh         sound
 tools/proofs/render.sh        render
 tools/proofs/render_list.txt  render
+tools/proofs/render_wgpu*     none
 tools/proofs/gui.sh           gui
 tools/proofs/gui_list.txt     gui
 tools/proofs/replays.sh       replays
