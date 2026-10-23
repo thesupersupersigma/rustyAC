@@ -56,6 +56,12 @@ web/*                         browser ai_page
 crates/rustyac-net/*          net
 crates/rustyac-gateway/*      net
 server/*                      net
+# rustyac-game: the areas that build rustyac.exe, replay_hash, rustyac-web or rustyac-launcher
+# (render_oracle, net_golden and the shader tools don't build it); chassis_compare also builds
+# dump.rs and input_file.rs as its own (#[path]), so those two ask for physics as well
+crates/rustyac-game/src/dump.rs        physics fresh sound replays browser ai_page launcher dumps
+crates/rustyac-game/src/input_file.rs  physics fresh sound replays browser ai_page launcher dumps
+crates/rustyac-game/*         fresh sound replays browser ai_page launcher dumps
 
 # the oracles and checkers
 tools/car_oracle/*            physics fresh sound replays
@@ -69,6 +75,6 @@ tools/net_gold/*              net
 tools/math_proof/*            browser
 tools/web_pack/*              browser ai_page
 
-# rustyac-game, rustyac-math, rustyac-content, Cargo.toml, tools/proofs/lib.sh, run_all.sh and
+# rustyac-math, rustyac-content, Cargo.toml, tools/proofs/lib.sh, run_all.sh and
 # anything else: no rule, so every area. Cargo.lock: the rules of the crates whose dependencies
 # changed in it (areas.sh, lock_crates.py), every area when that can't be told.

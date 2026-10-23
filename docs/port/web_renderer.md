@@ -7,6 +7,9 @@
 
 ## Resume here
 
+Task 38j (v0.38.9, in progress): Full-mode leftovers. Done so far: step 1 (`--changed` rule for
+rustyac-game). Read the Task 38j part at the end.
+
 Task 38i (v0.38.8) finished the Full-mode brief: the page draws with AC's own renderer
 (`AcRenderer` of rustyac-game, kgl on WebGPU), Full is the default where the browser has WebGPU
 and the debug view the fallback (the gear page's Picture menu, kept per browser). The page's
@@ -980,3 +983,23 @@ None: `index.html`, `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 
 | clippy `-D warnings`: rustyac-game, -render, -web (lib, bins, examples); with `rustyac-web/wgpu`; rustyac-render `backend-wgpu` (lib, tests); rustyac-web for wasm32 | clean |
 | tests: rustyac-web, -render, -content; `texture_fallback` on wgpu | 0 failures |
 | `areas_test.sh` | every check ok, the v0.38.7 to v0.38.8 lock among them (crates/rustyac-render, crates/rustyac-web) |
+
+# Task 38j (v0.38.9): Full mode leftovers
+
+## Step 1: a `--changed` rule for rustyac-game
+
+`tools/proofs/areas.map` had no rule for `crates/rustyac-game`, so any change to it asked for
+every area (about 7.5 h). The areas that really build it:
+
+| Area | What it builds from rustyac-game |
+|---|---|
+| fresh, sound, replays, ai_page, dumps | `--bin rustyac` (ai_page also rustyac-web's `race_proof`) |
+| browser | `--bin replay_hash`, native and wasm32 |
+| launcher | rustyac-launcher, which depends on rustyac-game |
+| physics | only `dump.rs` and `input_file.rs`: chassis_compare builds them as its own (`#[path]`); `run --dir` does not start rustyac.exe |
+
+render and gui run render_oracle (rustyac-render, -gui, -physics, -content, -math, not
+rustyac-game); net runs rustyac-net's `net_golden` example; shaders run rustyac-dxbc and
+rustyac-render examples. So `crates/rustyac-game/*` asks for fresh sound replays browser ai_page
+launcher dumps, and `dump.rs` / `input_file.rs` add physics. `areas_test.sh` checks both.
+

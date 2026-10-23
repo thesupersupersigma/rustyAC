@@ -23,7 +23,8 @@ check "net" server/panel/src/index.ts crates/rustyac-gateway/src/main.rs
 check "fresh net" crates/rustyac-net/src/lib.rs re/gold/fresh/god_tc4.ini
 check "physics fresh" tools/chassis_compare/src/main.rs
 check "launcher" tools/proofs/launcher/career.sh
-check "$all" crates/rustyac-game/src/main.rs
+check "fresh sound replays browser ai_page launcher dumps" crates/rustyac-game/src/main.rs crates/rustyac-game/src/render/ac.rs
+check "physics fresh sound replays browser ai_page launcher dumps" crates/rustyac-game/src/dump.rs
 check "$all" Cargo.lock
 check "$all" some/new/folder/file.rs
 check "$all" tools/proofs/lib.sh docs/port/proofs.md
