@@ -46,7 +46,9 @@ function showRunning() {
         } })),
       el('div', { className: 'mute' }, 'browser: ', el('a', { href: r.browser, textContent: r.browser, target: '_blank' })),
       el('div', { className: 'mute' }, 'desktop: ', el('code', { textContent: r.desktop })),
-      el('div', { className: 'mute', textContent: `ports: game ${r.ports.game} (TCP+UDP), HTTP ${r.ports.http}, gateway ${r.ports.gateway} · admin password ${r.admin}` }),
+      el('div', { className: 'mute', textContent: `ports: game ${r.ports.game} (TCP+UDP), HTTP ${r.ports.http}, gateway ${r.ports.gateway} · admin password ${r.admin} · ${r.password ? 'a password to join' : 'no password to join'}` }),
+      // a server runs as its preset was when it started: a saved change waits for the next start
+      ...(!!state.presets.find((p) => p.id === r.id)?.password !== r.password ? [el('div', { className: 'mute', textContent: 'the preset now says otherwise about the password: that takes effect when the server starts again' })] : []),
       logs);
   }));
   if (!state.running.length) box.replaceChildren(el('div', { className: 'card mute', textContent: 'none' }));

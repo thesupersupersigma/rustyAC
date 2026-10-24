@@ -42,7 +42,7 @@ function state() {
     pack: readPack(config.packDir), presets: presets(), fixed: fixedServers(), maxServers: config.maxServers,
     running: [...servers.running.values()].map((r) => ({
       id: r.id, name: r.preset.name, track: r.preset.track, layout: r.preset.layout, cars: r.preset.cars.map((c) => c.model),
-      ports: r.ports, started: r.started, status: r.status, players: r.players, maxPlayers: r.preset.maxPlayers, admin: r.admin,
+      ports: r.ports, started: r.started, status: r.status, players: r.players, maxPlayers: r.preset.maxPlayers, password: !!r.preset.password, admin: r.admin,
       idleMinutes: r.idle.minutes, stopsInSeconds: Math.max(0, Math.round((r.idle.last + r.idle.minutes * 60000 - now) / 1000)),
       browser: `${config.siteUrl}?join=x-${r.id}`,
       desktop: `rustyac.exe --join ${config.gameHost}:${r.ports.game} --car ${r.preset.cars[0].model}${r.preset.password ? ' (and the password)' : ''}`,

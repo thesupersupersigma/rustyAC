@@ -15,7 +15,7 @@ import { type Config, loadConfig, parsePool, takePorts } from '../src/config.ts'
 import type { Docker } from '../src/docker.ts';
 import { checkPreset, entryList, type Pack, type Preset, presetFromCfg, readPack, serverCfg } from '../src/preset.ts';
 import { api, idFromName } from '../public/form.js';
-import { router } from '../src/router.ts';
+import { listing, router } from '../src/router.ts';
 import { Idle, type Running, Servers } from '../src/servers.ts';
 
 const kit = new URL('../../', import.meta.url); // server/
@@ -283,6 +283,13 @@ test('Access tokens: only a valid one for this application passes', () => {
   assert.match((check('a.b') as { refused: string }).refused, /not a JWT/);
   const t = token(good);
   assert.match((check(`${t.slice(0, t.indexOf('.') + 5)}x${t.slice(t.indexOf('.') + 6)}`) as { refused: string }).refused, /signature|JWT/);
+});
+
+test('a running server with a password is listed with one', () => {
+  const r = (id: string, password: string): Running => ({ id, preset: { ...spa(), password }, ports: { game: 1, http: 2, gateway: 3 }, started: 0, admin: 'secret', players: [], status: 'running', idle: new Idle(0, 30) });
+  const list = listing([r('open', ''), r('locked', 'made-up-pw')]);
+  assert.deepEqual(list.servers.map((s) => [s.id, s.password]), [['x-open', false], ['x-locked', true]]);
+  assert.ok(!JSON.stringify(list).includes('made-up-pw'));
 });
 
 test('the router lists running servers and carries only their WebSockets', async () => {
