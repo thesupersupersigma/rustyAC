@@ -130,7 +130,7 @@ multi_list() {
         [ "$cars" = - ] || set -- "$@" --cars "$cars"
         [ "$steps" = - ] || set -- "$@" --steps "$steps"
         c=
-        if [ -n "$m_cache" ] && ! echo "$more" | grep -qE -- '--(replay|ghost|telemetry)'; then
+        if [ -n "$m_cache" ] && ! echo "$more" | grep -qE -- '--(replay|ghost|telemetry|ai-line)'; then
             # shellcheck disable=SC2086
             c=$m_cache/multi_$s/$(cache_key multi "$@" $more)
         fi
