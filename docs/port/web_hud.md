@@ -50,8 +50,7 @@ backend): baseline = y + usWinAscent; the run starts on the nearest whole
 pixel and each glyph on the pixel nearest its pen; GPOS kerning only (the
 old `kern` table is not used); no ligatures; trailing spaces are a run of
 their own outside the alignment width; a new run where the script changes;
-lines at `
-` (CR LF one break) every winAscent + winDescent (+ hhea extra).
+lines at line feeds (CR LF one break) every winAscent + winDescent (+ hhea extra).
 
 Proof (render_oracle `gui-run --side port`, D3D11 build vs `--features
 wgpu` on the GPU, 1920 x 1080; `re/scratch/task40/d3d_truth.sh`,
