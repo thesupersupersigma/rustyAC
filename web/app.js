@@ -18,6 +18,8 @@
 //   ?backend=full      Full mode: AC's own renderer draws (WebGPU only; else the debug view)
 //   ?tex=<pixels>      longest texture side kept (default: 1024, or 512 where textures are unpacked)
 //   ?msaa=1            no multisampling
+//   ?graphics=<spec>   graphics settings before the drive, kept: a preset (high, medium, low)
+//                      and/or keys, `low,VIDEO/SHADOW_MAP_SIZE=1024,SCALE=50` (SCALE: render scale %)
 //   ?nocache=1         do not keep the pack's files in the browser's storage
 //   ?selftest=<steps>  with ?go=1&autodrive=1: do not start the frame loop; run that many
 //                      physics steps at once and report the car's state hash in
@@ -46,7 +48,7 @@
 //                      the desktop's selftest takes the same list with `--hold`)
 
 import init, * as rac from './pkg/rustyac_web.js';
-import { startLauncher } from './launcher.js';
+import { startLauncher, loadDocuments, saveDocuments, snapshotFile, snapshotWith } from './launcher.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -696,9 +698,236 @@ function raceModels(race) {
   return models;
 }
 
+// ---------------------------------------------------------------- graphics (Full mode)
+
+// AC's Options -> Video (the default theme's names and choices): [label, SECTION/KEY, choices,
+// used]. choices: [[value, text]...], 'check', or [min, max, text at min] for a slider.
+// used: Full mode (and rustyac.exe) draws something else for it.
+const OFF_TO_ULTRA = ['Off', 'Low', 'Medium', 'Normal', 'High', 'Ultra'].map((text, i) => [String(i), text]);
+const GFX = [
+  ['Resolution', 'VIDEO/WIDTH', 'resolution', false],
+  ['Rendering Mode', 'CAMERA/MODE', [['DEFAULT', 'Single Screen'], ['TRIPLE', 'Triple Screen'], ['OCULUS', 'Oculus Rift'], ['OPENVR', 'OpenVR {early support}']], false],
+  ['Fullscreen Rendering', 'VIDEO/FULLSCREEN', 'check', false],
+  ['Vertical Sync', 'VIDEO/VSYNC', 'check', false],
+  ['Framerate limit', 'VIDEO/FPS_CAP_MS', [29, 200, 'Off'], false],
+  ['Anisotropic Filtering', 'VIDEO/ANISOTROPIC', [['0', 'Off'], ['2', '2x'], ['4', '4x'], ['8', '8x'], ['16', '16x']], true],
+  ['Anti-Aliasing Samples', 'VIDEO/AASAMPLES', [['1', 'Off'], ['2', '2x'], ['4', '4x']], true],
+  ['World detail', 'ASSETTOCORSA/WORLD_DETAIL', ['Minimum', 'Low', 'Medium', 'High', 'Very High', 'Maximum'].map((text, i) => [String(i), text]), true],
+  ['Shadow Resolution', 'VIDEO/SHADOW_MAP_SIZE', [['512', 'Low'], ['1024', 'Medium'], ['2048', 'High'], ['4096', 'Ultra']], true],
+  ['Smoke generation', 'EFFECTS/SMOKE', ['Off', 'Very Low', 'Low', 'Normal', 'High', 'Ultra'].map((text, i) => [String(i), text]), true],
+  ['Show smoke in mirrors', 'EFFECTS/RENDER_SMOKE_IN_MIRROR', 'check', true],
+  ['Enable post-processing effects', 'POST_PROCESS/ENABLED', 'check', true],
+  ['Effect preset', 'POST_PROCESS/FILTER', 'filters', false],
+  ['Overall effect quality', 'POST_PROCESS/QUALITY', ['Very Low', 'Low', 'Medium', 'Normal', 'High', 'Ultra'].map((text, i) => [String(i), text]), false],
+  ['Glare quality', 'POST_PROCESS/GLARE', OFF_TO_ULTRA, false],
+  ['Depth of field quality', 'POST_PROCESS/DOF', OFF_TO_ULTRA, false],
+  ['Color saturation', 'SATURATION/LEVEL', [0, 120, '0 %'], false],
+  ['Motion Blur', 'EFFECTS/MOTION_BLUR', [0, 12, 'Off'], true],
+  ['Crepuscular rays', 'POST_PROCESS/RAYS_OF_GOD', 'check', false],
+  ['Heat shimmering effects', 'POST_PROCESS/HEAT_SHIMMER', 'check', false],
+  ['Fast Approximate Anti-Aliasing', 'POST_PROCESS/FXAA', 'check', true],
+  ['Hide driver arms', 'ASSETTOCORSA/HIDE_ARMS', 'check', true],
+  ['Lock virtual steering wheel', 'ASSETTOCORSA/LOCK_STEER', 'check', true],
+  ['Hide virtual steering wheel', 'ASSETTOCORSA/HIDE_STEER', 'check', true],
+  ['Mirror Resolution', 'MIRROR/SIZE', [['0', 'Off'], ['512', 'Normal'], ['1024', 'High']], true],
+  ['High Quality Mirror Reflection', 'MIRROR/HQ', 'check', true],
+  ['Reflection Quality', 'CUBEMAP/SIZE', [['0', 'None'], ['512', 'Low'], ['1024', 'Medium'], ['2048', 'High']], true],
+  ['Reflection Rendering Frequency', 'CUBEMAP/FACES_PER_FRAME', ['Static', 'Very Low', 'Low', 'Medium', 'High', 'Very High', 'Ultra'].map((text, i) => [String(i), text]), true],
+];
+// High: what the game uses with no video.ini (VideoSettings's defaults), Full mode before 0.39.
+// Medium is rustyAC's own; Low is the Hybrid one. SCALE: rustyAC's render scale, in %.
+const GFX_HIGH = {
+  'VIDEO/WIDTH': '1920', 'VIDEO/HEIGHT': '1080', 'CAMERA/MODE': 'DEFAULT', 'VIDEO/FULLSCREEN': '0', 'VIDEO/VSYNC': '0', 'VIDEO/FPS_CAP_MS': '0',
+  'VIDEO/ANISOTROPIC': '4', 'VIDEO/AASAMPLES': '1', 'ASSETTOCORSA/WORLD_DETAIL': '5', 'VIDEO/SHADOW_MAP_SIZE': '2048',
+  'EFFECTS/SMOKE': '3', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'POST_PROCESS/ENABLED': '0', 'POST_PROCESS/FILTER': 'default',
+  'POST_PROCESS/QUALITY': '3', 'POST_PROCESS/GLARE': '3', 'POST_PROCESS/DOF': '3', 'SATURATION/LEVEL': '100', 'EFFECTS/MOTION_BLUR': '0',
+  'POST_PROCESS/RAYS_OF_GOD': '0', 'POST_PROCESS/HEAT_SHIMMER': '0', 'POST_PROCESS/FXAA': '0',
+  'ASSETTOCORSA/HIDE_ARMS': '0', 'ASSETTOCORSA/LOCK_STEER': '0', 'ASSETTOCORSA/HIDE_STEER': '0',
+  'MIRROR/SIZE': '0', 'MIRROR/HQ': '0', 'CUBEMAP/SIZE': '512', 'CUBEMAP/FACES_PER_FRAME': '0', SCALE: '100',
+};
+const GFX_PRESETS = {
+  high: GFX_HIGH,
+  medium: { ...GFX_HIGH, 'VIDEO/SHADOW_MAP_SIZE': '1024', 'ASSETTOCORSA/WORLD_DETAIL': '3', 'VIDEO/ANISOTROPIC': '2', 'EFFECTS/SMOKE': '2' },
+  low: { ...GFX_HIGH, 'VIDEO/SHADOW_MAP_SIZE': '512', 'ASSETTOCORSA/WORLD_DETAIL': '1', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'CUBEMAP/SIZE': '0', 'CUBEMAP/FACES_PER_FRAME': '0', 'POST_PROCESS/ENABLED': '0', 'VIDEO/AASAMPLES': '1', SCALE: '75' },
+};
+// (the keys a preset sets, which say whether the settings are one)
+const GFX_PRESET_KEYS = Object.keys(GFX_HIGH).filter((key) => !['VIDEO/WIDTH', 'VIDEO/HEIGHT', 'VIDEO/FULLSCREEN'].includes(key));
+const VIDEO_INI = 'cfg\\video.ini';
+
+// video.ini as {SECTION/KEY: value} (upper case, as the bridge writes it)
+function iniValues(text) {
+  const values = {};
+  let section = '';
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/;.*/, '').trim();
+    const head = /^\[(.+)\]$/.exec(line);
+    if (head) section = head[1].trim().toUpperCase();
+    else if (line.includes('=')) values[`${section}/${line.slice(0, line.indexOf('=')).trim().toUpperCase()}`] = line.slice(line.indexOf('=') + 1).trim();
+  }
+  return values;
+}
+
+// The file's text with these keys set: its other lines kept, new sections at the end.
+function iniWith(text, values) {
+  const lines = text ? text.split(/\r?\n/) : [];
+  for (const [path, value] of Object.entries(values)) {
+    const [section, key] = path.split('/');
+    let at = lines.findIndex((line) => line.trim().toUpperCase() === `[${section}]`);
+    if (at < 0) {
+      lines.push(`[${section}]`, `${key}=${value}`);
+      continue;
+    }
+    let end = at + 1;
+    while (end < lines.length && !/^\s*\[/.test(lines[end])) {
+      if (lines[end].split('=')[0].trim().toUpperCase() === key) break;
+      end++;
+    }
+    if (end < lines.length && !/^\s*\[/.test(lines[end])) lines[end] = `${key}=${value}`;
+    else lines.splice(end, 0, `${key}=${value}`);
+  }
+  return lines.join('\r\n');
+}
+console.assert(iniValues(iniWith('[VIDEO]\r\nVSYNC=1\r\n[A]\r\nB=2', { 'VIDEO/VSYNC': '0', 'VIDEO/X': '3', 'C/D': '4' }))['VIDEO/X'] === '3', 'iniWith');
+
+// The page's video.ini: the launcher's copy while it runs, else the player's folder in this browser.
+async function readVideoIni() {
+  const theme = window.rustyacTheme;
+  const bytes = theme ? theme.launcher.read_doc(VIDEO_INI) : snapshotFile(await loadDocuments(), 'cfg/video.ini');
+  return bytes ? new TextDecoder().decode(bytes) : '';
+}
+
+async function writeVideoIni(text) {
+  const bytes = new TextEncoder().encode(text);
+  const theme = window.rustyacTheme;
+  if (theme) {
+    theme.launcher.write_doc(VIDEO_INI, bytes);
+    await theme.saveNow();
+  } else {
+    await saveDocuments(snapshotWith(await loadDocuments(), rac.Launcher.roots()[1], 'cfg/video.ini', bytes, Date.now()));
+  }
+}
+
+// The settings now: the file's, and High's for a key it does not have (a file the launcher
+// made holds only the size); the render scale is kept apart from the game's file.
+async function graphicsNow() {
+  const values = { ...GFX_HIGH, ...iniValues(await readVideoIni()) };
+  try {
+    values.SCALE = localStorage.getItem('rustyac.renderScale') || GFX_HIGH.SCALE;
+  } catch (error) {
+    console.warn(error);
+  }
+  return values;
+}
+
+function presetOf(values) {
+  return Object.keys(GFX_PRESETS).find((name) => GFX_PRESET_KEYS.every((key) => String(GFX_PRESETS[name][key]) === String(values[key]))) || 'custom';
+}
+
+function renderScale() {
+  return Math.min(100, Math.max(50, Number(state.graphics ? state.graphics.SCALE : GFX_HIGH.SCALE) || 100)) / 100;
+}
+
+// Saves these settings: the file for the next drive, the render scale at once.
+async function setGraphics(values) {
+  const { SCALE, ...file } = values;
+  state.graphics = values;
+  try {
+    localStorage.setItem('rustyac.renderScale', SCALE);
+  } catch (error) {
+    console.warn(error);
+  }
+  await writeVideoIni(iniWith(await readVideoIni(), file));
+  resizeCanvas();
+  showGraphics();
+  $('gfx-note').textContent = state.game ? 'Saved. Render scale counts now; the rest counts from the next drive (the game reads video.ini as a drive starts).' : 'Saved.';
+}
+
+function showGraphics() {
+  const values = state.graphics;
+  $('gfx-preset').value = presetOf(values);
+  const rows = [];
+  const set = (key, value) => setGraphics({ ...state.graphics, [key]: String(value) });
+  const slider = (key, [min, max, offText], show) => {
+    const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step: 1, value: show(values[key]) });
+    const text = document.createElement('span');
+    const label = () => (text.textContent = Number(input.value) === min && offText ? offText : `${input.value}${key === 'SCALE' || key === 'SATURATION/LEVEL' ? ' %' : key === 'VIDEO/FPS_CAP_MS' ? ' FPS' : ''}`);
+    label();
+    input.addEventListener('input', label);
+    return [input, text];
+  };
+  const add = (label, key, choices, used) => {
+    let parts;
+    if (choices === 'check') {
+      const input = Object.assign(document.createElement('input'), { type: 'checkbox', checked: Number(values[key]) > 0 });
+      input.addEventListener('change', () => set(key, input.checked ? 1 : 0));
+      parts = [input];
+    } else if (choices === 'resolution' || choices === 'filters' || typeof choices[0] !== 'number') {
+      let list = choices;
+      let value = values[key];
+      if (choices === 'resolution') {
+        value = `${values['VIDEO/WIDTH']}x${values['VIDEO/HEIGHT']}`;
+        list = [...new Set([`${screen.width}x${screen.height}`, '1280x720', '1600x900', '1920x1080', '2560x1440', '3840x2160', value])].map((size) => [size, size.replace('x', ' x ')]);
+      } else if (choices === 'filters') {
+        list = [...new Set(['default', ...(state.ppFilters || []), value])].map((name) => [name, name]);
+      }
+      const select = document.createElement('select');
+      for (const [v, text] of list) select.append(new Option(text, v, false, v === value));
+      select.addEventListener('change', () => {
+        if (choices !== 'resolution') return set(key, select.value);
+        const [width, height] = select.value.split('x');
+        setGraphics({ ...state.graphics, 'VIDEO/WIDTH': width, 'VIDEO/HEIGHT': height });
+      });
+      parts = [select];
+    } else {
+      // the framerate limit is kept as AC's launcher writes it: 0 (Off) or ms per frame
+      const fps = key === 'VIDEO/FPS_CAP_MS';
+      const [input, text] = slider(key, choices, (v) => (fps ? (Number(v) > 0 ? Math.round(1000 / Number(v)) : 29) : v));
+      input.addEventListener('change', () => set(key, fps ? (Number(input.value) === 29 ? 0 : (1000 / Number(input.value)).toFixed(6)) : input.value));
+      parts = [input, text];
+    }
+    const row = document.createElement('p');
+    const name = document.createElement('label');
+    name.append(`${label} `, ...parts);
+    row.append(name);
+    if (!used) row.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: ' (not used)' }));
+    rows.push(row);
+  };
+  for (const [label, key, choices, used] of GFX) add(label, key, choices, used);
+  add('Render scale (rustyAC)', 'SCALE', [50, 100, ''], true);
+  $('gfx-list').replaceChildren(...rows);
+}
+
+async function startGraphics() {
+  state.graphics = await graphicsNow();
+  const theme = window.rustyacTheme;
+  if (theme) {
+    try {
+      // the Effect preset's names, as the theme lists them
+      const list = (url) => {
+        const answer = theme.launcher.request(url, null);
+        return answer.ok ? JSON.parse(new TextDecoder().decode(answer.body)).map(([name]) => name) : [];
+      };
+      state.ppFilters = [...list('ac://listfiles/system/cfg/ppfilters?extension=ini&root=true'), ...list('ac://listfiles/cfg/ppfilters?extension=ini')];
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  showGraphics();
+  $('gfx-preset').onchange = () => {
+    const name = $('gfx-preset').value;
+    if (GFX_PRESETS[name]) setGraphics({ ...state.graphics, ...Object.fromEntries(GFX_PRESET_KEYS.map((key) => [key, GFX_PRESETS[name][key]])) });
+  };
+}
+
 // The picture a drive gets: ?backend=, else the Picture menu (kept in this browser). Full mode
-// and WebGPU need an adapter; without one the debug view on WebGL2, and why.
+// and WebGPU need an adapter; without one the debug view on WebGL2, and why. Full mode gets
+// the graphics settings' video.ini.
 async function pictureBackend() {
+  if (state.graphics) {
+    state.graphics = await graphicsNow();
+    const { SCALE, ...file } = state.graphics;
+    rac.fs_put('docs/cfg/video.ini', new TextEncoder().encode(iniWith(await readVideoIni(), file)));
+  }
   let backend = params.get('backend') || $('backend').value;
   let why = '';
   if (backend !== 'webgl') {
@@ -1431,6 +1660,8 @@ function openControls() {
   showControls();
   $('controls').hidden = false;
   showStorage();
+  // (the launcher's Video page writes the same file)
+  startGraphics().catch((error) => console.warn(error));
 }
 
 // ---------------------------------------------------------------- downloaded data
@@ -1580,11 +1811,18 @@ function panelKey(event) {
 window.rustyac.loadControls = (text, origin) => takeControls(rac.controls_load(new TextEncoder().encode(text), origin || 'a test'), true);
 window.rustyac.setControl = (section, key, value) => takeControls(rac.controls_set(section, key, String(value)), true);
 window.rustyac.resetControls = () => takeControls(rac.controls_reset(), true);
+// the graphics settings ({SECTION/KEY: value, SCALE}), and setting some (the proofs)
+window.rustyac.graphics = async (values) => {
+  if (!state.graphics) await startGraphics();
+  if (values) await setGraphics({ ...state.graphics, ...values });
+  return state.graphics;
+};
 
 // ---------------------------------------------------------------- driving
 
 function resizeCanvas() {
-  const scale = Math.min(window.devicePixelRatio || 1, 1.5);
+  // (the graphics page's render scale draws fewer pixels, which the browser stretches)
+  const scale = Math.min(window.devicePixelRatio || 1, 1.5) * renderScale();
   const width = Math.max(16, Math.round(canvas.clientWidth * scale));
   const height = Math.max(16, Math.round(canvas.clientHeight * scale));
   if (canvas.width !== width || canvas.height !== height) {
@@ -2224,6 +2462,17 @@ async function main() {
     }
   });
   if (['webgl', 'full'].includes(params.get('backend'))) $('backend').value = params.get('backend');
+  try {
+    await startGraphics();
+    // ?graphics=low or ?graphics=high,VIDEO/SHADOW_MAP_SIZE=1024,...: those settings, kept
+    if (params.get('graphics')) {
+      const [name, ...keys] = params.get('graphics').split(',');
+      const preset = GFX_PRESETS[name] ? Object.fromEntries(GFX_PRESET_KEYS.map((key) => [key, GFX_PRESETS[name][key]])) : {};
+      await setGraphics({ ...state.graphics, ...preset, ...Object.fromEntries(keys.map((pair) => pair.split('='))) });
+    }
+  } catch (error) {
+    console.warn('graphics settings:', error);
+  }
   if (params.get('spawn')) $('spawn').value = params.get('spawn');
 
   let ready = false;

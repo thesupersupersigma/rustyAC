@@ -38,6 +38,8 @@ use crate::session::Session;
 
 /// The folder the page's files sit under (a name only: nothing is on a disk).
 const ROOT: &str = "ac";
+/// The page's own `Documents/Assetto Corsa/cfg/video.ini` (its graphics settings) under the root.
+const VIDEO_INI: &str = "docs/cfg/video.ini";
 
 fn files() -> &'static Arc<MemFs> {
     static FILES: OnceLock<Arc<MemFs>> = OnceLock::new();
@@ -456,10 +458,13 @@ impl Game {
         let (width, height) = gpu.size();
         let mut proof = None;
         let proof_frames = *full_proof_frames().lock().unwrap();
+        // the graphics page's video.ini, which the page puts here before a drive
+        let video = PathBuf::from(mounted(VIDEO_INI));
+        let video = vfs::is_file(&video).then_some(video.as_path());
         let made = match (gpu.full, proof_frames) {
             (false, _) => None,
-            (true, None) => Some(crate::full::renderer(Path::new(ROOT), width, height, &session, false, false, &mut notes)),
-            (true, Some(frames)) => Some(crate::full::fixed_frame(Path::new(ROOT), &mut session, width, height, frames, false, &mut notes).map(|(renderer, log)| {
+            (true, None) => Some(crate::full::renderer(Path::new(ROOT), width, height, &session, false, false, video, &mut notes)),
+            (true, Some(frames)) => Some(crate::full::fixed_frame(Path::new(ROOT), &mut session, width, height, frames, false, video, &mut notes).map(|(renderer, log)| {
                 proof = Some(format!("{width} {height}\n{log}"));
                 renderer
             })),

@@ -2,7 +2,7 @@
 
 //! `cargo run --release -p rustyac-web --example full_frame [--features wgpu] -- --car <id>
 //! --track <id> [--layout <l>] [--spawn pit] | --race <race.ini> [--seed n]] [--size 1280x720]
-//! [--frames 3] [--warp] --out <folder> --name <name>`: Full mode's fixed frame (`rustyac_web::full::fixed_frame`),
+//! [--frames 3] [--warp] [--video-ini <file>] [--cockpit] --out <folder> --name <name>`: Full mode's fixed frame (`rustyac_web::full::fixed_frame`),
 //! the one the page draws with `Game::full_proof`, natively from the installed game. Without
 //! the feature on Direct3D 11 (`--warp`: WARP), with it on kgl's wgpu backend (`--warp`: Direct3D
 //! 12 WARP, else RUSTYAC_WGPU_ADAPTER=gpu or swiftshader). Writes `<name>.kgllog` (the kgl call
@@ -10,11 +10,12 @@
 //! folder: what a pack needs for this drive in Full mode). `--race`: the drive of that race.ini
 //! (and the assists.ini beside it) as the page's `Session::from_race` makes it, seeded as `?seed=n`.
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let (mut car, mut track, mut layout, mut spawn) = (None, None, String::new(), "pit".to_string());
     let (mut size, mut frames, mut warp, mut out, mut name) = ((1280u32, 720u32), 3u32, false, None, None);
-    let (mut race, mut seed) = (None::<std::path::PathBuf>, 0u32);
+    let (mut race, mut seed, mut video, mut cockpit) = (None::<std::path::PathBuf>, 0u32, None::<std::path::PathBuf>, false);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
@@ -31,6 +32,8 @@ fn run() -> Result<(), String> {
             }
             "--frames" => frames = value()?.parse().map_err(|e| format!("--frames: {e}"))?,
             "--warp" => warp = true,
+            "--cockpit" => cockpit = true,
+            "--video-ini" => video = Some(std::path::PathBuf::from(value()?)),
             "--out" => out = Some(std::path::PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
             other => return Err(format!("unknown option {other}")),
@@ -50,8 +53,11 @@ fn run() -> Result<(), String> {
         }
         None => rustyac_web::session::Session::new(&car.ok_or("--car <id> or --race is needed")?, &track.ok_or("--track <id> is needed")?, &layout, true, &spawn)?,
     };
+    if cockpit {
+        session.camera.mode = rustyac_game::render::scene::CameraMode::Cockpit;
+    }
     let mut notes = Vec::new();
-    let (mut renderer, log) = rustyac_web::full::fixed_frame(&root, &mut session, size.0, size.1, frames, warp, &mut notes)?;
+    let (mut renderer, log) = rustyac_web::full::fixed_frame(&root, &mut session, size.0, size.1, frames, warp, video.as_deref(), &mut notes)?;
     let pixels = renderer.read_pixels()?;
     let mut read: Vec<String> = rustyac_content::vfs::take_log().into_iter().filter(|(_, found)| *found).filter_map(|(path, _)| path.strip_prefix(&root).ok().map(|p| p.to_string_lossy().replace('\\', "/"))).collect();
     rustyac_content::vfs::set_log(false);
@@ -69,6 +75,11 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+// native only: it reads the picture back (`AcRenderer::read_pixels`)
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     if let Err(message) = run() {
         eprintln!("full_frame: {message}");

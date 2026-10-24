@@ -22,8 +22,11 @@ pub const FIXED_SECONDS: f32 = 1.0 / 60.0;
 
 /// AC's renderer with the session's track and cars, as rustyac.exe makes it from the same
 /// race.ini (its sun, weather, groove and race start; without one, midday and clear). `warp`: Direct3D's or wgpu's WARP natively (the page has its
-/// own device); `log`: the kgl call log's names (kgl on wgpu gives them out only then).
-pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: bool, log: bool, notes: &mut Vec<String>) -> Result<Box<AcRenderer>, String> {
+/// own device); `log`: the kgl call log's names (kgl on wgpu gives them out only then);
+/// `video`: a video.ini read as `--video-ini` with `--video-ini-exact` reads it (the page's
+/// graphics settings), or none: the game's defaults.
+#[allow(clippy::too_many_arguments)]
+pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: bool, log: bool, video: Option<&Path>, notes: &mut Vec<String>) -> Result<Box<AcRenderer>, String> {
     let sim = &session.sim;
     let info = sim.car_info();
     let others = sim.opponent_infos();
@@ -37,7 +40,7 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
         sun_angle: look.sun_angle,
         weather: look.weather.clone(),
         skin: None,
-        video_exact: false,
+        video_exact: video.is_some(),
         cube_faces: None,
         mirror_size: None,
         sun_animation: look.sun_animation,
@@ -49,7 +52,7 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
         ideal_line: false,
         session_type: look.session_type.unwrap_or(if sim.setup.spawn == "hotlap" { 4 } else { 1 }),
         start_lights: look.start_lights(),
-        video_ini: None,
+        video_ini: video.map(Path::to_path_buf),
         preset: None,
         aa_samples: None,
         post: None,
@@ -92,11 +95,12 @@ pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, se
 
 /// The fixed frame of this drive (as it starts: no physics step yet) at this size: the
 /// renderer that drew it and the kgl call log.
-pub fn fixed_frame(root: &Path, session: &mut Session, width: u32, height: u32, frames: u32, warp: bool, notes: &mut Vec<String>) -> Result<(Box<AcRenderer>, String), String> {
+#[allow(clippy::too_many_arguments)]
+pub fn fixed_frame(root: &Path, session: &mut Session, width: u32, height: u32, frames: u32, warp: bool, video: Option<&Path>, notes: &mut Vec<String>) -> Result<(Box<AcRenderer>, String), String> {
     let view = session.view();
     let setup = &session.sim.setup;
     rustyac_render::kgl_log::begin(&format!("full frame: {} on {} {} from {}, {width} x {height}, {frames} frames of 1/60 s", setup.car, setup.track, setup.layout, setup.spawn));
-    let made = renderer(root, width, height, session, warp, true, notes);
+    let made = renderer(root, width, height, session, warp, true, video, notes);
     let mut renderer = match made {
         Ok(renderer) => renderer,
         Err(why) => {

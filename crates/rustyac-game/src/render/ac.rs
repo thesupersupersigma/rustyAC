@@ -389,7 +389,7 @@ fn video_ini_of(options: &AcOptions) -> Result<(Option<IniReader>, String), Stri
     }
     if let Some(file) = &options.video_ini {
         // (IniReader::load of a missing file is an empty file, not an error)
-        if !file.is_file() {
+        if !rustyac_content::vfs::is_file(file) {
             return Err(format!("--video-ini {}: no such file", file.display()));
         }
         let ini = IniReader::load(file).map_err(|e| format!("--video-ini {}: {e}", file.display()))?;

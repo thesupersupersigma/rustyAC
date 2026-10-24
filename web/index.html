@@ -64,6 +64,21 @@
     <option value="auto">Debug: WebGPU, else WebGL2</option>
     <option value="webgl">Debug: WebGL2</option>
   </select></label></p>
+  <h2>Graphics</h2>
+  <p><label>Preset <select id="gfx-preset">
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+    <option value="custom">Custom</option>
+  </select></label></p>
+  <div id="gfx-list"></div>
+  <p id="gfx-note" class="hint"></p>
+  <p class="hint">AC's Options &rarr; Video, for Full mode. They are kept in this browser in the
+    page's own <code>Documents\Assetto Corsa\cfg\video.ini</code>, the file the launcher's
+    Video page writes too, and Full mode reads it as rustyac.exe does. Like the game, it reads
+    the file when a drive starts: a change counts from the next drive. Render scale is
+    rustyAC's own and counts at once. Settings marked "not used" are kept in the file, but
+    neither rustyac.exe nor this page draws anything different for them yet.</p>
   <p id="controls-error" class="refusal" hidden></p>
   <div id="controls-list"></div>
   <table id="controls-layout"></table>
