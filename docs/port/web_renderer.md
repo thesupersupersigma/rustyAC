@@ -7,8 +7,10 @@
 
 ## Resume here
 
-Task 38j (v0.38.9, in progress): Full-mode leftovers. Done so far: step 1 (`--changed` rule for
-rustyac-game). Read the Task 38j part at the end.
+Task 38j (v0.38.9) closed the Full-mode leftovers: the page reads race.ini's sun, weather and
+grip as rustyac.exe does (`RaceLook`), Full drives one after another keep the wasm memory flat,
+two Full-mode browsers race each other through the gateway, and the test autodriver leaves a pit
+box by the pit lane. Read the Task 38j part at the end.
 
 Task 38i (v0.38.8) finished the Full-mode brief: the page draws with AC's own renderer
 (`AcRenderer` of rustyac-game, kgl on WebGPU), Full is the default where the browser has WebGPU
@@ -1003,3 +1005,169 @@ rustyac-game); net runs rustyac-net's `net_golden` example; shaders run rustyac-
 rustyac-render examples. So `crates/rustyac-game/*` asks for fresh sound replays browser ai_page
 launcher dumps, and `dump.rs` / `input_file.rs` add physics. `areas_test.sh` checks both.
 
+## In plain English (38j)
+
+The browser's Full mode now uses the same race.ini as the desktop game: the time of day, the
+weather and the track's grip match, and a fixed frame drawn in the page gives exactly the same
+list of graphics calls as the desktop renderer, on both native WebGPU and Direct3D 11. Doing that
+check showed the page took the driver's and the pit crew's suits, helmets and gloves from the
+wrong place when it read a folder; that is fixed too. Driving again and again in one page no
+longer grows the memory: it stays flat after the third drive. Two browsers in Full mode can join
+the local test server, see each other's cars and leave cleanly. The test autodriver no longer
+drives into the pit wall when it starts from a pit box. The desktop renderer is proved again,
+all 230 cases identical.
+
+## Step 0: the desktop renderer after the pit crew fix
+
+`run_all.sh render gui` at full size (log `re/scratch/task38j/step0_render_gui.log`):
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| render | 107 | 107 | 0 | 39m15s |
+| gui | 123 | 123 | 0 | 70m56s |
+| all (full, wall clock) | | | | 1h50m |
+
+## Step 2: race.ini's conditions in Full mode
+
+`RaceLook` (`crates/rustyac-game/src/render/ac.rs`) is what race.ini gives the renderer: the sun
+angle, the sun's and the clouds' speed (`[LIGHTING] TIME_MULT`, `CLOUD_SPEED`), the weather, the
+groove (`[GROOVE] MAX_LAPS`, `STARTING_LAPS`) and the race start lights. Without a race.ini it is
+rustyAC's old defaults (midday, `3_clear`, the sun moving). rustyac.exe (`desktop.rs`) and the page
+(`rustyac-web/src/session.rs` keeps `session.look`, `full.rs` uses it) both build it, so they can
+no longer differ. The page reads race.ini from memory, so its CR LF become LF first, as
+`IniReader::load` does for a file.
+
+The check, `re/scratch/task38j/cond.sh [record|physics|frame]`, uses a race.ini with a different
+time, weather and grip than the defaults (`cond/race.ini`: `SUN_ANGLE=56`, `TIME_MULT=4`,
+`7_heavy_clouds`, ambient 9 / road 12 C, wind 25 km/h from 135, `[DYNAMIC_TRACK]
+SESSION_START=86`, `STARTING_LAPS=20`), bmw_z4_gt3 against one AI at ks_laguna_seca, race seed
+28005, AI seed 5. The page serves the AC install (`serve.py --ac`, `?testfolder=/ac-test/`),
+because the gold pack `re/gold/web/pack` has no `system/shaders` and Full mode does not start
+from it.
+
+| check | result |
+|---|---|
+| physics: desktop `--replay --state-hash` | state hash e1d78f9def1bda39, 2 cars, 7108 steps |
+| physics: native `race_proof` | e1d78f9def1bda39, 2 cars, 7108 steps |
+| physics: the page in Full mode (`frameProof`) | e1d78f9def1bda39 at step 7108 |
+| race_out.json, page against native | identical (548 bytes) |
+| fixed frame, page's kgl call log against native wgpu (SwiftShader) | identical, 31383 lines, 1280x720 |
+| fixed frame, page against native Direct3D 11 (WARP) | identical, 31383 lines |
+| the same frame with Task 37c's race.ini (no conditions) | differs (1931 lines differ): the conditions reach the picture |
+
+The first frame comparison found a page bug: the folder source listed `content/texture` only one
+folder deep, so the driver's suit, helmet and gloves and the crew's textures
+(`content/texture/<kind>/<name>/<colour>/_nm`) were missing and the renderer used the model's own
+textures. Only the `set_texture` ids differed. The page now lists four folders deep there
+(`web/app.js` `listPictureFiles`). It lists names only, and fetches a file only when the renderer
+asks for it.
+
+## Step 3: memory over many Full drives
+
+`window.rustyac.driveRace(race, assists)` drives a race.ini in the page, after freeing the last
+game (`freshCanvas`). `window.rustyac.memory()` gives the wasm memory and the files the page
+holds, in MB. `re/scratch/task38j/mem.sh` (`ROUNDS=8`) drives Laguna Seca and Spa one after
+another, 16 drives in one page, and reads both after each drive:
+
+| drive | wasm memory | files held |
+|---|---|---|
+| none yet | 15 MB | 10 MB |
+| 1 laguna | 1449 MB | 142 MB |
+| 2 spa | 1449 MB | 148 MB |
+| 3 laguna | 1792 MB | 148 MB |
+| 4 to 16, laguna and spa in turn | 1792 MB | 148 MB |
+
+wasm memory only grows, it never gives memory back. The step at the third drive is most likely the
+allocator's fragmentation: a load did not fit in the first one's freed blocks (not measured
+further). After that, thirteen drives
+reuse the same memory. The page forgets a car's and a track's `.kn5` once they are built
+(`fs_forget_models`), so the files held stay at one track's worth. A 3-round run gave the same
+numbers (`re/scratch/task38j/mem_3rounds.log`). No code was needed beyond the two test hooks:
+`Game::free` already frees the session, the renderer and its GPU objects.
+
+## Step 4: online in Full mode
+
+`re/scratch/task38j/mp.sh`: the local acServer copy (laguna_seca, 127.0.0.1:9640), the gateway on
+9641, and two pages in Full mode (`backend=full`, SwiftShader WebGPU) joining by the address bar
+in a ks_ferrari_f2004 each, starting from the pits on autodrive. Client a drives 150 s and b
+drives 120 s, joining 15 s after a. At the end each page reports, then calls
+`window.rustyac.leave()`. Leaving reloads the page 150 ms later, so the report is taken 100 ms
+after the leave.
+
+| check | a | b |
+|---|---|---|
+| picture | Full mode, AC's own renderer on WebGPU | Full mode |
+| other cars seen at once (`others_seen`) | 1 | 1 |
+| drivers list | a | a, b |
+| console errors | none | none |
+| after `leave()` | state `left`, "you left the address bar's server" | the same |
+| acServer | "Clean exit, driver disconnected: a" | "Clean exit, driver disconnected: b" |
+| gateway | #1 left after 185 s, WebSocket code 1000 | #2 left after 155 s, code 1000 |
+
+## Step 5: the autodriver leaves a pit box by the pit lane
+
+`AutoDriver` (`crates/rustyac-game/src/autodrive.rs`) followed the fast lane from the start, so a
+car in a pit box steered for the racing line through the pit wall. It now starts on the pit
+lane's line (`ai/pit_lane.ai`) when that one is nearer than the fast lane, at most 60 km/h. It
+takes the fast lane once that is nearer, and never goes back. Grid and hotlap starts are
+unchanged. Test: `from_a_pit_box_on_magione_the_line_follower_leaves_by_the_pit_lane`
+(`crates/rustyac-game/tests/track.rs`) uses ks_toyota_gt86, because the F2004 got out with the old
+code too. With the old code the GT86 was at 0.06 km/h and 10.38 m from the line after 60 s. Now it
+is on the line in about 25 s.
+
+## Proofs (38j)
+
+`run_all.sh --changed v0.38.8`:
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| fresh | 657 | 654 | 3 | 179m32s |
+| sound | 22 | 22 | 0 | 3m29s |
+| replays | 34 | 34 | 0 | 50m44s |
+| browser | 223 | 223 | 0 | 45m44s |
+| ai_page | 3 | 3 | 0 | 7m41s |
+| launcher | 12 | 12 | 0 | 6m11s |
+| dumps | 223 | 223 | 0 | 81m00s |
+| all (changed, wall clock) | | | | 5h23m |
+
+The 3 differences are `pit_mouse` cases (the mouse pit menu, Task 34): seeds 2, 4 and 5. In each,
+the game's side holds values no car has (car 0's position exactly 0, a lap value of 1.7e34), while
+the port's side is the same in every run. car_oracle builds neither rustyac-game nor rustyac-web,
+and rustyac-physics did not change since v0.38.8, so this task's code is not in these cases.
+Recorded again once (`re/scratch/task38j/pitmouse/`), seeds 2 and 5 were identical. Seed 4
+differed again at the same step (3329, `world.referee.lo`), with the port's value the same as
+before and the game's value different from the first run.
+
+| other checks | result |
+|---|---|
+| clippy: rustyac-web, rustyac-game (lib, bins, examples) | clean |
+| `cargo test -p rustyac-game --test track` | 3 passed |
+| `areas_test.sh` | 23 of 23 ok |
+
+## New or renamed files in the web zip (38j)
+
+None: `app.js` and `pkg/rustyac_web_bg.wasm` changed (the wasm is 5.73 MB after wasm-opt). The preview pack does not need rebuilding
+for this task (see Not done for what a pack still lacks).
+
+## Not done (38j)
+
+- A pack (`tools/web_pack`, `files_of_picture`) still takes only the top of `content/texture`, so
+  a pack's Full mode draws the driver's and crew's suits, helmets and gloves with the model's
+  textures. The whole folder is 937 MB, and which suit folders a drive uses is known only after
+  the renderer has loaded. A pack would have to take what a native load read.
+- After a TO_PITS reset the autodriver does not take the pit lane again.
+- The GT86 (and other road cars) still runs wide at Magione's first fast bend with the
+  autodriver, from the grid too. Its speeds are set for racing cars, and changing them would
+  change every autodrive recording.
+
+## Open questions (38j, decided without asking)
+
+- `pit_mouse` seed 4 differed twice in a row, and seed 2 once (as once before, `docs/port/proofs.md`). The game's
+  recording of the referee's values is not repeatable there. It looks like the game's side, not
+  the port's, but I did not chase it.
+
+- The memory peak of about 1.8 GB is reached by the third drive and then stays. It is below
+  wasm32's 4 GB, so I did not chase the first load's peak.
+- The online check counts the other car in each page's list of nearby cars (`others_seen`). It
+  has no screenshot of the other car in Full mode: a screenshot taken after the leave raced the
+  page's reload.
