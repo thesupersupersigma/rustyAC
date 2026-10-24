@@ -239,7 +239,8 @@ fn log_name(key: Option<usize>) -> String {
 }
 
 /// What Direct3D 11 keeps bound.
-struct Bound {
+#[derive(Clone)]
+pub(crate) struct Bound {
     blend: i32,
     depth: i32,
     cull: i32,
@@ -260,6 +261,8 @@ struct Bound {
 }
 
 const SLOTS: usize = 128;
+/// FW1FontWrapper's blend state (ONE / INV_SRC_ALPHA, alpha ONE / ZERO), which no kgl index has.
+pub(crate) const FW1_BLEND: i32 = 100;
 const CB_SLOTS: usize = 14;
 
 struct Program {
@@ -780,7 +783,7 @@ impl Kgl {
     }
 
     /// `kglSetShader` 0x140019dc0.
-    pub fn set_shader(&mut self, layout: &Option<InputLayout>, vs: &Option<VertexShader>, ps: &Option<PixelShader>) {
+    pub fn set_shader(&self, layout: &Option<InputLayout>, vs: &Option<VertexShader>, ps: &Option<PixelShader>) {
         kgl_log::line(format_args!(
             "set_shader {} {} {}",
             log_name(layout.as_ref().map(|l| key(&l.0))),
@@ -819,6 +822,7 @@ impl Kgl {
                     2 => wgpu::VertexFormat::Float32x4,
                     6 => wgpu::VertexFormat::Float32x3,
                     16 => wgpu::VertexFormat::Float32x2,
+                    28 => wgpu::VertexFormat::Unorm8x4,
                     _ => wgpu::VertexFormat::Float32,
                 };
                 (e.semantic.to_string(), e.index, format, e.offset)
@@ -1200,6 +1204,32 @@ impl Kgl {
         Ok(self.view(&tex, None, false, 0, levels.len().max(1) as u32, 0, 1))
     }
 
+    /// FW1FontWrapper's states, saved and put back around its text (`FW1_RESTORESTATE`).
+    pub(crate) fn save_bound(&self) -> Bound {
+        self.bound.borrow().clone()
+    }
+
+    pub(crate) fn restore_bound(&self, bound: Bound) {
+        *self.bound.borrow_mut() = bound;
+    }
+
+    pub(crate) fn viewport(&self) -> [f32; 4] {
+        self.bound.borrow().viewport
+    }
+
+    /// A rectangle of a one-level texture made by [`Kgl::create_texture`] (`UpdateSubresource`
+    /// of a box): `bytes` from its top left corner, rows of `pitch` bytes. The queue takes it
+    /// before the draws recorded so far: only FW1's glyph sheets use it, which only add glyphs.
+    pub(crate) fn update_texture(&self, view: &View, [left, top, right, bottom]: [u32; 4], bytes: &[u8], pitch: u32) {
+        let t = &view.0.tex;
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &t.texture, mip_level: 0, origin: wgpu::Origin3d { x: left, y: top, z: 0 }, aspect: wgpu::TextureAspect::All },
+            bytes,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(pitch), rows_per_image: Some(bottom - top) },
+            wgpu::Extent3d { width: right - left, height: bottom - top, depth_or_array_layers: 1 },
+        );
+    }
+
     /// The size and levels of a view's texture (`KglTexture::describe`).
     pub fn describe_view(view: &View) -> (u32, u32, u32) {
         let t = &view.0.tex;
@@ -1376,12 +1406,16 @@ impl Kgl {
             .iter()
             .map(|&format| {
                 let blend = matches!(key.blend, 1 | 3) && blendable(format);
+                let add = |src_factor, dst_factor| wgpu::BlendComponent { src_factor, dst_factor, operation: wgpu::BlendOperation::Add };
+                let fw1 = (key.blend == FW1_BLEND && blendable(format)).then_some(wgpu::BlendState { color: add(wgpu::BlendFactor::One, wgpu::BlendFactor::OneMinusSrcAlpha), alpha: add(wgpu::BlendFactor::One, wgpu::BlendFactor::Zero) });
                 Some(wgpu::ColorTargetState {
                     format,
-                    blend: blend.then_some(wgpu::BlendState {
-                        color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
-                        alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Max },
-                    }),
+                    blend: blend
+                        .then_some(wgpu::BlendState {
+                            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::SrcAlpha, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add },
+                            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Max },
+                        })
+                        .or(fw1),
                     write_mask: if key.blend == 3 { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL },
                 })
             })

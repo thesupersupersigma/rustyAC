@@ -28,6 +28,10 @@ pub mod forward;
 compile_error!("rustyac-render off Windows needs the feature backend-wgpu (Direct3D 11 is Windows only)");
 #[cfg(not(feature = "backend-wgpu"))]
 pub mod fw1;
+mod fw1_atlas;
+// the glyphs of Direct3D 11's text are DirectWrite's: there only the layout tests use it
+#[cfg_attr(not(feature = "backend-wgpu"), allow(dead_code))]
+mod ttf;
 #[cfg(feature = "backend-wgpu")]
 #[path = "fw1_wgpu.rs"]
 pub mod fw1;

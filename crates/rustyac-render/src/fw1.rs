@@ -54,12 +54,8 @@ use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
 use crate::kgl::Kgl;
 
-/// `kglBlitStringWide`'s flags: FW1_RESTORESTATE | FW1_NOWORDWRAP, and the alignment.
-pub const FW1_CENTER: u32 = 0x1;
-pub const FW1_RIGHT: u32 = 0x2;
-pub const FW1_NOWORDWRAP: u32 = 0x10;
-pub const FW1_ALIASED: u32 = 0x20;
-pub const FW1_RESTORESTATE: u32 = 0x800;
+pub use crate::fw1_atlas::{FW1_ALIASED, FW1_CENTER, FW1_NOWORDWRAP, FW1_RESTORESTATE, FW1_RIGHT};
+use crate::fw1_atlas::{GlyphAtlas, GlyphMetrics, GlyphVertex, MAX_INDEX_COUNT, QUAD_VERTEX_SIZE, SHEET_HEIGHT, SHEET_WIDTH, VERTEX_BUFFER_SIZE};
 
 type D3DCompile = unsafe extern "system" fn(*const c_void, usize, PCSTR, *const c_void, *const c_void, PCSTR, PCSTR, u32, u32, *mut Option<ID3DBlob>, *mut Option<ID3DBlob>) -> HRESULT;
 
@@ -246,6 +242,7 @@ unsafe extern "system" fn renderer_glyph_run(this: *mut TextRenderer, _context: 
             position_x -= advance;
         }
         wrapper.vertices.push(GlyphVertex { x: (position_x + 0.5).floor(), y, glyph_index: atlas_id, color: renderer.color });
+        wrapper.placed.push(((position_x + 0.5).floor(), y, glyph, renderer.color));
         wrapper.max_sheet_index = wrapper.max_sheet_index.max(atlas_id >> 16);
         if run.bidiLevel & 1 == 0 {
             position_x += advance;
@@ -266,215 +263,28 @@ unsafe extern "system" fn renderer_inline_object(_this: *mut TextRenderer, _cont
 // glyph sheets and the atlas (CFW1GlyphSheet, CFW1GlyphAtlas)
 // ---------------------------------------------------------------------------------------------
 
-/// `FW1_GLYPHCOORDS`.
-#[derive(Clone, Copy, Default)]
-struct GlyphCoords {
-    tex_left: f32,
-    tex_top: f32,
-    tex_right: f32,
-    tex_bottom: f32,
-    pos_left: f32,
-    pos_top: f32,
-    pos_right: f32,
-    pos_bottom: f32,
-}
+/// `CFW1GlyphSheet::createDeviceResources`: a sheet's texture and its view.
+type SheetTexture = (ID3D11Texture2D, Option<ID3D11ShaderResourceView>);
 
-/// `FW1_GLYPHVERTEX`.
-#[derive(Clone, Copy)]
-struct GlyphVertex {
-    x: f32,
-    y: f32,
-    glyph_index: u32,
-    color: u32,
-}
-
-struct GlyphMetrics {
-    offset_x: f32,
-    offset_y: f32,
-    width: u32,
-    height: u32,
-}
-
-const SHEET_WIDTH: u32 = 512;
-const SHEET_HEIGHT: u32 = 512;
-const MAX_GLYPHS_PER_SHEET: u32 = 2048;
-const MAX_SHEETS: usize = 4096;
-/// one mip level: `m_alignWidth`
-const ALIGN: u32 = 1;
-
-struct GlyphSheet {
-    texture: ID3D11Texture2D,
-    view: Option<ID3D11ShaderResourceView>,
-    data: Vec<u8>,
-    coords: Vec<GlyphCoords>,
-    /// `HeightRange`: how far down each column is used
-    heights: Vec<u32>,
-    updated: u32,
-    dirty: [u32; 4],
-    closed: bool,
-    is_static: bool,
-}
-
-impl GlyphSheet {
-    /// `CFW1GlyphSheet::initGlyphSheet` + `createDeviceResources`.
-    fn new(device: &ID3D11Device) -> Option<GlyphSheet> {
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: SHEET_WIDTH,
-            Height: SHEET_HEIGHT,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let mut texture = None;
-        unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)).ok()? };
-        let texture = texture?;
-        let mut view = None;
-        unsafe { device.CreateShaderResourceView(&texture, None, Some(&mut view)).ok()? };
-        Some(GlyphSheet {
-            texture,
-            view,
-            data: vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize],
-            coords: Vec::new(),
-            heights: vec![0u32; (SHEET_WIDTH / ALIGN) as usize],
-            updated: 0,
-            dirty: [0; 4],
-            closed: false,
-            is_static: false,
-        })
-    }
-
-    fn find_max(&self, start: u32, width: u32) -> u32 {
-        let mut current = self.heights[start as usize];
-        for i in 1..width {
-            current = current.max(self.heights[(start + i) as usize]);
-        }
-        current
-    }
-
-    /// `HeightRange::findMin`: the leftmost place where a block of that width sits highest.
-    fn find_min(&self, width: u32) -> (u32, u32) {
-        let total = self.heights.len() as u32;
-        let width = width.min(total);
-        let mut current_max = self.find_max(0, width);
-        let mut current_min = current_max;
-        let mut min_x = 0;
-        let mut i = 1u32;
-        while i < total - width {
-            if self.heights[(i + width - 1) as usize] >= current_max {
-                current_max = self.heights[(i + width - 1) as usize];
-            } else if self.heights[(i - 1) as usize] == current_max {
-                current_max = self.find_max(i, width);
-                if current_max < current_min {
-                    current_min = current_max;
-                    min_x = i;
-                }
-            }
-            i += 1;
-        }
-        (min_x, current_min)
-    }
-
-    /// `CFW1GlyphSheet::InsertGlyph`. `pixels` are rows of `row_pitch` bytes of which every
-    /// `stride`-th is taken.
-    fn insert(&mut self, metrics: &GlyphMetrics, pixels: *const u8, row_pitch: u32, stride: u32, allow_oversized: bool) -> u32 {
-        if self.closed || self.coords.len() as u32 >= MAX_GLYPHS_PER_SHEET {
-            return u32::MAX;
-        }
-        let (width, height) = (metrics.width, metrics.height);
-        let mut block_width = width / ALIGN + 1;
-        if width % ALIGN != 0 {
-            block_width += 1;
-        }
-        let mut block_height = height / ALIGN + 1;
-        if height % ALIGN != 0 {
-            block_height += 1;
-        }
-        let (block_x, block_y, position_x, position_y);
-        if !self.coords.is_empty() || !allow_oversized {
-            if ALIGN + width + ALIGN > SHEET_WIDTH {
-                return u32::MAX;
-            }
-            let (x, y) = self.find_min(block_width);
-            block_x = x;
-            block_y = y;
-            position_x = ALIGN + block_x * ALIGN;
-            position_y = ALIGN + block_y * ALIGN;
-            if position_y + height + ALIGN > SHEET_HEIGHT {
-                return u32::MAX;
-            }
-        } else {
-            block_x = 0;
-            block_y = 0;
-            position_x = ALIGN;
-            position_y = ALIGN;
-        }
-        let update_width = block_width.min(self.heights.len() as u32);
-        for i in 0..update_width {
-            self.heights[(block_x + i) as usize] = block_y + block_height;
-        }
-        let coord_offset = ALIGN as f32 * 0.5;
-        let aligned_width = (block_width - 1) * ALIGN;
-        let aligned_height = (block_height - 1) * ALIGN;
-        let coords = GlyphCoords {
-            tex_left: (position_x as f32 - coord_offset) / SHEET_WIDTH as f32,
-            tex_top: (position_y as f32 - coord_offset) / SHEET_HEIGHT as f32,
-            tex_right: ((position_x + aligned_width) as f32 + coord_offset) / SHEET_WIDTH as f32,
-            tex_bottom: ((position_y + aligned_height) as f32 + coord_offset) / SHEET_HEIGHT as f32,
-            pos_left: metrics.offset_x - coord_offset,
-            pos_top: metrics.offset_y - coord_offset,
-            pos_right: metrics.offset_x + aligned_width as f32 + coord_offset,
-            pos_bottom: metrics.offset_y + aligned_height as f32 + coord_offset,
-        };
-        let glyph_index = self.coords.len() as u32;
-        self.coords.push(coords);
-        let mut i = 0;
-        while i < height && i < SHEET_HEIGHT - position_y {
-            let mut j = 0;
-            while j < width && j < SHEET_WIDTH - position_x {
-                let value = unsafe { *pixels.add((i * row_pitch + j * stride) as usize) };
-                self.data[((position_y + i) * SHEET_WIDTH + position_x + j) as usize] = value;
-                j += 1;
-            }
-            i += 1;
-        }
-        if self.updated == 0 {
-            self.dirty = [position_x - ALIGN, position_y - ALIGN, (position_x + width + ALIGN).min(SHEET_WIDTH), (position_y + height + ALIGN).min(SHEET_HEIGHT)];
-        } else {
-            self.dirty[0] = self.dirty[0].min(position_x - ALIGN);
-            self.dirty[1] = self.dirty[1].min(position_y - ALIGN);
-            self.dirty[2] = self.dirty[2].max(position_x + width + ALIGN).min(SHEET_WIDTH);
-            self.dirty[3] = self.dirty[3].max(position_y + height + ALIGN).min(SHEET_HEIGHT);
-        }
-        self.updated += 1;
-        glyph_index
-    }
-
-    /// `CFW1GlyphSheet::Flush`: the changed rectangle goes to the texture.
-    fn flush(&mut self, context: &ID3D11DeviceContext) {
-        if self.is_static {
-            return;
-        }
-        let updated = self.updated;
-        self.updated = 0;
-        if self.closed {
-            self.is_static = true;
-        }
-        let [left, top, right, bottom] = self.dirty;
-        if updated > 0 && right > left && bottom > top {
-            let region = D3D11_BOX { left, top, front: 0, right, bottom, back: 1 };
-            unsafe {
-                context.UpdateSubresource(&self.texture, 0, Some(&region), self.data.as_ptr().add((top * SHEET_WIDTH + left) as usize) as *const c_void, SHEET_WIDTH, 0);
-            }
-        }
-        if self.is_static {
-            self.data = Vec::new();
-        }
-    }
+fn sheet_texture(device: &ID3D11Device) -> Option<SheetTexture> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: SHEET_WIDTH,
+        Height: SHEET_HEIGHT,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_R8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut texture = None;
+    unsafe { device.CreateTexture2D(&desc, None, Some(&mut texture)).ok()? };
+    let texture = texture?;
+    let mut view = None;
+    unsafe { device.CreateShaderResourceView(&texture, None, Some(&mut view)).ok()? };
+    Some((texture, view))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -594,10 +404,10 @@ pub struct FontWrapper {
     /// the system collection: the provider's
     system_collection: IDWriteFontCollection,
     text_format: Option<IDWriteTextFormat>,
-    // CFW1GlyphAtlas
-    sheets: Vec<GlyphSheet>,
-    current_sheet_index: usize,
-    flushed_sheet_index: usize,
+    /// `Font::fontWrappers`' key, and the compiled shaders (for the kgl call log)
+    key: String,
+    shader_code: (Vec<u8>, Vec<u8>),
+    atlas: GlyphAtlas<SheetTexture>,
     // CFW1GlyphProvider
     fonts: Vec<(IDWriteFontFace, Vec<u16>)>,
     font_map: HashMap<(u32, u32, u32), usize>,
@@ -606,6 +416,7 @@ pub struct FontWrapper {
     // CFW1TextGeometry
     vertices: Vec<GlyphVertex>,
     max_sheet_index: u32,
+    placed: Vec<(f32, f32, u16, u32)>,
     // CFW1GlyphVertexDrawer
     vertex_buffer: Option<ID3D11Buffer>,
     index_buffer: Option<ID3D11Buffer>,
@@ -623,11 +434,6 @@ pub struct FontWrapper {
     renderer: *mut TextRenderer,
 }
 
-const VERTEX_BUFFER_SIZE: u32 = 4096 * 16;
-const QUAD_VERTEX_SIZE: u32 = 20;
-/// `m_maxIndexCount`
-const MAX_INDEX_COUNT: u32 = (VERTEX_BUFFER_SIZE * 3) / (2 * QUAD_VERTEX_SIZE);
-
 unsafe fn compile(compile: D3DCompile, source: &str, entry: PCSTR, profile: PCSTR) -> Option<Vec<u8>> {
     let mut code = None;
     // D3DCOMPILE_OPTIMIZATION_LEVEL3; the size counts the string's end, as sizeof does
@@ -643,7 +449,7 @@ impl FontWrapper {
     /// `CFW1Factory::CreateFontWrapper` 0x1404415a0 with the parameters of `kglCreateFont`:
     /// the atlas (and with its "no glyph" block the first sheet), the provider, the vertex
     /// drawer's buffers, the render states, then the text format.
-    fn new(kgl: &Kgl, d3d_compile: D3DCompile, collection: &Option<IDWriteFontCollection>, family: &[u16], weight: i32, style: i32, locale: &[u16]) -> Option<Box<FontWrapper>> {
+    fn new(kgl: &Kgl, key: &str, d3d_compile: D3DCompile, collection: &Option<IDWriteFontCollection>, family: &[u16], weight: i32, style: i32, locale: &[u16]) -> Option<Box<FontWrapper>> {
         unsafe {
             let device = &kgl.device;
             let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
@@ -655,15 +461,16 @@ impl FontWrapper {
                 factory,
                 system_collection,
                 text_format: None,
-                sheets: Vec::new(),
-                current_sheet_index: 0,
-                flushed_sheet_index: 0,
+                key: key.to_string(),
+                shader_code: (Vec::new(), Vec::new()),
+                atlas: GlyphAtlas::new(),
                 fonts: Vec::new(),
                 font_map: HashMap::new(),
                 maps: Vec::new(),
                 target: None,
                 vertices: Vec::new(),
                 max_sheet_index: 0,
+                placed: Vec::new(),
                 vertex_buffer: None,
                 index_buffer: None,
                 vs_quad: None,
@@ -680,18 +487,14 @@ impl FontWrapper {
             });
             // CFW1GlyphAtlas::initGlyphAtlas: glyph 0, a white block of 16 x 16
             let white = [0xffu8; 256];
-            if wrapper.atlas_insert(device, &GlyphMetrics { offset_x: 0.0, offset_y: 0.0, width: 16, height: 16 }, white.as_ptr(), 16, 1) == u32::MAX {
+            if wrapper.atlas.insert(&GlyphMetrics { offset_x: 0.0, offset_y: 0.0, width: 16, height: 16 }, &white, 16, 1, || sheet_texture(device)) == u32::MAX {
                 return None;
             }
 
             // CFW1GlyphVertexDrawer::createBuffers
             let desc = D3D11_BUFFER_DESC { ByteWidth: VERTEX_BUFFER_SIZE, Usage: D3D11_USAGE_DYNAMIC, BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32, CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, MiscFlags: 0, StructureByteStride: 0 };
             device.CreateBuffer(&desc, None, Some(&mut wrapper.vertex_buffer)).ok()?;
-            let mut indices = vec![0u16; MAX_INDEX_COUNT as usize];
-            for i in 0..(MAX_INDEX_COUNT / 6) as usize {
-                let base = (i * 4) as u16;
-                indices[i * 6..i * 6 + 6].copy_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
-            }
+            let indices = crate::fw1_atlas::quad_indices();
             let desc = D3D11_BUFFER_DESC { ByteWidth: 2 * MAX_INDEX_COUNT, Usage: D3D11_USAGE_IMMUTABLE, BindFlags: D3D11_BIND_INDEX_BUFFER.0 as u32, CPUAccessFlags: 0, MiscFlags: 0, StructureByteStride: 0 };
             let init = D3D11_SUBRESOURCE_DATA { pSysMem: indices.as_ptr() as *const c_void, SysMemPitch: 0, SysMemSlicePitch: 0 };
             device.CreateBuffer(&desc, Some(&init), Some(&mut wrapper.index_buffer)).ok()?;
@@ -720,6 +523,7 @@ impl FontWrapper {
             device.CreatePixelShader(&ps_code, None, Some(&mut wrapper.ps)).ok()?;
             let ps_clip_code = compile(d3d_compile, PS_CLIP, windows::core::s!("PS"), ps_profile)?;
             device.CreatePixelShader(&ps_clip_code, None, Some(&mut wrapper._ps_clip)).ok()?;
+            wrapper.shader_code = (vs_code, ps_code);
             // createConstantBuffer: the transform and the clip rectangle
             let desc = D3D11_BUFFER_DESC { ByteWidth: 80, Usage: D3D11_USAGE_DYNAMIC, BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32, CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32, MiscFlags: 0, StructureByteStride: 0 };
             device.CreateBuffer(&desc, None, Some(&mut wrapper.constant_buffer)).ok()?;
@@ -770,32 +574,6 @@ impl FontWrapper {
             wrapper.renderer = renderer;
             Some(wrapper)
         }
-    }
-
-    /// `CFW1GlyphAtlas::InsertGlyph` (+ `InsertSheet`): into the first open sheet that takes
-    /// it, else into a new one. The id is the sheet's index and the glyph's index in it.
-    fn atlas_insert(&mut self, device: &ID3D11Device, metrics: &GlyphMetrics, pixels: *const u8, row_pitch: u32, stride: u32) -> u32 {
-        for i in self.current_sheet_index..self.sheets.len() {
-            let index = self.sheets[i].insert(metrics, pixels, row_pitch, stride, true);
-            if index != u32::MAX {
-                return ((i as u32) << 16) | index;
-            }
-        }
-        if self.sheets.len() < MAX_SHEETS {
-            if let Some(mut sheet) = GlyphSheet::new(device) {
-                let index = sheet.insert(metrics, pixels, row_pitch, stride, true);
-                let sheet_index = self.sheets.len();
-                self.sheets.push(sheet);
-                if self.sheets.len() > self.current_sheet_index + 4 {
-                    self.sheets[self.current_sheet_index].closed = true;
-                    self.current_sheet_index += 1;
-                }
-                if index != u32::MAX {
-                    return ((sheet_index as u32) << 16) | index;
-                }
-            }
-        }
-        u32::MAX
     }
 
     /// `CFW1GlyphProvider::getUniqueNameFromFontFace`: family and face name in the provider's
@@ -878,11 +656,14 @@ impl FontWrapper {
         let (size, aliased) = (self.maps[map].font_size, self.maps[map].font_flags & FW1_ALIASED != 0);
         let mut id = u32::MAX;
         if let Some((metrics, pixels, row_pitch, stride)) = target.draw(face, glyph, size, aliased) {
+            let pixels: &[u8] = if metrics.height == 0 { &[] } else { std::slice::from_raw_parts(pixels, ((metrics.height - 1) * row_pitch + metrics.width * stride) as usize) };
+            crate::fw1_atlas::dump_glyph(&self.key, size, glyph, &metrics, pixels, row_pitch, stride);
             id = self.maps[map].glyphs[glyph as usize];
             if id == u32::MAX {
-                let device = { self.vertex_buffer_device() };
+                // any sheet knows the device (the first was made with the wrapper)
+                let device = self.atlas.sheets.first().and_then(|(_, (texture, _))| texture.GetDevice().ok());
                 id = match device {
-                    Some(device) => self.atlas_insert(&device, &metrics, pixels, row_pitch, stride),
+                    Some(device) => self.atlas.insert(&metrics, pixels, row_pitch, stride, || sheet_texture(&device)),
                     None => u32::MAX,
                 };
                 if id != u32::MAX {
@@ -892,13 +673,6 @@ impl FontWrapper {
         }
         self.target = Some(target);
         id
-    }
-
-    fn vertex_buffer_device(&self) -> Option<ID3D11Device> {
-        // any object of the wrapper knows the device; before the buffers exist (the atlas'
-        // first block) the caller hands it in itself
-        let sheet = self.sheets.first()?;
-        unsafe { sheet.texture.GetDevice().ok() }
     }
 
     /// `CFW1GlyphProvider::GetAtlasIdFromGlyphIndex`.
@@ -945,6 +719,7 @@ impl FontWrapper {
 
             // CFW1FontWrapper::DrawTextLayout 0x140447f80: the geometry …
             self.vertices.clear();
+            self.placed.clear();
             self.max_sheet_index = 0;
             // … AnalyzeTextLayout 0x140447ad0 -> CFW1TextRenderer::DrawTextLayout
             let renderer = &mut *self.renderer;
@@ -958,12 +733,12 @@ impl FontWrapper {
             if let Some(callbacks) = IDWriteTextRenderer::from_raw_borrowed(&raw) {
                 let _ = layout.Draw(None, callbacks, x, y);
             }
+            crate::fw1_atlas::dump_layout(&self.key, size, x, y, flags, text, &self.placed);
             // CFW1GlyphAtlas::Flush
-            let (first, end) = (self.flushed_sheet_index, self.sheets.len());
-            self.flushed_sheet_index = self.current_sheet_index;
-            for sheet in &mut self.sheets[first..end] {
-                sheet.flush(context);
-            }
+            self.atlas.flush(|(texture, _), [left, top, right, bottom], bytes| {
+                let region = D3D11_BOX { left, top, front: 0, right, bottom, back: 1 };
+                context.UpdateSubresource(texture, 0, Some(&region), bytes.as_ptr() as *const c_void, SHEET_WIDTH, 0);
+            });
             // … and DrawGeometry 0x140447c20
             self.draw_geometry(context);
         }
@@ -975,25 +750,6 @@ impl FontWrapper {
         if self.vertices.is_empty() {
             return;
         }
-        // CFW1TextGeometry::GetGlyphVerticesTemp: by sheet, in the order they came
-        let sheet_count = self.max_sheet_index as usize + 1;
-        let mut counts = vec![0u32; sheet_count];
-        for v in &self.vertices {
-            counts[(v.glyph_index >> 16) as usize] += 1;
-        }
-        let mut starts = vec![0u32; sheet_count];
-        let mut start = 0;
-        for (s, count) in starts.iter_mut().zip(&counts) {
-            *s = start;
-            start += count;
-        }
-        let mut sorted = self.vertices.clone();
-        for v in &self.vertices {
-            let sheet = (v.glyph_index >> 16) as usize;
-            sorted[starts[sheet] as usize] = GlyphVertex { glyph_index: v.glyph_index & 0xffff, ..*v };
-            starts[sheet] += 1;
-        }
-
         let saved = SavedState::save(context);
 
         // CFW1GlyphRenderStates::SetStates
@@ -1011,90 +767,40 @@ impl FontWrapper {
         context.PSSetSamplers(0, Some(std::slice::from_ref(&self.sampler)));
 
         // CFW1GlyphRenderStates::UpdateShaderConstants: pixels of the viewport to clip space
-        let (mut w, mut h) = (512.0f32, 512.0f32);
         let mut count = 1u32;
         let mut viewport = D3D11_VIEWPORT::default();
         context.RSGetViewports(&mut count, Some(&mut viewport));
-        if count > 0 && viewport.Width >= 1.0 && viewport.Height >= 1.0 {
-            w = viewport.Width;
-            h = viewport.Height;
-        }
-        let mut constants = [0f32; 20];
-        constants[0] = 2.0 / w;
-        constants[12] = -1.0;
-        constants[5] = -2.0 / h;
-        constants[13] = 1.0;
-        constants[10] = 1.0;
-        constants[15] = 1.0;
-        constants[16..20].copy_from_slice(&[f32::MAX; 4]);
+        let constants = crate::fw1_atlas::constants((count > 0).then_some((viewport.Width, viewport.Height)));
         if let Some(buffer) = &self.constant_buffer {
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             if context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)).is_ok() {
-                std::ptr::copy_nonoverlapping(constants.as_ptr() as *const u8, mapped.pData as *mut u8, 80);
+                std::ptr::copy_nonoverlapping(constants.as_ptr(), mapped.pData as *mut u8, 80);
                 context.Unmap(buffer, 0);
             }
         }
 
         // CFW1GlyphVertexDrawer::DrawVertices -> drawGlyphsAsQuads
+        let batches = crate::fw1_atlas::batches(&self.vertices, self.max_sheet_index, &self.atlas);
+        crate::fw1_atlas::log_geometry(&self.placed, &batches, &constants);
         context.IASetIndexBuffer(self.index_buffer.as_ref(), DXGI_FORMAT_R16_UINT, 0);
         context.IASetVertexBuffers(0, 1, Some(&self.vertex_buffer), Some(&QUAD_VERTEX_SIZE), Some(&0));
-        let mut max_vertex_count = VERTEX_BUFFER_SIZE / QUAD_VERTEX_SIZE;
-        if max_vertex_count > 4 * (MAX_INDEX_COUNT / 6) {
-            max_vertex_count = 4 * (MAX_INDEX_COUNT / 6);
-        }
-        max_vertex_count -= max_vertex_count % 4;
-        let total = sorted.len() as u32;
-        let mut current_sheet = 0usize;
         let mut active_sheet = usize::MAX;
-        let mut current_vertex = 0u32;
-        let mut next_sheet_start = counts[0];
-        while current_vertex < total {
-            let vertex_count = ((total - current_vertex) * 4).min(max_vertex_count);
+        for batch in &batches {
             let Some(buffer) = &self.vertex_buffer else { break };
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             if context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped)).is_err() {
                 break;
             }
-            let out = mapped.pData as *mut u8;
-            let saved_walk = (current_sheet, next_sheet_start, current_vertex);
-            let mut drawn = 0u32;
-            while drawn < vertex_count {
-                while current_vertex >= next_sheet_start {
-                    current_sheet += 1;
-                    next_sheet_start += counts[current_sheet];
-                }
-                let fill_sheet = current_sheet;
-                let draw_count = (vertex_count - drawn).min((next_sheet_start - current_vertex) * 4);
-                for i in 0..draw_count / 4 {
-                    let v = sorted[(current_vertex + i) as usize];
-                    let c = self.sheets[fill_sheet].coords[v.glyph_index as usize];
-                    let corners = [(v.x + c.pos_left, v.y + c.pos_top, c.tex_left, c.tex_top), (v.x + c.pos_right, v.y + c.pos_top, c.tex_right, c.tex_top), (v.x + c.pos_left, v.y + c.pos_bottom, c.tex_left, c.tex_bottom), (v.x + c.pos_right, v.y + c.pos_bottom, c.tex_right, c.tex_bottom)];
-                    for (k, (px, py, u, t)) in corners.into_iter().enumerate() {
-                        let at = out.add(((drawn + i * 4) as usize + k) * QUAD_VERTEX_SIZE as usize);
-                        std::ptr::copy_nonoverlapping([px, py, u, t].as_ptr() as *const u8, at, 16);
-                        std::ptr::copy_nonoverlapping(v.color.to_le_bytes().as_ptr(), at.add(16), 4);
-                    }
-                }
-                drawn += draw_count;
-                current_vertex += draw_count / 4;
-            }
+            std::ptr::copy_nonoverlapping(batch.bytes.as_ptr(), mapped.pData as *mut u8, batch.bytes.len());
             context.Unmap(buffer, 0);
-            (current_sheet, next_sheet_start, current_vertex) = saved_walk;
-            drawn = 0;
-            while drawn < vertex_count {
-                while current_vertex >= next_sheet_start {
-                    current_sheet += 1;
-                    next_sheet_start += counts[current_sheet];
-                }
-                if current_sheet != active_sheet {
+            for &(sheet, index_count, base) in &batch.draws {
+                if sheet != active_sheet {
                     // CFW1GlyphSheet::BindSheet
-                    context.PSSetShaderResources(0, Some(std::slice::from_ref(&self.sheets[current_sheet].view)));
-                    active_sheet = current_sheet;
+                    let (_, (_, view)) = &self.atlas.sheets[sheet];
+                    context.PSSetShaderResources(0, Some(std::slice::from_ref(view)));
+                    active_sheet = sheet;
                 }
-                let draw_count = (vertex_count - drawn).min((next_sheet_start - current_vertex) * 4);
-                context.DrawIndexed((draw_count / 2) * 3, 0, drawn as i32);
-                drawn += draw_count;
-                current_vertex += draw_count / 4;
+                context.DrawIndexed(index_count, 0, base);
             }
         }
 
@@ -1269,6 +975,8 @@ impl Fonts {
         if made.is_none() {
             println!("ERROR: pFW1Factory->CreateFontWrapper({family}) failed");
         }
+        let shaders = made.map(|n| (&self.wrappers[n].shader_code.0[..], &self.wrappers[n].shader_code.1[..]));
+        crate::fw1_atlas::log_create_font(&String::from_utf16_lossy(&key), made, shaders);
         self.by_key.insert(key, made);
         made
     }
@@ -1283,7 +991,7 @@ impl Fonts {
             println!("ERROR: pFW1Factory->CreateFontWrapper failed");
             return None;
         };
-        match FontWrapper::new(kgl, compile, &self.collection, &name, if bold { 700 } else { 400 }, if italic { 2 } else { 0 }, &self.locale) {
+        match FontWrapper::new(kgl, &crate::fw1_atlas::font_key(family, italic, bold), compile, &self.collection, &name, if bold { 700 } else { 400 }, if italic { 2 } else { 0 }, &self.locale) {
             Some(wrapper) => {
                 self.wrappers.push(wrapper);
                 Some(self.wrappers.len() - 1)
@@ -1297,13 +1005,10 @@ impl Fonts {
 
     /// `kglBlitStringWide` 0x140019aa0: `align` 0 left, 1 centre, 2 right of (x, y); `color` is
     /// 0xAABBGGRR.
-    pub fn blit_string(&mut self, kgl: &Kgl, wrapper: usize, x: f32, y: f32, text: &[u16], size: f32, align: u32, color: u32) {
-        let flags = match align {
-            1 => FW1_RESTORESTATE | FW1_NOWORDWRAP | FW1_CENTER,
-            2 => FW1_RESTORESTATE | FW1_NOWORDWRAP | FW1_RIGHT,
-            _ => FW1_RESTORESTATE | FW1_NOWORDWRAP,
-        };
-        if let Some(wrapper) = self.wrappers.get_mut(wrapper) {
+    pub fn blit_string(&mut self, kgl: &Kgl, wrapper_index: usize, x: f32, y: f32, text: &[u16], size: f32, align: u32, color: u32) {
+        let flags = crate::fw1_atlas::blit_flags(align);
+        if let Some(wrapper) = self.wrappers.get_mut(wrapper_index) {
+            crate::fw1_atlas::log_draw_string(wrapper_index, x, y, text, size, flags, color);
             wrapper.draw_string(&kgl.context, text, size, x, y, color, flags);
         }
     }

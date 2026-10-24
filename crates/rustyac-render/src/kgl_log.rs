@@ -46,9 +46,25 @@ pub fn on() -> bool {
     ON.load(Ordering::Relaxed)
 }
 
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// Runs `f` with no lines and no names given out: kgl calls that Direct3D 11 makes without kgl
+/// (wgpu's text, which Direct3D 11's FW1FontWrapper draws on the context itself) leave the log
+/// and the numbering of everything after them as they would be there.
+pub fn quiet<R>(f: impl FnOnce() -> R) -> R {
+    let was = QUIET.swap(true, Ordering::Relaxed);
+    let r = f();
+    QUIET.store(was, Ordering::Relaxed);
+    r
+}
+
+fn quiet_now() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
 /// One line, when a capture runs.
 pub fn line(args: std::fmt::Arguments) {
-    if on() {
+    if on() && !quiet_now() {
         with(|l| {
             if let Some(text) = &mut l.text {
                 let _ = text.write_fmt(args);
@@ -60,6 +76,9 @@ pub fn line(args: std::fmt::Arguments) {
 
 /// Gives the object at `key` the next name of its kind (`prefix` and a number).
 pub fn new_name(key: usize, prefix: &'static str) -> String {
+    if quiet_now() {
+        return format!("{prefix}~");
+    }
     with(|l| {
         let n = l.counters.entry(prefix).or_insert(0);
         *n += 1;
@@ -71,6 +90,9 @@ pub fn new_name(key: usize, prefix: &'static str) -> String {
 
 /// Gives the object at `key` a name of its own (a texture: its file).
 pub fn set_name(key: usize, name: &str) {
+    if quiet_now() {
+        return;
+    }
     with(|l| l.names.insert(key, name.to_string()));
 }
 

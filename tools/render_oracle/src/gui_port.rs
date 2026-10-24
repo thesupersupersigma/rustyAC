@@ -237,6 +237,17 @@ fn op(gui: &mut Gui, painter: &mut dyn Painter, hud: &mut crate::gui_port2::Hud,
 }
 
 pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, String> {
+    // Task 40: the kgl call log of the whole sequence, from the device on, the same text for
+    // both backends (text included: FW1's own lines)
+    rustyac_render::kgl_log::begin(name);
+    let result = run_logged(args, sequence, name);
+    let log = rustyac_render::kgl_log::end();
+    std::fs::create_dir_all(&args.out).map_err(|e| e.to_string())?;
+    std::fs::write(args.out.join(format!("{name}.port.kgllog")), log).map_err(|e| e.to_string())?;
+    result
+}
+
+fn run_logged(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, String> {
     let mut graphics = graphics(args)?;
     let mut renderer = GuiRenderer::new(&graphics);
     let mut outcome = Outcome::default();

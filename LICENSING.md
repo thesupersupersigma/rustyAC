@@ -53,7 +53,11 @@ everything that links the car physics is GPL.
 - **FW1FontWrapper**, copyright (c) 2011 Erik Rufelt, the library Assetto Corsa links for its
   text (DirectWrite glyphs drawn with Direct3D 11). `crates/rustyac-render/src/fw1.rs` is a
   Rust translation of the part the game uses, as the game has it (Kunos changed a few things),
-  and carries the library's notice at its top. The library was published on CodePlex under the
+  and carries the library's notice at its top, as do `fw1_atlas.rs` (its glyph sheets and
+  geometry, shared by both backends) and `fw1_wgpu.rs` (the same on kgl's wgpu backend).
+  `crates/rustyac-render/fw1/simple_vs.dxbc` and `simple_ps.dxbc` are the library's two HLSL
+  shaders compiled once by Microsoft's shader compiler, the bytes Direct3D 11 runs. The glyphs
+  on wgpu come from `ttf.rs`, rustyAC's own font reader. The library was published on CodePlex under the
   MIT License (its NuGet package still points at `fw1.codeplex.com/license`; CodePlex itself is
   offline, and the copies of the source on GitHub carry no license file).
 - **Microsoft Edge WebView2**, the browser the launcher (`crates/rustyac-launcher`) shows the
