@@ -931,7 +931,8 @@ const isLocal = () => ['127.0.0.1', 'localhost', '[::1]'].includes(location.host
 // the on-demand servers the server panel started (its router behind net/x/*); a test on
 // this computer names the router's address with ?ondemand=http://127.0.0.1:<port>
 const ondemandBase = () => (isLocal() && params.get('ondemand')) || '';
-const ondemandUrl = () => `${ondemandBase()}${ondemandBase() ? '/' : ''}net/x/servers.json`;
+// from the site's root: the page sits in /play/app/ but the router answers at /net/x/*
+const ondemandUrl = () => `${ondemandBase()}/net/x/servers.json`;
 function onDemandServers(text) {
   const base = ondemandBase();
   return (JSON.parse(text).servers || [])
@@ -986,6 +987,7 @@ async function loadServers() {
   }
   state.servers = servers.filter((s) => s && s.id && s.url);
   showServers(params.get('join'));
+  if (params.get('join') && $('mp-server').value !== params.get('join')) setMultiplayer(`server ${params.get('join')} is not running now (not in the server list)`);
   try {
     $('mp-name').value = params.get('name') || localStorage.getItem('rustyac.player-name') || 'rustyAC driver';
   } catch {
@@ -2299,7 +2301,7 @@ async function main() {
     if (ready) await launcherStart();
     return;
   }
-  if (ready && params.get('join') && !$('mp-join').disabled) {
+  if (ready && params.get('join') && $('mp-server').value === params.get('join') && !$('mp-join').disabled) {
     await joinServer();
   } else if (ready && params.get('go') === '1' && !$('drive').disabled) {
     state.lastChoice = `${$('car').value}|${$('track').value}`;

@@ -29,6 +29,7 @@ tools/proofs/replays.sh       replays
 tools/proofs/replay_list.txt  replays
 tools/proofs/net.sh           net
 tools/proofs/browser.sh       browser
+tools/proofs/ondemand*        browser
 tools/proofs/ai_page.sh       ai_page
 tools/proofs/ai_v6.py         ai_page
 tools/proofs/shaders.sh       shaders
