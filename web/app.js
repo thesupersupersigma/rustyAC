@@ -734,21 +734,26 @@ const GFX = [
   ['Reflection Quality', 'CUBEMAP/SIZE', [['0', 'None'], ['512', 'Low'], ['1024', 'Medium'], ['2048', 'High']], true],
   ['Reflection Rendering Frequency', 'CUBEMAP/FACES_PER_FRAME', ['Static', 'Very Low', 'Low', 'Medium', 'High', 'Very High', 'Ultra'].map((text, i) => [String(i), text]), true],
 ];
-// High: what the game uses with no video.ini (VideoSettings's defaults), Full mode before 0.39.
-// Medium is rustyAC's own; Low is the Hybrid one. SCALE: rustyAC's render scale, in %.
+// High: AC's shipped cfg/video.ini (what a new install copies to Documents; it has no size, so
+// 1920 x 1080 as VideoSettings). Medium (rustyAC's) and Low (the Hybrid one) start from the
+// game's defaults with no video.ini, as before 0.40. SCALE: rustyAC's render scale, in %.
 const GFX_HIGH = {
-  'VIDEO/WIDTH': '1920', 'VIDEO/HEIGHT': '1080', 'CAMERA/MODE': 'DEFAULT', 'VIDEO/FULLSCREEN': '0', 'VIDEO/VSYNC': '0', 'VIDEO/FPS_CAP_MS': '0',
-  'VIDEO/ANISOTROPIC': '4', 'VIDEO/AASAMPLES': '1', 'ASSETTOCORSA/WORLD_DETAIL': '5', 'VIDEO/SHADOW_MAP_SIZE': '2048',
-  'EFFECTS/SMOKE': '3', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'POST_PROCESS/ENABLED': '0', 'POST_PROCESS/FILTER': 'default',
+  'VIDEO/WIDTH': '1920', 'VIDEO/HEIGHT': '1080', 'CAMERA/MODE': 'DEFAULT', 'VIDEO/FULLSCREEN': '1', 'VIDEO/VSYNC': '0', 'VIDEO/FPS_CAP_MS': '0',
+  'VIDEO/ANISOTROPIC': '8', 'VIDEO/AASAMPLES': '2', 'ASSETTOCORSA/WORLD_DETAIL': '5', 'VIDEO/SHADOW_MAP_SIZE': '2048',
+  'EFFECTS/SMOKE': '3', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '1', 'POST_PROCESS/ENABLED': '1', 'POST_PROCESS/FILTER': 'default',
   'POST_PROCESS/QUALITY': '3', 'POST_PROCESS/GLARE': '3', 'POST_PROCESS/DOF': '3', 'SATURATION/LEVEL': '100', 'EFFECTS/MOTION_BLUR': '0',
-  'POST_PROCESS/RAYS_OF_GOD': '0', 'POST_PROCESS/HEAT_SHIMMER': '0', 'POST_PROCESS/FXAA': '0',
+  'POST_PROCESS/RAYS_OF_GOD': '1', 'POST_PROCESS/HEAT_SHIMMER': '1', 'POST_PROCESS/FXAA': '1',
   'ASSETTOCORSA/HIDE_ARMS': '0', 'ASSETTOCORSA/LOCK_STEER': '0', 'ASSETTOCORSA/HIDE_STEER': '0',
-  'MIRROR/SIZE': '0', 'MIRROR/HQ': '0', 'CUBEMAP/SIZE': '512', 'CUBEMAP/FACES_PER_FRAME': '0', SCALE: '100',
+  'MIRROR/SIZE': '512', 'MIRROR/HQ': '0', 'CUBEMAP/SIZE': '512', 'CUBEMAP/FACES_PER_FRAME': '0', SCALE: '100',
+};
+const GFX_DEFAULTS = {
+  ...GFX_HIGH, 'VIDEO/FULLSCREEN': '0', 'VIDEO/ANISOTROPIC': '4', 'VIDEO/AASAMPLES': '1', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'POST_PROCESS/ENABLED': '0',
+  'POST_PROCESS/RAYS_OF_GOD': '0', 'POST_PROCESS/HEAT_SHIMMER': '0', 'POST_PROCESS/FXAA': '0', 'MIRROR/SIZE': '0',
 };
 const GFX_PRESETS = {
   high: GFX_HIGH,
-  medium: { ...GFX_HIGH, 'VIDEO/SHADOW_MAP_SIZE': '1024', 'ASSETTOCORSA/WORLD_DETAIL': '3', 'VIDEO/ANISOTROPIC': '2', 'EFFECTS/SMOKE': '2' },
-  low: { ...GFX_HIGH, 'VIDEO/SHADOW_MAP_SIZE': '512', 'ASSETTOCORSA/WORLD_DETAIL': '1', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'CUBEMAP/SIZE': '0', 'CUBEMAP/FACES_PER_FRAME': '0', 'POST_PROCESS/ENABLED': '0', 'VIDEO/AASAMPLES': '1', SCALE: '75' },
+  medium: { ...GFX_DEFAULTS, 'VIDEO/SHADOW_MAP_SIZE': '1024', 'ASSETTOCORSA/WORLD_DETAIL': '3', 'VIDEO/ANISOTROPIC': '2', 'EFFECTS/SMOKE': '2' },
+  low: { ...GFX_DEFAULTS, 'VIDEO/SHADOW_MAP_SIZE': '512', 'ASSETTOCORSA/WORLD_DETAIL': '1', 'EFFECTS/RENDER_SMOKE_IN_MIRROR': '0', 'CUBEMAP/SIZE': '0', 'CUBEMAP/FACES_PER_FRAME': '0', 'POST_PROCESS/ENABLED': '0', 'VIDEO/AASAMPLES': '1', SCALE: '75' },
 };
 // (the keys a preset sets, which say whether the settings are one)
 const GFX_PRESET_KEYS = Object.keys(GFX_HIGH).filter((key) => !['VIDEO/WIDTH', 'VIDEO/HEIGHT', 'VIDEO/FULLSCREEN'].includes(key));
