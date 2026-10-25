@@ -442,6 +442,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             documents_cfg: rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")),
             data_paths: cars.iter().map(|car| car.data_path.clone()).collect(),
             dev_apps: rustyac_game::render::gui::dev_apps_enabled(&game, options.dev_apps),
+            hidden_apps: &[],
             language: rustyac_gui::locale::language(rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")).as_deref(), options.language.as_deref()),
             game: game.clone(),
         };

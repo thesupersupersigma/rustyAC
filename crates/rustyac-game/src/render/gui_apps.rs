@@ -90,10 +90,11 @@ impl GameApps {
         let dev_apps = setup.dev_apps;
         let mut add = |gui: &mut Gui, painter: &mut dyn Painter, name: &'static str, id: Id| {
             let dev = gui.form_data(id).dev_app && name != "hideall";
+            let hidden = setup.hidden_apps.contains(&name);
             if name != "leaderboard" {
-                gui.game_screen_add_control(painter, screen, id, !dev || dev_apps);
+                gui.game_screen_add_control(painter, screen, id, (!dev || dev_apps) && !hidden);
             }
-            if dev && !dev_apps {
+            if (dev && !dev_apps) || hidden {
                 gui.set_visible(id, false);
             }
             self.made.push((name, id));
@@ -135,7 +136,7 @@ impl GameApps {
         let id = gui.new_telemetry_app(painter, &setup.telemetry_car, system("telemetry_presets.ini").as_ref(), own_or_documents("telemetry_user.ini").as_ref());
         add(gui, painter, "telemetry", id);
         // ACHelp reads help/<acLocaleGetCurrentLocale>.tag
-        let help = std::fs::read(setup.game.join(format!("system/locales/help/{}.tag", setup.language))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let help = rustyac_content::vfs::read(&setup.game.join(format!("system/locales/help/{}.tag", setup.language))).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
         let id = gui.new_help_app(painter, &help);
         add(gui, painter, "help", id);
         let id = gui.new_time_flow_app(painter);
@@ -266,7 +267,7 @@ impl GameApps {
                 AppAction::WriteProfileString { file, section, key, value } => {
                     let name = file.strip_prefix("cfg/").unwrap_or(&file).to_string();
                     // (a car's car.ini: rustyAC's copy, else the game's loose file)
-                    let old = if file.starts_with("content/") { std::fs::read(setup.cfg_dir.join(&file)).ok().or_else(|| std::fs::read(setup.game.join(&file)).ok()) } else { own_or_documents_text(setup, &name) };
+                    let old = if file.starts_with("content/") { rustyac_content::vfs::read(&setup.cfg_dir.join(&file)).ok().or_else(|| rustyac_content::vfs::read(&setup.game.join(&file)).ok()) } else { own_or_documents_text(setup, &name) };
                     let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
                     if name == "audio.ini" {
                         self.audio_ini = Some(String::from_utf8_lossy(&bytes).into_owned());
@@ -541,5 +542,5 @@ pub struct AppSound {
 
 /// A settings file's bytes: rustyAC's own copy, else Documents'.
 fn own_or_documents_text(setup: &GuiSetup, name: &str) -> Option<Vec<u8>> {
-    std::fs::read(setup.cfg_dir.join(name)).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|folder| std::fs::read(folder.join(name)).ok()))
+    rustyac_content::vfs::read(&setup.cfg_dir.join(name)).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|folder| rustyac_content::vfs::read(&folder.join(name)).ok()))
 }

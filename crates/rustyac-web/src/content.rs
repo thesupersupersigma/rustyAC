@@ -197,8 +197,8 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
 
 /// Full mode: what AC's renderer reads besides the drive's files, as far as can be told
 /// before it runs: the shaders, the game's settings, the weather, the sky's and the pits'
-/// textures and models, the fonts, the car's models, textures, first skin and driver, the
-/// track's settings (lights, groove, crew side). What it reads past these (another skin, a
+/// textures and models, the fonts, the GUI's textures and languages, the car's models,
+/// textures, first skin and driver, the track's settings (lights, groove, crew side). What it reads past these (another skin, a
 /// driver's own suit folders) the page's folder source gets from its load
 /// ([`vfs::MemFs::take_wanted`]); a pack (`tools/web_pack`) has only these.
 pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Vec<PathBuf> {
@@ -210,6 +210,9 @@ pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Ve
     files_below(&root.join("content/texture/clouds"), &[], 0, &mut out);
     files_below(&root.join("content/objects3D"), &[], 0, &mut out);
     files_below(&root.join("content/fonts"), &[], 0, &mut out);
+    // AC's GUI: its textures (4 MB) and its languages
+    files_below(&root.join("content/gui"), &[], 3, &mut out);
+    files_below(&root.join("system/locales"), &[], 1, &mut out);
     let folder = car_folder(root, car);
     // the skin AC's renderer takes when none is named (the first by name); another one's files
     // come in the page's next round (Game::files_missing)
@@ -234,7 +237,8 @@ pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Ve
     if !layout.is_empty() {
         files_below(&track_folder.join(layout).join("data"), &[], 0, &mut out);
     }
-    out.retain(|path| path.vfs_is_file());
+    // (not the GUI's Photoshop files)
+    out.retain(|path| path.vfs_is_file() && !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("psd")));
     out.sort();
     out.dedup();
     out

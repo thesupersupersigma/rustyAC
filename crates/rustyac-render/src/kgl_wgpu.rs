@@ -343,6 +343,12 @@ pub struct Kgl {
     dummy_ms: wgpu::TextureView,
     default_sampler: Sampler,
     next_id: Cell<u32>,
+    /// Task 40: the 2D pass at the window's size over a 3D picture made smaller (the page's
+    /// render scale): the full-size screen and depth targets kept between frames, the small
+    /// ones (and their size) while the 2D pass draws, the full-size picture to present
+    gui_screen: Option<(KglRenderTarget, KglRenderTarget)>,
+    scaled: Option<(KglRenderTarget, KglRenderTarget, i32, i32)>,
+    present_gui: RefCell<Option<View>>,
 }
 
 /// Polls a future to its end (wgpu's native futures are ready once the device is polled).
@@ -512,6 +518,9 @@ impl Kgl {
             dummy_ms,
             default_sampler,
             next_id: Cell::new(0),
+            gui_screen: None,
+            scaled: None,
+            present_gui: RefCell::new(None),
         };
         kgl.make_screen()?;
         Ok(kgl)
@@ -1589,10 +1598,52 @@ impl Kgl {
             .clone()
     }
 
-    /// Draws the screen texture into `target` (the page's canvas), scaled to its size.
+    /// Task 40: the 2D pass from here on draws at `width` x `height` (the window's size) into a
+    /// screen of that size, the 3D picture drawn so far stretched into it, until
+    /// [`Kgl::end_gui_screen`]. [`Kgl::present_to`] then shows that screen.
+    pub fn begin_gui_screen(&mut self, width: i32, height: i32) -> Result<(), String> {
+        self.present_gui.borrow_mut().take();
+        let fits = |t: &KglRenderTarget| t.texture.as_ref().is_some_and(|t| (t.0.width, t.0.height) == (width as u32, height as u32));
+        let (mut color, mut depth) = match self.gui_screen.take() {
+            Some((color, depth)) if fits(&color) => (color, depth),
+            _ => {
+                let tex = self.color_texture(wgpu::TextureFormat::Rgba8Unorm, width as u32, height as u32, 1, 1, 1, "gui screen")?;
+                let rtv = self.view(&tex, None, false, 0, 1, 0, 1);
+                let mut depth = self.depth_target(width, height, 1);
+                depth.samples = -1;
+                (KglRenderTarget { texture: Some(Texture2D(tex)), render_target_view: Some(rtv), samples: -1, ..Default::default() }, depth)
+            }
+        };
+        if let Some(view) = &color.render_target_view {
+            self.present_to(&view.0.view, wgpu::TextureFormat::Rgba8Unorm);
+        }
+        std::mem::swap(&mut self.screen_render_target, &mut color);
+        std::mem::swap(&mut self.screen_depth_target, &mut depth);
+        self.scaled = Some((color, depth, self.video.width, self.video.height));
+        (self.video.width, self.video.height) = (width, height);
+        self.set_screen_render_targets(true);
+        Ok(())
+    }
+
+    /// The end of [`Kgl::begin_gui_screen`]: the small screen is the screen again.
+    pub fn end_gui_screen(&mut self) {
+        let Some((mut color, mut depth, width, height)) = self.scaled.take() else {
+            return;
+        };
+        self.end_pass();
+        std::mem::swap(&mut self.screen_render_target, &mut color);
+        std::mem::swap(&mut self.screen_depth_target, &mut depth);
+        (self.video.width, self.video.height) = (width, height);
+        *self.present_gui.borrow_mut() = color.render_target_view.clone();
+        self.gui_screen = Some((color, depth));
+        self.set_screen_render_targets(true);
+    }
+
+    /// Draws the screen texture (or the 2D pass's full-size one) into `target` (the page's
+    /// canvas), scaled to its size.
     pub fn present_to(&self, target: &wgpu::TextureView, format: wgpu::TextureFormat) {
         self.end_pass();
-        let Some(screen) = self.screen_render_target.render_target_view.clone() else {
+        let Some(screen) = self.present_gui.borrow_mut().take().or_else(|| self.screen_render_target.render_target_view.clone()) else {
             return;
         };
         let source = if screen.0.tex.samples > 1 {

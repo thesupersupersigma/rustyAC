@@ -79,6 +79,8 @@ webpki-roots = "1"
 # which gives kgl the page's device).
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 rustyac-render = { path = "../rustyac-render", features = ["backend-wgpu"] }
+# the clock (std::time::SystemTime panics in a browser)
+js-sys = "0.3"
 
 [features]
 # AC's renderer (`render::ac`) on kgl's wgpu backend on Windows too, as in the page: only for

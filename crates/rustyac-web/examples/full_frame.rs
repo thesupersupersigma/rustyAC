@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `cargo run --release -p rustyac-web --example full_frame [--features wgpu] -- --car <id>
-//! --track <id> [--layout <l>] [--spawn pit] | --race <race.ini> [--seed n]] [--size 1280x720]
-//! [--frames 3] [--warp] [--video-ini <file>] [--cockpit] --out <folder> --name <name>`: Full mode's fixed frame (`rustyac_web::full::fixed_frame`),
+//! --track <id> [--layout <l>] [--spawn pit] [--sessions p10,r3] | --race <race.ini> [--seed n]] [--size 1280x720]
+//! [--frames 3] [--warp] [--video-ini <file>] [--cockpit] [--gui <script>] --out <folder> --name <name>`: Full mode's fixed frame (`rustyac_web::full::fixed_frame`),
 //! the one the page draws with `Game::full_proof`, natively from the installed game. Without
 //! the feature on Direct3D 11 (`--warp`: WARP), with it on kgl's wgpu backend (`--warp`: Direct3D
 //! 12 WARP, else RUSTYAC_WGPU_ADAPTER=gpu or swiftshader). Writes `<name>.kgllog` (the kgl call
 //! log), `<name>.png` (the picture) and `<name>.files` (every file read, relative to the game's
 //! folder: what a pack needs for this drive in Full mode). `--race`: the drive of that race.ini
 //! (and the assists.ini beside it) as the page's `Session::from_race` makes it, seeded as `?seed=n`.
+//! `--gui`: AC's GUI and HUD on, this `--gui-do` script run on them first (`""`: none; `results`
+//! in it: the referee's results panel up). `--sessions`: the referee's session list, as the page's `?sessions=`.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut car, mut track, mut layout, mut spawn) = (None, None, String::new(), "pit".to_string());
+    let (mut car, mut track, mut layout, mut spawn, mut sessions) = (None, None, String::new(), "pit".to_string(), None::<String>);
     let (mut size, mut frames, mut warp, mut out, mut name) = ((1280u32, 720u32), 3u32, false, None, None);
-    let (mut race, mut seed, mut video, mut cockpit) = (None::<std::path::PathBuf>, 0u32, None::<std::path::PathBuf>, false);
+    let (mut race, mut seed, mut video, mut cockpit, mut gui) = (None::<std::path::PathBuf>, 0u32, None::<std::path::PathBuf>, false, None::<String>);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
@@ -23,6 +25,7 @@ fn run() -> Result<(), String> {
             "--track" => track = Some(value()?),
             "--layout" => layout = value()?,
             "--spawn" => spawn = value()?,
+            "--sessions" => sessions = Some(value()?),
             "--race" => race = Some(value()?.into()),
             "--seed" => seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
             "--size" => {
@@ -33,6 +36,7 @@ fn run() -> Result<(), String> {
             "--frames" => frames = value()?.parse().map_err(|e| format!("--frames: {e}"))?,
             "--warp" => warp = true,
             "--cockpit" => cockpit = true,
+            "--gui" => gui = Some(value()?),
             "--video-ini" => video = Some(std::path::PathBuf::from(value()?)),
             "--out" => out = Some(std::path::PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
@@ -51,13 +55,15 @@ fn run() -> Result<(), String> {
             let assists = Some(file.with_file_name("assists.ini")).filter(|p| p.is_file()).map(|p| text(&p)).transpose()?;
             rustyac_web::session::Session::from_race(&text(file)?, assists.as_deref(), seed)?
         }
-        None => rustyac_web::session::Session::new(&car.ok_or("--car <id> or --race is needed")?, &track.ok_or("--track <id> is needed")?, &layout, true, &spawn)?,
+        None => rustyac_web::session::Session::with_sessions(&car.ok_or("--car <id> or --race is needed")?, &track.ok_or("--track <id> is needed")?, &layout, true, &spawn, sessions.as_deref())?,
     };
     if cockpit {
         session.camera.mode = rustyac_game::render::scene::CameraMode::Cockpit;
     }
     let mut notes = Vec::new();
-    let (mut renderer, log) = rustyac_web::full::fixed_frame(&root, &mut session, size.0, size.1, frames, warp, video.as_deref(), &mut notes)?;
+    // (the apps' own files: a folder of the run's, as the page keeps them in memory)
+    let gui = gui.as_deref().map(|script| (rustyac_web::full::gui_setup(&root, &out.join("gui_cfg"), &session), script));
+    let (mut renderer, log) = rustyac_web::full::fixed_frame(&root, &mut session, size.0, size.1, frames, warp, video.as_deref(), gui, &mut notes)?;
     let pixels = renderer.read_pixels()?;
     let mut read: Vec<String> = rustyac_content::vfs::take_log().into_iter().filter(|(_, found)| *found).filter_map(|(path, _)| path.strip_prefix(&root).ok().map(|p| p.to_string_lossy().replace('\\', "/"))).collect();
     rustyac_content::vfs::set_log(false);

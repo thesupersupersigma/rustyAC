@@ -288,15 +288,19 @@ pub fn fs_forget_models() {
 
 /// The next Full drive ([`Game::create`] and the others) is Full mode's proof
 /// ([`crate::full::fixed_frame`]): the drive as it starts, drawn `frames` times 1/60 s apart,
-/// that stays on the screen ([`Game::full_proof`]). 0: drives as usual again.
+/// that stays on the screen ([`Game::full_proof`]). 0: drives as usual again. `gui`: AC's GUI
+/// on in it, with this `--gui-do` script run first (none: the GUI off, as before Task 40).
 #[wasm_bindgen]
-pub fn full_proof_next(frames: u32) {
-    *full_proof_frames().lock().unwrap() = (frames > 0).then_some(frames);
+pub fn full_proof_next(frames: u32, gui: Option<String>) {
+    *full_proof_frames().lock().unwrap() = (frames > 0).then_some((frames, gui));
 }
 
-fn full_proof_frames() -> &'static Mutex<Option<u32>> {
-    static FRAMES: OnceLock<Mutex<Option<u32>>> = OnceLock::new();
-    FRAMES.get_or_init(|| Mutex::new(None))
+/// The next drive's proof: its frames and its GUI script.
+type ProofNext = Option<(u32, Option<String>)>;
+
+fn full_proof_frames() -> &'static Mutex<ProofNext> {
+    static FRAMES: Mutex<ProofNext> = Mutex::new(None);
+    &FRAMES
 }
 
 /// The Controls panel's settings and where they came from; `None`: the built-in layout.
@@ -382,6 +386,11 @@ pub struct Game {
     remote_models: Vec<Option<usize>>,
     /// Online: the WebSocket's end in here.
     link: Option<std::rc::Rc<crate::net::Link>>,
+    /// Full mode: AC's GUI's pause, TAB and the setup editor's car between frames.
+    gui: crate::full::GuiLoop,
+    /// Full mode with AC's GUI: the graphics page's render scale (the 3D picture's share of the
+    /// canvas; the GUI keeps the canvas's size)
+    render_scale: f32,
 }
 
 pub(crate) fn now_ms() -> f64 {
@@ -457,17 +466,29 @@ impl Game {
         notes.push(session.sim.track_summary.lines().filter(|line| !line.starts_with("loaded in")).collect::<Vec<_>>().join("\n"));
         let (width, height) = gpu.size();
         let mut proof = None;
-        let proof_frames = *full_proof_frames().lock().unwrap();
+        let proof_frames = full_proof_frames().lock().unwrap().clone();
+        // AC's GUI reads the player's cfg (the language, gameplay.ini) where the page keeps it, and
+        // writes its forms into a folder of rustyAC's own (the page's memory)
+        if gpu.full {
+            rustyac_content::install::set_documents(Some(PathBuf::from(mounted("docs"))));
+        }
+        let gui_setup = || crate::full::gui_setup(Path::new(ROOT), &PathBuf::from(mounted("rustyac/cfg")), &session);
         // the graphics page's video.ini, which the page puts here before a drive
         let video = PathBuf::from(mounted(VIDEO_INI));
         let video = vfs::is_file(&video).then_some(video.as_path());
         let made = match (gpu.full, proof_frames) {
             (false, _) => None,
-            (true, None) => Some(crate::full::renderer(Path::new(ROOT), width, height, &session, false, false, video, &mut notes)),
-            (true, Some(frames)) => Some(crate::full::fixed_frame(Path::new(ROOT), &mut session, width, height, frames, false, video, &mut notes).map(|(renderer, log)| {
-                proof = Some(format!("{width} {height}\n{log}"));
-                renderer
-            })),
+            (true, None) => {
+                let gui = Some(gui_setup());
+                Some(crate::full::renderer(Path::new(ROOT), width, height, &session, false, false, video, gui, &mut notes))
+            }
+            (true, Some((frames, script))) => {
+                let gui = script.as_deref().map(|script| (gui_setup(), script));
+                Some(crate::full::fixed_frame(Path::new(ROOT), &mut session, width, height, frames, false, video, gui, &mut notes).map(|(renderer, log)| {
+                    proof = Some(format!("{width} {height}\n{log}"));
+                    renderer
+                }))
+            }
         };
         let full = match made {
             Some(Ok(renderer)) => Some(renderer),
@@ -485,7 +506,7 @@ impl Game {
         let missing: Vec<String> = if gpu.full { files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path)).collect() } else { Vec::new() };
         if full.is_some() {
             let view = session.view();
-            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link };
+            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui: Default::default(), render_scale: 1.0 };
         }
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
@@ -545,7 +566,7 @@ impl Game {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
         }
         let view = session.view();
-        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link }
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui: Default::default(), render_scale: 1.0 }
     }
 
     /// Full mode did not start for want of these files, one per line: fetch them and make the
@@ -567,14 +588,17 @@ impl Game {
         let seconds = self.last_ms.map_or(0.0, |last| (now - last) / 1000.0);
         self.last_ms = Some(now);
         let started = now_ms();
-        let stats = self.session.advance(seconds)?;
+        // (the pause menu's pause: no physics steps, the picture and the GUI go on)
+        let stats = if self.gui.paused { Default::default() } else { self.session.advance(seconds)? };
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
         let remote = self.session.remote_views();
         let others: Vec<OtherCar> = remote.iter().zip(&self.session.remote_shapes).zip(&self.remote_models).map(|((view, shape), model)| OtherCar { view, shape, model: *model }).collect();
         match &mut self.full {
             Some(full) => {
-                crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &Default::default());
+                let hud = crate::full::hud_info(&self.session, self.gui.paused);
+                crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &hud);
+                self.gui.exchange(full, &mut self.session);
                 self.gpu.present_full(|target, format| full.present_to(target, format))?;
             }
             None => self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?,
@@ -637,14 +661,32 @@ impl Game {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
-        if let Some(full) = &mut self.full {
-            let size = self.gpu.size();
-            if full.size() != size {
-                if let Err(why) = full.resize(size.0, size.1) {
-                    web_sys::console::warn_1(&format!("Full mode: the new size failed: {why}").into());
-                }
+        self.resize_full();
+    }
+
+    /// Full mode with AC's GUI: the 3D picture at this share of the canvas (0.5 to 1), the GUI
+    /// at the canvas's size. (Without the GUI the page makes the canvas itself smaller.)
+    pub fn set_render_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(0.5, 1.0);
+        if scale != self.render_scale {
+            self.render_scale = scale;
+            self.resize_full();
+        }
+    }
+
+    fn resize_full(&mut self) {
+        let Some(full) = &mut self.full else { return };
+        let window = self.gpu.size();
+        let size = match full.gui.is_some() && self.render_scale < 1.0 {
+            true => ((window.0 as f32 * self.render_scale).round().max(16.0) as u32, (window.1 as f32 * self.render_scale).round().max(16.0) as u32),
+            false => window,
+        };
+        if full.size() != size {
+            if let Err(why) = full.resize(size.0, size.1) {
+                web_sys::console::warn_1(&format!("Full mode: the new size failed: {why}").into());
             }
         }
+        full.gui_size = (size != window).then_some((window.0 as i32, window.1 as i32));
     }
 
     /// A key went down or up: a Windows virtual-key code.
@@ -660,6 +702,64 @@ impl Game {
     /// The page lost the keyboard: nothing is held.
     pub fn release_keys(&mut self) {
         self.session.input.lock().unwrap().keys.clear();
+        self.gui.tab_held = false;
+    }
+
+    /// Full mode draws AC's GUI: the page sends it the mouse and the keys below.
+    pub fn has_gui(&self) -> bool {
+        self.full.as_ref().is_some_and(|full| full.gui.is_some())
+    }
+
+    /// A key went down for AC's GUI (a Windows virtual-key code; `ctrl`: controls.ini's command
+    /// modifier is held). True: it was one of the GUI's own (Home, TAB, ESC, Ctrl+H …), the page
+    /// does nothing more with it.
+    pub fn gui_key(&mut self, code: u32, ctrl: bool, shift: bool) -> bool {
+        match &mut self.full {
+            Some(full) => self.gui.key(full, &mut self.session, code, ctrl, shift),
+            None => false,
+        }
+    }
+
+    /// The ESC menu's Exit or the console's `exit` was chosen since the last call: the page
+    /// leaves the drive.
+    pub fn gui_exit(&mut self) -> bool {
+        std::mem::take(&mut self.gui.exit)
+    }
+
+    /// A test hook (`?guido=`): rustyac.exe's `--gui-do` script on AC's GUI (apps opened for
+    /// the frame-rate runs, for one).
+    pub fn gui_script(&mut self, script: &str) -> Result<(), String> {
+        match self.full.as_mut().and_then(|full| full.gui.as_mut()) {
+            Some(gui) => gui.script(script),
+            None => Err("no GUI (Full mode only)".to_string()),
+        }
+    }
+
+    /// A key went up for AC's GUI (TAB's table goes).
+    pub fn gui_key_up(&mut self, code: u32) {
+        if code == 0x09 {
+            self.gui.tab_held = false;
+        }
+    }
+
+    /// A character typed (a UTF-16 unit, as WM_CHAR gives it): the console's line, the chat.
+    pub fn gui_char(&mut self, unit: u16) {
+        if let Some(gui) = self.full.as_mut().and_then(|full| full.gui.as_mut()) {
+            gui.key_char(unit as u32);
+        }
+    }
+
+    /// The mouse over the picture, in its pixels: `action` 0 move, 1 down, 2 up (`button` 0 left,
+    /// 1 right, 2 middle), 3 the wheel (`delta` in notches, up positive).
+    pub fn gui_mouse(&mut self, x: i32, y: i32, action: u32, button: u32, delta: f32) {
+        if let Some(gui) = self.full.as_mut().and_then(|full| full.gui.as_mut()) {
+            match action {
+                0 => gui.mouse_move(x, y),
+                1 => gui.mouse_down(x, y, button as i32),
+                2 => gui.mouse_up(x, y, button as i32),
+                _ => gui.mouse_wheel(x, y, delta),
+            }
+        }
     }
 
     /// The pad as XInput would give it: its buttons as `wButtons` bits, the triggers 0..255,

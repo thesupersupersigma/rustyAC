@@ -19,6 +19,8 @@ rustyac-content = { path = "../rustyac-content" }
 rustyac-game = { path = "../rustyac-game" }
 # multiplayer: the client of a Kunos acServer, here through a WebSocket gateway
 rustyac-net = { path = "../rustyac-net" }
+# Full mode: AC's GUI (its language, for the HUD and menus the page draws)
+rustyac-gui = { path = "../rustyac-gui" }
 
 # Full mode: AC's renderer (rustyac-game's `render::ac`); here only for the kgl call log of the
 # fixed frame (`full.rs`). In the page kgl runs on wgpu; natively on Direct3D 11, or on wgpu with

@@ -86,6 +86,8 @@ pub struct GuiSetup {
     /// Task 33: the developers' apps get icons (`Sim::Sim`'s `devEnabled`: `system/cfg/
     /// assetto_corsa.ini [AC_APPS] ENABLE_DEV_APPS`, or `--dev-apps`)
     pub dev_apps: bool,
+    /// Task 40: apps this front end cannot run (the page's): no icon, never shown
+    pub hidden_apps: &'static [&'static str],
     /// the GUI's language (`system/locales/<it>.ini`)
     pub language: String,
     /// the comparative telemetry's folder (its `opponents` folder holds others' laps; none:
@@ -196,6 +198,7 @@ pub struct GameGui {
     /// Task 33: `Game::gameTime`, the last frame's start; `Game::stats.cpuTime` and
     /// `renderHUDTime` of the last frame (they are stored after the HUD)
     pub game_time: rustyac_gui::app_stats::GameTime,
+    #[cfg_attr(not(windows), allow(dead_code))]
     last_frame: Option<std::time::Instant>,
     last_cpu_hud: (f64, f64),
     use_mph: bool,
@@ -354,7 +357,7 @@ impl GameGui {
             }
             let assists = own_or_documents(&setup, "assists.ini");
             let assist = |key: &str| assists.as_ref().map_or(0, |ini| ini.get_int("ASSISTS", key).unwrap_or(0));
-            let mut tracks: Vec<String> = std::fs::read_dir(setup.game.join("content/tracks")).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+            let mut tracks: Vec<String> = rustyac_content::vfs::read_dir(&setup.game.join("content/tracks")).map(|d| d.into_iter().filter(|e| e.1).map(|e| e.0).collect()).unwrap_or_default();
             tracks.sort_by_key(|name| name.to_uppercase());
             gui.setup = rustyac_gui::setup_car::SetupLink {
                 track_name: setup.track_name.clone(),
@@ -869,6 +872,7 @@ impl GameGui {
 
     /// What the statistics apps read this frame (`GameTime::update`, `Game::stats`,
     /// `GraphicsManager::stats`, the physics thread's `occupancy` and `physicsLateLoops`).
+    #[cfg(windows)]
     pub fn frame_stats(&mut self, update_ms: f64, render_ms: f64, counters: &rustyac_render::graphics::RenderStats, timing: &crate::physics_thread::Timing) {
         let now = std::time::Instant::now();
         if let Some(last) = self.last_frame {
@@ -1372,7 +1376,7 @@ impl GameGui {
 
 /// "DDMMYY-HHMMSS" of now (the name of the file the page "Time" prints).
 fn time_stamp() -> String {
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let seconds = crate::ac_replay::unix_seconds() as i64;
     // days since 1970 to a date (the civil calendar)
     let (days, rest) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     let z = days + 719_468;
@@ -1426,7 +1430,7 @@ pub fn car_names(game: &Path, race_ini: Option<&IniReader>, folders: &[String]) 
             if driver.is_empty() {
                 driver = if i == 0 { "Player".to_string() } else { format!("Driver {i}") };
             }
-            let screen = std::fs::read_to_string(game.join("content/cars").join(folder).join("ui/ui_car.json")).ok().and_then(|json| json_string(&json, "name")).unwrap_or_else(|| folder.clone());
+            let screen = rustyac_content::vfs::read_to_string(&game.join("content/cars").join(folder).join("ui/ui_car.json")).ok().and_then(|json| json_string(&json, "name")).unwrap_or_else(|| folder.clone());
             [driver, screen, folder.clone(), key("NATION_CODE")]
         })
         .collect()

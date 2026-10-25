@@ -20,6 +20,8 @@
 //   ?msaa=1            no multisampling
 //   ?graphics=<spec>   graphics settings before the drive, kept: a preset (high, medium, low)
 //                      and/or keys, `low,VIDEO/SHADOW_MAP_SIZE=1024,SCALE=50` (SCALE: render scale %)
+//   ?guido=<script>    Full mode: rustyac.exe's --gui-do script on AC's GUI at the start
+//                      (`show:essentials;show:tyres;show:pedals` opens three apps)
 //   ?nocache=1         do not keep the pack's files in the browser's storage
 //   ?selftest=<steps>  with ?go=1&autodrive=1: do not start the frame loop; run that many
 //                      physics steps at once and report the car's state hash in
@@ -957,6 +959,9 @@ async function listPictureFiles(models) {
     ['content/driver', 1, []],
     ['content/fonts', 0, []],
     ['content/objects3D', 0, []],
+    // AC's GUI: its textures and its languages
+    ['content/gui', 3, []],
+    ['system/locales', 1, []],
     ...models.map((model) => [`content/cars/${model}`, 3, ['sfx', 'data', 'ui']]),
   ];
   await state.source.listMore(parts);
@@ -1014,15 +1019,18 @@ async function drive(launch) {
     resizeCanvas();
     const built = performance.now();
     const backend = picture.backend;
-    // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart)
-    if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
+    // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart);
+    // given before every make (Full mode makes the game again, and making it takes the list)
+    const sessions = () => { if (params.get('sessions')) rac.set_sessions(params.get('sessions')); };
     // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
     // as rustyac.exe --race-seed n --ai-seed n-28000)
     const seed = (params.has('seed') ? Number(params.get('seed')) : Date.now()) >>> 0;
-    const create = () =>
-      launch
+    const create = () => {
+      sessions();
+      return launch
         ? rac.Game.create_race(canvas, launch.race, launch.assists, seed, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
         : rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
+    };
     let game = await create();
     // Full mode: the renderer names files of its own as it loads (the driver's model, a skin's
     // textures); those, and the game made again
@@ -1038,6 +1046,8 @@ async function drive(launch) {
     rac.fs_forget_models();
     state.game = game;
     game.set_autodrive(autodrive);
+    // ?guido=<script>: rustyac.exe's --gui-do on AC's GUI (a test hook: apps open for timings)
+    if (params.get('guido') && hasGui()) game.gui_script(params.get('guido'));
     const notes = `${state.pictureWhy ? state.pictureWhy + '\n' : ''}${megabytes(loaded)} of files in ${fileSeconds.toFixed(1)} s, built in ${((performance.now() - built) / 1000).toFixed(1)} s\n${game.notes()}`;
     window.rustyac.notes = notes;
     $('notes').textContent = notes;
@@ -1826,8 +1836,11 @@ window.rustyac.graphics = async (values) => {
 // ---------------------------------------------------------------- driving
 
 function resizeCanvas() {
-  // (the graphics page's render scale draws fewer pixels, which the browser stretches)
-  const scale = Math.min(window.devicePixelRatio || 1, 1.5) * renderScale();
+  // (the graphics page's render scale draws fewer pixels, which the browser stretches; with
+  // AC's GUI the game draws the 3D picture smaller itself and its GUI at the canvas's size)
+  const gui = hasGui();
+  if (gui) state.game.set_render_scale(renderScale());
+  const scale = Math.min(window.devicePixelRatio || 1, 1.5) * (gui ? 1 : renderScale());
   const width = Math.max(16, Math.round(canvas.clientWidth * scale));
   const height = Math.max(16, Math.round(canvas.clientHeight * scale));
   if (canvas.width !== width || canvas.height !== height) {
@@ -1857,9 +1870,13 @@ function keyList() {
     controlsNow.layout.map((line) => `${line.what.padEnd(width)}   ${line.keys}   |   ${line.pad}`).join('\n') +
     '\nABS up, down    Y, Shift+Y   Back + traction-control buttons\n' +
     'pits R   track Shift+R   view F1 / C   new car N\n' +
-    'gearbox G   pause P   menu Esc   controls O   this list H'
+    'gearbox G   pause P   menu Esc   controls O   this list H' +
+    (hasGui() ? "\nAC's menu Esc (Exit in it: the page's menu)   apps Ctrl+H, the bar on the right edge   desktops Ctrl+U   console Home   table Tab" : '')
   );
 }
+
+// Full mode with AC's GUI: Esc, Home, Tab, Ctrl+H … and the mouse go to the game.
+const hasGui = () => !!(state.game && state.game.has_gui && state.game.has_gui());
 
 function showKeys(forMs) {
   $('keys').textContent = keyList();
@@ -1870,7 +1887,8 @@ function showKeys(forMs) {
 
 function startDriving() {
   $('menu').hidden = true;
-  $('hud').hidden = false;
+  // (Full mode with AC's GUI: the game draws its own HUD)
+  $('hud').hidden = hasGui();
   showKeys(15000);
   state.running = true;
   state.paused = false;
@@ -1966,6 +1984,10 @@ function frame(now) {
     for (const until = performance.now() + (window.rustyac.slowFrameMs || 0); performance.now() < until; );
     try {
       state.game.frame(now);
+      if (hasGui() && state.game.gui_exit()) {
+        stopDriving();
+        return;
+      }
     } catch (error) {
       state.running = false;
       $('menu').hidden = false;
@@ -2045,6 +2067,16 @@ function pageUses(event) {
 window.addEventListener('keydown', (event) => {
   if (panelKey(event)) return;
   if (!(state.running || state.testing) || !state.game) return;
+  // AC's GUI has every key first, as the desktop's window gives it (WM_KEYDOWN, WM_CHAR)
+  if (hasGui() && !event.metaKey && !event.altKey && VK[event.code] !== undefined) {
+    if (!event.repeat && state.game.gui_key(VK[event.code], event.ctrlKey, event.shiftKey)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.key.length === 1 && !event.ctrlKey) state.game.gui_char(event.key.charCodeAt(0));
+    else if (event.key === 'Backspace') state.game.gui_char(8);
+    else if (event.key === 'Enter') state.game.gui_char(13);
+  }
   // a key with Ctrl, Alt or the Windows key is the browser's (Ctrl+T, Alt+Left ...), except
   // that a Ctrl key is itself a driving key (gear down)
   const isControl = event.code === 'ControlLeft' || event.code === 'ControlRight';
@@ -2132,6 +2164,26 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('keyup', (event) => {
   const code = VK[event.code];
   if (state.game && code !== undefined) state.game.key(code, false);
+  if (hasGui() && code !== undefined) state.game.gui_key_up(code);
+});
+
+// The mouse over the picture for AC's GUI, in the picture's pixels.
+function guiMouse(event, action, button, delta) {
+  if (!state.running || !hasGui() || event.target !== canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor(((event.clientX - rect.left) * canvas.width) / rect.width);
+  const y = Math.floor(((event.clientY - rect.top) * canvas.height) / rect.height);
+  state.game.gui_mouse(x, y, action, button, delta);
+  if (action !== 0) event.preventDefault();
+}
+// (a mouse button: 0 left, 1 middle, 2 right in the browser; AC's 0 left, 1 right, 2 middle)
+const acButton = (button) => [0, 2, 1][button] ?? 0;
+window.addEventListener('mousemove', (event) => guiMouse(event, 0, 0, 0));
+window.addEventListener('mousedown', (event) => guiMouse(event, 1, acButton(event.button), 0));
+window.addEventListener('mouseup', (event) => guiMouse(event, 2, acButton(event.button), 0));
+window.addEventListener('wheel', (event) => guiMouse(event, 3, 0, -Math.sign(event.deltaY)), { passive: false });
+window.addEventListener('contextmenu', (event) => {
+  if (state.running && hasGui() && event.target === canvas) event.preventDefault();
 });
 
 window.addEventListener('blur', () => state.game && state.game.release_keys());
@@ -2407,7 +2459,8 @@ async function main() {
   const wasm = await init();
   window.rustyac.memory = () => ({ wasm_mb: wasm.memory.buffer.byteLength / 2 ** 20, files_mb: rac.fs_megabytes() });
   $('version').textContent = rac.version();
-  rac.full_proof_next(Number(params.get('fullproof')) || 0);
+  // (?fullgui=<--gui-do script>: AC's GUI on in it, the script run first; ?fullgui= alone: none)
+  rac.full_proof_next(Number(params.get('fullproof')) || 0, params.has('fullgui') ? params.get('fullgui') : undefined);
   startControls();
   for (const item of (params.get('set') || '').split(',').filter(Boolean)) {
     const [name, value] = [item.slice(0, item.indexOf('=')), item.slice(item.indexOf('=') + 1)];

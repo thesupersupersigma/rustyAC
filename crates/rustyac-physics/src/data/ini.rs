@@ -88,7 +88,7 @@ fn decode_utf8_like_the_game(bytes: &[u8]) -> String {
 /// A plain file as a text-mode wide stream with that UTF-8 facet reads it (the setup help of
 /// `TagDocumentReader::load` @ 0x14044e030); none when it cannot be opened.
 pub fn read_text_utf8(path: &Path) -> Option<String> {
-    std::fs::read(path).ok().map(|bytes| decode_utf8_like_the_game(&text_mode(&bytes)))
+    rustyac_content::vfs::read(path).ok().map(|bytes| decode_utf8_like_the_game(&text_mode(&bytes)))
 }
 
 /// `trim2` @ 0x140238290: cut after the last character that is not space, tab or CR; a

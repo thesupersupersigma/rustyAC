@@ -48,13 +48,20 @@ pub mod referee;
 pub mod render;
 pub mod replay_manager;
 /// The part of the debug view that is plain maths and file parsing (no Direct3D), and in the
-/// browser AC's renderer on kgl's wgpu backend (`ac`, Full mode) with the HUD's inputs.
-/// (With the `wgpu` feature on Windows the same: the native proofs of Full mode.)
+/// browser AC's renderer on kgl's wgpu backend (`ac`, Full mode) with the HUD's inputs and
+/// AC's GUI (`gui`). (With the `wgpu` feature on Windows the same:
+/// the native proofs of Full mode.)
 #[cfg(any(not(windows), feature = "wgpu"))]
 pub mod render {
     #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
     pub mod ac;
+    #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
+    pub mod console;
     pub mod dds;
+    #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
+    pub mod gui;
+    #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
+    pub mod gui_apps;
     #[cfg(any(all(target_arch = "wasm32", target_os = "unknown"), feature = "wgpu"))]
     pub mod hud;
     pub mod scene;

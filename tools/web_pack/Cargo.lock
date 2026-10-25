@@ -815,6 +815,7 @@ version = "0.39.0"
 name = "rustyac-game"
 version = "0.39.0"
 dependencies = [
+ "js-sys",
  "png",
  "rustls",
  "rustyac-audio",
@@ -905,6 +906,7 @@ dependencies = [
  "js-sys",
  "rustyac-content",
  "rustyac-game",
+ "rustyac-gui",
  "rustyac-launcher",
  "rustyac-math",
  "rustyac-net",

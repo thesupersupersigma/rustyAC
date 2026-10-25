@@ -605,10 +605,12 @@ pub struct AcRenderer {
     #[cfg(all(windows, not(feature = "wgpu")))]
     hud: HudPass,
     /// AC's GUI and HUD (none: only the 2D pass's states are set, as with no form on the screen)
-    #[cfg(all(windows, not(feature = "wgpu")))]
     pub gui: Option<Box<super::gui::GameGui>>,
     /// the picture `ScreenCapturer` took this frame (the scene before the GUI and the HUD)
     pub pre_gui_shot: Option<ScreenShot>,
+    /// Task 40: the 2D pass's size when it is not the 3D picture's (the page's render scale:
+    /// AC's GUI at the window's size over a smaller picture; kgl on wgpu only)
+    pub gui_size: Option<(i32, i32)>,
     pub adapter: String,
     pub software: bool,
     /// draw calls of the last frame
@@ -790,11 +792,10 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, #[cfg(all(windows, not(feature = "wgpu")))] gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
-    #[cfg(all(windows, not(feature = "wgpu")))]
     pub fn enable_gui(&mut self, setup: super::gui::GuiSetup) -> Result<(), String> {
         self.gui = Some(Box::new(super::gui::GameGui::new(&mut self.graphics, setup)?));
         Ok(())
@@ -1168,7 +1169,6 @@ impl AcRenderer {
     /// lives and the HUD.
     pub fn draw(&mut self, world: &[CarView], focus: usize, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         // Game::onIdle's clock (ksGetQPTTime) for Game::stats (Task 33)
-        #[cfg(all(windows, not(feature = "wgpu")))]
         let frame_start = Instant::now();
         let view = &world[0];
         let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
@@ -1488,7 +1488,6 @@ impl AcRenderer {
         if let Some(semaphore) = &mut self.semaphore {
             semaphore.update(&mut self.scene, tts);
         }
-        #[cfg(all(windows, not(feature = "wgpu")))]
         let update_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
         self.graphics.begin_scene();
         self.scene.traverse(self.root);
@@ -1517,18 +1516,39 @@ impl AcRenderer {
         }
         self.draw_calls = self.graphics.stats.dip_calls;
         self.triangles = self.graphics.stats.triangles;
+        // (the page's render scale: the 2D pass at the window's size, the picture stretched)
+        #[cfg(any(not(windows), feature = "wgpu"))]
+        let small = match self.gui_size.filter(|&size| self.gui.is_some() && size != (self.graphics.video.width, self.graphics.video.height)) {
+            Some((w, h)) => match self.graphics.kgl.begin_gui_screen(w, h) {
+                Ok(()) => {
+                    let small = (self.graphics.video.width, self.graphics.video.height);
+                    (self.graphics.video.width, self.graphics.video.height) = (w, h);
+                    self.graphics.set_viewport(0, 0, w, h);
+                    Some(small)
+                }
+                Err(why) => {
+                    eprintln!("WARNING: the GUI at the window's size: {why}");
+                    None
+                }
+            },
+            None => None,
+        };
         self.graphics.set_screen_space_mode();
         // Game::evOnPreGUI: the handler of ScreenCapturer first (it was hung up first)
         // the statistics apps' numbers: Game::stats so far, GraphicsManager::stats of the 3D part
-        #[cfg(all(windows, not(feature = "wgpu")))]
         let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - update_ms;
+        // shortcut: the statistics apps get no frame numbers on wgpu (the page has no clock in
+        // here), give them the page's performance.now() when those apps matter there
         #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.frame_stats(update_ms, render_ms, &self.graphics.stats, &info.timing);
         }
-        #[cfg(all(windows, not(feature = "wgpu")))]
         if self.gui.as_mut().is_some_and(|gui| gui.pre_gui()) {
-            self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
+            // (F8's picture: the page reads none back, the browser takes screenshots)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.pre_gui_shot = Some(self.graphics.kgl.read_screen());
+            }
         }
         if let (Some(mirror), Some(v)) = (&self.mirror, &mut self.virtual_mirror) {
             v.render(&mut self.graphics, &mirror.texture, modes.0);
@@ -1536,13 +1556,6 @@ impl AcRenderer {
         // ksgui::GUI::render -> doRender2D 0x1402539d0: the states of the 2D pass, then the game
         // screen with its forms and the app bar (the HUD objects' update pass runs right before:
         // nothing between here and the game's place for it reads what they change)
-        #[cfg(any(not(windows), feature = "wgpu"))]
-        {
-            self.graphics.reset_render_states();
-            self.graphics.set_depth_mode(rustyac_render::graphics::DEPTH_OFF);
-            self.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
-        }
-        #[cfg(all(windows, not(feature = "wgpu")))]
         match &mut self.gui {
             Some(gui) => {
                 let camera = &self.camera.forward.base.camera;
@@ -1581,7 +1594,6 @@ impl AcRenderer {
         }
         // Game::renderHUD: the HUD objects of Sim (messages, banners, arrows, name tags, damage,
         // fuel light)
-        #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.render_hud(&mut self.graphics, dt);
             // Game::stats.cpuTime and renderHUDTime: the frame up to here
@@ -1610,7 +1622,6 @@ impl AcRenderer {
             }
         }
         // (the same handler, for a fade one of the menus asked for)
-        #[cfg(all(windows, not(feature = "wgpu")))]
         if let Some(gui) = &mut self.gui {
             gui.post_gui(&mut self.graphics, dt);
         }
@@ -1627,6 +1638,11 @@ impl AcRenderer {
         // the 2D drawing: GraphicsManager::resetRenderStates, then rustyAC's own HUD
         self.graphics.reset_render_states();
         self.graphics.kgl.set_screen_render_targets(true);
+        #[cfg(any(not(windows), feature = "wgpu"))]
+        if let Some((w, h)) = small {
+            self.graphics.kgl.end_gui_screen();
+            (self.graphics.video.width, self.graphics.video.height) = (w, h);
+        }
         #[cfg(all(windows, not(feature = "wgpu")))]
         let (width, height) = self.size();
         #[cfg(all(windows, not(feature = "wgpu")))]

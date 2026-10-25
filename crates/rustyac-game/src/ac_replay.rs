@@ -88,6 +88,14 @@ pub fn read_header(bytes: &[u8]) -> Result<ReplayHeader, String> {
     Ok(loader.header)
 }
 
+/// Seconds since 1970 (UTC): the browser's clock in the page, where `SystemTime` panics.
+pub fn unix_seconds() -> u64 {
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    return (js_sys::Date::now() / 1000.0) as u64;
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 /// The day and time for a file's name: the local time on Windows, UTC elsewhere.
 pub fn local_time() -> LocalTime {
     #[cfg(windows)]
@@ -103,7 +111,7 @@ pub fn local_time() -> LocalTime {
     }
     #[cfg(not(windows))]
     {
-        let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let seconds = unix_seconds();
         let (days, rest) = (seconds / 86400, seconds % 86400);
         // (days since 1970 to a date: Howard Hinnant's civil_from_days)
         let z = days as i64 + 719_468;
