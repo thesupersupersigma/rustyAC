@@ -2,11 +2,11 @@
 
 ## Resume here
 
-- Done: step 0 (lib.sh skips the recording cache for `--ai-line` cases; the
-  graphics page's High preset is AC's shipped `cfg/video.ini`); step 1 (FW1
-  text on wgpu: same kgl log as D3D11 on 12 of 13 GUI sequences, the 13th
-  differs only where DirectWrite takes CJK glyphs from a Windows font).
-- Next: step 2, the GUI in Full mode in the page.
+- Done: step 0; step 1 (FW1 text on wgpu); steps 2-4 (AC's GUI in Full mode
+  in the page, hidden apps, the GUI at full size under a render scale):
+  11 GUI sequences give the same kgl log and control states natively on
+  D3D11, natively on wgpu and in the page.
+- Next: `run_all.sh --quick` and `--changed v0.39.0`, then v0.40.0.
 - Scratch: `re/scratch/task40/`. Disk free at start: 36 GB.
 
 ## Step 0
@@ -86,3 +86,114 @@ the boxes (313 on D3D11, 301 on wgpu: a few tiny glyphs are empty here).
 
 setup_* sequences need the AC side to prepare their car files, so they are
 not in this table (the AC side runs acs.exe, which this task never runs).
+
+## Step 2: AC's GUI in Full mode in the page
+
+How it works:
+
+- `rustyac-game`: `render::gui`, `gui_apps` and `console` now build for
+  the page and the `wgpu` feature too (they were Windows-only glue); in
+  `render::ac` the GUI pass (game screen, forms, apps bar, HUD objects,
+  post-GUI fade) runs on every backend. What touched the disk directly now
+  goes through the content layer (`vfs`), so the page's files are found:
+  the setup editor's track list, the cars' `ui_car.json`, the help `.tag`,
+  the apps' content files, `cfg` files, and the setup help
+  (`rustyac_physics::data::ini::read_text_utf8`). The clock is the
+  browser's in the page (`ac_replay::unix_seconds`; `SystemTime` panics in
+  wasm).
+- `rustyac-web/src/full.rs`: `gui_setup` gives the GUI what rustyac.exe's
+  `make_ac` gives it; `GuiLoop` carries the GUI's asks back to the session
+  each frame as rustyac.exe's frame loop does (pause, next / restart
+  session, back to pits, the pits' lock and drive, the setup editor's jobs
+  and its car, the pit strategy page, cameras, exit), and routes keys as
+  rustyac.exe's window does (Home console, Tab table, Esc pause menu, the
+  controls.ini Ctrl keys for apps / desktops / names / damage / restart).
+- `web.rs` / `web/app.js`: a Full-mode drive has AC's GUI and HUD; the
+  page's own HUD hides. Keys go to the GUI first (Esc opens AC's menu; its
+  Exit leaves the drive), typed characters to the console and text boxes,
+  the canvas's mouse (move, buttons, wheel) to the GUI.
+- `content.rs`: the page's file list has AC's `content/gui` (textures;
+  `.psd` files left out) and `system/locales`.
+
+Proof, deviating from the prompt: the render oracle's GUI sequences (Tasks
+29–34) drive the widgets on their own with an AC side next to them; they
+are 6 000 lines of the oracle tied to acs.exe and the disk, so they were not
+put into the page. The page's proof instead runs the whole GUI as the game
+runs it: Full mode's fixed frame (`?fullproof=<frames>&fullgui=<script>`,
+natively `full_frame --gui <script>`) with a `--gui-do` script, and the kgl
+log ends with every control's state (name, shown, place, text, mouse,
+highlight), the mouse, the desktop and the GUI's asks of the session. Each
+sequence ran three ways: native D3D11, native wgpu (GPU), the page
+(headless Chrome on the GPU); 1280 x 720, ks_ferrari_f2004 at magione, the
+High video.ini (`re/scratch/task40/prove.sh`, `cmp_log.py`).
+
+| sequence | what | script | kgl log lines | D3D11 = wgpu | wgpu = page | control states |
+|---|---|---|---|---|---|---|
+| hud3 | HUD with Essentials, Tyres, Pedals open | `show:essentials;show:tyres;show:pedals` | 24062 | yes | yes | same (all 3) |
+| sidebar | the apps bar slid out (20 frames) | the same + `mouse:1279:360` | 115722 | yes | yes | same (all 3) |
+| esc | the pause / ESC menu | `esc` | 21434 | yes | yes | same (all 3) |
+| pits | the pits menu | `pits` | 22199 | yes | yes | same (all 3) |
+| setup | the setup editor, Setup I/O | `pits;click:47:273` | 24395 | yes | yes | same (all 3) |
+| pitlane | practice under the referee | `--sessions p10` | 22689 | yes | yes | same (all 3) |
+| results | the session results | `results`, `--sessions p10` | 22349 | yes | yes | same (all 3) |
+| console | the console with `help` typed | `console;type:help` | 21387 | yes | yes | same (all 3) |
+| tab | the TAB table | `tab` | 21211 | yes | yes | same (all 3) |
+| desktop | a second app desktop | `show:essentials;desktop;show:tyres` | 23861 | yes | yes | same (all 3) |
+| names | driver names, damage | `names;damage` | 21554 | yes | yes | same (all 3) |
+
+"=" is every line equal but the `fw1 atlas update` lines (the glyph atlas's
+bytes, step 1); the control states are the log's `gui` lines (1 500+
+controls each).
+
+Found on the way: in Full mode the page makes the game twice (after the
+renderer names its extra files) and the second make lost `?sessions=`
+(since 0.38.8); fixed.
+
+## Step 3: apps the page can't run
+
+`full::PAGE_HIDDEN_APPS`: made but without an icon in the apps bar and never
+shown (`GuiSetup::hidden_apps`; rustyac.exe hides none):
+
+| app | why |
+|---|---|
+| volumes | the page's sound does not take its levels |
+| ffb | a browser has no force feedback |
+| eyes | the page's cameras do not take its eye point |
+| gamestats, rstats | frame statistics only Direct3D 11 counts |
+| telemetry, setupdebug | fed from rustyac.exe's physics thread |
+
+AC's Python apps (`apps/python`: Chat, gMeter, system and any mod) are not
+made anywhere, in the page or in rustyac.exe (Task 42).
+
+## Step 4: the GUI at full resolution under a render scale
+
+With AC's GUI, the page no longer shrinks the canvas for the render scale:
+the 3D picture is drawn at the scale (`Game::set_render_scale`), then
+`Kgl::begin_gui_screen` stretches it into a full-size screen, the 2D pass
+draws there at the canvas's size, and `end_gui_screen` presents that
+(kgl's wgpu backend; `AcRenderer::gui_size`). At 100 % nothing changes and
+the kgl log is the same as before.
+
+Low at 75 % (`re/scratch/task40/shots/6_low_75pct_crop.jpg`, an unscaled
+corner of a 1920 x 1080 page): the track is soft, the apps' text sharp.
+
+## Pictures and frame rates
+
+Screenshots (`re/scratch/task40/shots/`, each under 300 KB, the page in
+headless Chrome on the GPU): `1_hud_driving.jpg` (autodrive, Essentials /
+Tyres / Pedals), `2_esc_menu.jpg`, `3_apps_sidebar.jpg` (the same three apps,
+the bar slid out), `4_setup_editor.jpg`, `5_results.jpg`,
+`6_low_75pct_crop.jpg`.
+
+Frame rate, the page on this PC's GPU (Chrome, Vulkan, 1920 x 1080), AC's HUD
+and three apps open, autodrive at magione, 40 s each, three runs
+(`re/scratch/task40/fps.sh`; `?guido=` opens the apps):
+
+| preset | fps, three runs | median | work ms / frame (median) |
+|---|---|---|---|
+| High (AC's shipped video.ini) | 63.7, 54.0, 47.7 | 54.0 | 17.8 |
+| Low (render scale 75 %) | 58.6, 59.1, 58.7 | 58.7 | 16.3 |
+
+High swings run to run (one run reached the page's ~60-64 frame cap);
+Low holds near the cap.
+
