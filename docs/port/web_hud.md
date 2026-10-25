@@ -6,8 +6,10 @@
   in the page, hidden apps, the GUI at full size under a render scale):
   11 GUI sequences give the same kgl log and control states natively on
   D3D11, natively on wgpu and in the page.
-- Next: `run_all.sh --quick` and `--changed v0.39.0`, then v0.40.0.
-- Scratch: `re/scratch/task40/`. Disk free at start: 36 GB.
+- `run_all.sh --quick` (129 / 129) and `--changed v0.39.0` (1599 / 1599)
+  identical.
+- Next: v0.40.0; leftovers (see "Not done") go to Task 40b.
+- Scratch: `re/scratch/task40/`. Disk free: 36 GB at start, 30 GB at end.
 
 ## Step 0
 
@@ -196,4 +198,43 @@ and three apps open, autodrive at magione, 40 s each, three runs
 
 High swings run to run (one run reached the page's ~60-64 frame cap);
 Low holds near the cap.
+
+## Proofs (`tools/proofs/run_all.sh`)
+
+`lib.sh` changed, so `--changed v0.39.0` took every area.
+
+| area | `--quick` cases | identical | `--changed v0.39.0` cases | identical |
+|---|---|---|---|---|
+| physics | 9 | 9 | 113 | 113 |
+| fresh | 47 | 47 | 657 | 657 |
+| sound | 4 | 4 | 22 | 22 |
+| render | 10 | 10 | 107 | 107 |
+| gui | 15 | 15 | 123 | 123 |
+| replays | 5 | 5 | 29 | 29 |
+| net | 16 | 16 | 80 | 80 |
+| browser | 9 | 9 | 226 | 226 |
+| ai_page | 3 | 3 | 3 | 3 |
+| shaders | 4 | 4 | 4 | 4 |
+| launcher | 1 | 1 | 12 | 12 |
+| dumps | 6 | 6 | 223 | 223 |
+| all (wall clock) | 129 (36 min) | 129 | 1599 (7 h 11 min) | 1599 |
+
+Clippy `-D warnings` clean: native `--workspace --all-targets`, the `wgpu`
+feature (`rustyac-web`, `rustyac-game`, `rustyac-render`, `--all-targets`),
+wasm32-unknown-unknown (`rustyac-web`, `rustyac-net`) and wasm32-wasip1. Every
+tool's lock file passes `cargo tree --locked --offline`.
+
+## Not done (Task 40b)
+
+- TrueType hinting (a TrueType interpreter), so wgpu's glyphs are a little
+  softer than DirectWrite's.
+- Fallback fonts for characters AC's fonts lack (CJK, Hangul): wgpu draws
+  the missing-glyph box.
+- The stats apps get no frame counts on wgpu (hidden in the page).
+- The hidden apps (step 3) and AC's Python apps (Task 42).
+- The render oracle's own GUI widget sequences in the page (the page is
+  proved with whole-GUI `--gui-do` scripts instead).
+- High's frame rate varies run to run on this PC.
+- The preview content pack must be rebuilt: it now carries `content/gui`
+  and `system/locales`.
 
