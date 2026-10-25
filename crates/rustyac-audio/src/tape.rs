@@ -30,7 +30,7 @@ pub struct Tape {
 
 impl Tape {
     pub fn read(path: &Path) -> Result<Tape, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = rustyac_content::vfs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let end = bytes.windows(2).position(|w| w == b"\n\n").ok_or("not an audio tape: no header")?;
         let header_text = String::from_utf8_lossy(&bytes[..end]);
         let header: Vec<(String, String)> = header_text.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();

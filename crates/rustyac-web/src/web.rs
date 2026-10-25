@@ -16,6 +16,7 @@ use rustyac_game::input::bindings::key_name;
 use rustyac_game::input::ini::ControlsIni;
 use rustyac_game::input::pad::PadState;
 use rustyac_game::input::{device_name, DEVICE_PAD};
+use rustyac_game::audio::GameAudio;
 use rustyac_game::view::CarView;
 use wasm_bindgen::prelude::*;
 
@@ -37,11 +38,11 @@ use rustyac_game::render::ac::AcRenderer;
 use crate::session::Session;
 
 /// The folder the page's files sit under (a name only: nothing is on a disk).
-const ROOT: &str = "ac";
+pub(crate) const ROOT: &str = "ac";
 /// The page's own `Documents/Assetto Corsa/cfg/video.ini` (its graphics settings) under the root.
 const VIDEO_INI: &str = "docs/cfg/video.ini";
 
-fn files() -> &'static Arc<MemFs> {
+pub(crate) fn files() -> &'static Arc<MemFs> {
     static FILES: OnceLock<Arc<MemFs>> = OnceLock::new();
     FILES.get_or_init(|| {
         let files = Arc::new(MemFs::new());
@@ -51,7 +52,7 @@ fn files() -> &'static Arc<MemFs> {
     })
 }
 
-fn mounted(path: &str) -> String {
+pub(crate) fn mounted(path: &str) -> String {
     format!("{ROOT}/{}", path.trim_start_matches('/'))
 }
 
@@ -391,6 +392,32 @@ pub struct Game {
     /// Full mode with AC's GUI: the graphics page's render scale (the 3D picture's share of the
     /// canvas; the GUI keeps the canvas's size)
     render_scale: f32,
+    /// AC's sound (FMOD Studio 2.03 HTML5 from the pack, see `web/sound.js`), when it started.
+    sound: Option<GameAudio>,
+}
+
+/// AC's sound for the session's cars and track, as the desktop's `start_audio`: `None` (and a
+/// note) when the pack has no FMOD or the sound did not start.
+fn start_sound(session: &mut Session, notes: &mut Vec<String>) -> Option<GameAudio> {
+    use rustyac_game::render::scene::CarShape;
+    // sound.js puts the bridge up once FMOD from the pack has loaded
+    if js_sys::Reflect::get(&js_sys::global(), &"rustyacSound".into()).map_or(true, |v| v.is_undefined()) {
+        notes.push("sound: none (FMOD is not in the pack, or the page has not loaded it)".to_string());
+        return None;
+    }
+    let feed = Arc::new(Mutex::new(rustyac_game::audio::Feed::default()));
+    let info = session.sim.car_info();
+    let others = session.sim.opponent_infos();
+    // a car's folder name is its name in the game
+    let cars: Vec<(String, PathBuf, CarShape)> = std::iter::once(&info)
+        .chain(&others)
+        .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
+        .collect();
+    let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
+    let sound = GameAudio::start(&rustyac_game::audio::AudioOptions::default(), Arc::clone(&feed), &cars, track);
+    notes.push(if sound.is_some() { "sound: AC's own, through FMOD Studio 2.03 (HTML5)".to_string() } else { "sound: none (no FMOD in the pack, or it did not start: see the console)".to_string() });
+    session.sound = sound.is_some().then_some(feed);
+    sound
 }
 
 pub(crate) fn now_ms() -> f64 {
@@ -506,7 +533,8 @@ impl Game {
         let missing: Vec<String> = if gpu.full { files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path)).collect() } else { Vec::new() };
         if full.is_some() {
             let view = session.view();
-            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui: Default::default(), render_scale: 1.0 };
+            let sound = start_sound(&mut session, &mut notes);
+            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui: Default::default(), render_scale: 1.0, sound };
         }
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
@@ -566,7 +594,8 @@ impl Game {
             notes.push(format!("files that were asked for and are not here: {}", wanted.join(", ")));
         }
         let view = session.view();
-        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui: Default::default(), render_scale: 1.0 }
+        let sound = start_sound(&mut session, &mut notes);
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui: Default::default(), render_scale: 1.0, sound }
     }
 
     /// Full mode did not start for want of these files, one per line: fetch them and make the
@@ -592,6 +621,9 @@ impl Game {
         let stats = if self.gui.paused { Default::default() } else { self.session.advance(seconds)? };
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
+        if let Some(sound) = &mut self.sound {
+            sound.frame(&self.session.camera, &camera.matrix, seconds, self.gui.paused);
+        }
         let remote = self.session.remote_views();
         let others: Vec<OtherCar> = remote.iter().zip(&self.session.remote_shapes).zip(&self.remote_models).map(|((view, shape), model)| OtherCar { view, shape, model: *model }).collect();
         match &mut self.full {

@@ -347,11 +347,11 @@ impl CarAudio {
     /// has one, then the sound object. `None` when the car has no bank.
     pub fn for_car(engine: &mut AudioEngine, info: CarInfo) -> Result<Option<CarAudio>, String> {
         let root = engine.files.content_root.clone();
-        if !root.join(Self::bank_path(&info.unix_name)).is_file() {
+        if !rustyac_content::vfs::is_file(&root.join(Self::bank_path(&info.unix_name))) {
             return Ok(None);
         }
         let guids = format!("content/cars/{}/sfx/GUIDs.txt", info.unix_name);
-        if root.join(&guids).is_file() {
+        if rustyac_content::vfs::is_file(&root.join(&guids)) {
             engine.parse_guids(&guids)?;
         }
         Ok(Some(CarAudio::new(engine, info)?))

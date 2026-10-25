@@ -10,8 +10,11 @@
 //! acs.exe image it maps, which is how the game's own sound code and the port come to write
 //! call logs in one format.
 
-use std::ffi::{c_char, c_void, CStr, CString, OsStr};
+#[cfg(windows)]
+use std::ffi::OsStr;
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::fmt::Write as _;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -39,8 +42,10 @@ pub enum Output {
     NoSound,
 }
 
+#[cfg(windows)]
 type Module = *mut c_void;
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn LoadLibraryExW(name: *const u16, file: *mut c_void, flags: u32) -> Module;
@@ -48,8 +53,10 @@ extern "system" {
     fn GetLastError() -> u32;
 }
 
+#[cfg(windows)]
 const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x8;
 
+#[cfg(windows)]
 unsafe fn symbol(module: Module, name: &str) -> Result<usize, String> {
     let c = CString::new(name).unwrap();
     let p = GetProcAddress(module, c.as_ptr().cast());
@@ -94,6 +101,7 @@ pub fn api() -> Option<&'static Api> {
 
 /// Loads the two FMOD DLLs from `folder` (the Assetto Corsa folder). Once per process: a second
 /// call returns the first result's API whatever its arguments.
+#[cfg(windows)]
 pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
     if let Some(api) = API.get() {
         return Ok(api);
@@ -137,6 +145,46 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
             },
         )
     };
+    keep(fns, extra, folder, output)
+}
+
+/// The browser's FMOD (see [`super::web`]): `web/sound.js` must have loaded it. `folder` is the
+/// game's folder as the page mounts it. Once per page, as [`load`] on Windows.
+#[cfg(target_arch = "wasm32")]
+pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
+    if let Some(api) = API.get() {
+        return Ok(api);
+    }
+    let extra = Extra {
+        set_output: web_extra::set_output,
+        set_dsp_buffer_size: web_extra::set_dsp_buffer_size,
+        flush_sample_loading: web_extra::flush_sample_loading,
+        get_sample_loading_state: web_extra::get_sample_loading_state,
+    };
+    keep(Fns::web(), extra, folder, output)
+}
+
+/// What the layer needs of the browser's FMOD besides acs.exe's imports.
+#[cfg(target_arch = "wasm32")]
+mod web_extra {
+    use super::super::web::call;
+    use super::{Handle, RawHandle};
+
+    pub unsafe extern "C" fn set_output(this: RawHandle, kind: i32) -> i32 {
+        call("x_set_output", &[&Handle(this), &kind])
+    }
+    pub unsafe extern "C" fn set_dsp_buffer_size(this: RawHandle, length: u32, count: i32) -> i32 {
+        call("x_set_dsp_buffer_size", &[&Handle(this), &length, &count])
+    }
+    pub unsafe extern "C" fn flush_sample_loading(this: RawHandle) -> i32 {
+        call("x_flush_sample_loading", &[&Handle(this)])
+    }
+    pub unsafe extern "C" fn get_sample_loading_state(this: RawHandle, state: *mut i32) -> i32 {
+        call("x_get_sample_loading_state", &[&Handle(this), &state])
+    }
+}
+
+fn keep(fns: Fns, extra: Extra, folder: &Path, output: Output) -> Result<&'static Api, String> {
     let wav_file = match &output {
         Output::WavNrt { file, .. } => {
             CString::new(file.to_string_lossy().into_owned()).map_err(|_| "bad WAV file name".to_string())?
@@ -144,6 +192,20 @@ pub fn load(folder: &Path, output: Output) -> Result<&'static Api, String> {
         _ => CString::default(),
     };
     Ok(API.get_or_init(|| Api { fns, extra, output, wav_file, folder: folder.to_path_buf(), studio: std::sync::atomic::AtomicUsize::new(0), descriptions: std::sync::Mutex::new(Vec::new()) }))
+}
+
+/// Waits in 1 ms steps until `done` or `seconds` have passed. The browser's FMOD has no loader
+/// thread (`sound.js` finishes loading inside the calls): there `done` is asked once.
+fn wait_for(seconds: u64, mut done: impl FnMut() -> bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let start = std::time::Instant::now();
+        while !done() && start.elapsed().as_secs() < seconds {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (seconds, done());
 }
 
 impl Api {
@@ -355,6 +417,7 @@ fn log_call(name: &str, args: &[&dyn Arg], result: i32, forget: bool) {
     log.push(&text);
 }
 
+#[cfg(windows)]
 macro_rules! pick {
     (low, $low:expr, $studio:expr) => {
         $low
@@ -385,6 +448,7 @@ macro_rules! fmod_api {
         }
 
         impl Fns {
+            #[cfg(windows)]
             unsafe fn load(low: Module, studio: Module) -> Result<Fns, String> {
                 Ok(Fns {
                     $( $name: std::mem::transmute::<usize, unsafe extern "C" fn($($ty),*) -> i32>(
@@ -392,6 +456,26 @@ macro_rules! fmod_api {
                     $( $mname: std::mem::transmute::<usize, unsafe extern "C" fn($($mty),*) -> i32>(
                         symbol(pick!($mdll, low, studio), $msym)?), )*
                 })
+            }
+        }
+
+        /// The browser's FMOD behind every function (see [`super::web`]).
+        #[cfg(target_arch = "wasm32")]
+        mod web_fns {
+            use super::*;
+            use super::super::web::{call, Wire};
+            $( pub unsafe extern "C" fn $name($($arg: $ty),*) -> i32 {
+                call(stringify!($name), &[$(&$arg as &dyn Wire),*])
+            } )*
+            $( pub unsafe extern "C" fn $mname($($marg: $mty),*) -> i32 {
+                call(stringify!($mname), &[$(&$marg as &dyn Wire),*])
+            } )*
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        impl Fns {
+            fn web() -> Fns {
+                Fns { $( $name: web_fns::$name, )* $( $mname: web_fns::$mname, )* }
             }
         }
 
@@ -691,18 +775,13 @@ pub unsafe extern "C" fn studio_flush_commands(this: Handle) -> i32 {
     let result = (api.fns.studio_flush_commands)(this);
     if api.non_real_time() {
         let list = api.descriptions.lock().unwrap().clone();
-        let start = std::time::Instant::now();
-        loop {
+        wait_for(30, || {
             // FMOD_STUDIO_LOADING_STATE_LOADING = 2
-            let loading = list.iter().any(|&d| {
+            !list.iter().any(|&d| {
                 let mut state = 0i32;
                 (api.extra.get_sample_loading_state)(d as RawHandle, &mut state) == FMOD_OK && state == 2
-            });
-            if !loading || start.elapsed().as_secs() >= 30 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+            })
+        });
     }
     if LOGGING.load(Ordering::Relaxed) {
         log_call("studio_flush_commands", &[&this], result, false);
@@ -722,16 +801,12 @@ pub unsafe extern "C" fn description_unload_sample_data(this: Handle) -> i32 {
     let studio = api.studio.load(Ordering::Relaxed) as RawHandle;
     if api.non_real_time() && !studio.is_null() && result == FMOD_OK {
         (api.fns.studio_flush_commands)(Handle(studio));
-        let start = std::time::Instant::now();
-        loop {
+        wait_for(5, || {
             // FMOD_STUDIO_LOADING_STATE: 0 unloading, 2 loading
             let mut state = 1i32;
             let found = (api.extra.get_sample_loading_state)(this.0, &mut state);
-            if found != FMOD_OK || (state != 0 && state != 2) || start.elapsed().as_secs() >= 5 {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+            found != FMOD_OK || (state != 0 && state != 2)
+        });
     }
     if LOGGING.load(Ordering::Relaxed) {
         log_call("description_unload_sample_data", &[&this], result, false);

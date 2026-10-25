@@ -8,3 +8,5 @@ pub mod dsp_abi;
 pub mod log;
 pub mod raw;
 pub mod types;
+#[cfg(target_arch = "wasm32")]
+pub mod web;

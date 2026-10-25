@@ -203,6 +203,9 @@ fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<S
     out
 }
 
+/// FMOD Studio's release build for the page (the logging build is twice the size).
+const FMOD_FILES: [&str; 2] = ["fmodstudio.js", "fmodstudio.wasm"];
+
 fn run(args: &[String]) -> Result<(), String> {
     let value = |name: &str| args.iter().position(|a| a == name).and_then(|at| args.get(at + 1)).cloned();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
@@ -290,6 +293,11 @@ fn run(args: &[String]) -> Result<(), String> {
             read.extend(content::files_of_picture(&root, car, "", ""));
             let own = format!("content/cars/{}/", car.to_ascii_lowercase());
             let mut files = Vec::new();
+            // the sound reads its bank and GUIDs.txt only once FMOD runs, and sounds.ini from a data folder
+            let mut sound = BTreeMap::new();
+            files_under(&root, &format!("content/cars/{car}/sfx"), &|p: &str| p.ends_with(".bank") || p.ends_with("/guids.txt"), &mut sound);
+            files_under(&root, &format!("content/cars/{car}/data"), &|p: &str| p.ends_with("/sounds.ini"), &mut sound);
+            files.extend(sound.into_iter().filter(|(file, _)| !read.iter().any(|r| relative(r).as_deref() == Some(file.as_str()))));
             for file in read.iter().filter_map(|file| relative(file)) {
                 let (file, bytes) = sized(file)?;
                 if file.to_ascii_lowercase().starts_with(&own) {
@@ -310,6 +318,12 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     eprintln!();
+    // the sound's own tables (no .strings.bank: every event is found by GUID)
+    for file in ["content/sfx/GUIDs.txt", "content/sfx/common.bank"] {
+        if let Ok(sized) = sized(file.to_string()) {
+            shared.insert(sized.0, sized.1);
+        }
+    }
     let Some(probe_car) = car_items.first().map(|item| item.id.clone()) else {
         std::panic::set_hook(hook);
         for (kind, name, why) in &skipped {
@@ -331,6 +345,11 @@ fn run(args: &[String]) -> Result<(), String> {
             let own = format!("content/tracks/{}/", track.to_ascii_lowercase());
             let car = format!("content/cars/{}/", probe_car.to_ascii_lowercase());
             let mut files = Vec::new();
+            // the track's reverbs and occluders (read by the sound only)
+            let mut sound = BTreeMap::new();
+            let data = if layout.is_empty() { format!("content/tracks/{track}/data") } else { format!("content/tracks/{track}/{layout}/data") };
+            files_under(&root, &data, &|p: &str| p.ends_with("/audio_sources.ini"), &mut sound);
+            files.extend(sound);
             for file in read.iter().filter_map(|file| relative(file)) {
                 let lower = file.to_ascii_lowercase();
                 if lower.starts_with(&car) {
@@ -460,6 +479,16 @@ fn run(args: &[String]) -> Result<(), String> {
     let launcher: Vec<(String, u64)> = launcher_files(&root, &pack_cars, &pack_tracks).into_iter().collect();
     manifest.launcher = add(&mut manifest, &launcher)?;
     println!("AC's launcher: {} in {} files (its theme, cfg, and the cars' and tracks' menu pictures)", megabytes(manifest.bytes_of(&manifest.launcher)), manifest.launcher.len());
+    // FMOD's browser build (Firelight's: never in the repo or a release, only in a pack), from ignored/fmod
+    let fmod = repo.join("ignored/fmod/fmodstudioapi20315html5/fmodstudioapi20315html5/api/studio/lib/wasm");
+    for name in FMOD_FILES {
+        match copy_hashed(&fmod.join(name), &out.join("fmod").join(name)) {
+            Ok((bytes, sha256)) => {
+                manifest.file(PackFile { path: format!("fmod/{name}"), bytes, sha256 });
+            }
+            Err(why) => println!("no sound in the page: FMOD Studio 2.03.15 HTML5 is not unpacked under ignored/fmod ({why})"),
+        }
+    }
     if manifest.cars.is_empty() || manifest.tracks.is_empty() {
         return Err("no car or no track could be copied: no pack was written".to_string());
     }

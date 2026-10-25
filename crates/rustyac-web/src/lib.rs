@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! rustyAC in the browser, a preview: the Vanilla physics as WebAssembly (bit for bit the
-//! desktop's, see `docs/port/web.md`), a small picture, keyboard and gamepad. No sound, no
-//! AC shaders, no shared memory.
+//! desktop's, see `docs/port/web.md`), a small picture, keyboard and gamepad, AC's sound
+//! (FMOD's HTML5 build from the pack). No AC shaders, no shared memory.
 //!
 //! * [`content`]: which cars and tracks are there, which load, which files a drive needs.
 //! * [`session`]: one drive: the simulation behind a fixed-step accumulator, its camera.
@@ -12,6 +12,8 @@
 //! * [`pack`]: the preview pack's manifest (`tools/web_pack` writes it, the page reads it).
 //! * [`race`]: a drive from AC's launcher: the session of its race.ini.
 //! * `gpu`, `web` (wasm only): the wgpu picture and what the page calls.
+//! * `sound` (wasm only): the sound's proof: a recorded drive through the port's sound code
+//!   and the browser's FMOD, its call log for the desktop's to be compared with.
 //! * `net` (wasm only): multiplayer: the page's WebSocket to a gateway as the transport of
 //!   `rustyac-net`'s client, the join as the page steps it.
 //!
@@ -34,5 +36,7 @@ mod gpu;
 mod launcher;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod net;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod sound;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod web;

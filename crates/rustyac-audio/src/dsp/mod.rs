@@ -12,6 +12,7 @@ pub mod distance_filter;
 pub mod gain;
 
 use std::ffi::{c_char, c_void};
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 /// `FMOD_DSP_STATE`, as far as the plug-ins look.
@@ -89,7 +90,7 @@ impl ParameterDesc {
         p.0[0..4].copy_from_slice(&kind.to_le_bytes());
         p.0[4..4 + name.len().min(15)].copy_from_slice(&name.as_bytes()[..name.len().min(15)]);
         p.0[0x14..0x14 + label.len().min(15)].copy_from_slice(&label.as_bytes()[..label.len().min(15)]);
-        p.0[0x28..0x30].copy_from_slice(&(description.as_ptr() as usize).to_le_bytes());
+        p.0[0x28..0x30].copy_from_slice(&(description.as_ptr() as usize as u64).to_le_bytes());
         p
     }
 
@@ -103,8 +104,8 @@ impl ParameterDesc {
 
     pub(crate) fn points(mut self, values: &'static [f32], positions: &'static [f32]) -> ParameterDesc {
         self.0[0x48..0x4c].copy_from_slice(&(values.len() as i32).to_le_bytes());
-        self.0[0x50..0x58].copy_from_slice(&(values.as_ptr() as usize).to_le_bytes());
-        self.0[0x58..0x60].copy_from_slice(&(positions.as_ptr() as usize).to_le_bytes());
+        self.0[0x50..0x58].copy_from_slice(&(values.as_ptr() as usize as u64).to_le_bytes());
+        self.0[0x58..0x60].copy_from_slice(&(positions.as_ptr() as usize as u64).to_le_bytes());
         self
     }
 
@@ -142,6 +143,13 @@ struct Crt {
     log10f: Option<F1>,
 }
 
+#[cfg(not(windows))]
+fn crt() -> &'static Crt {
+    // no MSVCR120 outside Windows: Rust's log10 and formatting
+    &Crt { sprintf: None, log10f: None }
+}
+
+#[cfg(windows)]
 fn crt() -> &'static Crt {
     #[link(name = "kernel32")]
     extern "system" {

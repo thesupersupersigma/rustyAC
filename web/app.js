@@ -967,6 +967,61 @@ async function listPictureFiles(models) {
   await state.source.listMore(parts);
 }
 
+// ---------------------------------------------------------------- sound (Task 41)
+
+// AC's sound: FMOD Studio for HTML5 from the preview pack (fmod/), under sound.js. Loaded once,
+// before the first drive; without it in the pack (or with a folder of one's own) the page is
+// silent. The volume and mute are this browser's, on top of the game's own levels.
+const SOUND_KEY = 'rustyac.sound';
+let soundLoad = null;
+function soundSettings() {
+  try {
+    return { volume: 1, muted: false, ...JSON.parse(localStorage.getItem(SOUND_KEY) || '{}') };
+  } catch {
+    return { volume: 1, muted: false };
+  }
+}
+function applySound(sound) {
+  const { volume, muted } = soundSettings();
+  $('sound-volume').value = Math.round(volume * 100);
+  $('sound-mute').checked = muted;
+  sound?.setVolume(volume, muted);
+}
+function loadSoundOnce() {
+  const source = state.source;
+  // (?sound=0, a test hook: no sound, for the frame rate without it)
+  if (soundLoad || params.get('sound') === '0' || !source || source.kind !== 'pack' || !source.sizes.has('fmod/fmodstudio.wasm')) return soundLoad;
+  soundLoad = (async () => {
+    const get = async (path) => {
+      const got = await fetch(source.urlOf(path));
+      if (!got.ok) throw new Error(`${path}: the server answered ${got.status}`);
+      return got;
+    };
+    const [js, wasm] = await Promise.all([get('fmod/fmodstudio.js').then((r) => r.text()), get('fmod/fmodstudio.wasm').then((r) => r.arrayBuffer())]);
+    const { loadSound } = await import('./sound.js');
+    const sound = await loadSound(js, new Uint8Array(wasm), rac);
+    applySound(sound);
+    window.rustyac.sound = sound;
+    return sound;
+  })().catch((error) => {
+    console.warn('sound:', error);
+    $('sound-line').textContent = `no sound: ${error.message || error}`;
+    return null;
+  });
+  return soundLoad;
+}
+for (const id of ['sound-volume', 'sound-mute']) {
+  $(id).addEventListener('input', async () => {
+    try {
+      localStorage.setItem(SOUND_KEY, JSON.stringify({ volume: $('sound-volume').value / 100, muted: $('sound-mute').checked }));
+    } catch {
+      // no storage: this visit only
+    }
+    applySound(await soundLoad);
+  });
+}
+applySound(null);
+
 // `launch`: a drive AC's launcher asked for ({ car, track, layout, race, assists }), else the
 // menu's choice
 async function drive(launch) {
@@ -1031,6 +1086,7 @@ async function drive(launch) {
         ? rac.Game.create_race(canvas, launch.race, launch.assists, seed, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4))
         : rac.Game.create(canvas, car, track, layout, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4));
     };
+    await loadSoundOnce();
     let game = await create();
     // Full mode: the renderer names files of its own as it loads (the driver's model, a skin's
     // textures); those, and the game made again
@@ -1407,6 +1463,7 @@ async function joinServer() {
     // (create_online takes the join: from here on the game owns the session)
     const joining = join;
     join = null;
+    await loadSoundOnce();
     const game = await rac.Game.create_online(canvas, joining, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4), Number(params.get('cars') || 0));
     rac.fs_forget_models();
     state.game = game;
@@ -2667,6 +2724,33 @@ window.rustyac.frameProof = async (race, assists, tape, steps, slowMs) => {
   const seconds = (performance.now() - started) / 1000;
   window.rustyac.slowFrameMs = 0;
   return { ...JSON.parse(state.game.check_state()), race_out: ((bytes) => (bytes ? new TextDecoder().decode(bytes) : null))(state.game.finish_race()), fps: frames / seconds, seconds };
+};
+
+// Task 41's proof: the audio oracle's drive of `tape` (an .audiotape's address) heard from
+// `camera`, on the pack's files and FMOD's HTML5 build, as `audio_oracle run --side port` runs
+// it with FMOD 1.08 natively. Its FMOD call log's lines and SHA-256 (the desktop's file has the
+// same bytes when the two agree). `drivers`: the desktop's count of sound devices, which the log
+// goes through one by one (the page has the browser's one).
+window.rustyac.soundProof = async (tape, camera, drivers) => {
+  const sound = await loadSoundOnce();
+  if (!sound) throw new Error('no sound: FMOD is not in this pack');
+  sound.state.drivers = drivers ?? null;
+  const bytes = new Uint8Array(await (await fetch(tape)).arrayBuffer());
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 2048));
+  const field = (key) => (head.match(new RegExp(`^${key}=(.*)$`, 'm')) || [])[1]?.trim() || '';
+  const [car, track, layout] = [field('car'), field('track'), field('track_layout')];
+  const wanted = (path) => path.startsWith('system/cfg/') || path === 'system/data/surfaces.ini' || path.startsWith('content/sfx/') ||
+    path.startsWith(`content/cars/${car}/sfx/`) || path.startsWith(`content/cars/${car}/data`) ||
+    path.startsWith(`content/tracks/${track}/data/`) || (layout && path.startsWith(`content/tracks/${track}/${layout}/data/`)) ||
+    new RegExp(`^content/tracks/${track}/[^/]+[.](kn5|ini)$`, 'i').test(path);
+  await loadFiles(state.source.manifest.files.map((f) => f.path).filter(wanted), () => {});
+  rac.fs_put('proof.audiotape', bytes);
+  const started = performance.now();
+  const log = rac.sound_proof('proof.audiotape', camera, false);
+  const seconds = (performance.now() - started) / 1000;
+  window.rustyac.soundLog = log; // (for a test that wants the text)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(log)));
+  return { lines: log.split('\n').length, sha256: [...digest].map((b) => b.toString(16).padStart(2, '0')).join(''), seconds };
 };
 
 // Full mode's proof (?fullproof=<frames>, Game.full_proof): the drive's fixed frame stays on the

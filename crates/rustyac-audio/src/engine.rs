@@ -322,7 +322,7 @@ impl AudioEngine {
     pub fn parse_guids(&mut self, file: &str) -> Result<(), String> {
         let path = self.files.content_root.join(file);
         // the game would spin for ever on a missing file; its callers check first
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = rustyac_content::vfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         // a wifstream in the C locale: one byte, one character; text mode
         let text: String = bytes.iter().filter(|&&b| b != b'\r').map(|&b| b as char).collect();
         for line in text.split('\n') {

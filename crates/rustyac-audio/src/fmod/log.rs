@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 pub struct CallLog {
     out: Option<std::io::BufWriter<std::fs::File>>,
+    /// The lines themselves, for a caller without files (the browser): see [`start_kept`].
+    kept: Option<Vec<u8>>,
     ids: HashMap<usize, u32>,
     next_id: u32,
     lines: u64,
@@ -54,6 +56,7 @@ pub fn start(file: Option<&Path>) -> Result<(), String> {
     };
     *LOG.lock().unwrap() = Some(CallLog {
         out,
+        kept: None,
         ids: HashMap::new(),
         next_id: 0,
         lines: 0,
@@ -115,6 +118,24 @@ pub fn summary_of(log_text: &[u8]) -> (u64, u64) {
     (lines, hash)
 }
 
+/// As [`start`] (with the answers of [`start_with_answers`] when given), the lines kept in
+/// memory for [`finish_kept`].
+pub fn start_kept(answers: Option<&[u32]>) {
+    let _ = match answers {
+        Some(answers) => start_with_answers(None, answers),
+        None => start(None),
+    };
+    if let Some(log) = LOG.lock().unwrap().as_mut() {
+        log.kept = Some(Vec::new());
+    }
+}
+
+/// As [`finish`], with the lines of a log [`start_kept`] began.
+pub fn finish_kept() -> Option<(LogSummary, Vec<u8>)> {
+    let kept = LOG.lock().unwrap().as_mut().and_then(|log| log.kept.take()).unwrap_or_default();
+    finish().map(|summary| (summary, kept))
+}
+
 /// Is a log running?
 pub fn active() -> bool {
     LOG.lock().unwrap().is_some()
@@ -151,6 +172,10 @@ impl CallLog {
         if let Some(out) = self.out.as_mut() {
             let _ = out.write_all(line.as_bytes());
             let _ = out.write_all(b"\n");
+        }
+        if let Some(kept) = self.kept.as_mut() {
+            kept.extend_from_slice(line.as_bytes());
+            kept.push(b'\n');
         }
     }
 

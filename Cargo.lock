@@ -801,6 +801,7 @@ dependencies = [
  "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -910,6 +911,7 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "png",
+ "rustyac-audio",
  "rustyac-content",
  "rustyac-game",
  "rustyac-gui",

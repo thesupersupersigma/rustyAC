@@ -52,7 +52,7 @@ TOOLS = {
         'e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe',
         f'binaryen-{BINARYEN}/bin/wasm-opt'),
 }
-SITE_FILES = ['index.html', 'app.js', 'style.css', 'servers.json', 'launcher.js', 'theme_glue.js', 'sw.js',
+SITE_FILES = ['index.html', 'app.js', 'sound.js', 'style.css', 'servers.json', 'launcher.js', 'theme_glue.js', 'sw.js',
               'fonts/selawik-regular.ttf', 'fonts/selawik-light.ttf', 'fonts/selawik-bold.ttf', 'fonts/Selawik-OFL.txt']
 # everything a site (and so a release's web zip) holds; anything else in it stops the build
 SITE_CONTENT = sorted(SITE_FILES + ['LICENSE-GPL', 'LICENSING.md', 'pkg/rustyac_web.js', 'pkg/rustyac_web_bg.wasm'])

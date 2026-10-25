@@ -50,6 +50,11 @@ everything that links the car physics is GPL.
   the names of the exported functions the game itself imports. Without an Assetto Corsa
   install rustyAC runs silently. FMOD is a trademark of Firelight Technologies Pty Ltd, who
   are not affiliated with rustyAC.
+- **FMOD Studio 2.03.15 for HTML5** (`fmodstudio.js`, `fmodstudio.wasm`), the browser
+  preview's sound engine. The website serves Firelight's unchanged files from its preview pack
+  (`tools/web_pack` copies them from a local FMOD download when the pack is made); they are not
+  in this repository, the web zip or a release. The page credits it: "Audio engine: FMOD Studio
+  by Firelight Technologies Pty Ltd."
 - **FW1FontWrapper**, copyright (c) 2011 Erik Rufelt, the library Assetto Corsa links for its
   text (DirectWrite glyphs drawn with Direct3D 11). `crates/rustyac-render/src/fw1.rs` is a
   Rust translation of the part the game uses, as the game has it (Kunos changed a few things),

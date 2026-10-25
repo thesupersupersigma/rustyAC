@@ -48,6 +48,11 @@
   </div>
   <p id="controls-origin" class="status"></p>
   <p>
+    <label>Sound volume <input id="sound-volume" type="range" min="0" max="100" step="1" value="100" aria-label="Sound volume"></label>
+    <label><input id="sound-mute" type="checkbox"> Mute</label>
+    <span id="sound-line" class="status"></span>
+  </p>
+  <p>
     <button id="controls-load">Load my controls.ini</button>
     <input id="controls-file" type="file" accept=".ini,text/plain" hidden>
     <button id="controls-reset">Reset to AC's defaults</button>
@@ -228,6 +233,7 @@
       <a href="LICENSING.md">licences</a>. Assetto Corsa and its content belong to Kunos
       Simulazioni; this page ships none of it.
     </p>
+    <p>Audio engine: FMOD Studio by Firelight Technologies Pty Ltd.</p>
   </footer>
 </main>
 

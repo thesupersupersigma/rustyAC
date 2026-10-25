@@ -14,3 +14,7 @@ rustyac-math = { path = "../rustyac-math" }
 rustyac-physics = { path = "../rustyac-physics" }
 # kn5 models: the nodes of a track (ambience emitters, reverb nodes, occluder meshes)
 rustyac-content = { path = "../rustyac-content" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# the browser's FMOD (FMOD Studio 2.03 HTML5, from the preview pack) is JavaScript: web/sound.js
+wasm-bindgen = "=0.2.129"

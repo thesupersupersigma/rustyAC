@@ -84,6 +84,10 @@ pub struct Session {
     tape: Option<(Vec<StepInput>, usize)>,
     pub stop_at: Option<u64>,
     pub chain: u64,
+    /// The sound's inputs after every step (as the desktop's physics thread leaves them), when
+    /// the page has sound.
+    pub sound: Option<Arc<Mutex<rustyac_game::audio::Feed>>>,
+    sticky: Vec<[rustyac_game::audio::StickySurface; 4]>,
 }
 
 impl Session {
@@ -208,6 +212,8 @@ sessions={}
             tape: None,
             stop_at: None,
             chain: CHAIN_START,
+            sound: None,
+            sticky: Vec::new(),
         })
     }
 
@@ -223,6 +229,9 @@ sessions={}
         }
         if self.stop_at.is_some() {
             self.chain = self.sim.state_hash(self.chain);
+        }
+        if let Some(feed) = &self.sound {
+            feed.lock().unwrap().push(&self.sim, &mut self.sticky);
         }
         let burst = self.sim.car.device.source.in_spawn_sequence();
         if burst {

@@ -12,7 +12,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 
 use rustyac_audio::car::{CameraView, CarFrame, CarInfo as SoundInfo, SimView};
 use rustyac_audio::engine::{AudioEngine, EngineFiles};
@@ -23,7 +25,9 @@ use rustyac_audio::track::{cache_surface_sounds, Scene, TrackAudio};
 use rustyac_physics::data::ini::{append_path, IniReader};
 use rustyac_physics::vecmath::xm_matrix_multiply;
 
+#[cfg(windows)]
 use crate::input_file::StepInput;
+#[cfg(windows)]
 use crate::physics_thread::StepSink;
 use crate::render::scene::{CameraMode, CarShape, DrivingCamera};
 use crate::sim::GameSim;
@@ -275,17 +279,20 @@ impl Feed {
 }
 
 /// The physics thread's end: after every step the sound's inputs go into the feed.
+#[cfg(windows)]
 pub struct AudioSink {
     feed: Arc<Mutex<Feed>>,
     sticky: Vec<[StickySurface; 4]>,
 }
 
+#[cfg(windows)]
 impl AudioSink {
     pub fn new(feed: Arc<Mutex<Feed>>) -> AudioSink {
         AudioSink { feed, sticky: Default::default() }
     }
 }
 
+#[cfg(windows)]
 impl StepSink for AudioSink {
     fn after_step(&mut self, sim: &GameSim, _input: &StepInput) -> Result<(), String> {
         // the copy is made outside the lock; the lock is held for a move
@@ -551,6 +558,8 @@ impl GameAudio {
     }
 
     fn one_frame(&mut self, mut states: Vec<CarFrame>, events: &[PhysicsEvent], camera: &DrivingCamera, camera_matrix: &Mat, dt: f32) {
+        // (the page has no `Instant`: there the frames are counted, not timed)
+        #[cfg(not(target_arch = "wasm32"))]
         let started = Instant::now();
         for (car, state) in states.iter_mut().enumerate() {
             state.body_position = self.body_position(car, &state.world_matrix);
@@ -580,10 +589,13 @@ impl GameAudio {
         self.frame_number += 1;
         self.world.frame(&FrameInput { cars: &states, events, sim, listener: Some(listener), dt });
         self.last = Some(states);
-        let took = started.elapsed();
         self.timing.frames += 1;
-        self.timing.sum += took;
-        self.timing.max = self.timing.max.max(took);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let took = started.elapsed();
+            self.timing.sum += took;
+            self.timing.max = self.timing.max.max(took);
+        }
     }
 
     /// Task 28c: a replay shows: the sound's cars take these states (the physics stands still,

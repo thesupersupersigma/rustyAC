@@ -187,6 +187,11 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
     out.extend(car_model);
     out.extend(track_models.into_iter().map(|(file, _)| file));
     files_below(&root.join("system").join("data"), &[], 0, &mut out);
+    // the sound: AC's engine settings, the shared bank and its GUIDs, the car's bank and GUIDs
+    out.push(root.join("system").join("cfg").join("audio_engine.ini"));
+    out.push(root.join("content").join("sfx").join("GUIDs.txt"));
+    out.push(root.join("content").join("sfx").join("common.bank"));
+    files_below(&folder.join("sfx"), &[], 0, &mut out);
     // an AI driver's setup of the car for the track, where the game has one
     out.push(root.join("system").join("setups").join(car).join(track).join("ai_default.ini"));
     out.retain(|path| path.vfs_is_file());

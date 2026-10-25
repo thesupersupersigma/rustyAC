@@ -11,13 +11,14 @@ use std::fmt::Write as _;
 /// # Safety
 /// `description` must point to a description of the 1.08 layout.
 pub(crate) unsafe fn describe(description: *const c_void, text: &mut String) {
-    let bytes = description.cast::<u8>();
-    let name = CStr::from_ptr(bytes.add(4).cast::<c_char>()).to_string_lossy();
-    let word = |offset: usize| bytes.add(offset).cast::<u32>().read_unaligned();
+    // by field, not offset: the same bytes on x64 (the 1.08 layout) and a layout of 4-byte
+    // pointers in the browser
+    let d = &*description.cast::<crate::dsp::DspDescription>();
+    let name = CStr::from_ptr(d.name.as_ptr().cast::<c_char>()).to_string_lossy();
     // pluginsdkversion, name, version, numinputbuffers, numoutputbuffers, numparameters
-    let count = word(0x60);
-    let _ = write!(text, " {:#x} \"{name}\" {:#x} {} {} {count}", word(0), word(0x24), word(0x28), word(0x2c));
-    let table = bytes.add(0x68).cast::<*const *const u8>().read_unaligned();
+    let count = d.numparameters as u32;
+    let _ = write!(text, " {:#x} \"{name}\" {:#x} {} {} {count}", d.pluginsdkversion, d.version, d.numinputbuffers as u32, d.numoutputbuffers as u32);
+    let table = d.paramdesc.cast::<*const u8>();
     for i in 0..count.min(16) as usize {
         // type, name, label, and the start of the union (a float's min, max, default and its
         // mapping type and point count; a bool's default; a data parameter's type)
