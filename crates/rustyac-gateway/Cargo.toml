@@ -4,7 +4,7 @@ description = "rustyAC WebSocket gateway: carries one Assetto Corsa client per W
 # Written out, not inherited from the workspace: the gateway's Docker image is built from
 # this folder alone (crates/rustyac-gateway/Dockerfile), where there is no workspace.
 # docs/release.md: keep the version the same as the workspace's.
-version = "0.39.0"
+version = "0.40.0"
 edition = "2021"
 authors = ["thesupersupersigma"]
 publish = false
