@@ -23,6 +23,9 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
         let unix = hud.input.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
         return crate::gui_seq_console::port_call(gui, painter, game_folder, &unix, what, number, text);
     }
+    if what.starts_with("py.") {
+        return crate::gui_py::port_call(gui, painter, game_folder, screen, what);
+    }
     if what.starts_with("tele.") {
         crate::gui_seq_tele::input(what, number, text)?;
         let player = hud.input.cars.first().map(|c| c.driver_name.clone()).unwrap_or_default();

@@ -53,7 +53,7 @@ struct PortConsole {
 static PORT: Mutex<Option<PortConsole>> = Mutex::new(None);
 
 /// The repository's folder (the sides run in the scratch root): `cardata/` is there.
-static REPO: Mutex<std::path::PathBuf> = Mutex::new(std::path::PathBuf::new());
+pub(crate) static REPO: Mutex<std::path::PathBuf> = Mutex::new(std::path::PathBuf::new());
 
 /// The scene camera's field of view at the start.
 const FOV: f32 = 56.0;
@@ -238,6 +238,15 @@ fn carry_out(p: &mut PortConsole) {
             }
             _ => {}
         }
+    }
+}
+
+/// Task 42: a line the Python apps wrote to the console.
+pub fn port_print(line: &str) {
+    if let Some(p) = PORT.lock().unwrap().as_mut() {
+        p.console.print(line);
+        p.console.print("
+");
     }
 }
 

@@ -66,6 +66,8 @@ pub fn classes() -> Vec<(&'static str, usize, usize, usize)> {
     let mut out: Vec<_> = APPS.iter().filter(|a| a.3 != 0).map(|a| ("Form", a.1, a.2, a.3)).collect();
     // Task 33: ComparativeTelemetry, the ESC menu's page "Telemetry"
     out.push(("Form", 0x258, 0x1_4006_dff0, 0x1_404a_f980));
+    // Task 42: PythonForm, a Python app's window
+    out.push(("Form", 0x1d8, 0x1_4012_4850, 0x1_404c_8da8));
     out
 }
 
@@ -78,6 +80,16 @@ struct AppGame {
 }
 
 static GAME: Mutex<Option<AppGame>> = Mutex::new(None);
+
+/// Task 42: the stand-in `Game` block and `Sim` (none before `app.create`).
+pub fn blocks() -> Option<(usize, usize)> {
+    GAME.lock().unwrap().as_ref().map(|g| (g.game_block, g.sim))
+}
+
+/// Task 42: the stand-in cars.
+pub fn avatars() -> Vec<usize> {
+    GAME.lock().unwrap().as_ref().map(|g| g.cars.clone()).unwrap_or_default()
+}
 
 /// The Audio app's session: `CarAudioFMOD` blocks (their `mixVolumes` at +0x118), the
 /// drivable cameras' definitions (0x38 a car), the master level's calls, the last line of
@@ -317,6 +329,21 @@ static RECORDER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 
 unsafe extern "C" fn get_ai_spline(_this: *mut u8) -> *mut u8 {
     (RECORDER.load(std::sync::atomic::Ordering::SeqCst) as *mut u8).add(0xf0)
+}
+
+/// Task 42: the cars' RaceManager getters again (a HUD field made after the apps takes them; its
+/// session getters stay the HUD's).
+pub unsafe fn install_car_getters(game: &Game) {
+    for (va, to) in [
+        (0x1_4013_80b0, get_current_lap as *const () as usize),
+        (0x1_4013_7c00, get_best_lap as *const () as usize),
+        (0x1_4013_87c0, get_last_lap as *const () as usize),
+        (0x1_4013_7ee0, get_car_leaderboard_position as *const () as usize),
+        (0x1_4013_7f90, get_car_real_time_position as *const () as usize),
+        (0x1_4013_8570, get_lap_count as *const () as usize),
+    ] {
+        crate::gui_ac_hud::jump(game, va, to);
+    }
 }
 
 unsafe fn install(game: &Game) {

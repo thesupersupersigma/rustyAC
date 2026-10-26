@@ -79,6 +79,7 @@ pub fn compare(args: &Args) -> Result<(), String> {
         crate::gui_seq_apps::prepare_root(args, name)?;
         crate::gui_seq_tele::prepare_root(args, name)?;
         crate::gui_seq_console::prepare_root(args, name);
+        crate::gui_py::prepare_root(args, name)?;
     }
     run_sides(args, name, &args.dump)?;
     let read = |side: &str, kind: &str| {
@@ -193,6 +194,9 @@ pub fn compare(args: &Args) -> Result<(), String> {
         failed = true;
     }
     if !crate::gui_seq_console::compare_files(args, name)? {
+        failed = true;
+    }
+    if !crate::gui_py::compare_files(args, name)? {
         failed = true;
     }
     if failed {

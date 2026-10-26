@@ -172,6 +172,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
     if what.starts_with("console.") {
         return crate::gui_seq_console::game_call(game, what, number, text);
     }
+    if what.starts_with("py.") {
+        return crate::gui_py::game_call(game, what);
+    }
     if what.starts_with("tele.") {
         crate::gui_seq_tele::input(what, number, text)?;
         return crate::gui_seq_tele::game_call(game, what);

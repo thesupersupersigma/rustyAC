@@ -296,6 +296,7 @@ fn run_logged(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, S
                 {
                     let mut painter = renderer.painter(&mut graphics);
                     crate::gui_port_hud::update(&mut hud.hud, &mut gui, *dt);
+                    crate::gui_py::port_frame(&mut gui, &mut painter, *dt);
                     gui.render_all(*dt, &mut painter);
                     // (what a menu asked of the session while it was drawn)
                     crate::gui_port_menu::drain(&mut hud.hud, &mut gui);
@@ -345,7 +346,7 @@ fn run_logged(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, S
             }
             other => {
                 let mut painter = renderer.painter(&mut graphics);
-                op(&mut gui, &mut painter, &mut hud, screen, &mut objects, other)?;
+                crate::gui_py::port_input(&mut gui, &mut painter, |gui, painter| op(gui, painter, &mut hud, screen, &mut objects, other))?;
                 crate::gui_port_menu::drain(&mut hud.hud, &mut gui);
             }
         }

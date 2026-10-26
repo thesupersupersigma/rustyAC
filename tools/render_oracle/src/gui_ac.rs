@@ -578,6 +578,7 @@ pub fn run(args: &Args, sequence: &Sequence, name: &str) -> Result<Outcome, Stri
                     crate::gui_ac_apps::update();
                     crate::gui_seq_tele::update(&game);
                     crate::gui_ac_apps::frame(&game);
+                    crate::gui_py::game_frame(&game, *dt);
                     call0(VA_GRAPHICS_SET_SCREEN_SPACE_MODE);
                     crate::gui_ac_menu::client_present(true);
                     crate::gui_ac_esc::sun(&game, true);

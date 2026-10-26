@@ -754,7 +754,7 @@ fn tape(path: &str) -> &'static str {
 }
 
 /// The session of the race tapes (`oracle/t32/race`, Task 28's `rc_race`: 6 cars, 3 laps).
-fn race(o: &mut Vec<Op>, cars: usize) {
+pub(crate) fn race(o: &mut Vec<Op>, cars: usize) {
     o.push(hud("app.create", cars as f32, ""));
     o.push(hud("app.tape", 0.0, tape("oracle/t32/race/rc_race")));
     o.extend([hud("app.session", 3.0, ""), hud("app.laps", 3.0, ""), hud("app.start", 5000.0, ""), hud("app.duration", 0.0, ""), hud("app.sessions", 1.0, "")]);
