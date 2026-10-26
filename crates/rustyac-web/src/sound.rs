@@ -76,3 +76,26 @@ fn proof(tape: &str, camera: &str, wav: bool) -> Result<String, String> {
     result?;
     String::from_utf8(kept).map_err(|e| e.to_string())
 }
+
+/// Task 41b: the sound of a whole drive from the launcher's files, every car of it (AI too),
+/// as the desktop's `rustyac.exe --replay <tape> --headless --audio-wav … --audio-log …
+/// --audio-ini <the oracle's audio.ini> --camera <camera> --focus <focus>` gives it: the setup
+/// the page makes of `race_text` / `assists_text` / `seed` (see `race::replay_race`), driven
+/// with the inputs of the desktop's recording `tape`; the mix in FMOD's file system as
+/// `/fmodoutput.wav`. Returns the FMOD call log.
+#[wasm_bindgen]
+pub fn race_sound_proof(race_text: &str, assists_text: Option<String>, seed: u32, tape: &[u8], camera: &str, focus: usize) -> Result<String, JsError> {
+    race_proof(race_text, assists_text.as_deref(), seed, tape, camera, focus).map_err(|e| JsError::new(&e))
+}
+
+fn race_proof(race_text: &str, assists_text: Option<&str>, seed: u32, tape: &[u8], camera: &str, focus: usize) -> Result<String, String> {
+    use rustyac_game::audio::{AudioOptions, GameAudio};
+    let file = rustyac_game::input_file::InputFile::parse(tape)?;
+    let (setup, _) = crate::race::setup_of(race_text, assists_text, seed)?;
+    let audio_ini = PathBuf::from(mounted("proof/cfg/audio.ini"));
+    files().insert(&audio_ini.to_string_lossy(), AUDIO_INI.as_bytes().into());
+    let options = AudioOptions { wav: Some(PathBuf::from("/fmodoutput.wav")), log: Some(PathBuf::from("kept")), ini: Some(audio_ini), ..AudioOptions::default() };
+    let audio = GameAudio::replay(&options, setup, &file.steps, camera, focus)?;
+    let log = audio.finish_kept().ok_or("no call log")?;
+    String::from_utf8(log).map_err(|e| e.to_string())
+}

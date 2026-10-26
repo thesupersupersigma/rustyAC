@@ -486,19 +486,16 @@ fn cfg_dir(options: &Options) -> PathBuf {
 
 /// The sound of the car that was built (the engine, the track's sounds, the car's).
 fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Option<GameAudio> {
-    let feed = feed.as_ref()?;
-    // a car's folder name is its name in the game
-    let cars: Vec<(String, PathBuf, CarShape)> = std::iter::once(info)
-        .chain(others)
-        .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
-        .collect();
-    let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
-    // the Audio app's files in rustyAC's own cfg folder come before Documents'
-    let mut audio_options = options.audio.clone();
-    audio_options.cfg_dir = Some(cfg_dir(options));
-    let mut audio = GameAudio::start(&audio_options, Arc::clone(feed), &cars, track)?;
+    let mut audio = GameAudio::start_for(&audio_options(options), Arc::clone(feed.as_ref()?), info, others)?;
     audio.set_focus(options.focus.min(others.len()));
     Some(audio)
+}
+
+/// The Audio app's files in rustyAC's own cfg folder come before Documents'.
+fn audio_options(options: &Options) -> rustyac_game::audio::AudioOptions {
+    let mut audio_options = options.audio.clone();
+    audio_options.cfg_dir = Some(cfg_dir(options));
+    audio_options
 }
 
 /// Task 28c: the session's replay (AC's `ReplayManager`), shared by the physics thread, which
@@ -2430,32 +2427,11 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
 /// every `floor(n * 50 / 9)` physics steps, the listener at the camera of `--camera`.
 fn run_replay_audio(options: &Options, replay: &Path) -> Result<(), String> {
     let file = rustyac_game::input_file::InputFile::read(replay)?;
-    let mut sim = GameSim::new(file.setup.clone(), Box::new(ReplaySource::default()))?;
-    let info = sim.car_info();
-    let others = sim.opponent_infos();
-    let focus = options.focus.min(others.len());
-    let shape = CarShape::of(if focus == 0 { &info } else { &others[focus - 1] });
-    let feed = Some(Arc::new(Mutex::new(Feed::with_grid())));
-    let mut audio = start_audio(options, &feed, &info, &others).ok_or("there is no sound to write")?;
-    let mut camera = DrivingCamera::from_name(&options.camera, &shape)?;
-    let mut sticky = Vec::new();
     let started = Instant::now();
-    for step in &file.steps {
-        sim.step_recorded(step)?;
-        let waiting = {
-            let mut feed = feed.as_ref().unwrap().lock().unwrap();
-            feed.push(&sim, &mut sticky);
-            !feed.grid.is_empty()
-        };
-        if waiting {
-            let view = if focus == 0 { CarView::capture(&sim, 0.0) } else { CarView::capture_opponent(&sim, focus - 1, 0.0) };
-            let frame = camera.update(&view, &shape, view.acc_g, rustyac_game::audio::NRT_DT);
-            audio.grid_frames(|_| (camera, frame.matrix));
-        }
-    }
+    let audio = GameAudio::replay(&audio_options(options), file.setup.clone(), &file.steps, &options.camera, options.focus)?;
     let timing = audio.finish();
     println!("{}", timing.report());
-    eprintln!("replayed {} steps ({:.1} s of driving) with sound in {:.2} s", sim.steps, sim.steps as f64 * 0.003, started.elapsed().as_secs_f64());
+    eprintln!("replayed {} steps ({:.1} s of driving) with sound in {:.2} s", file.steps.len(), file.steps.len() as f64 * 0.003, started.elapsed().as_secs_f64());
     Ok(())
 }
 

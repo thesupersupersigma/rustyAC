@@ -414,6 +414,8 @@ impl GameAudio {
             return Err("system/cfg/audio_engine.ini has ENABLE_AUDIO=0".to_string());
         }
         let output = match (&options.wav, options.null) {
+            // (the page's is a path in FMOD's own file system)
+            (Some(file), _) if cfg!(target_arch = "wasm32") => raw::Output::WavNrt { file: file.clone(), rate: NRT_RATE, block: NRT_BLOCK },
             (Some(file), _) => raw::Output::WavNrt { file: std::path::absolute(file).map_err(|e| e.to_string())?, rate: NRT_RATE, block: NRT_BLOCK },
             (None, true) => raw::Output::NoSound,
             (None, false) => raw::Output::Device,
@@ -422,6 +424,10 @@ impl GameAudio {
         let logging = options.log.is_some();
         match (&options.log, &options.script) {
             (Some(file), Some(script)) => log::start_scripted(Some(file), script)?,
+            // (the page writes no files: its log is kept, for `finish_kept`)
+            #[cfg(target_arch = "wasm32")]
+            (Some(_), None) => log::start_kept(None),
+            #[cfg(not(target_arch = "wasm32"))]
             (Some(file), None) => log::start(Some(file))?,
             _ => {}
         }
@@ -746,16 +752,76 @@ impl GameAudio {
 
     /// Ends the sound: the cars' sounds, the track's, the engine (which closes a WAV).
     pub fn finish(self) -> AudioTiming {
+        let timing = self.teardown();
+        if let Some(summary) = log::finish() {
+            println!("audio log: {} lines, hash {:016x}", summary.lines, summary.hash);
+        }
+        timing
+    }
+
+    /// As [`finish`](Self::finish), the call log back (the page's: it writes no files).
+    pub fn finish_kept(self) -> Option<Vec<u8>> {
+        self.teardown();
+        log::finish_kept().map(|(_, kept)| kept)
+    }
+
+    fn teardown(self) -> AudioTiming {
         let mut timing = self.timing;
         timing.fmod = self.world.engine.cpu_usage();
         if self.logging {
             log::mark("teardown");
         }
         self.world.destroy();
-        if let Some(summary) = log::finish() {
-            println!("audio log: {} lines, hash {:016x}", summary.lines, summary.hash);
-        }
         timing
+    }
+
+    /// The sound of a session's cars, the player's (`info`) first, then `others`
+    /// (`GameSim::opponent_infos`), on its track.
+    pub fn start_for(options: &AudioOptions, feed: Arc<Mutex<Feed>>, info: &crate::sim::CarInfo, others: &[crate::sim::CarInfo]) -> Option<GameAudio> {
+        let cars = Self::cars_of(info, others);
+        Self::start(options, feed, &cars, info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str())))
+    }
+
+    fn cars_of(info: &crate::sim::CarInfo, others: &[crate::sim::CarInfo]) -> Vec<(String, PathBuf, CarShape)> {
+        // a car's folder name is its name in the game
+        std::iter::once(info)
+            .chain(others)
+            .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
+            .collect()
+    }
+
+    /// `rustyac.exe --replay <file> --headless --audio-wav`: a recorded drive (every car of it)
+    /// as fast as it goes, its sound without a clock: one frame of the sound after every
+    /// `floor(n * 50 / 9)` physics steps, the listener at `camera` of car `focus`. The sound
+    /// back, for [`finish`](Self::finish).
+    pub fn replay(options: &AudioOptions, setup: crate::input_file::SimSetup, steps: &[crate::input_file::StepInput], camera: &str, focus: usize) -> Result<GameAudio, String> {
+        let mut sim = GameSim::new(setup, Box::new(crate::sim::ReplaySource::default()))?;
+        let info = sim.car_info();
+        let others = sim.opponent_infos();
+        let focus = focus.min(others.len());
+        let shape = CarShape::of(if focus == 0 { &info } else { &others[focus - 1] });
+        let feed = Arc::new(Mutex::new(Feed::with_grid()));
+        if options.off {
+            return Err("the sound is off".to_string());
+        }
+        let mut audio = Self::try_start(options, Arc::clone(&feed), &Self::cars_of(&info, &others), info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str())))?;
+        audio.set_focus(focus);
+        let mut camera = DrivingCamera::from_name(camera, &shape)?;
+        let mut sticky = Vec::new();
+        for step in steps {
+            sim.step_recorded(step)?;
+            let waiting = {
+                let mut feed = feed.lock().unwrap();
+                feed.push(&sim, &mut sticky);
+                !feed.grid.is_empty()
+            };
+            if waiting {
+                let view = if focus == 0 { crate::view::CarView::capture(&sim, 0.0) } else { crate::view::CarView::capture_opponent(&sim, focus - 1, 0.0) };
+                let frame = camera.update(&view, &shape, view.acc_g, NRT_DT);
+                audio.grid_frames(|_| (camera, frame.matrix));
+            }
+        }
+        Ok(audio)
     }
 }
 

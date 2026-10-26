@@ -399,22 +399,13 @@ pub struct Game {
 /// AC's sound for the session's cars and track, as the desktop's `start_audio`: `None` (and a
 /// note) when the pack has no FMOD or the sound did not start.
 fn start_sound(session: &mut Session, notes: &mut Vec<String>) -> Option<GameAudio> {
-    use rustyac_game::render::scene::CarShape;
     // sound.js puts the bridge up once FMOD from the pack has loaded
     if js_sys::Reflect::get(&js_sys::global(), &"rustyacSound".into()).map_or(true, |v| v.is_undefined()) {
         notes.push("sound: none (FMOD is not in the pack, or the page has not loaded it)".to_string());
         return None;
     }
     let feed = Arc::new(Mutex::new(rustyac_game::audio::Feed::default()));
-    let info = session.sim.car_info();
-    let others = session.sim.opponent_infos();
-    // a car's folder name is its name in the game
-    let cars: Vec<(String, PathBuf, CarShape)> = std::iter::once(&info)
-        .chain(&others)
-        .map(|info| (Path::new(&info.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| info.name.clone()), info.data_path.clone(), CarShape::of(info)))
-        .collect();
-    let track = info.track_folder.as_deref().map(|folder| (folder, info.track_layout.as_str()));
-    let sound = GameAudio::start(&rustyac_game::audio::AudioOptions::default(), Arc::clone(&feed), &cars, track);
+    let sound = GameAudio::start_for(&rustyac_game::audio::AudioOptions::default(), Arc::clone(&feed), &session.sim.car_info(), &session.sim.opponent_infos());
     notes.push(if sound.is_some() { "sound: AC's own, through FMOD Studio 2.03 (HTML5)".to_string() } else { "sound: none (no FMOD in the pack, or it did not start: see the console)".to_string() });
     session.sound = sound.is_some().then_some(feed);
     sound
@@ -621,19 +612,48 @@ impl Game {
         let stats = if self.gui.paused { Default::default() } else { self.session.advance(seconds)? };
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
-        if let Some(sound) = &mut self.sound {
-            sound.frame(&self.session.camera, &camera.matrix, seconds, self.gui.paused);
-        }
         let remote = self.session.remote_views();
         let others: Vec<OtherCar> = remote.iter().zip(&self.session.remote_shapes).zip(&self.remote_models).map(|((view, shape), model)| OtherCar { view, shape, model: *model }).collect();
         match &mut self.full {
             Some(full) => {
                 let hud = crate::full::hud_info(&self.session, self.gui.paused);
+                // the pit crew's wheel guns and the Audio app, as rustyac.exe's window loop
+                // (the page's camera is always on the player's car)
+                let guns = full.crew_guns_wanted();
+                if let Some(sound) = &mut self.sound {
+                    for (wheel, screw) in guns.iter().enumerate().filter_map(|(wheel, wanted)| wanted.map(|screw| (wheel, screw))) {
+                        full.crew.playing[wheel][screw as usize] = sound.crew_is_playing(wheel, screw);
+                    }
+                }
                 crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &hud);
+                let calls = std::mem::take(&mut full.crew.sound);
+                full.crew.camera.clear();
+                if let Some(sound) = &mut self.sound {
+                    use rustyac_game::render::ac::CrewSound;
+                    for call in calls {
+                        match call {
+                            CrewSound::Start { wheel, screw, matrix } => sound.crew_start(wheel, screw, &matrix.m),
+                            CrewSound::Stop { wheel, screw } => sound.crew_stop(wheel, screw),
+                        }
+                    }
+                    if let Some(gui) = full.gui.as_mut() {
+                        gui.apps.sound = sound.app_sound();
+                        for action in std::mem::take(&mut gui.apps.sound_actions) {
+                            sound.app_action(&action);
+                        }
+                    }
+                    sound.set_picture_backfires(&full.backfires_triggered());
+                }
                 self.gui.exchange(full, &mut self.session);
-                self.gpu.present_full(|target, format| full.present_to(target, format))?;
             }
             None => self.drawn = self.gpu.draw(&self.view, &self.session.shape, &camera, &others)?,
+        }
+        // Game::renderAudio: after the cameras and the picture, before it is shown
+        if let Some(sound) = &mut self.sound {
+            sound.frame(&self.session.camera, &camera.matrix, seconds, self.gui.paused);
+        }
+        if let Some(full) = &mut self.full {
+            self.gpu.present_full(|target, format| full.present_to(target, format))?;
         }
         self.frames += 1;
         self.steps += stats.steps;
