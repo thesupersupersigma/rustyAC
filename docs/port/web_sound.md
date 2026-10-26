@@ -2,12 +2,13 @@
 
 ## Resume here (Task 41b)
 
-- Done: A.3 (setters kept back and sent in one crossing, occlusion answered
-  in the wasm: Task 41's 18 page call logs unchanged line for line), B.1 to
-  B.4 (panel: compose labels, fill the slots, Spa default, chmod step).
-  A.2 (crew guns, Audio app) wired in the page, not yet proven.
-- Next: A.1 other cars' sound and its proofs (AI race, 2-client online),
-  A.4 controls line, report, v0.41.1.
+- Done: A.1 to A.4 and B.1 to B.4 (see "Task 41b" at the end). Every car's
+  sound in the page: an AI race's and two online clients' call logs are the
+  desktop's once both get the same "is it playing" answers. The batching left
+  Task 41's 18 logs unchanged but won no measurable frame time.
+- Proofs: the clippy runs and the --locked builds are clean; `run_all.sh
+  --quick` and `--changed v0.41.0` running; then the panel's end-to-end test
+  and v0.41.1.
 - Scratch: `re/scratch/task41b/`. Disk free: 39 GB at start.
 
 ## Resume here (Task 41)
@@ -232,3 +233,153 @@ That answer comes from Windows at run time; the career list alone again gave
 
 - Event lifetimes differ between FMOD 1.08 and 2.03 (the 7 drives above). That
   is FMOD's behaviour; whether a page-only workaround is worth it is open.
+
+# Task 41b: other cars' sound, crew guns, fewer crossings, panel fixes
+
+## How it works (Task 41b)
+
+- Every car: the page's sound already took every car's state (`Feed` captures
+  the player, the AI cars and the other players' cars); it now starts the same
+  way as the desktop, through one shared `GameAudio::start_for` (the desktop's
+  `start_audio` uses it too). The cars' banks: `files_wanted` names the `sfx/`
+  of each car it is asked for, and the page asks for every car of race.ini
+  and every car of the server before the drive.
+- AI race proof: the desktop's `--replay --headless --audio-wav` loop moved
+  into `GameAudio::replay` (`crates/rustyac-game/src/audio.rs`); the page
+  runs the same loop through `race_sound_proof` (wasm export, the race as
+  `race.ini` + `assists.ini` + seed, as `race_proof`).
+- Online proof: a sound tape. With `?soundtape=<n>` the page keeps what its
+  sound was given, frame by frame (every car's state, the events, the camera,
+  the listener matrix, dt, pause, focus, backfires) and its FMOD call log;
+  `window.rustyac.soundTape()` hands both back. `rustyac.exe --sound-tape
+  <file> --audio-wav <wav> --audio-log <log>` hears the tape with FMOD 1.08.
+  A live session cannot be run twice, so the two logs come from one session.
+- Crew guns and the Audio app: the page's frame does what the desktop's
+  window loop does (`desktop.rs`): the picture's crew asks whether a gun
+  plays, its starts and stops go to the sound, the Audio app gets the sound's
+  devices and its actions (master volume, mix levels, view sounds), the
+  picture's backfires go to the sound, and the sound's frame runs after the
+  picture, as in the game.
+- Fewer crossings: the setters whose answer is always OK for a live handle
+  (`event_set_volume`, `_parameter_value`, `_3d_attributes`, `_pitch`,
+  `_timeline_position`, `_paused`, `event_start`, `event_stop`,
+  `studio_set_listener_attributes`) wait in the wasm and go to JavaScript in
+  one `rustyacSound.batch` with the next call that needs an answer; a null
+  handle is answered in the wasm (`ERR_INVALID_HANDLE`, as FMOD answers it).
+  `system_get_geometry_occlusion` is answered in the wasm (the HTML5 build has
+  no polygons). About 370 crossings a frame become about 60.
+- Controls page: one line says the browser's sound leaves out AC's two DSP
+  plug-ins and the tracks' occluders.
+
+## Results (Task 41b)
+
+### AI race (`re/scratch/task41b/ai.sh`, `ai.txt`)
+
+The player's bmw_z4_gt3 and three AI cars (ks_ferrari_488_gt3, ks_nissan_gtr_gt3,
+bmw_m3_e30) at Laguna Seca, 60 s (20,430 steps), the desktop's tape. Page:
+the wasm and FMOD 2.03 HTML5 in node, every car's files from the install.
+
+| view | page | desktop (FMOD 1.08) | desktop, page's answers |
+|---|---|---|---|
+| cockpit, player | 3,706,869 lines | differs from frame 1915 | IDENTICAL |
+| chase, player | 3,697,208 lines | differs from frame 1899 | IDENTICAL |
+| chase, AI car 2 | 3,697,782 lines | differs from frame 1846 | IDENTICAL |
+
+The plain difference is Task 41's: an event FMOD 1.08 still calls playing has
+stopped in FMOD 2.03. With the page's answers to those questions the desktop
+makes the same calls line for line. All five banks load in the page:
+common.bank and the four cars'.
+
+### Online, two clients (`re/scratch/task41b/live.sh`, `live/summary.txt`)
+
+Two headless Chromes join one local acServer (Spa, pickup, no lobby, made-up
+admin password) through the gateway, all on 127.0.0.1: a in the f2004 for
+30 s, b in the Z4 joining 8 s later for 20 s. Each keeps a sound tape; the
+desktop hears it.
+
+| client | page log | desktop (FMOD 1.08) | desktop, page's answers |
+|---|---|---|---|
+| a | 1,444,202 lines | differs from frame 170 | frames IDENTICAL (1,437,392 lines) |
+| b | 866,841 lines | differs from frame 5 | frames IDENTICAL (860,031 lines) |
+
+- Compared from `# frame 0` on. The setups differ, as they must: the page
+  plays on the browser's sound card (it tries the 5 devices it is told of and
+  sets the output format), the desktop writes a WAV with no sound card.
+- The plain difference: an event the page's FMOD still plays (real-time mix)
+  the desktop's calls stopping (one 1/60 s block a frame). Same class as above:
+  an answer to "is it playing", not a call of ours.
+- Banks: both pages load common.bank, their own car's bank and the other
+  car's (ks_ferrari_f2004 and bmw_z4_gt3). The server's 12 slots give 11
+  other cars to the sound, on the desktop and in the page.
+- A first run with a 45 s drive: client a's answer never came back (b's
+  125 MB one did). The page hands its whole log back in one DevTools answer;
+  most likely too big. The drives were made shorter.
+
+### Task 41's drives after the batching (`re/scratch/task41b/same41.sh`, `same41.txt`)
+
+All 18: the page's log is the same as Task 41's page log line for line, so
+the desktop comparison is Task 41's (11 identical, 7 with the known FMOD 2.03
+endings).
+
+### Frame rate (`re/scratch/task41b/fps.sh`, `fps.txt`)
+
+Task 41's drive (f2004 at Spa, autodrive, 40 s, headless Chrome, WebGPU), twice:
+
+| page | frames/s | main thread ms/frame |
+|---|---|---|
+| Task 41, sound on | 58.0, 54.0 | 16.2, 17.5 |
+| Task 41b, sound on | 57.8, 52.7 | 16.2, 18.1 |
+| Task 41b, sound off | 66.9, 55.1 | 14.2, 17.0 |
+
+No gain this PC can measure: the crossings were not the cost. Where the 2 ms
+go instead (the game's sound code, `sound.js`'s translations, FMOD's own
+work) was not measured. The runs scatter by 1 to 3 ms between twins.
+
+### Panel (Part B)
+
+- `npm test` (server/panel): 15 of 15, `npx tsc --noEmit` clean. New tests: a
+  started server's two containers carry `com.docker.compose.project=rustyac-panel`
+  and their own service name, not the image's `server` / `gateway-spa`; a new
+  preset starts on Spa, the slots acServer would cut are filled over the chosen
+  cars (and saving fewer cars is still allowed); the pack script prints the
+  chmod step.
+- The form: under the car total, when the cars add up to fewer than the max
+  players, "only N of the M players can join: acServer lets on no more players
+  than cars" and a button "fill the K slots" (spread round-robin over the cars).
+- server/README.md: the pack upload ends with `chmod -R u=rwX,go=rX` on the
+  pack folder (Windows' `scp -r` leaves `drwx------`, acServer runs as uid 999);
+  `make_server_pack.py` prints it too.
+
+### Regression (Task 41b)
+
+(filled in after the runs)
+
+## Web zip and preview pack (Task 41b)
+
+- Web zip: no new or renamed files (`app.js`, `index.html`, `sound.js` and the
+  wasm changed).
+- Preview pack: nothing new. Task 41's pack already holds every car's `sfx/`;
+  the page now asks for the other cars' too.
+- Server: rebuild the panel's image (`server/panel`) and restart it; already
+  running servers keep their old labels until the panel starts them again.
+  The gateway's code did not change (its version number did). Packs already
+  on the server: run the `chmod` once.
+
+## Not done (Task 41b)
+
+- Cars in replays: the page has no AC replay player, so there is nothing to
+  give their sound to. The desktop's replays have it.
+- The pit crew's guns and the Audio app in the page: wired as the desktop
+  does it, not proven by a run. The page has no hook that drives a pit stop
+  or clicks the Audio app, and the sound tape does not carry them.
+- AC's two DSP plug-ins and the tracks' occluders (left out, as the prompt says;
+  the controls page says so).
+- The frame time with sound: about 2 ms a frame still (see "Frame rate").
+
+## Open questions (Task 41b)
+
+- Where the sound's 2 ms a frame go in the page (a profile of `sound.js` and
+  the wasm), and whether it is worth chasing.
+- The answers to "is it playing" differ between FMOD 1.08 and 2.03, and
+  between a real-time mix and the WAV writer; every log difference above is
+  one of them.
