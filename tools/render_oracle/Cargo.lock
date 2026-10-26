@@ -569,15 +569,15 @@ checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustyac-content"
-version = "0.41.1"
+version = "0.42.0"
 
 [[package]]
 name = "rustyac-dxbc"
-version = "0.41.1"
+version = "0.42.0"
 
 [[package]]
 name = "rustyac-gui"
-version = "0.41.1"
+version = "0.42.0"
 dependencies = [
  "rustyac-math",
  "rustyac-physics",
@@ -585,18 +585,18 @@ dependencies = [
 
 [[package]]
 name = "rustyac-math"
-version = "0.41.1"
+version = "0.42.0"
 
 [[package]]
 name = "rustyac-ode"
-version = "0.41.1"
+version = "0.42.0"
 dependencies = [
  "rustyac-math",
 ]
 
 [[package]]
 name = "rustyac-physics"
-version = "0.41.1"
+version = "0.42.0"
 dependencies = [
  "rustyac-content",
  "rustyac-math",
@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-python"
-version = "0.41.1"
+version = "0.42.0"
 dependencies = [
  "rustyac-gui",
  "rustyac-physics",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "rustyac-render"
-version = "0.41.1"
+version = "0.42.0"
 dependencies = [
  "jpeg-decoder",
  "png",

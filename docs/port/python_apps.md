@@ -10,7 +10,9 @@
   pixels, the state, the console, `py_log.txt`, and the 6.9 MB of values the test apps log are
   identical (`py_apps`, 69 frames).
 - Next: see "Not done (Task 42b)".
-- Scratch: `re/scratch/task42/`. Disk free: 33 GB at start, 32 GB at end.
+- Proofs: every area of `--quick` and `--changed v0.41.1` identical (the proof runner changed,
+  so `--changed` ran every area: 1,613 cases, 6 h 43 min).
+- Scratch: `re/scratch/task42/`. Disk free: 33 GB at start, 33 GB at end.
 
 ## How it works
 
@@ -150,6 +152,28 @@ shutdown, restart, getServerName, getServerIP, getServerHttpPort, getServerSlots
 - `tools/proofs/python.sh` is a new area: `py_quick` in `--quick`, plus `py_apps` in a full
   run. `areas.map` routes `crates/rustyac-python`, `crates/rustyac-gui`, the renderer and
   `tools/render_oracle` to it.
+
+### Every area
+
+| area | `--quick` | `--changed v0.41.1` |
+|---|---|---|
+| physics | 9 / 9 | 113 / 113 |
+| fresh | 47 / 47 | 657 / 657 |
+| sound | 4 / 4 | 22 / 22 |
+| render | 10 / 10 | 107 / 107 |
+| gui | 15 / 15 | 123 / 123 |
+| python | 1 / 1 | 2 / 2 |
+| replays | 5 / 5 | 29 / 29 |
+| net | 16 / 16 | 80 / 80 |
+| browser | 9 / 9 | 226 / 226 |
+| ai_page | 3 / 3 | 3 / 3 |
+| shaders | 4 / 4 | 4 / 4 |
+| launcher | 1 / 1 | 12 / 12 |
+| dumps | 6 / 6 | 223 / 223 |
+
+Clippy with `-D warnings` is clean on the native workspace (all targets), both wasm targets,
+the wgpu renderer and the page's crates. Every `--locked` build passes: the workspace and all
+nine tools.
 
 ## The browser (step 5, not built)
 
