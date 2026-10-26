@@ -2,14 +2,14 @@
 
 ## Resume here (Task 41b)
 
-- Done: A.1 to A.4 and B.1 to B.4 (see "Task 41b" at the end). Every car's
-  sound in the page: an AI race's and two online clients' call logs are the
-  desktop's once both get the same "is it playing" answers. The batching left
-  Task 41's 18 logs unchanged but won no measurable frame time.
-- Proofs: the clippy runs and the --locked builds are clean; `run_all.sh
-  --quick` and `--changed v0.41.0` running; then the panel's end-to-end test
-  and v0.41.1.
-- Scratch: `re/scratch/task41b/`. Disk free: 39 GB at start.
+- Done: A.1 to A.4 and B.1 to B.4, v0.41.1 (see "Task 41b" at the end).
+  Every car's sound in the page: an AI race's and two online clients' call
+  logs are the desktop's once both get the same "is it playing" answers. The
+  batching left Task 41's 18 logs unchanged but won no measurable frame time.
+- Proofs: every area of `--quick` and `--changed v0.41.0` identical; the
+  panel's unit and end-to-end tests pass.
+- Next: see "Not done (Task 41b)".
+- Scratch: `re/scratch/task41b/`. Disk free: 39 GB at start, 33 GB at end.
 
 ## Resume here (Task 41)
 
@@ -352,7 +352,36 @@ work) was not measured. The runs scatter by 1 to 3 ms between twins.
 
 ### Regression (Task 41b)
 
-(filled in after the runs)
+`tools/proofs/run_all.sh` on the 0.41.1 tree (`re/scratch/task41b/quick_table.md`,
+`changed_table.md`):
+
+| area | `--quick` | `--changed v0.41.0` |
+|---|---|---|
+| physics | 9 / 9 | (not changed) |
+| fresh | 47 / 47 | 657 / 657 |
+| sound | 4 / 4 | 22 / 22 |
+| render | 10 / 10 | (not changed) |
+| gui | 15 / 15 | (not changed) |
+| replays | 5 / 5 | 29 / 29 |
+| net | 16 / 16 | 80 / 80 |
+| browser | 9 / 9 | 226 / 226 |
+| ai_page | 3 / 3 | 3 / 3 |
+| shaders | 4 / 4 | (not changed) |
+| launcher | 1 / 1 | 12 / 12 |
+| dumps | 6 / 6 | 223 / 223 |
+| wall clock | 30 min | 3 h 51 min |
+
+- Panel: `npm test` 15 / 15, `npx tsc --noEmit` clean. Task 38g's end-to-end
+  test (`re/scratch/task41b/e2e.sh`: 38g's, on this build's site, since 38d's
+  old wasm no longer fits `web/app.js`): presets refused and saved, the
+  launcher page lists the new server after the start, a headless Chrome joins
+  it through the router and drives, the server stops 118 s after the client
+  left, no containers left.
+- clippy `-D warnings`: native `--all-targets`, wasm32-unknown-unknown
+  (rustyac-web, rustyac-net, rustyac-audio; rustyac-web and rustyac-dxbc
+  `--all-targets`), wasm32-wasip1, rustyac-render with wgpu: clean. Builds
+  `--locked`, the tool lock files included (car_oracle's 7 old warnings, in
+  files this task did not touch).
 
 ## Web zip and preview pack (Task 41b)
 
