@@ -1067,6 +1067,8 @@ async function drive(launch) {
       // (src/race.rs: OVER_TIME_MULT, the pit stop's settings); without them the game's defaults
       await loadFiles(['system/cfg/assetto_corsa.ini', 'system/cfg/pitstop.ini'], () => {}).catch((error) => console.warn(error));
     }
+    // (DISABLE_SHOW_MODE: no ESC menu at the start; a pack may not have the file)
+    if (picture.backend === 'full') await loadFiles(['system/cfg/options.ini'], () => {}).catch(() => {});
     const fileSeconds = (performance.now() - started) / 1000;
     $('progress').hidden = true;
     setStatus('building the track and the car (a large track takes some seconds; the page stands still meanwhile) ...');
@@ -1076,7 +1078,12 @@ async function drive(launch) {
     const backend = picture.backend;
     // Task 28: ?sessions=p10,q5,r3 runs the drive under the referee (F7 next session, F8 restart);
     // given before every make (Full mode makes the game again, and making it takes the list)
-    const sessions = () => { if (params.get('sessions')) rac.set_sessions(params.get('sessions')); };
+    const sessions = () => {
+      if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
+      // Task 42b: a drive at the keyboard begins in AC's ESC menu, as rustyac.exe's does (not
+      // one nobody sits at: autodrive, ?guido=, a proof, a self test)
+      rac.set_esc_start(backend === 'full' && !autodrive && !params.has('guido') && !params.has('fullproof') && !params.has('selftest'));
+    };
     // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
     // as rustyac.exe --race-seed n --ai-seed n-28000)
     const seed = (params.has('seed') ? Number(params.get('seed')) : Date.now()) >>> 0;
@@ -1949,6 +1956,10 @@ function showKeys(forMs) {
 }
 
 function startDriving() {
+  // the keys to the page: the launcher's Start or the menu's Drive leaves the focus in a frame
+  // or on a button that is hidden now, where every key would go
+  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  window.focus();
   $('menu').hidden = true;
   // (Full mode with AC's GUI: the game draws its own HUD)
   $('hud').hidden = hasGui();
@@ -2093,7 +2104,7 @@ function frame(now) {
 
 // Windows virtual-key codes, as AC's controls.ini and its keyboard class name the keys.
 const VK = {
-  ArrowUp: 0x26, ArrowDown: 0x28, ArrowLeft: 0x25, ArrowRight: 0x27, Space: 0x20, Enter: 0x0d, Tab: 0x09, Backspace: 0x08,
+  ArrowUp: 0x26, ArrowDown: 0x28, ArrowLeft: 0x25, ArrowRight: 0x27, Space: 0x20, Enter: 0x0d, Tab: 0x09, Backspace: 0x08, Escape: 0x1b,
   ShiftLeft: 0xa0, ShiftRight: 0xa1, ControlLeft: 0xa2, ControlRight: 0xa3, AltLeft: 0xa4, AltRight: 0xa5,
   Insert: 0x2d, Delete: 0x2e, Home: 0x24, End: 0x23, PageUp: 0x21, PageDown: 0x22, BracketLeft: 0xdb, BracketRight: 0xdd,
 };

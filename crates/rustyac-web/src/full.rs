@@ -188,6 +188,8 @@ pub struct GuiLoop {
     /// The ESC menu's Exit or the console's `exit`: the page leaves the drive.
     pub exit: bool,
     pits_locked: bool,
+    /// Task 42b: AC's start camera while a session that began in the ESC menu waits for "Drive"
+    pub start_camera: Option<rustyac_game::render::scene::StartCamera>,
     /// (the setup editor's car: its jobs applied, and the 64-step slice it was taken in)
     published: Option<(usize, u64)>,
     generation: u64,
@@ -233,7 +235,10 @@ impl GuiLoop {
                     self.pits_locked = false;
                     session.request(event::PITS_DRIVE);
                 }
-                SimAction::LoadPreviousSessionUserCamera => session.camera.back_to_driving(),
+                SimAction::LoadPreviousSessionUserCamera => {
+                    self.start_camera = None;
+                    session.camera.back_to_driving();
+                }
                 SimAction::SetDrivableCamera(view) => session.camera.set_drivable(view),
                 SimAction::SetCameraModeKept(mode) => session.camera.set_mode_kept(mode),
                 SimAction::Shutdown => self.exit = true,
@@ -291,8 +296,11 @@ impl GuiLoop {
 }
 
 /// One frame of the page's game: the player's car first, then the others.
-pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo) {
-    let camera = session.camera_frame(view, seconds as f64);
+pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, start: Option<&mut rustyac_game::render::scene::StartCamera>) {
+    let camera = match start {
+        Some(start) => start.update(view, session.shape.eye_model[0], seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32)),
+        None => session.camera_frame(view, seconds as f64),
+    };
     let world: Vec<CarView> = std::iter::once(*view).chain(session.remote_views()).collect();
     renderer.draw(&world, 0, &session.camera, &camera, hud, seconds);
 }
@@ -336,7 +344,7 @@ pub fn fixed_frame(root: &Path, session: &mut Session, width: u32, height: u32, 
     };
     let hud = if renderer.gui.is_some() { hud_info(session, false) } else { HudInfo { hidden: true, ..Default::default() } };
     for _ in 0..frames {
-        draw(&mut renderer, session, &view, FIXED_SECONDS, &hud);
+        draw(&mut renderer, session, &view, FIXED_SECONDS, &hud, None);
     }
     // the GUI's state at the end in the log too: every control (name, shown, place, text, mouse
     // and highlight), the mouse, the desktop, and what the GUI asked of the session

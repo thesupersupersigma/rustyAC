@@ -33,6 +33,12 @@ pub const MAX_FRAME_SECONDS: f64 = 0.1;
 /// FNV-1a 64's offset basis: where a chained state hash starts.
 pub const CHAIN_START: u64 = 0xcbf2_9ce4_8422_2325;
 
+thread_local! {
+    /// Task 42b: the next offline drive begins in AC's ESC menu, whose "Drive" frees the car
+    /// (`rustyac.exe`'s `esc_start` at the wheel); taken by the next [`Session`] made.
+    pub static ESC_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Steps of lying still on its roof or side before the car is put back on the road: 3 s.
 const FLIPPED_STEPS: u32 = 1000;
 
@@ -160,7 +166,15 @@ sessions={}
         Session::build(setup, Some(online))
     }
 
-    fn build(setup: SimSetup, online: Option<OnlineSession>) -> Result<Session, String> {
+    fn build(mut setup: SimSetup, online: Option<OnlineSession>) -> Result<Session, String> {
+        // (as the desktop's: the referee's `startRace` waits for the menu's "Drive")
+        if ESC_START.with(|start| start.take()) && online.is_none() {
+            setup.esc_start = true;
+            if let Some(referee) = &mut setup.referee {
+                referee.first_start_delay_ms = -1.0;
+                referee.next_start_delay_ms = -1.0;
+            }
+        }
         let input: SharedInput = Arc::new(Mutex::new(Input::default()));
         let source = WebSource::new(input.clone());
         let keys = source.bindings.describe();
@@ -170,7 +184,8 @@ sessions={}
             Some(online) => GameSim::new_online(setup, Box::new(source), online)?,
             None => GameSim::new(setup, Box::new(source))?,
         };
-        while sim.car.device.source.in_spawn_sequence() {
+        // (a car held for the ESC menu's "Drive" goes on with its sequence after it, as on the desktop)
+        while sim.car.device.source.in_spawn_sequence() && !sim.car.car.is_controls_locked {
             sim.step()?;
         }
         // the other cars: race.ini's (AI drivers) first, then the server's, as `opponent_infos`
@@ -294,7 +309,7 @@ sessions={}
             // a car that was just put back (R, N) settles unpaced, as on the desktop and as at
             // the start: the 470 steps of the spawn sequence run inside this frame
             let mut burst = 0;
-            while self.sim.car.device.source.in_spawn_sequence() && burst < 2000 && !self.stopped() {
+            while self.sim.car.device.source.in_spawn_sequence() && burst < 2000 && !self.stopped() && !self.sim.car.car.is_controls_locked {
                 self.step()?;
                 stats.steps += 1;
                 burst += 1;

@@ -37,6 +37,14 @@ pub fn set_sound_tape(on: bool) {
     SOUND_TAPE.with(|t| t.set(on));
 }
 
+/// Task 42b: the next drive begins in AC's ESC menu, as `rustyac.exe`'s at the wheel does
+/// (`Sim::Sim`: unless `system/cfg/options.ini [OPTIONS] DISABLE_SHOW_MODE` is set).
+#[wasm_bindgen]
+pub fn set_esc_start(on: bool) {
+    let disabled = rustyac_physics::data::ini::IniReader::load(&Path::new(ROOT).join("system/cfg/options.ini")).is_ok_and(|ini| ini.get_float("OPTIONS", "DISABLE_SHOW_MODE").unwrap_or(0.0) != 0.0);
+    crate::session::ESC_START.with(|start| start.set(on && !disabled));
+}
+
 /// Task 28: the session list of the next [`Game::create`] (`p10,q5,r3`; empty: no referee).
 #[wasm_bindgen]
 pub fn set_sessions(list: String) {
@@ -530,13 +538,25 @@ impl Game {
         if full.is_some() {
             notes[0] = format!("picture: Full mode, AC's own renderer on {}", gpu.backend);
         }
+        // Task 42b: a session that begins in the ESC menu shows AC's start camera until "Drive";
+        // without AC's GUI nobody could press "Drive", so it is pressed here (as rustyac.exe)
+        let mut gui = crate::full::GuiLoop::default();
+        if session.sim.setup.esc_start {
+            if full.as_ref().and_then(|full| full.gui.as_ref()).is_some_and(|gui| gui.has_esc_menu()) {
+                use rustyac_game::render::scene::StartCamera;
+                let setup = &session.sim.setup;
+                gui.start_camera = Some(StartCamera::new(StartCamera::crew_side(&Path::new(ROOT).join("content/tracks").join(&setup.track), &setup.layout)));
+            } else {
+                session.request(rustyac_game::input_file::event::PITS_DRIVE);
+            }
+        }
         // (what the renderer asked for and did not find: the page fetches it and starts again)
         // (and what it drew without: a texture of the skin, a font)
         let missing: Vec<String> = if gpu.full { files().take_wanted().iter().map(|path| relative(Path::new(path))).filter(|path| !fs_has(path)).collect() } else { Vec::new() };
         if full.is_some() {
             let view = session.view();
             let sound = start_sound(&mut session, &mut notes);
-            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui: Default::default(), render_scale: 1.0, sound };
+            return Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full, proof, missing, remote_models: Vec::new(), link, gui, render_scale: 1.0, sound };
         }
         let setup = &session.sim.setup;
         let (car_model, track_models) = content::model_files(Path::new(ROOT), &setup.car, &setup.track, &setup.layout);
@@ -597,7 +617,7 @@ impl Game {
         }
         let view = session.view();
         let sound = start_sound(&mut session, &mut notes);
-        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui: Default::default(), render_scale: 1.0, sound }
+        Game { session, gpu, last_ms: None, view, notes, frames: 0, steps: 0, work_ms: 0.0, dropped_seconds: 0.0, drawn: Default::default(), full: None, proof: None, missing, remote_models, link, gui, render_scale: 1.0, sound }
     }
 
     /// Full mode did not start for want of these files, one per line: fetch them and make the
@@ -636,7 +656,7 @@ impl Game {
                         full.crew.playing[wheel][screw as usize] = sound.crew_is_playing(wheel, screw);
                     }
                 }
-                crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &hud);
+                crate::full::draw(full, &mut self.session, &self.view, seconds as f32, &hud, self.gui.start_camera.as_mut());
                 let calls = std::mem::take(&mut full.crew.sound);
                 full.crew.camera.clear();
                 if let Some(sound) = &mut self.sound {
@@ -857,7 +877,12 @@ impl Game {
 
     /// F1: the next view (chase, chase 2, bonnet, bumper, dash, cockpit).
     pub fn next_camera(&mut self) {
-        self.session.camera.f1();
+        // (F1 from AC's start camera: back to the driving view, as rustyac.exe's camera_f1)
+        if self.gui.start_camera.take().is_some() {
+            self.session.camera.back_to_driving();
+        } else {
+            self.session.camera.f1();
+        }
     }
 
     pub fn set_autodrive(&mut self, on: bool) {

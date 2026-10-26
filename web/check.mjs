@@ -237,6 +237,9 @@ try {
           if (!fileChooser) throw new Error('the page opened no file chooser');
           await send('DOM.setFileInputFiles', { files: [resolve(step.pick)], backendNodeId: fileChooser.backendNodeId });
           report.flow.push({ at, pick: step.pick });
+        } else if (step.cdp) {
+          // { cdp: "Input.dispatchKeyEvent", params: {...} }: real (trusted) input, as a keyboard or mouse gives it
+          report.flow.push({ at, cdp: step.cdp, value: await send(step.cdp, step.params || {}) });
         } else if (step.wait) {
           await sleep(step.wait * 1000);
         } else if (step.shot) {
