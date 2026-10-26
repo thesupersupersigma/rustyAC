@@ -1589,15 +1589,22 @@ function showReferee(referee) {
   const boxes = [['hud-referee', 'top'], ['hud-referee-centre', 'centre'], ['hud-referee-results', 'results']];
   for (const [id, key] of boxes) {
     const lines = referee && !state.online ? referee[key] : [];
-    $(id).hidden = lines.length === 0;
-    $(id).textContent = lines.join('\n');
+    if ($(id).hidden !== (lines.length === 0)) $(id).hidden = lines.length === 0;
+    put(id, lines.join('\n'));
   }
+}
+
+// A box's text, written only when it changes.
+function put(id, text) {
+  const box = $(id);
+  text = String(text);
+  if (box.textContent !== text) box.textContent = text;
 }
 
 function showOnline(online) {
   window.rustyac.online = online;
   const box = $('hud-online');
-  box.hidden = !online;
+  if (box.hidden !== !online) box.hidden = !online;
   if (!online) return;
   const lines = [`${online.server}   ${online.session}   ping ${online.ping} ms${online.associated ? '' : '   (waiting for the server)'}`];
   for (const d of online.drivers) {
@@ -1606,7 +1613,7 @@ function showOnline(online) {
   if (window.rustyac.referee) lines.push(...window.rustyac.referee.top);
   lines.push(...online.chat);
   lines.push('Enter: chat   Esc: leave');
-  box.textContent = lines.join('\n');
+  put('hud-online', lines.join('\n'));
 }
 
 function openChat() {
@@ -2069,24 +2076,26 @@ const perf = { since: 0, text: '' };
 // bias are there all the time (lit while the aid acts); a change shows as a note for a moment.
 function showHud(hud) {
   window.rustyac.hud = hud;
-  $('hud-gear').textContent = hud.gear === 0 ? 'R' : hud.gear === 1 ? 'N' : String(hud.gear - 1);
-  $('hud-speed').textContent = Math.round(hud.kmh);
-  $('hud-rpm-bar').style.width = `${Math.min(100, (hud.rpm / Math.max(1, hud.rpm_limit)) * 100).toFixed(1)}%`;
-  $('hud-rpm-text').textContent = `${Math.round(hud.rpm)} rpm`;
-  $('hud-lap-time').textContent = time(hud.lap_ms);
-  $('hud-last').textContent = time(hud.last_ms);
-  $('hud-best').textContent = time(hud.best_ms);
-  $('hud-info').textContent =
+  // (the boxes are written only when their text changes: every write costs the page a layout)
+  put('hud-gear', hud.gear === 0 ? 'R' : hud.gear === 1 ? 'N' : String(hud.gear - 1));
+  put('hud-speed', Math.round(hud.kmh));
+  const rpm = `${Math.min(100, (hud.rpm / Math.max(1, hud.rpm_limit)) * 100).toFixed(0)}%`;
+  if ($('hud-rpm-bar').style.width !== rpm) $('hud-rpm-bar').style.width = rpm;
+  put('hud-rpm-text', `${Math.round(hud.rpm / 10) * 10} rpm`);
+  put('hud-lap-time', time(hud.lap_ms));
+  put('hud-last', time(hud.last_ms));
+  put('hud-best', time(hud.best_ms));
+  put('hud-info',
     `${hud.camera} view   ${hud.device}\n` +
     `${hud.auto_shifter ? 'automatic' : 'manual'} gearbox${hud.drs ? '   DRS' : ''}\n` +
-    `lap ${hud.laps + 1}${hud.valid ? '' : ' (not valid)'}${hud.in_pit_lane ? '   pit lane' : ''}${state.paused ? '\nPAUSED (P)' : ''}`;
-  $('hud-tc').textContent = hud.tc_text;
+    `lap ${hud.laps + 1}${hud.valid ? '' : ' (not valid)'}${hud.in_pit_lane ? '   pit lane' : ''}${state.paused ? '\nPAUSED (P)' : ''}`);
+  put('hud-tc', hud.tc_text);
   $('hud-tc').classList.toggle('acting', hud.tc);
-  $('hud-abs').textContent = hud.abs_text;
+  put('hud-abs', hud.abs_text);
   $('hud-abs').classList.toggle('acting', hud.abs);
-  $('hud-bias').textContent = hud.bias_text;
-  $('hud-note').textContent = hud.note;
-  $('hud-note').hidden = !hud.note;
+  put('hud-bias', hud.bias_text);
+  put('hud-note', hud.note);
+  if ($('hud-note').hidden !== !hud.note) $('hud-note').hidden = !hud.note;
   showReferee(hud.referee);
   showOnline(hud.online);
 }
