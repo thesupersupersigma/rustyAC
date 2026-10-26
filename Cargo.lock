@@ -889,6 +889,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustyac-python"
+version = "0.41.1"
+dependencies = [
+ "rustyac-gui",
+ "rustyac-physics",
+]
+
+[[package]]
 name = "rustyac-render"
 version = "0.41.1"
 dependencies = [

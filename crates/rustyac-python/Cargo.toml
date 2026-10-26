@@ -1,0 +1,15 @@
+[package]
+name = "rustyac-python"
+description = "rustyAC: Assetto Corsa's Python app API (the `ac` module, python.ini, acMain / acUpdate / acShutdown, py_log.txt). Loads the player's own python33.dll from the AC folder at run time, as acs.exe does; ships no Python."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+publish.workspace = true
+# A 1:1 port of Assetto Corsa's PythonInterface (acs.exe, Kunos Simulazioni); see LICENSING.md.
+license = "GPL-3.0-or-later"
+
+[dependencies]
+# the apps' forms are ksgui forms; the game's data the apps read is the apps' AppLink
+rustyac-gui = { path = "../rustyac-gui" }
+# the port of INIReader (python.ini)
+rustyac-physics = { path = "../rustyac-physics" }
