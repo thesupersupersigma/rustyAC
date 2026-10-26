@@ -213,6 +213,11 @@ pub enum OnlineGuiEvent {
     Message { title: String, text: String, kind: i32 },
     /// `ACClient::onSetupReceived` 0x140050090: the server's setup (its first byte unread)
     Setup { values: Vec<(String, f32)> },
+    /// Task 42b: the race is over and the car went to its pit box (lambda @ 0x14003dde0):
+    /// the ESC menu shows, its "Drive" off until the next session
+    SentToPits,
+    /// Task 42b: a new session (the Sim's handler @ 0x140196830): "Drive" on again
+    NewSession,
 }
 
 /// Task 34: what the GUI asks of the client.
@@ -288,6 +293,10 @@ pub struct OnlineSession {
     pub pit_failed: bool,
     /// Task 34: what the GUI hears of (taken every step)
     pub gui_events: Vec<OnlineGuiEvent>,
+    /// Task 42b: `ACClient::isResultScreenOn` (the race's results came) and
+    /// `endSession.sendToPitsTimer` (5 s at the join, 0 after a new session), seconds
+    result_screen_on: bool,
+    send_to_pits_timer: f32,
 }
 
 /// `system/cfg/pitstop.ini` as the game ships it (a server session reads no file here).
@@ -369,7 +378,7 @@ impl OnlineSession {
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
         let session = mirror_session(&client.current_session, client.session_start_time);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new() }
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
@@ -497,6 +506,10 @@ impl OnlineSession {
                     self.session = mirror_session(info, info.start as f64);
                     self.standings.clear();
                     self.results = None;
+                    // ACClient::onNewSession: the result screen is over
+                    self.result_screen_on = false;
+                    self.send_to_pits_timer = 0.0;
+                    self.gui_events.push(OnlineGuiEvent::NewSession);
                     if let Some(pit) = &mut self.pit {
                         pit.new_session = true;
                     }
@@ -619,6 +632,7 @@ impl OnlineSession {
                     // the server's results of the race (RemoteSessionResume: what the game's
                     // end-of-session screen is made from online)
                     self.results = Some(standings.clone());
+                    self.result_screen_on = true;
                     self.say("The race is over".to_string());
                     for (place, row) in standings.iter().enumerate() {
                         let who = self.driver_of(row.slot);
@@ -825,6 +839,19 @@ impl OnlineSession {
         }
     }
 
+    /// Task 42b: `ACClient::update` 0x140053b30 while the race's results show: the car stops
+    /// gently, and once `sendToPitsTimer` runs out it goes to its pit box (true: now).
+    /// shortcut: options.ini's IGNORE_RESULT_TELEPORT is not read and there is no fade; add them if a player asks.
+    pub fn result_frame(&mut self, car: &mut RollingChassis, dt: f32) -> bool {
+        // (CarAvatar::setGentleStop: on every frame of the result screen, off at a new session)
+        car.is_gentle_stopping = self.result_screen_on;
+        if !self.result_screen_on || !pits_due(&mut self.send_to_pits_timer, dt) {
+            return false;
+        }
+        self.gui_events.push(OnlineGuiEvent::SentToPits);
+        true
+    }
+
     /// Task 28: the server's session as the referee's banner words it, its standings, and
     /// its results when the race is over.
     pub fn referee_lines(&self) -> Vec<String> {
@@ -901,5 +928,35 @@ impl StepHooks for OnlineHooks<'_> {
                 }
             }
         }
+    }
+}
+
+/// `endSession.sendToPitsTimer` of `ACClient::update`: true once, the frame it runs out
+/// (`FLT_MAX` afterwards, until a new session sets it again).
+fn pits_due(timer: &mut f32, dt: f32) -> bool {
+    if *timer == f32::MAX {
+        return false;
+    }
+    *timer -= dt;
+    if *timer >= 0.0 {
+        return false;
+    }
+    *timer = f32::MAX;
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sent_to_pits_once_after_the_timer() {
+        // the first race's results: 5 s (ACClient::ACClient), then never again in that session
+        let mut timer = 5.0;
+        let frames: Vec<bool> = (0..400).map(|_| super::pits_due(&mut timer, 1.0 / 60.0)).collect();
+        assert_eq!(frames.iter().filter(|due| **due).count(), 1);
+        assert_eq!(frames.iter().position(|due| *due), Some(299)); // the 300th frame: 5 s
+        // a later session's: 0 s (ACClient::onNewSession), the first frame
+        let mut timer = 0.0;
+        assert!(super::pits_due(&mut timer, 0.003));
+        assert!(!super::pits_due(&mut timer, 0.003));
     }
 }

@@ -2034,6 +2034,14 @@ impl GameSim {
                 }
             }
             session.pit_frame(&mut self.car.car, time);
+            // Task 42b: the race is over: to the car's pit box (goToSpawnPosition("PIT"))
+            if session.result_frame(&mut self.car.car, DT) {
+                let slot = session.net.client.session_id as usize;
+                if let Some((position, tail)) = self.track.as_ref().and_then(|track| track.spawn_pose("PIT", slot).or_else(|| track.spawn_pose("PIT", 0))) {
+                    self.spawn = SpawnPose { position, tail };
+                }
+                self.car.device.source.request(event::RESET);
+            }
         }
         // Task 30: "Back to pits" without a referee is the plain way back to the spawn point
         if events & event::BACK_TO_PITS != 0 && self.referee.is_none() {

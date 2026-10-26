@@ -1125,6 +1125,16 @@ impl GameGui {
                     self.vote_output(vec![out]);
                 }
                 OnlineGuiEvent::Message { title, text, kind } => self.message.add_message(&mut self.gui, &title, &text, kind),
+                // Task 42b: the end of the race (lambda @ 0x14003dde0) and the next session
+                OnlineGuiEvent::SentToPits | OnlineGuiEvent::NewSession => {
+                    if let Some(menu) = self.esc_menu {
+                        let sent = event == OnlineGuiEvent::SentToPits;
+                        if sent {
+                            self.gui.sim_activate_esc_menu();
+                        }
+                        self.gui.esc_menu_set_drive_button_enabled(menu, !sent);
+                    }
+                }
                 // (the game's Documents\Assetto Corsa\setups is always there; rustyAC's own
                 // setups folder is made for it)
                 OnlineGuiEvent::Setup { values } => {
