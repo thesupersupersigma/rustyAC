@@ -212,6 +212,7 @@ pub struct GameGui {
     screen_flash: f32,
     /// Task 42: `gameplay.ini [PYTHON] ENABLE_PYTHON` (`Sim::Sim` makes `PythonInterface` when
     /// it is above 0), and the apps once they run
+    #[cfg_attr(not(windows), allow(dead_code))]
     python_on: bool,
     #[cfg(windows)]
     python: Option<rustyac_python::Python>,
@@ -1489,26 +1490,6 @@ fn json_string(json: &str, key: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ini_keys_are_set_in_place() {
-        let text = "[A]\r\nX=1\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=1\r\n";
-        assert_eq!(set_ini_key(text, "DAMAGE_DISPLAYER", "IS_ACTIVE", "0"), "[A]\r\nX=1\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=0\r\n");
-        assert_eq!(set_ini_key(text, "A", "Y", "2"), "[A]\r\nX=1\r\nY=2\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=1\r\n");
-        assert_eq!(set_ini_key("", "B", "K", "v"), "[B]\r\nK=v\r\n");
-        assert_eq!(set_ini_key("[A]\nX=1", "B", "K", "v"), "[A]\r\nX=1\r\n\r\n[B]\r\nK=v\r\n");
-    }
-
-    #[test]
-    fn json_names() {
-        assert_eq!(json_string("{\n \"name\": \"Ferrari \\\"F2004\\\"\", \"brand\": \"x\"}", "name").as_deref(), Some("Ferrari \"F2004\""));
-        assert_eq!(json_string("{}", "name"), None);
-    }
-}
-
 /// `PythonInterface::PythonInterface` 0x140124920 in rustyAC: the player's `python33.dll`, the
 /// apps of `python.ini` (rustyAC's cfg folder, else the game's Documents), `py_log.txt` in
 /// rustyAC's own `logs`. The working directory becomes the game's folder, as the apps expect.
@@ -1542,5 +1523,25 @@ fn start_python(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter, 
             println!("Python: no apps ({e}; the game exits here: \"Failed to load Python, exiting\")");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ini_keys_are_set_in_place() {
+        let text = "[A]\r\nX=1\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=1\r\n";
+        assert_eq!(set_ini_key(text, "DAMAGE_DISPLAYER", "IS_ACTIVE", "0"), "[A]\r\nX=1\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=0\r\n");
+        assert_eq!(set_ini_key(text, "A", "Y", "2"), "[A]\r\nX=1\r\nY=2\r\n\r\n[DAMAGE_DISPLAYER]\r\nIS_ACTIVE=1\r\n");
+        assert_eq!(set_ini_key("", "B", "K", "v"), "[B]\r\nK=v\r\n");
+        assert_eq!(set_ini_key("[A]\nX=1", "B", "K", "v"), "[A]\r\nX=1\r\n\r\n[B]\r\nK=v\r\n");
+    }
+
+    #[test]
+    fn json_names() {
+        assert_eq!(json_string("{\n \"name\": \"Ferrari \\\"F2004\\\"\", \"brand\": \"x\"}", "name").as_deref(), Some("Ferrari \"F2004\""));
+        assert_eq!(json_string("{}", "name"), None);
     }
 }

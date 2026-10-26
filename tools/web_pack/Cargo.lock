@@ -825,6 +825,7 @@ dependencies = [
  "rustyac-math",
  "rustyac-net",
  "rustyac-physics",
+ "rustyac-python",
  "rustyac-render",
  "webpki-roots",
  "windows",
@@ -882,6 +883,14 @@ dependencies = [
  "rustyac-content",
  "rustyac-math",
  "rustyac-ode",
+]
+
+[[package]]
+name = "rustyac-python"
+version = "0.41.1"
+dependencies = [
+ "rustyac-gui",
+ "rustyac-physics",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ Copyright (c) 2026 thesupersupersigma.
 
 | Part | Paths | License |
 |---|---|---|
-| The game, the car physics, the sound, the renderer, the game's GUI and HUD and the launcher | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/`<br>`crates/rustyac-gui/`<br>`crates/rustyac-launcher/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
+| The game, the car physics, the sound, the renderer, the game's GUI and HUD and the launcher | `crates/rustyac-game/`<br>`crates/rustyac-physics/`<br>`crates/rustyac-audio/`<br>`crates/rustyac-render/`<br>`crates/rustyac-gui/`<br>`crates/rustyac-launcher/`<br>`crates/rustyac-python/` | `GPL-3.0-or-later`: [LICENSE-GPL](LICENSE-GPL) |
 | The browser preview: the wasm build, its page and its server image | `crates/rustyac-web/`<br>`web/` (but `web/fonts/`)<br>`.dockerignore` | `GPL-3.0-or-later` |
 | The Selawik font for the launcher theme in the browser | `web/fonts/` | `OFL-1.1`: [web/fonts/Selawik-OFL.txt](web/fonts/Selawik-OFL.txt) |
 | Tools built on the car physics, the sound or the renderer | `tools/car_oracle/`<br>`tools/chassis_compare/`<br>`tools/tyre_oracle/`<br>`tools/audio_oracle/`<br>`tools/render_oracle/`<br>`tools/web_pack/`<br>`tools/launcher_oracle/` | `GPL-3.0-or-later` |
@@ -50,6 +50,12 @@ everything that links the car physics is GPL.
   the names of the exported functions the game itself imports. Without an Assetto Corsa
   install rustyAC runs silently. FMOD is a trademark of Firelight Technologies Pty Ltd, who
   are not affiliated with rustyAC.
+- **Python 3.3** (`python33.dll`, `Python33.zip`), the Python Software Foundation's
+  interpreter, which Assetto Corsa runs its Python apps on. rustyAC only calls the player's
+  installed copy: `crates/rustyac-python` loads the DLL at run time from the player's own
+  Assetto Corsa folder (`system/x64`); no Python DLL, header, library or standard library is in
+  this repository or in a release. The binding is written from the names of the 28 functions
+  the game itself imports. Without the DLL rustyAC runs on without Python apps.
 - **FMOD Studio 2.03.15 for HTML5** (`fmodstudio.js`, `fmodstudio.wasm`), the browser
   preview's sound engine. The website serves Firelight's unchanged files from its preview pack
   (`tools/web_pack` copies them from a local FMOD download when the pack is made); they are not
