@@ -61,7 +61,9 @@
       <label>or race minutes<input name="raceMinutes" type="number" min="0"><small>Used when laps is 0; both 0: no race.</small></label>
       <label>race wait seconds<input name="raceWait" type="number" min="0"><small>Time on the grid before the start.</small></label>
       <label>join during the race<select name="raceOpen"><option value="0">no</option><option value="1">yes</option><option value="2">first 20 s</option></select><small>Whether players can still join once the race runs.</small></label>
-    </div></fieldset>
+    </div>
+    <p id="raceOnly" class="mute" hidden>Race only: players who join while the race runs start from the pits, and when it ends everyone waits in the pits until the next race. Add a practice session for open driving.</p>
+    </fieldset>
     <fieldset><legend>weather and grip</legend><div class="row">
       <label>weather<select name="graphics"></select><small>The sky and clouds.</small></label>
       <label>air °C<input name="ambient" type="number"><small>Air temperature.</small></label>

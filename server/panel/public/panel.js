@@ -131,6 +131,7 @@ function edit(p) {
     raceWait: p.race ? p.race.waitSeconds : 60, raceOpen: p.race ? p.race.open : 1, ...p.weather, ...p.dynamicTrack,
     rules: Object.entries(p.rules || {}).map(([k, v]) => `${k}=${v}`).join('\n') };
   for (const [k, v] of Object.entries(set)) if (f[k]) f[k].value = v;
+  raceOnly();
   if (!p.id) f.presetId.value = idFromName(p.name, state.presets.map((x) => x.id));
   chosen = new Map(p.cars.map((c) => [c.model, { count: c.count, skins: new Set(c.skins), random: !!c.random }]));
   $('carSearch').value = '';
@@ -142,6 +143,12 @@ $('editor').presetName.oninput = (e) => {
   if (!editing.id && !idTouched) $('editor').presetId.value = idFromName(e.target.value, state.presets.map((x) => x.id));
 };
 $('editor').presetId.oninput = () => { idTouched = true; };
+// a race and nothing before it: who joins while it runs waits in the pits for the next session
+function raceOnly() {
+  const f = $('editor');
+  $('raceOnly').hidden = !(!Number(f.practice.value) && !Number(f.qualify.value) && (Number(f.raceLaps.value) || Number(f.raceMinutes.value)));
+}
+for (const k of ['practice', 'qualify', 'raceLaps', 'raceMinutes']) $('editor')[k].addEventListener('input', raceOnly);
 $('editor').track.onchange = showCars;
 $('editor').maxPlayers.oninput = showCars;
 $('carSearch').oninput = showCars;
@@ -167,7 +174,7 @@ $('new').onclick = () => {
   const t = defaultTrack(state.pack.tracks);
   const clear = state.pack.weather.find((w) => w.id === '3_clear') || state.pack.weather[0] || { id: '3_clear' };
   edit({ id: '', name: 'New server', track: t.track, layout: t.layout, cars: [],
-    practice: { minutes: 20, open: 1 }, qualify: { minutes: 10, open: 1 }, race: { laps: 10, minutes: 0, waitSeconds: 60, open: 1 },
+    practice: { minutes: 20, open: 1 }, qualify: null, race: { laps: 10, minutes: 0, waitSeconds: 60, open: 1 },
     time: '14:00', password: '', maxPlayers: 12, pickup: true, idleMinutes: 30,
     weather: { graphics: clear.id, ambient: 22, road: 8, variationAmbient: 1, variationRoad: 1, windMin: 0, windMax: 8, windDirection: 30, windVariation: 15 },
     dynamicTrack: { start: 96, randomness: 1, transfer: 80, lapGain: 30 }, rules: {} });
