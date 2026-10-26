@@ -24,6 +24,21 @@ extern "C" {
     // (the answer is a new array, the result first: a bank read back from this module can grow
     // its memory during the call, which leaves any view of the old memory empty)
     fn js_call(name: &str, text: &str, args: Vec<u32>) -> Vec<u32>;
+    /// The calls kept back (`name\ttext\n` each; their words, each led by its count), then
+    /// this call, in one crossing.
+    #[wasm_bindgen(js_namespace = rustyacSound, js_name = batch)]
+    fn js_batch(queued: &str, words: Vec<u32>, name: &str, text: &str, args: Vec<u32>) -> Vec<u32>;
+}
+
+/// Setters that give nothing back: they wait for the next call that does (one JavaScript
+/// crossing for all of them; the frame's `studio_update` is such a call). They answer
+/// `FMOD_OK` (`sound.js` warns in the console if one did not), or as `sound.js` answers a null
+/// handle.
+const KEPT_BACK: &[&str] = &["event_set_volume", "event_set_parameter_value", "event_set_3d_attributes", "event_set_pitch", "event_stop", "event_start", "event_set_timeline_position", "event_set_paused", "studio_set_listener_attributes"];
+const FMOD_ERR_INVALID_HANDLE: i32 = 30;
+
+thread_local! {
+    static QUEUE: std::cell::RefCell<(String, Vec<u32>)> = Default::default();
 }
 
 /// One call's arguments on their way to JavaScript.
@@ -166,7 +181,28 @@ pub fn call(name: &str, args: &[&dyn Wire]) -> i32 {
     for arg in args {
         arg.put(&mut w);
     }
-    let out = js_call(name, &w.text, w.args);
+    if KEPT_BACK.contains(&name) {
+        if w.args.first() == Some(&0) {
+            return FMOD_ERR_INVALID_HANDLE;
+        }
+        QUEUE.with(|q| {
+            let (calls, words) = &mut *q.borrow_mut();
+            calls.push_str(name);
+            calls.push('\t');
+            calls.push_str(&w.text);
+            calls.push('\n');
+            words.push(w.args.len() as u32);
+            words.extend(&w.args);
+        });
+        return FMOD_OK;
+    }
+    let out = if name == "system_get_geometry_occlusion" {
+        // nothing occludes: FMOD's HTML5 build has no addPolygon, so no geometry has a polygon
+        vec![FMOD_OK as u32, 0, 0]
+    } else {
+        let (calls, words) = QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        if calls.is_empty() { js_call(name, &w.text, w.args) } else { js_batch(&calls, words, name, &w.text, w.args) }
+    };
     let result = out.first().map_or(-1, |&r| r as i32);
     if result == FMOD_OK {
         let mut words = out[1..].iter();

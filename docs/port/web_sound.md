@@ -1,6 +1,16 @@
 # Task 41: sound in the browser
 
-## Resume here
+## Resume here (Task 41b)
+
+- Done: A.3 (setters kept back and sent in one crossing, occlusion answered
+  in the wasm: Task 41's 18 page call logs unchanged line for line), B.1 to
+  B.4 (panel: compose labels, fill the slots, Spa default, chmod step).
+  A.2 (crew guns, Audio app) wired in the page, not yet proven.
+- Next: A.1 other cars' sound and its proofs (AI race, 2-client online),
+  A.4 controls line, report, v0.41.1.
+- Scratch: `re/scratch/task41b/`. Disk free: 39 GB at start.
+
+## Resume here (Task 41)
 
 - Done: steps 1 to 5. The page plays AC's own sound banks through FMOD Studio
   2.03.15 for HTML5, served from the preview pack (never from the repository,

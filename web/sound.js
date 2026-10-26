@@ -17,6 +17,7 @@
 //   setCallback                -> nothing (a C function cannot be handed to the JavaScript build)
 //   Geometry::addPolygon       -> FMOD_ERR_UNSUPPORTED (not in the HTML5 build: no occluders)
 //   setGeometrySettings        -> FMOD_OK (unsupported there, and nothing for it to size)
+//   getGeometryOcclusion       -> 0, 0, answered in the wasm (no polygons, nothing occludes)
 //   the DSP plug-ins           -> left out (see studio_register_plugin)
 // Every object handed out gets a number of its own; the same FMOD object asked for again (the
 // core system, the master group, an event description by its GUID) gets the same number, as
@@ -120,10 +121,6 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
       return r === FMOD.OK ? [r, give(o.val, 'master')] : [r];
     },
     system_create_geometry: (a) => { const o = {}; return handed(core(a).createGeometry(a[1], a[2], o), o); },
-    system_get_geometry_occlusion: (a) => {
-      const d = {}, r = {};
-      return [core(a).getGeometryOcclusion(V(a, 1), V(a, 4), d, r), W(d.val), W(r.val)];
-    },
     // (unsupported in the HTML5 build, which has no polygons to size the occlusion tree for)
     system_set_geometry_settings: () => [FMOD.OK],
     system_set_advanced_settings: (a) => {
@@ -269,6 +266,20 @@ export async function loadSound(js, wasm, rac, { window: win = globalThis.window
       if (!t) return Uint32Array.of(FMOD.ERR_UNSUPPORTED);
       if (name !== 'studio_create' && !objects.has(args[0])) return Uint32Array.of(FMOD.ERR_INVALID_HANDLE);
       return Uint32Array.from(t(args, text), (w) => w >>> 0);
+    },
+    // the setters the wasm kept back (one `name\ttext` line each, their words each led by its
+    // count), then one call that answers: one crossing per answer, not per call
+    batch(queued, words, name, text, args) {
+      let at = 0;
+      for (const line of queued.split('\n')) {
+        if (!line) continue;
+        const tab = line.indexOf('\t');
+        const n = words[at];
+        const r = this.call(line.slice(0, tab), line.slice(tab + 1), words.subarray(at + 1, at + 1 + n))[0];
+        at += 1 + n;
+        if (r !== FMOD.OK) console.warn(`sound: ${line.slice(0, tab)} answered ${r} after the wasm logged 0`);
+      }
+      return this.call(name, text, args);
     },
   };
 
