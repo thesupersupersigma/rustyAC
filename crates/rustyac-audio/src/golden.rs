@@ -193,6 +193,45 @@ impl Reader<'_> {
     }
 }
 
+/// Task 41b: one frame's cars and events in the golden files' form, for `rustyac-game`'s
+/// sound tapes.
+pub fn write_frames(out: &mut Vec<u8>, cars: &[CarFrame], events: &[PhysicsEvent]) {
+    let mut w = Writer(std::mem::take(out));
+    w.u32(cars.len() as u32);
+    for car in cars {
+        write_frame(&mut w, car);
+    }
+    w.u32(events.len() as u32);
+    for e in events {
+        w.u32(e.kind as u32);
+        w.floats(&[e.param1, e.param2, e.param3, e.param4]);
+        w.floats(&e.v_param1);
+        w.floats(&e.v_param2);
+        w.u32(e.ul_param0 as u32);
+        w.u32((e.ul_param0 >> 32) as u32);
+    }
+    *out = w.0;
+}
+
+/// What [`write_frames`] wrote at `*at`, which moves past it.
+pub fn read_frames(bytes: &[u8], at: &mut usize) -> Result<(Vec<CarFrame>, Vec<PhysicsEvent>), String> {
+    let mut r = Reader(bytes, *at);
+    let mut cars = Vec::new();
+    for _ in 0..r.u32()? {
+        cars.push(read_frame(&mut r)?);
+    }
+    let mut events = Vec::new();
+    for _ in 0..r.u32()? {
+        let kind = r.u32()? as i32;
+        let [param1, param2, param3, param4] = r.floats::<4>()?;
+        let (v_param1, v_param2) = (r.floats::<3>()?, r.floats::<3>()?);
+        let ul_param0 = r.u32()? as u64 | (r.u32()? as u64) << 32;
+        events.push(PhysicsEvent { kind, param1, param2, param3, param4, v_param1, v_param2, ul_param0 });
+    }
+    *at = r.1;
+    Ok((cars, events))
+}
+
 fn write_frame(w: &mut Writer, f: &CarFrame) {
     w.floats(&f.world_matrix);
     for m in &f.tyre_matrix {
@@ -352,5 +391,27 @@ impl Golden {
             session,
             self.frames.iter().map(|f| SessionFrame { car: &f.car, events: &f.events, listener: camera.listener(&f.car, first.as_ref().unwrap_or(&f.car)) }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_comes_back_as_it_was_written() {
+        let bytes: Vec<u8> = (0..0xb70u32).map(|i| (i * 7 + 3) as u8).collect();
+        let mut car = CarFrame::from_physics_state(&bytes);
+        car.surface_wav[2] = "grass".to_string();
+        car.tc_in_action = true;
+        let mut event = PhysicsEvent::from_bytes(&bytes[0x100..]);
+        event.ul_param0 = 0x1234_5678_9abc_def0;
+        let mut out = b"head".to_vec();
+        write_frames(&mut out, &[car.clone(), car.clone()], &[event]);
+        let mut at = 4;
+        let (cars, events) = read_frames(&out, &mut at).unwrap();
+        assert_eq!(at, out.len());
+        assert_eq!(format!("{:?}", cars), format!("{:?}", [car.clone(), car]));
+        assert_eq!(events, [event]);
     }
 }

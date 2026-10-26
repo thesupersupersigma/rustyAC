@@ -26,6 +26,15 @@ use crate::controls;
 thread_local! {
     /// Task 28: the session list the next offline drive runs with the referee (`?sessions=`).
     static SESSIONS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Task 41b: the next drive's sound keeps a sound tape and its call log (`?soundtape=`).
+    static SOUND_TAPE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Task 41b: the next drive's sound keeps a sound tape and its FMOD call log, for
+/// [`Game::sound_tape`] and [`Game::sound_end`] (a test hook).
+#[wasm_bindgen]
+pub fn set_sound_tape(on: bool) {
+    SOUND_TAPE.with(|t| t.set(on));
 }
 
 /// Task 28: the session list of the next [`Game::create`] (`p10,q5,r3`; empty: no referee).
@@ -405,7 +414,9 @@ fn start_sound(session: &mut Session, notes: &mut Vec<String>) -> Option<GameAud
         return None;
     }
     let feed = Arc::new(Mutex::new(rustyac_game::audio::Feed::default()));
-    let sound = GameAudio::start_for(&rustyac_game::audio::AudioOptions::default(), Arc::clone(&feed), &session.sim.car_info(), &session.sim.opponent_infos());
+    let tape = SOUND_TAPE.with(|t| t.get());
+    let options = rustyac_game::audio::AudioOptions { tape, log: tape.then(|| PathBuf::from("kept")), ..Default::default() };
+    let sound = GameAudio::start_for(&options, Arc::clone(&feed), &session.sim.car_info(), &session.sim.opponent_infos());
     notes.push(if sound.is_some() { "sound: AC's own, through FMOD Studio 2.03 (HTML5)".to_string() } else { "sound: none (no FMOD in the pack, or it did not start: see the console)".to_string() });
     session.sound = sound.is_some().then_some(feed);
     sound
@@ -851,6 +862,19 @@ impl Game {
 
     pub fn set_autodrive(&mut self, on: bool) {
         self.session.input.lock().unwrap().autodrive = on;
+    }
+
+    /// Task 41b: the sound tape so far (`set_sound_tape`), for `rustyac.exe --sound-tape`.
+    pub fn sound_tape(&self) -> Option<Vec<u8>> {
+        self.sound.as_ref().and_then(|sound| sound.take_tape())
+    }
+
+    /// Task 41b: ends the sound and gives its FMOD call log (`set_sound_tape`); the drive goes
+    /// on without sound.
+    pub fn sound_end(&mut self) -> Option<String> {
+        self.session.sound = None;
+        let log = self.sound.take()?.finish_kept()?;
+        Some(String::from_utf8_lossy(&log).into_owned())
     }
 
     /// What the display shows, as JSON.

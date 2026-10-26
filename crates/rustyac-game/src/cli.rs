@@ -18,6 +18,8 @@ pub struct Options {
     pub record: Option<PathBuf>,
     /// `--replay <file>`: drive from a recorded input file.
     pub replay: Option<PathBuf>,
+    /// `--sound-tape <file>`: hear a sound tape of the page (Task 41b), with `--audio-wav`.
+    pub sound_tape: Option<PathBuf>,
     /// `--ffb`: force feedback out to a DirectInput wheel, if one is found.
     pub ffb: bool,
     /// `--no-rumble`: no rumble on the Xbox pad.
@@ -370,6 +372,7 @@ impl Default for Options {
             no_shm: false,
             record: None,
             replay: None,
+            sound_tape: None,
             ffb: false,
             no_rumble: false,
             headless: false,
@@ -571,6 +574,8 @@ usage: rustyac [options]
                         one 1/60 s block per 1/60 s of driving, whatever the PC's speed; also with --headless)
   --audio-log <file>    write every FMOD call to a text file
   --audio-null          FMOD's no-sound output (everything runs, nothing is heard; for timing runs)
+  --sound-tape <file>   with --audio-wav: the sound of a page's sound tape (?soundtape=1, an online
+                        session's frames), every frame as the page heard it
   --race-ini [file]     the session's conditions from Assetto Corsa's last session file
                         (Documents\\Assetto Corsa\\cfg\\race.ini, with assists.ini beside it):
                         air and road temperature, track grip, wind, ballast, aids. This is
@@ -1013,6 +1018,7 @@ impl Options {
                 "--audio-ini" => o.audio.ini = Some(PathBuf::from(value("--audio-ini")?)),
                 "--audio-oracle-camera" => o.audio.oracle_camera = Some(value("--audio-oracle-camera")?),
                 "--audio-script" => o.audio.script = Some(PathBuf::from(value("--audio-script")?)),
+                "--sound-tape" => o.sound_tape = Some(PathBuf::from(value("--sound-tape")?)),
                 "--autodrive" => o.autodrive = true,
                 "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
                 "--opponent" => o.opponents.push(value("--opponent")?),

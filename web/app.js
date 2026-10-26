@@ -1463,6 +1463,12 @@ async function joinServer() {
     // (create_online takes the join: from here on the game owns the session)
     const joining = join;
     join = null;
+    // Task 41b's test hook: ?soundtape=<sound devices of the desktop it is held against>
+    if (params.has('soundtape')) {
+      const sound = await loadSoundOnce();
+      if (sound) sound.state.drivers = Number(params.get('soundtape'));
+      rac.set_sound_tape(true);
+    }
     await loadSoundOnce();
     const game = await rac.Game.create_online(canvas, joining, spawn, $('auto-shifter').checked, backend, Number(params.get('tex') || 0), Number(params.get('msaa') || 4), Number(params.get('cars') || 0));
     rac.fs_forget_models();
@@ -2751,6 +2757,17 @@ window.rustyac.soundProof = async (tape, camera, drivers) => {
   window.rustyac.soundLog = log; // (for a test that wants the text)
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(log)));
   return { lines: log.split('\n').length, sha256: [...digest].map((b) => b.toString(16).padStart(2, '0')).join(''), seconds };
+};
+
+// Task 41b's proof of an online drive's sound (?soundtape=<n>): the sound tape (base64) and the
+// FMOD call log so far; the sound ends, the drive goes on silent
+window.rustyac.soundTape = () => {
+  const tape = state.game && state.game.sound_tape();
+  if (!tape) throw new Error('no sound tape: the drive needs ?soundtape=<n> and FMOD in the pack');
+  const log = state.game.sound_end();
+  let text = '';
+  for (let i = 0; i < tape.length; i += 0x8000) text += String.fromCharCode(...tape.subarray(i, i + 0x8000));
+  return { tape: btoa(text), log };
 };
 
 // Full mode's proof (?fullproof=<frames>, Game.full_proof): the drive's fixed frame stays on the

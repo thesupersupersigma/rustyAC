@@ -2484,6 +2484,11 @@ fn run(options: &Options) -> Result<(), String> {
     if let Some(path) = &options.screenshot {
         return run_screenshot(options, path);
     }
+    if let (Some(tape), Some(_)) = (&options.sound_tape, &options.audio.wav) {
+        let bytes = std::fs::read(tape).map_err(|e| format!("{}: {e}", tape.display()))?;
+        println!("{}", GameAudio::play_tape(&audio_options(options), &bytes)?.finish().report());
+        return Ok(());
+    }
     if options.headless {
         if let (Some(replay), false) = (&options.replay, options.realtime) {
             if options.audio.wav.is_some() && !options.audio.off {

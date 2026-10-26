@@ -339,6 +339,8 @@ pub struct AudioOptions {
     /// rustyAC's own `cfg` folder: its `audio.ini` and `camera_manager.ini` (the Audio app's)
     /// come before Documents'
     pub cfg_dir: Option<PathBuf>,
+    /// Task 41b: keep a sound tape of the frames (see [`GameAudio::take_tape`])
+    pub tape: bool,
 }
 
 impl AudioOptions {
@@ -381,6 +383,43 @@ pub struct GameAudio {
     /// the pit crew's wheel guns, made when the first pit stop needs them (the game makes them
     /// with the session; here a session without a stop keeps the calls it always made)
     crew: Option<rustyac_audio::pit_crew::CrewGuns>,
+    /// Task 41b: the sound tape kept so far (`AudioOptions::tape`)
+    tape: Option<Vec<u8>>,
+}
+
+/// A sound tape: what the sound was given, frame by frame (the cars, the events, the camera),
+/// for a run that cannot be repeated (online) to be heard again by [`GameAudio::play_tape`].
+/// shortcut: the pit crew's guns and the Audio app's actions are not on it, tape them when a proof drives them.
+const TAPE_MAGIC: &[u8; 8] = b"RACSTP01";
+
+fn tape_u32(tape: &mut Vec<u8>, v: u32) {
+    tape.extend_from_slice(&v.to_le_bytes());
+}
+
+fn tape_text(tape: &mut Vec<u8>, v: &str) {
+    tape_u32(tape, v.len() as u32);
+    tape.extend_from_slice(v.as_bytes());
+}
+
+struct TapeReader<'a>(&'a [u8], usize);
+
+impl TapeReader<'_> {
+    fn bytes(&mut self, n: usize) -> Result<&[u8], String> {
+        let b = self.0.get(self.1..self.1 + n).ok_or("the sound tape ends early")?;
+        self.1 += n;
+        Ok(b)
+    }
+    fn u32(&mut self) -> Result<u32, String> {
+        let b = self.bytes(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+    fn f32(&mut self) -> Result<f32, String> {
+        Ok(f32::from_bits(self.u32()?))
+    }
+    fn text(&mut self) -> Result<String, String> {
+        let n = self.u32()? as usize;
+        Ok(String::from_utf8_lossy(self.bytes(n)?).into_owned())
+    }
 }
 
 /// Documents `Assetto Corsa`, where the game keeps `cfg/audio.ini`.
@@ -531,6 +570,18 @@ impl GameAudio {
             frame_number: 0,
             focus: 0,
             crew: None,
+            tape: options.tape.then(|| {
+                let mut tape = TAPE_MAGIC.to_vec();
+                tape_u32(&mut tape, cars.len() as u32);
+                for (name, _, shape) in cars {
+                    tape_text(&mut tape, name);
+                    shape.graphics_offset.iter().for_each(|v| tape_u32(&mut tape, v.to_bits()));
+                }
+                let (folder, layout) = track.map_or((String::new(), ""), |(folder, layout)| (folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), layout));
+                tape_text(&mut tape, &folder);
+                tape_text(&mut tape, layout);
+                tape
+            }),
         })
     }
 
@@ -563,7 +614,15 @@ impl GameAudio {
         ]
     }
 
-    fn one_frame(&mut self, mut states: Vec<CarFrame>, events: &[PhysicsEvent], camera: &DrivingCamera, camera_matrix: &Mat, dt: f32) {
+    fn one_frame(&mut self, mut states: Vec<CarFrame>, events: &[PhysicsEvent], view: CameraView, camera_matrix: &Mat, dt: f32) {
+        if let Some(tape) = &mut self.tape {
+            tape.push(b'F');
+            rustyac_audio::golden::write_frames(tape, &states, events);
+            for v in [view.mode, view.car_camera_index, view.drivable_mode, view.bonnet_external_sound as i32, view.bumper_external_sound as i32] {
+                tape_u32(tape, v as u32);
+            }
+            camera_matrix.iter().flatten().chain([&dt]).for_each(|v| tape_u32(tape, v.to_bits()));
+        }
         // (the page has no `Instant`: there the frames are counted, not timed)
         #[cfg(not(target_arch = "wasm32"))]
         let started = Instant::now();
@@ -573,7 +632,6 @@ impl GameAudio {
         // Sim::focusedCarIndex: the car the camera is on
         let focus = self.focus.min(states.len().saturating_sub(1));
         let state = &states[focus];
-        let view = self.camera_view(camera);
         let sim = SimView { focused_car_index: focus as u32, camera: Some(view) };
         // ACCameraManager::setMode ends in setAudioDistanceScale; F6 inside the car cameras
         // (only the index changes) does not
@@ -648,6 +706,9 @@ impl GameAudio {
     /// (it owns `fuelInExhaust`, which its flames empty): the sound plays on that, as in the
     /// game, and does not test by itself. `None`: no such car (the sound tests by itself).
     pub fn set_picture_backfire(&mut self, fired: Option<bool>) {
+        if let Some(tape) = &mut self.tape {
+            tape.extend([b'b', fired.map_or(2, u8::from)]);
+        }
         if let Some(car) = self.world.cars.first_mut() {
             car.picture_backfire = fired;
         }
@@ -655,6 +716,11 @@ impl GameAudio {
 
     /// The same for every car, in the cars' order.
     pub fn set_picture_backfires(&mut self, fired: &[Option<bool>]) {
+        if let Some(tape) = &mut self.tape {
+            tape.push(b'B');
+            tape_u32(tape, fired.len() as u32);
+            tape.extend(fired.iter().map(|f| f.map_or(2, u8::from)));
+        }
         for (car, fired) in self.world.cars.iter_mut().zip(fired) {
             car.picture_backfire = *fired;
         }
@@ -705,6 +771,10 @@ impl GameAudio {
     }
 
     pub fn set_focus(&mut self, focus: usize) {
+        if let Some(tape) = &mut self.tape {
+            tape.push(b'S');
+            tape_u32(tape, focus as u32);
+        }
         self.focus = focus;
     }
 
@@ -714,6 +784,9 @@ impl GameAudio {
     /// at zero, as the game's pause menu does.
     pub fn frame(&mut self, camera: &DrivingCamera, camera_matrix: &Mat, seconds: f64, paused: bool) {
         if paused != self.paused {
+            if let Some(tape) = &mut self.tape {
+                tape.extend([b'P', paused as u8]);
+            }
             self.paused = paused;
             if paused {
                 self.world.engine.stop();
@@ -731,7 +804,8 @@ impl GameAudio {
             let Some(state) = feed.state.clone().or_else(|| self.last.clone()) else { return };
             (state, std::mem::take(&mut feed.events))
         };
-        self.one_frame(state, &events, camera, camera_matrix, dt);
+        let view = self.camera_view(camera);
+        self.one_frame(state, &events, view, camera_matrix, dt);
     }
 
     /// How many cars have sounds.
@@ -746,7 +820,8 @@ impl GameAudio {
             let Some(frame) = self.feed.lock().unwrap().grid.pop_front() else { break };
             let Some(focused) = frame.state.get(self.focus.min(frame.state.len().saturating_sub(1))) else { continue };
             let (driving, matrix) = camera(focused);
-            self.one_frame(frame.state, &frame.events, &driving, &matrix, NRT_DT);
+            let view = self.camera_view(&driving);
+            self.one_frame(frame.state, &frame.events, view, &matrix, NRT_DT);
         }
     }
 
@@ -757,6 +832,66 @@ impl GameAudio {
             println!("audio log: {} lines, hash {:016x}", summary.lines, summary.hash);
         }
         timing
+    }
+
+    /// The sound tape so far (`AudioOptions::tape`); the tape goes on.
+    pub fn take_tape(&self) -> Option<Vec<u8>> {
+        self.tape.clone()
+    }
+
+    /// `rustyac.exe --sound-tape <file>`: the sound of a tape [`take_tape`](Self::take_tape)
+    /// gave, its cars and track from this install, each frame as it was heard. The sound back,
+    /// for [`finish`](Self::finish).
+    pub fn play_tape(options: &AudioOptions, bytes: &[u8]) -> Result<GameAudio, String> {
+        let ac = rustyac_content::install::ac_root().ok_or("Assetto Corsa's folder was not found")?;
+        if bytes.get(..8) != Some(TAPE_MAGIC.as_slice()) {
+            return Err("not a sound tape".to_string());
+        }
+        let mut r = TapeReader(bytes, 8);
+        let mut cars = Vec::new();
+        for _ in 0..r.u32()? {
+            let name = r.text()?;
+            let graphics_offset = [r.f32()?, r.f32()?, r.f32()?];
+            let data = ac.join("content/cars").join(&name).join("data");
+            cars.push((name, data, CarShape { graphics_offset, ..CarShape::plain() }));
+        }
+        let (folder, layout) = (r.text()?, r.text()?);
+        let folder = (!folder.is_empty()).then(|| ac.join("content/tracks").join(folder));
+        let feed = Arc::new(Mutex::new(Feed::default()));
+        let mut audio = Self::try_start(options, feed, &cars, folder.as_deref().map(|f| (f, layout.as_str())))?;
+        let fired = |b: u8| (b != 2).then_some(b == 1);
+        while r.1 < bytes.len() {
+            match r.bytes(1)?[0] {
+                b'F' => {
+                    let (states, events) = rustyac_audio::golden::read_frames(bytes, &mut r.1)?;
+                    let [mode, car_camera_index, drivable_mode, bonnet, bumper] = [r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?];
+                    let view = CameraView { mode: mode as i32, car_camera_index: car_camera_index as i32, drivable_mode: drivable_mode as i32, bonnet_external_sound: bonnet != 0, bumper_external_sound: bumper != 0 };
+                    let mut matrix = [[0.0f32; 4]; 4];
+                    for v in matrix.iter_mut().flatten() {
+                        *v = r.f32()?;
+                    }
+                    let dt = r.f32()?;
+                    audio.one_frame(states, &events, view, &matrix, dt);
+                }
+                b'P' => {
+                    audio.paused = r.bytes(1)?[0] != 0;
+                    if audio.paused {
+                        audio.world.engine.stop();
+                    } else {
+                        audio.world.engine.start();
+                    }
+                }
+                b'b' => audio.set_picture_backfire(fired(r.bytes(1)?[0])),
+                b'B' => {
+                    let n = r.u32()? as usize;
+                    let list: Vec<Option<bool>> = r.bytes(n)?.iter().map(|b| fired(*b)).collect();
+                    audio.set_picture_backfires(&list);
+                }
+                b'S' => audio.set_focus(r.u32()? as usize),
+                other => return Err(format!("the sound tape has a record {other:#x} it should not have")),
+            }
+        }
+        Ok(audio)
     }
 
     /// As [`finish`](Self::finish), the call log back (the page's: it writes no files).
