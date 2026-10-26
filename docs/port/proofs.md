@@ -158,6 +158,7 @@ every part once (`SURVEY_FROM` finished the survey).
 | sound | 22 | 22 | 0 | 4 min | Task 19's 18 drives, the DSP check and 7 drives end to end (3 here: the other 4 drives' .ryin were lost) |
 | render | 107 | 107 | 0 | 39 min | 113 frames and sequences of Tasks 20-23 (38b: 6) |
 | gui | 123 | 123 | 0 | 112 min | 103 sequence runs by Task 33b, 82 in Task 37b (38b: 60) |
+| python | 2 | 2 | 0 | 1 min | Task 42 (added after Task 38c): `py_quick`, `py_apps`, acs.exe's PythonInterface against rustyac-python (`docs/port/python_apps.md`) |
 | replays | 34 | 34 | 0 | 43 min | 14 replay, 6 ghost and 6 telemetry sessions, 12 of the user's replays (7 there today; the game rotates them), rustyac.exe at 0, 1, 8 workers |
 | net | 80 | 80 | 0 | 17 min | 20 goldens four ways = 80 |
 | browser | 223 | 223 | 0 | 78 min | 158 drives (156 were left; the fresh survey and crash runs added 67) |
