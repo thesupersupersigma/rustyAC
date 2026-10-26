@@ -81,6 +81,9 @@ export class Servers {
       writeFileSync(join(dir, 'entry_list.ini'), entryList(preset));
       writeFileSync(join(dir, 'preset.json'), JSON.stringify({ preset, admin }), { mode: 0o600 });
       const n = names(id);
+      // (the kit's images carry its compose file's project and service labels: without these a
+      // panel server shows up in Docker tools as the kit's gateway-spa)
+      const compose = (service: string) => ({ 'com.docker.compose.project': 'rustyac-panel', 'com.docker.compose.service': service });
       const labels = { [LABEL]: '1', [`${LABEL}.id`]: id };
       const g = `${ports.game}`;
       await this.docker.remove(n.gw);
@@ -88,7 +91,7 @@ export class Servers {
       const ac = await this.docker.create(n.ac, {
         Image: this.config.acserverImage,
         Env: [`AC_SERVER=x-${id}`, 'AC_CFG=/cfg', `AC_ADMIN_PASSWORD=${admin}`, `AC_PASSWORD=${preset.password}`],
-        Labels: { ...labels, [`${LABEL}.ports`]: `${ports.game},${ports.http},${ports.gateway}`, [`${LABEL}.started`]: String(run.started) },
+        Labels: { ...compose(n.ac), ...labels, [`${LABEL}.ports`]: `${ports.game},${ports.http},${ports.gateway}`, [`${LABEL}.started`]: String(run.started) },
         ExposedPorts: { [`${g}/tcp`]: {}, [`${g}/udp`]: {}, [`${ports.http}/tcp`]: {}, '9601/tcp': {} },
         HostConfig: {
           Binds: [`${this.config.packHostDir}:/pack:ro`, `${join(this.config.dataHostDir, 'run', id).replace(/\\/g, '/')}:/cfg:ro`],
@@ -105,7 +108,7 @@ export class Servers {
       const gw = await this.docker.create(n.gw, {
         Image: this.config.gatewayImage,
         Env: [`GATEWAY_NAME=x-${id}`, 'GATEWAY_LISTEN=0.0.0.0:9601', `GATEWAY_SERVER=127.0.0.1:${g}`, `GATEWAY_ORIGINS=${this.config.gatewayOrigins}`, `GATEWAY_MAX_CLIENTS=${preset.maxPlayers}`],
-        Labels: labels,
+        Labels: { ...compose(n.gw), ...labels },
         HostConfig: { NetworkMode: `container:${n.ac}`, Init: true, RestartPolicy: { Name: 'no' } },
       });
       await this.docker.start(gw);

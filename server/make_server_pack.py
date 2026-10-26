@@ -250,6 +250,8 @@ def main():
         for s in index["skipped"]:
             print(f"  {s['kind']} {s['id']}: {s['reason']}")
     print("done. This folder holds Kunos' files: keep it off git and off public servers' web roots.")
+    # (scp -r from Windows leaves the folders drwx------, and acServer in the image runs as uid 999)
+    print("after copying it to the server, there: chmod -R u=rwX,go=rX <the pack folder>")
 
 
 if __name__ == "__main__":

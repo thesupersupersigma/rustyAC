@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // The panel page (public/index.html): the running servers, the presets and the preset form.
-import { api, idFromName } from './form.js';
+import { api, defaultTrack, fillSlots, idFromName } from './form.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, { dataset, ...props } = {}, ...kids) => {
@@ -84,6 +84,15 @@ function showCars() {
   const track = state.pack.tracks.find((t) => `${t.track}|${t.layout}` === $('editor').track.value);
   $('carTotal').textContent = `${total} cars${track?.pitboxes ? ` of ${track.pitboxes} pit boxes` : ''}`;
   $('carTotal').className = track?.pitboxes && total > track.pitboxes ? 'bad' : 'mute';
+  const max = Number($('editor').maxPlayers.value) || 0;
+  $('carFill').replaceChildren(...(total && total < max ? [
+    `only ${total} of the ${max} players can join: acServer lets on no more players than cars `,
+    el('button', { type: 'button', textContent: `fill the ${max - total} slots`, onclick: () => {
+      const filled = fillSlots([...chosen.values()].map((c) => c.count), max);
+      [...chosen.values()].forEach((c, i) => { c.count = filled[i]; });
+      showCars();
+    } }),
+  ] : []));
   const shown = state.pack.cars.filter((c) => chosen.has(c.model) || !query || c.name.toLowerCase().includes(query) || c.model.includes(query));
   $('cars').replaceChildren(...shown.sort((a, b) => chosen.has(b.model) - chosen.has(a.model)).map((car) => {
     const c = chosen.get(car.model);
@@ -134,6 +143,7 @@ $('editor').presetName.oninput = (e) => {
 };
 $('editor').presetId.oninput = () => { idTouched = true; };
 $('editor').track.onchange = showCars;
+$('editor').maxPlayers.oninput = showCars;
 $('carSearch').oninput = showCars;
 
 $('editor').onsubmit = (event) => {
@@ -154,7 +164,7 @@ $('editor').onsubmit = (event) => {
 };
 $('cancel').onclick = () => { $('editor').hidden = true; };
 $('new').onclick = () => {
-  const t = state.pack.tracks[0] || { track: '', layout: '' };
+  const t = defaultTrack(state.pack.tracks);
   const clear = state.pack.weather.find((w) => w.id === '3_clear') || state.pack.weather[0] || { id: '3_clear' };
   edit({ id: '', name: 'New server', track: t.track, layout: t.layout, cars: [],
     practice: { minutes: 20, open: 1 }, qualify: { minutes: 10, open: 1 }, race: { laps: 10, minutes: 0, waitSeconds: 60, open: 1 },

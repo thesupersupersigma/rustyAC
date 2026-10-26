@@ -14,7 +14,7 @@ import { checkToken, keysFromJwks } from '../src/access.ts';
 import { type Config, loadConfig, parsePool, takePorts } from '../src/config.ts';
 import type { Docker } from '../src/docker.ts';
 import { checkPreset, entryList, type Pack, type Preset, presetFromCfg, readPack, serverCfg } from '../src/preset.ts';
-import { api, idFromName } from '../public/form.js';
+import { api, defaultTrack, fillSlots, idFromName } from '../public/form.js';
 import { listing, router } from '../src/router.ts';
 import { Idle, type Running, Servers } from '../src/servers.ts';
 
@@ -105,6 +105,17 @@ test('skins: in turn, all of them, random, or none (acServer\'s default)', () =>
   assert.deepEqual(checkPreset(p, pack), []);
 });
 
+test('a new preset starts on Spa; the slots acServer would cut are filled over the chosen cars', () => {
+  assert.deepEqual(defaultTrack(pack.tracks), { track: 'spa', layout: '', name: 'Spa', pitboxes: 24 });
+  assert.equal(defaultTrack([{ track: 'monza', layout: 'junior' }, { track: 'spa', layout: 'gp' }]).layout, 'gp');
+  assert.equal(defaultTrack([{ track: 'monza', layout: '' }]).track, 'monza');
+  assert.deepEqual(defaultTrack([]), { track: '', layout: '' });
+  assert.deepEqual(fillSlots([2, 1], 8), [5, 3]);
+  assert.deepEqual(fillSlots([6, 6], 12), [6, 6]);
+  assert.deepEqual(fillSlots([10], 8), [10]);
+  assert.deepEqual(fillSlots([], 8), []);
+});
+
 test('preset ids from names', () => {
   assert.equal(idFromName('Spa: GT3 night!'), 'spa-gt3-night');
   assert.equal(idFromName('  Ünïcode ✓ '), 'n-code');
@@ -191,7 +202,8 @@ test('make_server_pack.py --all: the index of a made-up install, and the panel r
     }
     // --car adds one to the pack that is there
     put('content/cars/late_car/data.acd');
-    execFileSync(python, [script, '--ac', ac, '--out', out, '--car', 'late_car', '--no-check'], { stdio: 'pipe' });
+    const said = execFileSync(python, [script, '--ac', ac, '--out', out, '--car', 'late_car', '--no-check'], { stdio: 'pipe' }).toString();
+    assert.match(said, /chmod -R u=rwX,go=rX/);
     assert.deepEqual(readPack(out).cars.map((c) => c.model).sort(), ['bmw_z4_gt3', 'ks_ferrari_f2004', 'late_car', 'test_car']);
     assert.equal(readPack(out).tracks.length, 4);
   } finally {
@@ -255,6 +267,28 @@ test('the poll stops a server nobody was on for its idle minutes, and keeps one 
     assert.deepEqual(calls, ['stop rustyac-x-empty-gateway', 'remove rustyac-x-empty-gateway', 'stop rustyac-x-empty-acserver', 'remove rustyac-x-empty-acserver']);
   } finally {
     http.close();
+    rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test('a started server\'s containers are the panel\'s, not the kit\'s compose project', async () => {
+  const made: Record<string, { Labels: Record<string, string> }> = {};
+  const docker = {
+    remove: async () => null,
+    start: async () => null,
+    create: async (name: string, spec: { Labels: Record<string, string> }) => ((made[name] = spec), name),
+  } as unknown as Docker;
+  const data = mkdtempSync(join(fileURLToPath(new URL('.', import.meta.url)), 'tmp-'));
+  try {
+    const servers = new Servers({ ...loadConfig(env), hostAddr: '127.0.0.1', dataDir: data } as Config, docker, () => {});
+    await servers.start(spa());
+    for (const [name, spec] of Object.entries(made)) {
+      assert.equal(spec.Labels['com.docker.compose.project'], 'rustyac-panel');
+      assert.equal(spec.Labels['com.docker.compose.service'], name);
+      assert.equal(spec.Labels['rustyac.panel.id'], 'spa-x');
+    }
+    assert.deepEqual(Object.keys(made), ['rustyac-x-spa-x-acserver', 'rustyac-x-spa-x-gateway']);
+  } finally {
     rmSync(data, { recursive: true, force: true });
   }
 });

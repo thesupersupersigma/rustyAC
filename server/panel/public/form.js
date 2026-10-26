@@ -38,3 +38,18 @@ export async function api(path, body, env = globalThis) {
   if (!res.ok) throw new Error(data.error || `the panel answered ${res.status}`);
   return data;
 }
+
+// The track a new preset starts on: Spa (its main layout), else the pack's first.
+/** @param {{ track: string, layout: string }[]} tracks */
+export function defaultTrack(tracks) {
+  return tracks.find((t) => t.track === 'spa' && !t.layout) || tracks.find((t) => t.track === 'spa') || tracks[0] || { track: '', layout: '' };
+}
+
+// acServer lets on no more players than the entry list has cars (in pickup mode it cuts
+// MAX_CLIENTS to them): the counts with the missing ones spread over the chosen cars in turn.
+/** @param {number[]} counts @param {number} maxPlayers */
+export function fillSlots(counts, maxPlayers) {
+  const out = [...counts];
+  for (let i = 0, missing = maxPlayers - out.reduce((a, b) => a + b, 0); missing > 0 && out.length; i = (i + 1) % out.length, missing--) out[i]++;
+  return out;
+}

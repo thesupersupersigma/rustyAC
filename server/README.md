@@ -53,7 +53,9 @@ python server/make_server_pack.py            # -> dist-server/ (Kunos' files: ne
 python server/make_server_pack.py --all      # every car and layout acServer and rustyAC can run (the panel's choices)
 python server/make_server_pack.py --car ks_bmw_m235i_racing --track imola   # add one to the pack that is there
 
-# on the server (the pack copied to /srv/rustyac/dist-server)
+# on the server: the pack copied to /srv/rustyac/dist-server (e.g. scp -r dist-server <server>:/srv/rustyac/),
+# then readable for acServer (uid 999 in the image; scp -r from Windows leaves the folders drwx------)
+chmod -R u=rwX,go=rX /srv/rustyac/dist-server
 AC_PACK_DIR=/srv/rustyac/dist-server AC_ADMIN_PASSWORD=choose-one \
     docker compose -f server/docker-compose.yml up -d --build
 
