@@ -42,6 +42,7 @@ into their own process, and two at once make the render oracle's game side flaky
 | sound | `sound.sh` | the audio oracle's 18 tapes (game's FMOD calls against the port's), the DSP check, three drives end to end | `oracle/audio*`, `oracle/game` |
 | render | `render.sh` | the 107 frames and sequences of `render_list.txt` (Tasks 20 to 23), call log and pixels | `oracle/audio`, `oracle/render_tapes` |
 | gui | `gui.sh` | the 122 GUI sequences of `gui_list.txt` (Tasks 29 to 34) | `cardata/`, `oracle/t32` |
+| python | `python.sh` | AC's Python apps (Task 42): `py_quick`, `py_apps`, the game's PythonInterface and rustyac-python on the same apps | `oracle/t32`, the player's `system/x64/python33.dll` |
 | replays | `replays.sh` | the replay, ghost and telemetry sessions of `replay_list.txt`, the user's own replays (read in place), rustyac.exe's replay at 0, 1, 8 workers | AC, Documents (read only) |
 | net | `net.sh` | the 20 multiplayer goldens, four ways (`tools/net_gold/check.sh`) | `re/gold/net/` |
 | browser | `browser.sh` | every drive of `oracle/game` desktop against wasm32-wasip1 (`replay_hash`); `BROWSER_DIGEST=1` adds `math_proof digest` | `oracle/game`, wasmtime |

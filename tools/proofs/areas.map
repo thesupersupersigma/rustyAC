@@ -37,6 +37,7 @@ tools/proofs/launcher*        launcher
 tools/proofs/log2req.py       launcher
 tools/proofs/tdiff.py         launcher
 tools/proofs/dumps.sh         dumps
+tools/proofs/python.sh        python
 tools/proofs/areas*           none
 tools/proofs/lock_crates.py   none
 tools/proofs/same_rec.py      fresh
@@ -47,9 +48,10 @@ re/gold/launcher/*            launcher
 # the port
 crates/rustyac-physics/*      physics fresh sound replays net browser ai_page dumps
 crates/rustyac-ode/*          physics fresh sound replays net browser ai_page dumps
-crates/rustyac-render/*       render gui shaders
-crates/rustyac-dxbc/*         render gui shaders
-crates/rustyac-gui/*          gui
+crates/rustyac-render/*       render gui shaders python
+crates/rustyac-dxbc/*         render gui shaders python
+crates/rustyac-gui/*          gui python
+crates/rustyac-python/*       python
 crates/rustyac-audio/*        sound
 crates/rustyac-launcher/*     launcher browser
 crates/rustyac-web/*          browser ai_page
@@ -69,7 +71,7 @@ tools/car_oracle/*            physics fresh sound replays
 tools/chassis_compare/*       physics fresh
 tools/ode_oracle/*            physics
 tools/tyre_oracle/*           physics
-tools/render_oracle/*         render gui
+tools/render_oracle/*         render gui python
 tools/audio_oracle/*          sound
 tools/launcher_oracle/*       launcher
 tools/net_gold/*              net

@@ -8,7 +8,7 @@
 # version (every release bumps it in every lock file) asks for nothing, and a Cargo.lock no rule
 # names asks for what its changed crates' own rules ask for (tools/proofs/lock_crates.py: the path
 # crates whose dependencies changed); every area when that can't be told.
-all="physics fresh sound render gui replays net browser ai_page shaders launcher dumps"
+all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps"
 cd "$(dirname "$0")/../.." || exit 2
 map=tools/proofs/areas.map
 rules=$(grep -vE '^\s*(#|$)' "$map")

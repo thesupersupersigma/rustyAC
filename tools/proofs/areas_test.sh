@@ -9,14 +9,15 @@ check() {  # check "<expected areas>" <file>...
     got=$(printf '%s\n' "$@" | bash "$here/areas.sh" 2>/dev/null)
     if [ "$got" = "$want" ]; then echo "ok    [$*] -> [$got]"; else echo "WRONG [$*] -> [$got], want [$want]"; bad=1; fi
 }
-all="physics fresh sound render gui replays net browser ai_page shaders launcher dumps"
+all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps"
 check "" docs/port/proofs.md README.md
 check "" prompts/38f_fast_proofs.md .github/workflows/release.yml
 check "" crates/rustyac-physics/README.md
 check "physics fresh sound replays net browser ai_page dumps" crates/rustyac-physics/src/car/tyre.rs
-check "render gui shaders" crates/rustyac-render/src/fw1.rs docs/port/render.md
-check "gui" crates/rustyac-gui/src/app_chat.rs
+check "render gui python shaders" crates/rustyac-render/src/fw1.rs docs/port/render.md
+check "gui python" crates/rustyac-gui/src/app_chat.rs
 check "sound" crates/rustyac-audio/src/lib.rs
+check "python" crates/rustyac-python/src/ac.rs tools/proofs/python.sh
 check "browser launcher" crates/rustyac-launcher/src/bridge.rs
 check "browser ai_page" web/index.html crates/rustyac-web/src/controls.rs
 check "net" server/panel/src/index.ts crates/rustyac-gateway/src/main.rs

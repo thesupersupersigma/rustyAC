@@ -16,7 +16,7 @@
 # which run one at a time; each lane builds with 4 jobs (CARGO_BUILD_JOBS), 8 in all.
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../.." && pwd)
-all="physics fresh sound render gui replays net browser ai_page shaders launcher dumps"
+all="physics fresh sound render gui python replays net browser ai_page shaders launcher dumps"
 side_all="net browser ai_page shaders"
 mode=full; tag=; want=; dry=
 while [ $# -gt 0 ]; do
@@ -64,7 +64,7 @@ built=
 for t in car_oracle chassis_compare render_oracle audio_oracle; do
     case $t in
         car_oracle) uses="physics fresh replays" ;; chassis_compare) uses="physics fresh" ;;
-        render_oracle) uses="render gui" ;; audio_oracle) uses="sound" ;;
+        render_oracle) uses="render gui python" ;; audio_oracle) uses="sound" ;;
     esac
     for u in $uses; do
         case " $areas " in *" $u "*)
