@@ -115,6 +115,51 @@ const diagnosticsText = () =>
 function setStatus(text) {
   $('status').textContent = text;
   window.rustyac.log.push(text);
+  if (state.loading) {
+    $('loading-text').textContent = text;
+    loading.since = performance.now();
+  }
+}
+
+// Task 42b: what a drive's loading does, over the picture (AC's launcher hides the menu and its
+// status line): after 30 s without a change, what it still waits for, and two ways out. A 1-s
+// timer only while it shows.
+const loading = { since: 0, timer: 0 };
+function loadingShow(on) {
+  clearInterval(loading.timer);
+  $('loading').hidden = !on;
+  $('loading-stall').hidden = true;
+  $('loading-progress').hidden = true;
+  if (!on) return;
+  loading.since = performance.now();
+  loading.timer = setInterval(() => {
+    if (!state.loading) return loadingShow(false);
+    const still = Math.round((performance.now() - loading.since) / 1000);
+    $('loading-stall').hidden = still < 30;
+    $('loading-wait').textContent = `Nothing has moved for ${still} s. The page still waits for this: ${$('loading-text').textContent}`;
+  }, 1000);
+}
+
+// Task 42b: loadFiles' callback for a set of files: how many, how many megabytes of how many,
+// and how fast they come.
+function fileProgress(total, count) {
+  let got = 0;
+  let files = 0;
+  let last = null;
+  const since = performance.now();
+  return (bytes, path, from) => {
+    got += bytes;
+    if (path !== last) files++;
+    last = path;
+    const width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
+    $('progress-bar').style.width = width;
+    $('loading-bar').style.width = width;
+    $('loading-progress').hidden = !total;
+    const seconds = (performance.now() - since) / 1000;
+    const what = from === 'cache' ? "from this browser's storage" : from === 'folder' ? 'reading the folder' : 'downloading';
+    const speed = from !== 'cache' && from !== 'folder' && seconds > 1 ? `, ${(got / 1e6 / seconds).toFixed(1)} MB/s` : '';
+    setStatus(`${what}: file ${files} of ${count}, ${megabytes(got)}${total ? ' of ' + megabytes(total) : ''}${speed}`);
+  };
 }
 
 function fail(error) {
@@ -1030,6 +1075,8 @@ async function drive(launch) {
   const autodrive = params.get('autodrive') === '1';
   const spawn = params.get('spawn') || (autodrive ? 'hotlap' : $('spawn').value);
   state.loading = true;
+  loadingShow(true);
+  setStatus('checking files ...');
   $('drive').disabled = true;
   $('refusal').hidden = true;
   $('notes').hidden = true;
@@ -1046,15 +1093,14 @@ async function drive(launch) {
     if (picture.backend === 'full') await listPictureFiles(models);
     const wantedNow = () => [...new Set(models.flatMap((model) => filesWanted(model, track, layout).split('\n').filter(Boolean)))];
     const fetchWanted = async (wanted) => {
+      setStatus(`checking files: ${wanted.length} the drive needs`);
       let total = 0;
       for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
-      let got = 0;
       $('progress').hidden = false;
+      const progress = fileProgress(total, wanted.length);
       await loadFiles(wanted, (bytes, path, from) => {
-        got += bytes;
         loaded += bytes;
-        $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
-        setStatus(`${from === 'cache' ? 'from this browser\'s storage' : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
+        progress(bytes, path, from);
       });
     };
     for (let round = 0; round < 8; round++) {
@@ -1071,7 +1117,8 @@ async function drive(launch) {
     if (picture.backend === 'full') await loadFiles(['system/cfg/options.ini'], () => {}).catch(() => {});
     const fileSeconds = (performance.now() - started) / 1000;
     $('progress').hidden = true;
-    setStatus('building the track and the car (a large track takes some seconds; the page stands still meanwhile) ...');
+    $('loading-progress').hidden = true;
+    setStatus(`loading the car and the track${picture.backend === 'full' ? ', preparing the shaders' : ''} (a large track takes some seconds; the page stands still meanwhile) ...`);
     await nextPaint();
     resizeCanvas();
     const built = performance.now();
@@ -1095,6 +1142,7 @@ async function drive(launch) {
     };
     await loadSoundOnce();
     let game = await create();
+    setStatus('starting the session ...');
     // Full mode: the renderer names files of its own as it loads (the driver's model, a skin's
     // textures); those, and the game made again
     for (let round = 0; backend === 'full' && round < 6; round++) {
@@ -1329,13 +1377,11 @@ async function loadServerFiles(cars, track, checksumFiles) {
     if (!wanted.size) break;
     let total = 0;
     for (const path of wanted) total += state.source.size ? await state.source.size(path) : state.source.sizes.get(path) || 0;
-    let got = 0;
     $('progress').hidden = false;
+    const progress = fileProgress(total, wanted.size);
     await loadFiles([...wanted], (bytes, path, from) => {
-      got += bytes;
       loaded += bytes;
-      $('progress-bar').style.width = total ? `${Math.min(100, (got / total) * 100).toFixed(1)}%` : '100%';
-      setStatus(`${from === 'cache' ? "from this browser's storage" : from === 'folder' ? 'reading' : 'downloading'}: ${path.slice(path.lastIndexOf('/') + 1)} (${megabytes(got)}${total ? ' of ' + megabytes(total) : ''})`);
+      progress(bytes, path, from);
     });
   }
   return loaded;
@@ -1364,6 +1410,8 @@ async function joinServer() {
     return;
   }
   state.loading = true;
+  loadingShow(true);
+  setStatus('joining the server ...');
   $('mp-join').disabled = true;
   $('drive').disabled = true;
   $('refusal').hidden = true;
@@ -1460,7 +1508,8 @@ async function joinServer() {
     loaded += await loadServerFiles(cars, track, status.checksum_files);
     const fileSeconds = (performance.now() - started) / 1000;
     $('progress').hidden = true;
-    setStatus('building the track and the cars (a large track takes some seconds; the page stands still meanwhile) ...');
+    $('loading-progress').hidden = true;
+    setStatus('loading the cars and the track, preparing the shaders (a large track takes some seconds; the page stands still meanwhile) ...');
     await nextPaint();
     resizeCanvas();
     const built = performance.now();
@@ -1872,6 +1921,12 @@ function startControls() {
   );
   // (read again: the list on show may still be filling)
   $('storage-clear-all').addEventListener('click', async () => clearStorage((await storedGroups()).filter((g) => g.key !== 'documents')));
+  $('loading-copy').addEventListener('click', async () => {
+    const ok = await navigator.clipboard.writeText(diagnosticsText()).then(() => true, () => false);
+    $('loading-copy').textContent = ok ? 'Copied' : 'The browser refused the clipboard';
+  });
+  // (the page again: a drive half loaded cannot be stopped where it is)
+  $('loading-back').addEventListener('click', () => location.reload());
   $('copy-diagnostics').addEventListener('click', async () => {
     const text = diagnosticsText();
     window.rustyac.diagnostics = text;
@@ -1956,6 +2011,7 @@ function showKeys(forMs) {
 }
 
 function startDriving() {
+  loadingShow(false);
   // the keys to the page: the launcher's Start or the menu's Drive leaves the focus in a frame
   // or on a button that is hidden now, where every key would go
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
@@ -1966,12 +2022,15 @@ function startDriving() {
   showKeys(15000);
   state.running = true;
   state.paused = false;
+  lockKeys();
   window.rustyac.state = 'driving';
   perf.since = performance.now();
   requestAnimationFrame(frame);
 }
 
 function stopDriving() {
+  // (after the drive has stopped, below)
+  setTimeout(lockKeys, 0);
   if (state.launch) {
     returnToLauncher().catch(fail);
     return;
@@ -2123,7 +2182,7 @@ const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F7', 'F8', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 // The page's keys that give way to the layout: a key the player's controls.ini drives with
 // keeps that job (the desktop's rule for its own plain keys).
 const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
@@ -2141,6 +2200,10 @@ function pageUses(event) {
 window.addEventListener('keydown', (event) => {
   if (panelKey(event)) return;
   if (!(state.running || state.testing) || !state.game) return;
+  // while the player drives every key is the game's, none the browser's (Alt+Left, Backspace,
+  // F5, Ctrl+R ...); F12 stays the browser's. Keys the browser keeps for itself (Ctrl+W, Ctrl+T)
+  // only reach the page in full screen, with navigator.keyboard.lock (lockKeys)
+  if (state.running && event.code !== 'F12') event.preventDefault();
   // AC's GUI has every key first, as the desktop's window gives it (WM_KEYDOWN, WM_CHAR)
   if (hasGui() && !event.metaKey && !event.altKey && VK[event.code] !== undefined) {
     if (!event.repeat && state.game.gui_key(VK[event.code], event.ctrlKey, event.shiftKey)) {
@@ -2184,6 +2247,13 @@ window.addEventListener('keydown', (event) => {
     case 'F1':
     case 'KeyC':
       state.game.next_camera();
+      break;
+    // the car's own cameras (cameras.ini), AC's virtual mirror (Full mode)
+    case 'F6':
+      state.game.car_camera();
+      break;
+    case 'F11':
+      state.game.virtual_mirror();
       break;
     case 'KeyR':
       state.game.request(event.shiftKey ? EVENT.TO_TRACK : EVENT.RESET);
@@ -2236,6 +2306,8 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  // (Alt let go would take the keys to the browser's menu)
+  if (state.running && event.code !== 'F12') event.preventDefault();
   const code = VK[event.code];
   if (state.game && code !== undefined) state.game.key(code, false);
   if (hasGui() && code !== undefined) state.game.gui_key_up(code);
@@ -2253,8 +2325,32 @@ function guiMouse(event, action, button, delta) {
 // (a mouse button: 0 left, 1 middle, 2 right in the browser; AC's 0 left, 1 right, 2 middle)
 const acButton = (button) => [0, 2, 1][button] ?? 0;
 window.addEventListener('mousemove', (event) => guiMouse(event, 0, 0, 0));
-window.addEventListener('mousedown', (event) => guiMouse(event, 1, acButton(event.button), 0));
-window.addEventListener('mouseup', (event) => guiMouse(event, 2, acButton(event.button), 0));
+// the mouse's back and forward buttons do not leave a drive
+const noBrowserButton = (event) => state.running && (event.button === 3 || event.button === 4) && event.preventDefault();
+window.addEventListener('mousedown', (event) => {
+  noBrowserButton(event);
+  guiMouse(event, 1, acButton(event.button), 0);
+});
+window.addEventListener('mouseup', (event) => {
+  noBrowserButton(event);
+  guiMouse(event, 2, acButton(event.button), 0);
+});
+window.addEventListener('auxclick', noBrowserButton);
+// a reload or a closed tab during a drive asks first
+window.addEventListener('beforeunload', (event) => {
+  if (!state.running) return;
+  event.preventDefault();
+  event.returnValue = '';
+});
+// full screen (the page bar's button): there the browser lets the page have its own keys too
+// (Ctrl+W, Alt+Tab-less Esc: held Esc leaves full screen), while a drive runs
+function lockKeys() {
+  if (!navigator.keyboard || !navigator.keyboard.lock) return;
+  if (document.fullscreenElement && state.running) navigator.keyboard.lock().catch(() => {});
+  else navigator.keyboard.unlock();
+}
+document.addEventListener('fullscreenchange', lockKeys);
+$('fullscreen').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {});
 window.addEventListener('wheel', (event) => guiMouse(event, 3, 0, -Math.sign(event.deltaY)), { passive: false });
 window.addEventListener('contextmenu', (event) => {
   if (state.running && hasGui() && event.target === canvas) event.preventDefault();

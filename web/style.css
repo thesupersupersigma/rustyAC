@@ -47,6 +47,25 @@ html, body {
   z-index: 5;
   background: #000;
 }
+/* Task 42b: the loading screen over the picture */
+#loading {
+  position: fixed;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  z-index: 7;
+  width: min(640px, calc(100% - 32px));
+  padding: 12px 16px;
+  border-radius: 6px;
+  background: rgba(13, 16, 20, 0.88);
+  color: #e8edf2;
+  font-size: 14px;
+}
+#loading[hidden], #loading-stall[hidden], #loading-progress[hidden] { display: none; }
+#loading p { margin: 0 0 6px; overflow-wrap: anywhere; }
+#loading-progress { height: 8px; background: #232a32; border-radius: 4px; overflow: hidden; }
+#loading-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
+#loading-stall { margin-top: 10px; }
 #corner {
   position: fixed;
   left: 0;

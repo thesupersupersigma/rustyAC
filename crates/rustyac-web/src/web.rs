@@ -885,6 +885,19 @@ impl Game {
         }
     }
 
+    /// F6: the car's own cameras (`cameras.ini`), as rustyac.exe's camera_f6.
+    pub fn car_camera(&mut self) {
+        if self.gui.start_camera.take().is_some() && self.session.camera.mode == rustyac_game::render::scene::CameraMode::Car {
+            return;
+        }
+        self.session.camera.f6(self.session.shape.car_cameras.len());
+    }
+
+    /// F11: AC's virtual mirror (Full mode, a `video.ini` with mirrors); false: there is none.
+    pub fn virtual_mirror(&mut self) -> bool {
+        self.full.as_mut().and_then(|full| full.toggle_virtual_mirror()).is_some()
+    }
+
     pub fn set_autodrive(&mut self, on: bool) {
         self.session.input.lock().unwrap().autodrive = on;
     }

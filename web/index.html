@@ -10,9 +10,18 @@
 <body>
 <canvas id="view"></canvas>
 <div id="launcher" hidden></div>
+<div id="loading" hidden>
+  <p id="loading-text"></p>
+  <div id="loading-progress" hidden><div id="loading-bar"></div></div>
+  <div id="loading-stall" hidden>
+    <p id="loading-wait"></p>
+    <button id="loading-copy">Copy diagnostics</button> <button id="loading-back">Back to the menu</button>
+  </div>
+</div>
 <div id="corner" hidden>
   <button id="source-switch" hidden></button>
   <button id="source-list" hidden>Open it as a file list</button>
+  <button id="fullscreen" title="Full screen: there the game has every key, Esc held leaves it">Full screen</button>
   <button id="gear" title="Steering and controls" aria-label="Steering and controls"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.4 1l.3 1.8c.4.1.8.3 1.1.5l1.5-1 1.4 1.4-1 1.5c.2.3.4.7.5 1.1l1.8.3v2l-1.8.3c-.1.4-.3.8-.5 1.1l1 1.5-1.4 1.4-1.5-1c-.3.2-.7.4-1.1.5L9.4 15h-2l-.3-1.8c-.4-.1-.8-.3-1.1-.5l-1.5 1-1.4-1.4 1-1.5c-.2-.3-.4-.7-.5-1.1L1.8 9.4v-2l1.8-.3c.1-.4.3-.8.5-1.1l-1-1.5 1.4-1.4 1.5 1c.3-.2.7-.4 1.1-.5L7.4 1h2zM8.4 5.6a2.8 2.8 0 100 5.6 2.8 2.8 0 000-5.6z"/></svg></button>
 </div>
 
@@ -64,6 +73,21 @@
     buttons all count. Nothing is uploaded; the settings are kept in this browser. A change
     works at once, also while you drive. The defaults are the built-in layout: AC's default
     keys, and the pad numbers this page has always used.
+  </p>
+  <h2>Keys in a drive</h2>
+  <table class="small">
+    <tr><td>the driving views in turn, the car's own cameras</td><td>F1 or C, F6</td></tr>
+    <tr><td>AC's virtual mirror (Full mode, video.ini with mirrors)</td><td>F11</td></tr>
+    <tr><td>AC's ESC menu (Full mode; Debug: the page's menu)</td><td>Esc</td></tr>
+    <tr><td>table, console, apps (Full mode)</td><td>Tab, Home, Ctrl + your controls.ini keys</td></tr>
+    <tr><td>skip, restart the session (Debug)</td><td>F7, F8</td></tr>
+  </table>
+  <p class="hint">
+    While you drive every key is the game's: the browser's own (Alt+Left, Backspace, F5, F3,
+    Ctrl+R, Ctrl+F, Ctrl+P, Ctrl+S, the mouse's back and forward buttons) do nothing, and leaving
+    the page asks first. F12 stays the browser's. The browser keeps a few keys whatever a page
+    does (Ctrl+W, Ctrl+T, Ctrl+N): press <b>Full screen</b> at the bottom of the launcher and
+    those are the game's too while you drive (hold Esc to leave full screen).
   </p>
   <p><label>Picture <select id="backend">
     <option value="full" selected>Full: AC's own renderer (needs WebGPU; else Debug)</option>
@@ -206,7 +230,8 @@
       <tr><td>brake bias forward, rearward</td><td>], [</td><td>D-pad right, left</td></tr>
       <tr><td>back to the pits</td><td>R</td><td>Back, a tap</td></tr>
       <tr><td>back onto the track</td><td>Shift+R</td><td>Back, held 0.6 s and let go</td></tr>
-      <tr><td>next view</td><td>F1 or C</td><td>right stick press</td></tr>
+      <tr><td>next view, the car's own cameras</td><td>F1 or C, F6</td><td>right stick press</td></tr>
+      <tr><td>virtual mirror (Full mode)</td><td>F11</td><td></td></tr>
       <tr><td>new car, automatic gearbox</td><td>N, G</td><td></td></tr>
       <tr><td>pause, menu</td><td>P, Esc</td><td>Start</td></tr>
       <tr><td>steering and controls</td><td>O</td><td></td></tr>
