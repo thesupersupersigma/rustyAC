@@ -191,9 +191,11 @@ pub struct Python {
 
 /// `PythonInterface::PythonInterface` 0x140124920: loads `python33.dll` from `<ac_root>`,
 /// starts the interpreter with the `ac` module and loads the apps `python.ini` turns on
-/// (`documents` is the `Documents/Assetto Corsa` folder). The working directory must be the
-/// folder the apps are in (`apps/python`). An error: the DLL could not be loaded.
-pub fn start(ac_root: &Path, documents: &Path, gui: &mut Gui, painter: &mut dyn Painter, screen: Id, world: World) -> Result<Python, String> {
+/// (`documents` is the `Documents/Assetto Corsa` folder: `logs/py_log.txt` is written there,
+/// `restart` writes `cfg/race.ini`; `python_ini` is its `cfg/python.ini`, or a copy). The
+/// working directory must be the game's folder (`apps/python`). An error: the DLL could not be
+/// loaded.
+pub fn start(ac_root: &Path, documents: &Path, python_ini: &Path, gui: &mut Gui, painter: &mut dyn Painter, screen: Id, world: World) -> Result<Python, String> {
     let api = ffi::load(ac_root)?;
     let logs = documents.join("logs");
     let _ = std::fs::create_dir_all(&logs);
@@ -214,7 +216,7 @@ pub fn start(ac_root: &Path, documents: &Path, gui: &mut Gui, painter: &mut dyn 
         }
         run("sys.dont_write_bytecode = 1");
         run("sys.path.append('apps/python/system')");
-        let ini = rustyac_physics::data::ini::IniReader::load(&documents.join("cfg").join("python.ini")).unwrap_or_default();
+        let ini = rustyac_physics::data::ini::IniReader::load(python_ini).unwrap_or_default();
         let folders: Vec<String> = std::fs::read_dir("apps/python").map(|d| d.flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
         println!("LOADING {} PY APPS", folders.len());
         let mut plugins = Vec::new();
@@ -424,8 +426,9 @@ impl Python {
     }
 
     /// `PyPlugin::shutdown` 0x140124630 of every app (`acShutdown()`), then `Py_Finalize`.
-    pub fn shutdown(self, gui: &mut Gui, painter: &mut dyn Painter) {
-        with_host(gui, painter, |_, _| unsafe {
+    pub fn shutdown(self, gui: &mut Gui) {
+        // (no painter: a handler that needs one answers as for a missing file)
+        with_gui(gui, || unsafe {
             for p in &self.plugins {
                 if !p.shutdown.is_null() {
                     (api().object_call_function)(p.shutdown, c"".as_ptr());

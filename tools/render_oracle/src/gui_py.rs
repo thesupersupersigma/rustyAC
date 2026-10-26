@@ -212,7 +212,7 @@ pub fn port_call(gui: &mut Gui, painter: &mut dyn Painter, root: &Path, screen: 
             std::env::set_current_dir(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
             let world = world(gui);
             let (fired, widget_events) = (gui.fired.len(), gui.widget_events.len());
-            let mut python = rustyac_python::start(&ac, &cwd.join("documents/Assetto Corsa"), gui, painter, screen, world)?;
+            let mut python = rustyac_python::start(&ac, &cwd.join("documents/Assetto Corsa"), &cwd.join("documents/Assetto Corsa/cfg/python.ini"), gui, painter, screen, world)?;
             // (the game's side hooks a control's events at the next frame: the ones of controls
             // made and changed inside acMain are not in its record)
             gui.fired.truncate(fired);
@@ -233,7 +233,7 @@ pub fn port_call(gui: &mut Gui, painter: &mut dyn Painter, root: &Path, screen: 
         }),
         "py.end" => {
             if let Some(python) = PYTHON.with(|p| p.borrow_mut().take()) {
-                python.shutdown(gui, painter);
+                python.shutdown(gui);
             }
         }
         other => return Err(format!("no Python call {other:?}")),

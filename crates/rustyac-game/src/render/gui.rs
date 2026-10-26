@@ -210,6 +210,11 @@ pub struct GameGui {
     shot_ready: bool,
     shot_frame_skip: i32,
     screen_flash: f32,
+    /// Task 42: `gameplay.ini [PYTHON] ENABLE_PYTHON` (`Sim::Sim` makes `PythonInterface` when
+    /// it is above 0), and the apps once they run
+    python_on: bool,
+    #[cfg(windows)]
+    python: Option<rustyac_python::Python>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -248,6 +253,7 @@ impl GameGui {
         let locale = rustyac_gui::locale::Locale::load(&setup.game, &setup.language);
         let system = |name: &str| read(setup.game.join("system/cfg").join(name));
         let gameplay = own_or_documents(&setup, "gameplay.ini");
+        let python_on = gameplay.as_ref().is_some_and(|ini| ini.get_int("PYTHON", "ENABLE_PYTHON").unwrap_or(0) > 0);
         let files = GuiFiles {
             skin: IniReader::load(&setup.game.join("content/gui/skin.ini")).map_err(|e| e.to_string())?,
             acos: own_or_documents(&setup, "acos.ini"),
@@ -469,7 +475,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0 })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -729,10 +735,35 @@ impl GameGui {
         let mut painter = self.renderer.painter(graphics);
         if self.apps.made.is_empty() {
             self.apps.make(&mut self.gui, &mut painter, self.screen, &self.setup, self.leaderboard_app);
+            #[cfg(windows)]
+            if self.python_on {
+                self.python = start_python(&mut self.gui, &mut painter, self.screen, &self.setup);
+            }
         }
         // Game::gameTime.deltaT (the force feedback app's arrows)
         self.apps.game_dt = dt;
         self.gui.apps.game_dt = dt;
+        // Game::update: PyPlugin::update of every app (acUpdate), what they asked carried out
+        #[cfg(windows)]
+        if let Some(python) = &mut self.python {
+            let paused = self.gui.controls[self.pause_menu].visible;
+            python.world_mut(|w| w.paused = paused);
+            python.update(&mut self.gui, &mut painter, dt);
+            for line in python.take_console() {
+                self.console.print(&line);
+                self.console.print("
+");
+            }
+            for action in python.take_actions() {
+                match action {
+                    rustyac_python::Action::Shutdown | rustyac_python::Action::Restart => self.exit_requested = true,
+                    rustyac_python::Action::SetUserFfGain(value) => self.gui.apps.actions.push(rustyac_gui::apps::AppAction::SetUserFfGain(value)),
+                    // shortcut: the camera and the focused car stay as they are, a chat line is
+                    // not sent; wire them when an app needs them (Task 42b)
+                    other => println!("Python: an app asked {other:?} (not carried out)"),
+                }
+            }
+        }
         self.gui.render_all(dt, &mut painter);
         self.apps.write_files(&mut self.gui, &self.setup);
         for (title, text) in std::mem::take(&mut self.apps.messages) {
@@ -744,6 +775,11 @@ impl GameGui {
     /// force feedback app saves the car's car.ini), its files written.
     pub fn shutdown_apps(&mut self) {
         self.gui.shutdown_apps();
+        // (PythonInterface is a child of Sim: acShutdown, then Py_Finalize)
+        #[cfg(windows)]
+        if let Some(python) = self.python.take() {
+            python.shutdown(&mut self.gui);
+        }
         self.apps.write_files(&mut self.gui, &self.setup);
     }
 
@@ -1470,5 +1506,41 @@ mod tests {
     fn json_names() {
         assert_eq!(json_string("{\n \"name\": \"Ferrari \\\"F2004\\\"\", \"brand\": \"x\"}", "name").as_deref(), Some("Ferrari \"F2004\""));
         assert_eq!(json_string("{}", "name"), None);
+    }
+}
+
+/// `PythonInterface::PythonInterface` 0x140124920 in rustyAC: the player's `python33.dll`, the
+/// apps of `python.ini` (rustyAC's cfg folder, else the game's Documents), `py_log.txt` in
+/// rustyAC's own `logs`. The working directory becomes the game's folder, as the apps expect.
+/// No DLL: the game exits ("Failed to load Python, exiting"); rustyAC runs on without them.
+#[cfg(windows)]
+fn start_python(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter, screen: Id, setup: &GuiSetup) -> Option<rustyac_python::Python> {
+    let own = setup.cfg_dir.parent().map(Path::to_path_buf).unwrap_or_default();
+    let ini = Some(setup.cfg_dir.join("python.ini")).filter(|p| p.is_file()).or_else(|| setup.documents_cfg.as_ref().map(|cfg| cfg.join("python.ini"))).unwrap_or_default();
+    // shortcut: a relative --out-dir or --cfg-dir is read from here on against the game's
+    // folder; give them as absolute paths with Python apps on
+    if let Err(e) = std::env::set_current_dir(&setup.game) {
+        println!("Python: no apps ({}: {e})", setup.game.display());
+        return None;
+    }
+    let world = rustyac_python::World {
+        cars: (0..gui.apps.cars.len()).map(|i| rustyac_python::CarInfo {
+            skin: setup.skins.get(i).cloned().unwrap_or_default(),
+            nation_code: setup.cars.get(i).map(|c| c[3].clone()).unwrap_or_default(),
+            // shortcut: the race engineer's minimum height is not ported; 0 for the player's car
+            min_height: (i == 0).then_some(0.0),
+            ..Default::default()
+        }).collect(),
+        ..Default::default()
+    };
+    match rustyac_python::start(&setup.game, &own, &ini, gui, painter, screen, world) {
+        Ok(python) => {
+            println!("Python: {} app(s): {}", python.apps().len(), python.apps().join(", "));
+            Some(python)
+        }
+        Err(e) => {
+            println!("Python: no apps ({e}; the game exits here: \"Failed to load Python, exiting\")");
+            None
+        }
     }
 }

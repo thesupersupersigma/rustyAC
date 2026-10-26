@@ -67,6 +67,8 @@ features = [
 [target.'cfg(windows)'.dependencies]
 # AC's sound: its own FMOD banks through the player's own FMOD DLLs
 rustyac-audio = { path = "../rustyac-audio" }
+# AC's Python apps: the `ac` module on the player's own python33.dll
+rustyac-python = { path = "../rustyac-python" }
 # AC's renderer: its own shaders, materials, lighting, sky and shadows on Direct3D 11
 rustyac-render = { path = "../rustyac-render" }
 # `--join wss://...`: TLS to a gateway behind an HTTPS address (a Cloudflare Tunnel). rustls
