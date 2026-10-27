@@ -215,28 +215,31 @@ impl QuickMenu {
         };
         // QuickMenuPitstop::buildItem @ 0x1400aff20: the name and the limits of a setup.ini section
         let limits = |section: &str| (setup_ini.get_string(section, "NAME").to_uppercase(), setup_ini.get_float(section, "MIN").unwrap_or(0.0), setup_ini.get_float(section, "MAX").unwrap_or(0.0));
-        add(&mut menu, ITEM_FUEL, -1, "FUEL", "ADD LITERS".to_string(), 0.0, 0.0, 0.0);
-        add(&mut menu, ITEM_TYRE_COMPOUND, -1, "COMPOUND", "COMPOUND".to_string(), -1.0, car.compounds as f32, 0.0);
-        for (wheel, section) in ["PRESSURE_LF", "PRESSURE_RF", "PRESSURE_LR", "PRESSURE_RR"].iter().enumerate() {
-            if setup_ini.has_section(section) {
-                let (name, min, max) = limits(section);
-                add(&mut menu, ITEM_TYRE_PRESSURE, wheel as i32, section, name, min, max, 0.0);
+        // every item, the repairs too, only with a setup.ini (`if (setupIni.ready)`)
+        if setup_ini.ready {
+            add(&mut menu, ITEM_FUEL, -1, "FUEL", "ADD LITERS".to_string(), 0.0, 0.0, 0.0);
+            add(&mut menu, ITEM_TYRE_COMPOUND, -1, "COMPOUND", "COMPOUND".to_string(), -1.0, car.compounds as f32, 0.0);
+            for (wheel, section) in ["PRESSURE_LF", "PRESSURE_RF", "PRESSURE_LR", "PRESSURE_RR"].iter().enumerate() {
+                if setup_ini.has_section(section) {
+                    let (name, min, max) = limits(section);
+                    add(&mut menu, ITEM_TYRE_PRESSURE, wheel as i32, section, name, min, max, 0.0);
+                }
             }
-        }
-        let mut wing = 1;
-        loop {
-            let section = format!("WING_{wing}");
-            if !setup_ini.has_section(&section) {
-                break;
+            let mut wing = 1;
+            loop {
+                let section = format!("WING_{wing}");
+                if !setup_ini.has_section(&section) {
+                    break;
+                }
+                if setup_ini.has_key(&section, "PITSTOP") {
+                    let (name, min, max) = limits(&section);
+                    add(&mut menu, ITEM_WING, wing, &section, name, min, max, setup_ini.get_float(&section, "PITSTOP").unwrap_or(0.0));
+                }
+                wing += 1;
             }
-            if setup_ini.has_key(&section, "PITSTOP") {
-                let (name, min, max) = limits(&section);
-                add(&mut menu, ITEM_WING, wing, &section, name, min, max, setup_ini.get_float(&section, "PITSTOP").unwrap_or(0.0));
+            for (component, title) in ["BODY", "SUSPENSION", "ENGINE"].iter().enumerate() {
+                add(&mut menu, ITEM_REPAIR, component as i32, "", title.to_string(), 0.0, 0.0, 0.0);
             }
-            wing += 1;
-        }
-        for (component, title) in ["BODY", "SUSPENSION", "ENGINE"].iter().enumerate() {
-            add(&mut menu, ITEM_REPAIR, component as i32, "", title.to_string(), 0.0, 0.0, 0.0);
         }
         for preset in 0..menu.presets_count.max(0) {
             menu.presets.push(vec![0.0; menu.items.len()]);

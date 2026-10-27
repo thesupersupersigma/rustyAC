@@ -108,6 +108,10 @@ pub fn prepare_root(args: &Args, sequence: &Sequence) -> Result<(), String> {
             std::fs::copy(entry.path(), to.join(entry.file_name())).map_err(|e| e.to_string())?;
         }
     }
+    // `menu.setupPit` 1: a car without setup.ini (the pit menu then has no items)
+    if sequence.ops.iter().any(|op| matches!(op, Op::Hud("menu.setupPit", n, _) if *n == 1.0)) {
+        std::fs::remove_file(to.join("setup.ini")).map_err(|e| e.to_string())?;
+    }
     // the assists as the game ships them: what the car has
     std::fs::create_dir_all(args.root.join("cfg")).map_err(|e| e.to_string())?;
     std::fs::write(args.root.join("cfg/assists.ini"), "[ASSISTS]\nTRACTION_CONTROL=1\nABS=1\n").map_err(|e| e.to_string())?;
@@ -517,6 +521,15 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
         "server" => server(car),
         "pit" => pit_page(car),
         "pitprobe" => open_pit(car),
+        "pitbare" => {
+            let mut o = pit_page(car);
+            for op in o.iter_mut() {
+                if let Op::Hud("menu.setupPit", n, _) = op {
+                    *n = 1.0;
+                }
+            }
+            o
+        }
         "server1" => {
             // (only the first message: its file is the one left)
             let mut o = server(car);
