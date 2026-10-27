@@ -230,11 +230,28 @@ pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Ve
     files_below(&folder.join("texture"), &[], 1, &mut out);
     files_below(&folder.join("animations"), &[], 1, &mut out);
     // DriverModel: content/driver/<MODEL NAME>.kn5 and its far-away _B
+    let mut driver = String::new();
     if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")) {
-        let name = ini.get_string("MODEL", "NAME");
-        if !name.is_empty() {
-            out.push(root.join(format!("content/driver/{name}.kn5")));
-            out.push(root.join(format!("content/driver/{name}_B.kn5")));
+        driver = ini.get_string("MODEL", "NAME");
+        if !driver.is_empty() {
+            out.push(root.join(format!("content/driver/{driver}.kn5")));
+            out.push(root.join(format!("content/driver/{driver}_B.kn5")));
+        }
+    }
+    // Task 42c: the driver's and the pit crew's suit, gloves, helmet and brand that the skin's
+    // skin.ini names (DriverModel::loadDriverSkin, LollipopCrew::loadCrewSkin): those folders
+    // of content/texture and their normal maps (the "_nm" folder beside), not the whole 937 MB
+    if let Some(ini) = skins.first().and_then(|skin| rustyac_physics::data::ini::IniReader::load(&folder.join("skins").join(skin).join("skin.ini")).ok()) {
+        let parts = [(driver.as_str(), "driver", ["SUIT", "GLOVES", "HELMET"]), ("CREW", "crew", ["SUIT", "HELMET", "BRAND"])];
+        for (section, kind, keys) in parts {
+            for key in keys.into_iter().filter(|key| !section.is_empty() && ini.has_key(section, key)) {
+                let value = ini.get_string(section, key).replace('\\', "/");
+                let path = format!("{kind}_{}{value}", key.to_ascii_lowercase());
+                files_below(&root.join("content/texture").join(&path), &[], 0, &mut out);
+                if let Some(at) = path.rfind('/') {
+                    files_below(&root.join("content/texture").join(format!("{}_nm", &path[..=at])), &[], 0, &mut out);
+                }
+            }
         }
     }
     let track_folder = track_folder(root, track);

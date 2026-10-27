@@ -2,9 +2,9 @@
 
 ## Resume here
 
-- Done: steps 1 to 5 (the test autodriver, an online race to its end, Python apps, the page's
-  keys and hidden launcher, the mouse pit stop's unrepeatable recordings).
-- Next: step 6 (driver and crew suits in content packs).
+- Done: steps 1 to 6 (the test autodriver, an online race to its end, Python apps, the page's
+  keys and hidden launcher, the mouse pit stop's unrepeatable recordings, suits in packs).
+- Next: the quick proofs, the version (0.42.2) and the tag.
 - Scratch: `re/scratch/task42c/`.
 
 ## Step 1: the test autodriver (`--autodrive`)
@@ -184,3 +184,39 @@ Proof (`re/scratch/task42c/s5`):
 
 Seed 2's one-off difference (step 584, `docs/port/proofs.md`) was most likely the same byte; it
 did not come back in these runs.
+
+## Step 6: driver and crew suits in content packs
+
+A car's skin names its driver's suit, gloves and helmet and its pit crew's suit, helmet and
+brand in its `skin.ini` (`[<driver model>]` and `[CREW]`, e.g. `SUIT=\sparcolack`). AC's
+renderer then takes `content/texture/driver_suit\sparcolack` and the normal maps beside it
+(`driver_suit\sparco\_nm`) (`DriverModel::loadDriverSkin` 0x1400fb260,
+`LollipopCrew::loadCrewSkin` 0x1401136d0). `files_of_picture` (`crates/rustyac-web/src/content.rs`),
+which both the page and `tools/web_pack` use, now adds exactly those folders for the skin it
+already takes (the first). A skin without `skin.ini` uses its own folder, as before.
+
+Proof (`re/scratch/task42c/s6`):
+
+| Check | Result |
+|---|---|
+| `web_pack --config web/preview.toml --dry-run`, before / after | shared files 1216 → 1234 (125.9 → 140.7 MB); cars and tracks unchanged |
+| The preview pack built into scratch | the 18 new files below, nothing else of `content/texture`'s subfolders |
+| The page, Full mode, Z4 in Laguna's pit box, from that pack and from the install (`look.sh`) | the same picture (crew in the Z4's black suits; 2472 and 1677 of 921,600 pixels more than 16 apart: the live clock) |
+
+The preview pack gains (all from the Z4's first skin; the F2004's first skin has no `skin.ini`):
+
+```
+content/texture/crew_brand/bmw/Brands_Crew.dds, Brands_Crew.jpg, Brands_Crew_NM.dds
+content/texture/crew_helmet/black/Crew_HELMET_Color.dds
+content/texture/crew_suit/type1/_nm/DRIVER_Gloves_NM.dds, DRIVER_Suit_NM.dds
+content/texture/crew_suit/type1/black_black/DRIVER_Gloves.dds, DRIVER_Suit2.dds, DRIVER_Suit2.jpg
+content/texture/driver_gloves/sparco_racecars_tide_rg9/_nm/2016_Gloves_NM.dds
+content/texture/driver_gloves/sparco_racecars_tide_rg9/blue/2016_Gloves_DIFF.dds, 2016_Gloves_DIFF.jpg, MAT_white.dds
+content/texture/driver_helmet/helmet_base_red/5/HELMET_2012.dds, HELMET_2012.jpg
+content/texture/driver_suit/sparco/_nm/2016_Suit_NM.dds
+content/texture/driver_suit/sparco/black/2016_Suit_DIFF.dds, 2016_Suit_DIFF.jpg
+```
+
+Not done: the player's own `Documents\Assetto Corsa\cfg\driverskin.ini` (a suit chosen in
+the launcher) can name any folder; a pack holds only what the cars' skins name. Other skins
+than the first come as before (in the page's next round, from an install; not in a pack).

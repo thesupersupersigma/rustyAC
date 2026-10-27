@@ -1154,8 +1154,9 @@ for this task (see Not done for what a pack still lacks).
 - A pack (`tools/web_pack`, `files_of_picture`) still takes only the top of `content/texture`, so
   a pack's Full mode draws the driver's and crew's suits, helmets and gloves with the model's
   textures. The whole folder is 937 MB, and which suit folders a drive uses is known only after
-  the renderer has loaded. A pack would have to take what a native load read.
-- After a TO_PITS reset the autodriver does not take the pit lane again.
+  the renderer has loaded. A pack would have to take what a native load read. **Done in Task
+  42c** (`docs/port/leftovers_42c.md`, step 6): the folders the first skin's `skin.ini` names.
+- After a TO_PITS reset the autodriver does not take the pit lane again. (Done in Task 42c, step 1.)
 - The GT86 (and other road cars) still runs wide at Magione's first fast bend with the
   autodriver, from the grid too. Its speeds are set for racing cars, and changing them would
   change every autodrive recording.
