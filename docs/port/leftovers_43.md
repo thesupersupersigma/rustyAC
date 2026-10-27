@@ -2,9 +2,10 @@
 
 ## Resume here
 
-- Done: step 1 (`web_pack --delta`), step 4 (votes and chat on the wire), step 6 (every skin's
-  suits in packs), step 7 (refusals in plain words).
-- Next: step 2 (`race_out.json` after an online session on desktop), then steps 3, 5.
+- Done: step 1 (`web_pack --delta`), step 2 (`race_out.json` after an online session), step 4
+  (votes and chat on the wire), step 6 (every skin's suits in packs), step 7 (refusals in plain
+  words).
+- Next: step 3 (the old mouse pit menu), then step 5.
 - Scratch: `re/scratch/task43/`. Rerun scripts: `tools/web_checks/task43/`.
 - Disk at the start: 67 GB free.
 
@@ -48,6 +49,67 @@ with `diff -r` against the full new pack.
 
 Test: `a_manifest_reads_back` (`tools/web_pack`): a manifest written by `Manifest::to_json`, with
 `"`, `\` and a control character in its paths, reads back with every path, size and hash.
+
+## Step 2: `race_out.json` after an online session
+
+rustyac.exe now writes `race_out.json` when it leaves a server, as acs.exe does: the same file
+the offline referee writes, made the way `RaceManager` makes it online. What the game keeps of
+a session online is `ACClient`'s: every car's laps from the server's lap messages
+(`onRemoteLapCompleted` @ 0x14004f470: the time, the cuts, the car's compound; the player's own
+laps too, as the server counts them), the sector times (`onSectorSplit` @ 0x14004ff70 for the
+player's car, `onRemoteSectorSplit` @ 0x14004fdc0 for the others; `storeSplitToLap` makes the
+last sector the lap less the others) and the server's standings (`sessionResultsGT`). From
+that `RaceManager` makes a session's results in two places, both ported:
+
+- when the server goes on from a practice or qualifying (`lambda_d00cd7` → `lambda_9cebb0`
+  @ 0x140133f90, before `onNewSession` clears the laps; after a race it makes none),
+- when the program ends (`RaceManager::shutdown` @ 0x140141320, the online branch), whatever
+  the session.
+
+Then `JsonOutputFile::onlineEndSession` (already ported in Task 28) writes them: the session's
+place is the first of the server's sessions of its type (`ACClient::getCurrentSessionIndex`),
+the lap counts are the server's (`RaceManager::getLapCount`), the player's own count and best
+lap come from its car (`physicsState`). There is no `laps.ini` online (no
+`RaceTimingServices`), as in the game.
+
+Code: `crates/rustyac-net/src/laps.rs` (the lap lists, the results; a unit test),
+`OnlineSession::start_results` / `end_session` / `finish` in `crates/rustyac-game/src/online.rs`,
+`referee::finish` falls back to it. Two fixes on the way, both as the game does it:
+
+- The pit box after an online session's results (Task 42b) reset the car's lap timer and lap
+  count. The game's `CarAvatar::goToSpawnPosition` @ 0x1400d3ae0 only moves the car; only
+  `CarAvatar::onNewSession` @ 0x1400d91c0 resets the timer. The player's lap count read 0 in
+  every session before this.
+- A run that ended because the server went away wrote nothing. `RaceManager::shutdown` runs
+  however the game ends, so online the file is now written then too.
+
+The browser page: `Game::finish_race` (`crates/rustyac-web/src/web.rs`) now gives the online
+`race_out.json` too, and `returnToLauncher` in `web/app.js` writes it for an online drive as
+well, so AC's launcher in the page shows it on its results page.
+
+Live check (`sh tools/web_checks/task43/s2/online_out.sh 600`, then
+`py -I tools/web_checks/task43/s2/compare.py re/scratch/task43/s2/run`): Kunos' acServer on
+127.0.0.1, Laguna Seca, practice 2 min, qualifying 2 min, a 1-lap race; rustyac.exe "a" and
+"b" (F2004, autodrive) through all three. Each client's `race_out.json` against acServer's own
+results files (`results/*_PRACTICE.json`, `_QUALIFY`, `_RACE`):
+
+| session | laps (driver, time, sectors, cuts) | best laps | race order | a's file | b's file |
+|---|---|---|---|---|---|
+| Practice | 4 | a 1:18.111, b 1:18.097 | | = acServer | = acServer |
+| Qualify | 2 (b did none) | a 1:18.040 | | = acServer | = acServer |
+| Race | 1 (b did not finish the lap) | | a, b | = acServer | = acServer |
+
+Lap counts in the files: a 2 / 2 / 1 laps, b 2 / 0 / 0, the server's. Each file lists 12 cars
+(the entry list's slots; the empty ones without a name) with the client's own car first, as
+`Sim::getCar` orders them. An earlier run, before the pit box fix, had every lap and sector the
+same but the player's own count 0; one where the server stopped under the clients wrote no
+file (before the second fix).
+
+Not proven: the page. No script joins a server through AC's launcher in the page any more
+(Task 37b's flows were scratch and are gone), so the results page after an online drive in the
+browser was not run. The page calls the same Rust code as the desktop run above. Other cars'
+tyre compounds are the ones they last told the server of (their `tyres.ini` default before),
+not read from their car as the game reads them (`shortcut:` in `online.rs`).
 
 ## Step 4: votes and chat on the wire
 
