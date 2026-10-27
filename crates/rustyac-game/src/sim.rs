@@ -730,6 +730,9 @@ pub struct GameSim {
     pub setup_schedule: std::collections::VecDeque<(u64, SetupJob)>,
     /// every job done so far, with its step (a recording keeps them beside its input file)
     pub setup_log: Vec<(u64, SetupJob)>,
+    /// Task 43: the next teleport is `goToSpawnPosition` alone (the pit box after an online
+    /// session's results): the timer and the lap count stay, as only `onNewSession` resets them
+    keep_laps: bool,
 }
 
 /// Another car of the session with its driver.
@@ -1283,11 +1286,12 @@ impl GameSim {
             session.net.track = track.clone();
             add_remote_cars(session, engine, track.as_ref(), 1 + opponents.len())?;
             session.net.client.set_cars_in_session(1 + session.remote.len());
+            session.start_results(track.as_ref().map_or(0, |t| t.sectors_normalized_positions.len()));
             // the session has run for a while already: its start on this machine's clock
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new() };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new(), keep_laps: false };
         sim.setup_schedule = sim.setup.setup_jobs.iter().cloned().collect();
         // the session begins in the ESC menu: without a referee the car is held here
         if sim.setup.esc_start && sim.setup.referee.is_none() {
@@ -1791,6 +1795,7 @@ impl GameSim {
             self.fuel_evaluator.ignore_lap = true;
             // a teleport is a job of the game's main thread: it runs at the start of the step
             let spawn = self.spawn;
+            let keep_laps = std::mem::take(&mut self.keep_laps);
             // (the game's restart leaves the armed flag of a hot-lap file as it is)
             let armed = self.track.is_some() && self.setup.session.arm_first_lap.unwrap_or(self.car.car.env.session_type == 4);
             self.car.car.queue(move |car| {
@@ -1802,7 +1807,9 @@ impl GameSim {
                 car.reset_suspension_damage_level();
                 // back at the spawn point the timer starts again, as at a session's start
                 // (CarAvatar::onNewSession queues TimeTransponder::reset); the lap list stays
-                car.transponder.reset();
+                if !keep_laps {
+                    car.transponder.reset();
+                }
                 if armed {
                     car.transponder.arm_first_lap();
                 }
@@ -2053,6 +2060,7 @@ impl GameSim {
                 if let Some((position, tail)) = self.track.as_ref().and_then(|track| track.spawn_pose("PIT", slot).or_else(|| track.spawn_pose("PIT", 0))) {
                     self.spawn = SpawnPose { position, tail };
                 }
+                self.keep_laps = true;
                 self.car.device.source.request(event::RESET);
             }
         }
@@ -2165,6 +2173,8 @@ impl GameSim {
                         }
                     }
                     self.new_sessions += 1;
+                    // (a new session's teleport resets the timer, even right after the pit box's)
+                    self.keep_laps = false;
                     self.car.device.source.request(event::RESET);
                 }
                 Event::Message(Message::Bop(entries)) => {

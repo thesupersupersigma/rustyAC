@@ -654,8 +654,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             result = finished;
         }
     }
-    // Task 28: the end of the program for the referee: the results, the two files
-    if result.is_ok() {
+    // Task 28: the end of the program for the referee: the results, the two files (Task 43:
+    // online also after the server went away, as RaceManager::shutdown runs whatever ended it)
+    if result.is_ok() || sim.online.is_some() {
         if let Some(lines) = crate::referee::finish(&mut sim, config.referee_out.as_deref()) {
             for line in lines {
                 println!("{line}");

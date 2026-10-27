@@ -297,6 +297,15 @@ pub struct OnlineSession {
     /// `endSession.sendToPitsTimer` (5 s at the join, 0 after a new session), seconds
     result_screen_on: bool,
     send_to_pits_timer: f32,
+    /// Task 43: `ACClient`'s laps of the session, the `race_out.json` being made (once the
+    /// cars are there, `start_results`), every car's tyre compound and the `players` list
+    /// (by car number), the player's `physicsState.lapCount` and `bestLap`
+    pub laps: rustyac_net::laps::SessionLaps,
+    json: Option<rustyac_physics::race::output::JsonOutputFile>,
+    compounds: Vec<String>,
+    players: Vec<rustyac_physics::race::output::Player>,
+    local_lap_count: u32,
+    local_best_lap: u32,
 }
 
 /// `system/cfg/pitstop.ini` as the game ships it (a server session reads no file here).
@@ -341,6 +350,18 @@ impl OnlinePit {
 
 /// `RaceManager::convertRemoteSession` for a session as the server's messages carry it
 /// (`start`: its start on this machine's clock, ms).
+/// A slot's car number.
+fn number_of(map: &[(u8, usize)], slot: u8) -> Option<usize> {
+    map.iter().find(|(s, _)| *s == slot).map(|(_, car)| *car)
+}
+
+/// The short name of a car's `tyres.ini [COMPOUND_DEFAULT] INDEX` compound (front).
+fn default_compound(data_path: &Path) -> String {
+    let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&data_path.join("tyres.ini")) else { return String::new() };
+    let index = ini.get_int("COMPOUND_DEFAULT", "INDEX").unwrap_or(0);
+    ini.get_string(&if index == 0 { "FRONT".to_string() } else { format!("FRONT_{index}") }, "SHORT_NAME")
+}
+
 fn mirror_session(info: &rustyac_net::handshake::SessionInfo, start: f64) -> rustyac_physics::race::Session {
     rustyac_physics::race::convert_remote_session(&rustyac_physics::race::RemoteSession {
         name: info.name.clone(),
@@ -378,13 +399,65 @@ impl OnlineSession {
             .collect();
         let remote_entries = OnlineSession::remote_entries(cars, me);
         let session = mirror_session(&client.current_session, client.session_start_time);
-        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0 }
+        // Sim::getCar order: the player's car, then the others
+        let player = |car: &CarEntry| rustyac_physics::race::output::Player { name: car.driver_name.clone(), car: car.model.clone(), skin: car.skin.clone() };
+        let players = cars.iter().filter(|car| car.session_id == me).map(player).chain(remote_entries.iter().map(player)).collect();
+        OnlineSession { net: NetSession::new(client), remote: Vec::new(), roster, chat: VecDeque::new(), console: Vec::new(), pending: Vec::new(), welcome: String::new(), disconnect: None, remote_entries, damage_sent: [0.0; 5], damage_sent_at: 0.0, jump_starts_sent: 0, compound_sent: None, last_start_line: String::new(), session, standings: Vec::new(), results: None, now: 0.0, pit: None, pit_failed: false, gui_events: Vec::new(), result_screen_on: false, send_to_pits_timer: 5.0, laps: rustyac_net::laps::SessionLaps::default(), json: None, compounds: Vec::new(), players, local_lap_count: 0, local_best_lap: 0 }
     }
 
     /// The cars the game makes remote cars of: every slot but the player's and the
     /// spectators', in the list's order (`ACClient::getRemoteCarList`).
     pub fn remote_entries(cars: &[CarEntry], me: u8) -> Vec<CarEntry> {
         cars.iter().filter(|car| car.session_id != me && !car.is_spectator).cloned().collect()
+    }
+
+    /// Task 43, once every car is there: `ACClient::resetCurrentLaps` (`sectors`: the
+    /// track's) and the `JsonOutputFile` of `Sim::Sim` (online: the server's sessions).
+    pub fn start_results(&mut self, sectors: usize) {
+        let cars = 1 + self.net.cars.iter().map(|car| car.guid as usize).max().unwrap_or(0);
+        self.laps = rustyac_net::laps::SessionLaps::new(cars, sectors);
+        self.compounds = vec![String::new(); cars];
+        for (car, remote) in self.net.cars.iter().zip(&self.remote) {
+            self.compounds[car.guid as usize] = default_compound(&remote.data_path);
+        }
+        let map = self.car_numbers();
+        let current = &self.net.client.current_session;
+        self.laps.new_session_results(current.kind == session_type::RACE, &current.grid, |slot| number_of(&map, slot));
+        let accepted = &self.net.client.accepted;
+        self.json = Some(rustyac_physics::race::output::JsonOutputFile::new(&accepted.track, &accepted.track_config, accepted.sessions.len() as i32));
+    }
+
+    /// (slot, car number) of every car of the session.
+    fn car_numbers(&self) -> Vec<(u8, usize)> {
+        std::iter::once((self.net.client.session_id, 0)).chain(self.net.cars.iter().map(|car| (car.session_id, car.guid as usize))).collect()
+    }
+
+    /// `RaceManager`'s online end of the current session (`lambda_9cebb0` @ 0x140133f90 /
+    /// `shutdown` @ 0x140141320) into the `race_out.json` being made.
+    fn end_session(&mut self) {
+        let Some(json) = &mut self.json else { return };
+        let event = self.laps.end_event(&self.session);
+        let kinds: Vec<u8> = self.net.client.accepted.sessions.iter().map(|entry| entry.kind).collect();
+        let index = rustyac_net::laps::session_index(&kinds, self.session.session_type as u8);
+        let counts = self.laps.lap_counts(self.local_lap_count);
+        json.end_session(index, &event, self.laps.cars.len(), Some(&counts));
+        self.console.push(format!("online: the results of {} (session {index}) are kept", self.session.name));
+    }
+
+    /// `RaceManager::shutdown` and `Sim::writeOutputJson` online: `race_out.json`'s bytes
+    /// (none before the cars were there).
+    pub fn finish(&mut self) -> Option<Vec<u8>> {
+        self.json.as_ref()?;
+        self.end_session();
+        // driverInfo.name: who drives each car now
+        let mut players = self.players.clone();
+        let slots: Vec<u8> = std::iter::once(self.net.client.session_id).chain(self.net.cars.iter().map(|car| car.session_id)).collect();
+        for (player, slot) in players.iter_mut().zip(slots) {
+            if let Some(entry) = self.roster.iter().find(|entry| entry.slot == slot && !entry.driver.is_empty()) {
+                player.name = entry.driver.clone();
+            }
+        }
+        self.json.as_ref().map(|json| json.file(&players, self.local_best_lap as i32))
     }
 
     /// `Sim::addNetCar` @ 0x140197c30, the physics side: the body of the car in `entry`'s
@@ -456,7 +529,11 @@ impl OnlineSession {
     /// (`ACClient::updateDamageReport`: at most every two seconds).
     pub fn report_local_car(&mut self, car: &RollingChassis, laps: &[rustyac_physics::track::timing::OnLapCompletedEvent], splits: &[rustyac_physics::track::timing::OnSectorSplitEvent], physics_time: f64) {
         use rustyac_net::messages::ClientEvent;
+        self.local_lap_count = car.transponder.lap_count;
+        self.local_best_lap = car.transponder.best_lap;
         for split in splits {
+            // ACClient::onSectorSplit: addSplitToBest(localCarCurrentSplits)
+            self.laps.sector_split(0, split.sector_index as usize, split.sector_time);
             self.net.client.send_event(&ClientEvent::SectorSplit { sector: split.sector_index as u8, time: split.sector_time, cuts: split.cuts.max(0) as u32 });
         }
         for lap in laps.iter().filter(|lap| lap.is_valid) {
@@ -473,6 +550,9 @@ impl OnlineSession {
                 // (the first one is the compound the car starts on: nothing to tell)
                 if self.compound_sent.is_some() {
                     self.net.client.send_event(&ClientEvent::TyreCompound(compound.clone()));
+                }
+                if let Some(own) = self.compounds.first_mut() {
+                    own.clone_from(&compound);
                 }
                 self.compound_sent = Some(compound);
             }
@@ -502,8 +582,16 @@ impl OnlineSession {
                 }
                 Event::Message(Message::NewSession(info)) => {
                     // the handler of the client's new-session event (lambda @ 0x1401337d0):
+                    // (lambda_d00cd7: the old session's results first, not a race's)
+                    if self.session.session_type != session_type::RACE as i32 {
+                        self.end_session();
+                    }
                     // the manager's session is a copy of the server's
                     self.session = mirror_session(info, info.start as f64);
+                    // ACClient::onNewSession: the results, resetCurrentLaps
+                    let map = self.car_numbers();
+                    self.laps.reset();
+                    self.laps.new_session_results(info.kind == session_type::RACE, &info.grid, |slot| number_of(&map, slot));
                     self.standings.clear();
                     self.results = None;
                     // ACClient::onNewSession: the result screen is over
@@ -523,6 +611,13 @@ impl OnlineSession {
                     }
                 }
                 Event::Message(Message::LapCompleted { slot, lap_time, cuts, standings, .. }) => {
+                    // ACClient::onRemoteLapCompleted: the lap on the car's list, the results
+                    let map = self.car_numbers();
+                    if let Some(car) = number_of(&map, *slot) {
+                        let compound = self.compounds.get(car).cloned().unwrap_or_default();
+                        self.laps.lap_completed(car, *lap_time, *cuts, &compound);
+                    }
+                    self.laps.set_results(standings, |slot| number_of(&map, slot));
                     // the standings: laps and (in practice and qualifying) the best lap
                     self.standings = standings.clone();
                     let race = self.net.client.current_session.kind == session_type::RACE;
@@ -678,6 +773,21 @@ impl OnlineSession {
                 Event::Associated => self.console.push("online: the server answers on UDP, car updates flow".to_string()),
                 Event::ServerSilent => self.message("Connection Issue".to_string(), "The server seems to be unavailable.".to_string(), 0),
                 Event::ConnectionLost(message) => self.say(format!("Connection lost: {message}")),
+                // ACClient::onRemoteSectorSplit: only another car's
+                Event::Message(Message::SectorSplit { slot, sector, time, .. }) => {
+                    if let Some(car) = number_of(&self.car_numbers(), *slot).filter(|car| *car != 0) {
+                        self.laps.sector_split(car, *sector as usize, *time);
+                    }
+                }
+                // shortcut: another car's compound is the one it last told of (tyres.ini's
+                // default before), not read from its CarAvatar; upgrade if the tyres differ
+                Event::Message(Message::TyreCompound { slot, compound }) => {
+                    if let Some(car) = number_of(&self.car_numbers(), *slot).filter(|car| *car != 0) {
+                        if let Some(own) = self.compounds.get_mut(car) {
+                            own.clone_from(compound);
+                        }
+                    }
+                }
                 _ => {}
             }
             self.pending.push(event);

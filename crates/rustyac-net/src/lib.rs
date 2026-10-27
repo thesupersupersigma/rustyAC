@@ -22,6 +22,7 @@ pub mod dxmath {
     pub use rustyac_physics::dxmath::*;
 }
 pub mod handshake;
+pub mod laps;
 pub mod md5;
 pub mod messages;
 #[cfg(not(target_arch = "wasm32"))]

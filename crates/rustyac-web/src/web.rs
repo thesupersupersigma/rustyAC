@@ -468,7 +468,7 @@ impl Game {
     /// writes to `out/` when it closes, and AC's launcher shows on its results page), or
     /// nothing without a referee.
     pub fn finish_race(&mut self) -> Option<Vec<u8>> {
-        self.session.sim.finish_referee().map(|(json, _, _)| json)
+        self.session.sim.finish_referee().map(|(json, _, _)| json).or_else(|| self.session.sim.online.as_mut().and_then(|online| online.finish()))
     }
 
     /// The same on a server: `join` is a join that is done ([`crate::net::NetJoin`]); the

@@ -282,7 +282,7 @@ pub fn results_table(referee: &Referee, event: &rustyac_physics::race::OnSession
 /// `laps.ini` are written into `out` (rustyAC's own folder, never Assetto Corsa's), and what
 /// happened comes back as lines for the console. `None` without a referee.
 pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> Option<Vec<String>> {
-    let (json, laps, table) = sim.finish_referee()?;
+    let Some((json, laps, table)) = sim.finish_referee() else { return finish_online(sim, out) };
     let mut lines = table;
     let hash = |bytes: &[u8]| bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3));
     lines.push(format!("referee: race_out.json {} bytes (hash {:016x}), laps.ini {} bytes (hash {:016x})", json.len(), hash(&json), laps.len(), hash(&laps)));
@@ -305,6 +305,24 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
         match written {
             Ok(()) => lines.push(format!("referee: wrote {} and {}", out.join("race_out.json").display(), out.join("laps.ini").display())),
             Err(error) => lines.push(format!("referee: could not write into {}: {error}", out.display())),
+        }
+    }
+    Some(lines)
+}
+
+/// Task 43: online the game writes `race_out.json` too (no `laps.ini`: there is no
+/// `RaceTimingServices` online).
+fn finish_online(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> Option<Vec<String>> {
+    let session = sim.online.as_mut()?;
+    let json = session.finish()?;
+    let mut lines = std::mem::take(&mut session.console);
+    let hash = json.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3));
+    lines.push(format!("online: race_out.json {} bytes (hash {hash:016x})", json.len()));
+    if let Some(out) = out {
+        let file = out.join("race_out.json");
+        match std::fs::create_dir_all(out).and_then(|()| std::fs::write(&file, &json)) {
+            Ok(()) => lines.push(format!("online: wrote {}", file.display())),
+            Err(error) => lines.push(format!("online: could not write into {}: {error}", out.display())),
         }
     }
     Some(lines)

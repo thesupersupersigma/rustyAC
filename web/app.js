@@ -2650,7 +2650,7 @@ async function driveFromLauncher(api) {
 async function returnToLauncher() {
   state.running = false;
   window.rustyac.state = 'returning';
-  const json = state.game && !state.online ? state.game.finish_race() : null;
+  const json = state.game ? state.game.finish_race() : null;
   leaveServer(false);
   freshCanvas();
   for (const id of ['hud', 'keys', 'chat']) $(id).hidden = true;
