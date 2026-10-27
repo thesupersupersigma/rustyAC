@@ -526,6 +526,14 @@ impl DrivingCamera {
         self.started = false;
     }
 
+    /// `setMode(eCar)` then `CameraCarManager::setCurrentCamera(index)`, as `ac.setCameraCar`
+    /// asks (the index was checked against the car's cameras).
+    pub fn set_car_camera(&mut self, index: usize) {
+        self.mode = CameraMode::Car;
+        self.car_index = index;
+        self.started = false;
+    }
+
     /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
     /// that is not a driving one is `lastDrivingMode`, without moving on.
     pub fn back_to_driving(&mut self) {
@@ -801,6 +809,36 @@ impl MouseCamera {
         MouseCamera { matrix: last.matrix, fov: last.fov, last_mouse: (0, 0), last_down: false }
     }
 
+    /// `Camera::moveForward` 0x14020f0a0 (along minus row 2).
+    pub fn move_forward(&mut self, d: f32) {
+        let axis = self.matrix[2];
+        for (p, a) in self.matrix[3].iter_mut().zip(axis).take(3) {
+            *p += -a * d;
+        }
+    }
+
+    /// `Camera::moveRight` 0x14020f0f0 (along row 0).
+    pub fn move_right(&mut self, d: f32) {
+        let axis = self.matrix[0];
+        for (p, a) in self.matrix[3].iter_mut().zip(axis).take(3) {
+            *p += a * d;
+        }
+    }
+
+    /// `Camera::moveUpWorld` 0x14020f130 (`_42 += d`).
+    pub fn move_up_world(&mut self, d: f32) {
+        self.matrix[3][1] += d;
+    }
+
+    /// `Camera::rotatePitch` 0x14020fa80 / `rotateHeading` 0x14020f940 / `rotateRoll`
+    /// 0x14020fb30: about x, y or z (`axis` 0, 1, 2), the turn first.
+    pub fn rotate(&mut self, axis: usize, angle: f32) {
+        let mut v = [0.0f32; 3];
+        v[axis] = 1.0;
+        let turn = Mat44f::create_from_axis_angle(&Vec3f::new(v[0], v[1], v[2]), angle);
+        self.matrix = xm_matrix_multiply(&turn, &Mat44f { m: self.matrix }).m;
+    }
+
     /// The camera without a step (the window has no focus: the game does not run it).
     pub fn frame(&self) -> CameraFrame {
         CameraFrame { matrix: self.matrix, fov: self.fov, near: 0.05 }
@@ -816,30 +854,17 @@ impl MouseCamera {
         if input.ctrl {
             speed *= 50.0;
         }
-        // Camera::moveForward 0x14020f0a0, moveRight 0x14020f0f0
-        let forward = |m: &mut Mat, d: f32| {
-            let axis = m[2];
-            for (p, a) in m[3].iter_mut().zip(axis).take(3) {
-                *p += -a * d;
-            }
-        };
-        let right = |m: &mut Mat, d: f32| {
-            let axis = m[0];
-            for (p, a) in m[3].iter_mut().zip(axis).take(3) {
-                *p += a * d;
-            }
-        };
         if input.up {
-            forward(&mut self.matrix, dt * speed);
+            self.move_forward(dt * speed);
         }
         if input.down {
-            forward(&mut self.matrix, -(dt * speed));
+            self.move_forward(-(dt * speed));
         }
         if input.left {
-            right(&mut self.matrix, -(dt * speed));
+            self.move_right(-(dt * speed));
         }
         if input.right {
-            right(&mut self.matrix, dt * speed);
+            self.move_right(dt * speed);
         }
         let (x, y) = input.cursor;
         if input.look && self.last_down {

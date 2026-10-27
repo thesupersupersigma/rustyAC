@@ -169,6 +169,9 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         telemetry_folder: None,
         max_gear: rustyac_game::input::ini::ControlsIni::load_car_data(&info.data_path.join("drivetrain.ini")).map_or(0, |ini| ini.get_int("GEARS", "COUNT")),
         documents_cfg,
+        // (the page runs no Python apps)
+        python_cars: Vec::new(),
+        server: None,
     }
 }
 

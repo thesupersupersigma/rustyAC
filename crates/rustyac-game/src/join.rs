@@ -31,8 +31,10 @@ pub struct JoinTarget {
     pub nation_code: String,
     pub car: String,
     pub password: String,
-    /// The server's name as a launcher wrote it (for the console only).
+    /// The server's name as a launcher wrote it (the console and the Python apps).
     pub server_name: String,
+    /// `[REMOTE] SERVER_HTTP_PORT` (`ACClient::serverInfo.httpPort`, 0 without it)
+    pub http_port: i32,
     /// `--join ws://...` / `wss://...`: the address of a gateway next to the server
     /// (`crates/rustyac-gateway`) instead of the server's own `host:port`.
     pub gateway: Option<String>,
@@ -74,6 +76,7 @@ pub fn remote_of_race_ini(path: &Path) -> Result<Option<JoinTarget>, String> {
         car: ini.get_string("REMOTE", "REQUESTED_CAR"),
         password: ini.get_string("REMOTE", "PASSWORD"),
         server_name: ini.get_string("REMOTE", "SERVER_NAME"),
+        http_port: ini.get_int("REMOTE", "SERVER_HTTP_PORT").unwrap_or(0),
         gateway: None,
     }))
 }

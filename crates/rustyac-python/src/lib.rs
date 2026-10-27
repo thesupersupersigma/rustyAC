@@ -104,6 +104,8 @@ pub(crate) struct State {
     pub actions: Vec<Action>,
     /// `formCurrentOffset`: where the form the callbacks draw is
     pub offset: (f32, f32),
+    /// the chat's listeners (`ACClient::evOnChatMessage`, online only)
+    pub chat: Vec<Obj>,
 }
 
 thread_local! {
@@ -200,7 +202,7 @@ pub fn start(ac_root: &Path, documents: &Path, python_ini: &Path, gui: &mut Gui,
     let logs = documents.join("logs");
     let _ = std::fs::create_dir_all(&logs);
     let log = File::create(logs.join("py_log.txt")).ok();
-    STATE.with(|s| *s.borrow_mut() = Some(State { screen, documents: documents.to_path_buf(), controls: Vec::new(), forms: Vec::new(), textures: Vec::new(), log, world, console: Vec::new(), actions: Vec::new(), offset: (0.0, 0.0) }));
+    STATE.with(|s| *s.borrow_mut() = Some(State { screen, documents: documents.to_path_buf(), controls: Vec::new(), forms: Vec::new(), textures: Vec::new(), log, world, console: Vec::new(), actions: Vec::new(), offset: (0.0, 0.0), chat: Vec::new() }));
     println!("Initialising Python Interface");
     clear_python_cache("apps/python/system/");
     with_host(gui, painter, |_, _| unsafe {
@@ -411,6 +413,17 @@ impl Python {
                         print_err();
                     }
                 }
+            }
+        });
+    }
+
+    /// A chat line the client heard (lambda 0x140126860): `cb(message, name)`, `name`
+    /// "SERVER" for the server's, else the sender's driver ("" for none).
+    pub fn on_chat(&mut self, gui: &mut Gui, message: &str, name: &str) {
+        let listeners = state(|s| s.chat.clone());
+        with_gui(gui, || unsafe {
+            for cb in listeners {
+                (api().object_call_function)(cb, c"SS".as_ptr(), unicode(message), unicode(name));
             }
         });
     }

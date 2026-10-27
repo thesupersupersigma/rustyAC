@@ -184,8 +184,9 @@ unsafe extern "C" fn new_app(_: Obj, args: Obj) -> R {
     let form = g.new_form(painter, &name, false);
     g.set_app(form, Box::new(crate::PythonForm));
     g.form_set_title(form, &name);
-    // shortcut: a setup app (category 1) is kept but not put on the setup screen; the setup
-    // screen's Python apps are Task 42b
+    // a setup app (category 1) is kept and `evOnSetupAppCreated` fires, but nothing in
+    // acs.exe 1.16 listens to it (only the constructor, destructor and newApp touch it): the
+    // form is on no screen and has no icon
     if category != 1 {
         let screen = state(|s| s.screen);
         g.game_screen_add_control(painter, screen, form, true);
@@ -520,10 +521,34 @@ unsafe extern "C" fn add_on_list_box_listener(_: Obj, args: Obj) -> R {
     listener(args, |_, _| false)
 }
 
-unsafe extern "C" fn add_on_app_listener(_: Obj, args: Obj) -> R {
-    // shortcut: registered but never called (the game screen's activated / dismissed events
-    // are untraced), Task 42b
-    listener(args, |id, _| is_form(id))
+/// `PythonInterface::addPythonOnAppActivatedListener` 0x14012f120 / `...DismissedListener`
+/// 0x14012f240: a form's handler on the taskbar's `evOnAppOpened` / `evOnAppDismissed`
+/// (lambda 0x140126c40: the clicked icon's tag is the form, then `cb(index)`).
+unsafe fn add_on_app_listener(args: Obj, dismissed: bool) -> R {
+    let (mut i, mut o) = (0 as c_long, NUL);
+    if !parse!(args, c"lO", &mut i, &mut o) {
+        return long(-1);
+    }
+    let Some(form) = control(i).filter(|id| is_form(*id)) else { return long(0) };
+    let g = gui();
+    let taskbar = g.taskbar;
+    let handler: rustyac_gui::control::ClickHandler = Rc::new(move |g, e| {
+        let tag = (e.control < g.controls.len() && matches!(g.controls[e.control].kind, Kind::TaskBarIcon(_))).then(|| g.icon_data(e.control).form).flatten();
+        if tag == Some(form) {
+            with_gui(g, || unsafe { (api().object_call_function)(o, c"i".as_ptr(), i as c_int) });
+        }
+    });
+    let data = g.taskbar_data_mut(taskbar);
+    if dismissed { &mut data.ev_app_dismiss } else { &mut data.ev_app_opened }.push(handler);
+    long(1)
+}
+
+unsafe extern "C" fn add_on_app_activated_listener(_: Obj, args: Obj) -> R {
+    add_on_app_listener(args, false)
+}
+
+unsafe extern "C" fn add_on_app_dismissed_listener(_: Obj, args: Obj) -> R {
+    add_on_app_listener(args, true)
 }
 
 unsafe extern "C" fn send_chat_message(_: Obj, args: Obj) -> R {
@@ -545,7 +570,13 @@ unsafe extern "C" fn add_on_chat_message_listener(_: Obj, args: Obj) -> R {
     if !parse!(args, c"lO", &mut i, &mut o) {
         return long(-1);
     }
-    // shortcut: offline the game keeps no listener; online chat to Python apps is Task 42b
+    // PythonInterface::addPythonOnChatMessageListener: a handler on the client's
+    // `evOnChatMessage` (offline there is no client: none)
+    state(|s| {
+        if s.world.server.is_some() {
+            s.chat.push(o);
+        }
+    });
     long(1)
 }
 
@@ -1216,7 +1247,8 @@ unsafe extern "C" fn set_camera_car(_: Obj, args: Obj) -> R {
         return long(-1);
     }
     if let Some(i) = car(c) {
-        if (cam as u32 as i64) < info(i).camera_count as i64 && state(|s| s.world.server.is_none()) {
+        // (online through the car's NetCarStateProvider: the player's own has none)
+        if (cam as u32 as i64) < info(i).camera_count as i64 && (i != 0 || state(|s| s.world.server.is_none())) {
             state(|s| {
                 s.world.camera_mode = 1;
                 s.actions.push(Action::SetCameraCar(cam, c));
@@ -1404,8 +1436,8 @@ pub const FUNCTIONS: [(&std::ffi::CStr, H); 116] = [
     (c"addOnCheckBoxChanged", add_on_check_box_changed),
     (c"addOnListBoxSelectionListener", add_on_list_box_listener),
     (c"addOnListBoxDeselectionListener", add_on_list_box_listener),
-    (c"addOnAppActivatedListener", add_on_app_listener),
-    (c"addOnAppDismissedListener", add_on_app_listener),
+    (c"addOnAppActivatedListener", add_on_app_activated_listener),
+    (c"addOnAppDismissedListener", add_on_app_dismissed_listener),
     (c"sendChatMessage", send_chat_message),
     (c"addOnChatMessageListener", add_on_chat_message_listener),
     (c"initFont", init_font),

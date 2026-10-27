@@ -296,6 +296,16 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
     o.extend([Op::Frame(DT), Op::KeyChar(13), Op::Frame(DT)]);
     if !short {
         crate::gui_seq_apps::play(&mut o, 600, 1200, 20);
+        // Task 42c: the app bar shown (it slides in for 24 frames, an icon's title for 22), the
+        // test app's icon (the bar's first) pressed twice: dismissed, then activated again
+        o.push(Op::MouseMove(1270, 300));
+        o.extend(std::iter::repeat_n(Op::Frame(DT), 24));
+        o.push(Op::MouseMove(1250, 60));
+        o.extend(std::iter::repeat_n(Op::Frame(DT), 22));
+        for _ in 0..2 {
+            o.extend([Op::MouseDown(1250, 60), Op::MouseUp(1250, 60), Op::Frame(DT), Op::Frame(DT)]);
+        }
+        o.extend([Op::MouseMove(600, 400), Op::Frame(DT)]);
     }
     o.extend([hud("console.show", 0.0, ""), Op::Frame(DT), Op::Frame(DT), hud("py.end", 0.0, "")]);
     Some(o)

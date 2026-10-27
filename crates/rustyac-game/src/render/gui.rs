@@ -94,6 +94,21 @@ pub struct GuiSetup {
     /// there is no recorder), the player's car's `drivetrain.ini [GEARS] COUNT`
     pub telemetry_folder: Option<PathBuf>,
     pub max_gear: i32,
+    /// Task 42c: what the Python apps read of each car, and online the server
+    /// (`ACClient::serverInfo`: its name, IP and HTTP port; none offline)
+    pub python_cars: Vec<PythonCar>,
+    pub server: Option<(String, String, i32)>,
+}
+
+/// Task 42c: a car as the Python apps read it.
+#[derive(Clone, Debug, Default)]
+pub struct PythonCar {
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    /// `physicsInfo.minHeightM` (none: no race engineer, every car but the player's)
+    pub min_height: Option<f32>,
+    pub ai_controlled: bool,
+    pub camera_count: i32,
 }
 
 /// `Sim::Sim` 0x140192070's `devEnabled`: true unless the game's `system/cfg/assetto_corsa.ini`
@@ -216,6 +231,9 @@ pub struct GameGui {
     python_on: bool,
     #[cfg(windows)]
     python: Option<rustyac_python::Python>,
+    /// the Python apps' asks of the cameras, for the window's loop (it owns the cameras)
+    #[cfg(windows)]
+    pub python_cameras: Vec<rustyac_python::Action>,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -476,7 +494,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut painter);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -484,6 +502,18 @@ impl GameGui {
     /// `ACCameraManager::mode`; `time_ms` the game's clock.
     #[allow(clippy::too_many_arguments)]
     pub fn update(&mut self, world: &[CarView], focus: usize, info: &HudInfo, camera: (&Mat44f, &Mat44f, &Mat44f), camera_mode: i32, time_ms: f64, dt: f32) {
+        // Task 42c: the session's facts the Python apps read that change (the track's sectors,
+        // `Sim::connectedCarsCount`)
+        #[cfg(windows)]
+        if let Some(python) = &mut self.python {
+            let connected = self.gui.apps.connected_cars_count;
+            python.world_mut(|w| {
+                w.sector_count = world.first().map_or(w.sector_count, |car| car.lap.sector_count as usize);
+                if let Some(server) = &mut w.server {
+                    server.3 = connected;
+                }
+            });
+        }
         let input = &mut self.input;
         input.cars.resize(world.len().max(input.cars.len()), HudCar { current_lap_valid: true, leaderboard_position: -1, ping: -1, body_matrix: Mat44f::IDENTITY, engine_life_left: 1000.0, gearbox: 1.0, tyre_inflation: [1.0; 4], ..HudCar::default() });
         for (car, view) in input.cars.iter_mut().zip(world) {
@@ -759,9 +789,10 @@ impl GameGui {
                 match action {
                     rustyac_python::Action::Shutdown | rustyac_python::Action::Restart => self.exit_requested = true,
                     rustyac_python::Action::SetUserFfGain(value) => self.gui.apps.actions.push(rustyac_gui::apps::AppAction::SetUserFfGain(value)),
-                    // shortcut: the camera and the focused car stay as they are, a chat line is
-                    // not sent; wire them when an app needs them (Task 42b)
-                    other => println!("Python: an app asked {other:?} (not carried out)"),
+                    // Sim::setFocusedCarIndex, ACClient::sendChat: as the tables and the chat ask
+                    rustyac_python::Action::FocusCar(car) => self.gui.sim.actions.push(SimAction::SetFocusedCarIndex(car as u32)),
+                    rustyac_python::Action::SendChat(text) => self.gui.sim.actions.push(SimAction::SendChat(text)),
+                    camera => self.python_cameras.push(camera),
                 }
             }
         }
@@ -1115,6 +1146,18 @@ impl GameGui {
                     let net = self.online.as_ref().and_then(|online| online.net_cars.iter().find(|car| car.0 == session).map(|car| (car.2.clone(), car.1)));
                     // (the Chat app's handler was hung up before the page's)
                     self.gui.chat_apps_on_chat_message(session as u32, &text, net.as_ref().map(|(name, guid)| (name.as_str(), *guid)));
+                    // the Python apps' listeners (hung up in Sim::Sim before the ESC menu's)
+                    #[cfg(windows)]
+                    if let Some(python) = &mut self.python {
+                        let own = self.online.as_ref().is_some_and(|online| online.session_id == session);
+                        let name = match (session, &net) {
+                            (0xff, _) => "SERVER".to_string(),
+                            (_, Some((name, _))) => name.clone(),
+                            _ if own => self.gui.apps.cars.first().map(|car| car.driver_name.clone()).unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        python.on_chat(&mut self.gui, &text, &name);
+                    }
                     self.gui.chats_on_chat_message(session as u32, &text, net.as_ref().map(|(name, _)| name.as_str()));
                 }
                 OnlineGuiEvent::Vote { kind, target, time_left_ms, is_me } => {
@@ -1522,10 +1565,14 @@ fn start_python(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter, 
         cars: (0..gui.apps.cars.len()).map(|i| rustyac_python::CarInfo {
             skin: setup.skins.get(i).cloned().unwrap_or_default(),
             nation_code: setup.cars.get(i).map(|c| c[3].clone()).unwrap_or_default(),
-            // shortcut: the race engineer's minimum height is not ported; 0 for the player's car
-            min_height: (i == 0).then_some(0.0),
+            ballast_kg: setup.python_cars.get(i).map_or(0.0, |c| c.ballast_kg),
+            restrictor: setup.python_cars.get(i).map_or(0.0, |c| c.restrictor),
+            min_height: setup.python_cars.get(i).map_or((i == 0).then_some(-1.0), |c| c.min_height),
+            ai_controlled: setup.python_cars.get(i).is_some_and(|c| c.ai_controlled),
+            camera_count: setup.python_cars.get(i).map_or(0, |c| c.camera_count),
             ..Default::default()
         }).collect(),
+        server: setup.server.clone().map(|(name, ip, http_port)| (name, ip, http_port, gui.apps.connected_cars_count)),
         ..Default::default()
     };
     match rustyac_python::start(&setup.game, &own, &ini, gui, painter, screen, world) {

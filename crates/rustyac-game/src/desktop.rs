@@ -445,6 +445,19 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             hidden_apps: &[],
             language: rustyac_gui::locale::language(rustyac_game::conditions::documents_folder().map(|folder| folder.join("cfg")).as_deref(), options.language.as_deref()),
             game: game.clone(),
+            python_cars: cars
+                .iter()
+                .enumerate()
+                .map(|(i, car)| rustyac_game::render::gui::PythonCar {
+                    ballast_kg: car.ballast_kg,
+                    restrictor: car.restrictor,
+                    // (only the player's car has a race engineer)
+                    min_height: (i == 0).then_some(car.min_height_m),
+                    ai_controlled: car.ai_controlled,
+                    camera_count: rustyac_game::render::scene::CarShape::of(car).car_cameras.len() as i32,
+                })
+                .collect(),
+            server: rustyac_game::join::target(options).ok().flatten().map(|target| (target.server_name, target.host, target.http_port)),
         };
         if let Err(message) = renderer.enable_gui(setup) {
             eprintln!("WARNING: AC's GUI could not be made ({message}); rustyAC's own display is drawn instead");
@@ -1782,6 +1795,43 @@ fn run_window(options: &Options) -> Result<(), String> {
                 }
                 if let Some(menu) = gui.pit_page_exchange() {
                     *shared.pit_page.lock().unwrap() = Some(menu);
+                }
+            }
+            // Task 42c: the Python apps' cameras (ac_setCameraMode 0x14012d7d0 is
+            // `setMode(mode, false, false)`, ac_setCameraCar 0x14012d680, the free camera's calls
+            // move the mouse-control camera)
+            for asked in std::mem::take(&mut gui.python_cameras) {
+                use rustyac_python::Action;
+                let count = shapes[focus.index].car_cameras.len();
+                match asked {
+                    Action::SetCameraMode(0) => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
+                    Action::SetCameraMode(1) if count > 0 => {
+                        (start_camera, mouse_camera) = (None, None);
+                        camera.set_car_camera(camera.car_index.min(count - 1));
+                    }
+                    Action::SetCameraMode(2) => {
+                        (start_camera, mouse_camera) = (None, None);
+                        camera.set_mode_kept(2);
+                    }
+                    Action::SetCameraMode(6) => {
+                        start_camera = None;
+                        if mouse_camera.is_none() {
+                            mouse_camera = last_frame.as_ref().map(MouseCamera::new);
+                        }
+                    }
+                    Action::SetCameraCar(index, _) if (index as usize) < count => {
+                        (start_camera, mouse_camera) = (None, None);
+                        camera.set_car_camera(index as usize);
+                    }
+                    Action::FreeCameraMoveForward(d) => mouse_camera.iter_mut().for_each(|free| free.move_forward(d)),
+                    Action::FreeCameraMoveRight(d) => mouse_camera.iter_mut().for_each(|free| free.move_right(d)),
+                    Action::FreeCameraMoveUpWorld(d) => mouse_camera.iter_mut().for_each(|free| free.move_up_world(d)),
+                    Action::FreeCameraRotatePitch(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(0, a)),
+                    Action::FreeCameraRotateHeading(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(1, a)),
+                    Action::FreeCameraRotateRoll(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(2, a)),
+                    // shortcut: the track's, helicopter, on-board free and random cameras and the
+                    // free camera's clear colour are not ported; port them with those cameras
+                    other => println!("Python: an app asked {other:?} (not carried out)"),
                 }
             }
             use rustyac_gui::menus::SimAction;

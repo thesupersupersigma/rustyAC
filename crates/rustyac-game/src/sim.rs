@@ -648,6 +648,12 @@ pub struct CarInfo {
     pub car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra,
     /// Task 33b: the Car engineer app's masses (`physicsInfo`, set once)
     pub engineer_masses: rustyac_gui::app_car_engineer::CarEngineer,
+    /// Task 42c: what the Python apps read of the car (`CarAvatar::getBallastKG`,
+    /// `getRestrictor`, `physicsInfo.minHeightM`, `aiState.isActive`)
+    pub ballast_kg: f32,
+    pub restrictor: f32,
+    pub min_height_m: f32,
+    pub ai_controlled: bool,
 }
 
 /// What the game reads of a car once, right after building it (`CarAvatar::initPhysics`, its
@@ -1360,6 +1366,7 @@ impl GameSim {
         info.engineer_masses = crate::view::engineer_masses(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info.pit_page = self.pit_page().map(Box::new);
+        info.ai_controlled = self.car.device.ai.is_some();
         info
     }
 
@@ -1396,7 +1403,9 @@ impl GameSim {
             .iter()
             .map(|other| {
                 let info = CarInfo { setup: None, data_path: other.data_path.clone(), name: other.setup.car.clone(), skin: (!other.setup.skin.is_empty()).then(|| other.setup.skin.clone()), render_seed: self.setup.render_seed, track_folder: self.track_folder.clone(), track_layout: self.track.as_ref().map(|t| t.config.clone()).unwrap_or_default(), cars, ..CarInfo::default() };
-                Self::with_wheels(info, &other.car.car)
+                let mut info = Self::with_wheels(info, &other.car.car);
+                info.ai_controlled = matches!(other.setup.drive, crate::input_file::OpponentDrive::Ai { .. });
+                info
             })
             .chain(self.remote_infos())
             .collect()
@@ -1447,6 +1456,10 @@ impl GameSim {
             info.tyre_width[index] = car.tyres[index].data.width;
             info.tyre_radius[index] = car.tyres[index].data.radius;
         }
+        info.ballast_kg = car.ballast_kg;
+        // Car::getRestrictor 0x140272140: roundf(restrictor * 400)
+        info.restrictor = car.drivetrain.as_ref().map_or(0.0, |d| (d.engine().base().restrictor * 400.0).round());
+        info.min_height_m = car.setup_manager.minimum_height_m;
         info
     }
 

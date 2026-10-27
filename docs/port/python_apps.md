@@ -197,18 +197,14 @@ differences in the apps themselves, outside our code.
 
 ## Not done (Task 42b)
 
-- In rustyac.exe, `setCameraMode`, `setCameraCar`, `focusCar`, the free camera functions and
-  `sendChatMessage` are logged on the command line ("not carried out"). The camera and the
-  focused car do not move.
-- Online, the chat listener never fires and the server getters answer as offline.
-- `addOnAppActivatedListener` and `addOnAppDismissedListener` register (returning 1), but the
-  callbacks never run. The game screen's events behind them are not traced.
-- `newApp(name, 1)` (a setup-screen app) makes the form but does not put it on the setup
-  screen.
-- rustyac.exe's car data for the apps (`getCarBallast`, `getCarRestrictor`,
-  `isAIControlled`, `getCarMinHeight`, camera counts, tyre compound, sector count) comes from
-  defaults, not from the session. The oracle proof feeds both sides the same values, so it
-  covers the handlers but not this wiring.
+Task 42c did these (see `docs/port/leftovers_42c.md`, step 3): the camera, focus and chat
+requests, the online chat listener and server getters, the activated / dismissed listeners,
+the car values from the session. `newApp(name, 1)` matches acs.exe 1.16 as it is: the game
+fires `evOnSetupAppCreated` and nothing listens to it. Still not done:
+
+- `getCarTyreCompound` and the rest of the car data not listed in step 3 keep their defaults.
+- `setCameraMode` with the track, helicopter, on-board free and random cameras (3, 4, 5, 7),
+  and `freeCameraSetClearColor`, are logged on the command line ("not carried out").
 - The C++ plugin SDK (`apps/*.dll`) and CSP's Lua apps are not part of this task.
 
 ## Rule notes
@@ -222,5 +218,6 @@ differences in the apps themselves, outside our code.
 
 - What `ACTIVE` defaults to when a `python.ini` section has no such key. rustyAC reads it as 0;
   every file AC writes has the key.
-- The operand order of the free camera's rotations (0x14020f940) is not checked against the
-  game: no stand-in camera in the oracle reaches it.
+- (Answered in Task 42c) The free camera's rotations (0x14020fa80, 0x14020f940, 0x14020fb30)
+  all do `matrix = XMMatrixMultiply(createFromAxisAngle(axis, a), matrix)`, the order
+  rustyAC's mouse camera uses.

@@ -2,8 +2,8 @@
 
 ## Resume here
 
-- Done: step 1 (the test autodriver), step 2 (an online race to its end).
-- Next: step 3 (Python apps: camera, chat, listeners, setup-screen apps, car values).
+- Done: step 1 (the test autodriver), step 2 (an online race to its end), step 3 (Python apps).
+- Next: step 4 (the page: F4 / F7 in Full mode, the hidden launcher frame, full-screen Esc).
 - Scratch: `re/scratch/task42c/`.
 
 ## Step 1: the test autodriver (`--autodrive`)
@@ -78,3 +78,44 @@ What was wrong:
 The page's times are its own clock (it joined later). Shots: `run/b_pits.png` (the ESC menu in the pit box), `b_new_session.png`, `b_drive_again.png`.
 
 Not done: options.ini's `IGNORE_RESULT_TELEPORT` and the fade (Task 42b's shortcut) stay.
+
+## Step 3: Python apps
+
+What changed:
+
+- `setCameraMode` (cockpit, car, drivable, free), `setCameraCar`, `focusCar`, the free camera's
+  moves and turns and `sendChatMessage` are carried out in rustyac.exe (`render/gui.rs` hands
+  them to `desktop.rs`). The free camera functions move the same camera F7 gives
+  (`MouseCamera` in `render/scene.rs`, now with the game's `moveForward`, `moveRight`,
+  `moveUpWorld`, `rotatePitch/Heading/Roll`). Online, a chat line goes to the server, with
+  the game's one-second limit.
+- Online, `addOnChatMessageListener` keeps the callback, and every chat line the client hears
+  calls it with (message, name). The name is "SERVER" for the server's lines, else the
+  sender's driver (lambda 0x140126860). Offline it keeps nothing, as in the game.
+- `getServerName/IP/HttpPort` read the `[REMOTE]` section the game reads (`SERVER_NAME`, the
+  address, `SERVER_HTTP_PORT`), and `getServerSlotsCount` the connected cars.
+- `addOnAppActivatedListener` / `addOnAppDismissedListener` put a handler on the app bar's
+  "opened" / "dismissed" events. It calls back with the app's index when its icon is pressed
+  (0x14012f120, 0x14012f240, lambda 0x140126c40).
+- The car values come from the session: `getCarBallast`, `getCarRestrictor`
+  (`roundf(restrictor * 400)`), `isAIControlled`, `getCarMinHeight` (the player's car only:
+  `car.ini [RULES] MIN_HEIGHT`, -1 without), `getCameraCarCount` (the car's `cameras.ini`),
+  and the track's sector count (the splits).
+- `newApp(name, 1)`: no change. In acs.exe 1.16 it makes the form and fires
+  `evOnSetupAppCreated`, but nothing in the game listens to that event, so the form is on no
+  screen. rustyAC already did the same. Showing it on the setup screen is what Content
+  Manager / CSP add, not the game.
+
+Proof:
+
+| Check | Result |
+|---|---|
+| Python proof area, `py_quick` and `py_apps` (AC's PythonInterface vs rustyac-python) | 2 of 2 identical |
+| `py_apps` now also opens the app bar and presses the test app's icon twice | the game and the port both call "dismissed (1)" then "activated (1)"; 120 frames, draws, pixels, state and the apps' logs identical |
+| rustyac.exe offline, Magione, 2 cars, check app `cam42c` (`re/scratch/task42c/s3`) | car camera 1 at 1 s, free camera moved back and up at 2 s, focus on car 1 at 3 s (pictures in `re/scratch/task42c/s3/out`); AI car reads `isAIControlled` 1, the player's 0; minimum height -1.0 for the player, -1 for the others; 6 cameras each |
+| rustyac.exe online vs a local acServer copy (`s3/online.sh`) | `sendChatMessage` goes out; the listener fires for the app's own line and for desktop b's "hello from b" (name "b"); `getServerIP` 127.0.0.1, slots 2; splits padded to Laguna's 3 sectors |
+
+Not done: track, helicopter, on-board free and random cameras for `setCameraMode` (3, 4, 5,
+7) and `freeCameraSetClearColor` are still only logged. Neither camera exists in rustyac.exe.
+The name the listener gets for the player's own line is the one `getDriverName(0)` gives
+("Player" unless race.ini names the driver).
