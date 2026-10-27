@@ -117,7 +117,7 @@ Not changed:
 - The Python car values in the page: the page runs no Python apps (they need the player's
   `python33.dll`, `docs/port/python_apps.md`), so nothing would read them. The doc comment in
   `crates/rustyac-web/src/full.rs` that said rustyac.exe had none either is fixed.
-- The page still fetches the first skin's suits at the start of every Full drive (about 14 MB
+- The page still fetches the first skin's suits at the start of every Full drive (about 15 MB
   for the Z4), whichever skin is drawn.
 
 ## Step 7: "Session is closed to new connections"
