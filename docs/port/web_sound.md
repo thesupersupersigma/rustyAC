@@ -77,7 +77,7 @@
 
 `audio_oracle run --side port` on the 18 drives of `tools/proofs/sound.sh`,
 against `sound_proof` in node on the same wasm the page loads
-(`re/scratch/task41/all.sh`):
+(`tools/web_checks/task41/all.sh`):
 
 | drive | lines | result |
 |---|---|---|
@@ -105,7 +105,7 @@ says PLAYING (0) where 2.03 says STOPPED (2) or STOPPING (4). The plug-ins are
 not the cause: the desktop with them left out (a temporary switch, reverted)
 gives the same log as with them on two of these drives.
 
-In headless Chrome (`re/scratch/task41/page_proof.sh`, `window.rustyac.soundProof`):
+In headless Chrome (`tools/web_checks/task41/page_proof.sh`, `window.rustyac.soundProof`):
 
 | drive | lines | SHA-256 | |
 |---|---|---|---|
@@ -120,7 +120,7 @@ tells the page to answer 5 (it has the browser's 1 device otherwise, 20 lines fe
 
 The page's mix (taken at FMOD's master group) against the desktop's WAV
 writer, same tape, aligned by whole 800-sample blocks
-(`re/scratch/task41/wavcmp.py`). Bands: octave bands from 31 Hz, mean of
+(`tools/web_checks/task41/wavcmp.py`). Bands: octave bands from 31 Hz, mean of
 page minus desktop.
 
 | drive | whole (dB) | per second mean / max (dB) | bands (dB) |
@@ -153,7 +153,7 @@ times.
 
 ### Banks (step 5)
 
-`re/scratch/task41/bank_check.mjs`, in node on the wasm the page loads: every
+`tools/web_checks/task41/bank_check.mjs`, in node on the wasm the page loads: every
 bank of the install, then every event's sample data, an instance, a start and
 5 updates (`re/scratch/task41/banks.tsv`).
 
@@ -273,7 +273,7 @@ That answer comes from Windows at run time; the career list alone again gave
 
 ## Results (Task 41b)
 
-### AI race (`re/scratch/task41b/ai.sh`, `ai.txt`)
+### AI race (`tools/web_checks/task41b/ai.sh`, `ai.txt`)
 
 The player's bmw_z4_gt3 and three AI cars (ks_ferrari_488_gt3, ks_nissan_gtr_gt3,
 bmw_m3_e30) at Laguna Seca, 60 s (20,430 steps), the desktop's tape. Page:
@@ -290,7 +290,7 @@ stopped in FMOD 2.03. With the page's answers to those questions the desktop
 makes the same calls line for line. All five banks load in the page:
 common.bank and the four cars'.
 
-### Online, two clients (`re/scratch/task41b/live.sh`, `live/summary.txt`)
+### Online, two clients (`tools/web_checks/task41b/live.sh`, `live/summary.txt`)
 
 Two headless Chromes join one local acServer (Spa, pickup, no lobby, made-up
 admin password) through the gateway, all on 127.0.0.1: a in the f2004 for
@@ -315,13 +315,13 @@ desktop hears it.
   125 MB one did). The page hands its whole log back in one DevTools answer;
   most likely too big. The drives were made shorter.
 
-### Task 41's drives after the batching (`re/scratch/task41b/same41.sh`, `same41.txt`)
+### Task 41's drives after the batching (`tools/web_checks/task41b/same41.sh`, `same41.txt`)
 
 All 18: the page's log is the same as Task 41's page log line for line, so
 the desktop comparison is Task 41's (11 identical, 7 with the known FMOD 2.03
 endings).
 
-### Frame rate (`re/scratch/task41b/fps.sh`, `fps.txt`)
+### Frame rate (`tools/web_checks/task41b/fps.sh`, `fps.txt`)
 
 Task 41's drive (f2004 at Spa, autodrive, 40 s, headless Chrome, WebGPU), twice:
 
@@ -372,7 +372,7 @@ work) was not measured. The runs scatter by 1 to 3 ms between twins.
 | wall clock | 30 min | 3 h 51 min |
 
 - Panel: `npm test` 15 / 15, `npx tsc --noEmit` clean. Task 38g's end-to-end
-  test (`re/scratch/task41b/e2e.sh`: 38g's, on this build's site, since 38d's
+  test (`tools/web_checks/task41b/e2e.sh`: 38g's, on this build's site, since 38d's
   old wasm no longer fits `web/app.js`): presets refused and saved, the
   launcher page lists the new server after the start, a headless Chrome joins
   it through the router and drives, the server stops 118 s after the client

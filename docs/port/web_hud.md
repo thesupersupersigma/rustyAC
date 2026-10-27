@@ -55,7 +55,7 @@ their own outside the alignment width; a new run where the script changes;
 lines at line feeds (CR LF one break) every winAscent + winDescent (+ hhea extra).
 
 Proof (render_oracle `gui-run --side port`, D3D11 build vs `--features
-wgpu` on the GPU, 1920 x 1080; `re/scratch/task40/d3d_truth.sh`,
+wgpu` on the GPU, 1920 x 1080; `tools/web_checks/task40/d3d_truth.sh`,
 `wgpu_run.sh`, `cmp_log.py`, `glyph_close.py`):
 
 | sequence | kgl log lines | equal (but sheet uploads) | control states |
@@ -127,7 +127,7 @@ log ends with every control's state (name, shown, place, text, mouse,
 highlight), the mouse, the desktop and the GUI's asks of the session. Each
 sequence ran three ways: native D3D11, native wgpu (GPU), the page
 (headless Chrome on the GPU); 1280 x 720, ks_ferrari_f2004 at magione, the
-High video.ini (`re/scratch/task40/prove.sh`, `cmp_log.py`).
+High video.ini (`tools/web_checks/task40/prove.sh`, `cmp_log.py`).
 
 | sequence | what | script | kgl log lines | D3D11 = wgpu | wgpu = page | control states |
 |---|---|---|---|---|---|---|
@@ -189,7 +189,7 @@ the bar slid out), `4_setup_editor.jpg`, `5_results.jpg`,
 
 Frame rate, the page on this PC's GPU (Chrome, Vulkan, 1920 x 1080), AC's HUD
 and three apps open, autodrive at magione, 40 s each, three runs
-(`re/scratch/task40/fps.sh`; `?guido=` opens the apps):
+(`tools/web_checks/task40/fps.sh`; `?guido=` opens the apps):
 
 | preset | fps, three runs | median | work ms / frame (median) |
 |---|---|---|---|

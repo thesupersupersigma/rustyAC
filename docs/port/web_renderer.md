@@ -1037,7 +1037,7 @@ rustyAC's old defaults (midday, `3_clear`, the sun moving). rustyac.exe (`deskto
 no longer differ. The page reads race.ini from memory, so its CR LF become LF first, as
 `IniReader::load` does for a file.
 
-The check, `re/scratch/task38j/cond.sh [record|physics|frame]`, uses a race.ini with a different
+The check, `tools/web_checks/task38j/cond.sh [record|physics|frame]`, uses a race.ini with a different
 time, weather and grip than the defaults (`cond/race.ini`: `SUN_ANGLE=56`, `TIME_MULT=4`,
 `7_heavy_clouds`, ambient 9 / road 12 C, wind 25 km/h from 135, `[DYNAMIC_TRACK]
 SESSION_START=86`, `STARTING_LAPS=20`), bmw_z4_gt3 against one AI at ks_laguna_seca, race seed
@@ -1066,7 +1066,7 @@ asks for it.
 
 `window.rustyac.driveRace(race, assists)` drives a race.ini in the page, after freeing the last
 game (`freshCanvas`). `window.rustyac.memory()` gives the wasm memory and the files the page
-holds, in MB. `re/scratch/task38j/mem.sh` (`ROUNDS=8`) drives Laguna Seca and Spa one after
+holds, in MB. `tools/web_checks/task38j/mem.sh` (`ROUNDS=8`) drives Laguna Seca and Spa one after
 another, 16 drives in one page, and reads both after each drive:
 
 | drive | wasm memory | files held |
@@ -1087,7 +1087,7 @@ numbers (`re/scratch/task38j/mem_3rounds.log`). No code was needed beyond the tw
 
 ## Step 4: online in Full mode
 
-`re/scratch/task38j/mp.sh`: the local acServer copy (laguna_seca, 127.0.0.1:9640), the gateway on
+`tools/web_checks/task38j/mp.sh`: the local acServer copy (laguna_seca, 127.0.0.1:9640), the gateway on
 9641, and two pages in Full mode (`backend=full`, SwiftShader WebGPU) joining by the address bar
 in a ks_ferrari_f2004 each, starting from the pits on autodrive. Client a drives 150 s and b
 drives 120 s, joining 15 s after a. At the end each page reports, then calls

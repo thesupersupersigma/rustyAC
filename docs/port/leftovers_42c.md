@@ -76,7 +76,7 @@ does not need.
 
 ## Step 2: an online race to its end (page and desktop)
 
-`sh re/scratch/task42c/s2/live.sh 1` (from Task 42b's): a race-only copy of Kunos' acServer
+`sh tools/web_checks/task42c/s2/live.sh 1` (from Task 42b's): a race-only copy of Kunos' acServer
 (1 lap, Laguna Seca, 20 s result screen) on 127.0.0.1 with the gateway and `web/serve.py`.
 Desktop "a" (F2004, `--autodrive`) races from the start; page "b" (Full mode, `autodrive=1`)
 joins 8 s later and races too. The page's flow (`mkflow.py`) waits for the log lines below,

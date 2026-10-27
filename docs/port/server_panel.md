@@ -56,7 +56,7 @@ on an internal network.
 - `server/.env.example` (new), `.gitignore` gets `server/.env`.
 - `LICENSING.md`: the panel and its npm packages and images.
 
-## End to end on 127.0.0.1 (`re/scratch/task38e/e2e.sh`)
+## End to end on 127.0.0.1 (`tools/web_checks/task38e/e2e.sh`)
 
 The panel (`node server/panel/src/main.ts`) against a Docker API stand-in that runs the
 acServer copy from the AC folder's `server\` (in `re/scratch/task38e/acserver/`) and the
@@ -110,7 +110,7 @@ reason.
 | browser | 223 | 223 | 0 | 50m23s |
 | ai_page | 3 | 3 | 0 | 6m44s |
 
-Clippy `-D warnings` (re/scratch/task38e/checks.sh, CI's lists and the Task 38 extras): the
+Clippy `-D warnings` (tools/web_checks/task38e/checks.sh, CI's lists and the Task 38 extras): the
 workspace with `--all-targets`; rustyac-web + rustyac-net `--lib` on wasm32-unknown-unknown;
 math / ode / content / physics / net / game on wasm32-wasip1; rustyac-render `--features
 wgpu --all-targets`; rustyac-web + rustyac-dxbc `--all-targets` on wasm32-unknown-unknown:
@@ -176,7 +176,7 @@ only). The same 133 / 52 as the browser pack's dry run of everything.
 - The browser page (`web/app.js`) re-reads `net/x/servers.json` every time AC's launcher
   asks for the server list (each time its online page opens), not once at load.
 
-## End to end on 127.0.0.1 (`re/scratch/task38g/e2e.sh`)
+## End to end on 127.0.0.1 (`tools/web_checks/task38g/e2e.sh`)
 
 38e's stand-ins (Docker API, Access, local acServer copy and gateway), the panel on the
 `--all` pack, and a browser pack with only the GT86 and Magione
@@ -236,7 +236,7 @@ No Rust crate changed (`server/`, `web/app.js`, docs). Both runs from
 
 `--changed v0.38.5` mapped `server/*` to net and `web/app.js` to browser and ai_page.
 
-Clippy `-D warnings` (`re/scratch/task38g/checks.sh`: the workspace `--all-targets`; web +
+Clippy `-D warnings` (`tools/web_checks/task38g/checks.sh`: the workspace `--all-targets`; web +
 net `--lib` on wasm32-unknown-unknown; math / ode / content / physics / net / game on
 wasm32-wasip1; render `--features wgpu --all-targets`; web + dxbc `--all-targets` on
 wasm32-unknown-unknown): all clean. `cargo build --release --locked` and every `tools/*`

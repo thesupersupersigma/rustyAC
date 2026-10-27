@@ -6,8 +6,8 @@ Done and released as v0.38.3: steps 0 to 4, every proof area (table below), clip
 target, `--locked` builds of the workspace and every tool. Nothing is left open but the
 questions at the end. To see a case again:
 
-    sh re/scratch/task38d/dl.sh old|new clean cut wrong zero short 503x5 spoiled   # downloads
-    sh re/scratch/task38d/mp.sh old|new cutjoin|cutlate|gwclose|refused|freeze|session
+    sh tools/web_checks/task38d/dl.sh old|new clean cut wrong zero short 503x5 spoiled   # downloads
+    sh tools/web_checks/task38d/mp.sh old|new cutjoin|cutlate|gwclose|refused|freeze|session
 
 (`re/scratch/task38d/` holds the test pack, the v0.38.2 site and these scripts. It is scratch:
 the scripts are described here so they can be written again if the folder is gone.)

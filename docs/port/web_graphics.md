@@ -41,7 +41,7 @@ Three reports: two were one page bug, the third was what the panel shows:
 | `?join` of an unlisted server joins nothing, says why | `browser.sh` | IDENTICAL |
 | a running server with a password is listed with one, the password never in the list | `server/panel/test/panel.test.ts` | pass (13/13) |
 
-End to end (`re/scratch/task39/e2e.sh`, all on 127.0.0.1: the panel with 38e's Docker and
+End to end (`tools/web_checks/task39/e2e.sh`, all on 127.0.0.1: the panel with 38e's Docker and
 Access stand-ins, the router, a local acServer copy, a made-up password; the page under
 `/play/app/` and the router under `/net/x/` on one address as on rustyac.com):
 
@@ -84,7 +84,7 @@ nothing filled in).
 
 ## Proofs
 
-Scripts: `re/scratch/task39/gfx.sh` (F2004 at Magione, pit, 3 frames' kgl call log;
+Scripts: `tools/web_checks/task39/gfx.sh` (F2004 at Magione, pit, 3 frames' kgl call log;
 the page in headless Chrome on SwiftShader with `?fullproof=3&graphics=...`; native
 `full_frame --video-ini` on Direct3D 11 WARP and on wgpu/SwiftShader), `gfx_ini.mjs` (the
 page's own ini code makes the native side's file).
@@ -121,7 +121,7 @@ page's own ini code makes the native side's file).
 | Hide virtual steering wheel | High, cockpit camera | DIFFERENT |
 | Render scale 75 % / 50 % | — | the page draws 960x540 / 640x360 of 1280x720 |
 
-### Speed, 1920x1080, F2004 at Magione, 20 s autodrive (`re/scratch/task39/speed.sh`)
+### Speed, 1920x1080, F2004 at Magione, 20 s autodrive (`tools/web_checks/task39/speed.sh`)
 
 | Preset | Radeon Pro 5500M fps | ms/frame | SwiftShader fps | ms/frame |
 |---|---|---|---|---|

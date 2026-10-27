@@ -51,7 +51,7 @@ Proof (headless Chrome on the GPU, real input through the DevTools protocol, pag
 ## Step 0b: the lag
 
 Measured in headless Chrome on this PC's GPU, 20 s windows, CDP `Performance.getMetrics`
-plus a frame timer in the page (`re/scratch/task42b/s0b/perf.sh`). Main-thread time is ms
+plus a frame timer in the page (`tools/web_checks/task42b/s0b/perf.sh`). Main-thread time is ms
 of work per second (1000 = the main thread never rests).
 
 | page | launcher idle | Debug drive | Full drive |
