@@ -224,3 +224,4 @@ footer { border-top: 1px solid var(--line); padding-top: 10px; color: var(--dim)
   pointer-events: none;
   text-align: right;
 }
+.refusal .detail { color: var(--dim); font-size: 12px; }

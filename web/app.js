@@ -162,6 +162,22 @@ function fileProgress(total, count) {
   };
 }
 
+// The server's refusals (the game's words, rustyac-net handshake.rs and the kick reasons of
+// online.rs) in plain words for the page.
+const PLAIN_WORDS = [
+  [/Session is closed to new connections/, "This race has already started and the server doesn't let new players join during it. Try again when the next session starts."],
+  [/Password not accepted/, "The server wants a password and this one is wrong. Check the password and try again."],
+  [/no available slots/i, 'The server is full: every car it has for this model (or every car it has) is taken. Try another car, or try again later.'],
+  [/Server still booking/, 'The server is still taking bookings and lets drivers in only when that is over. Try again in a moment.'],
+  [/blacklisted from this server|put on blacklist|voted to be blacklisted/, 'This server has banned you, so it does not let you in.'],
+  [/voted to be banned|Kicked until the server restarts/, 'The other drivers voted to ban you: this server does not let you in again until it restarts.'],
+  [/voted to be kicked/, 'The other drivers voted to kick you out of this race.'],
+  [/Checksum failed/, "Your files of the track or the cars are not the same as the server's, so it sent you away. Every file it checks has to match its own."],
+  [/different protocol/, 'The server runs a different version of Assetto Corsa online, so it cannot be joined from here.'],
+  [/SERVER AUTH FAILED/, 'The server did not accept you (its sign-in check failed).'],
+  [/No response from the server/, 'The server did not answer. It may be off, or busy; try again later.'],
+];
+
 function fail(error) {
   let text = String(error && error.message ? error.message : error);
   // (a pack's files are checked as they arrive: one that does not decrypt is not a broken download)
@@ -174,7 +190,15 @@ function fail(error) {
   window.rustyac.error = text;
   $('status').textContent = '';
   $('refusal').hidden = false;
-  $('refusal').textContent = text;
+  const plain = PLAIN_WORDS.find(([pattern]) => pattern.test(text));
+  $('refusal').textContent = plain ? plain[1] : text;
+  if (plain) {
+    // (the game's own words, smaller, below)
+    const detail = document.createElement('small');
+    detail.className = 'detail';
+    detail.textContent = text;
+    $('refusal').append(document.createElement('br'), detail);
+  }
   $('progress').hidden = true;
   $('drive').disabled = !state.source;
   // the launcher's frame gives way to the menu, where the refusal is
