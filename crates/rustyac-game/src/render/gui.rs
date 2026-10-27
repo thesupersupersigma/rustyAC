@@ -1131,6 +1131,10 @@ impl GameGui {
                         let sent = event == OnlineGuiEvent::SentToPits;
                         if sent {
                             self.gui.sim_activate_esc_menu();
+                        } else {
+                            // (the pit stop's handler of the new session freed the controls;
+                            // the ESC menu that still shows locks them again)
+                            self.pits_lock_stale = true;
                         }
                         self.gui.esc_menu_set_drive_button_enabled(menu, !sent);
                     }

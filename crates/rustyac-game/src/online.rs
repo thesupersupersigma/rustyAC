@@ -510,6 +510,7 @@ impl OnlineSession {
                     self.result_screen_on = false;
                     self.send_to_pits_timer = 0.0;
                     self.gui_events.push(OnlineGuiEvent::NewSession);
+                    self.console.push(format!("online: a new session: {} (clock {:.1} s)", info.name, self.now / 1000.0));
                     if let Some(pit) = &mut self.pit {
                         pit.new_session = true;
                     }
@@ -634,6 +635,7 @@ impl OnlineSession {
                     self.results = Some(standings.clone());
                     self.result_screen_on = true;
                     self.say("The race is over".to_string());
+                    self.console.push(format!("online: the results came (clock {:.1} s)", self.now / 1000.0));
                     for (place, row) in standings.iter().enumerate() {
                         let who = self.driver_of(row.slot);
                         if self.roster.iter().any(|entry| entry.slot == row.slot && entry.connected) {
@@ -849,6 +851,7 @@ impl OnlineSession {
             return false;
         }
         self.gui_events.push(OnlineGuiEvent::SentToPits);
+        self.console.push(format!("online: the race is over: the car goes to its pit box (clock {:.1} s)", self.now / 1000.0));
         true
     }
 

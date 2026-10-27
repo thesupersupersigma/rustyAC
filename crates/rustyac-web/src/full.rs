@@ -202,6 +202,19 @@ impl GuiLoop {
         let Some(gui) = renderer.gui.as_mut() else { return };
         gui.tab_poll(self.tab_held);
         let sim = &mut session.sim;
+        // online: what the client heard (chat, votes, the race's end) to AC's GUI, and the
+        // GUI's chat lines and votes to the client, as rustyac.exe's loops pass them
+        if let Some(online) = &mut sim.online {
+            gui.online_heard(std::mem::take(&mut online.gui_events));
+            for request in gui.take_online_requests() {
+                match request {
+                    rustyac_game::online::OnlineRequest::Chat { text, now } => {
+                        online.net.client.send_chat(&text, now);
+                    }
+                    rustyac_game::online::OnlineRequest::Vote { kind, yes, guid } => online.send_vote(kind, yes, guid),
+                }
+            }
+        }
         // (the physics thread's publish_setup: after its jobs, and a few times a second)
         let now = (sim.setup_log.len(), sim.steps / 64);
         if self.published != Some(now) {
