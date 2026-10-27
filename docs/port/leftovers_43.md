@@ -61,8 +61,8 @@ desktop "c" and the page "b" 45 s after (`sh tools/web_checks/task43/s7/closed.s
 
 The answer is the server's handshake byte 0x6e (`id::SESSION_CLOSED` in
 `crates/rustyac-net/src/handshake.rs`), which the game turns into that text. With a race-only
-server and `IS_OPEN=2` the race is closed from the server's start: it begins with the race's
-countdown, and 2 closes joins 20 s before the green light.
+server and `IS_OPEN=2` joins were refused already 4 s after the server started (it starts in the
+race's countdown); exactly when acServer closes is not checked further.
 
 The page now says what each refusal means and keeps the game's text in a small grey line below
 (`PLAIN_WORDS` in `web/app.js`; one table for the join refusals of `handshake.rs` and the kick
