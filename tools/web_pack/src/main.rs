@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]
+//!          [--delta <the live pack's manifest.json>]
 //! ```
 //!
 //! Reads which cars and tracks are wanted: from `--config`, else from `web/my_pack.toml` when
@@ -18,6 +19,12 @@
 //! installed, made for Custom Shaders Patch only, encrypted, files missing) is left out with
 //! one line that says why; nothing is ever decrypted. `--dry-run` prints the sizes and what is
 //! left out, and writes nothing. The game's folder is only read.
+//!
+//! `--delta <manifest.json>` (the manifest of the pack already on a server): builds the same
+//! pack but writes only the files that are new or changed against that manifest (same path,
+//! size and SHA-256 is unchanged), plus the new `manifest.json`, into an empty `--out` folder,
+//! and prints their count and size and the files the new pack no longer has. That folder
+//! copied over the old pack (and those files deleted) is the new pack, file for file.
 //!
 //! The pack is the user's own copy of Kunos' (and mod makers') files. `dist-web/` is ignored by
 //! git; nothing in it belongs in the repository or in a release.
@@ -101,12 +108,18 @@ fn stock_cars(root: &Path) -> Option<Vec<String>> {
 }
 
 /// Copies a file and returns its size and SHA-256.
-fn copy_hashed(from: &Path, to: &Path) -> Result<(u64, String), String> {
+/// Copies `from` to `to` (or only reads it, without `to`): its size and SHA-256.
+fn copy_hashed(from: &Path, to: Option<&Path>) -> Result<(u64, String), String> {
     let mut input = std::fs::File::open(from).map_err(|e| format!("{}: {e}", from.display()))?;
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
-    let mut output = std::fs::File::create(to).map_err(|e| format!("{}: {e}", to.display()))?;
+    let mut output = match to {
+        Some(to) => {
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            Some((std::fs::File::create(to).map_err(|e| format!("{}: {e}", to.display()))?, to))
+        }
+        None => None,
+    };
     let mut hash = Sha256::new();
     let mut buffer = vec![0u8; 1 << 20];
     let mut size = 0u64;
@@ -117,9 +130,51 @@ fn copy_hashed(from: &Path, to: &Path) -> Result<(u64, String), String> {
         }
         hash.update(&buffer[..n]);
         size += n as u64;
-        output.write_all(&buffer[..n]).map_err(|e| format!("{}: {e}", to.display()))?;
+        if let Some((output, to)) = &mut output {
+            output.write_all(&buffer[..n]).map_err(|e| format!("{}: {e}", to.display()))?;
+        }
     }
     Ok((size, hash.finish()))
+}
+
+/// The files a `manifest.json` of this tool lists (one `{"path": …, "bytes": …, "sha256": …}`
+/// per line, as [`Manifest::to_json`] writes them): path → (size, SHA-256).
+fn manifest_files(text: &str) -> Result<BTreeMap<String, (u64, String)>, String> {
+    if !text.contains(rustyac_web::pack::FORMAT) {
+        return Err(format!("not a web_pack manifest.json (no \"{}\" in it)", rustyac_web::pack::FORMAT));
+    }
+    let mut files = BTreeMap::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("{\"path\": \"") else { continue };
+        let cut = || format!("a line it cannot read: {line}");
+        // the path, with the JSON escapes undone
+        let mut path = String::new();
+        let mut chars = rest.chars();
+        loop {
+            match chars.next().ok_or_else(cut)? {
+                '"' => break,
+                '\\' => match chars.next().ok_or_else(cut)? {
+                    'u' => {
+                        let hex: String = chars.by_ref().take(4).collect();
+                        path.push(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32).ok_or_else(cut)?);
+                    }
+                    c => path.push(c),
+                },
+                c => path.push(c),
+            }
+        }
+        let rest = chars.as_str();
+        let bytes = rest.split("\"bytes\": ").nth(1).and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next()).and_then(|s| s.parse().ok());
+        let sha256 = rest.split("\"sha256\": \"").nth(1).and_then(|s| s.split('"').next()).filter(|s| s.len() == 64);
+        match (bytes, sha256) {
+            (Some(bytes), Some(sha256)) => files.insert(path, (bytes, sha256.to_string())),
+            _ => return Err(cut()),
+        };
+    }
+    if files.is_empty() {
+        return Err("no files in it".to_string());
+    }
+    Ok(files)
 }
 
 /// Runs the look at one car or track; a loader that gives up anywhere on the way (a mod's
@@ -219,6 +274,14 @@ fn run(args: &[String]) -> Result<(), String> {
     });
     let out = value("--out").map(PathBuf::from).unwrap_or_else(|| repo.join("dist-web/preview"));
     let dry = args.iter().any(|a| a == "--dry-run");
+    let old = match value("--delta") {
+        Some(file) => Some(std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}")).and_then(|text| manifest_files(&text).map_err(|e| format!("{file}: {e}")))?),
+        None => None,
+    };
+    // a delta folder holds the upload and nothing else
+    if old.is_some() && !dry && std::fs::read_dir(&out).is_ok_and(|mut entries| entries.next().is_some()) {
+        return Err(format!("--delta writes into an empty folder: {} has files in it", out.display()));
+    }
     let root = match value("--ac") {
         Some(folder) => PathBuf::from(folder),
         None => rustyac_content::install::ac_root().ok_or_else(rustyac_content::install::not_found_hint)?,
@@ -441,6 +504,16 @@ fn run(args: &[String]) -> Result<(), String> {
     // copy and hash; a car or track whose file cannot be copied after all is left out too
     let mut manifest = Manifest::default();
     let mut late: Vec<(&str, String, String)> = Vec::new();
+    // a file the live pack already has (same path, size and hash) is only read, not written
+    let put = |from: &Path, file: &str| -> Result<(u64, String), String> {
+        if let Some(old) = &old {
+            let read = copy_hashed(from, None)?;
+            if old.get(file) == Some(&read) {
+                return Ok(read);
+            }
+        }
+        copy_hashed(from, Some(&out.join(file)))
+    };
     let add = |manifest: &mut Manifest, files: &[(String, u64)]| -> Result<Vec<usize>, String> {
         let mut numbers = Vec::new();
         for (file, _) in files {
@@ -449,7 +522,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 numbers.push(index);
                 continue;
             }
-            let (bytes, sha256) = copy_hashed(&root.join(file), &out.join(file))?;
+            let (bytes, sha256) = put(&root.join(file), file)?;
             numbers.push(manifest.file(PackFile { path: file.clone(), bytes, sha256 }));
         }
         Ok(numbers)
@@ -482,7 +555,7 @@ fn run(args: &[String]) -> Result<(), String> {
     // FMOD's browser build (Firelight's: never in the repo or a release, only in a pack), from ignored/fmod
     let fmod = repo.join("ignored/fmod/fmodstudioapi20315html5/fmodstudioapi20315html5/api/studio/lib/wasm");
     for name in FMOD_FILES {
-        match copy_hashed(&fmod.join(name), &out.join("fmod").join(name)) {
+        match put(&fmod.join(name), &format!("fmod/{name}")) {
             Ok((bytes, sha256)) => {
                 manifest.file(PackFile { path: format!("fmod/{name}"), bytes, sha256 });
             }
@@ -503,13 +576,29 @@ fn run(args: &[String]) -> Result<(), String> {
         megabytes(manifest.total_bytes()),
         manifest.files.len()
     );
+    if let Some(old) = &old {
+        let new: Vec<&PackFile> = manifest.files.iter().filter(|f| old.get(&f.path) != Some(&(f.bytes, f.sha256.clone()))).collect();
+        let kept: std::collections::BTreeSet<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        let gone: Vec<(&String, u64)> = old.iter().filter(|(path, _)| !kept.contains(path.as_str())).map(|(path, (bytes, _))| (path, *bytes)).collect();
+        println!(
+            "\ndelta: {} new or changed files, {} (plus manifest.json) in {}: upload these over the live pack",
+            new.len(),
+            megabytes(new.iter().map(|f| f.bytes).sum()),
+            out.display()
+        );
+        println!("the new pack no longer has {} files of the live pack ({}){}", gone.len(), megabytes(gone.iter().map(|(_, bytes)| bytes).sum()), if gone.is_empty() { "" } else { ": delete them there" });
+        for (path, _) in gone {
+            println!("  gone: {path}");
+        }
+    }
     Ok(())
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run]");
+        println!("usage: web_pack [--config <file>] [--out dist-web/preview] [--ac <Assetto Corsa folder>] [--dry-run] [--delta <live manifest.json>]");
+        println!("--delta: write only the files that are new or changed against that manifest, plus the new manifest.json, into an empty --out");
         println!("the config: --config, else web/my_pack.toml when it exists, else web/preview.toml");
         return;
     }
@@ -530,6 +619,22 @@ mod tests {
         assert_eq!(string_list(text, "tracks").unwrap(), vec!["spa", "ring/layout_gp"]);
         assert!(string_list(text, "bikes").is_err());
         assert!(string_list("cars = \"a\"", "cars").is_err());
+    }
+
+    #[test]
+    fn a_manifest_reads_back() {
+        let mut manifest = Manifest::default();
+        let paths = ["content/cars/a\"b\\c/data.acd", "content/tracks/\u{1}é/x.kn5"];
+        for (n, path) in paths.iter().enumerate() {
+            manifest.file(PackFile { path: path.to_string(), bytes: n as u64 * 7, sha256: format!("{n:064x}") });
+        }
+        manifest.shared = vec![0, 1];
+        let files = manifest_files(&manifest.to_json()).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[paths[0]], (0, format!("{:064x}", 0)));
+        assert_eq!(files[paths[1]], (7, format!("{:064x}", 1)));
+        assert!(manifest_files("{}").is_err());
+        assert!(manifest_files(&format!("{{\"format\": \"{}\"}}", rustyac_web::pack::FORMAT)).is_err());
     }
 
     #[test]

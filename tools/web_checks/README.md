@@ -1,6 +1,6 @@
 # web_checks
 
-The rerun scripts of Tasks 38d to 42c (browser, server panel, sound, graphics and HUD checks), moved out
+The rerun scripts of Tasks 38d to 43 (browser, server panel, sound, graphics and HUD checks), moved out
 of the git-ignored `re/scratch/task…/` by the scratch cleanup of 2026-10-27. Each folder keeps its task
 name, so a script's `cd "$(dirname "$0")/../../.."` still lands in the repo root.
 
