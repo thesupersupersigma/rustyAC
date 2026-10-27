@@ -200,6 +200,38 @@ pub fn files_of_drive(root: &Path, car: &str, track: &str, layout: &str) -> Vec<
     out
 }
 
+/// The driver model a car seats (`driver3d.ini [MODEL] NAME`; empty without one).
+fn driver_model(car_folder: &Path) -> String {
+    rustyac_physics::data::ini::IniReader::load(&car_folder.join("data/driver3d.ini")).map_or(String::new(), |ini| ini.get_string("MODEL", "NAME"))
+}
+
+/// Task 42c / 43: a skin's `skin.ini` and the driver's and pit crew's suit, gloves, helmet and
+/// brand it names (DriverModel::loadDriverSkin, LollipopCrew::loadCrewSkin): those folders of
+/// content/texture and their normal maps (the "_nm" folder beside), not the whole 937 MB.
+/// Nothing for a skin without `skin.ini` (it uses its own folder).
+pub fn suit_files(root: &Path, car: &str, skin: &str) -> Vec<PathBuf> {
+    let folder = car_folder(root, car);
+    let ini_path = folder.join("skins").join(skin).join("skin.ini");
+    // (IniReader reads a missing file as an empty one)
+    let Some(ini) = Some(&ini_path).filter(|p| p.vfs_is_file()).and_then(|p| rustyac_physics::data::ini::IniReader::load(p).ok()) else {
+        return Vec::new();
+    };
+    let mut out = vec![ini_path];
+    let driver = driver_model(&folder);
+    let parts = [(driver.as_str(), "driver", ["SUIT", "GLOVES", "HELMET"]), ("CREW", "crew", ["SUIT", "HELMET", "BRAND"])];
+    for (section, kind, keys) in parts {
+        for key in keys.into_iter().filter(|key| !section.is_empty() && ini.has_key(section, key)) {
+            let value = ini.get_string(section, key).replace('\\', "/");
+            let path = format!("{kind}_{}{value}", key.to_ascii_lowercase());
+            files_below(&root.join("content/texture").join(&path), &[], 0, &mut out);
+            if let Some(at) = path.rfind('/') {
+                files_below(&root.join("content/texture").join(format!("{}_nm", &path[..=at])), &[], 0, &mut out);
+            }
+        }
+    }
+    out
+}
+
 /// Full mode: what AC's renderer reads besides the drive's files, as far as can be told
 /// before it runs: the shaders, the game's settings, the weather, the sky's and the pits'
 /// textures and models, the fonts, the GUI's textures and languages, the car's models,
@@ -230,29 +262,13 @@ pub fn files_of_picture(root: &Path, car: &str, track: &str, layout: &str) -> Ve
     files_below(&folder.join("texture"), &[], 1, &mut out);
     files_below(&folder.join("animations"), &[], 1, &mut out);
     // DriverModel: content/driver/<MODEL NAME>.kn5 and its far-away _B
-    let mut driver = String::new();
-    if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&folder.join("data/driver3d.ini")) {
-        driver = ini.get_string("MODEL", "NAME");
-        if !driver.is_empty() {
-            out.push(root.join(format!("content/driver/{driver}.kn5")));
-            out.push(root.join(format!("content/driver/{driver}_B.kn5")));
-        }
+    let driver = driver_model(&folder);
+    if !driver.is_empty() {
+        out.push(root.join(format!("content/driver/{driver}.kn5")));
+        out.push(root.join(format!("content/driver/{driver}_B.kn5")));
     }
-    // Task 42c: the driver's and the pit crew's suit, gloves, helmet and brand that the skin's
-    // skin.ini names (DriverModel::loadDriverSkin, LollipopCrew::loadCrewSkin): those folders
-    // of content/texture and their normal maps (the "_nm" folder beside), not the whole 937 MB
-    if let Some(ini) = skins.first().and_then(|skin| rustyac_physics::data::ini::IniReader::load(&folder.join("skins").join(skin).join("skin.ini")).ok()) {
-        let parts = [(driver.as_str(), "driver", ["SUIT", "GLOVES", "HELMET"]), ("CREW", "crew", ["SUIT", "HELMET", "BRAND"])];
-        for (section, kind, keys) in parts {
-            for key in keys.into_iter().filter(|key| !section.is_empty() && ini.has_key(section, key)) {
-                let value = ini.get_string(section, key).replace('\\', "/");
-                let path = format!("{kind}_{}{value}", key.to_ascii_lowercase());
-                files_below(&root.join("content/texture").join(&path), &[], 0, &mut out);
-                if let Some(at) = path.rfind('/') {
-                    files_below(&root.join("content/texture").join(format!("{}_nm", &path[..=at])), &[], 0, &mut out);
-                }
-            }
-        }
+    if let Some(skin) = skins.first() {
+        out.extend(suit_files(root, car, skin));
     }
     let track_folder = track_folder(root, track);
     files_below(&track_folder.join("data"), &[], 0, &mut out);

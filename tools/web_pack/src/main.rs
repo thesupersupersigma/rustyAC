@@ -354,6 +354,13 @@ fn run(args: &[String]) -> Result<(), String> {
             content::check_car_model(&root, car)?;
             // and what Full mode (AC's renderer) reads: shaders, sky, pits, the car's skin and driver
             read.extend(content::files_of_picture(&root, car, "", ""));
+            // Task 43: every skin's skin.ini and the suits it names, for a car in any skin
+            for skin in std::fs::read_dir(folder.join("skins")).into_iter().flatten().flatten().filter(|e| e.path().is_dir()) {
+                read.extend(content::suit_files(&root, car, &skin.file_name().to_string_lossy()));
+            }
+            // (the first skin's are in files_of_picture already: a file counts once)
+            read.sort();
+            read.dedup();
             let own = format!("content/cars/{}/", car.to_ascii_lowercase());
             let mut files = Vec::new();
             // the sound reads its bank and GUIDs.txt only once FMOD runs, and sounds.ini from a data folder

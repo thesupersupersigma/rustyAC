@@ -99,8 +99,8 @@ pub fn renderer(root: &Path, width: u32, height: u32, session: &Session, warp: b
 /// levels (`volumes`: the page's sound does not take them), force feedback (`ffb`: a browser
 /// has none), the driver's eyes (`eyes`: the page's cameras do not take them), the frame
 /// statistics (`gamestats`, `rstats`: only Direct3D 11 counts them) and the apps fed from the
-/// physics thread (`telemetry`, `setupdebug`). AC's Python apps (apps/python) are not made at
-/// all, in the page or in rustyac.exe (Task 42).
+/// physics thread (`telemetry`, `setupdebug`). AC's Python apps (apps/python) are not made in
+/// the page: they need the player's python33.dll (rustyac.exe runs them, Task 42).
 pub const PAGE_HIDDEN_APPS: &[&str] = &["volumes", "ffb", "eyes", "gamestats", "rstats", "telemetry", "setupdebug"];
 
 /// What AC's GUI reads of the drive and where its files are, as rustyac.exe's `make_ac` gives
@@ -170,6 +170,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         max_gear: rustyac_game::input::ini::ControlsIni::load_car_data(&info.data_path.join("drivetrain.ini")).map_or(0, |ini| ini.get_int("GEARS", "COUNT")),
         documents_cfg,
         // (the page runs no Python apps)
+        // (no Python apps in the page: nothing reads them)
         python_cars: Vec::new(),
         server: None,
     }
