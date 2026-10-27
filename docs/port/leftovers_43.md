@@ -2,8 +2,9 @@
 
 ## Resume here
 
-- Done: step 1 (`web_pack --delta`), step 7 (refusals in plain words).
-- Next: step 2 (`race_out.json` after an online session on desktop), then steps 3 to 6.
+- Done: step 1 (`web_pack --delta`), step 4 (votes and chat on the wire), step 7 (refusals in plain
+  words).
+- Next: step 2 (`race_out.json` after an online session on desktop), then steps 3, 5, 6.
 - Scratch: `re/scratch/task43/`. Rerun scripts: `tools/web_checks/task43/`.
 - Disk at the start: 67 GB free.
 
@@ -47,6 +48,31 @@ with `diff -r` against the full new pack.
 
 Test: `a_manifest_reads_back` (`tools/web_pack`): a manifest written by `Manifest::to_json`, with
 `"`, `\` and a control character in its paths, reads back with every path, size and hash.
+
+## Step 4: votes and chat on the wire
+
+`car_oracle net <tape>` now also hands every chat line and vote rustyAC sent on the tape to the
+game's own `ACClient::sendChat` @ 0x140052a90 / `sendVote` @ 0x140052ba0 (on the in-process
+`ACClient`, with the stand-in sockets) and compares what the game sends, byte for byte, with what
+rustyAC sent (`NetGame::send_as_game` in `tools/car_oracle/src/game/net.rs`). A kick vote's target
+goes in as the target car's avatar guid, as the game's console and the vote window give it, and
+the game's `getSessionIdFromCarAvatarID` turns it back into a slot.
+
+The tape: a live session on 127.0.0.1 (acServer, Laguna Seca), rustyac.exe "a" taped and "b";
+a says three lines (short, long, not ASCII) and votes seven times
+(`sh tools/web_checks/task43/s4/votes.sh`):
+
+| message | count | game vs rustyAC |
+|---|---|---|
+| chat `0x47` (`hi`, a 36-character line, `ciao, è già`) | 3 | identical |
+| vote next session `0x64` (yes, no) | 2 | identical |
+| vote restart `0x65` (no, yes) | 2 | identical |
+| vote kick `0x66` (a driver not there: target 0xff; b: slot 1) | 2 | identical |
+
+acServer took them: its log has the three lines, "Creating vote to NEXT SESSION from a", the
+answers, and "ACP_VOTE_KICK_USER failed, cannot find car with session id= 255" for the kick of
+nobody. The rest of the same run (200 steps, net_watch) stayed identical. The three goldens' tapes
+(`rich_*`) carry one chat line each, which the quick proofs' net runs now also compare.
 
 ## Step 7: "Session is closed to new connections"
 
