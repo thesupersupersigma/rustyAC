@@ -142,3 +142,46 @@ fn from_a_pit_box_on_magione_the_line_follower_leaves_by_the_pit_lane() {
     }
     assert!(view.speed_kmh > 80.0 && sim.car.car.spline_locator.offset.abs() < 3.0, "on the racing line at speed after {seconds} s: {} km/h, {} m beside it", view.speed_kmh, sim.car.car.spline_locator.offset);
 }
+
+/// Task 42c: after "back to pits" the line follower takes the pit lane out again (before, it
+/// had left the pit lane's line for good and stood against the pit wall).
+#[test]
+fn after_back_to_pits_the_line_follower_takes_the_pit_lane_again() {
+    if !ready() {
+        return;
+    }
+    if let Err(message) = find_track("magione") {
+        eprintln!("NOT TESTED: {message}");
+        return;
+    }
+    let setup = SimSetup { car: "ks_toyota_gt86".to_string(), track: "magione".to_string(), auto_shifter: true, spawn: "pit".to_string(), ..SimSetup::default() };
+    let mut sim = GameSim::new(setup, Box::new(SpawnSequence::new(AutoDriver::new(), true))).unwrap();
+    for round in 0..2 {
+        let mut view = steps(&mut sim, 3);
+        let mut seconds = 0;
+        while seconds < 60 && !(view.speed_kmh > 80.0 && sim.car.car.spline_locator.offset.abs() < 3.0) {
+            view = steps(&mut sim, 333);
+            seconds += 1;
+        }
+        assert!(view.speed_kmh > 80.0 && sim.car.car.spline_locator.offset.abs() < 3.0, "round {round}: on the racing line at speed after {seconds} s: {} km/h, {} m beside it", view.speed_kmh, sim.car.car.spline_locator.offset);
+        sim.car.device.source.request(event::BACK_TO_PITS);
+    }
+}
+
+/// Task 42c: a GT3 car laps Laguna Seca: the follower learns that it brakes less than a racing
+/// car, and when it is stuck all the same (spun in the corkscrew) it goes back on the track.
+/// Before, the BMW Z4 stood in the corkscrew's gravel with the gas down for good.
+#[test]
+fn a_gt3_car_laps_laguna_seca() {
+    if !ready() {
+        return;
+    }
+    if let Err(message) = find_track("ks_laguna_seca") {
+        eprintln!("NOT TESTED: {message}");
+        return;
+    }
+    let setup = SimSetup { car: "bmw_z4_gt3".to_string(), track: "ks_laguna_seca".to_string(), auto_shifter: true, ..SimSetup::default() };
+    let mut sim = GameSim::new(setup, Box::new(SpawnSequence::new(AutoDriver::new(), true))).unwrap();
+    let view = steps(&mut sim, 360 * 333);
+    assert!(view.lap.laps >= 2, "{} laps in 360 s", view.lap.laps);
+}

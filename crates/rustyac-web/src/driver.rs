@@ -168,7 +168,7 @@ impl DriverSource for WebSource {
             let mut input = self.input.lock().unwrap();
             (std::mem::take(&mut input.requests), std::mem::take(&mut input.bias_clicks))
         };
-        (std::mem::take(&mut self.pending_events) | requests, std::mem::take(&mut self.pending_bias) + clicks)
+        (std::mem::take(&mut self.pending_events) | requests | self.auto.take_events().0, std::mem::take(&mut self.pending_bias) + clicks)
     }
 
     fn request(&mut self, events: u32) {

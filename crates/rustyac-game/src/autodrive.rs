@@ -14,6 +14,7 @@ use std::sync::Arc;
 use rustyac_physics::car::{CarControls, CarControlsInput};
 use rustyac_physics::track::{AiSpline, Track};
 
+use crate::input_file::event;
 use crate::sim::{CarProbe, DriverSource};
 
 /// Share of the grip the driver plans with (1 would be the limit of a car it knows nothing of).
@@ -47,6 +48,21 @@ pub struct AutoDriver {
     probe: CarProbe,
     /// It has reached the racing line (from a pit box it follows the pit lane's line first).
     on_line: bool,
+    /// Where the car was in the step before: a jump (back to the pits, back on track, a new
+    /// session) makes it start again from where it stands.
+    last_position: Option<[f32; 3]>,
+    /// It has driven since it was put down (a car held on a grid is not stuck), and the seconds
+    /// it has stood since with the gas down.
+    moved: bool,
+    stuck: f32,
+    /// Commands for the game ([`DriverSource::take_events`]).
+    events: u32,
+    /// How much less than planned the car slows at full brake (m/s², twice over), from the
+    /// full-brake spells so far (`brake_spell`: s and m/s lost) and the last step's pedal and speed.
+    brake_loss: f32,
+    brake_spell: (f32, f32),
+    last_brake: f32,
+    last_speed: f32,
 }
 
 impl AutoDriver {
@@ -81,7 +97,7 @@ fn gap(spline: &AiSpline, position: &[f32; 3]) -> f32 {
 /// The speed the bends ahead allow, m/s: for every point up to 320 m ahead the speed its
 /// curvature allows (grip that grows with the square of the speed), plus what can be braked
 /// away on the way there.
-fn allowed_speed(spline: &AiSpline, index: usize) -> f32 {
+fn allowed_speed(spline: &AiSpline, index: usize, brake_loss: f32) -> f32 {
     let points = &spline.spline.points;
     let n = points.len();
     let here = points[index % n].point_length;
@@ -99,7 +115,7 @@ fn allowed_speed(spline: &AiSpline, index: usize) -> f32 {
         let k = curvature(spline, i, 5).abs();
         let (a0, a1) = (14.0 * PACE, 0.0036 * PACE);
         let corner = if k <= a1 * 1.08 { TOP_SPEED } else { (a0 / (k - a1)).sqrt() };
-        allowed = allowed.min((corner * corner + 2.0 * 21.0 * PACE * ahead).sqrt());
+        allowed = allowed.min((corner * corner + (2.0 * 21.0 * PACE - brake_loss) * ahead).sqrt());
         i += 3;
     }
     allowed
@@ -114,15 +130,36 @@ impl DriverSource for AutoDriver {
         true
     }
 
+    fn take_events(&mut self) -> (u32, i32) {
+        (std::mem::take(&mut self.events), 0)
+    }
+
     fn set_probe(&mut self, probe: &CarProbe) {
         self.probe = *probe;
     }
 
-    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, input: &CarControlsInput) {
+    fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
         *controls = CarControls { clutch: 1.0, ..CarControls::default() };
         let Some(track) = self.track.clone() else { return };
         let Some(fast) = track.ai_spline.as_ref().filter(|line| line.point_count() >= 16) else { return };
         let car = self.probe;
+        if self.last_position.is_some_and(|p| (p[0] - car.position[0]).powi(2) + (p[1] - car.position[1]).powi(2) + (p[2] - car.position[2]).powi(2) > 100.0) {
+            (self.on_line, self.moved, self.stuck) = (false, false, 0.0);
+        }
+        self.last_position = Some(car.position);
+        // a car that slows less at full brake than planned (a GT car, not a Formula 1 car) brakes
+        // earlier from then on: every 0.25 s spell of full brake above 10 m/s is measured
+        if self.last_brake >= 1.0 && input.speed > 10.0 {
+            self.brake_spell = (self.brake_spell.0 + dt, self.brake_spell.1 + self.last_speed - input.speed);
+            if self.brake_spell.0 >= 0.25 {
+                let short = 2.0 * 21.0 * PACE - 2.0 * self.brake_spell.1 / self.brake_spell.0;
+                self.brake_loss = self.brake_loss.max(short);
+                self.brake_spell = (0.0, 0.0);
+            }
+        } else {
+            self.brake_spell = (0.0, 0.0);
+        }
+        self.last_speed = input.speed;
         // from a pit box the racing line is beyond the pit wall: the pit lane's line while it is the nearer one
         let pit = track.pit_lane_spline.as_ref().filter(|pit| !self.on_line && pit.point_count() >= 16 && gap(pit, &car.position) < gap(fast, &car.position));
         self.on_line = pit.is_none();
@@ -141,17 +178,31 @@ impl DriverSource for AutoDriver {
         let to_front = d[0] * car.forward[0] + d[1] * car.forward[1] + d[2] * car.forward[2];
         let alpha = atan2(to_left, to_front.max(0.5));
         let distance = (to_left * to_left + to_front * to_front).sqrt().max(1.0);
-        let wheel_angle = atan(2.0 * car.wheelbase * sin(alpha) / distance);
+        let mut wheel_angle = atan(2.0 * car.wheelbase * sin(alpha) / distance);
+        // a car short of grip (see brake_loss) turns the wheel at speed no further than about
+        // three times its braking in lateral pull: more only spins it
+        if self.brake_loss > 0.0 && input.speed > 10.0 {
+            let most = car.wheelbase * 1.5 * (2.0 * 21.0 * PACE - self.brake_loss) / (input.speed * input.speed);
+            wheel_angle = wheel_angle.clamp(-most, most);
+        }
         // positive turns right
         controls.steer = (-wheel_angle / car.max_wheel_angle.max(0.05)).clamp(-1.0, 1.0);
 
         // the pedals
         // (in the pit lane at most 60 km/h, under any pit limiter)
-        let error = allowed_speed(spline, index).min(if pit.is_some() { 16.7 } else { TOP_SPEED }) - input.speed;
+        let error = allowed_speed(spline, index, self.brake_loss).min(if pit.is_some() { 16.7 } else { TOP_SPEED }) - input.speed;
         if error >= 0.0 {
             controls.gas = (0.25 + error * 0.4).clamp(0.0, 1.0);
         } else {
             controls.brake = (-error * 0.25).clamp(0.0, 1.0);
+        }
+        self.last_brake = controls.brake;
+        // stuck (spun against a wall, beached in a gravel trap): after 3 s standing with the gas
+        // down, back on the track (the game's "to track"); a drive that never stops is unchanged
+        self.moved |= input.speed > 5.0;
+        self.stuck = if self.moved && input.speed < 1.0 && error > 1.0 { self.stuck + dt } else { 0.0 };
+        if self.stuck > 3.0 {
+            (self.stuck, self.events) = (0.0, event::TO_TRACK);
         }
     }
 }
