@@ -2191,7 +2191,7 @@ const EVENT = { RESET: 1, REBUILD: 2, TC_UP: 4, TC_DN: 8, ABS_UP: 16, ABS_DN: 32
 
 // The page's own keys. With the keys the built-in layout drives with (asked of the wasm side
 // once a car is there) they are the only keys the page keeps from the browser.
-const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
+const PAGE_KEYS = ['Escape', 'Pause', 'KeyP', 'F1', 'KeyC', 'KeyR', 'KeyN', 'KeyG', 'KeyH', 'KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'Enter', 'NumpadEnter', 'KeyO', 'F4', 'F6', 'F7', 'F8', 'F11', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
 // The page's keys that give way to the layout: a key the player's controls.ini drives with
 // keeps that job (the desktop's rule for its own plain keys).
 const GIVE_WAY = ['KeyT', 'KeyY', 'BracketLeft', 'BracketRight', 'KeyO', 'Numpad4', 'Numpad8', 'Numpad6', 'Numpad2'];
@@ -2264,6 +2264,11 @@ window.addEventListener('keydown', (event) => {
     case 'F11':
       state.game.virtual_mirror();
       break;
+    // Full mode: back to your car (AC's fade, with other cars), AC's free camera (when the
+    // game's assetto_corsa.ini allows it: the arrows move it, the right mouse button turns it)
+    case 'F4':
+      state.game.player_car();
+      break;
     case 'KeyR':
       state.game.request(event.shiftKey ? EVENT.TO_TRACK : EVENT.RESET);
       break;
@@ -2275,7 +2280,7 @@ window.addEventListener('keydown', (event) => {
       break;
     // the referee's two buttons, and the pit menu (the number pad's 4 8 6 2)
     case 'F7':
-      state.game.request(EVENT.NEXT_SESSION);
+      if (!state.game.free_camera()) state.game.request(EVENT.NEXT_SESSION);
       break;
     case 'F8':
       state.game.request(EVENT.RESTART_SESSION);
@@ -2561,6 +2566,7 @@ async function openLauncher() {
       await api.saveNow();
       api.trigger('ACRunningEvent');
       host.hidden = true;
+      api.pause(true);
       $('corner').hidden = true;
       const race = new TextDecoder().decode(api.launcher.read_doc('cfg\\race.ini') || new Uint8Array(0));
       // the game picks skins among a car's skin folders (as the desktop does), the player's
@@ -2631,6 +2637,7 @@ async function returnToLauncher() {
   $('launcher').hidden = false;
   $('corner').hidden = false;
   window.rustyac.state = 'launcher';
+  api.pause(false);
   api.trigger('ACStoppedEvent');
 }
 

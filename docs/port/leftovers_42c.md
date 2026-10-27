@@ -2,8 +2,9 @@
 
 ## Resume here
 
-- Done: step 1 (the test autodriver), step 2 (an online race to its end), step 3 (Python apps).
-- Next: step 4 (the page: F4 / F7 in Full mode, the hidden launcher frame, full-screen Esc).
+- Done: steps 1 to 4 (the test autodriver, an online race to its end, Python apps, the page's
+  keys and hidden launcher).
+- Next: step 5 (the mouse pit stop's seed 4 that differs between recordings).
 - Scratch: `re/scratch/task42c/`.
 
 ## Step 1: the test autodriver (`--autodrive`)
@@ -119,3 +120,35 @@ Not done: track, helicopter, on-board free and random cameras for `setCameraMode
 7) and `freeCameraSetClearColor` are still only logged. Neither camera exists in rustyac.exe.
 The name the listener gets for the player's own line is the one `getDriverName(0)` gives
 ("Player" unless race.ini names the driver).
+
+## Step 4: the page's F4 / F7, the hidden launcher, full-screen Esc
+
+What changed:
+
+- **F7 in Full mode** is AC's free camera when the game's `system/cfg/assetto_corsa.ini`
+  allows it (`[CAMERA] ALLOW_FREE_CAMERA=1`, read as rustyac.exe reads it). It starts where the
+  picture's camera was; the arrows move it (Shift slower, Ctrl faster), the right mouse button
+  held turns it, F1 or F6 go back to the driving cameras. Without the permission (the usual
+  install) F7 is still the page's "skip the session".
+- **F4 in Full mode**: back to your car, through AC's fade (`fades.ini [CHANGE_CAMERA_FADE]`,
+  only with other cars). The page's camera never leaves your car, so only the fade shows.
+  `Focus::new` now reads `fades.ini` through the page's file system too.
+- **The hidden launcher stops.** AC's theme asks `ac://eventcount` every second (its Special
+  Events page) and every answer saved the player's documents. While a drive hides the
+  launcher, `theme_glue.js` clears the theme's intervals and holds its timeouts; they start
+  again when the launcher shows.
+- **Full screen**: the key lock was already there (Task 42b). The controls page now says that
+  Esc opens AC's ESC menu in full screen too, and that holding Esc leaves full screen.
+
+Proof (`re/scratch/task42c/s4`):
+
+| Check | Result |
+|---|---|
+| Timers and rAF per 10 s by calling file, Full drive (`cost.sh before` / `after`) | launcher shown: 20 `launcher.js` timeouts (the theme's 1 s poll) both times; driving: 20 before, **0** after (the last bridge request is `ac://start`) |
+| The same with a Debug drive left with Esc (`cost.sh after_esc`) | back in the launcher the poll runs again: 20 per 10 s |
+| The page on a local acServer copy, Full mode, a stand-in install that allows the free camera (`live.sh`) | F7: the picture stays where it was; ArrowUp 0.3 s: the camera moved past the car; F1: the chase camera again; F4: one dark frame (mean 11 of 255), then the picture again |
+| Full screen there (`requestFullscreen` with a user gesture) | in full screen, the lock is there; Esc reached AC's GUI ("Stop for Esc Menu": the car was moving) |
+
+Not done: holding Esc to leave full screen is the browser's own; headless Chrome stays in full
+screen, so it was not seen. Free camera without the permission does nothing in AC; the page
+keeps F7 as its skip key then (a page-only key since Task 28).

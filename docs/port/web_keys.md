@@ -175,13 +175,12 @@ changed. Redeploy: the site (the new zip), and the panel (its `public/index.html
    `IGNORE_RESULT_TELEPORT` is not read, and there is no fade before the teleport.
 2. Full mode's main-thread load (≈ 930 ms/s of wasm at 55-57 fps on this PC): moving the
    physics to a worker or cutting the renderer's per-frame work is a task of its own.
-3. AC's launcher frame keeps animating (about 120 calls a second) while hidden during a
-   drive; it is AC's theme and cheap here, so it is left running.
-4. F4 (back to the player's car) and F7 (AC's free camera) in Full mode: the page has no car
-   focus switching and F7 is the page's skip-session key.
+3. (Done in Task 42c, step 4) AC's launcher frame kept running while hidden during a drive.
+4. (Done in Task 42c, step 4) F4 and F7 in Full mode.
 5. Old builds were measured on this PC only; a slower machine was not tried.
-6. The full-screen key lock was not tried: headless Chrome has no real full screen. The
-   blocked keys above were proven without it.
+6. The full-screen key lock: Task 42c tried it in headless Chrome (full screen and the lock
+   work, Esc reaches AC's GUI). Holding Esc to leave full screen is the browser's own and
+   headless Chrome does not do it, so that part is not seen.
 
 ## Open questions
 

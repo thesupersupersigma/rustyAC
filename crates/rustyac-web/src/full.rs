@@ -193,6 +193,12 @@ pub struct GuiLoop {
     pits_locked: bool,
     /// Task 42b: AC's start camera while a session that began in the ESC menu waits for "Drive"
     pub start_camera: Option<rustyac_game::render::scene::StartCamera>,
+    /// Task 42c: F7's free camera, the last frame's camera (where it starts), the mouse over
+    /// the picture (x, y, right button held) and F4's fade back to the player's car
+    pub free_camera: Option<rustyac_game::render::scene::MouseCamera>,
+    pub last_frame: Option<rustyac_game::render::scene::CameraFrame>,
+    pub mouse: (i32, i32, bool),
+    pub focus: Option<rustyac_game::focus::Focus>,
     /// (the setup editor's car: its jobs applied, and the 64-step slice it was taken in)
     published: Option<(usize, u64)>,
     generation: u64,
@@ -312,13 +318,35 @@ impl GuiLoop {
 }
 
 /// One frame of the page's game: the player's car first, then the others.
-pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, start: Option<&mut rustyac_game::render::scene::StartCamera>) {
-    let camera = match start {
-        Some(start) => start.update(view, session.shape.eye_model[0], seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32)),
-        None => session.camera_frame(view, seconds as f64),
+pub fn draw(renderer: &mut AcRenderer, session: &mut Session, view: &CarView, seconds: f32, hud: &HudInfo, gui: &mut GuiLoop) {
+    let dt = seconds.clamp(0.0, crate::session::MAX_FRAME_SECONDS as f32);
+    let camera = match (&mut gui.start_camera, &mut gui.free_camera) {
+        (Some(start), _) => start.update(view, session.shape.eye_model[0], dt),
+        (None, Some(free)) => {
+            // (the held keys as rustyac.exe's GetAsyncKeyState: either Shift, either Ctrl)
+            let keys = &session.input.lock().unwrap().keys;
+            let held = |codes: &[i32]| codes.iter().any(|code| keys.contains(code));
+            let (x, y, look) = gui.mouse;
+            let input = rustyac_game::render::scene::MouseCameraInput { shift: held(&[0x10, 0xa0, 0xa1]), ctrl: held(&[0x11, 0xa2, 0xa3]), up: held(&[0x26]), down: held(&[0x28]), left: held(&[0x25]), right: held(&[0x27]), look, cursor: (x, y) };
+            free.update(&input, dt)
+        }
+        (None, None) => session.camera_frame(view, seconds as f64),
     };
+    gui.last_frame = Some(camera);
     let world: Vec<CarView> = std::iter::once(*view).chain(session.remote_views()).collect();
-    renderer.draw(&world, 0, &session.camera, &camera, hud, seconds);
+    let mut hud = hud.clone();
+    hud.focus_fade = gui.focus.as_ref().and_then(|focus| focus.for_picture());
+    renderer.draw(&world, 0, &session.camera, &camera, &hud, seconds);
+    // (the page's focus is always the player's car: F4's fade comes back to it)
+    if let Some(focus) = &mut gui.focus {
+        focus.post_gui(dt, &world, &[]);
+    }
+}
+
+/// F7: `system/cfg/assetto_corsa.ini [CAMERA] ALLOW_FREE_CAMERA` above 0 (`Sim.allowFreeCamera`,
+/// as rustyac.exe reads it).
+pub fn free_camera_allowed(root: &Path) -> bool {
+    IniReader::load(&root.join("system/cfg/assetto_corsa.ini")).is_ok_and(|ini| ini.ready && ini.has_section("AC_APPS") && ini.get_int("CAMERA", "ALLOW_FREE_CAMERA").unwrap_or(0) > 0)
 }
 
 /// The fixed frame of this drive (as it starts: no physics step yet) at this size: the
@@ -359,8 +387,9 @@ pub fn fixed_frame(root: &Path, session: &mut Session, width: u32, height: u32, 
         }
     };
     let hud = if renderer.gui.is_some() { hud_info(session, false) } else { HudInfo { hidden: true, ..Default::default() } };
+    let mut no_gui_loop = GuiLoop::default();
     for _ in 0..frames {
-        draw(&mut renderer, session, &view, FIXED_SECONDS, &hud, None);
+        draw(&mut renderer, session, &view, FIXED_SECONDS, &hud, &mut no_gui_loop);
     }
     // the GUI's state at the end in the log too: every control (name, shown, place, text, mouse
     // and highlight), the mouse, the desktop, and what the GUI asked of the session

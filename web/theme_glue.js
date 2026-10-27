@@ -16,6 +16,44 @@
 
   const acfs = new URL(T.acfsBase, location.href);
 
+  // ------------------------------------------------------------ hidden behind a drive
+
+  // Task 42c: while a drive hides the frame (`pause(true)`) the theme's timers stop: its
+  // intervals (the Special Events page asks `ac://eventcount` every second, jQuery's
+  // animations) are cleared and made again when the frame shows; a timeout that comes due
+  // meanwhile runs then. AC's own launcher window keeps running behind the game; a page has
+  // one thread for both.
+  let hidden = false;
+  const held = [];
+  const intervals = new Map(); // the theme's id -> [the browser's id, fn, ms]
+  const real = { setTimeout: window.setTimeout, setInterval: window.setInterval, clearInterval: window.clearInterval };
+  window.setTimeout = function (fn, ms, ...args) {
+    if (typeof fn !== 'function') return real.setTimeout.call(window, fn, ms, ...args);
+    return real.setTimeout.call(window, () => (hidden ? held.push(() => fn(...args)) : fn(...args)), ms);
+  };
+  let nextInterval = 1;
+  window.setInterval = function (fn, ms, ...args) {
+    const tick = typeof fn === 'function' ? () => fn(...args) : fn;
+    const id = nextInterval++;
+    intervals.set(id, [hidden ? null : real.setInterval.call(window, tick, ms), tick, ms]);
+    return id;
+  };
+  window.clearInterval = function (id) {
+    const it = intervals.get(id);
+    if (!it) return;
+    if (it[0] !== null) real.clearInterval.call(window, it[0]);
+    intervals.delete(id);
+  };
+  function pause(on) {
+    if (on === hidden) return;
+    hidden = on;
+    for (const it of intervals.values()) {
+      if (on) real.clearInterval.call(window, it[0]);
+      it[0] = on ? null : real.setInterval.call(window, it[1], it[2]);
+    }
+    if (!on) for (const f of held.splice(0)) f();
+  }
+
   // ------------------------------------------------------------ requests
 
   // Where a request goes: the bridge, a file the page already holds, the page's online answers,
@@ -278,5 +316,5 @@
     T.loaded();
   });
 
-  window.__rustyac = { trigger, exec, notice, route };
+  window.__rustyac = { trigger, exec, notice, route, pause };
 })();

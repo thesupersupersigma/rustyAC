@@ -398,6 +398,8 @@ export async function startLauncher(env) {
     mimeOf,
     launcher,
     trigger,
+    // Task 42c: the theme's timers stop while a drive hides it (theme_glue.js)
+    pause: (on) => call((g) => g.pause(on)),
     frame,
     misses,
     requests: [],

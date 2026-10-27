@@ -63,7 +63,7 @@ impl Focus {
         let mut fade_time = 0.0f32;
         if let Some(ac) = rustyac_content::install::ac_root() {
             let file = ac.join("system/cfg/fades.ini");
-            if file.is_file() {
+            if rustyac_content::vfs::PathExt::vfs_is_file(file.as_path()) {
                 if let Ok(ini) = rustyac_physics::data::ini::IniReader::load(&file) {
                     fade_time = ini.get_float("CHANGE_CAMERA_FADE", "MS").unwrap_or(0.0) * f32::from_bits(0x3a83_126f);
                 }
