@@ -1081,6 +1081,18 @@ fn net(args: &Args) -> Result<(), String> {
     // before the first step: the push-to-pass question (the join's own messages are the port's)
     let before: Vec<(Lane, Vec<u8>)> = port.take_sent().into_iter().filter(|(_, data)| !matches!(data.first(), Some(0x3d | 0x3f))).collect();
     same_messages(&game.ask_p2p(), &before, 0, &mut counts)?;
+    // Task 43: every chat line and vote rustyAC sent on the tape, sent again by the game's own
+    // sendChat / sendVote (no step sends them: the player does)
+    let mut said = 0;
+    for entry in tape.of(Lane::ReliableOut) {
+        if let Some(game_sent) = game.send_as_game(&entry.data) {
+            same_messages(&game_sent, &[(Lane::ReliableOut, entry.data.clone())], entry.tick as usize, &mut counts).map_err(|e| format!("{}: chat or vote: {e}", scenario.name))?;
+            said += 1;
+        }
+    }
+    if said > 0 {
+        println!("  chat lines and votes rustyAC sent, sent again by the game's sendChat / sendVote: {said}, the same bytes");
+    }
 
     let steps = args.steps.unwrap_or((scenario.seconds / scenario::DT) as usize);
     let width = INPUT_COLUMNS.len();

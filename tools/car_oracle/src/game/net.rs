@@ -344,6 +344,62 @@ impl<'a> NetGame<'a> {
         wire(|w| std::mem::take(&mut w.sent))
     }
 
+    /// Task 43: what the game's own `ACClient::sendChat` @ 0x140052a90 or `sendVote` @
+    /// 0x140052ba0 sends for the chat line or vote of one message rustyAC sent (`data`, from
+    /// the tape): the line, or the vote's kind, answer and target (the target's avatar guid,
+    /// 0 for the local car as rustyAC's `send_vote` takes it). None for other messages.
+    pub fn send_as_game(&mut self, data: &[u8]) -> Option<Vec<(Lane, Vec<u8>)>> {
+        const VA_SEND_CHAT: usize = 0x1_4005_2a90;
+        const VA_SEND_VOTE: usize = 0x1_4005_2ba0;
+        unsafe {
+            let client = self.client;
+            // what the two read and the steps don't have: the game's clock (GameObject::game,
+            // its time at 0x18), lastChatMessage, the voting manager, the local avatar; and the
+            // remote cars' avatar guids. Put back after the call.
+            let saved: ([u8; 8], [u8; 8], [u8; 8], [u8; 8]) = (rd(client, 8), rd(client, 0x400), rd(client, 0x408), rd(client, 0x420));
+            let guids: Vec<i32> = self.netcars.iter().map(|p| rd(rd::<*mut u8>(*p, 0x1558), 0x1158)).collect();
+            wr(client, 8, object(0x20));
+            wr(client, 0x400, object(0x90));
+            wr(client, 0x408, object(0x12a8));
+            wr(client, 0x420, -1.0e9f64);
+            for p in &self.netcars {
+                wr(rd::<*mut u8>(*p, 0x1558), 0x1158, rd::<i32>(*p, 0x10c));
+            }
+            let target_guid = |slot: u8| -> i32 {
+                if slot == rd::<u8>(client, 0x440) {
+                    return 0;
+                }
+                self.netcars.iter().find(|p| rd::<u8>(**p, 0x78) == slot).map_or(-1, |p| rd::<i32>(*p, 0x10c))
+            };
+            let mut known = true;
+            match data {
+                [0x47, _, ..] => {
+                    let text = rustyac_net::packet::Reader::new(&data[2..]).wide();
+                    let send: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(self.acs.va(VA_SEND_CHAT));
+                    send(client, wstring(self.acs, &text));
+                }
+                [id @ (0x64 | 0x65), yes] => {
+                    let send: extern "C" fn(*mut u8, i32, u8, i32) = std::mem::transmute(self.acs.va(VA_SEND_VOTE));
+                    send(client, (*id - 0x64) as i32, *yes, -1);
+                }
+                [0x66, slot, yes] => {
+                    let send: extern "C" fn(*mut u8, i32, u8, i32) = std::mem::transmute(self.acs.va(VA_SEND_VOTE));
+                    send(client, 2, *yes, target_guid(*slot));
+                }
+                _ => known = false,
+            }
+            wr(client, 8, saved.0);
+            wr(client, 0x400, saved.1);
+            wr(client, 0x408, saved.2);
+            wr(client, 0x420, saved.3);
+            for (p, guid) in self.netcars.iter().zip(guids) {
+                wr(rd::<*mut u8>(*p, 0x1558), 0x1158, guid);
+            }
+            let sent = wire(|w| std::mem::take(&mut w.sent));
+            known.then_some(sent)
+        }
+    }
+
     /// One step: the tape's messages of this step go onto the stand-in sockets, the game's
     /// engine steps. Returns what the game sent.
     pub fn step(&mut self) -> Vec<(Lane, Vec<u8>)> {
