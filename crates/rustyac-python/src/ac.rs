@@ -557,11 +557,16 @@ unsafe extern "C" fn send_chat_message(_: Obj, args: Obj) -> R {
         return long(-1);
     }
     let t = text(o);
-    state(|s| {
-        if s.world.server.is_some() {
-            s.actions.push(Action::SendChat(t));
+    // ac_sendChatMessage 0x14012cfb0: online, -1 within a second of the last line
+    // (ACClient::isAllowedToSendChatMessage), else sent (offline: nothing, 1)
+    if state(|s| s.world.server.is_some()) {
+        let sim = &mut gui().sim;
+        if !sim.online_link.is_allowed_to_send_chat_message(sim.game_time) {
+            return long(-1);
         }
-    });
+        sim.online_link.last_chat_message = sim.game_time;
+        state(|s| s.actions.push(Action::SendChat(t)));
+    }
     long(1)
 }
 

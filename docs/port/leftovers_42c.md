@@ -88,7 +88,7 @@ What changed:
   them to `desktop.rs`). The free camera functions move the same camera F7 gives
   (`MouseCamera` in `render/scene.rs`, now with the game's `moveForward`, `moveRight`,
   `moveUpWorld`, `rotatePitch/Heading/Roll`). Online, a chat line goes to the server, with
-  the game's one-second limit.
+  the game's one-second limit (a second line within a second returns -1).
 - Online, `addOnChatMessageListener` keeps the callback, and every chat line the client hears
   calls it with (message, name). The name is "SERVER" for the server's lines, else the
   sender's driver (lambda 0x140126860). Offline it keeps nothing, as in the game.
