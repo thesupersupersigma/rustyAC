@@ -188,8 +188,8 @@ did not come back in these runs.
 ## Step 6: driver and crew suits in content packs
 
 A car's skin names its driver's suit, gloves and helmet and its pit crew's suit, helmet and
-brand in its `skin.ini` (`[<driver model>]` and `[CREW]`, e.g. `SUIT=\sparcolack`). AC's
-renderer then takes `content/texture/driver_suit\sparcolack` and the normal maps beside it
+brand in its `skin.ini` (`[<driver model>]` and `[CREW]`, e.g. `SUIT=\sparco\black`). AC's
+renderer then takes `content/texture/driver_suit\sparco\black` and the normal maps beside it
 (`driver_suit\sparco\_nm`) (`DriverModel::loadDriverSkin` 0x1400fb260,
 `LollipopCrew::loadCrewSkin` 0x1401136d0). `files_of_picture` (`crates/rustyac-web/src/content.rs`),
 which both the page and `tools/web_pack` use, now adds exactly those folders for the skin it
