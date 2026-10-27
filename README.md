@@ -36,9 +36,11 @@ It runs on Windows with your own Assetto Corsa install, and in the browser throu
 | **UI** | The in-game HUD, menus, setup editor, pit strategy, telemetry and the player apps, pixel-identical to the game. |
 | **Launcher** | AC's own launcher, with Kunos' theme from your install. |
 | **Multiplayer** | Joins real Assetto Corsa servers (acServer) on desktop, and in the browser through a WebSocket gateway. |
-| **Browser** | Bit-exact physics in WebAssembly, browser multiplayer. AC's full renderer, HUD and sound in the browser are being worked on. |
+| **Browser** | Bit-exact physics in WebAssembly, AC's own launcher, AC's renderer on WebGPU with AC's graphics settings (and a light Debug view), the HUD, menus and apps, AC's sound through FMOD, AI races and browser multiplayer. |
 
 Not supported: Custom Shaders Patch (CSP) features. Cars that need CSP won't load, and cars handle like **vanilla** Assetto Corsa (CSP changes the physics).
+
+Not ported on purpose: AC's **showroom** (`acShowroom.exe`, the car viewer). Use the one in your Assetto Corsa install: rustyAC reads the same content files as the original game, so any car or track that works in vanilla Assetto Corsa works in rustyAC too, and the original showroom already shows them.
 
 ---
 
