@@ -1164,7 +1164,8 @@ for this task (see Not done for what a pack still lacks).
 
 - `pit_mouse` seed 4 differed twice in a row, and seed 2 once (as once before, `docs/port/proofs.md`). The game's
   recording of the referee's values is not repeatable there. It looks like the game's side, not
-  the port's, but I did not chase it.
+  the port's, but I did not chase it. **Answered in Task 42c** (`docs/port/leftovers_42c.md`,
+  step 5): the car oracle's stand-in input device was too small for the class it claims to be.
 
 - The memory peak of about 1.8 GB is reached by the third drive and then stays. It is below
   wasm32's 4 GB, so I did not chase the first load's peak.

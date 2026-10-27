@@ -1737,7 +1737,9 @@ impl<'a> World<'a> {
                 device_set_engine_rpm as *const () as usize,          // +0x50
                 device_false as *const () as usize,                   // +0x58 shouldDelete
             ];
-            let device = object(0x40);
+            // (KeyboardCarControl's whole size: its RTTI is in front, so the game's casts
+            // reach its members, e.g. mouseSteering at +0x71)
+            let device = object(0x120);
             wr(device, 0, leak(table).add(1));
             wr(car, CAR_CONTROLS_PROVIDER, device);
 

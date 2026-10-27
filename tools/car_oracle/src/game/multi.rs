@@ -1102,7 +1102,10 @@ impl<'a> MultiWorld<'a> {
                 let mesh_geom: *mut u8 = rd(*meshes, 0x10);
                 geom_high.push((mesh_geom as usize >> 32) as u32);
 
-                let device = object(0x40);
+                // (KeyboardCarControl's whole size, 0x120: with its RTTI in front the game's
+                // dynamic_cast<KeyboardCarControl*> succeeds, and PitStop::isInPitPosition
+                // reads and writes mouseSteering at +0x71, which must be this block's zero)
+                let device = object(0x120);
                 wr(device, 0, table);
                 wr(device, DEV_GAS, [0.0f32, 0.0, 0.0, 1.0, 0.0]);
                 wr(device, DEV_REQUESTED_GEAR, -1i32);

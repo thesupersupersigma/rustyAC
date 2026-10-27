@@ -2,9 +2,9 @@
 
 ## Resume here
 
-- Done: steps 1 to 4 (the test autodriver, an online race to its end, Python apps, the page's
-  keys and hidden launcher).
-- Next: step 5 (the mouse pit stop's seed 4 that differs between recordings).
+- Done: steps 1 to 5 (the test autodriver, an online race to its end, Python apps, the page's
+  keys and hidden launcher, the mouse pit stop's unrepeatable recordings).
+- Next: step 6 (driver and crew suits in content packs).
 - Scratch: `re/scratch/task42c/`.
 
 ## Step 1: the test autodriver (`--autodrive`)
@@ -152,3 +152,35 @@ Proof (`re/scratch/task42c/s4`):
 Not done: holding Esc to leave full screen is the browser's own; headless Chrome stays in full
 screen, so it was not seen. Free camera without the permission does nothing in AC; the page
 keeps F7 as its skip key then (a page-only key since Task 28).
+
+## Step 5: the mouse pit stop's seed 4
+
+Why the game's side changed between recordings: an uninitialised byte in the oracle, not the
+game and not the port.
+
+- The car oracle gives each car a stand-in input device: a zeroed 0x40-byte block with
+  `KeyboardCarControl`'s RTTI in front (so that the game's `dynamic_cast<AIDriver*>` says "not
+  an AI").
+- With the mouse pit menu on, `PitStop::isInPitPosition` (0x1400a98c0) does
+  `dynamic_cast<KeyboardCarControl*>` on car 0's device. It succeeds, and the game reads
+  `mouseSteering` at +0x71 into `PitStop::mouseSteeringEnabled` (+0xc1). +0x71 is past the end of
+  the 0x40 block: whatever the heap held there. When it was not 0 the game also called
+  `setMouseSteering(false)`, which writes into that neighbouring memory.
+- Evidence: the game's referee state dumped at the frame of the difference (`REFEREE_DUMP_FRAME=1110`)
+  in six recordings of seed 4: three good ones identical, three bad ones each different, and
+  the only differing line is the mouse menu's `steering`: 0 in the good ones, 102 and 97 in
+  the bad ones (the port has 0: no keyboard mouse steering).
+- Fix (`tools/car_oracle/src/game/multi.rs`, and the single-car device in `game.rs` the same):
+  the stand-in device is `KeyboardCarControl`'s whole size (0x120), zeroed.
+
+Proof (`re/scratch/task42c/s5`):
+
+| Check | Result |
+|---|---|
+| Seed 4, 40,000 steps, before the fix, 3 + 6 recordings | 4 of 9 different (step 3329 `world.referee.lo`, game values like 1.76e34) |
+| Seed 4 after the fix, 8 recordings | 8 of 8 identical, all hash `cc5cbd8531a06219` (the good runs' hash before), same game state at the frame |
+| The five `pit_mouse` lines of `tools/proofs/multi_fresh.txt` at 0, 1 and 8 threads | 15 of 15 identical |
+| Seeds 2 and 5 again, 5 recordings each | 10 of 10 identical |
+
+Seed 2's one-off difference (step 584, `docs/port/proofs.md`) was most likely the same byte; it
+did not come back in these runs.

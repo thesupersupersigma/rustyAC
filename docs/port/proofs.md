@@ -214,6 +214,8 @@ run recorded again five times was identical every time, as the saved Task 34 rec
    now only the recorder's own call is redirected, and the comparison is identical again.
 2. `pit_mouse` seed 2 differed once at step 584 and not in five reruns: something on the game's
    side of that run is not repeatable (the mouse pit menu is driven by clicks; load?). Not chased.
+   **Answered in Task 42c** (`docs/port/leftovers_42c.md`, step 5): the game read a byte past the
+   end of the car oracle's stand-in input device.
 3. The launcher's career list differed once in `utility/get` (the game's display modes came back
    three times); alone it was identical. The display's mode list changed during that run, probably a
    remote desktop connecting.
