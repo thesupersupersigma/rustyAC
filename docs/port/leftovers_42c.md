@@ -4,8 +4,37 @@
 
 - Done: steps 1 to 6 (the test autodriver, an online race to its end, Python apps, the page's
   keys and hidden launcher, the mouse pit stop's unrepeatable recordings, suits in packs).
-- Next: the quick proofs, the version (0.42.2) and the tag.
-- Scratch: `re/scratch/task42c/`.
+- Done: the proofs below, version 0.42.2, tag `v0.42.2`. Nothing is left of this task.
+- Scratch: `re/scratch/task42c/`. The stand-in installs of steps 3 and 4 (`s3/acroot`,
+  `s4/acroot`) were junctions into the AC folder; they were removed after use (only their own
+  files are left). Make them again as the step's scripts say before running them.
+
+## Proofs at the end
+
+`sh tools/proofs/run_all.sh --quick` (all areas on the small samples), then every case of the
+two areas the changes touch most: `browser` (the page's driver, Full mode, `content.rs`) and
+`dumps` (the autodriver: every `--autodrive` recording must stay the same).
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics (quick) | 9 | 9 | 0 | 0m33s |
+| fresh (quick) | 47 | 47 | 0 | 14m01s |
+| sound (quick) | 4 | 4 | 0 | 0m22s |
+| render (quick) | 10 | 10 | 0 | 4m08s |
+| gui (quick) | 15 | 15 | 0 | 10m17s |
+| python (quick) | 1 | 1 | 0 | 0m05s |
+| replays (quick) | 5 | 5 | 0 | 3m09s |
+| net (quick) | 16 | 16 | 0 | 4m20s |
+| browser (quick) | 9 | 9 | 0 | 3m27s |
+| ai_page (quick) | 3 | 3 | 0 | 7m27s |
+| shaders (quick) | 4 | 4 | 0 | 2m43s |
+| launcher (quick) | 1 | 1 | 0 | 1m07s |
+| dumps (quick) | 6 | 6 | 0 | 2m43s |
+| **browser (every case)** | 226 | 226 | 0 | 42m32s |
+| **dumps (every case)** | 223 | 223 | 0 | 77m04s |
+
+The `python` area (`tools/proofs/python.sh`, both sequences) also ran in step 3: 2 of 2
+identical. `tools/proofs/lib.sh` and `run_all.sh` are unchanged.
 
 ## Step 1: the test autodriver (`--autodrive`)
 
