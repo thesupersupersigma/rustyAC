@@ -2,9 +2,9 @@
 
 ## Resume here
 
-- Done: step 1 (`web_pack --delta`), step 4 (votes and chat on the wire), step 7 (refusals in plain
-  words).
-- Next: step 2 (`race_out.json` after an online session on desktop), then steps 3, 5, 6.
+- Done: step 1 (`web_pack --delta`), step 4 (votes and chat on the wire), step 6 (every skin's
+  suits in packs), step 7 (refusals in plain words).
+- Next: step 2 (`race_out.json` after an online session on desktop), then steps 3, 5.
 - Scratch: `re/scratch/task43/`. Rerun scripts: `tools/web_checks/task43/`.
 - Disk at the start: 67 GB free.
 
@@ -73,6 +73,52 @@ acServer took them: its log has the three lines, "Creating vote to NEXT SESSION 
 answers, and "ACP_VOTE_KICK_USER failed, cannot find car with session id= 255" for the kick of
 nobody. The rest of the same run (200 steps, net_watch) stayed identical. The three goldens' tapes
 (`rich_*`) carry one chat line each, which the quick proofs' net runs now also compare.
+
+## Step 6: every skin's suits in packs
+
+A pack now holds every skin's `skin.ini` and the driver's and crew's suit, gloves, helmet and
+brand folders it names (`content::suit_files` in `crates/rustyac-web/src/content.rs`, called by
+`tools/web_pack` for each skin folder of each car). The skins' own textures stay out, as before:
+a car in another skin is drawn with the model's own livery, but its driver and crew now wear that
+skin's suits. The page itself is unchanged: it fetches a suit only when the renderer reads it.
+
+Preview pack (`web/preview.toml`, `--dry-run` before / after):
+
+| | before | after |
+|---|---|---|
+| shared files | 1234, 140.7 MB | 1301, 182.4 MB |
+| bmw_z4_gt3 | 49 files listed, 121.2 MB | 57 files, 86.0 MB |
+| ks_ferrari_f2004 | 54 files listed, 179.8 MB | 51 files, 136.1 MB |
+| total | 1404 files, 1743.1 MB | 1482 files, 1784.8 MB |
+
+The per-car lines were too big before: a file both the drive and the picture read was counted
+twice there (the total and the manifest never had duplicates). web_pack now counts each file once.
+`--delta` of the new pack against the old one: 78 files, 41.7 MB: the Z4's 11 other `skin.ini`
+and 67 suit files (crew helmets in six colours, `crew_suit/type1`, two glove and six helmet
+folders, `driver_suit/sparco`). The F2004's skins name no other suits. For all 207 cars of this
+install the suit folders grow from 77 (84.9 MB, first skins) to 139 (189.4 MB, every skin)
+(`re/scratch/task43/s6/suits.py`, which reads the skins' `skin.ini` outside `data.acd`).
+
+Page check (`sh tools/web_checks/task43/s6/suits.sh`): the Z4 in its `fanatec` skin at Laguna
+Seca, Full mode, `window.rustyac.driveRace`, from the old pack and then the same pack with the
+delta copied over it:
+
+| pack | suit files fetched | fanatec's own (`skin.ini`, red suits, `arrow_rg7` gloves, white helmet, red crew) |
+|---|---|---|
+| old | 18 (the first skin's) | 0: the driver and crew in the first skin's black |
+| new | 26 | 8: `skin.ini`, then its 7 suit files; the screenshot shows the red driver and crew |
+
+Not changed:
+- The player's own `Documents\Assetto Corsa\cfg\driverskin.ini`: only acs.exe reads it
+  (`DriverModel::DriverModel` 0x1400f76d0); neither AC's launcher (`AssettoCorsa.exe`, its theme)
+  nor rustyAC's page writes one, and the page's Documents hold only `cfg/video.ini` for the
+  renderer. A pack built from one PC's `driverskin.ini` would give every visitor that PC's
+  suit, so it stays out.
+- The Python car values in the page: the page runs no Python apps (they need the player's
+  `python33.dll`, `docs/port/python_apps.md`), so nothing would read them. The doc comment in
+  `crates/rustyac-web/src/full.rs` that said rustyac.exe had none either is fixed.
+- The page still fetches the first skin's suits at the start of every Full drive (about 14 MB
+  for the Z4), whichever skin is drawn.
 
 ## Step 7: "Session is closed to new connections"
 
