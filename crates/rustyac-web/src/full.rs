@@ -119,8 +119,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
     GuiSetup {
         game: root.to_path_buf(),
         cfg_dir: cfg_dir.to_path_buf(),
-        // (the page has no mouse menu: see race.rs pit_header)
-        pit_compounds: Vec::new(),
+        pit_compounds: info.pit_compounds.clone(),
         cars: rustyac_game::render::gui::car_names(root, None, &folders),
         steer_locks: cars.iter().map(|car| float(car, "CONTROLS", "STEER_LOCK")).collect(),
         fuel_light_min_liters: float(&info, "GRAPHICS", "FUEL_LIGHT_MIN_LITERS"),
@@ -238,6 +237,9 @@ impl GuiLoop {
         sim.setup_jobs.extend(gui.setup_exchange(&(self.generation, Some(snapshot))));
         if let Some(menu) = gui.pit_page_exchange() {
             sim.apply_pit_page(&menu);
+        }
+        for click in gui.take_pit_clicks() {
+            sim.pit_click(click);
         }
         use rustyac_game::input_file::event;
         use rustyac_gui::menus::SimAction;

@@ -53,7 +53,7 @@ fn run() -> Result<(), String> {
         Some(file) => {
             let text = |path: &std::path::Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
             let assists = Some(file.with_file_name("assists.ini")).filter(|p| p.is_file()).map(|p| text(&p)).transpose()?;
-            rustyac_web::session::Session::from_race(&text(file)?, assists.as_deref(), seed)?
+            rustyac_web::session::Session::from_race(&text(file)?, assists.as_deref(), seed, false)?
         }
         None => rustyac_web::session::Session::with_sessions(&car.ok_or("--car <id> or --race is needed")?, &track.ok_or("--track <id> is needed")?, &layout, true, &spawn, sessions.as_deref())?,
     };

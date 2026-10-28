@@ -137,3 +137,23 @@ fn a_drive_from_memory_is_the_drive_from_disk() {
         );
     }
 }
+
+/// Task 43b: a keyboard driver of the page (Full mode, AC's GUI) gets the old mouse pit menu, as
+/// rustyac.exe's; anyone else the quick menu.
+#[test]
+fn a_keyboard_driver_gets_the_mouse_pit_menu() {
+    let Some(root) = rustyac_content::install::ac_root() else {
+        println!("NOT TESTED: {}", rustyac_content::install::not_found_hint());
+        return;
+    };
+    if !root.join("content/cars/ks_ferrari_f2004").is_dir() || !root.join("content/tracks/magione").is_dir() {
+        println!("NOT TESTED: ks_ferrari_f2004 or magione is not installed");
+        return;
+    }
+    let race = "[RACE]\nTRACK=magione\nCONFIG_TRACK=\nMODEL=ks_ferrari_f2004\nCARS=1\n[CAR_0]\nMODEL=ks_ferrari_f2004\nSKIN=\n[SESSION_0]\nNAME=Practice\nTYPE=1\nDURATION_MINUTES=10\nSPAWN_SET=PIT\n";
+    for keyboard in [false, true] {
+        let session = Session::from_race(race, None, 1, keyboard).expect("the race");
+        let pit = session.sim.referee.as_ref().and_then(|referee| referee.pit.as_ref()).expect("a pit stop");
+        assert_eq!(pit.mouse.is_some(), keyboard, "keyboard {keyboard}");
+    }
+}

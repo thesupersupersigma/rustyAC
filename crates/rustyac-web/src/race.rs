@@ -42,7 +42,7 @@ fn pit_header(root: &Path, window: (u16, u16)) -> PitHeader {
         Ok(ini) if ini.ready => QuickMenuSettings::from_ini(&ini),
         _ => QuickMenuSettings::default(),
     };
-    // shortcut: the page's drivers get the quick menu, as a pad's; the mouse menu for its keyboard drivers is Task 43b
+    // (a keyboard driver's mouse menu: Session::from_race, with AC's GUI only)
     PitHeader { window, settings, values: None, presets_ini: None, mouse: false }
 }
 

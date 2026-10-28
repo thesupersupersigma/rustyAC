@@ -112,7 +112,7 @@ pub fn race_proof(race: &str, assists: Option<String>, seed: u32, tape: &[u8]) -
 #[wasm_bindgen]
 pub fn race_speed(race: &str, assists: Option<String>, seed: u32, skip: u32, steps: u32) -> Result<String, JsError> {
     files();
-    let mut session = crate::session::Session::from_race(race, assists.as_deref(), seed).map_err(|e| JsError::new(&e))?;
+    let mut session = crate::session::Session::from_race(race, assists.as_deref(), seed, false).map_err(|e| JsError::new(&e))?;
     session.input.lock().unwrap().autodrive = true;
     let mut run = |n: u32| -> Result<(), JsError> {
         let mut done = 0;
@@ -454,7 +454,9 @@ impl Game {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_race(canvas: web_sys::HtmlCanvasElement, race_ini: String, assists_ini: Option<String>, seed: u32, backend: String, texture_size: u32, samples: u32) -> Result<Game, JsValue> {
         let gpu = Gpu::new(canvas, backend == "webgl", samples, backend == "full").await?;
-        let session = Session::from_race(&race_ini, assists_ini.as_deref(), seed)?;
+        // Sim::Sim 0x140192070: a keyboard driver (controls.ini INPUT_METHOD) gets the mouse pit menu
+        let keyboard = backend == "full" && rustyac_game::input::bindings::Bindings::from_ini(&panel_now().0, String::new()).input_method == "KEYBOARD";
+        let session = Session::from_race(&race_ini, assists_ini.as_deref(), seed, keyboard)?;
         Ok(Game::finish(gpu, session, texture_size, None))
     }
 
@@ -537,6 +539,12 @@ impl Game {
         };
         if full.is_some() {
             notes[0] = format!("picture: Full mode, AC's own renderer on {}", gpu.backend);
+        }
+        // nobody could click the mouse pit menu without AC's GUI: the quick menu then
+        if full.as_ref().and_then(|full| full.gui.as_ref()).is_none() {
+            if let Some(pit) = session.sim.referee.as_mut().and_then(|referee| referee.pit.as_mut()) {
+                pit.mouse = None;
+            }
         }
         // Task 42b: a session that begins in the ESC menu shows AC's start camera until "Drive";
         // without AC's GUI nobody could press "Drive", so it is pressed here (as rustyac.exe)

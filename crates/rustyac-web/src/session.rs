@@ -121,8 +121,12 @@ impl Session {
     /// Task 37b: the drive AC's launcher asked for: the session of its `race.ini` (and
     /// `assists.ini`), as `rustyac.exe` makes it from the same files ([`crate::race`]).
     /// `seed`: the game's `rand()` seed (the desktop takes the clock's milliseconds).
-    pub fn from_race(race_text: &str, assists_text: Option<&str>, seed: u32) -> Result<Session, String> {
-        let (setup, race_notes) = crate::race::setup_of(race_text, assists_text, seed)?;
+    /// `keyboard`: a keyboard driver with AC's GUI, who gets the old mouse pit menu (`Sim::Sim`).
+    pub fn from_race(race_text: &str, assists_text: Option<&str>, seed: u32, keyboard: bool) -> Result<Session, String> {
+        let (mut setup, race_notes) = crate::race::setup_of(race_text, assists_text, seed)?;
+        if let Some(pit) = setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()) {
+            pit.mouse |= keyboard;
+        }
         let drive = format!(
             "car={}
 skin={}
