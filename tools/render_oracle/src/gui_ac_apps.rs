@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 33] = [
+pub const APPS: [(&str, usize, usize, usize); 34] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -54,6 +54,7 @@ pub const APPS: [(&str, usize, usize, usize); 33] = [
     ("chat", 0x3e0, 0x1_4030_8190, 0x1_4050_8ca0),
     // Task 43c
     ("wings", 0x1c0, 0x1_402e_c890, 0x1_4050_4aa0),
+    ("tyretester", 0x1f8, 0x1_4033_b520, 0x1_4051_20e8),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 const TAKES_CAR: [&str; 14] = ["wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
@@ -750,6 +751,14 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, gui, sim, false);
             } else if text == "help" {
                 ctor(form, gui);
+            } else if text == "tyretester" {
+                // TyreTesterForm(CarAvatar*, GUI*): its testers read content/cars/<unixName>/data/
+                // from the working folder (the oracle's root, where the staging put tyres.ini)
+                let unix = crate::gui_seq_apps::script(|s| s.unix.clone());
+                crate::ac::write_wstring(a, first_car.add(0x138), &unix);
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4033_b520));
+                ctor(form, first_car, gui);
+                *TYRE_TESTER.lock().unwrap() = Some(first_car as usize);
             } else {
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
             }
@@ -873,6 +882,13 @@ pub unsafe fn update() {
         for (i, row) in l.wings.iter().enumerate() {
             write_wing_state((status as *mut u8).add(i * 0x44), &row.state);
         }
+    }
+    // TyreTesterForm: its car's physicsState.speed (+0x4d8) and load[4] (+0x54c),
+    // currentTyreCompoundIndex[4] (+0x1260)
+    if let (Some(car), Some(c)) = (*TYRE_TESTER.lock().unwrap(), l.tyre_tester) {
+        wr(car as *mut u8, 0x4d8, c.speed);
+        wr(car as *mut u8, 0x54c, c.load);
+        wr(car as *mut u8, 0x1260, c.compound);
     }
     // TyreWearingDebug: its car's tyres (Car+0xb28, 0x858 each: status.virtualKM +0x350,
     // thermalModel.coreTemp +0x45c, isActive +0x4e0)
@@ -1108,6 +1124,7 @@ unsafe fn wings_car(a: &crate::acs::Acs, avatar: *mut u8) {
 }
 
 static WINGS: Mutex<Option<usize>> = Mutex::new(None);
+static TYRE_TESTER: Mutex<Option<usize>> = Mutex::new(None);
 
 /// A `WingState` as the game lays it (0x44 bytes).
 unsafe fn write_wing_state(at: *mut u8, s: &rustyac_physics::car::aero::WingState) {

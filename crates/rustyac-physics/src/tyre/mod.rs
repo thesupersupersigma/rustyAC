@@ -18,6 +18,7 @@ mod data;
 mod interfaces;
 pub mod oracle_csv;
 pub mod rig;
+pub mod tester;
 mod sctm;
 mod status;
 mod thermal;

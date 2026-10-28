@@ -22,7 +22,8 @@ State after the last commit (update after every commit):
   the car's sound (already proven by the sound oracle); Setup debug reads the focused car.
 - **Step 4, the developers' 3D windows:** Wings (`FormWings`) done and proven: its table in the
   GUI oracle (`app_wings`), its outlines and lift vectors in the scene oracle (`r43c_01`).
-  TyreTester and ACSuspension: see the step's section.
+  Tyre tester (`TyreTesterForm` + `TyreTester`) done and proven in the GUI oracle
+  (`app_tyretester`). ACSuspension: see the step's section.
 - **Step 5:** not started.
 - **Version:** still v0.43.1.
 
@@ -187,9 +188,35 @@ Ctrl+M list). Two halves:
 | GUI oracle `app_wings` (`tools/proofs/gui_list.txt`) | the game's `FormWings` (its constructor and `render`) and the port's, four wings (three level, a fin; no lift for 30 frames: the share and the efficiency divide by zero), 228 frames, hidden and shown | command log, pixels, state, layout IDENTICAL |
 | scene oracle `r43c_01` (`tools/proofs/render_list.txt`) | magione, chase view, the e30's lap tape, 30 frames: the game's `onRenderNode` through its own lambda added with `Event<OnNodeRenderEvent>::addHandler` to a stand-in form (visible byte, GUI → GraphicsManager, car), eight test wings whose lift turns each frame; shown, hidden at 20, shown at 25 | command log and pixels IDENTICAL in all 29 frames |
 
+### Tyre tester (`TyreTesterForm`, 0x1f8, and `TyreTester`, 0x128)
+
+Made in `Sim::Sim` before FormLogoAC and FormWings. Its constructor makes four `TyreTester`s, one
+per tyre of the player's car, from `content/cars/<car>/data/`; each holds a tyre of its own on a
+stand-in hub (turned by the slip angle, moving along z) and a stand-in ground (where the tyre's
+spring holds the load). Every frame (not in a replay) the tyre the spinner names takes the car's
+compound and speed (15 m/s below 30) and is swept three times, 200 tyre steps each: slip angle
+-20..20 degrees, slip ratio -1..1, slip ratio at 9 degrees; the graph shows Fy, Fx, Mz, DY over
+load, Fy at 9 degrees and the cambered DY; the line under it the peaks; a cyan line the friction
+circle at 9 degrees.
+
+- `crates/rustyac-physics/src/tyre/tester.rs` (new): `TyreTester` with `TesterHub`,
+  `TesterGround` (the tyre's values snapshotted before the step: the step writes
+  `pressureDynamic` only after its ray cast), the three sweeps; `VanillaTyre::get_cambered_dy`
+  is now public. Test `crates/rustyac-physics/tests/tyre_tester.rs` (the F2004 from data.acd).
+- `crates/rustyac-gui/src/app_tyre_tester.rs` (new): the form and `render`; its feed
+  `AppLink::tyre_tester` (speed, the four loads, `CarView::compound_index`). rustyac.exe and the
+  page make it from the player's data folder; no app when its tyres.ini cannot be read.
+
+| proof | what | result |
+|---|---|---|
+| GUI oracle `app_tyretester` (`tools/proofs/gui_list.txt`) | the game's `TyreTesterForm` (constructor, `render`, the game's own `TyreTester` and `Tyre`) and the port's on the F2004's tyres (loose tyres.ini and curves in the oracle's root), 32 frames: speed under and over 30 m/s, four loads changing, compounds 0 then 1/2, the spinner clicked up to 3 and back, hidden and shown | command log, pixels, state (the line of peaks in every frame), layout IDENTICAL |
+
 ## Not done
 
-- Steps 4-5 (see the task's prompt).
+- Step 4's ACSuspension and step 5 (see the task's prompt).
+- In the GUI oracle the game's tester read nothing from a copy of the F2004's `data.acd` in the
+  oracle's root (zero forces, other DY), so both sides read loose files there; rustyAC reads
+  `data.acd` as the game does elsewhere (`crate::data::read`), and the test above runs on it.
 - Telemetry `RIDE_HEIGHT_*` in rustyac.exe take this step's speed for the previous snapshot's (the
   2 m/s edge of the minimum-height rule may be one step late); online remote cars have no `Car` in
   rustyAC, so Setup debug shows the player's car when one is focused.

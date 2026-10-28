@@ -284,6 +284,8 @@ pub struct AppLink {
     pub telemetry: crate::app_telemetry::TelemetryFeed,
     /// `TyreWearingDebug`'s four tyres of the player's car (None: no car)
     pub tyre_debug: Option<[crate::app_tyre_debug::TyreDebugRow; 4]>,
+    /// The player's speed, wheel loads and compounds for the Tyre tester (None: no car).
+    pub tyre_tester: Option<crate::app_tyre_tester::TyreTesterCar>,
     /// `SetupDebug`'s members of the focused car's `Car` (None: no car)
     pub setup_debug: Option<crate::app_setup_debug::SetupDebugCar>,
     /// `CarPhysicsForm`'s numbers of the player's car beside its physics state

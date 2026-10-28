@@ -61,6 +61,10 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "carphysics" => gui.new_car_physics_app(painter),
         "carengineer" => gui.new_car_engineer_app(painter),
         "wings" => gui.new_wings_app(painter),
+        "tyretester" => {
+            let unix = crate::gui_seq_apps::script(|s| s.unix.clone());
+            gui.new_tyre_tester_app(painter, &game_folder.join("content/cars").join(unix).join("data"))?
+        }
         "telemetry" => {
             let presets = read(game_folder.join("system/cfg/telemetry_presets.ini"));
             let user = read(game_folder.join("documents/Assetto Corsa/cfg/telemetry_user.ini"));

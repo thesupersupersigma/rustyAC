@@ -891,7 +891,7 @@ impl VanillaTyre {
 
     /// `Tyre::getCamberedDy` @ 0x140280080: the lateral grip coefficient at this camber.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    fn get_cambered_dy(&self, camber_rad: f32, dy: f32) -> f32 {
+    pub fn get_cambered_dy(&self, camber_rad: f32, dy: f32) -> f32 {
         let m = &self.model_data;
         if m.d_camber_curve.get_count() != 0 {
             let x = camber_rad * 57.295_78;

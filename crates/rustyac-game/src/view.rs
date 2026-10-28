@@ -109,6 +109,8 @@ pub struct CarView {
     pub performance_meter: (f32, f32),
     /// `TyreWearingDebug`'s rows of each tyre (Task 33b)
     pub tyre_debug: [rustyac_gui::app_tyre_debug::TyreDebugRow; 4],
+    /// each wheel's `CarAvatar::getTyreCompoundIndex`, for the Tyre tester
+    pub compound_index: [i32; 4],
     /// Task 33b: what `RaceEngineer` reads for the Car engineer app (no masses: see `car_physics`)
     pub engineer: rustyac_gui::app_car_engineer::CarEngineer,
     /// Task 43c: `CarAvatar::wingsStatus` of the first [`MAX_WINGS`] wings (FormWings)
@@ -338,6 +340,7 @@ impl Default for CarView {
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
             tyre_debug: Default::default(),
+            compound_index: [0; 4],
             engineer: Default::default(),
             wing_states: Default::default(),
             wing_state_count: 0,
@@ -691,6 +694,7 @@ impl CarView {
                     active: t.thermal_model.is_active,
                 })
             }),
+            compound_index: std::array::from_fn(|k| car.tyres.get(k).map_or(0, |t| t.current_compound_index)),
             engineer: {
                 let s = |k: usize| car.suspensions.get(k);
                 let h = &car.heave_springs[0];

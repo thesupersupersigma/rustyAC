@@ -207,6 +207,10 @@ impl GameApps {
         add(gui, painter, "gamestats", id);
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
+        // TyreTesterForm (a developers' app): no app when the car's tyres.ini cannot be read
+        if let Ok(id) = gui.new_tyre_tester_app(painter, &setup.player_data) {
+            add(gui, painter, "tyretester", id);
+        }
         // FormWings (a developers' app, after TyreTesterForm and FormLogoAC)
         let id = gui.new_wings_app(painter);
         add(gui, painter, "wings", id);
@@ -456,6 +460,7 @@ impl GameApps {
             stats: self.stats.clone(),
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
+            tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),
             car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },
             wings: setup.wings.iter().zip(world.first().map_or(&[][..], |v| &v.wing_states[..v.wing_state_count as usize])).map(|(row, state)| rustyac_gui::app_wings::WingRow { state: *state, ..row.clone() }).collect(),

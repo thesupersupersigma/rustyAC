@@ -32,6 +32,7 @@ pub mod app_car_physics;
 pub mod app_setup_debug;
 pub mod app_telemetry;
 pub mod app_tyre_debug;
+pub mod app_tyre_tester;
 pub mod app_track_map;
 pub mod app_tyres;
 pub mod app_volumes;

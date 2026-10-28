@@ -46,6 +46,17 @@ pub const TYRE_WEAR_CURVE: [(f32, f32); 5] = [(0.0, 0.98), (10.0, 1.0), (25.0, 0
 
 /// TyreWearingDebug's tyres of a frame: the distance runs past the curve's end, the core
 /// temperatures through the ranges where %g changes its shape, the thermal model on and off.
+/// The Tyre tester's car: slow (15 m/s is used below 30), then fast; the loads apart per wheel;
+/// the compounds changed after frame 400.
+pub fn tyre_tester_car(frame: usize) -> rustyac_gui::app_tyre_tester::TyreTesterCar {
+    let f = frame as f32;
+    rustyac_gui::app_tyre_tester::TyreTesterCar {
+        speed: if frame < 200 { 20.0 } else { 30.0 + f * 0.05 },
+        load: [2500.0 + f * 3.0, 2700.0 + f * 2.0, 3300.0 - f, 3600.0 + f * 0.5],
+        compound: if frame < 400 { [0; 4] } else { [1, 1, 2, 2] },
+    }
+}
+
 pub fn tyre_debug_rows(frame: usize) -> [rustyac_gui::app_tyre_debug::TyreDebugRow; 4] {
     let mut curve = rustyac_physics::curve::Curve::new();
     for (x, y) in TYRE_WEAR_CURVE {
@@ -597,6 +608,7 @@ pub fn link() -> AppLink {
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
             telemetry: telemetry_feed(s.frame),
             tyre_debug: Some(tyre_debug_rows(s.frame)),
+            tyre_tester: Some(tyre_tester_car(s.frame)),
             setup_debug: Some(setup_debug_car(s.frame)),
             car_physics: car_physics_extra(s.frame),
             car_engineer: car_engineer(s.frame),
@@ -885,6 +897,13 @@ PRESET=AI Debug
         let to = args.root.join("content/cars").join(car).join("data");
         std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
         std::fs::copy(std::path::Path::new("cardata").join(car).join("engine.ini"), to.join("engine.ini")).map_err(|e| format!("{car} engine.ini: {e}"))?;
+        // the Tyre tester's: tyres.ini and the curves it names, loose for both sides
+        let from = std::path::Path::new("cardata").join(car);
+        let tyres = std::fs::read_to_string(from.join("tyres.ini")).map_err(|e| format!("{car} tyres.ini: {e}"))?;
+        let luts = tyres.lines().filter_map(|l| l.split_once('=')).map(|(_, v)| v.split(';').next().unwrap_or("").trim()).filter(|v| v.to_ascii_lowercase().ends_with(".lut"));
+        for name in std::iter::once("tyres.ini").chain(luts) {
+            std::fs::copy(from.join(name), to.join(name)).map_err(|e| format!("{car} {name}: {e}"))?;
+        }
     }
     // the Audio app's files: an audio.ini as a hand would leave it (levels between the steps,
     // one past 1, no TRANSMISSION), no camera_manager.ini; the same for the port's side
@@ -1399,6 +1418,27 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 0, 600, 3);
             o.extend([hud("app.visible", 0.0, "wings"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "wings")]);
             play(&mut o, 600, 700, 4);
+            o.push(Op::Save);
+        }
+        "app_tyretester" => {
+            // the tyre spinner (100 wide at (250, 10) of the form at VOLUMES_AT): its plus and minus
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32| o.extend([Op::MouseMove(x + cx, y + 25), Op::MouseDown(x + cx, y + 25), Op::Frame(DT), Op::MouseUp(x + cx, y + 25), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "tyretester"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "tyretester"));
+            play(&mut o, 0, 300, 30);
+            for _ in 0..2 {
+                click(&mut o, 339);
+            }
+            play(&mut o, 300, 500, 40);
+            for _ in 0..3 {
+                click(&mut o, 339);
+            }
+            click(&mut o, 261);
+            o.extend([hud("app.visible", 0.0, "tyretester"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "tyretester")]);
+            play(&mut o, 500, 600, 50);
             o.push(Op::Save);
         }
         "app_tyredebug" => {
