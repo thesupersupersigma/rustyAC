@@ -1515,6 +1515,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                 }
                 Event::Key { key, left_ctrl, right_ctrl, alt, shift } => {
                     let ctrl = bindings.command_modifier.held(left_ctrl, right_ctrl, alt, ctrl_drives);
+                    // Sim::onKeyDown 0x14019a940 skips its Ctrl block while the pause menu shows:
+                    // the plain keys run with Ctrl held (Ctrl+F7 is the free camera there)
+                    let pause_up = renderer.gui().is_some_and(|gui| gui.pause_menu_visible());
                     let request = |bits: u32| {
                         shared.requests.fetch_or(bits, Ordering::Relaxed);
                     };
@@ -1542,7 +1545,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                         // that is run again, end the program; a replay of the session goes back
                         // to the session with the pause menu up (the job 0x140195f20); else
                         // the pause menu comes, and the pause
-                        if ctrl {
+                        if ctrl && !pause_up {
                             continue;
                         }
                         if options.ac_replay.is_some() || transport.is_some() || replay.is_some() {
@@ -1690,7 +1693,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                                 shared.bias_requests.fetch_sub(1, Ordering::Relaxed);
                             }
                         }
-                    } else if !ctrl {
+                    } else if !ctrl || pause_up {
                         match key {
                             // C: camera, P or Pause: pause, R: back to the spawn point,
                             // Shift+R: back onto the track where the car is, N: a new car

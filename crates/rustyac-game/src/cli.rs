@@ -606,7 +606,9 @@ usage: rustyac [options]
                         instead of the game's static pressure + 0.16 x (core - 26), to try
                         what Custom Shaders Patch's pressures do (the F2004 at 14 C: 10.97,0.084)
   --autodrive           on a track: nobody at the controls, a simple driver follows the
-                        track's AI line (automatic gearbox on); for checks and for watching
+                        track's AI line (automatic gearbox on); for checks and for watching.
+                        It keeps the quick pit menu even with a keyboard's controls.ini (it
+                        clicks no CONFIRM), unless --pit-click scripts the mouse menu
   --join <host:port>    multiplayer: join a Kunos acServer (its TCP port), as Assetto Corsa
                         does. The server names the track and gives you a car: --car asks for
                         a model, --name is your driver name (default: your Windows user
@@ -648,7 +650,8 @@ usage: rustyac [options]
                         the AI drivers' aggression (AI_AGGRESSION; default: race.ini's, else 0)
   --ai-drive            an AI driver drives your car from the start (as controls.ini
                         INPUT_METHOD=AI); while driving, Ctrl+C hands your car to one
-                        (AC's command Activate AI; there is no way back but a new session)
+                        (AC's command Activate AI; there is no way back but a new session).
+                        As --autodrive, it keeps the quick pit menu unless --pit-click is given
   --ai-at <s>           hand your car to an AI driver after s seconds (for unattended runs)
   --ai-laps <n>         the race's laps as the AI drivers are told them (they fuel for
                         them); default: race.ini's, else 5
