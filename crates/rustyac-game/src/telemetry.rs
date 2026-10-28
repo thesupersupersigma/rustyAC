@@ -77,7 +77,7 @@ impl TelemetryRig {
         let Some(bytes) = recorder.save_bytes() else { return };
         recorder.need_to_save = false;
         let file = self.folder.join(ComparativeTelemetryRecorder::file_name(&recorder.names));
-        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, bytes));
+        let written = file.parent().map_or(Ok(()), rustyac_content::guard::create_dir_all).and_then(|()| rustyac_content::guard::write(&file, bytes));
         match written {
             Ok(()) => self.messages.push(format!("telemetry: {} (the best lap, {} ms)", file.display(), recorder.best_time)),
             Err(e) => self.messages.push(format!("WARNING: the telemetry was not saved: {}: {e}", file.display())),

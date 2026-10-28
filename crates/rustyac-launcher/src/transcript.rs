@@ -78,7 +78,7 @@ impl Host for Fixed {
 pub fn run(ac_root: &str, docs: &str, requests: &str, out_file: &str, lobby: Option<String>, host: Box<dyn Host>) -> std::io::Result<()> {
     let text = std::fs::read_to_string(requests)?;
     let out = run_text(ac_root, docs, &text, lobby, host);
-    std::fs::File::create(out_file)?.write_all(&out)
+    rustyac_content::guard::create(out_file)?.write_all(&out)
 }
 
 /// [`run`] on the request list's text, the transcript returned (the browser's check).

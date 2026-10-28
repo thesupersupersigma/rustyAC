@@ -760,7 +760,7 @@ pub fn run(options: Options) -> Result<i32, String> {
         }
     }
 
-    let log = options.log.as_ref().and_then(|p| std::fs::File::create(p).ok());
+    let log = options.log.as_ref().and_then(|p| rustyac_content::guard::create(p).ok());
     let steps: VecDeque<Step> = options.script.iter().flatten().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).filter_map(|l| parse_step(l.trim())).collect();
     let url = theme.url();
     let scripted = options.script.is_some();

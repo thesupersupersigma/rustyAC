@@ -334,9 +334,9 @@ impl Golden {
             }
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            rustyac_content::guard::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(path, w.0).map_err(|e| format!("{}: {e}", path.display()))
+        rustyac_content::guard::write(path, w.0).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn read(path: &Path) -> Result<Golden, String> {

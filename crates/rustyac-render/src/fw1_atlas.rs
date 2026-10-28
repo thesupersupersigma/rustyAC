@@ -458,7 +458,7 @@ pub(crate) fn dump_layout(key: &str, size: f32, x: f32, y: f32, flags: u32, text
 
 fn append(path: &std::ffi::OsStr, line: &str) {
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) = rustyac_content::guard::append(path) {
         let _ = file.write_all(line.as_bytes());
     }
 }

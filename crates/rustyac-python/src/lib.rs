@@ -200,8 +200,8 @@ pub struct Python {
 pub fn start(ac_root: &Path, documents: &Path, python_ini: &Path, gui: &mut Gui, painter: &mut dyn Painter, screen: Id, world: World) -> Result<Python, String> {
     let api = ffi::load(ac_root)?;
     let logs = documents.join("logs");
-    let _ = std::fs::create_dir_all(&logs);
-    let log = File::create(logs.join("py_log.txt")).ok();
+    let _ = rustyac_content::guard::create_dir_all(&logs);
+    let log = rustyac_content::guard::create(logs.join("py_log.txt")).ok();
     STATE.with(|s| *s.borrow_mut() = Some(State { screen, documents: documents.to_path_buf(), controls: Vec::new(), forms: Vec::new(), textures: Vec::new(), log, world, console: Vec::new(), actions: Vec::new(), offset: (0.0, 0.0), chat: Vec::new() }));
     println!("Initialising Python Interface");
     clear_python_cache("apps/python/system/");
@@ -377,7 +377,7 @@ fn clear_python_cache(dir: &str) {
     if let Ok(entries) = std::fs::read_dir(format!("{dir}__pycache__")) {
         for e in entries.flatten() {
             if e.path().is_file() {
-                let _ = std::fs::remove_file(e.path());
+                let _ = rustyac_content::guard::remove_file(e.path());
             }
         }
     }

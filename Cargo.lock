@@ -842,6 +842,7 @@ version = "0.43.0"
 name = "rustyac-gui"
 version = "0.43.0"
 dependencies = [
+ "rustyac-content",
  "rustyac-math",
  "rustyac-physics",
 ]
@@ -893,6 +894,7 @@ dependencies = [
 name = "rustyac-python"
 version = "0.43.0"
 dependencies = [
+ "rustyac-content",
  "rustyac-gui",
  "rustyac-physics",
 ]

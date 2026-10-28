@@ -2180,7 +2180,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         if let Some(shot) = renderer.take_pre_gui_shot() {
             let folder = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("screenshots"))).unwrap_or_else(|| PathBuf::from("screenshots"));
             let written = shot.and_then(|(width, height, mut pixels)| {
-                std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+                rustyac_content::guard::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
                 for pixel in pixels.chunks_exact_mut(4) {
                     pixel[3] = 255;
                 }
@@ -2378,7 +2378,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     dress(&mut view);
     lead.iter_mut().flatten().for_each(dress);
     if let Some(pose) = &options.pose_out {
-        std::fs::write(pose, view.physics_state().to_bytes()).map_err(|e| format!("{}: {e}", pose.display()))?;
+        rustyac_content::guard::write(pose, view.physics_state().to_bytes()).map_err(|e| format!("{}: {e}", pose.display()))?;
         println!("{}: the car's state after {} steps", pose.display(), sim.steps);
     }
     // the cars of the picture and the one the camera is on (--focus)

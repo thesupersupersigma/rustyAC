@@ -132,7 +132,7 @@ pub fn own_guid(file: &Path) -> Result<String, String> {
     }
     let guid = format!("8{:016}", random_u64() % 10_000_000_000_000_000);
     let text = format!("; rustyAC's own player id for online servers, made once from random bits.\n; It is used when Steam is not running. Delete this file to get a new one.\n[IDENTITY]\nGUID={guid}\n");
-    std::fs::write(file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+    rustyac_content::guard::write(file, text).map_err(|e| format!("{}: {e}", file.display()))?;
     Ok(guid)
 }
 
@@ -173,11 +173,11 @@ mod tests {
     fn own_guid_is_made_once_and_is_no_steam_id() {
         // (next to the test program, inside the build folder)
         let file = std::env::current_exe().unwrap().parent().unwrap().join(format!("rustyac_identity_test_{}.ini", std::process::id()));
-        let _ = std::fs::remove_file(&file);
+        let _ = rustyac_content::guard::remove_file(&file);
         let first = own_guid(&file).unwrap();
         assert!(is_own_guid(&first), "{first}");
         assert_eq!(own_guid(&file).unwrap(), first);
-        let _ = std::fs::remove_file(&file);
+        let _ = rustyac_content::guard::remove_file(&file);
         assert!(resolve(Some("not ok!"), false, None, None).is_err());
     }
 }

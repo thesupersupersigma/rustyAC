@@ -50,7 +50,7 @@ pub fn start(file: Option<&Path>) -> Result<(), String> {
     let out = match file {
         Some(path) => Some(std::io::BufWriter::with_capacity(
             1 << 20,
-            std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?,
+            rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?,
         )),
         None => None,
     };

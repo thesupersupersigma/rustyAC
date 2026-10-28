@@ -304,7 +304,7 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
         }
     }
     if let Some(out) = out {
-        let written = std::fs::create_dir_all(out).and_then(|()| std::fs::write(out.join("race_out.json"), &json)).and_then(|()| std::fs::write(out.join("laps.ini"), &laps));
+        let written = rustyac_content::guard::create_dir_all(out).and_then(|()| rustyac_content::guard::write(out.join("race_out.json"), &json)).and_then(|()| rustyac_content::guard::write(out.join("laps.ini"), &laps));
         match written {
             Ok(()) => lines.push(format!("referee: wrote {} and {}", out.join("race_out.json").display(), out.join("laps.ini").display())),
             Err(error) => lines.push(format!("referee: could not write into {}: {error}", out.display())),
@@ -323,7 +323,7 @@ fn finish_online(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -
     lines.push(format!("online: race_out.json {} bytes (hash {hash:016x})", json.len()));
     if let Some(out) = out {
         let file = out.join("race_out.json");
-        match std::fs::create_dir_all(out).and_then(|()| std::fs::write(&file, &json)) {
+        match rustyac_content::guard::create_dir_all(out).and_then(|()| rustyac_content::guard::write(&file, &json)) {
             Ok(()) => lines.push(format!("online: wrote {}", file.display())),
             Err(error) => lines.push(format!("online: could not write into {}: {error}", out.display())),
         }

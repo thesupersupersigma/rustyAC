@@ -325,9 +325,9 @@ impl ReplayRig {
         let bytes = manager.save_bytes(&self.info)?;
         let path = self.folder.join(format!("{relative}.{EXTENSION}"));
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            rustyac_content::guard::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        rustyac_content::guard::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         self.saved.push(path.clone());
         Ok(path)
     }
@@ -337,9 +337,9 @@ impl ReplayRig {
         let manager = self.manager.as_mut().ok_or("there is no replay yet")?;
         let bytes = manager.save_bytes(&self.info)?;
         if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            rustyac_content::guard::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        rustyac_content::guard::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(bytes.len())
     }
 
@@ -365,7 +365,7 @@ impl ReplayRig {
         let temp = self.folder.join("temp");
         let files: Vec<String> = std::fs::read_dir(&temp).map(|dir| dir.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|name| replay::autosave_pattern_matches(name, &short_name)).collect()).unwrap_or_default();
         if let Some(old) = replay::clear_saved(files, size) {
-            let _ = std::fs::remove_file(temp.join(old));
+            let _ = rustyac_content::guard::remove_file(temp.join(old));
         }
         let name = self.file_name(&short_name);
         match self.save(&name, true) {

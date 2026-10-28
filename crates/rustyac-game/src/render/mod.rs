@@ -1111,7 +1111,7 @@ pub fn box_downscale(rgba: &[u8], width: u32, height: u32, n: u32) -> Vec<u8> {
 
 /// Writes RGBA pixels as a PNG.
 pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file = rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);

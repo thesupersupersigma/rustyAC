@@ -1091,7 +1091,7 @@ impl InputFile {
     }
 
     pub fn write(&self, path: &Path) -> Result<(), String> {
-        std::fs::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+        rustyac_content::guard::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
     }
 }
 
@@ -1184,10 +1184,10 @@ pub fn read_setup_jobs(input: &Path) -> Result<Vec<(u64, SetupJob)>, String> {
 pub fn write_setup_jobs(input: &Path, jobs: &[(u64, SetupJob)]) -> Result<(), String> {
     let path = setup_jobs_path(input);
     if jobs.is_empty() {
-        let _ = std::fs::remove_file(&path);
+        let _ = rustyac_content::guard::remove_file(&path);
         return Ok(());
     }
-    std::fs::write(&path, setup_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
+    rustyac_content::guard::write(&path, setup_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// What the pit menus hand the physics thread besides the keys: the presets of the pit strategy
@@ -1283,10 +1283,10 @@ pub fn read_pit_jobs(input: &Path) -> Result<Vec<(u64, PitJob)>, String> {
 pub fn write_pit_jobs(input: &Path, jobs: &[(u64, PitJob)]) -> Result<(), String> {
     let path = pit_jobs_path(input);
     if jobs.is_empty() {
-        let _ = std::fs::remove_file(&path);
+        let _ = rustyac_content::guard::remove_file(&path);
         return Ok(());
     }
-    std::fs::write(&path, pit_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
+    rustyac_content::guard::write(&path, pit_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Writes an input file step by step while a drive runs.
@@ -1297,7 +1297,7 @@ pub struct InputWriter {
 
 impl InputWriter {
     pub fn create(path: &Path, setup: &SimSetup) -> Result<InputWriter, String> {
-        let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let file = rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut file = std::io::BufWriter::new(file);
         file.write_all(setup.header().as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(InputWriter { file, steps: 0 })

@@ -832,6 +832,12 @@ for checks, without anybody at the controls:
   --no-focus            show the window without activating it and keep running unfocused
 ";
 
+/// A path option made absolute now: the program may change its working directory later (the
+/// Python apps run in the game's folder), and a relative path must not then land there.
+fn absolute(path: String) -> PathBuf {
+    std::path::absolute(&path).unwrap_or_else(|_| PathBuf::from(path))
+}
+
 impl Options {
     pub fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         let mut o = Options::default();
@@ -841,7 +847,7 @@ impl Options {
                 // the file is optional
                 o.race_ini = Some(true);
                 if args.peek().is_some_and(|next| !next.starts_with("--")) {
-                    o.race_ini_file = args.next().map(PathBuf::from);
+                    o.race_ini_file = args.next().map(absolute);
                 }
                 continue;
             }
@@ -857,16 +863,16 @@ impl Options {
                     let (name, text) = field.split_once(':').ok_or("--join-header \"<Name>: <value>\"")?;
                     o.ws_headers.push((name.trim().to_string(), text.trim().to_string()));
                 }
-                "--tls-root" => o.tls_root = Some(PathBuf::from(value("--tls-root")?)),
-                "--net-arrivals" => o.net_arrivals = Some(PathBuf::from(value("--net-arrivals")?)),
+                "--tls-root" => o.tls_root = Some(absolute(value("--tls-root")?)),
+                "--net-arrivals" => o.net_arrivals = Some(absolute(value("--net-arrivals")?)),
                 "--offline" => o.offline = true,
                 "--name" => o.driver_name = Some(value("--name")?),
                 "--team" => o.team = Some(value("--team")?),
                 "--password" => o.password = Some(value("--password")?),
                 "--guid" => o.guid = Some(value("--guid")?),
-                "--net-identity" => o.net_identity = Some(PathBuf::from(value("--net-identity")?)),
+                "--net-identity" => o.net_identity = Some(absolute(value("--net-identity")?)),
                 "--no-steam" => o.no_steam = true,
-                "--net-tape" => o.net_tape = Some(PathBuf::from(value("--net-tape")?)),
+                "--net-tape" => o.net_tape = Some(absolute(value("--net-tape")?)),
                 "--chat" => {
                     let text = value("--chat")?;
                     let (line, at) = text.rsplit_once('@').ok_or("--chat <text>@<seconds>")?;
@@ -876,30 +882,30 @@ impl Options {
                 "--height" => o.height = value("--height")?.parse().map_err(|e| format!("--height: {e}"))?,
                 "--windowed" => o.windowed = true,
                 "--no-shm" => o.no_shm = true,
-                "--record" => o.record = Some(PathBuf::from(value("--record")?)),
-                "--replay" => o.replay = Some(PathBuf::from(value("--replay")?)),
+                "--record" => o.record = Some(absolute(value("--record")?)),
+                "--replay" => o.replay = Some(absolute(value("--replay")?)),
                 "--ffb" => o.ffb = true,
                 "--no-rumble" => o.no_rumble = true,
                 "--headless" => o.headless = true,
                 "--realtime" => o.realtime = true,
                 "--duration" => o.duration = Some(value("--duration")?.parse().map_err(|e| format!("--duration: {e}"))?),
-                "--dump-states" => o.dump_states = Some(PathBuf::from(value("--dump-states")?)),
-                "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
+                "--dump-states" => o.dump_states = Some(absolute(value("--dump-states")?)),
+                "--screenshot" => o.screenshot = Some(absolute(value("--screenshot")?)),
                 "--at" => o.at = Some(value("--at")?.parse().map_err(|e| format!("--at: {e}"))?),
                 "--no-hud" => o.no_hud = true,
                 "--debug-hud" => o.debug_hud = true,
                 "--no-gui" => o.no_gui = true,
                 "--dev-apps" => o.dev_apps = true,
                 "--language" => o.language = Some(value("--language")?),
-                "--cfg-dir" => o.cfg_dir = Some(PathBuf::from(value("--cfg-dir")?)),
-                "--setups-dir" => o.setups_dir = Some(PathBuf::from(value("--setups-dir")?)),
+                "--cfg-dir" => o.cfg_dir = Some(absolute(value("--cfg-dir")?)),
+                "--setups-dir" => o.setups_dir = Some(absolute(value("--setups-dir")?)),
                 "--no-ac-setups" => o.no_ac_setups = true,
                 "--esc-start" => o.esc_start = Some(true),
                 "--no-esc-start" => o.esc_start = Some(false),
                 "--gui-do" => o.gui_do = Some(value("--gui-do")?),
                 "--supersample" => o.supersample = value("--supersample")?.parse().ok().filter(|n| (1..=4).contains(n)).ok_or("--supersample <1 to 4>")?,
                 "--free-camera" => o.free_camera = Some(FreeCamera::parse(&value("--free-camera")?)?),
-                "--pose-out" => o.pose_out = Some(PathBuf::from(value("--pose-out")?)),
+                "--pose-out" => o.pose_out = Some(absolute(value("--pose-out")?)),
                 "--lead-in" => o.lead_in = value("--lead-in")?.parse().map_err(|e| format!("--lead-in: {e}"))?,
                 "--virtual-mirror" => o.virtual_mirror = true,
                 "--mirror-size" => o.mirror_size = Some(value("--mirror-size")?.parse().map_err(|_| "--mirror-size <pixels, 0: no mirrors>".to_string())?),
@@ -919,11 +925,11 @@ impl Options {
                 }
                 "--debug-view" => o.debug_view = true,
                 "--warp" => o.warp = true,
-                "--gpu-log" => o.gpu_log = Some(PathBuf::from(value("--gpu-log")?)),
+                "--gpu-log" => o.gpu_log = Some(absolute(value("--gpu-log")?)),
                 "--skin" => o.skin = Some(value("--skin")?),
                 "--video-ini-exact" => o.video_ini_exact = true,
                 "--video-ini" => {
-                    let file = PathBuf::from(value("--video-ini")?);
+                    let file = absolute(value("--video-ini")?);
                     if !file.is_file() {
                         return Err(format!("--video-ini {}: no such file", file.display()));
                     }
@@ -967,8 +973,8 @@ impl Options {
                 "--no-ideal-line" => o.ideal_line = Some(false),
                 "--new-session-at" => o.new_session_at = Some(value("--new-session-at")?.parse().map_err(|_| "--new-session-at <seconds>")?),
                 "--no-ac-replay" => o.no_ac_replay = true,
-                "--replay-dir" => o.replay_dir = Some(PathBuf::from(value("--replay-dir")?)),
-                "--save-replay" => o.save_replay = Some(PathBuf::from(value("--save-replay")?)),
+                "--replay-dir" => o.replay_dir = Some(absolute(value("--replay-dir")?)),
+                "--save-replay" => o.save_replay = Some(absolute(value("--save-replay")?)),
                 "--ghost" => {
                     let mode = value("--ghost")?;
                     if !["off", "record", "play", "both"].contains(&mode.as_str()) {
@@ -976,10 +982,10 @@ impl Options {
                     }
                     o.ghost = Some(mode);
                 }
-                "--ghost-file" => o.ghost_file = Some(PathBuf::from(value("--ghost-file")?)),
+                "--ghost-file" => o.ghost_file = Some(absolute(value("--ghost-file")?)),
                 "--ghost-advantage" => o.ghost_advantage = Some(value("--ghost-advantage")?.parse().map_err(|_| "--ghost-advantage <seconds>")?),
-                "--ghost-dir" => o.ghost_dir = Some(PathBuf::from(value("--ghost-dir")?)),
-                "--telemetry-dir" => o.telemetry_dir = Some(PathBuf::from(value("--telemetry-dir")?)),
+                "--ghost-dir" => o.ghost_dir = Some(absolute(value("--ghost-dir")?)),
+                "--telemetry-dir" => o.telemetry_dir = Some(absolute(value("--telemetry-dir")?)),
                 "--no-telemetry" => o.no_telemetry = true,
                 "--replay-script" => {
                     for item in value("--replay-script")?.split(',').filter(|s| !s.is_empty()) {
@@ -991,10 +997,10 @@ impl Options {
                     }
                 }
                 "--start-lights" => o.start_lights = Some(value("--start-lights")?.parse().ok().filter(|s: &f32| s.is_finite() && *s >= 0.0).ok_or("--start-lights <seconds>")?),
-                "--controls" => o.controls = Some(PathBuf::from(value("--controls")?)),
+                "--controls" => o.controls = Some(absolute(value("--controls")?)),
                 "--default-controls" => o.default_controls = true,
                 "--bench-render" => o.bench_render = true,
-                "--bench-shot" => o.bench_shot = Some(PathBuf::from(value("--bench-shot")?)),
+                "--bench-shot" => o.bench_shot = Some(absolute(value("--bench-shot")?)),
                 "--no-focus" => o.no_focus = true,
                 "--vsync" => o.vsync = value("--vsync")? != "0",
                 "--list-devices" => o.list_devices = true,
@@ -1017,13 +1023,13 @@ impl Options {
                     }
                     o.audio.volume = Some(volume);
                 }
-                "--audio-wav" => o.audio.wav = Some(PathBuf::from(value("--audio-wav")?)),
-                "--audio-log" => o.audio.log = Some(PathBuf::from(value("--audio-log")?)),
+                "--audio-wav" => o.audio.wav = Some(absolute(value("--audio-wav")?)),
+                "--audio-log" => o.audio.log = Some(absolute(value("--audio-log")?)),
                 "--audio-null" => o.audio.null = true,
-                "--audio-ini" => o.audio.ini = Some(PathBuf::from(value("--audio-ini")?)),
+                "--audio-ini" => o.audio.ini = Some(absolute(value("--audio-ini")?)),
                 "--audio-oracle-camera" => o.audio.oracle_camera = Some(value("--audio-oracle-camera")?),
-                "--audio-script" => o.audio.script = Some(PathBuf::from(value("--audio-script")?)),
-                "--sound-tape" => o.sound_tape = Some(PathBuf::from(value("--sound-tape")?)),
+                "--audio-script" => o.audio.script = Some(absolute(value("--audio-script")?)),
+                "--sound-tape" => o.sound_tape = Some(absolute(value("--sound-tape")?)),
                 "--autodrive" => o.autodrive = true,
                 "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
                 "--opponent" => o.opponents.push(value("--opponent")?),
@@ -1072,8 +1078,8 @@ impl Options {
                 "--jump-start" => o.jump_start = Some(value("--jump-start")?.parse().map_err(|e| format!("--jump-start: {e}"))?),
                 "--next-session-at" => o.next_session_at.push(value("--next-session-at")?.parse().map_err(|e| format!("--next-session-at: {e}"))?),
                 "--restart-session-at" => o.restart_session_at.push(value("--restart-session-at")?.parse().map_err(|e| format!("--restart-session-at: {e}"))?),
-                "--out-dir" => o.out_dir = Some(PathBuf::from(value("--out-dir")?)),
-                "--documents" => o.documents = Some(PathBuf::from(value("--documents")?)),
+                "--out-dir" => o.out_dir = Some(absolute(value("--out-dir")?)),
+                "--documents" => o.documents = Some(absolute(value("--documents")?)),
                 "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
                 "--race-seed" => o.race_seed = Some(value("--race-seed")?.parse().map_err(|e| format!("--race-seed: {e}"))?),
                 "--stand-in-drivers" => o.stand_in_drivers = true,

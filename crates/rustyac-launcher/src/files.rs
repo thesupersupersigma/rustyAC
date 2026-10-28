@@ -60,7 +60,7 @@ impl Files for Disk {
         std::fs::read(&*os(path))
     }
     fn write(&self, path: &str, bytes: &[u8]) -> Result<()> {
-        std::fs::write(&*os(path), bytes)
+        rustyac_content::guard::write(&*os(path), bytes)
     }
     fn is_file(&self, path: &str) -> bool {
         std::path::Path::new(&*os(path)).is_file()
@@ -77,19 +77,19 @@ impl Files for Disk {
         Ok(out)
     }
     fn create_dir_all(&self, path: &str) -> Result<()> {
-        std::fs::create_dir_all(&*os(path))
+        rustyac_content::guard::create_dir_all(&*os(path))
     }
     fn rename(&self, from: &str, to: &str) -> Result<()> {
         if std::path::Path::new(&*os(to)).exists() {
             return Err(Error::from(ErrorKind::AlreadyExists));
         }
-        std::fs::rename(&*os(from), &*os(to))
+        rustyac_content::guard::rename(&*os(from), &*os(to))
     }
     fn remove_file(&self, path: &str) -> Result<()> {
-        std::fs::remove_file(&*os(path))
+        rustyac_content::guard::remove_file(&*os(path))
     }
     fn remove_dir_all(&self, path: &str) -> Result<()> {
-        std::fs::remove_dir_all(&*os(path))
+        rustyac_content::guard::remove_dir_all(&*os(path))
     }
     fn modified(&self, path: &str) -> Option<SystemTime> {
         std::fs::metadata(&*os(path)).and_then(|m| m.modified()).ok()
@@ -98,11 +98,11 @@ impl Files for Disk {
         std::fs::metadata(&*os(path)).and_then(|m| m.created()).ok()
     }
     fn copy(&self, from: &str, to: &str) -> Result<()> {
-        std::fs::copy(&*os(from), &*os(to)).map(|_| ())
+        rustyac_content::guard::copy(&*os(from), &*os(to)).map(|_| ())
     }
     fn append(&self, path: &str, bytes: &[u8]) -> Result<()> {
         use std::io::Write as _;
-        std::fs::OpenOptions::new().append(true).open(&*os(path))?.write_all(bytes)
+        { rustyac_content::guard::check(std::path::Path::new(&*os(path)))?; std::fs::OpenOptions::new().append(true).open(&*os(path))? }.write_all(bytes)
     }
     fn len(&self, path: &str) -> Option<u64> {
         std::fs::metadata(&*os(path)).map(|m| m.len()).ok()

@@ -139,7 +139,7 @@ impl GhostRig {
         }
         self.recorder.need_to_save = false;
         let file = self.folder.join(GhostCarRecorder::file_name(&self.recorder.names));
-        let written = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, self.recorder.save_bytes()));
+        let written = file.parent().map_or(Ok(()), rustyac_content::guard::create_dir_all).and_then(|()| rustyac_content::guard::write(&file, self.recorder.save_bytes()));
         match written {
             Ok(()) => self.messages.push(format!("ghost car: {} ({} ms, {} frames)", file.display(), self.recorder.ghost_car_lap, self.recorder.playing_buffer.len())),
             Err(e) => self.messages.push(format!("WARNING: the ghost car was not saved: {}: {e}", file.display())),

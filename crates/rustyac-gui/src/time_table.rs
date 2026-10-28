@@ -312,9 +312,9 @@ impl Gui {
         if folder.as_os_str().is_empty() {
             return None;
         }
-        let _ = std::fs::create_dir_all(&folder);
+        let _ = rustyac_content::guard::create_dir_all(&folder);
         let path = folder.join(name);
-        std::fs::write(&path, text).ok().map(|()| path)
+        rustyac_content::guard::write(&path, text).ok().map(|()| path)
     }
 
     /// `EscMenuTimeTable::render` 0x140097660.

@@ -423,7 +423,7 @@ impl Bindings {
         if path.exists() || !self.keep {
             return Ok(None);
         }
-        std::fs::write(&path, self.file_text()).map_err(|e| format!("{}: {e}", path.display()))?;
+        rustyac_content::guard::write(&path, self.file_text()).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(Some(path))
     }
 

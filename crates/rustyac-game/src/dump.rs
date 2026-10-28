@@ -82,7 +82,7 @@ impl DumpWriter {
         let file: Box<dyn Write> = if path.as_os_str() == "-" {
             Box::new(std::io::BufWriter::with_capacity(1 << 20, std::io::stdout()))
         } else {
-            let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let file = rustyac_content::guard::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
             Box::new(std::io::BufWriter::with_capacity(1 << 20, file))
         };
         let mut writer = DumpWriter { file, names: Vec::new(), steps: 0 };

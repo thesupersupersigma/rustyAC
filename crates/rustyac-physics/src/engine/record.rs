@@ -402,7 +402,7 @@ impl Recording {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        std::fs::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+        rustyac_content::guard::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     /// Steps `from..from + count` as a recording of their own is not possible (a replay

@@ -61,7 +61,7 @@ pub fn text_file_bytes(text: &str) -> Vec<u8> {
 
 /// The file as the stream's open and close leave it (a folder that is missing: no file).
 fn write_file(path: &Path, bytes: &[u8]) -> bool {
-    std::fs::write(path, bytes).is_ok()
+    rustyac_content::guard::write(path, bytes).is_ok()
 }
 
 impl Gui {
@@ -370,7 +370,7 @@ impl Gui {
             return;
         }
         let generic = setups.join(car.unix_name()).join("generic");
-        let _ = std::fs::create_dir_all(&generic);
+        let _ = rustyac_content::guard::create_dir_all(&generic);
         self.setup_screen_save_setup_absolute_path(screen, &generic.join("last.ini"));
     }
 }

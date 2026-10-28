@@ -116,7 +116,7 @@ fn run(replay: &str, out: Option<&String>, remap: &[(String, String)]) -> Result
         bytes.extend_from_slice(&blind.to_le_bytes());
     }
     if let Some(out) = out {
-        std::fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+        rustyac_content::guard::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
     }
     println!(
         "{} steps, car {:?}, track {:?} {:?}, maths {:?}, hash {all_exact:016x}, NaN-blind {all_blind:016x}",

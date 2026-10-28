@@ -7,6 +7,7 @@
 //!   [`Kn5::open`](kn5::Kn5::open) reads only the structure and remembers where the big
 //!   blocks are; a [`Kn5Reader`](kn5::Kn5Reader) fetches one block when it is wanted.
 //! * [`acd`]: a car's packed data (`data.acd`), decrypted in memory the way the game does it.
+//! * [`guard`]: every write goes through it; it refuses the game's folder and `Documents\Assetto Corsa`.
 //! * [`install`]: where Assetto Corsa is installed (`AC_ROOT`, Steam's library folders).
 //! * [`track_files`]: which model files make up a track (`models.ini` / `models_<layout>.ini`)
 //!   and where its `data` and `ai` folders are.
@@ -17,6 +18,7 @@
 //! line, the timing gates) are read by `rustyac-physics` with the game's own parsing rules.
 
 pub mod acd;
+pub mod guard;
 pub mod install;
 pub mod kn5;
 pub mod track_files;

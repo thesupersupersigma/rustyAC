@@ -61,7 +61,7 @@ pub fn seed_from_player(f: &AppFolder, player_cfg: &std::path::Path) -> Vec<Stri
     let _ = create_if_non_existant(&f.user_config_dir);
     names.retain(|name| {
         let to = format!("{}{name}", f.user_config_dir);
-        !net::file_exists(&to) && std::fs::copy(player_cfg.join(name), &to).is_ok()
+        !net::file_exists(&to) && rustyac_content::guard::copy(player_cfg.join(name), &to).is_ok()
     });
     names
 }

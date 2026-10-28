@@ -139,14 +139,14 @@ impl Gui {
         let track_list_box = self.setup_io_list(painter, id, "TRACK_LISTBOX", 15.0);
         // the folders the game makes in Documents: here in rustyAC's own folder
         let save_root = self.setup.setups_save.clone();
-        let _ = std::fs::create_dir_all(self.setup_io_folder(&save_root, "generic"));
+        let _ = rustyac_content::guard::create_dir_all(self.setup_io_folder(&save_root, "generic"));
         self.list_box_add_item(track_list_box, &row_data("generic"));
         for track in self.setup.tracks.clone() {
             if track == "ai" {
                 continue;
             }
             self.list_box_add_item(track_list_box, &row_data(&track));
-            let _ = std::fs::create_dir(self.setup_io_folder(&save_root, &track));
+            let _ = rustyac_content::guard::create_dir(self.setup_io_folder(&save_root, &track));
         }
         self.list_box_set_items_font_size(track_list_box, 15.0);
         self.list_box_scroll_to_top(track_list_box);
@@ -439,11 +439,11 @@ impl Gui {
             return;
         }
         if path.is_file() {
-            let _ = std::fs::remove_file(&path);
+            let _ = rustyac_content::guard::remove_file(&path);
         }
         let sp = crate::setup_screen::sp_path(&path);
         if sp.is_file() {
-            let _ = std::fs::remove_file(&sp);
+            let _ = rustyac_content::guard::remove_file(&sp);
         }
         self.setup_io_refresh_setup_list_box(id);
         self.setup_io_reset_ui(id);

@@ -305,7 +305,7 @@ impl GameApps {
                     continue;
                 }
                 AppAction::DeleteFile { path } => {
-                    let _ = std::fs::remove_file(setup.cfg_dir.join(path.strip_prefix("cfg/").unwrap_or(&path)));
+                    let _ = rustyac_content::guard::remove_file(setup.cfg_dir.join(path.strip_prefix("cfg/").unwrap_or(&path)));
                     continue;
                 }
                 AppAction::SetBallastKg(kg) => {
@@ -331,9 +331,9 @@ impl GameApps {
                 _ => setup.cfg_dir.join(relative.strip_prefix("cfg/").unwrap_or(&relative)),
             };
             if let Some(parent) = target.parent() {
-                let _ = std::fs::create_dir_all(parent);
+                let _ = rustyac_content::guard::create_dir_all(parent);
             }
-            if let Err(e) = std::fs::write(&target, bytes) {
+            if let Err(e) = rustyac_content::guard::write(&target, bytes) {
                 eprintln!("WARNING: {}: {e}", target.display());
             }
         }

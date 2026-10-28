@@ -481,18 +481,18 @@ fn shadow_cache_folder() -> Result<PathBuf, String> {
 fn save_generated_shadows(car: &str, car_folder: &std::path::Path, pictures: &[Vec<u8>]) -> Result<PathBuf, String> {
     let folder = shadow_cache_folder()?.join(car);
     // (the stamp goes last: a half-written set is never taken for a whole one)
-    let _ = std::fs::remove_file(folder.join(rustyac_render::fake_shadow::STAMP_FILE));
-    std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let _ = rustyac_content::guard::remove_file(folder.join(rustyac_render::fake_shadow::STAMP_FILE));
+    rustyac_content::guard::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     for (i, picture) in pictures.iter().enumerate() {
         let (name, side) = if i < 4 { (format!("tyre_{i}_shadow.png"), 64u32) } else { ("body_shadow.png".to_string(), 512u32) };
-        let file = std::fs::File::create(folder.join(&name)).map_err(|e| format!("{name}: {e}"))?;
+        let file = rustyac_content::guard::create(folder.join(&name)).map_err(|e| format!("{name}: {e}"))?;
         let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), side, side);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
         writer.write_image_data(picture).map_err(|e| e.to_string())?;
     }
-    std::fs::write(folder.join(rustyac_render::fake_shadow::STAMP_FILE), rustyac_render::fake_shadow::car_files_stamp(car_folder)).map_err(|e| e.to_string())?;
+    rustyac_content::guard::write(folder.join(rustyac_render::fake_shadow::STAMP_FILE), rustyac_render::fake_shadow::car_files_stamp(car_folder)).map_err(|e| e.to_string())?;
     Ok(folder)
 }
 
@@ -1629,7 +1629,7 @@ impl AcRenderer {
         if logging {
             let capture = rustyac_render::gpulog::end_capture();
             if let Some(path) = &self.options.gpu_log {
-                match std::fs::write(path, &capture.text) {
+                match rustyac_content::guard::write(path, &capture.text) {
                     Ok(()) => println!("{}: the command log of frame 2 ({} calls, {} draws)", path.display(), capture.lines, capture.draws),
                     Err(e) => eprintln!("WARNING: {}: {e}", path.display()),
                 }

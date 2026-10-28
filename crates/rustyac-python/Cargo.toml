@@ -12,4 +12,5 @@ license = "GPL-3.0-or-later"
 # the apps' forms are ksgui forms; the game's data the apps read is the apps' AppLink
 rustyac-gui = { path = "../rustyac-gui" }
 # the port of INIReader (python.ini)
+rustyac-content = { path = "../rustyac-content" }
 rustyac-physics = { path = "../rustyac-physics" }

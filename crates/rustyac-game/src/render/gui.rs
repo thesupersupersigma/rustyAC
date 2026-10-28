@@ -1219,7 +1219,7 @@ impl GameGui {
                 // setups folder is made for it)
                 OnlineGuiEvent::Setup { values } => {
                     if let Some(screen) = self.esc_menu.and_then(|menu| self.gui.esc_menu(menu).setup_screen) {
-                        let _ = std::fs::create_dir_all(&self.setup.setups_dir);
+                        let _ = rustyac_content::guard::create_dir_all(&self.setup.setups_dir);
                         self.gui.setup_screen_load_server_setup(screen, &values, &self.setup.setups_dir);
                     }
                 }
@@ -1468,12 +1468,12 @@ impl GameGui {
     /// a `gameplay.ini` that starts as a copy of the game's.
     pub fn shutdown(&mut self) -> Result<Vec<PathBuf>, String> {
         let folder = self.setup.cfg_dir.clone();
-        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        rustyac_content::guard::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
         let mut written = Vec::new();
         self.gui.game_screen_shutdown(self.screen);
         if let Some(bytes) = self.gui.serialize_forms() {
             let path = folder.join("acos.ini");
-            std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            rustyac_content::guard::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
             written.push(path);
         }
         let path = folder.join("gameplay.ini");
@@ -1486,7 +1486,7 @@ impl GameGui {
             text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "ACTIVE", &active);
             text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "VERTICAL", &vertical);
         }
-        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        rustyac_content::guard::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         written.push(path);
         // ESCMenu::onShutdown 0x1400fdf80: the setup as it is, as `last.ini` (rustyAC's own folder)
         if let (Some(menu), Some(car)) = (self.esc_menu, &self.gui.setup_car) {
@@ -1588,8 +1588,8 @@ fn json_string(json: &str, key: &str) -> Option<String> {
 fn start_python(gui: &mut Gui, painter: &mut dyn rustyac_gui::painter::Painter, screen: Id, setup: &GuiSetup) -> Option<rustyac_python::Python> {
     let own = setup.cfg_dir.parent().map(Path::to_path_buf).unwrap_or_default();
     let ini = Some(setup.cfg_dir.join("python.ini")).filter(|p| p.is_file()).or_else(|| setup.documents_cfg.as_ref().map(|cfg| cfg.join("python.ini"))).unwrap_or_default();
-    // shortcut: a relative --out-dir or --cfg-dir is read from here on against the game's
-    // folder; give them as absolute paths with Python apps on
+    // (every path option is absolute since parsing, and every write goes through
+    // rustyac_content::guard, which refuses the game's folder)
     if let Err(e) = std::env::set_current_dir(&setup.game) {
         println!("Python: no apps ({}: {e})", setup.game.display());
         return None;

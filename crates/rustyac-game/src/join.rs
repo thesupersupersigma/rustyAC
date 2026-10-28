@@ -247,7 +247,7 @@ impl Drop for Arrivals {
         for (at, slot, sequence, position) in &self.rows {
             text.push_str(&format!("{at:.3},{at:.3},{slot},{sequence},{:08x},{:08x},{:08x}\n", position[0], position[1], position[2]));
         }
-        match std::fs::write(&self.file, text) {
+        match rustyac_content::guard::write(&self.file, text) {
             Ok(()) => println!("online: {} arrivals of car states are in {}", self.rows.len(), self.file.display()),
             Err(e) => eprintln!("WARNING: {}: {e}", self.file.display()),
         }
@@ -257,6 +257,6 @@ impl Drop for Arrivals {
 /// Writes the tape of a session (`--net-tape`).
 pub fn save_tape(transport: &dyn Transport, path: &Path) -> Result<usize, String> {
     let tape = transport.tape().ok_or("this session kept no tape")?;
-    std::fs::write(path, tape.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+    rustyac_content::guard::write(path, tape.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(tape.entries.len())
 }
