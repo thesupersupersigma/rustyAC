@@ -27,6 +27,7 @@ pub mod app_small;
 pub mod app_stats;
 pub mod app_sus_telemetry;
 pub mod app_car_engineer;
+pub mod app_wings;
 pub mod app_car_physics;
 pub mod app_setup_debug;
 pub mod app_telemetry;

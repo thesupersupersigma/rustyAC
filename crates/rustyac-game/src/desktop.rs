@@ -430,6 +430,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             telemetry_car: info.telemetry,
             car_physics: info.car_physics,
             engineer_masses: info.engineer_masses,
+            wings: info.wings.clone(),
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),

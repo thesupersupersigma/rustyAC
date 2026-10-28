@@ -110,6 +110,37 @@ pub fn car_engineer(frame: usize) -> rustyac_gui::app_car_engineer::CarEngineer 
     }
 }
 
+/// FormWings' wings of a frame: three level wings and a fin, the angles, heights and forces
+/// moving through the table's shapes (no lift for the first 30 frames: the front share and the
+/// efficiency divide by zero).
+pub fn wing_rows(frame: usize) -> Vec<rustyac_gui::app_wings::WingRow> {
+    use rustyac_physics::car::aero::WingState;
+    let f = frame as f32;
+    let lift = if frame < 30 { 0.0 } else { 1.0 };
+    let wing = |name: &str, chord: f32, span: f32, z: f32, vertical: bool, k: f32| rustyac_gui::app_wings::WingRow {
+        name: name.to_string(),
+        chord,
+        span,
+        position: [0.0, 0.45 + k * 0.1, z],
+        is_vertical: vertical,
+        state: WingState {
+            aoa: -2.5 + f * 0.013 * k,
+            cl: 0.8 + f * 0.001,
+            cd: 0.12 + f * 0.0003 * k,
+            angle: 4.0 + k - f * 0.007,
+            ground_height: 0.0789 - f * 0.00011 * k,
+            front_share: [1.0, 0.85, 0.15, 0.0][k as usize],
+            drag_kg: 11.25 + f * 0.05 * k,
+            lift_kg: lift * (120.5 + f * 0.3 * k),
+            yaw_angle: (f * 0.0137 * k).sin() * 3.0,
+            is_vertical: vertical,
+            lift_vector: rustyac_physics::vecmath::Vec3f { x: 0.0, y: lift * (1200.0 + f * k), z: 40.0 * k },
+            ..Default::default()
+        },
+    };
+    vec![wing("BODY", 1.2, 1.6, 0.1, false, 0.0), wing("FRONT", 0.32, 1.7, 1.9, false, 1.0), wing("REAR", 0.41, 1.25, -2.1, false, 2.0), wing("FIN", 0.6, 0.35, -1.8, true, 3.0)]
+}
+
 /// FormTelemetry's raw channel values of a frame: five physics steps 3 ms apart (16 ms a frame:
 /// the 12 ms rule takes about one in four), then the frame's own.
 pub fn telemetry_feed(frame: usize) -> rustyac_gui::app_telemetry::TelemetryFeed {
@@ -569,6 +600,7 @@ pub fn link() -> AppLink {
             setup_debug: Some(setup_debug_car(s.frame)),
             car_physics: car_physics_extra(s.frame),
             car_engineer: car_engineer(s.frame),
+            wings: wing_rows(s.frame),
             track_name: s.track.0.clone(),
             track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
@@ -1357,6 +1389,16 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 0, 1200, 3);
             o.extend([hud("app.visible", 0.0, "carengineer"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "carengineer")]);
             play(&mut o, 1200, 1300, 4);
+            o.push(Op::Save);
+        }
+        "app_wings" => {
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "wings"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "wings"));
+            play(&mut o, 0, 600, 3);
+            o.extend([hud("app.visible", 0.0, "wings"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "wings")]);
+            play(&mut o, 600, 700, 4);
             o.push(Op::Save);
         }
         "app_tyredebug" => {

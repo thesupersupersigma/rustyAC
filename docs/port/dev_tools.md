@@ -20,7 +20,10 @@ State after the last commit (update after every commit):
   its game source; the 12 that the game reads through a function of the car are proven in the car
   oracle (`CAR_ORACLE_TELEMETRY=1`, `tools/proofs/telem_list.txt`); the 8 skid channels come from
   the car's sound (already proven by the sound oracle); Setup debug reads the focused car.
-- **Steps 4-5:** not started.
+- **Step 4, the developers' 3D windows:** Wings (`FormWings`) done and proven: its table in the
+  GUI oracle (`app_wings`), its outlines and lift vectors in the scene oracle (`r43c_01`).
+  TyreTester and ACSuspension: see the step's section.
+- **Step 5:** not started.
 - **Version:** still v0.43.1.
 
 ## In plain words
@@ -159,6 +162,30 @@ stored each frame), not always the player's. Test:
 `crates/rustyac-game/tests/opponents.rs` `the_setup_debug_app_reads_the_focused_car` (an e30 with a
 parked F2004: each focus shows its own car's gears and final ratio). The app itself was proven
 against the game's in Task 33b (`app_setupdebug`, the focus moving to car 2 at frame 900).
+
+## Step 4: the developers' 3D windows
+
+### Wings (`FormWings`, 0x1c0)
+
+The game makes it in `Sim::Sim` after `TyreTesterForm` and `FormLogoAC` (a developers' app, in the
+Ctrl+M list). Two halves:
+
+- **The table** (`FormWings::render` 0x1402edff0): a row per wing of the player's car (name, angle of
+  attack + angle, ground height in mm, CL and CD areas, angle, yaw; fins in red), then the totals
+  (CL area, the front's share of the lift in %, CD area, efficiency, downforce and drag in kg).
+  `crates/rustyac-gui/src/app_wings.rs` (new); the wings' names and sizes are read once
+  (`view::wing_rows`, `CarInfo::wings`, `GuiSetup::wings`), their states every frame
+  (`CarView::wing_states`, at most 12: `view::MAX_WINGS`).
+- **The 3D lines** (`FormWings::onRenderNode` 0x1402edc30, a handler of the render-finished node):
+  while the app shows, every wing's outline (green; a fin yellow) and its lift vector (purple,
+  `liftVector * 0.001` long) over `physicsState.worldMatrix`, depth test off.
+  `crates/rustyac-render/src/wings.rs` (new); `AcRenderer` adds the handler with the GUI and feeds
+  it each frame.
+
+| proof | what | result |
+|---|---|---|
+| GUI oracle `app_wings` (`tools/proofs/gui_list.txt`) | the game's `FormWings` (its constructor and `render`) and the port's, four wings (three level, a fin; no lift for 30 frames: the share and the efficiency divide by zero), 228 frames, hidden and shown | command log, pixels, state, layout IDENTICAL |
+| scene oracle `r43c_01` (`tools/proofs/render_list.txt`) | magione, chase view, the e30's lap tape, 30 frames: the game's `onRenderNode` through its own lambda added with `Event<OnNodeRenderEvent>::addHandler` to a stand-in form (visible byte, GUI → GraphicsManager, car), eight test wings whose lift turns each frame; shown, hidden at 20, shown at 25 | command log and pixels IDENTICAL in all 29 frames |
 
 ## Not done
 

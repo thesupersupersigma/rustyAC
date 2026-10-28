@@ -290,6 +290,8 @@ pub struct AppLink {
     pub car_physics: crate::app_car_physics::CarPhysicsExtra,
     /// `ACDCarEngineer`'s inputs of the player's car
     pub car_engineer: crate::app_car_engineer::CarEngineer,
+    /// `FormWings`' rows of the player's car
+    pub wings: Vec<crate::app_wings::WingRow>,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,

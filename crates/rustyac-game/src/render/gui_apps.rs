@@ -207,6 +207,9 @@ impl GameApps {
         add(gui, painter, "gamestats", id);
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
+        // FormWings (a developers' app, after TyreTesterForm and FormLogoAC)
+        let id = gui.new_wings_app(painter);
+        add(gui, painter, "wings", id);
         // ACDriverPerformance (a developers' app): its records from rustyAC's own savedData,
         // else the game's (Documents, read only)
         let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
@@ -455,6 +458,7 @@ impl GameApps {
             tyre_debug: world.first().map(|v| v.tyre_debug),
             setup_debug: self.setup_debug.clone(),
             car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },
+            wings: setup.wings.iter().zip(world.first().map_or(&[][..], |v| &v.wing_states[..v.wing_state_count as usize])).map(|(row, state)| rustyac_gui::app_wings::WingRow { state: *state, ..row.clone() }).collect(),
             car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra { km_per_liter: world.first().map_or(0.0, |v| v.km_per_liter), filtered_speed: self.filtered_speed, ..setup.car_physics },
             track_name: setup.track_name.clone(),
             track_config: setup.track_layout.clone(),

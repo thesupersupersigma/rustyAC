@@ -24,6 +24,7 @@ use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f};
 use crate::ac::{rd, wr, wstring, write_wstring, Game};
 use crate::frames::CarSpec;
 
+const VA_EVENT_NODE_RENDER_ADD_HANDLER: usize = 0x1_4007_ce00; // Event<OnNodeRenderEvent>::addHandler(std::function const&, void* owner)
 const VA_FONT_CTOR: usize = 0x1_4020_0bb0; // Font::Font(eFontType, float, bool, bool): DirectWrite, not part of the 3D frame
 const VA_CONSOLE_SINGLETON: usize = 0x1_4155_9c08; // static Console* Console::_singleton
 const VA_CONSTRAINED_CTOR: usize = 0x1_4007_6d10; // ConstrainedObjectsManager::ConstrainedObjectsManager(CarAvatar*)
@@ -420,7 +421,44 @@ fn png_rgba(path: &Path) -> Result<Vec<u8>, String> {
     })
 }
 
+/// Task 43c: the stand-in FormWings (0 when the frames never show the app) and the frame the
+/// lift vectors are of
+pub static WINGS_FORM: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+pub static WINGS_FRAME: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+
 impl Game {
+    /// Task 43c: what `FormWings::FormWings` 0x1402ec890 leaves for `onRenderNode`: a form (the
+    /// visible byte +0x150, the GUI +0x148 whose +0x10 is the GraphicsManager, the car +0x1b8)
+    /// with its lambda (`std::_Func_impl` vftable 0x140504bd0, the form captured) added to the
+    /// render-finished node's evOnRender (+0xe0); the car's `physicsInfo.wingData` (+0xe88,
+    /// WingData 0x250: chord +0x20, span +0x24, position +0x28, isVertical +0x24c).
+    pub unsafe fn make_wings_form(&self, c: &Car, render_finished: *mut u8) {
+        let acs = &self.acs;
+        let form = acs.alloc(0x1c0);
+        let gui = acs.alloc(0x40);
+        wr(gui, 0x10, self.graphics);
+        wr(form, 0x148, gui);
+        wr(form, 0x1b8, c.car);
+        let wings = crate::frames::test_wings(0);
+        let data = acs.alloc(0x250 * wings.len());
+        for (i, w) in wings.iter().enumerate() {
+            let d = data.add(0x250 * i);
+            wr(d, 0x20, w.chord);
+            wr(d, 0x24, w.span);
+            wr(d, 0x28, w.position);
+            wr(d, 0x24c, w.is_vertical as u8);
+        }
+        wr(c.car, 0xe88, data);
+        wr(c.car, 0xe90, data.add(0x250 * wings.len()));
+        let function = acs.alloc(0x40);
+        wr(function, 0, acs.va(0x1_4050_4bd0));
+        wr(function, 8, form);
+        wr(function, 0x18, function);
+        let add: extern "C" fn(*mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(VA_EVENT_NODE_RENDER_ADD_HANDLER));
+        add(render_finished.add(0xe0), function, form);
+        *WINGS_FORM.lock().unwrap() = form as usize;
+    }
+
     /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows (the game's own
     /// `CarFakeShadow` constructor). A car without `body_shadow.png` gets its five pictures
     /// drawn and saved into the car's folder of the scratch root: the answer is a line with
@@ -889,10 +927,21 @@ impl Game {
             wr(rd::<*mut u8>(sim, 0x110), 0x150, extra.pause as u8);
             wr(rd::<*mut u8>(sim, 0x1b8), 0x158, extra.air);
             // CarAvatar::wingsStatus (WingState: 0x44 bytes, the angle at +0xc), physicsInfo
-            match extra.wing {
+            // Task 43c: FormWings' visible byte
+            let form = *WINGS_FORM.lock().unwrap();
+            if form != 0 && c.index == 0 {
+                wr(form as *mut u8, 0x150, extra.wings_app as u8);
+            }
+            match extra.wing.or(extra.wings_app.then_some(0.0)) {
                 Some(angle) => {
                     for i in 0..8 {
                         wr(c.wings, 0x44 * i + 0xc, angle);
+                    }
+                    // Task 43c: the lift vectors FormWings draws
+                    if *WINGS_FORM.lock().unwrap() != 0 && c.index == 0 {
+                        for (i, w) in crate::frames::test_wings(*WINGS_FRAME.lock().unwrap()).iter().enumerate() {
+                            wr(c.wings, 0x44 * i + 0x38, w.lift_vector);
+                        }
                     }
                     wr(c.car, 0xfa0, c.wings);
                     wr(c.car, 0xfa8, c.wings.add(0x44 * 8));

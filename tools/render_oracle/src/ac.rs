@@ -944,6 +944,10 @@ impl Game {
                 others.push(self.load_car(spec, &sim_nodes, camera, console, Some(first), i + 1, count)?);
             }
         }
+        // Task 43c: FormWings::FormWings (Sim::Sim, after the cars)
+        if let (Some(c), true) = (&car, frame.steps.iter().any(|s| s.extra.wings_app)) {
+            self.make_wings_form(c, render_finished);
+        }
         // Sim::cars, for the grooves
         if let Some(car) = &car {
             let list = acs.alloc(8 * count);
@@ -1054,6 +1058,7 @@ impl Game {
         let (mut lights_pause, mut lights_status) = (false, -1);
         let mut told_new_session = 0;
         for (index, step) in frame.steps.iter().enumerate() {
+            *crate::ac_car::WINGS_FRAME.lock().unwrap() = index;
             // RaceManager::setCurrentSession 0x140140df0: Sim::evOnNewSession, the handlers in the
             // order they were registered: the track's own, then the car's objects'
             if step.extra.new_session != told_new_session {

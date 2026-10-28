@@ -155,6 +155,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         telemetry_car: info.telemetry,
         car_physics: info.car_physics,
         engineer_masses: info.engineer_masses,
+        wings: info.wings.clone(),
         setups_dir: own.join("setups"),
         documents_setups: documents_cfg.as_ref().and_then(|cfg| cfg.parent()).map(|folder| folder.join("setups")),
         track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),

@@ -650,6 +650,8 @@ pub struct CarInfo {
     pub car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra,
     /// Task 33b: the Car engineer app's masses (`physicsInfo`, set once)
     pub engineer_masses: rustyac_gui::app_car_engineer::CarEngineer,
+    /// Task 43c: FormWings' wings of the player's car (`physicsInfo.wingData`)
+    pub wings: Vec<rustyac_gui::app_wings::WingRow>,
     /// Task 42c: what the Python apps read of the car (`CarAvatar::getBallastKG`,
     /// `getRestrictor`, `physicsInfo.minHeightM`, `aiState.isActive`)
     pub ballast_kg: f32,
@@ -1374,6 +1376,7 @@ impl GameSim {
         info.telemetry = crate::view::telemetry_car(self);
         info.car_physics = crate::view::car_physics(self);
         info.engineer_masses = crate::view::engineer_masses(self);
+        info.wings = crate::view::wing_rows(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info.pit_page = self.pit_page().map(Box::new);
         info.pit_compounds = self.car.car.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default();

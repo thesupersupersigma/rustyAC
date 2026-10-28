@@ -117,3 +117,5 @@ r23_21 | --track imola --view onboard --post --motion-blur 4 --mirror 512 --virt
 r23_22 | --track spa --view far --post --motion-blur 1 --aa 8 --smoke 3 --car ks_ferrari_f2004 --tape oracle/audio/ks_ferrari_f2004/spa_grass.audiotape --frames 59
 r23_23 | --track spa --view chase --post --frames 59 --set tts=8000
 r23_24 | --track ks_laguna_seca --view chase --post --aa 4 --fxaa --frames 39 --set tts=8000
+# Task 43c: the Wings app's outlines and lift vectors (FormWings::onRenderNode), shown, hidden, shown again
+r43c_01 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 30 --set wingsapp=1,wingsapp=0@20,wingsapp=1@25

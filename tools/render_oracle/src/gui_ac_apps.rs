@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 32] = [
+pub const APPS: [(&str, usize, usize, usize); 33] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -52,9 +52,11 @@ pub const APPS: [(&str, usize, usize, usize); 32] = [
     ("essentials", 0x2a0, 0x1_4031_bc60, 0x1_4050_c430),
     ("delta", 0x200, 0x1_4030_2570, 0x1_4050_7c10),
     ("chat", 0x3e0, 0x1_4030_8190, 0x1_4050_8ca0),
+    // Task 43c
+    ("wings", 0x1c0, 0x1_402e_c890, 0x1_4050_4aa0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 13] = ["carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 14] = ["wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -718,6 +720,14 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "setupdebug" {
                 setup_debug_car(a);
             }
+            if text == "wings" {
+                // FormWings: the render-finished node event its constructor adds a handler to
+                // (Sim+0x170, evOnRender at +0xe0); the wings' blocks
+                if rd::<usize>(sim, 0x170) == 0 {
+                    wr(sim, 0x170, a.alloc(0x200));
+                }
+                wings_car(a, first_car);
+            }
             if text == "carphysics" || text == "carengineer" {
                 car_physics_car(a, first_car, if text == "carphysics" { "carphysics" } else { "carengineer" });
             }
@@ -857,6 +867,12 @@ pub unsafe fn update() {
             crate::gui_ac_replay::fire(event as *const u8, argument.as_ptr());
         }
         std::ptr::copy_nonoverlapping(l.telemetry.graphics.as_ptr(), raw, l.telemetry.graphics.len());
+    }
+    // FormWings: the wings' states
+    if let Some(status) = *WINGS.lock().unwrap() {
+        for (i, row) in l.wings.iter().enumerate() {
+            write_wing_state((status as *mut u8).add(i * 0x44), &row.state);
+        }
     }
     // TyreWearingDebug: its car's tyres (Car+0xb28, 0x858 each: status.virtualKM +0x350,
     // thermalModel.coreTemp +0x45c, isActive +0x4e0)
@@ -1069,6 +1085,39 @@ unsafe fn telemetry_car(a: &crate::acs::Acs, avatar: *mut u8) {
 /// TyreWearingDebug's car: `PhysicsEngine::cars` (PhysicsAvatar+0x58+8) holds one `Car` whose
 /// tyres have the game's own wear `Curve` (`Curve::Curve` 0x1402058b0, `addValue` 0x140205ae0);
 /// every avatar gets a `physicsStateProvider` (+0x11b8), which the app only tests.
+/// FormWings' car: `physicsInfo.wingData` (CarAvatar+0xe88, WingData 0x250: name, chord +0x20,
+/// span +0x24, position +0x28, isVertical +0x24c) and `wingsStatus` (+0xfa0, WingState 0x44),
+/// laid once here; [`update`] writes the states every frame.
+unsafe fn wings_car(a: &crate::acs::Acs, avatar: *mut u8) {
+    let rows = crate::gui_seq_apps::wing_rows(0);
+    let data = a.alloc(rows.len() * 0x250 + 8);
+    let status = a.alloc(rows.len() * 0x44 + 8);
+    for (i, r) in rows.iter().enumerate() {
+        let d = data.add(i * 0x250);
+        crate::ac::write_wstring(a, d, &r.name);
+        wr(d, 0x20, r.chord);
+        wr(d, 0x24, r.span);
+        wr(d, 0x28, r.position);
+        wr(d, 0x24c, r.is_vertical as u8);
+    }
+    wr(avatar, 0xe88, data);
+    wr(avatar, 0xe90, data.add(rows.len() * 0x250));
+    wr(avatar, 0xfa0, status);
+    wr(avatar, 0xfa8, status.add(rows.len() * 0x44));
+    *WINGS.lock().unwrap() = Some(status as usize);
+}
+
+static WINGS: Mutex<Option<usize>> = Mutex::new(None);
+
+/// A `WingState` as the game lays it (0x44 bytes).
+unsafe fn write_wing_state(at: *mut u8, s: &rustyac_physics::car::aero::WingState) {
+    for (o, v) in [(0x0, s.aoa), (0x4, s.cd), (0x8, s.cl), (0xc, s.angle), (0x10, s.input_angle), (0x14, s.ground_height), (0x18, s.front_share), (0x1c, s.drag_kg), (0x20, s.lift_kg), (0x24, s.angle_mult), (0x28, s.ground_effect_lift), (0x2c, s.ground_effect_drag), (0x30, s.yaw_angle)] {
+        wr(at, o, v);
+    }
+    wr(at, 0x34, s.is_vertical as u8);
+    wr(at, 0x38, [s.lift_vector.x, s.lift_vector.y, s.lift_vector.z]);
+}
+
 unsafe fn tyre_debug_car(a: &crate::acs::Acs, sim: *mut u8) {
     let car = a.alloc(0x4000);
     let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4020_58b0));

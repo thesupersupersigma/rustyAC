@@ -17,3 +17,4 @@ console
 esc_menu#it
 esc_menu_online
 setup_pit@bmw_z4_gt3
+app_wings

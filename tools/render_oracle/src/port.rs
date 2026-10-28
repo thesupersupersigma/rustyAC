@@ -45,7 +45,7 @@ fn feed(car: &mut rustyac_render::car::CarAvatar, spec: &crate::frames::CarSpec,
     car.replay_mode = step.extra.replay;
     car.replay_scale = step.extra.replay_scale;
     car.pause_menu = step.extra.pause;
-    car.wing_angles = step.extra.wing.map(|a| vec![a; 8]).unwrap_or_default();
+    car.wing_angles = step.extra.wing.or(step.extra.wings_app.then_some(0.0)).map(|a| vec![a; 8]).unwrap_or_default();
     car.kers_max_j = step.extra.kers_max;
     car.ers_max_j = step.extra.ers_max;
     car.has_kers = step.extra.kers_max > 0.0;
@@ -314,6 +314,11 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
         other.init_common_post_physics(&mut graphics, &mut scene, &sim, spec.tyre_width)?;
         others.push(other);
     }
+    // Task 43c: FormWings::FormWings adds its handler to the render-finished node (after the cars')
+    let wings_outlines = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::wings::WingsOutlines::default()));
+    if car.is_some() && frame.steps.iter().any(|s| s.extra.wings_app) {
+        scene.add_event_handler(render_finished, wings_outlines.clone());
+    }
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
@@ -434,6 +439,8 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             // the cars' updates in the order they were made, then every handler of evOnPostUpdate
             feed(car, spec, step, index, count);
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
+            // FormWings: the player's wings over physicsState.worldMatrix while the app shows
+            wings_outlines.borrow_mut().frame = step.extra.wings_app.then(|| (step.state.world_matrix.m, crate::frames::test_wings(index)));
             // (the car's children after it: GhostCar::update)
             if let (Some(ghost), Some(recorder)) = (&mut ghost, &mut ghost_recorder) {
                 let b = scene.nodes[car.body_transform].matrix.m[3];

@@ -19,6 +19,9 @@ pub const MOVED_OBJECTS: usize = 8;
 
 /// How many other cars a [`CarView`] can show (Task 24: the debug view's boxes).
 pub const OTHER_CARS: usize = 31;
+/// Task 43c: the wings the car view carries (FormWings).
+// shortcut: a car with more [WING_n] + [FIN_n] shows only the first 12 in the Wings app; raise if one appears
+pub const MAX_WINGS: usize = 12;
 
 /// What the game's `Car::getPhysicsState` @ 0x140270d70 hands the car's picture beyond the
 /// members of [`CarView`]: the values the car's visual helpers read (ground shadows, skid
@@ -108,6 +111,9 @@ pub struct CarView {
     pub tyre_debug: [rustyac_gui::app_tyre_debug::TyreDebugRow; 4],
     /// Task 33b: what `RaceEngineer` reads for the Car engineer app (no masses: see `car_physics`)
     pub engineer: rustyac_gui::app_car_engineer::CarEngineer,
+    /// Task 43c: `CarAvatar::wingsStatus` of the first [`MAX_WINGS`] wings (FormWings)
+    pub wing_states: [rustyac_physics::car::aero::WingState; MAX_WINGS],
+    pub wing_state_count: u8,
     /// `CarAvatar::pitPosition`'s place (the pit box)
     pub pit_position: [f32; 3],
     /// every suspension's `getPackerRange`
@@ -333,6 +339,8 @@ impl Default for CarView {
             performance_meter: (0.0, 0.0),
             tyre_debug: Default::default(),
             engineer: Default::default(),
+            wing_states: Default::default(),
+            wing_state_count: 0,
             pit_position: [0.0; 3],
             packer_range: [0.0; 4],
             steps: 0,
@@ -695,6 +703,14 @@ impl CarView {
                     ..Default::default()
                 }
             },
+            wing_states: {
+                let mut out = [rustyac_physics::car::aero::WingState::default(); MAX_WINGS];
+                for (slot, wing) in out.iter_mut().zip(car.aero.as_ref().map_or(&[][..], |a| &a.base().wings[..])) {
+                    *slot = wing.status;
+                }
+                out
+            },
+            wing_state_count: car.aero.as_ref().map_or(0, |a| a.base().wings.len().min(MAX_WINGS)) as u8,
             pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
             packer_range: [0, 1, 2, 3].map(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_packer_range())),
             speed_kmh: car.speed * 3.6,
@@ -1005,6 +1021,18 @@ pub fn setup_debug(sim: &GameSim, focus: usize) -> rustyac_gui::app_setup_debug:
 /// What `RaceEngineer::getDynamicIndex` reads of the player's car (the Car physics app): the
 /// base positions' z of suspensions 0 and 2, the body's mass and inertia y (`getLocalInertia`:
 /// `dMass::I[5]`).
+/// Task 43c: what FormWings reads of the player's wings once (`physicsInfo.wingData`); the
+/// states come with each frame's [`CarView::wings`].
+pub fn wing_rows(sim: &GameSim) -> Vec<rustyac_gui::app_wings::WingRow> {
+    let car = &sim.car.car;
+    let wings = car.aero.as_ref().map_or(&[][..], |a| &a.base().wings[..]);
+    wings
+        .iter()
+        .take(MAX_WINGS)
+        .map(|w| rustyac_gui::app_wings::WingRow { name: w.data.name.clone(), chord: w.data.chord, span: w.data.span, position: [w.data.position.x, w.data.position.y, w.data.position.z], is_vertical: w.data.is_vertical, state: w.status })
+        .collect()
+}
+
 pub fn engineer_masses(sim: &GameSim) -> rustyac_gui::app_car_engineer::CarEngineer {
     // CarAvatar::initPhysics 0x1400d7660: bodyMass = totalMass = the body's, then each hub's added
     let car = &sim.car.car;
