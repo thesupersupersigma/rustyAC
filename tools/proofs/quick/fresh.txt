@@ -18,3 +18,4 @@ multi rc_pass_front magione .*
 multi pit_box_none magione .*
 multi pit_feed magione bmw_m3_e30,bmw_m3_e30 --seed 1
 multi rc_jump magione bmw_m3_e30.*
+shm pit_box_wing magione .*

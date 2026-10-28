@@ -1269,6 +1269,10 @@ impl<'a> MultiWorld<'a> {
             if std::env::var("CAR_ORACLE_PERF_METER").is_ok_and(|v| v == "1") {
                 recording.set("meter", "1");
             }
+            // Task 43c: the game's shared memory graphics page at every step
+            if std::env::var("CAR_ORACLE_SHM").is_ok_and(|v| v == "1") {
+                recording.set("shm", "1");
+            }
             recording.set("about", scenario.about);
             recording.set("track", track.name.clone());
             recording.set("track_folder", track_folder.display().to_string());
@@ -1379,6 +1383,13 @@ impl<'a> MultiWorld<'a> {
                             game_pit.enable_mouse();
                         }
                     }
+                }
+                // Task 43c: the game's graphics page after every frame
+                if recording.get("shm").is_some() {
+                    let shm = super::race::GameShm::build(acs, &whole, &track.data_folder.join("ai").join("fast_lane.ai"));
+                    recording.set("shm_flags", shm.flag_values().iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" "));
+                    recording.set("shm_static", shm.static_page().iter().map(|b| format!("{b:02x}")).collect::<String>());
+                    whole.shm = Some(shm);
                 }
                 referee = Some(whole);
             }
@@ -1749,6 +1760,9 @@ impl<'a> MultiWorld<'a> {
                 let meter = self.cars[0].car.add(CAR_PERFORMANCE_METER_IS_ENABLED);
                 row.extend(rd::<[u32; 2]>(meter, 0x60));
                 row.push(rd(meter, 0x68));
+            }
+            if let Some(shm) = self.referee.as_ref().and_then(|referee| referee.shm.as_ref()) {
+                row.extend(shm.words());
             }
             assert_eq!(row.len(), self.recording.row_words(), "a row of the wrong length");
             self.recording.rows.push(row);

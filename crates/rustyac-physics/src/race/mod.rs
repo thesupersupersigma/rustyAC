@@ -13,6 +13,7 @@ pub mod output;
 pub mod pitstop;
 pub mod referee;
 pub mod results;
+pub mod shm;
 pub mod timing;
 pub mod toy;
 

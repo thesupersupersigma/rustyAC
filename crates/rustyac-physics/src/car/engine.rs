@@ -96,6 +96,10 @@ pub trait EngineModel: Send {
     fn get_max_power_rpm(&self) -> f32;
     /// `Engine::getMaxTorqueRPM` @ 0x140285ae0
     fn get_max_torque_rpm(&self) -> f32;
+    /// `Engine::getMaxTorqueNM`: the torque curve's peak (`precalculatePowerAndTorque`).
+    fn get_max_torque_nm(&self) -> f32 {
+        0.0
+    }
     /// `Engine::getMaxPowerW` @ 0x140285a80: the largest power seen so far, or, before the
     /// engine has run, the curve's peak times one plus the turbos' full boost.
     fn get_max_power_w(&self) -> f32;
@@ -915,6 +919,10 @@ impl EngineModel for VanillaEngine {
 
     fn get_max_torque_rpm(&self) -> f32 {
         self.max_torque_rpm
+    }
+
+    fn get_max_torque_nm(&self) -> f32 {
+        self.max_torque_nm
     }
 
     fn push_to_pass(&self) -> Option<&PushToPass> {

@@ -33,6 +33,20 @@ pub const REFEREE_COLUMNS: [&str; 2] = ["world.referee.lo", "world.referee.hi"];
 /// `CAR_ORACLE_PERF_METER=1`: the game's meter left on)
 pub const METER_COLUMNS: [&str; 3] = ["world.meter.diff.lo", "world.meter.diff.hi", "world.meter.speedDiff"];
 
+/// Task 43c: the player's shared memory graphics page after the step's frame, in a recording
+/// whose header has the key `shm` (the car oracle's `CAR_ORACLE_SHM=1`): one column per word,
+/// named after the member it starts in.
+pub fn shm_columns() -> Vec<String> {
+    let page = crate::race::shm::Page::graphics();
+    let starts: Vec<(usize, &str)> = crate::race::shm::GRAPHICS_FIELDS.iter().map(|(name, _)| (page.offset(name), *name)).collect();
+    (0..crate::race::shm::GRAPHICS_SIZE / 4)
+        .map(|word| {
+            let (at, name) = starts.iter().rev().find(|(at, _)| *at <= word * 4).unwrap();
+            format!("world.shm.{name}+{}", word * 4 - at)
+        })
+        .collect()
+}
+
 /// What a car's device reported in a step, in a row.
 pub const INPUT_COLUMNS: [&str; 7] = ["in.gas", "in.brake", "in.steer", "in.clutch", "in.handBrake", "in.buttons", "in.requestedGear"];
 
@@ -301,7 +315,7 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 }
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 } + if self.get("shm").is_some() { crate::race::shm::GRAPHICS_SIZE / 4 } else { 0 }
     }
 
     /// Task 28: the referee of the recording (header key `referee`:
@@ -343,6 +357,9 @@ impl Recording {
         }
         if self.get("meter").is_some() {
             out.extend(METER_COLUMNS.iter().map(|s| s.to_string()));
+        }
+        if self.get("shm").is_some() {
+            out.extend(shm_columns());
         }
         out
     }
@@ -493,6 +510,9 @@ pub struct ReplayWorld {
     pub referee: Option<Box<crate::race::Referee>>,
     /// Task 33: the rows end with the player's car's `PerformanceMeter` ([`METER_COLUMNS`])
     pub meter: bool,
+    /// Task 43c: the player's graphics page ([`shm_columns`]): the writer, the page, the
+    /// referee frame it was written after
+    pub shm: Option<Box<(crate::race::shm::GraphicsWriter, crate::race::shm::Page, u64)>>,
     /// Task 28b: (car, step): before that step the car's AI driver is called in
     /// (`AIDriver::requestPitStop`; header key `ai_pit_calls`)
     pub pit_calls: Vec<(usize, usize)>,
@@ -651,7 +671,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), pit_calls, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), shm: None, pit_calls, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         if recording.cars.iter().any(|meta| meta.drag.is_some()) {
@@ -695,6 +715,57 @@ impl ReplayWorld {
             }
             referee.hash_frames = true;
             world.referee = Some(Box::new(referee));
+            if recording.get("shm").is_some() {
+                world.shm = Some(Box::new((Default::default(), crate::race::shm::Page::graphics(), 0)));
+            }
+            // (Task 43c: the game's static page, written when its writer was made, header key
+            // `shm_static`: the port's must be the same, byte for byte)
+            if let Some(text) = recording.get("shm_static") {
+                let referee = world.referee.as_deref().unwrap();
+                let (car, track) = (&world.cars[0], world.cars[0].track.as_deref().unwrap());
+                let engine = car.drivetrain.as_ref().map(|drivetrain| drivetrain.engine());
+                let player = &referee.players[0];
+                let port = crate::race::shm::static_page(
+                    car,
+                    &crate::race::shm::StaticFacts {
+                        ac_version: &crate::race::shm::ac_version(),
+                        sessions: referee.manager.sessions.len() as i32,
+                        cars: world.cars.len() as i32,
+                        car_model: &player.car,
+                        track: &track.name,
+                        track_config: &track.config,
+                        spline_length: track.length(),
+                        sector_count: track.sectors_normalized_positions.len() as i32,
+                        penalties: referee.manager.penalties_enabled,
+                        player_name: &player.name,
+                        skin: &player.skin,
+                        max_power_w: engine.map_or(0.0, |engine| engine.get_max_power_w()),
+                        max_turbo_boost: engine.map_or(0.0, |engine| engine.get_max_turbo_boost()),
+                        online: None,
+                    },
+                );
+                let game: Vec<u8> = (0..text.len() / 2).map(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap_or(0)).collect();
+                let differ: Vec<String> = crate::race::shm::STATIC_FIELDS
+                    .iter()
+                    .filter(|(name, _)| {
+                        let at = port.offset(name);
+                        let end = crate::race::shm::STATIC_FIELDS.iter().map(|(other, _)| port.offset(other)).filter(|&o| o > at).min().unwrap_or(crate::race::shm::STATIC_SIZE);
+                        game.get(at..end) != Some(&port.bytes[at..end])
+                    })
+                    .map(|(name, _)| name.to_string())
+                    .collect();
+                if !differ.is_empty() {
+                    return Err(format!("shm_static: the port's static page differs from the game's in {}", differ.join(", ")));
+                }
+            }
+            // (the game's page for each of its flags, from a writer of the oracle's own)
+            if let Some(text) = recording.get("shm_flags") {
+                use crate::race::flags::Flag;
+                let port: Vec<String> = [Flag::None, Flag::Blue, Flag::Black, Flag::Chequered, Flag::Yellow, Flag::White, Flag::Penalty].iter().map(|f| f.shared_memory().to_string()).collect();
+                if port.join(" ") != text {
+                    return Err(format!("shm_flags: the game's page shows flags 0..=6 as {text:?}, the port as {:?}", port.join(" ")));
+                }
+            }
         }
         Ok(world)
     }
@@ -863,6 +934,17 @@ impl ReplayWorld {
                 referee.events(index, &laps, &splits);
             }
             referee.after_step(self, time);
+            // Task 43c: SharedMemoryWriter::update, after the frame (the oracle's game has no
+            // flags in the whole run: its flag manager shows none)
+            if let Some(shm) = &mut self.shm {
+                if shm.2 != referee.frames {
+                    shm.2 = referee.frames;
+                    let mut frame = crate::race::shm::referee_frame(&referee);
+                    frame.flag = crate::race::flags::Flag::None;
+                    let (writer, page, _) = &mut **shm;
+                    writer.update(page, &self.cars[0], &frame);
+                }
+            }
             self.referee = Some(referee);
         }
     }
@@ -958,6 +1040,9 @@ impl ReplayWorld {
             let meter = &self.cars[0].performance_meter;
             let bits = meter.current_diff.to_bits();
             row.extend([bits as u32, (bits >> 32) as u32, meter.current_speed_diff_ms.to_bits()]);
+        }
+        if let Some(shm) = &self.shm {
+            row.extend(shm.1.bytes.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])));
         }
         row
     }

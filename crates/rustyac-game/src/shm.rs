@@ -6,8 +6,8 @@
 //!
 //! The physics page is the car's own ([`PhysicsPageWriter`](rustyac_physics::car::PhysicsPageWriter),
 //! bit-exact with the game's, including its 300 steps of warm-up) and is copied out after
-//! every step. The graphics and static pages hold what a lone car on an endless road has to
-//! say; fields about laps, sectors, opponents and the track are constant.
+//! every step. The graphics page is the game's `SharedMemoryWriter::update`, ported in
+//! [`rustyac_physics::race::shm`], once per frame of the main thread.
 //!
 //! The names are AC's, so the two cannot publish at once: rustyAC refuses to start its writer
 //! while `acs.exe` runs.
@@ -28,198 +28,15 @@ use crate::input_file::StepInput;
 use crate::physics_thread::StepSink;
 use crate::sim::GameSim;
 
-/// `sizeof(SPageFileGraphic)`, `sizeof(SPageFileStatic)`.
-pub const GRAPHICS_SIZE: usize = 0x130;
-pub const STATIC_SIZE: usize = 0x2ac;
+use rustyac_physics::race::flags::Flag;
+use rustyac_physics::race::shm::{ac_version, referee_frame, static_page, GraphicsFrame, GraphicsWriter, OnlineStatic, StaticFacts};
+pub use rustyac_physics::race::shm::{Kind, Page, AC_LIVE, AC_OFF, AC_PAUSE, GRAPHICS_FIELDS, GRAPHICS_SIZE, STATIC_FIELDS, STATIC_SIZE};
 
-/// `AC_STATUS`
-pub const AC_OFF: i32 = 0;
-pub const AC_LIVE: i32 = 2;
-pub const AC_PAUSE: i32 = 3;
 
-/// A member of a page: 32-bit integer, float, floats, or a `wchar_t` string of so many
-/// characters (with its terminator).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Kind {
-    I,
-    F,
-    Fs(usize),
-    W(usize),
-}
-
-/// `SPageFileGraphic` (4-byte packing).
-pub const GRAPHICS_FIELDS: &[(&str, Kind)] = &[
-    ("packetId", Kind::I),
-    ("status", Kind::I),
-    ("session", Kind::I),
-    ("currentTime", Kind::W(15)),
-    ("lastTime", Kind::W(15)),
-    ("bestTime", Kind::W(15)),
-    ("split", Kind::W(15)),
-    ("completedLaps", Kind::I),
-    ("position", Kind::I),
-    ("iCurrentTime", Kind::I),
-    ("iLastTime", Kind::I),
-    ("iBestTime", Kind::I),
-    ("sessionTimeLeft", Kind::F),
-    ("distanceTraveled", Kind::F),
-    ("isInPit", Kind::I),
-    ("currentSectorIndex", Kind::I),
-    ("lastSectorTime", Kind::I),
-    ("numberOfLaps", Kind::I),
-    ("tyreCompound", Kind::W(33)),
-    ("replayTimeMultiplier", Kind::F),
-    ("normalizedCarPosition", Kind::F),
-    ("carCoordinates", Kind::Fs(3)),
-    ("penaltyTime", Kind::F),
-    ("flag", Kind::I),
-    ("idealLineOn", Kind::I),
-    ("isInPitLane", Kind::I),
-    ("surfaceGrip", Kind::F),
-    ("mandatoryPitDone", Kind::I),
-    ("windSpeed", Kind::F),
-    ("windDirection", Kind::F),
-    ("timeLimitSessionLeft", Kind::I),
-    ("isEscMenuVisible", Kind::I),
-];
-
-/// `SPageFileStatic` (4-byte packing).
-pub const STATIC_FIELDS: &[(&str, Kind)] = &[
-    ("smVersion", Kind::W(15)),
-    ("acVersion", Kind::W(15)),
-    ("numberOfSessions", Kind::I),
-    ("numCars", Kind::I),
-    ("carModel", Kind::W(33)),
-    ("track", Kind::W(33)),
-    ("playerName", Kind::W(33)),
-    ("playerSurname", Kind::W(33)),
-    ("playerNick", Kind::W(33)),
-    ("sectorCount", Kind::I),
-    ("maxTorque", Kind::F),
-    ("maxPower", Kind::F),
-    ("maxRpm", Kind::I),
-    ("maxFuel", Kind::F),
-    ("suspensionMaxTravel", Kind::Fs(4)),
-    ("tyreRadius", Kind::Fs(4)),
-    ("maxTurboBoost", Kind::F),
-    ("deprecated_1", Kind::F),
-    ("deprecated_2", Kind::F),
-    ("penaltiesEnabled", Kind::I),
-    ("aidFuelRate", Kind::F),
-    ("aidTireRate", Kind::F),
-    ("aidMechanicalDamage", Kind::F),
-    ("aidAllowTyreBlankets", Kind::I),
-    ("aidStability", Kind::F),
-    ("aidAutoClutch", Kind::I),
-    ("aidAutoBlip", Kind::I),
-    ("hasDRS", Kind::I),
-    ("hasERS", Kind::I),
-    ("hasKERS", Kind::I),
-    ("kersMaxJ", Kind::F),
-    ("engineBrakeSettingsCount", Kind::I),
-    ("ersPowerControllerCount", Kind::I),
-    ("trackSPlineLength", Kind::F),
-    ("trackConfiguration", Kind::W(33)),
-    ("ersMaxJ", Kind::F),
-    ("isTimedRace", Kind::I),
-    ("hasExtraLap", Kind::I),
-    ("carSkin", Kind::W(33)),
-    ("reversedGridPositions", Kind::I),
-    ("PitWindowStart", Kind::I),
-    ("PitWindowEnd", Kind::I),
-];
-
-/// A page being filled: the members' offsets worked out from the layout.
-#[derive(Clone, Debug)]
-pub struct Page {
-    offsets: Vec<(&'static str, Kind, usize)>,
-    pub bytes: Vec<u8>,
-}
-
-impl Page {
-    pub fn new(fields: &[(&'static str, Kind)]) -> Page {
-        let mut offsets = Vec::new();
-        let mut at = 0usize;
-        for (name, kind) in fields {
-            let (align, size) = match kind {
-                Kind::I | Kind::F => (4, 4),
-                Kind::Fs(count) => (4, 4 * count),
-                Kind::W(count) => (2, 2 * count),
-            };
-            at = at.div_ceil(align) * align;
-            offsets.push((*name, *kind, at));
-            at += size;
-        }
-        Page { offsets, bytes: vec![0; at.div_ceil(4) * 4] }
-    }
-
-    pub fn graphics() -> Page {
-        Page::new(GRAPHICS_FIELDS)
-    }
-
-    pub fn statics() -> Page {
-        Page::new(STATIC_FIELDS)
-    }
-
-    pub fn offset(&self, name: &str) -> usize {
-        self.offsets.iter().find(|(n, _, _)| *n == name).unwrap_or_else(|| panic!("the page has no member {name}")).2
-    }
-
-    fn member(&self, name: &str) -> (Kind, usize) {
-        let (_, kind, offset) = self.offsets.iter().find(|(n, _, _)| *n == name).unwrap_or_else(|| panic!("the page has no member {name}"));
-        (*kind, *offset)
-    }
-
-    pub fn set_i(&mut self, name: &str, value: i32) {
-        let (kind, at) = self.member(name);
-        assert_eq!(kind, Kind::I, "{name}");
-        self.bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    pub fn set_f(&mut self, name: &str, value: f32) {
-        let (kind, at) = self.member(name);
-        assert_eq!(kind, Kind::F, "{name}");
-        self.bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    pub fn set_fs(&mut self, name: &str, values: &[f32]) {
-        let (kind, at) = self.member(name);
-        assert_eq!(kind, Kind::Fs(values.len()), "{name}");
-        for (k, value) in values.iter().enumerate() {
-            self.bytes[at + 4 * k..at + 4 * k + 4].copy_from_slice(&value.to_le_bytes());
-        }
-    }
-
-    /// A string: UTF-16, cut to fit, always terminated.
-    pub fn set_w(&mut self, name: &str, text: &str) {
-        let (kind, at) = self.member(name);
-        let Kind::W(count) = kind else { panic!("{name} is not a string") };
-        self.bytes[at..at + 2 * count].fill(0);
-        for (k, unit) in text.encode_utf16().take(count - 1).enumerate() {
-            self.bytes[at + 2 * k..at + 2 * k + 2].copy_from_slice(&unit.to_le_bytes());
-        }
-    }
-
-    pub fn get_i(&self, name: &str) -> i32 {
-        let at = self.offset(name);
-        i32::from_le_bytes(self.bytes[at..at + 4].try_into().unwrap())
-    }
-
-    pub fn get_f(&self, name: &str) -> f32 {
-        let at = self.offset(name);
-        f32::from_le_bytes(self.bytes[at..at + 4].try_into().unwrap())
-    }
-}
-
-/// A lap time the way AC's pages show it: `m:ss:mmm`.
 /// `DrivingAssistManager::idealLine`: whether the ideal line shows (the window's Ctrl+I and
 /// `assists.ini` set it; the graphics page reports it).
 pub static IDEAL_LINE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-pub fn time_string(ms: i32) -> String {
-    let ms = ms.max(0);
-    format!("{}:{:02}:{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
-}
 
 /// Is the real game running? Looks at the names of the running processes, nothing more.
 /// Also reports another `rustyac.exe` (two writers on one page would garble it).
@@ -326,197 +143,94 @@ impl SharedMemory {
     }
 }
 
-/// Publishes after every step.
+/// Publishes the physics page after every step and the graphics page every frame of the
+/// main thread (every referee frame, every third step).
 pub struct ShmSink {
     memory: SharedMemory,
     graphics: Page,
-    /// `sharedMemories[1].packetId`
-    graphics_packet: i32,
+    writer: GraphicsWriter,
     status: i32,
-    distance: f32,
-    last_position: Option<[f32; 3]>,
     static_written: bool,
-    drive_start_steps: u64,
+    /// the referee frame (or step) the graphics page was last written for
+    last_frame: u64,
 }
 
 impl ShmSink {
     pub fn new(memory: SharedMemory) -> ShmSink {
-        ShmSink {
-            memory,
-            graphics: Page::graphics(),
-            graphics_packet: 0,
-            status: AC_LIVE,
-            distance: 0.0,
-            last_position: None,
-            static_written: false,
-            drive_start_steps: 0,
-        }
+        ShmSink { memory, graphics: Page::graphics(), writer: GraphicsWriter::default(), status: AC_LIVE, static_written: false, last_frame: 0 }
     }
 
     /// The static page of this car (the game writes it once, with the first frame).
     pub fn static_page(sim: &GameSim) -> Page {
-        let car = &sim.car.car;
-        let mut page = Page::statics();
-        page.set_w("smVersion", "1.7");
-        page.set_w("acVersion", "rustyAC 0.1");
-        page.set_i("numberOfSessions", 1);
-        // SharedMemoryWriter::writeStatic 0x1401877c0: RaceManager::getPitWindowStart / End
-        // (the server's two numbers in the game; here also a window of race.ini's)
-        let (open, close) = sim.pit_window();
-        page.set_i("PitWindowStart", open as i32);
-        page.set_i("PitWindowEnd", close as i32);
-        page.set_i("numCars", 1);
-        // the car's folder name, however `--car` named it
-        let model = crate::sim::car_name(&sim.data_path);
-        page.set_w("carModel", &model);
-        match &sim.track {
-            Some(track) => {
-                page.set_w("track", &track.name);
-                // `Spline::length` of the AI line
-                page.set_f("trackSPlineLength", track.length());
-                page.set_i("penaltiesEnabled", 1);
-            }
-            None => page.set_w("track", "rustyac_flat"),
-        }
-        page.set_w("playerName", "Player");
-        page.set_w("playerSurname", "");
-        page.set_w("playerNick", "rustyAC");
-        // the track's lap / sector lines (`Track::sectorsNormalizedPositions`)
-        page.set_i("sectorCount", sim.track.as_ref().map(|t| t.sectors_normalized_positions.len() as i32).unwrap_or(1));
-        if let Some(drivetrain) = &car.drivetrain {
-            let engine = drivetrain.engine();
-            // `Engine::maxTorqueNM`: the torque curve at the revs of its peak
-            let ini = rustyac_physics::data::ini::IniReader::load(&sim.data_path.join("engine.ini"));
-            if let Ok(curve) = ini.and_then(|ini| ini.get_curve("HEADER", "POWER_CURVE")) {
-                page.set_f("maxTorque", curve.get_value(engine.get_max_torque_rpm()));
-            }
-            // (`CarAvatar::initPhysics` reads it right after building the car)
-            page.set_f("maxPower", sim.physics_info.max_power_w);
-            // `acEngine.defaultEngineLimiter`: nothing has moved the limiter when the page is written
-            page.set_i("maxRpm", engine.get_limiter_rpm());
-            // `CarAvatar::initPhysics`: the turbos' boost added up, the cockpit's engine-brake settings
-            page.set_f("maxTurboBoost", sim.physics_info.max_turbo_boost);
-            page.set_i("engineBrakeSettingsCount", engine.coast_settings_count());
-        }
-        // the hybrid system (`physicsInfo.hasKERS`, `hasERS`, the two allowances in joules)
-        page.set_i("hasKERS", car.kers.is_some() as i32);
-        page.set_i("hasERS", car.ers.is_some() as i32);
-        if let Some(kers) = &car.kers {
-            page.set_f("kersMaxJ", kers.max_j);
-        }
-        if let Some(ers) = &car.ers {
-            page.set_f("ersMaxJ", ers.max_j);
-            page.set_i("ersPowerControllerCount", ers.power_controllers.len() as i32);
-        }
-        page.set_f("maxFuel", car.max_fuel as f32);
-        let mut travel = [0.0; 4];
-        let mut radius = [0.0; 4];
-        for index in 0..4.min(car.tyres.len()) {
-            let base = car.suspensions[index].base();
-            travel[index] = base.bump_stop_up - base.bump_stop_dn;
-            radius[index] = car.tyres[index].data.radius;
-        }
-        page.set_fs("suspensionMaxTravel", &travel);
-        page.set_fs("tyreRadius", &radius);
-        page.set_f("aidFuelRate", car.env.fuel_consumption_rate);
-        page.set_f("aidTireRate", car.env.tyre_consumption_rate);
-        page.set_f("aidMechanicalDamage", car.env.mechanical_damage_rate);
-        page.set_i("aidAllowTyreBlankets", car.env.allow_tyre_blankets as i32);
-        if let Some(aids) = &car.aids {
-            page.set_f("aidStability", aids.base().stability_control.gain);
-        }
-        page.set_i("aidAutoClutch", car.autoclutch.use_auto_on_change as i32);
-        page.set_i("aidAutoBlip", car.auto_blip.is_active as i32);
-        if let Some(aero) = &car.aero {
-            page.set_i("hasDRS", aero.base().drs.is_present as i32);
-        }
-        page.set_w("trackConfiguration", "");
-        page.set_w("carSkin", "");
-        page
+        let (track, track_config, spline_length, sector_count) = match &sim.track {
+            Some(track) => (track.name.as_str(), track.config.as_str(), track.length(), track.sectors_normalized_positions.len() as i32),
+            None => ("rustyac_flat", "", 0.0, 1),
+        };
+        let referee = sim.referee.as_deref();
+        // driverInfo.name: the game's three name fields all hold it
+        let name = sim.setup.referee.as_ref().and_then(|referee| referee.driver_names.first()).filter(|name| !name.is_empty()).map_or("Player", |name| name.as_str());
+        let online = sim.online.as_ref().map(|session| {
+            let accepted = &session.net.client.accepted;
+            OnlineStatic { is_timed_race: false, has_extra_lap: accepted.has_extra_lap, reversed_grid_positions: accepted.inverted_grid_positions as i32, pit_window: (accepted.pit_window_start as i32, accepted.pit_window_end as i32) }
+        });
+        static_page(
+            &sim.car.car,
+            &StaticFacts {
+                ac_version: &ac_version(),
+                sessions: referee.map_or(1, |referee| referee.manager.sessions.len() as i32),
+                cars: (1 + sim.opponents.len() + sim.remote_count()) as i32,
+                // the car's folder name, however `--car` named it
+                car_model: &crate::sim::car_name(&sim.data_path),
+                track,
+                track_config,
+                spline_length,
+                sector_count,
+                // (no session list: penalties on a track, as before)
+                penalties: referee.map_or(sim.track.is_some(), |referee| referee.manager.penalties_enabled),
+                player_name: name,
+                skin: sim.setup.player_skin.as_deref().unwrap_or_default(),
+                max_power_w: sim.physics_info.max_power_w,
+                max_turbo_boost: sim.physics_info.max_turbo_boost,
+                online,
+            },
+        )
     }
 
     fn write_graphics(&mut self, sim: &GameSim) {
         let car = &sim.car.car;
-        let g = &mut self.graphics;
-        // the game's counter goes up twice per page: the page shows 1, 3, 5 ...
-        self.graphics_packet += 1;
-        g.set_i("packetId", self.graphics_packet);
-        self.graphics_packet += 1;
-        g.set_i("status", self.status);
-        if sim.track.is_some() {
-            // SharedMemoryWriter::update's lap fields: the strings and the lap count from the
-            // lap list (a lap with a cut is listed and is never the best), the integer times
-            // straight from the car's transponder (whose best lap does not look at cuts)
-            use rustyac_physics::track::timing::time_to_string;
-            let tp = &car.transponder;
-            let db = &sim.lap_db;
-            let last = db.last_lap();
-            // AC_PRACTICE 0, AC_QUALIFY 1, AC_RACE 2, AC_HOTLAP 3 ...: one less than race.ini's
-            // TYPE for 1..7, else AC_UNKNOWN -1
-            g.set_i("session", if (1..=7).contains(&car.env.session_type) { car.env.session_type - 1 } else { -1 });
-            g.set_w("currentTime", &time_to_string(tp.t as i32));
-            g.set_w("lastTime", &time_to_string(last.time as i32));
-            g.set_w("bestTime", &time_to_string(db.best_lap.time as i32));
-            match db.current_splits.last() {
-                // timeToSectorString: seconds and tenths
-                Some(split) => g.set_w("split", &format!("{}.{}", split / 1000, split % 1000 / 100)),
-                None => g.set_w("split", " "),
-            }
-            g.set_i("completedLaps", db.laps.len() as i32);
-            g.set_i("iCurrentTime", tp.t as i32);
-            g.set_i("iLastTime", tp.last_lap as i32);
-            g.set_i("iBestTime", tp.best_lap as i32);
-            g.set_i("currentSectorIndex", db.current_splits.len() as i32);
-            let last_sector = match db.current_splits.last() {
-                Some(split) => *split,
-                None if last.time == 0 => 0,
-                None => last.splits.last().copied().unwrap_or(0),
-            };
-            g.set_i("lastSectorTime", last_sector as i32);
-            g.set_f("normalizedCarPosition", car.spline_locator_data.npos);
-            g.set_i("isInPitLane", car.is_in_pit_lane() as i32);
-            // SharedMemoryWriter::update 0x140186230: DrivingAssistManager::idealLine
-            g.set_i("idealLineOn", IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed) as i32);
-            g.set_i("isInPit", car.is_in_pits() as i32);
-            // CarAvatar::mandatoryPitstopDone
-            g.set_i("mandatoryPitDone", sim.mandatory_pit_done() as i32);
-        } else {
-            g.set_i("session", 0);
-            let ms = ((sim.steps - self.drive_start_steps) as f64 * 3.0) as i32;
-            g.set_w("currentTime", &time_string(ms));
-            g.set_w("lastTime", "-:--:---");
-            g.set_w("bestTime", "-:--:---");
-            g.set_w("split", "");
-            g.set_i("iCurrentTime", ms);
+        let db = &sim.lap_db;
+        let last = db.laps.last().cloned().unwrap_or_default();
+        let mut frame = match &sim.referee {
+            Some(referee) => referee_frame(referee),
+            // (no session list: one endless practice)
+            None => GraphicsFrame {
+                replay: false,
+                paused: false,
+                esc_menu: false,
+                session_type: car.env.session_type,
+                session_laps: 0,
+                current_splits: &db.current_splits,
+                last_lap_time: last.time,
+                last_lap_last_split: last.splits.last().copied().unwrap_or(0),
+                best_lap_time: db.best_lap.time,
+                lap_count: db.laps.len() as i32,
+                position: 1,
+                session_time_left: 0.0,
+                flag: Flag::None,
+                ideal_line: false,
+                replay_time_multiplier: 1.0,
+                in_pitlane: car.is_in_pit_lane(),
+                mandatory_pit_done: false,
+                time_limit_left: None,
+            },
+        };
+        frame.paused = self.status == AC_PAUSE;
+        frame.esc_menu = frame.paused;
+        frame.ideal_line = IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed);
+        frame.mandatory_pit_done = sim.mandatory_pit_done();
+        if self.writer.update(&mut self.graphics, car, &frame) {
+            self.memory.graphics.write(&self.graphics.bytes);
         }
-        g.set_i("position", 1);
-        g.set_f("sessionTimeLeft", -1.0);
-        let position = car.core.get_position(car.body);
-        let position = [position.x, position.y, position.z];
-        if let Some(last) = self.last_position {
-            let d = [position[0] - last[0], position[1] - last[1], position[2] - last[2]];
-            let moved = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            // a teleport is not driving
-            if moved.is_finite() && moved < 2.0 {
-                self.distance += moved;
-            }
-        }
-        self.last_position = Some(position);
-        g.set_f("distanceTraveled", self.distance);
-        if let Some(tyre) = car.tyres.first() {
-            if let Some(compound) = tyre.compound_defs.get(tyre.current_compound_index as usize) {
-                g.set_w("tyreCompound", &compound.name);
-            }
-        }
-        g.set_f("replayTimeMultiplier", 1.0);
-        g.set_fs("carCoordinates", &position);
-        g.set_f("penaltyTime", car.get_penalty_time() as f32);
-        g.set_f("surfaceGrip", car.env.dynamic_grip_level);
-        g.set_f("windSpeed", car.env.wind_speed * 3.6);
-        g.set_f("windDirection", car.env.wind_direction_deg);
-        g.set_i("timeLimitSessionLeft", -1);
-        g.set_i("isEscMenuVisible", (self.status == AC_PAUSE) as i32);
-        self.memory.graphics.write(&g.bytes);
     }
 }
 
@@ -526,10 +240,6 @@ impl StepSink for ShmSink {
             self.memory.statics.write(&ShmSink::static_page(sim).bytes);
             self.static_written = true;
         }
-        if sim.car.device.source.in_spawn_sequence() || input.device == crate::sim::DEVICE_SPAWN {
-            // the clock of the drive starts when the driver gets the car
-            self.drive_start_steps = sim.steps;
-        }
         // what the game's physics thread does right after the step
         if let Some(page) = sim.car.physics_page() {
             let mut bytes = [0u8; PAGE_SIZE];
@@ -538,7 +248,12 @@ impl StepSink for ShmSink {
             }
             self.memory.physics.write(&bytes);
         }
-        self.write_graphics(sim);
+        // SharedMemoryWriter::update runs once per drawn frame of the main thread
+        let frame = sim.referee.as_ref().map_or(sim.steps / 3, |referee| referee.frames);
+        if frame != self.last_frame {
+            self.last_frame = frame;
+            self.write_graphics(sim);
+        }
         Ok(())
     }
 
@@ -567,77 +282,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_pages_have_the_game_s_layout() {
-        // sizes and offsets from acs.pdb (docs/map/telemetry.md 5.7, 5.8)
-        let g = Page::graphics();
-        assert_eq!(g.bytes.len(), GRAPHICS_SIZE);
-        for (name, offset) in [
-            ("packetId", 0x000),
-            ("session", 0x008),
-            ("currentTime", 0x00c),
-            ("lastTime", 0x02a),
-            ("bestTime", 0x048),
-            ("split", 0x066),
-            ("position", 0x088),
-            ("iBestTime", 0x094),
-            ("sessionTimeLeft", 0x098),
-            ("distanceTraveled", 0x09c),
-            ("isInPit", 0x0a0),
-            ("numberOfLaps", 0x0ac),
-            ("tyreCompound", 0x0b0),
-            ("replayTimeMultiplier", 0x0f4),
-            ("carCoordinates", 0x0fc),
-            ("penaltyTime", 0x108),
-            ("flag", 0x10c),
-            ("surfaceGrip", 0x118),
-            ("windSpeed", 0x120),
-            ("timeLimitSessionLeft", 0x128),
-            ("isEscMenuVisible", 0x12c),
-        ] {
-            assert_eq!(g.offset(name), offset, "{name}");
-        }
-        let s = Page::statics();
-        assert_eq!(s.bytes.len(), STATIC_SIZE);
-        for (name, offset) in [
-            ("smVersion", 0x000),
-            ("acVersion", 0x01e),
-            ("numberOfSessions", 0x03c),
-            ("numCars", 0x040),
-            ("carModel", 0x044),
-            ("track", 0x086),
-            ("playerName", 0x0c8),
-            ("playerSurname", 0x10a),
-            ("playerNick", 0x14c),
-            ("sectorCount", 0x190),
-            ("maxTorque", 0x194),
-            ("maxPower", 0x198),
-            ("maxRpm", 0x19c),
-            ("maxFuel", 0x1a0),
-            ("suspensionMaxTravel", 0x1a4),
-            ("tyreRadius", 0x1b4),
-            ("maxTurboBoost", 0x1c4),
-            ("penaltiesEnabled", 0x1d0),
-            ("aidFuelRate", 0x1d4),
-            ("aidAllowTyreBlankets", 0x1e0),
-            ("aidStability", 0x1e4),
-            ("aidAutoClutch", 0x1e8),
-            ("aidAutoBlip", 0x1ec),
-            ("hasDRS", 0x1f0),
-            ("kersMaxJ", 0x1fc),
-            ("engineBrakeSettingsCount", 0x200),
-            ("trackSPlineLength", 0x208),
-            ("trackConfiguration", 0x20c),
-            ("ersMaxJ", 0x250),
-            ("isTimedRace", 0x254),
-            ("carSkin", 0x25c),
-            ("reversedGridPositions", 0x2a0),
-            ("PitWindowEnd", 0x2a8),
-        ] {
-            assert_eq!(s.offset(name), offset, "{name}");
-        }
-    }
-
-    #[test]
     fn strings_are_cut_and_terminated() {
         let mut g = Page::graphics();
         g.set_w("currentTime", "0123456789abcdefgh");
@@ -649,6 +293,5 @@ mod tests {
         assert_eq!(g.get_i("session"), 0);
         g.set_w("currentTime", "1:02:003");
         assert_eq!(g.bytes[at + 16..at + 30], [0; 14]);
-        assert_eq!(time_string(62_003), "1:02:003");
     }
 }

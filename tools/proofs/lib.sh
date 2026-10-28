@@ -124,7 +124,7 @@ summary() {
 multi_list() {
     m_root=$2; m_rec=$3; m_cache=$4
     grep -vE '^\s*(#|$)' "$1" | while read -r s t cars steps more; do
-        name="multi $s $t $cars $more"
+        name="${m_label:-multi} $s $t $cars $more"
         keep "$name" || continue
         set -- --scenario "$s" --track "$t"
         [ "$cars" = - ] || set -- "$@" --cars "$cars"

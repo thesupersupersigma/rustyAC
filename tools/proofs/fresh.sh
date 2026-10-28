@@ -7,13 +7,13 @@
 # the kept one. The unpacked copies in target/proofs/fresh/rec are deleted once compared.
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
 # "hybrid <car>", "sus <car>", "collide spa", "collide-worlds", "rays <track> <layout>",
-# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "ini <file>", "multi ...".
-#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro ini multi" (default: all of them)
+# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "ini <file>", "multi ...", "shm ...".
+#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro ini multi shm" (default: all of them)
 area=fresh
 . "$(dirname "$0")/lib.sh"
 tool car_oracle
 tool chassis_compare
-parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro ini multi"}
+parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro ini multi shm"}
 root=$out/root     # the scratch game folder the oracles build for themselves
 rec=$out/rec
 
@@ -184,6 +184,10 @@ fi
 
 if part multi; then  # Task 28 and 28b: several cars, recorded once, the port at 0, 1 and 8 threads
     multi_list tools/proofs/multi_fresh.txt "$root" "$rec" "$cache"
+fi
+
+if part shm; then  # Task 43c: the game's shared memory pages (static once, graphics every frame), never kept
+    CAR_ORACLE_SHM=1 m_label=shm multi_list tools/proofs/shm_list.txt "$root" "$rec" ""
 fi
 
 rm -rf "$root"

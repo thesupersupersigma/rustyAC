@@ -929,6 +929,8 @@ pub struct WholeReferee<'a> {
     /// stops begun, stops finished (the choices applied), frames waiting in the box
     pub pit_seen: [u64; 9],
     pit_state: i32,
+    /// Task 43c: the game's writer of the graphics page, after every frame
+    pub shm: Option<GameShm>,
 }
 
 impl<'a> WholeReferee<'a> {
@@ -953,7 +955,7 @@ impl<'a> WholeReferee<'a> {
         }
         game.start_race(setup.first_start_delay_ms);
         REFEREE_RAND_ON.with(|on| on.set(false));
-        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 9], pit_state: 5 };
+        let mut referee = WholeReferee { game, engine, step_in_frame: 0, filtered: vec![0.0; cars.len()], next_start_delay_ms: setup.next_start_delay_ms, state_hash: 0, state: Vec::new(), frames: 0, log: Vec::new(), seen: [0; 5], pit: None, pit_seen: [0; 9], pit_state: 5, shm: None };
         referee.note();
         referee
     }
@@ -1114,6 +1116,9 @@ impl<'a> WholeReferee<'a> {
                 let _ = std::fs::write(file, self.state.iter().map(|(key, value)| format!("{key}: {value}
 ")).collect::<String>());
             }
+        }
+        if let Some(shm) = &self.shm {
+            shm.frame(self);
         }
     }
 
@@ -1563,4 +1568,185 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         ));
     }
     Ok(report)
+}
+
+/// `SharedMemoryWriter::update`: the graphics page of the first car.
+const VA_SMW_UPDATE: usize = 0x1_4018_6230;
+const SMW_SIZE: usize = 0x220;
+const SMW_SIM: usize = 0x58;
+const SMW_CAR: usize = 0x60;
+const SMW_AVATAR: usize = 0x68;
+const SMW_FLAG_MANAGER: usize = 0x78;
+/// `sharedMemories[1].mapFileBuffer`, `.nullCounts`; `staticWrote`
+const SMW_GRAPHICS_BUFFER: usize = 0x80 + 0x18 + 8;
+const SMW_GRAPHICS_NULL_COUNTS: usize = 0x80 + 0x18 + 0x14;
+const SMW_STATIC_WROTE: usize = 0x214;
+const SMW_STATIC_BUFFER: usize = 0x80 + 8;
+const VA_SMW_WRITE_STATIC: usize = 0x1_4018_77c0;
+const STATIC_SIZE: usize = 0x2ac;
+// the car's numbers CarAvatar::initPhysics copies into physicsInfo, and where it takes them
+const CA_PHYSICS_INFO: usize = 0xe40;
+const CAR_ENGINE: usize = 0x310 + 0xe0;
+const CAR_SUSPENSIONS: usize = 0x2c88;
+const CAR_DRS: usize = 0x3640;
+const CAR_KERS: usize = 0x3670;
+const CAR_ERS: usize = 0x3768;
+const CAR_MAX_FUEL: usize = 0x3dc8;
+const VA_ENGINE_GET_MAX_POWER_W: usize = 0x1_4028_5a80;
+const VA_ENGINE_GET_MAX_TURBO_BOOST: usize = 0x1_4028_5af0;
+const VA_CURVE_GET_COUNT: usize = 0x1_4020_68e0;
+const VA_AI_SPLINE_CTOR: usize = 0x1_402a_4d70;
+const VA_AI_SPLINE_LOAD: usize = 0x1_402a_8390;
+const TA_AI_SPLINE_RECORDER: usize = 0x178;
+const VA_TRACK_GET_MAX_SLOTS: usize = 0x1_401c_8090;
+const GRAPHICS_SIZE: usize = 0x130;
+const FM_CURRENT_FLAG: usize = 0xb0;
+const SIM_DRIVING_AIDS: usize = 0x168;
+const SIM_PAUSE_MENU: usize = 0x110;
+const SIM_ESC_MENU: usize = 0x118;
+const REPLAY_TIME_MULT: usize = 0x130;
+/// `PhysicsAvatar::engine.track`, `PhysicsAvatar::windData`; the engine's `track`, `wind`
+const PA_ENGINE_TRACK: usize = 0x58 + 0x198;
+const PA_WIND_DATA: usize = 0x310;
+const PE_TRACK: usize = 0x198;
+/// `CarAvatar::bodyMatrix`, `physicsState.worldMatrix`, `physicsInfo.tyreCompounds`,
+/// `currentTyreCompoundIndex[0]`; `Car::tyreCompounds`, the first tyre's compound index
+const CA_BODY_MATRIX: usize = 0x224;
+const CA_WORLD_MATRIX: usize = 0x268 + 4;
+const CA_TYRE_COMPOUNDS: usize = 0xe40 + 0xd8;
+const CA_TYRE_COMPOUND_INDEX: usize = 0x1260;
+const CAR_TYRE_COMPOUNDS: usize = 0xf8;
+const CAR_TYRE0_COMPOUND: usize = 0xb28 + 0x648;
+
+/// Task 43c: the game's `SharedMemoryWriter` of the player's car, on the referee's sim. The
+/// static page is marked written (it reads files); the menus, the drive aids and the replay
+/// manager are as a fresh game leaves them; the flag manager is a stand-in that shows no flag
+/// (the whole run has no game flags: their mapping is [`GameShm::flag_values`]).
+pub struct GameShm {
+    update: extern "C" fn(*mut u8),
+    smw: *mut u8,
+    page: *mut u8,
+    engine: *mut u8,
+}
+
+impl GameShm {
+    pub unsafe fn build(acs: &Acs, referee: &WholeReferee, fast_lane: &std::path::Path) -> GameShm {
+        let game = &referee.game;
+        let (sim, car, avatar) = (game.sim, game.cars[0], game.avatars[0]);
+        for (at, size) in [(SIM_PAUSE_MENU, 0x400), (SIM_ESC_MENU, 0x400), (SIM_DRIVING_AIDS, 0x100)] {
+            if rd::<*mut u8>(sim, at).is_null() {
+                wr(sim, at, zeroed(size));
+            }
+        }
+        // ReplayManager::ReplayManager: timeMult 1
+        wr(rd::<*mut u8>(sim, SIM_REPLAY_MANAGER), REPLAY_TIME_MULT, 1.0f32);
+        wr(game.physics_avatar(), PA_ENGINE_TRACK, rd::<*mut u8>(referee.engine, PE_TRACK));
+        // CarAvatar::initPhysics: the car's compound names
+        std::ptr::copy_nonoverlapping(car.add(CAR_TYRE_COMPOUNDS), avatar.add(CA_TYRE_COMPOUNDS), 24);
+        let dam: *mut u8 = rd(sim, SIM_DRIVING_AIDS);
+        wr(dam, 0x58, sim);
+        // CarAvatar::initPhysics: the numbers writeStatic reads (taken now, before the first step)
+        let info = avatar.add(CA_PHYSICS_INFO);
+        let engine = car.add(CAR_ENGINE);
+        let max_power: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(acs.va(VA_ENGINE_GET_MAX_POWER_W));
+        let max_boost: extern "C" fn(*mut u8, bool) -> f32 = std::mem::transmute(acs.va(VA_ENGINE_GET_MAX_TURBO_BOOST));
+        let count: extern "C" fn(*mut u8) -> i32 = std::mem::transmute(acs.va(VA_CURVE_GET_COUNT));
+        wr(info, 0x60, rd::<f32>(engine, 0x204));
+        wr(info, 0x64, max_power(engine));
+        for wheel in 0..4 {
+            // (ISuspension is the first base of every suspension class)
+            let suspension: *mut u8 = rd(rd::<*mut u8>(car, CAR_SUSPENSIONS), wheel * 8);
+            wr(info, 0x68 + wheel * 4, rd::<f32>(suspension, 0x1c));
+            wr(info, 0x78 + wheel * 4, rd::<f32>(suspension, 0x20));
+        }
+        wr(info, 0x88, rd::<f64>(car, CAR_MAX_FUEL));
+        wr(info, 0x10c, max_boost(engine, false));
+        let (kers, ers) = (rd::<u8>(car, CAR_KERS + 0x18), rd::<u8>(car, CAR_ERS + 0x10));
+        if kers != 0 {
+            wr(info, 0x114, rd::<f32>(car, CAR_KERS + 0x40));
+        }
+        if ers != 0 {
+            wr(info, 0x118, rd::<f32>(car, CAR_ERS + 0x1e0));
+        }
+        wr(info, 0x120, kers);
+        wr(info, 0x121, ers);
+        wr(info, 0x126, rd::<u8>(car, CAR_DRS));
+        wr(info, 0x128, count(engine.add(0x360)));
+        let controllers = rd::<usize>(car, CAR_ERS + 0x30) - rd::<usize>(car, CAR_ERS + 0x28);
+        wr(info, 0x12c, (controllers / 0x48) as i32);
+        wr(info, 0x138, rd::<i32>(engine, 0x1ec));
+        // the physics avatar's own engine: the session's rates
+        let (pa, pe) = (game.physics_avatar(), referee.engine);
+        for (at, size) in [(0xb8, 1), (0xc8, 4), (0xcc, 4), (0x108, 4)] {
+            std::ptr::copy_nonoverlapping(pe.add(at), pa.add(0x58 + at), size);
+        }
+        // the track's AI line, as the game loads it
+        let recorder = acs.alloc(0xf0 + 0x200);
+        let spline_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AI_SPLINE_CTOR));
+        spline_ctor(recorder.add(0xf0));
+        if fast_lane.exists() {
+            let load: extern "C" fn(*mut u8, *mut u8) -> u8 = std::mem::transmute(acs.va(VA_AI_SPLINE_LOAD));
+            load(recorder.add(0xf0), super::wstring(acs, &fast_lane.to_string_lossy()));
+        }
+        wr(rd::<*mut u8>(sim, SIM_TRACK), TA_AI_SPLINE_RECORDER, recorder);
+        let smw = zeroed(SMW_SIZE);
+        let page = zeroed(GRAPHICS_SIZE);
+        wr(smw, SMW_SIM, sim);
+        wr(smw, SMW_CAR, car);
+        wr(smw, SMW_AVATAR, avatar);
+        wr(smw, SMW_GRAPHICS_BUFFER, page);
+        // Sim::getTrackData also counts the layout's pit boxes (TrackAvatar::getMaxSlotsAvailable,
+        // a map the track stand-in lacks): the static page has no use for it
+        acs.patch(acs.va(VA_TRACK_GET_MAX_SLOTS), &[0x31, 0xc0, 0xc3]);
+        let statics = zeroed(STATIC_SIZE);
+        wr(smw, SMW_STATIC_BUFFER, statics);
+        let write_static: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_SMW_WRITE_STATIC));
+        write_static(smw);
+        assert_eq!(rd::<u8>(smw, SMW_STATIC_WROTE), 1, "writeStatic wrote no page");
+        GameShm { update: std::mem::transmute::<usize, extern "C" fn(*mut u8)>(acs.va(VA_SMW_UPDATE)), smw, page, engine: referee.engine }
+    }
+
+    /// One frame of the main thread, after the referee's.
+    pub unsafe fn frame(&self, referee: &WholeReferee) {
+        let (car, avatar) = (referee.game.cars[0], referee.game.avatars[0]);
+        // CarAvatar::update: the drawn body is where the physics left it, the compound on now
+        std::ptr::copy_nonoverlapping(avatar.add(CA_WORLD_MATRIX), avatar.add(CA_BODY_MATRIX), 64);
+        wr(avatar, CA_TYRE_COMPOUND_INDEX, rd::<i32>(car, CAR_TYRE0_COMPOUND));
+        // PhysicsAvatar::updateCrossThreadValues: the engine's wind
+        let wind = self.engine.add(PE_WIND);
+        wr(referee.game.physics_avatar(), PA_WIND_DATA, rd::<f32>(wind, 0xc));
+        wr(referee.game.physics_avatar(), PA_WIND_DATA + 4, rd::<f32>(wind, 0x10));
+        // (the first page looks the flag manager up: it is there from then on)
+        if rd::<i32>(self.smw, SMW_GRAPHICS_NULL_COUNTS) >= 30 && rd::<*mut u8>(self.smw, SMW_FLAG_MANAGER).is_null() {
+            (self.update)(self.smw);
+            wr(self.smw, SMW_FLAG_MANAGER, zeroed(0x100));
+            return;
+        }
+        (self.update)(self.smw);
+    }
+
+    /// The static page writeStatic wrote when the writer was made.
+    pub unsafe fn static_page(&self) -> [u8; STATIC_SIZE] {
+        rd(rd::<*mut u8>(self.smw, SMW_STATIC_BUFFER), 0)
+    }
+
+    pub unsafe fn words(&self) -> [u32; GRAPHICS_SIZE / 4] {
+        rd(self.page, 0)
+    }
+
+    /// The page's `flag` for each of the flag manager's flags 0..=6, from a writer of its own.
+    pub unsafe fn flag_values(&self) -> Vec<i32> {
+        let smw = zeroed(SMW_SIZE);
+        std::ptr::copy_nonoverlapping(self.smw, smw, SMW_SIZE);
+        let page = zeroed(GRAPHICS_SIZE);
+        let flags = zeroed(0x100);
+        wr(smw, SMW_GRAPHICS_BUFFER, page);
+        wr(smw, SMW_GRAPHICS_NULL_COUNTS, 30i32);
+        wr(smw, SMW_FLAG_MANAGER, flags);
+        (0..=6).map(|flag| {
+            wr(flags, FM_CURRENT_FLAG, flag);
+            (self.update)(smw);
+            rd::<i32>(page, 0x10c)
+        }).collect()
+    }
 }

@@ -18,6 +18,7 @@ tools/proofs/quick/*          none
 tools/proofs/physics.sh       physics
 tools/proofs/fresh.sh         fresh
 tools/proofs/multi_fresh.txt  fresh
+tools/proofs/shm_list.txt     fresh
 tools/proofs/survey_list.txt  fresh
 tools/proofs/sound.sh         sound
 tools/proofs/render.sh        render
