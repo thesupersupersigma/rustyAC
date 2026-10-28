@@ -107,6 +107,46 @@ fn stock_cars(root: &Path) -> Option<Vec<String>> {
     (!cars.is_empty()).then_some(cars)
 }
 
+/// `file` with every folder spelled as the first path of the pack that named it: Windows folds
+/// case, the Linux server doesn't (a skin.ini can name a skin folder in other letters than the
+/// install has). What `out` already has in other letters (an older pack's) takes that spelling.
+fn spell(folders: &mut BTreeMap<String, String>, out: &Path, file: &str) -> Result<String, String> {
+    let mut path = String::new();
+    for part in file.split('/') {
+        let next = if path.is_empty() { part.to_string() } else { format!("{path}/{part}") };
+        let key = next.to_ascii_lowercase();
+        if !folders.contains_key(&key) {
+            if let Ok(entries) = std::fs::read_dir(out.join(&path)) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if name != part && name.eq_ignore_ascii_case(part) {
+                        std::fs::rename(entry.path(), out.join(&next)).map_err(|e| format!("{}: {e}", entry.path().display()))?;
+                    }
+                }
+            }
+            folders.insert(key.clone(), next);
+        }
+        path = folders[&key].clone();
+    }
+    Ok(path)
+}
+
+/// An error when two paths of the pack differ only in letter case, in a folder or the file name.
+fn one_spelling<'a>(paths: impl Iterator<Item = &'a str>) -> Result<(), String> {
+    let mut seen = BTreeMap::new();
+    for path in paths {
+        for end in path.match_indices('/').map(|(at, _)| at).chain([path.len()]) {
+            let part = &path[..end];
+            if let Some(other) = seen.insert(part.to_ascii_lowercase(), part) {
+                if other != part {
+                    return Err(format!("{other} and {part} differ only in letter case: the server would not find one of them"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Copies a file and returns its size and SHA-256.
 /// Copies `from` to `to` (or only reads it, without `to`): its size and SHA-256.
 fn copy_hashed(from: &Path, to: Option<&Path>) -> Result<(u64, String), String> {
@@ -521,15 +561,17 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         copy_hashed(from, Some(&out.join(file)))
     };
+    let folders = std::cell::RefCell::new(BTreeMap::new());
     let add = |manifest: &mut Manifest, files: &[(String, u64)]| -> Result<Vec<usize>, String> {
         let mut numbers = Vec::new();
-        for (file, _) in files {
+        for (from, _) in files {
+            let file = &spell(&mut folders.borrow_mut(), &out, from)?;
             // (a file two layouts share is copied once)
             if let Some(index) = manifest.files.iter().position(|f| f.path.eq_ignore_ascii_case(file)) {
                 numbers.push(index);
                 continue;
             }
-            let (bytes, sha256) = put(&root.join(file), file)?;
+            let (bytes, sha256) = put(&root.join(from), file)?;
             numbers.push(manifest.file(PackFile { path: file.clone(), bytes, sha256 }));
         }
         Ok(numbers)
@@ -572,6 +614,7 @@ fn run(args: &[String]) -> Result<(), String> {
     if manifest.cars.is_empty() || manifest.tracks.is_empty() {
         return Err("no car or no track could be copied: no pack was written".to_string());
     }
+    one_spelling(manifest.files.iter().map(|f| f.path.as_str()))?;
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     std::fs::write(out.join("manifest.json"), manifest.to_json()).map_err(|e| format!("manifest.json: {e}"))?;
     print_skipped(&late);
@@ -626,6 +669,27 @@ mod tests {
         assert_eq!(string_list(text, "tracks").unwrap(), vec!["spa", "ring/layout_gp"]);
         assert!(string_list(text, "bikes").is_err());
         assert!(string_list("cars = \"a\"", "cars").is_err());
+    }
+
+    #[test]
+    fn every_folder_has_one_spelling_on_disk_too() {
+        let out = std::env::temp_dir().join(format!("web_pack_case_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        // an older pack's folder in the install's letters
+        std::fs::create_dir_all(out.join("content/cars/c/skins/ARROW_RG7")).unwrap();
+        std::fs::write(out.join("content/cars/c/skins/ARROW_RG7/Old.dds"), b"x").unwrap();
+        let mut folders = BTreeMap::new();
+        let mut spelled = |file: &str| spell(&mut folders, &out, file).unwrap();
+        assert_eq!(spelled("content/cars/c/skins/arrow_rg7/ui_skin.json"), "content/cars/c/skins/arrow_rg7/ui_skin.json");
+        assert_eq!(spelled("content/cars/c/skins/ARROW_RG7/livery.png"), "content/cars/c/skins/arrow_rg7/livery.png");
+        assert_eq!(spelled("content/cars/C/skins/arrow_rg7/old.dds"), "content/cars/c/skins/arrow_rg7/old.dds");
+        let names = |dir: &str| std::fs::read_dir(out.join(dir)).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect::<Vec<_>>();
+        assert_eq!(names("content/cars/c/skins"), ["arrow_rg7"]);
+        assert_eq!(names("content/cars/c/skins/arrow_rg7"), ["old.dds"]);
+        std::fs::remove_dir_all(&out).unwrap();
+        assert!(one_spelling(["a/B/c.ini", "a/B/d.ini", "a/e.ini"].into_iter()).is_ok());
+        assert!(one_spelling(["a/B/c.ini", "a/b/d.ini"].into_iter()).is_err());
+        assert!(one_spelling(["a/c.ini", "a/C.INI"].into_iter()).is_err());
     }
 
     #[test]
