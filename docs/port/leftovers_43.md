@@ -3,7 +3,7 @@
 ## Resume here
 
 - Done: steps 1 to 7 (step 3's live stop and step 5's live ESC run not shown: Task 43b).
-- Next: the proofs (`run_all.sh --quick`), the web build, the release.
+- Next: Task 43b (the Not done items of steps 3 and 5 and the open questions).
 - Scratch: `re/scratch/task43/`. Rerun scripts: `tools/web_checks/task43/`.
 - Disk at the start: 67 GB free.
 
@@ -304,3 +304,35 @@ voted out, checksum failed (files not the server's), other protocol, auth failed
 `window.rustyac.error` stays the game's text. The panel is unchanged. Page b's text at IS_OPEN=2:
 "This race has already started and the server doesn't let new players join during it. Try again
 when the next session starts." / "ERROR :: Session is closed to new connections".
+
+## The proofs at the end
+
+`bash tools/proofs/run_all.sh --quick` on the final code (with the steps' own proofs above):
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0m26s (again, see below) |
+| net | 16 | 16 | 0 | 4m51s |
+| browser | 9 | 9 | 0 | 5m10s |
+| fresh | 47 | 47 | 0 | 15m31s |
+| sound | 4 | 4 | 0 | 0m23s |
+| ai_page | 3 | 3 | 0 | 7m44s |
+| shaders | 4 | 4 | 0 | 2m39s |
+| render | 10 | 10 | 0 | 4m34s |
+| gui | 15 | 15 | 0 | 9m36s |
+| python | 1 | 1 | 0 | 0m04s |
+| replays | 5 | 5 | 0 | 2m57s |
+| launcher | 1 | 1 | 0 | 1m22s |
+| dumps | 6 | 6 | 0 | 4m58s |
+
+The first run had one difference: the kept recording `oracle/t34/mp_d/pit_mouse.mcrec` (Task 34,
+4,320 steps) was made with the car oracle's old stand-in for the mouse menu's parent, hidden at
+the start; the game's ksgui `Control` starts visible (step 3), so the recording held the old
+stand-in's state (`DIFFERENT at step 2 world.referee.lo`). It was recorded again with the same
+scenario, seed, cars and steps on the fixed stand-in (0 / 1 / 8 workers **IDENTICAL**,
+`race_out.json` identical); the old files are kept in `re/scratch/task43/t34_old/`. The physics
+area then ran **9 of 9 IDENTICAL**. The fresh recordings of `pit_mouse` (seeds 1 to 5 in
+`tools/proofs/multi_fresh.txt`) were identical in both runs.
+
+The browser area built the site (`web/build.py`: wasm 7.49 MB, the site 8.02 MB) from the final
+code; the page checks ran on it.
