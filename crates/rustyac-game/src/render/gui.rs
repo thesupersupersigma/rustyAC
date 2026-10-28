@@ -35,6 +35,8 @@ pub struct GuiSetup {
     pub game: PathBuf,
     /// rustyAC's own cfg folder: `acos.ini` and `gameplay.ini` are written here
     pub cfg_dir: PathBuf,
+    /// the player's car's compounds (`physicsInfo.tyreCompounds`: the mouse menu's buttons)
+    pub pit_compounds: Vec<String>,
     /// `Documents\Assetto Corsa\cfg` (read only: the start of the two files above)
     pub documents_cfg: Option<PathBuf>,
     /// every car: the driver's name, the car's name on the screen, its folder, the nation code
@@ -168,6 +170,8 @@ pub struct GameGui {
     pit_stop: PitStopHud,
     /// the menu and the stop as the referee last showed them
     pit: Option<crate::referee::PitGui>,
+    /// the mouse menu's clicks since the physics thread last took them
+    pit_clicks: Vec<rustyac_physics::race::pitstop::MousePitClick>,
     /// `Sim::endSessionDisplayer`
     pub end: EndSession,
     /// an online session's own overlays (`ACClient::renderHUD`, `QOSOverlay`), what they
@@ -491,10 +495,11 @@ impl GameGui {
         let fuel = FuelLight::new(&mut painter, setup.fuel_light_min_liters);
         message.load_drivers_info(&mut painter, &input.cars, None);
         let pit_looks = PitMenuLooks::from_ini(system("pitstop.ini").as_ref());
-        let pit_stop = PitStopHud::new(&mut painter);
+        let compounds: Vec<String> = setup.pit_compounds.clone();
+        let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -622,6 +627,11 @@ impl GameGui {
                 (link.tyre_blankets, link.jump_start_mode) = (rules.tyre_blankets, rules.jump_start_mode);
             }
             self.gui.sim.race.inverted_grid_positions = online.inverted_grid_positions;
+            if info.referee.is_none() {
+                self.gui.sim.session_type = online.session_type;
+                self.gui.sim.time_to_session_start = online.time_to_session_start;
+                self.gui.sim.player_in_pit = online.player_in_pit;
+            }
         }
         // what the ESC menu and its page read
         self.gui.sim.game_time = time_ms;
@@ -869,7 +879,10 @@ impl GameGui {
         // PitStop::renderHUD 0x1400aa300
         if let Some(pit) = &self.pit {
             let mut state = pit.state;
-            self.pit_stop.render_hud(&mut painter, &scene, input.race_over, input.cars.first().map_or(0.0, |car| car.lock_controls_time), &mut state, &pit.times);
+            if let Some(mouse) = &pit.mouse {
+                self.pit_stop.sync(gui, mouse);
+            }
+            self.pit_stop.render_hud(gui, &mut painter, dt, &scene, input.race_over, input.cars.first().map_or(0.0, |car| car.lock_controls_time), &mut state, &pit.times, &pit.mouse_values);
         }
         self.names.render_hud(gui, &mut painter, dt, input);
         self.damage.render_hud(gui, &mut painter, dt, input);
@@ -904,6 +917,7 @@ impl GameGui {
     pub fn mouse_move(&mut self, x: i32, y: i32) {
         let e = MouseEvent { x, y, ..MouseEvent::default() };
         self.gui.mouse_move(&e);
+        self.pit_mouse(2, &e);
         self.end.on_mouse_move(&mut self.gui, &e);
         if let Some(tab) = &self.tab {
             tab.on_mouse_move(&mut self.gui, &e);
@@ -917,6 +931,7 @@ impl GameGui {
             self.welcome_closed = online.welcome.clone();
         }
         self.gui.mouse_down(&e);
+        self.pit_mouse(0, &e);
         self.end.on_mouse_down(&mut self.gui, &e);
         if let Some(tab) = &self.tab {
             tab.on_mouse_down(&mut self.gui, &e);
@@ -926,10 +941,28 @@ impl GameGui {
     pub fn mouse_up(&mut self, x: i32, y: i32, button: i32) {
         let e = MouseEvent { x, y, button, delta: 0.0 };
         self.gui.mouse_up(&e);
+        self.pit_mouse(1, &e);
         self.end.on_mouse_up(&mut self.gui, &e);
         if let Some(tab) = &self.tab {
             tab.on_mouse_up(&mut self.gui, &e);
         }
+    }
+
+    /// `PitStop`'s handlers of the window's mouse (`isActive`, the menu shown, the state
+    /// "choosing"); `kind` 0 down, 1 up, 2 move.
+    fn pit_mouse(&mut self, kind: u32, e: &MouseEvent) {
+        let Some(pit) = &self.pit else { return };
+        if let Some(mouse) = &pit.mouse {
+            self.pit_stop.sync(&mut self.gui, mouse);
+            let open = pit.state == rustyac_physics::race::pitstop::STATE_CHOOSING;
+            let clicks = self.pit_stop.mouse(&mut self.gui, open, kind, e);
+            self.pit_clicks.extend(clicks);
+        }
+    }
+
+    /// The mouse menu's clicks, for the physics thread.
+    pub fn take_pit_clicks(&mut self) -> Vec<rustyac_physics::race::pitstop::MousePitClick> {
+        std::mem::take(&mut self.pit_clicks)
     }
 
     pub fn mouse_wheel(&mut self, x: i32, y: i32, delta: f32) {

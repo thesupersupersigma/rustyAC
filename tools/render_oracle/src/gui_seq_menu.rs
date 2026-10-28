@@ -97,12 +97,14 @@ pub struct PitScript {
     /// `PitStop`: its state, and pitTimer, maxPitTimer, tyreTime, repairTime, fuelTime
     pub state: i32,
     pub times: [f32; 5],
+    /// Task 43: `PitStop::getEstimatedTime`, for the mouse menu (the tank: `car.fuel`)
+    pub estimate: f32,
 }
 
 static SCRIPT: Mutex<MenuScript> = Mutex::new(MenuScript {
     session_count: 1,
     replay_manager: false,
-    pit: PitScript { max_fuel: 0.0, compounds: Vec::new(), pressure: [0; 4], wing: [0.0; 8], in_pitlane: false, fuel_per_lap: 0.0, spline: 0.0, total_time: 0, timed: false, state: 0, times: [0.0; 5] },
+    pit: PitScript { max_fuel: 0.0, compounds: Vec::new(), pressure: [0; 4], wing: [0.0; 8], in_pitlane: false, fuel_per_lap: 0.0, spline: 0.0, total_time: 0, timed: false, state: 0, times: [0.0; 5], estimate: 0.0 },
     own_ping: 0,
     welcome: String::new(),
     disconnect: String::new(),
@@ -253,6 +255,7 @@ pub fn menu_input(what: &str, number: f32, _text: &str) -> bool {
         "pit.totalTime" => s.pit.total_time = number as i32,
         "pit.timed" => s.pit.timed = number != 0.0,
         "pit.state" => s.pit.state = number as i32,
+        "pit.estimate" => s.pit.estimate = number,
         "pit.times" => {
             for (slot, word) in s.pit.times.iter_mut().zip(_text.split(',')) {
                 *slot = word.trim().parse().unwrap_or(0.0);
@@ -452,7 +455,7 @@ pub fn pit_menu(small: bool, lane: bool) -> Vec<Op> {
 
 /// The panel of a pit stop that is being worked on: the three bars as the clock runs down.
 pub fn pit_stop() -> Vec<Op> {
-    let mut o = vec![hud("create", 2.0, ""), hud("car.name", 0.0, "Tazio Nuvolari"), hud("session", 3.0, ""), hud("raceText", 0.0, "Race"), hud("menu.pitStop", 0.0, ""), Op::Frame(DT)];
+    let mut o = vec![hud("create", 2.0, ""), hud("car.name", 0.0, "Tazio Nuvolari"), hud("session", 3.0, ""), hud("raceText", 0.0, "Race"), hud("pit.compounds", 0.0, "Soft|Medium|Hard"), hud("menu.pitStop", 0.0, ""), Op::Frame(DT)];
     o.extend([hud("pit.state", 3.0, ""), hud("menu.pitState", 0.0, "")]);
     for times in ["30,30,8,12,20", "27.5,30,8,12,20", "22,30,8,12,20", "19.3,30,8,12,20", "12,30,8,12,20", "9.9,30,8,12,20", "4.2,30,8,12,20", "0.1,30,8,12,20", "0,30,8,12,20", "-1,30,8,12,20", "5,10,0,0,10", "5,10,10,0,0", "7,7,3,7,5"] {
         o.extend([hud("pit.times", 0.0, times), Op::Frame(DT)]);
@@ -465,6 +468,46 @@ pub fn pit_stop() -> Vec<Op> {
         o.extend([hud("pit.state", state, ""), hud("menu.pitState", 0.0, ""), Op::Frame(DT)]);
     }
     o.extend([hud("car.lock", 4000.0, "0"), Op::Frame(DT), hud("car.lock", 0.0, "0"), Op::Frame(DT), hud("pit.state", 3.0, ""), hud("menu.pitState", 0.0, ""), Op::Frame(DT)]);
+    o
+}
+
+/// Task 43: the old mouse menu of `PitStop` (a keyboard driver's): it opens in the box (the
+/// state "choosing"), the mouse goes over it and clicks every kind of control but CONFIRM
+/// (that one asks the car for the stop's time: proven by the car oracle's `pit_mouse`), the
+/// tank's line and the estimate follow; it is not drawn in a menu or once the race is over.
+/// A screen of 1280 x 720 is taken for the mouse (the panel's left edge is at 315).
+pub fn pit_mouse() -> Vec<Op> {
+    let mut o = vec![hud("create", 2.0, ""), hud("car.name", 0.0, "Tazio Nuvolari"), hud("session", 3.0, ""), hud("raceText", 0.0, "Race")];
+    o.extend([hud("pit.maxFuel", 60.0, ""), hud("pit.compounds", 0.0, "Soft|Medium|Hard"), hud("car.fuel", 21.5, "0"), hud("pit.estimate", 12.7, ""), hud("menu.pitStop", 0.0, ""), Op::Frame(DT)]);
+    // in the box: the menu opens with the tank's share, "NO CHANGE" chosen
+    o.extend([hud("pit.state", 2.0, ""), hud("menu.pitState", 0.0, ""), hud("menu.pitMouse", 21.5 / 60.0, ""), Op::Frame(DT)]);
+    let click = |o: &mut Vec<Op>, x: i32, y: i32| o.extend([Op::MouseMove(x, y), Op::Frame(DT), Op::MouseDown(x, y), Op::Frame(DT), Op::MouseUp(x, y), Op::Frame(DT)]);
+    let (left, top) = (315, 75);
+    // every compound, then "NO CHANGE" again, then the second compound
+    for x in [200 + 28, 312 + 28, 424 + 28, 50 + 28, 312 + 28] {
+        click(&mut o, left + x, top + 40 + 28);
+    }
+    // the fuel: plus three times, minus once, a click on the gauge past the tank, one before
+    // it (nothing), fill up, minus
+    for (x, y) in [(424, 224), (424, 224), (424, 224), (59, 224), (90 + 250, 215 + 9), (90 + 40, 215 + 9), (574, 224), (59, 224)] {
+        click(&mut o, left + x, top + y);
+    }
+    // the three repairs on, the body off again
+    for x in [66 + 32, 293 + 32, 536 + 32, 293 + 32] {
+        click(&mut o, left + x, top + 360 + 32);
+    }
+    // beside the controls, and outside the panel: nothing
+    click(&mut o, left + 600, top + 300);
+    click(&mut o, 100, 400);
+    o.extend([hud("pit.estimate", 31.2, ""), hud("car.fuel", 3.0, "0"), Op::Frame(DT)]);
+    // not in a menu, not once the race is over; another state: no menu, and no clicks
+    for (what, text) in [("pause", ""), ("esc", "300"), ("raceOver", "")] {
+        o.extend([hud(what, 1.0, text), Op::Frame(DT), hud(what, 0.0, text), Op::Frame(DT)]);
+    }
+    o.extend([hud("pit.state", 4.0, ""), hud("menu.pitState", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, left + 200 + 28, top + 40 + 28);
+    o.extend([hud("pit.state", 2.0, ""), hud("menu.pitState", 0.0, ""), Op::Frame(DT)]);
+    click(&mut o, left + 66 + 32, top + 360 + 32);
     o
 }
 

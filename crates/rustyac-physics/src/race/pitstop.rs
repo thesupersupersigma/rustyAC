@@ -596,7 +596,8 @@ impl MousePitstop {
             fuel_percentage: 0.0,
             requested_fuel_percentage: 0.0,
             mouse_steering_enabled: false,
-            parent_visible: false,
+            // (a ksgui Control starts visible; PitStop::update shows and hides it after)
+            parent_visible: true,
             compounds,
             max_fuel,
             fixed_fuel: None,
@@ -621,6 +622,42 @@ impl MousePitstop {
             self.requested_fuel_percentage = room;
         } else if !(asked >= 0.0) {
             self.requested_fuel_percentage = 0.0;
+        }
+    }
+
+    /// A click on the menu's control other than CONFIRM, as its handler in `PitStop::PitStop`
+    /// @ 0x1400a55d0 changes the controls.
+    pub fn click(&mut self, click: MousePitClick) {
+        match click {
+            MousePitClick::Tyre(n) => {
+                self.desired_tyre_compound = if n == 0 { String::new() } else { self.compounds.get(n - 1).cloned().unwrap_or_default() };
+                for selected in &mut self.tyre_selected {
+                    *selected = false;
+                }
+                if let Some(selected) = self.tyre_selected.get_mut(n) {
+                    *selected = true;
+                }
+            }
+            MousePitClick::FuelDown => {
+                // (the tank's size, also with a fixed setup)
+                self.requested_fuel_percentage -= 1.0 / self.max_fuel;
+                self.clamp_fuel();
+            }
+            MousePitClick::FuelUp => {
+                // (1 / max + req: an addition, the same either way round)
+                self.requested_fuel_percentage += 1.0 / self.real_max_fuel();
+                self.clamp_fuel();
+            }
+            MousePitClick::FuelFill => self.requested_fuel_percentage = 1.0 - self.fuel_percentage,
+            MousePitClick::FuelGauge(share) => {
+                if share > self.fuel_percentage {
+                    self.requested_fuel_percentage = share - self.fuel_percentage;
+                }
+            }
+            MousePitClick::RepairSuspension => self.repair_suspension = !self.repair_suspension,
+            MousePitClick::RepairBody => self.repair_body = !self.repair_body,
+            MousePitClick::RepairEngine => self.repair_engine = !self.repair_engine,
+            MousePitClick::Confirm => {}
         }
     }
 
@@ -931,57 +968,29 @@ impl PitStop {
         if !mouse.parent_visible || state != STATE_CHOOSING {
             return;
         }
-        match click {
-            MousePitClick::Tyre(n) => {
-                mouse.desired_tyre_compound = if n == 0 { String::new() } else { mouse.compounds.get(n - 1).cloned().unwrap_or_default() };
-                for selected in &mut mouse.tyre_selected {
-                    *selected = false;
-                }
-                if let Some(selected) = mouse.tyre_selected.get_mut(n) {
-                    *selected = true;
-                }
-            }
-            MousePitClick::FuelDown => {
-                // (the tank's size, also with a fixed setup)
-                mouse.requested_fuel_percentage -= 1.0 / mouse.max_fuel;
-                mouse.clamp_fuel();
-            }
-            MousePitClick::FuelUp => {
-                // (1 / max + req: an addition, the same either way round)
-                mouse.requested_fuel_percentage += 1.0 / mouse.real_max_fuel();
-                mouse.clamp_fuel();
-            }
-            MousePitClick::FuelFill => mouse.requested_fuel_percentage = 1.0 - mouse.fuel_percentage,
-            MousePitClick::FuelGauge(share) => {
-                if share > mouse.fuel_percentage {
-                    mouse.requested_fuel_percentage = share - mouse.fuel_percentage;
-                }
-            }
-            MousePitClick::RepairSuspension => mouse.repair_suspension = !mouse.repair_suspension,
-            MousePitClick::RepairBody => mouse.repair_body = !mouse.repair_body,
-            MousePitClick::RepairEngine => mouse.repair_engine = !mouse.repair_engine,
-            MousePitClick::Confirm => {
-                let body = mouse.repair_body || mouse.repair_suspension;
-                let fuel = mouse.real_max_fuel() * mouse.requested_fuel_percentage;
-                // CarAvatar::getPitstopTime @ 0x1400d3570
-                let fuel = if fuel > 0.0 { fuel } else { 0.0 };
-                let time: PitStopTime = chassis.get_pitstop_time(fuel, mouse.is_changing_tyres(), body, mouse.repair_engine, mouse.repair_suspension, true, rand);
-                self.pit_timer = time.total;
-                self.tyre_time = time.tyres;
-                self.repair_time = time.repair;
-                self.fuel_time = time.fuel;
-                self.max_pit_timer = self.pit_timer;
-                if self.pit_timer > 0.0 {
-                    let start = PitStopStart { tyre_change_time: time.tyres, total_time: self.pit_timer, force_change_camera: false };
-                    out.push(PitAction::Commit(start));
-                    self.commits += 1;
-                    self.last_start = start;
-                    self.last_changing_tyres = self.is_changing_tyres();
-                    self.state = STATE_OPERATING;
-                } else {
-                    self.state = STATE_FINISHED;
-                }
-            }
+        if click != MousePitClick::Confirm {
+            mouse.click(click);
+            return;
+        }
+        let body = mouse.repair_body || mouse.repair_suspension;
+        let fuel = mouse.real_max_fuel() * mouse.requested_fuel_percentage;
+        // CarAvatar::getPitstopTime @ 0x1400d3570
+        let fuel = if fuel > 0.0 { fuel } else { 0.0 };
+        let time: PitStopTime = chassis.get_pitstop_time(fuel, mouse.is_changing_tyres(), body, mouse.repair_engine, mouse.repair_suspension, true, rand);
+        self.pit_timer = time.total;
+        self.tyre_time = time.tyres;
+        self.repair_time = time.repair;
+        self.fuel_time = time.fuel;
+        self.max_pit_timer = self.pit_timer;
+        if self.pit_timer > 0.0 {
+            let start = PitStopStart { tyre_change_time: time.tyres, total_time: self.pit_timer, force_change_camera: false };
+            out.push(PitAction::Commit(start));
+            self.commits += 1;
+            self.last_start = start;
+            self.last_changing_tyres = self.is_changing_tyres();
+            self.state = STATE_OPERATING;
+        } else {
+            self.state = STATE_FINISHED;
         }
     }
 

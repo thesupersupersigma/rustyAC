@@ -15,6 +15,7 @@ use std::path::Path;
 
 use rustyac_physics::car::replay::{Ground, RunSetup};
 use rustyac_physics::car::setup::SetupJob;
+use rustyac_physics::race::pitstop::MousePitClick;
 use rustyac_physics::track::DynamicTrack;
 use rustyac_physics::car::{CarControls, ChassisEnvironment};
 
@@ -441,6 +442,9 @@ pub struct PitHeader {
     /// the text of the setup's `.sp` file (pit stop presets), read into the menu at the
     /// start (a recording carries it in the key `pit_presets`, as hex)
     pub presets_ini: Option<String>,
+    /// `Sim::useMousePitstop`: the old mouse menu (a keyboard driver's, or pitstop.ini's
+    /// USE_MOUSE_PITSTOP; key `pit_menu_mouse`)
+    pub mouse: bool,
 }
 
 impl PitHeader {
@@ -466,6 +470,7 @@ impl PitHeader {
             },
             values: (values != "-").then(|| values.to_string()),
             presets_ini: None,
+            mouse: false,
         })
     }
 }
@@ -577,6 +582,9 @@ pub struct SimSetup {
     /// Task 31: the setup editor's jobs of the drive, each with the step it is done before.
     /// Not in the header: they are the file beside the input file (`<input>.setup`).
     pub setup_jobs: Vec<(u64, SetupJob)>,
+    /// Task 43: the pit strategy page's edits and the mouse menu's clicks, each with the step
+    /// it is done before (the file `<input>.pit`)
+    pub pit_jobs: Vec<(u64, PitJob)>,
     pub oracle: Option<OracleSetup>,
     /// The track: a folder, or a name under the game's `content/tracks`. Empty: the endless
     /// flat road.
@@ -629,6 +637,7 @@ impl Default for SimSetup {
             ff_gain: 1.0,
             esc_start: false,
             setup_jobs: Vec::new(),
+            pit_jobs: Vec::new(),
             oracle: None,
             track: String::new(),
             layout: String::new(),
@@ -793,6 +802,9 @@ impl SimSetup {
             if let Some(pit) = &referee.pit {
                 put("pit_stop", pit.to_text());
                 put("pit_cursor", pit.settings.cursor_start.to_string());
+                if pit.mouse {
+                    put("pit_menu_mouse", "1".to_string());
+                }
                 if let Some(text) = &pit.presets_ini {
                     put("pit_presets", text.bytes().map(|byte| format!("{byte:02x}")).collect::<String>());
                 }
@@ -938,6 +950,7 @@ impl SimSetup {
                 }
                 "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
                 "pit_stop" => setup.referee.as_mut().ok_or("pit_stop before referee")?.pit = Some(PitHeader::parse(value)?),
+                "pit_menu_mouse" => setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()).ok_or("pit_menu_mouse before pit_stop")?.mouse = value == "1",
                 "pit_cursor" => setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()).ok_or("pit_cursor before pit_stop")?.settings.cursor_start = value.parse().map_err(|e| format!("pit_cursor: {e}"))?,
                 "pit_presets" => {
                     let bytes: Option<Vec<u8>> = (0..value.len() / 2).map(|i| u8::from_str_radix(value.get(2 * i..2 * i + 2)?, 16).ok()).collect();
@@ -1056,6 +1069,7 @@ impl InputFile {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut file = InputFile::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         file.setup.setup_jobs = read_setup_jobs(path)?;
+        file.setup.pit_jobs = read_pit_jobs(path)?;
         Ok(file)
     }
 
@@ -1176,6 +1190,105 @@ pub fn write_setup_jobs(input: &Path, jobs: &[(u64, SetupJob)]) -> Result<(), St
     std::fs::write(&path, setup_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What the pit menus hand the physics thread besides the keys: the presets of the pit strategy
+/// page, or a click on the old mouse menu.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PitJob {
+    Presets(Vec<Vec<f32>>),
+    Click(MousePitClick),
+}
+
+/// The file beside an input file that holds its pit jobs (`<input>.pit`).
+pub fn pit_jobs_path(input: &Path) -> std::path::PathBuf {
+    let mut name = input.as_os_str().to_os_string();
+    name.push(".pit");
+    std::path::PathBuf::from(name)
+}
+
+/// One job a line: the step, then `presets` and every preset's values (floats as their bits,
+/// `,` between values, `/` between presets, `-` an empty one) or `click` and the control.
+pub fn pit_jobs_text(jobs: &[(u64, PitJob)]) -> String {
+    let mut out = String::from("RUSTYAC-PIT-JOBS 1\n");
+    for (step, job) in jobs {
+        let line = match job {
+            PitJob::Presets(presets) => {
+                let one = |p: &Vec<f32>| if p.is_empty() { "-".to_string() } else { p.iter().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(",") };
+                format!("presets {}", presets.iter().map(one).collect::<Vec<_>>().join("/"))
+            }
+            PitJob::Click(click) => match click {
+                MousePitClick::Tyre(n) => format!("click tyre {n}"),
+                MousePitClick::FuelDown => "click fuel_down".to_string(),
+                MousePitClick::FuelUp => "click fuel_up".to_string(),
+                MousePitClick::FuelFill => "click fuel_fill".to_string(),
+                MousePitClick::FuelGauge(share) => format!("click gauge {:08x}", share.to_bits()),
+                MousePitClick::RepairSuspension => "click repair_suspension".to_string(),
+                MousePitClick::RepairBody => "click repair_body".to_string(),
+                MousePitClick::RepairEngine => "click repair_engine".to_string(),
+                MousePitClick::Confirm => "click confirm".to_string(),
+            },
+        };
+        out.push_str(&format!("{step} {line}\n"));
+    }
+    out
+}
+
+pub fn parse_pit_jobs(text: &str) -> Result<Vec<(u64, PitJob)>, String> {
+    let mut lines = text.lines();
+    if lines.next() != Some("RUSTYAC-PIT-JOBS 1") {
+        return Err("not a pit jobs file".to_string());
+    }
+    let mut jobs: Vec<(u64, PitJob)> = Vec::new();
+    for line in lines.filter(|line| !line.trim().is_empty()) {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let bad = || format!("pit jobs: {line:?}");
+        let bits = |word: &str| u32::from_str_radix(word, 16).ok().map(f32::from_bits).filter(|v| v.is_finite());
+        let step: u64 = words.first().and_then(|w| w.parse().ok()).ok_or_else(bad)?;
+        if jobs.last().is_some_and(|(before, _)| *before > step) {
+            return Err(bad());
+        }
+        let job = match (words.get(1).copied(), words.get(2).copied()) {
+            (Some("presets"), Some(all)) => PitJob::Presets(
+                all.split('/').map(|p| if p == "-" { Some(Vec::new()) } else { p.split(',').map(bits).collect() }).collect::<Option<Vec<_>>>().ok_or_else(bad)?,
+            ),
+            (Some("click"), Some(control)) => PitJob::Click(match control {
+                "tyre" => MousePitClick::Tyre(words.get(3).and_then(|w| w.parse().ok()).ok_or_else(bad)?),
+                "fuel_down" => MousePitClick::FuelDown,
+                "fuel_up" => MousePitClick::FuelUp,
+                "fuel_fill" => MousePitClick::FuelFill,
+                "gauge" => MousePitClick::FuelGauge(words.get(3).and_then(|w| bits(w)).ok_or_else(bad)?),
+                "repair_suspension" => MousePitClick::RepairSuspension,
+                "repair_body" => MousePitClick::RepairBody,
+                "repair_engine" => MousePitClick::RepairEngine,
+                "confirm" => MousePitClick::Confirm,
+                _ => return Err(bad()),
+            }),
+            _ => return Err(bad()),
+        };
+        jobs.push((step, job));
+    }
+    Ok(jobs)
+}
+
+/// The pit jobs of the drive recorded in `input` (none: the drive had none).
+pub fn read_pit_jobs(input: &Path) -> Result<Vec<(u64, PitJob)>, String> {
+    let path = pit_jobs_path(input);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => parse_pit_jobs(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// Written when a recording ends; an old file of a drive without pit jobs is taken away.
+pub fn write_pit_jobs(input: &Path, jobs: &[(u64, PitJob)]) -> Result<(), String> {
+    let path = pit_jobs_path(input);
+    if jobs.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    std::fs::write(&path, pit_jobs_text(jobs)).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Writes an input file step by step while a drive runs.
 pub struct InputWriter {
     file: std::io::BufWriter<std::fs::File>,
@@ -1240,5 +1353,20 @@ mod setup_jobs_tests {
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n5 tc 1\n4 tc 1\n").is_err());
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n-1 tc 1\n").is_err());
         assert!(parse_setup_jobs("RUSTYAC-SETUP-JOBS 1\n1 turbo 7fc00000\n").is_err());
+    }
+
+    #[test]
+    fn pit_jobs_round_trip() {
+        let jobs = vec![
+            (3, PitJob::Presets(vec![vec![12.5, 2.0], Vec::new(), vec![-1.0]])),
+            (3, PitJob::Click(MousePitClick::Tyre(2))),
+            (9, PitJob::Click(MousePitClick::FuelGauge(0.625))),
+            (9, PitJob::Click(MousePitClick::Confirm)),
+        ];
+        let text = pit_jobs_text(&jobs);
+        assert_eq!(parse_pit_jobs(&text).unwrap(), jobs);
+        assert!(parse_pit_jobs("RUSTYAC-PIT-JOBS 1\n5 click confirm\n4 click confirm\n").is_err());
+        assert!(parse_pit_jobs("RUSTYAC-PIT-JOBS 1\n1 click gauge 7fc00000\n").is_err());
+        assert!(parse_pit_jobs("RUSTYAC-PIT-JOBS 1\n1 presets 3f80000g\n").is_err());
     }
 }

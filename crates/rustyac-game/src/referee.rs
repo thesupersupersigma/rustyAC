@@ -211,6 +211,9 @@ pub struct PitGui {
     pub in_pitlane: bool,
     pub state: i32,
     pub times: [f32; 5],
+    /// the old mouse menu's controls, and what its panel reads of the car
+    pub mouse: Option<rustyac_physics::race::pitstop::MousePitstop>,
+    pub mouse_values: rustyac_gui::pit_menu::MousePitValues,
 }
 
 /// What AC's HUD objects read of the session through `Sim` (see `rustyac_gui::hud::HudInput`).
@@ -527,7 +530,7 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
             // RaceManager::getSessionTotalTime(0) offline: RaceTimingServices::getTotalTime
             session_total_time: manager.timing.lap_dbs.first().map_or(0, |db| db.total_time as i32),
         };
-        out.pit_gui = Some(PitGui { menu: menu.clone(), car, in_pitlane: referee.pit_avatar.in_pitlane, state: stop.state, times: [stop.pit_timer, stop.max_pit_timer, stop.tyre_time, stop.repair_time, stop.fuel_time] });
+        out.pit_gui = Some(PitGui { menu: menu.clone(), car, in_pitlane: referee.pit_avatar.in_pitlane, state: stop.state, times: [stop.pit_timer, stop.max_pit_timer, stop.tyre_time, stop.repair_time, stop.fuel_time], mouse: stop.mouse.clone(), mouse_values: stop.mouse.as_ref().map_or_else(Default::default, |mouse| rustyac_gui::pit_menu::MousePitValues { fuel: player.fuel as f32, real_max_fuel: mouse.real_max_fuel(), estimated_time: mouse.estimated_time(player) }) });
     }
     if manager.results_displayed {
         if let Some(event) = referee.last_results.as_ref().filter(|_| manager.finalized) {

@@ -174,7 +174,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
             }
             setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
             let wind_base = setup.referee.as_ref().and_then(|referee| referee.wind_base);
-            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new(), pit: (!options.no_pit_stop).then(|| rustyac_game::conditions::pit_header((0, 0), setup.session.setup_file.as_deref())) });
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new(), pit: (!options.no_pit_stop).then(|| rustyac_game::conditions::pit_header((0, 0), setup.session.setup_file.as_deref(), rustyac_game::conditions::keyboard_driver(options, &input_method))) });
         }
         // Task 28b: --pit-window <open>,<close>
         if let (Some(window), Some(pit)) = (options.pit_window, setup.referee.as_mut().and_then(|referee| referee.pit.as_mut())) {
@@ -426,6 +426,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             // (not over a recorded drive: its jobs are the recording's)
             setup_snapshot: if options.replay.is_some() { None } else { info.setup.as_deref().cloned() },
             pit_page: if options.replay.is_some() { None } else { info.pit_page.as_deref().cloned() },
+            pit_compounds: info.pit_compounds.clone(),
             telemetry_car: info.telemetry,
             car_physics: info.car_physics,
             engineer_masses: info.engineer_masses,
@@ -1066,6 +1067,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         chat: options.chat.clone(),
         referee_out: referee_out(options),
         session_script: session_script(options),
+        pit_clicks: options.pit_clicks.clone(),
     };
     if options.duration.is_none() && options.replay.is_none() {
         println!("no --duration: running until Ctrl+C");
@@ -1323,7 +1325,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
-    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options) };
+    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone() };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
         let autodrive = options.autodrive;
@@ -1796,6 +1798,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 if let Some(menu) = gui.pit_page_exchange() {
                     *shared.pit_page.lock().unwrap() = Some(menu);
                 }
+                shared.pit_clicks.lock().unwrap().extend(gui.take_pit_clicks());
             }
             // Task 42c: the Python apps' cameras (ac_setCameraMode 0x14012d7d0 is
             // `setMode(mode, false, false)`, ac_setCameraCar 0x14012d680, the free camera's calls
@@ -2360,6 +2363,7 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
             if let Some(writer) = writer.take() {
                 println!("{} steps of the drive written to {}", writer.finish()?, options.record.as_ref().unwrap().display());
                 rustyac_game::input_file::write_setup_jobs(options.record.as_ref().unwrap(), &sim.setup_log)?;
+                rustyac_game::input_file::write_pit_jobs(options.record.as_ref().unwrap(), &sim.pit_log)?;
             }
         }
     }

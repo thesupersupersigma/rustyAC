@@ -279,6 +279,7 @@ impl<'a> GamePit<'a> {
         let table = Box::leak(vec![nothing as *const () as usize; 64].into_boxed_slice());
         let parent = zeroed(0x200);
         wr(parent, 0, table.as_ptr());
+        wr(parent, 0x150, 1u8);
         wr(self.pit, 0x128, parent);
         self.parent = parent;
         let (_, names) = menu_car(self.car);

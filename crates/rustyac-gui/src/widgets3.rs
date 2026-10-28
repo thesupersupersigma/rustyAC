@@ -96,6 +96,17 @@ pub enum Widget3 {
     Graph(Graph),
     Spinner(crate::spinner::Spinner),
     CustomSpinner(crate::spinner::CustomSpinner),
+    PitStopFuel(PitStopFuel),
+}
+
+/// `PitStopFuel` (0x180 bytes, PitStop.obj): the old mouse pit menu's fuel gauge.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PitStopFuel {
+    /// `fuelPercentage` (+0x178), `requestedFuelToAddPercentage` (+0x17c)
+    pub fuel_percentage: f32,
+    pub requested: f32,
+    /// the share of the gauge the last click was at (what `onMouseDown` compares with the tank)
+    pub clicked: Option<f32>,
 }
 
 /// The vertices of `Graph::localGL`, the drawer every graph shares.
@@ -647,6 +658,50 @@ impl Gui {
         }
     }
 
+    // ----- PitStopFuel -----
+
+    /// `PitStopFuel::PitStopFuel` 0x1400a7460: no frame, no background, the gauge's picture.
+    pub fn new_pit_stop_fuel(&mut self, painter: &mut dyn Painter, name: &str) -> Id {
+        let id = self.new_control(painter, name);
+        self.controls[id].back_texture = painter.get_texture("content/gui/pitstop/fuel_meter.png");
+        self.controls[id].draw_border = false;
+        self.controls[id].draw_background = false;
+        self.set_widget3(id, Widget3::PitStopFuel(PitStopFuel::default()));
+        id
+    }
+
+    pub fn pit_stop_fuel_mut(&mut self, id: Id) -> &mut PitStopFuel {
+        match self.widget3_mut(id) {
+            Widget3::PitStopFuel(f) => f,
+            _ => panic!("control {id} is not a fuel gauge"),
+        }
+    }
+
+    /// `PitStopFuel::render` 0x1400aa1d0: the picture, then the tank in green and what is to
+    /// be added in red after it (on `GraphicsManager::gl`).
+    fn pit_stop_fuel_render(&mut self, id: Id, dt: f32, painter: &mut dyn Painter) {
+        self.control_render(id, dt, painter);
+        let mut r = self.controls[id].rect;
+        self.get_world_rect(id, &mut r);
+        let Widget3::PitStopFuel(f) = self.widget3(id) else { return };
+        let gl = crate::painter::GRAPHICS_GL;
+        painter.gl_color4f(gl, 0.0, 1.0, 0.0, 0.7);
+        painter.gl_quad(gl, r.left, r.top, (r.right - r.left) * f.fuel_percentage, r.bottom - r.top, false);
+        painter.gl_color4f(gl, 1.0, 0.0, 0.0, 0.7);
+        painter.gl_quad(gl, (r.right - r.left) * f.fuel_percentage + r.left, r.top, (r.right - r.left) * f.requested, r.bottom - r.top, false);
+    }
+
+    /// `PitStopFuel::onMouseDown` 0x1400a9ce0: no children, no click event; always true.
+    fn pit_stop_fuel_on_mouse_down(&mut self, id: Id, e: &MouseEvent) -> bool {
+        let mut r = self.controls[id].rect;
+        let width = r.right - r.left;
+        self.get_world_rect(id, &mut r);
+        if let Some(share) = rustyac_physics::race::pitstop::fuel_gauge_share([r.left, r.right, r.top, r.bottom], width, e.x, e.y) {
+            self.pit_stop_fuel_mut(id).clicked = Some(share);
+        }
+        true
+    }
+
     // ----- the virtual functions, by widget -----
 
     pub fn widget3_render(&mut self, id: Id, dt: f32, painter: &mut dyn Painter) {
@@ -656,6 +711,7 @@ impl Gui {
             Widget3::Graph(_) => self.graph_render(id, dt, painter),
             Widget3::Spinner(_) => self.spinner_render(id, dt, painter),
             Widget3::CustomSpinner(_) => self.custom_spinner_render(id, dt, painter),
+            Widget3::PitStopFuel(_) => self.pit_stop_fuel_render(id, dt, painter),
         }
     }
 
@@ -679,6 +735,7 @@ impl Gui {
     pub fn widget3_on_mouse_down(&mut self, id: Id, e: &MouseEvent) -> bool {
         match self.widget3(id) {
             Widget3::Spinner(_) => self.spinner_on_mouse_down(id, e),
+            Widget3::PitStopFuel(_) => self.pit_stop_fuel_on_mouse_down(id, e),
             _ => self.control_on_mouse_down(id, e),
         }
     }

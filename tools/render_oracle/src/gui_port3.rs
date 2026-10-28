@@ -17,6 +17,7 @@ pub fn class_name(gui: &Gui, id: Id) -> &'static str {
         Widget3::Graph(_) => "Graph",
         Widget3::Spinner(_) => "Spinner",
         Widget3::CustomSpinner(_) => "CustomSpinner",
+        Widget3::PitStopFuel(_) => "PitStopFuel",
     }
 }
 
@@ -44,6 +45,7 @@ pub fn extra(gui: &Gui, id: Id) -> String {
             s.is_read_only as u8
         ),
         Widget3::CustomSpinner(s) => format!(" cspin={},{:08x},{}", s.mode, s.bar_position_normalized.to_bits(), s.press_to_increment as u8),
+        Widget3::PitStopFuel(f) => format!(" fuel={:08x},{:08x}", f.fuel_percentage.to_bits(), f.requested.to_bits()),
     }
 }
 

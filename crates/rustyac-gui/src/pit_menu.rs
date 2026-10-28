@@ -14,12 +14,12 @@
 //! 28b: `rustyac_physics::race::pitstop::QuickMenu`. This file gives it the game's labels.
 
 use rustyac_physics::data::ini::IniReader;
-use rustyac_physics::race::pitstop::{QuickMenu, ITEM_FUEL, ITEM_REPAIR, ITEM_TYRE_COMPOUND, ITEM_TYRE_PRESSURE, ITEM_WING};
+use rustyac_physics::race::pitstop::{MousePitClick, MousePitstop, QuickMenu, ITEM_FUEL, ITEM_REPAIR, ITEM_TYRE_COMPOUND, ITEM_TYRE_PRESSURE, ITEM_WING};
 
-use crate::control::Id;
+use crate::control::{Id, MouseEvent};
 use crate::font::{Font, FontType};
 use crate::gui::Gui;
-use crate::painter::{Painter, Texture, ALIGN_CENTER, GRAPHICS_GL};
+use crate::painter::{Painter, Texture, ALIGN_CENTER, ALIGN_LEFT, ALIGN_RIGHT, GRAPHICS_GL};
 
 /// The keys of `system/cfg/pitstop.ini [SETTINGS]` that are the menu's looks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -407,11 +407,34 @@ impl PitMenu {
 pub const COL_TITLE_BAR: [f32; 4] = [0.74, 0.0, 0.0, 1.0];
 pub const COL_DARK_TRANSP: [f32; 4] = [0.1, 0.1, 0.1, 0.7];
 
-/// The pictures of `PitStop::renderHUD`.
+/// What `PitStop` shows of itself: the old mouse menu's controls (made for every car, shown
+/// in the state "choosing"), its font and the pictures of the stop being worked on.
 pub struct PitStopHud {
     pub tx_repairing: Texture,
     pub tx_fueling: Texture,
     pub tx_tyre_changing: Texture,
+    pub font: Font,
+    /// `PIT_STOP_PARENT_CONTROL`: in no GUI tree, drawn and clicked by the stop alone
+    pub parent: Id,
+    /// "NO CHANGE", then a button per compound
+    pub tyres: Vec<Id>,
+    pub fuel_down: Id,
+    pub fuel: Id,
+    pub fuel_up: Id,
+    pub fuel_fill: Id,
+    pub repair_suspension: Id,
+    pub repair_body: Id,
+    pub repair_engine: Id,
+    pub confirm: Id,
+}
+
+/// What the "choosing" panel of `PitStop::renderHUD` reads besides its controls: the tank now
+/// (`CarAvatar` +0x9fc), `getRealMaxFuel` and `getEstimatedTime`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MousePitValues {
+    pub fuel: f32,
+    pub real_max_fuel: f32,
+    pub estimated_time: f32,
 }
 
 /// `PitStop::getPitStopTyrePercentage` 0x1400a3070 (and its two twins): the share of a job
@@ -426,29 +449,166 @@ pub fn pit_stop_percentage(pit_timer: f32, max_pit_timer: f32, job_time: f32) ->
 }
 
 impl PitStopHud {
-    /// The three pictures, as `PitStop::PitStop` 0x1400a55d0 loads them.
-    pub fn new(painter: &mut dyn Painter) -> PitStopHud {
+    /// What `PitStop::PitStop` 0x1400a55d0 makes for the screen, in its order: the font, the
+    /// mouse menu's controls (`compounds`: the car's `physicsInfo.tyreCompounds`), the three
+    /// pictures.
+    pub fn new(gui: &mut Gui, painter: &mut dyn Painter, compounds: &[String]) -> PitStopHud {
+        let font = Font::new(painter, "", FontType::Monospaced, 14.0, false, true);
+        let (w, _) = painter.screen();
+        let parent = gui.new_control(painter, "PIT_STOP_PARENT_CONTROL");
+        gui.set_size(parent, 650.0, 600.0);
+        gui.controls[parent].draw_background = false;
+        gui.controls[parent].draw_border = false;
+        gui.controls[parent].back_color = [0.21, 0.21, 0.21, 1.0];
+        gui.set_position(parent, (w / 2) as f32 - 650.0 * 0.5, 75.0);
+        let button = |gui: &mut Gui, painter: &mut dyn Painter, name: &str, picture: &str, size: f32, x: f32, y: f32, text: &str| {
+            let b = gui.new_active_button(painter, name);
+            gui.set_multiple_texture(painter, b, &format!("content/gui/pitstop/{picture}"));
+            gui.set_text(b, text);
+            gui.set_size(b, size, size);
+            gui.active_button_mut(b).text_coord = [0.0, if size == 48.0 { 40.0 } else { size }];
+            gui.set_position(b, x, y);
+            gui.add_control(parent, b);
+            b
+        };
+        // (the tyre buttons get their pictures last)
+        let mut tyres = Vec::new();
+        let no_change = gui.new_active_button(painter, "DO_NOT_CHANGE");
+        gui.set_text(no_change, "NO CHANGE");
+        gui.set_size(no_change, 56.0, 56.0);
+        gui.set_position(no_change, 50.0, 40.0);
+        gui.active_button_mut(no_change).text_coord = [0.0, 56.0];
+        gui.set_multiple_texture(painter, no_change, "content/gui/pitstop/tyre_no_change");
+        tyres.push(no_change);
+        gui.add_control(parent, no_change);
+        for (i, compound) in compounds.iter().enumerate() {
+            let b = gui.new_active_button(painter, &format!("BUTTON_{compound}"));
+            // (std::transform with the C library's toupper: a-z only)
+            gui.set_text(b, &compound.to_ascii_uppercase());
+            gui.set_size(b, 56.0, 56.0);
+            gui.active_button_mut(b).text_coord = [0.0, 56.0];
+            gui.set_position(b, (200 + 112 * i as i32) as f32, 40.0);
+            gui.set_multiple_texture(painter, b, &format!("content/gui/pitstop/tyre_{}", i + 1));
+            tyres.push(b);
+            gui.add_control(parent, b);
+        }
+        let fuel_down = button(gui, painter, "BUT_FUEL_DOWN", "fuel_minus", 48.0, 35.0, 200.0, "");
+        let fuel = gui.new_pit_stop_fuel(painter, "FUEL_CONTROL");
+        gui.set_size(fuel, 301.0, 19.0);
+        gui.set_position(fuel, 90.0, 215.0);
+        gui.add_control(parent, fuel);
+        let fuel_up = button(gui, painter, "BUT_FUEL_UP", "fuel_plus", 48.0, 400.0, 200.0, "");
+        let fuel_fill = button(gui, painter, "BUT_FUEL_FILL", "fuel_fill", 48.0, 550.0, 200.0, "");
+        let repair_suspension = button(gui, painter, "BUT_REPAIR_SUSP", "repair_sus", 64.0, 66.0, 360.0, "REPAIR BODY + SUSPENSION");
+        let repair_body = button(gui, painter, "BUT_REPAIR_BODY", "repair_body", 64.0, 650.0 * 0.5 - 64.0 * 0.5, 360.0, "REPAIR BODY");
+        let repair_engine = button(gui, painter, "BUT_REPAIR_ENGINE", "repair_engine", 64.0, (650.0 - 64.0) - 50.0, 360.0, "REPAIR ENGINE");
+        let confirm = button(gui, painter, "BUT_VOTE_NEXT_PAGE", "confirm_button", 64.0, 450.0, 515.0, "");
         let tx_repairing = painter.get_texture("content/gui/pitstop/operating_repair.png");
         let tx_fueling = painter.get_texture("content/gui/pitstop/operating_fuel.png");
         let tx_tyre_changing = painter.get_texture("content/gui/pitstop/operating_tyres.png");
-        PitStopHud { tx_repairing, tx_fueling, tx_tyre_changing }
+        PitStopHud { tx_repairing, tx_fueling, tx_tyre_changing, font, parent, tyres, fuel_down, fuel, fuel_up, fuel_fill, repair_suspension, repair_body, repair_engine, confirm }
     }
 
-    /// `PitStop::renderHUD` 0x1400aa300 (without the old mouse menu of its state "choosing"):
-    /// nothing while a menu or a replay shows or once the race is over; locked controls leave
-    /// the stop's state undefined (5); while the stop is worked on (state 3) the panel is
-    /// drawn. `times`: `pitTimer`, `maxPitTimer`, `tyreTime`, `repairTime`, `fuelTime`.
-    pub fn render_hud(&self, painter: &mut dyn Painter, scene: &PitMenuScene, race_over: bool, lock_controls_time: f32, state: &mut i32, times: &[f32; 5]) {
+    /// The controls as the mouse menu's state says (the game's handlers write the buttons'
+    /// `selected` and the gauge's shares themselves).
+    pub fn sync(&self, gui: &mut Gui, mouse: &MousePitstop) {
+        for (id, selected) in self.tyres.iter().zip(&mouse.tyre_selected) {
+            gui.active_button_mut(*id).selected = *selected;
+        }
+        gui.active_button_mut(self.repair_suspension).selected = mouse.repair_suspension;
+        gui.active_button_mut(self.repair_body).selected = mouse.repair_body;
+        gui.active_button_mut(self.repair_engine).selected = mouse.repair_engine;
+        let gauge = gui.pit_stop_fuel_mut(self.fuel);
+        gauge.fuel_percentage = mouse.fuel_percentage;
+        gauge.requested = mouse.requested_fuel_percentage;
+        gui.controls[self.parent].visible = mouse.parent_visible;
+    }
+
+    /// The window's mouse as the stop's three handlers pass it on (`isActive`, the menu shown
+    /// and the state "choosing": `open`): `kind` 0 down, 1 up, 2 move. The clicks it made.
+    pub fn mouse(&self, gui: &mut Gui, open: bool, kind: u32, e: &MouseEvent) -> Vec<MousePitClick> {
+        if !open || !gui.controls[self.parent].visible {
+            return Vec::new();
+        }
+        let fired = gui.fired.len();
+        match kind {
+            0 => {
+                gui.on_mouse_down(self.parent, e);
+            }
+            1 => gui.on_mouse_up(self.parent, e),
+            _ => gui.on_mouse_move(self.parent, e),
+        }
+        let mut clicks: Vec<MousePitClick> = gui.fired[fired..].iter().filter_map(|c| self.click_of(c.control)).collect();
+        if let Some(share) = gui.pit_stop_fuel_mut(self.fuel).clicked.take() {
+            clicks.push(MousePitClick::FuelGauge(share));
+        }
+        clicks
+    }
+
+    fn click_of(&self, id: Id) -> Option<MousePitClick> {
+        if let Some(n) = self.tyres.iter().position(|t| *t == id) {
+            return Some(MousePitClick::Tyre(n));
+        }
+        Some(match id {
+            _ if id == self.fuel_down => MousePitClick::FuelDown,
+            _ if id == self.fuel_up => MousePitClick::FuelUp,
+            _ if id == self.fuel_fill => MousePitClick::FuelFill,
+            _ if id == self.repair_suspension => MousePitClick::RepairSuspension,
+            _ if id == self.repair_body => MousePitClick::RepairBody,
+            _ if id == self.repair_engine => MousePitClick::RepairEngine,
+            _ if id == self.confirm => MousePitClick::Confirm,
+            _ => return None,
+        })
+    }
+
+    /// `PitStop::renderHUD` 0x1400aa300: nothing while a menu or a replay shows or once the
+    /// race is over; locked controls leave the stop's state undefined (5); the mouse menu in
+    /// the state "choosing" (2), the panel of the stop being worked on in "operating" (3).
+    /// `times`: `pitTimer`, `maxPitTimer`, `tyreTime`, `repairTime`, `fuelTime`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_hud(&mut self, gui: &mut Gui, painter: &mut dyn Painter, dt: f32, scene: &PitMenuScene, race_over: bool, lock_controls_time: f32, state: &mut i32, times: &[f32; 5], values: &MousePitValues) {
         if scene.pause_menu_visible || scene.in_replay || scene.esc_menu_visible || race_over {
             return;
         }
         if 0.0 < lock_controls_time {
             *state = 5;
         }
-        if *state == 3 {
+        if *state == 2 {
+            self.render_choosing(gui, painter, dt, values);
+        } else if *state == 3 {
             let share = |job: f32| pit_stop_percentage(times[0], times[1], job);
             self.render_operating(painter, share(times[2]), share(times[3]), share(times[4]));
         }
+    }
+
+    /// `PitStop::renderHUD` 0x1400aa300 in the state "choosing": three titled panels, the
+    /// tank's line, the estimate and "CONFIRM", then the controls.
+    pub fn render_choosing(&mut self, gui: &mut Gui, painter: &mut dyn Painter, dt: f32, values: &MousePitValues) {
+        let (w, _) = painter.screen();
+        let gl = GRAPHICS_GL;
+        let half = (w / 2) as f32;
+        let x = half - 325.0;
+        let bar = |painter: &mut dyn Painter, color: [f32; 4], y: f32, h: f32| {
+            painter.gl_color4f(gl, color[0], color[1], color[2], color[3]);
+            painter.gl_quad(gl, x, y, 650.0, h, false);
+        };
+        for (y, title) in [(75.0, "SELECT TYRES COMPOUND"), (235.0, "SELECT FUEL AMOUNT"), (395.0, "SELECT DAMAGE REPAIR")] {
+            bar(painter, COL_TITLE_BAR, y, 20.0);
+            self.font.set_color(1.0, 1.0, 1.0, 1.0);
+            self.font.blit_string(painter, half, y, title, 1.0, ALIGN_CENTER);
+            bar(painter, COL_DARK_TRANSP, y + 20.0, 115.0);
+        }
+        bar(painter, COL_DARK_TRANSP, 575.0, 115.0);
+        bar(painter, COL_TITLE_BAR, 612.5, 20.0);
+        let requested = gui.pit_stop_fuel_mut(self.fuel).requested;
+        let tank = format!("Tank :{} L Add {} L", values.fuel as i32, (values.real_max_fuel * requested) as i32);
+        let r = gui.controls[self.parent].rect;
+        self.font.blit_string(painter, r.left + 100.0, (r.top + 200.0) + 50.0, &tank, 1.0, ALIGN_LEFT);
+        let estimate = format!("ESTIMATED PIT STOP TIME : {} sec", values.estimated_time as i32);
+        self.font.set_color(1.0, 1.0, 1.0, 1.0);
+        self.font.blit_string(painter, (w / 2 - 50) as f32, 612.5, &estimate, 1.0, ALIGN_CENTER);
+        self.font.blit_string(painter, (half + 325.0) - 50.0, 612.5, "CONFIRM", 1.0, ALIGN_RIGHT);
+        gui.render(self.parent, dt, painter);
     }
 
     /// `PitStop::renderHUD` 0x1400aa300 in the state "operating": a dark panel in the middle

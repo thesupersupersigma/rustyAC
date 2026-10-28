@@ -244,7 +244,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                 if window.1 != 0 {
                     car_notes.push(format!("mandatory pit window: opens at {}, closes at {} (the leader's laps; minutes in a timed race)", window.0, window.1));
                 }
-                let pit = (!options.no_pit_stop).then(|| pit_header(window, setup.session.setup_file.as_deref()));
+                let pit = (!options.no_pit_stop).then(|| pit_header(window, setup.session.setup_file.as_deref(), keyboard_driver(options, input_method)));
                 setup.referee = Some(crate::input_file::RefereeHeader { sessions, over_time_mult: over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit });
             }
             notes.push(line);
@@ -417,14 +417,21 @@ pub fn over_time_mult() -> f32 {
 
 /// Task 28b: the player's pit stop of a session: `system/cfg/pitstop.ini` of the installed
 /// game (only read; the constructor's values without it) and the pit stop presets beside
+/// A driver of the keyboard, for the pit menu (`Sim::Sim` 0x140192070: `IsKeyboardControl`).
+// shortcut: rustyAC's own drivers (--autodrive, --ai-drive) keep the quick menu unless --pit-click scripts the clicks, as they click no CONFIRM
+pub fn keyboard_driver(options: &crate::cli::Options, input_method: &str) -> bool {
+    input_method == "KEYBOARD" && (!options.pit_clicks.is_empty() || !(options.autodrive || options.ai_drive))
+}
+
 /// the saved setup (`<setup>.sp`, as `SetupScreen::loadSetupAbsolutePath` looks for them).
-pub fn pit_header(window: (u16, u16), setup_file: Option<&std::path::Path>) -> crate::input_file::PitHeader {
-    let settings = match rustyac_content::install::ac_root().map(|root| root.join("system").join("cfg").join("pitstop.ini")) {
-        Some(path) if path.is_file() => IniReader::load(&path).map(|ini| rustyac_physics::race::QuickMenuSettings::from_ini(&ini)).unwrap_or_default(),
-        _ => rustyac_physics::race::QuickMenuSettings::default(),
-    };
+/// `keyboard`: the controls are the keyboard's (`Sim::Sim` 0x140192070 gives those drivers
+/// the old mouse menu, as pitstop.ini's [SETTINGS] USE_MOUSE_PITSTOP does everyone).
+pub fn pit_header(window: (u16, u16), setup_file: Option<&std::path::Path>, keyboard: bool) -> crate::input_file::PitHeader {
+    let ini = rustyac_content::install::ac_root().map(|root| root.join("system").join("cfg").join("pitstop.ini")).filter(|path| path.is_file()).and_then(|path| IniReader::load(&path).ok());
+    let settings = ini.as_ref().map(rustyac_physics::race::QuickMenuSettings::from_ini).unwrap_or_default();
+    let mouse = keyboard || ini.is_some_and(|ini| ini.get_int("SETTINGS", "USE_MOUSE_PITSTOP").unwrap_or(0) != 0);
     let presets_ini = setup_file.map(|file| file.with_extension("sp")).filter(|file| file.is_file()).and_then(|file| std::fs::read_to_string(file).ok());
-    crate::input_file::PitHeader { window, settings, values: None, presets_ini }
+    crate::input_file::PitHeader { window, settings, values: None, presets_ini, mouse }
 }
 
 /// `--sessions p10,q5,r3,rt20+`: a session list as race.ini would give it.

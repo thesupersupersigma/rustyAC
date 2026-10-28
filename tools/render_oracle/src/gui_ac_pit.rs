@@ -2,7 +2,8 @@
 
 //! The game side of the GUI oracle's pit stop: acs.exe's own `QuickMenuPitstop` (constructor,
 //! `buildControls` on a `setup.ini` of the script's, `sendInput`, `renderHUD`) and
-//! `PitStop::renderHUD` on a `PitStop` laid out by hand (its constructor makes the pit crew).
+//! `PitStop` (its constructor with stand-ins for the pit marker's model, the spawn
+//! position, the skin and the pit crew; `renderHUD`; the old mouse menu's handlers).
 //!
 //! What the menu reads of the player's car is written into the stand-in `CarAvatar`, or
 //! answered by stand-ins for `CarAvatar::getTyreCompound`, `getWingAngle`,
@@ -24,7 +25,15 @@ const VA_CAR_GET_WING_ANGLE: usize = 0x1_400d_3aa0;
 const VA_CAR_GET_STATIC_PRESSURE: usize = 0x1_400d_32b0;
 const VA_RACE_MANAGER_GET_SESSION_TOTAL_TIME: usize = 0x1_4013_9ee0;
 const VA_PIT_STOP_RENDER_HUD: usize = 0x1_400a_a300;
-const VA_RESOURCE_STORE_GET_TEXTURE: usize = 0x1_4020_00d0;
+const VA_PIT_STOP_CTOR: usize = 0x1_400a_55d0;
+const VA_MODEL_LOAD: usize = 0x1_4021_7d30;
+const VA_GRAPHICS_COMPILE: usize = 0x1_4020_26e0;
+const VA_CAR_GET_SPAWN_POSITION_INDEX: usize = 0x1_400d_3730;
+const VA_TRACK_GET_SPAWN_POSITION: usize = 0x1_401c_8200;
+const VA_CAR_GET_CURRENT_SKIN: usize = 0x1_4009_6eb0;
+const VA_PIT_CREW_CTOR: usize = 0x1_400a_0b80;
+const VA_PIT_STOP_GET_REAL_MAX_FUEL: usize = 0x1_400a_97d0;
+const VA_PIT_STOP_GET_ESTIMATED_TIME: usize = 0x1_400a_9600;
 
 struct Pit {
     menu: usize,
@@ -48,6 +57,42 @@ unsafe extern "C" fn get_static_pressure(_this: *mut u8, wheel: u16) -> i32 {
 
 unsafe extern "C" fn get_session_total_time(_this: *mut u8, _session: u32) -> i32 {
     script().pit.total_time
+}
+
+unsafe extern "C" fn nothing() {}
+
+unsafe extern "C" fn spawn_position_index(_car: *mut u8, _name: *mut u8) -> u32 {
+    0
+}
+
+unsafe extern "C" fn spawn_position(_track: *mut u8, out: *mut u8, _name: *mut u8, _index: u32) -> *mut u8 {
+    let identity: [f32; 16] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    wr(out, 0, identity);
+    out
+}
+
+unsafe extern "C" fn current_skin(_car: *mut u8, out: *mut u8) -> *mut u8 {
+    write_wstring(acs(), out, "skin");
+    out
+}
+
+unsafe extern "C" fn pit_crew(this: *mut u8, _car: *mut u8, _path: *mut u8) -> *mut u8 {
+    std::ptr::write_bytes(this, 0, 0xa8);
+    this
+}
+
+unsafe extern "C" fn real_max_fuel(_this: *mut u8) -> f32 {
+    script().pit.max_fuel
+}
+
+unsafe extern "C" fn estimated_time(_this: *mut u8) -> f32 {
+    script().pit.estimate
+}
+
+/// The mouse menu's parent control (for the oracle's hooks), once the stop is made.
+pub unsafe fn root() -> Option<*mut u8> {
+    let stop = PIT.lock().unwrap().stop as *const u8;
+    (!stop.is_null()).then(|| rd(stop, 0x128))
 }
 
 /// `CarAvatar::getTyreCompound`, `getWingAngle` and `getCurrentCompoundStaticPressure`
@@ -120,17 +165,74 @@ pub unsafe fn call(game: &Game, _gui: *mut u8, what: &str, number: f32, text: &s
             send(menu, number as u32);
         }
         "menu.pitStop" => {
-            let stop = a.alloc(0x240);
-            wr(stop, 0x8, rd::<*mut u8>(sim, 0x8));
-            wr(stop, 0x30, 1u8);
-            wr(stop, 0xd0, sim);
-            wr(stop, 0xc8, h.cars[0]);
-            let get_texture: extern "C" fn(*mut u8, *mut u8, *const u8, bool) -> *mut u8 = std::mem::transmute(a.va(VA_RESOURCE_STORE_GET_TEXTURE));
-            get_texture(rd(game.graphics, 0x180), stop.add(0x188), wstring(a, "content/gui/pitstop/operating_repair.png"), false);
-            get_texture(rd(game.graphics, 0x180), stop.add(0x1b0), wstring(a, "content/gui/pitstop/operating_fuel.png"), false);
-            get_texture(rd(game.graphics, 0x180), stop.add(0x1d8), wstring(a, "content/gui/pitstop/operating_tyres.png"), false);
+            for (va, to) in [
+                (VA_MODEL_LOAD, nothing as *const () as usize),
+                (VA_GRAPHICS_COMPILE, nothing as *const () as usize),
+                (VA_CAR_GET_SPAWN_POSITION_INDEX, spawn_position_index as *const () as usize),
+                (VA_TRACK_GET_SPAWN_POSITION, spawn_position as *const () as usize),
+                (VA_CAR_GET_CURRENT_SKIN, current_skin as *const () as usize),
+                (VA_PIT_CREW_CTOR, pit_crew as *const () as usize),
+                (VA_PIT_STOP_GET_REAL_MAX_FUEL, real_max_fuel as *const () as usize),
+                (VA_PIT_STOP_GET_ESTIMATED_TIME, estimated_time as *const () as usize),
+            ] {
+                jump(game, va, to);
+            }
+            // physicsInfo.tyreCompounds: the names (the buttons' names and texts)
+            let avatar = h.cars[0];
+            let names = script().pit.compounds;
+            let compounds = a.alloc(names.len().max(1) * 0x20);
+            for (i, name) in names.iter().enumerate() {
+                write_wstring(a, compounds.add(i * 0x20), name);
+            }
+            wr(avatar, 0xf18, compounds);
+            wr(avatar, 0xf20, compounds.add(names.len() * 0x20));
+            wr(avatar, 0xf28, compounds.add(names.len() * 0x20));
+            // Sim::trackNode, blurredNode: nodes whose addChild (vtable +8) does nothing
+            let node = a.alloc(0x40);
+            for slot in 0..4 {
+                wr(node, 0x10 + slot * 8, nothing as *const () as usize);
+            }
+            wr(node, 0, node.add(0x10));
+            wr(sim, 0x128, node);
+            wr(sim, 0x158, node);
+            // escMenu->setupScreen for the fuel buttons' SetupScreen::isFixedFuel: a fuel
+            // spinner that is not read-only (no fixed setup)
+            let esc: *mut u8 = rd(sim, 0x118);
+            if rd::<usize>(esc, 0x1a8) == 0 {
+                let spinner = a.alloc(0x1000);
+                let fuel_manager = a.alloc(0x400);
+                for slot in 0..0x80 {
+                    wr(fuel_manager, slot * 8, spinner);
+                }
+                let setup_screen = a.alloc(0x400);
+                wr(setup_screen, 0x1e0, fuel_manager);
+                wr(esc, 0x1a8, setup_screen);
+            }
+            sync(h);
+            let stop = a.alloc(0x300);
+            let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_PIT_STOP_CTOR));
+            ctor(stop, sim);
             wr(stop, 0x120, script().pit.state);
             PIT.lock().unwrap().stop = stop as usize;
+        }
+        // (PitStop::update arriving in the box: the controls reset, the menu shown)
+        "menu.pitMouse" => {
+            let stop = PIT.lock().unwrap().stop as *mut u8;
+            if stop.is_null() {
+                return Err("no pit stop".into());
+            }
+            let fuel: *mut u8 = rd(stop, 0x150);
+            wr(fuel, 0x178, number);
+            wr(fuel, 0x17c, 0.0f32);
+            let (begin, end): (*const *mut u8, *const *mut u8) = (rd(stop, 0x130), rd(stop, 0x138));
+            for i in 0..end.offset_from(begin) as usize {
+                wr(*begin.add(i), 0x1e8, (i == 0) as u8);
+            }
+            write_wstring(a, stop.add(0xf0), "");
+            for at in [0x170, 0x178, 0x180] {
+                wr(rd::<*mut u8>(stop, at), 0x1e8, 0u8);
+            }
+            wr(rd::<*mut u8>(stop, 0x128), 0x150, 1u8);
         }
         // (after `Hud("pit.state", …)`: the script's state into the object)
         "menu.pitState" => {
@@ -191,6 +293,7 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
         }
     }
     if !stop.is_null() {
-        out.push_str(&format!("pitstop state={}\n", rd::<i32>(stop, 0x120)));
+        out.push_str(&format!("pitstop state={} tyre={:?}\n", rd::<i32>(stop, 0x120), crate::gui_ac::read_wstring(stop.add(0xf0))));
+        crate::gui_ac::dump_control(game, rd(stop, 0x128), 1, out);
     }
 }

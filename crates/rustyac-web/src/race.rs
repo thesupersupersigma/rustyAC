@@ -42,7 +42,8 @@ fn pit_header(root: &Path, window: (u16, u16)) -> PitHeader {
         Ok(ini) if ini.ready => QuickMenuSettings::from_ini(&ini),
         _ => QuickMenuSettings::default(),
     };
-    PitHeader { window, settings, values: None, presets_ini: None }
+    // shortcut: the page's drivers get the quick menu, as a pad's; the mouse menu for its keyboard drivers is Task 43b
+    PitHeader { window, settings, values: None, presets_ini: None, mouse: false }
 }
 
 /// The session of `race` (and `assists`) on top of `setup` (the page's car and track, as

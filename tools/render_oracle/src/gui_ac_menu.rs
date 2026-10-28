@@ -699,5 +699,6 @@ pub unsafe fn extra_roots() -> Vec<*mut u8> {
     if !tab.is_null() {
         roots.push(rd(tab, 0x58));
     }
+    roots.extend(crate::gui_ac_pit::root());
     roots
 }

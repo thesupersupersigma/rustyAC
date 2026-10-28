@@ -4,7 +4,7 @@ base text widgets_a widgets_b widgets_c hud_messages hud_flags hud_flags_triple 
 # Task 30: menus
 lb_control_2 lb_control_12 lb_control_24 lb_app_12 lb_tab_2 lb_tab_24 lb_online_12 end_race_12 end_race_24 end_qualify_2 end_practice_12 end_online_12
 tab_2 tab_12 tab_24 tab_online_12 app_12 overlay_2 overlay_12 overlay_24 overlay_v_12 overlay_v_24 esc_menu esc_menu_race esc_menu_fixed
-replay_bar_2 replay_bar_12 online_overlays pit_menu pit_menu_small pit_menu_lane pit_menu_looks pit_menu_bottom pit_stop pause_menu pause_menu_online pause_menu_race pause_menu_plain
+replay_bar_2 replay_bar_12 online_overlays pit_menu pit_menu_small pit_menu_lane pit_menu_looks pit_menu_bottom pit_stop pit_mouse pause_menu pause_menu_online pause_menu_race pause_menu_plain
 # Task 31: setup editor
 setup_probe setup_tabs@ks_ferrari_f2004 setup_tabs@bmw_m3_e30 setup_tabs@bmw_z4_gt3 setup_tabs@ks_alfa_romeo_155_v6 setup_tabs@ks_ferrari_488_gt3 setup_tabs@ks_ferrari_sf70h
 setup_io@ks_ferrari_f2004 setup_io@bmw_m3_e30 setup_io@bmw_z4_gt3 setup_io@ks_ferrari_sf70h setup_io@lotus_49 setup_io@lotus_98t setup_io@lotus_exige_240 setup_io@lotus_exos_125_s1 setup_io@tatuusfa1

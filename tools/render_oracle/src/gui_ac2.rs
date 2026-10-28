@@ -39,7 +39,7 @@ const VA_SPINNER_SET_DRAW_ARROWS: usize = 0x1_4024_d830;
 const VA_SPINNER_SET_POSITION: usize = 0x1_4024_db30;
 
 /// class, size, constructor, table
-pub const CLASSES: [(&str, usize, usize, usize); 17] = [
+pub const CLASSES: [(&str, usize, usize, usize); 18] = [
     // CarLabel: a plain control to the port, which keeps its parts beside it
     ("Control", 0x230, 0x1_4006_9840, 0x1_404a_ee40),
     // DriverStatusSystemMessage: a plain control to the port, which draws it by hand
@@ -50,6 +50,7 @@ pub const CLASSES: [(&str, usize, usize, usize); 17] = [
     ("Spinner", 0x270, 0x1_4024_bac0, 0x1_404f_24d8),
     ("SpinnerMirrored", 0x270, 0x1_4024_bac0, 0x1_404f_24d8),
     ("CustomSpinner", 0x1d8, 0x1_4024_ead0, 0x1_404f_2b40),
+    ("PitStopFuel", 0x180, 0x1_400a_7460, 0x1_404b_7988),
     ("ScrollBar", 0x1c0, 0x1_4025_ae60, 0x1_404f_44b0),
     ("MovingBar", 0x200, 0x1_4025_ab60, 0x1_404f_4400),
     ("TextBox", 0x190, 0x1_4024_e330, 0x1_404f_2a08),
@@ -263,6 +264,7 @@ pub unsafe fn extra(_game: &Game, control: *const u8, class: &str) -> String {
             rd::<u8>(control, 0x1dc)
         ),
         "CustomSpinner" => format!(" cspin={},{:08x},{}", rd::<i32>(control, 0x1d4), bits(0x1d0), rd::<u8>(control, 0x178)),
+        "PitStopFuel" => format!(" fuel={:08x},{:08x}", bits(0x178), bits(0x17c)),
         _ => String::new(),
     }
 }

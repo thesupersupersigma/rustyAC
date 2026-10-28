@@ -322,6 +322,10 @@ pub struct Options {
     /// `--pit-key <key>@<s>` (repeatable; left, up, right, down; Task 31: drive, the ESC menu's "Drive"): the pit menu's keys, pressed
     /// at a time of the run (unattended checks)
     pub pit_keys: Vec<(f64, u32)>,
+    /// Task 43: `--pit-click <control>@<s>` (repeatable; the words of a `.pit` file's clicks,
+    /// `:` for the space: tyre:2, fuel_up, gauge:<bits>, confirm..): the old mouse menu clicked
+    /// at a time of the run (unattended checks)
+    pub pit_clicks: Vec<(f64, rustyac_physics::race::pitstop::MousePitClick)>,
     /// `--ai-pit-at <s>` (repeatable): the AI driver of your car (`--ai-drive`) is called in
     /// for a pit stop at a time of the run
     pub ai_pit_at: Vec<f64>,
@@ -492,6 +496,7 @@ impl Default for Options {
             no_pit_stop: false,
             pit_window: None,
             pit_keys: Vec::new(),
+            pit_clicks: Vec::new(),
             ai_pit_at: Vec::new(),
             penalties: None,
             jump_start: None,
@@ -1052,6 +1057,16 @@ impl Options {
                         _ => return Err(wrong()),
                     };
                     o.pit_keys.push((at.parse().map_err(|_| wrong())?, bit));
+                }
+                "--pit-click" => {
+                    let text = value("--pit-click")?;
+                    let wrong = || format!("--pit-click: <control>@<seconds> expected, got {text:?}");
+                    let (what, at) = text.split_once('@').ok_or_else(wrong)?;
+                    let jobs = crate::input_file::parse_pit_jobs(&format!("RUSTYAC-PIT-JOBS 1
+0 click {}
+", what.replace(':', " "))).map_err(|_| wrong())?;
+                    let Some((_, crate::input_file::PitJob::Click(click))) = jobs.into_iter().next() else { return Err(wrong()) };
+                    o.pit_clicks.push((at.parse().map_err(|_| wrong())?, click));
                 }
                 "--penalties" => o.penalties = Some(value("--penalties")? != "0"),
                 "--jump-start" => o.jump_start = Some(value("--jump-start")?.parse().map_err(|e| format!("--jump-start: {e}"))?),

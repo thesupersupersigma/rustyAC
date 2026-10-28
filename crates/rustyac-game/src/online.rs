@@ -197,6 +197,11 @@ pub struct OnlineGui {
     /// cars) and driver
     pub session_id: u8,
     pub net_cars: Vec<(u8, i32, String)>,
+    /// Task 43: what the ESC menu's header reads (`RaceManager::getCurrentSessionType`,
+    /// `getTimeToSessionStart` in ms, `CarAvatar::isInPit` of the player's car)
+    pub session_type: i32,
+    pub time_to_session_start: f64,
+    pub player_in_pit: bool,
 }
 
 /// Task 34: what the client heard that the GUI acts on at once (in arrival order).
@@ -824,7 +829,7 @@ impl OnlineSession {
     }
 
     /// What AC's own online overlays show.
-    pub fn gui_state(&self) -> OnlineGui {
+    pub fn gui_state(&self, player_in_pit: bool) -> OnlineGui {
         let accepted = &self.net.client.accepted;
         let net_cars = self.net.cars.iter().map(|car| (car.session_id, car.guid as i32, self.driver_of(car.session_id))).collect();
         OnlineGui {
@@ -836,6 +841,9 @@ impl OnlineSession {
             inverted_grid_positions: accepted.inverted_grid_positions as i32,
             session_id: self.net.client.session_id,
             net_cars,
+            session_type: self.session.session_type,
+            time_to_session_start: self.session.start_time - self.now,
+            player_in_pit,
         }
     }
 

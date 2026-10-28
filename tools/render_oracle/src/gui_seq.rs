@@ -1156,6 +1156,7 @@ ITEM_FOREGROUND_SELECTED=1,1,1,1
 ITEM_BACKGROUND_SELECTED=0.74,0,0,1
 ")], acos: None, allow_overlapping: false },
         "pit_stop" => plain(crate::gui_seq_menu::pit_stop()),
+        "pit_mouse" => plain(crate::gui_seq_menu::pit_mouse()),
         "pause_menu" => plain(crate::gui_seq_menu::pause_menu(0)),
         "pause_menu_online" => plain(crate::gui_seq_menu::pause_menu(1)),
         "pause_menu_race" => plain(crate::gui_seq_menu::pause_menu(2)),

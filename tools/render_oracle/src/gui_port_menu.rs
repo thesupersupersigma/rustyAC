@@ -534,6 +534,7 @@ pub fn render_end(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
 /// The window's mouse events as the game objects that hang on them hear them (after the GUI):
 /// 0 down, 1 up, 2 move, 3 the wheel.
 pub fn window_mouse(hud: &mut HudPort, gui: &mut Gui, kind: u32, e: &MouseEvent) {
+    crate::gui_port_pit::window_mouse(hud, gui, kind, e);
     if let Some(end) = &hud.more.menus.end {
         match kind {
             0 => end.on_mouse_down(gui, e),

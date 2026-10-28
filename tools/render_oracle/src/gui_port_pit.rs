@@ -3,12 +3,12 @@
 //! The port side of the GUI oracle's pit stop: Task 28b's `QuickMenu` with the labels of
 //! `rustyac_gui::pit_menu`, and the panel of a stop that is being worked on.
 
-use rustyac_gui::control::Id;
+use rustyac_gui::control::{Id, MouseEvent};
 use rustyac_gui::gui::Gui;
 use rustyac_gui::painter::Painter;
-use rustyac_gui::pit_menu::{PitMenu, PitMenuCar, PitMenuLooks, PitMenuScene, PitStopHud};
+use rustyac_gui::pit_menu::{MousePitValues, PitMenu, PitMenuCar, PitMenuLooks, PitMenuScene, PitStopHud};
 use rustyac_physics::data::ini::IniReader;
-use rustyac_physics::race::pitstop::{QuickMenu, QuickMenuCar, QuickMenuSettings};
+use rustyac_physics::race::pitstop::{MousePitstop, QuickMenu, QuickMenuCar, QuickMenuSettings, STATE_CHOOSING};
 
 use crate::gui_port_hud::HudPort;
 use crate::gui_seq_menu::script;
@@ -17,6 +17,7 @@ use crate::gui_seq_menu::script;
 pub struct Pit {
     pub menu: Option<(QuickMenu, PitMenu)>,
     pub stop: Option<PitStopHud>,
+    pub mouse: Option<MousePitstop>,
     pub state: i32,
     pub screen: Id,
 }
@@ -74,8 +75,27 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, root: &
             labels.update_ui(gui, menu, &car);
         }
         "menu.pitStop" => {
-            hud.more.pit.stop = Some(PitStopHud::new(painter));
-            hud.more.pit.state = script().pit.state;
+            let s = script().pit;
+            hud.more.pit.stop = Some(PitStopHud::new(gui, painter, &s.compounds));
+            hud.more.pit.mouse = Some(MousePitstop::new(s.compounds, s.max_fuel));
+            hud.more.pit.state = s.state;
+        }
+        // (PitStop::update arriving in the box: the controls reset, the menu shown)
+        "menu.pitMouse" => {
+            let Some(mouse) = &mut hud.more.pit.mouse else { return Err("no pit stop".into()) };
+            mouse.fuel_percentage = number;
+            mouse.requested_fuel_percentage = 0.0;
+            for selected in &mut mouse.tyre_selected {
+                *selected = false;
+            }
+            if let Some(first) = mouse.tyre_selected.first_mut() {
+                *first = true;
+            }
+            mouse.desired_tyre_compound.clear();
+            mouse.repair_body = false;
+            mouse.repair_engine = false;
+            mouse.repair_suspension = false;
+            mouse.parent_visible = true;
         }
         "menu.pitState" => hud.more.pit.state = script().pit.state,
         other => return Err(format!("the port side knows no pit call {other:?}")),
@@ -93,15 +113,33 @@ pub fn render_menu(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, 
     }
 }
 
-pub fn render_stop(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter) {
+pub fn render_stop(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
     if hud.more.pit.stop.is_none() {
         return;
     }
     let scene = scene(hud, gui);
     let (race_over, lock) = (hud.input.race_over, hud.input.cars.first().map_or(0.0, |car| car.lock_controls_time));
+    let s = script().pit;
+    let fuel = hud.input.cars.first().map_or(0.0, |car| car.fuel);
     let pit = &mut hud.more.pit;
-    if let Some(stop) = &pit.stop {
-        stop.render_hud(painter, &scene, race_over, lock, &mut pit.state, &script().pit.times);
+    if let (Some(stop), Some(mouse)) = (&mut pit.stop, &pit.mouse) {
+        stop.sync(gui, mouse);
+        let values = MousePitValues { fuel, real_max_fuel: mouse.real_max_fuel(), estimated_time: s.estimate };
+        stop.render_hud(gui, painter, dt, &scene, race_over, lock, &mut pit.state, &s.times, &values);
+    }
+}
+
+/// `PitStop`'s three handlers of the window's mouse; the clicks change the controls as the
+/// game's own handlers do.
+pub fn window_mouse(hud: &mut HudPort, gui: &mut Gui, kind: u32, e: &MouseEvent) {
+    let pit = &mut hud.more.pit;
+    let (Some(stop), Some(mouse)) = (&pit.stop, &mut pit.mouse) else { return };
+    if kind > 2 {
+        return;
+    }
+    stop.sync(gui, mouse);
+    for click in stop.mouse(gui, pit.state == STATE_CHOOSING, kind, e) {
+        mouse.click(click);
     }
 }
 
@@ -111,8 +149,9 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
         out.push_str(&crate::gui_seq_menu::pit_line(menu.is_visible, menu.timer, menu.current_index, menu.current_preset, menu.fuel_index, &menu.presets));
         crate::gui_port::dump_control(gui, labels.root, 1, out);
     }
-    if pit.stop.is_some() {
-        out.push_str(&format!("pitstop state={}\n", pit.state));
+    if let (Some(stop), Some(mouse)) = (&pit.stop, &pit.mouse) {
+        out.push_str(&format!("pitstop state={} tyre={:?}\n", pit.state, mouse.desired_tyre_compound));
+        crate::gui_port::dump_control(gui, stop.parent, 1, out);
     }
 }
 

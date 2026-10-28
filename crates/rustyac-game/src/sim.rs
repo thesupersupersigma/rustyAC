@@ -638,6 +638,8 @@ pub struct CarInfo {
     pub setup: Option<Box<rustyac_gui::setup_car::SetupSnapshot>>,
     /// Task 34: the player's pit menu as the editor's page "PITSTOP STRATEGY" starts with
     pub pit_page: Option<Box<rustyac_gui::setup_car::SetupPit>>,
+    /// the compounds' names (`physicsInfo.tyreCompounds`)
+    pub pit_compounds: Vec<String>,
     /// Another car of the session: the skin it was asked for (`None`: the car's first)
     pub skin: Option<String>,
     /// How many cars the session has (`RaceManager::carsToBeLoaded`)
@@ -730,6 +732,9 @@ pub struct GameSim {
     pub setup_schedule: std::collections::VecDeque<(u64, SetupJob)>,
     /// every job done so far, with its step (a recording keeps them beside its input file)
     pub setup_log: Vec<(u64, SetupJob)>,
+    /// Task 43: the same of the pit menus' jobs
+    pub pit_schedule: std::collections::VecDeque<(u64, crate::input_file::PitJob)>,
+    pub pit_log: Vec<(u64, crate::input_file::PitJob)>,
     /// Task 43: the next teleport is `goToSpawnPosition` alone (the pit box after an online
     /// session's results): the timer and the lap count stay, as only `onNewSession` resets them
     keep_laps: bool,
@@ -1291,8 +1296,9 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new(), keep_laps: false };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new(), pit_schedule: std::collections::VecDeque::new(), pit_log: Vec::new(), keep_laps: false };
         sim.setup_schedule = sim.setup.setup_jobs.iter().cloned().collect();
+        sim.pit_schedule = sim.setup.pit_jobs.iter().cloned().collect();
         // the session begins in the ESC menu: without a referee the car is held here
         if sim.setup.esc_start && sim.setup.referee.is_none() {
             sim.car.car.lock_controls(true);
@@ -1370,6 +1376,7 @@ impl GameSim {
         info.engineer_masses = crate::view::engineer_masses(self);
         info.setup = Some(Box::new(rustyac_gui::setup_car::SetupSnapshot::of(&self.car.car, &self.setup_car_name())));
         info.pit_page = self.pit_page().map(Box::new);
+        info.pit_compounds = self.car.car.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default();
         info.ai_controlled = self.car.device.ai.is_some();
         info
     }
@@ -1378,6 +1385,8 @@ impl GameSim {
     /// referee's, or online the menu the session makes at its first frame (none: no pit stop).
     fn pit_page(&self) -> Option<rustyac_gui::setup_car::SetupPit> {
         let menu = match (&self.referee, &self.online) {
+            // (Sim::useMousePitstop: no page)
+            (Some(referee), _) if referee.pit.as_ref().is_some_and(|pit| pit.mouse.is_some()) => return None,
             (Some(referee), _) => referee.menu.clone()?,
             (None, Some(_)) => rustyac_physics::race::QuickMenu::for_car(&self.car.car, &crate::online::PIT_SETTINGS).ok()?,
             (None, None) => return None,
@@ -1388,16 +1397,43 @@ impl GameSim {
     /// Task 34: what the page "PITSTOP STRATEGY" changed of the pit menu (the game's page
     /// writes into the one `QuickMenuPitstop`): the presets, and the items a server's fixed
     /// setup locks.
+    /// `CarAvatar::isInPit` 0x1400d4f30: within 1.5 m of the car's pit box.
+    pub fn player_in_pit(&self) -> bool {
+        let at = self.car.car.core.get_world_matrix(self.car.car.body).m[3];
+        let pit = self.car.car.pit_position.m[3];
+        rustyac_gui::micro_sectors::is_in_pit([at[0], at[1], at[2]], [pit[0], pit[1], pit[2]])
+    }
+
+    pub fn pit_click(&mut self, click: rustyac_physics::race::pitstop::MousePitClick) {
+        self.pit_job(crate::input_file::PitJob::Click(click));
+    }
+
+    /// The pit strategy page's edits (it changes the presets' values alone).
     pub fn apply_pit_page(&mut self, page: &rustyac_physics::race::QuickMenu) {
-        let menu = match (&mut self.referee, &mut self.online) {
-            (Some(referee), _) => referee.menu.as_mut(),
-            (None, Some(session)) => session.pit.as_mut().map(|pit| &mut pit.menu),
-            (None, None) => None,
-        };
-        if let Some(menu) = menu {
-            menu.presets = page.presets.clone();
-            menu.items = page.items.clone();
+        self.pit_job(crate::input_file::PitJob::Presets(page.presets.clone()));
+    }
+
+    /// A pit menu's job, kept for a recording.
+    fn pit_job(&mut self, job: crate::input_file::PitJob) {
+        match &job {
+            crate::input_file::PitJob::Click(click) => {
+                if let Some(referee) = &mut self.referee {
+                    let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+                    referee.mouse_pit_click(*click, &mut world);
+                }
+            }
+            crate::input_file::PitJob::Presets(presets) => {
+                let menu = match (&mut self.referee, &mut self.online) {
+                    (Some(referee), _) => referee.menu.as_mut(),
+                    (None, Some(session)) => session.pit.as_mut().map(|pit| &mut pit.menu),
+                    (None, None) => None,
+                };
+                if let Some(menu) = menu {
+                    menu.presets = presets.clone();
+                }
+            }
         }
+        self.pit_log.push((self.steps, job));
     }
 
     /// The same of the session's other cars, in creation order.
@@ -1568,16 +1604,21 @@ impl GameSim {
                     if let Some(values) = &pit.values {
                         made.set_values_text(values);
                     }
-                    menu = Some((made, pit.window));
+                    menu = Some((made, pit.window, pit.mouse));
                 }
                 Err(message) => eprintln!("no pit stop: {message}"),
             }
         }
         let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
         let mut referee = rustyac_physics::race::Referee::new(setup, track, &mut world, now);
-        if let Some((menu, window)) = menu {
+        if let Some((menu, window, mouse)) = menu {
             referee.enable_pit_stop(menu, &world);
             referee.pit_window = window;
+            // Sim::useMousePitstop: the old mouse menu, with the car's compounds (physicsInfo.tyreCompounds)
+            if let (true, Some(pit)) = (mouse, &mut referee.pit) {
+                let compounds = self.car.car.tyres.first().map(|tyre| tyre.compound_defs.iter().map(|def| def.name.clone()).collect()).unwrap_or_default();
+                pit.mouse = Some(rustyac_physics::race::pitstop::MousePitstop::new(compounds, self.car.car.max_fuel as f32));
+            }
         }
         self.referee = Some(Box::new(referee));
     }
@@ -1923,6 +1964,10 @@ impl GameSim {
                 self.setup_jobs.push(job);
             }
         }
+        while let Some((_, job)) = self.pit_schedule.front().filter(|(step, _)| *step <= self.steps).cloned() {
+            self.pit_schedule.pop_front();
+            self.pit_job(job);
+        }
         for job in std::mem::take(&mut self.setup_jobs) {
             if let SetupJob::SetFfUpgrade { which, value } = job {
                 self.car.device.source.set_ff_upgrade(which, value);
@@ -2066,7 +2111,15 @@ impl GameSim {
         }
         // Task 30: "Back to pits" without a referee is the plain way back to the spawn point
         if events & event::BACK_TO_PITS != 0 && self.referee.is_none() {
-            self.car.device.source.request(event::RESET);
+            if self.online.is_none() {
+                self.car.device.source.request(event::RESET);
+            } else if !self.player_in_pit() {
+                // Task 43: online it comes from the ESC menu in the last 5 s before the start
+                // (ESCMenu::render 0x1400fe420): goToSpawnPosition("PIT"), lockControlsUntilTime(20000)
+                self.car.device.source.request(event::RESET);
+                self.car.car.lock_controls_until(20000.0, time);
+                println!("online: ESC in the last 5 s before the start: back to the pit box, the controls locked for 20 s");
+            }
         }
         // Task 30: the ESC menu's lock of the controls, and its "Drive", without a referee
         if self.referee.is_none() {

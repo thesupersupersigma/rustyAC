@@ -56,7 +56,7 @@ pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, d
             proximity.render_hud(gui, painter, &hud.input);
         }
     }
-    crate::gui_port_pit::render_stop(hud, gui, painter);
+    crate::gui_port_pit::render_stop(hud, gui, painter, dt);
     let c = &mut hud.more.cars;
     let (Some(_), Some(names), Some(damage)) = (&mut c.proximity, &mut c.names, &mut c.damage) else { return };
     // (the name tags' own switch is tested inside, as the game's `isActive` is outside)

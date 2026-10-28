@@ -184,6 +184,8 @@ pub struct Shared {
     pub setup_snapshot: Mutex<(u64, Option<rustyac_gui::setup_car::SetupSnapshot>)>,
     /// Task 34: the pit menu as the page "PITSTOP STRATEGY" last changed it
     pub pit_page: Mutex<Option<rustyac_physics::race::QuickMenu>>,
+    /// the old mouse menu's clicks
+    pub pit_clicks: Mutex<Vec<rustyac_physics::race::pitstop::MousePitClick>>,
     /// Task 33b: the Telemetry app is shown; the steps' channel values (physics time in ms)
     /// since the display took them
     pub telemetry_on: AtomicBool,
@@ -217,6 +219,7 @@ impl Shared {
             setup_jobs: Mutex::new(Vec::new()),
             setup_snapshot: Mutex::new((0, None)),
             pit_page: Mutex::new(None),
+            pit_clicks: Mutex::new(Vec::new()),
             telemetry_on: AtomicBool::new(false),
             telemetry: Mutex::new(Vec::new()),
             setup_debug_on: AtomicBool::new(false),
@@ -303,6 +306,8 @@ pub struct LoopConfig {
     /// buttons pressed at given seconds of the run (`--next-session-at`).
     pub referee_out: Option<std::path::PathBuf>,
     pub session_script: Vec<(f64, u32)>,
+    /// Task 43: the mouse menu's clicks at given seconds (`--pit-click`; not over a replay)
+    pub pit_clicks: Vec<(f64, rustyac_physics::race::pitstop::MousePitClick)>,
 }
 
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
@@ -433,6 +438,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             if let Some(page) = shared.pit_page.lock().unwrap().take() {
                 sim.apply_pit_page(&page);
             }
+            for click in std::mem::take(&mut *shared.pit_clicks.lock().unwrap()) {
+                sim.pit_click(click);
+            }
             let clicks = shared.bias_requests.swap(0, Ordering::Relaxed);
             if clicks != 0 {
                 sim.car.device.source.request_bias(clicks);
@@ -483,6 +491,13 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         for (at, bits) in &config.session_script {
             if (at / 0.003).round() as u64 == sim.steps {
                 sim.car.device.source.request(*bits);
+            }
+        }
+        if config.replay.is_none() {
+            for (at, click) in &config.pit_clicks {
+                if (at / 0.003).round() as u64 == sim.steps {
+                    sim.pit_click(*click);
+                }
             }
         }
         let begin = Instant::now();
@@ -607,9 +622,14 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             if !session.gui_events.is_empty() {
                 shared.online_events.lock().unwrap().append(&mut session.gui_events);
             }
-            if steps.is_multiple_of(64) || shared.online_gui.lock().unwrap().is_none() {
+            // (every step while the ESC menu's 5 s before the start can come: its header asks then)
+            let start_near = (0.0..6000.0).contains(&(session.session.start_time - session.now));
+            if steps.is_multiple_of(64) || start_near || shared.online_gui.lock().unwrap().is_none() {
                 *shared.online_hud.lock().unwrap() = session.hud_lines();
-                *shared.online_gui.lock().unwrap() = Some(session.gui_state());
+                let at = sim.car.car.core.get_world_matrix(sim.car.car.body).m[3];
+                let pit = sim.car.car.pit_position.m[3];
+                let in_pit = rustyac_gui::micro_sectors::is_in_pit([at[0], at[1], at[2]], [pit[0], pit[1], pit[2]]);
+                *shared.online_gui.lock().unwrap() = Some(session.gui_state(in_pit));
             }
             if session.net.client.is_lost() {
                 result = Err("the connection to the server is gone".to_string());
@@ -672,11 +692,12 @@ pub struct Recorder {
     pub writer: Option<crate::input_file::InputWriter>,
     pub path: std::path::PathBuf,
     pub setup_jobs: Vec<(u64, rustyac_physics::car::setup::SetupJob)>,
+    pub pit_jobs: Vec<(u64, crate::input_file::PitJob)>,
 }
 
 impl Recorder {
     pub fn new(path: &std::path::Path, writer: crate::input_file::InputWriter) -> Recorder {
-        Recorder { writer: Some(writer), path: path.to_path_buf(), setup_jobs: Vec::new() }
+        Recorder { writer: Some(writer), path: path.to_path_buf(), setup_jobs: Vec::new(), pit_jobs: Vec::new() }
     }
 }
 
@@ -684,6 +705,9 @@ impl StepSink for Recorder {
     fn after_step(&mut self, sim: &GameSim, input: &StepInput) -> Result<(), String> {
         if sim.setup_log.len() > self.setup_jobs.len() {
             self.setup_jobs.extend_from_slice(&sim.setup_log[self.setup_jobs.len()..]);
+        }
+        if sim.pit_log.len() > self.pit_jobs.len() {
+            self.pit_jobs.extend_from_slice(&sim.pit_log[self.pit_jobs.len()..]);
         }
         match &mut self.writer {
             Some(writer) => writer.push(input),
@@ -695,7 +719,8 @@ impl StepSink for Recorder {
         match self.writer.take() {
             Some(writer) => {
                 writer.finish()?;
-                crate::input_file::write_setup_jobs(&self.path, &self.setup_jobs)
+                crate::input_file::write_setup_jobs(&self.path, &self.setup_jobs)?;
+                crate::input_file::write_pit_jobs(&self.path, &self.pit_jobs)
             }
             None => Ok(()),
         }

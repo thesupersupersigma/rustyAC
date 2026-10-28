@@ -591,6 +591,16 @@ impl Referee {
         }
     }
 
+    /// A click on the old mouse menu the window passed on (`PitStop::mouse_click`).
+    pub fn mouse_pit_click(&mut self, click: pitstop::MousePitClick, world: &mut dyn World) {
+        let Some(pit) = &mut self.pit else { return };
+        let mut out = Vec::new();
+        let mut rand = self.rand;
+        pit.mouse_click(click, world.car(0), &mut rand, &mut out);
+        self.rand = rand;
+        self.apply_pit(out, world);
+    }
+
     fn apply_pit(&mut self, actions: Vec<PitAction>, world: &mut dyn World) {
         for action in actions {
             match action {
