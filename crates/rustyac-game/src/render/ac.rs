@@ -1608,7 +1608,11 @@ impl AcRenderer {
                 };
                 gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
+                // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)
+                let rows = self.graphics.gpu_profiler.queries.iter().map(|q| rustyac_gui::app_gpu_profiler::GpuQueryRow { name: q.name.to_string(), last_result: q.last_result, last_ts: q.last_ts });
+                gui.gui.apps.gpu_profile = rows.collect();
                 gui.render(&mut self.graphics, dt);
+                self.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
             }
             None => {
                 self.graphics.reset_render_states();
@@ -1616,6 +1620,7 @@ impl AcRenderer {
                 self.graphics.set_blend_mode(rustyac_render::graphics::BLEND_ALPHA);
             }
         }
+        self.graphics.trigger_query("GUI");
         // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
         if let Some(gates) = &self.gates {
             if !self.told_paused && !info.replay {
@@ -1780,9 +1785,11 @@ impl AcRenderer {
 
     /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised.
     #[cfg(all(windows, not(feature = "wgpu")))]
-    pub fn present(&self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
+    pub fn present(&mut self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
+        // GraphicsManager::endScene: the GPU profiler's END_FRAME, the present, its endFrame
+        self.graphics.trigger_query("END_FRAME");
         // SAFETY: the back buffer and the picture have the same size and format.
-        unsafe {
+        let shown = unsafe {
             let back: ID3D11Texture2D = chain.GetBuffer(0).map_err(err("back buffer"))?;
             if let Some(screen) = &self.graphics.kgl.screen_render_target.texture {
                 // (the game's own swap chain is multisampled and Present resolves it; here the
@@ -1795,8 +1802,10 @@ impl AcRenderer {
             }
             let status = chain.Present(vsync as u32, DXGI_PRESENT(0));
             status.ok().map_err(err("present"))?;
-            Ok(status.0 != 0x087A_0001)
-        }
+            status.0 != 0x087A_0001
+        };
+        self.graphics.gpu_profiler.end_frame(&self.graphics.kgl);
+        Ok(shown)
     }
 }
 

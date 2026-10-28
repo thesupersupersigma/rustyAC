@@ -326,6 +326,9 @@ struct Replay {
     warned: std::collections::HashSet<String>,
 }
 
+/// No queries on this backend.
+pub type KglQuery = ();
+
 pub struct Kgl {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -1009,6 +1012,29 @@ impl Kgl {
     pub fn swap_buffers(&self) {
         kgl_log::line(format_args!("swap_buffers"));
         self.submit();
+    }
+
+    /// No timestamp queries here: the GPU profiler stays empty.
+    // shortcut: no wgpu timestamp queries, upgrade if the page's profiler is wanted.
+    pub fn new_query(&self, _timestamp: bool) -> Option<KglQuery> {
+        None
+    }
+
+    pub fn query_begin(&self, _query: &KglQuery) {
+        kgl_log::line(format_args!("query_begin"));
+    }
+
+    pub fn query_end(&self, _query: &KglQuery) {
+        kgl_log::line(format_args!("query_end"));
+    }
+
+    pub fn query_frequency(&self, _query: &KglQuery, _frequency: &mut u64) {
+        kgl_log::line(format_args!("query_frequency"));
+    }
+
+    pub fn query_timestamp(&self, _query: &KglQuery, _frequency: u64) -> f64 {
+        kgl_log::line(format_args!("query_timestamp"));
+        0.0
     }
 
     /// The screen target's pixels, as RGBA rows (a multisampled screen resolved first).

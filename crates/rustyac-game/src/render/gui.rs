@@ -224,6 +224,7 @@ pub struct GameGui {
     #[cfg_attr(not(windows), allow(dead_code))]
     last_frame: Option<std::time::Instant>,
     last_cpu_hud: (f64, f64),
+    last_audio: (f64, Option<f32>),
     use_mph: bool,
     /// what the tables read of every car that never changes (names, nation, folder, skin)
     race_static: Vec<RaceCar>,
@@ -503,7 +504,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -997,11 +998,17 @@ impl GameGui {
             update_time: update_ms,
             render_hud_time: self.last_cpu_hud.1,
             render_time: render_ms,
-            render_audio_time: 0.0,
+            render_audio_time: self.last_audio.0,
             occupancy: if occ >= 300 { 300 } else { occ },
             physics_late_loops: timing.late_loops,
-            fmod_update_usage: None,
+            fmod_update_usage: self.last_audio.1,
         };
+    }
+
+    /// The frame's `Game::stats.renderAudioTime` (ms) and `AudioStats.updateCpuUsage`, for the
+    /// next frame's apps (no sound: the game's 0, never written).
+    pub fn audio_stats(&mut self, render_audio_ms: f64, fmod_update_usage: f32) {
+        self.last_audio = (render_audio_ms, Some(fmod_update_usage));
     }
 
     /// The frame's `Game::stats.cpuTime` and `renderHUDTime`, for the next frame's apps.

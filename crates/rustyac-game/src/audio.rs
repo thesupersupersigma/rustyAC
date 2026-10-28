@@ -738,6 +738,13 @@ impl GameAudio {
         self.world.cars.first().and_then(|car| car.audio.as_ref()).map(|audio| audio.skids())
     }
 
+    /// `AudioEngine::getPerformanceStats` 0x1401f98f0's `updateCpuUsage`: Studio's CPU percent
+    /// plus the low-level update's, as Render Stats' FMOD USAGE line shows it.
+    pub fn fmod_update_usage(&self) -> f32 {
+        let u = self.world.engine.cpu_usage();
+        u[4] + u[3]
+    }
+
     pub fn app_sound(&self) -> crate::render::gui_apps::AppSound {
         crate::render::gui_apps::AppSound { drivers: self.drivers.clone(), camera: [self.bonnet_external, self.bumper_external] }
     }

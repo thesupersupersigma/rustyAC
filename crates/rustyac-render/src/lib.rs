@@ -49,6 +49,7 @@ pub mod kgl;
 #[path = "kgl_wgpu.rs"]
 pub mod kgl;
 pub mod kgl_log;
+pub mod gpu_profiler;
 /// (the page gives kgl its device: the same wgpu as here)
 #[cfg(feature = "wgpu")]
 pub use wgpu;

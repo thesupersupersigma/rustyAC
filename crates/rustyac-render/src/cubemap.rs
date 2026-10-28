@@ -65,6 +65,7 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
         }
         n += 1;
     }
+    graphics.trigger_query("CUBEMAP");
     graphics.kgl.set_render_targets(None, None);
     if !renderer.diagnosis_no_mips {
         graphics.kgl.cube_map_generate_mips(cube, -1);
@@ -78,6 +79,7 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
     graphics.kgl.set_texture_cube_map(Some(cube), 10);
     graphics.current_cube_map = true;
     graphics.kgl.set_sampler_ps(&graphics.samplers.aniso, 0);
+    graphics.trigger_query("CUBEMAP");
     graphics.state.override_no_ms = false;
 }
 

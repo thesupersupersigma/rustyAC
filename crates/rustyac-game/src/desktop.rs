@@ -2222,6 +2222,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // Game::renderAudio and AudioEngine::update: after the cameras, before the picture is shown
         if let Some(sound) = audio.as_mut() {
+            let audio_start = Instant::now();
             // the Audio app: what it reads of the sound, what it asked of it in this frame
             if let Some(gui) = renderer.gui() {
                 gui.apps.sound = sound.app_sound();
@@ -2236,6 +2237,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                 sound.set_picture_backfires(&renderer.backfires_triggered());
                 // (ReplayManager::updateReplayAudio: no sound outside half to double speed)
                 sound.frame(&camera, &frame.matrix, dt.as_secs_f64(), info.paused || !replay_sound || (info.replay_transport && transport.is_none() && !ac_replay_audio));
+            }
+            // Game::onIdle times renderAudio + AudioEngine::update; Sim::update reads the FMOD usage
+            let audio_ms = (audio_start.elapsed().as_secs_f64() * 1000.0) as f32 as f64;
+            if let Some(gui) = renderer.gui() {
+                gui.audio_stats(audio_ms, sound.fmod_update_usage());
             }
         }
         // --bench-shot in a window: the picture a quarter of a second before --duration ends

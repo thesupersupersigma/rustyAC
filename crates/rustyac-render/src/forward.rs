@@ -148,6 +148,7 @@ impl CameraForward {
     pub fn render(&mut self, graphics: &mut Graphics, scene: &mut Scene, blurred: Option<NodeId>, root: NodeId) -> Result<(), String> {
         graphics.clear_texture_slot(5);
         self.base.shadow_map_pass(graphics, scene, root)?;
+        graphics.trigger_query("SHADOW_MAP");
         if let Some(blurred) = blurred {
             let position = [self.base.camera.matrix.m[3][0], self.base.camera.matrix.m[3][1], self.base.camera.matrix.m[3][2]];
             crate::cubemap::render(&mut self.cube_map_renderer, graphics, scene, &self.cube_map, blurred, position, self.base.sky_box.as_mut());
@@ -184,17 +185,21 @@ impl CameraForward {
             scene.render(graphics, blurred, &mut rc);
         }
         self.base.camera.render_camera(graphics);
+        graphics.trigger_query("BLUR_PASS");
         self.solve_blur(graphics, dt, solve_target);
+        graphics.trigger_query("BLUR_SOLVE");
         {
             let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: self.base.camera.cull_camera() };
             scene.render(graphics, unblurred, &mut rc);
         }
+        graphics.trigger_query("UNBLUR_PASS");
         graphics.set_depth_mode(DEPTH_NO_WRITE);
         {
             let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_TRANSPARENT, max_layer, camera: self.base.camera.cull_camera() };
             scene.render(graphics, root, &mut rc);
         }
         graphics.set_depth_mode(DEPTH_NORMAL);
+        graphics.trigger_query("TRANSP_PASS");
     }
 
     /// `CameraForward::solveBlur` 0x140220280: one full-screen quad that reads the blur target's

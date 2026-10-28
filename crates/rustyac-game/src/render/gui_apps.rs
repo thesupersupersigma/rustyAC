@@ -230,6 +230,9 @@ impl GameApps {
         // ACDCarEngineer (a developers' app, after ACDriverPerformance)
         let id = gui.new_car_engineer_app(painter);
         add(gui, painter, "carengineer", id);
+        // GPUProfilerApp (a developers' app, after ACDCarEngineer)
+        let id = gui.new_gpu_profiler_app(painter);
+        add(gui, painter, "gpuprofiler", id);
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
         let id = gui.new_track_description_app(painter, sections);
         add(gui, painter, "trackdescription", id);
@@ -469,6 +472,9 @@ impl GameApps {
             tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),
             car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },
+            // (filled by the renderer right before the GUI is drawn)
+            gpu_profile: Vec::new(),
+            gpu_profiler_active: false,
             wings: setup.wings.iter().zip(world.first().map_or(&[][..], |v| &v.wing_states[..v.wing_state_count as usize])).map(|(row, state)| rustyac_gui::app_wings::WingRow { state: *state, ..row.clone() }).collect(),
             car_physics: rustyac_gui::app_car_physics::CarPhysicsExtra { km_per_liter: world.first().map_or(0.0, |v| v.km_per_liter), filtered_speed: self.filtered_speed, ..setup.car_physics },
             track_name: setup.track_name.clone(),

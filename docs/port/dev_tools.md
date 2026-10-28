@@ -26,7 +26,9 @@ State after the last commit (update after every commit):
   (`app_tyretester`). Suspensions (`ACSuspension`) done and proven: the suspensions' debug
   lines, KPI and caster in the car oracle (`telem` runs), the window in the GUI oracle
   (`app_suspension`), its 3D lines and keys in the scene oracle (`r43c_02`).
-- **Step 5:** not started.
+- **Step 5, the readouts and the console:** the GPU profiler (`GPUProfiler` + `GPUProfilerApp`)
+  done and proven (the window in the GUI oracle, `app_gpuprofiler`; its queries live in
+  rustyac.exe); Render Stats' audio time and FMOD usage done. The console variables: in progress.
 - **Version:** still v0.43.1.
 
 ## In plain words
@@ -241,9 +243,49 @@ wheels.
 | GUI oracle `app_suspension` (`tools/proofs/gui_list.txt`) | the game's `ACSuspension` (constructor, `render`, `renderCamber`, `renderTyreTemp`) and the port's, 348 frames: E30-like facts, the tape's slips, temperatures and wheel nodes moving off their tyres, hidden and shown | command log, pixels, state, layout IDENTICAL |
 | scene oracle `r43c_02` (`tools/proofs/render_list.txt`) | the game's handler and `renderWireframe` (its `susGL`) over the E30 on Magione, 29 frames, with test debug lines and keys: links off, wheel 1, wheels 3 and 4, fuel tank off, hidden, shown, links on | command log, pixels IDENTICAL (5366 to 5545 calls a frame) |
 
+## Step 5: the GPU profiler, Render Stats' audio
+
+### GPU profiler (`GPUProfilerApp`, 0x1c0, and `GPUProfiler`, 0x30)
+
+A developers' app made after ACDCarEngineer. The first time it is drawn it switches the
+profiler on for the rest of the run (as in the game): then one frame in 32 gets a D3D11
+timestamp query at the end of each pass, in the order the names are first met (`BEGIN_FRAME`,
+`SHADOW_MAP`, `CUBEMAP`, `MAIN_PASS`, `TRANS_PASS`, the blur and YEBIS passes when they run,
+`GUI`, `END_FRAME`, `PRESENT`), read back 32 frames later without waiting. The window lists
+each pass's milliseconds since the one before, its share of the frame and the frame's time.
+The first row shows its own timestamp (the game's quirk: a huge time and percent).
+
+- `crates/rustyac-render/src/gpu_profiler.rs` (new): `GpuProfiler` (`beginFrame`, `endFrame`,
+  `fetchResults`, `triggerQuery`); `Graphics::gpu_profiler`, made just before the GL renderer
+  as `GraphicsManager` does (the disjoint query); `begin_scene` / `end_scene` /
+  `Graphics::trigger_query`, and the markers at the game's places in `forward.rs`,
+  `camera.rs`, `cubemap.rs`, `post.rs` and after the GUI in rustyac.exe; its window present
+  (`AcRenderer::present`) is the game's `endScene` here.
+- `kgl.rs`: `new_query`, `query_begin`, `query_end`, `query_frequency`, `query_timestamp`
+  (`GetData` without waiting; `S_FALSE` is not ready, as the game tests `== 0`). The wgpu
+  backend has none (the page's profiler stays empty).
+- `crates/rustyac-gui/src/app_gpu_profiler.rs` (new): the window (`AppLink::gpu_profile`, and
+  `gpu_profiler_active` for `setActive(true)`).
+
+### Render Stats' audio time and FMOD usage
+
+`Game::stats.renderAudioTime` is now the milliseconds of rustyac.exe's sound frame (the game
+times `renderAudio` + `AudioEngine::update`; rustyAC's frame also copies the cars' sound
+inputs), cut to a float; FMOD USAGE is Studio's CPU percent plus the update's
+(`AudioEngine::getPerformanceStats`), read once a frame. Both show one frame late, as in the
+game; without sound they stay 0.
+
+| proof | what | result |
+|---|---|---|
+| GUI oracle `app_gpuprofiler` (`tools/proofs/gui_list.txt`) | the game's `GPUProfilerApp` over its real `GPUProfiler` (rows written into it, kept off) and the port's, 163 frames: no rows, one row, eight rows at one time (nothing drawn), eight moving, hidden and shown | command log, pixels, state, layout IDENTICAL |
+| scene oracle, 10 frames of Magione (the startup query) | the port's new disjoint query at the start | command log, pixels IDENTICAL |
+| rustyac.exe, `--dev-apps --gui-do app:gpuprofiler` on Magione | the window with the eight passes and real GPU times; Render Stats with FMOD USAGE 1% | seen |
+| GUI oracle `app_stats` (Task 33) | the audio time and FMOD lines as drawn (fed 0.8 ms, 1.6 %) | unchanged, IDENTICAL |
+
+The live numbers themselves cannot be compared with the game (they are timings).
+
 ## Not done
 
-- Step 5 (see the task's prompt).
 - ACSuspension's TempRun button: the game's handler queues a job on the physics thread that
   writes `TempRuns/<car>@<track>.trun` into the game's folder (speed, wheel speeds and brake
   torques each step); rustyAC writes nothing there (the write guard), so the button only

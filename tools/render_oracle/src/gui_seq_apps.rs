@@ -146,6 +146,30 @@ pub fn suspension_link(state: &CarPhysicsState, frame: usize) -> rustyac_gui::ap
     }
 }
 
+/// Task 43c: `GPUProfiler::getResults` rows of a frame: none, one, eight at one time (nothing
+/// drawn), then eight passes moving (the first row's time is its timestamp, as in the game).
+pub const GPU_NAMES: [&str; 8] = ["BEGIN_FRAME", "SHADOW_MAP", "CUBEMAP", "MAIN_PASS", "TRANS_PASS", "GUI", "END_FRAME", "PRESENT"];
+pub fn gpu_rows(frame: usize) -> Vec<rustyac_gui::app_gpu_profiler::GpuQueryRow> {
+    let count = match frame {
+        0..30 => 0,
+        30..60 => 1,
+        _ => 8,
+    };
+    let f = frame as f64;
+    let mut ts = 1000.0 + f * 16.7;
+    let mut previous = 0.0;
+    (0..count)
+        .map(|i| {
+            if (90..).contains(&frame) {
+                ts += [0.0, 0.85, 0.41, 3.2 + (f * 0.05).sin(), 1.1, 0.6 + f * 0.001, 0.05, 0.3][i];
+            }
+            let row = rustyac_gui::app_gpu_profiler::GpuQueryRow { name: GPU_NAMES[i].to_string(), last_result: ts - previous, last_ts: ts };
+            previous = ts;
+            row
+        })
+        .collect()
+}
+
 pub fn wing_rows(frame: usize) -> Vec<rustyac_gui::app_wings::WingRow> {
     use rustyac_physics::car::aero::WingState;
     let f = frame as f32;
@@ -636,6 +660,8 @@ pub fn link() -> AppLink {
             car_physics: car_physics_extra(s.frame),
             car_engineer: car_engineer(s.frame),
             wings: wing_rows(s.frame),
+            gpu_profile: gpu_rows(s.frame),
+            gpu_profiler_active: false,
             track_name: s.track.0.clone(),
             track_config: s.track.1.clone(),
             camera_sounds: s.camera.clone(),
@@ -1441,6 +1467,16 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 0, 600, 3);
             o.extend([hud("app.visible", 0.0, "wings"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "wings")]);
             play(&mut o, 600, 700, 4);
+            o.push(Op::Save);
+        }
+        "app_gpuprofiler" => {
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "gpuprofiler"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "gpuprofiler"));
+            play(&mut o, 0, 300, 2);
+            o.extend([hud("app.visible", 0.0, "gpuprofiler"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "gpuprofiler")]);
+            play(&mut o, 300, 340, 4);
             o.push(Op::Save);
         }
         "app_suspension" => {

@@ -20,3 +20,4 @@ setup_pit@bmw_z4_gt3
 app_wings
 app_tyretester
 app_suspension
+app_gpuprofiler

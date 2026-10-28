@@ -110,6 +110,8 @@ pub struct Samplers {
 
 /// `GraphicsManager` (0x4e0 bytes).
 pub struct Graphics {
+    /// `GraphicsManager::gpuProfiler`
+    pub gpu_profiler: crate::gpu_profiler::GpuProfiler,
     /// The C runtime's `rand()` of the game's main thread, which its visual objects draw from
     /// (`ksRand`): one stream for all of them, in the order they ask. The game seeds it from
     /// the clock; whoever needs a run to repeat sets it.
@@ -221,7 +223,10 @@ impl Graphics {
             Samplers { aniso, shadow, point, point_clamp, linear_clamp, linear_shadow, linear_simple }
         };
 
+        // (GraphicsManager makes its GPUProfiler, the disjoint query, just before its GLRenderer)
+        let gpu_profiler = crate::gpu_profiler::GpuProfiler::new(&kgl);
         let mut graphics = Graphics {
+            gpu_profiler,
             crt_rand: rustyac_physics::session::MsvcRand(1),
             documents_folder: rustyac_content::install::documents().unwrap_or_default(),
             shadow_cache: None,
@@ -302,6 +307,7 @@ impl Graphics {
 
     /// `GraphicsManager::beginScene` 0x140202580.
     pub fn begin_scene(&mut self) {
+        self.gpu_profiler.begin_frame(&self.kgl);
         self.kgl.set_default_state();
         self.state.cull_mode = CULL_NONE;
         self.state.depth_state = DEPTH_NORMAL;
@@ -320,7 +326,14 @@ impl Graphics {
 
     /// `GraphicsManager::endScene` 0x140202850.
     pub fn end_scene(&mut self) {
+        self.gpu_profiler.trigger_query(&self.kgl, "END_FRAME");
         self.kgl.swap_buffers();
+        self.gpu_profiler.end_frame(&self.kgl);
+    }
+
+    /// `GPUProfiler::triggerQuery` at a pass (`SHADOW_MAP`, `CUBEMAP`, `MAIN_PASS`, ...).
+    pub fn trigger_query(&mut self, name: &'static str) {
+        self.gpu_profiler.trigger_query(&self.kgl, name);
     }
 
     /// `GraphicsManager::setBlendMode` 0x1402044e0.

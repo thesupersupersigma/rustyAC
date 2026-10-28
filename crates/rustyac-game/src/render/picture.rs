@@ -183,7 +183,7 @@ impl Picture {
         }
     }
 
-    pub fn present(&self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
+    pub fn present(&mut self, chain: &IDXGISwapChain1, vsync: bool) -> Result<bool, String> {
         match self {
             Picture::Debug(r) => r.present(chain, vsync),
             Picture::Ac(r) => r.present(chain, vsync),

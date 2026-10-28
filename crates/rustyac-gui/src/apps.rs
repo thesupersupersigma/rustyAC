@@ -296,6 +296,10 @@ pub struct AppLink {
     pub car_engineer: crate::app_car_engineer::CarEngineer,
     /// `FormWings`' rows of the player's car
     pub wings: Vec<crate::app_wings::WingRow>,
+    /// `GPUProfiler::getResults`: the last measured frame's rows
+    pub gpu_profile: Vec<crate::app_gpu_profiler::GpuQueryRow>,
+    /// `GPUProfiler::setActive(true)`, as `GPUProfilerApp::render` calls it (never cleared)
+    pub gpu_profiler_active: bool,
     /// `Sim::track`'s folder name (`TrackAvatar` GameObject name) and layout (`getConfig`)
     pub track_name: String,
     pub track_config: String,

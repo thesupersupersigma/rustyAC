@@ -399,11 +399,13 @@ impl CameraShadowMapped {
             let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: self.camera.cull_camera() };
             scene.render(graphics, node, &mut rc);
         }
+        graphics.trigger_query("MAIN_PASS");
         graphics.set_depth_mode(DEPTH_NO_WRITE);
         {
             let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_TRANSPARENT, max_layer, camera: self.camera.cull_camera() };
             scene.render(graphics, node, &mut rc);
         }
         graphics.set_depth_mode(DEPTH_NORMAL);
+        graphics.trigger_query("TRANS_PASS");
     }
 }

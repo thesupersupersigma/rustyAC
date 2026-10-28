@@ -84,6 +84,9 @@ pub struct KglCBuffer {
     pub size: i32,
 }
 
+/// `ID3D11Query`, as kgl hands it out.
+pub type KglQuery = ID3D11Query;
+
 pub struct Kgl {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
@@ -741,6 +744,60 @@ impl Kgl {
                     eprintln!("swapChain->Present failed");
                 }
             }
+        }
+    }
+
+    /// `kglInitGPUQuerySupport` 0x14001a840 (`timestamp` false: the frame's TIMESTAMP_DISJOINT
+    /// query) and `kglNewTimestampQuery` 0x14001b6b0 (true).
+    pub fn new_query(&self, timestamp: bool) -> Option<KglQuery> {
+        let desc = D3D11_QUERY_DESC { Query: if timestamp { D3D11_QUERY_TIMESTAMP } else { D3D11_QUERY_TIMESTAMP_DISJOINT }, MiscFlags: 0 };
+        let mut query = None;
+        // SAFETY: a plain query description.
+        if unsafe { self.device.CreateQuery(&desc, Some(&mut query)) }.is_err() && !timestamp {
+            eprintln!("ERROR: CreateQuery qDisjoint failed");
+        }
+        query
+    }
+
+    /// `kglQueryFrameBegin` 0x14001b670.
+    pub fn query_begin(&self, query: &KglQuery) {
+        kgl_log::line(format_args!("query_begin"));
+        // SAFETY: a live query.
+        unsafe { self.context.Begin(query) }
+    }
+
+    /// `kglQueryFrameEnd` 0x14001b690, `kglTriggerTimestampQuery` 0x14001b700.
+    pub fn query_end(&self, query: &KglQuery) {
+        kgl_log::line(format_args!("query_end"));
+        // SAFETY: a live query.
+        unsafe { self.context.End(query) }
+    }
+
+    /// `kglQueryFetchBegin` 0x14001b720: the disjoint query's frequency, without waiting (not
+    /// ready: `frequency` keeps the last one; `Disjoint` is never looked at).
+    pub fn query_frequency(&self, query: &KglQuery, frequency: &mut u64) {
+        kgl_log::line(format_args!("query_frequency"));
+        let mut data = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT { Frequency: *frequency, Disjoint: false.into() };
+        // (the game ignores the result: the driver writes the data only when it is ready)
+        let _ = self.get_data(query, &mut data as *mut _ as *mut c_void, 16);
+        *frequency = data.Frequency;
+    }
+
+    /// `ID3D11DeviceContext::GetData` without waiting, its HRESULT as it is (S_FALSE: not ready;
+    /// the wrapper's `Result` makes that a success).
+    fn get_data(&self, query: &KglQuery, data: *mut c_void, size: u32) -> windows::core::HRESULT {
+        // SAFETY: `data` holds `size` bytes; the query is live.
+        unsafe { (Interface::vtable(&self.context).GetData)(Interface::as_raw(&self.context), Interface::as_raw(query), data, size, 0) }
+    }
+
+    /// `kglQueryFetchTimestamp` 0x14001b760: the timestamp in ms, 0 while it is not ready.
+    pub fn query_timestamp(&self, query: &KglQuery, frequency: u64) -> f64 {
+        kgl_log::line(format_args!("query_timestamp"));
+        let mut ticks = 0u64;
+        if self.get_data(query, &mut ticks as *mut u64 as *mut c_void, 8) == windows::core::HRESULT(0) {
+            ticks as f64 / frequency as f64 * 1000.0
+        } else {
+            0.0
         }
     }
 

@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 35] = [
+pub const APPS: [(&str, usize, usize, usize); 36] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -56,6 +56,7 @@ pub const APPS: [(&str, usize, usize, usize); 35] = [
     ("wings", 0x1c0, 0x1_402e_c890, 0x1_4050_4aa0),
     ("tyretester", 0x1f8, 0x1_4033_b520, 0x1_4051_20e8),
     ("suspension", 0x288, 0x1_402e_3fd0, 0x1_4050_37f8),
+    ("gpuprofiler", 0x1c0, 0x1_4031_b320, 0x1_4050_c230),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 const TAKES_CAR: [&str; 15] = ["suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
@@ -758,6 +759,18 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 // TrackMap::TrackMap(GUI*, Sim*, bool)
                 let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, bool) -> *mut u8 = std::mem::transmute(a.va(0x1_402e_e8e0));
                 ctor(form, gui, sim, false);
+            } else if text == "gpuprofiler" {
+                // GPUProfilerApp(GraphicsManager*, GUI*): its rows go into the real GPUProfiler
+                // (GraphicsManager+0x138), the names laid once (update() writes the times)
+                let (game_block,) = GAME.lock().unwrap().as_ref().map(|g| (g.game_block,)).unwrap_or_default();
+                let graphics: *mut u8 = rd(game_block as *mut u8, 0x138);
+                let rows = a.alloc(crate::gui_seq_apps::GPU_NAMES.len() * 0x38);
+                for (i, name) in crate::gui_seq_apps::GPU_NAMES.iter().enumerate() {
+                    crate::ac::write_wstring(a, rows.add(i * 0x38 + 0x18), name);
+                }
+                *GPU_PROFILER.lock().unwrap() = Some((rd::<usize>(graphics, 0x138), rows as usize));
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4031_b320));
+                ctor(form, graphics, gui);
             } else if text == "help" {
                 ctor(form, gui);
             } else if text == "tyretester" {
@@ -902,6 +915,17 @@ pub unsafe fn update() {
         for (i, p) in s.wheel_nodes.iter().enumerate() {
             wr(nodes[i] as *mut u8, 8 + 0x30, *p);
         }
+    }
+    // GPUProfilerApp: its profiler's rows (QueryData 0x38: lastResult +8, lastTS +0x10), kept
+    // off (isActive +0x28, waitCount +0x20: no query of the oracle's frames is measured)
+    if let Some((profiler, rows)) = *GPU_PROFILER.lock().unwrap() {
+        let (profiler, rows) = (profiler as *mut u8, rows as *mut u8);
+        for (i, row) in l.gpu_profile.iter().enumerate() {
+            wr(rows.add(i * 0x38), 8, [row.last_result, row.last_ts]);
+        }
+        wr(profiler, 8, [rows as usize, rows as usize + l.gpu_profile.len() * 0x38, rows as usize + crate::gui_seq_apps::GPU_NAMES.len() * 0x38]);
+        wr(profiler, 0x20, 0i32);
+        wr(profiler, 0x28, 0u8);
     }
     // TyreTesterForm: its car's physicsState.speed (+0x4d8) and load[4] (+0x54c),
     // currentTyreCompoundIndex[4] (+0x1260)
@@ -1145,6 +1169,8 @@ unsafe fn wings_car(a: &crate::acs::Acs, avatar: *mut u8) {
 
 static WINGS: Mutex<Option<usize>> = Mutex::new(None);
 static TYRE_TESTER: Mutex<Option<usize>> = Mutex::new(None);
+/// the game's GPUProfiler, the rows laid for it
+static GPU_PROFILER: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 /// ACSuspension's car and its four wheel nodes
 static SUSPENSION: Mutex<Option<(usize, [usize; 4])>> = Mutex::new(None);
 

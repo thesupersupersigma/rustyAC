@@ -133,6 +133,7 @@ impl CameraForwardYebis {
             return self.forward.render(graphics, scene, blurred, root);
         }
         self.forward.base.shadow_map_pass(graphics, scene, root)?;
+        graphics.trigger_query("SHADOW_MAP");
         if let Some(blurred) = blurred {
             let m = &self.forward.base.camera.matrix.m;
             let position = [m[3][0], m[3][1], m[3][2]];
@@ -192,6 +193,7 @@ impl CameraForwardYebis {
                 stand_in_apply_effects(graphics, shader, source, destination, self.width, self.height);
             }
         }
+        graphics.trigger_query("YEBIS");
         self.yebis_rt_ms = Some(ms);
     }
 
