@@ -768,6 +768,8 @@ impl OnlineSession {
                     self.gui_events.push(OnlineGuiEvent::VoteNotPassed);
                 }
                 Event::RaceStart(start) => {
+                    // RaceManager::setCurrentSessionStartTime: the ESC menu's countdown and the HUD read it
+                    self.session.start_time = *start;
                     // (the server repeats it to make sure it arrives)
                     let line = format!("online: the session starts at {:.1} s of the server's clock", start / 1000.0);
                     if self.last_start_line != line {

@@ -7,7 +7,7 @@
 #   sh tools/web_checks/task43/s5/esc_online.sh
 cd /c/Users/thesupersupersigma/Desktop/project5/rustyAC || exit 1
 here=re/scratch/task43/s5/esc
-run=$PWD/$here/run
+run=$(pwd -W)/$here/run
 rm -rf "$run" && mkdir -p "$run"
 port=9666 http=8197 secs=${1:-150}
 
