@@ -1706,6 +1706,14 @@ impl RollingChassis {
         }
     }
 
+    /// `Car::getPhysicsState`'s `rideHeight` (see [`PhysicsPageWriter::ride_heights`]).
+    pub fn ride_heights(&self, previous_speed: f32) -> [f32; 2] {
+        match &self.telemetry {
+            Some(writer) => writer.ride_heights(self, previous_speed),
+            None => PhysicsPageWriter::new(self, &self.data_path.clone()).map_or([f32::NAN; 2], |writer| writer.ride_heights(self, previous_speed)),
+        }
+    }
+
     /// `RaceEngineer::evalRideHeight` @ 0x14027a9d0 (0 the front axle, 1 the rear).
     pub fn eval_ride_height(&self, axle: usize) -> f32 {
         match &self.telemetry {
@@ -2482,6 +2490,22 @@ impl RollingChassis {
     pub fn performance_meter_state(&self) -> (f32, f32) {
         let (t, speed) = self.performance_split();
         (t as f32, speed)
+    }
+
+    /// `Car::getWheelSterAngleDEG` @ 0x140272960: the wheel's heading in the body's frame,
+    /// degrees (the Telemetry app's `STEER_DEG_*`).
+    pub fn get_wheel_steer_angle_deg(&self, wheel: usize) -> f32 {
+        let z = self.tyres[wheel].world_rotation.m[2];
+        let v = self.core.world_to_local_normal(self.body, &Vec3f { x: -z[0], y: -z[1], z: -z[2] });
+        let length = (v.z * v.z + v.x * v.x).sqrt();
+        let sin = if length != 0.0 { v.x / length } else { v.x };
+        crate::math::asinf(sin) * 57.29578
+    }
+
+    /// `Car::getPhysicsState`'s `lastFF_Final`: the device's global gain times the user's times
+    /// the last force feedback value.
+    pub fn last_ff_final(&self) -> f32 {
+        self.ff_global_gain * self.user_ff_gain * self.last_ff
     }
 
     /// `PerformanceMeter::getCurrentSplit` 0x14026b700: (seconds behind the best lap, m/s

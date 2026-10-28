@@ -193,6 +193,8 @@ pub struct Shared {
     /// the Setup debug app's car, after each step while the app is shown
     pub setup_debug_on: AtomicBool,
     pub setup_debug: Mutex<Option<rustyac_gui::app_setup_debug::SetupDebugCar>>,
+    /// the display's focused car, which the Setup debug app reads (0: the player's)
+    pub setup_debug_focus: std::sync::atomic::AtomicUsize,
 }
 
 impl Shared {
@@ -224,6 +226,7 @@ impl Shared {
             telemetry: Mutex::new(Vec::new()),
             setup_debug_on: AtomicBool::new(false),
             setup_debug: Mutex::new(None),
+            setup_debug_focus: std::sync::atomic::AtomicUsize::new(0),
             timing: Mutex::new(Timing::default()),
             steps: AtomicU64::new(0),
             driver_text: Mutex::new(String::new()),
@@ -515,7 +518,7 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             shared.publish_setup(&sim);
         }
         if shared.setup_debug_on.load(Ordering::Relaxed) {
-            *shared.setup_debug.lock().unwrap() = Some(crate::view::setup_debug(&sim));
+            *shared.setup_debug.lock().unwrap() = Some(crate::view::setup_debug(&sim, shared.setup_debug_focus.load(Ordering::Relaxed)));
         }
         if shared.telemetry_on.load(Ordering::Relaxed) {
             let names = telemetry_names.get_or_insert_with(|| rustyac_gui::app_telemetry::channels(&crate::view::telemetry_car(&sim)).into_iter().map(|c| c.name).collect());

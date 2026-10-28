@@ -733,6 +733,11 @@ impl GameAudio {
     /// called for a change of the focus).
     /// The sound as the Audio app reads it.
     #[cfg(not(feature = "wgpu"))]
+    /// The player's car's skid sounds: volumes, pitches.
+    pub fn skids(&self) -> Option<[[f32; 4]; 2]> {
+        self.world.cars.first().and_then(|car| car.audio.as_ref()).map(|audio| audio.skids())
+    }
+
     pub fn app_sound(&self) -> crate::render::gui_apps::AppSound {
         crate::render::gui_apps::AppSound { drivers: self.drivers.clone(), camera: [self.bonnet_external, self.bumper_external] }
     }

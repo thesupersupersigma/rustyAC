@@ -1787,9 +1787,14 @@ fn run_window(options: &Options) -> Result<(), String> {
             // the Telemetry app's steps from the physics thread
             {
                 let steps = std::mem::take(&mut *shared.telemetry.lock().unwrap());
-                shared.telemetry_on.store(gui.telemetry_exchange(steps), Ordering::Relaxed);
+                let shown = gui.telemetry_exchange(steps);
+                shared.telemetry_on.store(shown, Ordering::Relaxed);
+                if let Some(skids) = audio.as_ref().filter(|_| shown).and_then(|audio| audio.skids()) {
+                    gui.telemetry_skids(skids);
+                }
                 let car = shared.setup_debug.lock().unwrap().take();
                 shared.setup_debug_on.store(gui.setup_debug_exchange(car), Ordering::Relaxed);
+                shared.setup_debug_focus.store(focus.index, Ordering::Relaxed);
             }
             // the setup editor's jobs to the physics thread, the car's newest picture back
             {

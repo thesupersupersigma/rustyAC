@@ -50,3 +50,25 @@ fn opponents_in_a_header() {
     // the worker threads are not a part of a recording
     assert_eq!(read.physics_threads, None);
 }
+
+/// Task 43c: the Setup debug app reads the focused car (0 the player's, then the others).
+#[test]
+fn the_setup_debug_app_reads_the_focused_car() {
+    use rustyac_game::sim::{GameSim, ReplaySource};
+    let mut setup = SimSetup { car: "bmw_m3_e30".to_string(), ..SimSetup::default() };
+    setup.opponents.push(opponent("ks_ferrari_f2004", "", OpponentDrive::Parked));
+    let sim = match GameSim::new(setup, Box::new(ReplaySource::default())) {
+        Ok(sim) => sim,
+        Err(message) => {
+            eprintln!("NOT TESTED: {message}");
+            return;
+        }
+    };
+    let gears = |focus: usize| rustyac_game::view::setup_debug(&sim, focus).max_gear;
+    let ratios: Vec<f64> = sim.cars().map(|car| car.drivetrain.as_ref().map_or(0.0, |d| d.base().final_ratio as f64)).collect();
+    assert_eq!(rustyac_game::view::setup_debug(&sim, 0).final_ratio as f64, ratios[0]);
+    assert_eq!(rustyac_game::view::setup_debug(&sim, 1).final_ratio as f64, ratios[1]);
+    assert_ne!(gears(0), gears(1), "the e30 and the F2004 have as many gears");
+    // a focus past the cars (an online remote car) shows the player's
+    assert_eq!(rustyac_game::view::setup_debug(&sim, 5), rustyac_game::view::setup_debug(&sim, 0));
+}

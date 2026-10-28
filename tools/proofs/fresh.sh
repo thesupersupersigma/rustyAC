@@ -191,6 +191,8 @@ if part shm; then  # Task 43c: the game's shared memory pages (static once, grap
     # the PerformanceMeter's other readers: the "recover time" penalty (a mode the game never
     # picks itself) with the meter on
     CAR_ORACLE_SHM=1 CAR_ORACLE_PERF_METER=1 CAR_ORACLE_PENALTY_MODE=2 m_label=recover multi_list tools/proofs/recover_list.txt "$root" "$rec" ""
+    # the Telemetry app's channels that read the player's car through a function of their own
+    CAR_ORACLE_TELEMETRY=1 m_label=telem multi_list tools/proofs/telem_list.txt "$root" "$rec" ""
 fi
 
 rm -rf "$root"

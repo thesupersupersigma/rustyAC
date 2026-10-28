@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Task 43c: the Telemetry app's channels that read the player's car through a function of their own
+# (FormTelemetry::initChannels' lambdas: AI_PUSH, AI_LIVE_OFFSET, AI_DIST_CORNER, ERS_TORQUE,
+# OVERSTEER_FACTOR, STEER_DEG_*, FF_FINAL, RIDE_HEIGHT_F/R) under CAR_ORACLE_TELEMETRY=1.
+ai_handover magione ks_ferrari_sf15t 20000
+ai_handover magione ks_ferrari_f2004 20000
+rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 30000
+pit_box_wing magione ks_ferrari_488_gt3,bmw_m3_e30 6000

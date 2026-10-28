@@ -956,6 +956,12 @@ impl CarAudio {
         }
     }
 
+    /// `skidVolumes[i].value` and `skidPitches[i].value` (the Telemetry app's `SKID_VOL_*` and
+    /// `SKID_PITCH_*`).
+    pub fn skids(&self) -> [[f32; 4]; 2] {
+        [self.skid_volumes.map(|s| s.value), self.skid_pitches.map(|s| s.value)]
+    }
+
     /// `CarAudioFMOD::updateSkids` @ 0x140067f30: volume and pitch of the four skid sounds,
     /// computed here (the events have no parameter).
     #[allow(clippy::neg_cmp_op_on_partial_ord, clippy::float_cmp)]

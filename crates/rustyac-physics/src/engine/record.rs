@@ -33,6 +33,24 @@ pub const REFEREE_COLUMNS: [&str; 2] = ["world.referee.lo", "world.referee.hi"];
 /// `CAR_ORACLE_PERF_METER=1`: the game's meter left on)
 pub const METER_COLUMNS: [&str; 3] = ["world.meter.diff.lo", "world.meter.diff.hi", "world.meter.speedDiff"];
 
+/// Task 43c: the Telemetry app's channels that read the player's car through a function of its own
+/// (`FormTelemetry::initChannels`' lambdas), in a recording whose header has the key `telem` (the
+/// car oracle's `CAR_ORACLE_TELEMETRY=1`).
+pub const TELEMETRY_COLUMNS: [&str; 12] = [
+    "world.telem.AI_PUSH",
+    "world.telem.AI_LIVE_OFFSET",
+    "world.telem.AI_DIST_CORNER",
+    "world.telem.ERS_TORQUE",
+    "world.telem.OVERSTEER_FACTOR",
+    "world.telem.STEER_DEG_LF",
+    "world.telem.STEER_DEG_RF",
+    "world.telem.STEER_DEG_LR",
+    "world.telem.STEER_DEG_RR",
+    "world.telem.FF_FINAL",
+    "world.telem.RIDE_HEIGHT_F",
+    "world.telem.RIDE_HEIGHT_R",
+];
+
 /// Task 43c: the player's shared memory graphics page after the step's frame, in a recording
 /// whose header has the key `shm` (the car oracle's `CAR_ORACLE_SHM=1`): one column per word,
 /// named after the member it starts in.
@@ -315,7 +333,7 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 } + if self.get("shm").is_some() { crate::race::shm::GRAPHICS_SIZE / 4 } else { 0 }
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 } + if self.get("telem").is_some() { TELEMETRY_COLUMNS.len() } else { 0 } + if self.get("shm").is_some() { crate::race::shm::GRAPHICS_SIZE / 4 } else { 0 }
     }
 
     /// Task 28: the referee of the recording (header key `referee`:
@@ -357,6 +375,9 @@ impl Recording {
         }
         if self.get("meter").is_some() {
             out.extend(METER_COLUMNS.iter().map(|s| s.to_string()));
+        }
+        if self.get("telem").is_some() {
+            out.extend(TELEMETRY_COLUMNS.iter().map(|s| s.to_string()));
         }
         if self.get("shm").is_some() {
             out.extend(shm_columns());
@@ -510,6 +531,8 @@ pub struct ReplayWorld {
     pub referee: Option<Box<crate::race::Referee>>,
     /// Task 33: the rows end with the player's car's `PerformanceMeter` ([`METER_COLUMNS`])
     pub meter: bool,
+    /// Task 43c: the rows end with [`TELEMETRY_COLUMNS`] after the meter's
+    pub telem: bool,
     /// Task 43c: header key `penalty_force`: the car oracle's game side writes this penalty mode
     /// instead of the one `RaceManager::setCurrentSession` picks (`CAR_ORACLE_PENALTY_MODE`; mode 2,
     /// "recover time", is never picked by the game itself)
@@ -676,7 +699,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         // (the oracle's game side switches its PerformanceMeter off unless the header has `meter`)
@@ -1051,6 +1074,29 @@ impl ReplayWorld {
             let meter = &self.cars[0].performance_meter;
             let bits = meter.current_diff.to_bits();
             row.extend([bits as u32, (bits >> 32) as u32, meter.current_speed_diff_ms.to_bits()]);
+        }
+        if self.telem {
+            let car = &self.cars[0];
+            let ai = self.ai[0].as_deref();
+            let ers = car.ers.as_ref().zip(car.drivetrain.as_ref()).map_or(0.0, |(e, d)| e.get_output_torque(d.base()));
+            row.extend(
+                [
+                    ai.map_or(0.0, |ai| ai.get_lateral_push(car) * 100.0),
+                    ai.map_or(0.0, |ai| ai.live_offset),
+                    ai.map_or(0.0, |ai| ai.offset_dist_from_corner),
+                    ers,
+                    crate::car::dynamic_controller::DynamicController::get_oversteer_factor(car),
+                    car.get_wheel_steer_angle_deg(0),
+                    car.get_wheel_steer_angle_deg(1),
+                    car.get_wheel_steer_angle_deg(2),
+                    car.get_wheel_steer_angle_deg(3),
+                    car.last_ff_final(),
+                    // (the oracle's state buffer is cleared before the call: a previous speed of 0)
+                    car.ride_heights(0.0)[0],
+                    car.ride_heights(0.0)[1],
+                ]
+                .map(f32::to_bits),
+            );
         }
         if let Some(shm) = &self.shm {
             row.extend(shm.1.bytes.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])));

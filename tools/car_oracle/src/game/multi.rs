@@ -105,6 +105,14 @@ const PE_EV_ON_NEW_SESSION_PHYSICS: usize = 0xa0;
 const CAR_EXPECTED_FUEL_PER_LAP: usize = 0x3d38;
 const CAR_PIT_POSITION: usize = 0x3a90;
 const AI_BASE_PUSH: usize = 0x28;
+// Task 43c: what the Telemetry app reads of the player's car
+const CAR_CONTROLS_PROVIDER: usize = 0x3d80;
+const CAR_ERS: usize = 0x3768;
+const AI_LIVE_OFFSET: usize = 0x13c;
+const AI_OFFSET_DIST_FROM_CORNER: usize = 0x140;
+const VA_AIDRIVER_GET_LATERAL_PUSH: usize = 0x1_4029_dd10; // AIDriver::getLateralPush()
+const VA_GET_OVERSTEER_FACTOR: usize = 0x1_402b_11d0; // DynamicController::getOversteerFactor(Car*)
+const VA_GET_WHEEL_STEER_ANGLE_DEG: usize = 0x1_4027_2960; // Car::getWheelSterAngleDEG(int)
 
 /// Task 27: the step at which a scenario's first car, driven by the line follower until
 /// then, is handed to the game's `AIDriver` (the game's "AI drives my car" switch: a new
@@ -1299,6 +1307,10 @@ impl<'a> MultiWorld<'a> {
                 recording.set("penalty_force", mode.to_string());
             }
             // Task 43c: the game's shared memory graphics page at every step
+            // Task 43c: the Telemetry app's channels that read the player's car through its functions
+            if std::env::var("CAR_ORACLE_TELEMETRY").is_ok_and(|v| v == "1") {
+                recording.set("telem", "1");
+            }
             if std::env::var("CAR_ORACLE_SHM").is_ok_and(|v| v == "1") {
                 recording.set("shm", "1");
             }
@@ -1789,6 +1801,28 @@ impl<'a> MultiWorld<'a> {
                 let meter = self.cars[0].car.add(CAR_PERFORMANCE_METER_IS_ENABLED);
                 row.extend(rd::<[u32; 2]>(meter, 0x60));
                 row.push(rd(meter, 0x68));
+            }
+            if self.recording.get("telem").is_some() {
+                // Task 43c: FormTelemetry::initChannels' lambdas on the player's car
+                let (car, ai) = (self.cars[0].car, self.cars[0].ai);
+                let driving = !ai.is_null() && rd::<*mut u8>(car, CAR_CONTROLS_PROVIDER) == ai;
+                let lateral_push: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(self.acs.va(VA_AIDRIVER_GET_LATERAL_PUSH));
+                let oversteer: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(self.acs.va(VA_GET_OVERSTEER_FACTOR));
+                let steer: extern "C" fn(*mut u8, i32) -> f32 = std::mem::transmute(self.acs.va(VA_GET_WHEEL_STEER_ANGLE_DEG));
+                // (ERS::getOutputTorque through the ERS's ITorqueGenerator table, as the lambda calls it)
+                let ers = car.add(CAR_ERS);
+                let ers_torque: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(*rd::<*const usize>(ers, 0).add(1));
+                row.push(if driving { lateral_push(ai) * 100.0 } else { 0.0 }.to_bits());
+                row.push(if driving { rd(ai, AI_LIVE_OFFSET) } else { 0 });
+                row.push(if driving { rd(ai, AI_OFFSET_DIST_FROM_CORNER) } else { 0 });
+                row.push(ers_torque(ers).to_bits());
+                row.push(oversteer(car).to_bits());
+                for wheel in 0..4 {
+                    row.push(steer(car, wheel).to_bits());
+                }
+                let (state, _) = self.physics_state(0);
+                let word = |at: usize| u32::from_le_bytes([state[at], state[at + 1], state[at + 2], state[at + 3]]);
+                row.extend([word(0x66c), word(0x79c), word(0x7a0)]);
             }
             if let Some(shm) = self.referee.as_ref().and_then(|referee| referee.shm.as_ref()) {
                 row.extend(shm.words());

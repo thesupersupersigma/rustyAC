@@ -1430,6 +1430,18 @@ impl GameGui {
         self.apps.app("telemetry").is_some_and(|id| self.gui.controls[id].visible)
     }
 
+    /// The Telemetry app's skid channels (read in its `render`, like every channel not read on the
+    /// physics thread): the player's car's skid sounds as the sound left them.
+    pub fn telemetry_skids(&mut self, skids: [[f32; 4]; 2]) {
+        for (i, def) in rustyac_gui::app_telemetry::channels(&self.setup.telemetry_car).iter().enumerate() {
+            let wheel = ["_LF", "_RF", "_LR", "_RR"].iter().position(|end| def.name.ends_with(end));
+            let kind = if def.name.starts_with("SKID_VOL_") { Some(0) } else if def.name.starts_with("SKID_PITCH_") { Some(1) } else { None };
+            if let (Some(kind), Some(wheel), Some(value)) = (kind, wheel, self.apps.telemetry.graphics.get_mut(i)) {
+                *value = skids[kind][wheel];
+            }
+        }
+    }
+
     /// The Setup debug app's newest car from the physics thread; true while it is shown.
     pub fn setup_debug_exchange(&mut self, car: Option<rustyac_gui::app_setup_debug::SetupDebugCar>) -> bool {
         if car.is_some() {

@@ -983,9 +983,11 @@ impl CarView {
     }
 }
 
-/// What the Setup debug app reads of the player's `Car` (the game's: the focused car's).
-pub fn setup_debug(sim: &GameSim) -> rustyac_gui::app_setup_debug::SetupDebugCar {
-    let car = &sim.car.car;
+/// What the Setup debug app reads of the focused car's `Car` (`focus`: 0 the player's, then the
+/// other cars in their order).
+pub fn setup_debug(sim: &GameSim, focus: usize) -> rustyac_gui::app_setup_debug::SetupDebugCar {
+    // shortcut: an online remote car has no Car here, so the player's is shown; port NetCar's setup if wanted
+    let car = sim.cars().nth(focus).unwrap_or(&sim.car.car);
     let d = car.drivetrain.as_ref().map(|d| d.base());
     let gear_ratios: Vec<f64> = d.map_or(Vec::new(), |d| d.gears.iter().map(|g| g.ratio).collect());
     rustyac_gui::app_setup_debug::SetupDebugCar {
@@ -1087,8 +1089,19 @@ pub fn telemetry_values(sim: &GameSim, names: &[String]) -> Vec<f32> {
                 "ACC_LON" => car.acc_g.z,
                 "ARB_FRONT" => car.antiroll_bars[0].k,
                 "ARB_REAR" => car.antiroll_bars[1].k,
-                // AI_PUSH AI_LIVE_OFFSET AI_DIST_CORNER ERS_TORQUE OVERSTEER_FACTOR STEER_DEG
-                // SKID_VOL SKID_PITCH FF_FINAL RIDE_HEIGHT_F RIDE_HEIGHT_R
+                // (the car's controls provider as an AIDriver: the player's car while AI drives it)
+                "AI_PUSH" => sim.car.device.ai.as_ref().map_or(0.0, |ai| ai.get_lateral_push(car) * 100.0),
+                "AI_LIVE_OFFSET" => sim.car.device.ai.as_ref().map_or(0.0, |ai| ai.live_offset),
+                "AI_DIST_CORNER" => sim.car.device.ai.as_ref().map_or(0.0, |ai| ai.offset_dist_from_corner),
+                "ERS_TORQUE" => car.ers.as_ref().zip(d).map_or(0.0, |(e, d)| e.get_output_torque(d.base())),
+                "OVERSTEER_FACTOR" => rustyac_physics::car::dynamic_controller::DynamicController::get_oversteer_factor(car),
+                "STEER_DEG" => car.get_wheel_steer_angle_deg(wheel),
+                // (Car::getPhysicsState's copies, which the main thread reads)
+                "FF_FINAL" => car.last_ff_final(),
+                // shortcut: the speed of this step stands for the previous snapshot's, exact but at the 2 m/s edge
+                "RIDE_HEIGHT_F" => car.ride_heights(car.speed)[0],
+                "RIDE_HEIGHT_R" => car.ride_heights(car.speed)[1],
+                // SKID_VOL SKID_PITCH: the sound's, on the display thread (GameGui::telemetry_skids)
                 _ => 0.0,
             }
         })

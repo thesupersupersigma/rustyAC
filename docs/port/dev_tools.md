@@ -16,7 +16,11 @@ State after the last commit (update after every commit):
   meter (`RollingChassis::performance_split`); recover time's start (`LapInvalidator::onEnterPenaltyZone`)
   was missing and is ported. Proofs: `rc_recover` with `CAR_ORACLE_PENALTY_MODE=2
   CAR_ORACLE_PERF_METER=1` (`tools/proofs/recover_list.txt`), the online `net_drive` with the meter on.
-- **Steps 3-5:** not started.
+- **Step 3, the Telemetry app's 20 channels and Setup debug's focus, done:** every channel has
+  its game source; the 12 that the game reads through a function of the car are proven in the car
+  oracle (`CAR_ORACLE_TELEMETRY=1`, `tools/proofs/telem_list.txt`); the 8 skid channels come from
+  the car's sound (already proven by the sound oracle); Setup debug reads the focused car.
+- **Steps 4-5:** not started.
 - **Version:** still v0.43.1.
 
 ## In plain words
@@ -119,9 +123,49 @@ New oracle pieces: `CAR_ORACLE_PENALTY_MODE=<n>` (header key `penalty_force`) wr
 mode wherever the game writes one; the scenario `rc_recover` (rc_cut's race of 4 laps, cutting
 from 150 s on).
 
+## Step 3: the Telemetry app's 20 channels, Setup debug's focus
+
+`FormTelemetry::initChannels` 0x140332ff0 reads these 20 through a function or a lambda of its
+own; rustyAC showed 0 for them. Now (`crates/rustyac-game/src/view.rs` `telemetry_values`):
+
+| channels | the game's source | rustyAC |
+|---|---|---|
+| `AI_PUSH`, `AI_LIVE_OFFSET`, `AI_DIST_CORNER` | the car's controls provider as an `AIDriver`: `getLateralPush() * 100`, `liveOffset` (+0x13c), `offsetDistFromCorner` (+0x140); 0 without one | the player's car's AI driver while it drives (`AiDriver::get_lateral_push` now public) |
+| `ERS_TORQUE` | `ERS::getOutputTorque` through the ERS's torque-generator table | `Ers::get_output_torque` |
+| `OVERSTEER_FACTOR` | `DynamicController::getOversteerFactor` | the same, already ported |
+| `STEER_DEG_LF/RF/LR/RR` | `Car::getWheelSterAngleDEG` 0x140272960: the tyre's −z axis in the body's frame, `asinf(x / |(x, z)|)` in degrees | `RollingChassis::get_wheel_steer_angle_deg` (new) |
+| `FF_FINAL` | `CarPhysicsState::lastFF_Final` = the device's `getFFGlobalGain` × `userFFGain` × `lastFF` | `RollingChassis::last_ff_final` (new) |
+| `RIDE_HEIGHT_F`, `RIDE_HEIGHT_R` | `CarPhysicsState::rideHeight`: `Car::computeRideHeight` over the plane of three tyres, or a standing car with a minimum-height rule the `RaceEngineer` estimate | `RollingChassis::ride_heights` (the physics page's code, shared) |
+| `SKID_VOL_*`, `SKID_PITCH_*` | the car's `CarAudioFMOD::skidVolumes` / `skidPitches` (+0x45c / +0x47c) | the player's car's sound (`CarAudio::skids`), handed to the app on the display thread (`GameGui::telemetry_skids`) |
+
+The proof: under `CAR_ORACLE_TELEMETRY=1` (header key `telem`) every multi-car oracle row ends with
+the 12 physics-side channels, the game's from its own functions on its car (`AIDriver::getLateralPush`,
+`DynamicController::getOversteerFactor`, `Car::getWheelSterAngleDEG`, the ERS's table,
+`Car::getPhysicsState`'s `lastFF_Final` and `rideHeight`), the port's from rustyAC's.
+
+| run (magione) | channels that moved | result |
+|---|---|---|
+| `ai_handover`, ks_ferrari_sf15t, 20,000 steps (the AI takes the car at 7.2 s) | ERS torque 0..77 Nm, the AI's three, oversteer, steer angles, FF final, ride heights | IDENTICAL |
+| `ai_handover`, ks_ferrari_f2004, 20,000 steps | AI push 0/100, live offset −0.44..0.78, distance to corner 0..347, oversteer −5.5..2.9, steer −9..11°, FF final −1.3..1.4, ride heights | IDENTICAL |
+| `rc_cut`, 3 × bmw_m3_e30, 30,000 steps | oversteer, steer angles, FF final, ride heights (no AI on the player's car: 0 as in the game) | IDENTICAL |
+| `pit_box_wing`, ks_ferrari_488_gt3 + e30, 6,000 steps | | IDENTICAL |
+
+The skid channels are the sound's own values; the sound is proven by the sound oracle (Task 19
+on), so only their hand-over to the app is new.
+
+**Setup debug** (`SetupDebug::render` reads the focused car's `Car`): the physics thread now builds
+`view::setup_debug(sim, focus)` from the car the display focuses (`Shared::setup_debug_focus`,
+stored each frame), not always the player's. Test:
+`crates/rustyac-game/tests/opponents.rs` `the_setup_debug_app_reads_the_focused_car` (an e30 with a
+parked F2004: each focus shows its own car's gears and final ratio). The app itself was proven
+against the game's in Task 33b (`app_setupdebug`, the focus moving to car 2 at frame 900).
+
 ## Not done
 
-- Steps 3-5 (see the task's prompt).
+- Steps 4-5 (see the task's prompt).
+- Telemetry `RIDE_HEIGHT_*` in rustyac.exe take this step's speed for the previous snapshot's (the
+  2 m/s edge of the minimum-height rule may be one step late); online remote cars have no `Car` in
+  rustyAC, so Setup debug shows the player's car when one is focused.
 - Online, the tape's local car may not finish a timed lap in its 198 s, so the delta it sends
   may stay 0 in `net_drive`; the meter's value itself is proven in `rc_recover`.
 - The online-only static fields and the graphics page while online or in a replay are ported

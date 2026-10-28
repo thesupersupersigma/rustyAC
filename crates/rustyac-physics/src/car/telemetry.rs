@@ -237,19 +237,22 @@ impl PhysicsPageWriter {
     /// before [`PhysicsPageWriter::update_physics`] (the game's physics thread does both after
     /// each step).
     pub fn snapshot(&mut self, car: &RollingChassis) {
+        self.ride_height = self.ride_heights(car, self.snapshot_speed);
+        self.snapshot_speed = car.speed;
+    }
+
+    /// `Car::getPhysicsState`'s `rideHeight` (front, rear) after a snapshot whose speed was
+    /// `previous_speed`: a standing car with a minimum-height rule shows an estimate from spring
+    /// rates and weight instead of the measured height over the plane of the first three tyres.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    pub fn ride_heights(&self, car: &RollingChassis, previous_speed: f32) -> [f32; 2] {
+        if !(previous_speed >= 2.0) && self.minimum_height > 0.0 {
+            return [self.eval_ride_height(car, 0), self.eval_ride_height(car, 1)];
+        }
         let t = &car.tyres;
         let ground =
             plane4f(&t[0].unmodified_contact_point, &t[1].unmodified_contact_point, &t[2].unmodified_contact_point);
-        // a standing car with a minimum-height rule shows an estimate from spring rates and
-        // weight instead of the measured height (the speed is the previous snapshot's)
-        if !(self.snapshot_speed >= 2.0) && self.minimum_height > 0.0 {
-            self.ride_height = [self.eval_ride_height(car, 0), self.eval_ride_height(car, 1)];
-        } else {
-            for index in 0..2 {
-                self.ride_height[index] = self.compute_ride_height(car, index, &ground);
-            }
-        }
-        self.snapshot_speed = car.speed;
+        [self.compute_ride_height(car, 0, &ground), self.compute_ride_height(car, 1, &ground)]
     }
 
     /// `RaceEngineer::evalFrontRideHeight` @ 0x14027a0f0 (`axle` 0) and

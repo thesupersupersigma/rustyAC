@@ -1012,7 +1012,7 @@ impl AiDriver {
     }
 
     /// `AIDriver::getLateralPush` @ 0x14029dd10: how much of the grip the driver uses.
-    fn get_lateral_push(&self, car: &RollingChassis) -> f32 {
+    pub fn get_lateral_push(&self, car: &RollingChassis) -> f32 {
         let pits = if self.spline_selection == SplineSelection::Pits { 0.92f32 } else { 1.0 };
         let gene = crate::car::drivetrain::cvttss2si(self.loc_npos * 20.0).clamp(0, 0x14);
         if car.physics_guid == 0 {
