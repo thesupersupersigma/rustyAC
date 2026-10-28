@@ -948,6 +948,10 @@ impl Game {
         if let (Some(c), true) = (&car, frame.steps.iter().any(|s| s.extra.wings_app)) {
             self.make_wings_form(c, render_finished);
         }
+        // and ACSuspension::ACSuspension after it
+        if let (Some(c), true) = (&car, frame.steps.iter().any(|s| s.extra.sus_app)) {
+            self.make_suspension_form(c, render_finished);
+        }
         // Sim::cars, for the grooves
         if let Some(car) = &car {
             let list = acs.alloc(8 * count);

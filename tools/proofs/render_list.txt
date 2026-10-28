@@ -119,3 +119,5 @@ r23_23 | --track spa --view chase --post --frames 59 --set tts=8000
 r23_24 | --track ks_laguna_seca --view chase --post --aa 4 --fxaa --frames 39 --set tts=8000
 # Task 43c: the Wings app's outlines and lift vectors (FormWings::onRenderNode), shown, hidden, shown again
 r43c_01 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 30 --set wingsapp=1,wingsapp=0@20,wingsapp=1@25
+# Task 43c: the Suspensions app's 3D lines (ACSuspension::renderWireframe) with its keys: Backspace, keypad 1, 4+5 (bits 3, 4), Ctrl; hidden, shown again
+r43c_02 | --track magione --view chase --car bmw_m3_e30 --tape oracle/audio/bmw_m3_e30/trk_lap.audiotape --frames 30 --set susapp=1,suskeys=1@4,suskeys=0@6,suskeys=4@8,suskeys=0@9,suskeys=24@10,suskeys=0@11,suskeys=2@13,suskeys=0@14,susapp=0@20,susapp=1@25,suskeys=1@27,suskeys=0@28

@@ -15,7 +15,7 @@ use std::path::Path;
 use rustyac_ode::JointId;
 
 use super::body::{DistanceJoint, ForceSource, PhysicsCore, RigidBody};
-use super::suspension::{ordered_nonzero, Damper, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
+use super::suspension::{ordered_nonzero, transform, DebugLine, Damper, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
 use crate::data::ini::IniReader;
 use crate::math::sqrtf;
 use crate::vecmath::{Mat44f, Vec3f};
@@ -166,6 +166,28 @@ impl VanillaAxle {
 }
 
 impl SuspensionModel for VanillaAxle {
+    /// `SuspensionAxle::getDebugLines` @ 0x1402c8010: on the left side only, the links (the
+    /// axle end in the wheel's matrix moved half a track in) and the axle itself.
+    fn get_debug_lines(&self, body: &Mat44f, wheel: &Mat44f) -> Vec<DebugLine> {
+        if !self.left {
+            return Vec::new();
+        }
+        let w = &wheel.m;
+        let neg = -self.track;
+        let shift = [w[0][0] * neg + w[3][0], w[0][1] * neg + w[3][1], w[0][2] * neg + w[3][2]];
+        let at = |j: &Vec3f| {
+            let c = |k: usize| ((j.x * w[0][k] + j.y * w[1][k]) + j.z * w[2][k]) + shift[k];
+            Vec3f::new(c(0), c(1), c(2))
+        };
+        let along = |x: f32| {
+            let c = |k: usize| ((x * w[0][k] + w[1][k] * 0.0) + w[2][k] * 0.0) + shift[k];
+            Vec3f::new(c(0), c(1), c(2))
+        };
+        let mut lines: Vec<DebugLine> = self.joints.iter().map(|j| DebugLine { p0: transform(&j.ball_car.rel_to_car, body), p1: at(&j.ball_axle.rel_to_axle), color: [4.0, 4.0, 4.0, 1.0] }).collect();
+        lines.push(DebugLine { p0: along(self.track), p1: along(neg), color: [0.0, 4.0, 4.0, 1.0] });
+        lines
+    }
+
     /// `SuspensionAxle::getHubWorldMatrix` @ 0x1402c8440: the axle's matrix moved to the wheel
     /// end along the axle's own x axis. No camber, no toe.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f {

@@ -23,7 +23,9 @@ State after the last commit (update after every commit):
 - **Step 4, the developers' 3D windows:** Wings (`FormWings`) done and proven: its table in the
   GUI oracle (`app_wings`), its outlines and lift vectors in the scene oracle (`r43c_01`).
   Tyre tester (`TyreTesterForm` + `TyreTester`) done and proven in the GUI oracle
-  (`app_tyretester`). ACSuspension: see the step's section.
+  (`app_tyretester`). Suspensions (`ACSuspension`) done and proven: the suspensions' debug
+  lines, KPI and caster in the car oracle (`telem` runs), the window in the GUI oracle
+  (`app_suspension`), its 3D lines and keys in the scene oracle (`r43c_02`).
 - **Step 5:** not started.
 - **Version:** still v0.43.1.
 
@@ -211,9 +213,42 @@ circle at 9 degrees.
 |---|---|---|
 | GUI oracle `app_tyretester` (`tools/proofs/gui_list.txt`) | the game's `TyreTesterForm` (constructor, `render`, the game's own `TyreTester` and `Tyre`) and the port's on the F2004's tyres (loose tyres.ini and curves in the oracle's root), 32 frames: speed under and over 30 m/s, four loads changing, compounds 0 then 1/2, the spinner clicked up to 3 and back, hidden and shown | command log, pixels, state (the line of peaks in every frame), layout IDENTICAL |
 
+### Suspensions (`ACSuspension`, 0x288)
+
+Made in `Sim::Sim` after FormWings. The window: four camber/slip gauges with the toe and the
+steering, each with a progress bar of the tyre's slip (yellow, red at 1 and over); the caster,
+KPI and scrub radius; the rear-left bump steer as a strip (toe over the wheel's height, recorded
+while the window shows); the tyre temperatures as 12 x 3 coloured squares with their sums; red
+"Tyre off" lines (how far each wheel node is from its tyre). Its handler on the render-finished
+node draws in 3D: every suspension's links (`ISuspension::getDebugLines`), the ride pickup
+points, a cyan plate under the car, optionally each wheel's two rims and a line from its node,
+and the fuel tank's cross; Backspace switches the links, Ctrl the fuel tank, keypad 1-4 the
+wheels.
+
+- `crates/rustyac-physics/src/car/suspension*.rs`: `ISuspension::get_debug_lines` for the
+  double wishbone, strut, multilink and axle (`DebugLine`, `transform`), `upright()` and
+  `kpi()` (`RaceEngineer::getKPI_RAD`).
+- `crates/rustyac-gui/src/app_suspension.rs` (new): the window (`SuspensionFacts` from
+  `CarAvatar::initPhysics`'s physicsInfo and car.ini `[FUELTANK] POSITION`; the wheel nodes in
+  `AppLink::suspension`). The TempRun button only changes its text (below).
+- `crates/rustyac-render/src/suspensions.rs` (new): `SuspensionWireframe`, the handler
+  (`renderWireframe`); rustyac.exe registers it after the Wings one and feeds it while the app
+  shows, with the keys from `GetAsyncKeyState`.
+
+| proof | what | result |
+|---|---|---|
+| car oracle `CAR_ORACLE_TELEMETRY=1`, `pit_box_wing` 3000 steps (`tools/proofs/telem_list.txt`) | the KPI, scrub, front caster and every wheel's debug lines (count and 10 floats a line) each step, against the game's `getKPI_RAD`, `getFrontCasterRAD`, `getDebugLines`: 488 GT3 (double wishbone), E30 (strut, axle), Alfa GTA (double wishbone + axle), the multilink test car | IDENTICAL |
+| GUI oracle `app_suspension` (`tools/proofs/gui_list.txt`) | the game's `ACSuspension` (constructor, `render`, `renderCamber`, `renderTyreTemp`) and the port's, 348 frames: E30-like facts, the tape's slips, temperatures and wheel nodes moving off their tyres, hidden and shown | command log, pixels, state, layout IDENTICAL |
+| scene oracle `r43c_02` (`tools/proofs/render_list.txt`) | the game's handler and `renderWireframe` (its `susGL`) over the E30 on Magione, 29 frames, with test debug lines and keys: links off, wheel 1, wheels 3 and 4, fuel tank off, hidden, shown, links on | command log, pixels IDENTICAL (5366 to 5545 calls a frame) |
+
 ## Not done
 
-- Step 4's ACSuspension and step 5 (see the task's prompt).
+- Step 5 (see the task's prompt).
+- ACSuspension's TempRun button: the game's handler queues a job on the physics thread that
+  writes `TempRuns/<car>@<track>.trun` into the game's folder (speed, wheel speeds and brake
+  torques each step); rustyAC writes nothing there (the write guard), so the button only
+  changes its text. The GUI oracle does not click it (its sim has no physics thread: the
+  game's side crashes).
 - In the GUI oracle the game's tester read nothing from a copy of the F2004's `data.acd` in the
   oracle's root (zero forces, other DY), so both sides read loose files there; rustyAC reads
   `data.acd` as the game does elsewhere (`crate::data::read`), and the test above runs on it.

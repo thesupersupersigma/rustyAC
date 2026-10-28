@@ -425,6 +425,50 @@ fn png_rgba(path: &Path) -> Result<Vec<u8>, String> {
 /// lift vectors are of
 pub static WINGS_FORM: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
 pub static WINGS_FRAME: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+/// Task 43c: ACSuspension's form (0: none) and the keys the test holds (bit 0 Backspace, 1
+/// Ctrl, 2-5 keypad 1-4)
+pub static SUS_FORM: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+static SUS_KEYS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static SUS_HELD: std::sync::Mutex<[bool; 6]> = std::sync::Mutex::new([false; 6]);
+static SUS_MALLOC: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// In place of `CarAvatar::getSuspensionDebugLines(out, wheel)`: the test's lines over the
+/// avatar's physicsState.worldMatrix, in a vector the game frees (msvcr120's malloc).
+unsafe extern "C" fn sus_debug_lines(avatar: *mut u8, out: *mut usize, wheel: i32) -> *mut usize {
+    let m = rustyac_physics::vecmath::Mat44f { m: rd(avatar, 0x26c) };
+    let lines = crate::frames::test_sus_lines(*WINGS_FRAME.lock().unwrap(), wheel as usize, &m);
+    let malloc: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(SUS_MALLOC.load(std::sync::atomic::Ordering::SeqCst));
+    let block = malloc(lines.len() * 0x2c);
+    for (i, l) in lines.iter().enumerate() {
+        let d = block.add(i * 0x2c);
+        wr(d, 0, [l.p0.x, l.p0.y, l.p0.z, l.p1.x, l.p1.y, l.p1.z]);
+        wr(d, 0x18, l.color);
+        wr(d, 0x28, 0.0f32);
+    }
+    let end = block as usize + lines.len() * 0x2c;
+    *out = block as usize;
+    *out.add(1) = end;
+    *out.add(2) = end;
+    out
+}
+
+/// In place of `Trigger::ignoreSubsequentTrue(down)`: ACSuspension's triggers (Backspace at
+/// form+0x238, Ctrl +0x244, keypad 1-4 at +0x208 + 12i) on the test's keys; the edge of a
+/// key going down. Any other trigger: false.
+unsafe extern "C" fn sus_trigger(this: *mut u8, _down: bool) -> bool {
+    let at = (this as usize).wrapping_sub(*SUS_FORM.lock().unwrap());
+    let key = match at {
+        0x238 => 0,
+        0x244 => 1,
+        0x208 | 0x214 | 0x220 | 0x22c => 2 + (at - 0x208) / 12,
+        _ => return false,
+    };
+    let down = SUS_KEYS.load(std::sync::atomic::Ordering::SeqCst) & (1 << key) != 0;
+    let mut held = SUS_HELD.lock().unwrap();
+    let edge = down && !held[key];
+    held[key] = down;
+    edge
+}
 
 impl Game {
     /// Task 43c: what `FormWings::FormWings` 0x1402ec890 leaves for `onRenderNode`: a form (the
@@ -457,6 +501,53 @@ impl Game {
         let add: extern "C" fn(*mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(VA_EVENT_NODE_RENDER_ADD_HANDLER));
         add(render_finished.add(0xe0), function, form);
         *WINGS_FORM.lock().unwrap() = form as usize;
+    }
+
+    /// Task 43c: `ACSuspension::ACSuspension` 0x1402e3fd0's part for the scene: the form
+    /// `renderWireframe` reads (GUI's graphics, the car, the switches, the fuel tank), `susGL`,
+    /// the car's ride pickup points and tyre radii (its RaceEngineer's car), and the handler
+    /// on the render-finished node. The suspensions' `getDebugLines` and the keys' triggers
+    /// are the test's (`frames::test_sus_lines`, `--set suskeys=`).
+    pub unsafe fn make_suspension_form(&self, c: &Car, render_finished: *mut u8) {
+        const VA_CREATE_GL_RENDERER: usize = 0x1_4020_2710;
+        const VA_SUS_GL: usize = 0x1_4155_aaa8;
+        const VA_GET_SUSPENSION_DEBUG_LINES: usize = 0x1_400d_37d0;
+        const VA_TRIGGER_IGNORE_SUBSEQUENT_TRUE: usize = 0x1_4023_b3a0;
+        const VA_SUS_HANDLER_VTABLE: usize = 0x1_4050_3a28;
+        let acs = &self.acs;
+        let form = acs.alloc(0x288);
+        let gui = acs.alloc(0x40);
+        wr(gui, 0x10, self.graphics);
+        wr(form, 0x148, gui);
+        wr(form, 0x1d8, c.car);
+        wr(form, 0x204, [1u8, 1u8]);
+        wr(form, 0x250, crate::frames::SUS_FUEL_TANK);
+        let create: extern "C" fn(*mut u8, i32) -> *mut u8 = std::mem::transmute(acs.va(VA_CREATE_GL_RENDERER));
+        wr(acs.va(VA_SUS_GL) as *mut u8, 0, create(self.graphics, 0x200));
+        wr(c.car, 0xed0, crate::frames::SUS_RIDE);
+        let physics: *mut u8 = rd(c.car, 0x1168);
+        for w in 0..4 {
+            wr(physics, 0xb38 + 0x858 * w, crate::frames::SUS_TYRE_RADIUS);
+        }
+        let engineer = acs.alloc(0x40);
+        wr(engineer, 8, physics);
+        wr(c.car, 0xf80, engineer);
+        SUS_MALLOC.store(acs.crt_function(c"malloc"), std::sync::atomic::Ordering::SeqCst);
+        let jump = |va: usize, to: usize| {
+            let mut code = vec![0x48, 0xb8];
+            code.extend_from_slice(&to.to_le_bytes());
+            code.extend_from_slice(&[0xff, 0xe0]);
+            acs.patch(acs.va(va), &code);
+        };
+        jump(VA_GET_SUSPENSION_DEBUG_LINES, sus_debug_lines as *const () as usize);
+        jump(VA_TRIGGER_IGNORE_SUBSEQUENT_TRUE, sus_trigger as *const () as usize);
+        let function = acs.alloc(0x40);
+        wr(function, 0, acs.va(VA_SUS_HANDLER_VTABLE));
+        wr(function, 8, form);
+        wr(function, 0x18, function);
+        let add: extern "C" fn(*mut u8, *mut u8, *mut u8) = std::mem::transmute(acs.va(VA_EVENT_NODE_RENDER_ADD_HANDLER));
+        add(render_finished.add(0xe0), function, form);
+        *SUS_FORM.lock().unwrap() = form as usize;
     }
 
     /// `CarAvatar::onPostLoad` 0x1400d92b0: the flat ground shadows (the game's own
@@ -927,6 +1018,12 @@ impl Game {
             wr(rd::<*mut u8>(sim, 0x110), 0x150, extra.pause as u8);
             wr(rd::<*mut u8>(sim, 0x1b8), 0x158, extra.air);
             // CarAvatar::wingsStatus (WingState: 0x44 bytes, the angle at +0xc), physicsInfo
+            // Task 43c: ACSuspension's visible byte and keys
+            let form = *SUS_FORM.lock().unwrap();
+            if form != 0 && c.index == 0 {
+                wr(form as *mut u8, 0x150, extra.sus_app as u8);
+                SUS_KEYS.store(extra.sus_keys, std::sync::atomic::Ordering::SeqCst);
+            }
             // Task 43c: FormWings' visible byte
             let form = *WINGS_FORM.lock().unwrap();
             if form != 0 && c.index == 0 {

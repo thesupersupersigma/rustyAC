@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 34] = [
+pub const APPS: [(&str, usize, usize, usize); 35] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -55,9 +55,10 @@ pub const APPS: [(&str, usize, usize, usize); 34] = [
     // Task 43c
     ("wings", 0x1c0, 0x1_402e_c890, 0x1_4050_4aa0),
     ("tyretester", 0x1f8, 0x1_4033_b520, 0x1_4051_20e8),
+    ("suspension", 0x288, 0x1_402e_3fd0, 0x1_4050_37f8),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 14] = ["wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 15] = ["suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -729,6 +730,14 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 }
                 wings_car(a, first_car);
             }
+            if text == "suspension" {
+                // ACSuspension: the same render-finished event; the car's body node and its
+                // suspension avatar's wheel nodes (Node::getWorldMatrix reads them)
+                if rd::<usize>(sim, 0x170) == 0 {
+                    wr(sim, 0x170, a.alloc(0x200));
+                }
+                suspension_car(a, first_car);
+            }
             if text == "carphysics" || text == "carengineer" {
                 car_physics_car(a, first_car, if text == "carphysics" { "carphysics" } else { "carengineer" });
             }
@@ -881,6 +890,17 @@ pub unsafe fn update() {
     if let Some(status) = *WINGS.lock().unwrap() {
         for (i, row) in l.wings.iter().enumerate() {
             write_wing_state((status as *mut u8).add(i * 0x44), &row.state);
+        }
+    }
+    // ACSuspension: physicsInfo caster (+0xe48), kpi (+0xf44, +0xf48), susBasePos (+0xee8);
+    // the wheel nodes' places
+    if let (Some((car, nodes)), Some(s)) = (*SUSPENSION.lock().unwrap(), l.suspension) {
+        let car = car as *mut u8;
+        wr(car, 0xe48, s.facts.caster);
+        wr(car, 0xf44, [s.facts.kpi_rad, s.facts.scrub]);
+        wr(car, 0xee8, s.facts.sus_base_pos);
+        for (i, p) in s.wheel_nodes.iter().enumerate() {
+            wr(nodes[i] as *mut u8, 8 + 0x30, *p);
         }
     }
     // TyreTesterForm: its car's physicsState.speed (+0x4d8) and load[4] (+0x54c),
@@ -1125,6 +1145,40 @@ unsafe fn wings_car(a: &crate::acs::Acs, avatar: *mut u8) {
 
 static WINGS: Mutex<Option<usize>> = Mutex::new(None);
 static TYRE_TESTER: Mutex<Option<usize>> = Mutex::new(None);
+/// ACSuspension's car and its four wheel nodes
+static SUSPENSION: Mutex<Option<(usize, [usize; 4])>> = Mutex::new(None);
+
+/// `ISuspensionAvatar::getWheelTransform(i)` (vtable +0x10) of the stand-in: the i-th node
+extern "C" fn get_wheel_transform(this: *mut u8, i: i32) -> *mut u8 {
+    // SAFETY: the stand-in holds four node pointers after its table
+    unsafe { rd(this, 8 + 8 * (i as usize & 3)) }
+}
+
+/// The car's body node and a suspension avatar (+0xff8) with four wheel nodes, all game
+/// `Node`s (vtable 0x1404eb558: getWorldMatrix copies +8 when there is no parent at +0xa8).
+unsafe fn suspension_car(a: &crate::acs::Acs, avatar: *mut u8) {
+    const VA_NODE_VTABLE: usize = 0x1_404e_b558;
+    let body: *mut u8 = rd(avatar, 0x1b8);
+    wr(body, 0, a.va(VA_NODE_VTABLE));
+    let node = || {
+        let n = a.alloc(0x100);
+        wr(n, 0, a.va(VA_NODE_VTABLE));
+        wr(n, 8, rustyac_physics::vecmath::Mat44f::IDENTITY.m);
+        n as usize
+    };
+    let nodes = [node(), node(), node(), node()];
+    let table = a.alloc(0x100);
+    for slot in 0..32 {
+        wr(table, slot * 8, get_wheel_transform as *const () as usize);
+    }
+    let sus = a.alloc(0x40);
+    wr(sus, 0, table);
+    for (i, n) in nodes.iter().enumerate() {
+        wr(sus, 8 + 8 * i, *n);
+    }
+    wr(avatar, 0xff8, sus);
+    *SUSPENSION.lock().unwrap() = Some((avatar as usize, nodes));
+}
 
 /// A `WingState` as the game lays it (0x44 bytes).
 unsafe fn write_wing_state(at: *mut u8, s: &rustyac_physics::car::aero::WingState) {

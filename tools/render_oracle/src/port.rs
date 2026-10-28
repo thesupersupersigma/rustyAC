@@ -319,6 +319,12 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     if car.is_some() && frame.steps.iter().any(|s| s.extra.wings_app) {
         scene.add_event_handler(render_finished, wings_outlines.clone());
     }
+    // and ACSuspension::ACSuspension after it
+    let sus_lines = (car.is_some() && frame.steps.iter().any(|s| s.extra.sus_app)).then(|| {
+        let lines = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::suspensions::SuspensionWireframe::new(&graphics)));
+        scene.add_event_handler(render_finished, lines.clone());
+        lines
+    });
     let cube_model = rustyac_render::cubemap::load_static_cubemap_model(&mut graphics, &mut scene, frame.track.as_ref().map(|t| t.folder.as_str()))?;
     rustyac_render::gpulog::begin_capture("static cube map");
     rustyac_render::cubemap::render_static_cubemap(&mut camera, &mut graphics, &mut scene, cube_model);
@@ -441,6 +447,20 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
             car.update(&mut graphics, &mut scene, &step.state, crate::frames::DT);
             // FormWings: the player's wings over physicsState.worldMatrix while the app shows
             wings_outlines.borrow_mut().frame = step.extra.wings_app.then(|| (step.state.world_matrix.m, crate::frames::test_wings(index)));
+            // ACSuspension: the test lines over physicsState.worldMatrix, the car's wheel nodes
+            if let Some(sus_lines) = &sus_lines {
+                sus_lines.borrow_mut().frame = step.extra.sus_app.then(|| rustyac_render::suspensions::SuspensionFrame {
+                world: step.state.world_matrix,
+                tyre_matrix: step.state.tyre_matrix,
+                lines: std::array::from_fn(|w| crate::frames::test_sus_lines(index, w, &step.state.world_matrix).iter().map(|l| ([l.p0.x, l.p0.y, l.p0.z], [l.p1.x, l.p1.y, l.p1.z], l.color)).collect()),
+                ride_pickup_point: crate::frames::SUS_RIDE,
+                tyre_width: spec.tyre_width,
+                tyre_radius: [crate::frames::SUS_TYRE_RADIUS; 4],
+                fuel_tank_position: crate::frames::SUS_FUEL_TANK,
+                wheel_nodes: std::array::from_fn(|w| car.wheel_node_position(&scene, w)),
+                keys: std::array::from_fn(|k| step.extra.sus_keys & (1 << k) != 0),
+                });
+            }
             // (the car's children after it: GhostCar::update)
             if let (Some(ghost), Some(recorder)) = (&mut ghost, &mut ghost_recorder) {
                 let b = scene.nodes[car.body_transform].matrix.m[3];

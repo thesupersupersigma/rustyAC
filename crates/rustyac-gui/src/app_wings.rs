@@ -32,7 +32,7 @@ pub struct WingRow {
 }
 
 /// `cvttss2si`: out of range or NaN is `i32::MIN`.
-fn cvtt(x: f32) -> i32 {
+pub(crate) fn cvtt(x: f32) -> i32 {
     if x.is_nan() || x >= 2147483648.0 || x < -2147483648.0 {
         i32::MIN
     } else {

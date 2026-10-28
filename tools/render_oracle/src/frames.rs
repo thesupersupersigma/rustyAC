@@ -125,6 +125,29 @@ pub fn test_wings(index: usize) -> Vec<rustyac_render::wings::WingOutline> {
         .collect()
 }
 
+/// ACSuspension's test car: its ride pickup points, fuel tank and tyre radius.
+pub const SUS_RIDE: [[f32; 3]; 2] = [[0.0, -0.12, 1.25], [0.0, -0.1, -1.3]];
+pub const SUS_FUEL_TANK: [f32; 3] = [0.1, -0.15, -0.8];
+pub const SUS_TYRE_RADIUS: f32 = 0.31;
+
+/// ACSuspension's test lines of a wheel (`getDebugLines` with the car's matrix `b`): three
+/// arms from the body to near the wheel, turning with the frame.
+pub fn test_sus_lines(index: usize, wheel: usize, b: &rustyac_physics::vecmath::Mat44f) -> Vec<rustyac_physics::car::suspension::DebugLine> {
+    use rustyac_physics::car::suspension::{transform, DebugLine};
+    use rustyac_physics::vecmath::Vec3f;
+    let t = index as f32 * 0.1;
+    let (x, z) = (if wheel % 2 == 0 { 0.75 } else { -0.75 }, if wheel < 2 { 1.25 } else { -1.3 });
+    let colors = [[1.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [4.0, 4.0, 4.0, 1.0]];
+    (0..3)
+        .map(|k| {
+            let kf = k as f32;
+            let car = Vec3f::new(x * 0.4, -0.15 + kf * 0.12, z + (kf - 1.0) * 0.2);
+            let tyre = Vec3f::new(x, -0.2 + kf * 0.15 + 0.03 * (t + wheel as f32).sin(), z);
+            DebugLine { p0: transform(&car, b), p1: transform(&tyre, b), color: colors[k] }
+        })
+        .collect()
+}
+
 /// What a frame sets beside the car's physics state (`--set`), on both sides alike.
 #[derive(Clone, Copy, Debug)]
 pub struct Extra {
@@ -150,6 +173,10 @@ pub struct Extra {
     /// Task 43c: the Wings app shows (FormWings::onRenderNode draws [`test_wings`] over the car;
     /// the wings' angle is `wing`'s, else 0)
     pub wings_app: bool,
+    /// Task 43c: ACSuspension shown (`--set susapp=1`) and its keys held (`suskeys=<mask>`:
+    /// Backspace, Ctrl, keypad 1-4 from bit 0)
+    pub sus_app: bool,
+    pub sus_keys: u8,
     /// `CarPhysicsInfo::kersMaxJ` (with `hasKERS`) and `ersMaxJ`
     pub kers_max: f32,
     pub ers_max: f32,
@@ -201,7 +228,7 @@ impl Extra {
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, wings_app: false, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false, crew: 0.0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, wings_app: false, sus_app: false, sus_keys: 0, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false, crew: 0.0 }
     }
 }
 
@@ -742,6 +769,8 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         }
         "wing" => x.wing = Some(number(value)?),
         "wingsapp" => x.wings_app = on(value)?,
+        "susapp" => x.sus_app = on(value)?,
+        "suskeys" => x.sus_keys = number(value)? as u8,
         "kersmax" => x.kers_max = number(value)?,
         "ersmax" => x.ers_max = number(value)?,
         "kerskj" => s.kers_current_kj = number(value)?,

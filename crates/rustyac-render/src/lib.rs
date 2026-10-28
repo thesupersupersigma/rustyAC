@@ -72,6 +72,7 @@ pub mod state {
     pub use rustyac_physics::car_physics_state::*;
 }
 pub mod suspension_graphics;
+pub mod suspensions;
 pub mod texture;
 pub mod time_attack;
 pub mod tyre_crew;

@@ -36,6 +36,12 @@ pub const METER_COLUMNS: [&str; 3] = ["world.meter.diff.lo", "world.meter.diff.h
 /// Task 43c: the Telemetry app's channels that read the player's car through a function of its own
 /// (`FormTelemetry::initChannels`' lambdas), in a recording whose header has the key `telem` (the
 /// car oracle's `CAR_ORACLE_TELEMETRY=1`).
+/// Task 43c: the Suspensions app's numbers after the telemetry's: the KPI angle and scrub radius
+/// (`RaceEngineer::getKPI_RAD(0)`), the front caster (`getFrontCasterRAD`), then per wheel the
+/// count of `ISuspension::getDebugLines` and up to [`DEBUG_LINES`] lines of 10 floats.
+pub const SUSPENSION_WORDS: usize = 3 + 4 * (1 + DEBUG_LINES * 10);
+pub const DEBUG_LINES: usize = 8;
+
 pub const TELEMETRY_COLUMNS: [&str; 12] = [
     "world.telem.AI_PUSH",
     "world.telem.AI_LIVE_OFFSET",
@@ -333,7 +339,7 @@ impl Recording {
 
     /// Words in a row.
     pub fn row_words(&self) -> usize {
-        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 } + if self.get("telem").is_some() { TELEMETRY_COLUMNS.len() } else { 0 } + if self.get("shm").is_some() { crate::race::shm::GRAPHICS_SIZE / 4 } else { 0 }
+        WORLD_COLUMNS.len() + self.cars.iter().map(|car| INPUT_COLUMNS.len() + car_columns(car).len()).sum::<usize>() + if self.get("referee").is_some() { REFEREE_COLUMNS.len() } else { 0 } + if self.get("meter").is_some() { METER_COLUMNS.len() } else { 0 } + if self.get("telem").is_some() { TELEMETRY_COLUMNS.len() + SUSPENSION_WORDS } else { 0 } + if self.get("shm").is_some() { crate::race::shm::GRAPHICS_SIZE / 4 } else { 0 }
     }
 
     /// Task 28: the referee of the recording (header key `referee`:
@@ -378,6 +384,7 @@ impl Recording {
         }
         if self.get("telem").is_some() {
             out.extend(TELEMETRY_COLUMNS.iter().map(|s| s.to_string()));
+            out.extend((0..SUSPENSION_WORDS).map(|i| format!("world.sus.{i}")));
         }
         if self.get("shm").is_some() {
             out.extend(shm_columns());
@@ -1097,6 +1104,21 @@ impl ReplayWorld {
                 ]
                 .map(f32::to_bits),
             );
+            let (angle, scrub) = crate::car::suspension::kpi(car.suspensions[0].upright(), car.tyres[0].data.radius);
+            row.extend([angle, scrub, car.suspensions[0].caster_rad()].map(f32::to_bits));
+            let body = car.core.get_world_matrix(car.body);
+            for s in &car.suspensions {
+                let lines = s.get_debug_lines(&body, &s.get_hub_world_matrix(&car.core));
+                row.push(lines.len() as u32);
+                let mut words = [0u32; DEBUG_LINES * 10];
+                for (k, l) in lines.iter().take(DEBUG_LINES).enumerate() {
+                    let v = [l.p0.x, l.p0.y, l.p0.z, l.p1.x, l.p1.y, l.p1.z, l.color[0], l.color[1], l.color[2], l.color[3]];
+                    for (j, f) in v.iter().enumerate() {
+                        words[k * 10 + j] = f.to_bits();
+                    }
+                }
+                row.extend(words);
+            }
         }
         if let Some(shm) = &self.shm {
             row.extend(shm.1.bytes.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])));

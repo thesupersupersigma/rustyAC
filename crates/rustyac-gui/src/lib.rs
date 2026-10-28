@@ -35,6 +35,7 @@ pub mod app_tyre_debug;
 pub mod app_tyre_tester;
 pub mod app_track_map;
 pub mod app_tyres;
+pub mod app_suspension;
 pub mod app_volumes;
 pub mod apps;
 pub mod control;

@@ -116,6 +116,10 @@ pub struct CarView {
     /// Task 43c: `CarAvatar::wingsStatus` of the first [`MAX_WINGS`] wings (FormWings)
     pub wing_states: [rustyac_physics::car::aero::WingState; MAX_WINGS],
     pub wing_state_count: u8,
+    /// Task 43c: `CarAvatar::getSuspensionDebugLines(w)` (ACSuspension's 3D lines), up to
+    /// [`rustyac_physics::engine::record::DEBUG_LINES`] a wheel
+    pub sus_lines: [[rustyac_physics::car::suspension::DebugLine; rustyac_physics::engine::record::DEBUG_LINES]; 4],
+    pub sus_line_count: [u8; 4],
     /// `CarAvatar::pitPosition`'s place (the pit box)
     pub pit_position: [f32; 3],
     /// every suspension's `getPackerRange`
@@ -344,6 +348,8 @@ impl Default for CarView {
             engineer: Default::default(),
             wing_states: Default::default(),
             wing_state_count: 0,
+            sus_lines: Default::default(),
+            sus_line_count: [0; 4],
             pit_position: [0.0; 3],
             packer_range: [0.0; 4],
             steps: 0,
@@ -715,6 +721,8 @@ impl CarView {
                 out
             },
             wing_state_count: car.aero.as_ref().map_or(0, |a| a.base().wings.len().min(MAX_WINGS)) as u8,
+            sus_lines: sus_lines(car).0,
+            sus_line_count: sus_lines(car).1,
             pit_position: [car.pit_position.m[3][0], car.pit_position.m[3][1], car.pit_position.m[3][2]],
             packer_range: [0, 1, 2, 3].map(|k| car.suspensions.get(k).map_or(0.0, |s| s.get_packer_range())),
             speed_kmh: car.speed * 3.6,
@@ -1035,6 +1043,44 @@ pub fn wing_rows(sim: &GameSim) -> Vec<rustyac_gui::app_wings::WingRow> {
         .take(MAX_WINGS)
         .map(|w| rustyac_gui::app_wings::WingRow { name: w.data.name.clone(), chord: w.data.chord, span: w.data.span, position: [w.data.position.x, w.data.position.y, w.data.position.z], is_vertical: w.data.is_vertical, state: w.status })
         .collect()
+}
+
+/// `CarAvatar::initPhysics` 0x1400d7660's suspension facts and the car.ini fuel tank
+/// `ACSuspension`'s constructor reads (missing: zeros, as the game's `getFloat3`).
+type SusLines = ([[rustyac_physics::car::suspension::DebugLine; rustyac_physics::engine::record::DEBUG_LINES]; 4], [u8; 4]);
+
+/// Every suspension's `getDebugLines` with the body's and its hub's matrices (cut at the first
+/// `DEBUG_LINES`).
+fn sus_lines(car: &rustyac_physics::car::RollingChassis) -> SusLines {
+    let body = car.core.get_world_matrix(car.body);
+    let mut out = SusLines::default();
+    for (w, s) in car.suspensions.iter().take(4).enumerate() {
+        let lines = s.get_debug_lines(&body, &s.get_hub_world_matrix(&car.core));
+        out.1[w] = lines.len().min(rustyac_physics::engine::record::DEBUG_LINES) as u8;
+        for (slot, line) in out.0[w].iter_mut().zip(lines) {
+            *slot = line;
+        }
+    }
+    out
+}
+
+pub fn suspension_facts(sim: &GameSim) -> rustyac_gui::app_suspension::SuspensionFacts {
+    use rustyac_physics::car::suspension::kpi;
+    let car = &sim.car.car;
+    let v = |p: rustyac_physics::vecmath::Vec3f| [p.x, p.y, p.z];
+    let (kpi_rad, scrub) = kpi(car.suspensions[0].upright(), car.tyres[0].data.radius);
+    let ride = rustyac_physics::car::PhysicsPageWriter::new(car, &sim.data_path).map(|w| w.ride_pickup_point.map(v)).unwrap_or_default();
+    let tank = rustyac_physics::data::ini::IniReader::load(&sim.data_path.join("car.ini")).ok().and_then(|ini| ini.get_float3("FUELTANK", "POSITION").ok()).unwrap_or_default();
+    rustyac_gui::app_suspension::SuspensionFacts {
+        caster: car.suspensions[0].caster_rad() * 57.29578,
+        kpi_rad,
+        scrub,
+        sus_base_pos: std::array::from_fn(|i| v(car.suspensions[i].get_base_position())),
+        ride_pickup_point: ride,
+        tyre_width: std::array::from_fn(|i| car.tyres[i].data.width),
+        tyre_radius: std::array::from_fn(|i| car.tyres[i].data.radius),
+        fuel_tank_position: tank,
+    }
 }
 
 pub fn engineer_masses(sim: &GameSim) -> rustyac_gui::app_car_engineer::CarEngineer {

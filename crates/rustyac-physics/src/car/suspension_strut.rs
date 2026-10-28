@@ -13,7 +13,7 @@ use std::path::Path;
 use rustyac_ode::JointId;
 
 use super::body::{DistanceJoint, ForceSource, PhysicsCore, RigidBody};
-use super::suspension::{add, ordered_nonzero, sign, Damper, SusDamageDef, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
+use super::suspension::{add, ordered_nonzero, sign, transform, DebugLine, GREEN, MAGENTA, YELLOW, Damper, SusDamageDef, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
 use crate::data::ini::IniReader;
 use crate::math::sqrtf;
 use crate::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
@@ -283,6 +283,22 @@ impl SuspensionModel for VanillaStrut {
     fn caster_rad(&self) -> f32 {
         let d = &self.data_rel_to_wheel;
         crate::math::atanf((d.car_strut.z - d.tyre_strut.z) / (d.car_strut.y - d.tyre_strut.y))
+    }
+
+    fn upright(&self) -> Option<(Vec3f, Vec3f)> {
+        Some((self.data_rel_to_wheel.car_strut, self.data_rel_to_wheel.tyre_strut))
+    }
+
+    /// `SuspensionStrut::getDebugLines` @ 0x1402c46e0.
+    fn get_debug_lines(&self, body: &Mat44f, wheel: &Mat44f) -> Vec<DebugLine> {
+        let (b, w) = (&self.data_rel_to_body, &self.data_rel_to_wheel);
+        let line = |p0: &Vec3f, p1: &Vec3f, color| DebugLine { p0: transform(p0, body), p1: transform(p1, wheel), color };
+        vec![
+            line(&b.car_bottom_wb_f, &w.tyre_bottom_wb, YELLOW),
+            line(&b.car_bottom_wb_r, &w.tyre_bottom_wb, YELLOW),
+            line(&b.car_steer, &w.tyre_steer, GREEN),
+            line(&b.car_strut, &w.tyre_strut, MAGENTA),
+        ]
     }
 
     /// `Suspension::getHubWorldMatrix` @ 0x1402c4c50 (the strut's vtable has the same

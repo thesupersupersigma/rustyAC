@@ -124,6 +124,28 @@ pub fn car_engineer(frame: usize) -> rustyac_gui::app_car_engineer::CarEngineer 
 /// FormWings' wings of a frame: three level wings and a fin, the angles, heights and forces
 /// moving through the table's shapes (no lift for the first 30 frames: the front share and the
 /// efficiency divide by zero).
+/// ACSuspension's facts (an E30-like car) and wheel nodes a little off the tyres, more so
+/// as the frames pass.
+pub fn suspension_link(state: &CarPhysicsState, frame: usize) -> rustyac_gui::app_suspension::SuspensionLink {
+    let k = frame as f32 * 0.0005;
+    rustyac_gui::app_suspension::SuspensionLink {
+        facts: rustyac_gui::app_suspension::SuspensionFacts {
+            caster: 6.25,
+            kpi_rad: 0.2232,
+            scrub: 0.0127,
+            sus_base_pos: [[-0.72, -0.2, 1.2], [0.72, -0.2, 1.2], [-0.71, -0.21, -1.36], [0.71, -0.21, -1.36]],
+            ride_pickup_point: [[0.0, -0.1, 1.2], [0.0, -0.1, -1.36]],
+            tyre_width: [0.205; 4],
+            tyre_radius: [0.31; 4],
+            fuel_tank_position: [0.0, -0.1, -1.0],
+        },
+        wheel_nodes: std::array::from_fn(|i| {
+            let t = state.tyre_matrix[i].m[3];
+            [t[0] + k * i as f32, t[1] - k, t[2] + 0.001 * i as f32]
+        }),
+    }
+}
+
 pub fn wing_rows(frame: usize) -> Vec<rustyac_gui::app_wings::WingRow> {
     use rustyac_physics::car::aero::WingState;
     let f = frame as f32;
@@ -609,6 +631,7 @@ pub fn link() -> AppLink {
             telemetry: telemetry_feed(s.frame),
             tyre_debug: Some(tyre_debug_rows(s.frame)),
             tyre_tester: Some(tyre_tester_car(s.frame)),
+            suspension: states.first().map(|state| suspension_link(state, s.frame)),
             setup_debug: Some(setup_debug_car(s.frame)),
             car_physics: car_physics_extra(s.frame),
             car_engineer: car_engineer(s.frame),
@@ -1418,6 +1441,19 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 0, 600, 3);
             o.extend([hud("app.visible", 0.0, "wings"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "wings")]);
             play(&mut o, 600, 700, 4);
+            o.push(Op::Save);
+        }
+        "app_suspension" => {
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "suspension"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "suspension"));
+            play(&mut o, 0, 900, 3);
+            // (no click on its TempRun button: the game's handler queues a job on the physics
+            // thread, which the oracle has not)
+            play(&mut o, 900, 960, 6);
+            o.extend([hud("app.visible", 0.0, "suspension"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "suspension")]);
+            play(&mut o, 960, 1100, 4);
             o.push(Op::Save);
         }
         "app_tyretester" => {

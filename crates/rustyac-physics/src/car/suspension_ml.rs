@@ -17,7 +17,7 @@ use std::path::Path;
 use rustyac_ode::JointId;
 
 use super::body::{DistanceJoint, ForceSource, PhysicsCore, RigidBody};
-use super::suspension::{ordered_nonzero, sign, Damper, SusDamageDef, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
+use super::suspension::{ordered_nonzero, sign, transform, DebugLine, Damper, SusDamageDef, SuspensionBase, SuspensionModel, SuspensionStatus, SuspensionType};
 use crate::data::ini::IniReader;
 use crate::math::sqrtf;
 use crate::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
@@ -189,6 +189,11 @@ impl VanillaMultilink {
 }
 
 impl SuspensionModel for VanillaMultilink {
+    /// `SuspensionML::getDebugLines` @ 0x1402c9480: every link, its joints as they are now.
+    fn get_debug_lines(&self, body: &Mat44f, wheel: &Mat44f) -> Vec<DebugLine> {
+        self.joints.iter().map(|j| DebugLine { p0: transform(&j.ball_car.rel_to_car, body), p1: transform(&j.ball_tyre.rel_to_tyre, wheel), color: [4.0, 4.0, 4.0, 1.0] }).collect()
+    }
+
     /// `SuspensionML::getHubWorldMatrix` @ 0x1402c96c0: `rotation((0,0,1), staticCamber) x hub`.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f {
         let hub = core.get_world_matrix(self.hub);

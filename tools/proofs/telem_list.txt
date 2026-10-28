@@ -6,3 +6,6 @@ ai_handover magione ks_ferrari_sf15t 20000
 ai_handover magione ks_ferrari_f2004 20000
 rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 30000
 pit_box_wing magione ks_ferrari_488_gt3,bmw_m3_e30 6000
+# the Suspensions app's debug lines of the rigid axle and the multilink (the others above)
+pit_box_wing magione ks_alfa_romeo_gta,bmw_m3_e30 3000
+pit_box_wing magione gt3_multilink,bmw_m3_e30 3000

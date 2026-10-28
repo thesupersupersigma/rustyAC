@@ -64,6 +64,8 @@ pub struct GameApps {
     pub onboard: ([f32; 3], f32, f32),
     pub onboard_changed: bool,
     pub ctrl_down: bool,
+    /// Task 43c: ACSuspension's keys held (Backspace, Ctrl, keypad 1-4)
+    pub suspension_keys: [bool; 6],
     /// Task 33: what the statistics apps read this frame
     pub stats: rustyac_gui::app_stats::AppStats,
     /// Task 33b: the Telemetry app's values of this frame
@@ -214,6 +216,8 @@ impl GameApps {
         // FormWings (a developers' app, after TyreTesterForm and FormLogoAC)
         let id = gui.new_wings_app(painter);
         add(gui, painter, "wings", id);
+        let id = gui.new_suspension_app(painter);
+        add(gui, painter, "suspension", id);
         // ACDriverPerformance (a developers' app): its records from rustyAC's own savedData,
         // else the game's (Documents, read only)
         let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
@@ -460,6 +464,8 @@ impl GameApps {
             stats: self.stats.clone(),
             telemetry: self.telemetry.clone(),
             tyre_debug: world.first().map(|v| v.tyre_debug),
+            // shortcut: the wheels' drawn matrices stand for the wheel nodes' world matrices
+            suspension: world.first().map(|v| rustyac_gui::app_suspension::SuspensionLink { facts: setup.suspension, wheel_nodes: v.wheels.map(|w| [w[3][0], w[3][1], w[3][2]]) }),
             tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),
             car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },

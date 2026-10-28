@@ -179,6 +179,16 @@ pub trait SuspensionModel: Send {
     fn caster_rad(&self) -> f32 {
         0.0
     }
+    /// The upright's top and bottom joints relative to the wheel, as `RaceEngineer::getKPI_RAD`
+    /// reads them (a double wishbone and a strut; the others none): see [`kpi`].
+    fn upright(&self) -> Option<(Vec3f, Vec3f)> {
+        None
+    }
+    /// +0x70 `getDebugLines(out, bodyMatrix, wheelMatrix, 0)`: the links as lines in the world
+    /// (`body` the car's world matrix, `wheel` the suspension's), for the Suspensions app.
+    fn get_debug_lines(&self, _body: &Mat44f, _wheel: &Mat44f) -> Vec<DebugLine> {
+        Vec::new()
+    }
     /// +0x08 `getHubWorldMatrix`: the hub's world matrix with the static camber applied.
     fn get_hub_world_matrix(&self, core: &PhysicsCore) -> Mat44f;
     /// +0x10 `getPointVelocity`: velocity of the hub body at a world point.
@@ -269,6 +279,32 @@ pub trait SuspensionModel: Send {
     /// Puts back what a step leaves behind (`status` and the steer torque): for restoring a
     /// saved state, not part of AC's interface.
     fn restore_step_state(&mut self, status: SuspensionStatus, steer_torque: f32);
+}
+
+/// AC's `DebugLine` (0x2c bytes; `seconds` is always 0 from the suspensions).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DebugLine {
+    pub p0: Vec3f,
+    pub p1: Vec3f,
+    pub color: [f32; 4],
+}
+
+pub const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+pub const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+pub const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+
+/// A point through a row-major matrix as the debug lines do: `((x M1 + y M2) + z M3) + M4`.
+pub fn transform(p: &Vec3f, m: &Mat44f) -> Vec3f {
+    let c = |k: usize| ((p.x * m.m[0][k] + p.y * m.m[1][k]) + p.z * m.m[2][k]) + m.m[3][k];
+    Vec3f::new(c(0), c(1), c(2))
+}
+
+/// `RaceEngineer::getKPI_RAD` @ 0x14027c060 on the upright's joints (`top`, `bottom`) and
+/// the tyre's radius: the kingpin angle (rad) and the scrub radius (m); (0, 0) without.
+pub fn kpi(upright: Option<(Vec3f, Vec3f)>, radius: f32) -> (f32, f32) {
+    let Some((top, bot)) = upright else { return (0.0, 0.0) };
+    let tan_k = (bot.x - top.x) / (top.y - bot.y);
+    (-crate::math::atanf(tan_k), -((bot.y + radius) * tan_k + bot.x))
 }
 
 /// AC's `SDWSuspensionData` (0x7c bytes): the pick-up points of a double-wishbone corner.
@@ -523,6 +559,24 @@ impl SuspensionModel for VanillaDwb {
     fn caster_rad(&self) -> f32 {
         let d = &self.data_rel_to_wheel;
         crate::math::atanf((d.tyre_top_wb.z - d.tyre_bottom_wb.z) / (d.tyre_top_wb.y - d.tyre_bottom_wb.y))
+    }
+
+    fn upright(&self) -> Option<(Vec3f, Vec3f)> {
+        Some((self.data_rel_to_wheel.tyre_top_wb, self.data_rel_to_wheel.tyre_bottom_wb))
+    }
+
+    /// `Suspension::getDebugLines` @ 0x1402c1530.
+    fn get_debug_lines(&self, body: &Mat44f, wheel: &Mat44f) -> Vec<DebugLine> {
+        let (b, w) = (&self.data_rel_to_body, &self.data_rel_to_wheel);
+        let line = |p0: &Vec3f, m0: &Mat44f, p1: &Vec3f, color| DebugLine { p0: transform(p0, m0), p1: transform(p1, wheel), color };
+        vec![
+            line(&b.car_bottom_wb_f, body, &w.tyre_bottom_wb, YELLOW),
+            line(&b.car_bottom_wb_r, body, &w.tyre_bottom_wb, YELLOW),
+            line(&b.car_steer, body, &w.tyre_steer, GREEN),
+            line(&b.car_top_wb_f, body, &w.tyre_top_wb, YELLOW),
+            line(&b.car_top_wb_r, body, &w.tyre_top_wb, YELLOW),
+            line(&w.tyre_bottom_wb, wheel, &w.tyre_top_wb, MAGENTA),
+        ]
     }
 
     /// `Suspension::getHubWorldMatrix` @ 0x1402c4c50: `rotation((0,0,1), staticCamber) x hub`.

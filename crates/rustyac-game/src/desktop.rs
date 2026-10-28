@@ -431,6 +431,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             car_physics: info.car_physics,
             engineer_masses: info.engineer_masses,
             wings: info.wings.clone(),
+            suspension: info.suspension,
             setups_dir: options.setups_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("setups")))).unwrap_or_else(|| PathBuf::from("setups")),
             documents_setups: (!options.no_ac_setups).then(|| rustyac_game::conditions::documents_folder().map(|folder| folder.join("setups"))).flatten(),
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -2074,6 +2075,8 @@ fn run_window(options: &Options) -> Result<(), String> {
             }
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
+            // SAFETY: plain calls.
+            gui.apps.suspension_keys = [0x08, 0x11, 0x61, 0x62, 0x63, 0x64].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
         }
         let frame = if let Some(start) = start_camera.as_mut() {
             start.update(&world[0], shapes[0].eye_model[0], dt.as_secs_f32())

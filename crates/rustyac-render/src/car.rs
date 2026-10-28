@@ -442,6 +442,15 @@ impl CarAvatar {
         }
     }
 
+    /// `ISuspensionAvatar::getWheelTransform(wheel)` (the first level's node) and its world
+    /// translation, as `ACSuspension` reads it.
+    pub fn wheel_node_position(&self, scene: &Scene, wheel: usize) -> [f32; 3] {
+        self.wheel_transforms(wheel).first().map_or([0.0; 3], |&n| {
+            let m = scene.get_world_matrix(n).m;
+            [m[3][0], m[3][1], m[3][2]]
+        })
+    }
+
     /// `CarAvatar::initMirrorMaterials` 0x1400d75f0: only when the game has a mirror texture.
     pub fn init_mirror_materials(&mut self, graphics: &mut Graphics, scene: &mut Scene, texture: &crate::texture::Texture) -> Result<(), String> {
         self.mirrors = crate::mirror::CarMirrorManager::new(graphics, scene, &self.folder, self.body_transform, texture)?;

@@ -111,6 +111,9 @@ const CAR_ERS: usize = 0x3768;
 const AI_LIVE_OFFSET: usize = 0x13c;
 const AI_OFFSET_DIST_FROM_CORNER: usize = 0x140;
 const VA_AIDRIVER_GET_LATERAL_PUSH: usize = 0x1_4029_dd10; // AIDriver::getLateralPush()
+const CAR_SUSPENSIONS: usize = 0x2c88;
+const VA_RACE_ENGINEER_GET_KPI_RAD: usize = 0x1_4027_c060; // KPI RaceEngineer::getKPI_RAD(int)
+const VA_RACE_ENGINEER_GET_FRONT_CASTER_RAD: usize = 0x1_4027_bd40;
 const VA_GET_OVERSTEER_FACTOR: usize = 0x1_402b_11d0; // DynamicController::getOversteerFactor(Car*)
 const VA_GET_WHEEL_STEER_ANGLE_DEG: usize = 0x1_4027_2960; // Car::getWheelSterAngleDEG(int)
 
@@ -1823,6 +1826,37 @@ impl<'a> MultiWorld<'a> {
                 let (state, _) = self.physics_state(0);
                 let word = |at: usize| u32::from_le_bytes([state[at], state[at + 1], state[at + 2], state[at + 3]]);
                 row.extend([word(0x66c), word(0x79c), word(0x7a0)]);
+                // the Suspensions app: RaceEngineer::getKPI_RAD(0) and getFrontCasterRAD through an
+                // engineer of this car, then every suspension's getDebugLines on the state's
+                // worldMatrix (+4) and suspensionMatrix[w] (+0x44)
+                // (a RaceEngineer is 0x18 bytes: its car at +8)
+                let mut engineer = [0usize, car as usize, 0];
+                let engineer = engineer.as_mut_ptr() as *mut u8;
+                let kpi: extern "C" fn(*mut u8, *mut [f32; 2], i32) -> *mut [f32; 2] = std::mem::transmute(self.acs.va(VA_RACE_ENGINEER_GET_KPI_RAD));
+                let caster: extern "C" fn(*mut u8) -> f32 = std::mem::transmute(self.acs.va(VA_RACE_ENGINEER_GET_FRONT_CASTER_RAD));
+                let mut k = [0f32; 2];
+                kpi(engineer, &mut k, 0);
+                row.extend([k[0].to_bits(), k[1].to_bits(), caster(engineer).to_bits()]);
+                let free: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.crt_function(c"free"));
+                let suspensions: *const *mut u8 = rd(car, CAR_SUSPENSIONS);
+                for w in 0..4 {
+                    let s = *suspensions.add(w);
+                    let lines: extern "C" fn(*mut u8, *mut [usize; 3], *const u8, *const u8, i32) -> *mut [usize; 3] = std::mem::transmute(*rd::<*const usize>(s, 0).add(0x70 / 8));
+                    let mut v = [0usize; 3];
+                    lines(s, &mut v, state.as_ptr().add(4), state.as_ptr().add(0x44 + 0x40 * w), 0);
+                    let count = (v[1] - v[0]) / 0x2c;
+                    row.push(count as u32);
+                    let mut words = [0u32; rustyac_physics::engine::record::DEBUG_LINES * 10];
+                    for k in 0..count.min(rustyac_physics::engine::record::DEBUG_LINES) {
+                        for j in 0..10 {
+                            words[k * 10 + j] = rd((v[0] + k * 0x2c) as *mut u8, j * 4);
+                        }
+                    }
+                    row.extend(words);
+                    if v[0] != 0 {
+                        free(v[0] as *mut u8);
+                    }
+                }
             }
             if let Some(shm) = self.referee.as_ref().and_then(|referee| referee.shm.as_ref()) {
                 row.extend(shm.words());

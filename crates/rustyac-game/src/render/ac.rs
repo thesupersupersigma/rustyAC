@@ -608,6 +608,7 @@ pub struct AcRenderer {
     pub gui: Option<Box<super::gui::GameGui>>,
     /// Task 43c: FormWings' handler of the render-finished node (made with the GUI)
     wings_outlines: Option<std::rc::Rc<std::cell::RefCell<rustyac_render::wings::WingsOutlines>>>,
+    suspension_lines: Option<std::rc::Rc<std::cell::RefCell<rustyac_render::suspensions::SuspensionWireframe>>>,
     /// the picture `ScreenCapturer` took this frame (the scene before the GUI and the HUD)
     pub pre_gui_shot: Option<ScreenShot>,
     /// Task 40: the 2D pass's size when it is not the 3D picture's (the page's render scale:
@@ -794,7 +795,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -804,6 +805,10 @@ impl AcRenderer {
         let outlines = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::wings::WingsOutlines::default()));
         self.scene.add_event_handler(self.sim_nodes.render_finished, outlines.clone());
         self.wings_outlines = Some(outlines);
+        // and ACSuspension::ACSuspension after it
+        let lines = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::suspensions::SuspensionWireframe::new(&self.graphics)));
+        self.scene.add_event_handler(self.sim_nodes.render_finished, lines.clone());
+        self.suspension_lines = Some(lines);
         Ok(())
     }
 
@@ -1524,6 +1529,25 @@ impl AcRenderer {
                 let rows = wings.iter().zip(lifts).map(|(w, s)| rustyac_render::wings::WingOutline { position: w.position, span: w.span, chord: w.chord, is_vertical: w.is_vertical, lift_vector: [s.lift_vector.x, s.lift_vector.y, s.lift_vector.z] });
                 // shortcut: the body's matrix of the frame's view stands for physicsState.worldMatrix; a replay's car may differ
                 (view.body, rows.collect())
+            });
+        }
+        // ACSuspension's handler: the player's suspensions while the app shows
+        if let (Some(lines), Some(gui)) = (&self.suspension_lines, &self.gui) {
+            let shown = gui.apps.made.iter().any(|&(name, id)| name == "suspension" && gui.gui.controls[id].visible);
+            let f = gui.setup.suspension;
+            let m = |m: [[f32; 4]; 4]| rustyac_physics::vecmath::Mat44f { m };
+            let keys = gui.apps.suspension_keys;
+            lines.borrow_mut().frame = shown.then(|| rustyac_render::suspensions::SuspensionFrame {
+                // shortcut: the frame's view stands for physicsState (worldMatrix, tyreMatrix); a replay's car may differ
+                world: m(view.body),
+                tyre_matrix: view.tyre_matrix.map(m),
+                lines: std::array::from_fn(|w| view.sus_lines[w][..view.sus_line_count[w] as usize].iter().map(|l| ([l.p0.x, l.p0.y, l.p0.z], [l.p1.x, l.p1.y, l.p1.z], l.color)).collect()),
+                ride_pickup_point: f.ride_pickup_point,
+                tyre_width: f.tyre_width,
+                tyre_radius: f.tyre_radius,
+                fuel_tank_position: f.fuel_tank_position,
+                wheel_nodes: std::array::from_fn(|w| self.cars.first().map_or([0.0; 3], |c| c.wheel_node_position(&self.scene, w))),
+                keys,
             });
         }
         // (a frame without time, a screenshot's first: the blur solve divides by it)
