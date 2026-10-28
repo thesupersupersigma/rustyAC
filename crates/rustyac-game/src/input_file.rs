@@ -1124,6 +1124,11 @@ pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
             SetupJob::SetFfUpgrade { which, value } => format!("ff_upgrade {which} {:08x}", value.to_bits()),
             SetupJob::SetBallastKg { kg } => format!("ballast {:08x}", kg.to_bits()),
             SetupJob::SetSteerAssist { value } => format!("steer_assist {:08x}", value.to_bits()),
+            SetupJob::SetRestrictor { value } => format!("restrictor {:08x}", value.to_bits()),
+            SetupJob::SetDamageLevel { zone, value } => format!("damage {zone} {:08x}", value.to_bits()),
+            SetupJob::SetEngineLife { value } => format!("engine_life {:08x}", value.to_bits()),
+            SetupJob::SetAi { which, value } => format!("ai {which} {:08x}", value.to_bits()),
+            SetupJob::SetAutoflipRecovery { on } => format!("autoflip {}", on as u8),
         };
         out.push_str(&format!("{step} {line}\n"));
     }
@@ -1163,6 +1168,11 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
             "ff_upgrade" => SetupJob::SetFfUpgrade { which: int(2)? as usize, value: float(3)? },
             "ballast" => SetupJob::SetBallastKg { kg: float(2)? },
             "steer_assist" => SetupJob::SetSteerAssist { value: float(2)? },
+            "restrictor" => SetupJob::SetRestrictor { value: float(2)? },
+            "damage" => SetupJob::SetDamageLevel { zone: int(2)? as usize, value: float(3)? },
+            "engine_life" => SetupJob::SetEngineLife { value: float(2)? },
+            "ai" => SetupJob::SetAi { which: int(2)? as usize, value: float(3)? },
+            "autoflip" => SetupJob::SetAutoflipRecovery { on: int(2)? != 0 },
             _ => return Err(bad()),
         };
         jobs.push((step, job));
@@ -1338,6 +1348,11 @@ mod setup_jobs_tests {
             (u64::from(u32::MAX) + 6, SetupJob::SetFfMult { value: 0.0027 }),
             (u64::from(u32::MAX) + 7, SetupJob::SetFfUpgrade { which: 2, value: 0.5 }),
             (u64::from(u32::MAX) + 8, SetupJob::SetBallastKg { kg: 35.0 }),
+            (u64::from(u32::MAX) + 9, SetupJob::SetRestrictor { value: 100.0 }),
+            (u64::from(u32::MAX) + 9, SetupJob::SetDamageLevel { zone: 4, value: 80.0 }),
+            (u64::from(u32::MAX) + 9, SetupJob::SetEngineLife { value: 0.0 }),
+            (u64::from(u32::MAX) + 9, SetupJob::SetAi { which: 2, value: 7.5 }),
+            (u64::from(u32::MAX) + 9, SetupJob::SetAutoflipRecovery { on: false }),
         ];
         let text = setup_jobs_text(&jobs);
         let back = parse_setup_jobs(&text).unwrap();

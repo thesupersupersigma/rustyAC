@@ -148,6 +148,14 @@ pub fn test_sus_lines(index: usize, wheel: usize, b: &rustyac_physics::vecmath::
         .collect()
 }
 
+/// The console variables `--set console=` knows (Task 43c): the car's, the track's, the
+/// camera's and `Sim`'s that change the picture. `graphicsPitchRotation` is in radians, as
+/// `Console::onSetVar` passes it on.
+pub const CONSOLE_VARS: [&str; 31] = [
+    "debugDamage", "hideHead", "headRoll", "headPitch", "headYaw", "headMaxG", "headFilter", "RPM_STEP", "RPM_ZERO", "SPEED_STEP", "SPEED_ZERO", "FUEL_STEP", "FUEL_ZERO", "FUEL_MIN", "wATER_STEP", "WATER_ZERO", "WATER_MIN", "debugDirt",
+    "graphicsOffset.x", "graphicsOffset.y", "graphicsOffset.z", "graphicsPitchRotation", "sunHeading", "sunPitch", "hideGroove", "maxLayer", "shadowBias", "mirrorpos.x", "mirrorpos.y", "mirrorpos.z", "lodDebug",
+];
+
 /// What a frame sets beside the car's physics state (`--set`), on both sides alike.
 #[derive(Clone, Copy, Debug)]
 pub struct Extra {
@@ -173,6 +181,9 @@ pub struct Extra {
     /// Task 43c: the Wings app shows (FormWings::onRenderNode draws [`test_wings`] over the car;
     /// the wings' angle is `wing`'s, else 0)
     pub wings_app: bool,
+    /// Task 43c: console sets (`--set console=name:value+name:value`, at most four): numbers
+    /// into [`CONSOLE_VARS`] (1 the first, 0 none); done on both sides when they change
+    pub console: [(u8, f32); 4],
     /// Task 43c: ACSuspension shown (`--set susapp=1`) and its keys held (`suskeys=<mask>`:
     /// Backspace, Ctrl, keypad 1-4 from bit 0)
     pub sus_app: bool,
@@ -228,7 +239,7 @@ impl Extra {
 
 impl Default for Extra {
     fn default() -> Extra {
-        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, wings_app: false, sus_app: false, sus_keys: 0, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false, crew: 0.0 }
+        Extra { session_type: 0, position: 0, tc: 0, abs: 0, air: 0.0, replay: false, replay_scale: 1.0, pause: false, replay_status: -1, wing: None, wings_app: false, console: [(0, 0.0); 4], sus_app: false, sus_keys: 0, kers_max: 0.0, ers_max: 0.0, ideal: false, tts: 0.0, new_session: 0, pit_state: 4, kmpl: 0.0, cars: 0, max_fuel: 0.0, torque: 0.0, ratio: 0.0, drive: false, session_laps: 0, gate: -1, focus: 0, all_lights: false, crew: 0.0 }
     }
 }
 
@@ -769,6 +780,14 @@ fn apply_set(s: &mut rustyac_render::car::CarPhysicsState, x: &mut Extra, name: 
         }
         "wing" => x.wing = Some(number(value)?),
         "wingsapp" => x.wings_app = on(value)?,
+        "console" => {
+            x.console = [(0, 0.0); 4];
+            for (slot, set) in x.console.iter_mut().zip(value.split('+')) {
+                let (name, v) = set.split_once(':').ok_or("--set console=name:value+name:value")?;
+                let i = CONSOLE_VARS.iter().position(|n| *n == name).ok_or_else(|| format!("--set console: {name} is not one of {CONSOLE_VARS:?}"))?;
+                *slot = (i as u8 + 1, number(v)?);
+            }
+        }
         "susapp" => x.sus_app = on(value)?,
         "suskeys" => x.sus_keys = number(value)? as u8,
         "kersmax" => x.kers_max = number(value)?,

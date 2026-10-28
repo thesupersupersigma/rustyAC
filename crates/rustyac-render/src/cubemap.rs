@@ -73,7 +73,7 @@ pub fn render(renderer: &mut CubeMapRenderer, graphics: &mut Graphics, scene: &m
     // evOnRenderEnd
     if renderer.faces_per_frame > 0 {
         for &mesh in &graphics.cube_map_hidden {
-            scene.nodes[mesh].is_active = true;
+            scene.nodes[mesh].is_active = !graphics.groove_always_hide;
         }
     }
     graphics.kgl.set_texture_cube_map(Some(cube), 10);

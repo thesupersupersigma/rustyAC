@@ -16,6 +16,7 @@ pub mod blur;
 pub mod camera;
 pub mod car;
 pub mod cockpit;
+pub mod console;
 pub mod constrained;
 pub mod crowds;
 pub mod cubemap;

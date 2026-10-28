@@ -1181,6 +1181,7 @@ impl AcRenderer {
     pub fn draw(&mut self, world: &[CarView], focus: usize, driving: &DrivingCamera, frame: &CameraFrame, info: &HudInfo, dt: f32) {
         // Game::onIdle's clock (ksGetQPTTime) for Game::stats (Task 33)
         let frame_start = Instant::now();
+        self.console_sets();
         let view = &world[0];
         let focus = focus.min(world.len() - 1).min(self.cars.len().saturating_sub(1));
         // the game camera of the moment
@@ -1781,6 +1782,14 @@ impl AcRenderer {
         }
         self.graphics.on_resize(width.max(16) as i32, height.max(16) as i32)?;
         self.camera.on_resize(&mut self.graphics)
+    }
+
+    /// The console's sets of the scene's objects since the last frame.
+    fn console_sets(&mut self) {
+        let Some(gui) = &mut self.gui else { return };
+        for (name, value) in std::mem::take(&mut gui.apps.console_sets) {
+            rustyac_render::console::console_set(&mut self.graphics, &mut self.camera, self.cars.first_mut(), &name, value);
+        }
     }
 
     /// Shows the last picture in the window. `Ok(false)`: the window is covered or minimised.

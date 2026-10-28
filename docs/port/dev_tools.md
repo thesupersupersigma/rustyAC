@@ -28,7 +28,9 @@ State after the last commit (update after every commit):
   (`app_suspension`), its 3D lines and keys in the scene oracle (`r43c_02`).
 - **Step 5, the readouts and the console:** the GPU profiler (`GPUProfiler` + `GPUProfilerApp`)
   done and proven (the window in the GUI oracle, `app_gpuprofiler`; its queries live in
-  rustyac.exe); Render Stats' audio time and FMOD usage done. The console variables: in progress.
+  rustyac.exe); Render Stats' audio time and FMOD usage done. The console variables done: what
+  each one changes in the game now changes in rustyAC (the scene's in the scene oracle, `r43c_03`
+  to `r43c_06`; the physics ones as jobs of the physics thread).
 - **Version:** still v0.43.1.
 
 ## In plain words
@@ -284,7 +286,51 @@ game; without sound they stay 0.
 
 The live numbers themselves cannot be compared with the game (they are timings).
 
+### The console's variables
+
+Task 33 registered every variable in the game's order; most changed nothing. Now a `set` does
+what the game's target, callback or lambda does (`ConsoleSet::execute` takes the first
+registration of a name, so a car's variables reach the player's car, its high-detail driver):
+
+| variables | the game's effect | rustyAC |
+|---|---|---|
+| `debugDamage` | `VisualDamageManager`'s debug zones from then on (6 flips all five, 0-4 one) | `VisualDamageManager::debug_damage` |
+| `hideHead`, `headRoll` `headPitch` `headYaw` `headMaxG` `headFilter` | the driver's head hidden outside; its tilt with the g-forces | `DriverModel` fields |
+| `RPM_*`, `SPEED_*`, `FUEL_*`, `wATER_STEP` `WATER_*` | the needles' step, zero, minimum (`TURBO_*` point at a dead stack local: nothing) | `AnalogInstruments::set_var` |
+| `debugDirt` | the dirt level, pushed when it next changes | `DynamicCarEffects::current_dirt_level` |
+| `graphicsOffset.x/y/z`, `graphicsPitchRotation` | the body's offset and pitch (`Console::onSetVar`) | `CarAvatar` fields |
+| `sunHeading`, `sunPitch` | the sun's angles, then `updateLightingSetttings` | `Graphics::lighting` |
+| `hideGroove` | the groove stays off after the next cube map's faces | `Graphics::groove_always_hide` |
+| `maxLayer`, `shadowBias`, `mirrorpos.x/y/z` | the scene camera's layers, its shadow bias, the mirror's origin | the same fields |
+| `restrictor`, `bodyDamageLevel0-4`, `engineDamageLevel` | physics-thread jobs: `Car::setRestrictor`, a zone's damage only up, the engine's life only down | `SetupJob`s (kept in a drive's input file) |
+| `aiSteerGain` `aiPush` `aiLookAhead` | car 0's AI driver, when it has one | `SetupJob::SetAi` |
+| `set AUTOFLIP_RECOVERY` | the options' map, read by `resetInvalidStateCarsToPits` | `SetupJob::SetAutoflipRecovery` |
+
+rustyac.exe also read options.ini's `AUTOFLIP_RECOVERY` nowhere: its referee never put a car on
+its wheels back in the pits. It now reads it (1 without the file), as `OptionsManager` does.
+No effect in the game, none here: `aiLookAheadSpeed` (empty lambda), `minExposure` (never read),
+the `hdr*` levels (`CameraForward::hdr` is never made), `bias0-2` (the camera sets the bias
+again every frame), `PROVIEW_MODE` / `DISABLE_SHOW_MODE` (read once at the start),
+`RENDER_SPLINE`.
+
+| proof | what | result |
+|---|---|---|
+| scene oracle `r43c_03` (Magione, chase, 12 frames) | `debugDamage 6`, `hideHead`, the body offset and pitch, the sun, `shadowBias`, `maxLayer 0`, `debugDirt 2`, the mirror's origin, one after another; the game's side runs its own lambdas from the console its cars registered into | command log, pixels IDENTICAL |
+| scene oracle `r43c_04` (dash view) | the needles' twelve variables, `lodDebug` | IDENTICAL |
+| scene oracle `r43c_05` (chase, 1.2 g) | the head's five | IDENTICAL |
+| scene oracle `r43c_06` (Spa, two cube map faces a frame) | `hideGroove` on, then off | IDENTICAL |
+| `input_file` test `jobs_round_trip`, `cockpit` test `the_console_writes_the_needles_fields` | the new jobs in a drive's file; the needles' names | pass |
+| rustyac.exe on Magione: `set graphicsOffset.y 0.4`, `sunHeading 200`, `bodyDamageLevel0 200`, `engineDamageLevel 0` | the body up, the sun moved, the front red in the damage display, the engine dead (smoke, standing) | seen |
+
 ## Not done
+
+- The console's `axisMode` (the world's axes drawn by `Camera::renderAxis`), `lodDebug`'s red
+  text (`CarLodManager::renderHUD`), `editBoxes` / `editCMesh` (collider editing) and the four
+  `observe*` (live reloading of ini files), `exposure` (the cockpit camera's YEBIS exposure,
+  which rustyAC's camera does not read): not ported. The scene oracle's game side does not
+  make `TrackAvatar` or `Console::initCommands`, so the sun, `maxLayer`, `shadowBias`, the mirror
+  and the body offset are done there as their owners do (the same fields, the game's
+  `updateLightingSetttings`).
 
 - ACSuspension's TempRun button: the game's handler queues a job on the physics thread that
   writes `TempRuns/<car>@<track>.trun` into the game's folder (speed, wheel speeds and brake

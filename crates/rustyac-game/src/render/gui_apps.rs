@@ -66,6 +66,8 @@ pub struct GameApps {
     pub ctrl_down: bool,
     /// Task 43c: ACSuspension's keys held (Backspace, Ctrl, keypad 1-4)
     pub suspension_keys: [bool; 6],
+    /// Task 43c: the console's sets of the scene's objects, for the renderer's next frame
+    pub console_sets: Vec<(String, f32)>,
     /// Task 33: what the statistics apps read this frame
     pub stats: rustyac_gui::app_stats::AppStats,
     /// Task 33b: the Telemetry app's values of this frame

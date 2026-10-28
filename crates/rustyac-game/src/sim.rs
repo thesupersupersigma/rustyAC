@@ -1617,6 +1617,9 @@ impl GameSim {
         }
         let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
         let mut referee = rustyac_physics::race::Referee::new(setup, track, &mut world, now);
+        // OptionsManager: options.ini's AUTOFLIP_RECOVERY (1 without the file)
+        let options = ac_root().and_then(|root| rustyac_physics::data::ini::IniReader::load(&root.join("system/cfg/options.ini")).ok()).filter(|ini| ini.ready);
+        referee.manager.autoflip_recovery = rustyac_gui::console::default_options(options.as_ref()).iter().any(|(name, value)| name == "AUTOFLIP_RECOVERY" && *value != 0.0);
         if let Some((menu, window, mouse)) = menu {
             referee.enable_pit_stop(menu, &world);
             referee.pit_window = window;
@@ -1977,6 +1980,20 @@ impl GameSim {
         for job in std::mem::take(&mut self.setup_jobs) {
             if let SetupJob::SetFfUpgrade { which, value } = job {
                 self.car.device.source.set_ff_upgrade(which, value);
+            }
+            // the console's: FormAI's lambdas (car 0's controls are an AIDriver or nothing
+            // happens), the options' AUTOFLIP_RECOVERY
+            if let SetupJob::SetAi { which, value } = job {
+                if let Some(ai) = &mut self.car.device.ai {
+                    match which {
+                        0 => ai.steer_gain = value,
+                        1 => ai.base_push = value,
+                        _ => ai.steer_min_lookahead = value,
+                    }
+                }
+            }
+            if let (SetupJob::SetAutoflipRecovery { on }, Some(referee)) = (&job, &mut self.referee) {
+                referee.manager.autoflip_recovery = *on;
             }
             // (the job's own line, `_Do_call` @ 0x1400d05a0)
             if let SetupJob::SetBallastKg { kg } = job {

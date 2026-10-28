@@ -577,6 +577,60 @@ impl Game {
 }
 
 impl Game {
+    /// Task 43c: `ConsoleSet::execute` 0x14018c8f0 on the first registration of the name in
+    /// the console the cars' objects registered into (a target: the value times the
+    /// multiplier; a callback: its slot 0; a lambda: its `_Do_call`); the variables the
+    /// oracle's game side does not register are done as their owners do (the track's
+    /// lambdas, `Console::onSetVar`'s setters, the targets).
+    pub(crate) unsafe fn console_set(&self, console: *mut u8, camera: *mut u8, grooves: *mut u8, car: Option<&Car>, name: &str, value: f32) -> Result<(), String> {
+        let (begin, end): (*mut *mut u8, *mut *mut u8) = (rd(console, 0x70), rd(console, 0x78));
+        let mut p = begin;
+        while p != end {
+            let var = *p;
+            if crate::gui_ac::read_wstring(var) == name {
+                let v = value * rd::<f32>(var, 0x38);
+                let target: *mut f32 = rd(var, 0x20);
+                let callback: *mut u8 = rd(var, 0x30);
+                if !target.is_null() {
+                    *target = v;
+                } else if !callback.is_null() {
+                    let call: extern "C" fn(*mut u8, *mut u8, f32) = std::mem::transmute(rd::<usize>(rd::<*mut u8>(callback, 0), 0));
+                    call(callback, var, v);
+                } else if rd::<u8>(var, 0x3c) != 0 {
+                    let imp: *mut u8 = rd(var, 0x58);
+                    if !imp.is_null() {
+                        let mut var_ptr = var;
+                        let mut value = v;
+                        let call: extern "C" fn(*mut u8, *mut *mut u8, *mut f32) = std::mem::transmute(rd::<usize>(rd::<*mut u8>(imp, 0), 0x10));
+                        call(imp, &mut var_ptr, &mut value);
+                    }
+                }
+                return Ok(());
+            }
+            p = p.add(1);
+        }
+        let avatar = car.map_or(std::ptr::null_mut(), |c| c.car);
+        let k = |prefix: &str| (name.as_bytes()[prefix.len()] - b'x') as usize;
+        match name {
+            // TrackAvatar's lambdas: GraphicsManager::lightingSettings (+0x74) headingAngle /
+            // pitchAngle, then updateLightingSetttings
+            "sunHeading" | "sunPitch" => {
+                wr(self.graphics, 0x74 + if name == "sunHeading" { 0x64 } else { 0x68 }, value);
+                let update: extern "C" fn(*mut u8) = std::mem::transmute(self.acs.va(crate::ac::VA_GRAPHICS_UPDATE_LIGHTING));
+                update(self.graphics);
+            }
+            "hideGroove" if !grooves.is_null() => wr(grooves, 0x88, (value != 0.0) as u8),
+            "maxLayer" => wr(camera, 0x1ac, value),
+            "shadowBias" => wr(camera, 0x228, value),
+            "mirrorpos.x" | "mirrorpos.y" | "mirrorpos.z" if !avatar.is_null() => wr(avatar, 0x120 + 4 * k("mirrorpos."), value),
+            // Console::onSetVar: setGraphicsOffset with one component changed, setGraphicsPitchRotation
+            "graphicsOffset.x" | "graphicsOffset.y" | "graphicsOffset.z" if !avatar.is_null() => wr(avatar, 0x104c + 4 * k("graphicsOffset."), value),
+            "graphicsPitchRotation" if !avatar.is_null() => wr(avatar, 0x1058, value),
+            _ => return Err(format!("console {name}: not registered on the game's side")),
+        }
+        Ok(())
+    }
+
     /// What has to be there once before any car: patches, the tables of node names, a console.
     pub(crate) unsafe fn prepare_cars(&self) -> *mut u8 {
         let acs = &self.acs;

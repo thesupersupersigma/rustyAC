@@ -1776,6 +1776,24 @@ impl RollingChassis {
             // Car::setBallastKG @ 0x1402759e0
             SetupJob::SetBallastKg { kg } => self.ballast_kg = kg,
             SetupJob::SetSteerAssist { value } => self.steer_assist = value,
+            SetupJob::SetRestrictor { value } => self.set_restrictor(value),
+            // shortcut: the game compares with the frame's snapshot of the level on the GUI
+            // thread, here with the car's own when the job runs (one step later at most)
+            SetupJob::SetDamageLevel { zone, value } => {
+                if let Some(level) = self.damage_zone_level.get_mut(zone).filter(|level| value > **level) {
+                    *level = value;
+                }
+            }
+            SetupJob::SetEngineLife { value } => {
+                if let Some(drivetrain) = &mut self.drivetrain {
+                    let base = drivetrain.engine_mut().base_mut();
+                    if f64::from(value) < base.life_left {
+                        base.life_left = f64::from(value);
+                    }
+                }
+            }
+            // (the session's: the game sim does them)
+            SetupJob::SetAi { .. } | SetupJob::SetAutoflipRecovery { .. } => {}
             _ => self.setup_manager.apply_job(job),
         }
     }

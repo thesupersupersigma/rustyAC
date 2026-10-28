@@ -42,7 +42,7 @@ const VA_CAMERA_SET_SHADOW_MAPS_SPLITS: usize = 0x1_4020_d5f0; // CameraShadowMa
 const VA_SKYBOX_CTOR: usize = 0x1_4021_c790; // SkyBox::SkyBox(GraphicsManager*)
 const VA_WORLD_MATRIX_TRAVERSE: usize = 0x1_4021_abf0; // WorldMatrixTraverser::traverse(Node*)
 const VA_KN5IO_ADD_TEXTURE_FOLDER: usize = 0x1_4021_4e90; // KN5IO::addTextureFolder(const std::wstring&)
-const VA_GRAPHICS_UPDATE_LIGHTING: usize = 0x1_4020_5190; // GraphicsManager::updateLightingSetttings()
+pub(crate) const VA_GRAPHICS_UPDATE_LIGHTING: usize = 0x1_4020_5190; // GraphicsManager::updateLightingSetttings()
 const VA_GRAPHICS_LOAD_LIGHTING: usize = 0x1_4020_3250; // GraphicsManager::loadLightingSettings(const std::wstring&)
 const VA_WEATHER_LOAD_PRESET: usize = 0x1_4022_7260; // static bool WeatherGenerator::loadPreset(const std::wstring&, GraphicsManager*, float)
 const VA_CUBE_MAP_RENDERER_RENDER: usize = 0x1_4021_edb0; // CubeMapRenderer::render(CubeMap*, Node*, Camera*)
@@ -1061,8 +1061,16 @@ impl Game {
         let mut rendered = Rendered { cube_log, frames: Vec::new(), width: 0, height: 0 };
         let (mut lights_pause, mut lights_status) = (false, -1);
         let mut told_new_session = 0;
+        let mut last_console = [(0u8, 0.0f32); 4];
         for (index, step) in frame.steps.iter().enumerate() {
             *crate::ac_car::WINGS_FRAME.lock().unwrap() = index;
+            // Task 43c: the console's sets (the game's message loop, before the frame)
+            if step.extra.console != last_console {
+                last_console = step.extra.console;
+                for &(i, v) in step.extra.console.iter().filter(|(i, _)| *i != 0) {
+                    self.console_set(console, camera, grooves, car.as_ref(), crate::frames::CONSOLE_VARS[i as usize - 1], v)?;
+                }
+            }
             // RaceManager::setCurrentSession 0x140140df0: Sim::evOnNewSession, the handlers in the
             // order they were registered: the track's own, then the car's objects'
             if step.extra.new_session != told_new_session {

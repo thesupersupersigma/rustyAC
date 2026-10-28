@@ -359,7 +359,15 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
     let mut told_new_session = 0;
     // ACCameraManager::fadeMode: fadeTime and fadeTotalTime (nothing fades before --fade-at)
     let (mut fade_time, mut fade_total) = (0.0f32, 0.0f32);
+    let mut last_console = [(0u8, 0.0f32); 4];
     for (index, step) in frame.steps.iter().enumerate() {
+        // Task 43c: the console's sets (the game's message loop, before the frame)
+        if step.extra.console != last_console {
+            last_console = step.extra.console;
+            for &(i, v) in step.extra.console.iter().filter(|(i, _)| *i != 0) {
+                rustyac_render::console::console_set(&mut graphics, &mut camera, car.as_mut(), crate::frames::CONSOLE_VARS[i as usize - 1], v);
+            }
+        }
         if frame.fade_at == Some(index) {
             (fade_time, fade_total) = (0.0, crate::frames::camera_fade_time());
         }

@@ -76,6 +76,9 @@ pub struct VisualDamageManager {
     pub damage_enabled: bool,
     /// `GameObject::isActive`: off while the game or a replay is paused
     pub is_active: bool,
+    /// `isDebugMode` and `localDebugZones` (the console's `debugDamage`): the zones drawn
+    /// instead of the car's own
+    pub debug_zones: Option<[f32; 5]>,
 }
 
 const GLASS_DAMAGE_NAMES: [&str; 5] = ["DAMAGE_GLASS_FRONT", "DAMAGE_GLASS_REAR", "DAMAGE_GLASS_LEFT", "DAMAGE_GLASS_RIGHT", "DAMAGE_GLASS_CENTER"];
@@ -150,6 +153,21 @@ fn collect_all_meshes(scene: &Scene, n: NodeId, out: &mut Vec<NodeId>) {
 }
 
 impl VisualDamageManager {
+    /// The console's `debugDamage` (the lambda 0x1401d41c0): the debug zones from now on; 6
+    /// switches all five between undamaged and fully damaged, 0 to 4 one of them.
+    pub fn debug_damage(&mut self, value: f32) {
+        let zones = self.debug_zones.get_or_insert([0.0; 5]);
+        let flip = |z: &mut f32| *z = if *z == 0.0 { f32::MAX } else { 0.0 };
+        if value == 6.0 {
+            zones.iter_mut().for_each(flip);
+        } else if !value.is_nan() {
+            // shortcut: an index outside 0..5 writes past the game's array; here it does nothing
+            if let Some(z) = zones.get_mut(value as i32 as usize) {
+                flip(z);
+            }
+        }
+    }
+
     /// `VisualDamageManager::VisualDamageManager` 0x1401d2890. `folder` is the car's folder.
     pub fn new(graphics: &mut Graphics, scene: &mut Scene, folder: &Path, body_transform: NodeId) -> Result<VisualDamageManager, String> {
         let mut manager = VisualDamageManager {
@@ -157,6 +175,7 @@ impl VisualDamageManager {
             scrathable_parts: Vec::new(),
             glass_breakable_parts: (0..5).map(|_| GlassBreakablePart { meshes: Vec::new(), var_damage: None, range: DamageRange { min_speed: 20.0, max_speed: 60.0 } }).collect(),
             oscillation_enabled: true,
+            debug_zones: None,
             glass_damage_threshold: f32::from_bits(0x3f26_6666),
             damage_enabled: false,
             is_active: true,
@@ -302,7 +321,7 @@ impl VisualDamageManager {
             return;
         }
         graphics.clear_texture_slot(21);
-        let zones = &state.damage_zone_level;
+        let zones = &self.debug_zones.unwrap_or(state.damage_zone_level);
         for p in &mut self.scrathable_parts {
             let Some(material) = mesh_material(scene, p.mesh) else {
                 continue;

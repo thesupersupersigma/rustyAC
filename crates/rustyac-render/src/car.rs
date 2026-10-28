@@ -236,6 +236,37 @@ fn get_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
 }
 
 impl CarAvatar {
+    /// A console `set` of a variable this car's objects registered (the game's `set` reaches
+    /// only the first registration of a name: the player's car, its high-detail driver);
+    /// `graphicsPitchRotation` comes in radians (`Console::onSetVar`). False: not one of them.
+    pub fn console_set(&mut self, name: &str, value: f32) -> bool {
+        match name {
+            "debugDamage" => {
+                if let Some(damage) = &mut self.damage {
+                    damage.debug_damage(value);
+                }
+            }
+            "hideHead" | "headRoll" | "headPitch" | "headYaw" | "headMaxG" | "headFilter" => {
+                if let Some(d) = &mut self.driver_hr {
+                    match name {
+                        "hideHead" => d.debug_hide_head_mode = value != 0.0,
+                        "headRoll" => d.roll_max_deg = value,
+                        "headPitch" => d.pitch_max_deg = value,
+                        "headYaw" => d.yaw_max_deg = value,
+                        "headMaxG" => d.max_g = value,
+                        _ => d.filter = value,
+                    }
+                }
+            }
+            // DynamicCarEffects' lambda: only the level (pushed when it next changes)
+            "debugDirt" => self.dynamic_effects.current_dirt_level = value,
+            "graphicsOffset.x" | "graphicsOffset.y" | "graphicsOffset.z" => self.graphics_offset[(name.as_bytes()[15] - b'x') as usize] = value,
+            "graphicsPitchRotation" => self.graphics_pitch_rotation = value,
+            _ => return self.analog_instruments.set_var(name, value),
+        }
+        true
+    }
+
     /// `CarAvatar::init3D` 0x1400d3b90 with what `initCommon` 0x1400d56e0 read before it.
     /// `folder` is the car's folder as text (its texture keys are made of it) and on disk.
     pub fn init_3d(graphics: &mut Graphics, scene: &mut Scene, cars_node: NodeId, folder_text: &str, folder: &Path, skin: &str, steer_lock: Option<f32>, guid: i32) -> Result<CarAvatar, String> {

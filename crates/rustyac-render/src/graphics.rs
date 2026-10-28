@@ -149,6 +149,9 @@ pub struct Graphics {
     /// the groove meshes, which `Sim::initCubemaps`' handlers switch off while the faces of a
     /// cube map are drawn (`TrackAvatar::setDynamicGrooveVisibility`)
     pub cube_map_hidden: Vec<crate::scene::NodeId>,
+    /// `DynamicTrackManager::alwaysHide` (the console's `hideGroove`): the groove stays off
+    /// after a cube map's faces
+    pub groove_always_hide: bool,
 }
 
 fn ini_float(ini: &Option<IniReader>, section: &str, key: &str) -> f32 {
@@ -262,6 +265,7 @@ impl Graphics {
             gl: None,
             current_cube_map: false,
             cube_map_hidden: Vec::new(),
+            groove_always_hide: false,
         };
         let mut gl = crate::gl::GlRenderer::new(&graphics, 0x20);
         gl.init_full_screen_quad(&graphics);

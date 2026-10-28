@@ -119,6 +119,26 @@ fn clamp01(x: f32) -> f32 {
 }
 
 impl AnalogInstruments {
+    /// The console's needle variables (Targets of the player's car, registered by
+    /// `initRPM` / `initSpeed` / `initFuel` / `initWater`): the field the game's target points
+    /// at. False: not one of them (`TURBO_*` point at a dead stack local in the game).
+    pub fn set_var(&mut self, name: &str, value: f32) -> bool {
+        let (needle, field) = match name.split_once('_') {
+            Some(("RPM", f)) => (&mut self.rpm, f),
+            Some(("SPEED", f)) => (&mut self.speed, f),
+            Some(("FUEL", f)) => (&mut self.fuel, f),
+            Some(("wATER" | "WATER", f)) => (&mut self.water, f),
+            _ => return false,
+        };
+        match field {
+            "STEP" => needle.step = value,
+            "ZERO" => needle.zero = value,
+            "MIN" => needle.min = value,
+            _ => return false,
+        }
+        true
+    }
+
     /// `AnalogInstruments::AnalogInstruments` 0x140056480.
     pub fn new(scene: &Scene, folder: &Path, car_node: NodeId, body_transform: NodeId) -> Result<AnalogInstruments, String> {
         let mut a = AnalogInstruments::default();
@@ -597,5 +617,18 @@ impl RotatingObjects {
             let r = Mat44f::create_from_axis_angle(&Vec3f::new(o.axis[0], o.axis[1], o.axis[2]), (dt * o.rotation_step) * DEG);
             scene.nodes[target].matrix = xm_matrix_multiply(&r, &scene.nodes[target].matrix);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_console_writes_the_needles_fields() {
+        let mut a = AnalogInstruments::default();
+        assert!(a.set_var("RPM_STEP", 0.5) && a.set_var("wATER_STEP", 2.0) && a.set_var("WATER_MIN", 30.0) && a.set_var("FUEL_ZERO", -40.0));
+        assert_eq!((a.rpm.step, a.water.step, a.water.min, a.fuel.zero), (0.5, 2.0, 30.0, -40.0));
+        assert!(!a.set_var("TURBO_STEP", 1.0) && !a.set_var("SPEED_MAX", 1.0) && !a.set_var("fov", 1.0));
     }
 }

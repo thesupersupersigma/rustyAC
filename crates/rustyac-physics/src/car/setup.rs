@@ -276,6 +276,20 @@ pub enum SetupJob {
     /// `Car::steerAssist` written (the console's `steerAssist`, a car.ini the force feedback
     /// app saved)
     SetSteerAssist { value: f32 },
+    /// the console's `restrictor` (`CarAvatar::setRestrictor`'s job): `Car::setRestrictor`
+    SetRestrictor { value: f32 },
+    /// the console's `bodyDamageLevel0..4` (`Sim::Sim`'s lambda 0x140195fb0, its job
+    /// 0x140196b30): `Car::setDamageLevel`, only higher than the zone's level
+    SetDamageLevel { zone: usize, value: f32 },
+    /// the console's `engineDamageLevel` (0x140195e40, its job 0x140196740): the engine's
+    /// `lifeLeft`, only lower
+    SetEngineLife { value: f32 },
+    /// the console's `aiSteerGain`, `aiPush`, `aiLookAhead` (`FormAI`'s lambdas): the AI
+    /// driver's `steerGain` (0), `basePush` (1), `steerMinLookahead` (2), when car 0 has one
+    SetAi { which: usize, value: f32 },
+    /// the console's `set AUTOFLIP_RECOVERY` (`OptionsManager`'s map, read by
+    /// `RaceManager::resetInvalidStateCarsToPits`)
+    SetAutoflipRecovery { on: bool },
 }
 
 /// One value `SetupManager::step` changed.
