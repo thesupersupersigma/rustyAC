@@ -6,6 +6,7 @@ version = 4
 name = "chassis_compare"
 version = "0.1.0"
 dependencies = [
+ "rustyac-content",
  "rustyac-ode",
  "rustyac-physics",
 ]

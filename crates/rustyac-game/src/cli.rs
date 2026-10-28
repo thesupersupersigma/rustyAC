@@ -835,6 +835,10 @@ for checks, without anybody at the controls:
 /// A path option made absolute now: the program may change its working directory later (the
 /// Python apps run in the game's folder), and a relative path must not then land there.
 fn absolute(path: String) -> PathBuf {
+    // ("-" is stdout for --dump-states)
+    if path == "-" {
+        return PathBuf::from(path);
+    }
     std::path::absolute(&path).unwrap_or_else(|_| PathBuf::from(path))
 }
 

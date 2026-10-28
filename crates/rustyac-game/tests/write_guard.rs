@@ -34,6 +34,8 @@ fn nothing_is_written_into_the_game_folder() {
         assert!(path.is_absolute(), "{option} {}", path.display());
         assert!(path.starts_with(own.canonicalize().unwrap()) || path.starts_with(&own), "{option} {}", path.display());
     }
+    // "-" stays stdout
+    assert_eq!(Options::parse(["--replay", "x.ryin", "--headless", "--dump-states", "-"].map(String::from).into_iter()).unwrap().dump_states.unwrap().as_os_str(), "-");
     // absolute ones stay as given
     let absolute = Options::parse(PATH_OPTIONS.iter().flat_map(|o| [o.to_string(), own.join(&o[2..]).display().to_string()])).unwrap();
     for (option, path) in PATH_OPTIONS.iter().zip(paths(&absolute)) {

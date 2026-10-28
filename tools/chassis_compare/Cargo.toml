@@ -9,6 +9,7 @@ description = "Runs the Rust rolling chassis (rustyac-physics on rustyac-ode) ag
 [dependencies]
 rustyac-physics = { path = "../../crates/rustyac-physics" }
 rustyac-ode = { path = "../../crates/rustyac-ode" }
+rustyac-content = { path = "../../crates/rustyac-content" }
 
 [profile.release]
 opt-level = 3
