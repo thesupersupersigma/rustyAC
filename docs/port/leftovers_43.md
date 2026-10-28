@@ -2,10 +2,8 @@
 
 ## Resume here
 
-- Done: step 1 (`web_pack --delta`), step 2 (`race_out.json` after an online session), step 4
-  (votes and chat on the wire), step 6 (every skin's suits in packs), step 7 (refusals in plain
-  words).
-- Next: step 3 (the old mouse pit menu), then step 5.
+- Done: steps 1 to 7 (step 3's live stop and step 5's live ESC run not shown: Task 43b).
+- Next: the proofs (`run_all.sh --quick`), the web build, the release.
 - Scratch: `re/scratch/task43/`. Rerun scripts: `tools/web_checks/task43/`.
 - Disk at the start: 67 GB free.
 
@@ -111,6 +109,46 @@ browser was not run. The page calls the same Rust code as the desktop run above.
 tyre compounds are the ones they last told the server of (their `tyres.ini` default before),
 not read from their car as the game reads them (`shortcut:` in `online.rs`).
 
+## Step 3: the old mouse pit menu
+
+The game gives every keyboard driver the old mouse pit menu (`Sim::Sim` @ 0x140192070:
+`USE_MOUSE_PITSTOP` in `pitstop.ini`, or controls that are the keyboard's), and then no pit
+strategy page. Task 34 had ported its logic (`MousePitstop`, proven by the car oracle's
+`pit_mouse`) but drew none of it. Now rustyac.exe draws it and hears it:
+
+- `PitStopHud::new` (`crates/rustyac-gui/src/pit_menu.rs`) makes the controls `PitStop::PitStop`
+  @ 0x1400a55d0 makes, in its order: the parent `PIT_STOP_PARENT_CONTROL` (650 x 600, in no GUI
+  tree), "NO CHANGE" and a button per compound, the fuel buttons and the gauge (a new widget,
+  `PitStopFuel`, `crates/rustyac-gui/src/widgets3.rs`), the three repairs and CONFIRM.
+- `render_hud` draws the state "choosing" as `PitStop::renderHUD` @ 0x1400aa300 does: the three
+  titled panels, the tank's line, the estimate, "CONFIRM", the controls.
+- The window's mouse goes to the menu as the stop's three handlers pass it on; the clicks go to
+  the physics thread (`GameSim::pit_click`, `Referee::mouse_pit_click`).
+- A keyboard driver (`INPUT_METHOD=KEYBOARD` in `controls.ini`) or `USE_MOUSE_PITSTOP` gets it;
+  the header of a recording says so (`pit_menu_mouse 1`), and the clicks are kept in
+  `<input>.pit` (step 5). `--pit-click <control>@<s>` clicks it in unattended runs.
+
+The menu starts visible, as a ksgui `Control` does (Task 34's port and the car oracle's stand-in
+had it hidden until `PitStop::update` showed it; both changed, the car oracle's `pit_mouse` run
+again).
+
+| Proof | Result |
+|---|---|
+| render oracle `pit_stop` (now with the game's own `PitStop` constructor, stand-ins for the pit marker's model, the spawn position, the skin and the pit crew) | 30 frames **IDENTICAL** (command log, pixels, state) |
+| render oracle `pit_mouse` (new): the menu opened in the box, every compound, "NO CHANGE", fuel + / - / fill, the gauge past and before the tank, the three repairs, clicks beside the controls and outside the panel, the estimate and the tank changing, the pause and ESC menus, the race over, another state | 74 frames, 49,363 calls: command log, pixels, state and events **IDENTICAL** (35 click events) |
+| the same with "BUT_FUEL_UP" one pixel to the right (a fault put in on purpose) | **DIFFERENT** from frame 1 (66 frames of the command log, 73 of pixels) |
+| car oracle `pit_mouse`, seeds 1 and 4, 0 / 1 / 8 workers | **IDENTICAL**, `race_out.json` identical (hashes `d5995828dcb84eaa`, `f060c67406fc308a`) |
+| rustyac.exe live (`sh tools/web_checks/task43/s3/live.sh`): a keyboard driver's `controls.ini`, `--ai-drive` called in, the menu clicked every 2 s, recorded, replayed with 0 / 1 / 8 workers | the clicks are in `a.ryin.pit` and the three replays give one state hash (`cfc68622714f8928`, 197,575 steps); **no stop was made**: in a race of 3 laps the AI driver drops a call in its last two laps, and in a practice it did not leave the box. A live stop through the mouse menu is not shown (Task 43b) |
+
+CONFIRM is not clicked in the render oracle: the game's handler asks the car for the stop's time
+(`CarAvatar::getPitstopTime`); the car oracle's `pit_mouse` proves that part.
+
+Not done (Task 43b): the page's keyboard drivers still get the quick menu (`crates/rustyac-web/src/race.rs`);
+online the mouse menu is not given (the online pit stop is `OnlinePit`'s); `[PIT_INDICATOR]
+ONLY_IN_PITLINE` (the pit marker shown only in the pit lane) is not ported; rustyAC's own
+drivers (`--autodrive`, `--ai-drive`) keep the quick menu unless `--pit-click` is given, as they
+click no CONFIRM.
+
 ## Step 4: votes and chat on the wire
 
 `car_oracle net <tape>` now also hands every chat line and vote rustyAC sent on the tape to the
@@ -135,6 +173,67 @@ acServer took them: its log has the three lines, "Creating vote to NEXT SESSION 
 answers, and "ACP_VOTE_KICK_USER failed, cannot find car with session id= 255" for the kick of
 nobody. The rest of the same run (200 steps, net_watch) stayed identical. The three goldens' tapes
 (`rich_*`) carry one chat line each, which the quick proofs' net runs now also compare.
+
+## Step 5: Task 34's leftovers
+
+### A car with no `setup.ini`
+
+Task 34 wrote that the game makes `PRESETS_COUNT` preset buttons and empty `[PRESET_n]` sections
+when the car's `setup.ini` is not there, and the port none. Read again, the difference was
+elsewhere: both make the buttons and the empty sections, but `QuickMenuPitstop::buildControls`
+@ 0x1400ae7b0 adds every item (fuel, compound, pressures, wings and the three repairs) only
+inside `if (setupIni.ready)`, and the port added fuel, compound and the repairs always. The port
+now does as the game (`QuickMenu::build` in `crates/rustyac-physics/src/race/pitstop.rs`).
+
+The new sequence `setup_pitbare@<car>` is `setup_pit@<car>` with the car's `setup.ini` taken out
+of the root (`tools/render_oracle/src/gui_seq_setup.rs`; in `tools/proofs/gui_list.txt`):
+
+| sequence | frames | command log | pixels | state and events |
+|---|---|---|---|---|
+| `setup_pitbare@bmw_z4_gt3` | 302 | IDENTICAL | IDENTICAL | IDENTICAL (123151 lines, 1142 events) |
+| `setup_pit@bmw_z4_gt3` (still) | | IDENTICAL | IDENTICAL | IDENTICAL (265161 lines) |
+| `setup_pitbare` with the old `pitstop.rs` | | DIFFERENT (267 frames, from 24) | DIFFERENT (278) | DIFFERENT (121965 lines, from frame 1) |
+
+### The pit strategy page's edits in a recording
+
+`--record` now writes a third file beside the input file: `<input>.pit`, the pit menus' jobs
+with the step each is done before (the page's presets, and the old mouse menu's clicks of
+step 3). `--replay` reads it and does them at the same steps. The page only ever changes the
+presets' values, so only those travel (`PitJob`, `pit_jobs_text` / `parse_pit_jobs` in
+`crates/rustyac-game/src/input_file.rs`; a unit test `pit_jobs_round_trip`). A drive without
+pit jobs writes no file, and a recording made before reads as one without.
+
+### F7 and the ESC menu
+
+The game's ESC menu does not swallow F7. `RenderWindow`'s key handler @ 0x1401fda30 calls every
+listener; `KeyboardManager::onKeyDownEvent` @ 0x140243b20 calls the focused one and then every
+"god listener" (`Sim` and `ksgui::GUI` both are), so nothing takes a key away. In
+`Sim::onKeyDown` @ 0x14019a940 the ESC menu's test only guards the command keys (ABS, TC...);
+the plain keys' `switch` comes after, and its `case 0x76` (F7) asks only
+`ALLOW_FREE_CAMERA`. rustyAC does the same: the GUI gets the key and the camera code still
+runs. One small difference stays: with Ctrl held and the ESC menu up the game skips its Ctrl
+block and runs the plain keys, so Ctrl+F7 gives the free camera there; rustyAC needs F7 without
+Ctrl (Task 43b).
+
+### ESC in the last 5 s before an online start
+
+The game's rule (`ESCMenu::render` @ 0x1400fe420) is for the last 5 s *before* the start, not
+the first 5 s after it: with the ESC menu up then and the car not in its box
+(`CarAvatar::isInPit`, 1.5 m), the car goes to the pit box and the controls are locked for 20 s.
+Task 34 wrote that rustyAC did the same; online it did not: nothing gave the ESC menu the online
+countdown, and the online "back to the pits" only put the car in its box. Now `OnlineGui`
+carries the session type, the time to the start and "in the box" (`crates/rustyac-game/src/online.rs`,
+every step in the last 6 s), and online `BACK_TO_PITS` also locks the controls for 20 s
+(`crates/rustyac-game/src/sim.rs`; it says "online: ESC in the last 5 s before the start: back to
+the pit box, the controls locked for 20 s").
+
+Not shown live (Task 43b): `bash tools/web_checks/task43/s5/esc_online.sh` (Kunos' acServer on
+127.0.0.1, a race of 1 lap, `--gui-do pits` to have the ESC menu up from the first frame) ran
+twice and the line never came; why (the ESC menu hidden again before the countdown, or the
+countdown not reaching it) is not found. The script found a bug of its own, older than this
+task: a windowed rustyac.exe moves into the Assetto Corsa folder, so a relative `--out-dir`
+writes there (three stray files of Tasks 42b and 43 were deleted from the install; the script
+now passes an absolute path). Task 43b.
 
 ## Step 6: every skin's suits in packs
 
