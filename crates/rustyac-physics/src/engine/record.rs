@@ -510,6 +510,10 @@ pub struct ReplayWorld {
     pub referee: Option<Box<crate::race::Referee>>,
     /// Task 33: the rows end with the player's car's `PerformanceMeter` ([`METER_COLUMNS`])
     pub meter: bool,
+    /// Task 43c: header key `penalty_force`: the car oracle's game side writes this penalty mode
+    /// instead of the one `RaceManager::setCurrentSession` picks (`CAR_ORACLE_PENALTY_MODE`; mode 2,
+    /// "recover time", is never picked by the game itself)
+    pub penalty_force: Option<i32>,
     /// Task 43c: the player's graphics page ([`shm_columns`]): the writer, the page, the
     /// referee frame it was written after
     pub shm: Option<Box<(crate::race::shm::GraphicsWriter, crate::race::shm::Page, u64)>>,
@@ -550,6 +554,7 @@ impl crate::race::World for ReplayWorld {
     }
 
     fn set_penalty_mode(&mut self, mode: i32) {
+        let mode = self.penalty_force.unwrap_or(mode);
         self.engine.env.penalty_mode = mode;
         for car in &mut self.cars {
             car.env.penalty_mode = mode;
@@ -671,9 +676,15 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), shm: None, pit_calls, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
+        // (the oracle's game side switches its PerformanceMeter off unless the header has `meter`)
+        if !world.meter {
+            for car in &mut world.cars {
+                car.performance_meter.is_enabled = false;
+            }
+        }
         if recording.cars.iter().any(|meta| meta.drag.is_some()) {
             world.build_drag(recording, clock_start_ms)?;
         }

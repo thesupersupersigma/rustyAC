@@ -576,12 +576,10 @@ pub struct RollingChassis {
     pub disable_min_speed_penalty_clear: bool,
     /// `Car::penaltyPerfTarget`
     pub penalty_perf_target: f64,
-    /// `PerformanceMeter::getCurrentSplit().t` of the car as the "recover time" penalty, the
-    /// shared memory and the online car updates read it: 0, as the car oracle's game side has
-    /// it (its `PerformanceMeter` is switched off); the meter itself is
-    /// [`RollingChassis::performance_meter`] (Task 33), which only the GUI reads.
-    pub performance_split: f64,
-    /// `Car::performanceMeter` (Task 33): stepped for the player's car, read by the apps
+    /// `Car::performanceMeter` (Task 33): stepped for the player's car; the apps, the "recover
+    /// time" penalty, the shared memory and the online car updates read it
+    /// ([`RollingChassis::performance_split`]). The car oracle's game side switches it off unless
+    /// `CAR_ORACLE_PERF_METER=1`, and the replays of its recordings do the same.
     pub performance_meter: super::performance_meter::PerformanceMeter,
     /// `Car::penaltyManager`
     pub penalty_manager: PenaltyManager,
@@ -1105,7 +1103,6 @@ impl RollingChassis {
             penalty_time_accumulator: 0.0,
             disable_min_speed_penalty_clear: false,
             penalty_perf_target: 0.0,
-            performance_split: 0.0,
             // PerformanceMeter::init in Car::Car
             performance_meter: {
                 let mut meter = super::performance_meter::PerformanceMeter::default();
@@ -2194,7 +2191,11 @@ impl RollingChassis {
                 Some(InvalidatorAction::AddPenalty(seconds)) => self.add_penalty(seconds),
                 Some(InvalidatorAction::AddCut) => self.transponder.add_cut(),
                 Some(InvalidatorAction::ClearPenalty) => self.clear_penalty(),
-                None => {}
+                Some(InvalidatorAction::RecoverTime) if self.performance_meter.has_data() => {
+                    self.add_penalty(5.0);
+                    self.penalty_perf_target = self.performance_split().0 + 5.0;
+                }
+                Some(InvalidatorAction::RecoverTime) | None => {}
             }
         }
         // 25: PenaltyManager::step, the player's car only
@@ -2401,7 +2402,7 @@ impl RollingChassis {
         match self.env.penalty_mode {
             2 => {
                 // recover time
-                self.penalty_time = self.penalty_perf_target - self.performance_split;
+                self.penalty_time = self.penalty_perf_target - self.performance_split().0;
             }
             0 => {
                 if 0.1 > self.controls.gas {
@@ -2479,10 +2480,16 @@ impl RollingChassis {
     /// `CarPhysicsState::performanceMeter` (`(f32)` of the seconds) and
     /// `performanceMeterSpeedDiffMS`.
     pub fn performance_meter_state(&self) -> (f32, f32) {
+        let (t, speed) = self.performance_split();
+        (t as f32, speed)
+    }
+
+    /// `PerformanceMeter::getCurrentSplit` 0x14026b700: (seconds behind the best lap, m/s
+    /// faster), as the recover-time penalty, the physics page and the online car updates read it.
+    pub fn performance_split(&self) -> (f64, f32) {
         // TimeTransponder::isInOpenTrackTransition 0x140290960
         let transition = self.transponder.is_open_track && self.transponder.open_track_state == 0;
-        let (t, speed) = self.performance_meter.get_current_split(transition);
-        (t as f32, speed)
+        self.performance_meter.get_current_split(transition)
     }
 
     /// `Car::lockControls` @ 0x1402745f0.

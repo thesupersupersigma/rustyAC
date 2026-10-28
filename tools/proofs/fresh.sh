@@ -188,6 +188,9 @@ fi
 
 if part shm; then  # Task 43c: the game's shared memory pages (static once, graphics every frame), never kept
     CAR_ORACLE_SHM=1 m_label=shm multi_list tools/proofs/shm_list.txt "$root" "$rec" ""
+    # the PerformanceMeter's other readers: the "recover time" penalty (a mode the game never
+    # picks itself) with the meter on
+    CAR_ORACLE_SHM=1 CAR_ORACLE_PERF_METER=1 CAR_ORACLE_PENALTY_MODE=2 m_label=recover multi_list tools/proofs/recover_list.txt "$root" "$rec" ""
 fi
 
 rm -rf "$root"

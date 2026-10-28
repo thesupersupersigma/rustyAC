@@ -1301,6 +1301,8 @@ impl RunSetup {
         chassis.core.set_no_collision_steps(self.collide.no_collision_steps);
         chassis.core.tape = Some(Vec::new());
         chassis.trace = Some(StepTrace::default());
+        // (the oracle's game side switches its PerformanceMeter off)
+        chassis.performance_meter.is_enabled = false;
         Ok(chassis)
     }
 

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Task 43c: penalty mode 2, "recover time" (5 s against the PerformanceMeter's best lap), with the
+# game's meter on (fresh.sh part "shm"; same columns as multi_list's lists).
+rc_recover magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 140000

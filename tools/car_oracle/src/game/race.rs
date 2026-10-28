@@ -907,6 +907,14 @@ pub extern "C" fn game_rand() -> i32 {
     crt()
 }
 
+/// Task 43c: `CAR_ORACLE_PENALTY_MODE=<n>`: the engine's penalty mode, wherever the game's
+/// `RaceManager::setCurrentSession` writes one (mode 2, "recover time", which the game never
+/// picks, reads the PerformanceMeter: run it with `CAR_ORACLE_PERF_METER=1`).
+pub fn forced_penalty_mode() -> Option<i32> {
+    static MODE: std::sync::OnceLock<Option<i32>> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| std::env::var("CAR_ORACLE_PENALTY_MODE").ok().and_then(|v| v.parse().ok()))
+}
+
 /// The game's referee among the game's real cars.
 pub struct WholeReferee<'a> {
     pub game: GameReferee<'a>,
@@ -1018,7 +1026,7 @@ impl<'a> WholeReferee<'a> {
             }
         }
         // RaceManager::setCurrentSession writes the mode straight into the engine
-        wr(self.engine, PE_PENALTY_MODE, rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE));
+        wr(self.engine, PE_PENALTY_MODE, forced_penalty_mode().unwrap_or(rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE)));
     }
 
     /// After a physics step at clock `now`: every third step a frame of the main thread.
@@ -1106,7 +1114,7 @@ impl<'a> WholeReferee<'a> {
         }
         // (RaceManager::setCurrentSession writes the penalty mode straight into the engine,
         // from the main thread: at once)
-        wr(self.engine, PE_PENALTY_MODE, rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE));
+        wr(self.engine, PE_PENALTY_MODE, forced_penalty_mode().unwrap_or(rd::<i32>(self.game.physics_avatar(), PA_PENALTY_MODE)));
         self.state = self.dump();
         self.state_hash = rustyac_physics::race::referee::dump_hash(&self.state);
         // (for a look at a difference: REFEREE_DUMP_FRAME=<frame> writes the game's state

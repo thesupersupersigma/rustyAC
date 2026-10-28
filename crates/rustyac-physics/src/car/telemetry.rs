@@ -425,7 +425,7 @@ impl PhysicsPageWriter {
         // wheel) times (lastFF * userFFGain)
         w.push(f(car.ff_global_gain * (car.last_ff * car.user_ff_gain)));
         // performanceMeter: the lap-time meter needs the track's racing line
-        w.push(f(car.performance_split as f32));
+        w.push(f(car.performance_split().0 as f32));
         // engineBrake: the cockpit setting; ersRecoveryLevel, ersPowerLevel, ersHeatCharging,
         // ersIsCharging: only for a car with ERS. The first three are numbers of the game's
         // main thread (the car's avatar), `cockpit` here; the last is the car's own

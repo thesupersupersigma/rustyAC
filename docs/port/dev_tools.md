@@ -11,7 +11,12 @@ State after the last commit (update after every commit):
   with the port's under `CAR_ORACLE_SHM=1`: the static page once, the graphics page after every
   frame of the referee (`sh tools/proofs/run_all.sh fresh` with `FRESH_PARTS=shm`, the list
   `tools/proofs/shm_list.txt`).
-- **Steps 2-5:** not started.
+- **Step 2, the PerformanceMeter's other readers, done and proven:** the physics page's
+  `performanceMeter`, the online car update's delta and the "recover time" penalty read the
+  meter (`RollingChassis::performance_split`); recover time's start (`LapInvalidator::onEnterPenaltyZone`)
+  was missing and is ported. Proofs: `rc_recover` with `CAR_ORACLE_PENALTY_MODE=2
+  CAR_ORACLE_PERF_METER=1` (`tools/proofs/recover_list.txt`), the online `net_drive` with the meter on.
+- **Steps 3-5:** not started.
 - **Version:** still v0.43.1.
 
 ## In plain words
@@ -82,8 +87,42 @@ index and time, laps, compound, car position, coordinates, penalty, mandatory pi
 Rerun: `FRESH_PARTS=shm bash tools/proofs/run_all.sh fresh` (the quick sample:
 `PROOF_QUICK=1`).
 
+## Step 2: the PerformanceMeter's other readers
+
+The game's `PerformanceMeter::getCurrentSplit` 0x14026b700 (the delta to the best lap) has five
+callers: the Performance Delta app (Task 33), `Car::getPhysicsState` (Task 33), and the three
+this step connects, which in rustyAC read a field that stayed 0:
+
+- `SharedMemoryWriter::updatePhysics` 0x140186ef0: the physics page's `performanceMeter`;
+- `ACClient::sendCarPosition` 0x140052230: the delta in every online car update (ms, ±30 s);
+- `Car::step` 0x140275da0 in penalty mode 2, "recover time": `penaltyTime = penaltyPerfTarget - split`.
+
+All now read `RollingChassis::performance_split()` (the meter, nothing on an open track that has
+not started). The start of a recover-time penalty, `LapInvalidator::onEnterPenaltyZone`
+0x1402c03d0's mode-2 branch, was missing: with a best lap in the meter, `Car::addPenalty(5)` and
+`penaltyPerfTarget` = the split + 5 s (`InvalidatorAction::RecoverTime`).
+
+Recover time is a mode the game never picks itself (`RaceManager::setCurrentSession` picks cut
+gas for a race and lap invalidation otherwise; online also cut detection), so it can only be
+reached by a mod or a patched game; it is ported because the code is there.
+
+The car oracle's game side switches the meter off unless `CAR_ORACLE_PERF_METER=1`; the port's
+replays of its recordings now do the same (`RunSetup::build`, `ReplayWorld::build` without the
+header key `meter`), so every earlier recording replays as before.
+
+| run | what it shows | result |
+|---|---|---|
+| `rc_recover` magione, 3 × e30, 140,000 steps, `CAR_ORACLE_PENALTY_MODE=2 CAR_ORACLE_PERF_METER=1 CAR_ORACLE_SHM=1` | a clean first lap (2:00.922) gives the meter a best lap; the cuts after 150 s give a recover-time penalty (5 s, page `penaltyTime` 5.0 at step 77,000), served and cleared; the meter's delta, every car's state, the referee and the graphics page at every step | IDENTICAL |
+| `net_drive` on the tape `laguna_a`, 66,000 steps, `CAR_ORACLE_PERF_METER=1` | the game's `sendCarPosition` with its meter on against rustyAC's car updates, and the meter at every step | IDENTICAL (3,866 outgoing messages) |
+
+New oracle pieces: `CAR_ORACLE_PENALTY_MODE=<n>` (header key `penalty_force`) writes a penalty
+mode wherever the game writes one; the scenario `rc_recover` (rc_cut's race of 4 laps, cutting
+from 150 s on).
+
 ## Not done
 
-- Steps 2-5 (see the task's prompt).
+- Steps 3-5 (see the task's prompt).
+- Online, the tape's local car may not finish a timed lap in its 198 s, so the delta it sends
+  may stay 0 in `net_drive`; the meter's value itself is proven in `rc_recover`.
 - The online-only static fields and the graphics page while online or in a replay are ported
   from the code but not run in the oracle (its sim has no client and no replay).

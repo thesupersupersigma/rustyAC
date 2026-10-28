@@ -28,8 +28,9 @@ pub enum Drive {
     /// the car stops.
     Follow { lateral: Vec<(f32, f32)>, pace: f32, limit: f32, brake_at: f32 },
     /// Task 28: along the AI line, and off it sideways by `zones`' metres (to the left)
-    /// while the car is between two places round the lap (from, to, metres).
-    FollowZones { zones: Vec<(f32, f32, f32)>, pace: f32, limit: f32 },
+    /// while the car is between two places round the lap (from, to, metres), from `after`
+    /// seconds on.
+    FollowZones { zones: Vec<(f32, f32, f32)>, pace: f32, limit: f32, after: f32 },
     /// Along the pit lane's line from `from` on, then straight on with this throttle until
     /// `brake_at`.
     PitLane { from: f32, then_gas: f32, brake_at: f32 },
@@ -92,6 +93,7 @@ pub fn referee_of(scenario: &str) -> Option<RefereeSpec> {
         "rc_jump" => Some(RefereeSpec { list: "r3", penalties: true, jump_start: Some(1), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_jump_dt" => Some(RefereeSpec { list: "r5", penalties: true, jump_start: Some(2), first_delay_ms: 12000.0, next_delay_ms: 4000.0 }),
         "rc_cut" => spec("r3", true, None),
+        "rc_recover" => spec("r4", true, None),
         "rc_cut_practice" => spec("p3", true, None),
         _ => None,
     }
@@ -699,7 +701,30 @@ pub fn scenarios() -> Vec<MultiScenario> {
                 if zones.is_empty() {
                     return Err("the track has no surface with a penalty beside its AI line".to_string());
                 }
-                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0 };
+                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0, after: 0.0 };
+                Ok(out)
+            },
+        },
+        MultiScenario {
+            name: "rc_recover",
+            about: "Task 43c: rc_cut's race of 4 laps whose line follower laps cleanly first and cuts from 150 s on; with CAR_ORACLE_PENALTY_MODE=2 CAR_ORACLE_PERF_METER=1 the cuts give \"recover time\" penalties (5 s against the PerformanceMeter's best lap)",
+            seconds: 420.0,
+            no_collision_steps: 250,
+            default_cars: &[F2004],
+            cars: |track, cars| {
+                let mut out = ai_grid(track, cars, &[F2004], 3, |_| 0.9, |_| 0.1)?;
+                out.swap(0, 2);
+                let (first, last) = (out[2].clone(), out[0].clone());
+                out[0].position = first.position;
+                out[0].tail = first.tail;
+                out[2].position = last.position;
+                out[2].tail = last.tail;
+                out[2].drive = out[1].drive.clone();
+                let zones = penalty_zones(track, 2);
+                if zones.is_empty() {
+                    return Err("the track has no surface with a penalty beside its AI line".to_string());
+                }
+                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0, after: 150.0 };
                 Ok(out)
             },
         },
@@ -715,7 +740,7 @@ pub fn scenarios() -> Vec<MultiScenario> {
                 if zones.is_empty() {
                     return Err("the track has no surface with a penalty beside its AI line".to_string());
                 }
-                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0 };
+                out[0].drive = Drive::FollowZones { zones, pace: 0.6, limit: 40.0, after: 0.0 };
                 Ok(out)
             },
         },
@@ -1269,6 +1294,10 @@ impl<'a> MultiWorld<'a> {
             if std::env::var("CAR_ORACLE_PERF_METER").is_ok_and(|v| v == "1") {
                 recording.set("meter", "1");
             }
+            // Task 43c: a penalty mode of the tester's choice where the game picks one
+            if let Some(mode) = super::race::forced_penalty_mode() {
+                recording.set("penalty_force", mode.to_string());
+            }
             // Task 43c: the game's shared memory graphics page at every step
             if std::env::var("CAR_ORACLE_SHM").is_ok_and(|v| v == "1") {
                 recording.set("shm", "1");
@@ -1447,8 +1476,8 @@ impl<'a> MultiWorld<'a> {
                         c.brake = 1.0;
                     }
                 }
-                Drive::FollowZones { zones, pace, limit } => {
-                    let target = zones.iter().find(|zone| view.npos >= zone.0 && view.npos < zone.1).map_or(0.0, |zone| zone.2);
+                Drive::FollowZones { zones, pace, limit, after } => {
+                    let target = if t < *after { 0.0 } else { zones.iter().find(|zone| view.npos >= zone.0 && view.npos < zone.1).map_or(0.0, |zone| zone.2) };
                     car.lateral += (target - car.lateral) * (DT / 0.35).min(1.0);
                     crate::track_driver::follow_line(&track, &view, car.lateral, *pace, *limit, &car.grip, t, &mut c);
                 }

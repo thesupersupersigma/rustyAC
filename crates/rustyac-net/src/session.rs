@@ -91,7 +91,7 @@ pub fn local_car_state(car: &RollingChassis, horn: bool) -> LocalCarState {
         penalty_time: car.get_penalty_time(),
         ers_is_charging: car.ers.as_ref().is_some_and(|ers| ers.is_charging),
         drs_open: car.aero.as_ref().is_some_and(|aero| aero.base().drs.is_present && aero.base().drs.is_active),
-        performance_split: car.performance_split,
+        performance_split: car.performance_split().0,
         normalized_position: car.spline_locator_data.npos,
         ..LocalCarState::default()
     };

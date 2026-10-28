@@ -386,6 +386,9 @@ pub enum InvalidatorAction {
     AddCut,
     /// `Car::clearPenalty()`
     ClearPenalty,
+    /// penalty mode 2, "recover time": with a best lap in the PerformanceMeter, `Car::addPenalty(5)`
+    /// and `penaltyPerfTarget` = the meter's split + 5 s
+    RecoverTime,
 }
 
 /// The car as [`LapInvalidator::step`] sees it.
@@ -467,6 +470,7 @@ impl LapInvalidator {
                     action = match mode {
                         0 if max_bf > 0.0 && kmh > 35.0 => Some(InvalidatorAction::AddPenalty(max_bf as f64)),
                         1 => Some(InvalidatorAction::AddCut),
+                        2 => Some(InvalidatorAction::RecoverTime),
                         4 if max_bf > 0.0 && kmh > 35.0 => Some(InvalidatorAction::AddCut),
                         _ => None,
                     };
