@@ -5,6 +5,9 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSING.md)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2)](https://discord.gg/trvtVNWzaf)
 
+# Important Request
+## If anyone has iRacing installed on their computer, preferrably with a bunch of cars, please message `thesuper2sigma` on discord or `thesupersupersigma@gmail.com`.
+
 **rustyAC** is an open-source rewrite of the racing simulator **Assetto Corsa** (Kunos Simulazioni, 2014) in **Rust**. It aims to be a 1:1, **bit-exact** copy of the original game, `acs.exe` 1.16: the same physics, renderer, sound, AI, multiplayer, HUD and launcher. Every part is checked against the original game's own code.
 
 It runs on Windows with your own Assetto Corsa install, and in the browser through WebAssembly at **[rustyac.com](https://rustyac.com)**.
