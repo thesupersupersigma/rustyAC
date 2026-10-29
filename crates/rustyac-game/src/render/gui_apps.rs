@@ -57,6 +57,8 @@ pub struct GameApps {
     /// the Camera editor's camera choices (`ACCameraManager::setMode`: 0 a driving view, 1 a car
     /// camera; the index)
     pub camera_selects: Vec<(i32, i32)>,
+    /// the Photo mode's calls: `SetCameraMode`, `PausePhysics`, `TakeScreenshot`
+    pub photo_actions: Vec<AppAction>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
     ff_upgrades: Option<[f32; 4]>,
@@ -140,7 +142,10 @@ impl GameApps {
         // RaceFuelMonitor (a developers' app)
         let id = gui.new_race_fuel_monitor_app(painter);
         add(gui, painter, "fuelmonitor", id);
-        // FormDRSZones (after PhotoMode, not ported): saves into maps\ (see write_files)
+        // PhotoMode (a developers' app)
+        let id = gui.new_photo_mode_app(painter);
+        add(gui, painter, "photomode", id);
+        // FormDRSZones: saves into maps\ (see write_files)
         let id = gui.new_drs_zones_app(painter);
         add(gui, painter, "drszones", id);
         let id = gui.new_setup_debug_app(painter);
@@ -337,6 +342,10 @@ impl GameApps {
                     self.camera_selects.push((mode, index));
                     continue;
                 }
+                AppAction::SetCameraMode(_) | AppAction::PausePhysics(_) | AppAction::TakeScreenshot => {
+                    self.photo_actions.push(action);
+                    continue;
+                }
                 AppAction::SetUserFfGain(value) => {
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetUserFfGain { value });
                     continue;
@@ -514,6 +523,7 @@ impl GameApps {
             // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
             chase_cam: gui.apps.chase_cam,
             camera_editor: gui.apps.camera_editor.take(),
+            photo: gui.apps.photo,
             chase_cam_active: gui.apps.chase_cam_active,
             keyboard: gui.apps.keyboard,
             pad: gui.apps.pad,

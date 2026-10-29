@@ -625,6 +625,15 @@ pub struct AcRenderer {
 }
 
 impl AcRenderer {
+    /// `GraphicsManager::useCustomSunDirection` / `customSunDirection` (the Photo mode's sun);
+    /// None: the sun of the time of day.
+    pub fn set_custom_sun(&mut self, direction: Option<rustyac_physics::vecmath::Vec3f>) {
+        self.graphics.use_custom_sun_direction = direction.is_some();
+        if let Some(d) = direction {
+            self.graphics.custom_sun_direction = d;
+        }
+    }
+
     pub fn new(width: u32, height: u32, options: AcOptions) -> Result<AcRenderer, String> {
         let (video_ini, video_name) = video_ini_of(&options)?;
         // a preset is followed to the letter: the launcher's "None" for reflections is SIZE=0

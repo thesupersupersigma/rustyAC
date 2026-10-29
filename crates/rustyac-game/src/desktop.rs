@@ -479,6 +479,8 @@ fn start_camera_editor(gui: Option<&mut rustyac_game::render::gui::GameGui>, opt
             gui.gui.sim.replay.post_processing = Some(on);
         }
         gui.gui.apps.camera_editor = Some(rustyac_game::render::gui_apps::camera_editor_link(unix, data, shape));
+        // GraphicsManager's exposure multiplier starts at 1 (the Photo mode shows it)
+        gui.gui.apps.photo.exposure_multiplier = 1.0;
     }
 }
 
@@ -1441,6 +1443,9 @@ fn run_window(options: &Options) -> Result<(), String> {
         .and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/assetto_corsa.ini")).ok())
         .is_some_and(|ini| ini.ready && ini.has_section("AC_APPS") && ini.get_int("CAMERA", "ALLOW_FREE_CAMERA").unwrap_or(0) > 0);
     let mut mouse_camera: Option<MouseCamera> = None;
+    // the Photo mode's link as last filled, and its sun
+    let mut photo_seen = rustyac_gui::app_photo_mode::PhotoLink::default();
+    let mut photo_sun = None;
     let mut last_frame: Option<CameraFrame> = None;
     start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
@@ -2141,6 +2146,26 @@ fn run_window(options: &Options) -> Result<(), String> {
                     l.scene_camera = rustyac_physics::vecmath::Mat44f { m: frame.matrix };
                 }
             }
+            // Photo mode: Start (the free camera, the physics paused), screenshots; its field of
+            // view and roll move the free camera
+            for action in std::mem::take(&mut gui.apps.photo_actions) {
+                match action {
+                    rustyac_gui::apps::AppAction::SetCameraMode(6) => {
+                        start_camera = None;
+                        mouse_camera = last_frame.as_ref().map(MouseCamera::new);
+                    }
+                    rustyac_gui::apps::AppAction::SetCameraMode(_) => mouse_camera = None,
+                    rustyac_gui::apps::AppAction::PausePhysics(paused) => shared.paused.store(paused, Ordering::Relaxed),
+                    rustyac_gui::apps::AppAction::TakeScreenshot => gui.take_screen(),
+                    _ => {}
+                }
+            }
+            let p = &mut gui.gui.apps.photo;
+            if let Some(free) = mouse_camera.as_mut().filter(|_| p.matrix != photo_seen.matrix || p.fov != photo_seen.fov) {
+                free.matrix = p.matrix.m;
+                free.fov = p.fov;
+            }
+            photo_sun = p.custom_sun;
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
@@ -2166,6 +2191,16 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else {
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
+        if let Some(gui) = renderer.gui() {
+            let p = &mut gui.gui.apps.photo;
+            (p.matrix, p.fov) = (rustyac_physics::vecmath::Mat44f { m: frame.matrix }, frame.fov);
+            p.camera_mode = if mouse_camera.is_some() { 6 } else { 0 };
+            p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();
+            // SAFETY: plain calls.
+            [p.right_button, p.middle_button] = [0x02, 0x04].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
+            photo_seen = *p;
+        }
+        renderer.set_custom_sun(photo_sun);
         last_frame = Some(frame);
         let replay_over = replay.is_some() && shared.finished.load(Ordering::Relaxed);
         let unfocused = !options.no_focus && !shared.focused.load(Ordering::Relaxed);

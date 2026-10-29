@@ -22,7 +22,10 @@ State after the last commit (update after every commit):
   `app_netmonitor`), "Keyboard debug" (`KeyboardControlsDebug`, `app_keyboard`,
   `app_keyboard_none`) and "X360 Controller debug" (`X360ControllerDebug`, `app_x360`,
   `app_x360_none`).
-- **Steps 4, 5, 7:** not started.
+- **Step 4, photo mode, done and proven:** the developers' "Photo mode" (`PhotoMode`,
+  `app_photo`: pictures, state, every frame's camera, exposure, DOF and sun, and the calls it makes:
+  free camera, physics pause, screenshots).
+- **Steps 5, 7:** not started.
 
 ## In plain words
 
@@ -193,6 +196,54 @@ Not done (Task 44b):
   (`exit(2)`) once it has saved; rustyac.exe reads the value but does not quit.
 - What `ACCameraManager::setMode` does besides switching the view (the game's free camera, track
   cameras) was not traced.
+
+## Step 4: photo mode (`PhotoMode`)
+
+AC's photo mode is a developers' app ("Photo mode", in the developers' apps bar; no key). It is
+ported in `crates/rustyac-gui/src/app_photo_mode.rs` and made in rustyac.exe like the game does
+(after the GPU profiler, before "DRS Zones").
+
+### How to use it
+
+Open "Photo mode" from the developers' apps. **Start** switches to the free camera (as F7 does)
+and pauses the physics (not in a replay); **Start** again goes back to the view you had and
+unpauses. The precision spinner sets how big each step is (10^(value-3)). The -/+ buttons: the
+exposure multiplier (±0.005), field of view (±0.5 × precision), DOF factor, DOF focus (0..1000),
+roll, sun azimuth and zenith (±0.35° × precision; the first press turns on the custom sun and stops
+the sun's own animation). While started: the view finder is drawn over the screen, the **middle
+mouse button** takes a screenshot each frame it is down (into the same folder as F8's), the
+**wheel** over the window changes the field of view, and with the **right button** held the DOF
+focus. It writes no files.
+
+### The proof
+
+`GUI_ONLY=app_photo sh tools/proofs/gui.sh` (render oracle sequence `app_photo`): the game's
+`PhotoMode` built on a staged scene camera, camera manager, sun animator and graphics manager,
+the port's app beside it; every spinner clicked up and down at three precisions, Start, the middle
+button for two frames, the wheel with and without the right button, Start again, the wheel while
+hidden. `GetAsyncKeyState` answers the script's buttons; `setMode`, `pausePhysics` and
+`takeScreen` are written down instead of done.
+
+| what | result |
+|---|---|
+| command log, pixels (115 frames) | IDENTICAL |
+| state and events (8168 lines, 348 events) | IDENTICAL |
+| every frame's camera matrix, FOV, DOF, exposure, mode, sun, sun animator, and the calls | IDENTICAL (18456 bytes) |
+
+Checked in rustyac.exe: `--screenshot photo.png --gui-do app:photomode` shows the window.
+
+### Not done (Task 44b)
+
+- **END** (the game's RayPicker: DOF focus = the distance to what is in the middle of the
+  screen, written in red) is not ported: rustyAC has no ray picker on the drawn scene.
+- rustyAC's renderer has no depth-of-field pass and does not use the exposure multiplier, so the
+  DOF and exposure spinners change the values (shown, proven) but not the picture. The custom sun
+  and the field of view / roll do change the picture.
+- In the game the FOV and roll spinners move the scene camera even before Start; in rustyac.exe
+  they only move the free camera (after Start).
+- The exposure multiplier's start value (1) is assumed, not read from the game's GraphicsManager.
+- The live Start / screenshot path in rustyac.exe was checked by building and by the window
+  showing, not by a scripted click in the windowed game.
 
 ## Step 6: the net monitor and the input debug apps
 

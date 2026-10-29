@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 42] = [
+pub const APPS: [(&str, usize, usize, usize); 43] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -64,6 +64,7 @@ pub const APPS: [(&str, usize, usize, usize); 42] = [
     ("keyboard", 0x1f8, 0x1_4030_dbe0, 0x1_4050_9a20),
     ("x360", 0x1d8, 0x1_4032_76d0, 0x1_4050_e090),
     ("cameraeditor", 0x2d0, 0x1_402f_1bc0, 0x1_4050_5638),
+    ("photomode", 0x250, 0x1_4032_1bc0, 0x1_4050_cff0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -140,6 +141,78 @@ unsafe fn camera_editor_link(c: &CameraGame) -> rustyac_gui::app_camera_editor::
         auto_exposure: rd(c.yebis as *mut u8, 0x7b4),
         use_auto_exposure_limits: rd::<u8>(c.yebis as *mut u8, 0x7a1) != 0,
     }
+}
+
+/// The Photo mode's staged blocks: the scene camera, the graphics manager, the sun animator
+/// and its graphics block, the camera manager; the calls written down, the last line.
+struct PhotoGame {
+    cam: usize,
+    gm: usize,
+    sa: usize,
+    sun_gm: usize,
+    manager: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static PHOTO: Mutex<Option<PhotoGame>> = Mutex::new(None);
+/// the real `GetAsyncKeyState`
+static REAL_KEYS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn photo_log(line: String) {
+    if let Some(p) = PHOTO.lock().unwrap().as_mut() {
+        p.log.push(line);
+    }
+}
+
+/// `GetAsyncKeyState` while the Photo mode is staged: the right and middle buttons from the
+/// script, END never down, the others the real one's.
+unsafe extern "system" fn photo_keys(vk: i32) -> i16 {
+    let [right, middle] = crate::gui_seq_apps::script(|s| s.photo_keys);
+    let down = |b: bool| if b { i16::MIN } else { 0 };
+    match vk {
+        2 => down(right),
+        4 => down(middle),
+        0x23 => 0,
+        _ => {
+            let real: extern "system" fn(i32) -> i16 = std::mem::transmute(REAL_KEYS.load(std::sync::atomic::Ordering::SeqCst));
+            real(vk)
+        }
+    }
+}
+
+/// `ACCameraManager::setMode` for the Photo mode: the mode kept (+0x120), the call written down.
+unsafe extern "C" fn photo_set_mode(this: *mut u8, mode: i32, _a: u8, _b: u8) {
+    wr(this, 0x120, mode);
+    photo_log(format!("setMode {mode}"));
+}
+
+/// `PhysicsAvatar::pausePhysics` 0x140122300: written down.
+unsafe extern "C" fn photo_pause(_this: *mut u8, paused: u8) {
+    photo_log(format!("pausePhysics {paused}"));
+}
+
+/// `ScreenCapturer::takeScreen` 0x140163470: written down.
+unsafe extern "C" fn photo_take_screen(_this: *mut u8, _path: *mut u8) {
+    photo_log("takeScreen".to_string());
+}
+
+/// The Photo mode's staged game, read back as the port's link.
+unsafe fn photo_link(p: &PhotoGame) -> (rustyac_gui::app_photo_mode::PhotoLink, bool) {
+    use rustyac_physics::vecmath::{Mat44f, Vec3f};
+    let (cam, sun_gm) = (p.cam as *mut u8, p.sun_gm as *mut u8);
+    let sun: [f32; 3] = rd(sun_gm, 0x388);
+    let link = rustyac_gui::app_photo_mode::PhotoLink {
+        matrix: Mat44f { m: rd(cam, 0xc) },
+        fov: rd(cam, 8),
+        dof_factor: rd(cam, 0x1b0),
+        dof_focus: rd(cam, 0x1b4),
+        exposure_multiplier: rd(p.gm as *mut u8, 0xc),
+        custom_sun: (rd::<u8>(sun_gm, 8) != 0).then_some(Vec3f::new(sun[0], sun[1], sun[2])),
+        camera_mode: rd(p.manager as *mut u8, 0x120),
+        ..Default::default()
+    };
+    (link, rd::<u8>(p.sa as *mut u8, 0x30) != 0)
 }
 
 /// The ChaseCam Editor's camera manager block (0: none staged).
@@ -823,6 +896,51 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 }
                 wings_car(a, first_car);
             }
+            if text == "photomode" {
+                // PhotoMode(Sim*): Sim::getSceneCamera (+0x238) a CameraForward (its vftable for
+                // the dynamic cast: matrix +0xc, fov +8, dofFactor +0x1b0, dofFocus +0x1b4);
+                // Sim::cameraManager (+0x188, mode +0x120); the game objects (+0x40) one
+                // SunAnimator whose game (+8) has its own graphics block at +0x138 (the sun's
+                // flag +8, direction +0x388); the GUI's graphics manager's exposure multiplier
+                // (+0xc). setMode, pausePhysics and takeScreen are written down, not made;
+                // GetAsyncKeyState answers the script's buttons.
+                let l = crate::gui_seq_apps::photo_start();
+                let scene = a.alloc(0x200);
+                wr(scene, 0, a.va(0x1_404e_d0a8) as usize);
+                wr(scene, 8, l.fov);
+                wr(scene, 0xc, l.matrix.m);
+                wr(scene, 0x1b0, l.dof_factor);
+                wr(scene, 0x1b4, l.dof_focus);
+                wr(sim, 0x238, scene);
+                let manager = a.alloc(0x200);
+                wr(manager, 0x120, l.camera_mode);
+                wr(sim, 0x188, manager);
+                let sun_game = a.alloc(0x200);
+                let sun_gm = a.alloc(0x400);
+                wr(sun_game, 0x138, sun_gm);
+                let sa = a.alloc(0x80);
+                wr(sa, 0, a.va(0x1_404d_b280) as usize);
+                wr(sa, 8, sun_game);
+                wr(sa, 0x30, 1u8);
+                let list = a.alloc(0x10);
+                wr(list, 0, sa);
+                wr(sim, 0x40, list);
+                wr(sim, 0x48, list.add(8));
+                wr(sim, 0x50, list.add(8));
+                let gm: *mut u8 = rd(gui, 0x10);
+                wr(gm, 0xc, l.exposure_multiplier);
+                for (va, to) in [
+                    (0x1_4003_40d0, photo_set_mode as *const () as usize),
+                    (0x1_4012_2300, photo_pause as *const () as usize),
+                    (0x1_4016_3470, photo_take_screen as *const () as usize),
+                ] {
+                    crate::gui_ac_hud::jump(game, va, to);
+                }
+                let slot = a.va(0x1_404a_4fa8) as *mut u8;
+                REAL_KEYS.store(rd::<usize>(slot, 0), std::sync::atomic::Ordering::SeqCst);
+                game.acs.patch(slot as usize, &(photo_keys as *const () as usize).to_le_bytes());
+                *PHOTO.lock().unwrap() = Some(PhotoGame { cam: scene as usize, gm: gm as usize, sa: sa as usize, sun_gm: sun_gm as usize, manager: manager as usize, log: Vec::new(), last: String::new() });
+            }
             if text == "chasecameditor" {
                 // ChaseCamEditor(Sim*): Sim::cameraManager (+0x188) -> mode (+0x120),
                 // cameraDrivable (+0xc0) -> currentMode (+0x58), chaseCamData (+0x5c, the
@@ -1335,6 +1453,12 @@ pub unsafe fn update() {
         let line = crate::gui_port_apps::camera_line(&camera_editor_link(c));
         let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut c.log), &line, &mut c.last);
+    }
+    if let Some(p) = PHOTO.lock().unwrap().as_mut() {
+        let (link, animator) = photo_link(p);
+        let line = crate::gui_port_apps::photo_line(&link, animator);
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut p.log), &line, &mut p.last);
     }
     if let Some((car, last)) = BALLAST.lock().unwrap().as_mut() {
         let line = format!("ballast {:08x}", rd::<f32>(*car as *mut u8, 0x3e30).to_bits());

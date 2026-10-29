@@ -66,6 +66,12 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "netmonitor" => gui.new_net_monitor_app(painter),
         "keyboard" => gui.new_keyboard_debug_app(painter),
         "x360" => gui.new_pad_debug_app(painter),
+        "photomode" => {
+            let start = crate::gui_seq_apps::photo_start();
+            gui.apps.photo = start;
+            *PHOTO.lock().unwrap() = Some((start, Vec::new(), String::new()));
+            gui.new_photo_mode_app(painter)
+        }
         "cameraeditor" => {
             let start = crate::gui_seq_apps::camera_editor_start();
             gui.apps.camera_editor = Some(start.clone());
@@ -205,6 +211,9 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             }),
             // (the port's app keeps its own copy in gui.apps.keyboard; the pictures show it)
             AppAction::SetKeyboardTuning { .. } | AppAction::SetPadTuning { .. } => {}
+            AppAction::SetCameraMode(mode) => photo_log(format!("setMode {mode}")),
+            AppAction::PausePhysics(paused) => photo_log(format!("pausePhysics {}", paused as u8)),
+            AppAction::TakeScreenshot => photo_log("takeScreen".to_string()),
             AppAction::SelectCamera { mode, index } => {
                 if let Some(c) = CAMERA.lock().unwrap().as_mut() {
                     c.1.push(format!("setMode {mode}"));
@@ -339,6 +348,32 @@ pub fn camera_line(l: &rustyac_gui::app_camera_editor::CameraEditorLink) -> Stri
     line
 }
 
+/// The Photo mode's: what its app changed, the calls, the last line.
+static PHOTO: std::sync::Mutex<Option<(rustyac_gui::app_photo_mode::PhotoLink, Vec<String>, String)>> = std::sync::Mutex::new(None);
+
+fn photo_log(line: String) {
+    if let Some(p) = PHOTO.lock().unwrap().as_mut() {
+        p.1.push(line);
+    }
+}
+
+/// The Photo mode's effects as a line of `effects_*.txt` (every float's bits); `animator`: the
+/// sun animator still runs.
+pub fn photo_line(l: &rustyac_gui::app_photo_mode::PhotoLink, animator: bool) -> String {
+    let bits = |v: &[f32]| v.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(" ");
+    let sun = l.custom_sun.map_or("off".to_string(), |s| bits(&[s.x, s.y, s.z]));
+    format!(
+        "photo cam {} fov {} dof {} exp {} mode {} sun {} animator {}",
+        bits(l.matrix.m.as_flattened()),
+        bits(&[l.fov]),
+        bits(&[l.dof_factor, l.dof_focus]),
+        bits(&[l.exposure_multiplier]),
+        l.camera_mode,
+        sun,
+        animator as u8
+    )
+}
+
 /// The ballast app's: the player's car's ballast as the port's app set it, the last line.
 static BALLAST: std::sync::Mutex<Option<(f32, String)>> = std::sync::Mutex::new(None);
 
@@ -382,7 +417,16 @@ pub fn sync(gui: &mut Gui) {
         });
     }
     let camera = gui.apps.camera_editor.take();
+    let photo = gui.apps.photo;
     gui.apps = crate::gui_seq_apps::link();
+    // the Photo mode's: what the port's app changed, the buttons from the script
+    if let Some(p) = PHOTO.lock().unwrap().as_mut() {
+        p.0 = photo;
+        [p.0.right_button, p.0.middle_button] = crate::gui_seq_apps::script(|s| s.photo_keys);
+        gui.apps.photo = p.0;
+        let line = photo_line(&p.0, p.0.custom_sun.is_none());
+        append_effects(&root.join("effects_port.txt"), std::mem::take(&mut p.1), &line, &mut p.2);
+    }
     // the Camera editor's: what the port's app changed, kept here
     if let Some(c) = CAMERA.lock().unwrap().as_mut() {
         if let Some(l) = camera {

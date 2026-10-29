@@ -61,6 +61,12 @@ pub enum AppAction {
     /// `FormCamera::selectCamera`: `ACCameraManager::setMode(mode)` then the drivable view
     /// (mode 0, `setDrivableCarIndex`) or the car camera (mode 1, `setCameraCarIndex`) `index`
     SelectCamera { mode: i32, index: i32 },
+    /// `ACCameraManager::setMode(mode, false, false)` (the Photo mode's Start)
+    SetCameraMode(i32),
+    /// `PhysicsAvatar::pausePhysics(paused)`
+    PausePhysics(bool),
+    /// `ScreenCapturer::takeScreen(L"")`: a screenshot where F8 puts them
+    TakeScreenshot,
     /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
     DeleteFile { path: String },
 }
@@ -301,6 +307,8 @@ pub struct AppLink {
     /// What the Camera editor reads and changes (None: no editor; the game makes it only with
     /// post-processing on)
     pub camera_editor: Option<crate::app_camera_editor::CameraEditorLink>,
+    /// What the Photo mode reads and changes (the scene camera, the exposure, the sun)
+    pub photo: crate::app_photo_mode::PhotoLink,
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,

@@ -65,6 +65,13 @@ impl Picture {
     }
 
     /// AC's GUI and HUD, when they are drawn.
+    /// Task 44: the Photo mode's sun (None: the time of day's).
+    pub fn set_custom_sun(&mut self, direction: Option<rustyac_physics::vecmath::Vec3f>) {
+        if let Picture::Ac(r) = self {
+            r.set_custom_sun(direction);
+        }
+    }
+
     pub fn gui(&mut self) -> Option<&mut super::gui::GameGui> {
         match self {
             Picture::Ac(r) => r.gui.as_deref_mut(),

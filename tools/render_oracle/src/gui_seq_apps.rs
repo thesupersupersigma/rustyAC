@@ -246,6 +246,8 @@ pub struct AppScript {
     pub pad: Option<[f32; 8]>,
     /// the Camera editor's: YEBIS's measured exposure (`currentAutoExposure`)
     pub auto_exposure: f32,
+    /// the Photo mode's: the right and middle buttons down (`GetAsyncKeyState`)
+    pub photo_keys: [bool; 2],
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -436,6 +438,8 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             s.net_ev = [v[0], v[1], v[2]];
         }),
         "app.autoexp" => script(|s| s.auto_exposure = number),
+        // 1: the right button down, 2: the middle one
+        "app.photoKeys" => script(|s| s.photo_keys = [(number as i32) & 1 != 0, (number as i32) & 2 != 0]),
         "app.chase" => script(|s| {
             s.chase_active = on;
             if s.chase == (0.0, 0.0, 0.0) {
@@ -699,6 +703,7 @@ pub fn link() -> AppLink {
             keyboard: s.keyboard,
             pad: s.pad,
             camera_editor: None,
+            photo: Default::default(),
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -837,6 +842,20 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
             }
         }
         return Ok(same);
+    }
+    if name.starts_with("app_photo") {
+        let (a, b) = (std::fs::read(args.root.join("effects_game.txt")), std::fs::read(args.root.join("effects_port.txt")));
+        let what = "the camera, exposure and sun every frame, the camera manager's, physics' and screenshot calls";
+        return Ok(match (a, b) {
+            (Ok(a), Ok(b)) if a == b => {
+                println!("file {what}: IDENTICAL ({} bytes)", a.len());
+                true
+            }
+            (a, b) => {
+                println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                false
+            }
+        });
     }
     if name.starts_with("app_camera") {
         let mut same = true;
@@ -1726,6 +1745,63 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             o.extend([Op::MouseMove(600, 400), Op::Frame(DT)]);
             o.extend([hud("app.visible", 0.0, "cameraeditor"), Op::Frame(DT), hud("app.visible", 1.0, "cameraeditor"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
         }
+        "app_photo" => {
+            // the form at VOLUMES_AT: Start 100 x 25 at (90, 50); the precision spinner 200 x 30
+            // at (40, 110); the -/+ spinners 49 x 23 at (10, 150 + 40 k): exposure, field of
+            // view, DOF factor, DOF focus, roll, azimuth, zenith
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            let (minus, plus) = (16, 52);
+            let row = |k: i32| 161 + 40 * k;
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "photomode"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "photomode"));
+            play(&mut o, 0, 50, 25);
+            // every spinner: plus three times, minus once
+            for k in 0..7 {
+                for cx in [plus, plus, plus, minus] {
+                    click(&mut o, cx, row(k));
+                }
+            }
+            // precision up twice (x100): field of view up (to the clamp) and down, focus down
+            // (to 0); down four times (x0.01): roll, azimuth, zenith
+            for (cx, n) in [(230, 2)] {
+                for _ in 0..n {
+                    click(&mut o, cx, 125);
+                }
+            }
+            for (cx, k) in [(plus, 1), (plus, 1), (minus, 1), (minus, 3), (minus, 3), (plus, 2)] {
+                click(&mut o, cx, row(k));
+            }
+            for _ in 0..4 {
+                click(&mut o, 50, 125);
+            }
+            for (cx, k) in [(plus, 4), (minus, 4), (minus, 4), (plus, 5), (minus, 6)] {
+                click(&mut o, cx, row(k));
+            }
+            // Start: the free camera, the physics paused, the view finder
+            click(&mut o, 140, 62);
+            play(&mut o, 50, 80, 10);
+            // the middle button: a screenshot each frame it is down
+            o.push(hud("app.photoKeys", 2.0, ""));
+            o.extend([Op::Frame(DT), Op::Frame(DT)]);
+            o.push(hud("app.photoKeys", 0.0, ""));
+            o.push(Op::Frame(DT));
+            // the wheel over the window: the field of view; with the right button the focus
+            o.extend([Op::MouseMove(x + 140, y + 300), Op::Frame(DT), Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), Op::Wheel(x + 140, y + 300, -120.0), Op::Wheel(x + 140, y + 300, -120.0), Op::Frame(DT)]);
+            o.push(hud("app.photoKeys", 1.0, ""));
+            o.extend([Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), Op::Wheel(x + 140, y + 300, -240.0), Op::Frame(DT)]);
+            o.push(hud("app.photoKeys", 0.0, ""));
+            o.push(Op::Save);
+            // Start again: the camera back, the physics on
+            click(&mut o, 140, 62);
+            play(&mut o, 80, 100, 10);
+            // hidden: the wheel does nothing
+            o.extend([hud("app.visible", 0.0, "photomode"), Op::Frame(DT), Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), hud("app.visible", 1.0, "photomode"), Op::Frame(DT)]);
+            play(&mut o, 100, 120, 10);
+            o.push(Op::Save);
+        }
         "app_netmonitor" => {
             // online: the speeds of cars 0 and 1, then error vectors and pings of every size
             race(&mut o, 6);
@@ -1861,6 +1937,14 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
 fn floats<const N: usize>(text: &str) -> [f32; N] {
     let v: Vec<f32> = text.split(',').map(|p| p.trim().parse().expect("a number")).collect();
     v.try_into().expect("the count")
+}
+
+/// The Photo mode's start, both sides: a scene camera somewhere on the track.
+pub fn photo_start() -> rustyac_gui::app_photo_mode::PhotoLink {
+    use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
+    let mut matrix = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), 0.7), &Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), -0.1));
+    matrix.m[3] = [10.0, 2.0, -30.0, 1.0];
+    rustyac_gui::app_photo_mode::PhotoLink { matrix, fov: 56.0, dof_factor: 0.2, dof_focus: 5.0, exposure_multiplier: 1.0, custom_sun: None, camera_mode: 2, in_replay: false, right_button: false, middle_button: false }
 }
 
 /// The Camera editor's start, both sides: the F2004 (its eye point), two car cameras, the
