@@ -8,3 +8,5 @@ Only the scripts live here. What they read and write (test packs, site builds, C
 output) is still `re/scratch/<task>/…` and is gone: make a pack with `tools/web_pack` from the `.toml`
 next to the script, build the site with `web/build.py`, and the scripts recreate the rest. They were
 moved with their paths adjusted, not rerun.
+
+Task 44b's Settings proofs (`task44b/`) were put here directly; docs/port/web_settings.md says how to run them.

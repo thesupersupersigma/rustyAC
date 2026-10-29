@@ -1,0 +1,60 @@
+# Task 44b: one Settings session, run by rustyac-launcher.exe --script and (txt2flow.py) in the page
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+js $('div.flag[data-mode=en]').click()
+wait 8000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+log MARK
+click #menu li[data-panel=options]
+wait 1500
+shot out/s_video_display.png
+js var s=$('#af');s.slider('value',2);s.triggerSliderEvent('stop')
+wait 1000
+js var s=$('#shadowmap');s.slider('value',1);s.triggerSliderEvent('stop')
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=effects]
+wait 1000
+shot out/s_video_effects.png
+js var c=$('input[data-bind="video?POST_PROCESS/FXAA"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+js var c=$('input[data-bind="video?VIDEO/DISABLE_HDR"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=view]
+wait 1000
+shot out/s_video_view.png
+js var s=$('#fov');s.slider('value',60);s.triggerSliderEvent('stop')
+wait 1000
+js var c=$('input[data-bind="camera_onboard?MODE/IS_WORLD_ALIGNED"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+js var c=$('input[data-bind="gameplay?TIME_DIFFERENCE/IS_ACTIVE"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+js var c=$('input[data-bind="options?no_body"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+click #options .subpanel.video .tabs h2[data-mode=reflections]
+wait 1000
+shot out/s_video_reflections.png
+js var c=$('input[data-bind="video?MIRROR/HQ"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+click #options > .tabs > div[data-mode=audio]
+wait 1500
+shot out/s_audio.png
+js var s=$('#music');s.slider('value',0.5);s.triggerSliderEvent('stop')
+wait 1000
+js var s=$('#uilevel');s.slider('value',0.5);s.triggerSliderEvent('stop')
+wait 1000
+click #options > .tabs > div[data-mode=general]
+wait 1500
+shot out/s_general.png
+js var c=$('input[data-bind="launcher?SAVED/PERSISTTRACK"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+js var c=$('input[data-bind="replay?AUTOSAVE/ENABLED"]');c.prop('checked',!c.prop('checked')).change()
+wait 1000
+click #options > .tabs > div[data-mode=profile]
+wait 2000
+shot out/s_profile.png
+click #options > .tabs > div[data-mode=video]
+wait 1500
+log END
+click #options > .tabs > div[data-mode=controls]
+wait 2000

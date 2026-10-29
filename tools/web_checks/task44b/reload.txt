@@ -1,0 +1,5 @@
+# Task 44b: after settings.txt and a reload of the page, Settings shows what was saved
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+click #menu li[data-panel=options]
+wait 1500
