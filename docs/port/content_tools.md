@@ -25,7 +25,9 @@ State after the last commit (update after every commit):
 - **Step 4, photo mode, done and proven:** the developers' "Photo mode" (`PhotoMode`,
   `app_photo`: pictures, state, every frame's camera, exposure, DOF and sun, and the calls it makes:
   free camera, physics pause, screenshots).
-- **Steps 5, 7:** not started.
+- **Step 5, in progress:** the "Post Process Filter" picker (`PostProcessFilterSelector`,
+  `app_ppfilter`) done and proven; the HDR settings window and the driver model window next.
+- **Step 7:** not started.
 
 ## In plain words
 
@@ -244,6 +246,38 @@ Checked in rustyac.exe: `--screenshot photo.png --gui-do app:photomode` shows th
 - The exposure multiplier's start value (1) is assumed, not read from the game's GraphicsManager.
 - The live Start / screenshot path in rustyac.exe was checked by building and by the window
   showing, not by a scripted click in the windowed game.
+
+## Step 5: driver model, HDR, post-processing filter
+
+### The "Post Process Filter" picker (`PostProcessFilterSelector`)
+
+Ported in `crates/rustyac-gui/src/app_pp_filter.rs`. Like the game, rustyac.exe makes it only with
+post-processing on (`--post on` or video.ini `[POST_PROCESS] ENABLED=1`: in the game the window
+belongs to YEBIS' camera). It is a normal app (not a developers' one).
+
+How to use it: the spinner lists the filters of Documents' `cfg\ppfilters` (rustyAC's own cfg
+folder first, else the game's Documents) and then of the game's `system\cfg\ppfilters`, in the
+folders' order, with the game's quirks (a name in both folders shows twice; video.ini's `FILTER`
+is only looked for among the first N items, N the game folder's count). -/+ pick a filter. At the
+end of the session the filter showing is written to video.ini `[POST_PROCESS] FILTER`: the game
+writes Documents\Assetto Corsa\cfg\video.ini, **rustyac.exe writes its own cfg\video.ini**.
+
+Waits for YEBIS: picking a filter changes nothing in rustyAC's picture (the game loads the
+filter's settings into YEBIS, `loadPPSet`, and rebuilds its render targets). rustyac.exe drops
+the request.
+
+Proof `GUI_ONLY=app_ppfilter sh tools/proofs/gui.sh` (one Documents filter `my_look` before the
+game's ten, so the start index quirk shows; -/+ clicked past both ends; the game's end):
+
+| what | result |
+|---|---|
+| command log, pixels (55 frames) | IDENTICAL |
+| state and events (1585 lines, 100 events) | IDENTICAL |
+| every filter asked for (`loadConfigurationFile`, the start one included) | IDENTICAL (424 bytes) |
+| cfg/video.ini written at the end | IDENTICAL (513 bytes) |
+
+Checked in rustyac.exe: `--post on --screenshot ppf.png --gui-do app:ppfilter` shows the window on
+"default".
 
 ## Step 6: the net monitor and the input debug apps
 

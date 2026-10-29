@@ -30,6 +30,9 @@ pub enum AppAction {
     /// `WritePrivateProfileStringW(section, key, value, <Documents>\Assetto Corsa\<file>)`
     /// (see [`write_profile_string`])
     WriteProfileString { file: String, section: String, key: String, value: String },
+    /// `PostProcessEffectsUpdater::loadConfigurationFile` 0x1400abb70: a post-processing filter
+    /// (YEBIS')
+    LoadPostProcessFilter(String),
     /// `AudioEngine::setVolume` 0x1401fbdf0 (the master level, 0..1)
     SetMasterVolume(f32),
     /// one level of every car's `CarAudioFMOD::mixVolumes`; for the transmission -1 means

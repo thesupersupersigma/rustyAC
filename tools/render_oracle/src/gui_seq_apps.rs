@@ -843,6 +843,22 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
+    if name.starts_with("app_ppfilter") {
+        let mut same = true;
+        for (what, a, b) in [
+            ("the filters asked for (loadConfigurationFile)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
+            ("cfg/video.ini", args.root.join("documents/Assetto Corsa/cfg/video.ini"), args.root.join("port_files/documents/Assetto Corsa/cfg/video.ini")),
+        ] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if name.starts_with("app_photo") {
         let (a, b) = (std::fs::read(args.root.join("effects_game.txt")), std::fs::read(args.root.join("effects_port.txt")));
         let what = "the camera, exposure and sun every frame, the camera manager's, physics' and screenshot calls";
@@ -1092,6 +1108,22 @@ PRESET=AI Debug
     for root in [args.root.clone(), args.root.join("port_files")] {
         let _ = std::fs::remove_file(root.join("content/cars/ks_ferrari_f2004/data/dash_cam.ini"));
         let _ = std::fs::remove_file(root.join("content/cars/ks_ferrari_f2004/data/cameras.ini"));
+    }
+    // the filter picker's: the game's filters in both game folders, one more in both Documents;
+    // the game's side gets the oracle's video.ini when it starts, the same for the port's
+    if name.starts_with("app_ppfilter") {
+        for (root, docs) in [(args.root.clone(), docs.clone()), (args.root.join("port_files"), port_docs.clone())] {
+            let to = root.join("system/cfg/ppfilters");
+            let _ = std::fs::remove_dir_all(&to);
+            std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+            for e in std::fs::read_dir(args.game.join("system/cfg/ppfilters")).map_err(|e| e.to_string())?.flatten() {
+                std::fs::copy(e.path(), to.join(e.file_name())).map_err(|e| e.to_string())?;
+            }
+            let _ = std::fs::remove_dir_all(docs.join("ppfilters"));
+            std::fs::create_dir_all(docs.join("ppfilters")).map_err(|e| e.to_string())?;
+            std::fs::write(docs.join("ppfilters/my_look.ini"), "[GENERAL]\r\n").map_err(|e| e.to_string())?;
+        }
+        std::fs::write(port_docs.join("video.ini"), crate::root::video_ini(args.width, args.height)).map_err(|e| e.to_string())?;
     }
     if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") {
         for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
@@ -1801,6 +1833,27 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             o.extend([hud("app.visible", 0.0, "photomode"), Op::Frame(DT), Op::Wheel(x + 140, y + 300, 120.0), Op::Frame(DT), hud("app.visible", 1.0, "photomode"), Op::Frame(DT)]);
             play(&mut o, 100, 120, 10);
             o.push(Op::Save);
+        }
+        "app_ppfilter" => {
+            // the form at VOLUMES_AT, the spinner 200 x 30 at (58, 70): its "-" at the left, its
+            // "+" at the right; one Documents filter before the game's ten, video.ini's "default"
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "ppfilter"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "ppfilter"));
+            play(&mut o, 0, 20, 10);
+            for (cx, n) in [(248, 3), (68, 6), (248, 12)] {
+                for _ in 0..n {
+                    click(&mut o, cx, 85);
+                }
+            }
+            for _ in 0..4 {
+                click(&mut o, 68, 85);
+            }
+            play(&mut o, 20, 40, 10);
+            o.extend([Op::Save, hud("app.shutdown", 0.0, "ppfilter")]);
         }
         "app_netmonitor" => {
             // online: the speeds of cars 0 and 1, then error vectors and pings of every size

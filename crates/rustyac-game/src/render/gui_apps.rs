@@ -173,7 +173,16 @@ impl GameApps {
         gui.apps.ff_upgrades = self.ff_upgrades;
         let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
         let loose = setup.game.join("content/cars").join(&unix).join("data/car.ini").is_file();
-        // DriverEyesPositioner (after FormOpenVR and PostProcessFilterSelector, not made here):
+        // PostProcessFilterSelector: only with YEBIS (post-processing on); its filters from
+        // Documents' cfg\ppfilters (rustyAC's own first) and the game's system\cfg\ppfilters
+        if gui.sim.replay.post_processing == Some(true) {
+            let names = rustyac_gui::app_pp_filter::filter_names;
+            let documents = Some(names(&setup.cfg_dir.join("ppfilters"))).filter(|n| !n.is_empty()).or_else(|| setup.documents_cfg.as_ref().map(|cfg| names(&cfg.join("ppfilters")))).unwrap_or_default();
+            let default = own_or_documents("video.ini").filter(|ini| ini.has_section("POST_PROCESS")).map(|ini| ini.get_string("POST_PROCESS", "FILTER")).unwrap_or_default();
+            let id = gui.new_pp_filter_app(painter, &documents, &names(&setup.game.join("system/cfg/ppfilters")), &default);
+            add(gui, painter, "ppfilter", id);
+        }
+        // DriverEyesPositioner (after FormOpenVR and PostProcessFilterSelector):
         // the car.ini's eye point and pitch, the game folder's camera_onboard.ini field of view
         let car_ini = crate::input::ini::ControlsIni::load(&setup.cfg_dir.join("content/cars").join(&unix).join("data/car.ini")).ok().or_else(|| setup.data_paths.first().and_then(|data| crate::input::ini::ControlsIni::load_car_data(&data.join("car.ini")).ok()));
         let onboard_ini = read(setup.game.join("cfg/camera_onboard.ini"));
@@ -342,6 +351,8 @@ impl GameApps {
                     self.camera_selects.push((mode, index));
                     continue;
                 }
+                // applying a filter to the picture waits for YEBIS
+                AppAction::LoadPostProcessFilter(_) => continue,
                 AppAction::SetCameraMode(_) | AppAction::PausePhysics(_) | AppAction::TakeScreenshot => {
                     self.photo_actions.push(action);
                     continue;

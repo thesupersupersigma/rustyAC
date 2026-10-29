@@ -66,6 +66,10 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "netmonitor" => gui.new_net_monitor_app(painter),
         "keyboard" => gui.new_keyboard_debug_app(painter),
         "x360" => gui.new_pad_debug_app(painter),
+        "ppfilter" => {
+            let names = |dir: &str| rustyac_gui::app_pp_filter::filter_names(&game_folder.join("port_files").join(dir));
+            gui.new_pp_filter_app(painter, &names("documents/Assetto Corsa/cfg/ppfilters"), &names("system/cfg/ppfilters"), "default")
+        }
         "photomode" => {
             let start = crate::gui_seq_apps::photo_start();
             gui.apps.photo = start;
@@ -211,6 +215,7 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             }),
             // (the port's app keeps its own copy in gui.apps.keyboard; the pictures show it)
             AppAction::SetKeyboardTuning { .. } | AppAction::SetPadTuning { .. } => {}
+            AppAction::LoadPostProcessFilter(name) => append_effects(&root.join("effects_port.txt"), vec![format!("load {name:?}")], "", &mut String::new()),
             AppAction::SetCameraMode(mode) => photo_log(format!("setMode {mode}")),
             AppAction::PausePhysics(paused) => photo_log(format!("pausePhysics {}", paused as u8)),
             AppAction::TakeScreenshot => photo_log("takeScreen".to_string()),

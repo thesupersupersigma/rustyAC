@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 43] = [
+pub const APPS: [(&str, usize, usize, usize); 44] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -65,6 +65,7 @@ pub const APPS: [(&str, usize, usize, usize); 43] = [
     ("x360", 0x1d8, 0x1_4032_76d0, 0x1_4050_e090),
     ("cameraeditor", 0x2d0, 0x1_402f_1bc0, 0x1_4050_5638),
     ("photomode", 0x250, 0x1_4032_1bc0, 0x1_4050_cff0),
+    ("ppfilter", 0x1c8, 0x1_4032_9360, 0x1_4050_e610),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -141,6 +142,13 @@ unsafe fn camera_editor_link(c: &CameraGame) -> rustyac_gui::app_camera_editor::
         auto_exposure: rd(c.yebis as *mut u8, 0x7b4),
         use_auto_exposure_limits: rd::<u8>(c.yebis as *mut u8, 0x7a1) != 0,
     }
+}
+
+/// `PostProcessEffectsUpdater::loadConfigurationFile` 0x1400abb70 for the filter picker: the
+/// name written down (the wstring by value is left to leak).
+unsafe extern "C" fn ppf_load(_this: *mut u8, name: *mut u8) {
+    let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), vec![format!("load {:?}", crate::gui_ac::read_wstring(name))], "", &mut String::new());
 }
 
 /// The Photo mode's staged blocks: the scene camera, the graphics manager, the sun animator
@@ -896,6 +904,20 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 }
                 wings_car(a, first_car);
             }
+            if text == "ppfilter" {
+                // PostProcessFilterSelector(Sim*): the game objects (Sim+0x40) one
+                // PostProcessEffectsUpdater (its table for the dynamic cast, defaultFilter +0x58);
+                // loadConfigurationFile written down
+                let ppeu = a.alloc(0x88);
+                wr(ppeu, 0, a.va(0x1_404b_8730) as usize);
+                crate::ac::write_wstring(&game.acs, ppeu.add(0x58), "default");
+                let list = a.alloc(0x10);
+                wr(list, 0, ppeu);
+                wr(sim, 0x40, list);
+                wr(sim, 0x48, list.add(8));
+                wr(sim, 0x50, list.add(8));
+                crate::gui_ac_hud::jump(game, 0x1_400a_bb70, ppf_load as *const () as usize);
+            }
             if text == "photomode" {
                 // PhotoMode(Sim*): Sim::getSceneCamera (+0x238) a CameraForward (its vftable for
                 // the dynamic cast: matrix +0xc, fov +8, dofFactor +0x1b0, dofFocus +0x1b4);
@@ -1118,6 +1140,12 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if let Some(g) = GAME.lock().unwrap().as_mut() {
                 g.made.push((text.to_string(), form as usize));
             }
+        }
+        "app.shutdown" if text == "ppfilter" => {
+            // ~PostProcessFilterSelector 0x1403299d0: video.ini's FILTER (the game's end)
+            let destroy: extern "C" fn(*mut u8) = std::mem::transmute(a.va(0x1_4032_99d0));
+            crate::gui_ac::DESTROYING.store(true, std::sync::atomic::Ordering::SeqCst);
+            destroy(app("ppfilter")?);
         }
         "app.shutdown" if text == "chat" => {
             // ~FormChat 0x14030a2c0: its export (the game's end)
