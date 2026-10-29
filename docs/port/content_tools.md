@@ -27,8 +27,8 @@ State after the last commit (update after every commit):
   free camera, physics pause, screenshots).
 - **Step 5 done:** the "Post Process Filter" picker (`app_ppfilter`), the "HDR Settings"
   window (`app_hdr`) and the "Driver Model Utilities" (`app_driver`), all proven.
-- **Step 7 (only "if time"):** not started, moved whole to Task 44b (list at the end).
-- **Released as v0.44.0.** Next: Task 44b, from "Not done (Task 44b)" at the end of this file.
+- **Step 7 (only "if time"):** not started, moved whole to Task 44c (list at the end).
+- **Released as v0.44.0.** Next: Task 44c, from "Not done (Task 44c)" at the end of this file.
 
 ## In plain words
 
@@ -88,7 +88,7 @@ game reads it.
 - In the game the kept lap becomes the track's live AI line at once (`bestLapSpline` is the line
   `Track` hands the AI and the cars' position on the track); in rustyAC the loaded line stays live
   until the next session. With `--ai-record` the whole-car compare therefore differs from the first
-  finished lap on (`car0.npos`); the proof judges the files only. Task 44b.
+  finished lap on (`car0.npos`); the proof judges the files only. Task 44c.
 - The AI app's window (FormAI: the buttons, the hints editor, the drawn splines) is not ported;
   rustyAC records from the start of the session.
 
@@ -129,7 +129,7 @@ in a fresh root); the staging now makes it.
 
 - The zones a server sends (0x53, `ACClient::onDRSZoneReceived` 0x14004b520 then
   `DRSManager::setZones`): decoded, not acted on; rustyAC keeps the track's own zones online.
-  Task 44b.
+  Task 44c.
 
 ## Step 3: the camera editors
 
@@ -192,7 +192,7 @@ in for the camera manager (its calls are written down, not made) and YEBIS (the 
 comes from the script). Checked in rustyac.exe too: `rustyac.exe --track magione --car bmw_m3_e30
 --no-race-ini --post 1 --screenshot cam.png --gui-do app:cameraeditor` shows the window.
 
-Not done (Task 44b):
+Not done (Task 44c):
 - rustyac.exe does not read its own saved cameras.ini / dash_cam.ini back on the next start (the
   game reads its edited files; rustyAC reads the game's).
 - `[AC_APPS] AUTOEXP` in the game's assetto_corsa.ini starts AUTO EXP and the game quits
@@ -235,7 +235,7 @@ hidden. `GetAsyncKeyState` answers the script's buttons; `setMode`, `pausePhysic
 
 Checked in rustyac.exe: `--screenshot photo.png --gui-do app:photomode` shows the window.
 
-### Not done (Task 44b)
+### Not done (Task 44c)
 
 - **END** (the game's RayPicker: DOF focus = the distance to what is in the middle of the
   screen, written in red) is not ported: rustyAC has no ray picker on the drawn scene.
@@ -445,7 +445,7 @@ ai_page were run again after the fix.
 | launcher | 1 | 1 | 0 |
 | dumps | 6 | 6 | 0 |
 
-## Not done (Task 44b)
+## Not done (Task 44c)
 
 Collected from the steps above, plus step 7:
 
