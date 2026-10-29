@@ -30,3 +30,6 @@ rc_cut magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 100000 --telemetry
 rc_weekend magione bmw_m3_e30,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 150000 --telemetry
 ai_solo spa - 84000 --telemetry
 rc_timed magione ks_ferrari_f2004,bmw_m3_e30,bmw_m3_e30,bmw_m3_e30 112000 --telemetry
+# Task 44: the AI line recorder (two laps, then 20 s of pit lane; the saved .ai.candidate files)
+ai_solo spa - 100000 --ai-record
+ai_solo magione bmw_m3_e30 75000 --ai-record

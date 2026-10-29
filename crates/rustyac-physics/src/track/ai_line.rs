@@ -11,7 +11,11 @@
 //! (`calculateNormals`). A line older than version 7 is rebuilt on top of that as
 //! `AISplineRecorder::save` does before it writes it back as version 7: track limits from
 //! ray casts, the closing gap cleaned and smoothed, a new lookup grid. The game writes that
-//! file; here the rebuilt line only ever exists in memory.
+//! file over the track's own; here the rebuilt line only exists in memory.
+//!
+//! The recording half (`startRecording`, `step`, the lap and pit-lane events, `save`) records
+//! a driven lap into a line and gives the bytes the game writes to `ai/fast_lane.ai.candidate`
+//! and `ai/pit_lane.ai.candidate`; the caller writes them outside the AC folder.
 
 // (the comparisons and the order of the operations are the machine code's)
 #![allow(clippy::neg_cmp_op_on_partial_ord, clippy::assign_op_pattern, clippy::manual_range_contains, clippy::needless_range_loop, clippy::field_reassign_with_default, clippy::if_same_then_else, clippy::too_many_arguments)]
@@ -788,6 +792,18 @@ pub struct AiSplineRecorder {
     pub hints_max_speed: Vec<AiSplineHint>,
     /// The fast lane's file was older than version 7 and was rebuilt as the game rebuilds it
     pub rebuilt_from_version: Option<i32>,
+    /// `isActive`
+    pub is_active: bool,
+    /// `isSaveNeeded`: a recording was started; the lines are saved when the track goes
+    pub is_save_needed: bool,
+    /// `recordingStep`: metres between recorded points
+    pub recording_step: f32,
+    /// `isRecordingPitlane`
+    pub is_recording_pitlane: bool,
+    /// `car`: the physics GUID of the recorded car (the first car), once recording started
+    pub car: Option<u32>,
+    /// `splineCurrent`: the lap being recorded
+    pub spline_current: AiSpline,
 }
 
 fn hint_at(hints: &[AiSplineHint], pos: f32) -> Option<f32> {
@@ -830,7 +846,7 @@ impl AiSplineRecorder {
     /// version 7 rebuilt in memory, the pit lane's line) and `loadHints` @ 0x140295670.
     /// `ai` is the layout's `ai` folder, `data` its `data` folder.
     pub fn load(track: &Track, ai: &Path, data: &Path) -> Result<AiSplineRecorder, String> {
-        let mut recorder = AiSplineRecorder { pit_lane_spline_attach_point: -1.0, ..AiSplineRecorder::default() };
+        let mut recorder = AiSplineRecorder { pit_lane_spline_attach_point: -1.0, is_active: true, recording_step: 1.5, ..AiSplineRecorder::default() };
         let fast_lane = ai.join("fast_lane.ai");
         if fast_lane.vfs_is_file() {
             let bytes = vfs::read(&fast_lane).map_err(|e| format!("{}: {e}", fast_lane.display()))?;
@@ -840,18 +856,7 @@ impl AiSplineRecorder {
                 // AISplineRecorder::save(true) @ 0x140296ae0, without the writing
                 recorder.rebuilt_from_version = Some(line.version);
                 if line.point_count() != 0 {
-                    line.calculate_radius(5);
-                    line.lap_time = 0;
-                    line.build_sides(track);
-                    line.clean_spline();
-                    if line.spline.is_closed() {
-                        line.close_smooth();
-                    }
-                    line.spline.compute_spline_length();
-                    line.calculate_normals(track)?;
-                    line.spline.build_grid();
-                    line.grid_missing = false;
-                    line.grid_built = true;
+                    line.rebuild_for_save(track)?;
                 }
             }
             line.calculate_normals(track)?;
@@ -866,7 +871,9 @@ impl AiSplineRecorder {
         let pit_lane = ai.join("pit_lane.ai");
         if pit_lane.vfs_is_file() {
             let bytes = vfs::read(&pit_lane).map_err(|e| format!("{}: {e}", pit_lane.display()))?;
-            let mut line = AiSpline::parse_fast(&bytes).map_err(|e| format!("{}: {e}", pit_lane.display()))?;
+            // AISpline::load: with its lookup grid, which a recording saves again (an old
+            // version with points has none: AISpline::loadVersion6)
+            let mut line = AiSpline::parse(&bytes).or_else(|_| AiSpline::parse_fast(&bytes)).map_err(|e| format!("{}: {e}", pit_lane.display()))?;
             line.finish_load();
             recorder.pit_lane = line;
         }
@@ -925,5 +932,107 @@ impl AiSplineRecorder {
             }
         }
         Ok(recorder)
+    }
+
+    /// `AISplineRecorder::startRecording` @ 0x140296f00
+    pub fn start_recording(&mut self) {
+        self.is_save_needed = true;
+    }
+
+    /// `AISplineRecorder::step` @ 0x140296f60, given the first car: its GUID, body position,
+    /// speed (m/s), gas and brake. A point every `recording_step` metres on the ground plane.
+    pub fn step(&mut self, car_guid: u32, pos: P3, speed_ms: f32, gas: f32, brake: f32) {
+        if !self.is_active {
+            return;
+        }
+        if self.is_save_needed && self.car.is_none() {
+            self.car = Some(car_guid);
+        }
+        if self.car.is_none() {
+            return;
+        }
+        if let Some(last) = self.spline_current.spline.points.last() {
+            let (dx, dz) = (pos[0] - last.point[0], pos[2] - last.point[2]);
+            let q = dx * dx + dz * dz;
+            let d = if q == 0.0 { 0.0 } else { sqrtf(q) };
+            if !(d >= self.recording_step) {
+                return;
+            }
+        }
+        self.spline_current.add_point(pos, AiSplinePayload { speed_ms, gas, brake, ..AiSplinePayload::default() });
+    }
+
+    /// `AISplineRecorder::onLapCompleted` @ 0x140296760: the lap just driven becomes the fast
+    /// lane (the last lap, not the quickest) and recording starts again.
+    pub fn on_lap_completed(&mut self, car_guid: u32, lap_time: u32) {
+        if !self.is_active || self.car != Some(car_guid) || self.is_recording_pitlane {
+            return;
+        }
+        if self.is_save_needed {
+            if self.spline_current.spline.is_closed() {
+                self.spline_current.close_smooth();
+            }
+            self.best_lap = self.spline_current.clone();
+            self.best_lap.lap_time = lap_time;
+        }
+        self.spline_current.clear();
+    }
+
+    /// `AISplineRecorder::beginPitLaneSpline` @ 0x140295020
+    pub fn begin_pit_lane_spline(&mut self) {
+        self.spline_current.clear();
+        self.is_recording_pitlane = true;
+        self.is_save_needed = true;
+    }
+
+    /// `AISplineRecorder::endPitLaneSpline` @ 0x140295110
+    pub fn end_pit_lane_spline(&mut self) {
+        self.pit_lane = self.spline_current.clone();
+        self.pit_lane.lap_time = 0;
+        self.spline_current.clear();
+        self.is_recording_pitlane = false;
+    }
+
+    /// `AISplineRecorder::save(false)` @ 0x140296ae0 as the destructor @ 0x140293d20 calls it
+    /// when a recording was started: the side files first (when `data` has both), then the
+    /// file names (`*.ai.candidate`) and bytes of the pit lane and the rebuilt fast lane.
+    pub fn save(&mut self, track: &Track, data: &Path) -> Result<Vec<(&'static str, Vec<u8>)>, String> {
+        let mut files = Vec::new();
+        if !self.is_save_needed {
+            return Ok(files);
+        }
+        let (left, right) = (data.join("side_l.csv"), data.join("side_r.csv"));
+        if left.vfs_is_file() && right.vfs_is_file() {
+            recompute_sides_from_csv(&mut self.best_lap, &left, &right)?;
+        }
+        if self.pit_lane.point_count() != 0 {
+            files.push(("pit_lane.ai.candidate", self.pit_lane.to_bytes()));
+        }
+        if self.best_lap.point_count() != 0 {
+            self.best_lap.rebuild_for_save(track)?;
+            files.push(("fast_lane.ai.candidate", self.best_lap.to_bytes()));
+        }
+        Ok(files)
+    }
+}
+
+impl AiSpline {
+    /// What `AISplineRecorder::save` @ 0x140296ae0 does to the fast lane before it writes it:
+    /// radius again, track limits from rays, the closing gap cleaned and smoothed, normals,
+    /// a new lookup grid.
+    fn rebuild_for_save(&mut self, track: &Track) -> Result<(), String> {
+        self.calculate_radius(5);
+        self.lap_time = 0;
+        self.build_sides(track);
+        self.clean_spline();
+        if self.spline.is_closed() {
+            self.close_smooth();
+        }
+        self.spline.compute_spline_length();
+        self.calculate_normals(track)?;
+        self.spline.build_grid();
+        self.grid_missing = false;
+        self.grid_built = true;
+        Ok(())
     }
 }

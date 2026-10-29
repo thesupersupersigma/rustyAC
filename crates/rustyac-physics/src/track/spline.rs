@@ -904,6 +904,25 @@ impl InterpolatingSpline {
         }
     }
 
+    /// `InterpolatingSpline::addPoint` with `Spline::addPoint`: the point goes on the end,
+    /// its length the straight distance from the last one added to the total.
+    pub fn add_point(&mut self, point: P3, tag: i32) {
+        if let Some(last) = self.points.last() {
+            let (dx, dy, dz) = (point[0] - last.point[0], point[1] - last.point[1], point[2] - last.point[2]);
+            let q = (dy * dy + dx * dx) + dz * dz;
+            self.m_length += if q == 0.0 { 0.0 } else { sqrtf(q) };
+        } else {
+            self.m_length = 0.0;
+        }
+        self.points.push(SplinePoint { point, point_length: self.m_length, tag });
+        self.closed = self.compute_is_closed();
+    }
+
+    /// `InterpolatingSpline::clear`: no points, no length, no grid.
+    pub fn clear(&mut self) {
+        *self = InterpolatingSpline { linear: self.linear, ..InterpolatingSpline::default() };
+    }
+
     /// How many cells [`InterpolatingSpline::build_grid`] would make (`None`: no points).
     fn grid_cell_count(&self) -> Option<u64> {
         let (mut min, mut max) = ([f32::MAX; 2], [f32::MIN_POSITIVE; 2]);
@@ -1086,6 +1105,75 @@ impl AiSpline {
         }
         ai.spline.compute_spline_length();
         Ok(ai)
+    }
+
+    /// `AISpline::addPoint`: the point, tagged with its payload's index, and its payload.
+    pub fn add_point(&mut self, point: P3, payload: AiSplinePayload) {
+        self.spline.add_point(point, self.spline.points.len() as i32);
+        self.payloads.push(payload);
+    }
+
+    /// `AISpline::clear`
+    pub fn clear(&mut self) {
+        self.spline.clear();
+        self.payloads.clear();
+    }
+
+    /// The bytes `AISpline::save` @ 0x1402a98d0 writes (version 7) with
+    /// `InterpolatingSpline::saveGrid` @ 0x1401f3750.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut u = |v: u32| out.extend_from_slice(&v.to_le_bytes());
+        u(7);
+        u(self.spline.points.len() as u32);
+        u(self.lap_time);
+        u(0);
+        let f = |v: f32| v.to_bits();
+        for p in &self.spline.points {
+            for c in p.point {
+                u(f(c));
+            }
+            u(f(p.point_length));
+            u(p.tag as u32);
+        }
+        u(self.payloads.len() as u32);
+        for p in &self.payloads {
+            for v in [p.speed_ms, p.gas, p.brake, 0.0, p.radius, p.sides[0], p.sides[1], p.camber, p.direction] {
+                u(f(v));
+            }
+            for c in p.normal {
+                u(f(c));
+            }
+            u(f(p.length));
+            for c in p.forward_vector {
+                u(f(c));
+            }
+            u(0);
+            u(f(p.grade));
+        }
+        let s = &self.spline;
+        match &s.grid_data {
+            None => u(0),
+            Some(g) => {
+                u(1);
+                for c in g.max_extreme.into_iter().chain(g.min_extreme) {
+                    u(f(c));
+                }
+                u(g.neighbors_considered_number);
+                u(f(g.sampling_density));
+                u(s.grid_columns.len() as u32);
+                for &(start, cells) in &s.grid_columns {
+                    u(cells);
+                    for &(at, n) in &s.grid_cells[start as usize..(start + cells) as usize] {
+                        u(n);
+                        for &i in &s.grid_indices[at as usize..(at + n) as usize] {
+                            u(i);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     pub fn load(path: &Path) -> Result<AiSpline, String> {

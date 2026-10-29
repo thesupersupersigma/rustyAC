@@ -179,6 +179,10 @@ pub struct Options {
     /// `--ghost-dir <folder>`: where ghost cars are kept (default: `GhostCar` beside
     /// rustyac.exe; never one of Assetto Corsa's folders)
     pub ghost_dir: Option<PathBuf>,
+    /// `--ai-record <folder>`: AC's AI line recorder on the player's car from the start (FormAI's
+    /// "start recording"); at the end `fast_lane.ai.candidate` / `pit_lane.ai.candidate` go into
+    /// that folder (the game writes them into the track's own `ai` folder)
+    pub ai_record: Option<PathBuf>,
     /// `--telemetry-dir <folder>`: where the comparative telemetry's best laps are kept (default:
     /// `ctelemetry` beside rustyac.exe; never one of Assetto Corsa's folders). Headless runs
     /// and replayed drives record telemetry only when this is given.
@@ -449,6 +453,7 @@ impl Default for Options {
             ghost_file: None,
             ghost_advantage: None,
             ghost_dir: None,
+            ai_record: None,
             ac_replay: None,
             new_session_at: None,
             spawn_given: false,
@@ -699,6 +704,8 @@ usage: rustyac [options]
   --ghost-file <file>   load this .ghost file (one of the game's too) instead
   --ghost-advantage <s> the ghost runs this many seconds ahead
   --ghost-dir <dir>     where ghost cars are kept (default: GhostCar beside rustyac.exe)
+  --ai-record <dir>     record the player's laps into an AI line as AC's FormAI does; the last
+                        lap is saved as <dir>/fast_lane.ai.candidate at the end
   --telemetry-dir <dir> where AC's comparative telemetry keeps your best lap's gear, speed
                         and pedals (a .tc file, written when the program ends; default:
                         ctelemetry beside rustyac.exe; a headless run records it only when
@@ -992,6 +999,7 @@ impl Options {
                 "--ghost-file" => o.ghost_file = Some(absolute(value("--ghost-file")?)),
                 "--ghost-advantage" => o.ghost_advantage = Some(value("--ghost-advantage")?.parse().map_err(|_| "--ghost-advantage <seconds>")?),
                 "--ghost-dir" => o.ghost_dir = Some(absolute(value("--ghost-dir")?)),
+                "--ai-record" => o.ai_record = Some(absolute(value("--ai-record")?)),
                 "--telemetry-dir" => o.telemetry_dir = Some(absolute(value("--telemetry-dir")?)),
                 "--no-telemetry" => o.no_telemetry = true,
                 "--replay-script" => {

@@ -19,6 +19,7 @@
 #[cfg(any(windows, all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod audio;
 pub mod ac_replay;
+pub mod ai_record;
 pub mod ghost;
 pub mod telemetry;
 pub mod autodrive;

@@ -103,6 +103,8 @@ struct Args {
     replay: bool,
     /// Task 28c: `multi --ghost`: the game's GhostCarRecorder beside the port's on the first car
     ghost: bool,
+    /// Task 44: `multi --ai-record`: the game's AISplineRecorder beside the port's on the first car
+    ai_record: bool,
     /// Task 28c: `multi --telemetry`: the game's ComparativeTelemetryRecorder beside the port's
     telemetry: bool,
     replay_frames: Option<i32>,
@@ -165,6 +167,7 @@ fn parse_args() -> Result<Args, String> {
         audio_tape: false,
         replay: false,
         ghost: false,
+        ai_record: false,
         telemetry: false,
         replay_frames: None,
         replay_level: None,
@@ -223,6 +226,7 @@ fn parse_args() -> Result<Args, String> {
             "--audio-tape" => a.audio_tape = true,
             "--replay" => a.replay = true,
             "--ghost" => a.ghost = true,
+            "--ai-record" => a.ai_record = true,
             "--telemetry" => a.telemetry = true,
             "--replay-frames" => a.replay_frames = Some(value()?.parse().map_err(|_| "--replay-frames needs a number")?),
             "--replay-level" => a.replay_level = Some(value()?.parse().map_err(|_| "--replay-level needs 0..4")?),
@@ -686,6 +690,9 @@ fn multi(args: &Args) -> Result<(), String> {
         let port_track = world.port_track();
         unsafe { game::ghost::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
     }
+    if args.ai_record {
+        unsafe { game::ai_record::install(&acs, world.engine, world.game_track, world.car_ptr(0), &world.port_track())? };
+    }
     if args.telemetry {
         let port_track = world.port_track();
         unsafe { game::telemetry::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
@@ -693,6 +700,9 @@ fn multi(args: &Args) -> Result<(), String> {
     let mut next_frame = 1usize;
     for i in 0..steps {
         world.step();
+        if args.ai_record {
+            unsafe { game::ai_record::after_step() };
+        }
         if let Some(replay) = &mut replay {
             unsafe { replay.after_step(world.time_ms(), &|index| world.physics_state(index).0)? };
         }
@@ -730,6 +740,11 @@ fn multi(args: &Args) -> Result<(), String> {
     println!("wrote {} ({} MB)", path.display(), std::fs::metadata(&path).map(|m| m.len() / 1_000_000).unwrap_or(0));
     if args.ghost {
         for line in unsafe { game::ghost::finish(&repo, scenario.name)? } {
+            println!("{line}");
+        }
+    }
+    if args.ai_record {
+        for line in unsafe { game::ai_record::finish(&repo, scenario.name, world.game_track, &world.port_track())? } {
             println!("{line}");
         }
     }

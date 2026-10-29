@@ -830,6 +830,10 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
     if let Some(rig) = telemetry {
         sinks.push(Box::new(TelemetrySink { rig: Arc::clone(rig) }));
     }
+    if let Some(folder) = &options.ai_record {
+        sinks.push(Box::new(rustyac_game::ai_record::AiRecordSink::new(folder.clone())));
+        println!("recording an AI line from the player's car; saved into {} at the end", folder.display());
+    }
     if let Some(rig) = rig {
         sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
     }

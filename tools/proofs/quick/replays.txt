@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # run_all.sh --quick: the cases of this area that run, one key a line (a regex matched against the
 # whole key; see the area script for what its keys look like).
-# one AC replay, one ghost, one telemetry, one replay file of the game's
+# one AC replay, one ghost, one telemetry, one AI line recording, one replay file of the game's
 multi mc_rear_end spa - --replay
 multi ai_solo spa - --ghost
 multi ai_solo spa - --telemetry
+multi ai_solo spa - --ai-record
 replay-file AC_181026-153245_R_rss_formula_hybrid_2020_ks_nurburgring_layout_gp_a
