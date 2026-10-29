@@ -375,6 +375,15 @@ impl CarShape {
     }
 }
 
+/// The whole matrix of a car's 3D model (`CarAvatar::bodyMatrix`): its origin is the centre of
+/// mass moved by `GRAPHICS_OFFSET`, pitched by `GRAPHICS_PITCH`.
+pub fn model_matrix(body: &Mat, shape: &CarShape) -> Mat {
+    let mut moved = *body;
+    let origin = point(body, shape.graphics_offset);
+    moved[3] = [origin[0], origin[1], origin[2], 1.0];
+    rotate_pitch(&moved, shape.graphics_pitch)
+}
+
 /// AC's camera modes, as far as a car is driven with them (`ACCameraManager::mode`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CameraMode {
@@ -596,12 +605,7 @@ impl DrivingCamera {
         let body = &rotate_pitch(&view.body, shape.graphics_pitch);
         // the whole matrix of the 3D model (`CarAvatar::bodyMatrix`): its origin is the
         // centre of mass moved by `GRAPHICS_OFFSET`
-        let model = {
-            let mut moved = view.body;
-            let origin = point(&view.body, shape.graphics_offset);
-            moved[3] = [origin[0], origin[1], origin[2], 1.0];
-            rotate_pitch(&moved, shape.graphics_pitch)
-        };
+        let model = model_matrix(&view.body, shape);
         if self.mode == CameraMode::Car && shape.car_cameras.is_empty() {
             self.mode = self.last_driving;
         }

@@ -58,6 +58,9 @@ pub enum AppAction {
     SetKeyboardTuning { index: usize, value: f32 },
     /// `X360ControllerDebug`'s buttons: one of the pad's steering parameters (`PadTuning`'s order)
     SetPadTuning { index: usize, value: f32 },
+    /// `FormCamera::selectCamera`: `ACCameraManager::setMode(mode)` then the drivable view
+    /// (mode 0, `setDrivableCarIndex`) or the car camera (mode 1, `setCameraCarIndex`) `index`
+    SelectCamera { mode: i32, index: i32 },
     /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
     DeleteFile { path: String },
 }
@@ -295,6 +298,9 @@ pub struct AppLink {
     /// the player's controls if they are the Xbox pad's (`JoypadCarControl`), for "X360
     /// Controller debug"
     pub pad: Option<crate::app_pad_debug::PadTuning>,
+    /// What the Camera editor reads and changes (None: no editor; the game makes it only with
+    /// post-processing on)
+    pub camera_editor: Option<crate::app_camera_editor::CameraEditorLink>,
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,

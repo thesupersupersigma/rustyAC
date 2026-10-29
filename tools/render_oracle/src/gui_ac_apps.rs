@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 41] = [
+pub const APPS: [(&str, usize, usize, usize); 42] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -63,6 +63,7 @@ pub const APPS: [(&str, usize, usize, usize); 41] = [
     ("netmonitor", 0x1e0, 0x1_4030_3400, 0x1_4050_7e60),
     ("keyboard", 0x1f8, 0x1_4030_dbe0, 0x1_4050_9a20),
     ("x360", 0x1d8, 0x1_4032_76d0, 0x1_4050_e090),
+    ("cameraeditor", 0x2d0, 0x1_402f_1bc0, 0x1_4050_5638),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -73,6 +74,73 @@ static KEYBOARD: Mutex<Option<usize>> = Mutex::new(None);
 static PAD: Mutex<Option<usize>> = Mutex::new(None);
 /// what `getControlsProvider` answers while Keyboard debug or X360 Controller debug is made
 static CONTROLS_CTOR: Mutex<Option<usize>> = Mutex::new(None);
+
+/// The Camera editor's staging: car 0, the Sim, YEBIS's camera, the camera manager's calls,
+/// the last line of `effects_game.txt`.
+struct CameraGame {
+    car: usize,
+    sim: usize,
+    yebis: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static CAMERA_EDITOR: Mutex<Option<CameraGame>> = Mutex::new(None);
+
+fn camera_log(line: String) {
+    if let Some(c) = CAMERA_EDITOR.lock().unwrap().as_mut() {
+        c.log.push(line);
+    }
+}
+
+/// `ACCameraManager::setMode(mode, bool, bool)` 0x1400340d0: the call, written down.
+unsafe extern "C" fn camera_set_mode(_this: *mut u8, mode: i32, _a: u8, _b: u8) {
+    camera_log(format!("setMode {mode}"));
+}
+
+/// `ACCameraManager::setDrivableCarIndex` 0x140033fd0: written down.
+unsafe extern "C" fn camera_set_drivable(_this: *mut u8, index: i32) {
+    camera_log(format!("setDrivableCarIndex {index}"));
+}
+
+/// `ACCameraManager::setCameraCarIndex` 0x140033fb0: written down.
+unsafe extern "C" fn camera_set_car(_this: *mut u8, index: i32) {
+    camera_log(format!("setCameraCarIndex {index}"));
+}
+
+/// The Camera editor's staged game, read back as the port's link.
+unsafe fn camera_editor_link(c: &CameraGame) -> rustyac_gui::app_camera_editor::CameraEditorLink {
+    use rustyac_physics::vecmath::Mat44f;
+    let (car, sim) = (c.car as *mut u8, c.sim as *mut u8);
+    let begin: *mut u8 = rd(car, 0xfc8);
+    let end: *mut u8 = rd(car, 0xfd0);
+    let cameras = (0..(end as usize - begin as usize) / 0x4c)
+        .map(|i| {
+            let at = begin.add(i * 0x4c);
+            rustyac_gui::app_camera_editor::EditorCamera { matrix: Mat44f { m: rd(at, 0) }, fov: rd(at, 0x40), exposure: rd(at, 0x44), external_sound: rd::<u8>(at, 0x48) != 0 }
+        })
+        .collect();
+    let manager: *mut u8 = rd(sim, 0x188);
+    let def: *mut u8 = rd(rd::<*mut u8>(manager, 0xc0), 0x88);
+    let node: *mut u8 = rd(car, 0x1b8);
+    rustyac_gui::app_camera_editor::CameraEditorLink {
+        unix_name: crate::gui_ac::read_wstring(car.add(0x138)),
+        on_board_exposure: rd(car, 0xfb8),
+        out_board_exposure: rd(car, 0xfbc),
+        dash_board_exposure: rd(car, 0xfc0),
+        cameras,
+        eyes: rd(car, 0x218),
+        onboard_pitch: rd(rd::<*mut u8>(rd::<*mut u8>(manager, 0x88), 0xc8), 0),
+        bumper_pos: rd(def, 0),
+        bumper_pitch: rd(def, 0xc),
+        bonnet_pos: rd(def, 0x10),
+        bonnet_pitch: rd(def, 0x1c),
+        scene_camera: Mat44f { m: rd(rd::<*mut u8>(sim, 0x238), 0xc) },
+        body: Mat44f { m: rd(node, 8) },
+        auto_exposure: rd(c.yebis as *mut u8, 0x7b4),
+        use_auto_exposure_limits: rd::<u8>(c.yebis as *mut u8, 0x7a1) != 0,
+    }
+}
 
 /// The ChaseCam Editor's camera manager block (0: none staged).
 static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -818,6 +886,68 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, graphics, gui);
             } else if text == "help" {
                 ctor(form, gui);
+            } else if text == "cameraeditor" {
+                // FormCamera(Sim*, CameraForwardYebis*): car 0's exposures (+0xfb8 / +0xfbc /
+                // +0xfc0), its cameras (+0xfc8, room for six: the constructor copies the first
+                // into the others in place), unixName (+0x138), eye point (+0x218), body node
+                // (+0x1b8, matrix at +8); Sim::cameraManager (+0x188: cameraOnBoard +0x88 ->
+                // customCameraSettings +0xc8, cameraDrivable +0xc0 -> drivableCameraPositions
+                // +0x88), the focused car (+0x220), the scene camera (+0x238, matrix at +0xc);
+                // YEBIS's camera (currentAutoExposure +0x7b4, useAutoExposureLimits +0x7a1).
+                // The camera manager's mode calls are written down, not made.
+                let l = crate::gui_seq_apps::camera_editor_start();
+                crate::ac::write_wstring(a, first_car.add(0x138), &l.unix_name);
+                wr(first_car, 0xfb8, [l.on_board_exposure, l.out_board_exposure, l.dash_board_exposure]);
+                let cams = a.alloc(6 * 0x4c);
+                for (i, c) in l.cameras.iter().enumerate() {
+                    let at = cams.add(i * 0x4c);
+                    wr(at, 0, c.matrix.m);
+                    wr(at, 0x40, c.fov);
+                    wr(at, 0x44, c.exposure);
+                    wr(at, 0x48, c.external_sound as u8);
+                }
+                wr(first_car, 0xfc8, cams);
+                wr(first_car, 0xfd0, cams.add(l.cameras.len() * 0x4c));
+                wr(first_car, 0xfd8, cams.add(6 * 0x4c));
+                wr(first_car, 0x218, l.eyes);
+                wr(rd::<*mut u8>(first_car, 0x1b8), 8, l.body.m);
+                let cars = GAME.lock().unwrap().as_ref().map(|g| g.cars.len()).unwrap_or(1).max(1);
+                let manager = a.alloc(0x200);
+                let cob = a.alloc(0x200);
+                let settings = a.alloc(cars * 8);
+                wr(settings, 0, l.onboard_pitch);
+                wr(cob, 0xc8, settings);
+                wr(cob, 0xd0, settings.add(cars * 8));
+                wr(cob, 0xd8, settings.add(cars * 8));
+                wr(manager, 0x88, cob);
+                let drivable = a.alloc(0x200);
+                let defs = a.alloc(cars * 0x38);
+                wr(defs, 0, l.bumper_pos);
+                wr(defs, 0xc, l.bumper_pitch);
+                wr(defs, 0x10, l.bonnet_pos);
+                wr(defs, 0x1c, l.bonnet_pitch);
+                wr(drivable, 0x88, defs);
+                wr(drivable, 0x90, defs.add(cars * 0x38));
+                wr(drivable, 0x98, defs.add(cars * 0x38));
+                wr(manager, 0xc0, drivable);
+                wr(sim, 0x188, manager);
+                wr(sim, 0x220, 0i32);
+                let scene = a.alloc(0x100);
+                wr(scene, 0xc, l.scene_camera.m);
+                wr(sim, 0x238, scene);
+                let yebis = a.alloc(0x800);
+                wr(yebis, 0x7a1, 1u8);
+                wr(yebis, 0x7b4, crate::gui_seq_apps::script(|s| s.auto_exposure));
+                for (va, to) in [
+                    (0x1_4003_40d0, camera_set_mode as *const () as usize),
+                    (0x1_4003_3fd0, camera_set_drivable as *const () as usize),
+                    (0x1_4003_3fb0, camera_set_car as *const () as usize),
+                ] {
+                    crate::gui_ac_hud::jump(game, va, to);
+                }
+                *CAMERA_EDITOR.lock().unwrap() = Some(CameraGame { car: first_car as usize, sim: sim as usize, yebis: yebis as usize, log: Vec::new(), last: String::new() });
+                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_402f_1bc0));
+                ctor(form, sim, yebis);
             } else if text == "tyretester" {
                 // TyreTesterForm(CarAvatar*, GUI*): its testers read content/cars/<unixName>/data/
                 // from the working folder (the oracle's root, where the staging put tyres.ini)
@@ -1199,6 +1329,12 @@ pub unsafe fn update() {
         let line = crate::gui_port_apps::eyes_line(eyes, rd(e.cob as *mut u8, 0x90), rd(rd::<*mut u8>(e.cob as *mut u8, 0xc8), 0));
         let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut e.log), &line, &mut e.last);
+    }
+    if let Some(c) = CAMERA_EDITOR.lock().unwrap().as_mut() {
+        wr(c.yebis as *mut u8, 0x7b4, crate::gui_seq_apps::script(|s| s.auto_exposure));
+        let line = crate::gui_port_apps::camera_line(&camera_editor_link(c));
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut c.log), &line, &mut c.last);
     }
     if let Some((car, last)) = BALLAST.lock().unwrap().as_mut() {
         let line = format!("ballast {:08x}", rd::<f32>(*car as *mut u8, 0x3e30).to_bits());

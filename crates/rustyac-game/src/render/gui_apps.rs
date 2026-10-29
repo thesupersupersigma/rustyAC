@@ -54,6 +54,9 @@ pub struct GameApps {
     pub keyboard_edits: Vec<(usize, f32)>,
     /// "X360 Controller debug"'s edits for the pad's class (index, value)
     pub pad_edits: Vec<(usize, f32)>,
+    /// the Camera editor's camera choices (`ACCameraManager::setMode`: 0 a driving view, 1 a car
+    /// camera; the index)
+    pub camera_selects: Vec<(i32, i32)>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
     ff_upgrades: Option<[f32; 4]>,
@@ -250,6 +253,16 @@ impl GameApps {
         // GPUProfilerApp (a developers' app, after ACDCarEngineer)
         let id = gui.new_gpu_profiler_app(painter);
         add(gui, painter, "gpuprofiler", id);
+        // FormCamera: only with YEBIS's camera (post-processing on); [AC_APPS] AUTOEXP of the
+        // game's system\cfg\assetto_corsa.ini starts its auto exposure
+        if gui.sim.replay.post_processing == Some(true) && gui.apps.camera_editor.is_some() {
+            let auto_exp = rustyac_content::install::ac_root()
+                .and_then(|root| read(root.join("system/cfg/assetto_corsa.ini")))
+                .filter(|ini| ini.has_key("AC_APPS", "AUTOEXP"))
+                .map_or(0.0, |ini| ini.get_float("AC_APPS", "AUTOEXP").unwrap_or(0.0));
+            let id = gui.new_camera_editor_app(painter, auto_exp);
+            add(gui, painter, "cameraeditor", id);
+        }
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
         let id = gui.new_track_description_app(painter, sections);
         add(gui, painter, "trackdescription", id);
@@ -318,6 +331,10 @@ impl GameApps {
                 }
                 AppAction::SetPadTuning { index, value } => {
                     self.pad_edits.push((index, value));
+                    continue;
+                }
+                AppAction::SelectCamera { mode, index } => {
+                    self.camera_selects.push((mode, index));
                     continue;
                 }
                 AppAction::SetUserFfGain(value) => {
@@ -496,6 +513,7 @@ impl GameApps {
             auto_eyes: None,
             // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
             chase_cam: gui.apps.chase_cam,
+            camera_editor: gui.apps.camera_editor.take(),
             chase_cam_active: gui.apps.chase_cam_active,
             keyboard: gui.apps.keyboard,
             pad: gui.apps.pad,
@@ -603,4 +621,46 @@ pub struct AppSound {
 /// A settings file's bytes: rustyAC's own copy, else Documents'.
 fn own_or_documents_text(setup: &GuiSetup, name: &str) -> Option<Vec<u8>> {
     rustyac_content::vfs::read(&setup.cfg_dir.join(name)).ok().or_else(|| setup.documents_cfg.as_ref().and_then(|folder| rustyac_content::vfs::read(&folder.join(name)).ok()))
+}
+
+/// The Camera editor's start: car 0's exposures (car.ini `[GRAPHICS] ONBOARD_EXPOSURE` /
+/// `OUTBOARD_EXPOSURE`, 0 meaning 40, as `CarAvatar::init3D` reads them; dash_cam.ini
+/// `[DASH_CAM] EXP`), its cameras (cameras.ini, with their exposures and sound) and views.
+pub fn camera_editor_link(unix: &str, data: &Path, shape: &crate::render::scene::CarShape) -> rustyac_gui::app_camera_editor::CameraEditorLink {
+    use crate::input::ini::ControlsIni;
+    use rustyac_gui::app_camera_editor::{CameraEditorLink, EditorCamera};
+    use rustyac_physics::vecmath::Mat44f;
+    let car = ControlsIni::load_car_data(&data.join("car.ini")).ok();
+    let exposure = |key: &str| Some(car.as_ref().map_or(0.0, |ini| ini.get_float("GRAPHICS", key))).filter(|e| *e != 0.0).unwrap_or(40.0);
+    let cameras = ControlsIni::load_car_data(&data.join("cameras.ini")).ok();
+    CameraEditorLink {
+        unix_name: unix.to_string(),
+        on_board_exposure: exposure("ONBOARD_EXPOSURE"),
+        out_board_exposure: exposure("OUTBOARD_EXPOSURE"),
+        dash_board_exposure: ControlsIni::load_car_data(&data.join("dash_cam.ini")).map_or(0.0, |ini| ini.get_float("DASH_CAM", "EXP")),
+        cameras: shape
+            .car_cameras
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let section = format!("CAMERA_{i}");
+                EditorCamera {
+                    matrix: Mat44f { m: c.matrix },
+                    fov: c.fov,
+                    exposure: cameras.as_ref().map_or(0.0, |ini| ini.get_float(&section, "EXPOSURE")),
+                    external_sound: cameras.as_ref().is_some_and(|ini| ini.get_int(&section, "EXTERNAL_SOUND") != 0),
+                }
+            })
+            .collect(),
+        eyes: shape.eye_model,
+        onboard_pitch: shape.eye_pitch,
+        bumper_pos: shape.bumper_pos,
+        bumper_pitch: shape.bumper_pitch,
+        bonnet_pos: shape.bonnet_pos,
+        bonnet_pitch: shape.bonnet_pitch,
+        scene_camera: Mat44f::IDENTITY,
+        body: Mat44f::IDENTITY,
+        auto_exposure: 0.0,
+        use_auto_exposure_limits: false,
+    }
 }

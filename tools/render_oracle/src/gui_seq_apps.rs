@@ -244,6 +244,8 @@ pub struct AppScript {
     pub keyboard: Option<[f32; 11]>,
     /// X360 Controller debug's: the pad's parameters (`PadTuning`), None: no pad class
     pub pad: Option<[f32; 8]>,
+    /// the Camera editor's: YEBIS's measured exposure (`currentAutoExposure`)
+    pub auto_exposure: f32,
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -433,6 +435,7 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
             let v: Vec<f32> = text.split(',').filter_map(|p| p.parse().ok()).collect();
             s.net_ev = [v[0], v[1], v[2]];
         }),
+        "app.autoexp" => script(|s| s.auto_exposure = number),
         "app.chase" => script(|s| {
             s.chase_active = on;
             if s.chase == (0.0, 0.0, 0.0) {
@@ -695,6 +698,7 @@ pub fn link() -> AppLink {
             net_error_vector: s.net_ev,
             keyboard: s.keyboard,
             pad: s.pad,
+            camera_editor: None,
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -824,6 +828,21 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
             ("cfg/camera_manager.ini", docs.join("camera_manager.ini"), port.join("camera_manager.ini")),
             ("the sound's settings (master level calls, every car's mix, the views' sounds)", args.root.join("effects_game.txt"), args.root.join("effects_port.txt")),
         ] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT\n  game: {:?}\n  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
+    if name.starts_with("app_camera") {
+        let mut same = true;
+        for rel in ["content/cars/ks_ferrari_f2004/data/car.ini", "content/cars/ks_ferrari_f2004/data/dash_cam.ini", "content/cars/ks_ferrari_f2004/data/cameras.ini", "effects"] {
+            let (a, b) = if rel == "effects" { (args.root.join("effects_game.txt"), args.root.join("effects_port.txt")) } else { (args.root.join(rel), args.root.join("port_files").join(rel)) };
+            let what = if rel == "effects" { "the cameras' settings (car 0's exposures and cameras, the eye point, the views, the scene camera, the camera manager's calls)" } else { rel };
             match (std::fs::read(&a), std::fs::read(&b)) {
                 (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
                 (a, b) => {
@@ -1053,8 +1072,9 @@ PRESET=AI Debug
     }
     for root in [args.root.clone(), args.root.join("port_files")] {
         let _ = std::fs::remove_file(root.join("content/cars/ks_ferrari_f2004/data/dash_cam.ini"));
+        let _ = std::fs::remove_file(root.join("content/cars/ks_ferrari_f2004/data/cameras.ini"));
     }
-    if name.starts_with("app_ffb") || name.starts_with("app_eyes") {
+    if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") {
         for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
             std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
             std::fs::copy("cardata/ks_ferrari_f2004/car.ini", &to).map_err(|e| format!("car.ini: {e}"))?;
@@ -1633,6 +1653,79 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 250, 300, 25);
             o.push(Op::Save);
         }
+        "app_camera" => {
+            // the form at VOLUMES_AT: F1 buttons 50 x 30 at (5 + 55 i, 35) (F1-2, F1-3 hidden), F6
+            // at y 70; the turn buttons 50 x 20 at y 115, the moves at y 150; EXP - / + at
+            // (5 / 115, 185), sensitivity - / + 20 x 20 at (170 / 310, 185); FOV - / + and
+            // External / Internal at y 220; SET, SAVE CAMERAS, AUTO EXP 30 high at y 245
+            let (x, y) = VOLUMES_AT;
+            let hold = |o: &mut Vec<Op>, cx: i32, cy: i32, frames: usize| {
+                o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy)]);
+                o.extend(std::iter::repeat_n(Op::Frame(DT), frames));
+                o.extend([Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            };
+            let f1 = |i: i32| (30 + 55 * i, 50);
+            let f6 = |i: i32| (30 + 55 * i, 85);
+            race(&mut o, 6);
+            o.push(hud("app.autoexp", 0.42, ""));
+            o.push(hud("app.new", 0.0, "cameraeditor"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "cameraeditor"));
+            play(&mut o, 0, 50, 25);
+            // the cockpit (F1-1): pitch up held, forward, up, left, exposure up twice, a finer
+            // step, forward again
+            let (cx, cy) = f1(0);
+            hold(&mut o, cx, cy, 1);
+            hold(&mut o, 30, 125, 8);
+            for (cx, cy, n) in [(250, 160, 3), (30, 160, 2), (140, 160, 1), (140, 195, 2), (180, 195, 1), (250, 160, 4)] {
+                for _ in 0..n {
+                    hold(&mut o, cx, cy, 1);
+                }
+            }
+            // bonnet (F1-4): pitch down, up, right; bumper (F1-5): back; dash (F1-6): exposure down
+            for (cam, moves) in [(3, vec![(85, 125, 2), (30, 160, 1), (195, 160, 2)]), (4, vec![(305, 160, 3), (30, 125, 1)]), (5, vec![(30, 195, 2)])] {
+                let (cx, cy) = f1(cam);
+                hold(&mut o, cx, cy, 1);
+                for (cx, cy, n) in moves {
+                    for _ in 0..n {
+                        hold(&mut o, cx, cy, 1);
+                    }
+                }
+            }
+            play(&mut o, 50, 100, 25);
+            // SAVE CAMERAS on the dash (dash_cam.ini), then on the cockpit (car.ini)
+            hold(&mut o, 140, 260, 1);
+            let (cx, cy) = f1(0);
+            hold(&mut o, cx, cy, 1);
+            hold(&mut o, 140, 260, 1);
+            // a car camera (F6-2): yaw left, roll right, forward, field of view up, exposure up,
+            // Internal, External, SET; F6-1: field of view down; F6-5 (a copy); save
+            let (cx, cy) = f6(1);
+            hold(&mut o, cx, cy, 1);
+            hold(&mut o, 180, 195, 1);
+            for (cx, cy, n) in [(250, 125, 3), (195, 125, 1), (250, 160, 2), (140, 230, 2), (140, 195, 1), (290, 230, 1), (205, 230, 1), (30, 260, 1)] {
+                for _ in 0..n {
+                    hold(&mut o, cx, cy, 1);
+                }
+            }
+            hold(&mut o, 30, 160, 6);
+            for (cx, cy) in [f6(0), (30, 230), f6(4), (85, 125), (140, 260)] {
+                hold(&mut o, cx, cy, 1);
+            }
+            hold(&mut o, 320, 195, 1);
+            hold(&mut o, 320, 195, 1);
+            play(&mut o, 100, 150, 25);
+            // AUTO EXP: YEBIS's exposure taken after 3 s, then the cameras' exposure nudged
+            // every 3 s against what YEBIS measures
+            hold(&mut o, 285, 260, 1);
+            for (auto, frames) in [(0.42, 220), (0.40, 200), (0.48, 200), (0.43, 400)] {
+                o.push(hud("app.autoexp", auto, ""));
+                o.extend(std::iter::repeat_n(Op::Frame(DT), frames));
+                o.push(Op::Save);
+            }
+            o.extend([Op::MouseMove(600, 400), Op::Frame(DT)]);
+            o.extend([hud("app.visible", 0.0, "cameraeditor"), Op::Frame(DT), hud("app.visible", 1.0, "cameraeditor"), Op::Frame(DT), Op::Frame(DT), Op::Save]);
+        }
         "app_netmonitor" => {
             // online: the speeds of cars 0 and 1, then error vectors and pings of every size
             race(&mut o, 6);
@@ -1768,4 +1861,33 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
 fn floats<const N: usize>(text: &str) -> [f32; N] {
     let v: Vec<f32> = text.split(',').map(|p| p.trim().parse().expect("a number")).collect();
     v.try_into().expect("the count")
+}
+
+/// The Camera editor's start, both sides: the F2004 (its eye point), two car cameras, the
+/// views, a scene camera and the car's body somewhere on the track.
+pub fn camera_editor_start() -> rustyac_gui::app_camera_editor::CameraEditorLink {
+    use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
+    let placed = |angle: f32, pos: [f32; 3]| {
+        let mut m = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), angle), &Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), angle * 0.25));
+        m.m[3] = [pos[0], pos[1], pos[2], 1.0];
+        m
+    };
+    let camera = |angle: f32, pos: [f32; 3], fov: f32, exposure: f32, external_sound: bool| rustyac_gui::app_camera_editor::EditorCamera { matrix: placed(angle, pos), fov, exposure, external_sound };
+    rustyac_gui::app_camera_editor::CameraEditorLink {
+        unix_name: "ks_ferrari_f2004".into(),
+        on_board_exposure: 38.6,
+        out_board_exposure: 41.2,
+        dash_board_exposure: 0.0,
+        cameras: vec![camera(0.0, [0.5, 1.0, -2.0], 56.0, 40.0, false), camera(0.3, [-0.4, 0.9, 1.5], 48.5, 37.3, true)],
+        eyes: [0.000_573, 0.682_822, -0.066_301_9],
+        onboard_pitch: -0.091_891,
+        bumper_pos: [0.0, 0.45, 2.1],
+        bumper_pitch: -0.02,
+        bonnet_pos: [0.0, 0.95, 0.2],
+        bonnet_pitch: 0.01,
+        scene_camera: placed(0.7, [10.0, 2.0, -30.0]),
+        body: placed(0.2, [12.0, 0.5, -28.0]),
+        auto_exposure: 0.42,
+        use_auto_exposure_limits: true,
+    }
 }

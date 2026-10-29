@@ -15,8 +15,9 @@ State after the last commit (update after every commit):
   before (car oracle `spa_drs_timing`); the HUD's DRS lamp, the Electronics app's DRS light and the
   cockpit's DRS instruments too. New: the developers' "DRS Zones" window (`FormDRSZones`), proven
   in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
-- **Step 3, camera editors, in progress:** the developers' "ChaseCam Editor" (`ChaseCamEditor`)
-  done and proven in the GUI oracle (`app_chasecam`). The camera editor (`FormCamera`) next.
+- **Step 3, camera editors, done and proven:** the developers' "ChaseCam Editor"
+  (`ChaseCamEditor`, `app_chasecam`) and the "Camera editor" (`FormCamera`, `app_camera`: pictures,
+  state, every frame's camera settings and the three saved files).
 - **Step 6, done and proven:** the developers' "Net monitor" (`NetMonitorForm`,
   `app_netmonitor`), "Keyboard debug" (`KeyboardControlsDebug`, `app_keyboard`,
   `app_keyboard_none`) and "X360 Controller debug" (`X360ControllerDebug`, `app_x360`,
@@ -145,6 +146,53 @@ Proof: `render_oracle gui --gui app_chasecam` (in `tools/proofs/gui_list.txt` an
 47 frames, command log, pixels, state and events IDENTICAL; the saved `chase_cam.ini` (130 bytes:
 distance 3 clicks up, height 2 down, pitch 4 up and 1 down, saved as CHASE_0 and CHASE_1) and the
 messages IDENTICAL; a Save click with another camera on screen does nothing on both sides.
+
+### The "Camera editor" (`FormCamera`)
+
+`crates/rustyac-gui/src/app_camera_editor.rs`. The game makes it only with YEBIS's camera, so only
+with post-processing on (video.ini `[POST_PROCESS] ENABLED=1`, or `rustyac.exe --post 1`); it is a
+developers' app. What it does:
+
+- **F1-1 ... F1-6** pick the cockpit and the driving views (F1-2 and F1-3, the chase cameras, are
+  hidden); **F6-1 ... F6-6** the car's own cameras. When it opens, the game copies the car's first
+  camera until the car has six, so all six F6 buttons work.
+- **Pitch / Roll / Yaw**, **Elev / Strafe / Move**: the cockpit's eye point and pitch, the bonnet's
+  and bumper's places and pitches, or a car camera. Steps of 0.1 mm, 1 mm or 1 cm
+  (**SENSITIVITY** -/+, one to three red bars); turns of 0.01, 0.1 or 1 degree for car cameras.
+- **EXP -/+**, **FOV -/+**, **External / Internal**: the exposure of the view, the field of view and
+  the car camera's sound.
+- **SET** keeps the camera where it is now as the car camera. **SAVE CAMERAS** writes car.ini
+  `[GRAPHICS]` (both exposures, and for the view on screen the eye point and pitch, the bonnet's or
+  the bumper's place and pitch) or, on F1-6, dash_cam.ini `[DASH_CAM] EXP`, then cameras.ini (`[CAMERA_n]` POSITION / FORWARD / UP / FOV / EXPOSURE / EXTERNAL_SOUND).
+- **AUTO EXP** goes to the cockpit and, every 3 seconds, nudges each view's exposure by YEBIS's
+  measured brightness until it settles, then saves.
+
+Where the files go: the game writes into `content/cars/<car>/data/` in its own folder. rustyac.exe
+writes the same three files into `<cfg>/content/cars/<car>/data/` (car.ini made from the game's
+file the first time, as the Onboard settings app does).
+
+In rustyac.exe the editor's changes move the real views at once: the car cameras, the bonnet and
+bumper views, and the eye point and pitch (through the Onboard settings' actions). The exposures
+are kept and saved but change nothing on screen (rustyAC's renderer has no YEBIS exposure yet).
+
+Proof: `render_oracle gui --gui app_camera` (in `tools/proofs/gui_list.txt` and the quick list):
+1153 frames: command log, pixels, state and events IDENTICAL; car.ini (1544 bytes), dash_cam.ini
+(20 bytes) and cameras.ini (703 bytes) IDENTICAL; every frame's camera settings (exposures, the six
+cameras' matrices, field of view and sound, the eye point, the views, the scene camera, bit for
+bit) and the camera manager's calls IDENTICAL (90372 bytes). The sequence moves and saves the
+cockpit, bonnet, bumper and dash views, edits and SETs a car camera, changes the sensitivity, and
+runs AUTO EXP over 1020 frames with YEBIS's measured exposure changed four times. The oracle stands
+in for the camera manager (its calls are written down, not made) and YEBIS (the measured exposure
+comes from the script). Checked in rustyac.exe too: `rustyac.exe --track magione --car bmw_m3_e30
+--no-race-ini --post 1 --screenshot cam.png --gui-do app:cameraeditor` shows the window.
+
+Not done (Task 44b):
+- rustyac.exe does not read its own saved cameras.ini / dash_cam.ini back on the next start (the
+  game reads its edited files; rustyAC reads the game's).
+- `[AC_APPS] AUTOEXP` in the game's assetto_corsa.ini starts AUTO EXP and the game quits
+  (`exit(2)`) once it has saved; rustyac.exe reads the value but does not quit.
+- What `ACCameraManager::setMode` does besides switching the view (the game's free camera, track
+  cameras) was not traced.
 
 ## Step 6: the net monitor and the input debug apps
 

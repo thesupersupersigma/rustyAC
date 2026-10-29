@@ -66,6 +66,12 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "netmonitor" => gui.new_net_monitor_app(painter),
         "keyboard" => gui.new_keyboard_debug_app(painter),
         "x360" => gui.new_pad_debug_app(painter),
+        "cameraeditor" => {
+            let start = crate::gui_seq_apps::camera_editor_start();
+            gui.apps.camera_editor = Some(start.clone());
+            *CAMERA.lock().unwrap() = Some((start, Vec::new(), String::new()));
+            gui.new_camera_editor_app(painter, 0.0)
+        }
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {
@@ -199,6 +205,12 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
             }),
             // (the port's app keeps its own copy in gui.apps.keyboard; the pictures show it)
             AppAction::SetKeyboardTuning { .. } | AppAction::SetPadTuning { .. } => {}
+            AppAction::SelectCamera { mode, index } => {
+                if let Some(c) = CAMERA.lock().unwrap().as_mut() {
+                    c.1.push(format!("setMode {mode}"));
+                    c.1.push(if mode == 0 { format!("setDrivableCarIndex {index}") } else { format!("setCameraCarIndex {index}") });
+                }
+            }
             AppAction::DeleteFile { path } => {
                 let _ = std::fs::remove_file(docs.join(path));
             }
@@ -303,6 +315,30 @@ pub fn eyes_line(e: [f32; 3], fov: f32, pitch: f32) -> String {
     format!("eyes {:08x} {:08x} {:08x} fov {:08x} pitch {:08x}", e[0].to_bits(), e[1].to_bits(), e[2].to_bits(), fov.to_bits(), pitch.to_bits())
 }
 
+/// The Camera editor's: what its app changed, the camera manager's calls, the last line.
+static CAMERA: std::sync::Mutex<Option<(rustyac_gui::app_camera_editor::CameraEditorLink, Vec<String>, String)>> = std::sync::Mutex::new(None);
+
+/// The Camera editor's effects as a line of `effects_*.txt` (every float's bits).
+pub fn camera_line(l: &rustyac_gui::app_camera_editor::CameraEditorLink) -> String {
+    let bits = |v: &[f32]| v.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(" ");
+    let mut line = format!(
+        "camera exp {} eyes {} pitch {} bumper {} {} bonnet {} {} scene {} limits {}",
+        bits(&[l.on_board_exposure, l.out_board_exposure, l.dash_board_exposure]),
+        bits(&l.eyes),
+        bits(&[l.onboard_pitch]),
+        bits(&l.bumper_pos),
+        bits(&[l.bumper_pitch]),
+        bits(&l.bonnet_pos),
+        bits(&[l.bonnet_pitch]),
+        bits(l.scene_camera.m.as_flattened()),
+        l.use_auto_exposure_limits as u8
+    );
+    for (i, c) in l.cameras.iter().enumerate() {
+        line += &format!(" | cam{i} {} fov {} exp {} sound {}", bits(c.matrix.m.as_flattened()), bits(&[c.fov]), bits(&[c.exposure]), c.external_sound as u8);
+    }
+    line
+}
+
 /// The ballast app's: the player's car's ballast as the port's app set it, the last line.
 static BALLAST: std::sync::Mutex<Option<(f32, String)>> = std::sync::Mutex::new(None);
 
@@ -345,7 +381,22 @@ pub fn sync(gui: &mut Gui) {
             }
         });
     }
+    let camera = gui.apps.camera_editor.take();
     gui.apps = crate::gui_seq_apps::link();
+    // the Camera editor's: what the port's app changed, kept here
+    if let Some(c) = CAMERA.lock().unwrap().as_mut() {
+        if let Some(l) = camera {
+            c.0 = l;
+        }
+        c.0.auto_exposure = crate::gui_seq_apps::script(|s| s.auto_exposure);
+        // the oracle moves car 0's body every frame (the game's node too)
+        if let Some(car) = gui.apps.cars.first() {
+            c.0.body = car.body_matrix;
+        }
+        gui.apps.camera_editor = Some(c.0.clone());
+        let line = camera_line(&c.0);
+        append_effects(&root.join("effects_port.txt"), std::mem::take(&mut c.1), &line, &mut c.2);
+    }
     if gui.apps.in_replay != was_replay {
         gui.apps_on_replay_status(gui.apps.in_replay);
     }

@@ -471,6 +471,17 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
 
 /// The picture: AC's renderer, or the debug view when it was asked for or when AC's renderer
 /// cannot start (no Assetto Corsa folder, no Direct3D 11 …).
+/// The Camera editor's start (car 0's cameras and views), before the apps are made; `--post`
+/// decides whether it is made at all (only with post-processing on, as with YEBIS's camera).
+fn start_camera_editor(gui: Option<&mut rustyac_game::render::gui::GameGui>, options: &Options, unix: &str, data: &Path, shape: &CarShape) {
+    if let Some(gui) = gui {
+        if let Some(on) = options.post {
+            gui.gui.sim.replay.post_processing = Some(on);
+        }
+        gui.gui.apps.camera_editor = Some(rustyac_game::render::gui_apps::camera_editor_link(unix, data, shape));
+    }
+}
+
 fn make_picture(options: &Options, width: u32, height: u32, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Result<Picture, String> {
     if !options.debug_view {
         match make_ac(options, width, height, info, others) {
@@ -1431,6 +1442,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         .is_some_and(|ini| ini.ready && ini.has_section("AC_APPS") && ini.get_int("CAMERA", "ALLOW_FREE_CAMERA").unwrap_or(0) > 0);
     let mut mouse_camera: Option<MouseCamera> = None;
     let mut last_frame: Option<CameraFrame> = None;
+    start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
     if let (Some(file), Some(rig)) = (&options.ac_replay, &rig) {
@@ -2108,6 +2120,27 @@ fn run_window(options: &Options) -> Result<(), String> {
                 }
                 gui.gui.apps.pad = tuning.0;
             }
+            // Camera editor: its cameras, views and choices for the player's car; the eye point and
+            // pitch come back through the Onboard actions
+            for (mode, index) in std::mem::take(&mut gui.apps.camera_selects) {
+                match (mode, index) {
+                    (0, 0) => camera.set_mode_kept(0),
+                    (0, _) => {
+                        camera.set_mode_kept(2);
+                        camera.set_drivable(index - 1);
+                    }
+                    _ => camera.set_car_camera(index.max(0) as usize),
+                }
+            }
+            if let Some(l) = gui.gui.apps.camera_editor.as_mut().filter(|_| gui.apps.app("cameraeditor").is_some()) {
+                shapes[0].car_cameras = l.cameras.iter().map(|c| rustyac_game::render::scene::CarCamera { matrix: c.matrix.m, fov: c.fov }).collect();
+                (shapes[0].bumper_pos, shapes[0].bumper_pitch, shapes[0].bonnet_pos, shapes[0].bonnet_pitch) = (l.bumper_pos, l.bumper_pitch, l.bonnet_pos, l.bonnet_pitch);
+                (l.eyes, l.onboard_pitch) = (shapes[0].eye_model, shapes[0].eye_pitch);
+                l.body = rustyac_physics::vecmath::Mat44f { m: rustyac_game::render::scene::model_matrix(&world[0].body, &shapes[0]) };
+                if let Some(frame) = &last_frame {
+                    l.scene_camera = rustyac_physics::vecmath::Mat44f { m: frame.matrix };
+                }
+            }
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
@@ -2466,6 +2499,18 @@ fn run_screenshot(options: &Options, path: &Path) -> Result<(), String> {
     }
     // rustyAC's own panels: with --debug-hud, or when AC's HUD is not there
     let text_hidden = options.no_hud || !(options.debug_hud || renderer.gui().is_none());
+    {
+        let first = sim.car_info();
+        let own;
+        let car0 = if focus == 0 {
+            &shape
+        } else {
+            own = CarShape::of(&first);
+            &own
+        };
+        let unix = Path::new(&first.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        start_camera_editor(renderer.gui(), options, &unix, &first.data_path, car0);
+    }
     if let (Some(commands), Some(gui)) = (&options.gui_do, renderer.gui()) {
         gui.script(commands)?;
     }
