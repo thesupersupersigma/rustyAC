@@ -12,10 +12,12 @@ State after the last commit (update after every commit):
   count every step and both saved files byte for byte. `rustyac.exe --ai-record <folder>` records
   the player's car.
 - **Step 2, DRS zones, done and proven:** the zones' reading and logic (`DRSManager`) were ported
-  before (Task 16, `spa_drs_timing`); the HUD's DRS lamp, the Electronics app's DRS light and the
+  before (car oracle `spa_drs_timing`); the HUD's DRS lamp, the Electronics app's DRS light and the
   cockpit's DRS instruments too. New: the developers' "DRS Zones" window (`FormDRSZones`), proven
   in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
-- **Steps 3-7:** not started.
+- **Step 3, camera editors, in progress:** the developers' "ChaseCam Editor" (`ChaseCamEditor`)
+  done and proven in the GUI oracle (`app_chasecam`). The camera editor (`FormCamera`) next.
+- **Steps 4-7:** not started.
 
 ## In plain words
 
@@ -85,7 +87,7 @@ game reads it.
 
 - `data/drs_zones.ini` (`DRSManager::DRSManager` 0x140278ea0) and `DRSManager::isDRSAvailable`
   0x140279490: `crates/rustyac-physics/src/track/` (`DrsZone`, `Track::is_drs_available`), proven
-  by the car oracle's `spa_drs_timing` (Task 16).
+  by the car oracle's `spa_drs_timing`.
 - The HUD's DRS lamp, the Electronics app's DRS light, the cockpit's `DRS_*` instruments.
 - `DRSManager::step` and `wasRaceSwitchedOn`: nothing to port. The game's `Track::step` calls a
   linker-folded empty function for the step, so the manager's `detections` stay empty and
@@ -117,3 +119,25 @@ in a fresh root); the staging now makes it.
 - The zones a server sends (0x53, `ACClient::onDRSZoneReceived` 0x14004b520 then
   `DRSManager::setZones`): decoded, not acted on; rustyAC keeps the track's own zones online.
   Task 44b.
+
+## Step 3: the camera editors
+
+### The "ChaseCam Editor" (`ChaseCamEditor`)
+
+`crates/rustyac-gui/src/app_chase_cam.rs`. A developers' app (shown with `ENABLE_DEV_APPS`).
+Three spinners move the first chase camera while it is on screen: distance and height in tenths of
+a metre, pitch in whole degrees. Another camera on screen: the spinners and buttons are hidden and
+the window says "Select Chase Cam 0 to activate". "Save CHASE_0" and "Save CHASE_1" both write the
+first chase camera's values (as the game does) into `chase_cam.ini` under that section, with
+`WritePrivateProfileStringW` (values as `%f`), then show "Global chase_cam.ini saved for CHASE_n".
+
+Where the file goes: the game writes `system/cfg/chase_cam.ini` in its own folder. rustyac.exe
+writes `<cfg>/system/cfg/chase_cam.ini` (made from the game's file the first time), and reads the
+chase cameras from that file when it exists, else from the game's (the game's
+`CameraDrivableManager::initChaseCamFromINI` 0x1400c61c0; rustyAC had the shipped values built in
+before).
+
+Proof: `render_oracle gui --gui app_chasecam` (in `tools/proofs/gui_list.txt` and the quick list):
+47 frames, command log, pixels, state and events IDENTICAL; the saved `chase_cam.ini` (130 bytes:
+distance 3 clicks up, height 2 down, pitch 4 up and 1 down, saved as CHASE_0 and CHASE_1) and the
+messages IDENTICAL; a Save click with another camera on screen does nothing on both sides.

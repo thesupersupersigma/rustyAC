@@ -206,6 +206,9 @@ pub fn telemetry_feed(frame: usize) -> rustyac_gui::app_telemetry::TelemetryFeed
     rustyac_gui::app_telemetry::TelemetryFeed { graphics: raw(frame * 8 + 7), steps: (0..5).map(|j| (frame as f64 * 16.0 + j as f64 * 3.0, raw(frame * 8 + j))).collect() }
 }
 
+/// `system/cfg/chase_cam.ini`'s CHASE_0 as shipped: distance, height, pitch.
+pub const CHASE_0: (f32, f32, f32) = (3.0, 1.4, 0.034_906);
+
 #[derive(Default)]
 pub struct AppScript {
     /// every car's frames: the game's `CarPhysicsState` bytes
@@ -230,6 +233,10 @@ pub struct AppScript {
     pub ideal_pressure: i32,
     pub edl: Option<f32>,
     pub drs: bool,
+    /// the ChaseCam Editor's: `chaseCamData[0]` as the port's app left it, and the first chase
+    /// camera on screen
+    pub chase: (f32, f32, f32),
+    pub chase_active: bool,
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -400,6 +407,13 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         }),
         "app.edl" => script(|s| s.edl = if text == "off" { None } else { Some(number) }),
         "app.drs" => script(|s| s.drs = on),
+        "app.chase" => script(|s| {
+            s.chase_active = on;
+            if s.chase == (0.0, 0.0, 0.0) {
+                // system/cfg/chase_cam.ini's CHASE_0 as shipped (the game side's staging too)
+                s.chase = CHASE_0;
+            }
+        }),
         "app.ff" => script(|s| s.ff_gain = number),
         "app.unix" => script(|s| s.unix = text.to_string()),
         "app.aiLine" => {
@@ -649,6 +663,8 @@ pub fn link() -> AppLink {
             onboard_fov: s.eyes.map_or(0.0, |e| e.1),
             onboard_pitch: s.eyes.map_or(0.0, |e| e.2),
             auto_eyes: None,
+            chase_cam: s.chase,
+            chase_cam_active: s.chase_active,
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -788,8 +804,8 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_drszones") {
-        let rel = "content/tracks/magione/data/drs_zones.ini.candidate";
+    if name.starts_with("app_drszones") || name.starts_with("app_chasecam") {
+        let rel = if name.starts_with("app_drszones") { "content/tracks/magione/data/drs_zones.ini.candidate" } else { "system/cfg/chase_cam.ini" };
         let mut same = true;
         for (what, a, b) in [(rel, args.root.join(rel), args.root.join("port_files").join(rel)), ("the messages", args.root.join("effects_game.txt"), args.root.join("effects_port.txt"))] {
             match (std::fs::read(&a), std::fs::read(&b)) {
@@ -990,6 +1006,11 @@ PRESET=AI Debug
     // dash_cam.ini and no Documents camera_onboard.ini on either side
     std::fs::create_dir_all(args.root.join("cfg")).map_err(|e| e.to_string())?;
     std::fs::copy(args.game.join("cfg/camera_onboard.ini"), args.root.join("cfg/camera_onboard.ini")).map_err(|e| format!("camera_onboard.ini: {e}"))?;
+    // the ChaseCam Editor's: the game folder's system/cfg/chase_cam.ini on both sides
+    for dir in [args.root.join("system/cfg"), args.root.join("port_files/system/cfg")] {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        std::fs::copy(args.game.join("system/cfg/chase_cam.ini"), dir.join("chase_cam.ini")).map_err(|e| format!("chase_cam.ini: {e}"))?;
+    }
     for dir in [&docs, &port_docs] {
         let _ = std::fs::remove_file(dir.join("cars/ks_ferrari_f2004/view.ini"));
         let _ = std::fs::remove_file(dir.join("camera_onboard.ini"));
@@ -1529,6 +1550,37 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             click(&mut o, 95, 115);
             o.extend([hud("app.visible", 0.0, "drszones"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "drszones")]);
             play(&mut o, 3300, 3400, 25);
+            o.push(Op::Save);
+        }
+        "app_chasecam" => {
+            // the form at VOLUMES_AT: the spinners (150 x 20 at (10, 40 / 80 / 120)) with their
+            // minus and plus (20 x 20 at either end); Save CHASE_0 / CHASE_1 (150 x 30 at
+            // (10, 350) and (200, 350))
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.chase", 0.0, ""));
+            o.push(hud("app.new", 0.0, "chasecameditor"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "chasecameditor"));
+            // another camera: the editor asks for chase 0, its buttons are hidden
+            play(&mut o, 0, 100, 25);
+            click(&mut o, 85, 365);
+            o.push(hud("app.chase", 1.0, ""));
+            play(&mut o, 100, 200, 25);
+            // distance up 3, height down 2, pitch up 4 and down 1
+            for (cx, cy, n) in [(150, 50, 3), (20, 90, 2), (150, 130, 4), (20, 130, 1)] {
+                for _ in 0..n {
+                    click(&mut o, cx, cy);
+                }
+            }
+            click(&mut o, 85, 365);
+            play(&mut o, 200, 300, 25);
+            click(&mut o, 275, 365);
+            o.push(hud("app.chase", 0.0, ""));
+            play(&mut o, 300, 400, 25);
+            o.extend([hud("app.visible", 0.0, "chasecameditor"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "chasecameditor")]);
+            play(&mut o, 400, 450, 25);
             o.push(Op::Save);
         }
         "app_tyretester" => {

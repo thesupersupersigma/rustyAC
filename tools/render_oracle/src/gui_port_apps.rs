@@ -62,6 +62,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "carengineer" => gui.new_car_engineer_app(painter),
         "wings" => gui.new_wings_app(painter),
         "drszones" => gui.new_drs_zones_app(painter),
+        "chasecameditor" => gui.new_chase_cam_editor_app(painter),
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {
@@ -156,8 +157,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                 std::fs::write(&target, bytes).map_err(|e| format!("{}: {e}", target.display()))?;
             }
             AppAction::WriteProfileString { file, section, key, value } => {
-                // (a car's car.ini: a file of the game's folder)
-                let target = if file.starts_with("content/") { root.join("port_files").join(&file) } else { docs.join(&file) };
+                // (a car's car.ini, system/cfg/chase_cam.ini: a file of the game's folder)
+                let target = if file.starts_with("content/") || file.starts_with("system/") { root.join("port_files").join(&file) } else { docs.join(&file) };
                 std::fs::create_dir_all(target.parent().unwrap_or(root)).map_err(|e| e.to_string())?;
                 let old = std::fs::read(&target).ok();
                 let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
@@ -319,6 +320,11 @@ pub fn sync(gui: &mut Gui) {
     let root = documents.parent().map(|p| p.to_path_buf()).unwrap_or_default();
     let _ = write_files(gui, &root);
     let was_replay = gui.apps.in_replay;
+    // (the ChaseCam Editor's spinners change the camera: kept in the script)
+    let chase = gui.apps.chase_cam;
+    if chase != (0.0, 0.0, 0.0) {
+        crate::gui_seq_apps::script(|s| s.chase = chase);
+    }
     gui.apps = crate::gui_seq_apps::link();
     if gui.apps.in_replay != was_replay {
         gui.apps_on_replay_status(gui.apps.in_replay);

@@ -249,6 +249,10 @@ impl GameApps {
                 add(gui, painter, "runningtime", id);
             }
         }
+        // ChaseCamEditor: made after the camera manager; saves into rustyAC's own
+        // system\cfg\chase_cam.ini (see write_files)
+        let id = gui.new_chase_cam_editor_app(painter);
+        add(gui, painter, "chasecameditor", id);
         // FriendsLeaderboardDisplayer: made after SteamInterface, the last of the apps here
         let id = gui.new_friends_app(painter);
         add(gui, painter, "friends", id);
@@ -285,8 +289,8 @@ impl GameApps {
                 AppAction::WriteFile { path, bytes } => (path, bytes),
                 AppAction::WriteProfileString { file, section, key, value } => {
                     let name = file.strip_prefix("cfg/").unwrap_or(&file).to_string();
-                    // (a car's car.ini: rustyAC's copy, else the game's loose file)
-                    let old = if file.starts_with("content/") { rustyac_content::vfs::read(&setup.cfg_dir.join(&file)).ok().or_else(|| rustyac_content::vfs::read(&setup.game.join(&file)).ok()) } else { own_or_documents_text(setup, &name) };
+                    // (a car's car.ini or system\cfg\chase_cam.ini: rustyAC's copy, else the game's loose file)
+                    let old = if file.starts_with("content/") || file.starts_with("system/") { rustyac_content::vfs::read(&setup.cfg_dir.join(&file)).ok().or_else(|| rustyac_content::vfs::read(&setup.game.join(&file)).ok()) } else { own_or_documents_text(setup, &name) };
                     let bytes = rustyac_gui::apps::write_profile_string(old.as_deref(), &section, &key, &value);
                     if name == "audio.ini" {
                         self.audio_ini = Some(String::from_utf8_lossy(&bytes).into_owned());
@@ -467,6 +471,9 @@ impl GameApps {
             onboard_pitch: self.onboard.2,
             // (rustyAC draws no driver model: no head to put the eyes in)
             auto_eyes: None,
+            // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
+            chase_cam: gui.apps.chase_cam,
+            chase_cam_active: gui.apps.chase_cam_active,
             ctrl_down: self.ctrl_down,
             penalties_enabled: setup.penalties,
             stats: self.stats.clone(),

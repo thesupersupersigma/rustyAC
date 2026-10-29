@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 37] = [
+pub const APPS: [(&str, usize, usize, usize); 38] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -59,8 +59,12 @@ pub const APPS: [(&str, usize, usize, usize); 37] = [
     ("gpuprofiler", 0x1c0, 0x1_4031_b320, 0x1_4050_c230),
     // Task 44
     ("drszones", 0x210, 0x1_4033_6210, 0x1_4051_1390),
+    ("chasecameditor", 0x1f0, 0x1_4033_72a0, 0x1_4051_16e0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
+/// The ChaseCam Editor's camera manager block (0: none staged).
+static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 const TAKES_CAR: [&str; 16] = ["drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
@@ -736,6 +740,20 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 }
                 wings_car(a, first_car);
             }
+            if text == "chasecameditor" {
+                // ChaseCamEditor(Sim*): Sim::cameraManager (+0x188) -> mode (+0x120),
+                // cameraDrivable (+0xc0) -> currentMode (+0x58), chaseCamData (+0x5c, the
+                // shipped ini's), chaseIndex (+0x128); update() switches them with the script
+                if rd::<usize>(sim, 0x188) == 0 {
+                    let camera = a.alloc(0x200);
+                    wr(camera, 0xc0, a.alloc(0x200));
+                    wr(sim, 0x188, camera);
+                }
+                let drivable: *mut u8 = rd(rd::<*mut u8>(sim, 0x188), 0xc0);
+                let (d, h, p) = crate::gui_seq_apps::CHASE_0;
+                wr(drivable, 0x5c, [d, h, p, 3.9f32, 1.9, -0.017_453]);
+                CHASE_CAMERA.store(rd::<usize>(sim, 0x188), std::sync::atomic::Ordering::Relaxed);
+            }
             if text == "drszones" {
                 // FormDRSZones' save: TrackAvatar::getDataFolder (TrackAvatar+0xf8 physicsTrack,
                 // Track+0x108 dataFolder), relative to the oracle's root
@@ -865,6 +883,14 @@ pub unsafe fn update() {
     let guard = GAME.lock().unwrap();
     let Some(g) = guard.as_ref() else { return };
     let l = link();
+    let camera = CHASE_CAMERA.load(std::sync::atomic::Ordering::Relaxed) as *mut u8;
+    if !camera.is_null() {
+        // ACCameraManager::mode eDrivable (2) or eCockpit (0); CameraDrivableManager eChase, index 0
+        wr(camera, 0x120, if l.chase_cam_active { 2i32 } else { 0 });
+        let drivable: *mut u8 = rd(camera, 0xc0);
+        wr(drivable, 0x58, 0i32);
+        wr(drivable, 0x128, 0i32);
+    }
     crate::gui_seq_apps::script(|s| {
         for (i, avatar) in g.cars.iter().enumerate() {
             if let Some(bytes) = crate::gui_seq_apps::raw_state(s, i) {

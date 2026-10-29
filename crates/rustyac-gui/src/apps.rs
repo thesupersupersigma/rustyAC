@@ -275,6 +275,11 @@ pub struct AppLink {
     pub onboard_fov: f32,
     pub onboard_pitch: f32,
     pub auto_eyes: Option<[f32; 3]>,
+    /// `CameraDrivableManager::chaseCamData[0]` (distance, height, pitch in radians: the
+    /// ChaseCam Editor changes it), and whether the first chase camera is on screen
+    /// (`ACCameraManager::mode == eDrivable`, `currentMode == eChase`, `chaseIndex == 0`)
+    pub chase_cam: (f32, f32, f32),
+    pub chase_cam_active: bool,
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,

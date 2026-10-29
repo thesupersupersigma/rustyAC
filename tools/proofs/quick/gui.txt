@@ -22,3 +22,4 @@ app_tyretester
 app_suspension
 app_gpuprofiler
 app_drszones
+app_chasecam

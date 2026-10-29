@@ -441,6 +441,9 @@ pub struct DrivingCamera {
     /// The chase camera's place relative to the rear axle, lagging behind the g forces.
     current_offset: [f32; 3],
     started: bool,
+    /// `CameraDrivableManager::chaseCamData`: distance, height, pitch (radians) of the two chase
+    /// cameras (the ChaseCam Editor changes the first one live)
+    pub chase: [(f32, f32, f32); 2],
 }
 
 /// `system/cfg/chase_cam.ini` as shipped: distance, height, pitch (radians) of the two chase cameras.
@@ -449,7 +452,17 @@ const CHASE: [(f32, f32, f32); 2] = [(3.0, 1.4, 0.034_906), (3.9, 1.9, -0.017_45
 impl DrivingCamera {
     /// The first chase view.
     pub fn chase() -> DrivingCamera {
-        DrivingCamera { mode: CameraMode::Drivable, drivable: Drivable::Chase, last_driving: CameraMode::Drivable, car_index: 0, current_offset: [0.0; 3], started: false }
+        DrivingCamera { mode: CameraMode::Drivable, drivable: Drivable::Chase, last_driving: CameraMode::Drivable, car_index: 0, current_offset: [0.0; 3], started: false, chase: CHASE }
+    }
+
+    /// `CameraDrivableManager::initChaseCamFromINI` 0x1400c61c0: `CHASE_0` / `CHASE_1`'s
+    /// `DISTANCE`, `HEIGHT`, `PITCH` (a missing file or key: 0, as in the game).
+    pub fn read_chase_ini(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let ini = rustyac_physics::data::ini::IniReader::load(path)?;
+        for (i, section) in ["CHASE_0", "CHASE_1"].iter().enumerate() {
+            self.chase[i] = (ini.get_float(section, "DISTANCE")?, ini.get_float(section, "HEIGHT")?, ini.get_float(section, "PITCH")?);
+        }
+        Ok(())
     }
 
     /// The camera `--camera <name>` asks for: `cockpit`, `chase`, `chase2`, `bonnet`, `bumper`,
@@ -628,7 +641,7 @@ impl DrivingCamera {
             }
             _ => {}
         }
-        let (distance, height, pitch) = CHASE[(self.drivable == Drivable::Chase2) as usize];
+        let (distance, height, pitch) = self.chase[(self.drivable == Drivable::Chase2) as usize];
         // an upside-down car is looked at from below
         let h = if 0.0 >= body[1][1] { -height } else { height };
         let kmh = view.speed_kmh;

@@ -1414,6 +1414,13 @@ fn run_window(options: &Options) -> Result<(), String> {
             return Err(message);
         }
     };
+    // the chase cameras: rustyAC's own chase_cam.ini (the ChaseCam Editor saves it), else the game's
+    let chase_ini = [cfg_dir(options).join("system/cfg/chase_cam.ini"), rustyac_content::install::ac_root().unwrap_or_default().join("system/cfg/chase_cam.ini")];
+    if let Some(path) = chase_ini.iter().find(|p| p.is_file()) {
+        if let Err(e) = camera.read_chase_ini(path) {
+            eprintln!("WARNING: {}: {e}", path.display());
+        }
+    }
     // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
     // (without AC's GUI "Drive" is pressed at once, so there is none)
     let mut start_camera = (setup_esc_start && renderer.gui().is_some_and(|gui| gui.has_esc_menu()))
@@ -2071,12 +2078,18 @@ fn run_window(options: &Options) -> Result<(), String> {
         if let Some(gui) = renderer.gui() {
             if gui.apps.made.is_empty() {
                 gui.apps.onboard = (shapes[0].eye_model, shapes[0].onboard_fov, shapes[0].eye_pitch);
+                gui.gui.apps.chase_cam = camera.chase[0];
             } else if std::mem::take(&mut gui.apps.onboard_changed) {
                 let (eyes, fov, pitch) = gui.apps.onboard;
                 shapes[0].set_eye_model(eyes);
                 shapes[0].onboard_fov = fov;
                 shapes[0].eye_pitch = pitch;
             }
+            // the ChaseCam Editor's spinners move the first chase camera at once
+            if !gui.apps.made.is_empty() {
+                camera.chase[0] = gui.gui.apps.chase_cam;
+            }
+            gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;
             // SAFETY: plain calls.
