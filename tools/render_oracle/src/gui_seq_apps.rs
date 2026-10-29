@@ -240,6 +240,8 @@ pub struct AppScript {
     /// the Net monitor's: the client's ping, the second car's error vector
     pub ping: i32,
     pub net_ev: [f32; 3],
+    /// Keyboard debug's: the keyboard's parameters (`KeyboardTuning`), None: no keyboard class
+    pub keyboard: Option<[f32; 11]>,
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -410,6 +412,13 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         }),
         "app.edl" => script(|s| s.edl = if text == "off" { None } else { Some(number) }),
         "app.drs" => script(|s| s.drs = on),
+        // "off", the 11 parameters, or (`app.keyboardLive`) the last six: what the spinners do not change
+        "app.keyboard" => script(|s| s.keyboard = (text != "off").then(|| floats::<11>(text))),
+        "app.keyboardLive" => script(|s| {
+            if let Some(k) = s.keyboard.as_mut() {
+                k[5..].copy_from_slice(&floats::<6>(text));
+            }
+        }),
         "app.net" => script(|s| {
             s.ping = number as i32;
             let v: Vec<f32> = text.split(',').filter_map(|p| p.parse().ok()).collect();
@@ -675,6 +684,7 @@ pub fn link() -> AppLink {
             chase_cam_active: s.chase_active,
             ping: s.ping,
             net_error_vector: s.net_ev,
+            keyboard: s.keyboard,
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -1540,6 +1550,39 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 960, 1100, 4);
             o.push(Op::Save);
         }
+        "app_keyboard" | "app_keyboard_none" => {
+            // the form at VOLUMES_AT: five spinners (150 x 35 at (400, 175 + 75 k)), their minus
+            // and plus 35 x 35 at either end
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            if name == "app_keyboard" {
+                // controls.ini [KEYBOARD] as shipped, the rest as KeyboardCarControl's constructor leaves it
+                o.push(hud("app.keyboard", 0.0, "1.75,2.5,0.85,1.8,12,0.3,0.4,0.95,0,0,0.12345678"));
+            }
+            o.push(hud("app.new", 0.0, "keyboard"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "keyboard"));
+            play(&mut o, 0, 100, 25);
+            if name == "app_keyboard" {
+                // every spinner down and up, some more than once; then the integrators move
+                for (k, down, up) in [(0, 2, 0), (1, 0, 3), (2, 1, 1), (3, 4, 0), (4, 0, 2)] {
+                    for _ in 0..down {
+                        click(&mut o, 417, 192 + 75 * k);
+                    }
+                    for _ in 0..up {
+                        click(&mut o, 532, 192 + 75 * k);
+                    }
+                }
+                for (i, live) in ["0.3,0.4,0.95,0.25,-0.0123456,0.12345678", "0.3,0.4,0.95,1,0.99999,-1e-05", "0.3,0.4,0.95,0.5,-1,123.456789"].iter().enumerate() {
+                    o.push(hud("app.keyboardLive", 0.0, live));
+                    play(&mut o, 100 + i * 50, 150 + i * 50, 25);
+                }
+            }
+            o.extend([hud("app.visible", 0.0, "keyboard"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "keyboard")]);
+            play(&mut o, 250, 300, 25);
+            o.push(Op::Save);
+        }
         "app_netmonitor" => {
             // online: the speeds of cars 0 and 1, then error vectors and pings of every size
             race(&mut o, 6);
@@ -1669,4 +1712,10 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
         _ => return None,
     }
     Some(o)
+}
+
+/// `N` comma-separated numbers of a script op's text.
+fn floats<const N: usize>(text: &str) -> [f32; N] {
+    let v: Vec<f32> = text.split(',').map(|p| p.trim().parse().expect("a number")).collect();
+    v.try_into().expect("the count")
 }

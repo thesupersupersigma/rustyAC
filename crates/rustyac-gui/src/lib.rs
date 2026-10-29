@@ -12,6 +12,7 @@ pub mod acos;
 pub mod app_delta;
 pub mod app_driver_perf;
 pub mod app_chase_cam;
+pub mod app_keyboard_debug;
 pub mod app_net_monitor;
 pub mod app_drs_zones;
 pub mod comparative_telemetry;

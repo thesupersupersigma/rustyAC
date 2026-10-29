@@ -53,6 +53,9 @@ pub enum AppAction {
     /// `CameraOnBoard::onBoardFov` (degrees), `customCameraSettings[0].pitch` (radians)
     SetOnboardFov(f32),
     SetOnboardPitch(f32),
+    /// `KeyboardControlsDebug`'s spinners: one of the keyboard's steering parameters
+    /// (`KeyboardTuning`'s order)
+    SetKeyboardTuning { index: usize, value: f32 },
     /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
     DeleteFile { path: String },
 }
@@ -284,6 +287,9 @@ pub struct AppLink {
     /// `NetCarStateProvider::errorVector` (the Net monitor reads them)
     pub ping: i32,
     pub net_error_vector: [f32; 3],
+    /// the player's controls if they are the keyboard's (`KeyboardCarControl`): its steering
+    /// parameters, for "Keyboard debug"
+    pub keyboard: Option<crate::app_keyboard_debug::KeyboardTuning>,
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,

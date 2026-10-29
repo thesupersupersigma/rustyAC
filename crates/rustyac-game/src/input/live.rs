@@ -91,6 +91,10 @@ impl LiveSource {
         } else {
             DEVICE_KEYBOARD
         };
+        // the game's controls are the keyboard's class only when it picked the keyboard
+        if active == DEVICE_KEYBOARD {
+            shared.keyboard_tuning.lock().unwrap().0 = Some(keyboard.tuning());
+        }
         LiveSource {
             bindings,
             pad,
@@ -226,6 +230,15 @@ impl DriverSource for LiveSource {
         }
         self.shared.mouse_steering.store(self.keyboard.mouse_steering, Ordering::Relaxed);
         self.shared.keyboard_drives.store(self.active == DEVICE_KEYBOARD, Ordering::Relaxed);
+        {
+            let mut tuning = self.shared.keyboard_tuning.lock().unwrap();
+            for (index, value) in std::mem::take(&mut tuning.1) {
+                self.keyboard.set_tuning(index, value);
+            }
+            if tuning.0.is_some() {
+                tuning.0 = Some(self.keyboard.tuning());
+            }
+        }
         self.choose(controls, self.keyboard.in_use(key_down));
         let mut extra = Extra::default();
         match self.active {

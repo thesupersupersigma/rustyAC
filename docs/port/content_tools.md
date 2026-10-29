@@ -17,8 +17,9 @@ State after the last commit (update after every commit):
   in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
 - **Step 3, camera editors, in progress:** the developers' "ChaseCam Editor" (`ChaseCamEditor`)
   done and proven in the GUI oracle (`app_chasecam`). The camera editor (`FormCamera`) next.
-- **Step 6, in progress:** the developers' "Net monitor" (`NetMonitorForm`) done and proven
-  (`app_netmonitor`). The input debug apps next.
+- **Step 6, in progress:** the developers' "Net monitor" (`NetMonitorForm`, `app_netmonitor`)
+  and "Keyboard debug" (`KeyboardControlsDebug`, `app_keyboard`, `app_keyboard_none`) done and
+  proven. The X360 controller debug app (`X360ControllerDebug`) next.
 - **Steps 4, 5, 7:** not started.
 
 ## In plain words
@@ -164,3 +165,30 @@ Proof: `render_oracle gui --gui app_netmonitor`: 68 frames with five pings and e
 game side runs the real constructor and render with a stand-in client (its avatar car 0, its
 socket's ping) and a block with `NetCarStateProvider`'s vftable as car 1's state provider, for the
 render's dynamic cast.
+
+### The "Keyboard debug" app (`KeyboardControlsDebug`)
+
+`crates/rustyac-gui/src/app_keyboard_debug.rs`. A developers' app, always made (in `Sim::Sim`
+after the race position app). 600 x 600, the keyboard's steering parameters in red Consolas:
+"Steering Speed", "Opposite Direction Speed", "Steering Gain", "Steering Reset", "LookAhead
+Points", the three decelerating factors, the two integrators ("Int Gas", "Int Steer") and "Min
+Steer", each floored to four decimals. The first five have spinners (0 to 100) that change them at
+once while driving: speed = value x 0.05, opposite direction and reset = value x 0.1, gain = value
+x 0.01, look-ahead as is. When the car's controls are not the keyboard's class the window says
+`KEYBOARD CONTROL NOT SELECTED : 0` and has no spinners. It writes nothing (the changes are lost at
+the end of the session, as in the game).
+
+In rustyac.exe the window shows the live keyboard class of the physics thread (published every
+step); the spinners' changes go back to it through the shared state. rustyAC switches devices
+while driving where the game picks one class at the start: the window counts as "selected" when
+rustyAC starts on the keyboard (no pad, or `INPUT_METHOD=KEYBOARD`), as the game would. With
+`--autodrive`, `--replay` or `--screenshot` there is no keyboard class: "NOT SELECTED".
+
+Proof: `render_oracle gui --gui app_keyboard` (41 frames: the shipped `[KEYBOARD]` values, every
+spinner clicked down and up, the integrators moving, the window hidden and shown) and
+`app_keyboard_none` (9 frames, no keyboard class): command log, pixels, state and events
+IDENTICAL. The game side runs the real constructor, render and spinner handlers; the oracle's
+`getControlsProvider` stand-in answers a block with `KeyboardCarControl`'s vftable (for the
+constructor's dynamic cast) while the window is made. A `rustyac.exe --screenshot ... --gui-do
+app:keyboard` picture shows the window drawn ("NOT SELECTED": no keyboard class in a screenshot
+run).

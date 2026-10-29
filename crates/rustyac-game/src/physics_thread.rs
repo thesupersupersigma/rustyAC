@@ -128,6 +128,9 @@ impl Timing {
     }
 }
 
+/// "Keyboard debug"'s share: the parameters as of the last step, the edits not yet applied.
+pub type KeyboardTuningShare = (Option<rustyac_gui::app_keyboard_debug::KeyboardTuning>, Vec<(usize, f32)>);
+
 /// What the physics thread and the rest of the program share.
 pub struct Shared {
     /// Stop the thread.
@@ -159,6 +162,9 @@ pub struct Shared {
     pub mouse_steering: std::sync::atomic::AtomicBool,
     /// Task 34: the player's car is driven by the keyboard's class (Ctrl+M acts only then)
     pub keyboard_drives: std::sync::atomic::AtomicBool,
+    /// "Keyboard debug": the keyboard's steering parameters as of the last step (None when
+    /// the game would not have picked the keyboard's class), and the app's edits not yet applied
+    pub keyboard_tuning: Mutex<KeyboardTuningShare>,
     /// The car's unchanging facts, once it is built.
     pub car_info: Mutex<Option<crate::sim::CarInfo>>,
     /// The same of the session's other cars (car 1, 2, …), set before `car_info`.
@@ -234,6 +240,7 @@ impl Shared {
             mouse_steering_toggles: AtomicU32::new(0),
             mouse_steering: std::sync::atomic::AtomicBool::new(false),
             keyboard_drives: std::sync::atomic::AtomicBool::new(false),
+            keyboard_tuning: Mutex::new((None, Vec::new())),
             car_info: Mutex::new(None),
         })
     }

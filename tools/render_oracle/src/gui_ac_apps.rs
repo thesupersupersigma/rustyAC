@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 39] = [
+pub const APPS: [(&str, usize, usize, usize); 40] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -61,15 +61,20 @@ pub const APPS: [(&str, usize, usize, usize); 39] = [
     ("drszones", 0x210, 0x1_4033_6210, 0x1_4051_1390),
     ("chasecameditor", 0x1f0, 0x1_4033_72a0, 0x1_4051_16e0),
     ("netmonitor", 0x1e0, 0x1_4030_3400, 0x1_4050_7e60),
+    ("keyboard", 0x1f8, 0x1_4030_dbe0, 0x1_4050_9a20),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
 static NET_MONITOR: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+/// Keyboard debug's `KeyboardCarControl` stand-in
+static KEYBOARD: Mutex<Option<usize>> = Mutex::new(None);
+/// what `getControlsProvider` answers while Keyboard debug is made
+static KEYBOARD_CTOR: Mutex<Option<usize>> = Mutex::new(None);
 
 /// The ChaseCam Editor's camera manager block (0: none staged).
 static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-const TAKES_CAR: [&str; 16] = ["drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 17] = ["keyboard", "drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -334,6 +339,9 @@ unsafe extern "C" fn ff_global_gain(this: *mut u8) -> f32 {
 }
 
 unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
+    if let Some(key) = *KEYBOARD_CTOR.lock().unwrap() {
+        return key as *mut u8;
+    }
     let index = car_index(this);
     if link().cars.get(index).is_some_and(|c| c.ff_global_gain.is_some()) {
         PROVIDERS.lock().unwrap().get(index).copied().unwrap_or(0) as *mut u8
@@ -816,7 +824,11 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, first_car, gui);
                 *TYRE_TESTER.lock().unwrap() = Some(first_car as usize);
             } else {
+                if text == "keyboard" {
+                    *KEYBOARD_CTOR.lock().unwrap() = Some(keyboard_class(a));
+                }
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
+                *KEYBOARD_CTOR.lock().unwrap() = None;
             }
             if text == "telemetry" {
                 telemetry_channels(a, form, sim)?;
@@ -957,6 +969,12 @@ pub unsafe fn update() {
             crate::gui_ac_replay::fire(event as *const u8, argument.as_ptr());
         }
         std::ptr::copy_nonoverlapping(l.telemetry.graphics.as_ptr(), raw, l.telemetry.graphics.len());
+    }
+    // KeyboardControlsDebug: what its spinners do not change (they change the game's own)
+    if let (Some(key), Some(k)) = (*KEYBOARD.lock().unwrap(), l.keyboard) {
+        for (off, v) in [0x38, 0x3c, 0x34, 0x40, 0x44, 0x18].into_iter().zip(&k[5..]) {
+            wr(key as *mut u8, off, *v);
+        }
     }
     // NetMonitorForm: the client's ping (u16), car 1's error vector
     if let Some((client, net)) = *NET_MONITOR.lock().unwrap() {
@@ -1431,4 +1449,21 @@ unsafe fn telemetry_channels(a: &crate::acs::Acs, form: *mut u8, sim: *mut u8) -
     let physics_avatar: *mut u8 = rd(sim, 0x1b8);
     *TELEMETRY.lock().unwrap() = Some((raw as usize, physics_avatar.add(0x2d0) as usize));
     Ok(())
+}
+
+/// KeyboardControlsDebug's controls while it is made (the constructor alone asks for them,
+/// through the `getControlsProvider` stand-in): a `KeyboardCarControl` (its vftable for the
+/// constructor's dynamic cast) when the script has one, else none (`KEYBOARD CONTROL NOT
+/// SELECTED`).
+unsafe fn keyboard_class(a: &crate::acs::Acs) -> usize {
+    let Some(k) = crate::gui_seq_apps::script(|s| s.keyboard) else { return 0 };
+    let key = a.alloc(0x100);
+    wr(key, 0, a.va(0x1_404c_5d50));
+    // steerSpeed, steerOppositeDirectionFactor, steerGain, steerResetFactor, lookAhead,
+    // speedDeceleringFactor, turnDeceleringFactor, steerDecelerator, intGas, intSteer, minSteering
+    for (off, v) in [0x1c, 0x20, 0x24, 0x28, 0x2c, 0x38, 0x3c, 0x34, 0x40, 0x44, 0x18].into_iter().zip(k) {
+        wr(key, off, v);
+    }
+    *KEYBOARD.lock().unwrap() = Some(key as usize);
+    key as usize
 }

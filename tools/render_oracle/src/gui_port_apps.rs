@@ -64,6 +64,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "drszones" => gui.new_drs_zones_app(painter),
         "chasecameditor" => gui.new_chase_cam_editor_app(painter),
         "netmonitor" => gui.new_net_monitor_app(painter),
+        "keyboard" => gui.new_keyboard_debug_app(painter),
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {
@@ -195,6 +196,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     u[which.min(3)] = value;
                 }
             }),
+            // (the port's app keeps its own copy in gui.apps.keyboard; the pictures show it)
+            AppAction::SetKeyboardTuning { .. } => {}
             AppAction::DeleteFile { path } => {
                 let _ = std::fs::remove_file(docs.join(path));
             }
@@ -325,6 +328,14 @@ pub fn sync(gui: &mut Gui) {
     let chase = gui.apps.chase_cam;
     if chase != (0.0, 0.0, 0.0) {
         crate::gui_seq_apps::script(|s| s.chase = chase);
+    }
+    // (Keyboard debug's spinners change the keyboard's first five parameters: kept in the script)
+    if let Some(k) = gui.apps.keyboard {
+        crate::gui_seq_apps::script(|s| {
+            if let Some(s) = s.keyboard.as_mut() {
+                s[..5].copy_from_slice(&k[..5]);
+            }
+        });
     }
     gui.apps = crate::gui_seq_apps::link();
     if gui.apps.in_replay != was_replay {

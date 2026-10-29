@@ -260,6 +260,35 @@ fn sgn(x: f32) -> f32 {
 }
 
 impl KeyboardCarControl {
+    /// What "Keyboard debug" (`KeyboardControlsDebug::render`) prints, in its order.
+    pub fn tuning(&self) -> [f32; 11] {
+        [
+            self.steer_speed,
+            self.steer_opposite_direction_factor,
+            self.steer_gain,
+            self.steer_reset_factor,
+            self.look_ahead,
+            self.speed_decelering_factor,
+            self.turn_decelering_factor,
+            self.steer_decelerator,
+            self.int_gas,
+            self.int_steer,
+            self.min_steering,
+        ]
+    }
+
+    /// `KeyboardControlsDebug::onSpinnerValueChanged`: one of the first five of [`Self::tuning`].
+    pub fn set_tuning(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.steer_speed = value,
+            1 => self.steer_opposite_direction_factor = value,
+            2 => self.steer_gain = value,
+            3 => self.steer_reset_factor = value,
+            4 => self.look_ahead = value,
+            _ => {}
+        }
+    }
+
     /// `KeyboardCarControl::KeyboardCarControl` @ 0x14010f0e0: the values without a file.
     pub fn defaults() -> KeyboardCarControl {
         KeyboardCarControl {

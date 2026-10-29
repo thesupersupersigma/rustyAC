@@ -50,6 +50,8 @@ pub struct GameApps {
     audio_ini: Option<String>,
     /// the force feedback app's jobs for the physics thread (`PhysicsAvatar::executeOnPhysicsThread`)
     pub ffb_jobs: Vec<rustyac_physics::car::setup::SetupJob>,
+    /// "Keyboard debug"'s edits for the keyboard's class (index, value)
+    pub keyboard_edits: Vec<(usize, f32)>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
     ff_upgrades: Option<[f32; 4]>,
@@ -219,6 +221,9 @@ impl GameApps {
         add(gui, painter, "gamestats", id);
         let id = gui.new_race_position_app(painter);
         add(gui, painter, "position", id);
+        // KeyboardControlsDebug (Sim::Sim: after RacePosition)
+        let id = gui.new_keyboard_debug_app(painter);
+        add(gui, painter, "keyboard", id);
         // TyreTesterForm (a developers' app): no app when the car's tyres.ini cannot be read
         if let Ok(id) = gui.new_tyre_tester_app(painter, &setup.player_data) {
             add(gui, painter, "tyretester", id);
@@ -301,6 +306,10 @@ impl GameApps {
                         self.audio_ini = Some(String::from_utf8_lossy(&bytes).into_owned());
                     }
                     (file, bytes)
+                }
+                AppAction::SetKeyboardTuning { index, value } => {
+                    self.keyboard_edits.push((index, value));
+                    continue;
                 }
                 AppAction::SetUserFfGain(value) => {
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetUserFfGain { value });
@@ -479,6 +488,7 @@ impl GameApps {
             // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
             chase_cam: gui.apps.chase_cam,
             chase_cam_active: gui.apps.chase_cam_active,
+            keyboard: gui.apps.keyboard,
             ping: info.online.as_ref().map_or(0, |o| o.ping),
             net_error_vector: info.online.as_ref().map_or([0.0; 3], |o| o.car1_error_vector),
             ctrl_down: self.ctrl_down,

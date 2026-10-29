@@ -2089,6 +2089,17 @@ fn run_window(options: &Options) -> Result<(), String> {
             if !gui.apps.made.is_empty() {
                 camera.chase[0] = gui.gui.apps.chase_cam;
             }
+            // Keyboard debug: the keyboard's parameters as of the last step, the app's edits to it
+            {
+                let mut tuning = shared.keyboard_tuning.lock().unwrap();
+                for (index, value) in std::mem::take(&mut gui.apps.keyboard_edits) {
+                    if let Some(k) = tuning.0.as_mut() {
+                        k[index] = value;
+                    }
+                    tuning.1.push((index, value));
+                }
+                gui.gui.apps.keyboard = tuning.0;
+            }
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.
             gui.apps.ctrl_down = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x11) } != 0;

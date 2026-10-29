@@ -54,7 +54,7 @@ impl Gui {
 
 /// `printStringList`'s rounding: `value * powf(10, 4)` floored (truncated, one less when
 /// negative and not whole), divided back.
-fn floor4(value: f32) -> f32 {
+pub(crate) fn floor4(value: f32) -> f32 {
     let p = 10000.0f32;
     let mut v = value * p;
     let n = v as i32;
