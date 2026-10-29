@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn save_text_is_the_games_ini() {
-        let zones = [DrsZone { detection: 0.0, start: 0.0, end: 0.25 }, DrsZone { detection: 0.912345678, start: 0.95, end: 0.0001 }];
+        let zones = [DrsZone { detection: 0.0, start: 0.0, end: 0.25 }, DrsZone { detection: 0.912_345_7, start: 0.95, end: 0.0001 }];
         assert_eq!(save_text(&zones), "[ZONE_0]\r\nDETECTION=0\r\nSTART=0\r\nEND=0.25\r\n\r\n[ZONE_1]\r\nDETECTION=0.912346\r\nSTART=0.95\r\nEND=0.0001\r\n\r\n");
     }
 }
