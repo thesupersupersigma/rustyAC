@@ -94,6 +94,8 @@ async function walkFolder(root, tree, report) {
   await under('launcher/themes', 8, (p) => !p.endsWith('.ogv'));
   await under('content/weather', 1, (p) => p.endsWith('.ini'));
   await under('content/showroom', 2, (p) => p.endsWith('.json'));
+  // the Special Events page: no list means the theme asks `ac://eventcount` forever
+  await under('content/specialevents', 1, all);
   await under('apps/python', 0, () => false);
   // every car: its menu entry and pictures, its skins' entries and pictures
   const cars = await child(root, 'content').then((c) => (c ? child(c, 'cars') : null));

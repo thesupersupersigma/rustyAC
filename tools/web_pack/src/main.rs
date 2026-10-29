@@ -275,7 +275,8 @@ fn files_under(root: &Path, folder: &str, keep: &dyn Fn(&str) -> bool, out: &mut
 }
 
 /// AC's launcher in the page: its default theme and the shared scripts the launcher puts into
-/// it, the game's `cfg` (the player's settings start as copies of it), the weather list, and
+/// it, the game's `cfg` (the player's settings start as copies of it), the weather list, the
+/// special events' event.ini files, and
 /// for every car and track in the pack what the launcher shows of it: menu entries, brand
 /// badges, skins' previews and liveries, track previews and outlines. Videos are left out.
 fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<String, u64> {
@@ -287,6 +288,8 @@ fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<S
     files_under(root, "launcher/themes/.base", &all, &mut out);
     files_under(root, "launcher/themes/default", &|p: &str| !p.ends_with(".ogv"), &mut out);
     files_under(root, "content/weather", &|p: &str| p.ends_with(".ini"), &mut out);
+    // shortcut: the Special Events list without its pictures (144 MB), add them if the preview should show them
+    files_under(root, "content/specialevents", &|p: &str| p.ends_with(".ini"), &mut out);
     for car in cars {
         files_under(root, &format!("content/cars/{car}/ui"), &all, &mut out);
         let skin = |p: &str| p.ends_with("/ui_skin.json") || p.ends_with("/preview.jpg") || p.ends_with("/livery.png");
