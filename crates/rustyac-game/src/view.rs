@@ -1186,6 +1186,62 @@ pub fn telemetry_values(sim: &GameSim, names: &[String]) -> Vec<f32> {
         .collect()
 }
 
+/// Task 44c: what FormAI reads of the focused car (`focus` as [`setup_debug`]'s) and of the
+/// track's line (`TrackAvatar::getAISpline`: the live one).
+pub fn ai_app(sim: &GameSim, focus: usize) -> rustyac_gui::app_ai::AiAppView {
+    use rustyac_gui::app_ai::{AiAppView, AiDriverValues, AiState};
+    let (car, ai) = if focus == 0 { (&sim.car.car, sim.car.device.ai.as_deref()) } else { sim.opponents.get(focus - 1).map_or((&sim.car.car, None), |o| (&o.car.car, o.car.device.ai.as_deref())) };
+    let track = car.track.as_deref();
+    let line = track.and_then(|t| t.ai_line());
+    let p = car.core.get_position(car.body);
+    let pos = [p.x, p.y, p.z];
+    let mut view = AiAppView::default();
+    if let Some(line) = line {
+        let s = &line.spline;
+        view.points_count = s.points_count() as u32;
+        // interpolationModeName: eLinear or eCatmulRom
+        view.interpolation_mode = if s.linear { 0 } else { 2 };
+        view.grid_on = s.grid_data.is_some();
+        view.spline_at_zero = s.spline_to_world(0.0);
+        view.sides = line.payload_at_position(s.world_to_spline(&pos, -1)).sides;
+    }
+    if let Some(ai) = ai {
+        let v = |v: &rustyac_physics::vecmath::Vec3f| [v.x, v.y, v.z];
+        let npos = car.spline_locator_data.npos;
+        let target = v(&ai.steer_target);
+        let d = [target[0] - pos[0], target[1] - pos[1], target[2] - pos[2]];
+        view.driver = Some(AiDriverValues {
+            steer_min_lookahead: ai.steer_min_lookahead,
+            gas_brake_lookahead: ai.gas_brake_lookahead,
+            steer_gain: ai.steer_gain,
+            brake_hint_base: ai.brake_hint_base,
+            change_up_rpm: ai.change_up_rpm,
+            change_dn_perc: ai.change_dn_perc,
+            aero_hint: ai.aero_hint,
+            tyres_hint: ai.tyres_hint,
+            ultra_grip: ai.ultra_grip,
+            next_car_modifier: ai.next_car_modifier,
+            dist_to_next_corner: ai.dist_to_next_corner,
+            distance_from_target: (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
+        });
+        view.state = Some(AiState {
+            steer_target: target,
+            gas_brake_target: ai.gas_brake_lookahead,
+            target_speed: ai.target_speed,
+            target_lateral_offset: ai.current_offset,
+            brake_target_speed: ai.brake_point.target_speed,
+            brake_target_dist: line.map_or(0.0, |l| l.length()) * (ai.brake_point.target_normalized - npos),
+            current_normalized_spline_position: npos,
+            outside_offset: track.and_then(|t| t.ai()).map_or(0.0, |r| ai.get_outside_offset(car, r)),
+            proj_dn_rpm: ai.prj_dn_rpm,
+            understeer_factor: ai.understeer_factor,
+            current_push: ai.get_lateral_push(car),
+            spline_at_npos: line.map_or([0.0; 3], |l| l.spline.spline_to_world(npos)),
+        });
+    }
+    view
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

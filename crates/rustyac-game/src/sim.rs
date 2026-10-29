@@ -742,6 +742,9 @@ pub struct GameSim {
     /// Task 43: the next teleport is `goToSpawnPosition` alone (the pit box after an online
     /// session's results): the timer and the lap count stay, as only `onNewSession` resets them
     keep_laps: bool,
+    /// Task 44c: the AI line recorder FormAI started while one car steps alone (with other
+    /// cars it is the engine's)
+    pub ai_recording: Option<rustyac_physics::track::ai_line::AiSplineRecorder>,
 }
 
 /// Another car of the session with its driver.
@@ -1304,7 +1307,7 @@ impl GameSim {
             let started = setup.clock_start_ms - session.net.client.accepted.current_session.start as f64;
             session.net.client.begin_update_mode(started)?;
         }
-        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new(), pit_schedule: std::collections::VecDeque::new(), pit_log: Vec::new(), keep_laps: false };
+        let mut sim = GameSim { setup, data_path, car, physics_info, steps: 0, track, track_folder, spawn, track_summary, lap_db, session_index: 0, new_sessions: 0, step_laps: Vec::new(), fuel_evaluator: rustyac_physics::car::fuel_lap_evaluator::FuelLapEvaluator::new(), aid_note: AidNote::default(), opponents, engine, online, rules, solo_ai: rustyac_physics::ai::SoloAi { rand: rustyac_physics::session::MsvcRand(1), session: rustyac_physics::ai::SessionInfo::default() }, referee: None, setup_jobs: Vec::new(), setup_schedule: std::collections::VecDeque::new(), setup_log: Vec::new(), pit_schedule: std::collections::VecDeque::new(), pit_log: Vec::new(), keep_laps: false, ai_recording: None };
         sim.setup_schedule = sim.setup.setup_jobs.iter().cloned().collect();
         sim.pit_schedule = sim.setup.pit_jobs.iter().cloned().collect();
         // the session begins in the ESC menu: without a referee the car is held here
@@ -1985,14 +1988,33 @@ impl GameSim {
             if let SetupJob::SetFfUpgrade { which, value } = job {
                 self.car.device.source.set_ff_upgrade(which, value);
             }
-            // the console's: FormAI's lambdas (car 0's controls are an AIDriver or nothing
+            // the console's and FormAI's lambdas (the car's controls are an AIDriver or nothing
             // happens), the options' AUTOFLIP_RECOVERY
-            if let SetupJob::SetAi { which, value } = job {
-                if let Some(ai) = &mut self.car.device.ai {
+            if let SetupJob::SetAi { which, value, car } = job {
+                let device = if car == 0 { Some(&mut self.car.device) } else { self.opponents.get_mut(car - 1).map(|o| &mut o.car.device) };
+                if let Some(ai) = device.and_then(|d| d.ai.as_mut()) {
                     match which {
                         0 => ai.steer_gain = value,
                         1 => ai.base_push = value,
-                        _ => ai.steer_min_lookahead = value,
+                        2 => ai.steer_min_lookahead = value,
+                        3 => ai.change_up_rpm = value,
+                        4 => ai.change_dn_perc = value,
+                        5 => ai.brake_hint_base = value,
+                        6 => ai.tyres_hint = value,
+                        7 => ai.aero_hint = value,
+                        _ => ai.use_magic_forces = value != 0.0,
+                    }
+                }
+            }
+            if let SetupJob::AiRecording { what } = job {
+                match (&mut self.engine, what) {
+                    (Some(engine), 0) => engine.start_ai_recording(),
+                    (Some(engine), _) => engine.ai_recording_pit_lane(what == 1),
+                    (None, 0) => self.ai_recording = self.car.car.track.as_deref().map(rustyac_physics::engine::new_ai_recording),
+                    (None, _) => {
+                        if let (Some(recorder), Some(track)) = (&mut self.ai_recording, &self.car.car.track) {
+                            rustyac_physics::engine::ai_recording_pit_lane(recorder, track, what == 1);
+                        }
                     }
                 }
             }
@@ -2028,6 +2050,11 @@ impl GameSim {
             self.referee = Some(referee);
         }
         let time = self.setup.time_of_step(self.steps);
+        // one car alone: its recorder in the engine's order (before the car's step, its laps after)
+        let laps_before = self.car.car.transponder.lap_events.len();
+        if let Some(recorder) = &mut self.ai_recording {
+            rustyac_physics::engine::ai_recording_step(recorder, &self.car.car);
+        }
         match &mut self.engine {
             None if self.car.device.ai.is_some() => {
                 // one car with an AI driver: what the engine hands such a car
@@ -2074,6 +2101,9 @@ impl GameSim {
                     }
                 }
             }
+        }
+        if let (Some(recorder), Some(track)) = (&mut self.ai_recording, &self.car.car.track) {
+            rustyac_physics::engine::ai_recording_laps(recorder, track, &self.car.car, laps_before);
         }
         self.steps += 1;
         // FuelLapEvaluator::step (the end of Car::stepComponents)

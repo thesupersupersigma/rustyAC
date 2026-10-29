@@ -72,6 +72,8 @@ pub enum AppAction {
     TakeScreenshot,
     /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
     DeleteFile { path: String },
+    /// Task 44c: FormAI's recorder buttons and AI driver values
+    Ai(crate::app_ai::AiJob),
 }
 
 /// A level of `MixVolumes` (`CarAudioFMOD+0x118`).
@@ -315,6 +317,8 @@ pub struct AppLink {
     /// What the Photo mode reads and changes (the scene camera, the exposure, the sun)
     pub photo: crate::app_photo_mode::PhotoLink,
     pub ctrl_down: bool,
+    /// Task 44c: what FormAI reads of the focused car and the track's line
+    pub ai: crate::app_ai::AiAppView,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,
     /// Task 33: what the statistics apps read

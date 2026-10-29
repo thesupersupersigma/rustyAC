@@ -82,6 +82,10 @@ pub struct GameApps {
     /// Task 33b: the Telemetry app's values of this frame
     pub telemetry: rustyac_gui::app_telemetry::TelemetryFeed,
     pub setup_debug: Option<rustyac_gui::app_setup_debug::SetupDebugCar>,
+    /// Task 44c: FormAI's view of the focused car's AI and the track's line; the player's car.ini
+    /// is a loose file
+    pub ai: rustyac_gui::app_ai::AiAppView,
+    loose: bool,
 }
 
 fn read(path: PathBuf) -> Option<IniReader> {
@@ -234,6 +238,11 @@ impl GameApps {
             let id = gui.new_ballast_app(painter);
             add(gui, painter, "ballast", id);
         }
+        // FormAI (Sim::Sim makes it right before CarPhysicsForm)
+        self.loose = loose;
+        gui.apps.ai.driver = setup.ai_drive.then(rustyac_gui::app_ai::AiDriverValues::default);
+        let id = gui.new_ai_app(painter);
+        add(gui, painter, "ai", id);
         // CarPhysicsForm (a developers' app, before TelemetryApp)
         let id = gui.new_car_physics_app(painter);
         add(gui, painter, "carphysics", id);
@@ -410,6 +419,16 @@ impl GameApps {
                     let _ = rustyac_content::guard::remove_file(setup.cfg_dir.join(path.strip_prefix("cfg/").unwrap_or(&path)));
                     continue;
                 }
+                AppAction::Ai(job) => {
+                    use rustyac_gui::app_ai::AiJob;
+                    use rustyac_physics::car::setup::SetupJob;
+                    self.ffb_jobs.push(match job {
+                        AiJob::StartRecording => SetupJob::AiRecording { what: 0 },
+                        AiJob::PitLane { begin } => SetupJob::AiRecording { what: if begin { 1 } else { 2 } },
+                        AiJob::Set { which, value } => SetupJob::SetAi { which, value, car: gui.apps.focused_car },
+                    });
+                    continue;
+                }
                 AppAction::SetBallastKg(kg) => {
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetBallastKg { kg });
                     continue;
@@ -569,6 +588,7 @@ impl GameApps {
             suspension: world.first().map(|v| rustyac_gui::app_suspension::SuspensionLink { facts: setup.suspension, wheel_nodes: v.wheels.map(|w| [w[3][0], w[3][1], w[3][2]]) }),
             tyre_tester: world.first().map(|v| rustyac_gui::app_tyre_tester::TyreTesterCar { speed: v.speed_ms, load: v.wheel_load, compound: v.compound_index }),
             setup_debug: self.setup_debug.clone(),
+            ai: rustyac_gui::app_ai::AiAppView { km_per_liter: first.map_or(0.0, |v| v.km_per_liter), loose: self.loose, ..self.ai.clone() },
             car_engineer: rustyac_gui::app_car_engineer::CarEngineer { total_mass: setup.engineer_masses.total_mass, body_mass: setup.engineer_masses.body_mass, unsprung: setup.engineer_masses.unsprung, ..world.first().map(|v| v.engineer).unwrap_or_default() },
             // (filled by the renderer right before the GUI is drawn)
             gpu_profile: Vec::new(),

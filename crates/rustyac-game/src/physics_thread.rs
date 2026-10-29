@@ -202,6 +202,9 @@ pub struct Shared {
     pub telemetry: Mutex<Vec<(f64, Vec<f32>)>>,
     /// the Setup debug app's car, after each step while the app is shown
     pub setup_debug_on: AtomicBool,
+    /// Task 44c: FormAI is shown (its view of the focused car, `setup_debug_focus`'s)
+    pub ai_app_on: AtomicBool,
+    pub ai_app: Mutex<Option<rustyac_gui::app_ai::AiAppView>>,
     pub setup_debug: Mutex<Option<rustyac_gui::app_setup_debug::SetupDebugCar>>,
     /// the display's focused car, which the Setup debug app reads (0: the player's)
     pub setup_debug_focus: std::sync::atomic::AtomicUsize,
@@ -235,6 +238,8 @@ impl Shared {
             telemetry_on: AtomicBool::new(false),
             telemetry: Mutex::new(Vec::new()),
             setup_debug_on: AtomicBool::new(false),
+            ai_app_on: AtomicBool::new(false),
+            ai_app: Mutex::new(None),
             setup_debug: Mutex::new(None),
             setup_debug_focus: std::sync::atomic::AtomicUsize::new(0),
             timing: Mutex::new(Timing::default()),
@@ -528,6 +533,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
         // the car as the setup editor sees it: after its jobs, and a few times a second
         if sim.setup_log.len() != jobs_before || sim.steps.is_multiple_of(64) {
             shared.publish_setup(&sim);
+        }
+        if shared.ai_app_on.load(Ordering::Relaxed) {
+            *shared.ai_app.lock().unwrap() = Some(crate::view::ai_app(&sim, shared.setup_debug_focus.load(Ordering::Relaxed)));
         }
         if shared.setup_debug_on.load(Ordering::Relaxed) {
             *shared.setup_debug.lock().unwrap() = Some(crate::view::setup_debug(&sim, shared.setup_debug_focus.load(Ordering::Relaxed)));

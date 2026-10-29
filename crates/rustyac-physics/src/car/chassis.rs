@@ -1793,7 +1793,7 @@ impl RollingChassis {
                 }
             }
             // (the session's: the game sim does them)
-            SetupJob::SetAi { .. } | SetupJob::SetAutoflipRecovery { .. } => {}
+            SetupJob::SetAi { .. } | SetupJob::AiRecording { .. } | SetupJob::SetAutoflipRecovery { .. } => {}
             _ => self.setup_manager.apply_job(job),
         }
     }

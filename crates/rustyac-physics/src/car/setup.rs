@@ -284,9 +284,14 @@ pub enum SetupJob {
     /// the console's `engineDamageLevel` (0x140195e40, its job 0x140196740): the engine's
     /// `lifeLeft`, only lower
     SetEngineLife { value: f32 },
-    /// the console's `aiSteerGain`, `aiPush`, `aiLookAhead` (`FormAI`'s lambdas): the AI
-    /// driver's `steerGain` (0), `basePush` (1), `steerMinLookahead` (2), when car 0 has one
-    SetAi { which: usize, value: f32 },
+    /// the console's `aiSteerGain`, `aiPush`, `aiLookAhead` and FormAI's spinners and magic
+    /// button: car `car`'s AI driver's `steerGain` (0), `basePush` (1), `steerMinLookahead` (2),
+    /// `changeUpRPM` (3), `changeDnPerc` (4), `brakeHintBase` (5), `tyresHint` (6), `aeroHint`
+    /// (7), `useMagicForces` (8, 0 or 1), when it has one
+    SetAi { which: usize, value: f32, car: usize },
+    /// FormAI's buttons on the track's AI line recorder: `startRecording` (0),
+    /// `beginPitLaneSpline` (1), `endPitLaneSpline` (2)
+    AiRecording { what: u8 },
     /// the console's `set AUTOFLIP_RECOVERY` (`OptionsManager`'s map, read by
     /// `RaceManager::resetInvalidStateCarsToPits`)
     SetAutoflipRecovery { on: bool },

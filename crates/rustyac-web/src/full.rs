@@ -163,6 +163,7 @@ pub fn gui_setup(root: &Path, cfg_dir: &Path, session: &Session) -> GuiSetup {
         track_layout: info.track_layout.clone(),
         out_dir: own.join("out"),
         esc_start: sim.setup.esc_start,
+        ai_drive: false,
         fixed_setup: manager.is_some_and(|m| m.fixed_setup),
         data_paths: cars.iter().map(|car| car.data_path.clone()).collect(),
         dev_apps: rustyac_game::render::gui::dev_apps_enabled(root, false),

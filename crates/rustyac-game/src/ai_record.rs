@@ -22,11 +22,13 @@ use crate::sim::GameSim;
 pub struct AiRecordSink {
     folder: PathBuf,
     track: Option<Arc<Track>>,
+    /// a recording ran (`--ai-record` or the AI app's "start recording": `isSaveNeeded`)
+    recorded: bool,
 }
 
 impl AiRecordSink {
     pub fn new(folder: PathBuf) -> AiRecordSink {
-        AiRecordSink { folder, track: None }
+        AiRecordSink { folder, track: None, recorded: false }
     }
 }
 
@@ -35,12 +37,13 @@ impl StepSink for AiRecordSink {
         if self.track.is_none() {
             self.track = sim.track.clone();
         }
+        self.recorded |= sim.ai_recording.is_some() || sim.engine.as_ref().is_some_and(|e| e.ai_recording.is_some());
         Ok(())
     }
 
     /// `AISplineRecorder::~AISplineRecorder` @ 0x140293d20: the save, into rustyAC's folder.
     fn finish(&mut self) -> Result<(), String> {
-        let Some(track) = self.track.take() else { return Ok(()) };
+        let Some(track) = self.track.take().filter(|_| self.recorded) else { return Ok(()) };
         // the lines the recording left (the track's own until a lap was finished)
         let mut recorder = track.ai().cloned().unwrap_or_else(|| AiSplineRecorder { is_active: true, recording_step: 1.5, pit_lane_spline_attach_point: -1.0, ..AiSplineRecorder::default() });
         recorder.start_recording();

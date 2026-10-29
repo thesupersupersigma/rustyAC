@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 46] = [
+pub const APPS: [(&str, usize, usize, usize); 47] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -68,6 +68,8 @@ pub const APPS: [(&str, usize, usize, usize); 46] = [
     ("ppfilter", 0x1c8, 0x1_4032_9360, 0x1_4050_e610),
     ("hdr", 0x218, 0x1_4032_9e20, 0x1_4050_eaa8),
     ("drivermodel", 0x220, 0x1_4031_f0e0, 0x1_4050_c860),
+    // Task 44c
+    ("ai", 0x2b0, 0x1_402d_cf80, 0x1_4050_2aa0),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -518,6 +520,10 @@ unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
     if let Some(key) = *CONTROLS_CTOR.lock().unwrap() {
         return key as *mut u8;
     }
+    // FormAI's: the stand-in AIDriver once the script has one, else none (it casts what it gets)
+    if let Some(driver) = AI.lock().unwrap().as_ref().map(|g| g.driver) {
+        return if crate::gui_seq_apps::script(|s| s.ai_driver.is_some()) { driver as *mut u8 } else { std::ptr::null_mut() };
+    }
     let index = car_index(this);
     if link().cars.get(index).is_some_and(|c| c.ff_global_gain.is_some()) {
         PROVIDERS.lock().unwrap().get(index).copied().unwrap_or(0) as *mut u8
@@ -532,6 +538,51 @@ static RECORDER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 unsafe extern "C" fn get_ai_spline(_this: *mut u8) -> *mut u8 {
     (RECORDER.load(std::sync::atomic::Ordering::SeqCst) as *mut u8).add(0xf0)
 }
+
+/// Task 44c FormAI's session: the stand-in `AIDriver` (its vftable for the casts), its values
+/// written once the script has them, the recorder's calls, the last line of `effects_game.txt`.
+struct AiGame {
+    driver: usize,
+    written: bool,
+    log: Vec<String>,
+    last: String,
+}
+
+static AI: Mutex<Option<AiGame>> = Mutex::new(None);
+
+/// `AIDriver`'s members in the order of the script's `app.aiDriver` (then `useMagicForces` at
+/// +0x134)
+const AI_DRIVER_AT: [usize; 12] = [0x20, 0x24, 0x28, 0x64, 0x6c, 0x74, 0x78, 0xbc, 0xc0, 0x144, 0x80, 0xb8];
+
+fn ai_log(line: &str) {
+    if let Some(g) = AI.lock().unwrap().as_mut() {
+        g.log.push(line.to_string());
+    }
+}
+
+/// `TrackAvatar::getSplineRecorder` 0x1401c82f0: the fake track's recorder.
+unsafe extern "C" fn get_spline_recorder(_this: *mut u8) -> *mut u8 {
+    RECORDER.load(std::sync::atomic::Ordering::SeqCst) as *mut u8
+}
+
+/// `AISplineRecorder::startRecording` 0x140296f00, `beginPitLaneSpline` 0x140295020,
+/// `endPitLaneSpline` 0x140295110: written down.
+unsafe extern "C" fn ai_start_recording(_this: *mut u8) {
+    ai_log("ai start");
+}
+
+unsafe extern "C" fn ai_begin_pit_lane(_this: *mut u8) {
+    ai_log("ai pits 1");
+}
+
+unsafe extern "C" fn ai_end_pit_lane(_this: *mut u8) {
+    ai_log("ai pits 0");
+}
+
+/// (`Sim::executeOnMainThread` 0x140199240, save cons's message: the job done at once too)
+/// `Console::addVarLambda` 0x14018a830: the oracle has no console (the port's console vars are
+/// the console's proof); the by-value name and lambda are left (callee-destroyed: a leak only).
+unsafe extern "C" fn console_add_var_lambda(_this: *mut u8) {}
 
 /// Task 42: the cars' RaceManager getters again (a HUD field made after the apps takes them; its
 /// session getters stay the HUD's).
@@ -728,7 +779,8 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         // the track: its AI spline (TrackAvatar+0x178 -> AISplineRecorder, getBestLapSpline = +0xf0,
         // its Spline at +0x50: points begin / end, length at +0x20)
         let track = a.alloc(0x400);
-        let recorder = a.alloc(0x200);
+        // (sizeof AISplineRecorder: FormAI reads its side splines)
+        let recorder = a.alloc(0x448);
         wr(track, 0x178, recorder);
         RECORDER.store(recorder as usize, std::sync::atomic::Ordering::SeqCst);
         empty_wstring(track.add(0x10));
@@ -1149,8 +1201,51 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 if text == "x360" {
                     *CONTROLS_CTOR.lock().unwrap() = Some(pad_class(a));
                 }
+                if text == "ai" {
+                    // the recorder's best lap: magione's line as TrackAvatar loads one (loadFast)
+                    let spline = (RECORDER.load(std::sync::atomic::Ordering::SeqCst) as *mut u8).add(0xf0);
+                    let sctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(a.va(crate::ac::VA_AI_SPLINE_CTOR));
+                    sctor(spline);
+                    let load: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(a.va(crate::ac::VA_AI_SPLINE_LOAD_FAST));
+                    load(spline, crate::ac::wstring(a, crate::gui_seq_apps::AI_LINE));
+                    let driver = a.alloc(0x400);
+                    wr(driver, 0, a.va(0x1_404f_bfd0));
+                    for (va, to) in [(0x1_401c_82f0, get_spline_recorder as *const () as usize), (0x1_4029_6f00, ai_start_recording as *const () as usize), (0x1_4029_5020, ai_begin_pit_lane as *const () as usize), (0x1_4029_5110, ai_end_pit_lane as *const () as usize), (0x1_4018_a830, console_add_var_lambda as *const () as usize), (0x1_4019_9240, execute_on_physics_thread as *const () as usize)] {
+                        crate::gui_ac_hud::jump(game, va, to);
+                    }
+                    // the player's Car for save cons: unixName (+0x180), the fuel lap evaluator's
+                    // totalM / totalLiters (+0x3af8 + 0x20 / 0x28)
+                    if rd::<usize>(first_car, 0x1168) == 0 {
+                        let car = a.alloc(0x4000);
+                        empty_wstring(car.add(0x180));
+                        crate::ac::write_wstring(a, car.add(0x180), &crate::gui_seq_apps::script(|s| s.unix.clone()));
+                        wr(car, 0x3af8 + 0x20, crate::gui_seq_apps::AI_FUEL.0);
+                        wr(car, 0x3af8 + 0x28, crate::gui_seq_apps::AI_FUEL.1);
+                        wr(first_car, 0x1168, car);
+                    }
+                    // the dynamic initializer of `interpolationModeName` (the game runs it at start)
+                    let init: extern "C" fn() = std::mem::transmute(a.va(0x1_4001_26e0));
+                    init();
+                    // (Sim+0x170: the render-finished node event its 3D lines hook into)
+                    if rd::<usize>(sim, 0x170) == 0 {
+                        wr(sim, 0x170, a.alloc(0x200));
+                    }
+                    *AI.lock().unwrap() = Some(AiGame { driver: driver as usize, written: false, log: Vec::new(), last: String::new() });
+                    // getGameObjects<CarAvatar> finds car 0 (its vftable for the cast) while the
+                    // constructor runs: LAT_OFF and BR_TARGET are made
+                    wr(first_car, 0, a.va(0x1_404b_e5e8));
+                    let list = a.alloc(0x10);
+                    wr(list, 0, first_car);
+                    wr(sim, 0x40, list);
+                    wr(sim, 0x48, list.add(8));
+                }
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
                 *CONTROLS_CTOR.lock().unwrap() = None;
+                if text == "ai" {
+                    wr(first_car, 0, 0usize);
+                    wr(sim, 0x40, 0usize);
+                    wr(sim, 0x48, 0usize);
+                }
             }
             if text == "telemetry" {
                 telemetry_channels(a, form, sim)?;
@@ -1482,6 +1577,47 @@ pub unsafe fn update() {
     wr(g.game_block as *mut u8, 0x18, l.game_time);
     if let Some(game) = GAME_ACS.lock().unwrap().as_ref() {
         wr(game.0 as *mut u8, 0, l.use_mph as u8);
+    }
+    // FormAI's: the script's AI state on every car (CarAvatar::aiState, +0xdd8; only isActive
+    // goes when it has none, as Car::getAIState leaves it), the stand-in driver's values
+    if let Some(ai) = AI.lock().unwrap().as_mut() {
+        let (state, values) = crate::gui_seq_apps::script(|s| (s.ai_state, s.ai_driver));
+        for avatar in &g.cars {
+            let at = (*avatar as *mut u8).add(0xdd8);
+            match state {
+                Some(st) => {
+                    wr(at, 4, [st[0], st[1], st[2], st[3]]);
+                    wr(at, 0x14, (st[13] != 0.0) as u8);
+                    for (k, off) in (0x18..=0x38).step_by(4).enumerate() {
+                        wr(at, off, st[4 + k]);
+                    }
+                }
+                None => wr(at, 0x14, 0u8),
+            }
+        }
+        let driver = ai.driver as *mut u8;
+        if let (Some(v), false) = (values, ai.written) {
+            for (off, x) in AI_DRIVER_AT.iter().zip(v) {
+                wr(driver, *off, x);
+            }
+            wr(driver, 0x134, (v[12] != 0.0) as u8);
+            ai.written = true;
+        }
+        if let Some(st) = state {
+            wr(driver, 0x44, [st[0], st[1], st[2]]);
+        }
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let line = if ai.written {
+            let mut v = [0f32; 13];
+            for (k, off) in AI_DRIVER_AT.iter().enumerate() {
+                v[k] = rd(driver, *off);
+            }
+            v[12] = rd::<u8>(driver, 0x134) as f32;
+            crate::gui_port_apps::ai_line(&v)
+        } else {
+            String::new()
+        };
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut ai.log), &line, &mut ai.last);
     }
     // the force feedback app's: the gains, the car's FF mult, the wheel's effects, the messages
     if let Some(f) = FFB.lock().unwrap().as_mut() {

@@ -1027,7 +1027,7 @@ impl AiDriver {
     }
 
     /// `AIDriver::getOutsideOffset` @ 0x14029ddd0
-    fn get_outside_offset(&self, car: &RollingChassis, recorder: &AiSplineRecorder) -> f32 {
+    pub fn get_outside_offset(&self, car: &RollingChassis, recorder: &AiSplineRecorder) -> f32 {
         if self.spline_selection == SplineSelection::FastLane {
             let payload = self.spline(recorder).payload_at_position(self.loc_npos);
             let side = if payload.direction <= 0.0 { -1.0f32 } else { 1.0 };

@@ -438,6 +438,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
             track_name: info.track_folder.as_ref().and_then(|folder| folder.file_name()).map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             track_layout: info.track_layout.clone(),
             esc_start: esc_start(options),
+            ai_drive: options.ai_drive,
             // Task 33: the ESC menu's page "Telemetry": the recorder's folder (none: no recorder)
             telemetry_folder: telemetry_folder(options, true).filter(|_| !options.online_session),
             max_gear: rustyac_game::input::ini::ControlsIni::load_car_data(&info.data_path.join("drivetrain.ini")).map_or(0, |ini| ini.get_int("GEARS", "COUNT")),
@@ -847,6 +848,10 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
     if let Some(folder) = &options.ai_record {
         sinks.push(Box::new(rustyac_game::ai_record::AiRecordSink::new(folder.clone())));
         println!("recording an AI line from the player's car; saved into {} at the end", folder.display());
+    } else if let Some(track) = &options.track {
+        // the AI app's "start recording": the game saves into the track's ai folder, rustyAC into its cfg folder's copy of that path
+        let ai = cfg_dir(options).join("content/tracks").join(track).join(options.layout.as_deref().unwrap_or("")).join("ai");
+        sinks.push(Box::new(rustyac_game::ai_record::AiRecordSink::new(ai)));
     }
     if let Some(rig) = rig {
         sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
@@ -1826,6 +1831,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                 let car = shared.setup_debug.lock().unwrap().take();
                 shared.setup_debug_on.store(gui.setup_debug_exchange(car), Ordering::Relaxed);
                 shared.setup_debug_focus.store(focus.index, Ordering::Relaxed);
+                let ai = shared.ai_app.lock().unwrap().take();
+                shared.ai_app_on.store(gui.ai_app_exchange(ai), Ordering::Relaxed);
             }
             // the setup editor's jobs to the physics thread, the car's newest picture back
             {

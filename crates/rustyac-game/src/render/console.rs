@@ -136,9 +136,9 @@ pub fn carry_out(gui: &mut super::gui::GameGui) -> bool {
                 // the physics thread's (jobs, so a drive's input file keeps them)
                 "restrictor" => gui.apps.ffb_jobs.push(SetupJob::SetRestrictor { value }),
                 "engineDamageLevel" => gui.apps.ffb_jobs.push(SetupJob::SetEngineLife { value }),
-                "aiSteerGain" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 0, value }),
-                "aiPush" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 1, value }),
-                "aiLookAhead" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 2, value }),
+                "aiSteerGain" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 0, value, car: 0 }),
+                "aiPush" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 1, value, car: 0 }),
+                "aiLookAhead" => gui.apps.ffb_jobs.push(SetupJob::SetAi { which: 2, value, car: 0 }),
                 "AUTOFLIP_RECOVERY" => gui.apps.ffb_jobs.push(SetupJob::SetAutoflipRecovery { on: value != 0.0 }),
                 n if n.starts_with("bodyDamageLevel") => {
                     let zone = (n.as_bytes()[15] - b'0') as usize;

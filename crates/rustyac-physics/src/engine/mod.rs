@@ -78,6 +78,43 @@ pub struct CarSlot<'a> {
     pub device: DeviceRef<'a>,
 }
 
+/// `AISplineRecorder::startRecording` @ 0x140296f00 on a copy of the track's recorder (one with
+/// no line where the track has none).
+pub fn new_ai_recording(track: &Track) -> crate::track::ai_line::AiSplineRecorder {
+    let mut recorder = track.ai().cloned().unwrap_or_else(|| crate::track::ai_line::AiSplineRecorder { is_active: true, recording_step: 1.5, pit_lane_spline_attach_point: -1.0, ..Default::default() });
+    recorder.start_recording();
+    recorder
+}
+
+/// `AISplineRecorder::step` @ 0x140296f60 with the first car as the pre-step jobs left it.
+pub fn ai_recording_step(recorder: &mut crate::track::ai_line::AiSplineRecorder, car: &RollingChassis) {
+    let p = car.core.get_position(car.body);
+    recorder.step(car.physics_guid, [p.x, p.y, p.z], car.speed, car.controls.gas, car.controls.brake);
+}
+
+/// The recorder's handler on the first car's `evOnLapCompleted` for the laps after
+/// `laps_before`: a finished lap becomes the track's line for everyone.
+pub fn ai_recording_laps(recorder: &mut crate::track::ai_line::AiSplineRecorder, track: &Track, car: &RollingChassis, laps_before: usize) {
+    let laps = &car.transponder.lap_events;
+    if laps.len() > laps_before {
+        for lap in &laps[laps_before..] {
+            recorder.on_lap_completed(lap.car_index, lap.lap_time);
+        }
+        track.live_ai.publish(recorder.clone());
+    }
+}
+
+/// `beginPitLaneSpline` @ 0x140295020 (true) or `endPitLaneSpline` @ 0x140295110 (false); the
+/// end makes the new pit lane everyone's.
+pub fn ai_recording_pit_lane(recorder: &mut crate::track::ai_line::AiSplineRecorder, track: &Track, begin: bool) {
+    if begin {
+        recorder.begin_pit_lane_spline();
+    } else {
+        recorder.end_pit_lane_spline();
+        track.live_ai.publish(recorder.clone());
+    }
+}
+
 /// AC's other `PhysicsEngine::evOnStepCompleted` handlers: what runs after `dWorldStep`
 /// besides the loose objects and the cars' `Car::postStep`, in the order the game registered
 /// them. Online that is the client (`ACClient::onPhysicsStep` @ 0x14004f1d0: registered in
@@ -334,21 +371,16 @@ impl PhysicsEngine {
     /// `AISplineRecorder::startRecording` @ 0x140296f00 on the track's recorder (one with no
     /// line where the track has none).
     pub fn start_ai_recording(&mut self) {
-        let Some(track) = &self.track else { return };
-        let mut recorder = track.ai().cloned().unwrap_or_else(|| crate::track::ai_line::AiSplineRecorder { is_active: true, recording_step: 1.5, pit_lane_spline_attach_point: -1.0, ..Default::default() });
-        recorder.start_recording();
-        self.ai_recording = Some(recorder);
+        if let Some(track) = &self.track {
+            self.ai_recording = Some(new_ai_recording(track));
+        }
     }
 
     /// `beginPitLaneSpline` @ 0x140295020 (true) or `endPitLaneSpline` @ 0x140295110 (false)
     /// on the recording; the end makes the new pit lane everyone's.
     pub fn ai_recording_pit_lane(&mut self, begin: bool) {
-        let (Some(recorder), Some(track)) = (&mut self.ai_recording, &self.track) else { return };
-        if begin {
-            recorder.begin_pit_lane_spline();
-        } else {
-            recorder.end_pit_lane_spline();
-            track.live_ai.publish(recorder.clone());
+        if let (Some(recorder), Some(track)) = (&mut self.ai_recording, &self.track) {
+            ai_recording_pit_lane(recorder, track, begin);
         }
     }
 
@@ -487,9 +519,7 @@ impl PhysicsEngine {
         // the pre-step jobs left it
         let laps_before = cars.first().map_or(0, |slot| slot.car.transponder.lap_events.len());
         if let (Some(recorder), Some(slot)) = (&mut self.ai_recording, cars.first()) {
-            let car = &*slot.car;
-            let p = car.core.get_position(car.body);
-            recorder.step(car.physics_guid, [p.x, p.y, p.z], car.speed, car.controls.gas, car.controls.brake);
+            ai_recording_step(recorder, slot.car);
         }
         // PhysicsEngine::stepWind
         self.env.step_wind(physics_time);
@@ -525,13 +555,7 @@ impl PhysicsEngine {
         // here every car of this step saw the old line (the first car never reads it again
         // before Car::postStep)
         if let (Some(recorder), Some(track), Some(slot)) = (&mut self.ai_recording, &self.track, cars.first()) {
-            let laps = &slot.car.transponder.lap_events;
-            if laps.len() > laps_before {
-                for lap in &laps[laps_before..] {
-                    recorder.on_lap_completed(lap.car_index, lap.lap_time);
-                }
-                track.live_ai.publish(recorder.clone());
-            }
+            ai_recording_laps(recorder, track, slot.car, laps_before);
         }
         let clock = Clock::start();
 

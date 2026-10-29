@@ -58,6 +58,10 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "sustelemetry" => gui.new_sus_telemetry_app(painter),
         "tyredebug" => gui.new_tyre_debug_app(painter),
         "setupdebug" => gui.new_setup_debug_app(painter),
+        "ai" => {
+            *PORT_AI.lock().unwrap() = Some((Vec::new(), String::new()));
+            gui.new_ai_app(painter)
+        }
         "carphysics" => gui.new_car_physics_app(painter),
         "carengineer" => gui.new_car_engineer_app(painter),
         "wings" => gui.new_wings_app(painter),
@@ -265,6 +269,25 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     b.0 = kg;
                 }
             }
+            AppAction::Ai(job) => {
+                use rustyac_gui::app_ai::AiJob;
+                let line = match job {
+                    AiJob::StartRecording => "ai start".to_string(),
+                    AiJob::PitLane { begin } => format!("ai pits {}", begin as u8),
+                    AiJob::Set { which, value } => {
+                        // (FormAI's spinners change the stand-in driver: kept in the script, as the game's memory)
+                        crate::gui_seq_apps::script(|s| {
+                            if let Some(d) = s.ai_driver.as_mut() {
+                                d[AI_SET_AT[which]] = value;
+                            }
+                        });
+                        continue;
+                    }
+                };
+                if let Some(p) = PORT_AI.lock().unwrap().as_mut() {
+                    p.0.push(line);
+                }
+            }
             AppAction::AddMessage { title, text } => ffb(|f| {
                 if let Some(f) = f {
                     f.log.push(format!("message {title}|{text}"));
@@ -411,6 +434,17 @@ pub fn photo_line(l: &rustyac_gui::app_photo_mode::PhotoLink, animator: bool) ->
     )
 }
 
+/// FormAI's: the recorder's calls, the last line.
+static PORT_AI: std::sync::Mutex<Option<(Vec<String>, String)>> = std::sync::Mutex::new(None);
+
+/// `SetupJob::SetAi`'s `which` as an index of the script's `app.aiDriver`.
+const AI_SET_AT: [usize; 9] = [3, 2, 0, 5, 6, 4, 8, 7, 12];
+
+/// FormAI's stand-in driver as a line of `effects_*.txt` (every value's bits).
+pub fn ai_line(v: &[f32; 13]) -> String {
+    format!("ai driver {}", v.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(" "))
+}
+
 /// The ballast app's: the player's car's ballast as the port's app set it, the last line.
 static BALLAST: std::sync::Mutex<Option<(f32, String)>> = std::sync::Mutex::new(None);
 
@@ -437,6 +471,10 @@ pub fn sync(gui: &mut Gui) {
     let chase = gui.apps.chase_cam;
     if chase != (0.0, 0.0, 0.0) {
         crate::gui_seq_apps::script(|s| s.chase = chase);
+    }
+    if let Some(p) = PORT_AI.lock().unwrap().as_mut() {
+        let line = crate::gui_seq_apps::script(|s| s.ai_driver).map_or(String::new(), |v| ai_line(&v));
+        append_effects(&root.join("effects_port.txt"), std::mem::take(&mut p.0), &line, &mut p.1);
     }
     // (Keyboard debug's spinners change the keyboard's first five parameters: kept in the script)
     if let Some(k) = gui.apps.keyboard {

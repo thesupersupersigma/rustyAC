@@ -84,6 +84,9 @@ pub struct GuiSetup {
     pub out_dir: PathBuf,
     /// the session begins in the ESC menu (and so does every session after it)
     pub esc_start: bool,
+    /// Task 44c: the player's car is driven by an AI driver from the start (FormAI's
+    /// constructor finds it)
+    pub ai_drive: bool,
     /// race.ini `[RACE] FIXED_SETUP` (`RaceManager::fixedSetup`): the menu's Setup button is
     /// dimmed and answers "Blocked"
     pub fixed_setup: bool,
@@ -1459,6 +1462,14 @@ impl GameGui {
             self.apps.setup_debug = car;
         }
         self.apps.app("setupdebug").is_some_and(|id| self.gui.controls[id].visible)
+    }
+
+    /// Task 44c: FormAI's newest view from the physics thread; true while the app is shown.
+    pub fn ai_app_exchange(&mut self, view: Option<rustyac_gui::app_ai::AiAppView>) -> bool {
+        if let Some(view) = view {
+            self.apps.ai = view;
+        }
+        self.apps.app("ai").is_some_and(|id| self.gui.controls[id].visible)
     }
 
     /// The setup editor's jobs since the last call, for the physics thread; and the physics

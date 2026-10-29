@@ -244,6 +244,15 @@ pub struct AppScript {
     pub keyboard: Option<[f32; 11]>,
     /// X360 Controller debug's: the pad's parameters (`PadTuning`), None: no pad class
     pub pad: Option<[f32; 8]>,
+    /// Task 44c FormAI's: the stand-in `AIDriver`'s values (steerMinLookahead,
+    /// gasBrakeLookahead, basePush, steerGain, brakeHintBase, changeUpRPM, changeDnPerc,
+    /// aeroHint, tyresHint, ultraGrip, nextCarModifier, distToNextCorner, useMagicForces), None:
+    /// the cars' controls are no AI driver; every car's `aiState` (steerTarget, gasBrakeTarget,
+    /// targetSpeed, targetLateralOffset, brakeTargetSpeed, brakeTargetDist,
+    /// currentNormalizedSplinePosition, outsideOffset, projDNRPM, understeerFactor, currentPush,
+    /// isActive), None: not active
+    pub ai_driver: Option<[f32; 13]>,
+    pub ai_state: Option<[f32; 14]>,
     /// the Camera editor's: YEBIS's measured exposure (`currentAutoExposure`)
     pub auto_exposure: f32,
     /// the Photo mode's: the right and middle buttons down (`GetAsyncKeyState`)
@@ -420,6 +429,8 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.drs" => script(|s| s.drs = on),
         // "off", the 11 parameters, or (`app.keyboardLive`) the last six: what the spinners do not change
         "app.keyboard" => script(|s| s.keyboard = (text != "off").then(|| floats::<11>(text))),
+        "app.aiDriver" => script(|s| s.ai_driver = (text != "off").then(|| floats::<13>(text))),
+        "app.aiState" => script(|s| s.ai_state = (text != "off").then(|| floats::<14>(text))),
         "app.keyboardLive" => script(|s| {
             if let Some(k) = s.keyboard.as_mut() {
                 k[5..].copy_from_slice(&floats::<6>(text));
@@ -713,6 +724,7 @@ pub fn link() -> AppLink {
             tyre_tester: Some(tyre_tester_car(s.frame)),
             suspension: states.first().map(|state| suspension_link(state, s.frame)),
             setup_debug: Some(setup_debug_car(s.frame)),
+            ai: ai_view(s, &states),
             car_physics: car_physics_extra(s.frame),
             car_engineer: car_engineer(s.frame),
             wings: wing_rows(s.frame),
@@ -726,6 +738,84 @@ pub fn link() -> AppLink {
             actions: Vec::new(),
         }
     })
+}
+
+/// FormAI's track line (copied into the oracle's root; the game's side loads it with
+/// `AISpline::loadFast`)
+pub const AI_LINE: &str = "content/tracks/magione/ai/fast_lane.ai";
+/// FormAI's save cons: the player's fuel lap evaluator's totalM and totalLiters
+pub const AI_FUEL: (f64, f64) = (12345.678, 3.25);
+
+/// What FormAI reads (the port's `rustyac_game::view::ai_app`): the script's driver and state,
+/// the line's facts at the focused car.
+fn ai_view(s: &AppScript, states: &[CarPhysicsState]) -> rustyac_gui::app_ai::AiAppView {
+    use rustyac_gui::app_ai::{AiAppView, AiDriverValues, AiState};
+    static LINE: std::sync::OnceLock<Option<rustyac_physics::track::AiSpline>> = std::sync::OnceLock::new();
+    let line = LINE.get_or_init(|| {
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        std::fs::read(root.join(AI_LINE)).ok().and_then(|b| rustyac_physics::track::AiSpline::parse_fast(&b).ok()).map(|mut l| {
+            l.finish_load();
+            l
+        })
+    });
+    let m = states.get(s.focused).map_or(Default::default(), |st| st.world_matrix);
+    let pos = [m.m[3][0], m.m[3][1], m.m[3][2]];
+    let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+    let mut view = AiAppView { km_per_liter: (AI_FUEL.0 * 0.001 / AI_FUEL.1) as f32, loose: root.join(format!("content/cars/{}/data/car.ini", s.unix)).is_file(), ..AiAppView::default() };
+    // (the game's side writes the script's line length into the line every frame)
+    let line = line.clone().map(|mut l| {
+        l.spline.m_length = s.spline_length;
+        l
+    });
+    if let Some(line) = &line {
+        view.points_count = line.spline.points_count() as u32;
+        view.interpolation_mode = if line.spline.linear { 0 } else { 2 };
+        view.grid_on = line.spline.grid_data.is_some();
+        view.spline_at_zero = line.spline.spline_to_world(0.0);
+        view.sides = line.payload_at_position(line.spline.world_to_spline(&pos, -1)).sides;
+    }
+    let st = s.ai_state.filter(|a| a[13] != 0.0);
+    view.driver = s.ai_driver.map(|d| {
+        // (the game's side writes the stand-in driver's steerTarget while there is a state: it keeps the last)
+        static TARGET: std::sync::Mutex<[f32; 3]> = std::sync::Mutex::new([0.0; 3]);
+        let t = match s.ai_state {
+            Some(a) => {
+                *TARGET.lock().unwrap() = [a[0], a[1], a[2]];
+                [a[0], a[1], a[2]]
+            }
+            None => *TARGET.lock().unwrap(),
+        };
+        let q = [t[0] - pos[0], t[1] - pos[1], t[2] - pos[2]];
+        AiDriverValues {
+            steer_min_lookahead: d[0],
+            gas_brake_lookahead: d[1],
+            steer_gain: d[3],
+            brake_hint_base: d[4],
+            change_up_rpm: d[5],
+            change_dn_perc: d[6],
+            aero_hint: d[7],
+            tyres_hint: d[8],
+            ultra_grip: d[9],
+            next_car_modifier: d[10],
+            dist_to_next_corner: d[11],
+            distance_from_target: (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt(),
+        }
+    });
+    view.state = st.map(|a| AiState {
+        steer_target: [a[0], a[1], a[2]],
+        gas_brake_target: a[3],
+        target_speed: a[4],
+        target_lateral_offset: a[5],
+        brake_target_speed: a[6],
+        brake_target_dist: a[7],
+        current_normalized_spline_position: a[8],
+        outside_offset: a[9],
+        proj_dn_rpm: a[10],
+        understeer_factor: a[11],
+        current_push: a[12],
+        spline_at_npos: line.as_ref().map_or([0.0; 3], |l| l.spline.spline_to_world(a[8])),
+    });
+    view
 }
 
 /// After a sequence: the files the two sides wrote (the AI-line map's `map.png`, compared by
@@ -896,18 +986,24 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_drszones") || name.starts_with("app_chasecam") || name == "app_x360" {
-        let rel = if name.starts_with("app_drszones") {
-            "content/tracks/magione/data/drs_zones.ini.candidate"
+    if name.starts_with("app_drszones") || name.starts_with("app_chasecam") || name == "app_x360" || name.starts_with("app_ai") {
+        // (FormAI: the race's F2004, a loose car.ini here: save cons writes its fuel_cons.ini)
+        let rels: &[&str] = if name.starts_with("app_ai") {
+            &["content/cars/ks_ferrari_f2004/data/ai.ini", "content/cars/ks_ferrari_f2004/data/fuel_cons.ini"]
+        } else if name.starts_with("app_drszones") {
+            &["content/tracks/magione/data/drs_zones.ini.candidate"]
         } else if name.starts_with("app_x360") {
-            "documents/Assetto Corsa/cfg/controls.ini"
+            &["documents/Assetto Corsa/cfg/controls.ini"]
         } else {
-            "system/cfg/chase_cam.ini"
+            &["system/cfg/chase_cam.ini"]
         };
         let mut same = true;
-        for (what, a, b) in [(rel, args.root.join(rel), args.root.join("port_files").join(rel)), ("the messages", args.root.join("effects_game.txt"), args.root.join("effects_port.txt"))] {
+        let files = rels.iter().map(|&rel| (rel, args.root.join(rel), args.root.join("port_files").join(rel)));
+        for (what, a, b) in files.chain([("the messages", args.root.join("effects_game.txt"), args.root.join("effects_port.txt"))]) {
             match (std::fs::read(&a), std::fs::read(&b)) {
                 (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                // (FormAI without an AI driver saves no ai.ini)
+                (Err(_), Err(_)) if name.starts_with("app_ai") && what.ends_with(".ini") => println!("file {what}: written by neither side"),
                 (a, b) => {
                     same = false;
                     println!("file {what}: DIFFERENT
@@ -1052,6 +1148,9 @@ PRESET=AI Debug
     // the track map's files: system/cfg/map.ini, the road's picture, every test track's map
     std::fs::copy(args.game.join("system/cfg/map.ini"), cfg.join("map.ini")).map_err(|e| format!("map.ini: {e}"))?;
     std::fs::copy(args.game.join("content/texture/mapRoad.png"), tex.join("mapRoad.png")).map_err(|e| format!("mapRoad.png: {e}"))?;
+    // FormAI's line
+    std::fs::create_dir_all(args.root.join("content/tracks/magione/ai")).map_err(|e| e.to_string())?;
+    std::fs::copy(args.game.join(AI_LINE), args.root.join(AI_LINE)).map_err(|e| format!("{AI_LINE}: {e}"))?;
     for track in ["magione", "spa", "ks_laguna_seca"] {
         let to = args.root.join("content/tracks").join(track);
         std::fs::create_dir_all(to.join("data")).map_err(|e| e.to_string())?;
@@ -1069,6 +1168,10 @@ PRESET=AI Debug
     let ai_track = args.root.join("content/tracks/t32_ai_line");
     let _ = std::fs::remove_dir_all(&ai_track);
     let _ = std::fs::remove_dir_all(args.root.join("port_files"));
+    // FormAI's: what the game's side wrote last time
+    for f in ["ai.ini", "fuel_cons.ini"] {
+        let _ = std::fs::remove_file(args.root.join("content/cars/ks_ferrari_f2004/data").join(f));
+    }
     std::fs::create_dir_all(ai_track.join("data")).map_err(|e| e.to_string())?;
     std::fs::create_dir_all(args.root.join("port_files/content/tracks/t32_ai_line/data")).map_err(|e| e.to_string())?;
     // the cars' engine.ini (the repo's cardata): FormGear reads [TURBO_n] DISPLAY_MAX_BOOST
@@ -1133,7 +1236,7 @@ PRESET=AI Debug
         }
         std::fs::write(port_docs.join("video.ini"), crate::root::video_ini(args.width, args.height)).map_err(|e| e.to_string())?;
     }
-    if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") || name.starts_with("app_hdr") {
+    if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") || name.starts_with("app_hdr") || name == "app_ai_driver" {
         for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
             std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
             std::fs::copy("cardata/ks_ferrari_f2004/car.ini", &to).map_err(|e| format!("car.ini: {e}"))?;
@@ -1948,6 +2051,58 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             }
             o.extend([hud("app.visible", 0.0, "netmonitor"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "netmonitor")]);
             play(&mut o, 600, 700, 20);
+            o.push(Op::Save);
+        }
+        "app_ai" | "app_ai_driver" => {
+            // the form at VOLUMES_AT (400 x 740): start recording / start pits / save cons 200 x 25
+            // at (50, 140 / 170 / 200), magic 100 x 25 at (5, 330), the spinners 175 x 25 ("-" at
+            // the left end, "+" at the right), SAVE ai 175 x 25 at (200, 680)
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            let spin = |o: &mut Vec<Op>, sx: i32, sy: i32, plus: bool, n: usize| {
+                for _ in 0..n {
+                    o.extend([Op::MouseMove(x + sx + if plus { 163 } else { 12 }, y + sy + 12), Op::MouseDown(x + sx + if plus { 163 } else { 12 }, y + sy + 12), Op::Frame(DT), Op::MouseUp(x + sx + if plus { 163 } else { 12 }, y + sy + 12), Op::Frame(DT)]);
+                }
+            };
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "ai"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "ai"));
+            play(&mut o, 0, 20, 5);
+            // the recorder's buttons: start recording twice (once only), start pits twice
+            click(&mut o, 150, 152);
+            click(&mut o, 150, 152);
+            click(&mut o, 150, 182);
+            play(&mut o, 20, 30, 5);
+            click(&mut o, 150, 182);
+            // save cons (car.ini is no loose file here: nothing)
+            click(&mut o, 150, 212);
+            // the blink: 500 ms grey, 500 ms red
+            play(&mut o, 30, 400, 25);
+            if name == "app_ai_driver" {
+                // an AI driver takes the car: the render sets the spinners from it (they tell the
+                // driver back), the state of an AI car (the graph, labels, the red text)
+                o.push(hud("app.aiDriver", 0.0, "1.2345678,25.5,0.875,1.23,0.97,7350,0.666,1.1,0.95,1.05,0.37,123.25,1"));
+                o.push(hud("app.aiState", 0.0, "-120.5,4.25,310.75,33.333,41.5,-0.875,22.25,123.456,0.4375,1.5,6123.5,0.333,0.8125,1"));
+                play(&mut o, 400, 450, 5);
+                for (sx, sy, plus, n) in [(5, 440, true, 3), (5, 500, false, 2), (5, 560, true, 1), (200, 560, false, 2), (5, 620, true, 1), (200, 620, false, 1), (200, 500, true, 2), (200, 380, false, 3)] {
+                    spin(&mut o, sx, sy, plus, n);
+                }
+                // magic off and on again
+                click(&mut o, 55, 342);
+                play(&mut o, 450, 460, 5);
+                click(&mut o, 55, 342);
+                click(&mut o, 55, 342);
+                o.push(hud("app.aiState", 0.0, "15.5,-2.25,-48.125,12.5,22.75,2.5,0,-5.5,0.875,-2.75,4100,0.125,0.25,1"));
+                play(&mut o, 460, 520, 5);
+                // SAVE ai
+                click(&mut o, 287, 692);
+                // the driver leaves: the state stays as it was
+                o.push(hud("app.aiState", 0.0, "off"));
+                play(&mut o, 520, 560, 5);
+            }
+            o.extend([hud("app.visible", 0.0, "ai"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "ai")]);
+            play(&mut o, 560, 600, 20);
             o.push(Op::Save);
         }
         "app_drszones" => {
