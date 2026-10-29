@@ -185,6 +185,11 @@ impl GameApps {
         add(gui, painter, "rstats", id);
         let id = gui.new_pedals_app(painter, own_or_documents("controls.ini").as_ref());
         add(gui, painter, "pedals", id);
+        // NetMonitorForm: online only (Sim::Sim finds an ACClient)
+        if setup.online {
+            let id = gui.new_net_monitor_app(painter);
+            add(gui, painter, "netmonitor", id);
+        }
         let id = gui.new_realtime_app(painter);
         add(gui, painter, "realtime", id);
         let id = gui.new_performance_delta_app(painter);
@@ -474,6 +479,8 @@ impl GameApps {
             // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
             chase_cam: gui.apps.chase_cam,
             chase_cam_active: gui.apps.chase_cam_active,
+            ping: info.online.as_ref().map_or(0, |o| o.ping),
+            net_error_vector: info.online.as_ref().map_or([0.0; 3], |o| o.car1_error_vector),
             ctrl_down: self.ctrl_down,
             penalties_enabled: setup.penalties,
             stats: self.stats.clone(),

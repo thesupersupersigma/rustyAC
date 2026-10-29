@@ -17,7 +17,9 @@ State after the last commit (update after every commit):
   in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
 - **Step 3, camera editors, in progress:** the developers' "ChaseCam Editor" (`ChaseCamEditor`)
   done and proven in the GUI oracle (`app_chasecam`). The camera editor (`FormCamera`) next.
-- **Steps 4-7:** not started.
+- **Step 6, in progress:** the developers' "Net monitor" (`NetMonitorForm`) done and proven
+  (`app_netmonitor`). The input debug apps next.
+- **Steps 4, 5, 7:** not started.
 
 ## In plain words
 
@@ -141,3 +143,24 @@ Proof: `render_oracle gui --gui app_chasecam` (in `tools/proofs/gui_list.txt` an
 47 frames, command log, pixels, state and events IDENTICAL; the saved `chase_cam.ini` (130 bytes:
 distance 3 clicks up, height 2 down, pitch 4 up and 1 down, saved as CHASE_0 and CHASE_1) and the
 messages IDENTICAL; a Save click with another camera on screen does nothing on both sides.
+
+## Step 6: the net monitor and the input debug apps
+
+### The "Net monitor" (`NetMonitorForm`)
+
+`crates/rustyac-gui/src/app_net_monitor.rs`. A developers' app, made online only (in `Sim::Sim`
+after the pedals' app, when there is an `ACClient`). A graph (400 x 200, up to 400 values, top
+300) of the speeds in km/h of car 0 (white) and car 1 (magenta); with a second car, "EV: " and the
+length of car 1's error vector (the gap between where its last packet put it and where it is
+drawn; a stream of precision 2: `0.005`, `1.2e+003`) and "P: " and the client's own ping
+(`ACClient::getPing(car 0)` is the client's, not the car's). The labels sit on the graph, as in
+the game. It writes nothing.
+
+In rustyac.exe the ping and car 1's (guid 1) error vector come from the online state the physics
+thread hands over every 64 steps (shortcut: not every frame; the game reads the live values).
+
+Proof: `render_oracle gui --gui app_netmonitor`: 68 frames with five pings and error vectors from
+0 to 1234.5 and the window hidden and shown, command log, pixels, state and events IDENTICAL. The
+game side runs the real constructor and render with a stand-in client (its avatar car 0, its
+socket's ping) and a block with `NetCarStateProvider`'s vftable as car 1's state provider, for the
+render's dynamic cast.

@@ -237,6 +237,9 @@ pub struct AppScript {
     /// camera on screen
     pub chase: (f32, f32, f32),
     pub chase_active: bool,
+    /// the Net monitor's: the client's ping, the second car's error vector
+    pub ping: i32,
+    pub net_ev: [f32; 3],
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -407,6 +410,11 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         }),
         "app.edl" => script(|s| s.edl = if text == "off" { None } else { Some(number) }),
         "app.drs" => script(|s| s.drs = on),
+        "app.net" => script(|s| {
+            s.ping = number as i32;
+            let v: Vec<f32> = text.split(',').filter_map(|p| p.parse().ok()).collect();
+            s.net_ev = [v[0], v[1], v[2]];
+        }),
         "app.chase" => script(|s| {
             s.chase_active = on;
             if s.chase == (0.0, 0.0, 0.0) {
@@ -665,6 +673,8 @@ pub fn link() -> AppLink {
             auto_eyes: None,
             chase_cam: s.chase,
             chase_cam_active: s.chase_active,
+            ping: s.ping,
+            net_error_vector: s.net_ev,
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -1528,6 +1538,22 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 900, 960, 6);
             o.extend([hud("app.visible", 0.0, "suspension"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "suspension")]);
             play(&mut o, 960, 1100, 4);
+            o.push(Op::Save);
+        }
+        "app_netmonitor" => {
+            // online: the speeds of cars 0 and 1, then error vectors and pings of every size
+            race(&mut o, 6);
+            o.push(hud("app.net", 35.0, "0,0,0"));
+            o.push(hud("app.new", 0.0, "netmonitor"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "netmonitor"));
+            play(&mut o, 0, 300, 10);
+            for (k, (ping, ev)) in [(41.0, "0.003,0.004,0"), (120.0, "0.3,-0.4,1.2"), (8.0, "12.5,0,-3"), (999.0, "1234.5,0,0"), (0.0, "0,0,0.0995")].iter().enumerate() {
+                o.push(hud("app.net", *ping, ev));
+                play(&mut o, 300 + k * 60, 360 + k * 60, 10);
+            }
+            o.extend([hud("app.visible", 0.0, "netmonitor"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "netmonitor")]);
+            play(&mut o, 600, 700, 20);
             o.push(Op::Save);
         }
         "app_drszones" => {

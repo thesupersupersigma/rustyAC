@@ -280,6 +280,10 @@ pub struct AppLink {
     /// (`ACCameraManager::mode == eDrivable`, `currentMode == eChase`, `chaseIndex == 0`)
     pub chase_cam: (f32, f32, f32),
     pub chase_cam_active: bool,
+    /// online: `ACClient::getPing(car 0)` (the client's own ping), the second car's
+    /// `NetCarStateProvider::errorVector` (the Net monitor reads them)
+    pub ping: i32,
+    pub net_error_vector: [f32; 3],
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,

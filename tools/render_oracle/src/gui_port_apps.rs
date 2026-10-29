@@ -63,6 +63,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "wings" => gui.new_wings_app(painter),
         "drszones" => gui.new_drs_zones_app(painter),
         "chasecameditor" => gui.new_chase_cam_editor_app(painter),
+        "netmonitor" => gui.new_net_monitor_app(painter),
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {

@@ -202,6 +202,9 @@ pub struct OnlineGui {
     pub session_type: i32,
     pub time_to_session_start: f64,
     pub player_in_pit: bool,
+    /// the Net monitor's: car 1's (guid 1) `NetCarStateProvider::errorVector`
+    /// shortcut: refreshed with the rest of this state (every 64 steps), not every frame
+    pub car1_error_vector: [f32; 3],
 }
 
 /// Task 34: what the client heard that the GUI acts on at once (in arrival order).
@@ -843,6 +846,7 @@ impl OnlineSession {
             inverted_grid_positions: accepted.inverted_grid_positions as i32,
             session_id: self.net.client.session_id,
             net_cars,
+            car1_error_vector: self.net.cars.iter().find(|car| car.guid == 1).map_or([0.0; 3], |car| car.error_vector),
             session_type: self.session.session_type,
             time_to_session_start: self.session.start_time - self.now,
             player_in_pit,

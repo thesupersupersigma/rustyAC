@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 38] = [
+pub const APPS: [(&str, usize, usize, usize); 39] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -60,8 +60,12 @@ pub const APPS: [(&str, usize, usize, usize); 38] = [
     // Task 44
     ("drszones", 0x210, 0x1_4033_6210, 0x1_4051_1390),
     ("chasecameditor", 0x1f0, 0x1_4033_72a0, 0x1_4051_16e0),
+    ("netmonitor", 0x1e0, 0x1_4030_3400, 0x1_4050_7e60),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
+/// The Net monitor's stand-in client and car 1's net provider.
+static NET_MONITOR: Mutex<Option<(usize, usize)>> = Mutex::new(None);
+
 /// The ChaseCam Editor's camera manager block (0: none staged).
 static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
@@ -817,6 +821,23 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
             if text == "telemetry" {
                 telemetry_channels(a, form, sim)?;
             }
+            if text == "netmonitor" {
+                // the constructor finds no ACClient among the hand-laid Sim's game objects:
+                // NetMonitorForm::client (+0x1c0) a stand-in whose avatar (+0x408) is car 0, so
+                // getPing(car 0) answers sok.ping (+0x3a0 + 0x28); car 1's physicsStateProvider
+                // (+0x11b8) a NetCarStateProvider's ICarPhysicsStateProvider part (+0x58, its
+                // vftable for the render's dynamic cast), errorVector at +0x100
+                let cars = GAME.lock().unwrap().as_ref().map(|g| g.cars.clone()).unwrap_or_default();
+                let client = a.alloc(0x500);
+                wr(client, 0x408, first_car);
+                wr(form, 0x1c0, client);
+                let net = a.alloc(0x200);
+                wr(net, 0x58, a.va(0x1_404c_6e80));
+                if let Some(car1) = cars.get(1) {
+                    wr(*car1 as *mut u8, 0x11b8, net.add(0x58));
+                }
+                *NET_MONITOR.lock().unwrap() = Some((client as usize, net as usize));
+            }
             if text == "volumes" {
                 // INIReaderDocuments::basePath (the oracle skips its making, which leaves it
                 // empty): the stand-in Documents' folder, where the app's Win32 writes go too
@@ -936,6 +957,11 @@ pub unsafe fn update() {
             crate::gui_ac_replay::fire(event as *const u8, argument.as_ptr());
         }
         std::ptr::copy_nonoverlapping(l.telemetry.graphics.as_ptr(), raw, l.telemetry.graphics.len());
+    }
+    // NetMonitorForm: the client's ping (u16), car 1's error vector
+    if let Some((client, net)) = *NET_MONITOR.lock().unwrap() {
+        wr(client as *mut u8, 0x3c8, l.ping as u16);
+        wr(net as *mut u8, 0x100, l.net_error_vector);
     }
     // FormWings: the wings' states
     if let Some(status) = *WINGS.lock().unwrap() {
