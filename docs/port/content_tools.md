@@ -27,7 +27,8 @@ State after the last commit (update after every commit):
   free camera, physics pause, screenshots).
 - **Step 5 done:** the "Post Process Filter" picker (`app_ppfilter`), the "HDR Settings"
   window (`app_hdr`) and the "Driver Model Utilities" (`app_driver`), all proven.
-- **Step 7:** not started.
+- **Step 7 (only "if time"):** not started, moved whole to Task 44b (list at the end).
+- **Released as v0.44.0.** Next: Task 44b, from "Not done (Task 44b)" at the end of this file.
 
 ## In plain words
 
@@ -421,3 +422,51 @@ values moving, Save, the window hidden and shown; command log, pixels, state and
 `cfg/controls.ini` 163 bytes IDENTICAL; the messages 30 bytes IDENTICAL) and `app_x360_none` (9
 frames, no pad class, IDENTICAL). The game side runs the real constructor, render, buttons and Save
 with a block carrying `JoypadCarControl`'s vftable answered by the `getControlsProvider` stand-in.
+
+## Release check (v0.44.0)
+
+`bash tools/proofs/run_all.sh --quick` (rule 14). The first run found the browser build broken by
+step 1 (`ai_record.rs` uses the Windows-only physics thread; now `#[cfg(windows)]`); browser and
+ai_page were run again after the fix.
+
+| area | cases | identical | different |
+|---|---|---|---|
+| physics | 9 | 9 | 0 |
+| fresh | 51 | 51 | 0 |
+| sound | 4 | 4 | 0 |
+| render | 12 | 12 | 0 |
+| gui (the new apps' sequences included) | 29 | 29 | 0 |
+| python | 1 | 1 | 0 |
+| replays (the AI line recording included) | 6 | 6 | 0 |
+| net | 16 | 16 | 0 |
+| browser (rerun) | 9 | 9 | 0 |
+| ai_page (rerun) | 3 | 3 | 0 |
+| shaders | 4 | 4 | 0 |
+| launcher | 1 | 1 | 0 |
+| dumps | 6 | 6 | 0 |
+
+## Not done (Task 44b)
+
+Collected from the steps above, plus step 7:
+
+1. AI line: the kept lap does not become the live AI line at once (the game's `bestLapSpline` is
+   the track's line); the FormAI window (buttons, hints editor, drawn splines) is not ported.
+2. DRS: the zones a server sends (0x53) are decoded, not acted on.
+3. Camera editor: rustyac.exe does not read back its own saved cameras.ini / dash_cam.ini;
+   `[AC_APPS] AUTOEXP`'s quit after the save; `ACCameraManager::setMode`'s other effects.
+4. Photo mode: END (ray picker), no DOF pass, exposure multiplier unused, FOV/roll before Start.
+5. Waits for YEBIS (rustyAC has no YEBIS): loading a post-processing filter, the per-car
+   exposures, the auto exposure and its limits and target (rustyac.exe shows 0), the exposure
+   multiplier, depth of field. The windows edit and save these values like the game; the picture
+   does not change.
+6. Driver model: no `data_<config>` save path (configName always empty in rustyac.exe).
+7. Step 7, all of it: the console variables `axisMode`, `lodDebug`'s red text, `editBoxes` /
+   `editCMesh`, the four `observe*` live reloads, the cockpit exposure; `race_out.json` after an
+   online server's next race.
+
+## Open questions
+
+- The exposure multiplier's start value: rustyAC assumes 1; docs/map/yebis.md says the game takes
+  it from Documents `cfg/exposure.ini [EXPOSURE] VALUE` (not checked against the game).
+- The whole-car compare with `--ai-record` after the first lap: expected to agree again once the
+  kept lap is the live line (item 1), not proven.
