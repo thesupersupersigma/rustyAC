@@ -82,7 +82,9 @@ html, body {
 }
 #corner[hidden] { display: none; }
 #corner button { font-size: 12px; padding: 2px 10px; }
-#gear { display: flex; align-items: center; padding: 2px 6px; }
+/* a drive's way to the rustyAC tab (O does the same) */
+#gear { position: fixed; right: 8px; bottom: 8px; z-index: 29; display: flex; align-items: center; padding: 4px 6px; opacity: 0.7; }
+#gear[hidden] { display: none; }
 /* the start page (no pack, no folder) and the loading of a drive: only the Content section */
 body.launcher-page #menu > section.old { display: none; }
 body.launcher-page.has-source #menu .folder-only { display: none; }
@@ -110,6 +112,8 @@ body.launcher-page.has-source #menu .folder-only { display: none; }
 }
 
 #controls[hidden] { display: none; }
+/* Settings' rustyAC tab: over the area under the theme's tabs (top, left, width, height from theme_glue.js) */
+#controls.docked { right: auto; bottom: auto; border-radius: 0; }
 .controls-head { display: flex; justify-content: space-between; align-items: center; }
 .control { border-top: 1px solid var(--line); padding: 8px 0 2px; }
 .control-row { display: flex; gap: 10px; align-items: center; }

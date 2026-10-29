@@ -327,7 +327,7 @@ export async function startLauncher(env) {
     save();
   }
   // The game's picture is this page: a new player's video.ini has no size, and the theme then
-  // stops every Start to send the player to its Options page (hidden in the browser). The
+  // stops every Start to send the player to its Options page (whose resolution the browser decides). The
   // page's size is written as that page would write it, once, through the bridge.
   const setting = (key) => dec.decode(launcher.request(`ac://getsetting/video?VIDEO/${key}`).body).trim();
   if (!setting('WIDTH') || !setting('HEIGHT')) {
@@ -378,8 +378,10 @@ export async function startLauncher(env) {
   const enterTheme = (event) => {
     trigger(event);
     trigger('ACVisible');
-    // the browser has only the Drive tile: it is opened at once
-    setTimeout(() => call((g) => g.exec("$('#menu li[data-panel=drive]').click();", 'rustyac: drive')), 0);
+    // Drive is opened at once; Settings' rustyAC tab again after reloadSettings()
+    const tile = api.reopen ? "$('#menu li[data-panel=options]').click();document.querySelector('#options > .tabs > div[data-mode=rustyac]').click();" : "$('#menu li[data-panel=drive]').click();";
+    api.reopen = false;
+    setTimeout(() => call((g) => g.exec(tile, 'rustyac: first tile')), 0);
     if (env.afterIntro) setTimeout(() => env.afterIntro(api), 400);
   };
 
@@ -402,7 +404,20 @@ export async function startLauncher(env) {
     pause: (on) => call((g) => g.pause(on)),
     frame,
     misses,
+    // the requests, as tools/proofs/log2req.py lists the desktop's (for the checks)
     requests: [],
+    // the video.ini keys Full mode does not draw yet, marked in Settings (theme_glue.js)
+    unused: env.unused || [],
+    // the rustyAC tab: its area in the frame, or null when another tab or tile is shown
+    rustyacTab: (rect) => {
+      const at = frame.getBoundingClientRect();
+      env.onTab(rect && { top: rect.top + at.top, left: rect.left + at.left, width: rect.width, height: rect.height });
+    },
+    // a video.ini written elsewhere: the theme reads it again, Settings' rustyAC tab shown again
+    reloadSettings() {
+      api.reopen = true;
+      frame.src = frame.src;
+    },
     save,
     saveNow,
     report: (kind, text) => env.report(kind, text),
@@ -430,9 +445,8 @@ export async function startLauncher(env) {
       const acUrl = posted ? url.replace('http://ac/', 'ac://') : url;
       const post = posted || method === 'POST' ? String(body ?? '') : undefined;
       const host = hostOf(acUrl);
-      // (the last requests, for the checks)
-      api.requests.push(`${post === undefined ? 'GET' : 'POST'} ${acUrl}`);
-      if (api.requests.length > 400) api.requests.shift();
+      api.requests.push(post === undefined ? `GET ${acUrl}` : `POST ${acUrl}	${post}`);
+      if (api.requests.length > 4000) api.requests.shift();
       if (env.lobby && env.lobby.answers(host)) return env.lobby.request(host, acUrl, post);
       const a = launcher.request(acUrl, post);
       const text = rewrite(dec.decode(a.body));

@@ -21,8 +21,6 @@
 <div id="corner" hidden>
   <button id="source-switch" hidden></button>
   <button id="source-list" hidden>Open it as a file list</button>
-  <button id="fullscreen" title="Full screen: there the game has every key, Esc held leaves it">Full screen</button>
-  <button id="gear" title="Steering and controls" aria-label="Steering and controls"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.4 1l.3 1.8c.4.1.8.3 1.1.5l1.5-1 1.4 1.4-1 1.5c.2.3.4.7.5 1.1l1.8.3v2l-1.8.3c-.1.4-.3.8-.5 1.1l1 1.5-1.4 1.4-1.5-1c-.3.2-.7.4-1.1.5L9.4 15h-2l-.3-1.8c-.4-.1-.8-.3-1.1-.5l-1.5 1-1.4-1.4 1-1.5c-.2-.3-.4-.7-.5-1.1L1.8 9.4v-2l1.8-.3c.1-.4.3-.8.5-1.1l-1-1.5 1.4-1.4 1.5 1c.3-.2.7-.4 1.1-.5L7.4 1h2zM8.4 5.6a2.8 2.8 0 100 5.6 2.8 2.8 0 000-5.6z"/></svg></button>
 </div>
 
 <div id="hud" hidden>
@@ -49,12 +47,14 @@
 <input id="chat" hidden maxlength="120" autocomplete="off" placeholder="say something: Enter sends, Esc closes">
 
 <div id="keys" hidden></div>
+  <button id="gear" hidden title="rustyAC settings (O)" aria-label="rustyAC settings"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.4 1l.3 1.8c.4.1.8.3 1.1.5l1.5-1 1.4 1.4-1 1.5c.2.3.4.7.5 1.1l1.8.3v2l-1.8.3c-.1.4-.3.8-.5 1.1l1 1.5-1.4 1.4-1.5-1c-.3.2-.7.4-1.1.5L9.4 15h-2l-.3-1.8c-.4-.1-.8-.3-1.1-.5l-1.5 1-1.4-1.4 1-1.5c-.2-.3-.4-.7-.5-1.1L1.8 9.4v-2l1.8-.3c.1-.4.3-.8.5-1.1l-1-1.5 1.4-1.4 1.5 1c.3-.2.7-.4 1.1-.5L7.4 1h2zM8.4 5.6a2.8 2.8 0 100 5.6 2.8 2.8 0 000-5.6z"/></svg></button>
 
 <div id="controls" hidden>
   <div class="controls-head">
-    <h2>Controls</h2>
+    <h2>rustyAC</h2>
     <button id="controls-close">Close (Esc)</button>
   </div>
+  <p><button id="fullscreen" title="Full screen: there the game has every key, Esc held leaves it">Full screen</button></p>
   <p id="controls-origin" class="status"></p>
   <p>
     <label>Sound volume <input id="sound-volume" type="range" min="0" max="100" step="1" value="100" aria-label="Sound volume"></label>
@@ -88,7 +88,7 @@
     While you drive every key is the game's: the browser's own (Alt+Left, Backspace, F5, F3,
     Ctrl+R, Ctrl+F, Ctrl+P, Ctrl+S, the mouse's back and forward buttons) do nothing, and leaving
     the page asks first. F12 stays the browser's. The browser keeps a few keys whatever a page
-    does (Ctrl+W, Ctrl+T, Ctrl+N): press <b>Full screen</b> at the bottom of the launcher and
+    does (Ctrl+W, Ctrl+T, Ctrl+N): press <b>Full screen</b> at the top of this tab and
     those are the game's too while you drive: Esc opens AC's ESC menu there as well, and holding
     Esc leaves full screen.
   </p>
@@ -106,12 +106,13 @@
   </select></label></p>
   <div id="gfx-list"></div>
   <p id="gfx-note" class="hint"></p>
-  <p class="hint">AC's Options &rarr; Video, for Full mode. They are kept in this browser in the
-    page's own <code>Documents\Assetto Corsa\cfg\video.ini</code>, the file the launcher's
-    Video page writes too, and Full mode reads it as rustyac.exe does. Like the game, it reads
-    the file when a drive starts: a change counts from the next drive. Render scale is
-    rustyAC's own and counts at once. Settings marked "not used" are kept in the file, but
-    neither rustyac.exe nor this page draws anything different for them yet.</p>
+  <p class="hint">A preset writes its settings into the page's own
+    <code>Documents\Assetto Corsa\cfg\video.ini</code>; Settings' Video tab shows and changes
+    the same file key by key (a preset that no longer matches it reads Custom). Full mode reads
+    it as rustyac.exe does, when a drive starts: a change counts from the next drive. Render
+    scale is rustyAC's own and counts at once. What the Video tab marks "not used" is kept in
+    the file, but neither rustyac.exe nor this page draws anything different for it yet.</p>
+  <h2 id="controls-section">Controls</h2>
   <p id="controls-error" class="refusal" hidden></p>
   <div id="controls-list"></div>
   <table id="controls-layout"></table>

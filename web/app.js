@@ -912,82 +912,36 @@ async function setGraphics(values) {
   } catch (error) {
     console.warn(error);
   }
-  await writeVideoIni(iniWith(await readVideoIni(), file));
+  const before = await readVideoIni();
+  const after = iniWith(before, file);
+  await writeVideoIni(after);
   resizeCanvas();
+  // (Settings open beside this: the theme shows the file's values again)
+  if (after !== before && controlsDocked()) window.rustyacTheme.reloadSettings();
   showGraphics();
   $('gfx-note').textContent = state.game ? 'Saved. Render scale counts now; the rest counts from the next drive (the game reads video.ini as a drive starts).' : 'Saved.';
 }
 
+// The rustyAC tab's graphics: the preset (written into video.ini, which AC's Video tab edits key
+// by key) and the render scale, which only this page has.
 function showGraphics() {
   const values = state.graphics;
   $('gfx-preset').value = presetOf(values);
-  const rows = [];
-  const set = (key, value) => setGraphics({ ...state.graphics, [key]: String(value) });
-  const slider = (key, [min, max, offText], show) => {
-    const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step: 1, value: show(values[key]) });
-    const text = document.createElement('span');
-    const label = () => (text.textContent = Number(input.value) === min && offText ? offText : `${input.value}${key === 'SCALE' || key === 'SATURATION/LEVEL' ? ' %' : key === 'VIDEO/FPS_CAP_MS' ? ' FPS' : ''}`);
-    label();
-    input.addEventListener('input', label);
-    return [input, text];
-  };
-  const add = (label, key, choices, used) => {
-    let parts;
-    if (choices === 'check') {
-      const input = Object.assign(document.createElement('input'), { type: 'checkbox', checked: Number(values[key]) > 0 });
-      input.addEventListener('change', () => set(key, input.checked ? 1 : 0));
-      parts = [input];
-    } else if (choices === 'resolution' || choices === 'filters' || typeof choices[0] !== 'number') {
-      let list = choices;
-      let value = values[key];
-      if (choices === 'resolution') {
-        value = `${values['VIDEO/WIDTH']}x${values['VIDEO/HEIGHT']}`;
-        list = [...new Set([`${screen.width}x${screen.height}`, '1280x720', '1600x900', '1920x1080', '2560x1440', '3840x2160', value])].map((size) => [size, size.replace('x', ' x ')]);
-      } else if (choices === 'filters') {
-        list = [...new Set(['default', ...(state.ppFilters || []), value])].map((name) => [name, name]);
-      }
-      const select = document.createElement('select');
-      for (const [v, text] of list) select.append(new Option(text, v, false, v === value));
-      select.addEventListener('change', () => {
-        if (choices !== 'resolution') return set(key, select.value);
-        const [width, height] = select.value.split('x');
-        setGraphics({ ...state.graphics, 'VIDEO/WIDTH': width, 'VIDEO/HEIGHT': height });
-      });
-      parts = [select];
-    } else {
-      // the framerate limit is kept as AC's launcher writes it: 0 (Off) or ms per frame
-      const fps = key === 'VIDEO/FPS_CAP_MS';
-      const [input, text] = slider(key, choices, (v) => (fps ? (Number(v) > 0 ? Math.round(1000 / Number(v)) : 29) : v));
-      input.addEventListener('change', () => set(key, fps ? (Number(input.value) === 29 ? 0 : (1000 / Number(input.value)).toFixed(6)) : input.value));
-      parts = [input, text];
-    }
-    const row = document.createElement('p');
-    const name = document.createElement('label');
-    name.append(`${label} `, ...parts);
-    row.append(name);
-    if (!used) row.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: ' (not used)' }));
-    rows.push(row);
-  };
-  for (const [label, key, choices, used] of GFX) add(label, key, choices, used);
-  add('Render scale (rustyAC)', 'SCALE', [50, 100, ''], true);
-  $('gfx-list').replaceChildren(...rows);
+  const input = Object.assign(document.createElement('input'), { type: 'range', min: 50, max: 100, step: 1, value: values.SCALE });
+  const text = document.createElement('span');
+  const label = () => (text.textContent = `${input.value} %`);
+  label();
+  input.addEventListener('input', label);
+  input.addEventListener('change', () => setGraphics({ ...state.graphics, SCALE: input.value }));
+  const name = document.createElement('label');
+  name.append('Render scale ', input, text);
+  const row = document.createElement('p');
+  row.append(name);
+  $('gfx-list').replaceChildren(row);
 }
 
 async function startGraphics() {
   state.graphics = await graphicsNow();
-  const theme = window.rustyacTheme;
-  if (theme) {
-    try {
-      // the Effect preset's names, as the theme lists them
-      const list = (url) => {
-        const answer = theme.launcher.request(url, null);
-        return answer.ok ? JSON.parse(new TextDecoder().decode(answer.body)).map(([name]) => name) : [];
-      };
-      state.ppFilters = [...list('ac://listfiles/system/cfg/ppfilters?extension=ini&root=true'), ...list('ac://listfiles/cfg/ppfilters?extension=ini')];
-    } catch (error) {
-      console.warn(error);
-    }
-  }
   showGraphics();
   $('gfx-preset').onchange = () => {
     const name = $('gfx-preset').value;
@@ -1821,9 +1775,16 @@ function showControls() {
   $('controls-not-used').textContent = `Also read by AC's keyboard class and not used here (mouse steering is not in rustyAC): ${controlsNow.not_used.join(', ')}.`;
 }
 
-function openControls() {
+// The rustyAC tab: the panel over Settings' area in the theme (a rect), or on its own (a drive's
+// button, O); null hides it (another tab or tile in Settings).
+function openControls(dock) {
+  const panel = $('controls');
+  if (dock === null) return closeControls(true);
+  panel.classList.toggle('docked', !!dock);
+  for (const side of ['top', 'left', 'width', 'height']) panel.style[side] = dock ? `${dock[side]}px` : '';
   showControls();
-  $('controls').hidden = false;
+  if (panel.hidden) panel.scrollTop = 0;
+  panel.hidden = false;
   showStorage();
   // (the launcher's Video page writes the same file)
   startGraphics().catch((error) => console.warn(error));
@@ -1910,7 +1871,13 @@ async function clearStorage(groups) {
   await showStorage();
 }
 
-function closeControls() {
+function controlsDocked() {
+  return !$('controls').hidden && $('controls').classList.contains('docked');
+}
+
+// (the panel's Close while it is Settings' rustyAC tab: Settings' Video tab)
+function closeControls(fromTheme) {
+  if (fromTheme !== true && controlsDocked()) window.rustyacTheme.exec("document.querySelector('#options > .tabs > div[data-mode=video]').click();");
   $('controls').hidden = true;
   if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#controls')) document.activeElement.blur();
 }
@@ -1936,8 +1903,8 @@ function startControls() {
     }
   }
   takeControls(json || rac.controls_json(), false);
-  $('controls-open').addEventListener('click', openControls);
-  $('controls-close').addEventListener('click', closeControls);
+  $('controls-open').addEventListener('click', () => openControls());
+  $('controls-close').addEventListener('click', () => closeControls());
   $('controls-load').addEventListener('click', () => $('controls-file').click());
   $('controls-file').addEventListener('change', async (event) => {
     if (event.target.files[0]) await loadControlsFile(event.target.files[0]);
@@ -2053,6 +2020,7 @@ function startDriving() {
   showKeys(15000);
   state.running = true;
   state.paused = false;
+  $('gear').hidden = false;
   lockKeys();
   window.rustyac.state = 'driving';
   perf.since = performance.now();
@@ -2070,7 +2038,7 @@ function stopDriving() {
     // a car that stands still in the menu would stay on the server's track: Esc leaves
     state.running = false;
     $('menu').hidden = false;
-    $('hud').hidden = true;
+    $('hud').hidden = $('gear').hidden = true;
     $('keys').hidden = true;
     $('chat').hidden = true;
     setMultiplayer(`you left ${state.online.server.name || state.online.server.id}`);
@@ -2081,7 +2049,7 @@ function stopDriving() {
   state.running = false;
   if (state.game) state.game.release_keys();
   $('menu').hidden = false;
-  $('hud').hidden = true;
+  $('hud').hidden = $('gear').hidden = true;
   $('keys').hidden = true;
   setStatus('paused in the menu: press Drive to go on with the same car, or pick another');
   window.rustyac.state = 'menu';
@@ -2134,7 +2102,7 @@ function failOnline(error) {
   // (the game only knows the connection is gone: the socket knows why)
   if (state.online && state.online.closed) text += `: ${state.online.closed}`;
   leaveServer(false, text);
-  $('hud').hidden = true;
+  $('hud').hidden = $('gear').hidden = true;
   $('chat').hidden = true;
   setMultiplayer('');
   fail(new Error(`${text}. You are off the server: reload the page to join again.`));
@@ -2260,6 +2228,8 @@ window.addEventListener('keydown', (event) => {
     case 'KeyO':
       if ($('controls').hidden) openControls();
       else closeControls();
+      // (a drive's button: the keys stay the car's)
+      if (document.activeElement && document.activeElement.closest && document.activeElement.closest('#controls')) document.activeElement.blur();
       return;
     case 'Escape':
       stopDriving();
@@ -2380,7 +2350,7 @@ window.addEventListener('beforeunload', (event) => {
   event.preventDefault();
   event.returnValue = '';
 });
-// full screen (the page bar's button): there the browser lets the page have its own keys too
+// full screen (the rustyAC tab's button): there the browser lets the page have its own keys too
 // (Ctrl+W, Alt+Tab-less Esc: held Esc leaves full screen), while a drive runs
 function lockKeys() {
   if (!navigator.keyboard || !navigator.keyboard.lock) return;
@@ -2388,6 +2358,10 @@ function lockKeys() {
   else navigator.keyboard.unlock();
 }
 document.addEventListener('fullscreenchange', lockKeys);
+$('gear').onclick = () => {
+  openControls();
+  $('gear').blur();
+};
 $('fullscreen').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {});
 window.addEventListener('wheel', (event) => guiMouse(event, 3, 0, -Math.sign(event.deltaY)), { passive: false });
 window.addEventListener('contextmenu', (event) => {
@@ -2488,8 +2462,8 @@ async function launcherStart() {
   await openLauncher();
 }
 
-// The bar under the theme: the controls page (a gear) and the switch between the site's pack
-// and the player's own folder.
+// The bar under the theme: the switch between the site's pack and the player's own folder (the
+// page's own settings are Settings' rustyAC tab).
 function showCorner() {
   const button = $('source-switch');
   const onPack = state.source.kind === 'pack';
@@ -2509,7 +2483,6 @@ function showCorner() {
   // start page)
   $('source-list').hidden = !onPack || !window.showDirectoryPicker;
   $('source-list').onclick = () => $('folder-input').click();
-  $('gear').onclick = openControls;
   $('corner').hidden = false;
 }
 
@@ -2601,7 +2574,13 @@ async function openLauncher() {
       }
       driveFromLauncher(api).catch(fail);
     },
-    onControls: openControls,
+    // AC's Controls tab (showcontrols): the rustyAC tab, at its controls
+    onControls: () => {
+      state.theme.exec("document.querySelector('#options > .tabs > div[data-mode=rustyac]').click();");
+      $('controls-section').scrollIntoView();
+    },
+    onTab: openControls,
+    unused: GFX.filter(([, , , used]) => !used).map(([, key]) => key),
     report: launcherReport,
     lobby: launcherLobby(),
   });
@@ -2653,7 +2632,7 @@ async function returnToLauncher() {
   const json = state.game ? state.game.finish_race() : null;
   leaveServer(false);
   freshCanvas();
-  for (const id of ['hud', 'keys', 'chat']) $(id).hidden = true;
+  for (const id of ['hud', 'keys', 'chat', 'gear']) $(id).hidden = true;
   state.launch = null;
   const api = state.theme;
   if (json) api.launcher.write_doc('out\\race_out.json', json);

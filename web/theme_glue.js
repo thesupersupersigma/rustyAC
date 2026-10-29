@@ -6,8 +6,9 @@
 // Launcher, through window.parent.rustyacTheme), the shared scripts and the theme's own are run
 // after the page has loaded (JSIncludeDefaultLibs), and the page raises the theme's events.
 //
-// The browser shows only the Drive tile: the other tiles of the theme's left column are hidden,
-// and the modes a browser cannot run show the theme's own notice. Nothing reaches the network
+// The browser shows only the Drive and Settings tiles: the other tiles of the theme's left
+// column are hidden, and the modes a browser cannot run show the theme's own notice. Settings
+// gets a rustyAC tab (the page's own settings, shown over the frame by app.js). Nothing reaches the network
 // outside this site: a request elsewhere fails here, before it is made.
 (function () {
   'use strict';
@@ -223,14 +224,82 @@
     if (typeof window.$ !== 'undefined') window.$(document).trigger(name, args || []);
   }
 
-  // ------------------------------------------------------------ Drive only
+  // ------------------------------------------------------------ Drive and Settings only
 
+  const TILES = '[data-panel=drive], [data-panel=options]';
   const DRIVE_ONLY = `
-#menu ul li:not([data-panel=drive]):not(.dummy) { display: none !important; }
+#menu ul li:not([data-panel=drive]):not([data-panel=options]):not(.dummy) { display: none !important; }
 #menu a.home { pointer-events: none !important; }
+#options .item.rustyac-browser .widget { pointer-events: none !important; opacity: 0.4; }
+#options .rustyac-note { margin-left: 8px; opacity: 0.6; font-size: 0.85em; }
 `;
+  // Settings the browser decides: shown, not changed here
+  const BROWSER = '#screenres, #fullscreen, #vsync, [data-bind="launcher?SAVED/FPS_CAP"]';
+  const note = (item, text) => {
+    const span = document.createElement('span');
+    span.className = 'rustyac-note';
+    span.textContent = text;
+    (item.querySelector('label') || item).appendChild(span);
+  };
+  function markSettings() {
+    for (const el of document.querySelectorAll(`#options ${BROWSER.split(', ').join(', #options ')}`)) {
+      const item = el.closest('.item');
+      if (!item || item.classList.contains('rustyac-browser')) continue;
+      item.classList.add('rustyac-browser');
+      item.querySelectorAll('input, select').forEach((i) => (i.disabled = true));
+      note(item, 'your browser decides this');
+    }
+    // what Full mode does not draw yet (post-processing: YEBIS), as the rustyAC tab's list says
+    for (const key of T.unused || []) {
+      for (const el of document.querySelectorAll(`#options [data-bind="video?${key}"]`)) {
+        const item = el.closest('.item');
+        if (item && !item.classList.contains('rustyac-browser') && !item.querySelector('.rustyac-note')) note(item, '(not used)');
+      }
+    }
+    const tabs = document.querySelector('#options > .tabs');
+    if (tabs && !tabs.querySelector('[data-mode=rustyac]')) {
+      const tab = document.createElement('div');
+      tab.setAttribute('data-mode', 'rustyac');
+      tab.className = 'nonpanel';
+      tab.textContent = 'rustyAC';
+      tabs.appendChild(tab);
+    }
+  }
+
+  // The rustyAC tab: app.js shows the page's settings over the theme's settings area, while the
+  // theme's tile and tab (its body's data-panel and rel, after every click) are Settings' and ours
+  let ours = false;
+  const showOurs = () => {
+    const was = ours;
+    ours = document.body.getAttribute('data-panel') === 'options' && document.body.getAttribute('rel') === 'rustyac';
+    // (our tab is one more under the theme's own: where it and its name under it would leave the
+    // window, the column moves up by as much, at most one and a half tabs)
+    const tabs = document.querySelector('#options > .tabs');
+    const tab = tabs && tabs.querySelector('[data-mode=rustyac]');
+    if (tab && document.body.getAttribute('data-panel') === 'options') {
+      // (the theme's own handler is on the button itself, which a script's .click() reaches)
+      window.$('.benchmark').off('click').on('click', noBenchmark);
+      tabs.style.marginTop = '';
+      const pitch = tab.getBoundingClientRect().top - tab.previousElementSibling.getBoundingClientRect().top;
+      const over = tab.getBoundingClientRect().bottom + 30 - window.innerHeight;
+      if (over > 0) tabs.style.marginTop = `${-Math.min(pitch * 1.5, over)}px`;
+    }
+    if (!ours) return was && T.rustyacTab(null);
+    // over the theme's settings area: the subpanel shown before our tab was picked
+    const area = [...document.querySelectorAll('#options .subpanel')].map((p) => p.getBoundingClientRect()).sort((x, y) => y.height - x.height)[0];
+    T.rustyacTab({ top: area.top, left: area.left, width: area.width, height: Math.min(area.height, window.innerHeight - area.top) });
+  };
+  window.addEventListener('resize', showOurs);
   // the modes of Drive a browser cannot run yet: the theme's own notice says so
   const NOT_HERE = { timeattack: 'Time Attack', drift: 'Drift', dragrace: 'Drag Race' };
+
+  // the benchmark starts a drive of its own (race.ini [BENCHMARK]), which rustyAC does not have
+  function noBenchmark(e) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    notice('The benchmark is not available in the browser version yet.');
+    return false;
+  }
 
   function notice(text) {
     // (reported too, for the checks)
@@ -241,11 +310,12 @@
   document.addEventListener(
     'click',
     (e) => {
+      if (e.target && e.target.closest && e.target.closest('#benchmark')) return noBenchmark(e);
       const target = e.target && e.target.closest ? e.target.closest('[data-mode], [data-panel], a.home') : null;
       if (!target) return;
       // (the left column's tiles are the menu's `li`s; buttons inside Drive have a data-panel too)
       const tile = target.matches('#menu li[data-panel]');
-      if ((tile && target.getAttribute('data-panel') !== 'drive') || target.matches('a.home')) {
+      if ((tile && !target.matches(TILES)) || target.matches('a.home')) {
         e.stopImmediatePropagation();
         e.preventDefault();
         return;
@@ -310,9 +380,11 @@
         e.preventDefault();
         return false;
       };
-      window.$('#menu li[data-panel]').not('[data-panel=drive]').addClass('disabled').on('click', stop);
+      window.$('#menu li[data-panel]').not(TILES).addClass('disabled').on('click', stop);
       window.$('.home').off('click').on('click', stop);
     }
+    markSettings();
+    if (typeof window.$ !== 'undefined') window.$(document).on('screenChanged', showOurs);
     T.loaded();
   });
 
