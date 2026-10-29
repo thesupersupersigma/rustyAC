@@ -25,8 +25,8 @@ State after the last commit (update after every commit):
 - **Step 4, photo mode, done and proven:** the developers' "Photo mode" (`PhotoMode`,
   `app_photo`: pictures, state, every frame's camera, exposure, DOF and sun, and the calls it makes:
   free camera, physics pause, screenshots).
-- **Step 5, in progress:** the "Post Process Filter" picker (`app_ppfilter`) and the "HDR
-  Settings" window (`app_hdr`) done and proven; the driver model window next.
+- **Step 5 done:** the "Post Process Filter" picker (`app_ppfilter`), the "HDR Settings"
+  window (`app_hdr`) and the "Driver Model Utilities" (`app_driver`), all proven.
 - **Step 7:** not started.
 
 ## In plain words
@@ -308,6 +308,42 @@ off, on, off; both exposures and the target clicked both ways; Save; the 3 s run
 | saved car.ini (ONBOARD 37, OUTBOARD 44) | IDENTICAL (1544 bytes) |
 
 Checked in rustyac.exe: `--post on --screenshot hdr.png --gui-do app:hdr` shows the window.
+
+### The "Driver Model Utilities" (`FormDriverModel`)
+
+Ported in `crates/rustyac-gui/src/app_driver_model.rs`, a developers' app (auto-hiding, no
+background until the mouse is over it). It works on car 0's 3D driver (the high-detail one).
+
+How to use it: "G Force" and "G Direction X/Y/Z" (Negative / No Force / Positive) push a
+G force on the driver's head; from the first change the driver's own animation is locked, as in
+the game. The red button reads "Start": the first click loads the car's `data/driver3d.ini`
+`[HEAD_MOVEMENT]` into the right column (Max G Force, Roll / Yaw / Pitch Max Deg, Filter; Filter
+15 without that section) and the button becomes "Save Ini"; from then on those spinners change
+the driver's head movement and "Save Ini" writes the five keys. The button is hidden when the car
+has no loose driver3d.ini (packed cars), as in the game. The game writes
+`content\cars\<car>\data\driver3d.ini` (or `data_<config>`); **rustyac.exe writes its own cfg's
+`content\cars\<car>\data\driver3d.ini`**.
+
+The game's quirk kept: the Filter spinner stores `value * 0.01 / 60` while the driver's own load
+stores `FILTER * 60`, so moving it makes the head follow far more slowly.
+
+Proof `GUI_ONLY=app_driver sh tools/proofs/gui.sh` (G spinners before Start, Start, every head
+spinner both ways, the G spinners again, Save Ini; the driver model a stand-in block with
+cardata's values, `updateHeadMovement` written down with its arguments):
+
+| what | result |
+|---|---|
+| command log, pixels (71 frames) | IDENTICAL |
+| state and events (6728 lines, 125 events) | IDENTICAL |
+| the driver's lock, head movement and every `updateHeadMovement(dt, dt, accG)` call (69 calls) | IDENTICAL (7067 bytes) |
+| saved driver3d.ini (FILTER 0.2, MAX_G 2.3, ROLL -11, PITCH -11, YAW 18) | IDENTICAL (387 bytes) |
+
+In rustyac.exe the window's writes and calls go into car 0's `driver_hr` after the GUI's render
+(`crates/rustyac-game/src/render/ac.rs`), so the head moves from the next frame, as in the game.
+Checked: `--car ks_ferrari_f2004 --screenshot drv.png --gui-do app:drivermodel` shows the window.
+Not done: the car's `configName` is always empty in rustyac.exe (no `data_<config>` save path);
+the lock is set again every frame (a `shortcut:` comment), which differs from the game only for
+a car whose `LOCK_VIRTUAL_STEER` clears it on board.
 
 ## Step 6: the net monitor and the input debug apps
 

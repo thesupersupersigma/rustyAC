@@ -310,6 +310,8 @@ pub struct AppLink {
     /// What the Camera editor reads and changes (None: no editor; the game makes it only with
     /// post-processing on)
     pub camera_editor: Option<crate::app_camera_editor::CameraEditorLink>,
+    /// Task 44: FormDriverModel's car 0 driver
+    pub driver_model: Option<crate::app_driver_model::DriverModelLink>,
     /// What the Photo mode reads and changes (the scene camera, the exposure, the sun)
     pub photo: crate::app_photo_mode::PhotoLink,
     pub ctrl_down: bool,

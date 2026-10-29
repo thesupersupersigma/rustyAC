@@ -703,6 +703,7 @@ pub fn link() -> AppLink {
             keyboard: s.keyboard,
             pad: s.pad,
             camera_editor: None,
+            driver_model: None,
             photo: Default::default(),
             ctrl_down: false,
             penalties_enabled: s.penalties,
@@ -873,9 +874,11 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
             }
         });
     }
-    if name.starts_with("app_camera") || name.starts_with("app_hdr") {
+    if name.starts_with("app_camera") || name.starts_with("app_hdr") || name.starts_with("app_driver") {
         let mut same = true;
-        let rels: &[&str] = if name.starts_with("app_hdr") {
+        let rels: &[&str] = if name.starts_with("app_driver") {
+            &["content/cars/ks_ferrari_f2004/data/driver3d.ini", "effects"]
+        } else if name.starts_with("app_hdr") {
             &["content/cars/ks_ferrari_f2004/data/car.ini", "effects"]
         } else {
             &["content/cars/ks_ferrari_f2004/data/car.ini", "content/cars/ks_ferrari_f2004/data/dash_cam.ini", "content/cars/ks_ferrari_f2004/data/cameras.ini", "effects"]
@@ -1137,6 +1140,15 @@ PRESET=AI Debug
         }
     } else {
         let _ = std::fs::remove_file(args.root.join(car_ini));
+    }
+    let driver_ini = "content/cars/ks_ferrari_f2004/data/driver3d.ini";
+    if name.starts_with("app_driver") {
+        for to in [args.root.join(driver_ini), args.root.join("port_files").join(driver_ini)] {
+            std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
+            std::fs::copy("cardata/ks_ferrari_f2004/driver3d.ini", &to).map_err(|e| format!("driver3d.ini: {e}"))?;
+        }
+    } else {
+        let _ = std::fs::remove_file(args.root.join(driver_ini));
     }
     Ok(())
 }
@@ -1860,6 +1872,38 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 20, 40, 10);
             o.extend([Op::Save, hud("app.shutdown", 0.0, "ppfilter")]);
         }
+        "app_driver" => {
+            // the form at VOLUMES_AT: the spinners 200 x 20 at (5 / 210, 80 + 50 k) ("-" at
+            // the left, "+" at the right), Save 200 x 20 at (5, 280)
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            let minus = |c: i32| if c == 0 { 15 } else { 220 };
+            let plus = |c: i32| if c == 0 { 195 } else { 400 };
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "drivermodel"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "drivermodel"));
+            play(&mut o, 0, 10, 5);
+            // before Start: the G spinners and Max G (not loaded: only the forces)
+            for (c, k, plus_side, n) in [(0, 0, true, 4), (0, 1, true, 1), (0, 2, false, 1), (1, 0, true, 2)] {
+                for _ in 0..n {
+                    click(&mut o, if plus_side { plus(c) } else { minus(c) }, 90 + 50 * k);
+                }
+            }
+            // Start (arms), the ini comes in at the next render
+            click(&mut o, 105, 290);
+            play(&mut o, 10, 20, 5);
+            // loaded: every head movement spinner both ways, the G ones again
+            for (c, k, plus_side, n) in [(1, 0, true, 3), (1, 1, false, 2), (1, 2, true, 4), (1, 3, false, 1), (1, 4, true, 6), (1, 4, false, 1), (0, 3, true, 1), (0, 1, false, 2), (0, 0, false, 1)] {
+                for _ in 0..n {
+                    click(&mut o, if plus_side { plus(c) } else { minus(c) }, 90 + 50 * k);
+                }
+            }
+            // Save Ini: the five keys
+            click(&mut o, 105, 290);
+            play(&mut o, 20, 40, 5);
+            o.push(Op::Save);
+        }
         "app_hdr" => {
             // the form at VOLUMES_AT: Disable Limits 100 x 20 at (250, 350); the OnBoard and
             // OutBoard spinners 150 x 30 at (25 / 225, 400), the target at (225, 480): "-" at
@@ -2037,6 +2081,12 @@ pub fn photo_start() -> rustyac_gui::app_photo_mode::PhotoLink {
 
 /// The Camera editor's start, both sides: the F2004 (its eye point), two car cameras, the
 /// views, a scene camera and the car's body somewhere on the track.
+/// The Driver Model Utilities': the staged driver's head movement (maxG, roll, pitch, yaw,
+/// filter: the ini's filter / (1 / 60)) and cardata's driver3d.ini [HEAD_MOVEMENT] (FILTER,
+/// MAX_G, ROLL_MAX_DEG, PITCH_MAX_DEG, YAW_MAX_DEG), the file both roots get.
+pub const DRIVER_HEAD: [f32; 5] = [2.0, -9.0, -10.0, 14.0, 9.0];
+pub const DRIVER_INI: [f32; 5] = [0.15, 2.0, -9.0, -10.0, 14.0];
+
 /// The HDR Settings': the GUI's graphics manager's exposure multiplier, both sides.
 pub const HDR_EXPOSURE_MULTIPLIER: f32 = 1.257;
 

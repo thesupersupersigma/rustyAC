@@ -630,7 +630,7 @@ impl DriverModel {
     }
 
     /// `DriverModel::updateHeadMovement` 0x1400fb9a0.
-    fn update_head_movement(&mut self, scene: &mut Scene, dt_raw: f32, dt_scaled: f32, acc_g: &[f32; 3]) {
+    pub fn update_head_movement(&mut self, scene: &mut Scene, dt_raw: f32, dt_scaled: f32, acc_g: &[f32; 3]) {
         let Some(neck) = self.neck_node else {
             return;
         };

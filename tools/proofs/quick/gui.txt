@@ -30,3 +30,4 @@ app_camera
 app_photo
 app_ppfilter
 app_hdr
+app_driver

@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 45] = [
+pub const APPS: [(&str, usize, usize, usize); 46] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -67,6 +67,7 @@ pub const APPS: [(&str, usize, usize, usize); 45] = [
     ("photomode", 0x250, 0x1_4032_1bc0, 0x1_4050_cff0),
     ("ppfilter", 0x1c8, 0x1_4032_9360, 0x1_4050_e610),
     ("hdr", 0x218, 0x1_4032_9e20, 0x1_4050_eaa8),
+    ("drivermodel", 0x220, 0x1_4031_f0e0, 0x1_4050_c860),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -201,6 +202,24 @@ unsafe extern "C" fn photo_set_mode(this: *mut u8, mode: i32, _a: u8, _b: u8) {
 }
 
 /// `PhysicsAvatar::pausePhysics` 0x140122300: written down.
+/// FormDriverModel's: the form (accG +0x210), car 0's `driverModel_HR`, the calls, the last line.
+struct DriverGame {
+    form: usize,
+    dm: usize,
+    log: Vec<String>,
+    last: String,
+}
+
+static DRIVER: Mutex<Option<DriverGame>> = Mutex::new(None);
+
+/// `DriverModel::updateHeadMovement(float&, float&, vec3f&)` 0x1400fb9a0: written down (the
+/// staged driver has no neck node).
+unsafe extern "C" fn driver_head(_dm: *mut u8, dt_filter: *const f32, dt_anim: *const f32, acc: *const [f32; 3]) {
+    if let Some(d) = DRIVER.lock().unwrap().as_mut() {
+        d.log.push(crate::gui_port_apps::driver_call(*dt_filter, *dt_anim, *acc));
+    }
+}
+
 unsafe extern "C" fn photo_pause(_this: *mut u8, paused: u8) {
     photo_log(format!("pausePhysics {paused}"));
 }
@@ -231,7 +250,7 @@ unsafe fn photo_link(p: &PhotoGame) -> (rustyac_gui::app_photo_mode::PhotoLink, 
 /// The ChaseCam Editor's camera manager block (0: none staged).
 static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-const TAKES_CAR: [&str; 17] = ["keyboard", "drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 18] = ["drivermodel", "keyboard", "drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -1115,6 +1134,18 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 if text == "keyboard" {
                     *CONTROLS_CTOR.lock().unwrap() = Some(keyboard_class(a));
                 }
+                if text == "drivermodel" {
+                    // car 0: unixName (+0x138), configName (+0x158, empty), driverModel_HR
+                    // (+0xfe8) with its head movement (+0x64..); updateHeadMovement a stand-in;
+                    // driver3d.ini read from the working folder (the oracle's root)
+                    crate::ac::write_wstring(a, first_car.add(0x138), "ks_ferrari_f2004");
+                    crate::ac::write_wstring(a, first_car.add(0x158), "");
+                    let dm = a.alloc(0x180);
+                    wr(dm, 0x64, crate::gui_seq_apps::DRIVER_HEAD);
+                    wr(first_car, 0xfe8, dm);
+                    crate::gui_ac_hud::jump(game, 0x1_400f_b9a0, driver_head as *const () as usize);
+                    *DRIVER.lock().unwrap() = Some(DriverGame { form: form as usize, dm: dm as usize, log: Vec::new(), last: String::new() });
+                }
                 if text == "x360" {
                     *CONTROLS_CTOR.lock().unwrap() = Some(pad_class(a));
                 }
@@ -1490,6 +1521,11 @@ pub unsafe fn update() {
         let line = crate::gui_port_apps::eyes_line(eyes, rd(e.cob as *mut u8, 0x90), rd(rd::<*mut u8>(e.cob as *mut u8, 0xc8), 0));
         let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
         crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut e.log), &line, &mut e.last);
+    }
+    if let Some(d) = DRIVER.lock().unwrap().as_mut() {
+        let line = crate::gui_port_apps::driver_line(rd::<u8>(d.dm as *mut u8, 0x60) != 0, rd(d.dm as *mut u8, 0x64), rd(d.form as *mut u8, 0x210));
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), std::mem::take(&mut d.log), &line, &mut d.last);
     }
     if let Some(c) = CAMERA_EDITOR.lock().unwrap().as_mut() {
         wr(c.yebis as *mut u8, 0x7b4, crate::gui_seq_apps::script(|s| s.auto_exposure));

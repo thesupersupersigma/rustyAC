@@ -1623,6 +1623,19 @@ impl AcRenderer {
                 gui.gui.apps.gpu_profile = rows.collect();
                 gui.render(&mut self.graphics, dt);
                 self.graphics.gpu_profiler.is_active |= gui.gui.apps.gpu_profiler_active;
+                // FormDriverModel: what it wrote into car 0's driverModel_HR, its updateHeadMovement calls
+                if let (Some(l), Some(d)) = (gui.gui.apps.driver_model.as_mut(), self.cars.first_mut().and_then(|c| c.driver_hr.as_mut())) {
+                    for (i, v) in l.head.iter_mut().enumerate() {
+                        if let Some(v) = v.take() {
+                            *[&mut d.max_g, &mut d.roll_max_deg, &mut d.pitch_max_deg, &mut d.yaw_max_deg, &mut d.filter][i] = v;
+                        }
+                    }
+                    // shortcut: set every frame, so a car whose LOCK_VIRTUAL_STEER clears it on board keeps it; follow updateForces calls if that matters
+                    d.lock_animation |= l.lock_animation;
+                    for (dt, acc) in l.head_updates.drain(..) {
+                        d.update_head_movement(&mut self.scene, dt, dt, &acc);
+                    }
+                }
             }
             None => {
                 self.graphics.reset_render_states();

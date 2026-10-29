@@ -76,6 +76,18 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
             *PHOTO.lock().unwrap() = Some((start, Vec::new(), String::new()));
             gui.new_photo_mode_app(painter)
         }
+        "drivermodel" => {
+            let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let file = root.join("port_files/content/cars/ks_ferrari_f2004/data/driver3d.ini");
+            gui.apps.driver_model = Some(rustyac_gui::app_driver_model::DriverModelLink {
+                unix_name: "ks_ferrari_f2004".into(),
+                save_exists: file.is_file(),
+                ini: Some(crate::gui_seq_apps::DRIVER_INI),
+                ..Default::default()
+            });
+            *DRIVER.lock().unwrap() = Some((crate::gui_seq_apps::DRIVER_HEAD, Vec::new(), String::new()));
+            gui.new_driver_model_app(painter)
+        }
         "cameraeditor" | "hdr" => {
             let start = crate::gui_seq_apps::camera_editor_start();
             gui.apps.camera_editor = Some(start.clone());
@@ -335,6 +347,20 @@ pub fn eyes_line(e: [f32; 3], fov: f32, pitch: f32) -> String {
 }
 
 /// The Camera editor's: what its app changed, the camera manager's calls, the last line.
+/// FormDriverModel's: the driver's head movement as the port's app left it, the calls, the last line.
+static DRIVER: std::sync::Mutex<Option<([f32; 5], Vec<String>, String)>> = std::sync::Mutex::new(None);
+
+/// One `updateHeadMovement` call (every float's bits).
+pub fn driver_call(dt_filter: f32, dt_anim: f32, acc: [f32; 3]) -> String {
+    format!("updateHeadMovement {:08x} {:08x} acc {:08x} {:08x} {:08x}", dt_filter.to_bits(), dt_anim.to_bits(), acc[0].to_bits(), acc[1].to_bits(), acc[2].to_bits())
+}
+
+/// The Driver Model Utilities' effects as a line of `effects_*.txt`.
+pub fn driver_line(lock: bool, head: [f32; 5], acc: [f32; 3]) -> String {
+    let bits = |v: &[f32]| v.iter().map(|x| format!("{:08x}", x.to_bits())).collect::<Vec<_>>().join(" ");
+    format!("driver lock {} head {} acc {}", lock as u8, bits(&head), bits(&acc))
+}
+
 static CAMERA: std::sync::Mutex<Option<(rustyac_gui::app_camera_editor::CameraEditorLink, Vec<String>, String)>> = std::sync::Mutex::new(None);
 
 /// The Camera editor's effects as a line of `effects_*.txt` (every float's bits).
@@ -428,8 +454,10 @@ pub fn sync(gui: &mut Gui) {
         });
     }
     let camera = gui.apps.camera_editor.take();
+    let driver = gui.apps.driver_model.take();
     let photo = gui.apps.photo;
     gui.apps = crate::gui_seq_apps::link();
+    gui.apps.driver_model = driver;
     // the Photo mode's: what the port's app changed, the buttons from the script
     if let Some(p) = PHOTO.lock().unwrap().as_mut() {
         p.0 = photo;
@@ -437,6 +465,21 @@ pub fn sync(gui: &mut Gui) {
         gui.apps.photo = p.0;
         let line = photo_line(&p.0, p.0.custom_sun.is_none());
         append_effects(&root.join("effects_port.txt"), std::mem::take(&mut p.1), &line, &mut p.2);
+    }
+    // the Driver Model Utilities': its head movement writes and updateHeadMovement calls
+    if let Some(d) = DRIVER.lock().unwrap().as_mut() {
+        if let Some(l) = gui.apps.driver_model.as_mut() {
+            for (i, v) in l.head.iter_mut().enumerate() {
+                if let Some(v) = v.take() {
+                    d.0[i] = v;
+                }
+            }
+            for (dt, acc) in l.head_updates.drain(..) {
+                d.1.push(driver_call(dt, dt, acc));
+            }
+            let line = driver_line(l.lock_animation, d.0, l.acc_g);
+            append_effects(&root.join("effects_port.txt"), std::mem::take(&mut d.1), &line, &mut d.2);
+        }
     }
     // the Camera editor's: what the port's app changed, kept here
     if let Some(c) = CAMERA.lock().unwrap().as_mut() {

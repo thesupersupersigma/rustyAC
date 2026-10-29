@@ -248,6 +248,20 @@ impl GameApps {
         // KeyboardControlsDebug (Sim::Sim: after RacePosition)
         let id = gui.new_keyboard_debug_app(painter);
         add(gui, painter, "keyboard", id);
+        // FormDriverModel (a developers' app, after KeyboardControlsDebug): car 0's driver3d.ini
+        {
+            use crate::input::ini::ControlsIni;
+            let unix = setup.cars.first().map(|c| c[2].clone()).unwrap_or_default();
+            let ini = ControlsIni::load_car_data(&setup.player_data.join("driver3d.ini")).ok().filter(|ini| ini.has_section("HEAD_MOVEMENT"));
+            gui.apps.driver_model = Some(rustyac_gui::app_driver_model::DriverModelLink {
+                save_exists: setup.game.join("content/cars").join(&unix).join("data/driver3d.ini").is_file(),
+                ini: ini.map(|ini| ["FILTER", "MAX_G", "ROLL_MAX_DEG", "PITCH_MAX_DEG", "YAW_MAX_DEG"].map(|key| ini.get_float("HEAD_MOVEMENT", key))),
+                unix_name: unix,
+                ..Default::default()
+            });
+            let id = gui.new_driver_model_app(painter);
+            add(gui, painter, "drivermodel", id);
+        }
         // TyreTesterForm (a developers' app): no app when the car's tyres.ini cannot be read
         if let Ok(id) = gui.new_tyre_tester_app(painter, &setup.player_data) {
             add(gui, painter, "tyretester", id);
@@ -539,6 +553,7 @@ impl GameApps {
             // (the ChaseCam Editor's edit, and the camera as the window loop sets it)
             chase_cam: gui.apps.chase_cam,
             camera_editor: gui.apps.camera_editor.take(),
+            driver_model: gui.apps.driver_model.take(),
             photo: gui.apps.photo,
             chase_cam_active: gui.apps.chase_cam_active,
             keyboard: gui.apps.keyboard,
