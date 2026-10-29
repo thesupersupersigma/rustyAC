@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 44] = [
+pub const APPS: [(&str, usize, usize, usize); 45] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -66,6 +66,7 @@ pub const APPS: [(&str, usize, usize, usize); 44] = [
     ("cameraeditor", 0x2d0, 0x1_402f_1bc0, 0x1_4050_5638),
     ("photomode", 0x250, 0x1_4032_1bc0, 0x1_4050_cff0),
     ("ppfilter", 0x1c8, 0x1_4032_9360, 0x1_4050_e610),
+    ("hdr", 0x218, 0x1_4032_9e20, 0x1_4050_eaa8),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
@@ -141,6 +142,10 @@ unsafe fn camera_editor_link(c: &CameraGame) -> rustyac_gui::app_camera_editor::
         body: Mat44f { m: rd(node, 8) },
         auto_exposure: rd(c.yebis as *mut u8, 0x7b4),
         use_auto_exposure_limits: rd::<u8>(c.yebis as *mut u8, 0x7a1) != 0,
+        auto_exposure_min: rd(c.yebis as *mut u8, 0xcbc),
+        auto_exposure_max: rd(c.yebis as *mut u8, 0xcc0),
+        auto_exposure_target: rd(c.yebis as *mut u8, 0xcc4),
+        data_acd: false,
     }
 }
 
@@ -1026,7 +1031,7 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 ctor(form, graphics, gui);
             } else if text == "help" {
                 ctor(form, gui);
-            } else if text == "cameraeditor" {
+            } else if text == "cameraeditor" || text == "hdr" {
                 // FormCamera(Sim*, CameraForwardYebis*): car 0's exposures (+0xfb8 / +0xfbc /
                 // +0xfc0), its cameras (+0xfc8, room for six: the constructor copies the first
                 // into the others in place), unixName (+0x138), eye point (+0x218), body node
@@ -1075,8 +1080,10 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 let scene = a.alloc(0x100);
                 wr(scene, 0xc, l.scene_camera.m);
                 wr(sim, 0x238, scene);
-                let yebis = a.alloc(0x800);
+                // (+ the filter's auto exposure min / max / target at +0xcbc.., the HDR Settings')
+                let yebis = a.alloc(0x1000);
                 wr(yebis, 0x7a1, 1u8);
+                wr(yebis, 0xcbc, [l.auto_exposure_min, l.auto_exposure_max, l.auto_exposure_target]);
                 wr(yebis, 0x7b4, crate::gui_seq_apps::script(|s| s.auto_exposure));
                 for (va, to) in [
                     (0x1_4003_40d0, camera_set_mode as *const () as usize),
@@ -1086,8 +1093,16 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                     crate::gui_ac_hud::jump(game, va, to);
                 }
                 *CAMERA_EDITOR.lock().unwrap() = Some(CameraGame { car: first_car as usize, sim: sim as usize, yebis: yebis as usize, log: Vec::new(), last: String::new() });
-                let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_402f_1bc0));
-                ctor(form, sim, yebis);
+                if text == "hdr" {
+                    // FormHDR(GUI*, CameraForwardYebis&, Sim&); the GUI's exposure multiplier
+                    let gm: *mut u8 = rd(gui, 0x10);
+                    wr(gm, 0xc, crate::gui_seq_apps::HDR_EXPOSURE_MULTIPLIER);
+                    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_4032_9e20));
+                    ctor(form, gui, yebis, sim);
+                } else {
+                    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(a.va(0x1_402f_1bc0));
+                    ctor(form, sim, yebis);
+                }
             } else if text == "tyretester" {
                 // TyreTesterForm(CarAvatar*, GUI*): its testers read content/cars/<unixName>/data/
                 // from the working folder (the oracle's root, where the staging put tyres.ini)

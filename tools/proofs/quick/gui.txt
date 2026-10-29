@@ -29,3 +29,4 @@ app_x360
 app_camera
 app_photo
 app_ppfilter
+app_hdr

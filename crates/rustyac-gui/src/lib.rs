@@ -17,6 +17,7 @@ pub mod app_keyboard_debug;
 pub mod app_net_monitor;
 pub mod app_pad_debug;
 pub mod app_photo_mode;
+pub mod app_hdr;
 pub mod app_pp_filter;
 pub mod app_drs_zones;
 pub mod comparative_telemetry;

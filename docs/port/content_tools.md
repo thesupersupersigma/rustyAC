@@ -25,8 +25,8 @@ State after the last commit (update after every commit):
 - **Step 4, photo mode, done and proven:** the developers' "Photo mode" (`PhotoMode`,
   `app_photo`: pictures, state, every frame's camera, exposure, DOF and sun, and the calls it makes:
   free camera, physics pause, screenshots).
-- **Step 5, in progress:** the "Post Process Filter" picker (`PostProcessFilterSelector`,
-  `app_ppfilter`) done and proven; the HDR settings window and the driver model window next.
+- **Step 5, in progress:** the "Post Process Filter" picker (`app_ppfilter`) and the "HDR
+  Settings" window (`app_hdr`) done and proven; the driver model window next.
 - **Step 7:** not started.
 
 ## In plain words
@@ -278,6 +278,36 @@ game's ten, so the start index quirk shows; -/+ clicked past both ends; the game
 
 Checked in rustyac.exe: `--post on --screenshot ppf.png --gui-do app:ppfilter` shows the window on
 "default".
+
+### The "HDR Settings" window (`FormHDR`)
+
+Ported in `crates/rustyac-gui/src/app_hdr.rs`, a developers' app. Like the game, rustyac.exe
+makes it only with post-processing on (it belongs to YEBIS' camera).
+
+How to use it: the graph shows YEBIS' auto exposure (white), the filter's minimum (yellow) and
+maximum (red); "Disable Limits" / "Enable Limits" switches the limits; the OnBoard / OutBoard EXP
+spinners change car 0's exposures (0..100); "PP Target (not saved)" changes the filter's target
+(0.00..1.00); "Save in car.ini" writes `[GRAPHICS] ONBOARD_EXPOSURE` / `OUTBOARD_EXPOSURE` and
+shows "SAVED" for 3 s of game time. It is hidden when the car has a `data.acd`, as in the game.
+The game writes `content\cars\<car>\data\car.ini`; **rustyac.exe writes its own cfg's
+`content\cars\<car>\data\car.ini`** (the Camera editor's mapping).
+
+Waits for YEBIS: rustyAC's picture has no auto exposure, no per-car exposure and no filter
+target, so in rustyac.exe the graph and label stay 0 and the edits change nothing on screen (the
+saved car.ini is the game's). The filter's min / max / target start at 0 there (a `shortcut:`
+comment in `gui_apps.rs::camera_editor_link`).
+
+Proof `GUI_ONLY=app_hdr sh tools/proofs/gui.sh` (an auto exposure moving every frame; limits
+off, on, off; both exposures and the target clicked both ways; Save; the 3 s running out):
+
+| what | result |
+|---|---|
+| command log, pixels (84 frames) | IDENTICAL |
+| state and events (3940 lines, 76 events) | IDENTICAL |
+| car 0's exposures, the limits and the target every frame | IDENTICAL (15036 bytes) |
+| saved car.ini (ONBOARD 37, OUTBOARD 44) | IDENTICAL (1544 bytes) |
+
+Checked in rustyac.exe: `--post on --screenshot hdr.png --gui-do app:hdr` shows the window.
 
 ## Step 6: the net monitor and the input debug apps
 

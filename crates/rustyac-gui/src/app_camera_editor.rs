@@ -64,6 +64,12 @@ pub struct CameraEditorLink {
     /// `CameraForwardYebis::currentAutoExposure` (read) and `useAutoExposureLimits` (cleared)
     pub auto_exposure: f32,
     pub use_auto_exposure_limits: bool,
+    /// the filter's `[AUTO_EXPOSURE]` MIN, MAX and TARGET (`pp` +0xcbc..; the HDR Settings')
+    pub auto_exposure_min: f32,
+    pub auto_exposure_max: f32,
+    pub auto_exposure_target: f32,
+    /// the car has a `data.acd` (the HDR Settings' save button hidden)
+    pub data_acd: bool,
 }
 
 #[derive(Default)]

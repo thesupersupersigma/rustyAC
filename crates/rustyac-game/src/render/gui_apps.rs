@@ -135,7 +135,12 @@ impl GameApps {
         gui.game_screen_add_control(painter, screen, leaderboard, true);
         let id = gui.new_laps_app(painter);
         add(gui, painter, "laps", id);
-        // FormVolumes (after FormHDR, made only with a Yebis camera)
+        // FormHDR: only with YEBIS's camera (post-processing on), like FormCamera
+        if gui.sim.replay.post_processing == Some(true) && gui.apps.camera_editor.is_some() {
+            let id = gui.new_hdr_app(painter);
+            add(gui, painter, "hdr", id);
+        }
+        // FormVolumes
         self.audio_ini = own_or_documents_text(setup, "audio.ini").map(|b| String::from_utf8_lossy(&b).into_owned());
         let id = gui.new_volumes_app(painter);
         add(gui, painter, "volumes", id);
@@ -683,5 +688,10 @@ pub fn camera_editor_link(unix: &str, data: &Path, shape: &crate::render::scene:
         body: Mat44f::IDENTITY,
         auto_exposure: 0.0,
         use_auto_exposure_limits: false,
+        // shortcut: no YEBIS, so no auto exposure filter values (0); read the filter's [AUTO_EXPOSURE] when YEBIS is ported
+        auto_exposure_min: 0.0,
+        auto_exposure_max: 0.0,
+        auto_exposure_target: 0.0,
+        data_acd: data.parent().is_some_and(|car| car.join("data.acd").is_file()),
     }
 }

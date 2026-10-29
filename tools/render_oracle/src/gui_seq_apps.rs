@@ -873,9 +873,14 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
             }
         });
     }
-    if name.starts_with("app_camera") {
+    if name.starts_with("app_camera") || name.starts_with("app_hdr") {
         let mut same = true;
-        for rel in ["content/cars/ks_ferrari_f2004/data/car.ini", "content/cars/ks_ferrari_f2004/data/dash_cam.ini", "content/cars/ks_ferrari_f2004/data/cameras.ini", "effects"] {
+        let rels: &[&str] = if name.starts_with("app_hdr") {
+            &["content/cars/ks_ferrari_f2004/data/car.ini", "effects"]
+        } else {
+            &["content/cars/ks_ferrari_f2004/data/car.ini", "content/cars/ks_ferrari_f2004/data/dash_cam.ini", "content/cars/ks_ferrari_f2004/data/cameras.ini", "effects"]
+        };
+        for &rel in rels {
             let (a, b) = if rel == "effects" { (args.root.join("effects_game.txt"), args.root.join("effects_port.txt")) } else { (args.root.join(rel), args.root.join("port_files").join(rel)) };
             let what = if rel == "effects" { "the cameras' settings (car 0's exposures and cameras, the eye point, the views, the scene camera, the camera manager's calls)" } else { rel };
             match (std::fs::read(&a), std::fs::read(&b)) {
@@ -1125,7 +1130,7 @@ PRESET=AI Debug
         }
         std::fs::write(port_docs.join("video.ini"), crate::root::video_ini(args.width, args.height)).map_err(|e| e.to_string())?;
     }
-    if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") {
+    if name.starts_with("app_ffb") || name.starts_with("app_eyes") || name.starts_with("app_camera") || name.starts_with("app_hdr") {
         for to in [args.root.join(car_ini), args.root.join("port_files").join(car_ini)] {
             std::fs::create_dir_all(to.parent().unwrap_or(&args.root)).map_err(|e| e.to_string())?;
             std::fs::copy("cardata/ks_ferrari_f2004/car.ini", &to).map_err(|e| format!("car.ini: {e}"))?;
@@ -1855,6 +1860,36 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 20, 40, 10);
             o.extend([Op::Save, hud("app.shutdown", 0.0, "ppfilter")]);
         }
+        "app_hdr" => {
+            // the form at VOLUMES_AT: Disable Limits 100 x 20 at (250, 350); the OnBoard and
+            // OutBoard spinners 150 x 30 at (25 / 225, 400), the target at (225, 480): "-" at
+            // the left, "+" at the right; Save 350 x 20 at (25, 580)
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.autoexp", 0.42, ""));
+            o.push(hud("app.new", 0.0, "hdr"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "hdr"));
+            for (i, f) in (0..300).step_by(15).enumerate() {
+                o.push(hud("app.autoexp", 0.42 + 0.17 * (i % 7) as f32, ""));
+                o.push(hud("app.at", f as f32, ""));
+                o.push(Op::Frame(DT));
+            }
+            click(&mut o, 300, 360);
+            play(&mut o, 300, 330, 10);
+            for (cx, cy, n) in [(33, 415, 3), (167, 415, 2), (233, 415, 1), (367, 415, 4), (233, 495, 5), (367, 495, 2)] {
+                for _ in 0..n {
+                    click(&mut o, cx, cy);
+                }
+            }
+            click(&mut o, 300, 360);
+            click(&mut o, 300, 360);
+            // Save: "SAVED" for 3 s of the game's clock
+            click(&mut o, 200, 590);
+            play(&mut o, 330, 600, 15);
+            o.push(Op::Save);
+        }
         "app_netmonitor" => {
             // online: the speeds of cars 0 and 1, then error vectors and pings of every size
             race(&mut o, 6);
@@ -2002,6 +2037,9 @@ pub fn photo_start() -> rustyac_gui::app_photo_mode::PhotoLink {
 
 /// The Camera editor's start, both sides: the F2004 (its eye point), two car cameras, the
 /// views, a scene camera and the car's body somewhere on the track.
+/// The HDR Settings': the GUI's graphics manager's exposure multiplier, both sides.
+pub const HDR_EXPOSURE_MULTIPLIER: f32 = 1.257;
+
 pub fn camera_editor_start() -> rustyac_gui::app_camera_editor::CameraEditorLink {
     use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
     let placed = |angle: f32, pos: [f32; 3]| {
@@ -2026,5 +2064,9 @@ pub fn camera_editor_start() -> rustyac_gui::app_camera_editor::CameraEditorLink
         body: placed(0.2, [12.0, 0.5, -28.0]),
         auto_exposure: 0.42,
         use_auto_exposure_limits: true,
+        auto_exposure_min: 0.3,
+        auto_exposure_max: 3.5,
+        auto_exposure_target: 0.85,
+        data_acd: false,
     }
 }

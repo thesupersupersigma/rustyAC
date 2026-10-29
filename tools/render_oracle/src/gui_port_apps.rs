@@ -76,11 +76,16 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
             *PHOTO.lock().unwrap() = Some((start, Vec::new(), String::new()));
             gui.new_photo_mode_app(painter)
         }
-        "cameraeditor" => {
+        "cameraeditor" | "hdr" => {
             let start = crate::gui_seq_apps::camera_editor_start();
             gui.apps.camera_editor = Some(start.clone());
             *CAMERA.lock().unwrap() = Some((start, Vec::new(), String::new()));
-            gui.new_camera_editor_app(painter, 0.0)
+            if name == "hdr" {
+                gui.apps.photo.exposure_multiplier = crate::gui_seq_apps::HDR_EXPOSURE_MULTIPLIER;
+                gui.new_hdr_app(painter)
+            } else {
+                gui.new_camera_editor_app(painter, 0.0)
+            }
         }
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
@@ -347,6 +352,7 @@ pub fn camera_line(l: &rustyac_gui::app_camera_editor::CameraEditorLink) -> Stri
         bits(l.scene_camera.m.as_flattened()),
         l.use_auto_exposure_limits as u8
     );
+    line += &format!(" target {:08x}", l.auto_exposure_target.to_bits());
     for (i, c) in l.cameras.iter().enumerate() {
         line += &format!(" | cam{i} {} fov {} exp {} sound {}", bits(c.matrix.m.as_flattened()), bits(&[c.fov]), bits(&[c.exposure]), c.external_sound as u8);
     }
@@ -443,6 +449,7 @@ pub fn sync(gui: &mut Gui) {
             c.0.body = car.body_matrix;
         }
         gui.apps.camera_editor = Some(c.0.clone());
+        gui.apps.photo.exposure_multiplier = crate::gui_seq_apps::HDR_EXPOSURE_MULTIPLIER;
         let line = camera_line(&c.0);
         append_effects(&root.join("effects_port.txt"), std::mem::take(&mut c.1), &line, &mut c.2);
     }
