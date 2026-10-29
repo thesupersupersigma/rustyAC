@@ -61,6 +61,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "carphysics" => gui.new_car_physics_app(painter),
         "carengineer" => gui.new_car_engineer_app(painter),
         "wings" => gui.new_wings_app(painter),
+        "drszones" => gui.new_drs_zones_app(painter),
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {
@@ -220,6 +221,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     f.log.push(format!("message {title}|{text}"));
                 } else if let Some(s) = EYES.lock().unwrap().as_mut() {
                     s.log.push(format!("message {title}|{text}"));
+                } else {
+                    append_effects(&root.join("effects_port.txt"), vec![format!("message {title}|{text}")], "", &mut String::new());
                 }
             }),
         }

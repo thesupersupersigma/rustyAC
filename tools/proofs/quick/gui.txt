@@ -21,3 +21,4 @@ app_wings
 app_tyretester
 app_suspension
 app_gpuprofiler
+app_drszones

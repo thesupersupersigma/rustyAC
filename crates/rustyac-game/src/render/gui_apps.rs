@@ -133,6 +133,9 @@ impl GameApps {
         // RaceFuelMonitor (a developers' app)
         let id = gui.new_race_fuel_monitor_app(painter);
         add(gui, painter, "fuelmonitor", id);
+        // FormDRSZones (after PhotoMode, not ported): saves into maps\ (see write_files)
+        let id = gui.new_drs_zones_app(painter);
+        add(gui, painter, "drszones", id);
         let id = gui.new_setup_debug_app(painter);
         add(gui, painter, "setupdebug", id);
         let id = gui.new_tyre_debug_app(painter);

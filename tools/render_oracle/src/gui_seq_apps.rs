@@ -788,6 +788,22 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
+    if name.starts_with("app_drszones") {
+        let rel = "content/tracks/magione/data/drs_zones.ini.candidate";
+        let mut same = true;
+        for (what, a, b) in [(rel, args.root.join(rel), args.root.join("port_files").join(rel)), ("the messages", args.root.join("effects_game.txt"), args.root.join("effects_port.txt"))] {
+            match (std::fs::read(&a), std::fs::read(&b)) {
+                (Ok(a), Ok(b)) if a == b => println!("file {what}: IDENTICAL ({} bytes)", a.len()),
+                (a, b) => {
+                    same = false;
+                    println!("file {what}: DIFFERENT
+  game: {:?}
+  port: {:?}", a.map(|x| String::from_utf8_lossy(&x).into_owned()), b.map(|x| String::from_utf8_lossy(&x).into_owned()));
+                }
+            }
+        }
+        return Ok(same);
+    }
     if !name.contains("ailine") {
         return Ok(true);
     }
@@ -972,6 +988,7 @@ PRESET=AI Debug
     let car_ini = "content/cars/ks_ferrari_f2004/data/car.ini";
     // the Onboard settings' files: the game folder's cfg/camera_onboard.ini, no view.ini, no
     // dash_cam.ini and no Documents camera_onboard.ini on either side
+    std::fs::create_dir_all(args.root.join("cfg")).map_err(|e| e.to_string())?;
     std::fs::copy(args.game.join("cfg/camera_onboard.ini"), args.root.join("cfg/camera_onboard.ini")).map_err(|e| format!("camera_onboard.ini: {e}"))?;
     for dir in [&docs, &port_docs] {
         let _ = std::fs::remove_file(dir.join("cars/ks_ferrari_f2004/view.ini"));
@@ -1490,6 +1507,28 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 900, 960, 6);
             o.extend([hud("app.visible", 0.0, "suspension"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "suspension")]);
             play(&mut o, 960, 1100, 4);
+            o.push(Op::Save);
+        }
+        "app_drszones" => {
+            // the button (180 x 30 at (5, 100) of the form at VOLUMES_AT), Save (100 x 30 at (5, 350))
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            o.push(hud("app.new", 0.0, "drszones"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "drszones"));
+            play(&mut o, 0, 200, 20);
+            // nothing to save yet; then the first press (it ends a zone from 0), two whole zones
+            click(&mut o, 55, 365);
+            for k in 0..7 {
+                play(&mut o, 200 + k * 400, 400 + k * 400, 50);
+                click(&mut o, 95, 115);
+            }
+            click(&mut o, 55, 365);
+            play(&mut o, 3000, 3300, 50);
+            click(&mut o, 95, 115);
+            o.extend([hud("app.visible", 0.0, "drszones"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "drszones")]);
+            play(&mut o, 3300, 3400, 25);
             o.push(Op::Save);
         }
         "app_tyretester" => {

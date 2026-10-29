@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 36] = [
+pub const APPS: [(&str, usize, usize, usize); 37] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -57,9 +57,11 @@ pub const APPS: [(&str, usize, usize, usize); 36] = [
     ("tyretester", 0x1f8, 0x1_4033_b520, 0x1_4051_20e8),
     ("suspension", 0x288, 0x1_402e_3fd0, 0x1_4050_37f8),
     ("gpuprofiler", 0x1c0, 0x1_4031_b320, 0x1_4050_c230),
+    // Task 44
+    ("drszones", 0x210, 0x1_4033_6210, 0x1_4051_1390),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
-const TAKES_CAR: [&str; 15] = ["suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
+const TAKES_CAR: [&str; 16] = ["drszones", "suspension", "wings", "carphysics", "telemetry", "sustelemetry", "driverperf", "delta", "tyres", "pedals", "electronics", "gears", "ffb", "mgu", "ballast", "eyes"];
 /// `const DICarControl::vftable'`
 const VA_DICARCONTROL_VFTABLE: usize = 0x1_404b_2098;
 const VA_SPEED_USE_MPH: usize = 0x1_4155_a5ae;
@@ -161,6 +163,9 @@ unsafe extern "C" fn add_message(_this: *mut u8, title: *const u8, text: *const 
         f.log.push(line);
     } else if let Some(e) = EYES.lock().unwrap().as_mut() {
         e.log.push(line);
+    } else {
+        let root = crate::root::documents().parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        crate::gui_port_apps::append_effects(&root.join("effects_game.txt"), vec![line], "", &mut String::new());
     }
 }
 
@@ -730,6 +735,13 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                     wr(sim, 0x170, a.alloc(0x200));
                 }
                 wings_car(a, first_car);
+            }
+            if text == "drszones" {
+                // FormDRSZones' save: TrackAvatar::getDataFolder (TrackAvatar+0xf8 physicsTrack,
+                // Track+0x108 dataFolder), relative to the oracle's root
+                let (name, config) = crate::gui_seq_apps::script(|s| s.track.clone());
+                let folder = if config.is_empty() { format!("content/tracks/{name}") } else { format!("content/tracks/{name}/{config}") };
+                crate::ac::write_wstring(a, rd::<*mut u8>(sim, 0x150).add(0xf8 + 0x108), &folder);
             }
             if text == "suspension" {
                 // ACSuspension: the same render-finished event; the car's body node and its

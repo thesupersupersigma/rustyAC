@@ -11,7 +11,11 @@ State after the last commit (update after every commit):
   game's own recorder beside the port's (`car_oracle multi --ai-record`): the recording's point
   count every step and both saved files byte for byte. `rustyac.exe --ai-record <folder>` records
   the player's car.
-- **Steps 2-7:** not started.
+- **Step 2, DRS zones, done and proven:** the zones' reading and logic (`DRSManager`) were ported
+  before (Task 16, `spa_drs_timing`); the HUD's DRS lamp, the Electronics app's DRS light and the
+  cockpit's DRS instruments too. New: the developers' "DRS Zones" window (`FormDRSZones`), proven
+  in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
+- **Steps 3-7:** not started.
 
 ## In plain words
 
@@ -74,3 +78,42 @@ game reads it.
   finished lap on (`car0.npos`); the proof judges the files only. Task 44b.
 - The AI app's window (FormAI: the buttons, the hints editor, the drawn splines) is not ported;
   rustyAC records from the start of the session.
+
+## Step 2: DRS zones
+
+### What was already there
+
+- `data/drs_zones.ini` (`DRSManager::DRSManager` 0x140278ea0) and `DRSManager::isDRSAvailable`
+  0x140279490: `crates/rustyac-physics/src/track/` (`DrsZone`, `Track::is_drs_available`), proven
+  by the car oracle's `spa_drs_timing` (Task 16).
+- The HUD's DRS lamp, the Electronics app's DRS light, the cockpit's `DRS_*` instruments.
+- `DRSManager::step` and `wasRaceSwitchedOn`: nothing to port. The game's `Track::step` calls a
+  linker-folded empty function for the step, so the manager's `detections` stay empty and
+  `wasRaceSwitchedOn` is always false.
+
+### The "DRS Zones" window (`FormDRSZones`)
+
+`crates/rustyac-gui/src/app_drs_zones.rs`. A developers' app (shown with `ENABLE_DEV_APPS`): the
+player's car's position along the lap, one button that marks a zone's detection point, start and
+end in turn, the zones' list, and "Save".
+
+How to use it: drive, press the button at the detection point, at the start and at the end of each
+zone, then Save. The game's constructor leaves the button at "end" under its "Set Detection" text,
+so the first press ends a zone that begins at 0 (as in the game). Save writes
+`content/tracks/<track>[/<layout>]/data/drs_zones.ini.candidate` in the game; rustyac.exe writes it
+under its own cfg folder: `<cfg>/maps/<track>[/<layout>]/data/drs_zones.ini.candidate` (the folder
+where the track map's files go too). Rename it to `drs_zones.ini` in the track's `data` folder
+yourself.
+
+Proof: `render_oracle gui --gui app_drszones` (in `tools/proofs/gui_list.txt` and the quick list):
+71 frames, command log, pixels, state and events IDENTICAL; the saved file (169 bytes, three
+zones) and the window's two messages ("Nothing to save", "DRS Zones saved") IDENTICAL.
+
+Found on the way: a GUI oracle run of an app sequence alone failed while staging (no `cfg` folder
+in a fresh root); the staging now makes it.
+
+### Not done
+
+- The zones a server sends (0x53, `ACClient::onDRSZoneReceived` 0x14004b520 then
+  `DRSManager::setZones`): decoded, not acted on; rustyAC keeps the track's own zones online.
+  Task 44b.
