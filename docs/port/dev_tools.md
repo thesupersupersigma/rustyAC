@@ -31,7 +31,11 @@ State after the last commit (update after every commit):
   rustyac.exe); Render Stats' audio time and FMOD usage done. The console variables done: what
   each one changes in the game now changes in rustyAC (the scene's in the scene oracle, `r43c_03`
   to `r43c_06`; the physics ones as jobs of the physics thread).
-- **Version:** still v0.43.1.
+- **Version:** v0.43.2 (tag `v0.43.2`). Leftovers go to Task 43d (see "Not done").
+- **Checks at the release:** `sh tools/proofs/run_all.sh --quick`: 140 cases in 13 areas, all
+  IDENTICAL (physics 9, fresh 51, sound 4, render 12, gui 19, python 1, replays 5, net 16,
+  browser 9, ai_page 3, shaders 4, launcher 1, dumps 6; 43 min). Clippy native, wasm and wgpu
+  clean.
 
 ## In plain words
 
