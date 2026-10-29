@@ -52,6 +52,8 @@ pub struct GameApps {
     pub ffb_jobs: Vec<rustyac_physics::car::setup::SetupJob>,
     /// "Keyboard debug"'s edits for the keyboard's class (index, value)
     pub keyboard_edits: Vec<(usize, f32)>,
+    /// "X360 Controller debug"'s edits for the pad's class (index, value)
+    pub pad_edits: Vec<(usize, f32)>,
     /// the wheel's `ffUpgrades` (controls.ini `[FF_ENHANCEMENT]` with INPUT_METHOD=WHEEL, then the
     /// app's changes); the messages the apps asked for (title, text)
     ff_upgrades: Option<[f32; 4]>,
@@ -251,6 +253,9 @@ impl GameApps {
         let sections = rustyac_gui::app_small::read_sections(read(folder.join("data/sections.ini")).as_ref());
         let id = gui.new_track_description_app(painter, sections);
         add(gui, painter, "trackdescription", id);
+        // X360ControllerDebug (Sim::Sim: after TrackDescription)
+        let id = gui.new_pad_debug_app(painter);
+        add(gui, painter, "x360", id);
         // FormRunningTime: only with a time limited test (Documents cfg/time_limited_test.ini)
         if let Some(test) = own_or_documents("time_limited_test.ini") {
             let max = test.get_int("SETTINGS", "MAX_RUNNING_TIME").unwrap_or(0);
@@ -309,6 +314,10 @@ impl GameApps {
                 }
                 AppAction::SetKeyboardTuning { index, value } => {
                     self.keyboard_edits.push((index, value));
+                    continue;
+                }
+                AppAction::SetPadTuning { index, value } => {
+                    self.pad_edits.push((index, value));
                     continue;
                 }
                 AppAction::SetUserFfGain(value) => {
@@ -489,6 +498,7 @@ impl GameApps {
             chase_cam: gui.apps.chase_cam,
             chase_cam_active: gui.apps.chase_cam_active,
             keyboard: gui.apps.keyboard,
+            pad: gui.apps.pad,
             ping: info.online.as_ref().map_or(0, |o| o.ping),
             net_error_vector: info.online.as_ref().map_or([0.0; 3], |o| o.car1_error_vector),
             ctrl_down: self.ctrl_down,

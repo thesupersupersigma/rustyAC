@@ -17,9 +17,10 @@ State after the last commit (update after every commit):
   in the GUI oracle (`app_drszones`: pictures, state, the saved file and the messages).
 - **Step 3, camera editors, in progress:** the developers' "ChaseCam Editor" (`ChaseCamEditor`)
   done and proven in the GUI oracle (`app_chasecam`). The camera editor (`FormCamera`) next.
-- **Step 6, in progress:** the developers' "Net monitor" (`NetMonitorForm`, `app_netmonitor`)
-  and "Keyboard debug" (`KeyboardControlsDebug`, `app_keyboard`, `app_keyboard_none`) done and
-  proven. The X360 controller debug app (`X360ControllerDebug`) next.
+- **Step 6, done and proven:** the developers' "Net monitor" (`NetMonitorForm`,
+  `app_netmonitor`), "Keyboard debug" (`KeyboardControlsDebug`, `app_keyboard`,
+  `app_keyboard_none`) and "X360 Controller debug" (`X360ControllerDebug`, `app_x360`,
+  `app_x360_none`).
 - **Steps 4, 5, 7:** not started.
 
 ## In plain words
@@ -192,3 +193,32 @@ IDENTICAL. The game side runs the real constructor, render and spinner handlers;
 constructor's dynamic cast) while the window is made. A `rustyac.exe --screenshot ... --gui-do
 app:keyboard` picture shows the window drawn ("NOT SELECTED": no keyboard class in a screenshot
 run).
+
+### The "X360 Controller debug" app (`X360ControllerDebug`)
+
+`crates/rustyac-gui/src/app_pad_debug.rs`. A developers' app, always made (in `Sim::Sim` after
+the track description). 400 x 300. With the Xbox pad's class as the car's controls it prints, in
+the GUI's own font (its colour changed for good, as in the game), "RAW", "Filtered" and "% of
+steer" in yellow (the stick's last raw value, its filtered value, the last steering limit), "Steering
+Speed", "DeadZone", "Steer Filter" and "Steer Gamma" in magenta and "Speed Sens." in white. Five
+rows of - and + buttons (`LRControl`: "Speed Sens", "Steer Gamma", "Steer Filter", "Deadzone",
+"Speed") change the pad's parameters by 0.001 (Steer Gamma by 0.01) at once. "Save" writes
+`STEER_GAMMA`, `STEER_FILTER`, `SPEED_SENSITIVITY`, `STEER_DEADZONE` and `STEER_SPEED` (`%g`) into
+`[X360]` of Documents' `cfg/controls.ini` and shows "X360 Parameters" / "Saved". The values it
+saves are the class's own: `STEER_FILTER` and `STEER_SPEED` are written as the class keeps them
+(after its reading's arithmetic), so a save and a reload do not give back the same steering, as in
+the game.
+
+Where it writes: the game writes `Documents\Assetto Corsa\cfg\controls.ini`. rustyac.exe writes
+its own `cfg/controls.ini` (in rustyAC's cfg folder, through the write guard), starting from a copy
+of the Documents file the first time.
+
+Without a pad class the window is empty below its buttons; the game's buttons then write through
+a null pointer (a crash), the port's do nothing. In rustyac.exe the class counts as the game's when
+rustyAC starts on the pad (a pad found and `INPUT_METHOD` not `KEYBOARD`).
+
+Proof: `render_oracle gui --gui app_x360` (43 frames: every row clicked down and up, the stick's
+values moving, Save, the window hidden and shown; command log, pixels, state and events IDENTICAL;
+`cfg/controls.ini` 163 bytes IDENTICAL; the messages 30 bytes IDENTICAL) and `app_x360_none` (9
+frames, no pad class, IDENTICAL). The game side runs the real constructor, render, buttons and Save
+with a block carrying `JoypadCarControl`'s vftable answered by the `getControlsProvider` stand-in.

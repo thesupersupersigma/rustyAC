@@ -13,7 +13,7 @@ setup_time@ks_ferrari_f2004
 app_chat app_chat_export app_chat_online app_laps app_position app_essentials app_delta app_realtime app_delta_sectors app_gears_ers app_mgu_ers
 app_trackmap app_trackmap@spa app_trackmap@laguna app_trackmap@ailine app_small app_driverperf app_stats app_ffb app_volumes app_friends app_eyes app_ballast
 # Task 33: telemetry, console, car data apps, translations
-app_telemetry app_telemetry_user app_setupdebug app_carphysics app_carengineer app_wings app_tyretester app_suspension app_gpuprofiler app_drszones app_chasecam app_netmonitor app_keyboard app_keyboard_none app_tyredebug app_tyres app_pedals app_electronics app_gears app_mgu app_sustelemetry
+app_telemetry app_telemetry_user app_setupdebug app_carphysics app_carengineer app_wings app_tyretester app_suspension app_gpuprofiler app_drszones app_chasecam app_netmonitor app_keyboard app_keyboard_none app_x360 app_x360_none app_tyredebug app_tyres app_pedals app_electronics app_gears app_mgu app_sustelemetry
 esc_telemetry console
 esc_menu#it pause_menu#de hud_messages#it app_essentials#it app_tyres#de app_volumes#it app_ffb@short#de setup_tabs#it setup_io#de esc_menu_race#de tab_12#it end_race_12#de
 # Task 34: online menus and the setup pages of a server

@@ -131,6 +131,9 @@ impl Timing {
 /// "Keyboard debug"'s share: the parameters as of the last step, the edits not yet applied.
 pub type KeyboardTuningShare = (Option<rustyac_gui::app_keyboard_debug::KeyboardTuning>, Vec<(usize, f32)>);
 
+/// "X360 Controller debug"'s share, the same for the pad's class.
+pub type PadTuningShare = (Option<rustyac_gui::app_pad_debug::PadTuning>, Vec<(usize, f32)>);
+
 /// What the physics thread and the rest of the program share.
 pub struct Shared {
     /// Stop the thread.
@@ -165,6 +168,7 @@ pub struct Shared {
     /// "Keyboard debug": the keyboard's steering parameters as of the last step (None when
     /// the game would not have picked the keyboard's class), and the app's edits not yet applied
     pub keyboard_tuning: Mutex<KeyboardTuningShare>,
+    pub pad_tuning: Mutex<PadTuningShare>,
     /// The car's unchanging facts, once it is built.
     pub car_info: Mutex<Option<crate::sim::CarInfo>>,
     /// The same of the session's other cars (car 1, 2, …), set before `car_info`.
@@ -241,6 +245,7 @@ impl Shared {
             mouse_steering: std::sync::atomic::AtomicBool::new(false),
             keyboard_drives: std::sync::atomic::AtomicBool::new(false),
             keyboard_tuning: Mutex::new((None, Vec::new())),
+            pad_tuning: Mutex::new((None, Vec::new())),
             car_info: Mutex::new(None),
         })
     }

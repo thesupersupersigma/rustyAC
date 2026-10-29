@@ -242,6 +242,8 @@ pub struct AppScript {
     pub net_ev: [f32; 3],
     /// Keyboard debug's: the keyboard's parameters (`KeyboardTuning`), None: no keyboard class
     pub keyboard: Option<[f32; 11]>,
+    /// X360 Controller debug's: the pad's parameters (`PadTuning`), None: no pad class
+    pub pad: Option<[f32; 8]>,
     pub ff_gain: f32,
     pub user_ff_gain: f32,
     /// the cars' folder; KERS / ERS: there, the lap's energy (J)
@@ -417,6 +419,13 @@ pub fn app_input(what: &str, number: f32, text: &str) -> Result<bool, String> {
         "app.keyboardLive" => script(|s| {
             if let Some(k) = s.keyboard.as_mut() {
                 k[5..].copy_from_slice(&floats::<6>(text));
+            }
+        }),
+        // "off", the 8 parameters, or (`app.padLive`) the last three: what the buttons do not change
+        "app.pad" => script(|s| s.pad = (text != "off").then(|| floats::<8>(text))),
+        "app.padLive" => script(|s| {
+            if let Some(p) = s.pad.as_mut() {
+                p[5..].copy_from_slice(&floats::<3>(text));
             }
         }),
         "app.net" => script(|s| {
@@ -685,6 +694,7 @@ pub fn link() -> AppLink {
             ping: s.ping,
             net_error_vector: s.net_ev,
             keyboard: s.keyboard,
+            pad: s.pad,
             ctrl_down: false,
             penalties_enabled: s.penalties,
             stats: rustyac_gui::app_stats::AppStats { delta_t: DT, ..s.stats.clone() },
@@ -824,8 +834,14 @@ pub fn compare_files(args: &crate::Args, name: &str) -> Result<bool, String> {
         }
         return Ok(same);
     }
-    if name.starts_with("app_drszones") || name.starts_with("app_chasecam") {
-        let rel = if name.starts_with("app_drszones") { "content/tracks/magione/data/drs_zones.ini.candidate" } else { "system/cfg/chase_cam.ini" };
+    if name.starts_with("app_drszones") || name.starts_with("app_chasecam") || name == "app_x360" {
+        let rel = if name.starts_with("app_drszones") {
+            "content/tracks/magione/data/drs_zones.ini.candidate"
+        } else if name.starts_with("app_x360") {
+            "documents/Assetto Corsa/cfg/controls.ini"
+        } else {
+            "system/cfg/chase_cam.ini"
+        };
         let mut same = true;
         for (what, a, b) in [(rel, args.root.join(rel), args.root.join("port_files").join(rel)), ("the messages", args.root.join("effects_game.txt"), args.root.join("effects_port.txt"))] {
             match (std::fs::read(&a), std::fs::read(&b)) {
@@ -1548,6 +1564,40 @@ pub fn sequence(name: &str) -> Option<Vec<Op>> {
             play(&mut o, 900, 960, 6);
             o.extend([hud("app.visible", 0.0, "suspension"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "suspension")]);
             play(&mut o, 960, 1100, 4);
+            o.push(Op::Save);
+        }
+        "app_x360" | "app_x360_none" => {
+            // the form at VOLUMES_AT: the rows' - and + (50 x 50 at (200, 50 + 50 k) and
+            // (350, ...)), Save (100 x 50 at (20, 250))
+            let (x, y) = VOLUMES_AT;
+            let click = |o: &mut Vec<Op>, cx: i32, cy: i32| o.extend([Op::MouseMove(x + cx, y + cy), Op::MouseDown(x + cx, y + cy), Op::Frame(DT), Op::MouseUp(x + cx, y + cy), Op::Frame(DT)]);
+            race(&mut o, 6);
+            if name == "app_x360" {
+                // controls.ini [X360] as JoypadCarControl reads the shipped one, a moving stick
+                o.push(hud("app.pad", 0.0, "0.6,1.8,0.6534,0.05,0.12,0.75,0.123456,-0.0987654"));
+            }
+            o.push(hud("app.new", 0.0, "x360"));
+            o.push(Op::Frame(DT));
+            o.push(hud("app.visible", 1.0, "x360"));
+            play(&mut o, 0, 100, 25);
+            if name == "app_x360" {
+                // every row down and up, some more than once; the stick moves; then Save
+                for (k, down, up) in [(0, 2, 0), (1, 0, 3), (2, 1, 1), (3, 4, 0), (4, 0, 2)] {
+                    for _ in 0..down {
+                        click(&mut o, 225, 75 + 50 * k);
+                    }
+                    for _ in 0..up {
+                        click(&mut o, 375, 75 + 50 * k);
+                    }
+                }
+                for (i, live) in ["1,0.5,0.25", "0.333333,-1,-0.99999", "0.000123,1e-05,0"].iter().enumerate() {
+                    o.push(hud("app.padLive", 0.0, live));
+                    play(&mut o, 100 + i * 50, 150 + i * 50, 25);
+                }
+                click(&mut o, 70, 275);
+            }
+            o.extend([hud("app.visible", 0.0, "x360"), Op::Frame(DT), Op::Frame(DT), hud("app.visible", 1.0, "x360")]);
+            play(&mut o, 250, 300, 25);
             o.push(Op::Save);
         }
         "app_keyboard" | "app_keyboard_none" => {

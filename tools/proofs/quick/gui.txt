@@ -25,3 +25,4 @@ app_drszones
 app_chasecam
 app_netmonitor
 app_keyboard
+app_x360

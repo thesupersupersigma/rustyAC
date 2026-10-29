@@ -19,7 +19,7 @@ use crate::ac::{rd, wr, wstring, Game};
 use crate::gui_ac_hud::jump;
 
 /// name, the class's size, constructor, table
-pub const APPS: [(&str, usize, usize, usize); 40] = [
+pub const APPS: [(&str, usize, usize, usize); 41] = [
     ("carengineer", 0x1f0, 0x1_4031_a0f0, 0x1_4050_bf80),
     ("telemetry", 0x2b8, 0x1_4032_f660, 0x1_4050_fbe8),
     ("tyredebug", 0x1c0, 0x1_4031_9960, 0x1_4050_bd90),
@@ -62,14 +62,17 @@ pub const APPS: [(&str, usize, usize, usize); 40] = [
     ("chasecameditor", 0x1f0, 0x1_4033_72a0, 0x1_4051_16e0),
     ("netmonitor", 0x1e0, 0x1_4030_3400, 0x1_4050_7e60),
     ("keyboard", 0x1f8, 0x1_4030_dbe0, 0x1_4050_9a20),
+    ("x360", 0x1d8, 0x1_4032_76d0, 0x1_4050_e090),
 ];
 /// the apps whose constructor takes the player's `CarAvatar` (the others take `Sim`)
 /// The Net monitor's stand-in client and car 1's net provider.
 static NET_MONITOR: Mutex<Option<(usize, usize)>> = Mutex::new(None);
 /// Keyboard debug's `KeyboardCarControl` stand-in
 static KEYBOARD: Mutex<Option<usize>> = Mutex::new(None);
-/// what `getControlsProvider` answers while Keyboard debug is made
-static KEYBOARD_CTOR: Mutex<Option<usize>> = Mutex::new(None);
+/// X360 Controller debug's `JoypadCarControl` stand-in
+static PAD: Mutex<Option<usize>> = Mutex::new(None);
+/// what `getControlsProvider` answers while Keyboard debug or X360 Controller debug is made
+static CONTROLS_CTOR: Mutex<Option<usize>> = Mutex::new(None);
 
 /// The ChaseCam Editor's camera manager block (0: none staged).
 static CHASE_CAMERA: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -339,7 +342,7 @@ unsafe extern "C" fn ff_global_gain(this: *mut u8) -> f32 {
 }
 
 unsafe extern "C" fn get_controls_provider(this: *mut u8) -> *mut u8 {
-    if let Some(key) = *KEYBOARD_CTOR.lock().unwrap() {
+    if let Some(key) = *CONTROLS_CTOR.lock().unwrap() {
         return key as *mut u8;
     }
     let index = car_index(this);
@@ -825,10 +828,13 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
                 *TYRE_TESTER.lock().unwrap() = Some(first_car as usize);
             } else {
                 if text == "keyboard" {
-                    *KEYBOARD_CTOR.lock().unwrap() = Some(keyboard_class(a));
+                    *CONTROLS_CTOR.lock().unwrap() = Some(keyboard_class(a));
+                }
+                if text == "x360" {
+                    *CONTROLS_CTOR.lock().unwrap() = Some(pad_class(a));
                 }
                 ctor(form, if TAKES_CAR.contains(&text) { first_car } else { sim });
-                *KEYBOARD_CTOR.lock().unwrap() = None;
+                *CONTROLS_CTOR.lock().unwrap() = None;
             }
             if text == "telemetry" {
                 telemetry_channels(a, form, sim)?;
@@ -975,6 +981,10 @@ pub unsafe fn update() {
         for (off, v) in [0x38, 0x3c, 0x34, 0x40, 0x44, 0x18].into_iter().zip(&k[5..]) {
             wr(key as *mut u8, off, *v);
         }
+    }
+    // X360ControllerDebug: lastMaxSteer, lastRaw, lastNormalized (its buttons change the rest)
+    if let (Some(pad), Some(p)) = (*PAD.lock().unwrap(), l.pad) {
+        wr(pad as *mut u8, 0x2c, [p[5], p[6], p[7]]);
     }
     // NetMonitorForm: the client's ping (u16), car 1's error vector
     if let Some((client, net)) = *NET_MONITOR.lock().unwrap() {
@@ -1466,4 +1476,15 @@ unsafe fn keyboard_class(a: &crate::acs::Acs) -> usize {
     }
     *KEYBOARD.lock().unwrap() = Some(key as usize);
     key as usize
+}
+
+/// X360ControllerDebug's controls while it is made: a `JoypadCarControl` (its vftable for the
+/// constructor's dynamic cast, its fields from +0x18 on) when the script has one, else none.
+unsafe fn pad_class(a: &crate::acs::Acs) -> usize {
+    let Some(p) = crate::gui_seq_apps::script(|s| s.pad) else { return 0 };
+    let pad = a.alloc(0x200);
+    wr(pad, 0, a.va(0x1_404e_0d38));
+    wr(pad, 0x18, p);
+    *PAD.lock().unwrap() = Some(pad as usize);
+    pad as usize
 }

@@ -95,6 +95,9 @@ impl LiveSource {
         if active == DEVICE_KEYBOARD {
             shared.keyboard_tuning.lock().unwrap().0 = Some(keyboard.tuning());
         }
+        if active == DEVICE_PAD {
+            shared.pad_tuning.lock().unwrap().0 = Some(pad.tuning());
+        }
         LiveSource {
             bindings,
             pad,
@@ -237,6 +240,13 @@ impl DriverSource for LiveSource {
             }
             if tuning.0.is_some() {
                 tuning.0 = Some(self.keyboard.tuning());
+            }
+            let mut tuning = self.shared.pad_tuning.lock().unwrap();
+            for (index, value) in std::mem::take(&mut tuning.1) {
+                self.pad.set_tuning(index, value);
+            }
+            if tuning.0.is_some() {
+                tuning.0 = Some(self.pad.tuning());
             }
         }
         self.choose(controls, self.keyboard.in_use(key_down));

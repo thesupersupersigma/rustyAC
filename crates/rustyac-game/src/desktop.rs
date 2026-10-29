@@ -2099,6 +2099,14 @@ fn run_window(options: &Options) -> Result<(), String> {
                     tuning.1.push((index, value));
                 }
                 gui.gui.apps.keyboard = tuning.0;
+                let mut tuning = shared.pad_tuning.lock().unwrap();
+                for (index, value) in std::mem::take(&mut gui.apps.pad_edits) {
+                    if let Some(p) = tuning.0.as_mut() {
+                        p[index] = value;
+                    }
+                    tuning.1.push((index, value));
+                }
+                gui.gui.apps.pad = tuning.0;
             }
             gui.gui.apps.chase_cam_active = camera.mode == rustyac_game::render::scene::CameraMode::Drivable && camera.drivable == rustyac_game::render::scene::Drivable::Chase;
             // SAFETY: a plain call.

@@ -376,6 +376,23 @@ pub fn get_axis_value(value: f32, gamma: f32, dead_zone: f32) -> f32 {
 }
 
 impl JoypadCarControl {
+    /// What "X360 Controller debug" shows (`JoypadCarControl` from +0x18 on).
+    pub fn tuning(&self) -> [f32; 8] {
+        [self.speed_sensitivity, self.steer_gamma, self.steer_filter, self.dead_zone, self.steer_speed, self.last_max_steer, self.last_raw, self.last_normalized]
+    }
+
+    /// The debug app's buttons: one of the first five of [`Self::tuning`].
+    pub fn set_tuning(&mut self, index: usize, value: f32) {
+        match index {
+            0 => self.speed_sensitivity = value,
+            1 => self.steer_gamma = value,
+            2 => self.steer_filter = value,
+            3 => self.dead_zone = value,
+            4 => self.steer_speed = value,
+            _ => {}
+        }
+    }
+
     /// `JoypadCarControl::JoypadCarControl` @ 0x1401d9280: the settings of `[X360]` and the
     /// buttons of the action sections. A key that is missing reads as 0 / no button, not as
     /// a default (so a missing `STEER_THUMB` means the right stick, as in the game).

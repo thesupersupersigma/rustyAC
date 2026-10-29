@@ -65,6 +65,7 @@ pub fn make(gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::P
         "chasecameditor" => gui.new_chase_cam_editor_app(painter),
         "netmonitor" => gui.new_net_monitor_app(painter),
         "keyboard" => gui.new_keyboard_debug_app(painter),
+        "x360" => gui.new_pad_debug_app(painter),
         "gpuprofiler" => gui.new_gpu_profiler_app(painter),
         "suspension" => gui.new_suspension_app(painter),
         "tyretester" => {
@@ -197,7 +198,7 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                 }
             }),
             // (the port's app keeps its own copy in gui.apps.keyboard; the pictures show it)
-            AppAction::SetKeyboardTuning { .. } => {}
+            AppAction::SetKeyboardTuning { .. } | AppAction::SetPadTuning { .. } => {}
             AppAction::DeleteFile { path } => {
                 let _ = std::fs::remove_file(docs.join(path));
             }
@@ -334,6 +335,13 @@ pub fn sync(gui: &mut Gui) {
         crate::gui_seq_apps::script(|s| {
             if let Some(s) = s.keyboard.as_mut() {
                 s[..5].copy_from_slice(&k[..5]);
+            }
+        });
+    }
+    if let Some(p) = gui.apps.pad {
+        crate::gui_seq_apps::script(|s| {
+            if let Some(s) = s.pad.as_mut() {
+                s[..5].copy_from_slice(&p[..5]);
             }
         });
     }

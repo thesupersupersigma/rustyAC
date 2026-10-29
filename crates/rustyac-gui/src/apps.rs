@@ -56,6 +56,8 @@ pub enum AppAction {
     /// `KeyboardControlsDebug`'s spinners: one of the keyboard's steering parameters
     /// (`KeyboardTuning`'s order)
     SetKeyboardTuning { index: usize, value: f32 },
+    /// `X360ControllerDebug`'s buttons: one of the pad's steering parameters (`PadTuning`'s order)
+    SetPadTuning { index: usize, value: f32 },
     /// `DeleteFileW(<Documents>\Assetto Corsa\<path>)`
     DeleteFile { path: String },
 }
@@ -290,6 +292,9 @@ pub struct AppLink {
     /// the player's controls if they are the keyboard's (`KeyboardCarControl`): its steering
     /// parameters, for "Keyboard debug"
     pub keyboard: Option<crate::app_keyboard_debug::KeyboardTuning>,
+    /// the player's controls if they are the Xbox pad's (`JoypadCarControl`), for "X360
+    /// Controller debug"
+    pub pad: Option<crate::app_pad_debug::PadTuning>,
     pub ctrl_down: bool,
     /// `RaceManager::penaltiesEnabled`
     pub penalties_enabled: bool,
