@@ -2235,7 +2235,7 @@ impl RollingChassis {
         if let Some(track) = self.track.clone() {
             // a track without an AI line has an empty one in the game, and the locator runs on it
             let empty = crate::track::AiSpline::default();
-            let spline = track.ai_spline.as_ref().unwrap_or(&empty);
+            let spline = track.ai_line().unwrap_or(&empty);
             let position = self.core.get_position(self.body);
             self.spline_locator.step(spline, &track.starting_bounds, &position, self.car_half_width);
         }
@@ -2713,7 +2713,7 @@ impl RollingChassis {
         if let Some(track) = &self.track {
             let empty = crate::track::AiSpline::default();
             {
-                let spline = track.ai_spline.as_ref().unwrap_or(&empty);
+                let spline = track.ai_line().unwrap_or(&empty);
                 let locator = self.spline_locator;
                 // the game's step-completed handler calls Car::postStep with a time step of
                 // zero (lambda @ 0x14026ef00: `xorps xmm1, xmm1`), so the "side velocity" it

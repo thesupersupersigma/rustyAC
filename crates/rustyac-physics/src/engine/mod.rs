@@ -171,6 +171,10 @@ pub struct PhysicsEngine {
     /// the cars after it, was not what its step then left. It never happens (the same rays
     /// from the same hubs); the proofs check that it is 0.
     pub pit_lane_mispredictions: u64,
+    /// `Track::aiSplineRecorder` once FormAI's "start recording" ran
+    /// ([`PhysicsEngine::start_ai_recording`]): it records the first car in `Track::step` and
+    /// every lap it finishes is the AI line of everyone from then on (`Track::live_ai`).
+    pub ai_recording: Option<crate::track::ai_line::AiSplineRecorder>,
     parts: Vec<CarParts>,
     /// The core is out, in a car that is being built.
     building: bool,
@@ -281,6 +285,7 @@ impl PhysicsEngine {
             session: SessionInfo { session_type: crate::ai::SESSION_UNDEFINED, start_time_ms: 0.0, time_secs: 0.0, laps: 0, index: 0 },
             ai_rand: MsvcRand(1),
             pit_lane_mispredictions: 0,
+            ai_recording: None,
             parts: Vec::new(),
             building: false,
             stepped: false,
@@ -324,6 +329,27 @@ impl PhysicsEngine {
             self.create_track_objects(&track.objects);
         }
         self.track = Some(track);
+    }
+
+    /// `AISplineRecorder::startRecording` @ 0x140296f00 on the track's recorder (one with no
+    /// line where the track has none).
+    pub fn start_ai_recording(&mut self) {
+        let Some(track) = &self.track else { return };
+        let mut recorder = track.ai().cloned().unwrap_or_else(|| crate::track::ai_line::AiSplineRecorder { is_active: true, recording_step: 1.5, pit_lane_spline_attach_point: -1.0, ..Default::default() });
+        recorder.start_recording();
+        self.ai_recording = Some(recorder);
+    }
+
+    /// `beginPitLaneSpline` @ 0x140295020 (true) or `endPitLaneSpline` @ 0x140295110 (false)
+    /// on the recording; the end makes the new pit lane everyone's.
+    pub fn ai_recording_pit_lane(&mut self, begin: bool) {
+        let (Some(recorder), Some(track)) = (&mut self.ai_recording, &self.track) else { return };
+        if begin {
+            recorder.begin_pit_lane_spline();
+        } else {
+            recorder.end_pit_lane_spline();
+            track.live_ai.publish(recorder.clone());
+        }
     }
 
     /// `PhysicsObject::PhysicsObject` for each loose object, before any car.
@@ -457,6 +483,14 @@ impl PhysicsEngine {
             track.step(laps);
             self.env.dynamic_grip_level = track.dynamic_grip_level;
         }
+        // AISplineRecorder::step @ 0x140296f60 at the end of Track::step: the first car as
+        // the pre-step jobs left it
+        let laps_before = cars.first().map_or(0, |slot| slot.car.transponder.lap_events.len());
+        if let (Some(recorder), Some(slot)) = (&mut self.ai_recording, cars.first()) {
+            let car = &*slot.car;
+            let p = car.core.get_position(car.body);
+            recorder.step(car.physics_guid, [p.x, p.y, p.z], car.speed, car.controls.gas, car.controls.brake);
+        }
         // PhysicsEngine::stepWind
         self.env.step_wind(physics_time);
 
@@ -486,6 +520,19 @@ impl PhysicsEngine {
         let clock = Clock::start();
         self.step_cars(dt, physics_time, cars);
         self.seconds[0] += clock.seconds();
+        // the recorder's handler on the first car's evOnLapCompleted. The game swaps the line
+        // inside that car's step, while the cars after it may be stepping on other threads;
+        // here every car of this step saw the old line (the first car never reads it again
+        // before Car::postStep)
+        if let (Some(recorder), Some(track), Some(slot)) = (&mut self.ai_recording, &self.track, cars.first()) {
+            let laps = &slot.car.transponder.lap_events;
+            if laps.len() > laps_before {
+                for lap in &laps[laps_before..] {
+                    recorder.on_lap_completed(lap.car_index, lap.lap_time);
+                }
+                track.live_ai.publish(recorder.clone());
+            }
+        }
         let clock = Clock::start();
 
         // every car's part goes into the one world

@@ -50,7 +50,7 @@ impl PlaybackTrack for NoTrack {
 
 impl PlaybackTrack for Track {
     fn world_to_spline(&self, pos: &[f32; 3]) -> f32 {
-        match &self.ai_spline {
+        match self.ai_line() {
             Some(line) => line.spline.world_to_spline(&[pos[0], pos[1], pos[2]], -1),
             None => 0.0,
         }

@@ -136,6 +136,15 @@ pub unsafe fn after_step() {
     });
 }
 
+/// The recording's header key `ai_record`: the steps before which the pit lane's recording
+/// began and ended (`<begin>:<end>`, empty sides when it did not).
+pub fn header() -> String {
+    REC.with(|r| match r.borrow().as_ref() {
+        Some(s) => format!("{}:{}", s.pit_from.map_or(String::new(), |step| step.to_string()), if s.pit_done { s.pit_from.map_or(String::new(), |step| (step + PIT_STEPS).to_string()) } else { String::new() }),
+        None => ":".to_string(),
+    })
+}
+
 /// Both recorders save; the lines of the result.
 pub unsafe fn finish(repo: &Path, scenario: &str, game_track: *mut u8, port_track: &Arc<Track>) -> Result<Vec<String>, String> {
     let Some(mut s) = REC.with(|r| r.borrow_mut().take()) else { return Ok(Vec::new()) };

@@ -144,15 +144,7 @@ multi_list() {
         # --replay / --ghost / --telemetry: their own verdict line must agree too
         feature=$(echo "$more" | grep -oE -- '--(replay|ghost|telemetry|ai-record)' | head -n 1 | sed 's/^--//; s/-/_/')
         if [ -n "$feature" ] && ! grep -qE "^$feature \| $s \| all \| (IDENTICAL|no lap became a ghost|no lap was finished)" "$out/multi.txt"; then n=0; fi
-        # --ai-record: only its files count; in the game a recorded lap becomes the track's live
-        # line (lap position, AI), which the port does not do, so the cars part after that lap
-        cars_part="^$s threads|do not agree"
-        if [ "$feature" = ai_record ]; then
-            grep -qE "^ai_record \| $s \| all \| IDENTICAL" "$out/multi.txt" && n=3 || n=0
-        else
-            cars_part='^$'
-        fi
-        if [ "$n" = 3 ] && ! grep -vE "$cars_part" "$out/multi.txt" | grep -q 'DIFFERENT'; then
+        if [ "$n" = 3 ] && ! grep -q 'DIFFERENT' "$out/multi.txt"; then
             verdict "$name" IDENTICAL "$(grep -m1 -oE '[0-9]+ steps, [0-9]+ values' "$out/multi.txt")"
         else
             verdict "$name" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$out/multi.txt")"

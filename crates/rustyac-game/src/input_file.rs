@@ -579,6 +579,9 @@ pub struct SimSetup {
     /// Task 31: the session begins in the ESC menu, the player's car held (the controls
     /// locked) until "Drive", as in the game. Off in files recorded before.
     pub esc_start: bool,
+    /// Task 44c (`--ai-record`): FormAI's "start recording" before the first step. The AI line
+    /// recorder runs on the first car and every lap it finishes is everyone's AI line.
+    pub ai_record: bool,
     /// Task 31: the setup editor's jobs of the drive, each with the step it is done before.
     /// Not in the header: they are the file beside the input file (`<input>.setup`).
     pub setup_jobs: Vec<(u64, SetupJob)>,
@@ -636,6 +639,7 @@ impl Default for SimSetup {
             drs_zones: false,
             ff_gain: 1.0,
             esc_start: false,
+            ai_record: false,
             setup_jobs: Vec::new(),
             pit_jobs: Vec::new(),
             oracle: None,
@@ -739,6 +743,9 @@ impl SimSetup {
         }
         if self.drs_zones {
             put("drs_zones", "1".to_string());
+        }
+        if self.ai_record {
+            put("ai_record", "1".to_string());
         }
         put("ff_gain", format!("{:?}", self.ff_gain));
         // the session's additions, each only when it is not the default (older files have none)
@@ -932,6 +939,7 @@ impl SimSetup {
                 "session_starts_at_spawn" => setup.session_starts_at_spawn = flag(),
                 "esc_start" => setup.esc_start = flag(),
                 "drs_zones" => setup.drs_zones = flag(),
+                "ai_record" => setup.ai_record = flag(),
                 "session_type" => setup.session.session_type = Some(value.parse().map_err(|e| format!("session_type: {e}"))?),
                 "arm_first_lap" => setup.session.arm_first_lap = Some(flag()),
                 "ff_gain" => setup.ff_gain = float()?,

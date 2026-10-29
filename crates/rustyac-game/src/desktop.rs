@@ -89,6 +89,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
         spawn: options.spawn.clone(),
         session_starts_at_spawn: true,
         drs_zones: true,
+        ai_record: options.ai_record.is_some(),
         ..SimSetup::default()
     };
     // normal play: the picture's rand() starts from the clock, as the game's does (Sim::Sim

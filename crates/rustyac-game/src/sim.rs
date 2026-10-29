@@ -1163,7 +1163,8 @@ fn build_world(
     rules: Option<&ServerRules>,
 ) -> Result<(VanillaCar<Driver>, Vec<OpponentCar>, Option<PhysicsEngine>), String> {
     // (an online session always has the engine: the other players' cars are bodies in it)
-    if setup.opponents.is_empty() && rules.is_none() {
+    // (the AI line recorder is the engine's: it steps inside the engine's step)
+    if setup.opponents.is_empty() && rules.is_none() && !setup.ai_record {
         return Ok((build_car(setup, data_path, physics_time, driver, track, spawn, None, 0, None)?, Vec::new(), None));
     }
     if setup.oracle.is_some() {
@@ -1177,6 +1178,9 @@ fn build_world(
     let mut engine = PhysicsEngine::new(session_env(setup, physics_time, track.is_some(), rules), threads);
     if let Some(track) = track {
         engine.set_track(Arc::clone(track), setup.track_objects);
+        if setup.ai_record {
+            engine.start_ai_recording();
+        }
     }
     let car = build_car(setup, data_path, physics_time, driver, track, spawn, Some(&mut engine), setup.player_place.map_or(0, |place| place.pit), rules)?;
     let mut opponents = Vec::new();

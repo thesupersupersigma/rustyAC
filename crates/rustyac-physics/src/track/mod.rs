@@ -86,6 +86,9 @@ pub struct Track {
     /// them at load, and the track's hints. Worked out when it is first asked for
     /// ([`Track::ai`]), or with the track when its line is older than version 7.
     pub ai_recorder: std::sync::OnceLock<Result<ai_line::AiSplineRecorder, String>>,
+    /// The lines a recording made during the session, which replace both of the above
+    /// ([`Track::ai`], [`Track::ai_line`]).
+    pub live_ai: ai_line::LiveAi,
     /// The layout's `ai` folder
     pub ai_folder: PathBuf,
     /// `startingBounds` (`data/starting_bounds.ini`): ranges of AI-line point indices
@@ -182,7 +185,19 @@ impl Track {
     /// nothing else reads it. `None`: the lines could not be finished ([`Track::init_ai`]
     /// says why).
     pub fn ai(&self) -> Option<&ai_line::AiSplineRecorder> {
+        if let Some(live) = self.live_ai.latest() {
+            return Some(live);
+        }
         self.ai_recorder.get_or_init(|| ai_line::AiSplineRecorder::load(self, &self.ai_folder, &self.data_folder.join("data"))).as_ref().ok()
+    }
+
+    /// `aiSplineRecorder->getBestLapSpline()` while the cars run: the last lap a recording
+    /// finished, else the track's line.
+    pub fn ai_line(&self) -> Option<&AiSpline> {
+        match self.live_ai.latest() {
+            Some(live) => Some(&live.best_lap),
+            None => self.ai_spline.as_ref(),
+        }
     }
 
     /// Another `ai` folder for this track (its `fast_lane.ai` and `pit_lane.ai`): everything
@@ -191,6 +206,7 @@ impl Track {
         self.ai_spline = None;
         self.pit_lane_spline = None;
         self.ai_recorder = std::sync::OnceLock::new();
+        self.live_ai = ai_line::LiveAi::default();
         let mut messages = Vec::new();
         let data = self.data_folder.join("data");
         spline::init_ai_spline(self, ai_folder, &data, &mut messages)?;
@@ -217,7 +233,7 @@ impl Track {
 
     /// The lap's length: the AI line's, 0 without one.
     pub fn length(&self) -> f32 {
-        self.ai_spline.as_ref().map(|s| s.length()).unwrap_or(0.0)
+        self.ai_line().map(|s| s.length()).unwrap_or(0.0)
     }
 }
 

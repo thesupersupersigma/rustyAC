@@ -141,7 +141,7 @@ impl DriverSource for AutoDriver {
     fn acquire(&mut self, controls: &mut CarControls, dt: f32, input: &CarControlsInput) {
         *controls = CarControls { clutch: 1.0, ..CarControls::default() };
         let Some(track) = self.track.clone() else { return };
-        let Some(fast) = track.ai_spline.as_ref().filter(|line| line.point_count() >= 16) else { return };
+        let Some(fast) = track.ai_line().filter(|line| line.point_count() >= 16) else { return };
         let car = self.probe;
         if self.last_position.is_some_and(|p| (p[0] - car.position[0]).powi(2) + (p[1] - car.position[1]).powi(2) + (p[2] - car.position[2]).powi(2) > 100.0) {
             (self.on_line, self.moved, self.stuck) = (false, false, 0.0);

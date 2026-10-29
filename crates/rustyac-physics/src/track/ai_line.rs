@@ -806,6 +806,49 @@ pub struct AiSplineRecorder {
     pub spline_current: AiSpline,
 }
 
+/// The lines a recording made while the cars run: `AISplineRecorder::onLapCompleted`
+/// @ 0x140296760 swaps `bestLapSpline` under every reader of `getBestLapSpline`. Each new set
+/// is appended and none goes before the track, so a line a reader holds stays valid.
+// shortcut: keeps every recorded lap's lines until the track goes (a few MB a lap), drop old ones once no reader can hold them if sessions record hundreds of laps
+#[derive(Default)]
+pub struct LiveAi(std::sync::OnceLock<Box<(AiSplineRecorder, LiveAi)>>);
+
+impl LiveAi {
+    /// The newest set, if a recording finished a lap.
+    pub fn latest(&self) -> Option<&AiSplineRecorder> {
+        let mut node = self.0.get()?;
+        while let Some(next) = node.1 .0.get() {
+            node = next;
+        }
+        Some(&node.0)
+    }
+
+    /// The lines everyone reads from now on (one writer: the physics thread).
+    pub fn publish(&self, recorder: AiSplineRecorder) {
+        let mut cell = self;
+        while let Some(node) = cell.0.get() {
+            cell = &node.1;
+        }
+        let _ = cell.0.set(Box::new((recorder, LiveAi::default())));
+    }
+}
+
+impl Clone for LiveAi {
+    fn clone(&self) -> LiveAi {
+        let copy = LiveAi::default();
+        if let Some(recorder) = self.latest() {
+            copy.publish(recorder.clone());
+        }
+        copy
+    }
+}
+
+impl std::fmt::Debug for LiveAi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LiveAi({})", if self.latest().is_some() { "recorded" } else { "none" })
+    }
+}
+
 fn hint_at(hints: &[AiSplineHint], pos: f32) -> Option<f32> {
     hints.iter().find(|h| h.start_pos <= pos && pos <= h.end_pos).map(|h| h.value)
 }
@@ -1034,5 +1077,22 @@ impl AiSpline {
         self.grid_missing = false;
         self.grid_built = true;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_ai_keeps_old_lines_and_gives_the_newest() {
+        let live = LiveAi::default();
+        assert!(live.latest().is_none());
+        live.publish(AiSplineRecorder { recording_step: 1.0, ..AiSplineRecorder::default() });
+        let first = live.latest().unwrap();
+        live.publish(AiSplineRecorder { recording_step: 2.0, ..AiSplineRecorder::default() });
+        assert_eq!(first.recording_step, 1.0);
+        assert_eq!(live.latest().unwrap().recording_step, 2.0);
+        assert_eq!(live.clone().latest().unwrap().recording_step, 2.0);
     }
 }

@@ -258,7 +258,7 @@ impl RollingChassis {
     /// @ 0x1402ab530.
     pub fn reset_spline_locator(&mut self) {
         let Some(track) = self.track.clone() else { return };
-        let Some(spline) = &track.ai_spline else { return };
+        let Some(spline) = track.ai_line() else { return };
         let p = self.core.get_position(self.body);
         let p = [p.x, p.y, p.z];
         self.spline_locator.current_index = -1;
@@ -268,7 +268,7 @@ impl RollingChassis {
 
     /// `Spline::length` of the locator's line (the fast lane).
     pub fn fast_lane_length(&self) -> f32 {
-        self.track.as_ref().and_then(|track| track.ai_spline.as_ref()).map_or(0.0, |spline| spline.length())
+        self.track.as_ref().and_then(|track| track.ai_line()).map_or(0.0, |spline| spline.length())
     }
 
     /// `ksPhysics->sessionInfo` as the car was last handed it.

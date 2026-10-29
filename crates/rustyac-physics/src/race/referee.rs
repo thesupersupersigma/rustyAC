@@ -182,7 +182,7 @@ impl Referee {
         for (slot, index) in manager.start_index.iter_mut().zip(&setup.start_index) {
             *slot = *index;
         }
-        let length = track.ai_spline.as_ref().map_or(0.0, |spline| spline.length());
+        let length = track.ai_line().map_or(0.0, |spline| spline.length());
         let json = JsonOutputFile::new(&track.name, &setup.layout, setup.sessions.sessions.len() as i32);
         let mut referee = Referee {
             flags: FlagManager::new(cars, length, setup.yellow_flag_distance),
@@ -281,7 +281,7 @@ impl Referee {
         let m = car.core.get_world_matrix(car.body).m;
         // CarAvatar::getRoadDirection @ 0x1400d3630 (Spline::getSplineDirection @ 0x1401ee1d0,
         // with the point the car's own locator is at for the nearest one)
-        let against_road = match self.track.ai_spline.as_ref().filter(|spline| spline.point_count() >= 2) {
+        let against_road = match self.track.ai_line().filter(|spline| spline.point_count() >= 2) {
             Some(spline) => {
                 let count = spline.point_count() as u32;
                 let mut from = car.spline_locator_data.current_index.min(count - 1);

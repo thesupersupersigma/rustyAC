@@ -550,6 +550,9 @@ pub struct ReplayWorld {
     /// Task 28b: (car, step): before that step the car's AI driver is called in
     /// (`AIDriver::requestPitStop`; header key `ai_pit_calls`)
     pub pit_calls: Vec<(usize, usize)>,
+    /// Task 44c: (step, begin): before that step the AI line recording's pit lane begins or
+    /// ends (header key `ai_record`, `<begin>:<end>`; the key turns the recording on)
+    pub ai_pit_lane: Vec<(usize, bool)>,
     /// Task 28b: the step before which the first car is damaged, the five zone levels, the
     /// engine's life left and the hit that bends the second suspension (header key
     /// `pit_damage`)
@@ -645,7 +648,24 @@ impl ReplayWorld {
             ..ChassisEnvironment::default()
         };
         let mut engine = PhysicsEngine::new(env, threads);
+        // a recording's laps became the line of the track an earlier world shared: this one
+        // starts from the line as loaded
+        let track = match recording.get("ai_record").is_some() && track.live_ai.latest().is_some() {
+            true => Arc::new(Track { live_ai: Default::default(), ..(*track).clone() }),
+            false => track,
+        };
         engine.set_track(Arc::clone(&track), recording.get("track_objects") == Some("1"));
+        let mut ai_pit_lane = Vec::new();
+        if let Some(text) = recording.get("ai_record") {
+            engine.start_ai_recording();
+            let wrong = || format!("ai_record: <begin>:<end> expected, got {text:?}");
+            let (begin, end) = text.split_once(':').ok_or_else(wrong)?;
+            for (step, is_begin) in [(begin, true), (end, false)] {
+                if !step.is_empty() {
+                    ai_pit_lane.push((step.parse().map_err(|_| wrong())?, is_begin));
+                }
+            }
+        }
         engine.core.mesh_bounce_vel = f32::from_bits(u32::from_str_radix(recording.need("mesh_bounce_vel")?, 16).map_err(|e| e.to_string())?);
         let mut cars = Vec::new();
         for meta in &recording.cars {
@@ -706,7 +726,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, ai_pit_lane, pit_damage };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         // (the oracle's game side switches its PerformanceMeter off unless the header has `meter`)
@@ -944,6 +964,11 @@ impl ReplayWorld {
                     drivetrain.engine_mut().base_mut().life_left = life;
                 }
                 car.suspensions[1].set_damage(hit);
+            }
+        }
+        for &(step, begin) in &self.ai_pit_lane {
+            if step == self.steps {
+                self.engine.ai_recording_pit_lane(begin);
             }
         }
         for &(car, step) in &self.pit_calls {

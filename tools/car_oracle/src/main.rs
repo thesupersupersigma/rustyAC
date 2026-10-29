@@ -730,6 +730,9 @@ fn multi(args: &Args) -> Result<(), String> {
         world.recording.set("ai_folder", ai_folder.display().to_string());
     }
     world.recording.set("game_threads", args.game_threads.to_string());
+    if args.ai_record {
+        world.recording.set("ai_record", game::ai_record::header());
+    }
     let suffix = if args.game_threads != 0 { format!("_gt{}", args.game_threads) } else { String::new() };
     let path = out.join(format!("{}{suffix}.mcrec", scenario.name));
     world.recording.save(&path)?;
