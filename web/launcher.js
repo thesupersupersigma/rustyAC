@@ -325,15 +325,7 @@ export async function startLauncher(env) {
   };
 
   // the theme: the one launcher.ini names when the game's folder has it, else the default
-  let ini = dec.decode(launcher.read_doc('cfg\\launcher.ini') || new Uint8Array(0));
-  // Drive opens on the mode it was left on ([SAVED] DRIVE): one a browser cannot run is not
-  // reopened, Practice is (what the theme opens when the key is not there)
-  const saved = /^(\s*DRIVE\s*=\s*)(timeattack|drift|dragrace)\s*$/im;
-  if (saved.test(ini)) {
-    ini = ini.replace(saved, '$1practice');
-    launcher.write_doc('cfg\\launcher.ini', enc.encode(ini));
-    save();
-  }
+  const ini = dec.decode(launcher.read_doc('cfg\\launcher.ini') || new Uint8Array(0));
   // The game's picture is this page: a new player's video.ini has no size, and the theme then
   // stops every Start to send the player to its Options page (whose resolution the browser decides). The
   // page's size is written as that page would write it, once, through the bridge.

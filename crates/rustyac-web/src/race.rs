@@ -115,7 +115,17 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
         let driver_names = (0..1 + setup.opponents.len()).map(|n| ini.get_string(&format!("CAR_{n}"), "DRIVER_NAME")).collect();
         let window = (ini.get_int("RACE", "RACE_PIT_WINDOW_START").unwrap_or(0).clamp(0, 65535) as u16, ini.get_int("RACE", "RACE_PIT_WINDOW_END").unwrap_or(0).clamp(0, 65535) as u16);
         let pit = Some(pit_header(root, window));
-        setup.referee = Some(RefereeHeader { sessions, over_time_mult: over_time_mult(root), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit, game_mode: Default::default() });
+        // the mode's goals (shortcut: no official special event here, the page has no Special Events tile; read them through IniReader::load_race with that tile)
+        let mut game_mode = rustyac_physics::race::game_mode::GameMode::new(ini, ini, false);
+        // TimeAttack's constructor: INIReaderDocuments(cfg/gameplay.ini)
+        if let Some(gameplay) = rustyac_content::install::documents().and_then(|p| IniReader::load(&p.join("cfg/gameplay.ini")).ok()).filter(|ini| ini.ready && ini.has_section("TIME_ATTACK")) {
+            game_mode.time_attack_mult = gameplay.get_float("TIME_ATTACK", "BASE_TIME_MULT").unwrap_or(0.0);
+        }
+        // DriftMode's constructor lets the player's car have two tyres out
+        if sessions.sessions.first().is_some_and(|s| s.session_type == rustyac_physics::race::manager::SESSION_DRIFT) {
+            setup.env.allowed_tyres_out = 2;
+        }
+        setup.referee = Some(RefereeHeader { sessions, over_time_mult: over_time_mult(root), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit, game_mode });
     }
     // the AI drivers' random numbers. The desktop gives the referee `--ai-seed` + 28000, so a
     // desktop run of `--race-seed S --ai-seed <S - 28000>` draws as this drive

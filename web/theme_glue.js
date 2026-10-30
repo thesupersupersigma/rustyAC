@@ -298,9 +298,6 @@
     T.rustyacTab({ top: area.top, left: area.left, width: area.width, height: Math.min(area.height, window.innerHeight - area.top) });
   };
   window.addEventListener('resize', showOurs);
-  // the modes of Drive a browser cannot run yet: the theme's own notice says so
-  const NOT_HERE = { timeattack: 'Time Attack', drift: 'Drift', dragrace: 'Drag Race' };
-
   // the benchmark starts a drive of its own (race.ini [BENCHMARK]), which rustyAC does not have
   function noBenchmark(e) {
     e.stopImmediatePropagation();
@@ -327,12 +324,6 @@
         e.stopImmediatePropagation();
         e.preventDefault();
         return;
-      }
-      const mode = target.getAttribute('data-mode');
-      if (mode && NOT_HERE[mode] && target.closest('.drive')) {
-        e.stopImmediatePropagation();
-        e.preventDefault();
-        notice(`${NOT_HERE[mode]} is not available in the browser version yet.`);
       }
     },
     true,
