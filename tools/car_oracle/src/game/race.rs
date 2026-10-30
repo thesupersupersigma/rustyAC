@@ -1630,6 +1630,21 @@ const CAR_TYRE0_COMPOUND: usize = 0xb28 + 0x648;
 /// static page is marked written (it reads files); the menus, the drive aids and the replay
 /// manager are as a fresh game leaves them; the flag manager is a stand-in that shows no flag
 /// (the whole run has no game flags: their mapping is [`GameShm::flag_values`]).
+/// Task 44c: `CAR_ORACLE_SHM_REPLAY=<first frame>:<end frame>:<time multiplier>`: the referee's
+/// frames in that range are drawn as a replay.
+pub fn shm_replay() -> Option<(u64, u64, f32)> {
+    let text = std::env::var("CAR_ORACLE_SHM_REPLAY").ok()?;
+    let mut w = text.split(':');
+    Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?, w.next()?.parse().ok()?))
+}
+
+/// Task 44c: `CAR_ORACLE_SHM_ONLINE`'s four numbers (see [`GameShm::build`]).
+pub fn online_client() -> Option<[u32; 4]> {
+    let text = std::env::var("CAR_ORACLE_SHM_ONLINE").ok()?;
+    let v: Vec<u32> = text.split(',').filter_map(|w| w.trim().parse().ok()).collect();
+    (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
+}
+
 pub struct GameShm {
     update: extern "C" fn(*mut u8),
     smw: *mut u8,
@@ -1709,7 +1724,41 @@ impl GameShm {
         let statics = zeroed(STATIC_SIZE);
         wr(smw, SMW_STATIC_BUFFER, statics);
         let write_static: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_SMW_WRITE_STATIC));
+        // Task 44c: CAR_ORACLE_SHM_ONLINE=<extra lap>,<inverted grid>,<pit window start>,<end>:
+        // a stand-in ACClient (Sim+0x1c8) while the page is written, its four fields set
+        let client = online_client().map(|v| {
+            let client = zeroed(0x10700);
+            wr(client, 0x10601, (v[0] != 0) as u8);
+            wr(client, 0x10604, v[1]);
+            wr(client, 0x105e8, v[2]);
+            wr(client, 0x105ec, v[3]);
+            // its sessions (RemoteSession, 0x40 bytes) as the race manager's: online the
+            // manager answers from them
+            let manager: *mut u8 = rd(sim, SIM_RACE_MANAGER);
+            let (first, last): (*mut u8, *mut u8) = (rd(manager, 0x188), rd(manager, 0x190));
+            let count = (last as usize - first as usize) / 0x70;
+            let remote = zeroed(0x40 * count.max(1));
+            for k in 0..count {
+                let (from, to) = (first.add(k * 0x70), remote.add(k * 0x40));
+                wr(to, 0x18, 7usize);
+                wr(to, 0x20, rd::<i32>(from, 0));
+                wr(to, 0x24, k as i32);
+                wr(to, 0x28, rd::<f32>(from, 0xc) as i32);
+                wr(to, 0x2c, rd::<i32>(from, 8));
+                wr(to, 0x39, rd::<u8>(from, 4));
+            }
+            wr(client, 0x10540, remote);
+            wr(client, 0x10548, remote.add(0x40 * count));
+            wr(client, 0x10550, remote.add(0x40 * count));
+            client
+        });
+        if let Some(client) = client {
+            wr(sim, 0x1c8, client);
+        }
         write_static(smw);
+        if client.is_some() {
+            wr(sim, 0x1c8, 0usize);
+        }
         assert_eq!(rd::<u8>(smw, SMW_STATIC_WROTE), 1, "writeStatic wrote no page");
         GameShm { update: std::mem::transmute::<usize, extern "C" fn(*mut u8)>(acs.va(VA_SMW_UPDATE)), smw, page, engine: referee.engine }
     }
@@ -1717,6 +1766,12 @@ impl GameShm {
     /// One frame of the main thread, after the referee's.
     pub unsafe fn frame(&self, referee: &WholeReferee) {
         let (car, avatar) = (referee.game.cars[0], referee.game.avatars[0]);
+        // Task 44c: CAR_ORACLE_SHM_REPLAY's frames are a replay (ReplayManager::replayMode,
+        // its timeMult), the others are not
+        let manager: *mut u8 = rd(referee.game.sim, SIM_REPLAY_MANAGER);
+        let replay = shm_replay().filter(|r| (r.0..r.1).contains(&referee.frames));
+        wr(manager, 0x148, replay.is_some() as u8);
+        wr(manager, REPLAY_TIME_MULT, replay.map_or(1.0f32, |r| r.2));
         // CarAvatar::update: the drawn body is where the physics left it, the compound on now
         std::ptr::copy_nonoverlapping(avatar.add(CA_WORLD_MATRIX), avatar.add(CA_BODY_MATRIX), 64);
         wr(avatar, CA_TYRE_COMPOUND_INDEX, rd::<i32>(car, CAR_TYRE0_COMPOUND));
@@ -1728,9 +1783,12 @@ impl GameShm {
         if rd::<i32>(self.smw, SMW_GRAPHICS_NULL_COUNTS) >= 30 && rd::<*mut u8>(self.smw, SMW_FLAG_MANAGER).is_null() {
             (self.update)(self.smw);
             wr(self.smw, SMW_FLAG_MANAGER, zeroed(0x100));
-            return;
+        } else {
+            (self.update)(self.smw);
         }
-        (self.update)(self.smw);
+        // (only the page sees the replay: the referee's next step is the live one)
+        wr(manager, 0x148, 0u8);
+        wr(manager, REPLAY_TIME_MULT, 1.0f32);
     }
 
     /// The static page writeStatic wrote when the writer was made.

@@ -227,6 +227,23 @@ pub struct GraphicsFrame<'a> {
     pub time_limit_left: Option<i32>,
 }
 
+impl GraphicsFrame<'_> {
+    /// While a replay plays (`ReplayManager::isInReplaymode`): its time multiplier; the race
+    /// manager answers the position from the replay (`ReplayManager::getCarLeaderboardPosition`
+    /// is -1), the time left -1 and, offline, the last lap from the car's
+    /// `physicsState.lastLap` with no splits.
+    pub fn in_replay(&mut self, time_mult: f32, last_lap: u32, online: bool) {
+        self.replay = true;
+        self.replay_time_multiplier = time_mult;
+        self.position = -1;
+        self.session_time_left = -1.0;
+        if !online {
+            self.last_lap_time = last_lap;
+            self.last_lap_last_split = 0;
+        }
+    }
+}
+
 /// `SharedMemoryWriter`'s graphics page state.
 #[derive(Clone, Debug, Default)]
 pub struct GraphicsWriter {

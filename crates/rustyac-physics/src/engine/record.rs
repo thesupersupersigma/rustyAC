@@ -557,6 +557,8 @@ pub struct ReplayWorld {
     /// engine's life left and the hit that bends the second suspension (header key
     /// `pit_damage`)
     pub pit_damage: Option<(usize, [f32; 5], f64, f32)>,
+    /// Task 44c: the graphics page's frames drawn as a replay (header key `shm_replay`)
+    pub shm_replay: Option<(u64, u64, f32)>,
 }
 
 impl crate::race::World for ReplayWorld {
@@ -726,7 +728,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, ai_pit_lane, pit_damage };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, ai_pit_lane, pit_damage, shm_replay: shm_replay(recording) };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         // (the oracle's game side switches its PerformanceMeter off unless the header has `meter`)
@@ -802,7 +804,14 @@ impl ReplayWorld {
                         skin: &player.skin,
                         max_power_w: engine.map_or(0.0, |engine| engine.get_max_power_w()),
                         max_turbo_boost: engine.map_or(0.0, |engine| engine.get_max_turbo_boost()),
-                        online: None,
+                        // (header key `shm_online`: extra lap, inverted grid, pit window start, end;
+                        // isTimedRace from the last race session, as online)
+                        online: recording.get("shm_online").map(|text| {
+                            let v: Vec<i32> = text.split(',').filter_map(|w| w.parse().ok()).collect();
+                            let at = |k: usize| v.get(k).copied().unwrap_or(0);
+                            let is_timed_race = referee.manager.sessions.iter().rfind(|s| s.session_type == crate::race::manager::SESSION_RACE).is_some_and(|s| s.is_timed_race);
+                            crate::race::shm::OnlineStatic { is_timed_race, has_extra_lap: at(0) != 0, reversed_grid_positions: at(1), pit_window: (at(2), at(3)) }
+                        }),
                     },
                 );
                 let game: Vec<u8> = (0..text.len() / 2).map(|i| u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap_or(0)).collect();
@@ -1007,6 +1016,12 @@ impl ReplayWorld {
                     shm.2 = referee.frames;
                     let mut frame = crate::race::shm::referee_frame(&referee);
                     frame.flag = crate::race::flags::Flag::None;
+                    // (header key `shm_replay` <first>:<end>:<multiplier bits>: these frames are a replay's)
+                    if let Some(r) = self.shm_replay {
+                        if (r.0..r.1).contains(&referee.frames) {
+                            frame.in_replay(r.2, self.cars[0].transponder.last_lap, false);
+                        }
+                    }
                     let (writer, page, _) = &mut **shm;
                     writer.update(page, &self.cars[0], &frame);
                 }
@@ -1389,4 +1404,11 @@ impl Golden {
         }
         Ok(None)
     }
+}
+
+/// Task 44c: the header key `shm_replay` (`<first frame>:<end frame>:<time multiplier bits>`).
+fn shm_replay(recording: &Recording) -> Option<(u64, u64, f32)> {
+    let text = recording.get("shm_replay")?;
+    let mut w = text.split(':');
+    Some((w.next()?.parse().ok()?, w.next()?.parse().ok()?, f32::from_bits(u32::from_str_radix(w.next()?, 16).ok()?)))
 }

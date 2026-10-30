@@ -119,8 +119,9 @@ pub fn socket_overrides() -> Vec<(&'static str, &'static str, usize)> {
 
 /// The messages of the reliable channel the game's own handlers are given. The others'
 /// handlers post work to the main thread's `Sim` or walk avatars, which are not there;
-/// the port takes every message.
-const GAME_TAKES: [u8; 3] = [0x4d, 0x47, 0x4a];
+/// the port takes every message. (0x53, Task 44c: the server's DRS zones, onto the engine's
+/// track as `ACClient::onDRSZoneReceived` puts them.)
+const GAME_TAKES: [u8; 4] = [0x4d, 0x47, 0x4a, 0x53];
 
 struct Hook {
     client: *mut u8,
@@ -432,6 +433,20 @@ impl<'a> NetGame<'a> {
             assert!(w.datagrams.is_empty(), "the game left datagrams of step {tick} unread");
             std::mem::take(&mut w.sent)
         })
+    }
+
+    /// Task 44c: the track's DRS zones now (`Track::drsMamanger` +0x90, its `zones` +0x20:
+    /// detection, start, end), as bits.
+    pub fn drs_zones(&self) -> Vec<[u32; 3]> {
+        unsafe {
+            let track: *mut u8 = rd(self.world.engine, 0x198);
+            let manager: *mut u8 = rd(track, 0x90);
+            if manager.is_null() {
+                return Vec::new();
+            }
+            let (begin, end): (*mut u8, *mut u8) = (rd(manager, 0x20), rd(manager, 0x28));
+            (0..(end as usize - begin as usize) / 12).map(|k| rd::<[u32; 3]>(begin, k * 12)).collect()
+        }
     }
 
     /// The compared words of every remote car (`rustyac_net::replay::REMOTE_FIELDS`).

@@ -802,6 +802,7 @@ fn leave_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
         return;
     }
     rig.stop_replay_mode();
+    rustyac_game::shm::IN_REPLAY.store(false, Ordering::Relaxed);
     if !online {
         shared.paused.store(false, Ordering::Relaxed);
     }
@@ -826,6 +827,7 @@ fn screenshot_name(car: &str, track: Option<&str>) -> String {
 /// Offline the physics stands still meanwhile (`Sim::onReplayModeChanged`).
 fn enter_replay(rig: &mut ReplayRig, shared: &Shared, online: bool) {
     if rig.start_replay_mode() {
+        rustyac_game::shm::IN_REPLAY.store(true, Ordering::Relaxed);
         if !online {
             shared.paused.store(true, Ordering::Relaxed);
         }
@@ -1977,6 +1979,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 if let Some(manager) = &rig.manager {
                     link.status = manager.status;
                     link.time_mult = manager.time_mult;
+                    rustyac_game::shm::REPLAY_TIME_MULT.store(manager.time_mult.to_bits(), Ordering::Relaxed);
                     link.slow_mo_level = manager.slow_mo_level;
                     link.current_frame = manager.current_frame;
                     link.recorded_frames = manager.recorded_frames;

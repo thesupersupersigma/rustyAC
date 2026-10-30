@@ -102,6 +102,9 @@ pub struct Track {
     /// `drsMamanger.zones` (`data/drs_zones.ini`): where along the lap a car may open its
     /// DRS. Empty: anywhere.
     pub drs_zones: Vec<DrsZone>,
+    /// `DRSManager::setZones` from the server (`ACClient::onDRSZoneReceived`, 0x53): they
+    /// take the file's place for the rest of the session.
+    pub server_drs_zones: ServerDrsZones,
     /// The loose objects (`TrackAvatar::trackObjects` that have a `PhysicsObject`), in the
     /// order the game creates their bodies: the models in the order of the models file, the
     /// nodes of each in tree order.
@@ -132,16 +135,45 @@ pub struct DrsZone {
     pub end: f32,
 }
 
+/// The zones a server sent (a track is shared by every car: the zones change behind an
+/// `Arc`). Cloning a track copies them.
+#[derive(Debug, Default)]
+pub struct ServerDrsZones(std::sync::RwLock<Option<Vec<DrsZone>>>);
+
+impl Clone for ServerDrsZones {
+    fn clone(&self) -> Self {
+        ServerDrsZones(std::sync::RwLock::new(self.get()))
+    }
+}
+
+impl ServerDrsZones {
+    pub fn get(&self) -> Option<Vec<DrsZone>> {
+        self.0.read().map_or(None, |z| z.clone())
+    }
+
+    /// `DRSManager::setZones` @ 0x140279500 (None: the file's zones again)
+    pub fn set(&self, zones: Option<Vec<DrsZone>>) {
+        if let Ok(mut z) = self.0.write() {
+            *z = zones;
+        }
+    }
+}
+
 impl Track {
     /// `DRSManager::isDRSAvailable` @ 0x140279490 for a car at `npos` along the lap
     /// (`Car::splineLocatorData.npos`): true on a track without zones, else inside any zone.
     /// A zone whose end is not above its start goes over the start line.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn is_drs_available(&self, npos: f32) -> bool {
-        if self.drs_zones.is_empty() {
+        let server = self.server_drs_zones.0.read();
+        let zones = match server.as_deref() {
+            Ok(Some(zones)) => zones,
+            _ => &self.drs_zones,
+        };
+        if zones.is_empty() {
             return true;
         }
-        for zone in &self.drs_zones {
+        for zone in zones {
             if zone.end > zone.start {
                 if npos >= zone.start && !(npos > zone.end) {
                     return true;

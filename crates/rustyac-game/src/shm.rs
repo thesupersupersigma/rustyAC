@@ -29,13 +29,18 @@ use crate::physics_thread::StepSink;
 use crate::sim::GameSim;
 
 use rustyac_physics::race::flags::Flag;
-use rustyac_physics::race::shm::{ac_version, referee_frame, static_page, GraphicsFrame, GraphicsWriter, OnlineStatic, StaticFacts};
+use rustyac_physics::race::shm::{ac_version, AC_REPLAY, referee_frame, static_page, GraphicsFrame, GraphicsWriter, OnlineStatic, StaticFacts};
 pub use rustyac_physics::race::shm::{Kind, Page, AC_LIVE, AC_OFF, AC_PAUSE, GRAPHICS_FIELDS, GRAPHICS_SIZE, STATIC_FIELDS, STATIC_SIZE};
 
 
 /// `DrivingAssistManager::idealLine`: whether the ideal line shows (the window's Ctrl+I and
 /// `assists.ini` set it; the graphics page reports it).
 pub static IDEAL_LINE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Task 44c: `ReplayManager::isInReplaymode` and its `timeMult` (bits), as the desktop's replay
+/// has them.
+pub static IN_REPLAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub static REPLAY_TIME_MULT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
 
 
 /// Is the real game running? Looks at the names of the running processes, nothing more.
@@ -171,7 +176,9 @@ impl ShmSink {
         let name = sim.setup.referee.as_ref().and_then(|referee| referee.driver_names.first()).filter(|name| !name.is_empty()).map_or("Player", |name| name.as_str());
         let online = sim.online.as_ref().map(|session| {
             let accepted = &session.net.client.accepted;
-            OnlineStatic { is_timed_race: false, has_extra_lap: accepted.has_extra_lap, reversed_grid_positions: accepted.inverted_grid_positions as i32, pit_window: (accepted.pit_window_start as i32, accepted.pit_window_end as i32) }
+            // the race manager's sessions in turn: the last race session's isTimedRace
+            let is_timed_race = referee.and_then(|r| r.manager.sessions.iter().rfind(|s| s.session_type == rustyac_physics::race::manager::SESSION_RACE)).is_some_and(|s| s.is_timed_race);
+            OnlineStatic { is_timed_race, has_extra_lap: accepted.has_extra_lap, reversed_grid_positions: accepted.inverted_grid_positions as i32, pit_window: (accepted.pit_window_start as i32, accepted.pit_window_end as i32) }
         });
         static_page(
             &sim.car.car,
@@ -228,6 +235,10 @@ impl ShmSink {
         frame.esc_menu = frame.paused;
         frame.ideal_line = IDEAL_LINE_ON.load(std::sync::atomic::Ordering::Relaxed);
         frame.mandatory_pit_done = sim.mandatory_pit_done();
+        // (online the physics goes on during a replay)
+        if IN_REPLAY.load(std::sync::atomic::Ordering::Relaxed) {
+            frame.in_replay(f32::from_bits(REPLAY_TIME_MULT.load(std::sync::atomic::Ordering::Relaxed)), car.transponder.last_lap, sim.online.is_some());
+        }
         if self.writer.update(&mut self.graphics, car, &frame) {
             self.memory.graphics.write(&self.graphics.bytes);
         }
@@ -258,8 +269,21 @@ impl StepSink for ShmSink {
     }
 
     fn set_paused(&mut self, paused: bool) {
+        let replay = IN_REPLAY.load(std::sync::atomic::Ordering::Relaxed);
         self.status = if paused { AC_PAUSE } else { AC_LIVE };
         let g = &mut self.graphics;
+        if replay && paused {
+            // an offline replay stands the physics still: the page as GraphicsFrame::in_replay
+            // makes it (shortcut: written once as the replay starts, not every frame; the
+            // later time multiplier and the replayed laps do not reach it)
+            g.set_i("status", AC_REPLAY);
+            g.set_i("position", -1);
+            g.set_f("sessionTimeLeft", -1.0);
+            g.set_f("replayTimeMultiplier", f32::from_bits(REPLAY_TIME_MULT.load(std::sync::atomic::Ordering::Relaxed)));
+            g.set_i("isEscMenuVisible", 0);
+            self.memory.graphics.write(&g.bytes);
+            return;
+        }
         g.set_i("status", self.status);
         g.set_i("isEscMenuVisible", paused as i32);
         self.memory.graphics.write(&g.bytes);

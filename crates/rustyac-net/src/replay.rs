@@ -121,6 +121,8 @@ impl<T: Transport> NetReplay<T> {
         if client.transport.tape().is_none() {
             return Err("the replay's transport keeps no record of what is sent".to_string());
         }
+        // (the zones an earlier replay's server sent go: this one starts with the file's)
+        track.server_drs_zones.set(None);
         let mut world = ReplayWorld::build(recording, paths, Arc::clone(&track), 0)?;
         let me = client.session_id;
         let mut session = NetSession::new(client);

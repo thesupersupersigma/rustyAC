@@ -1124,6 +1124,7 @@ fn net(args: &Args) -> Result<(), String> {
     let mut contact_steps = 0u64;
     let mut failure = None;
     let start = std::time::Instant::now();
+    let mut zones_seen: Vec<Vec<[u32; 3]>> = Vec::new();
     'steps: for step in 0..steps {
         let game_sent = game.step();
         let game_local = game.world.recording.rows.last().expect("a step leaves a row").clone();
@@ -1144,6 +1145,16 @@ fn net(args: &Args) -> Result<(), String> {
                 failure = Some(format!("step {step}: {} differs: game {a:08x} ({:e}), port {b:08x} ({:e}); also {also:?}", columns[i], f32::from_bits(*a), f32::from_bits(*b)));
                 break 'steps;
             }
+        }
+        // Task 44c: the server's DRS zones (0x53) take the file's place in both
+        let port_zones: Vec<[u32; 3]> = port.world.engine.track.as_ref().map_or(Vec::new(), |t| t.server_drs_zones.get().unwrap_or_else(|| t.drs_zones.clone())).iter().map(|z| [z.detection.to_bits(), z.start.to_bits(), z.end.to_bits()]).collect();
+        let game_zones = game.drs_zones();
+        if game_zones != port_zones {
+            failure = Some(format!("step {step}: the DRS zones differ: game {game_zones:x?}, port {port_zones:x?}"));
+            break;
+        }
+        if zones_seen.last() != Some(&game_zones) {
+            zones_seen.push(game_zones);
         }
         if let Err(message) = same_messages(&game_sent, &port_sent, step, &mut counts) {
             failure = Some(message);
@@ -1170,6 +1181,7 @@ fn net(args: &Args) -> Result<(), String> {
             println!("  slot {slot:2} ({}): solid {} steps, ghost {} steps, gone {} steps, moving {} steps, pushed by the local car (velocity blend) {} steps", remote[car].0.model, s[0], s[1], s[2], s[4], s[3]);
         }
     }
+    println!("  the track's DRS zones (start, end) in turn, the same in both: {:?}", zones_seen.iter().map(|z| z.iter().map(|w| (f32::from_bits(w[1]), f32::from_bits(w[2]))).collect::<Vec<_>>()).collect::<Vec<_>>());
     println!("  steps with contact joints in the world: {contact_steps}; reliable messages given to the game's own handlers: {}", game.game_reliable);
     for ((lane, id), count) in &counts {
         println!("  outgoing {} id {id:#04x}: {count} messages identical", if *lane == Lane::ReliableOut as u8 { "TCP" } else { "UDP" });

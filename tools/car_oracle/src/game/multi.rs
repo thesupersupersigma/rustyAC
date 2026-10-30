@@ -1316,6 +1316,12 @@ impl<'a> MultiWorld<'a> {
             }
             if std::env::var("CAR_ORACLE_SHM").is_ok_and(|v| v == "1") {
                 recording.set("shm", "1");
+                if let Some(r) = super::race::shm_replay() {
+                    recording.set("shm_replay", format!("{}:{}:{:08x}", r.0, r.1, r.2.to_bits()));
+                }
+                if let Some(v) = super::race::online_client() {
+                    recording.set("shm_online", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","));
+                }
             }
             recording.set("about", scenario.about);
             recording.set("track", track.name.clone());

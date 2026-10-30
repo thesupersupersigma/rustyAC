@@ -189,6 +189,10 @@ impl<T: Transport> StepHooks for NetSession<T> {
                     remote.mark_disconnected();
                 }
             }
+            // ACClient::onDRSZoneReceived: DRSManager::setZones at once, detection 0
+            if let (Event::Message(crate::messages::Message::DrsZones(zones)), Some(track)) = (&event, &self.track) {
+                track.server_drs_zones.set(Some(zones.iter().map(|&(start, end)| rustyac_physics::track::DrsZone { detection: 0.0, start, end }).collect()));
+            }
             self.events.push(event);
         }
     }
