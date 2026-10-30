@@ -114,6 +114,9 @@ fn race_cars(ini: &IniReader, setup: &mut SimSetup, options: &Options, rand: &mu
 /// `input_method`: `[HEADER] INPUT_METHOD` of the bindings in use (`X360`, `KEYBOARD`, `WHEEL`).
 pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Result<Vec<String>, String> {
     let mut notes = Vec::new();
+    if let Some(root) = rustyac_content::install::ac_root() {
+        setup.env.trigger_slip_level = rustyac_physics::car::drift::trigger_slip_level(&root);
+    }
     // Task 27: CarAvatar::initControls @ 0x1400d6f30: INPUT_METHOD=AI gives the player's car
     // an AI driver
     if options.ai_drive || input_method == "AI" {

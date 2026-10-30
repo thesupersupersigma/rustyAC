@@ -912,6 +912,7 @@ impl Referee {
             let (grip, dirt) = t.surface.unwrap_or_default();
             w.extend([t.surface.is_some() as u32, grip.to_bits(), dirt.to_bits(), t.load.to_bits(), t.slip_ratio.to_bits(), t.angular_velocity.to_bits()]);
         }
+        w.push(input.trigger_slip_level.to_bits());
         let words: Vec<String> = w.iter().map(|v| format!("{v:08x}")).collect();
         lines.push(format!("ds {}", words.join(" ")));
         lines.push(format!("= {after:?}"));

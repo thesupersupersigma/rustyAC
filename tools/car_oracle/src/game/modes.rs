@@ -252,6 +252,7 @@ pub unsafe fn micro(acs: &Acs, root: &Path, ac: &Path, seed: u32, laps_per_case:
 }
 
 const VA_DRIFT_STEP: usize = 0x1_402b_ff20; // DriftModeComponent::step(float)
+const VA_TRIGGER_SLIP_LEVEL: usize = 0x1_4151_d940; // static float triggerSlipLevel (tyre_smoke.ini)
 const CAR_BODY: usize = 0x118;
 const CAR_GEAR: usize = 0x894;
 const CAR_TYRES: usize = 0xb28; // Tyre[4], 0x858 each: surfaceDef* +0x410, TyreStatus +0x2e8
@@ -273,6 +274,7 @@ struct GameDrift {
     car: *mut u8,
     surfaces: [*mut u8; 4],
     step: extern "C" fn(*mut u8, f32),
+    slip_level: *mut f32,
 }
 
 impl GameDrift {
@@ -284,13 +286,14 @@ impl GameDrift {
         wr(body, 0, vtable);
         wr(car, CAR_BODY, body);
         wr(car.add(CAR_DRIFT), 0, car);
-        GameDrift { car, surfaces: [zeroed(0x100), zeroed(0x100), zeroed(0x100), zeroed(0x100)], step: std::mem::transmute(acs.va(VA_DRIFT_STEP)) }
+        GameDrift { car, surfaces: [zeroed(0x100), zeroed(0x100), zeroed(0x100), zeroed(0x100)], step: std::mem::transmute(acs.va(VA_DRIFT_STEP)), slip_level: acs.va(VA_TRIGGER_SLIP_LEVEL) as *mut f32 }
     }
 
     /// One `DriftModeComponent::step(dt)` on these inputs; the component after it.
     unsafe fn step(&self, dt: f32, f: &rustyac_physics::car::drift::DriftInput) -> rustyac_physics::car::drift::DriftModeComponent {
         let (car, game) = (self.car, self.car.add(CAR_DRIFT));
         LOCAL_VELOCITY.with(|v| v.set(f.local_velocity));
+        *self.slip_level = f.trigger_slip_level;
         wr(car, CAR_SPEED, f.speed);
         wr(car, CAR_GEAR, f.gear);
         for i in 0..5 {
@@ -345,7 +348,7 @@ pub unsafe fn drift_drive(acs: &Acs, file: &Path) -> Result<(usize, usize, usize
             let b = 11 + 6 * k;
             DriftTyre { surface: (w[b] != 0).then(|| (f32s(b + 1), f32s(b + 2))), load: f32s(b + 3), slip_ratio: f32s(b + 4), angular_velocity: f32s(b + 5) }
         };
-        let f = DriftInput { local_velocity: [f32s(1), f32s(2), f32s(3)], speed: f32s(4), gear: w[5] as i32, damage_zone_level: [f32s(6), f32s(7), f32s(8), f32s(9), f32s(10)], tyres: [tyre(0), tyre(1), tyre(2), tyre(3)] };
+        let f = DriftInput { local_velocity: [f32s(1), f32s(2), f32s(3)], speed: f32s(4), gear: w[5] as i32, damage_zone_level: [f32s(6), f32s(7), f32s(8), f32s(9), f32s(10)], tyres: [tyre(0), tyre(1), tyre(2), tyre(3)], trigger_slip_level: f32s(35) };
         let theirs = game.step(f32s(0), &f);
         let drive = lines.next().and_then(|l| l.strip_prefix("= ")).ok_or(format!("step {steps}: no state line"))?;
         if format!("{theirs:?}") != drive {
@@ -377,6 +380,8 @@ unsafe fn drift_component(acs: &Acs, next: &mut dyn FnMut() -> u32, steps: usize
             angle = if r < 0.15 { 0.0 } else if r < 0.25 { 0.1 } else { 0.15 + unit() * 0.9 };
             speed = if unit() < 0.1 { 4.0 } else { 6.0 + unit() * 40.0 };
             gear = if unit() < 0.05 { 0 } else { 2 + (unit() * 4.0) as i32 };
+            // tyre_smoke.ini's SLIP_LEVEL: the shipped 0.8, none (0), lower, higher
+            f.trigger_slip_level = [0.8, 0.0, 0.5, 1.2][(unit() * 4.0) as usize];
         }
         if n % 200 == 0 && unit() < 0.4 {
             side = -side; // a flick the other way: a combo

@@ -54,6 +54,7 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
     let ini = race_ini;
     let race = RaceIni::from_ini(ini);
     race.apply_to_env(&mut setup.env);
+    setup.env.trigger_slip_level = rustyac_physics::car::drift::trigger_slip_level(root);
     if let Some(spawn) = match race.spawn_set.as_str() {
         "PIT" => Some("pit"),
         "START" => Some("start"),

@@ -70,6 +70,9 @@ pub struct ChassisEnvironment {
     /// The car is the first one created (`Car::physicsGUID == 0`): only that car switches its
     /// joints' ERP with speed.
     pub is_first_car: bool,
+    /// `tyre_smoke.ini [TRIGGERS] SLIP_LEVEL` ([`super::drift::trigger_slip_level`]; 0.8, the
+    /// shipped file's and the static's own value, until the game crate reads the install's)
+    pub trigger_slip_level: f32,
     /// `PhysicsEngine::sessionInfo.startTimeMS`: the physics clock at the session start. The
     /// gearbox is held and the automatic gearbox waits until then.
     pub session_start_time_ms: f64,
@@ -164,6 +167,7 @@ impl Default for ChassisEnvironment {
             ff_filter: 0.0,
             use_fake_understeer_ff: false,
             is_first_car: true,
+            trigger_slip_level: 0.8,
             session_start_time_ms: 0.0,
             lock_gearbox_at_start_time_ms: 0.0,
             jump_start_penalty_mode: 1,
@@ -2225,7 +2229,7 @@ impl RollingChassis {
                 super::drift::DriftTyre { surface: t.surface_def.as_ref().map(|s| (s.grip_mod, s.dirt_additive_k)), load: t.status.load, slip_ratio: t.status.slip_ratio, angular_velocity: t.status.angular_velocity }
             };
             let lv = self.core.get_local_velocity(self.body);
-            let input = super::drift::DriftInput { local_velocity: [lv.x, lv.y, lv.z], speed: self.speed, gear: self.drivetrain.as_ref().map_or(0, |d| d.base().current_gear), damage_zone_level: self.damage_zone_level, tyres: [tyre(0), tyre(1), tyre(2), tyre(3)] };
+            let input = super::drift::DriftInput { local_velocity: [lv.x, lv.y, lv.z], speed: self.speed, gear: self.drivetrain.as_ref().map_or(0, |d| d.base().current_gear), damage_zone_level: self.damage_zone_level, tyres: [tyre(0), tyre(1), tyre(2), tyre(3)], trigger_slip_level: self.env.trigger_slip_level };
             self.drift_input = input;
             self.drift.step(dt, &input);
         }

@@ -6,9 +6,12 @@
 //! `DriftMode` of a drift session reads them through `CarPhysicsState` (`driftPoints`,
 //! `instantDrift`, `isDriftValid`, `driftComboCounter`, `driftBonusOn`).
 
-/// `tyre_smoke.ini [TRIGGERS] SLIP_LEVEL`, a static the game reads in every `Car::Car`.
-// shortcut: the install's value (and the static's own), read the file when a user changes it
-pub const TRIGGER_SLIP_LEVEL: f32 = 0.8;
+/// `DriftModeComponent::init` @ 0x1402bfda0 (in every `Car::Car`; `TyreSmoke::TyreSmoke` reads
+/// the same): `system/cfg/tyre_smoke.ini [TRIGGERS] SLIP_LEVEL` of the install into the static
+/// `triggerSlipLevel`, 0 without the file or the key.
+pub fn trigger_slip_level(root: &std::path::Path) -> f32 {
+    crate::data::ini::IniReader::load(&root.join("system/cfg/tyre_smoke.ini")).ok().map_or(0.0, |ini| ini.get_float("TRIGGERS", "SLIP_LEVEL").unwrap_or(0.0))
+}
 
 const BETA_START: f32 = f32::from_bits(0x3e06_09fe); // 7.5 degrees
 const BETA_COMBO: f32 = f32::from_bits(0x3e86_09fe); // 15 degrees
@@ -35,6 +38,8 @@ pub struct DriftInput {
     pub gear: i32,
     pub damage_zone_level: [f32; 5],
     pub tyres: [DriftTyre; 4],
+    /// the static `triggerSlipLevel` ([`trigger_slip_level`])
+    pub trigger_slip_level: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -103,7 +108,7 @@ impl DriftModeComponent {
     /// `checkExtremeDrifting` 0x1402bfc50: two tyres or more spinning hard on grip.
     fn extreme(f: &DriftInput) -> bool {
         let n = f.tyres.iter().filter(|t| {
-            t.surface.is_some_and(|(grip, _)| t.angular_velocity.abs() > 4.0 && t.slip_ratio.abs() > TRIGGER_SLIP_LEVEL && !(10.0 >= t.load) && !(0.9 > grip))
+            t.surface.is_some_and(|(grip, _)| t.angular_velocity.abs() > 4.0 && t.slip_ratio.abs() > f.trigger_slip_level && !(10.0 >= t.load) && !(0.9 > grip))
         });
         n.count() > 1
     }

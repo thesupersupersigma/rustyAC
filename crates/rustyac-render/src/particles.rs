@@ -430,7 +430,7 @@ impl TyreSmoke {
             scene.add_child(particles_node, pieces.borrow().node);
             TyreSystems { system, grass, pieces, generator, generator_grass, generator_pieces }
         });
-        let trigger_slip_level = IniReader::load(&folder.join("system/cfg/tyre_smoke.ini")).ok().map(|ini| ini.get_float("TRIGGERS", "SLIP_LEVEL").unwrap_or(0.0)).unwrap_or(0.0);
+        let trigger_slip_level = rustyac_physics::car::drift::trigger_slip_level(&folder);
         TyreSmoke { tyre_index, is_active: true, time_mult: 1.0, trigger_slip_level, systems }
     }
 

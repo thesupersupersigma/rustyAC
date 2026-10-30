@@ -734,6 +734,9 @@ impl SimSetup {
         put("use_fake_understeer_ff", (e.use_fake_understeer_ff as u32).to_string());
         put("damper_min_value", format!("{:?}", e.damper_min_value));
         put("damper_gain", format!("{:?}", e.damper_gain));
+        if e.trigger_slip_level != 0.8 {
+            put("trigger_slip_level", format!("{:?}", e.trigger_slip_level));
+        }
         put("auto_clutch", (self.auto_clutch as u32).to_string());
         put("auto_shifter", (self.auto_shifter as u32).to_string());
         if let Some(blip) = self.auto_blip {
@@ -937,6 +940,7 @@ impl SimSetup {
                 "use_fake_understeer_ff" => e.use_fake_understeer_ff = flag(),
                 "damper_min_value" => e.damper_min_value = float()?,
                 "damper_gain" => e.damper_gain = float()?,
+                "trigger_slip_level" => e.trigger_slip_level = float()?,
                 "auto_clutch" => setup.auto_clutch = flag(),
                 "auto_shifter" => setup.auto_shifter = flag(),
                 "auto_blip" => setup.auto_blip = Some(flag()),
