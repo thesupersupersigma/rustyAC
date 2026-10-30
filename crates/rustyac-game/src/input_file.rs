@@ -306,11 +306,14 @@ pub struct AiSetup {
     pub seed: u32,
     /// The step before which the player's car is handed to an AI driver (`--ai-at`); -1: never.
     pub hand_over_step: i64,
+    /// `PhysicsEngine::isTestMode` (`--drag-drive`): `RaceManager::initOffline` gives the
+    /// player's car of a drag session `AIDriverDrag` too
+    pub test_mode: bool,
 }
 
 impl Default for AiSetup {
     fn default() -> AiSetup {
-        AiSetup { player: false, laps: 5, time_secs: 0.0, start_delay_ms: 0.0, seed: 0, hand_over_step: -1 }
+        AiSetup { player: false, laps: 5, time_secs: 0.0, start_delay_ms: 0.0, seed: 0, hand_over_step: -1, test_mode: false }
     }
 }
 
@@ -804,6 +807,9 @@ impl SimSetup {
             // (only a session with AI drivers has the key: older files read as before)
             put("ai", format!("{},{},{},{},{},{}", self.ai.player as u32, self.ai.laps, self.ai.time_secs, self.ai.start_delay_ms, self.ai.seed, self.ai.hand_over_step));
         }
+        if self.ai.test_mode {
+            put("ai_test_mode", "1".to_string());
+        }
         if let Some(referee) = &self.referee {
             put("referee", referee.to_text());
             for session in &referee.sessions.sessions {
@@ -962,8 +968,10 @@ impl SimSetup {
                         start_delay_ms: start_delay_ms.parse().map_err(|e: std::num::ParseFloatError| wrong(e.to_string()))?,
                         seed: seed.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
                         hand_over_step: hand_over_step.parse().map_err(|e: std::num::ParseIntError| wrong(e.to_string()))?,
+                        test_mode: setup.ai.test_mode,
                     };
                 }
+                "ai_test_mode" => setup.ai.test_mode = flag(),
                 "referee" => setup.referee = Some(RefereeHeader::parse(value)?),
                 "pit_stop" => setup.referee.as_mut().ok_or("pit_stop before referee")?.pit = Some(PitHeader::parse(value)?),
                 "pit_menu_mouse" => setup.referee.as_mut().and_then(|referee| referee.pit.as_mut()).ok_or("pit_menu_mouse before pit_stop")?.mouse = value == "1",

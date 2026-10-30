@@ -1824,7 +1824,7 @@ impl GameSim {
             let session = self.solo_ai.session;
             let slot = if index == 0 { &mut self.car } else { &mut self.opponents[index - 1].car };
             slot.car.forced_position_events = 0;
-            if index > 0 && slot.car.env.session_type == rustyac_physics::race::manager::SESSION_DRAG {
+            if (index > 0 || self.setup.ai.test_mode) && slot.car.env.session_type == rustyac_physics::race::manager::SESSION_DRAG {
                 let mut driver = rustyac_physics::ai::AiDriverDrag::new(&mut slot.car)?;
                 driver.push = push;
                 slot.device.drag = Some(Box::new(driver));

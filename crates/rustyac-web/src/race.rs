@@ -122,6 +122,8 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
         if let Some(gameplay) = rustyac_content::install::documents().and_then(|p| IniReader::load(&p.join("cfg/gameplay.ini")).ok()).filter(|ini| ini.ready && ini.has_section("TIME_ATTACK")) {
             game_mode.time_attack_mult = gameplay.get_float("TIME_ATTACK", "BASE_TIME_MULT").unwrap_or(0.0);
         }
+        // Sim::Sim: Speed::useMPH (the page's own cfg folder first, as its HUD reads it)
+        game_mode.use_mph = rustyac_game::render::gui_apps::use_mph(&root.join("rustyac/cfg"), rustyac_content::install::documents().map(|folder| folder.join("cfg")).as_ref());
         // DriftMode's constructor lets the player's car have two tyres out
         if sessions.sessions.first().is_some_and(|s| s.session_type == rustyac_physics::race::manager::SESSION_DRIFT) {
             setup.env.allowed_tyres_out = 2;

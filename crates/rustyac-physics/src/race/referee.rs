@@ -462,8 +462,8 @@ impl Referee {
                 let (car, speed) = (lap.car_index as usize, world.car(lap.car_index as usize).speed);
                 self.with_drag(world, |drag, side| {
                     let mut log = Vec::new();
-                    // shortcut: Speed::useMPH is false here (km/h), read the player's setting when a page shows mph
-                    drag.on_finish_lane_passed(car, speed, false, side, &mut |text, description| log.push(format!("{text} {description}")));
+                    let use_mph = drag.base.use_mph;
+                    drag.on_finish_lane_passed(car, speed, use_mph, side, &mut |text, description| log.push(format!("{text} {description}")));
                     side.referee.log.append(&mut log);
                 });
             }

@@ -260,6 +260,9 @@ pub struct Options {
     pub autodrive: bool,
     /// `--drift-drive`: Task 45b's scripted drift driver ([`crate::autodrive::DriftDriver`])
     pub drift_drive: bool,
+    /// `--drag-drive`: the game's test mode for a drag session: the player's car gets
+    /// `AIDriverDrag` like the AI cars
+    pub drag_drive: bool,
     /// Task 25. `--join <host:port>`: the server to join (its TCP port). Task 26: or
     /// `ws://...` / `wss://...`, a gateway next to the server.
     pub join: Option<String>,
@@ -479,6 +482,7 @@ impl Default for Options {
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
             drift_drive: false,
+            drag_drive: false,
             join: None,
             ws_headers: Vec::new(),
             tls_root: None,
@@ -624,6 +628,8 @@ usage: rustyac [options]
   --drift-drive         headless, on the drift track from its start: a scripted driver that
                         holds slides one way and the other (automatic gearbox on); with
                         --record the drive becomes an input file for the drift proof
+  --drag-drive          a drag session as the game's test mode drives it: the AI drag driver
+                        drives your car too (RaceManager::initOffline with isTestMode)
   --join <host:port>    multiplayer: join a Kunos acServer (its TCP port), as Assetto Corsa
                         does. The server names the track and gives you a car: --car asks for
                         a model, --name is your driver name (default: your Windows user
@@ -1059,6 +1065,7 @@ impl Options {
                 "--sound-tape" => o.sound_tape = Some(absolute(value("--sound-tape")?)),
                 "--autodrive" => o.autodrive = true,
                 "--drift-drive" => o.drift_drive = true,
+                "--drag-drive" => o.drag_drive = true,
                 "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
                 "--opponent" => o.opponents.push(value("--opponent")?),
                 "--ai-cars" => o.ai_cars = Some(value("--ai-cars")?.parse().map_err(|e| format!("--ai-cars: {e}"))?),

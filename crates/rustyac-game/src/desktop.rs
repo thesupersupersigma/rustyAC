@@ -512,10 +512,7 @@ fn audio_feed(options: &Options, headless: bool) -> Option<Arc<Mutex<Feed>>> {
     Some(Arc::new(Mutex::new(if audio.clockless() { Feed::with_grid() } else { Feed::default() })))
 }
 
-/// rustyAC's own `cfg` folder (`--cfg-dir`, else `cfg` beside the exe): the files the apps write.
-fn cfg_dir(options: &Options) -> PathBuf {
-    options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg"))
-}
+use rustyac_game::conditions::cfg_dir;
 
 /// The sound of the car that was built (the engine, the track's sounds, the car's).
 fn start_audio(options: &Options, feed: &Option<Arc<Mutex<Feed>>>, info: &rustyac_game::sim::CarInfo, others: &[rustyac_game::sim::CarInfo]) -> Option<GameAudio> {

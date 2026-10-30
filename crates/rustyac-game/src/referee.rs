@@ -61,11 +61,18 @@ impl World for SimWorld<'_> {
     }
 
     fn is_drag_ai(&self, index: usize) -> bool {
-        index > 0 && self.opponents.get(index - 1).is_some_and(|o| o.car.device.drag.is_some())
+        match index {
+            0 => self.car.device.drag.is_some(),
+            _ => self.opponents.get(index - 1).is_some_and(|o| o.car.device.drag.is_some()),
+        }
     }
 
     fn set_drag_start_time(&mut self, index: usize, time: f64, rand: &mut rustyac_physics::session::MsvcRand) {
-        if let Some(drag) = index.checked_sub(1).and_then(|i| self.opponents.get_mut(i)).and_then(|o| o.car.device.drag.as_mut()) {
+        let device = match index {
+            0 => Some(&mut self.car.device),
+            _ => self.opponents.get_mut(index - 1).map(|o| &mut o.car.device),
+        };
+        if let Some(drag) = device.and_then(|d| d.drag.as_mut()) {
             drag.set_start_time(time, rand);
         }
     }

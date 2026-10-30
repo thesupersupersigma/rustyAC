@@ -53,11 +53,14 @@ pub struct GameMode {
     /// not the game's `GameMode`: `RaceEvent`'s `[RACE] AI_LEVEL` of the player's race.ini
     /// (0 without a readable file), the level the race's goal is chosen by
     pub ai_level: f32,
+    /// not the game's `GameMode`: `Speed::useMPH` (`Sim::Sim`: `cfg/gameplay.ini [OPTIONS]
+    /// USE_MPH`), the unit of `DragMode`'s finish speed
+    pub use_mph: bool,
 }
 
 impl Default for GameMode {
     fn default() -> GameMode {
-        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0, drag_matches: 5, ai_level: 0.0 }
+        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0, drag_matches: 5, ai_level: 0.0, use_mph: false }
     }
 }
 

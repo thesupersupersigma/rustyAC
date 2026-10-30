@@ -22,6 +22,11 @@ pub fn documents_folder() -> Option<PathBuf> {
 }
 
 /// The game's last session file.
+/// rustyAC's own `cfg` folder (`--cfg-dir`, else `cfg` beside the exe): the files the apps write.
+pub fn cfg_dir(options: &Options) -> PathBuf {
+    options.cfg_dir.clone().or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(|folder| folder.join("cfg")))).unwrap_or_else(|| PathBuf::from("cfg"))
+}
+
 pub fn race_ini_path() -> Option<PathBuf> {
     Some(documents_folder()?.join("cfg").join("race.ini"))
 }
@@ -119,7 +124,11 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
     }
     // Task 27: CarAvatar::initControls @ 0x1400d6f30: INPUT_METHOD=AI gives the player's car
     // an AI driver
-    if options.ai_drive || input_method == "AI" {
+    if options.drag_drive {
+        setup.ai.player = true;
+        setup.ai.test_mode = true;
+        notes.push("test mode: in a drag session the AI drag driver drives your car (--drag-drive)".to_string());
+    } else if options.ai_drive || input_method == "AI" {
         setup.ai.player = true;
         notes.push(format!("an AI driver drives your car ({})", if options.ai_drive { "--ai-drive" } else { "controls.ini INPUT_METHOD=AI" }));
     }
@@ -147,6 +156,8 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
             if let Some(gameplay) = documents_folder().and_then(|p| IniReader::load(&p.join("cfg/gameplay.ini")).ok()).filter(|ini| ini.ready && ini.has_section("TIME_ATTACK")) {
                 game_mode.time_attack_mult = gameplay.get_float("TIME_ATTACK", "BASE_TIME_MULT")?;
             }
+            // Sim::Sim: Speed::useMPH (rustyAC's own cfg folder first, as its HUD reads it)
+            game_mode.use_mph = crate::render::gui_apps::use_mph(&cfg_dir(options), documents_folder().map(|folder| folder.join("cfg")).as_ref());
             let ini = official.unwrap_or(documents);
             if !ini.ready {
                 return Err(format!("{}: cannot be read", path.display()));
