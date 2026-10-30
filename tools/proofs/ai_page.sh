@@ -4,7 +4,7 @@
 # AI drivers and the game modes in the page (Tasks 37c, 38, 45): Task 37c's Quick Race (seed 28005, the desktop's tape in
 # re/gold/ai_page) three ways: the desktop's replay, native race_proof, and the page in headless
 # Chrome (its own frame loop): the same race_out.json as Task 38's page run, byte for byte.
-# Needs the test pack in re/gold/web/pack (tools/web_pack with web/preview.toml, see the README).
+# Needs the test pack in re/gold/web/pack (tools/web_pack with tools/proofs/test_pack.toml, see the README).
 area=ai_page
 . "$(dirname "$0")/lib.sh"
 q=$gold/ai_page
@@ -38,7 +38,7 @@ cmp -s "$out/page_race_out.json" "$q/race_out.json" && verdict "page frameProof 
 # Task 45: Time Attack, Drift and Drag Race from race.ini. The desktop drives each (autodrive,
 # recorded), then race_proof (the page's setup and code, native) and, for the pack's Spa, the page
 # in Chrome replay the tape: race_out.json (the mode's extras too) byte for byte as the desktop's.
-# (The drag runs at ks_drag, which the test pack does not have: native only.)
+# (Task 45b: the test pack has ks_drag/drag400 and the e30, so the drag runs in Chrome too.)
 rm -rf "$out/chrome_profile"
 m=$out/modes
 mkdir -p "$m"
@@ -63,12 +63,13 @@ mode() { # mode() <name> <seed> <seconds> <rustyac.exe options>: the desktop's d
 mode ta 28000 200 --track spa --car ks_ferrari_f2004
 mode drift 28000 90 --track spa --car ks_ferrari_f2004
 mode drag 28005 120 --track ks_drag --layout drag400 --car bmw_m3_e30 --ai-seed 5
-for name in ta drift; do
+for name in ta drift drag; do
+    seed=28000; [ "$name" = drag ] && seed=28005
     {
         printf 'for (let i = 0; i < 600 && !(window.rustyac && window.rustyac.frameProof && window.rustyac.launcher); i++) await new Promise((r) => setTimeout(r, 100));\n'
         printf 'return await window.rustyac.frameProof(%s, %s, "%s", 0, 0);\n' "$(js "$m/$name/race.ini")" "$(js "$m/$name/assists.ini")" "$(base64 -w0 "$m/$name/drive.ryin")"
     } > "$m/$name/page.js"
-    node web/check.mjs --url "http://127.0.0.1:8137/?seed=28000" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile" --port 9338 --timeout 3600 > "$m/$name/page.json" 2> "$m/$name/page.err"
+    node web/check.mjs --url "http://127.0.0.1:8137/?seed=$seed" --launcher --script "$m/$name/page.js" --profile "$out/chrome_profile" --port 9338 --timeout 3600 > "$m/$name/page.json" 2> "$m/$name/page.err"
     node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); require("fs").writeFileSync(process.argv[2], (r.script || {}).race_out || ""); console.log(`step ${(r.script||{}).step}, error ${r.error}`);' "$m/$name/page.json" "$m/$name/page_race_out.json" > "$m/$name/page.txt" 2>&1
     cmp -s "$m/$name/page_race_out.json" "$m/$name/desktop/race_out.json" && verdict "$name: page frameProof race_out.json" IDENTICAL "$(cat "$m/$name/page.txt")" \
         || verdict "$name: page frameProof race_out.json" DIFFERENT "$(cat "$m/$name/page.txt")"

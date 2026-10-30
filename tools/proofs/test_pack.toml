@@ -1,0 +1,6 @@
+# The proofs' test pack (re/gold/web/pack): web/preview.toml's cars and tracks, and the drag strip
+# with the car of the drag proofs (Task 45b), so that tools/proofs/ai_page.sh drives Drag Race in
+# Chrome too. Build: cargo run --release --manifest-path tools/web_pack/Cargo.toml -- --config tools/proofs/test_pack.toml --out re/gold/web/pack
+
+cars = ["ks_ferrari_f2004", "bmw_z4_gt3", "bmw_m3_e30"]
+tracks = ["spa", "ks_laguna_seca", "ks_drag/drag400"]
