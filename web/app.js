@@ -923,21 +923,62 @@ async function setGraphics(values) {
 }
 
 // The rustyAC tab's graphics: the preset (written into video.ini, which AC's Video tab edits key
-// by key) and the render scale, which only this page has.
+// by key) and the render scale, which only this page has; without AC's launcher (?launcher=0)
+// every key of the file.
 function showGraphics() {
   const values = state.graphics;
   $('gfx-preset').value = presetOf(values);
-  const input = Object.assign(document.createElement('input'), { type: 'range', min: 50, max: 100, step: 1, value: values.SCALE });
-  const text = document.createElement('span');
-  const label = () => (text.textContent = `${input.value} %`);
-  label();
-  input.addEventListener('input', label);
-  input.addEventListener('change', () => setGraphics({ ...state.graphics, SCALE: input.value }));
-  const name = document.createElement('label');
-  name.append('Render scale ', input, text);
-  const row = document.createElement('p');
-  row.append(name);
-  $('gfx-list').replaceChildren(row);
+  const rows = [];
+  const set = (key, value) => setGraphics({ ...state.graphics, [key]: String(value) });
+  const slider = (key, [min, max, offText], show) => {
+    const input = Object.assign(document.createElement('input'), { type: 'range', min, max, step: 1, value: show(values[key]) });
+    const text = document.createElement('span');
+    const label = () => (text.textContent = Number(input.value) === min && offText ? offText : `${input.value}${key === 'SCALE' || key === 'SATURATION/LEVEL' ? ' %' : key === 'VIDEO/FPS_CAP_MS' ? ' FPS' : ''}`);
+    label();
+    input.addEventListener('input', label);
+    return [input, text];
+  };
+  const add = (label, key, choices, used) => {
+    let parts;
+    if (choices === 'check') {
+      const input = Object.assign(document.createElement('input'), { type: 'checkbox', checked: Number(values[key]) > 0 });
+      input.addEventListener('change', () => set(key, input.checked ? 1 : 0));
+      parts = [input];
+    } else if (choices === 'resolution' || choices === 'filters' || typeof choices[0] !== 'number') {
+      let list = choices;
+      let value = values[key];
+      if (choices === 'resolution') {
+        value = `${values['VIDEO/WIDTH']}x${values['VIDEO/HEIGHT']}`;
+        list = [...new Set([`${screen.width}x${screen.height}`, '1280x720', '1600x900', '1920x1080', '2560x1440', '3840x2160', value])].map((size) => [size, size.replace('x', ' x ')]);
+      } else if (choices === 'filters') {
+        list = [...new Set(['default', ...(state.ppFilters || []), value])].map((name) => [name, name]);
+      }
+      const select = document.createElement('select');
+      for (const [v, text] of list) select.append(new Option(text, v, false, v === value));
+      select.addEventListener('change', () => {
+        if (choices !== 'resolution') return set(key, select.value);
+        const [width, height] = select.value.split('x');
+        setGraphics({ ...state.graphics, 'VIDEO/WIDTH': width, 'VIDEO/HEIGHT': height });
+      });
+      parts = [select];
+    } else {
+      // the framerate limit is kept as AC's launcher writes it: 0 (Off) or ms per frame
+      const fps = key === 'VIDEO/FPS_CAP_MS';
+      const [input, text] = slider(key, choices, (v) => (fps ? (Number(v) > 0 ? Math.round(1000 / Number(v)) : 29) : v));
+      input.addEventListener('change', () => set(key, fps ? (Number(input.value) === 29 ? 0 : (1000 / Number(input.value)).toFixed(6)) : input.value));
+      parts = [input, text];
+    }
+    const row = document.createElement('p');
+    const name = document.createElement('label');
+    name.append(`${label} `, ...parts);
+    row.append(name);
+    if (!used) row.append(Object.assign(document.createElement('span'), { className: 'hint', textContent: ' (not used)' }));
+    rows.push(row);
+  };
+  // (with AC's launcher its Video tab edits these: only the render scale here)
+  if (!launcherMode) for (const [label, key, choices, used] of GFX) add(label, key, choices, used);
+  add(launcherMode ? 'Render scale' : 'Render scale (rustyAC)', 'SCALE', [50, 100, ''], true);
+  $('gfx-list').replaceChildren(...rows);
 }
 
 async function startGraphics() {

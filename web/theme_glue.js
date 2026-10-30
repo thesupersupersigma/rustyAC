@@ -262,6 +262,14 @@
       tab.setAttribute('data-mode', 'rustyac');
       tab.className = 'nonpanel';
       tab.textContent = 'rustyAC';
+      // its icon as the theme's _initLayout gives every tab one (a white 64 px glyph by class): a
+      // steering wheel
+      tab.insertAdjacentHTML('afterbegin', '<div class="icon"><span class="rustyac"></span></div>');
+      const wheel = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><g fill="none" stroke="#fff" stroke-width="4"><circle cx="32" cy="32" r="15"/><path d="M17 31h10M37 31h10M32 36v11"/></g><circle cx="32" cy="32" r="5" fill="#fff"/></svg>';
+      const style = document.createElement('style');
+      // (the theme's _initLayout adds one more when the tab is there before it runs: one shows)
+      style.textContent = `.options > .tabs .rustyac { background: url("data:image/svg+xml,${encodeURIComponent(wheel)}") no-repeat; } .options > .tabs > div[data-mode=rustyac] > .icon ~ .icon { display: none; }`;
+      document.head.appendChild(style);
       tabs.appendChild(tab);
     }
   }
@@ -302,9 +310,9 @@
   }
 
   function notice(text) {
-    // (reported too, for the checks)
+    // (reported too, for the checks; the theme binds no OK of its own: without one only Esc closed it)
     T.report('notice', text);
-    if (window.UI && typeof window.UI.displayDialog === 'function') window.UI.displayDialog('.notice', text, null, null, 'OK');
+    if (window.UI && typeof window.UI.displayDialog === 'function') window.UI.displayDialog('.notice', text, () => window.UI.closeDialog(), null, 'OK');
   }
 
   document.addEventListener(

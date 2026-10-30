@@ -1,0 +1,41 @@
+# Task 44c: Settings' General tab, run by rustyac-launcher.exe --script and (task44b/txt2flow.py) in
+# the page: the changelog, the language (Italian, Restart UI: yes), Clear cache
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+js $('div.flag[data-mode=en]').click()
+wait 8000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+js $('.modalDialogOverlay .notice .options .ok:visible').click()
+wait 1000
+log MARK
+click #menu li[data-panel=options]
+wait 1500
+click #options > .tabs > div[data-mode=general]
+wait 1500
+shot out/g_general.png
+click .showchangelog
+wait 3000
+shot out/g_changelog.png
+js window.__changelog=$('pre').last().text().length;$('pre').last().closest('.modalOverlay,.overlay').find('.close,.ok').first().click()
+log CHANGELOG
+wait 1500
+js $('.options #language').val('it').change()
+wait 1500
+shot out/g_language_dialog.png
+click .modalDialogOverlay .yesno .options .ok
+wait 10000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+click #menu li[data-panel=options]
+wait 1500
+click #options > .tabs > div[data-mode=general]
+wait 1500
+shot out/g_italian.png
+log LANGUAGE
+click .clearcache
+wait 10000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=options]').length>0
+wait 3000
+shot out/g_cleared.png
+log END

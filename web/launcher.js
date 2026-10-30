@@ -97,6 +97,12 @@ async function walkFolder(root, tree, report) {
   // the Special Events page: no list means the theme asks `ac://eventcount` forever
   await under('content/specialevents', 1, all);
   await under('apps/python', 0, () => false);
+  // Settings' Changelog: the theme reads ../../../changelog.txt, the game folder's
+  const changelog = await child(root, 'changelog.txt');
+  if (changelog && changelog.kind === 'file') {
+    tree.file('changelog.txt', -1, 0);
+    tree.handles.set('changelog.txt', changelog);
+  }
   // every car: its menu entry and pictures, its skins' entries and pictures
   const cars = await child(root, 'content').then((c) => (c ? child(c, 'cars') : null));
   if (cars) {

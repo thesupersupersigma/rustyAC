@@ -288,6 +288,10 @@ fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<S
     files_under(root, "launcher/themes/.base", &all, &mut out);
     files_under(root, "launcher/themes/default", &|p: &str| !p.ends_with(".ogv"), &mut out);
     files_under(root, "content/weather", &|p: &str| p.ends_with(".ini"), &mut out);
+    // Settings' Changelog (the theme reads ../../../changelog.txt)
+    if let Ok(meta) = std::fs::metadata(root.join("changelog.txt")) {
+        out.insert("changelog.txt".to_string(), meta.len());
+    }
     // shortcut: the Special Events list without its pictures (144 MB), add them if the preview should show them
     files_under(root, "content/specialevents", &|p: &str| p.ends_with(".ini"), &mut out);
     for car in cars {
