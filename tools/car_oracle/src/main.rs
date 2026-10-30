@@ -580,6 +580,17 @@ fn mode_micro(args: &Args) -> Result<(), String> {
     if !args.verbose {
         acs.silence_game_stdout();
     }
+    if let Some(kind) = args.kind {
+        // --kind 5|6|7: race_out.json's extras of that mode
+        let r = unsafe { game::modes::extras(&acs, &root, &ac, args.seed as u32, kind as i32)? };
+        return match r.mismatch {
+            None => {
+                println!("mode-micro extras of session type {kind}: race_out.json {} bytes IDENTICAL", r.json_bytes);
+                Ok(())
+            }
+            Some(what) => Err(format!("mode-micro extras of session type {kind}: DIFFERENT at {what}")),
+        };
+    }
     let r = unsafe { game::modes::micro(&acs, &root, &ac, args.seed as u32, args.steps.unwrap_or(40))? };
     println!("mode-micro seed {}: {} event files ({} bytes) decrypted, {} race.ini read ({} goals), {} hotlap laps judged ({} messages), race_out.json {} bytes, {} time attack sessions ({} frames, {} checkpoints, {} messages), {} drift steps ({} drifts, {} combos, {:.0} points), {} drag sessions ({} frames, {} matches, {} penalties, {} messages), {} race events ({} race ends judged, {} messages)", args.seed, r.files, r.bytes, r.inis, r.conditions, r.laps, r.messages, r.json_bytes, r.ta_sessions, r.ta_frames, r.ta_checkpoints, r.ta_messages, r.drift_steps, r.drifts, r.drift_combos, r.drift_points, r.drag_sessions, r.drag_frames, r.drag_matches, r.drag_penalties, r.drag_messages, r.race_events, r.race_event_checks, r.race_event_messages);
     match r.mismatch {

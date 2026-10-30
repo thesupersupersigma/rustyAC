@@ -697,3 +697,96 @@ unsafe fn race_event(acs: &Acs, file: &Path, next: &mut dyn FnMut() -> u32, chec
     }
     Ok(())
 }
+
+const VA_EXTRAS_SESSION_TYPE_CALL: usize = 0x1_4010_c637; // addExtraSessionInfo's call of getCurrentSessionType
+const VA_DRIFT_VTABLE_EXTRAS: usize = 0x1_404b_3848;
+const VA_DRAG_VTABLE_EXTRAS: usize = 0x1_404b_31e0;
+
+/// `race_out.json`'s `extras` of one session kind (5 time attack, 6 drift, 7 drag): the mode
+/// with made-up results among the game's objects, the session type `addExtraSessionInfo` asks
+/// for forced, the whole file written by the game and by the port (one drive per process).
+pub unsafe fn extras(acs: &Acs, root: &Path, ac: &Path, seed: u32, kind: i32) -> Result<Report, String> {
+    let stub = |va: usize, target: usize| {
+        let mut code = vec![0x48, 0xb8];
+        code.extend_from_slice(&(target as u64).to_le_bytes());
+        code.extend_from_slice(&[0xff, 0xe0]);
+        acs.patch(acs.va(va), &code);
+    };
+    stub(VA_ADD_MESSAGE, add_message as *const () as usize);
+    acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+    write_wstring(acs.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &format!("{}/", root.to_string_lossy().replace('\\', "/")));
+    // mov eax, kind (5 bytes, in place of the call)
+    let mut code = vec![0xb8];
+    code.extend_from_slice(&kind.to_le_bytes());
+    acs.patch(acs.va(VA_EXTRAS_SESSION_TYPE_CALL), &code);
+    // the goals of a mod's event, one reached
+    let file = root.join("cfg/race.ini");
+    std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
+    std::fs::write(&file, "[SPECIAL_EVENT]\nGUID=777\n[CONDITION_0]\nOBJECTIVE=100\nACHIEVED=1\n[CONDITION_1]\nOBJECTIVE=200\n[SESSION_0]\nMATCHES=5\n").map_err(|e| e.to_string())?;
+    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GAME_MODE_CTOR));
+    let documents = IniReader::load(&file)?;
+    let mut base = GameMode::new(&documents, &documents, false);
+    base.current_tier = 0;
+    let mut rand = seed;
+    let mut next = move || {
+        rand = rand.wrapping_mul(214_013).wrapping_add(2_531_011);
+        rand >> 16 & 0x7fff
+    };
+    let here = std::env::current_dir().map_err(|e| e.to_string())?;
+    let block = |size: usize, vtable: usize| {
+        let mode = zeroed(size);
+        let name = zeroed(0x20);
+        write_wstring(name, "MODE");
+        std::env::set_current_dir(ac).ok();
+        ctor(mode, name, zeroed(0x278));
+        std::env::set_current_dir(&here).ok();
+        wr(mode, 0, acs.va(vtable));
+        wr(mode, GM_TIER, 0i32);
+        mode
+    };
+    let (mode, port) = match kind {
+        5 => {
+            let mode = block(0x2e0, VA_TA_VTABLE);
+            let points = (next() % 30000) as f32 / 7.0 - 100.0;
+            wr(mode, 0x278 + 0xc, points);
+            let mut ta = TimeAttack::new(base.clone(), 1.0);
+            ta.points = points;
+            (mode, Mode::TimeAttack(Box::new(ta)))
+        }
+        6 => {
+            let mode = block(0x1248, VA_DRIFT_VTABLE_EXTRAS);
+            let mut drift = rustyac_physics::race::drift::DriftMode::new(base.clone());
+            drift.session_points = (next() % 90000) as f32 / 9.0;
+            drift.max_session_combo_count = (next() % 40) as f32 + 0.75;
+            drift.current_level = (next() % 9) as i32;
+            wr(mode, 0x290, drift.session_points);
+            wr(mode, 0x27c, drift.max_session_combo_count);
+            wr(mode, 0x28c, drift.current_level);
+            (mode, Mode::Drift(Box::new(drift)))
+        }
+        7 => {
+            let mode = block(0x2f0, VA_DRAG_VTABLE_EXTRAS);
+            let mut host = drag::PortDragHost { rand: rustyac_physics::session::MsvcRand(seed), log: Vec::new() };
+            let mut drag = rustyac_physics::race::drag::DragMode::new(base.clone(), 5, [[0.0, 0.0, -2.0], [0.0, 0.0, 2.0]], [[400.0, 0.0, -3.0], [400.0, 0.0, 3.0]], &[[0.0, 0.0, -2.0], [0.0, 0.0, 2.0]], 0.0, &mut host);
+            let cars = zeroed(0x90);
+            for (i, car) in drag.cars.iter_mut().enumerate() {
+                car.wins = next() % 4;
+                car.max_speed = (next() % 300) as i32;
+                // seed 1: a reaction never timed (FLT_MAX: -1 in the file)
+                car.lowest_reaction_time = if seed % 2 == 1 { f32::MAX } else { (next() % 900) as f32 / 1000.0 + 0.1 };
+                let at = cars.add(i * 0x48);
+                wr(at, 4, car.wins);
+                wr(at, 0x24, car.max_speed);
+                wr(at, 0x2c, car.lowest_reaction_time);
+            }
+            wr(mode, 0xd8, cars);
+            wr(mode, 0xe0, cars.add(0x90));
+            wr(mode, 0xe8, cars.add(0x90));
+            wr(mode, 0x110, drag.match_number);
+            (mode, Mode::Drag(Box::new(drag)))
+        }
+        _ => return Err(format!("--kind {kind}: 5, 6 or 7")),
+    };
+    let race = super::race::micro(acs, seed, 0, 2, 20_000, false, Some((mode, port.extras())))?;
+    Ok(Report { json_bytes: race.json_bytes, mismatch: race.mismatch, ..Report::default() })
+}

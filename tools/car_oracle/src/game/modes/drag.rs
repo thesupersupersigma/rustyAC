@@ -74,9 +74,9 @@ extern "C" fn drag_ai_start_time(ai: *mut u8, time: f64) {
     DRAG.with(|d| d.borrow_mut().log.push(format!("ai {i} {:#x}", time.to_bits())));
 }
 
-struct PortDragHost {
-    rand: rustyac_physics::session::MsvcRand,
-    log: Vec<String>,
+pub(super) struct PortDragHost {
+    pub(super) rand: rustyac_physics::session::MsvcRand,
+    pub(super) log: Vec<String>,
 }
 
 impl DragHost for PortDragHost {

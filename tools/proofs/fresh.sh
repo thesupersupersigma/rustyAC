@@ -171,11 +171,15 @@ if part micro; then  # Task 28: the game's referee on made-up drives, 25 seeds o
     done
 fi
 
-if part modes; then  # Task 45: special-event files and goals, hotlap and Time Attack judged by the game's code
+if part modes; then  # Task 45: special-event files and goals, hotlap, Time Attack, drift, drag and race events judged by the game's code, and their race_out.json extras
     for seed in 7 12; do
         keep "modes $seed" || continue
         r=$("$CO" mode-micro --seed "$seed" --root "$root/modes" 2>&1 | grep '^modes:')
         case "$r" in *IDENTICAL*) verdict "mode-micro $seed" IDENTICAL ;; *) verdict "mode-micro $seed" DIFFERENT "$r" ;; esac
+        for kind in 5 6 7; do  # race_out.json's extras of time attack, drift and drag
+            r=$("$CO" mode-micro --kind "$kind" --seed "$seed" --root "$root/modes" 2>&1 | grep '^mode-micro extras')
+            case "$r" in *IDENTICAL*) verdict "mode extras $kind $seed" IDENTICAL ;; *) verdict "mode extras $kind $seed" DIFFERENT "$r" ;; esac
+        done
     done
 fi
 
