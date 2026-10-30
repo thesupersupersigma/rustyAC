@@ -1,3 +1,281 @@
+# Task 44c: the leftovers of Tasks 43c, 44 and 44b
+
+## Resume here
+
+- Steps 1 to 9 are done, each in its own commit. Step 10 (only "if time is left") was not
+  started and moves to Task 44d with the rest of "Not done" below. Released as v0.44.2.
+
+## In plain words
+
+The web page no longer asks `ac://eventcount` every second. That request is the Special Events
+page's loading percentage, and it only kept going because the page could not see the special
+events folder. A lap recorded with the AI app now becomes the track's AI line straight away, as
+in the game, so whole-car runs that record agree with the game past the first lap. The AI app's
+own window (FormAI) is ported. In photo mode, the END key measures the distance to what is in
+the centre of the screen, using the game's own ray picker, and the exposure multiplier starts
+from `exposure.ini`. Online, the server's DRS zones replace the track's and the shared memory's
+online-only static fields are filled in. The shared memory's graphics page during a replay now
+matches the game's. The console's `axisMode` draws the world's axes. The Suspensions window's
+TempRun button writes its file. In the browser, the old graphics list is back without the
+launcher, the rustyAC tab has an icon, and the changelog and the OK button of notices work. What
+rustyAC writes to `race_out.json` after a server starts its next race already matched what the
+game writes.
+
+## Step 1: the page's `ac://eventcount`
+
+AC's theme (`modules/specialevents/specialevents.js`) asks for `ac://listspecialevents?async=true`.
+It then asks for `ac://eventcount` once a second to show a loading percentage, and the list's
+answer stops that timer. In the real launcher the list comes back in well under a second
+(`ACSchemeHandler.cs:122`: `async=true` runs on a worker thread; `ACRequestHandler.cs:833`
+`ListSpecialEvents`, with `GetEventCount` giving the percentage), and the same is true in desktop
+rustyAC. So `eventcount` is never asked there. The page's folder copy had no `content/specialevents`,
+so the answer was an error and its JSON never parsed. The callback never ran and the timer never
+stopped. The real launcher would do the same without that folder.
+
+Fix: `web/launcher.js` now reads `content/specialevents` (one level deep), and `tools/web_pack`
+packs every event's `event.ini` (203 files, about 0.8 MB). Their pictures (144 MB) are left out,
+with a `shortcut:` comment. A page run after the fix shows `listspecialevents`, "Loaded 203
+special events" and `getachievements`, and no `eventcount` at all, as on the desktop.
+
+The order of the events still differs. AC sorts the folders newest first (`LastWriteTime`). The
+page sorts them by name, because a browser folder handle has no dates. On this install every
+folder's date comes from the install itself, so AC's order there is arbitrary anyway.
+
+## Step 2: a recorded lap becomes the live AI line
+
+In the game, `AISplineRecorder::onLapCompleted` @ 0x140296760 copies the lap just recorded into
+`bestLapSpline`. `getBestLapSpline` hands that line to everyone: the spline locator of every car,
+the AI drivers, the keyboard steering help and `Car::postStep`'s track sides. So from the first
+recorded lap on, each car's place on the lap is measured on the new line. rustyAC kept the old
+line. That is why Task 44's whole-car comparison drifted from the first finished lap on
+(`car0.npos`).
+
+The recorder now lives in the physics engine (`PhysicsEngine::ai_recording`), stepped where
+`Track::step` steps it. Every lap car 0 finishes publishes the recorder to the track's live line,
+`Track::live_ai`. It is an append-only list, so lines handed out earlier stay valid, and
+`Track::ai_line()` / `Track::ai()` give the newest. Every reader during a session now uses it: the
+spline locator, the AI's lap length and reset, the referee, the replay's track and the autodriver.
+
+| proof | what is checked | result |
+|---|---|---|
+| `car_oracle multi --scenario ai_solo --track spa --steps 100000 --ai-record --threads 0,8`, and `multi-check` with 0 / 1 / 8 threads | both saved files and every value of the whole car, 2 laps and a pit lane | files IDENTICAL (2,752,176 / 55,408 bytes); cars **IDENTICAL** for 100,000 steps (before: DIFFERENT at step 37,191) |
+| the same at magione with the bmw_m3_e30, 75,000 steps | the same | files IDENTICAL (815,080 / 30,568 bytes); cars IDENTICAL |
+| `tools/proofs/lib.sh` | the `--ai-record` lines | the cars must now agree too (the old exception is removed) |
+
+With several cars, the game swaps the line inside car 0's step while the other cars step on
+worker threads, so which line those cars see in that step depends on timing. rustyAC swaps after
+every car has stepped. With one car, as proven here, both ways give the same result.
+
+## Step 3: FormAI, the AI app
+
+`crates/rustyac-gui/src/app_ai.rs` ports `FormAI::FormAI` @ 0x1402dcf80 and `render`
+@ 0x1402e1480. It is the 400 x 740 window with its speed graph, the "start recording", "start
+pits" and "save cons" buttons, the AI driver's eight spinners and magic switch, "SAVE ai", and the
+red debug text. The buttons and spinners become drive jobs (`SetupJob::SetAi`,
+`SetupJob::AiRecording`), so a recorded drive replays them.
+
+Where the files go:
+- A recording started from the app is saved at the end into
+  `<cfg folder>/content/tracks/<track>/<layout>/ai/`. The game saves it into the track's own `ai`
+  folder.
+- `ai.ini` and `fuel_cons.ini` go into `<cfg folder>/content/cars/<car>/data/`. The game writes
+  them into the car's data folder.
+
+| proof | result |
+|---|---|
+| GUI oracle `app_ai` (36 frames) and `app_ai_driver` (106 frames): pictures, state, `ai.ini` (243 B), `fuel_cons.ini` (36 B), messages | **IDENTICAL** |
+| neighbouring sequences `app_setupdebug`, `app_drszones`, `app_keyboard`, `app_x360` | IDENTICAL |
+
+## Step 4: photo mode
+
+- **END:** `Scene::ray_picker_pick` (`crates/rustyac-render/src/scene.rs`) ports
+  `RayPicker::pick` @ 0x14044c8c0, `RayPickerTraverser::onNode` @ 0x14044c510 and
+  `Collisions::rayMeshIntersect` @ 0x14044cdd0. Within one mesh the first triangle hit counts,
+  not the nearest; across meshes the nearest counts. While END is held, the photo window sets the
+  depth-of-field focus to that distance and writes it in red at (0, 0), as the game does.
+- **Exposure multiplier:** the game starts it from Documents `cfg/exposure.ini`
+  `[EXPOSURE] VALUE` (`Sim::Sim`) and writes it back at the end (`Sim::~Sim`). rustyAC reads its
+  own cfg folder first, then Documents. It writes to `<cfg folder>/exposure.ini`, never to
+  Documents.
+- **Clicking Start live:** with `rustyac.exe --track magione --car bmw_m3_e30 --no-race-ini
+  --duration 8 --cfg-dir <d> --gui-do "app:photomode;click:140:141;screenshot"`, the physics
+  paused after 68 steps (2,662 steps without the click). This needed a fix: `--gui-do` commands
+  after an `app:` command waited for an app that did not exist yet, so they did nothing. They now
+  run the frame after the apps are made.
+
+| proof | result |
+|---|---|
+| `RENDER_ORACLE_PICK=<stem> render_oracle compare`: the game's own `RayPicker` on the game's scene against the port's, at 5 screen points a frame; scenes r20_13 (magione chase), r20_06 (spa cockpit), r20_07 (spa chase, sun 40) | 5 of 5 bit-identical in each |
+| the same over r21_01 (spa dash, 58 frames) | 290 picks, all bit-identical |
+| GUI oracle `app_photo` (115 frames) | IDENTICAL |
+| `ray_picker_tests` unit test | pass |
+| live: `exposure.ini` with `VALUE=1.35` in the cfg folder | read, then written back as `[EXPOSURE]\r\nVALUE=1.35\r\n` |
+
+## Step 5: online DRS zones, the online static fields, the replay page
+
+- **DRS zones:** acServer reads the track's `data/drs_zones.ini` and sends message 0x53 when a
+  client joins. Every recorded tape has one zone (start 0, end 0.001).
+  `ACClient::onDRSZoneReceived` @ 0x14004b520 replaces the track's zones
+  (`DRSManager::setZones`), with detection 0. In rustyAC, the network session sets
+  `Track::server_drs_zones`, and `is_drs_available` uses it ahead of the track's own zones.
+- **Online static fields** (`SharedMemoryWriter::writeStatic` @ 0x1401877c0): online,
+  `isTimedRace` is the last race session's value. rustyAC always wrote 0 there; that is fixed.
+  `hasExtraLap`, `reversedGridPositions` and the pit window come from the client.
+- **Replay graphics page:** the status is 1 (replay), `replayTimeMultiplier` is filled in,
+  the position is -1, `sessionTimeLeft` is -1, and the last lap comes from the car without splits
+  (`GraphicsFrame::in_replay`). rustyac.exe sets these while its replay plays.
+
+| proof | result |
+|---|---|
+| `car_oracle net` with the game's own 0x53 handler, the track's zones compared every step: 5 tapes x net_watch / net_block / net_drive / net_pit x 3,000 steps | 20 of 20 **IDENTICAL** |
+| `sh tools/proofs/net.sh` (the goldens, four ways) | 80 of 80 IDENTICAL |
+| `CAR_ORACLE_SHM_ONLINE=1,4,3,8` and `0,0,0,0`, `pit_box_wing` (f2004 + e30), threads 0 / 8 | static page and run IDENTICAL |
+| `CAR_ORACLE_SHM_ONLINE=0,2,1,3`, `rc_timed` (the game's `isTimedRace` is 1) | IDENTICAL |
+| `CAR_ORACLE_SHM_REPLAY=40:120:0.25` (with online 1,4,3,8), 2,000 steps; `14500:14700:2`, 45,000 steps (after lap 1) | IDENTICAL |
+
+Having the real game join our own acServer was not tried: the rules forbid running acs.exe. What
+is proven:
+- for DRS, the game's own client code on the recorded server bytes;
+- for the shared memory, the game's own `writeStatic` and page update, run with a stand-in client
+  and replay manager.
+
+## Step 6: the console variables
+
+`axisMode` is done. The console's lambda @ 0x140196710 accepts only 0 to 2 and sets the scene
+camera's mode. `CameraShadowMapped::renderPass` then draws `Camera::renderAxis` @ 0x14020f360
+after the opaque pass: three lines of length 1 from the origin. Render oracle `r44c_01` (magione,
+`axisMode` 1, 2 and 0, then 3, which is refused) gives a **IDENTICAL** command log and pixels over
+7 frames (906 draws, 907 while the axes are on). The case is added to
+`tools/proofs/render_list.txt`.
+
+The other console variables go to Task 44d (see "Not done").
+
+## Step 7: write paths
+
+- **TempRun** (Suspensions window): the game's button queues `BrakeSystem::activateTempRunFile`
+  @ 0x14028d400 on the physics thread. That opens `TempRuns/<car>@<track>.trun` in the game's
+  folder and writes an `i32` 1. After that, every physics step after the brakes
+  (`saveTempsRunFame` @ 0x14028e4e0) adds the speed, the four wheels' angular speeds and the four
+  brake torques. AC ships without a `TempRuns` folder, so the game writes nothing unless you make
+  that folder.
+  In rustyAC, a `SetupJob::TempRun` drive job starts and stops it, and the bytes are kept on the
+  car. At the end of the run they are written to `<cfg folder>/TempRuns/<car>@<track>.trun`,
+  only when that folder exists (as in the game).
+- **Driver model save:** it already went to the cfg folder. Its `data_<config>` path stays open
+  (Task 44d).
+
+| proof | result |
+|---|---|
+| `CAR_ORACLE_TEMP_RUN=500:2500 car_oracle multi --scenario ai_solo --track spa --steps 3000 --threads 0,8`, F2004 | file (72,004 B) IDENTICAL, cars IDENTICAL |
+| the same with `--cars ferrari_f40` (a car with brake temperatures) | file IDENTICAL, cars IDENTICAL |
+| live: F40 at magione, `--gui-do "app:suspension;click:110:770"` | 93,208 bytes written |
+
+## Step 8: the browser Settings leftovers
+
+- **Start Benchmark:** AC's theme sets `race.ini [BENCHMARK] ACTIVE=1` and starts the game. The
+  game then plays `content/benchmark/benchmark.acr` with a benchmark HUD and writes an
+  `acbench_*.txt` result (`BenchmarkMode::renderHUD` @ 0x14005c0c0, `generateResultString`
+  @ 0x14005b370). rustyac.exe can play that replay but has no benchmark mode, so the page keeps
+  its notice (Task 44d).
+- **`?launcher=0`:** the old key-by-key graphics list is back (29 rows, with "Render scale
+  (rustyAC)" last).
+- **rustyAC tab icon:** it uses the theme's own tab markup with a white steering-wheel glyph
+  (inline SVG), drawn like the theme's 64 px icons. When the theme adds a second icon of its own,
+  CSS hides it. A script checked it (one visible icon, with the SVG background). It was not
+  looked at in a picture, because the headless window does not show that part of the tab column.
+- **Clear cache, Changelog, language** (`tools/web_checks/task44c/general.txt`, run in the
+  desktop launcher and in the page): both sides send the same requests (`setlanguage/it`,
+  `WINDOW/LANGUAGE=it`, the reloads, "Clearing preview cache"). Two fixes in the page:
+  - The changelog was missing. The page now reads `changelog.txt` from the game's folder, and
+    the pack includes it.
+  - A notice's OK button did nothing; only Esc closed it. OK now closes it.
+- **Profile's raw `<l18n…>` filter text:** the theme puts `<l18n>` inside `<option>`, and a
+  select shows that as raw text. Desktop (WebView2) shows the same. The real launcher is also
+  Chromium (CefGlue), so AC shows it too. No change.
+
+## Step 9: `race_out.json` after the server starts its next race
+
+When the server goes on from a session, `lambda_9cebb0` @ 0x140133f90 keeps a practice's or a
+qualifying's results, but returns at once after a race. `RaceManager::shutdown` @ 0x140141320
+then writes the session in progress into the slot of its type. So if you leave after the server
+has started its next race, the game's `race_out.json` holds that new race (no laps yet, in grid
+order), and the race that just finished is lost. rustyAC already did the same (Task 43).
+
+Live check `sh tools/web_checks/task44c/race_loop.sh 430` (Kunos' acServer, races only,
+`LOOP_MODE=1`, 1 lap, F2004 cars "a" and "b"): acServer finished three races and wrote three
+`_RACE.json` files. Both clients left early in the fourth race. Both clients' files hold one
+session, "Race", with 0 laps, every lap count 0, no best laps and the grid order.
+
+## Step 10
+
+Not started (it was only "if time is left"). It moves to Task 44d.
+
+## The quick run
+
+`bash tools/proofs/run_all.sh --quick`. The physics and fresh areas did not run the first time:
+`tools/chassis_compare` no longer built because of step 2's new `SimSetup` field (fixed in its own
+commit). They were then run again alone (`run_all.sh --quick physics fresh`).
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics | 9 | 9 | 0 | 0m30s |
+| fresh | 51 | 51 | 0 | 11m28s |
+| sound | 4 | 4 | 0 | 0m38s |
+| render | 12 | 12 | 0 | 3m42s |
+| gui | 29 | 29 | 0 | 17m07s |
+| python | 1 | 1 | 0 | 0m05s |
+| replays | 6 | 6 | 0 | 4m00s |
+| net | 16 | 16 | 0 | 5m30s |
+| browser | 9 | 9 | 0 | 4m36s |
+| ai_page | 3 | 3 | 0 | 8m49s |
+| shaders | 4 | 4 | 0 | 1m31s |
+| launcher | 1 | 1 | 0 | 1m06s |
+| dumps | 6 | 6 | 0 | 5m02s |
+
+## New or renamed web-zip files
+
+No files were renamed. The preview pack must gain `changelog.txt` (141,254 bytes) and
+`content/specialevents/*/event.ini` (203 files, about 0.8 MB). `re/gold/web/pack` was not remade
+here.
+
+## Not done (Task 44d)
+
+1. Special Events order in the page: it sorts by name. AC puts the newest folder first, using
+   dates a browser folder handle does not give.
+2. AI line with several cars: the game's swap inside car 0's step races the other cars' steps;
+   rustyAC swaps after all cars. Not proven with several cars.
+3. FormAI: the 3D splines (`renderSplines`), `AUTO_FUEL_CONS`, the `drivetrain.ini`
+   `AUTO_SHIFTER` copy and the side splines' indexes; no live click in a window.
+4. Photo mode:
+   - END was not pressed by script in a live run.
+   - There is no depth-of-field pass, and the renderer does not use the exposure multiplier (no
+     YEBIS).
+   - FOV and roll set before Start do not move the scene camera.
+   - In the `--screenshot` path, the photo window shows FOV 0.
+5. Online: the graphics page built from the client's leaderboard, laps and time (the net oracle
+   has no shared-memory writer); the real game against our own acServer (running it is not
+   allowed).
+6. Console variables:
+   - `lodDebug`'s red text: the HUD oracle would need to stage `CarLodManager::renderHUD`.
+   - `editBoxes`: the live `colliders.ini` reload and the wireframe boxes; `ShapeRenderer` is not
+     ported.
+   - `editCMesh`: the collider mesh drawn in red; the port's renderer does not load it.
+   - The four `observe*`: they reload every 2 s of wall-clock time, so there is no repeatable
+     oracle.
+   - The cockpit exposure: no YEBIS.
+7. Driver model `data_<config>` save path (race.ini `MODEL_CONFIG`, which rustyac.exe does not
+   use).
+8. Start Benchmark (`BenchmarkMode` is not ported); the tab icon was not seen in a picture.
+9. Step 10: Telemetry's ride-height channels one step late at the 2 m/s edge; remote cars in
+   Setup debug.
+
+## Open questions
+
+- Does the real launcher really leave `<l18n>` raw in the Profile filters? This is inferred from
+  the theme's markup and from it being Chromium; no recording of the real launcher's page exists.
+- `RACE_OVER_TIME=150` had no visible effect in the race loop: everyone finished, and the
+  results came 11 s before the next race. acServer's rule for it is not checked.
+
 # AC's content-maker tools (Task 44)
 
 ## Resume here
