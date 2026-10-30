@@ -1137,10 +1137,13 @@ fn run_headless(options: &Options) -> Result<(), String> {
         println!("no --duration: running until Ctrl+C");
     }
     let replaying = replay.is_some();
+    let drift_drive = options.drift_drive;
     let autodrive = options.autodrive;
     let source = move || -> Box<dyn DriverSource> {
         if replaying {
             Box::new(ReplaySource::default())
+        } else if drift_drive {
+            Box::new(SpawnSequence::new(rustyac_game::autodrive::DriftDriver::default(), true))
         } else if autodrive {
             Box::new(SpawnSequence::new(AutoDriver::new(), true))
         } else {
@@ -2738,7 +2741,8 @@ fn run(options: &Options) -> Result<(), String> {
         return Ok(());
     }
     if options.headless {
-        if let (Some(replay), false) = (&options.replay, options.realtime) {
+        // --drawn-frames: the physics thread's loop, which draws the frames
+        if let (Some(replay), false) = (&options.replay, options.realtime || options.drawn_frames.is_some()) {
             if options.audio.wav.is_some() && !options.audio.off {
                 return run_replay_audio(options, replay);
             }

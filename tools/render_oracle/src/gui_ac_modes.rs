@@ -225,6 +225,28 @@ pub unsafe fn drift_call(game: &Game, h: &mut HudGame, what: &str, number: f32) 
     if d.is_null() {
         return Err("no drift mode (dr.create first)".into());
     }
+    if name == "goal" {
+        // a ConditionDef (0x48: TYPE, its name, OBJECTIVE, achieved) at the end of
+        // GameMode::conditions, room for four made at the first
+        if rd::<usize>(d, 0xa8) == 0 {
+            let c = a.alloc(4 * 0x48);
+            std::ptr::write_bytes(c, 0, 4 * 0x48);
+            wr(d, 0xa8, c);
+            wr(d, 0xb0, c);
+            wr(d, 0xb8, c.add(4 * 0x48));
+        }
+        let (c, end): (*mut u8, *mut u8) = (rd(d, 0xb0), rd(d, 0xb8));
+        if c == end {
+            return Err("four drift goals at most".into());
+        }
+        let i = (c as usize - rd::<usize>(d, 0xa8)) / 0x48;
+        write_wstring(a, c, "POINTS");
+        write_wstring(a, c.add(0x20), ["BRONZE", "SILVER", "GOLD", "GOLDEN GLORY"][i]);
+        wr(c, 0x40, number as i32);
+        wr(c, 0x44, 0u8);
+        wr(d, 0xb0, c.add(0x48));
+        return Ok(());
+    }
     if let Some(i) = drift_input(name) {
         DRIFT_CAR.lock().unwrap()[i] = number;
         return Ok(());

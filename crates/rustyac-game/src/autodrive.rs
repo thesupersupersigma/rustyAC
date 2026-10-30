@@ -206,3 +206,91 @@ impl DriverSource for AutoDriver {
         }
     }
 }
+
+/// Task 45b's drift drive (`--drift-drive`, on the drift track from its start): round the first
+/// bends to the open tarmac south of the start, then down the long road with the throttle holding
+/// the tail out and the wheels pointing where the car goes. What it drives is kept with
+/// `--record` as an input file; its drifts score (Task 45b's report).
+#[derive(Debug, Default)]
+pub struct DriftDriver {
+    probe: CarProbe,
+    /// the car's velocity over the last step (m/s, from where the probes put it)
+    velocity: [f32; 3],
+    next: usize,
+}
+
+/// The route: x, z (m), the top speed on the way there (km/h) and whether it is a slide stretch;
+/// after the last point, the brakes.
+const DRIFT_ROUTE: [(f32, f32, f32, bool); 13] = [
+    (-75.0, 186.0, 40.0, false),
+    (-88.0, 180.0, 35.0, false),
+    (-96.0, 168.0, 40.0, false),
+    (-97.0, 150.0, 45.0, false),
+    (-95.0, 136.0, 40.0, false),
+    (-88.0, 122.0, 35.0, false),
+    (-78.0, 116.0, 30.0, false),
+    (-70.0, 102.0, 45.0, true),
+    (-71.0, 92.0, 45.0, true),
+    (-76.0, 82.0, 45.0, true),
+    (-81.0, 72.0, 45.0, true),
+    (-83.0, 62.0, 45.0, true),
+    (-70.0, 52.0, 45.0, true),
+];
+
+impl DriverSource for DriftDriver {
+    fn wants_probe(&self) -> bool {
+        true
+    }
+
+    fn set_probe(&mut self, probe: &CarProbe) {
+        // once a step (the device may be read more often)
+        self.velocity = [0, 1, 2].map(|k| (probe.position[k] - self.probe.position[k]) / 0.003);
+        self.probe = *probe;
+    }
+
+    fn acquire(&mut self, controls: &mut CarControls, _dt: f32, _input: &CarControlsInput) {
+        *controls = CarControls { clutch: 1.0, ..CarControls::default() };
+        let (car, v) = (self.probe, self.velocity);
+        let flat = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[2] * b[2];
+        // a point passed (near, or close behind the car) is done
+        while let Some(&(x, z, ..)) = DRIFT_ROUTE.get(self.next) {
+            let d = [x - car.position[0], 0.0, z - car.position[2]];
+            let far = d[0].hypot(d[2]);
+            if far > 7.0 && (far > 12.0 || flat(d, car.forward) > 0.0) {
+                break;
+            }
+            self.next += 1;
+        }
+        let Some(&(x, z, top, slide)) = DRIFT_ROUTE.get(self.next) else {
+            controls.brake = 1.0;
+            return;
+        };
+        let d = [x - car.position[0], 0.0, z - car.position[2]];
+        let to_left = atan2(flat(d, car.left), flat(d, car.forward));
+        let (along, across) = (flat(v, car.forward), flat(v, car.left));
+        let beta = if along.hypot(across) > 2.0 { atan2(across, along) } else { 0.0 };
+        let kmh = v[0].hypot(v[2]) * 3.6;
+        // in a slide the wheels point where the car goes; past ~17 degrees the front tyres
+        // only push straight on
+        let aim = if slide && beta.abs() > 0.25 { beta } else { to_left.clamp(-0.3, 0.3) };
+        controls.steer = (-aim / car.max_wheel_angle.max(0.1)).clamp(-1.0, 1.0);
+        if slide {
+            // the throttle holds the slide angle
+            controls.gas = match beta.abs() {
+                b if b < 0.35 => 1.0,
+                b if b < 0.6 => 0.75,
+                b if b < 0.8 => 0.45,
+                _ => 0.15,
+            };
+            if kmh < 25.0 {
+                controls.gas = controls.gas.max(0.6);
+            }
+            if kmh > top {
+                controls.gas = 0.0;
+            }
+        } else {
+            controls.gas = if beta.abs() > 0.7 { 0.3 } else if kmh < top { 1.0 } else { 0.0 };
+            controls.brake = if kmh > top + 8.0 { 0.6 } else { 0.0 };
+        }
+    }
+}

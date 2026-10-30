@@ -258,6 +258,8 @@ pub struct Options {
     pub pressure_law: Option<(f32, f32)>,
     /// `--autodrive`: a driver that follows the track's AI line (needs `--track`).
     pub autodrive: bool,
+    /// `--drift-drive`: Task 45b's scripted drift driver ([`crate::autodrive::DriftDriver`])
+    pub drift_drive: bool,
     /// Task 25. `--join <host:port>`: the server to join (its TCP port). Task 26: or
     /// `ws://...` / `wss://...`, a gateway next to the server.
     pub join: Option<String>,
@@ -476,6 +478,7 @@ impl Default for Options {
             no_textures: false,
             audio: crate::audio::AudioOptions::default(),
             autodrive: false,
+            drift_drive: false,
             join: None,
             ws_headers: Vec::new(),
             tls_root: None,
@@ -618,6 +621,9 @@ usage: rustyac [options]
                         track's AI line (automatic gearbox on); for checks and for watching.
                         It keeps the quick pit menu even with a keyboard's controls.ini (it
                         clicks no CONFIRM), unless --pit-click scripts the mouse menu
+  --drift-drive         headless, on the drift track from its start: a scripted driver that
+                        holds slides one way and the other (automatic gearbox on); with
+                        --record the drive becomes an input file for the drift proof
   --join <host:port>    multiplayer: join a Kunos acServer (its TCP port), as Assetto Corsa
                         does. The server names the track and gives you a car: --car asks for
                         a model, --name is your driver name (default: your Windows user
@@ -1052,6 +1058,7 @@ impl Options {
                 "--audio-script" => o.audio.script = Some(absolute(value("--audio-script")?)),
                 "--sound-tape" => o.sound_tape = Some(absolute(value("--sound-tape")?)),
                 "--autodrive" => o.autodrive = true,
+                "--drift-drive" => o.drift_drive = true,
                 "--cars" => o.cars = Some(value("--cars")?.parse().map_err(|e| format!("--cars: {e}"))?),
                 "--opponent" => o.opponents.push(value("--opponent")?),
                 "--ai-cars" => o.ai_cars = Some(value("--ai-cars")?.parse().map_err(|e| format!("--ai-cars: {e}"))?),

@@ -902,11 +902,34 @@ impl Referee {
         self.mode_session_line();
     }
 
-    /// `ta_session <track sectors> <budget of each sector>` of the session now.
+    /// A drift session's physics step for the proof: `ds <dt> <what DriftModeComponent::step read>`,
+    /// then `= <the component after it>`.
+    pub fn drift_step_line(&mut self, dt: f32, input: &crate::car::drift::DriftInput, after: &crate::car::drift::DriftModeComponent) {
+        let (Some(lines), Some(Mode::Drift(_))) = (&mut self.mode_frames, &self.mode) else { return };
+        let mut w = vec![dt.to_bits(), input.local_velocity[0].to_bits(), input.local_velocity[1].to_bits(), input.local_velocity[2].to_bits(), input.speed.to_bits(), input.gear as u32];
+        w.extend(input.damage_zone_level.map(f32::to_bits));
+        for t in &input.tyres {
+            let (grip, dirt) = t.surface.unwrap_or_default();
+            w.extend([t.surface.is_some() as u32, grip.to_bits(), dirt.to_bits(), t.load.to_bits(), t.slip_ratio.to_bits(), t.angular_velocity.to_bits()]);
+        }
+        let words: Vec<String> = w.iter().map(|v| format!("{v:08x}")).collect();
+        lines.push(format!("ds {}", words.join(" ")));
+        lines.push(format!("= {after:?}"));
+    }
+
+    /// `ta_session <track sectors> <budget of each sector>` of the session now, or a drift's
+    /// `dr_goals <objective of each goal>`.
     fn mode_session_line(&mut self) {
-        if let (Some(lines), Some(Mode::TimeAttack(ta))) = (&mut self.mode_frames, &self.mode) {
-            let bits: Vec<String> = ta.sectors.iter().map(|v| format!("{:08x}", v.to_bits())).collect();
-            lines.push(format!("ta_session {} {}", self.track.sectors_normalized_positions.len(), bits.join(" ")));
+        match (&mut self.mode_frames, &self.mode) {
+            (Some(lines), Some(Mode::TimeAttack(ta))) => {
+                let bits: Vec<String> = ta.sectors.iter().map(|v| format!("{:08x}", v.to_bits())).collect();
+                lines.push(format!("ta_session {} {}", self.track.sectors_normalized_positions.len(), bits.join(" ")));
+            }
+            (Some(lines), Some(Mode::Drift(drift))) => {
+                let goals: Vec<String> = drift.base.conditions.iter().map(|c| c.objective.to_string()).collect();
+                lines.push(format!("dr_goals {}", goals.join(" ")).trim_end().to_string());
+            }
+            _ => {}
         }
     }
 

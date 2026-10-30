@@ -268,20 +268,103 @@ extern "C" fn local_velocity(_body: *mut u8, out: *mut [f32; 3]) -> *mut [f32; 3
     out
 }
 
+/// The game's `DriftModeComponent` on a made-up car: the fields its `step` reads.
+struct GameDrift {
+    car: *mut u8,
+    surfaces: [*mut u8; 4],
+    step: extern "C" fn(*mut u8, f32),
+}
+
+impl GameDrift {
+    unsafe fn new(acs: &Acs) -> GameDrift {
+        let car = zeroed(0x4000);
+        let vtable = zeroed(0x100);
+        wr(vtable, 0xb8, local_velocity as *const () as usize);
+        let body = zeroed(0x40);
+        wr(body, 0, vtable);
+        wr(car, CAR_BODY, body);
+        wr(car.add(CAR_DRIFT), 0, car);
+        GameDrift { car, surfaces: [zeroed(0x100), zeroed(0x100), zeroed(0x100), zeroed(0x100)], step: std::mem::transmute(acs.va(VA_DRIFT_STEP)) }
+    }
+
+    /// One `DriftModeComponent::step(dt)` on these inputs; the component after it.
+    unsafe fn step(&self, dt: f32, f: &rustyac_physics::car::drift::DriftInput) -> rustyac_physics::car::drift::DriftModeComponent {
+        let (car, game) = (self.car, self.car.add(CAR_DRIFT));
+        LOCAL_VELOCITY.with(|v| v.set(f.local_velocity));
+        wr(car, CAR_SPEED, f.speed);
+        wr(car, CAR_GEAR, f.gear);
+        for i in 0..5 {
+            wr(car, CAR_DAMAGE + 4 * i, f.damage_zone_level[i]);
+        }
+        for (k, t) in f.tyres.iter().enumerate() {
+            let tyre = car.add(CAR_TYRES + 0x858 * k);
+            match t.surface {
+                Some((grip, dirt)) => {
+                    wr(self.surfaces[k], 0x90, grip);
+                    wr(self.surfaces[k], 0x98, dirt);
+                    wr(tyre, 0x410, self.surfaces[k]);
+                }
+                None => wr(tyre, 0x410, 0usize),
+            }
+            wr(tyre, 0x2e8 + 4, t.load);
+            wr(tyre, 0x2e8 + 0x10, t.slip_ratio);
+            wr(tyre, 0x2e8 + 0x14, t.angular_velocity);
+        }
+        (self.step)(game, dt);
+        rustyac_physics::car::drift::DriftModeComponent {
+            drift_straight_timer: rd(game, 0x8),
+            points: rd(game, 0x10),
+            instant_drift: rd(game, 0x18),
+            current_speed_multiplier: rd(game, 0x20),
+            current_drift_angle: rd(game, 0x28),
+            combo_counter: rd(game, 0x30),
+            last_drift_direction: rd(game, 0x34),
+            extreme_drifting: rd::<u8>(game, 0x38) != 0,
+            drifting: rd::<u8>(game, 0x39) != 0,
+            invalid: rd::<u8>(game, 0x3a) != 0,
+            old_damage_zones: [rd(game, 0x3c), rd(game, 0x40), rd(game, 0x44), rd(game, 0x48), rd(game, 0x4c)],
+        }
+    }
+}
+
+/// Task 45b: a drift drive's physics steps (`ds` lines of `rustyac.exe --drawn-frames`'s
+/// `mode_frames.txt`): what each step read into the game's `DriftModeComponent::step`, the
+/// component after it against the drive's. Returns the steps, the drifts, the combos (each
+/// flick the other way) and the points at the end.
+pub unsafe fn drift_drive(acs: &Acs, file: &Path) -> Result<(usize, usize, usize, f64), String> {
+    use rustyac_physics::car::drift::{DriftInput, DriftTyre};
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let game = GameDrift::new(acs);
+    let (mut steps, mut drifts, mut combos, mut points, mut was) = (0, 0, 0, 0.0, (false, 0));
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some(rest) = line.strip_prefix("ds ") else { continue };
+        let w: Vec<u32> = rest.split(' ').map(|w| u32::from_str_radix(w, 16).map_err(|e| format!("{w}: {e}"))).collect::<Result<_, _>>()?;
+        let f32s = |k: usize| f32::from_bits(w[k]);
+        let tyre = |k: usize| {
+            let b = 11 + 6 * k;
+            DriftTyre { surface: (w[b] != 0).then(|| (f32s(b + 1), f32s(b + 2))), load: f32s(b + 3), slip_ratio: f32s(b + 4), angular_velocity: f32s(b + 5) }
+        };
+        let f = DriftInput { local_velocity: [f32s(1), f32s(2), f32s(3)], speed: f32s(4), gear: w[5] as i32, damage_zone_level: [f32s(6), f32s(7), f32s(8), f32s(9), f32s(10)], tyres: [tyre(0), tyre(1), tyre(2), tyre(3)] };
+        let theirs = game.step(f32s(0), &f);
+        let drive = lines.next().and_then(|l| l.strip_prefix("= ")).ok_or(format!("step {steps}: no state line"))?;
+        if format!("{theirs:?}") != drive {
+            return Err(format!("drift drive step {steps}: the game {theirs:?} and the drive {drive} (input {f:?})"));
+        }
+        steps += 1;
+        drifts += (theirs.drifting && !was.0) as usize;
+        combos += (theirs.combo_counter > was.1 && was.1 > 0) as usize;
+        was = (theirs.drifting, theirs.combo_counter);
+        points = theirs.points;
+    }
+    Ok((steps, drifts, combos, points))
+}
+
 /// The game's `DriftModeComponent` against the port's, on drives made of slides one way and
 /// the other, straights, slow parts, dirt, knocks and neutral.
 unsafe fn drift_component(acs: &Acs, next: &mut dyn FnMut() -> u32, steps: usize, report: &mut Report) -> Result<(), String> {
-    use rustyac_physics::car::drift::{DriftInput, DriftModeComponent, DriftTyre};
-    let car = zeroed(0x4000);
-    let vtable = zeroed(0x100);
-    wr(vtable, 0xb8, local_velocity as *const () as usize);
-    let body = zeroed(0x40);
-    wr(body, 0, vtable);
-    wr(car, CAR_BODY, body);
-    let surfaces = [zeroed(0x100), zeroed(0x100), zeroed(0x100), zeroed(0x100)];
-    let game = car.add(CAR_DRIFT);
-    wr(game, 0, car);
-    let step: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_DRIFT_STEP));
+    use rustyac_physics::car::drift::{DriftInput, DriftModeComponent};
+    let game = GameDrift::new(acs);
     let mut port = DriftModeComponent::default();
     let mut unit = || (next() % 10_000) as f32 / 10_000.0;
     let (mut speed, mut angle, mut side, mut gear) = (30.0f32, 0.0f32, 1.0f32, 3);
@@ -314,42 +397,8 @@ unsafe fn drift_component(acs: &Acs, next: &mut dyn FnMut() -> u32, steps: usize
             t.angular_velocity = (unit() - 0.1) * 120.0;
         }
         let dt = if n % 7 == 0 { 0.003 } else { 0.0030003 };
-        // the game's car
-        LOCAL_VELOCITY.with(|v| v.set(f.local_velocity));
-        wr(car, CAR_SPEED, f.speed);
-        wr(car, CAR_GEAR, f.gear);
-        for i in 0..5 {
-            wr(car, CAR_DAMAGE + 4 * i, f.damage_zone_level[i]);
-        }
-        for (k, t) in f.tyres.iter().enumerate() {
-            let tyre = car.add(CAR_TYRES + 0x858 * k);
-            match t.surface {
-                Some((grip, dirt)) => {
-                    wr(surfaces[k], 0x90, grip);
-                    wr(surfaces[k], 0x98, dirt);
-                    wr(tyre, 0x410, surfaces[k]);
-                }
-                None => wr(tyre, 0x410, 0usize),
-            }
-            wr(tyre, 0x2e8 + 4, t.load);
-            wr(tyre, 0x2e8 + 0x10, t.slip_ratio);
-            wr(tyre, 0x2e8 + 0x14, t.angular_velocity);
-        }
-        step(game, dt);
+        let theirs = game.step(dt, &f);
         port.step(dt, &f);
-        let theirs = DriftModeComponent {
-            drift_straight_timer: rd(game, 0x8),
-            points: rd(game, 0x10),
-            instant_drift: rd(game, 0x18),
-            current_speed_multiplier: rd(game, 0x20),
-            current_drift_angle: rd(game, 0x28),
-            combo_counter: rd(game, 0x30),
-            last_drift_direction: rd(game, 0x34),
-            extreme_drifting: rd::<u8>(game, 0x38) != 0,
-            drifting: rd::<u8>(game, 0x39) != 0,
-            invalid: rd::<u8>(game, 0x3a) != 0,
-            old_damage_zones: [rd(game, 0x3c), rd(game, 0x40), rd(game, 0x44), rd(game, 0x48), rd(game, 0x4c)],
-        };
         let bits = |c: &DriftModeComponent| format!("{:08x} {:016x} {:016x} {:016x} {:016x} {} {} {} {} {} {:?}", c.drift_straight_timer.to_bits(), c.points.to_bits(), c.instant_drift.to_bits(), c.current_speed_multiplier.to_bits(), c.current_drift_angle.to_bits(), c.combo_counter, c.last_drift_direction, c.extreme_drifting, c.drifting, c.invalid, c.old_damage_zones.map(f32::to_bits));
         if bits(&theirs) != bits(&port) {
             return Err(format!("drift step {n}: the game {} and the port {} (input {f:?})", bits(&theirs), bits(&port)));

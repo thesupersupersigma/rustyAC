@@ -584,7 +584,14 @@ fn mode_micro(args: &Args) -> Result<(), String> {
         acs.silence_game_stdout();
     }
     if let Some(file) = &args.mode_frames {
-        // --mode-frames: a drive's Time Attack frames (rustyac.exe --drawn-frames) on the game's TimeAttack::update
+        // --mode-frames: a drive's Time Attack frames (rustyac.exe --drawn-frames) on the game's TimeAttack::update,
+        // a drift drive's physics steps on its DriftModeComponent::step
+        if std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?.contains("
+ds ") {
+            let (steps, drifts, combos, points) = unsafe { game::modes::drift_drive(&acs, file)? };
+            println!("mode-micro drift drive {}: {steps} steps ({drifts} drifts, {combos} combos, {points} points) IDENTICAL", file.display());
+            return Ok(());
+        }
         let (frames, checkpoints, messages) = unsafe { game::modes::time_attack_drive(&acs, &root, &ac, file)? };
         println!("mode-micro time attack drive {}: {frames} frames ({checkpoints} checkpoints, {messages} messages) IDENTICAL", file.display());
         return Ok(());

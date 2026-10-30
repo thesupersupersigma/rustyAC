@@ -120,6 +120,11 @@ pub fn drift_call(painter: &mut dyn Painter, what: &str, number: f32) -> Result<
             return Ok(());
         }
         let Some(Drift { mode, car, .. }) = d.as_mut() else { return Err("no drift mode (dr.create first)".to_string()) };
+        if name == "goal" {
+            let name = ["BRONZE", "SILVER", "GOLD", "GOLDEN GLORY"].get(mode.base.conditions.len()).unwrap_or(&"MEDAL").to_string();
+            mode.base.conditions.push(rustyac_physics::race::game_mode::Condition { kind: "POINTS".into(), name, objective: number as i32, achieved: false });
+            return Ok(());
+        }
         if let Some(i) = crate::gui_ac_modes::drift_input(name) {
             car[i] = number;
             return Ok(());
@@ -143,7 +148,7 @@ pub fn drift_sync(gui: &mut Gui) {
     });
 }
 
-pub fn drift_render_hud(hud: &HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
+pub fn drift_render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
     DRIFT.with(|d| {
         let mut d = d.borrow_mut();
         let Some(Drift { mode, hud: drawn, car }) = d.as_mut() else { return };
@@ -151,7 +156,13 @@ pub fn drift_render_hud(hud: &HudPort, gui: &mut Gui, painter: &mut dyn Painter,
         let [speed, drift_points, instant_drift, combo, bonus] = *car;
         let frame = rustyac_physics::race::drift::DriftFrame { drift_points, instant_drift, combo: combo as i32, bonus_on: bonus != 0.0, speed, esc_open: input.esc_menu_visible, paused: input.pause_menu_visible, replay: input.in_replay };
         let mut out = Default::default();
-        mode.drawn = mode.hud(dt, &frame, &mut |_, _| {}, &mut out);
+        let mut said = Vec::new();
+        mode.drawn = mode.hud(dt, &frame, &mut |title, text| said.push((title.to_string(), text.to_string())), &mut out);
+        if let Some(message) = &mut hud.message {
+            for (title, text) in said {
+                message.add_message(gui, &title, &text, rustyac_gui::hud::MESSAGE_DEFAULT);
+            }
+        }
         let link = rustyac_gui::drift::DriftLink { session_points: mode.session_points, drawn: mode.drawn };
         gui.sim.drift = Some(link);
         drawn.render_hud(gui, painter, &link);

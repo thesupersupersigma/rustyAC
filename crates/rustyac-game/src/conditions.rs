@@ -340,11 +340,11 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
     if options.no_auto_clutch {
         setup.auto_clutch = false;
     }
-    if options.auto_shifter || options.autodrive {
+    if options.auto_shifter || options.autodrive || options.drift_drive {
         // (the line follower does not shift)
         setup.auto_shifter = true;
     }
-    if options.no_auto_shifter && !options.autodrive {
+    if options.no_auto_shifter && !options.autodrive && !options.drift_drive {
         setup.auto_shifter = false;
     }
     if options.auto_blip.is_some() {

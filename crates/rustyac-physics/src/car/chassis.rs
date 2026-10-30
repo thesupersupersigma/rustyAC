@@ -582,6 +582,8 @@ pub struct RollingChassis {
     /// `CAR_ORACLE_PERF_METER=1`, and the replays of its recordings do the same.
     /// Task 45: `DriftModeComponent` (Car+0x3510), the player's car's drift points
     pub drift: super::drift::DriftModeComponent,
+    /// What the last step handed [`Self::drift`] (proofs replay it through the game's step).
+    pub drift_input: super::drift::DriftInput,
     pub performance_meter: super::performance_meter::PerformanceMeter,
     /// `Car::penaltyManager`
     pub penalty_manager: PenaltyManager,
@@ -1110,6 +1112,7 @@ impl RollingChassis {
             disable_min_speed_penalty_clear: false,
             penalty_perf_target: 0.0,
             drift: Default::default(),
+            drift_input: Default::default(),
             // PerformanceMeter::init in Car::Car
             performance_meter: {
                 let mut meter = super::performance_meter::PerformanceMeter::default();
@@ -2223,6 +2226,7 @@ impl RollingChassis {
             };
             let lv = self.core.get_local_velocity(self.body);
             let input = super::drift::DriftInput { local_velocity: [lv.x, lv.y, lv.z], speed: self.speed, gear: self.drivetrain.as_ref().map_or(0, |d| d.base().current_gear), damage_zone_level: self.damage_zone_level, tyres: [tyre(0), tyre(1), tyre(2), tyre(3)] };
+            self.drift_input = input;
             self.drift.step(dt, &input);
         }
         // 23: PerformanceMeter::step, the player's car only (what the last step's lap timer and

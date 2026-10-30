@@ -1381,6 +1381,11 @@ pub fn drift_drive() -> Result<Vec<Op>, String> {
     field(&mut o, 1);
     o.extend([hud("race.sessions", 0.0, "6:0:Drift"), hud("race.current", 0.0, ""), hud("session", 6.0, ""), hud("menu.pause", 0.0, ""), hud("dr.create", 0.0, "")]);
     let mut esc = false;
+    for w in text.lines().map(|l| l.split(' ').collect::<Vec<_>>()).filter(|w| w[0] == "dr_goals") {
+        for goal in &w[1..] {
+            o.push(hud("dr.goal", goal.parse::<f32>().map_err(|e| format!("{file}: {e}"))?, ""));
+        }
+    }
     for w in text.lines().map(|l| l.split(' ').collect::<Vec<_>>()).filter(|w| w[0] == "dr") {
         let [_, dt, points, instant, combo, bonus, speed, esc_open] = w[..] else { return Err(format!("{file}: {w:?} is not a drift frame")) };
         o.extend([hud("dr.points", bits(points)?, ""), hud("dr.instant", bits(instant)?, ""), hud("dr.combo", combo.parse::<f32>().map_err(|e| e.to_string())?, ""), hud("dr.bonus", bonus.parse::<f32>().map_err(|e| e.to_string())?, ""), hud("dr.speed", bits(speed)?, "")]);

@@ -552,6 +552,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             }
         };
         timing.last_step_ms = begin.elapsed().as_secs_f64() * 1000.0;
+        if let (Some(_), Some(referee)) = (config.drawn_frames, sim.referee.as_mut()) {
+            referee.drift_step_line(crate::sim::DT, &sim.car.car.drift_input, &sim.car.car.drift);
+        }
         // the car as the setup editor sees it: after its jobs, and a few times a second
         if sim.setup_log.len() != jobs_before || sim.steps.is_multiple_of(64) {
             shared.publish_setup(&sim);
