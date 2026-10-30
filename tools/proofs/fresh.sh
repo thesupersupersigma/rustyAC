@@ -7,7 +7,7 @@
 # the kept one. The unpacked copies in target/proofs/fresh/rec are deleted once compared.
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
 # "hybrid <car>", "sus <car>", "collide spa", "collide-worlds", "rays <track> <layout>",
-# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "ini <file>", "multi ...", "shm ...".
+# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "modes <seed>", "drive ta|drift", "ini <file>", "multi ...", "shm ...".
 #   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm" (default: all of them)
 area=fresh
 . "$(dirname "$0")/lib.sh"
@@ -180,6 +180,47 @@ if part modes; then  # Task 45: special-event files and goals, hotlap, Time Atta
             r=$("$CO" mode-micro --kind "$kind" --seed "$seed" --root "$root/modes" 2>&1 | grep '^mode-micro extras')
             case "$r" in *IDENTICAL*) verdict "mode extras $kind $seed" IDENTICAL ;; *) verdict "mode extras $kind $seed" DIFFERENT "$r" ;; esac
         done
+    done
+    # Task 45b: rustyac.exe drives Time Attack and Drift at Spa with drawn frames out of step with
+    # physics (--drawn-frames: 5-40 ms); each drawn frame through the game's TimeAttack::update
+    # and DriftMode::renderHUD (render_oracle drift_drive: pixels, draw calls, state)
+    for mode in ta drift; do
+        keep "drive $mode" || continue
+        cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+        d=$root/drive_$mode; rm -rf "$d"; mkdir -p "$d/home"
+        { printf '[RACE]
+TRACK=spa
+CONFIG_TRACK=
+MODEL=ks_ferrari_f2004
+CARS=1
+[CAR_0]
+MODEL=ks_ferrari_f2004
+SKIN=
+[SESSION_0]
+'
+          [ $mode = ta ] && printf 'NAME=Time Attack
+TYPE=5
+' || printf 'NAME=Drift
+TYPE=6
+'; printf 'SPAWN_SET=START
+'; } > "$d/race.ini"
+        [ $mode = ta ] && secs=200 || secs=90
+        USERPROFILE=$(cygpath -w "$d/home") target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$d/race.ini" --autodrive --duration $secs --race-seed 28000 --drawn-frames 45 --out-dir "$d/out" --track spa --car ks_ferrari_f2004 > "$out/drive_$mode.txt" 2>&1
+        frames=$(grep -cE "^(ta|dr) " "$d/out/mode_frames.txt" 2>/dev/null)
+        if [ $mode = ta ]; then
+            r=$("$CO" mode-micro --root "$root/modes" --mode-frames "$(cygpath -m "$d/out/mode_frames.txt")" 2>&1 | tail -n 1)
+            case "$r" in *IDENTICAL*) verdict "drive ta" IDENTICAL "$r" ;; *) verdict "drive ta" DIFFERENT "$r" ;; esac
+        else
+            tool render_oracle
+            RENDER_ORACLE_MODE_FRAMES=$(cygpath -m "$d/out/mode_frames.txt") "$RO" gui --gui drift_drive --root "$root/gui" --out "$d/frames" > "$out/drive_drift_gui.txt" 2>&1 < /dev/null
+            f=$out/drive_drift_gui.txt
+            if grep -q '^command log: IDENTICAL' "$f" && grep -q '^pixels: IDENTICAL' "$f" && grep -q '^state and events: IDENTICAL' "$f" && ! grep -q DIFFERENT "$f"; then
+                verdict "drive drift" IDENTICAL "$frames drawn frames"
+            else
+                verdict "drive drift" DIFFERENT "$(grep -m1 -E 'DIFFERENT|rror|panic' "$f")"
+            fi
+            rm -rf "$d/frames"
+        fi
     done
 fi
 

@@ -1655,6 +1655,16 @@ impl GameSim {
 
     /// Task 28b: the player's pit stop for the picture: `PitStop::state` and the marker's
     /// visibility (`None`: no pit stop in this session).
+    /// Task 45b: a drawn frame of the game (`dt` its `GameTime::deltaT`): Time Attack's update
+    /// and Drift's HUD run here from then on, not on the referee's 9 ms frame.
+    pub fn drawn_frame(&mut self, dt: f32) {
+        if let Some(mut referee) = self.referee.take() {
+            let mut world = crate::referee::SimWorld { car: &mut self.car, opponents: &mut self.opponents, engine: &mut self.engine, solo_ai: &mut self.solo_ai, setup: &mut self.setup, session_index: &mut self.session_index };
+            referee.drawn_frame(&mut world, dt);
+            self.referee = Some(referee);
+        }
+    }
+
     /// Task 45: the time-attack mode of the session, as its HUD reads it.
     pub fn time_attack_view(&self) -> Option<crate::view::TimeAttackView> {
         let Some(rustyac_physics::race::game_mode::Mode::TimeAttack(ta)) = self.referee.as_ref()?.mode.as_ref() else { return None };

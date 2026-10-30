@@ -321,6 +321,15 @@ pub fn finish(sim: &mut crate::sim::GameSim, out: Option<&std::path::Path>) -> O
             Ok(()) => lines.push(format!("referee: wrote {} and {}", out.join("race_out.json").display(), out.join("laps.ini").display())),
             Err(error) => lines.push(format!("referee: could not write into {}: {error}", out.display())),
         }
+        if let Some(frames) = sim.referee.as_ref().and_then(|referee| referee.mode_frames.as_ref()) {
+            let file = out.join("mode_frames.txt");
+            match rustyac_content::guard::write(&file, frames.join("
+") + "
+") {
+                Ok(()) => lines.push(format!("referee: {} drawn frames into {}", frames.iter().filter(|l| !l.starts_with('=')).count(), file.display())),
+                Err(error) => lines.push(format!("referee: could not write {}: {error}", file.display())),
+            }
+        }
     }
     Some(lines)
 }

@@ -322,6 +322,15 @@ sessions={}
         Ok(stats)
     }
 
+    /// Task 45b: a drawn frame's Time Attack and Drift, with the frame's counted seconds (a
+    /// tape's replay keeps the referee's 9 ms frame, as the headless drive it was recorded on).
+    pub fn drawn_frame(&mut self, seconds: f64) {
+        let counted = if seconds.is_finite() { seconds.clamp(0.0, MAX_FRAME_SECONDS) } else { 0.0 };
+        if self.tape.is_none() && counted > 0.0 {
+            self.sim.drawn_frame(counted as f32);
+        }
+    }
+
     /// Whether the frame loop reached [`Session::stop_at`].
     pub fn stopped(&self) -> bool {
         self.stop_at.is_some_and(|step| self.sim.steps >= step)

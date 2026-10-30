@@ -348,6 +348,9 @@ pub struct Options {
     /// track's grip, the wind, the grid's skins); without it the clock's milliseconds, as the
     /// game. The browser's drives name theirs, so a desktop run can draw the same.
     pub race_seed: Option<u32>,
+    /// `--drawn-frames <seed>` (a proof, `--headless`): Time Attack and Drift on drawn frames
+    /// of uneven length, and each frame's inputs and the mode after it into `mode_frames.txt`
+    pub drawn_frames: Option<u32>,
     /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
     pub stand_in_drivers: bool,
     /// `--physics-threads <n>`: worker threads of the physics engine with several cars
@@ -511,6 +514,7 @@ impl Default for Options {
             documents: None,
             ai_seed: None,
             race_seed: None,
+            drawn_frames: None,
             stand_in_drivers: false,
             physics_threads: None,
             state_hash: false,
@@ -667,6 +671,8 @@ usage: rustyac [options]
   --race-seed <n>       what race.ini's draws start from (track grip, wind, grid skins;
                         default: the clock, as the game). --race-seed n with --ai-seed
                         n-28000 draws as a browser drive of seed n
+  --drawn-frames <seed> with --headless: Time Attack and Drift on drawn frames of uneven
+                        length (5 to 40 ms, seeded), each frame into mode_frames.txt of --out-dir
   --stand-in-drivers    race.ini's other cars with rustyAC's line follower, not the AI
   --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split
                         leaves the worker nothing). Default: as the game, [PHYSICS_THREADING]
@@ -1096,6 +1102,7 @@ impl Options {
                 "--out-dir" => o.out_dir = Some(absolute(value("--out-dir")?)),
                 "--documents" => o.documents = Some(absolute(value("--documents")?)),
                 "--ai-seed" => o.ai_seed = Some(value("--ai-seed")?.parse().map_err(|e| format!("--ai-seed: {e}"))?),
+                "--drawn-frames" => o.drawn_frames = Some(value("--drawn-frames")?.parse().map_err(|e| format!("--drawn-frames: {e}"))?),
                 "--race-seed" => o.race_seed = Some(value("--race-seed")?.parse().map_err(|e| format!("--race-seed: {e}"))?),
                 "--stand-in-drivers" => o.stand_in_drivers = true,
                 "--physics-threads" => o.physics_threads = Some(value("--physics-threads")?.parse().map_err(|e| format!("--physics-threads: {e}"))?),

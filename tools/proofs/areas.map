@@ -74,7 +74,7 @@ tools/car_oracle/*            physics fresh sound replays
 tools/chassis_compare/*       physics fresh
 tools/ode_oracle/*            physics
 tools/tyre_oracle/*           physics
-tools/render_oracle/*         render gui python
+tools/render_oracle/*         render gui python fresh
 tools/audio_oracle/*          sound
 tools/launcher_oracle/*       launcher
 tools/net_gold/*              net

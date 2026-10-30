@@ -1370,6 +1370,29 @@ pub fn drift() -> Vec<Op> {
     o
 }
 
+/// Task 45b: the drift HUD on a drive's drawn frames (`rustyac.exe --drawn-frames`): the
+/// uneven frame times and the car's drift numbers of each `dr` line of the file in
+/// RENDER_ORACLE_MODE_FRAMES.
+pub fn drift_drive() -> Result<Vec<Op>, String> {
+    let file = std::env::var("RENDER_ORACLE_MODE_FRAMES").map_err(|_| "drift_drive needs RENDER_ORACLE_MODE_FRAMES (a drive's mode_frames.txt)")?;
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("{file}: {e}"))?;
+    let bits = |w: &str| u32::from_str_radix(w, 16).map(f32::from_bits).map_err(|e| format!("{file}: {w}: {e}"));
+    let mut o = Vec::new();
+    field(&mut o, 1);
+    o.extend([hud("race.sessions", 0.0, "6:0:Drift"), hud("race.current", 0.0, ""), hud("session", 6.0, ""), hud("menu.pause", 0.0, ""), hud("dr.create", 0.0, "")]);
+    let mut esc = false;
+    for w in text.lines().map(|l| l.split(' ').collect::<Vec<_>>()).filter(|w| w[0] == "dr") {
+        let [_, dt, points, instant, combo, bonus, speed, esc_open] = w[..] else { return Err(format!("{file}: {w:?} is not a drift frame")) };
+        o.extend([hud("dr.points", bits(points)?, ""), hud("dr.instant", bits(instant)?, ""), hud("dr.combo", combo.parse::<f32>().map_err(|e| e.to_string())?, ""), hud("dr.bonus", bonus.parse::<f32>().map_err(|e| e.to_string())?, ""), hud("dr.speed", bits(speed)?, "")]);
+        if (esc_open == "1") != esc {
+            esc = !esc;
+            o.push(hud(if esc { "menu.esc" } else { "menu.resume" }, 0.0, ""));
+        }
+        o.push(Op::Frame(bits(dt)?));
+    }
+    Ok(o)
+}
+
 /// Task 45: the drag race's HUD: standing (nothing), the run with the cars along the strip,
 /// the reaction time and the finish speed, a false start and a disqualification, the end
 /// screen's wins.

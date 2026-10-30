@@ -649,6 +649,9 @@ impl Game {
         let started = now_ms();
         // (the pause menu's pause: no physics steps, the picture and the GUI go on)
         let stats = if self.gui.paused { Default::default() } else { self.session.advance(seconds)? };
+        if !self.gui.paused {
+            self.session.drawn_frame(seconds);
+        }
         self.view = self.session.view();
         let camera = self.session.camera_frame(&self.view, seconds);
         let remote = self.session.remote_views();

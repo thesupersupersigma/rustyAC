@@ -192,6 +192,12 @@ pub struct Referee {
     pub mode: Option<Mode>,
     /// Time Attack's 2.5 s camera fade before its end screen: the seconds left
     pub mode_fade: Option<f32>,
+    /// a host draws frames and runs [`Referee::drawn_frame`]: Time Attack, Drift and the fade
+    /// leave the referee's 9 ms frame (headless runs and proofs keep it)
+    pub drawn_frames: bool,
+    /// proofs only: every drawn frame's inputs (`ta`/`dr` lines, f32 as bits) and the mode
+    /// after it (`=` lines); a Time Attack session's budget first (`ta_session`)
+    pub mode_frames: Option<Vec<String>>,
     /// the ESC menu of the pits shows (from the lock it asks for to its "Drive")
     pub esc_open: bool,
     /// `DragMode::newMatch`'s 1 s fade before the cars go back to the start: seconds left
@@ -283,6 +289,8 @@ impl Referee {
             pit_estimate: 0.0,
             mode: None,
             mode_fade: None,
+            drawn_frames: false,
+            mode_frames: None,
             esc_open: false,
             drag_fade: None,
             esc_requests: 0,
@@ -500,7 +508,12 @@ impl Referee {
             self.time_attack_session(world);
             self.with_drag(world, |drag, side| drag.new_session(now, side));
         }
-        self.time_attack_frame(world);
+        if !self.drawn_frames {
+            self.mode_frame(world, FRAME_DT);
+        }
+        if let Some(Mode::Drag(_)) = &self.mode {
+            self.drag_frame(world);
+        }
         self.pit_frame(world, now, &views);
         // FlagManager::update and the messages
         let flag_cars: Vec<FlagCar> = (0..world.car_count()).map(|index| self.flag_car(world.car(index))).collect();
@@ -863,6 +876,7 @@ impl Referee {
             Vec::new()
         });
         ta.new_session(&estimate, self.track.sectors_normalized_positions.len());
+        self.mode_session_line();
         self.mode_fade = None;
         let set = if self.track.spawn_pose("TIME_ATTACK", 0).is_some() { "TIME_ATTACK" } else { "START" };
         let slot = self.manager.start_index.first().copied().unwrap_or(0);
@@ -882,9 +896,31 @@ impl Referee {
         event.verify(position, over, world.car(0).black_flagged, &mut |text, description| log.push(format!("{text} {description}")));
     }
 
-    fn time_attack_frame(&mut self, world: &mut dyn World) {
+    /// A proof's record of the drawn frames from now on ([`Referee::mode_frames`]).
+    pub fn record_mode_frames(&mut self) {
+        self.mode_frames = Some(Vec::new());
+        self.mode_session_line();
+    }
+
+    /// `ta_session <track sectors> <budget of each sector>` of the session now.
+    fn mode_session_line(&mut self) {
+        if let (Some(lines), Some(Mode::TimeAttack(ta))) = (&mut self.mode_frames, &self.mode) {
+            let bits: Vec<String> = ta.sectors.iter().map(|v| format!("{:08x}", v.to_bits())).collect();
+            lines.push(format!("ta_session {} {}", self.track.sectors_normalized_positions.len(), bits.join(" ")));
+        }
+    }
+
+    /// A drawn frame of the game (`Game::onIdle`: `Game::update` and `renderHUD` with
+    /// `GameTime::deltaT`): Time Attack's update, Drift's HUD and the fade to the end screen,
+    /// from now on only here.
+    pub fn drawn_frame(&mut self, world: &mut dyn World, dt: f32) {
+        self.drawn_frames = true;
+        self.mode_frame(world, dt);
+    }
+
+    fn mode_frame(&mut self, world: &mut dyn World, dt: f32) {
         if let Some(left) = &mut self.mode_fade {
-            *left -= FRAME_DT;
+            *left -= dt;
             if *left <= 0.0 {
                 self.mode_fade = None;
                 self.manager.results_displayed = true;
@@ -892,7 +928,7 @@ impl Referee {
             }
         }
         if let Some(Mode::Drift(drift)) = &mut self.mode {
-            // DriftMode::renderHUD, here on the referee's frame
+            // DriftMode::renderHUD
             let car = world.car(0);
             let frame = super::drift::DriftFrame {
                 drift_points: car.drift.points as f32,
@@ -904,7 +940,12 @@ impl Referee {
                 ..Default::default()
             };
             let (log, mut out) = (&mut self.log, super::drift::DriftOut::default());
-            drift.drawn = drift.hud(FRAME_DT, &frame, &mut |text, description| log.push(format!("{text} {description}")), &mut out);
+            drift.drawn = drift.hud(dt, &frame, &mut |text, description| log.push(format!("{text} {description}")), &mut out);
+            if let Some(lines) = &mut self.mode_frames {
+                let f = &frame;
+                lines.push(format!("dr {:08x} {:08x} {:08x} {} {} {:08x} {}", dt.to_bits(), f.drift_points.to_bits(), f.instant_drift.to_bits(), f.combo, f.bonus_on as u8, f.speed.to_bits(), f.esc_open as u8));
+                lines.push(format!("= {drift:?}"));
+            }
             if out.fade_to_results && self.mode_fade.is_none() {
                 self.mode_fade = Some(super::manager::FADE_SECONDS);
             }
@@ -913,15 +954,20 @@ impl Referee {
             }
             return;
         }
-        if let Some(Mode::Drag(_)) = &self.mode {
-            self.drag_frame(world);
-            return;
-        }
         let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };
         let frame = Self::time_attack_view(&self.track, &self.manager, self.esc_open, world.car(0));
         let log = &mut self.log;
-        let out = ta.update(FRAME_DT, &frame, &mut |text, description| log.push(format!("{text} {description}")));
-        ta.hud_tick(FRAME_DT, &frame);
+        let out = ta.update(dt, &frame, &mut |text, description| log.push(format!("{text} {description}")));
+        ta.hud_tick(dt, &frame);
+        if let Some(lines) = &mut self.mode_frames {
+            let f = &frame;
+            let bits = |v: &[f32]| v.iter().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(" ");
+            lines.push(format!(
+                "ta {:08x} {} {} {} {} {} {} {} {} {} {:08x} {:08x} {:08x}",
+                dt.to_bits(), f.track_sectors, f.paused as u8, f.esc_open as u8, f.replay as u8, bits(&f.position), f.splits, f.lap_count, bits(&f.damage_zone_level), f.tyres_off, f.first_gear_max_speed.to_bits(), f.speed.to_bits(), f.penalty_time.to_bits()
+            ));
+            lines.push(format!("= {ta:?}"));
+        }
         if out.fade_to_results && self.mode_fade.is_none() {
             self.mode_fade = Some(super::manager::FADE_SECONDS);
         }

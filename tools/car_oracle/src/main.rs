@@ -133,6 +133,7 @@ struct Args {
     count_given: bool,
     mesh_count: usize,
     kind: Option<usize>,
+    mode_frames: Option<PathBuf>,
     hybrid: bool,
     boxes_only: bool,
     collide: bool,
@@ -191,6 +192,7 @@ fn parse_args() -> Result<Args, String> {
         count_given: false,
         mesh_count: 50_000,
         kind: None,
+        mode_frames: None,
         hybrid: false,
         boxes_only: false,
         collide: false,
@@ -257,6 +259,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--mesh-count" => a.mesh_count = number(value()?)?,
             "--kind" => a.kind = Some(number(value()?)?),
+            "--mode-frames" => a.mode_frames = Some(PathBuf::from(value()?)),
             "--hybrid" => a.hybrid = true,
             "--boxes-only" => a.boxes_only = true,
             "--collide" => a.collide = true,
@@ -564,7 +567,7 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// Task 45: `car_oracle mode-micro [--seed <n>] [--steps <laps per race.ini>]`: the game's
+/// Task 45: `car_oracle mode-micro [--seed <n>] [--steps <laps per race.ini>] [--kind 5|6|7] [--mode-frames <mode_frames.txt>]`: the game's
 /// special-event decryption, goals and hotlap judging against the port's.
 fn mode_micro(args: &Args) -> Result<(), String> {
     let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
@@ -579,6 +582,12 @@ fn mode_micro(args: &Args) -> Result<(), String> {
     let acs = acs::Acs::load(&acs_path)?;
     if !args.verbose {
         acs.silence_game_stdout();
+    }
+    if let Some(file) = &args.mode_frames {
+        // --mode-frames: a drive's Time Attack frames (rustyac.exe --drawn-frames) on the game's TimeAttack::update
+        let (frames, checkpoints, messages) = unsafe { game::modes::time_attack_drive(&acs, &root, &ac, file)? };
+        println!("mode-micro time attack drive {}: {frames} frames ({checkpoints} checkpoints, {messages} messages) IDENTICAL", file.display());
+        return Ok(());
     }
     if let Some(kind) = args.kind {
         // --kind 5|6|7: race_out.json's extras of that mode

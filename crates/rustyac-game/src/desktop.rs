@@ -1131,6 +1131,7 @@ fn run_headless(options: &Options) -> Result<(), String> {
         referee_out: referee_out(options),
         session_script: session_script(options),
         pit_clicks: options.pit_clicks.clone(),
+        drawn_frames: options.drawn_frames,
     };
     if options.duration.is_none() && options.replay.is_none() {
         println!("no --duration: running until Ctrl+C");
@@ -1388,7 +1389,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     }
     // the window says when it has the keyboard (and Windows may not have given it)
     shared.focused.store(false, Ordering::Relaxed);
-    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone() };
+    let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone(), drawn_frames: None };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
         let autodrive = options.autodrive;
@@ -1527,6 +1528,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     script.sort_by(|a, b| a.0.total_cmp(&b.0));
     let started = Instant::now();
     let mut last = Instant::now();
+    let mut game_time = rustyac_gui::app_stats::GameTime::default();
     // MouseHider (Sim::Sim 0x14019457b)
     // the ESC menu asked for the player's controls to be locked
     let mut pits_locked = false;
@@ -2055,6 +2057,12 @@ fn run_window(options: &Options) -> Result<(), String> {
         let now = Instant::now();
         let dt = now - last;
         last = now;
+        // Game::onIdle: Time Attack and Drift once per drawn frame, with GameTime's deltaT
+        // (a recorded drive's replay keeps the referee's 9 ms frame, as when it was recorded headless)
+        game_time.update(dt.as_secs_f64() * 1000.0);
+        if replay.is_none() && game_time.delta_t > 0.0 {
+            shared.drawn_frames.lock().unwrap().push(game_time.delta_t);
+        }
         world = shared.world_at(now);
         // Task 28c: --replay-script for a replay of recorded frames; then the replay's frame
         // (ReplayManager::updatePlayState): every car's state from its recorder

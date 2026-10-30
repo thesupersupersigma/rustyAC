@@ -186,6 +186,9 @@ pub struct Shared {
     pub online_requests: Mutex<Vec<crate::online::OnlineRequest>>,
     /// Task 28: what the referee says, for the HUD.
     pub referee_hud: Mutex<Option<crate::referee::RefereeHud>>,
+    /// Task 45b: the window's drawn frames not yet run (`GameTime::deltaT` of each), for Time
+    /// Attack and Drift ([`GameSim::drawn_frame`])
+    pub drawn_frames: Mutex<Vec<f32>>,
     /// Task 28c: the session's track, for the replay's playback on the display thread
     pub track: Mutex<Option<Arc<rustyac_physics::track::Track>>>,
     /// Task 31: the setup editor's jobs (the game's `PhysicsAvatar::commandQueue`), and the
@@ -230,6 +233,7 @@ impl Shared {
             online_events: Mutex::new(Vec::new()),
             online_requests: Mutex::new(Vec::new()),
             referee_hud: Mutex::new(None),
+            drawn_frames: Mutex::new(Vec::new()),
             track: Mutex::new(None),
             setup_jobs: Mutex::new(Vec::new()),
             setup_snapshot: Mutex::new((0, None)),
@@ -328,6 +332,8 @@ pub struct LoopConfig {
     pub session_script: Vec<(f64, u32)>,
     /// Task 43: the mouse menu's clicks at given seconds (`--pit-click`; not over a replay)
     pub pit_clicks: Vec<(f64, rustyac_physics::race::pitstop::MousePitClick)>,
+    /// Task 45b, a proof: drawn frames of uneven length from this seed (`--drawn-frames`)
+    pub drawn_frames: Option<u32>,
 }
 
 /// Steps of lying still on its roof (or side) before the car is put back: 3 s.
@@ -376,6 +382,11 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
     let mut chat_at = 0;
     let mut telemetry_names: Option<Vec<String>> = None;
     let mut result = Ok(());
+    // --drawn-frames: the frames' clock (sim seconds) and their lengths' draws
+    let (mut frame_at, mut frame_rand) = (0.0f64, config.drawn_frames.unwrap_or(0));
+    if let (Some(_), Some(referee)) = (config.drawn_frames, sim.referee.as_mut()) {
+        referee.record_mode_frames();
+    }
     {
         shared.publish_start(&sim);
         *shared.track.lock().unwrap() = sim.track.clone();
@@ -436,6 +447,8 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
             if replay_done {
                 shared.finished.store(true, Ordering::Relaxed);
             }
+            // (paused, Time Attack and Drift skip their frames)
+            shared.drawn_frames.lock().unwrap().clear();
             sim.car.device.source.idle();
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -519,6 +532,15 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                     sim.pit_click(*click);
                 }
             }
+        }
+        for dt in std::mem::take(&mut *shared.drawn_frames.lock().unwrap()) {
+            sim.drawn_frame(dt);
+        }
+        while config.drawn_frames.is_some() && sim.sim_seconds() >= frame_at {
+            frame_rand = frame_rand.wrapping_mul(214_013).wrapping_add(2_531_011);
+            let dt = (5 + (frame_rand >> 16 & 0x7fff) % 36) as f32 * 0.001;
+            frame_at += dt as f64;
+            sim.drawn_frame(dt);
         }
         let begin = Instant::now();
         let jobs_before = sim.setup_log.len();

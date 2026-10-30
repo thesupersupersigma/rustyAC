@@ -410,6 +410,7 @@ struct TaWorld {
     fade: bool,
     checkpoint: Option<(f32, f32)>,
     operator_new: usize,
+    first_gear_max_speed: f32,
 }
 
 thread_local! {
@@ -443,7 +444,7 @@ extern "C" fn get_lap_count(_manager: *mut u8, _car: *mut u8) -> u32 {
     TA.with(|t| t.borrow().lap_count)
 }
 extern "C" fn get_max_speed_from_gear(_engineer: *mut u8, out: *mut f32, _gear: i32) -> *mut f32 {
-    unsafe { *out = FIRST_GEAR_MAX_SPEED };
+    unsafe { *out = TA.with(|t| t.borrow().first_gear_max_speed) };
     out
 }
 extern "C" fn checkpoint_break(_ta: *mut u8, _dt: f32, gained_points: f32, gained_seconds: f32) -> bool {
@@ -478,7 +479,8 @@ fn ta_port_side(ta: &TimeAttack) -> TaState {
 /// Sessions of made-up frames: the game's `TimeAttack::update` on a hand-built block and car
 /// (its budget from the same estimate, through its own resets) against the port's. Runs
 /// with the install as the working folder (the goals' constructor reads the events there).
-unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32, frames: usize, report: &mut Report) -> Result<(), String> {
+/// The stand-ins `TimeAttack::update` calls.
+unsafe fn ta_stubs(acs: &Acs) {
     let stub = |va: usize, target: usize| {
         let mut code = vec![0x48, 0xb8];
         code.extend_from_slice(&(target as u64).to_le_bytes());
@@ -499,13 +501,16 @@ unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32,
         stub(va, first_argument as *const () as usize);
     }
     TA.with(|t| t.borrow_mut().operator_new = acs.crt_function(c"??2@YAPEAX_K@Z"));
+}
+
+/// A game `TimeAttack` block with its sim, car and track (`sectors` of them), the budget
+/// through the game's resets, as the constructor and a new session leave it. Returns the
+/// block, its car, pause menu and ESC menu.
+unsafe fn ta_block(acs: &Acs, sectors: usize, budget: &[f32], reset_position_before: f32) -> (*mut u8, *mut u8, *mut u8, *mut u8) {
     let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GAME_MODE_CTOR));
-    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_TA_UPDATE));
     let target_reset: extern "C" fn(*mut u8, *const [usize; 3]) = std::mem::transmute(acs.va(VA_TA_TARGET_RESET));
     let status_reset: extern "C" fn(*mut u8, i32) = std::mem::transmute(acs.va(VA_TA_STATUS_RESET));
-    for session in 0..24 {
-        let sectors = 1 + next() as usize % 4;
-        let time_mult = [1.0f32, 0.5, 0.25, 0.0, 1.5][session % 5];
+    {
         // the mode with its goals, then TimeAttack's members
         let ta = zeroed(TA_SIZE);
         let name = zeroed(0x20);
@@ -523,15 +528,49 @@ unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32,
         wr(car, CA_SIM, sim);
         wr(car, CA_RACE_ENGINEER, zeroed(0x100));
         wr(ta, TA_CAR, car);
-        // the budget (the constructor's and a new session's sums) through the game's resets
-        let estimate: Vec<f32> = (0..sectors).map(|_| (next() % 4000) as f32 * 0.01 + 3.0).collect();
-        let budget: Vec<f32> = estimate.iter().map(|v| (v + 10.0) * time_mult).collect();
         let end = budget.as_ptr().add(budget.len()) as usize;
         target_reset(ta.add(TA_TARGET), &[budget.as_ptr() as usize, end, end]);
-        wr(ta, TA_STATUS + 0x1c, 7.0f32); // a resetPosition of the session before: the reset keeps it
+        wr(ta, TA_STATUS + 0x1c, reset_position_before); // a resetPosition of the session before: the reset keeps it
         status_reset(ta.add(TA_STATUS), sectors as i32);
         wr(ta, TA_STATUS + 0x18, 10.0f32);
         wr(ta, TA_SCORE_LABEL_TIMER, 1000.0f32);
+        (ta, car, pause, esc)
+    }
+}
+
+/// The game's `TimeAttack::update` on the frame `f` (written into the block and the
+/// stand-ins). Returns what it said, its gentle stop, its fade and its checkpoint.
+#[allow(clippy::type_complexity)]
+unsafe fn ta_game_frame(acs: &Acs, (ta, car, pause, esc): (*mut u8, *mut u8, *mut u8, *mut u8), dt: f32, f: &TaFrame) -> (Vec<String>, Option<bool>, bool, Option<(f32, f32)>) {
+    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_TA_UPDATE));
+    *esc.add(0x150) = f.esc_open as u8;
+    *pause.add(0x150) = f.paused as u8;
+    wr(car, CA_POSITION, f.position);
+    wr(car, CA_SPEED, f.speed);
+    wr(car, CA_DAMAGE, f.damage_zone_level);
+    for (k, at) in CA_VALID_TRACK.iter().enumerate() {
+        *car.add(*at) = (k >= f.tyres_off) as u8;
+    }
+    TA.with(|t| {
+        let mut t = t.borrow_mut();
+        (t.replay, t.splits, t.lap_count, t.gentle_stop, t.fade, t.checkpoint, t.first_gear_max_speed) = (f.replay, f.splits, f.lap_count, None, false, None, f.first_gear_max_speed);
+    });
+    SAID.with(|s| s.borrow_mut().clear());
+    update(ta, dt);
+    let said = SAID.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    TA.with(|t| (said, t.borrow().gentle_stop, t.borrow().fade, t.borrow().checkpoint))
+}
+
+unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32, frames: usize, report: &mut Report) -> Result<(), String> {
+    ta_stubs(acs);
+    for session in 0..24 {
+        let sectors = 1 + next() as usize % 4;
+        let time_mult = [1.0f32, 0.5, 0.25, 0.0, 1.5][session % 5];
+        // the budget (the constructor's and a new session's sums)
+        let estimate: Vec<f32> = (0..sectors).map(|_| (next() % 4000) as f32 * 0.01 + 3.0).collect();
+        let budget: Vec<f32> = estimate.iter().map(|v| (v + 10.0) * time_mult).collect();
+        let block = ta_block(acs, sectors, &budget, 7.0);
+        let ta = block.0;
         let mut port = TimeAttack::new(base.clone(), time_mult);
         port.reset_position[0] = 7.0;
         port.new_session(&estimate, sectors);
@@ -566,22 +605,7 @@ unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32,
                 }
             }
             // the game
-            *esc.add(0x150) = f.esc_open as u8;
-            *pause.add(0x150) = f.paused as u8;
-            wr(car, CA_POSITION, f.position);
-            wr(car, CA_SPEED, f.speed);
-            wr(car, CA_DAMAGE, f.damage_zone_level);
-            for (k, at) in CA_VALID_TRACK.iter().enumerate() {
-                *car.add(*at) = (k >= f.tyres_off) as u8;
-            }
-            TA.with(|t| {
-                let mut t = t.borrow_mut();
-                (t.replay, t.splits, t.lap_count, t.gentle_stop, t.fade, t.checkpoint) = (f.replay, f.splits, f.lap_count, None, false, None);
-            });
-            SAID.with(|s| s.borrow_mut().clear());
-            update(ta, dt);
-            let game_said = SAID.with(|s| std::mem::take(&mut *s.borrow_mut()));
-            let (gentle, fade, checkpoint) = TA.with(|t| (t.borrow().gentle_stop, t.borrow().fade, t.borrow().checkpoint));
+            let (game_said, gentle, fade, checkpoint) = ta_game_frame(acs, block, dt, &f);
             // the port (a checkpoint moves the sector on)
             let mut port_said = Vec::new();
             let sector_before = port.sector_index;
@@ -605,6 +629,90 @@ unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32,
         report.ta_sessions += 1;
     }
     Ok(())
+}
+
+/// Task 45b: a drive's drawn frames (`rustyac.exe --drawn-frames`, its `mode_frames.txt`):
+/// each frame's inputs into the game's `TimeAttack::update` and into the port's, compared
+/// every frame, and the port's mode after the frame (and its HUD's tick) against the drive's
+/// own mode then. `root`: the oracle's folder, its `cfg/race.ini` one without goals as the
+/// drive's. Returns the frames, the checkpoints and the messages.
+pub unsafe fn time_attack_drive(acs: &Acs, root: &Path, ac: &Path, file: &Path) -> Result<(usize, usize, usize), String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let bits = |w: &str| u32::from_str_radix(w, 16).map(f32::from_bits).map_err(|e| format!("{w}: {e}"));
+    let int = |w: &str| w.parse::<u32>().map_err(|e| format!("{w}: {e}"));
+    acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+    write_wstring(acs.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &format!("{}/", root.to_string_lossy().replace('\\', "/")));
+    let ini = root.join("cfg/race.ini");
+    std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
+    std::fs::write(&ini, "[RACE]\nTRACK=spa\n").map_err(|e| e.to_string())?;
+    let documents = IniReader::load(&ini)?;
+    let base = GameMode::new(&documents, &documents, false);
+    ta_stubs(acs);
+    let here = std::env::current_dir().map_err(|e| e.to_string())?;
+    std::env::set_current_dir(ac).map_err(|e| e.to_string())?;
+    let done = (|| {
+        let (mut block, mut port, mut frames, mut checkpoints, mut messages) = (None, None::<TimeAttack>, 0, 0, 0);
+        let mut lines = text.lines();
+        while let Some(line) = lines.next() {
+            let w: Vec<&str> = line.split(' ').collect();
+            if w[0] == "ta_session" {
+                let sectors = int(w[1])? as usize;
+                let budget: Vec<f32> = w[2..].iter().map(|w| bits(w)).collect::<Result<_, _>>()?;
+                let reset_before = port.as_ref().map_or(0.0, |p| p.reset_position[0]);
+                block = Some(ta_block(acs, sectors, Box::leak(budget.clone().into_boxed_slice()), reset_before));
+                let mut ta = port.take().unwrap_or_else(|| TimeAttack::new(base.clone(), 1.0));
+                ta.new_session(&vec![0.0; budget.len()], sectors);
+                ta.sectors = budget;
+                port = Some(ta);
+                continue;
+            }
+            if w[0] != "ta" {
+                continue;
+            }
+            let (Some(block), Some(port)) = (block, port.as_mut()) else { return Err(format!("{}: a frame before its session", file.display())) };
+            if w.len() != 20 {
+                return Err(format!("{}: {line:?} is not a frame", file.display()));
+            }
+            let dt = bits(w[1])?;
+            let f = TaFrame {
+                track_sectors: int(w[2])? as usize,
+                paused: w[3] == "1",
+                esc_open: w[4] == "1",
+                replay: w[5] == "1",
+                position: [bits(w[6])?, bits(w[7])?, bits(w[8])?],
+                splits: int(w[9])? as usize,
+                lap_count: int(w[10])?,
+                damage_zone_level: [bits(w[11])?, bits(w[12])?, bits(w[13])?, bits(w[14])?, bits(w[15])?],
+                tyres_off: int(w[16])? as usize,
+                first_gear_max_speed: bits(w[17])?,
+                speed: bits(w[18])?,
+                penalty_time: bits(w[19])?,
+            };
+            if f.penalty_time != 0.0 {
+                return Err(format!("frame {frames}: a penalty (the stand-in car has none)"));
+            }
+            let (game_said, gentle, fade, checkpoint) = ta_game_frame(acs, block, dt, &f);
+            let mut port_said = Vec::new();
+            let sector_before = port.sector_index;
+            let out = port.update(dt, &f, &mut |a, b| port_said.push(format!("Message({a} | {b})")));
+            let port_checkpoint = (port.sector_index != sector_before).then_some((port.last_gained_points, port.last_gained_seconds));
+            let (game_state, port_state) = (ta_game_side(block.0), ta_port_side(port));
+            if game_state != port_state || game_said != port_said || gentle != out.gentle_stop || fade != out.fade_to_results || checkpoint != port_checkpoint {
+                return Err(format!("time attack drive frame {frames} dt {dt} {f:?}: the game {game_state:?} said {game_said:?} gentle {gentle:?} fade {fade} checkpoint {checkpoint:?}, the port {port_state:?} said {port_said:?} gentle {:?} fade {} checkpoint {port_checkpoint:?}", out.gentle_stop, out.fade_to_results));
+            }
+            port.hud_tick(dt, &f);
+            let drive = lines.next().unwrap_or_default();
+            if drive != format!("= {port:?}") {
+                return Err(format!("time attack drive frame {frames}: the drive's mode {drive}, the port's on its frames {port:?}"));
+            }
+            frames += 1;
+            checkpoints += checkpoint.is_some() as usize;
+            messages += game_said.len();
+        }
+        Ok((frames, checkpoints, messages))
+    })();
+    std::env::set_current_dir(&here).ok();
+    done
 }
 
 const VA_RACE_EVENT_CTOR: usize = 0x1_4013_03c0; // RaceEvent::RaceEvent(Sim*)

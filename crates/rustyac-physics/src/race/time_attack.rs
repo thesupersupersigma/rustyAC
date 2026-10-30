@@ -13,9 +13,8 @@
 //!   `renderGuiStatus` @ 0x1401bd120 and `renderGuiCheckpointBreak` @ 0x1401bc4c0); the
 //!   drawing itself is the GUI's.
 //!
-//! The game runs it once per drawn frame with the frame's time; rustyAC runs it in the
-//! referee's frame (shortcut: a 9 ms frame instead of the screen's, upgrade if points must
-//! match a recorded run of the game frame for frame).
+//! The game runs it once per drawn frame with the frame's time, and so does rustyAC
+//! ([`super::referee::Referee::drawn_frame`]; headless runs keep the referee's 9 ms frame).
 
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
