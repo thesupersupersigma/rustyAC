@@ -519,6 +519,8 @@ pub struct ReplayReport {
     pub referee_files: Option<(Vec<u8>, Vec<u8>)>,
     /// and its state in words when the replay stopped (for a look at a difference)
     pub referee_dump: Vec<(String, String)>,
+    /// Task 44c: car 0's TempRun bytes (`BrakeSystem::tempRunFile`) at the end
+    pub temp_run: Option<Vec<u8>>,
 }
 
 /// A replay being built: the engine and its cars.
@@ -553,6 +555,8 @@ pub struct ReplayWorld {
     /// Task 44c: (step, begin): before that step the AI line recording's pit lane begins or
     /// ends (header key `ai_record`, `<begin>:<end>`; the key turns the recording on)
     pub ai_pit_lane: Vec<(usize, bool)>,
+    /// Task 44c: car 0's TempRun button, on and off (header key `temp_run`, `<on>:<off>`)
+    pub temp_run: Vec<(usize, bool)>,
     /// Task 28b: the step before which the first car is damaged, the five zone levels, the
     /// engine's life left and the hit that bends the second suspension (header key
     /// `pit_damage`)
@@ -668,6 +672,14 @@ impl ReplayWorld {
                 }
             }
         }
+        let mut temp_run = Vec::new();
+        if let Some(text) = recording.get("temp_run") {
+            let wrong = || format!("temp_run: <on>:<off> expected, got {text:?}");
+            let (on, off) = text.split_once(':').ok_or_else(wrong)?;
+            for (step, on) in [(on, true), (off, false)] {
+                temp_run.push((step.parse().map_err(|_| wrong())?, on));
+            }
+        }
         engine.core.mesh_bounce_vel = f32::from_bits(u32::from_str_radix(recording.need("mesh_bounce_vel")?, 16).map_err(|e| e.to_string())?);
         let mut cars = Vec::new();
         for meta in &recording.cars {
@@ -728,7 +740,7 @@ impl ReplayWorld {
             }
             None => None,
         };
-        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, ai_pit_lane, pit_damage, shm_replay: shm_replay(recording) };
+        let mut world = ReplayWorld { engine, cars, devices, ai: Vec::new(), drag: Vec::new(), handover, clock_start_ms, steps: 0, referee: None, meter: recording.get("meter").is_some(), telem: recording.get("telem").is_some(), penalty_force: recording.get("penalty_force").map(|m| m.parse().map_err(|_| format!("penalty_force: a number expected, got {m:?}"))).transpose()?, shm: None, pit_calls, ai_pit_lane, temp_run, pit_damage, shm_replay: shm_replay(recording) };
         world.ai.resize_with(world.cars.len(), || None);
         world.drag.resize_with(world.cars.len(), || None);
         // (the oracle's game side switches its PerformanceMeter off unless the header has `meter`)
@@ -978,6 +990,11 @@ impl ReplayWorld {
         for &(step, begin) in &self.ai_pit_lane {
             if step == self.steps {
                 self.engine.ai_recording_pit_lane(begin);
+            }
+        }
+        for &(step, on) in &self.temp_run {
+            if step == self.steps {
+                self.cars[0].apply_setup_job(&crate::car::setup::SetupJob::TempRun { on });
             }
         }
         for &(car, step) in &self.pit_calls {
@@ -1281,6 +1298,7 @@ pub fn replay_on(recording: &Recording, paths: &ReplayPaths, track: Arc<Track>, 
     }
     report.seconds = start.elapsed().as_secs_f64();
     report.hash = hash;
+    report.temp_run = world.cars.first().and_then(|car| car.temp_run.as_ref()).map(|(_, bytes)| bytes.clone());
     if let Some(mut referee) = world.referee.take() {
         report.referee_dump = referee.dump(&world);
         if report.mismatch.is_none() {

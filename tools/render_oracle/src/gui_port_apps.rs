@@ -264,6 +264,8 @@ fn write_files(gui: &mut Gui, root: &std::path::Path) -> Result<(), String> {
                     s.pitch = p;
                 }
             }
+            // (the GUI sequences do not click TempRun: tools/car_oracle's temp_run proves its file)
+            AppAction::TempRun(_) => {}
             AppAction::SetBallastKg(kg) => {
                 if let Some(b) = BALLAST.lock().unwrap().as_mut() {
                     b.0 = kg;

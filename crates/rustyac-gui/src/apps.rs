@@ -51,6 +51,8 @@ pub enum AppAction {
     AddMessage { title: String, text: String },
     /// the player's car's `Car::ballastKG` (`CarAvatar::setBallastKG`'s job)
     SetBallastKg(f32),
+    /// ACSuspension's TempRun button: `BrakeSystem::activateTempRunFile(on)` of the car
+    TempRun(bool),
     /// the player's car's `CarAvatar::driverEyesPosition` (the 3D model's frame)
     SetDriverEyes([f32; 3]),
     /// `CameraOnBoard::onBoardFov` (degrees), `customCameraSettings[0].pitch` (radians)

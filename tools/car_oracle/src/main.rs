@@ -697,8 +697,22 @@ fn multi(args: &Args) -> Result<(), String> {
         let port_track = world.port_track();
         unsafe { game::telemetry::install(&acs, world.car_ptr(0), &world.names[0], &port_track.name, &port_track.config) };
     }
+    // Task 44c: ACSuspension's TempRun on car 0 (CAR_ORACLE_TEMP_RUN=<on>:<off> steps): the
+    // game's BrakeSystem::activateTempRunFile @ 0x14028d400 (Car+0x2ca0), its file in the root's
+    // TempRuns (the working folder by now)
+    let temp_run: Option<(usize, usize)> = std::env::var("CAR_ORACLE_TEMP_RUN").ok().and_then(|t| t.split_once(':').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?))));
+    if let Some((on, off)) = temp_run {
+        std::fs::create_dir_all("TempRuns").map_err(|e| e.to_string())?;
+        world.recording.set("temp_run", format!("{on}:{off}"));
+    }
     let mut next_frame = 1usize;
     for i in 0..steps {
+        if let Some((on, off)) = temp_run {
+            if i == on || i == off {
+                let activate: extern "C" fn(*mut u8, bool) = unsafe { std::mem::transmute(acs.va(0x1_4028_d400)) };
+                activate(unsafe { world.car_ptr(0).add(0x2ca0) }, i == on);
+            }
+        }
         world.step();
         if args.ai_record {
             unsafe { game::ai_record::after_step() };
@@ -1258,6 +1272,14 @@ fn multi_compare(args: &Args, recording: &rustyac_physics::engine::record::Recor
         println!("{line}");
         for also in &report.also {
             println!("    also {also}");
+        }
+        // Task 44c: the TempRun file
+        if let Some(port) = &report.temp_run {
+            let name = format!("TempRuns/{}@{}.trun", recording.cars.first().map_or("", |c| c.name.as_str()), recording.get("track").unwrap_or(""));
+            let game = std::fs::read(&name).unwrap_or_default();
+            let same = game == *port;
+            ok &= same;
+            println!("    temp_run {name}: {} ({} bytes in the game's, {} in the port's)", if same { "IDENTICAL" } else { "DIFFERENT" }, game.len(), port.len());
         }
         // Task 28: the referee's files at the end
         if let (Some((json, laps_ini)), Some(game)) = (&report.referee_files, game_file) {

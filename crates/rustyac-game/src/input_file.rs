@@ -1137,6 +1137,7 @@ pub fn setup_jobs_text(jobs: &[(u64, SetupJob)]) -> String {
             SetupJob::SetEngineLife { value } => format!("engine_life {:08x}", value.to_bits()),
             SetupJob::SetAi { which, value, car } => format!("ai {which} {:08x} {car}", value.to_bits()),
             SetupJob::AiRecording { what } => format!("ai_recording {what}"),
+            SetupJob::TempRun { on } => format!("temp_run {}", on as u8),
             SetupJob::SetAutoflipRecovery { on } => format!("autoflip {}", on as u8),
         };
         out.push_str(&format!("{step} {line}\n"));
@@ -1183,6 +1184,7 @@ pub fn parse_setup_jobs(text: &str) -> Result<Vec<(u64, SetupJob)>, String> {
             // (before Task 44c: no car, car 0)
             "ai" => SetupJob::SetAi { which: int(2)? as usize, value: float(3)?, car: if words.len() > 4 { int(4)? as usize } else { 0 } },
             "ai_recording" => SetupJob::AiRecording { what: int(2)? as u8 },
+            "temp_run" => SetupJob::TempRun { on: int(2)? != 0 },
             "autoflip" => SetupJob::SetAutoflipRecovery { on: int(2)? != 0 },
             _ => return Err(bad()),
         };
@@ -1365,6 +1367,7 @@ mod setup_jobs_tests {
             (u64::from(u32::MAX) + 9, SetupJob::SetAi { which: 2, value: 7.5, car: 1 }),
             (u64::from(u32::MAX) + 9, SetupJob::SetAutoflipRecovery { on: false }),
             (u64::from(u32::MAX) + 10, SetupJob::AiRecording { what: 2 }),
+            (u64::from(u32::MAX) + 11, SetupJob::TempRun { on: true }),
         ];
         let text = setup_jobs_text(&jobs);
         let back = parse_setup_jobs(&text).unwrap();

@@ -435,6 +435,10 @@ impl GameApps {
                     });
                     continue;
                 }
+                AppAction::TempRun(on) => {
+                    self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::TempRun { on });
+                    continue;
+                }
                 AppAction::SetBallastKg(kg) => {
                     self.ffb_jobs.push(rustyac_physics::car::setup::SetupJob::SetBallastKg { kg });
                     continue;

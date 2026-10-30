@@ -276,6 +276,9 @@ pub enum SetupJob {
     /// `Car::steerAssist` written (the console's `steerAssist`, a car.ini the force feedback
     /// app saved)
     SetSteerAssist { value: f32 },
+    /// ACSuspension's TempRun button (0x1402e4770): `BrakeSystem::activateTempRunFile(on)` on
+    /// the physics thread
+    TempRun { on: bool },
     /// the console's `restrictor` (`CarAvatar::setRestrictor`'s job): `Car::setRestrictor`
     SetRestrictor { value: f32 },
     /// the console's `bodyDamageLevel0..4` (`Sim::Sim`'s lambda 0x140195fb0, its job

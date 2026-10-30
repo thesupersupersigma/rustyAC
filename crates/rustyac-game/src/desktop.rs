@@ -639,6 +639,39 @@ impl StepSink for TelemetrySink {
     }
 }
 
+/// ACSuspension's TempRun: the game's `BrakeSystem::tempRunFile` opens
+/// `TempRuns/<car>@<track>.trun` in its own folder and writes nothing when that folder is not
+/// there (AC ships without it); rustyAC writes the same bytes into its cfg folder's `TempRuns`,
+/// also only when that folder is there, when the run ends.
+struct TempRunSink {
+    folder: PathBuf,
+    file: Option<(String, Vec<u8>)>,
+}
+
+impl StepSink for TempRunSink {
+    fn after_step(&mut self, sim: &GameSim, _input: &StepInput) -> Result<(), String> {
+        let car = &sim.car.car;
+        if let Some((_, bytes)) = &car.temp_run {
+            let track = car.track.as_ref().map_or(String::new(), |t| t.name.clone());
+            self.file = Some((format!("{}@{track}.trun", sim.setup.car), bytes.clone()));
+        }
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), String> {
+        let Some((name, bytes)) = self.file.take() else { return Ok(()) };
+        let path = self.folder.join(&name);
+        if !self.folder.is_dir() {
+            println!("TempRun: {} is not there, so nothing is written (as in the game)", self.folder.display());
+        } else if let Err(e) = rustyac_content::guard::write(&path, &bytes) {
+            eprintln!("WARNING: the TempRun was not saved: {}: {e}", path.display());
+        } else {
+            println!("TempRun: {} ({} bytes; the game would write it into its own TempRuns folder)", path.display(), bytes.len());
+        }
+        Ok(())
+    }
+}
+
 /// The physics thread's end of the ghost car: the recorder's handlers after every step, and
 /// the file when the run ends.
 struct GhostSink {
@@ -853,6 +886,7 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
         let ai = cfg_dir(options).join("content/tracks").join(track).join(options.layout.as_deref().unwrap_or("")).join("ai");
         sinks.push(Box::new(rustyac_game::ai_record::AiRecordSink::new(ai)));
     }
+    sinks.push(Box::new(TempRunSink { folder: cfg_dir(options).join("TempRuns"), file: None }));
     if let Some(rig) = rig {
         sinks.push(Box::new(ReplaySink { rig: Arc::clone(rig), save: options.save_replay.clone() }));
     }

@@ -48,6 +48,9 @@ pub trait BrakeModel: Send {
     fn get_brake_power(&self) -> f32;
     /// `BrakeSystem::isUsingEBB` @ 0x1402befa0
     fn is_using_ebb(&self) -> bool;
+    /// `BrakeSystem::activateTempRunFile(true)` @ 0x14028d400: a temp run switches the disc
+    /// temperatures off (`hasBrakeTempsData`)
+    fn begin_temp_run(&mut self);
     /// `BrakeSystem::setManualFrontBias` @ 0x14028e5d0: `clicks` steps of the cockpit control.
     fn set_manual_front_bias(&mut self, clicks: i32);
     /// `discs[i].t`: the disc temperatures in tyre order, deg C (the telemetry shows them).
@@ -337,6 +340,10 @@ impl BrakeModel for VanillaBrakes {
 
     fn is_using_ebb(&self) -> bool {
         self.ebb_mode != EbbMode::Disabled
+    }
+
+    fn begin_temp_run(&mut self) {
+        self.has_brake_temps_data = false;
     }
 
     fn set_manual_front_bias(&mut self, clicks: i32) {

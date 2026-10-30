@@ -13,7 +13,7 @@ use rustyac_physics::vecmath::{xm_matrix_inverse, Mat44f, Vec3f};
 
 use crate::acos::format_g6;
 use crate::app_wings::cvtt;
-use crate::apps::App;
+use crate::apps::{App, AppAction};
 use crate::control::{Clicked, Id};
 use crate::gui::Gui;
 use crate::hud::translate;
@@ -69,10 +69,10 @@ impl Gui {
         self.set_text(button, "Start TempRun");
         self.set_position(button, 10.0, 680.0);
         self.control_add_control(form, button);
-        // shortcut: the button only switches its text; the game's brake-temperature file
-        // (TempRuns/<car>@<track>.trun) is not written, see docs/port/dev_tools.md
+        // (lambda 0x1402e4770: the job on the physics thread, then the text)
         let recording = std::cell::Cell::new(false);
         self.controls[button].ev_clicked.push(Rc::new(move |gui: &mut Gui, _: &Clicked| {
+            gui.apps.actions.push(AppAction::TempRun(!recording.get()));
             recording.set(!recording.get());
             gui.set_text(button, if recording.get() { "STOP TempRun" } else { "Start TempRun" });
         }));

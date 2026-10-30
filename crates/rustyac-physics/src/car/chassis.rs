@@ -693,6 +693,10 @@ pub struct RollingChassis {
     pub ballast_kg: f32,
     /// `Car::valueCache.speed`: |body velocity| at the start of the step, m/s
     pub speed: f32,
+    /// ACSuspension's TempRun (`BrakeSystem::tempRunFile`): recording or not, and the bytes of
+    /// `TempRuns/<car>@<track>.trun` (an i32 1, then after each brake step the speed, the four
+    /// wheels' angular velocities and brake torques as f32). Whoever runs the car saves it.
+    pub temp_run: Option<(bool, Vec<u8>)>,
     /// `Engine::fuelPressure` as the fuel burn leaves it (1, or 0 with an empty tank): an
     /// output towards the engine.
     pub fuel_pressure: f32,
@@ -1178,6 +1182,7 @@ impl RollingChassis {
             forced_position_events: 0,
             forced_position: Vec3f::new(0.0, 0.0, 0.0),
             speed: 0.0,
+            temp_run: None,
             fuel_pressure: 0.0,
             physics_time,
             trace: None,
@@ -1773,6 +1778,19 @@ impl RollingChassis {
             SetupJob::SetFfMult { value } => self.ff_mult = value,
             // (the controls' own: the game's DICarControl, here the driver's source)
             SetupJob::SetFfUpgrade { .. } => {}
+            // ACSuspension's TempRun button's jobs: BrakeSystem::activateTempRunFile @ 0x14028d400
+            // (opening truncates the file and writes an i32 1; closing keeps it)
+            SetupJob::TempRun { on: true } => {
+                if let Some(brakes) = &mut self.brake_system {
+                    brakes.begin_temp_run();
+                }
+                self.temp_run = Some((true, 1i32.to_le_bytes().to_vec()));
+            }
+            SetupJob::TempRun { on: false } => {
+                if let Some(run) = &mut self.temp_run {
+                    run.0 = false;
+                }
+            }
             // Car::setBallastKG @ 0x1402759e0
             SetupJob::SetBallastKg { kg } => self.ballast_kg = kg,
             SetupJob::SetSteerAssist { value } => self.steer_assist = value,
@@ -2075,6 +2093,16 @@ impl RollingChassis {
             Some(mut brakes) => {
                 brakes.step(self, dt);
                 self.brake_system = Some(brakes);
+                // BrakeSystem::saveTempsRunFame @ 0x14028e4e0, while the file is open
+                if let Some((true, bytes)) = &mut self.temp_run {
+                    bytes.extend_from_slice(&self.speed.to_le_bytes());
+                    for t in &self.tyres {
+                        bytes.extend_from_slice(&t.status.angular_velocity.to_le_bytes());
+                    }
+                    for t in &self.tyres {
+                        bytes.extend_from_slice(&t.inputs.brake_torque.to_le_bytes());
+                    }
+                }
             }
             None => feed.brakes(self),
         }
