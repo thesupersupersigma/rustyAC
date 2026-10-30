@@ -1426,7 +1426,9 @@ pub unsafe fn remote_sessions(acs: &Acs, manager: *mut u8, seed: u32, count: usi
 /// One made-up drive (`rustyac_physics::race::toy`): `frames` frames of the game's referee
 /// and flags and of the port's, fed the same cars, compared after every frame; the results
 /// and `race_out.json` at the end.
-pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, frames: usize, fault: bool) -> Result<MicroReport, String> {
+/// `mode`: a game `GameMode` block and the port's extras for it, put in `Sim`'s game objects
+/// before the end (the `special_event` entry of `race_out.json`).
+pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, frames: usize, fault: bool, mode: Option<(*mut u8, Vec<rustyac_physics::race::output::Node>)>) -> Result<MicroReport, String> {
     use rustyac_physics::race::toy::{self, Button, PortDrive};
     let ini = toy::sessions(variant, car_count);
     let setups: Vec<CarSetup> = toy::players(variant, car_count).into_iter().enumerate().map(|(i, (player, compound))| CarSetup { name: player.name, car: player.car, skin: player.skin, compound, start_index: i as i32 }).collect();
@@ -1544,6 +1546,15 @@ pub unsafe fn micro(acs: &Acs, seed: u32, variant: usize, car_count: usize, fram
         return Ok(report);
     }
     // the end of the program: the last session's results, the file
+    if let Some((block, extras)) = mode {
+        let list = zeroed(8);
+        wr(list, 0, block);
+        // Sim::gameObjects (0x40): empty in this oracle's Sim
+        wr(game.sim, 0x40, list);
+        wr(game.sim, 0x48, list.add(8));
+        wr(game.sim, 0x50, list.add(8));
+        drive.json.mode_extras = extras;
+    }
     let game_file = game.shutdown()?;
     let (actions, port_file) = drive.shutdown();
     report.sessions_ended = drive.sessions_ended;

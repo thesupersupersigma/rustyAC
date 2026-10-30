@@ -426,6 +426,8 @@ pub struct RefereeHeader {
     pub driver_names: Vec<String>,
     /// Task 28b: the player's pit stop (`None`: none, as before v0.28.1)
     pub pit: Option<PitHeader>,
+    /// Task 45: race.ini's special event (its goals)
+    pub game_mode: rustyac_physics::race::game_mode::GameMode,
 }
 
 /// Task 28b: what the player's pit stop is set up with.
@@ -522,6 +524,8 @@ impl RefereeHeader {
             wind_base,
             driver_names: Vec::new(),
             pit: None,
+            // shortcut: an input file does not carry the special event's goals, add a key when a proof replays one
+            game_mode: Default::default(),
         })
     }
 

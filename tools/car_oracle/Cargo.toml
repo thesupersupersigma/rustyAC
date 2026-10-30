@@ -9,6 +9,7 @@ description = "Test oracle: Assetto Corsa's own PhysicsEngine and one Car (loade
 [dependencies]
 # only for the tyre cross-check: the recorded tyre inputs are replayed through the Rust port
 rustyac-physics = { path = "../../crates/rustyac-physics" }
+rustyac-content = { path = "../../crates/rustyac-content" }
 # Task 25: the port of the online client and the remote cars, held against the game's own
 rustyac-net = { path = "../../crates/rustyac-net" }
 

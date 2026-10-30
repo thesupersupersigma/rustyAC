@@ -1370,6 +1370,7 @@ impl<'a> MultiWorld<'a> {
                     next_start_delay_ms: spec.next_delay_ms,
                     yellow_flag_distance: None,
                     layout: layout.to_string(),
+                    game_mode: Default::default(),
                     sessions,
                 };
                 // RaceManager::initOffline: how long before the start the gearbox is locked

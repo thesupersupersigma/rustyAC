@@ -34,7 +34,7 @@ pub fn race_track(options: &Options) -> Option<(String, String)> {
         (None, Some(false)) => return None,
         (None, _) => race_ini_path()?,
     };
-    let ini = IniReader::load(&path).ok().filter(|ini| ini.ready)?;
+    let ini = IniReader::load_race(&path).ok().filter(|ini| ini.ready)?;
     let race = RaceIni::from_ini(&ini);
     Some((race.track, race.track_config))
 }
@@ -137,7 +137,10 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
     let mut setup_from_race_ini = false;
     match &race_path {
         Some(path) => {
-            let ini = IniReader::load(path)?;
+            let documents = IniReader::load(path)?;
+            let official = documents.official_special_event();
+            let game_mode = rustyac_physics::race::game_mode::GameMode::new(official.as_ref().unwrap_or(&documents), &documents, official.is_some());
+            let ini = official.unwrap_or(documents);
             if !ini.ready {
                 return Err(format!("{}: cannot be read", path.display()));
             }
@@ -245,7 +248,7 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
                     car_notes.push(format!("mandatory pit window: opens at {}, closes at {} (the leader's laps; minutes in a timed race)", window.0, window.1));
                 }
                 let pit = (!options.no_pit_stop).then(|| pit_header(window, setup.session.setup_file.as_deref(), keyboard_driver(options, input_method)));
-                setup.referee = Some(crate::input_file::RefereeHeader { sessions, over_time_mult: over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit });
+                setup.referee = Some(crate::input_file::RefereeHeader { sessions, over_time_mult: over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit, game_mode });
             }
             notes.push(line);
             notes.append(&mut car_notes);

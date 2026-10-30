@@ -115,7 +115,7 @@ pub fn apply(setup: &mut SimSetup, race_ini: &IniReader, assists_ini: Option<&In
         let driver_names = (0..1 + setup.opponents.len()).map(|n| ini.get_string(&format!("CAR_{n}"), "DRIVER_NAME")).collect();
         let window = (ini.get_int("RACE", "RACE_PIT_WINDOW_START").unwrap_or(0).clamp(0, 65535) as u16, ini.get_int("RACE", "RACE_PIT_WINDOW_END").unwrap_or(0).clamp(0, 65535) as u16);
         let pit = Some(pit_header(root, window));
-        setup.referee = Some(RefereeHeader { sessions, over_time_mult: over_time_mult(root), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit });
+        setup.referee = Some(RefereeHeader { sessions, over_time_mult: over_time_mult(root), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed, wind_base, driver_names, pit, game_mode: Default::default() });
     }
     // the AI drivers' random numbers. The desktop gives the referee `--ai-seed` + 28000, so a
     // desktop run of `--race-seed S --ai-seed <S - 28000>` draws as this drive

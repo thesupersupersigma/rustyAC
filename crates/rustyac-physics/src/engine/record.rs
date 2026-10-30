@@ -366,6 +366,7 @@ impl Recording {
             next_start_delay_ms: float(next)?,
             yellow_flag_distance: None,
             layout: self.get("track_layout").unwrap_or("").to_string(),
+            game_mode: Default::default(),
         }))
     }
 

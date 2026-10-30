@@ -150,13 +150,16 @@ pub struct JsonOutputFile {
     sessions: Vec<Node>,
     /// `sessionCounter`: how often each session of the list has ended
     session_counter: Vec<i32>,
+    /// `addExtraSessionInfo`'s entries of the session's mode (time attack / drift / drag, then
+    /// `special_event`), set when the session ends; `bestlap` follows them
+    pub mode_extras: Vec<Node>,
 }
 
 impl JsonOutputFile {
     /// The constructor @ 0x14010c0e0.
     pub fn new(track: &str, layout: &str, number_of_sessions: i32) -> JsonOutputFile {
         let track = if layout.is_empty() { track.to_string() } else { format!("{track}-{layout}") };
-        JsonOutputFile { track, number_of_sessions, sessions: Vec::new(), session_counter: vec![0; number_of_sessions.max(0) as usize] }
+        JsonOutputFile { track, number_of_sessions, sessions: Vec::new(), session_counter: vec![0; number_of_sessions.max(0) as usize], mode_extras: Vec::new() }
     }
 
     /// `endSession` @ 0x14010d310 with `offlineEndSession` @ 0x14010d730 or
@@ -235,12 +238,13 @@ impl JsonOutputFile {
     }
 
     /// `writeOutputFile` @ 0x14010ecc0 (with `writePlayers` @ 0x14010edb0 and
-    /// `addExtraSessionInfo` @ 0x14010c5e0, whose drift / drag / time-attack / special-event
-    /// blocks belong to modes that are not ported): the file's bytes. `instance_best_lap`:
+    /// `addExtraSessionInfo` @ 0x14010c5e0: [`Self::mode_extras`], then `bestlap`): the file's
+    /// bytes. `instance_best_lap`:
     /// `RaceManager::getInstanceBestLap` of car 0.
     pub fn file(&self, players: &[Player], instance_best_lap: i32) -> Vec<u8> {
         let players = players.iter().map(|p| Node::Object(vec![("name".to_string(), Node::escaped(&p.name)), ("car".to_string(), Node::escaped(&p.car)), ("skin".to_string(), Node::escaped(&p.skin))])).collect();
-        let extras = vec![Node::Object(vec![("name".to_string(), Node::Text("bestlap".to_string())), ("time".to_string(), Node::int(instance_best_lap as i64))])];
+        let mut extras = self.mode_extras.clone();
+        extras.push(Node::Object(vec![("name".to_string(), Node::Text("bestlap".to_string())), ("time".to_string(), Node::int(instance_best_lap as i64))]));
         let root = Node::Object(vec![
             ("track".to_string(), Node::Text(self.track.clone())),
             ("number_of_sessions".to_string(), Node::int(self.number_of_sessions as i64)),

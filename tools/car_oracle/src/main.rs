@@ -310,6 +310,7 @@ fn main() {
         "replay-file" => replay_file(&args),
         "race-ini" => race_ini(&args),
         "race-micro" => race_micro(&args),
+        "mode-micro" => mode_micro(&args),
         "mouse-micro" => mouse_micro(&args),
         "steer-micro" => steer_micro(&args),
         "pad-micro" => pad_micro(&args),
@@ -563,6 +564,33 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
+/// Task 45: `car_oracle mode-micro [--seed <n>] [--steps <laps per race.ini>]`: the game's
+/// special-event decryption, goals and hotlap judging against the port's.
+fn mode_micro(args: &Args) -> Result<(), String> {
+    let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
+    let acs_path = std::path::absolute(&args.acs).map_err(|e| e.to_string())?;
+    let ac = acs_path.parent().ok_or("--acs has no folder")?.to_path_buf();
+    if root.join("acs.exe").is_file() {
+        return Err(format!("{} is a game folder: the oracle writes only into a scratch folder of its own", root.display()));
+    }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    std::env::set_current_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    acs::set_extra_overrides(vec![("shell32.dll", "SHGetFolderPathW", game::multi::sh_get_folder_path_w as *const () as usize)]);
+    let acs = acs::Acs::load(&acs_path)?;
+    if !args.verbose {
+        acs.silence_game_stdout();
+    }
+    let r = unsafe { game::modes::micro(&acs, &root, &ac, args.seed as u32, args.steps.unwrap_or(40))? };
+    println!("mode-micro seed {}: {} event files ({} bytes) decrypted, {} race.ini read ({} goals), {} hotlap laps judged ({} messages), race_out.json {} bytes", args.seed, r.files, r.bytes, r.inis, r.conditions, r.laps, r.messages, r.json_bytes);
+    match r.mismatch {
+        None => {
+            println!("modes: IDENTICAL");
+            Ok(())
+        }
+        Some(what) => Err(format!("modes: DIFFERENT at {what}")),
+    }
+}
+
 /// Task 28: `car_oracle race-micro [--seed <n>] [--kind <session list 0..7>] [--count <cars>]
 /// [--steps <frames>] [--fault 1:0] [--root <dir>]`: the game's own referee and the port's on
 /// the same made-up drive, compared after every frame (`game::race`). One drive per process.
@@ -583,7 +611,7 @@ fn race_micro(args: &Args) -> Result<(), String> {
     let variant = args.kind.unwrap_or(0);
     let cars = if args.count_given { args.count } else { 6 };
     let frames = args.steps.unwrap_or(40_000);
-    let report = unsafe { game::race::micro(&acs, args.seed as u32, variant, cars, frames, args.fault.is_some())? };
+    let report = unsafe { game::race::micro(&acs, args.seed as u32, variant, cars, frames, args.fault.is_some(), None)? };
     let jobs: Vec<String> = report.jobs_seen.iter().map(|(address, name)| format!("{name} @ {:#x}", 0x1_4000_0000usize + address)).collect();
     println!("race-micro seed {} list {variant} cars {cars}: {} frames, {} laps, {} sessions ended, {} values compared, race_out.json {} bytes", args.seed, report.frames, report.laps, report.sessions_ended, report.values, report.json_bytes);
     println!("  jobs for the physics thread: {}", jobs.join(", "));

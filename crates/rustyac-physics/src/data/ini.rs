@@ -128,6 +128,24 @@ impl IniReader {
         Ok(reader)
     }
 
+    /// A session file (`race.ini`) as `RaceManager::initOffline` @ 0x14013a6c0 reads it: the
+    /// official event it names in its place ([`IniReader::official_special_event`]).
+    pub fn load_race(path: &Path) -> Result<IniReader, String> {
+        let ini = IniReader::load(path)?;
+        Ok(ini.official_special_event().unwrap_or(ini))
+    }
+
+    /// When this `race.ini`'s `[SPECIAL_EVENT] GUID` names one of the install's official
+    /// events and its decrypted file says the same GUID: that file (decrypted in memory only),
+    /// which replaces the whole of race.ini in the game.
+    pub fn official_special_event(&self) -> Option<IniReader> {
+        let guid = self.get_int("SPECIAL_EVENT", "GUID").ok()?;
+        let bytes = rustyac_content::acd::special_event(guid)?;
+        let mut official = IniReader { filename: self.filename.clone(), ready: true, ..IniReader::default() };
+        official.parse(&decode_utf8_like_the_game(&text_mode(&bytes)));
+        (official.get_int("SPECIAL_EVENT", "GUID") == Ok(guid)).then_some(official)
+    }
+
     /// An in-memory file, for tests; `filename` is where relative curve files are looked up.
     pub fn from_text(filename: &Path, code: &str) -> IniReader {
         let mut reader = IniReader {

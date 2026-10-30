@@ -1604,6 +1604,7 @@ impl GameSim {
             next_start_delay_ms: header.next_start_delay_ms,
             yellow_flag_distance: None,
             layout: self.setup.layout.clone(),
+            game_mode: header.game_mode.clone(),
         };
         let now = self.clock_ms();
         // Task 28b: the pit menu of the player's car, with the presets of its setup

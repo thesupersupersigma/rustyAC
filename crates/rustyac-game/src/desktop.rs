@@ -175,7 +175,7 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
             }
             setup.env.allowed_tyres_out = sessions.allowed_tyres_out();
             let wind_base = setup.referee.as_ref().and_then(|referee| referee.wind_base);
-            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new(), pit: (!options.no_pit_stop).then(|| rustyac_game::conditions::pit_header((0, 0), setup.session.setup_file.as_deref(), rustyac_game::conditions::keyboard_driver(options, &input_method))) });
+            setup.referee = Some(rustyac_game::input_file::RefereeHeader { sessions, over_time_mult: rustyac_game::conditions::over_time_mult(), first_start_delay_ms: 20000.0, next_start_delay_ms: 10000.0, seed: 0, wind_base, driver_names: Vec::new(), pit: (!options.no_pit_stop).then(|| rustyac_game::conditions::pit_header((0, 0), setup.session.setup_file.as_deref(), rustyac_game::conditions::keyboard_driver(options, &input_method))), game_mode: Default::default() });
         }
         // Task 28b: --pit-window <open>,<close>
         if let (Some(window), Some(pit)) = (options.pit_window, setup.referee.as_mut().and_then(|referee| referee.pit.as_mut())) {
@@ -296,7 +296,7 @@ fn make_ac(options: &Options, width: u32, height: u32, info: &rustyac_game::sim:
         (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
     };
     let assists_file = race.as_ref().map(|p| p.with_file_name("assists.ini")).filter(|p| p.is_file());
-    let race_reader = race.as_ref().and_then(|p| rustyac_physics::data::ini::IniReader::load(p).ok());
+    let race_reader = race.as_ref().and_then(|p| rustyac_physics::data::ini::IniReader::load_race(p).ok());
     // the sun, the weather and the groove of race.ini
     let look = rustyac_game::render::ac::RaceLook::of(race_reader.as_ref());
     // a race start: --start-lights <seconds>, or race.ini's race
@@ -568,7 +568,7 @@ fn ghost_rig(options: &Options) -> Option<Arc<Mutex<GhostRig>>> {
         (None, Some(false)) => None,
         (None, _) => rustyac_game::conditions::race_ini_path().filter(|p| p.is_file()),
     };
-    if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load(&p).ok()) {
+    if let Some(ini) = race.and_then(|p| rustyac_physics::data::ini::IniReader::load_race(&p).ok()) {
         let on = |key: &str| ini.get_int("GHOST_CAR", key).unwrap_or(0) != 0;
         ghost.recording = on("RECORDING");
         ghost.playing = on("PLAYING");

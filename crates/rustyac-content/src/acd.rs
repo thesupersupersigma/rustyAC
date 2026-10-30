@@ -249,6 +249,25 @@ pub fn exists(file: &Path) -> bool {
     }
 }
 
+/// `SimpleFileEncrypter::decryptFile` @ 0x14023b650: an `i32` length and a name (skipped), an
+/// `i32` count, then that many `i32`s, each one byte: its low byte minus the key's
+/// `i % len`-th character (the low byte of the `wchar_t`). Memory only, never written.
+pub fn decrypt_simple(file: &[u8], key: &str) -> Option<Vec<u8>> {
+    let int = |at: usize| Some(i32::from_le_bytes(file.get(at..at + 4)?.try_into().ok()?));
+    let name = usize::try_from(int(0)?).ok()?;
+    let count = usize::try_from(int(4 + name)?).ok()?;
+    let key: Vec<u8> = key.chars().map(|c| c as u32 as u8).collect();
+    let body = file.get(8 + name..8 + name + count.checked_mul(4)?)?;
+    Some(body.chunks_exact(4).enumerate().map(|(i, b)| b[0].wrapping_sub(key[i % key.len()])).collect())
+}
+
+/// An official special event's `race.ini`, `system/data/se/SPECIAL_EVENT_<guid>.acd` under
+/// the install, decrypted in memory with the key `ARUMBA_SPECIAL_EVENT_<guid>`.
+pub fn special_event(guid: i32) -> Option<Vec<u8>> {
+    let path = crate::install::ac_root()?.join(format!("system/data/se/SPECIAL_EVENT_{guid}.acd"));
+    decrypt_simple(&vfs::read(&path).ok()?, &format!("ARUMBA_SPECIAL_EVENT_{guid}"))
+}
+
 /// Why the archive of a data folder cannot be used, if it has one that cannot.
 pub fn archive_error(data_folder: &Path) -> Option<String> {
     archive_of(&data_folder.join("car.ini"))?.err()
@@ -265,6 +284,23 @@ mod tests {
         assert_eq!(key_from_string("ks_ferrari_f2004").unwrap(), "179-44-163-59-166-193-14-53");
         assert_eq!(key_from_string("").unwrap(), "0-0-0-131-66-101-171-171");
         assert!(key_from_string("a").is_ok());
+    }
+
+    #[test]
+    fn a_special_event_file_decrypts() {
+        let (key, plain) = ("ARUMBA_X", b"[SPECIAL_EVENT]\r\nGUID=7");
+        let mut file = 3i32.to_le_bytes().to_vec();
+        file.extend(b"abc");
+        file.extend((plain.len() as i32).to_le_bytes());
+        for (i, b) in plain.iter().enumerate() {
+            file.extend((b.wrapping_add(key.as_bytes()[i % key.len()]) as i32 | 0x7700).to_le_bytes());
+        }
+        assert_eq!(decrypt_simple(&file, key).unwrap(), plain);
+        assert_eq!(decrypt_simple(&file[..10], key), None);
+        // the install's own, when there is one: its GUID is the file's number
+        if let Some(text) = special_event(1) {
+            assert!(String::from_utf8_lossy(&text).contains("GUID=1"));
+        }
     }
 
     #[test]

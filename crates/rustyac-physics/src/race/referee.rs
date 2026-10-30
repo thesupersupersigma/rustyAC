@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use super::flags::{FlagCar, FlagManager, PlayerPenalty, Shown};
 use super::hud::{PenaltyMessages, PlayerState};
+use super::game_mode::{GameMode, Mode};
 use super::manager::{filter_speed, Action, CarView, OnSessionEndEvent, RaceManager, SessionsIni, SESSION_HOTLAP, SESSION_RACE};
 use super::output::{JsonOutputFile, Player};
 use super::pitstop::{self, PitAction, PitCarView, PitFrame, PitStop, PitStopStart, QuickMenu};
@@ -71,6 +72,8 @@ pub struct RefereeSetup {
     pub yellow_flag_distance: Option<f32>,
     /// the track's layout folder, for the name in `race_out.json`
     pub layout: String,
+    /// race.ini's special event, for the session's mode object
+    pub game_mode: GameMode,
 }
 
 /// The referee of a session list.
@@ -139,6 +142,8 @@ pub struct Referee {
     pub mouse_steering: Option<bool>,
     /// proofs only: what `PitStop::getEstimatedTime` said of the last fed frame
     pub pit_estimate: f32,
+    /// Task 45: the session's mode object (`Sim::Sim`'s, by the first session's type)
+    pub mode: Option<Mode>,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -220,12 +225,14 @@ impl Referee {
             pit_feed: None,
             mouse_steering: None,
             pit_estimate: 0.0,
+            mode: None,
             manager,
         };
         let mut actions = Vec::new();
         referee.manager.set_current_session(0, now, &mut actions);
         referee.manager.reset_current_laps_and_mandatory_pit(&mut actions);
         referee.apply(actions, world);
+        referee.mode = Mode::of(referee.manager.current_session.session_type, &setup.game_mode);
         if setup.first_start_delay_ms >= 0.0 {
             referee.start_race(setup.first_start_delay_ms, world);
         } else {
@@ -375,6 +382,9 @@ impl Referee {
         }
         for lap in std::mem::take(&mut self.laps) {
             self.manager.on_lap_completed(&lap, &views);
+            if let (0, Some(mode)) = (lap.car_index, &mut self.mode) {
+                mode.on_lap_completed(&lap, &mut |text, description| self.log.push(format!("{text} {description}")));
+            }
         }
         // the black flag's event (PhysicsEngine::evOnFlagEvent), for the player's car
         if let Some(car) = (world.car_count() > 0).then(|| world.car(0)) {
@@ -706,6 +716,7 @@ impl Referee {
             self.rand = rand;
             self.apply(actions, world);
         }
+        self.json.mode_extras = self.mode.as_ref().map_or_else(Vec::new, Mode::extras);
         let best = self.manager.timing.instance_best_times.first().map_or(0, |lap| lap.time as i32);
         (self.json.file(&self.players, best), self.manager.timing.laps_ini().into_bytes())
     }
