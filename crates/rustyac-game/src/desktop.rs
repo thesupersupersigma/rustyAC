@@ -1392,10 +1392,13 @@ fn run_window(options: &Options) -> Result<(), String> {
     let config = LoopConfig { replay: replay.clone(), duration: None, max_steps: None, pause_unfocused: !options.no_focus, auto_reset: true, net_tape: options.net_tape.clone(), chat: options.chat.clone(), referee_out: referee_out(options), session_script: session_script(options), pit_clicks: options.pit_clicks.clone(), drawn_frames: None };
     let source = {
         let (bindings, shared, rumble, ffb, live) = (bindings.clone(), Arc::clone(&shared), !options.no_rumble, options.ffb, replay.is_none());
-        let autodrive = options.autodrive;
+        let (autodrive, drift_drive) = (options.autodrive, options.drift_drive);
         move || -> Box<dyn DriverSource> {
             if !live {
                 return Box::new(ReplaySource::default());
+            }
+            if drift_drive {
+                return Box::new(SpawnSequence::new(rustyac_game::autodrive::DriftDriver::default(), true));
             }
             if autodrive {
                 return Box::new(SpawnSequence::new(AutoDriver::new(), true));

@@ -625,7 +625,7 @@ usage: rustyac [options]
                         track's AI line (automatic gearbox on); for checks and for watching.
                         It keeps the quick pit menu even with a keyboard's controls.ini (it
                         clicks no CONFIRM), unless --pit-click scripts the mouse menu
-  --drift-drive         headless, on the drift track from its start: a scripted driver that
+  --drift-drive         on the drift track from its start: a scripted driver that
                         holds slides one way and the other (automatic gearbox on); with
                         --record the drive becomes an input file for the drift proof
   --drag-drive          a drag session as the game's test mode drives it: the AI drag driver

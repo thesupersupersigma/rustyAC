@@ -479,8 +479,9 @@ pub fn run(mut sim: GameSim, shared: &Shared, mut sinks: Vec<Box<dyn StepSink>>,
                 sim.car.device.source.request_bias(clicks);
             }
         }
-        // (a car held for the ESC menu's "Drive" does not move its sequence on: paced, not a burst)
-        let burst = sim.car.device.source.in_spawn_sequence() && !sim.car.car.is_controls_locked;
+        // (a car held for the ESC menu's "Drive" does not move its sequence on: paced, not a burst;
+        // nor does a car an AI driver drives, which never asks the sequence)
+        let burst = sim.car.device.source.in_spawn_sequence() && !sim.car.car.is_controls_locked && sim.car.device.ai.is_none() && sim.car.device.drag.is_none();
         let mut due = Instant::now();
         if burst {
             if !fresh {
