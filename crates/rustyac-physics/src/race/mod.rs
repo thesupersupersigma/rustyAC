@@ -15,6 +15,7 @@ pub mod pitstop;
 pub mod referee;
 pub mod results;
 pub mod shm;
+pub mod time_attack;
 pub mod timing;
 pub mod toy;
 

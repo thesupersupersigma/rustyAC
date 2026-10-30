@@ -120,6 +120,9 @@ const VA_GET_WHEEL_STEER_ANGLE_DEG: usize = 0x1_4027_2960; // Car::getWheelSterA
 /// Task 27: the step at which a scenario's first car, driven by the line follower until
 /// then, is handed to the game's `AIDriver` (the game's "AI drives my car" switch: a new
 /// driver with the constructor's `basePush` 1 and no aggression).
+const VA_EVALUATE_TIME_FROM_TRACK_SPLINE: usize = 0x1_401b_ab80; // TimeEvaluation evaluateTimeFromTrackSpline(CarAvatar*)
+const VA_TIME_EVALUATION: usize = 0x1_4155_9c48; // its cache: estimatedLapTime_s, 0 = not worked out
+
 pub fn ai_handover(scenario: &str) -> Option<usize> {
     match scenario {
         "ai_handover" => Some(2400),
@@ -1341,6 +1344,20 @@ impl<'a> MultiWorld<'a> {
             recording.set("mesh_geom_high", geom_high.iter().map(|h| format!("{h:08x}")).collect::<Vec<_>>().join(","));
             recording.set("mesh_bounce_vel", format!("{:08x}", geom_high[0]));
             recording.set_cars(&metas);
+            // Task 45: Time Attack's budget estimate of the first car (TimeAttack's call with
+            // the car's avatar; the game keeps the first result for the process: forgotten)
+            // (only with an ideal line: without one the game's call reads a file that is not there)
+            if let (Some(first), true) = (cars.first(), track.data_folder.join("data").join("ideal_line.ai").is_file()) {
+                let evaluate: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_EVALUATE_TIME_FROM_TRACK_SPLINE));
+                acs.set_global(VA_TIME_EVALUATION, 0.0f32);
+                let mut engineer = [0usize, first.car as usize, 0];
+                let avatar = super::race_ini::zeroed(0x1300);
+                wr(avatar, 0xf80, engineer.as_mut_ptr());
+                let out = super::race_ini::zeroed(0x20);
+                evaluate(out, avatar);
+                let (begin, end): (usize, usize) = (rd(out, 8), rd(out, 0x10));
+                recording.set("ta_estimate", (begin..end).step_by(4).map(|p| format!("{:08x}", *(p as *const u32))).collect::<Vec<_>>().join(","));
+            }
             if recording_ai_seed {
                 recording.set("ai_seed", ai_seed.to_string());
             }

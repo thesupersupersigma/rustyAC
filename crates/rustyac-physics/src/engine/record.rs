@@ -711,6 +711,13 @@ impl ReplayWorld {
             }
             car.auto_shifter.is_active = meta.auto_shifter;
             car.set_track(Arc::clone(&track));
+            // Task 45: Time Attack's budget estimate, against the game's of the first car
+            if let (true, Some(game)) = (cars.is_empty(), recording.get("ta_estimate")) {
+                let port = car.evaluate_time_from_track_spline()?.iter().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(",");
+                if port != game {
+                    return Err(format!("Time Attack's estimate of the sectors' seconds is {port} here and {game} in the game"));
+                }
+            }
             car.force_rotation(&Vec3f::new(meta.tail[0], meta.tail[1], meta.tail[2]));
             car.force_position(&Vec3f::new(meta.position[0], meta.position[1], meta.position[2]));
             car.set_damage_level(0.0);

@@ -1642,6 +1642,22 @@ impl GameSim {
 
     /// Task 28b: the player's pit stop for the picture: `PitStop::state` and the marker's
     /// visibility (`None`: no pit stop in this session).
+    /// Task 45: the time-attack mode of the session, as its HUD reads it.
+    pub fn time_attack_view(&self) -> Option<crate::view::TimeAttackView> {
+        let Some(rustyac_physics::race::game_mode::Mode::TimeAttack(ta)) = self.referee.as_ref()?.mode.as_ref() else { return None };
+        Some(crate::view::TimeAttackView {
+            mode: ta.mode as i32,
+            sector_index: ta.sector_index as u32,
+            time_left: ta.time_left,
+            points: ta.points,
+            available: !ta.sectors.is_empty() && self.track.as_ref().is_some_and(|t| !t.sectors_normalized_positions.is_empty()),
+            checkpoint_shown: ta.checkpoint_shown,
+            last_gained_points: ta.last_gained_points,
+            last_gained_seconds: ta.last_gained_seconds,
+            penalty_points_accumulated: ta.penalty_points_accumulated,
+        })
+    }
+
     pub fn pit_stop_view(&self) -> Option<crate::view::PitStopView> {
         let pit = match (&self.referee, &self.online) {
             (Some(referee), _) => referee.pit.as_ref(),

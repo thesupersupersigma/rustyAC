@@ -1328,3 +1328,23 @@ pub fn online_overlays() -> Vec<Op> {
     o.extend([hud("menu.welcome", 0.0, "both at once"), Op::Frame(DT), hud("menu.disconnect", 0.0, ""), hud("menu.welcome", 0.0, ""), Op::Frame(DT)]);
     o
 }
+
+/// Task 45: `TimeAttack`'s HUD (`sectors` 0: a track without sectors) and its end screen.
+pub fn time_attack(sectors: u32) -> Vec<Op> {
+    let f = Op::Frame(DT);
+    let mut o = Vec::new();
+    field(&mut o, 1);
+    o.extend([hud("race.sessions", 0.0, "5:0:Time Attack"), hud("race.current", 0.0, ""), hud("session", 5.0, ""), hud("menu.pause", 0.0, ""), hud("ta.create", sectors as f32, ""), hud("menu.blank", 1.0, "1"), f.clone(), f.clone()]);
+    // on: the time and the points, then less time, points below zero
+    o.extend([hud("ta.mode", 1.0, ""), hud("ta.timeLeft", 41.25, ""), hud("ta.points", 120.7, ""), f.clone(), hud("ta.timeLeft", 3.0049, ""), hud("ta.points", -35.0, ""), f.clone()]);
+    // a checkpoint: its panel for five seconds, a time lost, the panel goes
+    o.extend([hud("ta.points", 480.0, ""), hud("ta.scoreLabelTimer", 0.0, ""), hud("ta.gainedPoints", 236.9, ""), hud("ta.gainedSeconds", 4.96, ""), f.clone(), Op::Frame(1.0), f.clone(), hud("ta.gainedSeconds", -0.35, ""), Op::Frame(2.0), f.clone(), Op::Frame(2.0), f.clone(), f.clone()]);
+    // penalties: damage, a penalty of the car, the panel with what they took, five seconds
+    o.extend([hud("ta.penaltyPoints", -45.0, ""), hud("ta.carDamage", 9.0, ""), f.clone(), Op::Frame(2.0), f.clone(), hud("car.penalty", 3.0, "0"), f.clone(), hud("car.penalty", 0.0, "0"), Op::Frame(3.0), f.clone(), Op::Frame(2.5), f.clone(), f.clone()]);
+    // nothing behind the pause menu or in a replay
+    o.extend([hud("menu.esc", 0.0, ""), f.clone(), hud("menu.resume", 0.0, ""), f.clone(), hud("replay", 1.0, ""), f.clone(), hud("replay", 0.0, ""), f.clone()]);
+    // still again (a new session), then over: the pause menu loses Resume too
+    o.extend([hud("ta.mode", 2.0, ""), f.clone(), hud("ta.mode", 0.0, ""), hud("ta.points", 1234.9, ""), f.clone(), hud("menu.esc", 0.0, ""), f.clone(), hud("menu.resume", 0.0, ""), f.clone()]);
+    o.extend([hud("menu.end", 0.0, ""), f.clone(), hud("menu.endShow", 0.0, ""), f.clone(), f.clone(), hud("ta.points", -20.0, ""), f.clone()]);
+    o
+}

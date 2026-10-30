@@ -82,6 +82,7 @@ pub mod setup_tab;
 pub mod setup_tyres;
 pub mod spinner;
 pub mod taskbar;
+pub mod time_attack;
 pub mod time_table;
 pub mod ttf;
 pub mod widgets;

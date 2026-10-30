@@ -139,7 +139,11 @@ pub fn apply(options: &Options, setup: &mut SimSetup, input_method: &str) -> Res
         Some(path) => {
             let documents = IniReader::load(path)?;
             let official = documents.official_special_event();
-            let game_mode = rustyac_physics::race::game_mode::GameMode::new(official.as_ref().unwrap_or(&documents), &documents, official.is_some());
+            let mut game_mode = rustyac_physics::race::game_mode::GameMode::new(official.as_ref().unwrap_or(&documents), &documents, official.is_some());
+            // TimeAttack's constructor: INIReaderDocuments(cfg/gameplay.ini)
+            if let Some(gameplay) = documents_folder().and_then(|p| IniReader::load(&p.join("cfg/gameplay.ini")).ok()).filter(|ini| ini.ready && ini.has_section("TIME_ATTACK")) {
+                game_mode.time_attack_mult = gameplay.get_float("TIME_ATTACK", "BASE_TIME_MULT")?;
+            }
             let ini = official.unwrap_or(documents);
             if !ini.ready {
                 return Err(format!("{}: cannot be read", path.display()));

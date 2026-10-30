@@ -173,6 +173,8 @@ pub struct SimLink {
     pub telemetry: crate::comparative_telemetry::TelemetryLink,
     /// what the online pages read of `ACClient` (Task 34)
     pub online_link: crate::race_control_online::OnlineLink,
+    /// Task 45: the time-attack mode (`getGameObject<TimeAttack>`), when the session is one
+    pub time_attack: Option<crate::time_attack::TimeAttackLink>,
 }
 
 /// `PauseMenu`'s own members.

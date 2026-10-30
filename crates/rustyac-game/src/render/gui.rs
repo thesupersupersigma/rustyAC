@@ -214,6 +214,8 @@ pub struct GameGui {
     pub overlay: Option<OverlayLeaderboard>,
     /// `Sim::leaderboard`: the table held on TAB (with more than one car, or online)
     pub tab: Option<SessionLeaderboard>,
+    /// Task 45: `TimeAttack`'s HUD (made at the first frame of a time-attack session)
+    pub time_attack: Option<rustyac_gui::time_attack::TimeAttackHud>,
     /// the app "Leaderboard"
     pub leaderboard_app: Id,
     /// the other apps (made at the first frame), `Speed::useMPH`
@@ -507,7 +509,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -539,6 +541,16 @@ impl GameGui {
             car.sus_damage = view.suspension_damage;
             car.engine_life_left = view.engine_life;
         }
+        self.gui.sim.time_attack = world.first().and_then(|view| view.lap.time_attack).map(|t| rustyac_gui::time_attack::TimeAttackLink {
+            available: t.available,
+            mode: t.mode,
+            time_left: t.time_left,
+            points: t.points,
+            checkpoint_shown: t.checkpoint_shown,
+            last_gained_points: t.last_gained_points,
+            last_gained_seconds: t.last_gained_seconds,
+            penalty_points_accumulated: t.penalty_points_accumulated,
+        });
         // the car's state for the editor's status panel, while the ESC menu shows
         if let (Some(data), Some(view), true) = (&self.setup_data, world.first(), self.esc_menu_visible()) {
             let state = view.physics_state();
@@ -880,6 +892,11 @@ impl GameGui {
                     labels.draw(gui, &mut painter, dt, &pit.menu, &pit.car);
                 }
             }
+        }
+        // TimeAttack::renderHUD 0x1401bda40 (made in Sim::Sim after the ESC menu)
+        if let Some(ta) = gui.sim.time_attack {
+            let hud = self.time_attack.get_or_insert_with(|| rustyac_gui::time_attack::TimeAttackHud::new(gui, &mut painter));
+            hud.render_hud(gui, &mut painter, &ta);
         }
         if let Some(wrong) = self.wrong.as_mut().filter(|w| w.is_active) {
             wrong.render_hud(gui, &mut painter, input);

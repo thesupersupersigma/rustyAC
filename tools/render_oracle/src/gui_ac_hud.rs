@@ -169,6 +169,10 @@ unsafe fn write_names(h: &HudGame) {
 pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, number: f32, text: &str) -> Result<(), String> {
     let acs_ref = &game.acs;
     ACS.store(acs_ref as *const Acs as usize, Ordering::SeqCst);
+    if what.starts_with("ta.") {
+        let h = hud().ok_or("no HUD (cars first)")?;
+        return crate::gui_ac_modes::call(game, h, what, number);
+    }
     if what.starts_with("console.") {
         return crate::gui_seq_console::game_call(game, what, number, text);
     }
@@ -316,6 +320,7 @@ pub unsafe fn render_hud(game: &Game, dt: f32) {
     let Some(h) = hud() else { return };
     let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_SYSTEM_MESSAGE_RENDER_HUD));
     render(h.message, dt);
+    crate::gui_ac_modes::render_hud(game, h, dt);
     crate::gui_ac_pit::render_menu(game, h, dt);
     crate::gui_ac_hud2::render_hud(game, h, dt);
     // Task 33: Console::renderHUD, the last of the HUD objects
@@ -332,6 +337,7 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     let n = h.notification;
     out.push_str(&crate::gui_seq::notification_line(rd(n, 0x80), rd(n, 0x84), rd(n, 0x88), rd::<u8>(n, 0x8c) != 0));
     crate::gui_ac_hud2::dump(game, h, out);
+    crate::gui_ac_modes::dump(out);
     crate::gui_ac_pit::dump(game, out);
     crate::gui_ac_menu::dump(game, out);
     crate::gui_seq_menu::dump_actions(out);

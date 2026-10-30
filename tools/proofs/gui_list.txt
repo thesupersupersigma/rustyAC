@@ -18,3 +18,5 @@ esc_telemetry console
 esc_menu#it pause_menu#de hud_messages#it app_essentials#it app_tyres#de app_volumes#it app_ffb@short#de setup_tabs#it setup_io#de esc_menu_race#de tab_12#it end_race_12#de
 # Task 34: online menus and the setup pages of a server
 esc_menu_online setup_server@bmw_z4_gt3 setup_server1@bmw_z4_gt3 setup_pit@bmw_z4_gt3 setup_pitprobe@bmw_z4_gt3 setup_pitbare@bmw_z4_gt3
+# Task 45: the game modes' HUDs
+ta_hud ta_none

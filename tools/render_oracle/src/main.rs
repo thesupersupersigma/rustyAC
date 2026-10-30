@@ -12,6 +12,8 @@ mod ac_car;
 mod compare;
 mod frames;
 mod gui_ac;
+mod gui_ac_modes;
+mod gui_port_modes;
 mod gui_ac2;
 mod gui_ac_apps;
 mod gui_ac_hud;

@@ -20,6 +20,8 @@ pub const SESSION_PRACTICE: i32 = 1;
 pub const SESSION_QUALIFY: i32 = 2;
 pub const SESSION_RACE: i32 = 3;
 pub const SESSION_HOTLAP: i32 = 4;
+pub const SESSION_TIME_ATTACK: i32 = 5;
+pub const SESSION_DRIFT: i32 = 6;
 pub const SESSION_DRAG: i32 = 7;
 
 /// The length of `ACCameraManager::fadeIn` as the manager asks for it, seconds.

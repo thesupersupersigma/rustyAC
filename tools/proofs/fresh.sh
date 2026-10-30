@@ -8,12 +8,12 @@
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
 # "hybrid <car>", "sus <car>", "collide spa", "collide-worlds", "rays <track> <layout>",
 # "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "ini <file>", "multi ...", "shm ...".
-#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro ini multi shm" (default: all of them)
+#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm" (default: all of them)
 area=fresh
 . "$(dirname "$0")/lib.sh"
 tool car_oracle
 tool chassis_compare
-parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro ini multi shm"}
+parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm"}
 root=$out/root     # the scratch game folder the oracles build for themselves
 rec=$out/rec
 
@@ -168,6 +168,14 @@ if part micro; then  # Task 28: the game's referee on made-up drives, 25 seeds o
             r=$("$CO" race-micro --seed "$seed" --kind "$kind" --count "$cars" --root "$root" 2>&1 | grep '^referee:')
             case "$r" in *IDENTICAL*) verdict "race-micro $kind/$seed/$cars" IDENTICAL ;; *) verdict "race-micro $kind/$seed/$cars" DIFFERENT "$r" ;; esac
         done
+    done
+fi
+
+if part modes; then  # Task 45: special-event files and goals, hotlap and Time Attack judged by the game's code
+    for seed in 7 12; do
+        keep "modes $seed" || continue
+        r=$("$CO" mode-micro --seed "$seed" --root "$root/modes" 2>&1 | grep '^modes:')
+        case "$r" in *IDENTICAL*) verdict "mode-micro $seed" IDENTICAL ;; *) verdict "mode-micro $seed" DIFFERENT "$r" ;; esac
     done
 fi
 

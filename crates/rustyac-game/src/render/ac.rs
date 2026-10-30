@@ -569,13 +569,9 @@ pub struct AcRenderer {
     lollipops: Vec<rustyac_render::pit_crew::LollipopCrew>,
     pit_marker: Option<rustyac_render::pit_crew::PitIndicator>,
     pit_setup: Option<(NodeId, PathBuf, Vec<Mat44f>, rustyac_physics::track::Track)>,
-    /// the gates of a time-attack session (`TimeAttack`), the time lines of the track, where
-    /// the car stood when the session began, and `TimeAttackGameStatus::mode == 1` (it runs
-    /// once the car has moved 3 m)
+    /// the gates of a time-attack session (`TimeAttack`) and the time lines of the track
     gates: Option<std::rc::Rc<std::cell::RefCell<rustyac_render::time_attack::TimeAttackGates>>>,
     gate_sectors: usize,
-    gate_start: Option<[f32; 3]>,
-    gate_running: bool,
     start_lights: Option<rustyac_render::start_lights::StartingLights>,
     semaphore: Option<rustyac_render::start_lights::StartingTrackSemaphore>,
     race_start_ms: Option<f64>,
@@ -811,7 +807,7 @@ impl AcRenderer {
             };
             rustyac_render::mirror::VirtualMirrorRenderer::new(&graphics, active)
         });
-        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, gate_start: None, gate_running: false, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
+        Ok(AcRenderer { pre_gui_shot: None, gui_size: None, ghost: None, ghost_rig: None, mirror, virtual_mirror, ideal_line: None, ideal_on: options.ideal_line, lollipops: Vec::new(), pit_marker: None, pit_setup: None, gates: None, gate_sectors: 0, start_lights: None, semaphore: None, race_start_ms: None, time_ms: 0.0, sun: None, grooves: None, crowds: Vec::new(), object_nodes: Vec::new(), moved_objects: Vec::new(), told_paused: false, told_replay_status: -1, told_replay_status_before: -1, told_new_sessions: 0, dynamic_objects: Vec::new(), graphics, scene, camera, root, blurred, unblurred, track_node, cars_node: cars, car_shadows, sim_nodes: rustyac_render::car::SimNodes { root, cars, skid_marks, particles, car_shadows, before_cars, render_finished }, cockpit_flags, cars: Vec::new(), crew_cars: Vec::new(), replay_states: None, tyre_crew: None, crew: CrewLink::default(), crew_seen: (0, 0), crew_fade: None, crew_inputs: None, cars_to_be_loaded: 1, global_camera_index: 0, track_folder: None, options, #[cfg(all(windows, not(feature = "wgpu")))] hud, gui: None, wings_outlines: None, suspension_lines: None, adapter, software: false, draw_calls: 0, triangles: 0, frames: 0, notes })
     }
 
     /// AC's GUI and HUD are made (after the cars are loaded) and drawn from the next frame on.
@@ -1293,8 +1289,6 @@ impl AcRenderer {
                 car.on_new_session(&mut self.scene);
             }
             self.start_race();
-            self.gate_start = None;
-            self.gate_running = false;
         }
         // Game::update, the track's children: LollipopCrew::update (the player's man follows the
         // pit stop's state: up while the car is in the pit lane, down once it has stopped in its box)
@@ -1446,16 +1440,8 @@ impl AcRenderer {
             crew.pit_crew_update(&mut self.scene, &mut self.crew, dt, &inputs);
             self.crew_inputs = Some(inputs);
         }
-        // TimeAttack::update 0x1401be0b0: the mode runs once the car is 3 m from where it stood
-        if let (Some(gates), Some(car)) = (&self.gates, self.cars.first()) {
+        if let Some(gates) = &self.gates {
             gates.borrow_mut().in_replay = info.replay;
-            let b = self.scene.nodes[car.body_transform].matrix.m[3];
-            let start = *self.gate_start.get_or_insert([b[0], b[1], b[2]]);
-            let (dx, dy, dz) = (b[0] - start[0], b[1] - start[1], b[2] - start[2]);
-            let d2 = (dy * dy + dx * dx) + dz * dz;
-            if !self.gate_running && !self.told_paused && !info.replay && d2 != 0.0 && d2.sqrt() > 3.0 {
-                self.gate_running = true;
-            }
         }
         // PitStop::update, after the cars: the pit box marker
         let pit_inputs = self.cars.first().map(|car| {
@@ -1654,7 +1640,9 @@ impl AcRenderer {
         // Game::renderHUD: TimeAttack::renderGuiStatus, the gate of the next time line
         if let Some(gates) = &self.gates {
             if !self.told_paused && !info.replay {
-                gates.borrow_mut().set_active(self.gate_running, view.lap.sector as usize, self.gate_sectors);
+                // (the gate of the next checkpoint while the mode is on: TimeAttack's own sector)
+                let ta = view.lap.time_attack.unwrap_or_default();
+                gates.borrow_mut().set_active(ta.mode == 1, ta.sector_index as usize, self.gate_sectors);
             }
         }
         // Game::renderHUD: PitStop::renderHUD, the marker's part

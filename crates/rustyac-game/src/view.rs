@@ -310,6 +310,26 @@ pub struct LapView {
     /// Task 28b: the player's pit stop, when there is one: `PitStop::state` and whether the
     /// pit box marker shows (the lollipop man and the marker follow them)
     pub pit_stop: Option<PitStopView>,
+    /// Task 45: the time-attack session's state (`TimeAttack`), when it is one
+    pub time_attack: Option<TimeAttackView>,
+}
+
+/// What `TimeAttack`'s HUD and gates read of the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TimeAttackView {
+    /// `TimeAttackGameStatus::mode` (0 over, 1 on, 2 still), `sectorIndex`, `timeLeft`, `points`
+    pub mode: i32,
+    pub sector_index: u32,
+    pub time_left: f32,
+    pub points: f32,
+    /// the track has sectors and the mode a budget; the checkpoint panel shows, with what
+    /// the last checkpoint gave
+    pub available: bool,
+    pub checkpoint_shown: bool,
+    pub last_gained_points: f32,
+    pub last_gained_seconds: f32,
+    /// the points the penalties took within the last five seconds
+    pub penalty_points_accumulated: f32,
 }
 
 /// The player's pit stop as the picture and the pit crew read it.
@@ -891,6 +911,7 @@ impl CarView {
                 position: car.spline_locator_data.npos,
                 in_pit_lane: car.is_in_pit_lane(),
                 pit_stop: if player { sim.pit_stop_view() } else { None },
+                time_attack: if player { sim.time_attack_view() } else { None },
             };
             if !player {
                 // another car: what its own transponder counted

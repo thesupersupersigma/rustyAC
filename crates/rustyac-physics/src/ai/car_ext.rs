@@ -74,7 +74,7 @@ impl RollingChassis {
 
     /// `RaceEngineer::getMaxSpeedFromGear` @ 0x14027c240: the speed at the limiter in a gear
     /// (`gear` + 2 is its place in the drivetrain's list), m/s.
-    fn get_max_speed_from_gear(&self, gear: i32) -> f32 {
+    pub fn get_max_speed_from_gear(&self, gear: i32) -> f32 {
         let Some(drivetrain) = &self.drivetrain else { return 0.0 };
         let base = drivetrain.base();
         let radius = if base.traction_type == crate::car::TractionType::Fwd { self.tyres[0].data.radius } else { self.tyres[2].data.radius };
@@ -157,6 +157,46 @@ impl RollingChassis {
         } else {
             max
         })
+    }
+
+    /// `TimeAttack::evaluateTimeFromTrackSpline` @ 0x1401bab80: the seconds of each sector
+    /// at the speeds the track's `data/ideal_line.ai` was recorded with, scaled to the car's
+    /// top speed (the turbos it steps do not change the result). The game crashes without
+    /// that file; this is an `Err`. The game keeps the first result for the whole process
+    /// (shortcut: worked out again for each session, the same car on the same track).
+    pub fn evaluate_time_from_track_spline(&self) -> Result<Vec<f32>, String> {
+        use rustyac_content::vfs;
+        let Some(track) = &self.track else { return Err("no track".to_string()) };
+        let path = track.data_folder.join("data").join("ideal_line.ai");
+        let bytes = vfs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let line = crate::track::AiSpline::parse_fast(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let gears = self.drivetrain.as_ref().map_or(0, |d| (d.base().gears.len() as i32).clamp(0, 8));
+        let top = super::sat(self.get_max_speed_from_gear(gears - 4) * 3.6, 0.0, 225.0);
+        let count = line.point_count() as i32;
+        let mut max_speed = 0.0f32;
+        for i in 0..count {
+            let p = line.payload_at_spline_index(i);
+            if max_speed <= p.speed_ms && p.speed_ms < 300.0 {
+                max_speed = p.speed_ms;
+            }
+        }
+        let mut per_sector = vec![0.0f32; track.sectors_normalized_positions.len()];
+        let inv_speed = 1.0 / max_speed;
+        for i in 0..count {
+            let p = line.payload_at_spline_index(i);
+            let v = super::sat(inv_speed * p.speed_ms, 0.0, 1.0) * (top - 1.0) + 1.0;
+            let prev = line.spline.point_at(line.spline.wrap_index(i - 1) as u32);
+            let cur = line.spline.point_at(i as u32);
+            let (dx, dy, dz) = (cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2]);
+            let squared = (dy * dy + dx * dx) + dz * dz;
+            let distance = if squared == 0.0 { 0.0 } else { crate::math::sqrtf(squared) };
+            let seconds = ((distance as f64 * 0.001) / v as f64 * 3600.0) as f32;
+            let sector = track.get_sector(line.spline.world_to_spline(&cur, -1));
+            if let Some(slot) = per_sector.get_mut(sector) {
+                *slot += seconds;
+            }
+        }
+        Ok(per_sector)
     }
 
     /// `Car::getFuelPerLap` @ 0x140270bd0

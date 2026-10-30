@@ -144,6 +144,10 @@ pub struct Referee {
     pub pit_estimate: f32,
     /// Task 45: the session's mode object (`Sim::Sim`'s, by the first session's type)
     pub mode: Option<Mode>,
+    /// Time Attack's 2.5 s camera fade before its end screen: the seconds left
+    pub mode_fade: Option<f32>,
+    /// the ESC menu of the pits shows (from the lock it asks for to its "Drive")
+    pub esc_open: bool,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -226,6 +230,8 @@ impl Referee {
             mouse_steering: None,
             pit_estimate: 0.0,
             mode: None,
+            mode_fade: None,
+            esc_open: false,
             manager,
         };
         let mut actions = Vec::new();
@@ -233,11 +239,13 @@ impl Referee {
         referee.manager.reset_current_laps_and_mandatory_pit(&mut actions);
         referee.apply(actions, world);
         referee.mode = Mode::of(referee.manager.current_session.session_type, &setup.game_mode);
+        referee.time_attack_session(world);
         if setup.first_start_delay_ms >= 0.0 {
             referee.start_race(setup.first_start_delay_ms, world);
         } else {
             // ESCMenu::render: the player's controls are locked while the menu shows
             world.car_mut(0).queue(|car| car.lock_controls(true));
+            referee.esc_open = true;
         }
         referee
     }
@@ -412,7 +420,12 @@ impl Referee {
         if new_session && self.next_start_delay_ms < 0.0 {
             // the ESC menu comes up again (the handler of the new session, 0x140195c60)
             world.car_mut(0).queue(|car| car.lock_controls(true));
+            self.esc_open = true;
         }
+        if new_session {
+            self.time_attack_session(world);
+        }
+        self.time_attack_frame(world);
         self.pit_frame(world, now, &views);
         // FlagManager::update and the messages
         let flag_cars: Vec<FlagCar> = (0..world.car_count()).map(|index| self.flag_car(world.car(index))).collect();
@@ -695,6 +708,7 @@ impl Referee {
     /// every frame it is drawn).
     pub fn pits_lock(&mut self, world: &mut dyn World) {
         world.car_mut(0).queue(|car| car.lock_controls(true));
+        self.esc_open = true;
     }
 
     /// Task 30: the ESC menu's "Drive" (the job `Sim::startGame` leaves for the end of the
@@ -702,6 +716,66 @@ impl Referee {
     pub fn drive(&mut self, world: &mut dyn World) {
         self.start_race(10000.0, world);
         world.car_mut(0).queue(|car| car.lock_controls(false));
+        self.esc_open = false;
+    }
+
+    /// `TimeAttack`'s constructor and its handler of a new session (lambda @ 0x1401b91d0):
+    /// the budget again, the player's car to the track's `TIME_ATTACK` spawn (`START` when
+    /// the track has none).
+    fn time_attack_session(&mut self, world: &mut dyn World) {
+        let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };
+        let estimate = world.car(0).evaluate_time_from_track_spline().unwrap_or_else(|e| {
+            self.log.push(format!("time attack: {e}"));
+            Vec::new()
+        });
+        ta.new_session(&estimate, self.track.sectors_normalized_positions.len());
+        self.mode_fade = None;
+        let set = if self.track.spawn_pose("TIME_ATTACK", 0).is_some() { "TIME_ATTACK" } else { "START" };
+        let slot = self.manager.start_index.first().copied().unwrap_or(0);
+        self.teleport(world, 0, set, slot, None);
+    }
+
+    /// `TimeAttack::update` in the frame (after the race manager's, the game's order of
+    /// `Sim::gameObjects`), and the end screen once its fade is over.
+    fn time_attack_frame(&mut self, world: &mut dyn World) {
+        if let Some(left) = &mut self.mode_fade {
+            *left -= FRAME_DT;
+            if *left <= 0.0 {
+                self.mode_fade = None;
+                self.manager.results_displayed = true;
+                self.apply(vec![Action::DisplayResults], world);
+            }
+        }
+        let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };
+        let frame = Self::time_attack_view(&self.track, &self.manager, self.esc_open, world.car(0));
+        let log = &mut self.log;
+        let out = ta.update(FRAME_DT, &frame, &mut |text, description| log.push(format!("{text} {description}")));
+        ta.hud_tick(FRAME_DT, &frame);
+        if out.fade_to_results && self.mode_fade.is_none() {
+            self.mode_fade = Some(super::manager::FADE_SECONDS);
+        }
+        if let Some(on) = out.gentle_stop {
+            world.car_mut(0).queue(move |car| car.is_gentle_stopping = on);
+        }
+    }
+
+    /// What `TimeAttack` reads of the player's car and the session.
+    pub fn time_attack_view(track: &Track, manager: &RaceManager, esc_open: bool, car: &RollingChassis) -> super::time_attack::TaFrame {
+        let p = car.core.get_position(car.body);
+        super::time_attack::TaFrame {
+            track_sectors: track.sectors_normalized_positions.len(),
+            paused: false,
+            esc_open,
+            replay: false,
+            position: [p.x, p.y, p.z],
+            splits: manager.timing.lap_dbs.first().map_or(0, |db| db.current_splits.len()),
+            lap_count: manager.timing.lap_count(0),
+            damage_zone_level: car.damage_zone_level,
+            tyres_off: car.tyres.iter().filter(|t| t.surface_def.as_ref().is_some_and(|s| !s.is_valid_track)).count(),
+            first_gear_max_speed: car.get_max_speed_from_gear(0),
+            speed: car.speed,
+            penalty_time: car.get_penalty_time() as f32,
+        }
     }
 
     /// `RaceManager::shutdown` @ 0x140141320 and `Sim::writeOutputJson`: the current

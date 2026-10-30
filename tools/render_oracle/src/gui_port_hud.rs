@@ -19,6 +19,9 @@ pub struct HudPort {
 }
 
 pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_folder: &std::path::Path, screen: Id, what: &str, number: f32, text: &str) -> Result<(), String> {
+    if what.starts_with("ta.") {
+        return crate::gui_port_modes::call(gui, painter, what, number);
+    }
     if what.starts_with("console.") {
         let unix = hud.input.cars.first().map(|c| c.unix_name.clone()).unwrap_or_default();
         return crate::gui_seq_console::port_call(gui, painter, game_folder, &unix, what, number, text);
@@ -48,6 +51,7 @@ pub fn call(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, game_fo
         }
         if what.starts_with("menu.pit") {
             crate::gui_port_menu::sync(hud, gui);
+    crate::gui_port_modes::sync(gui);
             return crate::gui_port_pit::call(hud, gui, painter, game_folder, screen, what, number, text);
         }
         return crate::gui_port_menu::call(hud, gui, painter, game_folder, screen, what, number, text);
@@ -99,6 +103,7 @@ pub fn update(hud: &mut HudPort, gui: &mut Gui, dt: f32) {
 pub fn render_hud(hud: &mut HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
     let Some(message) = &mut hud.message else { return };
     message.render_hud(gui, painter, dt, &hud.input);
+    crate::gui_port_modes::render_hud(hud, gui, painter, dt);
     crate::gui_port_pit::render_menu(hud, gui, painter, dt);
     crate::gui_port_hud2::render_hud(hud, gui, painter, dt);
     // Task 33: the console, the last of the HUD objects
@@ -112,6 +117,7 @@ pub fn dump(hud: &HudPort, gui: &Gui, out: &mut String) {
     crate::gui_port::dump_control(gui, m.driver.control, 1, out);
     out.push_str(&crate::gui_seq::notification_line(n.current_status, n.timer, n.blink_time, n.show));
     crate::gui_port_hud2::dump(hud, gui, out);
+    crate::gui_port_modes::dump(out);
     crate::gui_port_pit::dump(hud, gui, out);
     crate::gui_port_menu::dump(hud, gui, out);
     crate::gui_seq_menu::dump_actions(out);

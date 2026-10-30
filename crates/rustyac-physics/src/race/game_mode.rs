@@ -12,7 +12,8 @@
 //! `evOnTierCompleted` and `evOnLeaderboardScore` have only Steam's achievements and
 //! leaderboards behind them in the game, which rustyAC leaves out.
 
-use super::manager::SESSION_HOTLAP;
+use super::manager::{SESSION_HOTLAP, SESSION_TIME_ATTACK};
+use super::time_attack::TimeAttack;
 use super::output::Node;
 use crate::data::ini::IniReader;
 use crate::track::timing::OnLapCompletedEvent;
@@ -40,11 +41,14 @@ pub struct GameMode {
     /// `RaceManager::isOfficialSpecialEvent`: race.ini named one of the install's encrypted
     /// events, which replaced it
     pub official: bool,
+    /// not the game's `GameMode`: `cfg/gameplay.ini [TIME_ATTACK] BASE_TIME_MULT` (1 without
+    /// the section), which `TimeAttack`'s constructor reads
+    pub time_attack_mult: f32,
 }
 
 impl Default for GameMode {
     fn default() -> GameMode {
-        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false }
+        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0 }
     }
 }
 
@@ -92,6 +96,7 @@ impl GameMode {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
     Hotlap(GameMode),
+    TimeAttack(Box<TimeAttack>),
 }
 
 impl Mode {
@@ -99,6 +104,7 @@ impl Mode {
     pub fn of(session_type: i32, base: &GameMode) -> Option<Mode> {
         match session_type {
             SESSION_HOTLAP => Some(Mode::Hotlap(base.clone())),
+            SESSION_TIME_ATTACK => Some(Mode::TimeAttack(Box::new(TimeAttack::new(base.clone(), base.time_attack_mult)))),
             _ => None,
         }
     }
@@ -106,13 +112,14 @@ impl Mode {
     pub fn base(&self) -> &GameMode {
         match self {
             Mode::Hotlap(base) => base,
+            Mode::TimeAttack(ta) => &ta.base,
         }
     }
 
     /// The player's car finished a lap (the mode's handler runs after the race manager's).
     /// `message`: `SystemMessage::addMessage(text, description)`.
     pub fn on_lap_completed(&mut self, lap: &OnLapCompletedEvent, message: &mut dyn FnMut(&str, &str)) {
-        let Mode::Hotlap(base) = self;
+        let Mode::Hotlap(base) = self else { return };
         if lap.lap_time == 0 || !lap.is_valid || lap.cuts != 0 {
             return;
         }
@@ -129,7 +136,10 @@ impl Mode {
 
     /// The entries of `race_out.json`'s `extras` before `bestlap`.
     pub fn extras(&self) -> Vec<Node> {
-        vec![self.base().extra()]
+        match self {
+            Mode::Hotlap(base) => vec![base.extra()],
+            Mode::TimeAttack(ta) => vec![ta.extra(), ta.base.extra()],
+        }
     }
 }
 
