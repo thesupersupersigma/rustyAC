@@ -582,6 +582,13 @@ fn render_frames(args: &Args, frame: &Frame) -> Result<(Vec<u8>, Rendered), Stri
                 let capture = rustyac_render::gpulog::end_capture();
                 (capture.text, capture.draws)
             };
+            if std::env::var_os("RENDER_ORACLE_PICK").is_some() {
+                let (w, h) = (args.width as i32, args.height as i32);
+                for at in crate::pick_at(w, h) {
+                    let d = scene.ray_picker_pick(root, w as f32, h as f32, at.0, at.1, step.camera.fov, &mat(&step.camera.matrix));
+                    crate::pick_line("port", index, at, d);
+                }
+            }
             let (width, height, pixels) = graphics.kgl.read_screen()?;
             crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
             rendered.width = width;

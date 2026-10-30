@@ -781,6 +781,12 @@ impl GameGui {
     /// `ksgui::GUI::render` 0x140254c10: the 2D pass's states, the game screen with its forms
     /// (and the flags), the app bar.
     pub fn render(&mut self, graphics: &mut Graphics, dt: f32) {
+        if !self.apps.made.is_empty() && !self.apps.after.is_empty() {
+            let after = std::mem::take(&mut self.apps.after);
+            if let Err(e) = self.script(&after) {
+                eprintln!("{e}");
+            }
+        }
         let mut painter = self.renderer.painter(graphics);
         if self.apps.made.is_empty() {
             self.apps.make(&mut self.gui, &mut painter, self.screen, &self.setup, self.leaderboard_app);
@@ -1333,7 +1339,8 @@ impl GameGui {
     /// `car:N` (the bar of car N), `notify:N` (1 the down-shift icon, 2 the wheel warning),
     /// `flag:blue|black|yellow|penalty|chequered|none`, `esc` (the pause menu), `screenshot` (F8), `overlay` (F9: the overlay leaderboard's next face), `pits` (the ESC menu, as "Back to pits" ends), `replay` (the replay's bar, for pictures), `tab` (the table of TAB, until a frame finds the key up), `app` (the Leaderboard app shown or hidden), `console` (Home), `type:<text>` (typed into the console, then Enter).
     pub fn script(&mut self, commands: &str) -> Result<(), String> {
-        for command in commands.split(';').map(str::trim).filter(|c| !c.is_empty()) {
+        let commands: Vec<&str> = commands.split(';').map(str::trim).filter(|c| !c.is_empty()).collect();
+        for (k, &command) in commands.iter().enumerate() {
             let mut parts = command.splitn(2, ':');
             let (name, rest) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
             let numbers = || -> Result<Vec<i32>, String> { rest.split(':').map(|n| n.trim().parse::<i32>().map_err(|e| format!("--gui-do {command}: {e}"))).collect() };
@@ -1407,6 +1414,9 @@ impl GameGui {
                         self.gui.set_visible(app, !shown);
                     } else if self.apps.made.is_empty() {
                         self.apps.pending.push((rest.to_string(), name == "show"));
+                        // the commands after it wait for the app too (the next frame's)
+                        self.apps.after = commands[k + 1..].join(";");
+                        return Ok(());
                     } else {
                         let Some(app) = self.apps.app(rest) else { return Err(format!("--gui-do {name}:{rest}: no such app")) };
                         let visible = name == "show" || !self.gui.controls[app].visible;
@@ -1520,6 +1530,11 @@ impl GameGui {
             text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "ACTIVE", &active);
             text = set_ini_key(&text, "OVERLAY_LEADERBOARD", "VERTICAL", &vertical);
         }
+        rustyac_content::guard::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        written.push(path);
+        // Sim::~Sim 0x1401956d0: the exposure multiplier (a wofstream in text mode, `<< float`)
+        let path = folder.join("exposure.ini");
+        let text = format!("[EXPOSURE]\r\nVALUE={}\r\n", rustyac_gui::acos::format_g6(self.gui.apps.photo.exposure_multiplier));
         rustyac_content::guard::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
         written.push(path);
         // ESCMenu::onShutdown 0x1400fdf80: the setup as it is, as `last.ini` (rustyAC's own folder)

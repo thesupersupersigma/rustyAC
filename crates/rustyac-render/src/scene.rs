@@ -446,6 +446,56 @@ impl Scene {
         }
     }
 
+    /// `RayPicker::pick` 0x14044c8c0: the ray through the screen's pixel (`x`, `y`) of a
+    /// camera (its `fov`, its matrix), tried against every active `Mesh` under `root`; the
+    /// answer is `pickedDistance` (0 when `root` is off, 1e11 when nothing was hit).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ray_picker_pick(&self, root: NodeId, screen_w: f32, screen_h: f32, x: i32, y: i32, fov: f32, camera: &Mat44f) -> f32 {
+        let inv_h = 1.0 / screen_h;
+        let aspect = screen_w * inv_h;
+        let f = 1.0 / rustyac_math::tanf(fov * 0.017453 * 0.5);
+        let src = [((x as f32 * 2.0) / screen_w - 1.0) / (f / aspect), -(((y as f32 * 2.0) * inv_h - 1.0) / f), -1.0f32];
+        let m = &camera.m;
+        let mut dir = Vec3f::new(
+            src[0] * m[0][0] + src[1] * m[1][0] + src[2] * m[2][0],
+            src[0] * m[0][1] + src[1] * m[1][1] + src[2] * m[2][1],
+            src[0] * m[0][2] + src[1] * m[1][2] + src[2] * m[2][2],
+        );
+        dir.normalize();
+        let mut t = RayPickerTraverser { org: [m[3][0], m[3][1], m[3][2]], dir: [dir.x, dir.y, dir.z], best_t: f32::from_bits(0x51ba_43b7), picked_distance: 0.0, stack: vec![Mat44f::IDENTITY] };
+        self.ray_visit(root, &mut t);
+        t.picked_distance
+    }
+
+    /// `Node::visit` with `RayPickerTraverser::onNode` 0x14044c510 and the pop after the
+    /// children.
+    fn ray_visit(&self, node: NodeId, t: &mut RayPickerTraverser) {
+        let n = &self.nodes[node];
+        if !n.is_active {
+            return;
+        }
+        // MatrixStack::multMatrix: the node's matrix times the current one
+        let current = xm_matrix_multiply(&n.matrix, t.stack.last().unwrap_or(&Mat44f::IDENTITY));
+        t.stack.push(current);
+        if let NodeKind::Mesh(mesh) = &n.kind {
+            let i = rustyac_physics::vecmath::xm_matrix_inverse(&current).m;
+            let (o, d) = (t.org, t.dir);
+            let org = [o[0] * i[0][0] + o[1] * i[1][0] + o[2] * i[2][0] + i[3][0], o[0] * i[0][1] + o[1] * i[1][1] + o[2] * i[2][1] + i[3][1], o[0] * i[0][2] + o[1] * i[1][2] + o[2] * i[2][2] + i[3][2]];
+            let dir = [d[1] * i[1][0] + d[0] * i[0][0] + d[2] * i[2][0], d[1] * i[1][1] + d[0] * i[0][1] + d[2] * i[2][1], d[1] * i[1][2] + d[0] * i[0][2] + d[2] * i[2][2]];
+            if let Some(hit) = ray_mesh_intersect(&org, &dir, mesh) {
+                // (comiss: a NaN is taken)
+                if !(hit >= t.best_t) {
+                    t.best_t = hit;
+                }
+            }
+        }
+        t.picked_distance = t.best_t;
+        for &child in &n.children {
+            self.ray_visit(child, t);
+        }
+        t.stack.pop();
+    }
+
     /// `Node::getWorldMatrix` 0x14020e190: from the local matrices up the tree, as they are
     /// now (not the world matrices of the last traversal).
     pub fn get_world_matrix(&self, node: NodeId) -> Mat44f {
@@ -853,4 +903,79 @@ fn is_visible_to(pass: i32, max_layer: i32, cam: &CullCamera, m: &Renderable, wo
         }
     }
     cam.frustum.intersect(&s)
+}
+
+/// `RayPickerTraverser`: the ray (world space), the nearest hit so far, the answer, the
+/// matrix stack.
+struct RayPickerTraverser {
+    org: [f32; 3],
+    dir: [f32; 3],
+    best_t: f32,
+    picked_distance: f32,
+    stack: Vec<Mat44f>,
+}
+
+/// `Collisions::rayMeshIntersect` 0x14044cdd0: the mesh's triangles in their order, the
+/// first one the ray goes through (not the nearest) gives its distance.
+fn ray_mesh_intersect(org: &[f32; 3], dir: &[f32; 3], mesh: &MeshData) -> Option<f32> {
+    let vertex = |i: u16| {
+        let at = i as usize * 44;
+        let f = |k: usize| mesh.vertices.get(at + k * 4..at + k * 4 + 4).map_or(0.0, |b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        [f(0), f(1), f(2)]
+    };
+    for tri in mesh.indices.chunks_exact(3) {
+        let (p0, p1, p2) = (vertex(tri[0]), vertex(tri[1]), vertex(tri[2]));
+        let e1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let e2 = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+        let (dx, dy, dz) = (dir[0], dir[1], dir[2]);
+        let a = dx * e2[1] - dy * e2[0];
+        let b = dz * e2[0] - dx * e2[2];
+        let c = dy * e2[2] - dz * e2[1];
+        let det = b * e1[1] + c * e1[0] + a * e1[2];
+        if !(det <= -1e-5 || 1e-5 <= det) {
+            continue;
+        }
+        let inv = 1.0 / det;
+        let s = [org[0] - p0[0], org[1] - p0[1], org[2] - p0[2]];
+        let u = (s[0] * c + s[1] * b + s[2] * a) * inv;
+        if !(0.0..=1.0).contains(&u) {
+            continue;
+        }
+        let q8 = s[0] * e1[1] - s[1] * e1[0];
+        let q7 = s[2] * e1[0] - s[0] * e1[2];
+        let q9 = s[1] * e1[2] - s[2] * e1[1];
+        let v = (dx * q9 + dy * q7 + dz * q8) * inv;
+        if !(0.0 <= v && v + u <= 1.0) {
+            continue;
+        }
+        let t = (q9 * e2[0] + q7 * e2[1] + q8 * e2[2]) * inv;
+        if 1e-5 < t {
+            return Some(t);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod ray_picker_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_triangle_hit_gives_the_distance() {
+        // two squares facing +z at z = -5 and z = -3, the far one first: the far one answers
+        let mut vertices = Vec::new();
+        for z in [-5.0f32, -3.0] {
+            for (x, y) in [(-1.0f32, -1.0f32), (1.0, -1.0), (0.0, 1.0)] {
+                let mut v = [0u8; 44];
+                v[0..4].copy_from_slice(&x.to_le_bytes());
+                v[4..8].copy_from_slice(&y.to_le_bytes());
+                v[8..12].copy_from_slice(&z.to_le_bytes());
+                vertices.extend_from_slice(&v);
+            }
+        }
+        let mesh = MeshData { vertices, indices: vec![0, 1, 2, 3, 4, 5], material: None, is_renderable: true, vb: None, ib: None, compiled_indices_count: 0, compiled_vertices_count: 0 };
+        assert_eq!(ray_mesh_intersect(&[0.0, 0.0, 0.0], &[0.0, 0.0, -1.0], &mesh), Some(5.0));
+        assert_eq!(ray_mesh_intersect(&[0.0, 0.0, 0.0], &[0.0, 0.0, 1.0], &mesh), None);
+        assert_eq!(ray_mesh_intersect(&[5.0, 0.0, 0.0], &[0.0, 0.0, -1.0], &mesh), None);
+    }
 }

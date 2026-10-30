@@ -481,8 +481,6 @@ fn start_camera_editor(gui: Option<&mut rustyac_game::render::gui::GameGui>, opt
             gui.gui.sim.replay.post_processing = Some(on);
         }
         gui.gui.apps.camera_editor = Some(rustyac_game::render::gui_apps::camera_editor_link(unix, data, shape));
-        // GraphicsManager's exposure multiplier starts at 1 (the Photo mode shows it)
-        gui.gui.apps.photo.exposure_multiplier = 1.0;
     }
 }
 
@@ -2199,9 +2197,13 @@ fn run_window(options: &Options) -> Result<(), String> {
         } else {
             camera.update(&view, &shapes[focus.index], view.acc_g, dt.as_secs_f32())
         };
+        // SAFETY: a plain call.
+        let end_key = shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x23) } != 0;
+        let end_pick = end_key.then(|| renderer.pick_centre(frame.fov, &rustyac_physics::vecmath::Mat44f { m: frame.matrix }));
         if let Some(gui) = renderer.gui() {
             let p = &mut gui.gui.apps.photo;
             (p.matrix, p.fov) = (rustyac_physics::vecmath::Mat44f { m: frame.matrix }, frame.fov);
+            p.end_pick = end_pick;
             p.camera_mode = if mouse_camera.is_some() { 6 } else { 0 };
             p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();
             // SAFETY: plain calls.

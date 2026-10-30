@@ -2231,7 +2231,7 @@ pub fn photo_start() -> rustyac_gui::app_photo_mode::PhotoLink {
     use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
     let mut matrix = xm_matrix_multiply(&Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), 0.7), &Mat44f::create_from_axis_angle(&Vec3f::new(1.0, 0.0, 0.0), -0.1));
     matrix.m[3] = [10.0, 2.0, -30.0, 1.0];
-    rustyac_gui::app_photo_mode::PhotoLink { matrix, fov: 56.0, dof_factor: 0.2, dof_focus: 5.0, exposure_multiplier: 1.0, custom_sun: None, camera_mode: 2, in_replay: false, right_button: false, middle_button: false }
+    rustyac_gui::app_photo_mode::PhotoLink { matrix, fov: 56.0, dof_factor: 0.2, dof_focus: 5.0, exposure_multiplier: 1.0, custom_sun: None, camera_mode: 2, in_replay: false, right_button: false, middle_button: false, end_pick: None }
 }
 
 /// The Camera editor's start, both sides: the F2004 (its eye point), two car cameras, the

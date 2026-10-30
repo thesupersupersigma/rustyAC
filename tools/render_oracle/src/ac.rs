@@ -1261,6 +1261,18 @@ impl Game {
                     let capture = rustyac_render::gpulog::end_capture();
                     (capture.text, capture.draws)
                 };
+                if std::env::var_os("RENDER_ORACLE_PICK").is_some() {
+                    // RayPicker::RayPicker 0x14044c3b0 (the video settings' size), pick 0x14044c8c0
+                    let (w, h) = (rd::<i32>(self.graphics, 0x14), rd::<i32>(self.graphics, 0x18));
+                    let picker = acs.alloc(0x48);
+                    let ctor: extern "C" fn(*mut u8, f32, f32) -> *mut u8 = std::mem::transmute(acs.va(0x1_4044_c3b0));
+                    let pick: extern "C" fn(*mut u8, i32, i32, *mut u8, *mut u8) = std::mem::transmute(acs.va(0x1_4044_c8c0));
+                    for at in crate::pick_at(w, h) {
+                        ctor(picker, w as f32, h as f32);
+                        pick(picker, at.0, at.1, camera, root);
+                        crate::pick_line("game", index, at, rd(picker, 0x1c));
+                    }
+                }
                 let (width, height, pixels) = self.read_back()?;
                 crate::FRAME_MS.lock().unwrap().push(started.elapsed().as_secs_f64() * 1000.0);
                 rendered.width = width;

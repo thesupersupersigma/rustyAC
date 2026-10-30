@@ -35,6 +35,8 @@ pub struct GameApps {
     replay: bool,
     /// `--gui-do app:<name>` / `show:<name>` given before the apps were made: (name, show)
     pub pending: Vec<(String, bool)>,
+    /// `--gui-do`'s commands after a pending `app:<name>`
+    pub after: String,
     /// the AI line's length (Realtime's gaps); every car has DRS (`physicsInfo.hasDRS`: its
     /// `drs.ini`); the player's controls' force feedback gain (`getFFGlobalGain`: a wheel's
     /// `controls.ini [STEER] FF_GAIN`, 1 for the others)
@@ -102,6 +104,10 @@ impl GameApps {
     pub fn make(&mut self, gui: &mut Gui, painter: &mut dyn Painter, screen: Id, setup: &GuiSetup, leaderboard: Id) {
         let system = |name: &str| read(setup.game.join("system/cfg").join(name));
         let own_or_documents = |name: &str| read(setup.cfg_dir.join(name)).or_else(|| setup.documents_cfg.as_ref().and_then(|folder| read(folder.join(name))));
+        // Sim::Sim 0x140192070: GraphicsManager's exposure multiplier (1) from exposure.ini's
+        // [EXPOSURE] VALUE when the file is there (0 for no value; text that is no number makes
+        // the game throw, here it stays 1); Sim::~Sim writes it back (GameGui::shutdown)
+        gui.apps.photo.exposure_multiplier = own_or_documents("exposure.ini").map_or(1.0, |ini| ini.get_float("EXPOSURE", "VALUE").unwrap_or(1.0));
         // Sim::addForm 0x140197ae0: a developers' app without ENABLE_DEV_APPS gets no icon and
         // is hidden
         let dev_apps = setup.dev_apps;

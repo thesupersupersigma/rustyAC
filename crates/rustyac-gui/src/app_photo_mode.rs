@@ -54,6 +54,9 @@ pub struct PhotoLink {
     /// `GetAsyncKeyState`: the right button, the middle button
     pub right_button: bool,
     pub middle_button: bool,
+    /// END held (`GetAsyncKeyState(VK_END)`): `RayPicker::pick`'s distance at the screen's
+    /// centre from the scene camera
+    pub end_pick: Option<f32>,
 }
 
 /// The members the handlers share.
@@ -235,7 +238,13 @@ impl App for PhotoMode {
             painter.gl_color4f(GRAPHICS_GL, 1.0, 1.0, 1.0, 1.0);
             painter.set_texture(0, &self.view_finder);
             painter.gl_quad(GRAPHICS_GL, 0.0, 0.0, gui.screen.0 as f32, gui.screen.1 as f32, true);
-            // shortcut: END (RayPicker's autofocus on the screen's centre) not ported, rustyAC has no ray picker; port it with the DOF pass
+            // END: the focus at what is in the screen's centre, its distance in red at the corner
+            if let Some(d) = gui.apps.photo.end_pick {
+                gui.apps.photo.dof_focus = d;
+                let font = gui.controls[id].font.unwrap_or(gui.font);
+                gui.fonts[font].set_color(1.0, 0.0, 0.0, 1.0);
+                gui.fonts[font].blit_string(painter, 0.0, 0.0, &crate::acos::format_g6(d), 1.0, crate::painter::ALIGN_LEFT);
+            }
             if gui.apps.photo.middle_button {
                 gui.apps.actions.push(AppAction::TakeScreenshot);
             }

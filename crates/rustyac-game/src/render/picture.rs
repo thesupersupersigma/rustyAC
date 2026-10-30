@@ -72,6 +72,13 @@ impl Picture {
         }
     }
 
+    pub fn pick_centre(&self, fov: f32, matrix: &rustyac_physics::vecmath::Mat44f) -> f32 {
+        match self {
+            Picture::Ac(r) => r.pick_centre(fov, matrix),
+            Picture::Debug(_) => 0.0,
+        }
+    }
+
     pub fn gui(&mut self) -> Option<&mut super::gui::GameGui> {
         match self {
             Picture::Ac(r) => r.gui.as_deref_mut(),

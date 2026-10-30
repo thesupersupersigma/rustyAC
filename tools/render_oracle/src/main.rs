@@ -416,6 +416,22 @@ fn parse() -> Result<Args, String> {
 /// game's own renderer against the port's (with `RENDER_ORACLE_HARDWARE=1`).
 pub static FRAME_MS: std::sync::Mutex<Vec<f64>> = std::sync::Mutex::new(Vec::new());
 
+/// Task 44c: `RENDER_ORACLE_PICK=<file stem>`: every captured frame's `RayPicker::pick` (Photo
+/// mode's END) at the screen points of [`PICK_AT`], one line each, into `<stem>.<side>.txt`.
+pub fn pick_line(side: &str, index: usize, at: (i32, i32), distance: f32) {
+    use std::io::Write;
+    let Some(stem) = std::env::var_os("RENDER_ORACLE_PICK") else { return };
+    let path = format!("{}.{side}.txt", stem.to_string_lossy());
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "frame {index} at {} {}: {:08x} {distance}", at.0, at.1, distance.to_bits());
+    }
+}
+
+/// The picked points, as parts of the screen: its centre (END's), and around it.
+pub fn pick_at(w: i32, h: i32) -> [(i32, i32); 5] {
+    [(w / 2, h / 2), (w / 4, h / 2), (w * 3 / 4, h * 2 / 3), (w / 2, h * 3 / 4), (w / 3, h / 3)]
+}
+
 pub fn timing() -> bool {
     std::env::var_os("RENDER_ORACLE_TIMING").is_some_and(|v| v == "1")
 }

@@ -627,6 +627,13 @@ pub struct AcRenderer {
 impl AcRenderer {
     /// `GraphicsManager::useCustomSunDirection` / `customSunDirection` (the Photo mode's sun);
     /// None: the sun of the time of day.
+    /// Photo mode's END: `RayPicker::pick` at the screen's centre from a camera (its field of
+    /// view, its matrix) against the whole scene (`Sim::rootNode`).
+    pub fn pick_centre(&self, fov: f32, matrix: &rustyac_physics::vecmath::Mat44f) -> f32 {
+        let (w, h) = (self.graphics.video.width, self.graphics.video.height);
+        self.scene.ray_picker_pick(self.root, w as f32, h as f32, w / 2, h / 2, fov, matrix)
+    }
+
     pub fn set_custom_sun(&mut self, direction: Option<rustyac_physics::vecmath::Vec3f>) {
         self.graphics.use_custom_sun_direction = direction.is_some();
         if let Some(d) = direction {
