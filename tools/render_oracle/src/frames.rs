@@ -151,9 +151,11 @@ pub fn test_sus_lines(index: usize, wheel: usize, b: &rustyac_physics::vecmath::
 /// The console variables `--set console=` knows (Task 43c): the car's, the track's, the
 /// camera's and `Sim`'s that change the picture. `graphicsPitchRotation` is in radians, as
 /// `Console::onSetVar` passes it on.
-pub const CONSOLE_VARS: [&str; 31] = [
+pub const CONSOLE_VARS: [&str; 32] = [
     "debugDamage", "hideHead", "headRoll", "headPitch", "headYaw", "headMaxG", "headFilter", "RPM_STEP", "RPM_ZERO", "SPEED_STEP", "SPEED_ZERO", "FUEL_STEP", "FUEL_ZERO", "FUEL_MIN", "wATER_STEP", "WATER_ZERO", "WATER_MIN", "debugDirt",
     "graphicsOffset.x", "graphicsOffset.y", "graphicsOffset.z", "graphicsPitchRotation", "sunHeading", "sunPitch", "hideGroove", "maxLayer", "shadowBias", "mirrorpos.x", "mirrorpos.y", "mirrorpos.z", "lodDebug",
+    // Task 44c
+    "axisMode",
 ];
 
 /// What a frame sets beside the car's physics state (`--set`), on both sides alike.

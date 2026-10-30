@@ -119,6 +119,9 @@ pub struct Camera {
     pub is_mirror: bool,
     pub lod_multiplier: f32,
     pub is_cube_map_camera: bool,
+    /// `axisRenderingMode` (+0x7c): the console's `axisMode` (0 none, 1 the world's axes
+    /// in the scene, 2 over it)
+    pub axis_rendering_mode: i32,
 }
 
 impl Camera {
@@ -143,6 +146,33 @@ impl Camera {
             is_mirror: false,
             lod_multiplier: 1.0,
             is_cube_map_camera: false,
+            axis_rendering_mode: 0,
+        }
+    }
+
+    /// `Camera::renderAxis` 0x14020f360: the world's axes at the origin, 1 m each (x red, y
+    /// green, z blue). `axis3d` is never set in `acs.exe`.
+    pub fn render_axis(&self, graphics: &mut Graphics, depth: bool) {
+        if !depth {
+            graphics.set_depth_mode(DEPTH_OFF);
+        }
+        graphics.set_world_matrix(&Mat44f::IDENTITY);
+        if let (true, Some(mut gl)) = ((self.axis_rendering_mode.wrapping_sub(1) as u32) <= 1, graphics.gl.take()) {
+            gl.color4f(3.0, 0.0, 0.0, 1.0);
+            gl.begin(crate::gl::GL_LINES, None);
+            gl.vertex3f(0.0, 0.0, 0.0);
+            gl.vertex3f(1.0, 0.0, 0.0);
+            gl.color4f(0.0, 3.0, 0.0, 1.0);
+            gl.vertex3f(0.0, 0.0, 0.0);
+            gl.vertex3f(0.0, 1.0, 0.0);
+            gl.color4f(0.0, 0.0, 3.0, 1.0);
+            gl.vertex3f(0.0, 0.0, 0.0);
+            gl.vertex3f(0.0, 0.0, 1.0);
+            gl.end(graphics);
+            graphics.gl = Some(gl);
+        }
+        if !depth {
+            graphics.set_depth_mode(DEPTH_NORMAL);
         }
     }
 
@@ -398,6 +428,9 @@ impl CameraShadowMapped {
         {
             let mut rc = RenderContext { material_filter: &mut filter, pass_id: PASS_OPAQUE, max_layer, camera: self.camera.cull_camera() };
             scene.render(graphics, node, &mut rc);
+        }
+        if self.camera.axis_rendering_mode != 0 {
+            self.camera.render_axis(graphics, self.camera.axis_rendering_mode == 1);
         }
         graphics.trigger_query("MAIN_PASS");
         graphics.set_depth_mode(DEPTH_NO_WRITE);

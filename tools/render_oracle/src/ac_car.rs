@@ -622,6 +622,12 @@ impl Game {
             "hideGroove" if !grooves.is_null() => wr(grooves, 0x88, (value != 0.0) as u8),
             "maxLayer" => wr(camera, 0x1ac, value),
             "shadowBias" => wr(camera, 0x228, value),
+            // Sim's lambda (0x140196710): Camera::axisRenderingMode (+0x7c), 0 to 2 only
+            "axisMode" => {
+                if (0.0..=2.0).contains(&value) {
+                    wr(camera, 0x7c, value as i32);
+                }
+            }
             "mirrorpos.x" | "mirrorpos.y" | "mirrorpos.z" if !avatar.is_null() => wr(avatar, 0x120 + 4 * k("mirrorpos."), value),
             // Console::onSetVar: setGraphicsOffset with one component changed, setGraphicsPitchRotation
             "graphicsOffset.x" | "graphicsOffset.y" | "graphicsOffset.z" if !avatar.is_null() => wr(avatar, 0x104c + 4 * k("graphicsOffset."), value),

@@ -5,7 +5,7 @@
 //! 0x14018c8f0 finds the first registration of the name): the player's car's own
 //! ([`CarAvatar::console_set`]), the track's, the scene camera's and `Sim`'s targets.
 //! `bias*` changes nothing (the camera sets the shadow bias again every frame); `minExposure`
-//! has no reader; the `hdr*` levels find no `HDR`; `axisMode` is not ported.
+//! has no reader; the `hdr*` levels find no `HDR`.
 
 use crate::car::CarAvatar;
 use crate::graphics::Graphics;
@@ -32,6 +32,12 @@ pub fn console_set(graphics: &mut Graphics, camera: &mut CameraForwardYebis, car
         // the targets: Camera::maxLayer, CameraShadowMapped::shadowBias, CarAvatar::mirrorPosition
         "maxLayer" => camera.base.camera.max_layer = value,
         "shadowBias" => camera.base.shadow_bias = value,
+        // Sim's lambda: the scene camera's axisRenderingMode, 0 to 2 only
+        "axisMode" => {
+            if (0.0..=2.0).contains(&value) {
+                camera.base.camera.axis_rendering_mode = value as i32;
+            }
+        }
         "mirrorpos.x" | "mirrorpos.y" | "mirrorpos.z" => {
             if let Some(car) = car {
                 car.mirror_position[(name.as_bytes()[10] - b'x') as usize] = value;
