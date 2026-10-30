@@ -175,6 +175,8 @@ pub struct SimLink {
     pub online_link: crate::race_control_online::OnlineLink,
     /// Task 45: the time-attack mode (`getGameObject<TimeAttack>`), when the session is one
     pub time_attack: Option<crate::time_attack::TimeAttackLink>,
+    /// Task 45: a drift session's mode
+    pub drift: Option<crate::drift::DriftLink>,
 }
 
 /// `PauseMenu`'s own members.

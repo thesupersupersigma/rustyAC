@@ -581,7 +581,7 @@ fn mode_micro(args: &Args) -> Result<(), String> {
         acs.silence_game_stdout();
     }
     let r = unsafe { game::modes::micro(&acs, &root, &ac, args.seed as u32, args.steps.unwrap_or(40))? };
-    println!("mode-micro seed {}: {} event files ({} bytes) decrypted, {} race.ini read ({} goals), {} hotlap laps judged ({} messages), race_out.json {} bytes, {} time attack sessions ({} frames, {} checkpoints, {} messages)", args.seed, r.files, r.bytes, r.inis, r.conditions, r.laps, r.messages, r.json_bytes, r.ta_sessions, r.ta_frames, r.ta_checkpoints, r.ta_messages);
+    println!("mode-micro seed {}: {} event files ({} bytes) decrypted, {} race.ini read ({} goals), {} hotlap laps judged ({} messages), race_out.json {} bytes, {} time attack sessions ({} frames, {} checkpoints, {} messages), {} drift steps ({} drifts, {} combos, {:.0} points)", args.seed, r.files, r.bytes, r.inis, r.conditions, r.laps, r.messages, r.json_bytes, r.ta_sessions, r.ta_frames, r.ta_checkpoints, r.ta_messages, r.drift_steps, r.drifts, r.drift_combos, r.drift_points);
     match r.mismatch {
         None => {
             println!("modes: IDENTICAL");

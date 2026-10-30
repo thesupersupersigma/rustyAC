@@ -9,7 +9,8 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ac::{rd, wr, wstring, Game};
+use crate::ac::{rd, wr, write_wstring, wstring, Game};
+use crate::gui_ac::read_wstring;
 use crate::gui_ac_hud::HudGame;
 
 const VA_TA_VTABLE: usize = 0x1_404d_c990;
@@ -127,4 +128,141 @@ pub unsafe fn dump(out: &mut String) {
     }
     let g = TA_GUI_INFO;
     out.push_str(&line(rd(ta, TA_STATUS + 0x40), [rd(ta, g + 4), rd(ta, g + 8), rd(ta, g + 0xc), rd(ta, g + 0x10), rd(ta, g + 0x14), rd(ta, g + 0x18)]));
+}
+
+// DriftMode's HUD: the mode's logic runs in its renderHUD, so the dump has every member the
+// frame moved; the car's drift numbers are the script's, written into the car's physics copy.
+
+const VA_DRIFT_VTABLE: usize = 0x1_404b_3848;
+const VA_DRIFT_RENDER_HUD: usize = 0x1_4008_b7c0;
+const VA_SET_GENTLE_STOP: usize = 0x1_400d_a280;
+const VA_REGISTER_TO_FADE_IN: usize = 0x1_4003_3ce0;
+const VA_FADE_IN: usize = 0x1_4003_3690;
+const DRIFT_SIZE: usize = 0x1248;
+const DRIFT_TEXTURES: [(usize, &str); 8] = [(0xe8, "star"), (0x110, "time_icon"), (0x138, "points_icon"), (0x160, "instantDrift"), (0x188, "instantDriftExtreme"), (0x1b0, "levelup"), (0x1d8, "combo"), (0x200, "drift_start")];
+/// CarAvatar's physics copy: speed, driftPoints, instantDrift, driftComboCounter, driftBonusOn
+const CA_SPEED: usize = 0x4d8;
+const CA_DRIFT: [usize; 4] = [0x988, 0x98c, 0x994, 0x998];
+
+static DRIFT: AtomicUsize = AtomicUsize::new(0);
+/// speed, points, instant, combo, bonus
+static DRIFT_CAR: std::sync::Mutex<[f32; 5]> = std::sync::Mutex::new([0.0; 5]);
+
+unsafe extern "C" fn first(a: usize) -> usize {
+    a
+}
+
+/// The car inputs a script names (index into `DRIFT_CAR`), then the mode's own members.
+pub fn drift_input(name: &str) -> Option<usize> {
+    ["speed", "points", "instant", "combo", "bonus"].iter().position(|n| *n == name)
+}
+
+pub fn drift_member(name: &str) -> Option<(usize, bool)> {
+    Some(match name {
+        "mode" => (0xd8, false),
+        "seconds" => (0x288, true),
+        "level" => (0x28c, false),
+        "session" => (0x290, true),
+        _ => return None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn drift_line(mode: i32, floats: [f32; 6], ints: [i32; 5], bonuses: [(f32, String); 2]) -> String {
+    let [combo, level_up, old, seconds, session, per_level] = floats.map(f32::to_bits);
+    let [last_time, level, max_points, last_points, last_seconds] = ints;
+    let [(ty, tt), (py, pt)] = bonuses;
+    format!(
+        "hud drift mode={mode} combo={combo:08x} levelUp={level_up:08x} old={old:08x} seconds={seconds:08x} session={session:08x} perLevel={per_level:08x} lastTime={last_time} level={level} maxPoints={max_points} last={last_points},{last_seconds} bonusTime={:08x} {tt:?} bonusPoints={:08x} {pt:?}\n",
+        ty.to_bits(),
+        py.to_bits()
+    )
+}
+
+/// `dr.create`, `dr.<car input> <value>`, `dr.<member> <value>`.
+pub unsafe fn drift_call(game: &Game, h: &mut HudGame, what: &str, number: f32) -> Result<(), String> {
+    let a = &game.acs;
+    let name = what.trim_start_matches("dr.");
+    if name == "create" {
+        let d = a.alloc(DRIFT_SIZE);
+        std::ptr::write_bytes(d, 0, DRIFT_SIZE);
+        wr(d, 0, a.va(VA_DRIFT_VTABLE));
+        wr(d, 8, rd::<*mut u8>(h.sim, 0x8));
+        wr(d, 0xc0, 1u8); // GameMode::valid
+        wr(d, 0xc4, -1i32); // GameMode::currentTier
+        let font = a.alloc(0x40);
+        let ctor: extern "C" fn(*mut u8, i32, f32, bool, bool) -> *mut u8 = std::mem::transmute(a.va(VA_FONT_CTOR));
+        ctor(font, 1, 35.0, false, false);
+        wr(font, 4, 1u8);
+        wr(d, 0xc8, font);
+        wr(d, 0xd8, 2i32);
+        wr(d, 0xe0, h.cars[0]);
+        let get_texture: extern "C" fn(*mut u8, *mut u8, *const u8, bool) -> *mut u8 = std::mem::transmute(a.va(VA_RESOURCE_STORE_GET_TEXTURE));
+        for (at, name) in DRIFT_TEXTURES {
+            get_texture(rd(game.graphics, 0x180), d.add(at), wstring(a, &format!("content/gui/drift/{name}.png")), false);
+        }
+        for at in [0x228 + 8, 0x250 + 8] {
+            write_wstring(a, d.add(at), "");
+        }
+        wr(d, 0x288, 60.0f32);
+        for i in 0..1000 {
+            wr(d, 0x29c + i * 4, (200 + 100 * i) as f32);
+        }
+        for va in [VA_SET_GENTLE_STOP, VA_REGISTER_TO_FADE_IN, VA_FADE_IN] {
+            crate::gui_ac_hud::jump(game, va, first as *const () as usize);
+        }
+        // among the Sim's children, for the end screen's getGameObject<DriftMode>
+        let (begin, end): (*mut usize, *mut usize) = (rd(h.sim, 0x40), rd(h.sim, 0x48));
+        if end.offset_from(begin) >= 4 {
+            return Err("no room for the mode among the Sim's children".into());
+        }
+        *end = d as usize;
+        wr(h.sim, 0x48, end.add(1));
+        DRIFT.store(d as usize, Ordering::SeqCst);
+        return Ok(());
+    }
+    let d = DRIFT.load(Ordering::SeqCst) as *mut u8;
+    if d.is_null() {
+        return Err("no drift mode (dr.create first)".into());
+    }
+    if let Some(i) = drift_input(name) {
+        DRIFT_CAR.lock().unwrap()[i] = number;
+        return Ok(());
+    }
+    match drift_member(name) {
+        Some((at, true)) => wr(d, at, number),
+        Some((at, false)) => wr(d, at, number as i32),
+        None => return Err(format!("the game side knows no drift member {what:?}")),
+    }
+    Ok(())
+}
+
+pub unsafe fn drift_render_hud(game: &Game, h: &HudGame, dt: f32) {
+    let d = DRIFT.load(Ordering::SeqCst) as *mut u8;
+    if d.is_null() {
+        return;
+    }
+    let [speed, points, instant, combo, bonus] = *DRIFT_CAR.lock().unwrap();
+    let car = h.cars[0];
+    wr(car, CA_SPEED, speed);
+    wr(car, CA_DRIFT[0], points);
+    wr(car, CA_DRIFT[1], instant);
+    wr(car, CA_DRIFT[2], combo as i32);
+    wr(car, CA_DRIFT[3], (bonus != 0.0) as u8);
+    let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_DRIFT_RENDER_HUD));
+    render(d, dt);
+}
+
+pub unsafe fn drift_dump(out: &mut String) {
+    let d = DRIFT.load(Ordering::SeqCst) as *const u8;
+    if d.is_null() {
+        return;
+    }
+    let bonus = |at: usize| (rd::<f32>(d, at), read_wstring(d.add(at + 8)));
+    out.push_str(&drift_line(
+        rd(d, 0xd8),
+        [rd(d, 0x27c), rd(d, 0x280), rd(d, 0x284), rd(d, 0x288), rd(d, 0x290), rd(d, 0x298)],
+        [rd(d, 0x278), rd(d, 0x28c), rd(d, 0x294), rd(d, 0x123c), rd(d, 0x1240)],
+        [bonus(0x228), bonus(0x250)],
+    ));
 }

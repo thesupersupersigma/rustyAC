@@ -95,3 +95,79 @@ pub fn dump(out: &mut String) {
         }
     });
 }
+
+// DriftMode: `rustyac_physics::race::drift::DriftMode::hud` per frame, drawn by
+// `rustyac_gui::drift::DriftHud`.
+
+struct Drift {
+    mode: rustyac_physics::race::drift::DriftMode,
+    hud: rustyac_gui::drift::DriftHud,
+    /// speed, points, instant, combo, bonus (the game side's car inputs)
+    car: [f32; 5],
+}
+
+thread_local! {
+    static DRIFT: RefCell<Option<Drift>> = const { RefCell::new(None) };
+}
+
+pub fn drift_call(painter: &mut dyn Painter, what: &str, number: f32) -> Result<(), String> {
+    use rustyac_physics::race::drift::{DriftMode, DriftStatus};
+    DRIFT.with(|d| {
+        let mut d = d.borrow_mut();
+        let name = what.trim_start_matches("dr.");
+        if name == "create" {
+            *d = Some(Drift { mode: DriftMode::new(Default::default()), hud: rustyac_gui::drift::DriftHud::new(painter), car: [0.0; 5] });
+            return Ok(());
+        }
+        let Some(Drift { mode, car, .. }) = d.as_mut() else { return Err("no drift mode (dr.create first)".to_string()) };
+        if let Some(i) = crate::gui_ac_modes::drift_input(name) {
+            car[i] = number;
+            return Ok(());
+        }
+        crate::gui_ac_modes::drift_member(name).ok_or_else(|| format!("the port side knows no drift member {what:?}"))?;
+        match name {
+            "mode" => mode.mode = [DriftStatus::Over, DriftStatus::Drifting, DriftStatus::Still][number as usize],
+            "seconds" => mode.seconds_left = number,
+            "level" => mode.current_level = number as i32,
+            _ => mode.session_points = number,
+        }
+        Ok(())
+    })
+}
+
+pub fn drift_sync(gui: &mut Gui) {
+    DRIFT.with(|d| {
+        if let Some(d) = d.borrow().as_ref() {
+            gui.sim.drift = Some(rustyac_gui::drift::DriftLink { session_points: d.mode.session_points, drawn: d.mode.drawn });
+        }
+    });
+}
+
+pub fn drift_render_hud(hud: &HudPort, gui: &mut Gui, painter: &mut dyn Painter, dt: f32) {
+    DRIFT.with(|d| {
+        let mut d = d.borrow_mut();
+        let Some(Drift { mode, hud: drawn, car }) = d.as_mut() else { return };
+        let input = &hud.input;
+        let [speed, drift_points, instant_drift, combo, bonus] = *car;
+        let frame = rustyac_physics::race::drift::DriftFrame { drift_points, instant_drift, combo: combo as i32, bonus_on: bonus != 0.0, speed, esc_open: input.esc_menu_visible, paused: input.pause_menu_visible, replay: input.in_replay };
+        let mut out = Default::default();
+        mode.drawn = mode.hud(dt, &frame, &mut |_, _| {}, &mut out);
+        let link = rustyac_gui::drift::DriftLink { session_points: mode.session_points, drawn: mode.drawn };
+        gui.sim.drift = Some(link);
+        drawn.render_hud(gui, painter, &link);
+    });
+}
+
+pub fn drift_dump(out: &mut String) {
+    DRIFT.with(|d| {
+        let d = d.borrow();
+        let Some(Drift { mode: m, .. }) = d.as_ref() else { return };
+        let text = |b: &rustyac_physics::race::drift::Bonus, unit: &str| if b.value == 0 { String::new() } else { format!("+{}{unit}", b.value) };
+        out.push_str(&crate::gui_ac_modes::drift_line(
+            m.mode as i32,
+            [m.max_session_combo_count, m.level_up_time, m.old_points, m.seconds_left, m.session_points, m.current_points_per_level],
+            [m.last_time_left, m.current_level, m.max_points, m.last_points_achieved, m.last_seconds_achieved],
+            [(m.bonus_time.y, text(&m.bonus_time, "\"")), (m.bonus_points.y, text(&m.bonus_points, " pt"))],
+        ));
+    });
+}

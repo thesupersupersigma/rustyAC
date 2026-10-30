@@ -1348,3 +1348,24 @@ pub fn time_attack(sectors: u32) -> Vec<Op> {
     o.extend([hud("menu.end", 0.0, ""), f.clone(), hud("menu.endShow", 0.0, ""), f.clone(), f.clone(), hud("ta.points", -20.0, ""), f.clone()]);
     o
 }
+
+/// Task 45: `DriftMode`'s HUD and its end screen (the mode's logic is in its renderHUD).
+pub fn drift() -> Vec<Op> {
+    let f = Op::Frame(DT);
+    let mut o = Vec::new();
+    field(&mut o, 1);
+    o.extend([hud("race.sessions", 0.0, "6:0:Drift"), hud("race.current", 0.0, ""), hud("session", 6.0, ""), hud("menu.pause", 0.0, ""), hud("dr.create", 0.0, ""), f.clone(), f.clone()]);
+    // the start picture until the car is over 15 km/h
+    o.extend([hud("dr.speed", 4.0, ""), f.clone(), hud("dr.speed", 12.0, ""), f.clone(), f.clone()]);
+    // a drift in progress, a combo with the bonus on, then banked: a level and seconds
+    o.extend([hud("dr.instant", 35.5, ""), hud("dr.combo", 1.0, ""), f.clone(), hud("dr.instant", 120.9, ""), hud("dr.combo", 3.0, ""), hud("dr.bonus", 1.0, ""), f.clone(), f.clone()]);
+    o.extend([hud("dr.points", 250.7, ""), hud("dr.instant", 0.0, ""), hud("dr.combo", 0.0, ""), hud("dr.bonus", 0.0, ""), f.clone(), f.clone(), Op::Frame(0.4), f.clone(), Op::Frame(0.7), f.clone(), Op::Frame(2.5), f.clone()]);
+    // a drift bigger than the level, a gain inside one point, little time left
+    o.extend([hud("dr.instant", 400.0, ""), f.clone(), hud("dr.points", 251.2, ""), hud("dr.instant", 0.0, ""), f.clone(), hud("dr.points", 680.0, ""), f.clone(), f.clone(), hud("dr.seconds", 5.5, ""), f.clone()]);
+    // nothing behind the menus or in a replay
+    o.extend([hud("menu.esc", 0.0, ""), f.clone(), hud("menu.resume", 0.0, ""), f.clone(), hud("replay", 1.0, ""), f.clone(), hud("replay", 0.0, ""), f.clone()]);
+    // the clock runs out during a drift (held at 0), the drift ends: over, the results
+    o.extend([hud("dr.seconds", 0.01, ""), hud("dr.instant", 50.0, ""), f.clone(), f.clone(), hud("dr.instant", 0.0, ""), hud("dr.points", 730.4, ""), f.clone(), f.clone(), f.clone()]);
+    o.extend([hud("menu.end", 0.0, ""), f.clone(), hud("menu.endShow", 0.0, ""), f.clone(), f.clone()]);
+    o
+}

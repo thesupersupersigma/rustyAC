@@ -51,6 +51,7 @@ pub mod app_suspension;
 pub mod app_volumes;
 pub mod apps;
 pub mod control;
+pub mod drift;
 pub mod end_session;
 pub mod esc_menu;
 pub mod font;

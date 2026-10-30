@@ -1079,6 +1079,7 @@ pub fn sequence(name: &str) -> Result<Sequence, String> {
         "lb_tab_24" => plain(crate::gui_seq_menu::leaderboard(2, 24)),
         "lb_online_12" => plain(crate::gui_seq_menu::leaderboard(3, 12)),
         "ta_hud" => plain(crate::gui_seq_menu::time_attack(3)),
+        "drift_hud" => plain(crate::gui_seq_menu::drift()),
         "ta_none" => plain(crate::gui_seq_menu::time_attack(0)),
         "end_race_12" => plain(crate::gui_seq_menu::end_session(3, 12)),
         "end_race_24" => plain(crate::gui_seq_menu::end_session(3, 24)),

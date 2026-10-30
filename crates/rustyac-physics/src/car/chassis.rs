@@ -580,6 +580,8 @@ pub struct RollingChassis {
     /// time" penalty, the shared memory and the online car updates read it
     /// ([`RollingChassis::performance_split`]). The car oracle's game side switches it off unless
     /// `CAR_ORACLE_PERF_METER=1`, and the replays of its recordings do the same.
+    /// Task 45: `DriftModeComponent` (Car+0x3510), the player's car's drift points
+    pub drift: super::drift::DriftModeComponent,
     pub performance_meter: super::performance_meter::PerformanceMeter,
     /// `Car::penaltyManager`
     pub penalty_manager: PenaltyManager,
@@ -1107,6 +1109,7 @@ impl RollingChassis {
             penalty_time_accumulator: 0.0,
             disable_min_speed_penalty_clear: false,
             penalty_perf_target: 0.0,
+            drift: Default::default(),
             // PerformanceMeter::init in Car::Car
             performance_meter: {
                 let mut meter = super::performance_meter::PerformanceMeter::default();
@@ -2212,6 +2215,16 @@ impl RollingChassis {
         }
         self.setup_manager = manager;
         // 21 to 29: telemetry, lap timing, stability control
+        // 22: DriftModeComponent::step, the player's car only
+        if self.env.is_first_car {
+            let tyre = |k: usize| {
+                let t = &self.tyres[k];
+                super::drift::DriftTyre { surface: t.surface_def.as_ref().map(|s| (s.grip_mod, s.dirt_additive_k)), load: t.status.load, slip_ratio: t.status.slip_ratio, angular_velocity: t.status.angular_velocity }
+            };
+            let lv = self.core.get_local_velocity(self.body);
+            let input = super::drift::DriftInput { local_velocity: [lv.x, lv.y, lv.z], speed: self.speed, gear: self.drivetrain.as_ref().map_or(0, |d| d.base().current_gear), damage_zone_level: self.damage_zone_level, tyres: [tyre(0), tyre(1), tyre(2), tyre(3)] };
+            self.drift.step(dt, &input);
+        }
         // 23: PerformanceMeter::step, the player's car only (what the last step's lap timer and
         // spline locator left, the speed of this step's start)
         if self.env.is_first_car {

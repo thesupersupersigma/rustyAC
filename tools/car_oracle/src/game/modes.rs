@@ -8,7 +8,9 @@
 //!   every official event) against `GameMode::new`;
 //! * `HotlapMode`'s lap handler on made-up laps against `Mode::on_lap_completed`;
 //! * `TimeAttack::update` (with its penalties and goals) on made-up frames against
-//!   `rustyac_physics::race::time_attack`, field by field every frame.
+//!   `rustyac_physics::race::time_attack`, field by field every frame;
+//! * `DriftModeComponent::step` on made-up drives against `rustyac_physics::car::drift`,
+//!   every member every physics step.
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -56,6 +58,10 @@ pub struct Report {
     pub ta_frames: usize,
     pub ta_checkpoints: usize,
     pub ta_messages: usize,
+    pub drift_steps: usize,
+    pub drifts: usize,
+    pub drift_combos: usize,
+    pub drift_points: f64,
     pub mismatch: Option<String>,
 }
 
@@ -214,7 +220,123 @@ pub unsafe fn micro(acs: &Acs, root: &Path, ac: &Path, seed: u32, laps_per_case:
     if let Err(what) = done {
         differ(&mut report, what);
     }
+    // 6. the drift points of the physics
+    if let Err(what) = drift_component(acs, &mut next, laps_per_case * 2000, &mut report) {
+        differ(&mut report, what);
+    }
     Ok(report)
+}
+
+const VA_DRIFT_STEP: usize = 0x1_402b_ff20; // DriftModeComponent::step(float)
+const CAR_BODY: usize = 0x118;
+const CAR_GEAR: usize = 0x894;
+const CAR_TYRES: usize = 0xb28; // Tyre[4], 0x858 each: surfaceDef* +0x410, TyreStatus +0x2e8
+const CAR_DAMAGE: usize = 0x3de0;
+const CAR_DRIFT: usize = 0x3510;
+const CAR_SPEED: usize = 0x3e90;
+
+thread_local! {
+    static LOCAL_VELOCITY: std::cell::Cell<[f32; 3]> = const { std::cell::Cell::new([0.0; 3]) };
+}
+
+extern "C" fn local_velocity(_body: *mut u8, out: *mut [f32; 3]) -> *mut [f32; 3] {
+    unsafe { *out = LOCAL_VELOCITY.with(|v| v.get()) };
+    out
+}
+
+/// The game's `DriftModeComponent` against the port's, on drives made of slides one way and
+/// the other, straights, slow parts, dirt, knocks and neutral.
+unsafe fn drift_component(acs: &Acs, next: &mut dyn FnMut() -> u32, steps: usize, report: &mut Report) -> Result<(), String> {
+    use rustyac_physics::car::drift::{DriftInput, DriftModeComponent, DriftTyre};
+    let car = zeroed(0x4000);
+    let vtable = zeroed(0x100);
+    wr(vtable, 0xb8, local_velocity as *const () as usize);
+    let body = zeroed(0x40);
+    wr(body, 0, vtable);
+    wr(car, CAR_BODY, body);
+    let surfaces = [zeroed(0x100), zeroed(0x100), zeroed(0x100), zeroed(0x100)];
+    let game = car.add(CAR_DRIFT);
+    wr(game, 0, car);
+    let step: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_DRIFT_STEP));
+    let mut port = DriftModeComponent::default();
+    let mut unit = || (next() % 10_000) as f32 / 10_000.0;
+    let (mut speed, mut angle, mut side, mut gear) = (30.0f32, 0.0f32, 1.0f32, 3);
+    let mut f = DriftInput::default();
+    let (mut was_drifting, mut combo) = (false, 0);
+    for n in 0..steps {
+        // a new part of the drive now and then
+        if n % 600 == 0 {
+            let r = unit();
+            angle = if r < 0.15 { 0.0 } else if r < 0.25 { 0.1 } else { 0.15 + unit() * 0.9 };
+            speed = if unit() < 0.1 { 4.0 } else { 6.0 + unit() * 40.0 };
+            gear = if unit() < 0.05 { 0 } else { 2 + (unit() * 4.0) as i32 };
+        }
+        if n % 200 == 0 && unit() < 0.4 {
+            side = -side; // a flick the other way: a combo
+        }
+        speed = (speed + (unit() - 0.5) * 0.2).max(0.0);
+        let a = side * (angle + (unit() - 0.5) * 0.02);
+        f.local_velocity = [speed * a.sin(), (unit() - 0.5) * 0.1, speed * a.cos()];
+        f.speed = speed;
+        f.gear = gear;
+        if unit() < 0.0008 {
+            f.damage_zone_level[(unit() * 5.0) as usize] += unit() * 10.0;
+        }
+        for (k, t) in f.tyres.iter_mut().enumerate() {
+            let dirt = if unit() < 0.002 { unit() * 0.01 } else if unit() < 0.01 { 0.0 } else { t.surface.map_or(0.0, |s| s.1) };
+            t.surface = if n % 5000 < 30 && k == 3 { None } else { Some((if unit() < 0.01 { 0.85 } else { 1.0 }, dirt)) };
+            t.load = if unit() < 0.02 { 5.0 } else { 1000.0 + unit() * 3000.0 };
+            t.slip_ratio = (unit() - 0.3) * 1.6 * angle;
+            t.angular_velocity = (unit() - 0.1) * 120.0;
+        }
+        let dt = if n % 7 == 0 { 0.003 } else { 0.0030003 };
+        // the game's car
+        LOCAL_VELOCITY.with(|v| v.set(f.local_velocity));
+        wr(car, CAR_SPEED, f.speed);
+        wr(car, CAR_GEAR, f.gear);
+        for i in 0..5 {
+            wr(car, CAR_DAMAGE + 4 * i, f.damage_zone_level[i]);
+        }
+        for (k, t) in f.tyres.iter().enumerate() {
+            let tyre = car.add(CAR_TYRES + 0x858 * k);
+            match t.surface {
+                Some((grip, dirt)) => {
+                    wr(surfaces[k], 0x90, grip);
+                    wr(surfaces[k], 0x98, dirt);
+                    wr(tyre, 0x410, surfaces[k]);
+                }
+                None => wr(tyre, 0x410, 0usize),
+            }
+            wr(tyre, 0x2e8 + 4, t.load);
+            wr(tyre, 0x2e8 + 0x10, t.slip_ratio);
+            wr(tyre, 0x2e8 + 0x14, t.angular_velocity);
+        }
+        step(game, dt);
+        port.step(dt, &f);
+        let theirs = DriftModeComponent {
+            drift_straight_timer: rd(game, 0x8),
+            points: rd(game, 0x10),
+            instant_drift: rd(game, 0x18),
+            current_speed_multiplier: rd(game, 0x20),
+            current_drift_angle: rd(game, 0x28),
+            combo_counter: rd(game, 0x30),
+            last_drift_direction: rd(game, 0x34),
+            extreme_drifting: rd::<u8>(game, 0x38) != 0,
+            drifting: rd::<u8>(game, 0x39) != 0,
+            invalid: rd::<u8>(game, 0x3a) != 0,
+            old_damage_zones: [rd(game, 0x3c), rd(game, 0x40), rd(game, 0x44), rd(game, 0x48), rd(game, 0x4c)],
+        };
+        let bits = |c: &DriftModeComponent| format!("{:08x} {:016x} {:016x} {:016x} {:016x} {} {} {} {} {} {:?}", c.drift_straight_timer.to_bits(), c.points.to_bits(), c.instant_drift.to_bits(), c.current_speed_multiplier.to_bits(), c.current_drift_angle.to_bits(), c.combo_counter, c.last_drift_direction, c.extreme_drifting, c.drifting, c.invalid, c.old_damage_zones.map(f32::to_bits));
+        if bits(&theirs) != bits(&port) {
+            return Err(format!("drift step {n}: the game {} and the port {} (input {f:?})", bits(&theirs), bits(&port)));
+        }
+        report.drift_steps += 1;
+        report.drifts += (port.drifting && !was_drifting) as usize;
+        report.drift_combos += (port.combo_counter > combo && combo > 0) as usize;
+        (was_drifting, combo) = (port.drifting, port.combo_counter);
+        report.drift_points = port.points;
+    }
+    Ok(())
 }
 
 const VA_TA_VTABLE: usize = 0x1_404d_c990;

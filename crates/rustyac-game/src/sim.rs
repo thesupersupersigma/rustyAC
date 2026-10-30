@@ -1658,6 +1658,12 @@ impl GameSim {
         })
     }
 
+    /// Task 45: what the drift mode's HUD draws.
+    pub fn drift_view(&self) -> Option<rustyac_gui::drift::DriftLink> {
+        let Some(rustyac_physics::race::game_mode::Mode::Drift(drift)) = self.referee.as_ref()?.mode.as_ref() else { return None };
+        Some(rustyac_gui::drift::DriftLink { session_points: drift.session_points, drawn: drift.drawn })
+    }
+
     pub fn pit_stop_view(&self) -> Option<crate::view::PitStopView> {
         let pit = match (&self.referee, &self.online) {
             (Some(referee), _) => referee.pit.as_ref(),

@@ -12,7 +12,8 @@
 //! `evOnTierCompleted` and `evOnLeaderboardScore` have only Steam's achievements and
 //! leaderboards behind them in the game, which rustyAC leaves out.
 
-use super::manager::{SESSION_HOTLAP, SESSION_TIME_ATTACK};
+use super::drift::DriftMode;
+use super::manager::{SESSION_DRIFT, SESSION_HOTLAP, SESSION_TIME_ATTACK};
 use super::time_attack::TimeAttack;
 use super::output::Node;
 use crate::data::ini::IniReader;
@@ -81,6 +82,19 @@ impl GameMode {
         mode
     }
 
+    /// The `verifyConditions` of TimeAttack and DriftMode: every goal `score` reaches is
+    /// achieved, `title` its message's text.
+    pub fn verify(&mut self, title: &str, score: f32, message: &mut dyn FnMut(&str, &str)) {
+        for i in 0..self.conditions.len() {
+            let c = &mut self.conditions[i];
+            if c.objective as f32 <= score && !c.achieved {
+                message(title, &format!("{} Achieved", c.name));
+                c.achieved = true;
+                self.current_tier = i as i32;
+            }
+        }
+    }
+
     /// `addExtraSessionInfo`'s `special_event` entry (every mode has one, goals or not).
     pub fn extra(&self) -> Node {
         Node::Object(vec![
@@ -97,6 +111,7 @@ impl GameMode {
 pub enum Mode {
     Hotlap(GameMode),
     TimeAttack(Box<TimeAttack>),
+    Drift(Box<DriftMode>),
 }
 
 impl Mode {
@@ -105,6 +120,7 @@ impl Mode {
         match session_type {
             SESSION_HOTLAP => Some(Mode::Hotlap(base.clone())),
             SESSION_TIME_ATTACK => Some(Mode::TimeAttack(Box::new(TimeAttack::new(base.clone(), base.time_attack_mult)))),
+            SESSION_DRIFT => Some(Mode::Drift(Box::new(DriftMode::new(base.clone())))),
             _ => None,
         }
     }
@@ -113,6 +129,7 @@ impl Mode {
         match self {
             Mode::Hotlap(base) => base,
             Mode::TimeAttack(ta) => &ta.base,
+            Mode::Drift(drift) => &drift.base,
         }
     }
 
@@ -139,6 +156,7 @@ impl Mode {
         match self {
             Mode::Hotlap(base) => vec![base.extra()],
             Mode::TimeAttack(ta) => vec![ta.extra(), ta.base.extra()],
+            Mode::Drift(drift) => vec![drift.extra(), drift.base.extra()],
         }
     }
 }

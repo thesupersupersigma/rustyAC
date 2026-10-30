@@ -240,7 +240,7 @@ impl EndSession {
             gui.render(self.leaderboard, dt, painter);
             return;
         }
-        // (a hot lap has no table; the drift's and the drag's banners are not ported yet)
+        // (a hot lap has no table; the drag's banner is not ported yet)
         gui.set_visible(self.leaderboard, false);
         if kind == 5 {
             let Some(ta) = gui.sim.time_attack else { return };
@@ -251,6 +251,15 @@ impl EndSession {
             let font = &mut gui.fonts[self.font];
             font.set_color(0.0, 1.0, 0.0, 1.0);
             font.blit_string(painter, half, 275.0, &(ta.points as i32).to_string(), 0.8, ALIGN_CENTER);
+        } else if kind == 6 {
+            let Some(drift) = gui.sim.drift else { return };
+            let (w, h) = painter.texture_size(&self.tex_endpoints_drift);
+            let half = painter.screen().0 as f32 * 0.5;
+            painter.set_texture(0, &self.tex_endpoints_drift);
+            painter.gl_quad(GRAPHICS_GL, half - (w >> 1) as f32, 250.0, w as f32, h as f32, true);
+            let font = &mut gui.fonts[self.font];
+            font.set_color(0.0, 1.0, 0.0, 1.0);
+            font.blit_string(painter, half, 275.0, &(drift.session_points as i32).to_string(), 0.8, ALIGN_CENTER);
         }
     }
 

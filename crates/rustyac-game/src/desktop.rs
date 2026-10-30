@@ -186,6 +186,10 @@ fn live_setup(options: &Options) -> Result<SimSetup, String> {
                 referee.sessions.penalties_enabled = penalties;
                 setup.env.allowed_tyres_out = referee.sessions.allowed_tyres_out();
             }
+            // Task 45: DriftMode's constructor lets the player's car have two tyres out
+            if referee.sessions.sessions.first().is_some_and(|s| s.session_type == rustyac_physics::race::manager::SESSION_DRIFT) {
+                setup.env.allowed_tyres_out = 2;
+            }
             if let Some(seconds) = options.race_start_in {
                 referee.first_start_delay_ms = (seconds * 1000.0) as f32;
                 referee.next_start_delay_ms = (seconds * 1000.0) as f32;

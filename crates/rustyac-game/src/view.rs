@@ -107,6 +107,8 @@ pub struct CarView {
     /// `CarPhysicsState::performanceMeter` (s) and `performanceMeterSpeedDiffMS` (m/s): the
     /// car's `PerformanceMeter` (Task 33)
     pub performance_meter: (f32, f32),
+    /// Task 45: the car's `DriftModeComponent`
+    pub drift: rustyac_physics::car::drift::DriftModeComponent,
     /// `TyreWearingDebug`'s rows of each tyre (Task 33b)
     pub tyre_debug: [rustyac_gui::app_tyre_debug::TyreDebugRow; 4],
     /// each wheel's `CarAvatar::getTyreCompoundIndex`, for the Tyre tester
@@ -312,6 +314,8 @@ pub struct LapView {
     pub pit_stop: Option<PitStopView>,
     /// Task 45: the time-attack session's state (`TimeAttack`), when it is one
     pub time_attack: Option<TimeAttackView>,
+    /// Task 45: what the drift mode's HUD draws (`None`: not a drift session, or nothing)
+    pub drift: Option<rustyac_gui::drift::DriftLink>,
 }
 
 /// What `TimeAttack`'s HUD and gates read of the mode.
@@ -363,6 +367,7 @@ impl Default for CarView {
             other_car_count: 0,
             new_sessions: 0,
             performance_meter: (0.0, 0.0),
+            drift: Default::default(),
             tyre_debug: Default::default(),
             compound_index: [0; 4],
             engineer: Default::default(),
@@ -578,6 +583,11 @@ impl CarView {
             disc_temps: r.disc_temps,
             status_bytes: self.lights as u32 | if self.drs { 4 } else { 0 },
             performance_meter: self.performance_meter.0,
+            drift_points: self.drift.points as f32,
+            instant_drift: self.drift.instant_drift as f32,
+            is_drift_valid: self.drift.drifting && !self.drift.invalid,
+            drift_combo_counter: self.drift.combo_counter,
+            drift_bonus_on: self.drift.extreme_drifting,
             performance_meter_speed_diff_ms: self.performance_meter.1,
             ..rustyac_physics::car_physics_state::CarPhysicsState::at_origin()
         }
@@ -712,6 +722,7 @@ impl CarView {
             other_car_count: if player { sim.opponents.len().min(OTHER_CARS) as u8 } else { 0 },
             new_sessions: sim.new_sessions,
             performance_meter: car.performance_meter_state(),
+            drift: car.drift,
             tyre_debug: std::array::from_fn(|k| {
                 car.tyres.get(k).map_or(Default::default(), |t| rustyac_gui::app_tyre_debug::TyreDebugRow {
                     virtual_km: t.status.virtual_km,
@@ -912,6 +923,7 @@ impl CarView {
                 in_pit_lane: car.is_in_pit_lane(),
                 pit_stop: if player { sim.pit_stop_view() } else { None },
                 time_attack: if player { sim.time_attack_view() } else { None },
+                drift: if player { sim.drift_view() } else { None },
             };
             if !player {
                 // another car: what its own transponder counted

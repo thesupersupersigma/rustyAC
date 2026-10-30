@@ -214,14 +214,7 @@ impl TimeAttack {
     }
 
     fn verify_conditions(&mut self, message: &mut dyn FnMut(&str, &str)) {
-        for i in 0..self.base.conditions.len() {
-            let c = &mut self.base.conditions[i];
-            if c.objective as f32 <= self.points && !c.achieved {
-                message("TimeAttack challenge", &format!("{} Achieved", c.name));
-                c.achieved = true;
-                self.base.current_tier = i as i32;
-            }
-        }
+        self.base.verify("TimeAttack challenge", self.points, message);
     }
 
     /// `renderGuiCheckpointBreak`'s timer: whether the checkpoint panel is drawn.

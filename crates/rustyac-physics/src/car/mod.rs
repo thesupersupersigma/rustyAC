@@ -48,6 +48,7 @@ pub mod body;
 pub mod brakes;
 pub mod chassis;
 pub mod colliders;
+pub mod drift;
 pub mod drivetrain;
 pub mod dynamic_controller;
 pub mod engine;

@@ -723,6 +723,10 @@ impl Referee {
     /// the budget again, the player's car to the track's `TIME_ATTACK` spawn (`START` when
     /// the track has none).
     fn time_attack_session(&mut self, world: &mut dyn World) {
+        if let Some(Mode::Drift(drift)) = &mut self.mode {
+            drift.new_session();
+            self.mode_fade = None;
+        }
         let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };
         let estimate = world.car(0).evaluate_time_from_track_spline().unwrap_or_else(|e| {
             self.log.push(format!("time attack: {e}"));
@@ -745,6 +749,28 @@ impl Referee {
                 self.manager.results_displayed = true;
                 self.apply(vec![Action::DisplayResults], world);
             }
+        }
+        if let Some(Mode::Drift(drift)) = &mut self.mode {
+            // DriftMode::renderHUD, here on the referee's frame
+            let car = world.car(0);
+            let frame = super::drift::DriftFrame {
+                drift_points: car.drift.points as f32,
+                instant_drift: car.drift.instant_drift as f32,
+                combo: car.drift.combo_counter,
+                bonus_on: car.drift.extreme_drifting,
+                speed: car.speed,
+                esc_open: self.esc_open,
+                ..Default::default()
+            };
+            let (log, mut out) = (&mut self.log, super::drift::DriftOut::default());
+            drift.drawn = drift.hud(FRAME_DT, &frame, &mut |text, description| log.push(format!("{text} {description}")), &mut out);
+            if out.fade_to_results && self.mode_fade.is_none() {
+                self.mode_fade = Some(super::manager::FADE_SECONDS);
+            }
+            if let Some(on) = out.gentle_stop {
+                world.car_mut(0).queue(move |car| car.is_gentle_stopping = on);
+            }
+            return;
         }
         let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };
         let frame = Self::time_attack_view(&self.track, &self.manager, self.esc_open, world.car(0));
