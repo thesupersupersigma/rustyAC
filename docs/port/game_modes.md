@@ -2,8 +2,30 @@
 
 ## Resume here
 
-- Steps 1 to 7 are done, one commit each (step 1 was the audit, no code). Released as v0.45.0.
-- Left for Task 45b: see "Not done" at the end. Steam achievements and leaderboards are Task 47.
+- Task 45 (v0.45.0) and Task 45b (v0.45.1) are done; Task 45b's leftovers are under "Not done" at
+  the end. Steam achievements and leaderboards are Task 47.
+
+## Task 45b: the modes' leftovers (v0.45.1)
+
+In plain words: Time Attack and Drift now update once per drawn frame with that frame's time, as
+the game does, on desktop and in the page. A scripted drift drive on the drift track scores, and
+every step and frame of it matches the game's code. Drift reads its tyre-smoke threshold from
+`tyre_smoke.ini`, the drag finish speed follows the player's mph setting, layouts without
+`overlays.ini` get their Time Attack gates as the game makes them, and Drag Race is replayed in
+Chrome too.
+
+| Step | What | Proof | Result |
+|---|---|---|---|
+| 1 | `Referee::drawn_frame(dt)`: Time Attack, Drift and the results fade run once per drawn frame (`Game::onIdle`: `update(deltaT)` then `renderHUD(deltaT)`, `GameTime` clamps 0.2 s). Desktop window: the display pushes its `GameTime` dt to the physics thread; page: `Web::frame` after `Session::advance` with the counted seconds. Headless, the picture path and tape replays (frameProof, `ai_page.sh`) keep the 9 ms frame | `rustyac.exe --headless --drawn-frames <seed>`: drawn frames of 5 to 40 ms between the physics steps, each written to `mode_frames.txt`; `car_oracle mode-micro --mode-frames` feeds them to the game's `TimeAttack::update`, `render_oracle gui --gui drift_drive` to `DriftMode::renderHUD` | Time Attack at Spa: 9,023 frames, 4 checkpoints, identical every frame (one dt changed: caught at frame 2,999). Drift: 1,165 frames, command log, pixels and state identical |
+| 2 | `--drift-drive`: a scripted driver (`autodrive::DriftDriver`) on the drift track in `bmw_m3_e92_drift`, aids off, power slides with counter-steer | every physics step's `DriftModeComponent` inputs (`ds` lines) through the game's `DriftModeComponent::step`; frames through `DriftMode::renderHUD` with the event's goals | 8,794 steps, 2 drifts, 1 combo, 78.49 points, BRONZE and GOLD achieved: identical every step and frame (a lateral-speed change mid-slide caught at step 4,373) |
+| 3 | `tyre_smoke.ini [TRIGGERS] SLIP_LEVEL` read as `DriftModeComponent::init` reads it (0 when missing), desktop and page; input files keep it when not 0.8 | mode-micro writes the game's static `triggerSlipLevel` (0x14151d940) per part: 0.8, 0, 0.5, 1.2 | seeds 7 and 12 identical (1,297 and 2,604 drifts); pinned 0.8 caught at step 0 |
+| 4 | Drag finish speed in mph with `gameplay.ini [OPTIONS] USE_MPH` (rustyAC's cfg, then Documents; the page's own cfg, then Documents); `--drag-drive`: the game's test mode, the AI drag driver drives your car | `DragMode::onFinishLanePassed` with both settings was already in the drag oracle; live drives | USE_MPH=1: max speed 95, =0: 154 (km/h) |
+| 5 | A layout without `data/overlays.ini`: the gates made **in memory** as `TimeAttack::createAndSaveOverlays` writes them (rustyAC never writes into the install, nor a copy into its cfg) | `render.sh` "overlays": the game's own function writes into a scratch folder, compared byte for byte, then the gate view drawn by both | 14 of 14 layouts identical (Bahrain ×6, ct_backwoods, monaco_2017, vhe_interlagos ×2: 1 or 3 gates; ks_drag ×5: no `AC_TIME_` nodes, nothing written, as the game). ks_brands_hatch has no AI line and is skipped |
+| 6 | The test pack (`tools/proofs/test_pack.toml`, 2,064 MB) gains `ks_drag/drag400` and `bmw_m3_e30` | `ai_page.sh` replays the drag tape in Chrome | 9 of 9 identical, drag included |
+| 7 | Hotlap, Time Attack, Drift and Drag in a normal window (`--no-focus`, scripted drives) | screenshots (≤ 300 KB) | HUDs and end screens drawn; two fixes: `--drift-drive` in a window, and a car an AI drag driver drives was run unpaced |
+
+Step 8 (the page's Special Events, Career and Championships tiles) was not started.
+
 
 ## In plain words
 
@@ -27,7 +49,7 @@ web pack); the proofs compare what the game reads from them.
 | Hotlap | done except special-event goals | goals judged like `HotlapMode` (oracle), results, page |
 | Time Attack | gates drawn only (Task 22c) | budget, checkpoints, bonus time, penalties, goals, HUD, end screen, results, page |
 | Drift | missing | `DriftModeComponent` scoring, `DriftMode` clock / levels / combos / goals, HUD, end screen, results, shared memory's drift fields, page |
-| Drag Race | start lights only | tree, false starts, wrong-side disqualification, reaction time, matches, AI drag drivers, HUD, end screen, results, page (native proof; the test pack has no drag strip) |
+| Drag Race | start lights only | tree, false starts, wrong-side disqualification, reaction time, matches, AI drag drivers, HUD, end screen, results, page (in Chrome since Task 45b) |
 | Track Day | not an AC mode | dropped (as agreed) |
 | Special Events | launcher page and saves (Task 36) | plus the in-game goals of every kind, the official events' files read in memory |
 | Career, Championships | launcher pages and saves (Task 36) | plus every `race_out.json` extra the theme scores from; there is no career code in acs.exe |
@@ -115,9 +137,9 @@ block is in the file (the research brief said it was not; the disassembly of
 | Race events | the game's `RaceEvent` on 40 race.ini files, 800 race ends | identical |
 | race_out.json | the game's writer with each mode's block among its objects, whole file, seeds 7 and 12 | identical for time attack, drift and drag |
 | HUDs | render oracle `ta_hud`, `ta_none`, `drift_hud`, `drag_hud`: command log, pixels, state | identical |
-| Page | `tools/proofs/ai_page.sh`: the desktop's drive (an empty Documents folder, as the page's), then native `race_proof` and the page in Chrome replaying its tape: Time Attack at Spa (2,117 points), Drift at Spa (2 combos), Drag at ks_drag drag400 (two e30s, 3 matches; native only) | race_out.json identical, 5 of 5 |
+| Page | `tools/proofs/ai_page.sh`: the desktop's drive (an empty Documents folder, as the page's), then native `race_proof` and the page in Chrome replaying its tape: Time Attack at Spa (2,117 points), Drift at Spa (2 combos), Drag at ks_drag drag400 (two e30s, 3 matches; in Chrome since Task 45b) | race_out.json identical, 9 of 9 (Task 45b) |
 
-The quick run of every area (`run_all.sh --quick`, 156 cases, 56 min) is identical too. Every
+The quick run of every area (`run_all.sh --quick`, 156 cases, 56 min) is identical too (Task 45b: 161 cases, 1 h 00 min, all identical). Every
 oracle was also run with one rule of the port broken on purpose, and caught it. The
 oracles run in `car_oracle mode-micro` (`--kind 5|6|7` for the extras) and
 `tools/proofs/fresh.sh` part `modes`; the HUDs are in `tools/proofs/gui_list.txt`.
@@ -130,20 +152,20 @@ Task 36: personal bests (`personalbest.ini`), special-event tiers (the theme's o
 `__AC.setDbValue("se_tier_<event>")` in `results.js`, in the launcher's browser storage), career
 (`launcherdata\filestore\career.ini`), championships (`champs\<guid>.champ`, `champs.ini`).
 
-## Not done (Task 45b)
+## Not done (after Task 45b)
 
-- `overlays.ini` creation: the game writes one for a layout without it; rustyAC never writes
-  into the install. All Kunos layouts ship it; 9 mod layouts on this PC lack it (no gates drawn
-  there, the checkpoints still work).
-- Time Attack and Drift run on the referee's 9 ms frame instead of every rendered frame
-  (`shortcut:` comments); the game's per-frame timing differs by up to a frame.
-- The tyre smoke threshold of drift (`tyre_smoke.ini SLIP_LEVEL`) is the shipped 0.8, not read.
-- Drag finish speed in mph (`Speed::useMPH`) is not followed: km/h always.
-- The page's Special Events, Career and Championships tiles stay off; the page does not read
-  official event files yet.
-- A drag in the page is proven natively only (the test pack has no drag strip).
-- No windowed desktop run of the new modes was looked at by a person.
+- The page's Special Events, Career and Championships tiles stay off (Task 45b step 8 not started);
+  the page does not read official event files yet.
+- Drag stays on the referee's 9 ms frame (its HUD and fades); Time Attack's lap and split events
+  are still handed over in that frame, not in the drawn frame (the game: `CarAvatar::update` in
+  the same main frame).
+- `--drag-drive` is desktop only: the page has no test mode, so a desktop drag drive with it is
+  not replayed in the page (the proofs' drag tape is the opponent-only drive).
+- The drift drive's proof runs headless at an uneven drawn-frame rate; the windowed drawn frames
+  were only looked at (screenshots), not compared.
 
 ## Open questions
 
-- Should the page's test pack gain `ks_drag` so the drag can be proven in Chrome too?
+- In the game the drift HUD (`DriftMode::renderHUD`) runs only while the GUI is drawn
+  (`isRenderingGui`); with the GUI hidden its clock would stop. rustyAC runs it every drawn
+  frame. Worth matching?
