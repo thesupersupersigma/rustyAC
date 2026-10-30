@@ -462,7 +462,12 @@ impl Referee {
             if let (0, Some(mode)) = (lap.car_index, &mut self.mode) {
                 mode.on_lap_completed(&lap, &mut |text, description| self.log.push(format!("{text} {description}")));
             }
+            if lap.car_index == 0 {
+                self.race_event_verify(world, &views);
+            }
         }
+        // RaceEvent::update: its check every frame once the player's race is over
+        self.race_event_verify(world, &views);
         // the black flag's event (PhysicsEngine::evOnFlagEvent), for the player's car
         if let Some(car) = (world.car_count() > 0).then(|| world.car(0)) {
             if car.black_flagged != self.was_black_flagged {
@@ -866,6 +871,17 @@ impl Referee {
 
     /// `TimeAttack::update` in the frame (after the race manager's, the game's order of
     /// `Sim::gameObjects`), and the end screen once its fade is over.
+    /// `RaceEvent::verifyConditions` (an official event's race).
+    fn race_event_verify(&mut self, world: &dyn World, views: &[CarView]) {
+        let Some(Mode::RaceEvent(event)) = &mut self.mode else { return };
+        if world.car_count() == 0 {
+            return;
+        }
+        let (position, over) = (self.manager.car_leaderboard_position(0, views), self.manager.is_race_over(0, views));
+        let log = &mut self.log;
+        event.verify(position, over, world.car(0).black_flagged, &mut |text, description| log.push(format!("{text} {description}")));
+    }
+
     fn time_attack_frame(&mut self, world: &mut dyn World) {
         if let Some(left) = &mut self.mode_fade {
             *left -= FRAME_DT;

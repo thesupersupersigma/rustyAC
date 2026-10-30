@@ -11,6 +11,8 @@
 //!   `rustyac_physics::race::time_attack`, field by field every frame;
 //! * `DriftModeComponent::step` on made-up drives against `rustyac_physics::car::drift`,
 //!   every member every physics step;
+//! * `RaceEvent` (an official event's race) choosing its goal by the AI level and judging
+//!   made-up race ends against `rustyac_physics::race::game_mode::RaceEvent`;
 //! * `DragMode` on made-up matches against `rustyac_physics::race::drag` (`modes/drag.rs`).
 
 mod drag;
@@ -19,7 +21,7 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use rustyac_physics::data::ini::IniReader;
-use rustyac_physics::race::game_mode::{Condition, GameMode, Mode};
+use rustyac_physics::race::game_mode::{Condition, GameMode, Mode, RaceEvent};
 use rustyac_physics::race::manager::SESSION_HOTLAP;
 use rustyac_physics::race::time_attack::{TaFrame, TaMode, TimeAttack};
 use rustyac_physics::track::timing::OnLapCompletedEvent;
@@ -70,6 +72,9 @@ pub struct Report {
     pub drag_matches: usize,
     pub drag_penalties: usize,
     pub drag_messages: usize,
+    pub race_events: usize,
+    pub race_event_checks: usize,
+    pub race_event_messages: usize,
     pub mismatch: Option<String>,
 }
 
@@ -237,6 +242,10 @@ pub unsafe fn micro(acs: &Acs, root: &Path, ac: &Path, seed: u32, laps_per_case:
     let done = drag::drag(acs, &base, seed, &mut next, laps_per_case * 400, &mut report);
     std::env::set_current_dir(&here).map_err(|e| e.to_string())?;
     if let Err(what) = done {
+        differ(&mut report, what);
+    }
+    // 8. official race events' goals (after the drag: its random draws stay as they were)
+    if let Err(what) = race_event(acs, &file, &mut next, laps_per_case * 20, &mut report) {
         differ(&mut report, what);
     }
     Ok(report)
@@ -594,6 +603,97 @@ unsafe fn time_attack(acs: &Acs, base: &GameMode, next: &mut dyn FnMut() -> u32,
             }
         }
         report.ta_sessions += 1;
+    }
+    Ok(())
+}
+
+const VA_RACE_EVENT_CTOR: usize = 0x1_4013_03c0; // RaceEvent::RaceEvent(Sim*)
+const VA_RACE_EVENT_VERIFY: usize = 0x1_4013_0700; // RaceEvent::verifyConditions()
+const VA_LEADERBOARD_POSITION: usize = 0x1_4013_7ee0; // RaceManager::getCarLeaderboardPosition(CarAvatar*)
+const VA_IS_RACE_OVER: usize = 0x1_4013_eae0; // RaceManager::isRaceOver(int)
+const RACE_EVENT_SIZE: usize = 0xe0;
+const RACE_EVENT_TIER: usize = 0xd8;
+const CA_BLACK_FLAGGED: usize = 0x1000;
+
+thread_local! {
+    /// the stand-ins' answers: the player's position and whether their race is over
+    static RACE_END: std::cell::Cell<(i32, bool)> = const { std::cell::Cell::new((1, false)) };
+}
+
+extern "C" fn leaderboard_position(_manager: *mut u8, _car: *mut u8) -> i32 {
+    RACE_END.with(|r| r.get().0)
+}
+
+extern "C" fn is_race_over(_manager: *mut u8, _car: i32) -> bool {
+    RACE_END.with(|r| r.get().1)
+}
+
+/// The constructor on race.ini files with goals of AI levels and a player's level, then
+/// `verifyConditions` at made-up race ends.
+unsafe fn race_event(acs: &Acs, file: &Path, next: &mut dyn FnMut() -> u32, checks: usize, report: &mut Report) -> Result<(), String> {
+    let stub = |va: usize, target: usize| {
+        let mut code = vec![0x48, 0xb8];
+        code.extend_from_slice(&(target as u64).to_le_bytes());
+        code.extend_from_slice(&[0xff, 0xe0]);
+        acs.patch(acs.va(va), &code);
+    };
+    stub(VA_LEADERBOARD_POSITION, leaderboard_position as *const () as usize);
+    stub(VA_IS_RACE_OVER, is_race_over as *const () as usize);
+    let ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_RACE_EVENT_CTOR));
+    let verify: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_RACE_EVENT_VERIFY));
+    for case in 0..40 {
+        // goals of rising AI levels, some reached before; the player's level among them
+        let mut ini = format!("[SPECIAL_EVENT]\nGUID={}\n", 900_000 + case);
+        let goals = next() as usize % 5;
+        let levels: Vec<i32> = (0..goals).map(|i| 80 + 5 * i as i32 + (next() % 3) as i32 - 1).collect();
+        for (i, level) in levels.iter().enumerate() {
+            ini += &format!("[CONDITION_{i}]\nTYPE=AI\nOBJECTIVE={level}\nACHIEVED={}\n", (next() % 4 == 0) as u8);
+        }
+        let level = match case % 4 {
+            0 => String::new(),
+            1 => "AI_LEVEL=100\n".to_string(),
+            _ => format!("AI_LEVEL={}\n", 75.0 + (next() % 300) as f32 / 10.0),
+        };
+        ini += &format!("[RACE]\nTRACK=magione\n{level}");
+        std::fs::write(file, &ini).map_err(|e| e.to_string())?;
+        let sim = zeroed(0x2d0);
+        let car = zeroed(0x1200);
+        let cars = zeroed(8);
+        wr(cars, 0, car);
+        wr(sim, 0x208, cars);
+        wr(sim, 0x210, cars.add(8));
+        wr(sim, 0x218, cars.add(8));
+        wr(sim, 0x8, zeroed(0x278));
+        wr(sim, 0x198, zeroed(0x100)); // systemMessage (stood in for)
+        wr(sim, 0x1a8, zeroed(0x100)); // raceManager (its two getters stood in for)
+        let mode = zeroed(RACE_EVENT_SIZE);
+        ctor(mode, sim);
+        let documents = IniReader::load(file)?;
+        let mut port = RaceEvent::new(GameMode::new(&documents, &documents, false));
+        let game = game_side(mode);
+        let tier: i32 = rd(mode, RACE_EVENT_TIER);
+        if (&port.base.conditions, port.objective_tier) != (&game.1, tier) {
+            return Err(format!("race event {case} ({ini:?}): the game chose {tier} of {:?}, the port {} of {:?}", game.1, port.objective_tier, port.base.conditions));
+        }
+        report.race_events += 1;
+        for check in 0..checks / 40 {
+            let position = 1 + (next() % 3) as i32;
+            let over = next() % 3 != 0;
+            let black = next() % 6 == 0;
+            RACE_END.with(|r| r.set((position, over)));
+            wr(car, CA_BLACK_FLAGGED, black as u8);
+            SAID.with(|s| s.borrow_mut().clear());
+            verify(mode);
+            let game_said = SAID.with(|s| std::mem::take(&mut *s.borrow_mut()));
+            let mut port_said = Vec::new();
+            port.verify(position, over, black, &mut |a, b| port_said.push(format!("Message({a} | {b})")));
+            let game = game_side(mode);
+            if game_said != port_said || (&port.base.conditions, port.base.current_tier) != (&game.1, game.2) {
+                return Err(format!("race event {case} check {check} (position {position}, over {over}, black flag {black}): the game said {game_said:?} tier {}, the port {port_said:?} tier {}", game.2, port.base.current_tier));
+            }
+            report.race_event_checks += 1;
+            report.race_event_messages += game_said.len();
+        }
     }
     Ok(())
 }

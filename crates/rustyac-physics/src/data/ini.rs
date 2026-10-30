@@ -143,6 +143,13 @@ impl IniReader {
         let bytes = rustyac_content::acd::special_event(guid)?;
         let mut official = IniReader { filename: self.filename.clone(), ready: true, ..IniReader::default() };
         official.parse(&decode_utf8_like_the_game(&text_mode(&bytes)));
+        // initOffline reads [RACE] AI_LEVEL (the AI drivers' level) from the player's file, before the swap
+        if let Some(race) = official.sections.get_mut("RACE") {
+            race.remove("AI_LEVEL");
+        }
+        if let Some(level) = self.sections.get("RACE").and_then(|race| race.get("AI_LEVEL")) {
+            official.sections.entry("RACE".to_string()).or_default().insert("AI_LEVEL".to_string(), level.clone());
+        }
         (official.get_int("SPECIAL_EVENT", "GUID") == Ok(guid)).then_some(official)
     }
 

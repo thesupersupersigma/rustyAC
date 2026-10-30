@@ -8,12 +8,14 @@
 //!   `special_event` entry of `JsonOutputFile::addExtraSessionInfo` @ 0x14010c5e0.
 //! * [`Mode::Hotlap`]: `HotlapMode` (constructor @ 0x1400beac0, its lap handler
 //!   @ 0x1400beb80).
+//! * [`Mode::RaceEvent`]: `RaceEvent` (constructor @ 0x1401303c0, `update` @ 0x1401306c0,
+//!   `verifyConditions` @ 0x140130700), an official event's race.
 //!
 //! `evOnTierCompleted` and `evOnLeaderboardScore` have only Steam's achievements and
 //! leaderboards behind them in the game, which rustyAC leaves out.
 
 use super::drift::DriftMode;
-use super::manager::{SESSION_DRIFT, SESSION_HOTLAP, SESSION_TIME_ATTACK};
+use super::manager::{SESSION_DRIFT, SESSION_HOTLAP, SESSION_RACE, SESSION_TIME_ATTACK};
 use super::time_attack::TimeAttack;
 use super::output::Node;
 use crate::data::ini::IniReader;
@@ -48,11 +50,14 @@ pub struct GameMode {
     /// not the game's `GameMode`: `DragMode`'s `[SESSION_0] MATCHES` of the player's
     /// race.ini (0 without the key, 5 without a readable file)
     pub drag_matches: u32,
+    /// not the game's `GameMode`: `RaceEvent`'s `[RACE] AI_LEVEL` of the player's race.ini
+    /// (0 without a readable file), the level the race's goal is chosen by
+    pub ai_level: f32,
 }
 
 impl Default for GameMode {
     fn default() -> GameMode {
-        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0, drag_matches: 5 }
+        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0, drag_matches: 5, ai_level: 0.0 }
     }
 }
 
@@ -62,7 +67,8 @@ impl GameMode {
     /// the goals already reached are (`[CONDITION_n] ACHIEVED`).
     pub fn new(race: &IniReader, documents: &IniReader, official: bool) -> GameMode {
         let drag_matches = if documents.ready { documents.get_int("SESSION_0", "MATCHES").unwrap_or(0) as u32 } else { 5 };
-        let mut mode = GameMode { official, drag_matches, ..GameMode::default() };
+        let ai_level = if documents.ready { documents.get_float("RACE", "AI_LEVEL").unwrap_or(0.0) } else { 0.0 };
+        let mut mode = GameMode { official, drag_matches, ai_level, ..GameMode::default() };
         if !race.ready || !race.has_section("SPECIAL_EVENT") {
             return mode;
         }
@@ -115,6 +121,34 @@ impl GameMode {
     }
 }
 
+/// `RaceEvent`: an official event's race, won at the AI level a goal asks for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RaceEvent {
+    pub base: GameMode,
+    /// the last goal whose `OBJECTIVE` (an AI level) the player's level reaches, -1: none
+    pub objective_tier: i32,
+}
+
+impl RaceEvent {
+    pub fn new(base: GameMode) -> RaceEvent {
+        let objective_tier = base.conditions.iter().rposition(|c| c.objective as f32 <= base.ai_level).map_or(-1, |i| i as i32);
+        RaceEvent { base, objective_tier }
+    }
+
+    /// `verifyConditions`, after the player's laps and every frame once their race is over:
+    /// first place, not black-flagged, and the chosen goal new: it and every goal below it.
+    pub fn verify(&mut self, position: i32, race_over: bool, black_flagged: bool, message: &mut dyn FnMut(&str, &str)) {
+        if position != 1 || !race_over || self.objective_tier < 0 || black_flagged || self.base.conditions[self.objective_tier as usize].achieved {
+            return;
+        }
+        for i in 0..=self.objective_tier as usize {
+            message("Race challenge", &format!("{} Achieved", self.base.conditions[i].name));
+            self.base.conditions[i].achieved = true;
+            self.base.current_tier = i as i32;
+        }
+    }
+}
+
 /// The session's mode object.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Mode {
@@ -123,6 +157,7 @@ pub enum Mode {
     Drift(Box<DriftMode>),
     /// made by the referee, which has the track ([`super::drag::DragMode::new`])
     Drag(Box<super::drag::DragMode>),
+    RaceEvent(RaceEvent),
 }
 
 impl Mode {
@@ -132,6 +167,7 @@ impl Mode {
             SESSION_HOTLAP => Some(Mode::Hotlap(base.clone())),
             SESSION_TIME_ATTACK => Some(Mode::TimeAttack(Box::new(TimeAttack::new(base.clone(), base.time_attack_mult)))),
             SESSION_DRIFT => Some(Mode::Drift(Box::new(DriftMode::new(base.clone())))),
+            SESSION_RACE if base.official => Some(Mode::RaceEvent(RaceEvent::new(base.clone()))),
             _ => None,
         }
     }
@@ -142,6 +178,7 @@ impl Mode {
             Mode::TimeAttack(ta) => &ta.base,
             Mode::Drift(drift) => &drift.base,
             Mode::Drag(drag) => &drag.base,
+            Mode::RaceEvent(event) => &event.base,
         }
     }
 
@@ -170,6 +207,7 @@ impl Mode {
             Mode::TimeAttack(ta) => vec![ta.extra(), ta.base.extra()],
             Mode::Drift(drift) => vec![drift.extra(), drift.base.extra()],
             Mode::Drag(drag) => vec![drag.extra(), drag.base.extra()],
+            Mode::RaceEvent(event) => vec![event.base.extra()],
         }
     }
 }
