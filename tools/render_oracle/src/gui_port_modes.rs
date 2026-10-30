@@ -171,3 +171,96 @@ pub fn drift_dump(out: &mut String) {
         ));
     });
 }
+
+// DragMode: the HUD draws a `DragLink`, the strip's places from
+// `rustyac_physics::race::drag::DragMode`'s spline (made by its constructor).
+
+struct Drag {
+    mode: rustyac_physics::race::drag::DragMode,
+    hud: rustyac_gui::drag::DragHud,
+    link: rustyac_gui::drag::DragLink,
+    x: [f32; 2],
+}
+
+thread_local! {
+    static DRAG: RefCell<Option<Drag>> = const { RefCell::new(None) };
+}
+
+struct NoHost;
+
+impl rustyac_physics::race::drag::DragHost for NoHost {
+    fn rand(&mut self) -> i32 {
+        0
+    }
+    fn is_ai(&self, _car: usize) -> bool {
+        false
+    }
+    fn ai_start_time(&mut self, _car: usize, _time: f64) {}
+    fn gentle_stop(&mut self, _car: usize, _on: bool) {}
+    fn go_to_spawn(&mut self, _car: usize) {}
+    fn show_esc_menu(&mut self) {}
+    fn fade_in(&mut self, _seconds: f32, _results: bool) -> bool {
+        false
+    }
+}
+
+pub fn drag_call(gui: &mut Gui, painter: &mut dyn Painter, what: &str, number: f32) -> Result<(), String> {
+    DRAG.with(|d| {
+        let mut d = d.borrow_mut();
+        let name = what.trim_start_matches("dg.");
+        if name == "create" {
+            let l = crate::gui_ac_modes::DRAG_LENGTH;
+            let mode = rustyac_physics::race::drag::DragMode::new(Default::default(), 0, [[0.0, 0.0, -2.0], [0.0, 0.0, 2.0]], [[l, 0.0, -3.0], [l, 0.0, 3.0]], &[[0.0; 3]; 2], 0.0, &mut NoHost);
+            let link = rustyac_gui::drag::DragLink { status: 3, ..Default::default() };
+            *d = Some(Drag { mode, hud: rustyac_gui::drag::DragHud::new(gui, painter), link, x: [0.0; 2] });
+            return Ok(());
+        }
+        let Some(Drag { link, x, .. }) = d.as_mut() else { return Err("no drag mode (dg.create first)".to_string()) };
+        if let Some(i) = ["x0", "x1"].iter().position(|n| *n == name) {
+            x[i] = number;
+            return Ok(());
+        }
+        let (car, _, _) = crate::gui_ac_modes::drag_member(name).ok_or_else(|| format!("the port side knows no drag member {what:?}"))?;
+        let i = car.unwrap_or(0);
+        match name.trim_end_matches(['0', '1']) {
+            "status" => link.status = number as i32,
+            "false" => link.false_start[i] = number != 0.0,
+            "disq" => link.disqualified[i] = number != 0.0,
+            "wins" => link.wins[i] = number as u32,
+            "reaction" => link.reaction_time = number,
+            "time" => link.player_time = number,
+            _ => link.final_speed = number as i32,
+        }
+        Ok(())
+    })
+}
+
+pub fn drag_sync(gui: &mut Gui) {
+    DRAG.with(|d| {
+        if let Some(d) = d.borrow().as_ref() {
+            gui.sim.drag = Some(d.link);
+        }
+    });
+}
+
+pub fn drag_render_hud(gui: &mut Gui, painter: &mut dyn Painter) {
+    DRAG.with(|d| {
+        let mut d = d.borrow_mut();
+        let Some(Drag { mode, hud, link, x }) = d.as_mut() else { return };
+        // the game's playerPerc/aiPerc move only when renderDragGUI runs
+        let hidden = gui.sim.in_replay || gui.sim.pause_menu.is_some_and(|p| gui.controls[p].visible);
+        if link.status < 3 && !hidden {
+            link.perc = x.map(|x| mode.spline.world_to_spline(&[x, 0.0, 0.0], -1));
+        }
+        gui.sim.drag = Some(*link);
+        hud.render_hud(gui, painter, link);
+    });
+}
+
+pub fn drag_dump(out: &mut String) {
+    DRAG.with(|d| {
+        let d = d.borrow();
+        let Some(Drag { link, .. }) = d.as_ref() else { return };
+        out.push_str(&crate::gui_ac_modes::drag_line(link.status, link.perc));
+    });
+}

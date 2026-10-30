@@ -384,12 +384,16 @@ pub struct Driver {
     /// Task 27: AC's AI driver of the car. While there is one the source is not asked for
     /// the controls: the driver writes them.
     pub ai: Option<Box<rustyac_physics::ai::AiDriver>>,
+    /// Task 45: a drag session's AI driver (`RaceManager::initOffline` gives the AI cars
+    /// `AIDriverDrag` when the first session is a drag)
+    pub drag: Option<Box<rustyac_physics::ai::AiDriverDrag>>,
 }
 
 impl Driver {
     pub fn new(source: Box<dyn DriverSource>, ff_gain: f32) -> Driver {
         Driver {
             ai: None,
+            drag: None,
             source,
             ff_gain,
             reported: CarControls::default(),
@@ -438,6 +442,12 @@ impl ControlsProvider for Driver {
     }
 
     fn acquire_controls_car(&mut self, car: &mut rustyac_physics::car::RollingChassis, dt: f32) {
+        if let Some(drag) = &mut self.drag {
+            ControlsProvider::acquire_controls_car(&mut **drag, car, dt);
+            self.reported = car.controls;
+            self.polled = true;
+            return;
+        }
         match &mut self.ai {
             Some(ai) => {
                 ai.acquire(car, dt);
@@ -452,10 +462,13 @@ impl ControlsProvider for Driver {
     }
 
     fn is_ai(&self) -> bool {
-        self.ai.is_some()
+        self.ai.is_some() || self.drag.is_some()
     }
 
     fn on_forced_position(&mut self, car: &mut rustyac_physics::car::RollingChassis) {
+        if let Some(drag) = &mut self.drag {
+            ControlsProvider::on_forced_position(&mut **drag, car);
+        }
         if let Some(ai) = &mut self.ai {
             ControlsProvider::on_forced_position(&mut **ai, car);
         }
@@ -1664,6 +1677,27 @@ impl GameSim {
         Some(rustyac_gui::drift::DriftLink { session_points: drift.session_points, drawn: drift.drawn })
     }
 
+    /// Task 45: what the drag mode's HUD draws (the strip places as `renderDragGUI` takes them).
+    pub fn drag_view(&self) -> Option<rustyac_gui::drag::DragLink> {
+        let Some(rustyac_physics::race::game_mode::Mode::Drag(drag)) = self.referee.as_ref()?.mode.as_ref() else { return None };
+        let (c0, c1) = (drag.cars.first()?, drag.cars.get(1)?);
+        let place = |car: &rustyac_physics::car::RollingChassis| {
+            let p = car.core.get_position(car.body);
+            drag.spline.world_to_spline(&[p.x, p.y, p.z], -1)
+        };
+        let ai = self.opponents.first().map_or(0.0, |o| place(&o.car.car));
+        Some(rustyac_gui::drag::DragLink {
+            status: drag.status as i32,
+            wins: [c0.wins, c1.wins],
+            false_start: [c0.false_start, c1.false_start],
+            disqualified: [c0.disqualified, c1.disqualified],
+            player_time: c0.player_time,
+            reaction_time: c0.reaction_time,
+            final_speed: c0.final_speed,
+            perc: [place(&self.car.car), ai],
+        })
+    }
+
     pub fn pit_stop_view(&self) -> Option<crate::view::PitStopView> {
         let pit = match (&self.referee, &self.online) {
             (Some(referee), _) => referee.pit.as_ref(),
@@ -1706,7 +1740,8 @@ impl GameSim {
     pub fn referee_hud(&self) -> Option<crate::referee::RefereeHud> {
         self.referee.as_ref().map(|referee| {
             let mut hud = crate::referee::hud_of(referee, &self.car.car);
-            hud.new_sessions = (self.new_sessions << 16) | (referee.new_session_count & 0xffff);
+            // (DragMode::resetMatch asks for the ESC menu again too)
+            hud.new_sessions = (self.new_sessions << 16) | (referee.new_session_count.wrapping_add(referee.esc_requests) & 0xffff);
             hud
         })
     }
@@ -1779,6 +1814,12 @@ impl GameSim {
             let session = self.solo_ai.session;
             let slot = if index == 0 { &mut self.car } else { &mut self.opponents[index - 1].car };
             slot.car.forced_position_events = 0;
+            if index > 0 && slot.car.env.session_type == rustyac_physics::race::manager::SESSION_DRAG {
+                let mut driver = rustyac_physics::ai::AiDriverDrag::new(&mut slot.car)?;
+                driver.push = push;
+                slot.device.drag = Some(Box::new(driver));
+                continue;
+            }
             let mut driver = make_ai_driver(&mut slot.car, &session, &mut rand, setup_file.as_deref())?;
             driver.base_push = push;
             driver.aggression = aggression;

@@ -383,6 +383,8 @@ pub struct RaceManager {
     pub start_index: Vec<i32>,
     /// the global `SessionResult` the result processor works on (0x141559b70)
     pub processor_result: SessionResult,
+    /// Task 45: `DragMode`'s places and matches for `processDragResults`, kept by the referee
+    pub drag_results: Option<(Vec<i32>, Vec<Vec<Lap>>)>,
     /// the player was retired for leaving a race early in this very frame: `Car::isRetired`
     /// is set already, the views of the frame do not show it yet
     pub player_retired_now: bool,
@@ -414,6 +416,7 @@ impl RaceManager {
             now: 0.0,
             fade: None,
             results_displayed: false,
+            drag_results: None,
             finalized: false,
             autoflip_recovery: false,
             start_index: (0..cars as i32).collect(),

@@ -111,7 +111,7 @@ impl TimeAttackHud {
             let y = h as f32 + 165.0 + 10.0;
             Self::picture(painter, &self.black_clock, half - 150.0, y);
             Self::picture(painter, &self.black_cup, half + 60.0, y);
-            let seconds = format!("{:.1}\"", ta.last_gained_seconds);
+            let seconds = format!("{}\"", crate::widgets2::format_fixed(ta.last_gained_seconds as f64, 1));
             if ta.last_gained_seconds <= 0.0 {
                 self.font.set_color(1.0, 0.0, 0.0, 1.0);
                 self.font.blit_string(painter, half - 20.0, y, &seconds, 0.6, ALIGN_RIGHT);
@@ -137,7 +137,7 @@ impl TimeAttackHud {
         Self::picture(painter, &self.white_cup, half + 30.0, 90.0);
         // shortcut: the game leaves the text unwritten when no time is left (never drawn so)
         self.font.set_color(1.0, 1.0, 1.0, 1.0);
-        self.font.blit_string(painter, half - 10.0, 100.0, &format!("{:.3}\"", ta.time_left), 0.8, ALIGN_RIGHT);
+        self.font.blit_string(painter, half - 10.0, 100.0, &format!("{}\"", crate::widgets2::format_fixed(ta.time_left as f64, 3)), 0.8, ALIGN_RIGHT);
         let red = if ta.points >= 0.0 { 1.0 } else { 0.0 };
         self.font.set_color(1.0, red, red, 1.0);
         self.font.blit_string(painter, half + 260.0, 100.0, &format!("{} pt", ta.points as i32), 0.8, ALIGN_RIGHT);

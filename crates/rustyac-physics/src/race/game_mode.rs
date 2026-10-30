@@ -45,11 +45,14 @@ pub struct GameMode {
     /// not the game's `GameMode`: `cfg/gameplay.ini [TIME_ATTACK] BASE_TIME_MULT` (1 without
     /// the section), which `TimeAttack`'s constructor reads
     pub time_attack_mult: f32,
+    /// not the game's `GameMode`: `DragMode`'s `[SESSION_0] MATCHES` of the player's
+    /// race.ini (0 without the key, 5 without a readable file)
+    pub drag_matches: u32,
 }
 
 impl Default for GameMode {
     fn default() -> GameMode {
-        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0 }
+        GameMode { guid: String::new(), conditions: Vec::new(), current_tier: -1, official: false, time_attack_mult: 1.0, drag_matches: 5 }
     }
 }
 
@@ -58,7 +61,8 @@ impl GameMode {
     /// is one, [`IniReader::load_race`]), `documents` the player's own `cfg/race.ini`, where
     /// the goals already reached are (`[CONDITION_n] ACHIEVED`).
     pub fn new(race: &IniReader, documents: &IniReader, official: bool) -> GameMode {
-        let mut mode = GameMode { official, ..GameMode::default() };
+        let drag_matches = if documents.ready { documents.get_int("SESSION_0", "MATCHES").unwrap_or(0) as u32 } else { 5 };
+        let mut mode = GameMode { official, drag_matches, ..GameMode::default() };
         if !race.ready || !race.has_section("SPECIAL_EVENT") {
             return mode;
         }
@@ -85,9 +89,14 @@ impl GameMode {
     /// The `verifyConditions` of TimeAttack and DriftMode: every goal `score` reaches is
     /// achieved, `title` its message's text.
     pub fn verify(&mut self, title: &str, score: f32, message: &mut dyn FnMut(&str, &str)) {
+        self.verify_by(title, |objective| objective as f32 <= score, message);
+    }
+
+    /// The same with the mode's own test of a goal's `OBJECTIVE`.
+    pub fn verify_by(&mut self, title: &str, reached: impl Fn(i32) -> bool, message: &mut dyn FnMut(&str, &str)) {
         for i in 0..self.conditions.len() {
             let c = &mut self.conditions[i];
-            if c.objective as f32 <= score && !c.achieved {
+            if reached(c.objective) && !c.achieved {
                 message(title, &format!("{} Achieved", c.name));
                 c.achieved = true;
                 self.current_tier = i as i32;
@@ -112,6 +121,8 @@ pub enum Mode {
     Hotlap(GameMode),
     TimeAttack(Box<TimeAttack>),
     Drift(Box<DriftMode>),
+    /// made by the referee, which has the track ([`super::drag::DragMode::new`])
+    Drag(Box<super::drag::DragMode>),
 }
 
 impl Mode {
@@ -130,6 +141,7 @@ impl Mode {
             Mode::Hotlap(base) => base,
             Mode::TimeAttack(ta) => &ta.base,
             Mode::Drift(drift) => &drift.base,
+            Mode::Drag(drag) => &drag.base,
         }
     }
 
@@ -157,6 +169,7 @@ impl Mode {
             Mode::Hotlap(base) => vec![base.extra()],
             Mode::TimeAttack(ta) => vec![ta.extra(), ta.base.extra()],
             Mode::Drift(drift) => vec![drift.extra(), drift.base.extra()],
+            Mode::Drag(drag) => vec![drag.extra(), drag.base.extra()],
         }
     }
 }
@@ -187,6 +200,7 @@ mod tests {
         assert_eq!(said, ["Hotlap challenge BRONZE Achieved"]);
         assert_eq!(mode.base().current_tier, 0);
         assert!(Mode::of(1, &base).is_none());
-        assert_eq!(GameMode::new(&ini("[RACE]\n"), &ini(""), false), GameMode::default());
+        // a readable race.ini without [SESSION_0] MATCHES: no matches (5 only without one)
+        assert_eq!(GameMode::new(&ini("[RACE]\n"), &ini(""), false), GameMode { drag_matches: 0, ..GameMode::default() });
     }
 }

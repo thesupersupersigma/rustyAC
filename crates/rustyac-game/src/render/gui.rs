@@ -217,6 +217,7 @@ pub struct GameGui {
     /// Task 45: `TimeAttack`'s HUD (made at the first frame of a time-attack session)
     pub time_attack: Option<rustyac_gui::time_attack::TimeAttackHud>,
     pub drift: Option<rustyac_gui::drift::DriftHud>,
+    pub drag: Option<rustyac_gui::drag::DragHud>,
     /// the app "Leaderboard"
     pub leaderboard_app: Id,
     /// the other apps (made at the first frame), `Speed::useMPH`
@@ -510,7 +511,7 @@ impl GameGui {
         let pit_stop = PitStopHud::new(&mut gui, &mut painter, &compounds);
         // ACClient's own font and its QOSOverlay (ACClient::ACClient 0x14003a2c0)
         let client_hud = setup.online.then(|| (rustyac_gui::online_hud::ClientHud::new(&mut gui, &mut painter), rustyac_gui::online_hud::QosOverlay::new(&mut gui, &mut painter)));
-        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
+        Ok(GameGui { renderer, gui, screen, message, notification, wrong, lap, drive, lock, proximity, names, damage, flags, fuel, input, setup, black_flagged: false, last_focus: 0, aids: None, caption: String::new(), was_replay: false, forced_flags: [false; 5], pause_menu, menu_fade: None, pit_menu: None, pit_looks, pit_stop, pit: None, pit_clicks: Vec::new(), end, client_hud, online: None, welcome_closed: String::new(), disconnect_time: 0.0, replay_bar, esc_menu, voting: Default::default(), online_requests: Vec::new(), setup_data, setup_generation: 0, setup_jobs_sent: 0, pit_edits_sent: 0, pit_seen: None, pits_lock_stale: false, new_sessions_seen: None, overlay, tab, time_attack: None, drift: None, drag: None, leaderboard_app, apps: Default::default(), console, exit_requested: false, game_time: Default::default(), last_frame: None, last_cpu_hud: (0.0, 0.0), last_audio: (0.0, None), use_mph, race_static, last_session_index: 0, shot_ready: false, shot_frame_skip: 0, screen_flash: 0.0, python_on, #[cfg(windows)] python: None, #[cfg(windows)] python_cameras: Vec::new() })
     }
 
     /// The update pass: the session's state is read, the objects that have an `update` run.
@@ -553,6 +554,7 @@ impl GameGui {
             penalty_points_accumulated: t.penalty_points_accumulated,
         });
         self.gui.sim.drift = world.first().and_then(|view| view.lap.drift);
+        self.gui.sim.drag = world.first().and_then(|view| view.lap.drag);
         // the car's state for the editor's status panel, while the ESC menu shows
         if let (Some(data), Some(view), true) = (&self.setup_data, world.first(), self.esc_menu_visible()) {
             let state = view.physics_state();
@@ -903,6 +905,11 @@ impl GameGui {
         // DriftMode::renderHUD 0x14008b7c0
         if let Some(link) = gui.sim.drift {
             self.drift.get_or_insert_with(|| rustyac_gui::drift::DriftHud::new(&mut painter)).render_hud(gui, &mut painter, &link);
+        }
+        // DragMode::renderHUD 0x140088730
+        if let Some(link) = gui.sim.drag {
+            let hud = self.drag.get_or_insert_with(|| rustyac_gui::drag::DragHud::new(gui, &mut painter));
+            hud.render_hud(gui, &mut painter, &link);
         }
         if let Some(wrong) = self.wrong.as_mut().filter(|w| w.is_active) {
             wrong.render_hud(gui, &mut painter, input);

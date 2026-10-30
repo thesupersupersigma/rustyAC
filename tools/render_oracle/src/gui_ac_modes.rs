@@ -266,3 +266,149 @@ pub unsafe fn drift_dump(out: &mut String) {
         [bonus(0x228), bonus(0x250)],
     ));
 }
+
+// DragMode: a hand-made 0x2f0 block, two `DragStatus` (the HUD's two cars), the strip's
+// spline built as the constructor builds it, from (0,0,0) to (400,0,0).
+
+const VA_DRAG_VTABLE: usize = 0x1_404b_31e0;
+const VA_DRAG_RENDER_HUD: usize = 0x1_4008_8730;
+const VA_SPLINE_CTOR: usize = 0x1_401e_ecd0;
+const VA_SPLINE_ADD_POINT: usize = 0x1_401e_f700;
+const VA_SPLINE_LENGTH: usize = 0x1_401f_1db0;
+const DRAG_SIZE: usize = 0x2f0;
+const DRAG_TEXTURES: [(usize, &str); 8] = [(0x130, "xmas_tree"), (0x158, "time_icon"), (0x180, "player_car"), (0x1a8, "ai_car"), (0x1d0, "race_straightline"), (0x1f8, "speed_icon"), (0x220, "false_start"), (0x248, "disqualified")];
+/// CarAvatar's physics state position, which the HUD places the cars by
+const CA_STATE_POSITION: usize = 0x29c;
+pub const DRAG_LENGTH: f32 = 400.0;
+
+static DRAG: AtomicUsize = AtomicUsize::new(0);
+static DRAG_X: std::sync::Mutex<[f32; 2]> = std::sync::Mutex::new([0.0; 2]);
+
+/// A script's name for a drag member: (car, offset in `DragStatus`, kind) with kind 0 u8,
+/// 1 u32/i32, 2 f32; car `None` is the mode's status.
+pub fn drag_member(name: &str) -> Option<(Option<usize>, usize, u8)> {
+    let (field, car) = match name.strip_suffix(['0', '1']) {
+        Some(field) => (field, Some(name.ends_with('1') as usize)),
+        None => (name, Some(0)),
+    };
+    Some(match field {
+        "status" => (None, 0xf0, 1),
+        "false" => (car, 0, 0),
+        "disq" => (car, 1, 0),
+        "wins" => (car, 4, 1),
+        "reaction" => (Some(0), 0x18, 2),
+        "time" => (Some(0), 0x1c, 2),
+        "speed" => (Some(0), 0x20, 1),
+        _ => return None,
+    })
+}
+
+pub fn drag_line(status: i32, perc: [f32; 2]) -> String {
+    format!("hud drag status={status} perc={:08x},{:08x}\n", perc[0].to_bits(), perc[1].to_bits())
+}
+
+/// `dg.create`, `dg.x0`/`dg.x1 <metres along the strip>`, `dg.<member> <value>`.
+pub unsafe fn drag_call(game: &Game, h: &mut HudGame, what: &str, number: f32) -> Result<(), String> {
+    let a = &game.acs;
+    let name = what.trim_start_matches("dg.");
+    if name == "create" {
+        if h.cars.len() < 2 {
+            return Err("a drag race needs two cars".into());
+        }
+        let d = a.alloc(DRAG_SIZE);
+        std::ptr::write_bytes(d, 0, DRAG_SIZE);
+        wr(d, 0, a.va(VA_DRAG_VTABLE));
+        wr(d, 8, rd::<*mut u8>(h.sim, 0x8));
+        wr(d, 0xc0, 1u8);
+        wr(d, 0xc4, -1i32);
+        let cars = a.alloc(0x90);
+        std::ptr::write_bytes(cars, 0, 0x90);
+        for i in 0..2 {
+            wr(cars, i * 0x48 + 8, h.cars[i]);
+            wr(cars, i * 0x48 + 0x2c, f32::MAX);
+        }
+        wr(d, 0xd8, cars);
+        wr(d, 0xe0, cars.add(0x90));
+        wr(d, 0xe8, cars.add(0x90));
+        wr(d, 0xf0, 3i32);
+        wr(d, 0xf8, h.sim);
+        let font = a.alloc(0x40);
+        let ctor: extern "C" fn(*mut u8, i32, f32, bool, bool) -> *mut u8 = std::mem::transmute(a.va(VA_FONT_CTOR));
+        ctor(font, 1, 45.0, false, false);
+        wr(d, 0x100, font);
+        let get_texture: extern "C" fn(*mut u8, *mut u8, *const u8, bool) -> *mut u8 = std::mem::transmute(a.va(VA_RESOURCE_STORE_GET_TEXTURE));
+        for (at, name) in DRAG_TEXTURES {
+            get_texture(rd(game.graphics, 0x180), d.add(at), wstring(a, &format!("content/gui/drag/{name}.png")), false);
+        }
+        let spline_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(a.va(VA_SPLINE_CTOR));
+        let add_point: extern "C" fn(*mut u8, *const [f32; 3], i32) = std::mem::transmute(a.va(VA_SPLINE_ADD_POINT));
+        let length: extern "C" fn(*mut u8) = std::mem::transmute(a.va(VA_SPLINE_LENGTH));
+        let spline = d.add(0x270);
+        spline_ctor(spline);
+        wr(spline, 0x6c, 0i32); // eLinear
+        for i in 0..=100u32 {
+            let t = i as f32 * f32::from_bits(0x3c23_d70a);
+            add_point(spline, &[DRAG_LENGTH * t, 0.0, 0.0], 0);
+        }
+        length(spline);
+        // PauseMenu::blankButton(sim->pauseMenu, ePauseMenuPits, true)
+        let pause: *mut u8 = rd(h.sim, 0x110);
+        if !pause.is_null() {
+            let blank: extern "C" fn(*mut u8, i32, bool) = std::mem::transmute(a.va(0x1_4011_f400));
+            blank(pause, 1, true);
+        }
+        let (begin, end): (*mut usize, *mut usize) = (rd(h.sim, 0x40), rd(h.sim, 0x48));
+        if end.offset_from(begin) >= 4 {
+            return Err("no room for the mode among the Sim's children".into());
+        }
+        *end = d as usize;
+        wr(h.sim, 0x48, end.add(1));
+        DRAG.store(d as usize, Ordering::SeqCst);
+        return Ok(());
+    }
+    let d = DRAG.load(Ordering::SeqCst) as *mut u8;
+    if d.is_null() {
+        return Err("no drag mode (dg.create first)".into());
+    }
+    if let Some(i) = ["x0", "x1"].iter().position(|n| *n == name) {
+        DRAG_X.lock().unwrap()[i] = number;
+        return Ok(());
+    }
+    let (car, at, kind) = drag_member(name).ok_or_else(|| format!("the game side knows no drag member {what:?}"))?;
+    let at = match car {
+        Some(i) => rd::<*mut u8>(d, 0xd8).add(i * 0x48 + at),
+        None => d.add(at),
+    };
+    match kind {
+        0 => wr(at, 0, (number != 0.0) as u8),
+        1 => wr(at, 0, number as i32),
+        _ => wr(at, 0, number),
+    }
+    Ok(())
+}
+
+pub unsafe fn drag_render_hud(game: &Game, h: &HudGame, dt: f32) {
+    let d = DRAG.load(Ordering::SeqCst) as *mut u8;
+    if d.is_null() {
+        return;
+    }
+    // the places only for the drag HUD: the proximity arrows read the same field after it
+    let x = *DRAG_X.lock().unwrap();
+    let kept: [[f32; 3]; 2] = [rd(h.cars[0], CA_STATE_POSITION), rd(h.cars[1], CA_STATE_POSITION)];
+    for (i, x) in x.into_iter().enumerate() {
+        wr(h.cars[i], CA_STATE_POSITION, [x, 0.0, 0.0]);
+    }
+    let render: extern "C" fn(*mut u8, f32) = std::mem::transmute(game.acs.va(VA_DRAG_RENDER_HUD));
+    render(d, dt);
+    for (i, p) in kept.into_iter().enumerate() {
+        wr(h.cars[i], CA_STATE_POSITION, p);
+    }
+}
+
+pub unsafe fn drag_dump(out: &mut String) {
+    let d = DRAG.load(Ordering::SeqCst) as *const u8;
+    if d.is_null() {
+        return;
+    }
+    out.push_str(&drag_line(rd(d, 0xf0), [rd(d, 0x2e0), rd(d, 0x2e4)]));
+}

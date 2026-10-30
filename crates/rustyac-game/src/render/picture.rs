@@ -19,6 +19,12 @@ pub enum Picture {
 
 impl Picture {
     /// Task 28: the referee's race start, `ms` from now, for the start lights.
+    pub fn set_lights_disqualified(&mut self, on: bool) {
+        if let Picture::Ac(renderer) = self {
+            renderer.set_lights_disqualified(on);
+        }
+    }
+
     pub fn set_race_start_in(&mut self, ms: Option<f64>) {
         if let Picture::Ac(renderer) = self {
             renderer.set_race_start_in(ms);

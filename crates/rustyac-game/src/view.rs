@@ -316,6 +316,8 @@ pub struct LapView {
     pub time_attack: Option<TimeAttackView>,
     /// Task 45: what the drift mode's HUD draws (`None`: not a drift session, or nothing)
     pub drift: Option<rustyac_gui::drift::DriftLink>,
+    /// Task 45: what the drag mode's HUD draws (`None`: not a drag race)
+    pub drag: Option<rustyac_gui::drag::DragLink>,
 }
 
 /// What `TimeAttack`'s HUD and gates read of the mode.
@@ -924,6 +926,7 @@ impl CarView {
                 pit_stop: if player { sim.pit_stop_view() } else { None },
                 time_attack: if player { sim.time_attack_view() } else { None },
                 drift: if player { sim.drift_view() } else { None },
+                drag: if player { sim.drag_view() } else { None },
             };
             if !player {
                 // another car: what its own transponder counted

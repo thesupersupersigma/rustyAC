@@ -177,6 +177,10 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         let h = hud().ok_or("no HUD (cars first)")?;
         return crate::gui_ac_modes::drift_call(game, h, what, number);
     }
+    if what.starts_with("dg.") {
+        let h = hud().ok_or("no HUD (cars first)")?;
+        return crate::gui_ac_modes::drag_call(game, h, what, number);
+    }
     if what.starts_with("console.") {
         return crate::gui_seq_console::game_call(game, what, number, text);
     }
@@ -326,6 +330,7 @@ pub unsafe fn render_hud(game: &Game, dt: f32) {
     render(h.message, dt);
     crate::gui_ac_modes::render_hud(game, h, dt);
     crate::gui_ac_modes::drift_render_hud(game, h, dt);
+    crate::gui_ac_modes::drag_render_hud(game, h, dt);
     crate::gui_ac_pit::render_menu(game, h, dt);
     crate::gui_ac_hud2::render_hud(game, h, dt);
     // Task 33: Console::renderHUD, the last of the HUD objects
@@ -344,6 +349,7 @@ pub unsafe fn dump(game: &Game, out: &mut String) {
     crate::gui_ac_hud2::dump(game, h, out);
     crate::gui_ac_modes::dump(out);
     crate::gui_ac_modes::drift_dump(out);
+    crate::gui_ac_modes::drag_dump(out);
     crate::gui_ac_pit::dump(game, out);
     crate::gui_ac_menu::dump(game, out);
     crate::gui_seq_menu::dump_actions(out);

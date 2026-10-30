@@ -22,7 +22,13 @@ pub fn get_complete_ai_results(manager: &RaceManager, cars: &[CarView], res: &mu
         SESSION_PRACTICE | SESSION_QUALIFY => process_qualify_results(manager, cars, res, rand),
         SESSION_RACE => process_race_results(manager, cars, res, rand),
         // processDragResults @ 0x140166d70: without a `DragMode` object nothing is touched
-        SESSION_DRAG => {}
+        // processDragResults @ 0x140166d70: the matches are added to what the processor holds
+        SESSION_DRAG => {
+            if let Some((positions, laps)) = &manager.drag_results {
+                res.positions.clone_from(positions);
+                res.laps.extend(laps.iter().cloned());
+            }
+        }
         _ => fetch_basic_results(manager, cars, res),
     }
     res.clone()

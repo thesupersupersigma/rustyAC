@@ -24,7 +24,7 @@ use crate::font::{Font, FontType};
 use crate::gui::Gui;
 use crate::hud::translate;
 use crate::menus::{Menu, SimAction};
-use crate::painter::{Painter, Texture, ALIGN_CENTER, ALIGN_LEFT, BLEND_ALPHA, DEPTH_OFF, GRAPHICS_GL};
+use crate::painter::{Painter, Texture, ALIGN_CENTER, ALIGN_LEFT, ALIGN_RIGHT, BLEND_ALPHA, DEPTH_OFF, GRAPHICS_GL};
 
 /// `colTitleBar`, `colDarkTransp` of the file.
 const COL_TITLE_BAR: [f32; 4] = [0.74, 0.0, 0.0, 1.0];
@@ -240,7 +240,7 @@ impl EndSession {
             gui.render(self.leaderboard, dt, painter);
             return;
         }
-        // (a hot lap has no table; the drag's banner is not ported yet)
+        // (a hot lap has no table)
         gui.set_visible(self.leaderboard, false);
         if kind == 5 {
             let Some(ta) = gui.sim.time_attack else { return };
@@ -260,6 +260,22 @@ impl EndSession {
             let font = &mut gui.fonts[self.font];
             font.set_color(0.0, 1.0, 0.0, 1.0);
             font.blit_string(painter, half, 275.0, &(drift.session_points as i32).to_string(), 0.8, ALIGN_CENTER);
+        } else if kind == 7 {
+            let Some(drag) = gui.sim.drag else { return };
+            let (w, h) = painter.texture_size(&self.tex_end_drag);
+            let half = painter.screen().0 / 2;
+            painter.set_texture(0, &self.tex_end_drag);
+            painter.gl_quad(GRAPHICS_GL, (half - (w >> 1) as i32) as f32, 250.0, w as f32, h as f32, true);
+            // getNumberOfRuns - getNumberOfPlayerWins
+            let (player, ai) = (drag.wins[0] as i32, drag.wins[1] as i32);
+            let font = &mut gui.fonts[self.font];
+            if ai < player {
+                font.set_color(0.0, 1.0, 0.0, 1.0);
+            } else {
+                font.set_color(1.0, 0.0, 0.0, 1.0);
+            }
+            font.blit_string(painter, (half - 25) as f32, 280.0, &format!("PLAYER : {player}"), 1.0, ALIGN_RIGHT);
+            font.blit_string(painter, (half + 25) as f32, 280.0, &format!("AI : {ai}"), 1.0, ALIGN_LEFT);
         }
     }
 

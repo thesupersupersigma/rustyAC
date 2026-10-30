@@ -579,6 +579,16 @@ impl crate::race::World for ReplayWorld {
         &mut self.cars[index]
     }
 
+    fn is_drag_ai(&self, index: usize) -> bool {
+        self.drag.get(index).is_some_and(Option::is_some)
+    }
+
+    fn set_drag_start_time(&mut self, index: usize, time: f64, rand: &mut crate::session::MsvcRand) {
+        if let Some(Some(drag)) = self.drag.get_mut(index) {
+            drag.set_start_time(time, rand);
+        }
+    }
+
     fn set_session_info(&mut self, info: crate::ai::SessionInfo) {
         let mut slots = slots_of(&mut self.cars, &mut self.devices, &mut self.ai);
         self.engine.set_session(info, &mut slots);

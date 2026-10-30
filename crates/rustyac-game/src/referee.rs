@@ -60,6 +60,16 @@ impl World for SimWorld<'_> {
         }
     }
 
+    fn is_drag_ai(&self, index: usize) -> bool {
+        index > 0 && self.opponents.get(index - 1).is_some_and(|o| o.car.device.drag.is_some())
+    }
+
+    fn set_drag_start_time(&mut self, index: usize, time: f64, rand: &mut rustyac_physics::session::MsvcRand) {
+        if let Some(drag) = index.checked_sub(1).and_then(|i| self.opponents.get_mut(i)).and_then(|o| o.car.device.drag.as_mut()) {
+            drag.set_start_time(time, rand);
+        }
+    }
+
     fn set_session_info(&mut self, info: SessionInfo) {
         // a later session starts from the track as the one before left it (the handler the
         // track hangs on the engine's new-session event, lambda @ 0x140277740)
@@ -173,6 +183,8 @@ pub struct RefereeHud {
     pub results: Vec<String>,
     /// ms to the green light of a race (negative: it is on); `None` outside a race
     pub time_to_start_ms: Option<f64>,
+    /// Task 45: a drag's false start or wrong lane lights the semaphore's disqualified lamps
+    pub lights_disqualified: bool,
     /// the picture is fading to black: 0 none .. 1 black
     pub fade: f32,
     /// Task 28b: the pit menu while it is up, line by line (the cursor's line starts with `>`)
@@ -405,6 +417,13 @@ pub fn hud_of(referee: &Referee, player: &RollingChassis) -> RefereeHud {
     };
     if session.session_type == SESSION_RACE {
         out.time_to_start_ms = Some(manager.time_to_session_start());
+    }
+    // StartingTrackSemaphore::getTimeToSessionStart: DragMode's customStart once it set one
+    if let Some(rustyac_physics::race::game_mode::Mode::Drag(drag)) = &referee.mode {
+        if drag.custom_start != 0.0 {
+            out.time_to_start_ms = Some(drag.custom_start - manager.now);
+        }
+        out.lights_disqualified = drag.disqualified_on;
     }
     let cars = manager.car_count();
     out.gui = RefereeGui {

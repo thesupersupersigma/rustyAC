@@ -946,6 +946,13 @@ impl AcRenderer {
         self.race_start_ms = ms.filter(|ms| ms.abs() < 1.0e9).map(|ms| self.time_ms + ms);
     }
 
+    /// Task 45: `StartingTrackSemaphore::disqualifiedOn` (a drag's false start).
+    pub fn set_lights_disqualified(&mut self, on: bool) {
+        if let Some(semaphore) = &mut self.semaphore {
+            semaphore.disqualified_on = on;
+        }
+    }
+
     /// How many meshes of the track are start lights, and whether it has a semaphore.
     pub fn start_lights_summary(&self) -> (usize, bool) {
         (self.start_lights.as_ref().map_or(0, |l| l.track_light_count()), self.semaphore.as_ref().is_some_and(|s| !s.is_empty()))

@@ -2320,6 +2320,7 @@ fn run_window(options: &Options) -> Result<(), String> {
         // Task 28: the start lights count down to the referee's race start
         if let Some(referee) = &info.referee {
             renderer.set_race_start_in(referee.time_to_start_ms);
+            renderer.set_lights_disqualified(referee.lights_disqualified);
         }
         if focus.index != 0 {
             info.notes.push(format!("camera on car {} ({}): Ctrl+{} is your car", focus.index, car_names[focus.index], rustyac_game::input::bindings::key_name(bindings.key_player_car)));

@@ -10,7 +10,10 @@
 //! * `TimeAttack::update` (with its penalties and goals) on made-up frames against
 //!   `rustyac_physics::race::time_attack`, field by field every frame;
 //! * `DriftModeComponent::step` on made-up drives against `rustyac_physics::car::drift`,
-//!   every member every physics step.
+//!   every member every physics step;
+//! * `DragMode` on made-up matches against `rustyac_physics::race::drag` (`modes/drag.rs`).
+
+mod drag;
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -62,6 +65,11 @@ pub struct Report {
     pub drifts: usize,
     pub drift_combos: usize,
     pub drift_points: f64,
+    pub drag_sessions: usize,
+    pub drag_frames: usize,
+    pub drag_matches: usize,
+    pub drag_penalties: usize,
+    pub drag_messages: usize,
     pub mismatch: Option<String>,
 }
 
@@ -222,6 +230,13 @@ pub unsafe fn micro(acs: &Acs, root: &Path, ac: &Path, seed: u32, laps_per_case:
     }
     // 6. the drift points of the physics
     if let Err(what) = drift_component(acs, &mut next, laps_per_case * 2000, &mut report) {
+        differ(&mut report, what);
+    }
+    // 7. drag matches (last: its stand-ins replace the others')
+    std::env::set_current_dir(ac).map_err(|e| e.to_string())?;
+    let done = drag::drag(acs, &base, seed, &mut next, laps_per_case * 400, &mut report);
+    std::env::set_current_dir(&here).map_err(|e| e.to_string())?;
+    if let Err(what) = done {
         differ(&mut report, what);
     }
     Ok(report)

@@ -177,6 +177,8 @@ pub struct SimLink {
     pub time_attack: Option<crate::time_attack::TimeAttackLink>,
     /// Task 45: a drift session's mode
     pub drift: Option<crate::drift::DriftLink>,
+    /// Task 45: a drag race's mode
+    pub drag: Option<crate::drag::DragLink>,
 }
 
 /// `PauseMenu`'s own members.

@@ -7,6 +7,7 @@
 //! start, is in the car's step: `car::chassis` and `track::timing`.)
 
 pub mod flags;
+pub mod drag;
 pub mod drift;
 pub mod game_mode;
 pub mod hud;

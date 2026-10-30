@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::flags::{FlagCar, FlagManager, PlayerPenalty, Shown};
 use super::hud::{PenaltyMessages, PlayerState};
 use super::game_mode::{GameMode, Mode};
-use super::manager::{filter_speed, Action, CarView, OnSessionEndEvent, RaceManager, SessionsIni, SESSION_HOTLAP, SESSION_RACE};
+use super::manager::{filter_speed, Action, CarView, OnSessionEndEvent, RaceManager, SessionsIni, SESSION_DRAG, SESSION_HOTLAP, SESSION_RACE};
 use super::output::{JsonOutputFile, Player};
 use super::pitstop::{self, PitAction, PitCarView, PitFrame, PitStop, PitStopStart, QuickMenu};
 use crate::ai::SessionInfo;
@@ -45,6 +45,52 @@ pub trait World {
     fn set_penalty_mode(&mut self, mode: i32);
     /// `RaceManager::generateWind`: the wind of a new session.
     fn generate_wind(&mut self);
+    /// Task 45: the car is driven by `AIDriverDrag` (a drag session's AI cars).
+    fn is_drag_ai(&self, _car: usize) -> bool {
+        false
+    }
+    /// `AIDriverDrag::setStartTime` (one of the game's `rand()`s).
+    fn set_drag_start_time(&mut self, _car: usize, _time: f64, _rand: &mut MsvcRand) {}
+}
+
+/// What `DragMode` asks of the cars and menus, through the referee.
+struct DragSide<'a> {
+    referee: &'a mut Referee,
+    world: &'a mut dyn World,
+}
+
+impl super::drag::DragHost for DragSide<'_> {
+    fn rand(&mut self) -> i32 {
+        self.referee.rand.next()
+    }
+    fn is_ai(&self, car: usize) -> bool {
+        self.world.is_drag_ai(car)
+    }
+    fn ai_start_time(&mut self, car: usize, time: f64) {
+        self.world.set_drag_start_time(car, time, &mut self.referee.rand);
+    }
+    fn gentle_stop(&mut self, car: usize, on: bool) {
+        self.world.car_mut(car).queue(move |car| car.is_gentle_stopping = on);
+    }
+    fn go_to_spawn(&mut self, car: usize) {
+        let slot = self.referee.manager.start_index.get(car).copied().unwrap_or(car as i32);
+        self.referee.teleport(self.world, car, "START", slot, Some(false));
+    }
+    fn show_esc_menu(&mut self) {
+        // (without the ESC menu at a session's start, Drive is pressed for the player)
+        if self.referee.next_start_delay_ms < 0.0 {
+            self.referee.pits_lock(self.world);
+            self.referee.esc_requests = self.referee.esc_requests.wrapping_add(1);
+        }
+    }
+    fn fade_in(&mut self, seconds: f32, results: bool) -> bool {
+        if results {
+            self.referee.mode_fade.get_or_insert(seconds);
+        } else {
+            self.referee.drag_fade = Some(seconds);
+        }
+        true
+    }
 }
 
 /// How a session is set up for the referee.
@@ -148,6 +194,12 @@ pub struct Referee {
     pub mode_fade: Option<f32>,
     /// the ESC menu of the pits shows (from the lock it asks for to its "Drive")
     pub esc_open: bool,
+    /// `DragMode::newMatch`'s 1 s fade before the cars go back to the start: seconds left
+    pub drag_fade: Option<f32>,
+    /// `DragMode::resetMatch` asked for the ESC menu again (a count, for the GUI)
+    pub esc_requests: u32,
+    /// frames a drag match has stood still without the ESC menu (Drive is pressed after ~1 s)
+    drag_still: u32,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -232,6 +284,9 @@ impl Referee {
             mode: None,
             mode_fade: None,
             esc_open: false,
+            drag_fade: None,
+            esc_requests: 0,
+            drag_still: 0,
             manager,
         };
         let mut actions = Vec::new();
@@ -239,6 +294,10 @@ impl Referee {
         referee.manager.reset_current_laps_and_mandatory_pit(&mut actions);
         referee.apply(actions, world);
         referee.mode = Mode::of(referee.manager.current_session.session_type, &setup.game_mode);
+        if referee.manager.current_session.session_type == SESSION_DRAG {
+            referee.manager.now = now;
+            referee.make_drag(&setup.game_mode, world, now);
+        }
         referee.time_attack_session(world);
         if setup.first_start_delay_ms >= 0.0 {
             referee.start_race(setup.first_start_delay_ms, world);
@@ -390,6 +449,16 @@ impl Referee {
         }
         for lap in std::mem::take(&mut self.laps) {
             self.manager.on_lap_completed(&lap, &views);
+            if let Some(Mode::Drag(_)) = &self.mode {
+                // DragMode's handler of every car's lap: the finish line
+                let (car, speed) = (lap.car_index as usize, world.car(lap.car_index as usize).speed);
+                self.with_drag(world, |drag, side| {
+                    let mut log = Vec::new();
+                    // shortcut: Speed::useMPH is false here (km/h), read the player's setting when a page shows mph
+                    drag.on_finish_lane_passed(car, speed, false, side, &mut |text, description| log.push(format!("{text} {description}")));
+                    side.referee.log.append(&mut log);
+                });
+            }
             if let (0, Some(mode)) = (lap.car_index, &mut self.mode) {
                 mode.on_lap_completed(&lap, &mut |text, description| self.log.push(format!("{text} {description}")));
             }
@@ -424,6 +493,7 @@ impl Referee {
         }
         if new_session {
             self.time_attack_session(world);
+            self.with_drag(world, |drag, side| drag.new_session(now, side));
         }
         self.time_attack_frame(world);
         self.pit_frame(world, now, &views);
@@ -717,6 +787,61 @@ impl Referee {
         self.start_race(10000.0, world);
         world.car_mut(0).queue(|car| car.lock_controls(false));
         self.esc_open = false;
+        // DragMode's handler of ESCMenu::evOnDriveMenuPressed
+        if let Some(Mode::Drag(drag)) = &mut self.mode {
+            drag.drive_pressed();
+        }
+    }
+
+    /// `DragMode`'s constructor in `Sim::Sim`: the line from the start slots to the
+    /// `AC_OPEN_FINISH` nodes, every car's place on its `START` slot.
+    fn make_drag(&mut self, base: &GameMode, world: &mut dyn World, now: f64) {
+        let pose = |track: &Track, slot: i32| track.spawn_pose("START", slot.max(0) as usize).map_or([0.0; 3], |(p, _)| [p.x, p.y, p.z]);
+        let node = |track: &Track, name: &str| track.helper_nodes.iter().find(|h| h.name == name).map_or([0.0; 3], |h| [h.local.m[3][0], h.local.m[3][1], h.local.m[3][2]]);
+        let start = [pose(&self.track, 0), pose(&self.track, 1)];
+        let finish = [node(&self.track, "AC_OPEN_FINISH_L"), node(&self.track, "AC_OPEN_FINISH_R")];
+        let spawns: Vec<[f32; 3]> = (0..world.car_count()).map(|car| pose(&self.track, self.manager.start_index.get(car).copied().unwrap_or(car as i32))).collect();
+        let mut side = DragSide { referee: self, world };
+        let drag = super::drag::DragMode::new(base.clone(), base.drag_matches, start, finish, &spawns, now, &mut side);
+        self.mode = Some(Mode::Drag(Box::new(drag)));
+    }
+
+    /// Runs `job` on the drag session's mode, with the referee and the cars it asks for.
+    fn with_drag(&mut self, world: &mut dyn World, job: impl FnOnce(&mut super::drag::DragMode, &mut DragSide)) {
+        let Some(Mode::Drag(mut drag)) = self.mode.take() else { return };
+        job(&mut drag, &mut DragSide { referee: self, world });
+        self.mode = Some(Mode::Drag(drag));
+    }
+
+    /// `DragMode::update` on the referee's frame, its fade and the results it keeps.
+    fn drag_frame(&mut self, world: &mut dyn World) {
+        let now = self.manager.now;
+        if let Some(left) = &mut self.drag_fade {
+            *left -= FRAME_DT;
+            if *left <= 0.0 {
+                self.drag_fade = None;
+                self.with_drag(world, |drag, side| drag.reset_match(now, side));
+            }
+        }
+        let positions: Vec<[f32; 3]> = (0..world.car_count())
+            .map(|car| {
+                let car = world.car(car);
+                let p = car.core.get_position(car.body);
+                [p.x, p.y, p.z]
+            })
+            .collect();
+        let frame = super::drag::DragFrame { game_time: now, paused: false, replay: false, state_positions: positions.clone(), positions };
+        let auto_drive = self.next_start_delay_ms >= 0.0 && !self.esc_open;
+        self.with_drag(world, |drag, side| {
+            drag.update(FRAME_DT, &frame, side);
+            // (the cars stand on their slots for a second first: Still notes where they stand)
+            let still = auto_drive && drag.status == super::drag::DragState::Still;
+            side.referee.drag_still = if still { side.referee.drag_still + 1 } else { 0 };
+            if side.referee.drag_still > 110 {
+                drag.drive_pressed();
+            }
+            side.referee.manager.drag_results = Some(drag.results());
+        });
     }
 
     /// `TimeAttack`'s constructor and its handler of a new session (lambda @ 0x1401b91d0):
@@ -770,6 +895,10 @@ impl Referee {
             if let Some(on) = out.gentle_stop {
                 world.car_mut(0).queue(move |car| car.is_gentle_stopping = on);
             }
+            return;
+        }
+        if let Some(Mode::Drag(_)) = &self.mode {
+            self.drag_frame(world);
             return;
         }
         let Some(Mode::TimeAttack(ta)) = &mut self.mode else { return };

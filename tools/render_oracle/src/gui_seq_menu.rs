@@ -1369,3 +1369,27 @@ pub fn drift() -> Vec<Op> {
     o.extend([hud("menu.end", 0.0, ""), f.clone(), hud("menu.endShow", 0.0, ""), f.clone(), f.clone()]);
     o
 }
+
+/// Task 45: the drag race's HUD: standing (nothing), the run with the cars along the strip,
+/// the reaction time and the finish speed, a false start and a disqualification, the end
+/// screen's wins.
+pub fn drag() -> Vec<Op> {
+    let f = Op::Frame(DT);
+    let mut o = Vec::new();
+    field(&mut o, 2);
+    o.extend([hud("race.sessions", 0.0, "7:0:Drag Race"), hud("race.current", 0.0, ""), hud("session", 7.0, ""), hud("menu.pause", 0.0, ""), hud("dg.create", 0.0, ""), f.clone(), f.clone()]);
+    // the run: the clock, the two cars moving, the player off the line
+    o.extend([hud("dg.status", 1.0, ""), f.clone(), hud("dg.time", 0.84, ""), hud("dg.x0", 3.5, ""), hud("dg.x1", 2.2, ""), f.clone()]);
+    o.extend([hud("dg.reaction", 0.4321, ""), hud("dg.time", 6.25, ""), hud("dg.x0", 160.0, ""), hud("dg.x1", 171.3, ""), f.clone(), f.clone()]);
+    // the player over the line first, then the AI: a win
+    o.extend([hud("dg.time", 12.96, ""), hud("dg.x0", 401.0, ""), hud("dg.x1", 388.0, ""), hud("dg.speed", 187.0, ""), f.clone(), hud("dg.wins0", 1.0, ""), hud("dg.x1", 402.0, ""), f.clone()]);
+    // nothing behind the pause menu or in a replay (the ESC menu does not hide it)
+    o.extend([hud("menu.esc", 0.0, ""), f.clone(), hud("menu.resume", 0.0, ""), f.clone(), hud("replay", 1.0, ""), f.clone(), hud("replay", 0.0, ""), f.clone()]);
+    // standing for the next match: nothing; a false start, then a disqualification
+    o.extend([hud("dg.status", 3.0, ""), hud("dg.time", 0.0, ""), hud("dg.reaction", 0.0, ""), hud("dg.speed", 0.0, ""), hud("dg.x0", 0.0, ""), hud("dg.x1", 0.0, ""), f.clone()]);
+    o.extend([hud("dg.status", 2.0, ""), hud("dg.false0", 1.0, ""), hud("dg.wins1", 1.0, ""), f.clone(), f.clone(), hud("dg.false0", 0.0, ""), hud("dg.disq1", 1.0, ""), hud("dg.wins0", 2.0, ""), f.clone()]);
+    // game over: the panel stays, then the results with the player ahead and behind
+    o.extend([hud("dg.status", 0.0, ""), hud("dg.disq1", 0.0, ""), f.clone(), hud("menu.end", 0.0, ""), f.clone(), hud("menu.endShow", 0.0, ""), f.clone(), f.clone()]);
+    o.extend([hud("dg.wins1", 3.0, ""), f.clone()]);
+    o
+}
