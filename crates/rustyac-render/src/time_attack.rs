@@ -9,8 +9,8 @@
 //!
 //! The gates' places come from the track's `data/overlays.ini`. The game writes that file
 //! into the track's folder the first time the mode is used there
-//! (`createAndSaveOverlays` 0x1401b9b00); this port only reads it: a track that has none shows
-//! no gate.
+//! (`createAndSaveOverlays` 0x1401b9b00); this port makes the same text ([`create_overlays`])
+//! and keeps it in memory: it never writes into the install.
 
 use rustyac_content::vfs::PathExt;
 use std::path::Path;
@@ -45,6 +45,53 @@ pub fn read_overlays(data_folder: &Path, sectors: usize) -> Vec<Overlay> {
         return Vec::new();
     }
     let Ok(ini) = IniReader::load(&file) else { return Vec::new() };
+    overlays_of(&ini, sectors)
+}
+
+/// [`read_overlays`] of the text [`create_overlays`] made.
+pub fn read_made_overlays(text: &str, sectors: usize) -> Vec<Overlay> {
+    overlays_of(&IniReader::from_text(Path::new("data/overlays.ini"), &text.replace("\r\n", "\n")), sectors)
+}
+
+/// `TimeAttack::createAndSaveOverlays` 0x1401b9b00: the `data/overlays.ini` the game writes for a
+/// layout that has none (`TimeAttack::TimeAttack`, before it reads the file back). A gate per
+/// `AC_TIME_<n>_L` node from 0 to the first one missing: the AI line's point nearest the node,
+/// the road's middle beside it as its offset (3 m up), 15 m wide, 1.5 m high, facing back
+/// along the line. CR LF lines, as the game's text-mode `wofstream` writes them. None without
+/// a gate (the game writes nothing then).
+pub fn create_overlays(nodes: &[rustyac_physics::track::loader::HelperNode], ai: &rustyac_physics::track::spline::AiSpline) -> Option<String> {
+    use rustyac_gui::acos::format_g6 as g;
+    let vec3 = |v: [f32; 3]| format!("{} ,{} ,{}", g(v[0]), g(v[1]), g(v[2]));
+    let mut gates = Vec::new();
+    while let Some(node) = nodes.iter().find(|h| h.name == format!("AC_TIME_{}_L", gates.len())) {
+        let m = node.world.m[3];
+        let n = ai.spline.world_to_spline(&[m[0], m[1], m[2]], -1);
+        let position = ai.spline.spline_to_world(n);
+        let sides = ai.payload_at_position(n).sides;
+        let half = (sides[1].abs() + sides[0].abs()) * 0.5;
+        let offset = if sides[1] <= sides[0] { half - sides[1] } else { -(half - sides[0]) };
+        let back = ai.spline.spline_to_world(n - 1.0 / ai.spline.length());
+        let (dx, dy, dz) = (back[0] - position[0], back[1] - position[1], back[2] - position[2]);
+        let l = sqrtf((dx * dx + dy * dy) + dz * dz);
+        let orientation = if l != 0.0 { [dx * (1.0 / l), dy * (1.0 / l), dz * (1.0 / l)] } else { [dx, dy, dz] };
+        gates.push((position, offset, orientation));
+    }
+    if gates.is_empty() {
+        return None;
+    }
+    let mut text = format!("[MAIN]\r\nOVERLAYS_COUNT={}\r\n\r\n", gates.len());
+    for (i, (position, offset, orientation)) in gates.iter().enumerate() {
+        text += &format!(
+            "[CHECKPOINT_{i}]\r\nWORLD_POSITION={}\r\nOFFSET={}\r\nWIDTH=15\r\nHEIGHT=1.5\r\nORIENTATION={}\r\n\r\n",
+            vec3(*position),
+            vec3([*offset, 3.0, 0.0]),
+            vec3(*orientation)
+        );
+    }
+    Some(text)
+}
+
+fn overlays_of(ini: &IniReader, sectors: usize) -> Vec<Overlay> {
     (0..sectors)
         .map(|i| {
             let section = format!("CHECKPOINT_{i}");

@@ -14,3 +14,6 @@ r23_01
 r23_24
 r43c_01
 r43c_03
+# Task 45b: one layout the game makes gates for, one without gates
+overlays ct_backwoods
+overlays ks_drag/drag400

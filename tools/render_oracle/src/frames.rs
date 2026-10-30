@@ -281,10 +281,19 @@ pub struct Frame {
     pub time_attack: bool,
 }
 
-/// The gates of the track's `data/overlays.ini`, one per time line of the port's track.
+/// The gates of the track's `data/overlays.ini`, one per time line of the port's track (without
+/// the file: the text the port makes as the game's `createAndSaveOverlays` writes it).
 pub fn time_attack_overlays(data_folder: &str) -> Vec<rustyac_render::time_attack::Overlay> {
     let sectors = RAY_TRACK.with(|t| t.borrow().as_ref().map_or(0, |track| track.sectors_normalized_positions.len()));
-    rustyac_render::time_attack::read_overlays(Path::new(data_folder), sectors)
+    match made_overlays().filter(|_| !Path::new(data_folder).join("data/overlays.ini").is_file()) {
+        Some(text) => rustyac_render::time_attack::read_made_overlays(&text, sectors),
+        None => rustyac_render::time_attack::read_overlays(Path::new(data_folder), sectors),
+    }
+}
+
+/// The port's `createAndSaveOverlays` text of the port's track.
+pub fn made_overlays() -> Option<String> {
+    RAY_TRACK.with(|t| t.borrow().as_ref().and_then(|track| rustyac_render::time_attack::create_overlays(&track.helper_nodes, track.ai_spline.as_ref()?)))
 }
 
 /// The matrices of the track's `AC_PIT_<n>` nodes as the port's physics has them (put on the

@@ -873,9 +873,16 @@ impl AcRenderer {
                 // TimeAttack::TimeAttack (a time-attack session): the gates of data/overlays.ini
                 if self.options.session_type == 5 {
                     self.gate_sectors = track.sectors_normalized_positions.len();
-                    let overlays = rustyac_render::time_attack::read_overlays(&data, self.gate_sectors);
+                    let mut overlays = rustyac_render::time_attack::read_overlays(&data, self.gate_sectors);
+                    if !rustyac_content::vfs::PathExt::vfs_is_file(data.join("data/overlays.ini").as_path()) {
+                        // createAndSaveOverlays: the game writes the file into the track's folder;
+                        // rustyAC keeps the same text in memory
+                        let made = track.ai_spline.as_ref().and_then(|ai| rustyac_render::time_attack::create_overlays(&track.helper_nodes, ai));
+                        overlays = made.as_deref().map_or(Vec::new(), |text| rustyac_render::time_attack::read_made_overlays(text, self.gate_sectors));
+                        println!("time attack: no data/overlays.ini; made the {} gates Assetto Corsa would write there (kept in memory)", overlays.len());
+                    }
                     if overlays.is_empty() {
-                        println!("time attack: this track has no data/overlays.ini (Assetto Corsa writes it at the first time-attack session there): no gates");
+                        println!("time attack: no gates (the track has no AC_TIME_0_L)");
                     } else {
                         let gates = std::rc::Rc::new(std::cell::RefCell::new(rustyac_render::time_attack::TimeAttackGates::new(&mut self.graphics, overlays)));
                         self.scene.add_event_handler(self.sim_nodes.before_cars, gates.clone());

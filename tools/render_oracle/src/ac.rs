@@ -67,6 +67,7 @@ const VA_SPAWN_POSITIONS_HEAD: usize = 0x1_401c_6d80; // the head node of TrackA
 const VA_INIT_PIT_CREW: usize = 0x1_401c_a630; // TrackAvatar::initPitCrew()
 const VA_LOLLIPOP_CREW_UPDATE: usize = 0x1_4011_3ab0; // LollipopCrew::update(float)
 const VA_TRACK_NEW_SESSION_HANDLER: usize = 0x1_401c_6b70; // the handler TrackAvatar::TrackAvatar hangs on Sim::evOnNewSession
+const VA_CREATE_AND_SAVE_OVERLAYS: usize = 0x1_401b_9b00; // TimeAttack::createAndSaveOverlays()
 const VA_FUNCTION_QUEUE_VTABLE: usize = 0x1_404c_7b30; // Concurrency::concurrent_queue<std::function<void(void)>>::`vftable'
 const VA_STARTING_LIGHTS_CTOR: usize = 0x1_401a_1a20; // StartingLights::StartingLights(Sim*)
 const VA_STARTING_LIGHTS_RENDER_HUD: usize = 0x1_401a_2e80; // StartingLights::renderHUD(float)
@@ -786,6 +787,35 @@ impl Game {
         // (read by the port's reader) and the texture the game's own store loads
         let mut gates: Vec<*mut u8> = Vec::new();
         let gate_replay = acs.alloc(0x198);
+        if let (true, Some(track), Ok(out)) = (frame.time_attack, &frame.track, std::env::var("RENDER_ORACLE_OVERLAYS")) {
+            // Task 45b: the game's createAndSaveOverlays on the game's track node and AI line,
+            // writing into <out>/data (not the install), against the port's text
+            let dir = std::path::PathBuf::from(&out);
+            std::fs::create_dir_all(dir.join("data")).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_file(dir.join("data/overlays.ini"));
+            let recorder = acs.alloc(0x400);
+            let ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_AI_SPLINE_CTOR));
+            ctor(recorder.add(0xf0));
+            let load: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_AI_SPLINE_LOAD_FAST));
+            load(recorder.add(0xf0), wstring(acs, &format!("{}/ai/fast_lane.ai", track.data_folder)));
+            let avatar = new_session_track;
+            wr(avatar, 0x178, recorder);
+            write_wstring(acs, avatar.add(0x200), &crate::frames::path_text(&dir));
+            let this = acs.alloc(0x2e0);
+            let car = acs.alloc(0x200);
+            wr(car, 0x130, track_sim);
+            wr(this, 0x240, car);
+            let create: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_CREATE_AND_SAVE_OVERLAYS));
+            create(this);
+            write_wstring(acs, avatar.add(0x200), &track.data_folder);
+            let game = std::fs::read(dir.join("data/overlays.ini")).unwrap_or_default();
+            let port = crate::frames::made_overlays().unwrap_or_default();
+            let same = if game == port.as_bytes() { "IDENTICAL" } else { "DIFFERENT" };
+            println!("overlays {}/{}: the game wrote {} bytes, the port made {} ({} gates) {same}", track.name, track.layout, game.len(), port.len(), port.matches("[CHECKPOINT_").count());
+            if same == "DIFFERENT" {
+                std::fs::write(dir.join("data/port_overlays.ini"), &port).map_err(|e| e.to_string())?;
+            }
+        }
         if let (true, Some(track)) = (frame.time_attack, &frame.track) {
             copy_into_root(&self.game_folder, "content/texture/checkpoint.png")?;
             let overlays = crate::frames::time_attack_overlays(&track.data_folder);
