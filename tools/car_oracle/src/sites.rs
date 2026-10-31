@@ -165,6 +165,9 @@ pub fn system_of(site: u32) -> &'static str {
     }
 }
 
+/// The site of a call that returns outside acs.exe (into the oracle's own thunk after a tail jump).
+pub const OUTSIDE_ACS: u32 = 0xffff_fffe;
+
 /// The trailer line of one call site.
 pub fn describe(site: u32) -> String {
     let location = match function_of(site) {

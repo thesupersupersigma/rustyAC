@@ -657,7 +657,12 @@ macro_rules! thunk {
 
 impl State {
     fn site(&self, return_address: usize) -> u32 {
-        return_address.wrapping_sub(self.image_base) as u32
+        // a tail jump of the game's (the solid axle's force entries) returns into the oracle's own
+        // thunk, whose address changes every run: one fixed site for every such call
+        match crate::acs::ghidra_of(return_address) {
+            Some(_) => return_address.wrapping_sub(self.image_base) as u32,
+            None => crate::sites::OUTSIDE_ACS,
+        }
     }
 
     fn body_index(&self, wrapper: *mut u8) -> usize {
@@ -1986,6 +1991,20 @@ impl<'a> World<'a> {
                 for offset in [0x10, SUS_BUMP_STOP_UP, SUS_BUMP_STOP_DN, 0x2c] {
                     wr(suspension, offset, 0.0f32);
                 }
+                // the setup screen's PACKER_RANGE item copied packerRange when the car was built
+                // (newValue = *connected / multiplier): give it what 0 there would have given
+                let manager = car.add(CAR_SETUP_MANAGER);
+                let mut item: *mut u8 = rd(manager, 0);
+                let items_end: *mut u8 = rd(manager, 8);
+                let mut found = 0;
+                while item < items_end {
+                    if rd::<*mut u8>(item, SI_CONNECTED_FLOAT) == suspension.add(0x2c) {
+                        wr(item, SI_NEW_VALUE, 0.0f32);
+                        found += 1;
+                    }
+                    item = item.add(SETUP_ITEM_SIZE);
+                }
+                assert_eq!(found, 1, "wheel {wheel}: the setup items connected to packerRange");
             }
             if let Some(hub) = class.hub {
                 st.bodies.push(body_ref(&format!("hub_{wheel}"), rd(suspension, hub)));
