@@ -10,7 +10,7 @@ area=sound
 . "$(dirname "$0")/lib.sh"
 tool audio_oracle
 need oracle/audio/ks_ferrari_f2004/spa_launch.audiotape "Task 19's tapes"
-cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
 
 # quick keys: "<car> <scenario> <camera>", "dsp", "e2e <scenario> <camera>"
 while read -r car scenario camera; do

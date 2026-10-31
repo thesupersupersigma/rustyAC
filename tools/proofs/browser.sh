@@ -10,7 +10,7 @@ area=browser
 wt=$repo/target/web-tools/wasmtime/bin/wasmtime.exe
 need "$wt" "wasmtime (docs/port/web.md)"
 need target/wasm-sysroot "the wasm sysroot (docs/port/web.md)"
-cargo build --release --locked --quiet -p rustyac-game --bin replay_hash || exit 2
+build replay_hash cargo build --release --locked --quiet -p rustyac-game --bin replay_hash
 CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2
 docs="$USERPROFILE/Documents/Assetto Corsa"

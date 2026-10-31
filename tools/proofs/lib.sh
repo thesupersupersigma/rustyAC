@@ -2,7 +2,7 @@
 #
 # Shared by the area scripts of tools/proofs (sourced, never run): where things are, how the
 # tools are built, and the tally every area prints last:
-#   PROOF <area> cases=<n> identical=<n> different=<n>
+#   PROOF <area> cases=<n> identical=<n> different=<n> skipped=<n>
 # An area script sets $area before sourcing this file.
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -16,6 +16,10 @@ rm -rf "$out"
 mkdir -p "$out"
 log=$out/cases.log
 : > "$log"
+# times.tsv: the seconds each case took (from the end of the one before), for the table of README.md
+times=$out/times.tsv
+: > "$times"
+last_case=$(date +%s)
 cd "$repo"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 
@@ -39,13 +43,29 @@ keep() {
 # again and holds the new recording against the kept one; nothing kept is ever replaced or deleted.
 # Below PROOF_KEEP_MIN_GB (18) of free disk nothing new is kept (the run goes on, recording as before).
 cache=$gold/fresh/rec
-# the oracle's own source is part of every key: a changed oracle records anew (not its lock file,
-# which every release changes for rustyAC's version)
-cache_salt=$({ git ls-tree -r HEAD -- tools/car_oracle | grep -v 'Cargo\.lock$'
-    git diff HEAD -- tools/car_oracle ':!tools/car_oracle/Cargo.lock'; } 2>/dev/null | sha1sum | cut -c1-16)
+# salt_of <tool>: the oracle's own source (not its lock file, which every release changes for
+# rustyAC's version) and the game's files (install_key)
+# shortcut: the port crates an oracle links are not in the key (they change every task, the game's
+# side only reads a few of their files); a stale result shows as a difference, and `--rerecord`
+# holds every kept result against a new one.
+salt_of() {
+    { git ls-tree -r HEAD -- "tools/$1" | grep -v 'Cargo\.lock$'
+      git diff HEAD -- "tools/$1" ":!tools/$1/Cargo.lock"; install_key; } 2>/dev/null | sha1sum | cut -c1-16
+}
+# install_key: the game's files every case may read: acs.exe's bytes and the names, sizes and
+# times of system/, content/cars and content/tracks (once a run: run_all.sh exports it)
+install_key() {
+    if [ -z "$PROOF_INSTALL_KEY" ]; then
+        PROOF_INSTALL_KEY=$({ sha1sum "$ac/acs.exe" | cut -c1-40
+            (cd "$ac" && find system content/cars content/tracks -type f -printf '%p %s %T@\n' | sort); } | sha1sum | cut -c1-16)
+        export PROOF_INSTALL_KEY
+    fi
+    echo "$PROOF_INSTALL_KEY"
+}
+cache_salt=$(salt_of car_oracle)
 # cache_key <words...>: the key of one recording (its arguments, the content of any file named in them)
 cache_key() {
-    { echo "$cache_salt"; printf '%s
+    { echo "${key_salt:-$cache_salt}"; printf '%s
 ' "$@"; for a in "$@"; do [ -f "$a" ] && cat "$a"; done; } | sha1sum | cut -c1-16
 }
 # cache_get <dir> <into>: the kept recording into <into>; fails when there is none or when re-recording
@@ -97,10 +117,23 @@ tool() {
     case " $PROOF_BUILT " in *" $1 "*) return 0 ;; esac
     cargo build --release --locked --quiet --manifest-path "tools/$1/Cargo.toml" || { echo "tools/$1 does not build" >&2; exit 2; }
 }
+# build <name> <command...>: one build of rustyAC's own programs, skipped when run_all.sh made it
+# already (PROOF_BUILT): an area never rebuilds a program another area is running
+build() {
+    b=$1; shift
+    case " $PROOF_BUILT " in *" $b "*) return 0 ;; esac
+    "$@" || { echo "$b does not build" >&2; exit 2; }
+}
 
 # verdict <case> <IDENTICAL|DIFFERENT> [detail]: one line in the tally
 verdict() {
     echo "$2 $1${3:+ | $3}" | tee -a "$log"
+    now=$(date +%s); printf '%s\t%s\n' $((now - last_case)) "$1" >> "$times"; last_case=$now
+}
+# skip <case> <reason>: a case that did not run, listed with its reason and counted in the tally
+skip() {
+    echo "SKIPPED $1 | $2" | tee -a "$log"
+    last_case=$(date +%s)
 }
 
 # need <path> <what>: a recording the area cannot run without
@@ -111,7 +144,8 @@ need() {
 summary() {
     identical=$(grep -c '^IDENTICAL ' "$log")
     different=$(grep -c '^DIFFERENT ' "$log")
-    echo "PROOF $area cases=$((identical + different)) identical=$identical different=$different"
+    skipped=$(grep -c '^SKIPPED ' "$log")
+    echo "PROOF $area cases=$((identical + different)) identical=$identical different=$different skipped=$skipped"
     [ "$different" = 0 ] && [ $((identical + different)) -gt 0 ]
 }
 

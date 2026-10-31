@@ -117,20 +117,20 @@ if part collide; then  # Task 13: contacts
 fi
 
 if part rays; then  # Task 14 and 18: the road under the wheels on every track and layout that loads
-    cargo build --release --locked --quiet -p rustyac-physics --bin track_survey
+    build track_survey cargo build --release --locked --quiet -p rustyac-physics --bin track_survey
     target/release/track_survey.exe --list 2>/dev/null | tr -d '\r' | awk 'NF' > "$out/layouts.txt" || true
     [ -s "$out/layouts.txt" ] || printf 'magione\nspa\nks_laguna_seca\n' > "$out/layouts.txt"
     while read -r t l _; do
         keep "rays $t $l" || continue
         "$CO" rays --track "$t" ${l:+--layout "$l"} --count 200000 --root "$root" > "$out/rays.txt" 2>&1
         if grep -q '^No difference' "$out/rays.txt"; then verdict "rays $t $l" IDENTICAL
-        elif grep -qiE 'refused|not load|cannot|needs .*models_|is missing|invalid stof' "$out/rays.txt"; then echo "rays $t $l: refused (not a case)" >> "$out/refused.txt"
+        elif grep -qiE 'refused|not load|cannot|needs .*models_|is missing|invalid stof' "$out/rays.txt"; then skip "rays $t $l" "the game refuses the layout: $(grep -m1 -iE 'refused|not load|cannot|needs .*models_|is missing|invalid stof' "$out/rays.txt" | cut -c1-120)"
         else verdict "rays $t $l" DIFFERENT "$(tail -n 1 "$out/rays.txt")"; fi
     done < "$out/layouts.txt"
 fi
 
 if part survey; then  # Task 18: a car on every track of survey_list.txt, then rustyac.exe replays the game's drive
-    cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+    build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     # SURVEY_FROM=<n>: start at the n-th run of the list (to finish a run that was cut off)
     grep -vE '^\s*(#|$)' tools/proofs/survey_list.txt | tail -n +"${SURVEY_FROM:-1}" | while read -r car t l scenarios; do
         [ "$l" = - ] && l=
@@ -141,14 +141,14 @@ if part survey; then  # Task 18: a car on every track of survey_list.txt, then r
         "$CC" game-replay --dir "$rec/$label" --exe target/release/rustyac.exe > "$out/replay_$label.txt" 2>&1
         grep -E '^\| .(trk|spa)_[a-z_]*. \|' "$out/replay_$label.txt" | while IFS='|' read -r _ sc rest; do
             sc=$(echo "$sc" | tr -d ' `')
-            case "$rest" in *"100 %"*) verdict "game-replay $label/$sc" IDENTICAL ;; *skipped*) echo "game-replay $label/$sc: $rest" >> "$out/left_out.txt" ;; *) verdict "game-replay $label/$sc" DIFFERENT "$rest" ;; esac
+            case "$rest" in *"100 %"*) verdict "game-replay $label/$sc" IDENTICAL ;; *skipped*) skip "game-replay $label/$sc" "$rest" ;; *) verdict "game-replay $label/$sc" DIFFERENT "$rest" ;; esac
         done
         compare_dirs
     done
 fi
 
 if part crash; then  # Task 22b: into the barrier at Spa with damage, five suspensions; then rustyac.exe replays it
-    cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+    build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
     for car in ks_ferrari_f2004 bmw_m3_e30 ks_ferrari_812_superfast gt3_multilink ks_ferrari_250_gto; do
         keep "crash $car" || continue
         label="t22b_$car"
@@ -190,7 +190,7 @@ if part modes; then  # Task 45: special-event files and goals, hotlap, Time Atta
     # 1, 2, 3 wins) through DragMode's update, new session, finish line and resetMatch
     for mode in ta drift drag; do
         keep "drive $mode" || continue
-        cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+        build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
         d=$root/drive_$mode; rm -rf "$d"; mkdir -p "$d/home"
         layout=
         if [ $mode = ta ]; then

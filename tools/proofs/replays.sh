@@ -20,18 +20,18 @@ for f in "$USERPROFILE/Documents/Assetto Corsa/replay/temp/"*.acreplay; do
     keep "replay-file $b" || continue  # quick keys: "multi ...", "replay-file <name>"
     # the name ends _<track>_<layout>; the longest installed track folder in it wins
     t=$(for x in $tracks; do case "$b" in *"_${x}_"*) echo "${#x} $x" ;; esac; done | sort -rn | head -n 1 | cut -d' ' -f2)
-    [ -n "$t" ] || { echo "$b: track not installed, left out" >> "$out/left_out.txt"; continue; }
+    [ -n "$t" ] || { skip "replay-file $b" "its track is not installed"; continue; }
     l=${b##*_"$t"_}
     "$CO" replay-file "$f" --track "$t" ${l:+--layout "$l"} --root "$root" > "$out/file.txt" 2>&1 < /dev/null
     r=$(grep -m1 '^replay-file |' "$out/file.txt")
     case "$r" in
         *"| IDENTICAL") verdict "replay-file $b" IDENTICAL ;;
-        *) if grep -q "game's code crashed" "$out/file.txt"; then echo "$b: the game's own loader crashes (docs/port/replays.md)" >> "$out/left_out.txt"
+        *) if grep -q "game's code crashed" "$out/file.txt"; then skip "replay-file $b" "the game's own loader crashes on it (docs/port/replays.md)"
            else verdict "replay-file $b" DIFFERENT "$(grep -m1 -E 'DIFFERENT|differ|rror' "$out/file.txt")"; fi ;;
     esac
 done
 
-cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
 exe=target/release/rustyac.exe
 $exe --car ks_ferrari_f2004 --track spa --no-race-ini --spawn start --autodrive --headless --duration 60 --no-audio --record "$out/spa.ryin" > "$out/record.txt" 2>&1
 hashes=$(for w in 0 1 8; do $exe --replay "$out/spa.ryin" --headless --state-hash --physics-threads $w 2>&1 | grep -oE "state hash [0-9a-f]+"; done | sort -u)

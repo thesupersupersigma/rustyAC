@@ -14,7 +14,7 @@ for name in $(grep -vE '^\s*#' tools/proofs/gui_list.txt); do
     echo "$name" | grep -qE "^(${GUI_ONLY:-.*})$" || continue
     keep "$name" || continue  # quick keys: the sequence's name
     if [ "$name" = esc_telemetry ] && ! ls "$USERPROFILE/Documents/Assetto Corsa/ctelemetry/player/"*.tc > /dev/null 2>&1; then
-        echo "esc_telemetry: no saved laps here, left out" >&2; continue
+        skip "$name" "no saved laps in Documents\Assetto Corsa\ctelemetry here"; continue
     fi
     f=$out/$(echo "$name" | tr '@#' '__').txt
     for try in 1 2; do  # a second try only for a log that differs while the pictures agree (load-flaky)

@@ -10,7 +10,7 @@ area=ai_page
 q=$gold/ai_page
 need "$q/full.ryin" "Task 37c's Quick Race tape"
 need "$gold/web/pack/manifest.json" "the test pack"
-cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
 target/release/rustyac.exe --replay "$q/full.ryin" --headless --state-hash --physics-threads 8 > "$out/desktop.txt" 2>&1
 grep -q '^state hash 7aea29db0a574b43: 2 cars, 93774 steps' "$out/desktop.txt" && verdict "desktop replay" IDENTICAL "$(head -n 1 "$out/desktop.txt")" || verdict "desktop replay" DIFFERENT "$(tail -n 1 "$out/desktop.txt")"
 cargo run --release --locked --quiet -p rustyac-web --example race_proof -- --race "$q/race.ini" --assists "$q/assists.ini" --seed 28005 --tape "$q/full.ryin" --out "$out/native" > "$out/native.txt" 2>&1

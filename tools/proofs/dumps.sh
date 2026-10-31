@@ -8,7 +8,7 @@
 # The old version is built from a git worktree into target/proofs/dumps_old, deleted at the end.
 area=dumps
 . "$(dirname "$0")/lib.sh"
-cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
+build rustyac cargo build --release --locked --quiet -p rustyac-game --bin rustyac
 old=$DUMPS_OLD
 if [ -z "$old" ]; then
     tag=${DUMPS_TAG:-$(git tag --list 'v*' --sort=-v:refname --no-contains HEAD | head -n 1)}
@@ -25,11 +25,25 @@ if [ -z "$old" ]; then
     fi
     echo "old: $tag" >> "$log.info"
 fi
+# the old exe's dump of a drive is kept in re/gold/dumps/<key> (key: the old exe's bytes, the drive,
+# the game's files); PROOF_RERECORD=1 dumps again and holds the new dump against the kept one
+# shortcut: files a drive names (a setup .ini) are not in the key; a changed one shows as a difference
+# until `--rerecord`.
+kept=$gold/dumps
+mkdir -p "$kept"
+key_salt=$({ sha1sum < "$old/rustyac.exe"; install_key; } | sha1sum | cut -c1-16)
 ls oracle/game/*.ryin | awk -v n="${DUMPS_EVERY:-1}" 'NR % n == 1 || n == 1' | while read -r f; do
     keep "$f" || continue  # quick keys: oracle/game/<drive>.ryin
-    a=$("$old/rustyac.exe" --replay "$f" --headless --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
-    b=$(target/release/rustyac.exe --replay "$f" --headless --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
-    if [ "$a" = e3b0c44298fc1c14 ]; then echo "$f: the old exe dumps nothing" >> "$out/left_out.txt"
+    k=$kept/$(cache_key "$f")
+    if [ -n "$PROOF_RERECORD" ] || [ ! -f "$k" ]; then
+        a=$("$old/rustyac.exe" --replay "$f" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
+        if [ -f "$k" ] && [ "$(cat "$k")" != "$a" ]; then verdict "$f" DIFFERENT "the old exe's dump $a, kept $(cat "$k")"; continue; fi
+        echo "$a" > "$k"
+    else
+        a=$(cat "$k")
+    fi
+    b=$(target/release/rustyac.exe --replay "$f" --headless --no-shm --dump-states - 2>/dev/null | sha256sum | cut -c1-16)
+    if [ "$a" = e3b0c44298fc1c14 ]; then skip "$f" "the old exe dumps nothing"
     elif [ "$a" = "$b" ]; then verdict "$f" IDENTICAL "$a"
     else verdict "$f" DIFFERENT "old $a new $b"; fi
 done

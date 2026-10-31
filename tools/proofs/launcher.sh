@@ -13,7 +13,7 @@ nu=$repo/target/nuget; mkdir -p "$nu/tmp"
 export NUGET_PACKAGES="$(cygpath -w "$nu/packages")" DOTNET_CLI_HOME="$(cygpath -w "$nu/home")" TEMP="$(cygpath -w "$nu/tmp")" TMP="$(cygpath -w "$nu/tmp")" DOTNET_CLI_TELEMETRY_OPTOUT=1
 { dotnet restore --locked-mode --source https://api.nuget.org/v3/index.json tools/launcher_oracle/launcher_oracle.csproj &&
   dotnet build -c Release --no-restore tools/launcher_oracle/launcher_oracle.csproj; } > "$out/dotnet.txt" 2>&1 || { echo "dotnet build failed (see $out/dotnet.txt)" >&2; exit 2; }
-cargo build --release --locked --quiet -p rustyac-launcher || exit 2
+build rustyac-launcher cargo build --release --locked --quiet -p rustyac-launcher
 LO=$(ls tools/launcher_oracle/bin/Release/launcher_oracle.exe tools/launcher_oracle/bin/Release/net*/launcher_oracle.exe 2> /dev/null | head -n 1)
 # the oracle takes only a fake player folder under re\scratch (never Documents); it is deleted at the end
 fake=$repo/re/scratch/proofs/launcher
