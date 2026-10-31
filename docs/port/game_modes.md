@@ -2,8 +2,37 @@
 
 ## Resume here
 
-- Task 45 (v0.45.0) and Task 45b (v0.45.1) are done; Task 45b's leftovers are under "Not done" at
-  the end. Steam achievements and leaderboards are Task 47.
+- Task 45 (v0.45.0), Task 45b (v0.45.1) and Task 45c (v0.45.2) are done; Task 45c's leftovers
+  (for Task 45d) are under "Not done" at the end. Steam achievements and leaderboards are Task 47.
+
+## Task 45c: the modes' clocks and the page's event tiles (v0.45.2)
+
+In plain words: Drag Race now runs on the drawn frame like Time Attack and Drift, and Time
+Attack's lap and split events reach it on that frame. The page's Special Events read an official
+event's own file (decrypted in memory only), so its goals and the tier it saves are the
+desktop's; the page's Career tile works; Championships matched already. Two leftovers from the
+M1 proofs are fixed. The drift HUD question of Task 45b needed no change: the game never stops
+drawing the HUD on a monitor.
+
+| Step | What | Proof | Result |
+|---|---|---|---|
+| 0a | M1: Vallelunga extended `ai_solo` (`--ai-line`) differed since v0.45.0. Cause: the case swaps the AI line after the track loads (`Track::replace_ai_line`), and the port kept the sector positions measured on the old line; the game adds its timing lines after the AI line. `replace_ai_line` now measures them again (`timing::init_time_lines`) | `car_oracle multi ai_solo ks_vallelunga --layout extended_circuit --ai-line re/gold/fresh/vallelunga_extended_v6.ai` | threads 0/1/8 identical, 36,000 steps (estimate was `420f8239,422cb15f,4202b7f8` vs the game's `420f7d2d,422cfca0,420271c3`). It is the only case with `--ai-line`, so no other layout's result changes |
+| 0b | M1: the browser case `conditions_spa_setup_launch` names the deleted `re\scratch\task15\god_tc4.ini`. `browser.sh` remaps that folder to `re/gold/fresh` (`replay_hash --remap`; `oracle/` stays read-only) | the case, desktop and wasm | 8,001 steps, hash `7d5ec97f570b8a4a` both: identical |
+| 1 | Drag Race on the drawn frame (`DragMode::update(dt)` is a per-frame game object, like Time Attack): fades and `update` take the frame's dt; `mode_frames.txt` gains `dg_*` lines | `rustyac.exe --headless --drag-drive --drawn-frames 45` → `car_oracle mode-micro --mode-frames` (the game's `DragMode` with the same frames and events); fresh area, part `modes` | 5,339 frames, 7 events (2 matches, 2 messages) identical; a changed dt (frame 2,500) and a changed finish speed caught. Fresh `modes`: 11 of 11 identical |
+| 2 | Time Attack's lap and split events handed over on the drawn frame (`CarAvatar::updateFromChannels` in the main frame), not at the physics step | Spa drive, `ta_ev` lines in `mode_frames.txt` checked against the game's `TimeAttack::update` | 9,023 frames, 4 checkpoints identical; events removed: caught at frame 1,720 |
+| 3 | Drift HUD with the GUI hidden: `Game::onIdle` calls `renderHUD` only while `isRenderingGui` (Game+0x8). A sweep of every byte store to it finds two, both 0, in `OculusManager` and `ViveManager` (VR draws the HUD elsewhere). Hiding apps (H) never touches it, so on a monitor the drift clock never stops: rustyAC already does that | binary sweep (`re/scratch/task45c/scan_gui.py`) | no change needed |
+| 4 | Page Special Events: an official event (`[SPECIAL_EVENT] GUID`) reads `system/data/se/SPECIAL_EVENT_<n>.acd` in place of race.ini, as `conditions.rs`; the page loads that file for the drive and the folder walk lists it | SPECIAL_EVENT_7 (drag, 12 matches, goals 3/5/6 wins) driven by the AI drag driver: desktop recording replayed by the page's code natively and in Chrome; launcher flow desktop vs page (`tools/web_checks/task45c/special.txt`) | 199,380 steps, chain `29b35684119d935d`, race_out.json `e087b6a4db835c2e` (tier 2) the same natively and in Chrome (52 fps); race.ini's goals changed to 50: the same (the goals are the event file's). Launcher: 262 = 262 requests, goals `3:0,5:0,6:0`, saved `se_tier_special_event_7=2`, shown `2 1,1,1` on both |
+| 5 | Page Career tile (was hidden): the folder walk lists `system/locales/launcher` (the career names its series from `career_<language>.ini`; without it every series threw) and the career's videos (read only when played); the page's message box keeps the theme's overlay (it wiped the first run's language picker, so the page never asked the language). Championships needed nothing | `tools/proofs/launcher/career.txt` and `champs.txt` (with a MARK), desktop vs page from the same player folder | Career 109 = 109 requests, in order; Championships 203 = 203 (same set; 22 lines in another order: the theme's timers), the `.champ` file the same but its random GUID |
+| 6 | `?dragdrive=1`: rustyac.exe's `--drag-drive` test mode in the page (`race_proof --drag-drive` too) | used by step 4 | as step 4 |
+
+`run_all.sh --quick` was stopped by the machine running low on memory after six areas, all
+0 different: physics 9/9, net 16/16, browser 9/9, fresh 54/54, sound 4/4, render 14/14. The
+gui, python, replays, ai_page, shaders, launcher and dumps areas did not run.
+
+The launcher checks start both sides from the AC folder's `cfg/` (the page takes the picked
+folder's `cfg/` as the player's; the desktop check copies it into its `--docs`). Requests are
+compared URL-decoded, the player's name, the theme's random road temperature, the clock's
+`lastselected` and new GUIDs blanked (`tools/web_checks/task45c/cmp45.py`).
 
 ## Task 45b: the modes' leftovers (v0.45.1)
 
@@ -152,20 +181,21 @@ Task 36: personal bests (`personalbest.ini`), special-event tiers (the theme's o
 `__AC.setDbValue("se_tier_<event>")` in `results.js`, in the launcher's browser storage), career
 (`launcherdata\filestore\career.ini`), championships (`champs\<guid>.champ`, `champs.ini`).
 
-## Not done (after Task 45b)
+## Not done (after Task 45c, for Task 45d)
 
-- The page's Special Events, Career and Championships tiles stay off (Task 45b step 8 not started);
-  the page does not read official event files yet.
-- Drag stays on the referee's 9 ms frame (its HUD and fades); Time Attack's lap and split events
-  are still handed over in that frame, not in the drawn frame (the game: `CarAvatar::update` in
-  the same main frame).
-- `--drag-drive` is desktop only: the page has no test mode, so a desktop drag drive with it is
-  not replayed in the page (the proofs' drag tape is the opponent-only drive).
+- The preview pack has no event tiles' content until it is made again: `web_pack` now takes
+  `content/career/*.ini` and `system/data/se/*.acd`, but not the career's and events' pictures
+  and videos (617 MB and 144 MB). With a folder of one's own everything is there.
+- Only a drag event was driven to a tier in the page: the autodriver does not reach the Time
+  Attack events' points (SPECIAL_EVENT_35: 4,441 of 6,000), so a TA or hotlap event's tier is
+  proven only through the shared code.
+- `tools/proofs/dumps.sh` still leaves out the setup drive (`conditions_spa_setup_launch`): its old
+  rustyac.exe has no `--remap`.
 - The drift drive's proof runs headless at an uneven drawn-frame rate; the windowed drawn frames
   were only looked at (screenshots), not compared.
 
 ## Open questions
 
-- In the game the drift HUD (`DriftMode::renderHUD`) runs only while the GUI is drawn
-  (`isRenderingGui`); with the GUI hidden its clock would stop. rustyAC runs it every drawn
-  frame. Worth matching?
+- The page takes the picked AC folder's `cfg/` as the player's starting files, while the desktop
+  launcher starts from an empty Documents folder; the theme then sets other camera and AI
+  defaults (g-force 1.4 against 1.0, AI level 98 against 100). Which start should the page copy?
