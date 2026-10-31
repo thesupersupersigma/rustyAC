@@ -422,6 +422,11 @@ impl Referee {
             lap
         }));
         self.splits.extend(splits.iter().map(|split| OnSectorSplitEvent { car_index: car as u32, ..*split }));
+        if let (Some(lines), Some(Mode::TimeAttack(_)), 0) = (&mut self.mode_frames, &self.mode, car) {
+            if !laps.is_empty() || !splits.is_empty() {
+                lines.push(format!("ta_ev {} {}", laps.len(), splits.len()));
+            }
+        }
     }
 
     /// After every physics step, at the step's clock, once the cars' events of the step were
@@ -434,6 +439,12 @@ impl Referee {
         }
         self.step_in_frame = 0;
         self.frame(world, now);
+    }
+
+    /// Time Attack on drawn frames: the cars' lap and sector events wait for the next drawn
+    /// frame (`CarAvatar::updateFromChannels` drains its queues there, before the mode's update).
+    fn events_on_drawn_frames(&self) -> bool {
+        self.drawn_frames && matches!(self.mode, Some(Mode::TimeAttack(_)))
     }
 
     /// `CarAvatar::updateFromChannels`: the laps and sector splits queued since the last frame,
@@ -483,7 +494,9 @@ impl Referee {
             self.update_in_pitlane_state(world.car(0).is_in_pit_lane(), now);
         }
         let mut views = self.views_of(world);
-        self.hand_over_events(world, &views);
+        if !self.events_on_drawn_frames() {
+            self.hand_over_events(world, &views);
+        }
         // RaceEvent::update: its check every frame once the player's race is over
         self.race_event_verify(world, &views);
         // the black flag's event (PhysicsEngine::evOnFlagEvent), for the player's car
@@ -982,6 +995,10 @@ impl Referee {
     /// from now on only here.
     pub fn drawn_frame(&mut self, world: &mut dyn World, dt: f32) {
         self.drawn_frames = true;
+        if self.events_on_drawn_frames() {
+            let views = self.views_of(world);
+            self.hand_over_events(world, &views);
+        }
         self.mode_frame(world, dt);
     }
 

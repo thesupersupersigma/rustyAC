@@ -707,10 +707,18 @@ pub unsafe fn time_attack_drive(acs: &Acs, root: &Path, ac: &Path, file: &Path) 
     std::env::set_current_dir(ac).map_err(|e| e.to_string())?;
     let done = (|| {
         let (mut block, mut port, mut frames, mut checkpoints, mut messages) = (None, None::<TimeAttack>, 0, 0, 0);
+        // Task 45c: the player's lap and split events of the physics steps (ta_ev) reach the
+        // race manager at the next drawn frame (CarAvatar::updateFromChannels), never later
+        let (mut event, mut last) = (false, None::<(usize, u32)>);
         let mut lines = text.lines();
         while let Some(line) = lines.next() {
             let w: Vec<&str> = line.split(' ').collect();
+            if w[0] == "ta_ev" {
+                event = true;
+                continue;
+            }
             if w[0] == "ta_session" {
+                (event, last) = (false, None);
                 let sectors = int(w[1])? as usize;
                 let budget: Vec<f32> = w[2..].iter().map(|w| bits(w)).collect::<Result<_, _>>()?;
                 let reset_before = port.as_ref().map_or(0.0, |p| p.reset_position[0]);
@@ -746,6 +754,11 @@ pub unsafe fn time_attack_drive(acs: &Acs, root: &Path, ac: &Path, file: &Path) 
             if f.penalty_time != 0.0 {
                 return Err(format!("frame {frames}: a penalty (the stand-in car has none)"));
             }
+            let counts = (f.splits, f.lap_count);
+            if last.is_some_and(|last| (last == counts) == event) {
+                return Err(format!("time attack drive frame {frames}: splits and laps {last:?} then {counts:?}, a lap or split event of the steps before: {event}"));
+            }
+            (event, last) = (false, Some(counts));
             let (game_said, gentle, fade, checkpoint) = ta_game_frame(acs, block, dt, &f);
             let mut port_said = Vec::new();
             let sector_before = port.sector_index;
