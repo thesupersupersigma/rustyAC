@@ -96,6 +96,11 @@ async function walkFolder(root, tree, report) {
   await under('content/showroom', 2, (p) => p.endsWith('.json'));
   // the Special Events page: no list means the theme asks `ac://eventcount` forever
   await under('content/specialevents', 1, all);
+  // the Career tile's series and events (their .ini files; the pictures are not needed to drive)
+  // and its videos (read only when played; the theme plays the intro when there is one)
+  await under('content/career', 2, (p) => p.endsWith('.ini') || p.endsWith('.ogv'));
+  // the launcher's languages (the Career tile's series names: career_<language>.ini)
+  await under('system/locales/launcher', 0, (p) => p.endsWith('.ini'));
   await under('apps/python', 0, () => false);
   // Settings' Changelog: the theme reads ../../../changelog.txt, the game folder's
   const changelog = await child(root, 'changelog.txt');

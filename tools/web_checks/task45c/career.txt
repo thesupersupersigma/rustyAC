@@ -1,0 +1,37 @@
+# game args besides --headless --no-steam: --autodrive --duration 20 --race-seed 28005 --ai-seed 5
+# Task 45c: tools/proofs/launcher/career.txt from an empty player folder, desktop and page, with `log MARK`
+# after the theme is up (the request lists are compared from there) and the request list at the end.
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=career]').length>0
+wait 3000
+js $('div.flag[data-mode=en]').click()
+wait 8000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=career]').length>0
+wait 3000
+js try{UI.checkVideomode=false}catch(e){}
+wait 8000
+log MARK
+click #menu li[data-panel=career]
+wait 3000
+js try{UI.closeDialog(true,'videoplayer');UI.closeOverlay(true)}catch(e){}
+shot out/career_list.png
+until 90000 $('#career .series .datalist .item:not(.error)[data-id=series1]').length>0
+click #career .series .datalist .item:not(.error)[data-id=series1]
+wait 2500
+js try{UI.closeDialog(true,'videoplayer');UI.closeOverlay(true)}catch(e){}
+js if($('#career .introview').hasClass('selected'))$('#career .introview .start:not(.disabled)').first().click()
+wait 1500
+shot out/career_series.png
+until 30000 $('#career .events .datalist .item:not(.error)').length>0
+js $('#career .events .datalist .item:not(.error):not(.completed)').first().click()
+wait 2000
+shot out/career_event.png
+until 30000 $('#career .mainview .start:not(.disabled)').length>0
+click #career .mainview .start:not(.disabled)
+game-exit 240000
+until 120000 !$('body').hasClass('ACactive')&&$('.summary .settings .results:not(.inactive):not(.disabled)').length>0
+wait 8000
+shot out/career_results.png
+js $('#career .notification .button.continue').first().click()
+wait 3000
+shot out/career_after.png
+log END

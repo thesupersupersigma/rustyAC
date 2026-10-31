@@ -224,11 +224,11 @@
     if (typeof window.$ !== 'undefined') window.$(document).trigger(name, args || []);
   }
 
-  // ------------------------------------------------------------ Drive and Settings only
+  // ------------------------------------------------------------ Drive, Career and Settings only
 
-  const TILES = '[data-panel=drive], [data-panel=options]';
+  const TILES = '[data-panel=drive], [data-panel=career], [data-panel=options]';
   const DRIVE_ONLY = `
-#menu ul li:not([data-panel=drive]):not([data-panel=options]):not(.dummy) { display: none !important; }
+#menu ul li:not([data-panel=drive]):not([data-panel=career]):not([data-panel=options]):not(.dummy) { display: none !important; }
 #menu a.home { pointer-events: none !important; }
 #options .item.rustyac-browser .widget { pointer-events: none !important; opacity: 0.4; }
 #options .rustyac-note { margin-left: 8px; opacity: 0.6; font-size: 0.85em; }
@@ -309,7 +309,9 @@
   function notice(text) {
     // (reported too, for the checks; the theme binds no OK of its own: without one only Esc closed it)
     T.report('notice', text);
-    if (window.UI && typeof window.UI.displayDialog === 'function') window.UI.displayDialog('.notice', text, () => window.UI.closeDialog(), null, 'OK');
+    // (persist, and closed leaving the overlay: the game's message box is its own window and
+    // leaves the theme's overlay alone, such as the first run's language picker)
+    if (window.UI && typeof window.UI.displayDialog === 'function') window.UI.displayDialog('.notice', text, () => window.UI.closeDialog(true), null, 'OK', null, null, true);
   }
 
   document.addEventListener(

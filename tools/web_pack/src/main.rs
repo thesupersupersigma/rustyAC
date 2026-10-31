@@ -294,6 +294,10 @@ fn launcher_files(root: &Path, cars: &[String], tracks: &[String]) -> BTreeMap<S
     }
     // shortcut: the Special Events list without its pictures (144 MB), add them if the preview should show them
     files_under(root, "content/specialevents", &|p: &str| p.ends_with(".ini"), &mut out);
+    // shortcut: the career's series without their pictures (617 MB with the videos), add them if the preview should show them
+    files_under(root, "content/career", &|p: &str| p.ends_with(".ini"), &mut out);
+    // the official events' own files, which a special event's drive reads in place of race.ini
+    files_under(root, "system/data/se", &|p: &str| p.ends_with(".acd"), &mut out);
     for car in cars {
         files_under(root, &format!("content/cars/{car}/ui"), &all, &mut out);
         let skin = |p: &str| p.ends_with("/ui_skin.json") || p.ends_with("/preview.jpg") || p.ends_with("/livery.png");
