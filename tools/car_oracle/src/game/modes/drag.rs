@@ -9,6 +9,7 @@ const VA_DRAG_UPDATE: usize = 0x1_4008_8c30;
 const VA_DRAG_FINISH: usize = 0x1_4008_70e0; // onFinishLanePassed(const unsigned &)
 const VA_DRAG_NEW_SESSION: usize = 0x1_4008_5a60; // the constructor's lambda on OnNewSession
 const VA_DRAG_GENERATE_START: usize = 0x1_4008_6ea0;
+const VA_DRAG_RESET_MATCH: usize = 0x1_4008_89e0; // resetMatch (the end of newMatch's fade)
 const VA_SPLINE_CTOR: usize = 0x1_401e_ecd0;
 const VA_SPLINE_ADD_POINT: usize = 0x1_401e_f700;
 const VA_SPLINE_LENGTH: usize = 0x1_401f_1db0;
@@ -77,6 +78,10 @@ extern "C" fn drag_ai_start_time(ai: *mut u8, time: f64) {
 pub(super) struct PortDragHost {
     pub(super) rand: rustyac_physics::session::MsvcRand,
     pub(super) log: Vec<String>,
+    /// which cars an AI drag driver drives
+    pub(super) ai: Vec<bool>,
+    /// a camera manager that fades (a drive's): every fade is logged and begins
+    pub(super) fades: bool,
 }
 
 impl DragHost for PortDragHost {
@@ -84,7 +89,7 @@ impl DragHost for PortDragHost {
         self.rand.next()
     }
     fn is_ai(&self, car: usize) -> bool {
-        car == 1
+        self.ai.get(car).copied().unwrap_or(false)
     }
     fn ai_start_time(&mut self, car: usize, time: f64) {
         self.rand.next();
@@ -98,10 +103,11 @@ impl DragHost for PortDragHost {
     }
     fn show_esc_menu(&mut self) {}
     fn fade_in(&mut self, _seconds: f32, results: bool) -> bool {
-        if results {
+        // (the stand-in of ACCameraManager::fadeIn cannot tell the two fades apart)
+        if results || self.fades {
             self.log.push("fade results".into());
         }
-        false
+        self.fades && !results
     }
 }
 
@@ -202,9 +208,27 @@ fn port_side_drag(port: &DragMode) -> (String, Vec<String>, Laps) {
     (head, port.cars.iter().map(car_line).collect(), laps)
 }
 
-/// Sessions of made-up drag matches on a hand-built block, cars and spline. Run last: its
-/// stand-ins replace ones the other parts use. `report.drag_*` count what was compared.
-pub(super) unsafe fn drag(acs: &Acs, base: &GameMode, seed: u32, next: &mut dyn FnMut() -> u32, frames: usize, report: &mut Report) -> Result<(), String> {
+/// The game's functions the oracle calls, its stand-ins in place.
+struct Calls {
+    srand: extern "C" fn(u32),
+    crt_rand: usize,
+    vtable: usize,
+    operator_new: extern "C" fn(usize) -> *mut u8,
+    ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8,
+    update: extern "C" fn(*mut u8, f32),
+    finish: extern "C" fn(*mut u8, *const u32),
+    new_session: extern "C" fn(*mut usize, *const u8),
+    reset_match: extern "C" fn(*mut u8),
+    generate_start: extern "C" fn(*mut u8) -> f64,
+    spline_ctor: extern "C" fn(*mut u8) -> *mut u8,
+    add_point: extern "C" fn(*mut u8, *const [f32; 3], i32),
+    spline_length: extern "C" fn(*mut u8),
+    signed: extern "C" fn(*mut u8, *const [f32; 3], f32) -> f32,
+    world_to: extern "C" fn(*mut u8, *const [f32; 3], i32) -> f32,
+    ai_vtable: *mut usize,
+}
+
+unsafe fn calls(acs: &Acs) -> Calls {
     let stub = |va: usize, target: usize| {
         let mut code = vec![0x48, 0xb8];
         code.extend_from_slice(&(target as u64).to_le_bytes());
@@ -219,110 +243,146 @@ pub(super) unsafe fn drag(acs: &Acs, base: &GameMode, seed: u32, next: &mut dyn 
     stub(VA_GET_SEMAPHORE, drag_semaphore as *const () as usize);
     stub(VA_FADE_IN, drag_fade_in as *const () as usize);
     stub(VA_REGISTER_TO_FADE_IN, first_argument as *const () as usize);
-    let operator_new: extern "C" fn(usize) -> *mut u8 = std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z"));
-    let srand: extern "C" fn(u32) = std::mem::transmute(acs.crt_function(c"srand"));
-    let crt_rand = acs.crt_function(c"rand");
-    let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_GAME_MODE_CTOR));
-    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_DRAG_UPDATE));
-    let finish: extern "C" fn(*mut u8, *const u32) = std::mem::transmute(acs.va(VA_DRAG_FINISH));
-    let new_session: extern "C" fn(*mut usize, *const u8) = std::mem::transmute(acs.va(VA_DRAG_NEW_SESSION));
-    let generate_start: extern "C" fn(*mut u8) -> f64 = std::mem::transmute(acs.va(VA_DRAG_GENERATE_START));
-    let spline_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SPLINE_CTOR));
-    let add_point: extern "C" fn(*mut u8, *const [f32; 3], i32) = std::mem::transmute(acs.va(VA_SPLINE_ADD_POINT));
-    let spline_length: extern "C" fn(*mut u8) = std::mem::transmute(acs.va(VA_SPLINE_LENGTH));
-    let signed: extern "C" fn(*mut u8, *const [f32; 3], f32) -> f32 = std::mem::transmute(acs.va(VA_SPLINE_SIGNED));
-    let world_to: extern "C" fn(*mut u8, *const [f32; 3], i32) -> f32 = std::mem::transmute(acs.va(VA_SPLINE_WORLD_TO));
     let ai_vtable = Box::leak(vec![0usize; 16].into_boxed_slice()).as_mut_ptr();
     *ai_vtable.add(0x60 / 8) = drag_ai_start_time as *const () as usize;
+    Calls {
+        srand: std::mem::transmute(acs.crt_function(c"srand")),
+        crt_rand: acs.crt_function(c"rand"),
+        vtable: acs.va(VA_DRAG_VTABLE),
+        operator_new: std::mem::transmute(acs.crt_function(c"??2@YAPEAX_K@Z")),
+        ctor: std::mem::transmute(acs.va(VA_GAME_MODE_CTOR)),
+        update: std::mem::transmute(acs.va(VA_DRAG_UPDATE)),
+        finish: std::mem::transmute(acs.va(VA_DRAG_FINISH)),
+        new_session: std::mem::transmute(acs.va(VA_DRAG_NEW_SESSION)),
+        reset_match: std::mem::transmute(acs.va(VA_DRAG_RESET_MATCH)),
+        generate_start: std::mem::transmute(acs.va(VA_DRAG_GENERATE_START)),
+        spline_ctor: std::mem::transmute(acs.va(VA_SPLINE_CTOR)),
+        add_point: std::mem::transmute(acs.va(VA_SPLINE_ADD_POINT)),
+        spline_length: std::mem::transmute(acs.va(VA_SPLINE_LENGTH)),
+        signed: std::mem::transmute(acs.va(VA_SPLINE_SIGNED)),
+        world_to: std::mem::transmute(acs.va(VA_SPLINE_WORLD_TO)),
+        ai_vtable,
+    }
+}
+
+/// The game's `DragMode` block, its sim and cars.
+struct GameDrag {
+    d: *mut u8,
+    game: *mut u8,
+    pause: *mut u8,
+    semaphore: *mut u8,
+    avatars: Vec<*mut u8>,
+}
+
+/// The constructor's part, by hand (`Sim` is not built): the goals of `base` written into the
+/// block, the line from the `start` slots to the `finish` nodes, every car on its spawn, the
+/// AI cars' drivers, then `generateStartTime` (one `rand()`). `fades`: a camera manager
+/// whose fades begin (a drive's), else none (`newMatch` resets at once).
+#[allow(clippy::too_many_arguments)]
+unsafe fn game_drag(c: &Calls, base: &GameMode, matches: u32, start: [[f32; 3]; 2], finish: [[f32; 3]; 2], spawns: &[[f32; 3]], ai: &[bool], game_time: f64, fades: bool) -> GameDrag {
+    let d = zeroed(DRAG_SIZE);
+    let name = zeroed(0x20);
+    write_wstring(name, "DRAG_MODE");
+    let game = zeroed(0x278);
+    (c.ctor)(d, name, game);
+    wr(d, 0, c.vtable);
+    let goals: usize = rd(d, GM_CONDITIONS);
+    for (i, g) in base.conditions.iter().enumerate() {
+        wr(goals as *mut u8, i * 0x48 + 0x40, g.objective);
+        wr(goals as *mut u8, i * 0x48 + 0x44, g.achieved as u8);
+    }
+    let sim = zeroed(0x2d0);
+    let pause = zeroed(0x160);
+    wr(sim, SIM_PAUSE_MENU, pause);
+    wr(sim, SIM_REPLAY_MANAGER, zeroed(0x200));
+    wr(sim, SIM_SYSTEM_MESSAGE, zeroed(0x100));
+    if fades {
+        wr(sim, SIM_CAMERA_MANAGER, zeroed(0x200));
+    }
+    let semaphore = zeroed(0x100);
+    DRAG.with(|w| *w.borrow_mut() = DragWorld { semaphore: semaphore as usize, rand: c.crt_rand, ..DragWorld::default() });
+    let avatars: Vec<*mut u8> = spawns.iter().map(|_| zeroed(0x1300)).collect();
+    let n = avatars.len();
+    let car_list = Box::leak(avatars.clone().into_boxed_slice()).as_ptr();
+    wr(sim, SIM_CARS, car_list);
+    wr(sim, SIM_CARS + 8, car_list.add(n));
+    wr(sim, SIM_CARS + 0x10, car_list.add(n));
+    wr(d, DRAG_STATUS, 3u32);
+    wr(d, DRAG_SIM, sim);
+    wr(d, DRAG_MATCHES, matches);
+    let head = (c.operator_new)(0x40);
+    std::ptr::write_bytes(head, 0, 0x40);
+    for at in [0, 8, 0x10] {
+        wr(head, at, head);
+    }
+    (*head.add(0x18), *head.add(0x19)) = (1, 1);
+    wr(d, DRAG_LAP_TIMES, head);
+    let spline = d.add(DRAG_SPLINE);
+    (c.spline_ctor)(spline);
+    wr(spline, 0x6c, 0u32); // eLinear
+    let s = [0, 1, 2].map(|k| (start[0][k] + start[1][k]) * 0.5);
+    let dd = [0, 1, 2].map(|k| (finish[1][k] + finish[0][k]) * 0.5 - s[k]);
+    for i in 0..=100u32 {
+        let t = i as f32 * f32::from_bits(0x3c23_d70a);
+        (c.add_point)(spline, &[dd[0] * t + s[0], dd[1] * t + s[1], dd[2] * t + s[2]], 0);
+    }
+    (c.spline_length)(spline);
+    let statuses = (c.operator_new)(n * 0x48);
+    std::ptr::write_bytes(statuses, 0, n * 0x48);
+    for (i, a) in avatars.iter().enumerate() {
+        let st = statuses.add(i * 0x48);
+        wr(*a, CA_GUID, i as i32);
+        wr(*a, CA_BODY_POSITION, spawns[i]);
+        wr(*a, CA_STATE_POSITION, spawns[i]);
+        wr(st, 8, *a);
+        if ai.get(i).copied().unwrap_or(false) {
+            let driver = zeroed(0x20);
+            wr(driver, 0, c.ai_vtable);
+            wr(driver, 8, i);
+            wr(st, 0x10, driver);
+        }
+        let at = (c.world_to)(spline, &spawns[i], -1);
+        let v = (c.signed)(spline, &spawns[i], at);
+        wr(st, 0x28, if v > 0.0 { 1.0f32 } else if v < 0.0 { -1.0 } else { 0.0 });
+        wr(st, 0x2c, f32::MAX);
+        wr(st, 0x30, spawns[i]);
+    }
+    wr(d, DRAG_CARS, statuses);
+    wr(d, DRAG_CARS + 8, statuses.add(n * 0x48));
+    wr(d, DRAG_CARS + 0x10, statuses.add(n * 0x48));
+    wr(game, 0x18, game_time);
+    wr(d, DRAG_START, (c.generate_start)(d));
+    GameDrag { d, game, pause, semaphore, avatars }
+}
+
+/// Sessions of made-up drag matches on a hand-built block, cars and spline. Run last: its
+/// stand-ins replace ones the other parts use. `report.drag_*` count what was compared.
+pub(super) unsafe fn drag(acs: &Acs, base: &GameMode, seed: u32, next: &mut dyn FnMut() -> u32, frames: usize, report: &mut Report) -> Result<(), String> {
+    let c = calls(acs);
+    let (srand, update, finish, new_session) = (c.srand, c.update, c.finish, c.new_session);
 
     let mut done = 0;
     let mut session = 0u32;
     while done < frames {
         session += 1;
         srand(seed.wrapping_add(session));
-        let mut host = PortDragHost { rand: rustyac_physics::session::MsvcRand(seed.wrapping_add(session)), log: Vec::new() };
+        let mut host = PortDragHost { rand: rustyac_physics::session::MsvcRand(seed.wrapping_add(session)), log: Vec::new(), ai: vec![false, true], fades: false };
         let matches = [3u32, 5, 1, 0, 4][session as usize % 5];
         let use_mph = session % 4 == 1;
         acs.set_global(VA_USE_MPH, use_mph as u8);
         // the mode with goals of 1, 2, 3... wins
-        let d = zeroed(DRAG_SIZE);
-        let name = zeroed(0x20);
-        write_wstring(name, "DRAG_MODE");
-        let game = zeroed(0x278);
-        ctor(d, name, game);
-        wr(d, 0, acs.va(VA_DRAG_VTABLE));
         let mut base = base.clone();
-        let goals: usize = rd(d, GM_CONDITIONS);
         for (i, c) in base.conditions.iter_mut().enumerate() {
             (c.objective, c.achieved) = (i as i32 + 1, false);
-            wr(goals as *mut u8, i * 0x48 + 0x40, i as u32 + 1);
-            wr(goals as *mut u8, i * 0x48 + 0x44, 0u8);
         }
-        // the sim, the cars, the semaphore
-        let sim = zeroed(0x2d0);
-        let pause = zeroed(0x160);
-        wr(sim, SIM_PAUSE_MENU, pause);
-        wr(sim, SIM_REPLAY_MANAGER, zeroed(0x200));
-        wr(sim, SIM_SYSTEM_MESSAGE, zeroed(0x100));
-        let semaphore = zeroed(0x100);
-        DRAG.with(|w| *w.borrow_mut() = DragWorld { semaphore: semaphore as usize, rand: crt_rand, ..DragWorld::default() });
-        let avatars = [zeroed(0x1300), zeroed(0x1300)];
-        let car_list = Box::leak(avatars.to_vec().into_boxed_slice()).as_ptr();
-        wr(sim, SIM_CARS, car_list);
-        wr(sim, SIM_CARS + 8, car_list.add(2));
-        wr(sim, SIM_CARS + 0x10, car_list.add(2));
-        let ai = zeroed(0x20);
-        wr(ai, 0, ai_vtable);
-        wr(ai, 8, 1usize);
         // the track: the start slots and the finish's nodes
         let mut jitter = || (next() % 100) as f32 * 0.01;
         let spawns = [[-2.0 - jitter(), jitter() * 0.1, jitter()], [2.0 + jitter(), jitter() * 0.1, jitter()]];
         let length = [201.0f32, 402.3, 99.7][session as usize % 3];
         let finish_nodes = [[-6.0 + jitter(), 0.0, length], [6.0 + jitter(), 0.0, length + jitter()]];
-        // the game constructor's part
-        wr(d, DRAG_STATUS, 3u32);
-        wr(d, DRAG_SIM, sim);
-        wr(d, DRAG_MATCHES, matches);
-        let head = operator_new(0x40);
-        std::ptr::write_bytes(head, 0, 0x40);
-        for at in [0, 8, 0x10] {
-            wr(head, at, head);
-        }
-        (*head.add(0x18), *head.add(0x19)) = (1, 1);
-        wr(d, DRAG_LAP_TIMES, head);
-        let spline = d.add(DRAG_SPLINE);
-        spline_ctor(spline);
-        wr(spline, 0x6c, 0u32); // eLinear
-        let s = [0, 1, 2].map(|k| (spawns[0][k] + spawns[1][k]) * 0.5);
-        let dd = [0, 1, 2].map(|k| (finish_nodes[1][k] + finish_nodes[0][k]) * 0.5 - s[k]);
-        for i in 0..=100u32 {
-            let t = i as f32 * f32::from_bits(0x3c23_d70a);
-            add_point(spline, &[dd[0] * t + s[0], dd[1] * t + s[1], dd[2] * t + s[2]], 0);
-        }
-        spline_length(spline);
-        let statuses = operator_new(2 * 0x48);
-        std::ptr::write_bytes(statuses, 0, 2 * 0x48);
-        for (i, a) in avatars.iter().enumerate() {
-            let c = statuses.add(i * 0x48);
-            wr(*a, CA_GUID, i as i32);
-            wr(*a, CA_BODY_POSITION, spawns[i]);
-            wr(*a, CA_STATE_POSITION, spawns[i]);
-            wr(c, 8, *a);
-            if i == 1 {
-                wr(c, 0x10, ai);
-            }
-            let n = world_to(spline, &spawns[i], -1);
-            let v = signed(spline, &spawns[i], n);
-            wr(c, 0x28, if v > 0.0 { 1.0f32 } else if v < 0.0 { -1.0 } else { 0.0 });
-            wr(c, 0x2c, f32::MAX);
-            wr(c, 0x30, spawns[i]);
-        }
-        wr(d, DRAG_CARS, statuses);
-        wr(d, DRAG_CARS + 8, statuses.add(2 * 0x48));
-        wr(d, DRAG_CARS + 0x10, statuses.add(2 * 0x48));
         let mut game_time = (next() % 100000) as f64;
-        wr(game, 0x18, game_time);
-        wr(d, DRAG_START, generate_start(d));
+        let g = game_drag(&c, &base, matches, spawns, finish_nodes, &spawns, &[false, true], game_time, false);
+        let (d, game, pause, semaphore, avatars) = (g.d, g.game, g.pause, g.semaphore, g.avatars);
         let mut port = DragMode::new(base, matches, spawns, finish_nodes, &spawns, game_time, &mut host);
 
         let mut f = DragFrame { game_time, positions: spawns.to_vec(), state_positions: spawns.to_vec(), ..DragFrame::default() };
@@ -439,4 +499,144 @@ pub(super) unsafe fn drag(acs: &Acs, base: &GameMode, seed: u32, next: &mut dyn 
         report.drag_penalties += port.cars.iter().map(|c| c.false_start as usize + c.disqualified as usize).sum::<usize>();
     }
     Ok(())
+}
+
+/// What one call of the drive did on both sides, compared.
+unsafe fn same(g: &GameDrag, port: &DragMode, host: &mut PortDragHost, port_said: Vec<String>, what: &str) -> Result<usize, String> {
+    let game_log = DRAG.with(|w| std::mem::take(&mut w.borrow_mut().log));
+    let game_said = SAID.with(|s| std::mem::take(&mut *s.borrow_mut()));
+    let (game_state, port_state) = (game_side_drag(g.d, g.semaphore, &g.avatars), port_side_drag(port));
+    let (_, goals, tier) = game_side(g.d);
+    let port_log = std::mem::take(&mut host.log);
+    if game_state != port_state || game_log != port_log || game_said != port_said || (&goals, tier) != (&port.base.conditions, port.base.current_tier) {
+        return Err(format!("drag drive {what}:\n the game {game_state:?}\n {game_log:?} said {game_said:?} tier {tier}\n the port {port_state:?}\n {port_log:?} said {port_said:?} tier {}", port.base.current_tier));
+    }
+    Ok(game_said.len())
+}
+
+/// Task 45c: a drag drive's drawn frames and events (`dg*` lines of `rustyac.exe
+/// --drawn-frames`'s `mode_frames.txt`, each with the CRT `rand()` state before it) through
+/// the game's `DragMode` (constructor's part, `update`, the new session's handler,
+/// `onFinishLanePassed`, `resetMatch` at the end of `newMatch`'s fade) and the oracle's own
+/// port, compared after each; the port's mode after each frame against the drive's own.
+/// `root`: the oracle's folder; its `cfg/race.ini` gets the drive's goals. Returns the frames,
+/// the events, the matches run and the messages.
+pub unsafe fn drag_drive(acs: &Acs, root: &Path, ac: &Path, file: &Path) -> Result<(usize, usize, u32, usize), String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let hex = |w: &str| u64::from_str_radix(w, 16).map_err(|e| format!("{w}: {e}"));
+    let f32s = |w: &[&str]| w.iter().map(|w| hex(w).map(|v| f32::from_bits(v as u32))).collect::<Result<Vec<f32>, String>>();
+    let v3 = |v: &[f32]| v.chunks(3).map(|c| [c[0], c[1], c[2]]).collect::<Vec<[f32; 3]>>();
+    acs.set_global(VA_INIREADERDOCUMENTS_INITIALIZED, 1u8);
+    write_wstring(acs.va(VA_INIREADERDOCUMENTS_BASE_PATH) as *mut u8, &format!("{}/", root.to_string_lossy().replace('\\', "/")));
+    std::fs::create_dir_all(root.join("cfg")).map_err(|e| e.to_string())?;
+    let c = calls(acs);
+    let here = std::env::current_dir().map_err(|e| e.to_string())?;
+    std::env::set_current_dir(ac).map_err(|e| e.to_string())?;
+    let done = (|| {
+        let mut drive: Option<(GameDrag, DragMode, PortDragHost, bool)> = None;
+        let (mut frames, mut events, mut messages) = (0, 0, 0);
+        let mut lines = text.lines();
+        while let Some(line) = lines.next() {
+            let w: Vec<&str> = line.split(' ').collect();
+            if w[0] == "dg_session" {
+                // dg_session <rand> <now> <matches> <use mph> <tier> | start | finish | spawns | ai | goals
+                let parts: Vec<Vec<&str>> = line.split(" | ").map(|p| p.split(' ').filter(|w| !w.is_empty()).collect()).collect();
+                if parts.len() != 6 || parts[0].len() != 6 {
+                    return Err(format!("{}: {line:?} is not a session", file.display()));
+                }
+                let h = &parts[0];
+                let (rand, now, matches, use_mph) = (hex(h[1])? as u32, f64::from_bits(hex(h[2])?), h[3].parse::<u32>().map_err(|e| e.to_string())?, h[4] == "1");
+                let (start, finish, spawns) = (v3(&f32s(&parts[1])?), v3(&f32s(&parts[2])?), v3(&f32s(&parts[3])?));
+                let ai: Vec<bool> = parts[4].iter().map(|w| *w == "1").collect();
+                let mut ini = String::from("[RACE]\nTRACK=ks_drag\n");
+                if !parts[5].is_empty() {
+                    ini += "[SPECIAL_EVENT]\nGUID=4545\n";
+                }
+                for (i, g) in parts[5].iter().enumerate() {
+                    let (objective, achieved) = g.split_once(':').ok_or(format!("{g}: not a goal"))?;
+                    ini += &format!("[CONDITION_{i}]\nOBJECTIVE={objective}\nACHIEVED={achieved}\n");
+                }
+                let race = root.join("cfg/race.ini");
+                std::fs::write(&race, ini).map_err(|e| e.to_string())?;
+                let documents = IniReader::load(&race)?;
+                let base = GameMode::new(&documents, &documents, false);
+                let goals: Vec<String> = base.conditions.iter().map(|c| format!("{}:{}", c.objective, c.achieved as u8)).collect();
+                if goals != parts[5] || base.current_tier.to_string() != h[5] {
+                    return Err(format!("{}: the goals {goals:?} tier {}, the drive's {:?} tier {}", file.display(), base.current_tier, parts[5], h[5]));
+                }
+                acs.set_global(VA_USE_MPH, use_mph as u8);
+                (c.srand)(rand);
+                let mut host = PortDragHost { rand: rustyac_physics::session::MsvcRand(rand), log: Vec::new(), ai: ai.clone(), fades: true };
+                let g = game_drag(&c, &base, matches, [start[0], start[1]], [finish[0], finish[1]], &spawns, &ai, now, true);
+                let port = DragMode::new(base, matches, [start[0], start[1]], [finish[0], finish[1]], &spawns, now, &mut host);
+                same(&g, &port, &mut host, Vec::new(), "constructor")?;
+                drive = Some((g, port, host, use_mph));
+                continue;
+            }
+            if !w[0].starts_with("dg") {
+                continue;
+            }
+            let Some((g, port, host, use_mph)) = drive.as_mut() else { return Err(format!("{}: {line:?} before its session", file.display())) };
+            let rand = hex(w[w.len() - 1])? as u32;
+            (c.srand)(rand);
+            host.rand = rustyac_physics::session::MsvcRand(rand);
+            DRAG.with(|d| d.borrow_mut().log.clear());
+            SAID.with(|s| s.borrow_mut().clear());
+            let mut port_said = Vec::new();
+            match w[0] {
+                "dg_new" => {
+                    let now = f64::from_bits(hex(w[1])?);
+                    wr(g.game, 0x18, now);
+                    let mut lambda = [g.d as usize];
+                    (c.new_session)(lambda.as_mut_ptr(), std::ptr::null());
+                    port.new_session(now, host);
+                }
+                "dg_drive" => {
+                    wr(g.d, DRAG_STATUS, 1u32);
+                    port.drive_pressed();
+                }
+                "dg_finish" => {
+                    let (car, speed) = (w[1].parse::<u32>().map_err(|e| e.to_string())?, f32::from_bits(hex(w[2])? as u32));
+                    wr(g.avatars[car as usize], CA_DRAG_SPEED, speed);
+                    (c.finish)(g.d, &car);
+                    port.on_finish_lane_passed(car as usize, speed, *use_mph, host, &mut |a, b| port_said.push(format!("Message({a} | {b})")));
+                }
+                "dg_reset" => {
+                    let now = f64::from_bits(hex(w[1])?);
+                    wr(g.game, 0x18, now);
+                    (c.reset_match)(g.d);
+                    port.reset_match(now, host);
+                }
+                "dg" => {
+                    let (dt, now) = (f32::from_bits(hex(w[1])? as u32), f64::from_bits(hex(w[2])?));
+                    let positions = v3(&f32s(&w[3..w.len() - 1])?);
+                    if positions.len() != g.avatars.len() {
+                        return Err(format!("{}: {line:?}: not a place for every car", file.display()));
+                    }
+                    wr(g.game, 0x18, now);
+                    for (a, p) in g.avatars.iter().zip(&positions) {
+                        wr(*a, CA_BODY_POSITION, *p);
+                        wr(*a, CA_STATE_POSITION, *p);
+                    }
+                    let f = DragFrame { game_time: now, paused: false, replay: false, state_positions: positions.clone(), positions };
+                    (c.update)(g.d, dt);
+                    port.update(dt, &f, host);
+                    messages += same(g, port, host, port_said, &format!("frame {frames} dt {dt}"))?;
+                    let drive = lines.next().unwrap_or_default();
+                    if drive != format!("= {}", port.frame_state()) {
+                        return Err(format!("drag drive frame {frames}: the drive's mode {drive}, the port's on its frames {}", port.frame_state()));
+                    }
+                    frames += 1;
+                    continue;
+                }
+                other => return Err(format!("{}: {other}: not a drag line", file.display())),
+            }
+            messages += same(g, port, host, port_said, &format!("{line} after frame {frames}"))?;
+            events += 1;
+        }
+        let runs = drive.as_ref().map_or(0, |d| d.1.runs());
+        Ok((frames, events, runs, messages))
+    })();
+    std::env::set_current_dir(&here).ok();
+    done
 }

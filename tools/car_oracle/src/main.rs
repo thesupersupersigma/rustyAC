@@ -592,6 +592,11 @@ ds ") {
             println!("mode-micro drift drive {}: {steps} steps ({drifts} drifts, {combos} combos, {points} points) IDENTICAL", file.display());
             return Ok(());
         }
+        if std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?.lines().any(|l| l.starts_with("dg_session ")) {
+            let (frames, events, runs, messages) = unsafe { game::modes::drag_drive(&acs, &root, &ac, file)? };
+            println!("mode-micro drag drive {}: {frames} frames, {events} events ({runs} matches, {messages} messages) IDENTICAL", file.display());
+            return Ok(());
+        }
         let (frames, checkpoints, messages) = unsafe { game::modes::time_attack_drive(&acs, &root, &ac, file)? };
         println!("mode-micro time attack drive {}: {frames} frames ({checkpoints} checkpoints, {messages} messages) IDENTICAL", file.display());
         return Ok(());

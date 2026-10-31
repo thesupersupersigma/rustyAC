@@ -22,3 +22,4 @@ shm pit_box_wing magione .*
 telem ai_handover magione ks_ferrari_sf15t.*
 drive ta
 drive drift
+drive drag

@@ -206,6 +206,8 @@ pub struct Referee {
     pub esc_requests: u32,
     /// frames a drag match has stood still without the ESC menu (Drive is pressed after ~1 s)
     drag_still: u32,
+    /// proofs only: the drag constructor's inputs (`dg_session`), for [`Referee::mode_frames`]
+    drag_made: Option<String>,
 }
 
 /// What `CarAvatar` keeps of the player's car for the mandatory pit stop.
@@ -295,6 +297,7 @@ impl Referee {
             drag_fade: None,
             esc_requests: 0,
             drag_still: 0,
+            drag_made: None,
             manager,
         };
         let mut actions = Vec::new();
@@ -433,6 +436,34 @@ impl Referee {
         self.frame(world, now);
     }
 
+    /// `CarAvatar::updateFromChannels`: the laps and sector splits queued since the last frame,
+    /// to the race manager and the mode.
+    fn hand_over_events(&mut self, world: &mut dyn World, views: &[CarView]) {
+        for split in std::mem::take(&mut self.splits) {
+            self.manager.on_sector_split(&split);
+        }
+        for lap in std::mem::take(&mut self.laps) {
+            self.manager.on_lap_completed(&lap, views);
+            if let Some(Mode::Drag(_)) = &self.mode {
+                // DragMode's handler of every car's lap: the finish line
+                let (car, speed) = (lap.car_index as usize, world.car(lap.car_index as usize).speed);
+                self.drag_note(format!("dg_finish {car} {:08x}", speed.to_bits()));
+                self.with_drag(world, |drag, side| {
+                    let mut log = Vec::new();
+                    let use_mph = drag.base.use_mph;
+                    drag.on_finish_lane_passed(car, speed, use_mph, side, &mut |text, description| log.push(format!("{text} {description}")));
+                    side.referee.log.append(&mut log);
+                });
+            }
+            if let (0, Some(mode)) = (lap.car_index, &mut self.mode) {
+                mode.on_lap_completed(&lap, &mut |text, description| self.log.push(format!("{text} {description}")));
+            }
+            if lap.car_index == 0 {
+                self.race_event_verify(world, views);
+            }
+        }
+    }
+
     fn views_of(&mut self, world: &dyn World) -> Vec<CarView> {
         (0..world.car_count()).map(|index| self.view(index, world.car(index))).collect()
     }
@@ -452,28 +483,7 @@ impl Referee {
             self.update_in_pitlane_state(world.car(0).is_in_pit_lane(), now);
         }
         let mut views = self.views_of(world);
-        for split in std::mem::take(&mut self.splits) {
-            self.manager.on_sector_split(&split);
-        }
-        for lap in std::mem::take(&mut self.laps) {
-            self.manager.on_lap_completed(&lap, &views);
-            if let Some(Mode::Drag(_)) = &self.mode {
-                // DragMode's handler of every car's lap: the finish line
-                let (car, speed) = (lap.car_index as usize, world.car(lap.car_index as usize).speed);
-                self.with_drag(world, |drag, side| {
-                    let mut log = Vec::new();
-                    let use_mph = drag.base.use_mph;
-                    drag.on_finish_lane_passed(car, speed, use_mph, side, &mut |text, description| log.push(format!("{text} {description}")));
-                    side.referee.log.append(&mut log);
-                });
-            }
-            if let (0, Some(mode)) = (lap.car_index, &mut self.mode) {
-                mode.on_lap_completed(&lap, &mut |text, description| self.log.push(format!("{text} {description}")));
-            }
-            if lap.car_index == 0 {
-                self.race_event_verify(world, &views);
-            }
-        }
+        self.hand_over_events(world, &views);
         // RaceEvent::update: its check every frame once the player's race is over
         self.race_event_verify(world, &views);
         // the black flag's event (PhysicsEngine::evOnFlagEvent), for the player's car
@@ -506,13 +516,11 @@ impl Referee {
         }
         if new_session {
             self.time_attack_session(world);
+            self.drag_note(format!("dg_new {:x}", now.to_bits()));
             self.with_drag(world, |drag, side| drag.new_session(now, side));
         }
         if !self.drawn_frames {
             self.mode_frame(world, FRAME_DT);
-        }
-        if let Some(Mode::Drag(_)) = &self.mode {
-            self.drag_frame(world);
         }
         self.pit_frame(world, now, &views);
         // FlagManager::update and the messages
@@ -808,6 +816,7 @@ impl Referee {
         // DragMode's handler of ESCMenu::evOnDriveMenuPressed
         if let Some(Mode::Drag(drag)) = &mut self.mode {
             drag.drive_pressed();
+            self.drag_note("dg_drive".to_string());
         }
     }
 
@@ -819,6 +828,22 @@ impl Referee {
         let start = [pose(&self.track, 0), pose(&self.track, 1)];
         let finish = [node(&self.track, "AC_OPEN_FINISH_L"), node(&self.track, "AC_OPEN_FINISH_R")];
         let spawns: Vec<[f32; 3]> = (0..world.car_count()).map(|car| pose(&self.track, self.manager.start_index.get(car).copied().unwrap_or(car as i32))).collect();
+        let bits = |v: &[[f32; 3]]| v.iter().flatten().map(|v| format!("{:08x}", v.to_bits())).collect::<Vec<_>>().join(" ");
+        let ai: Vec<String> = (0..world.car_count()).map(|car| (world.is_drag_ai(car) as u8).to_string()).collect();
+        let goals: Vec<String> = base.conditions.iter().map(|c| format!("{}:{}", c.objective, c.achieved as u8)).collect();
+        self.drag_made = Some(format!(
+            "dg_session {:08x} {:x} {} {} {} | {} | {} | {} | {} | {}",
+            self.rand.0,
+            now.to_bits(),
+            base.drag_matches,
+            base.use_mph as u8,
+            base.current_tier,
+            bits(&start),
+            bits(&finish),
+            bits(&spawns),
+            ai.join(" "),
+            goals.join(" ")
+        ));
         let mut side = DragSide { referee: self, world };
         let drag = super::drag::DragMode::new(base.clone(), base.drag_matches, start, finish, &spawns, now, &mut side);
         self.mode = Some(Mode::Drag(Box::new(drag)));
@@ -831,13 +856,22 @@ impl Referee {
         self.mode = Some(Mode::Drag(drag));
     }
 
-    /// `DragMode::update` on the referee's frame, its fade and the results it keeps.
-    fn drag_frame(&mut self, world: &mut dyn World) {
+    /// A drag event for the proof's record, with the CRT `rand()` state before it.
+    fn drag_note(&mut self, what: String) {
+        if let (Some(lines), Some(Mode::Drag(_))) = (&mut self.mode_frames, &self.mode) {
+            lines.push(format!("{what} {:08x}", self.rand.0));
+        }
+    }
+
+    /// `DragMode::update` on the drawn frame (a game object, like Time Attack), its fade and
+    /// the results it keeps.
+    fn drag_frame(&mut self, world: &mut dyn World, dt: f32) {
         let now = self.manager.now;
         if let Some(left) = &mut self.drag_fade {
-            *left -= FRAME_DT;
+            *left -= dt;
             if *left <= 0.0 {
                 self.drag_fade = None;
+                self.drag_note(format!("dg_reset {:x}", now.to_bits()));
                 self.with_drag(world, |drag, side| drag.reset_match(now, side));
             }
         }
@@ -848,15 +882,23 @@ impl Referee {
                 [p.x, p.y, p.z]
             })
             .collect();
+        let words: Vec<String> = positions.iter().flatten().map(|v| format!("{:08x}", v.to_bits())).collect();
+        self.drag_note(format!("dg {:08x} {:x} {}", dt.to_bits(), now.to_bits(), words.join(" ")));
         let frame = super::drag::DragFrame { game_time: now, paused: false, replay: false, state_positions: positions.clone(), positions };
         let auto_drive = self.next_start_delay_ms >= 0.0 && !self.esc_open;
         self.with_drag(world, |drag, side| {
-            drag.update(FRAME_DT, &frame, side);
+            drag.update(dt, &frame, side);
+            if let Some(lines) = &mut side.referee.mode_frames {
+                lines.push(format!("= {}", drag.frame_state()));
+            }
             // (the cars stand on their slots for a second first: Still notes where they stand)
             let still = auto_drive && drag.status == super::drag::DragState::Still;
             side.referee.drag_still = if still { side.referee.drag_still + 1 } else { 0 };
             if side.referee.drag_still > 110 {
                 drag.drive_pressed();
+                if let Some(lines) = &mut side.referee.mode_frames {
+                    lines.push(format!("dg_drive {:08x}", side.referee.rand.0));
+                }
             }
             side.referee.manager.drag_results = Some(drag.results());
         });
@@ -930,6 +972,7 @@ impl Referee {
                 let goals: Vec<String> = drift.base.conditions.iter().map(|c| c.objective.to_string()).collect();
                 lines.push(format!("dr_goals {}", goals.join(" ")).trim_end().to_string());
             }
+            (Some(lines), Some(Mode::Drag(_))) => lines.extend(self.drag_made.clone()),
             _ => {}
         }
     }
@@ -950,6 +993,10 @@ impl Referee {
                 self.manager.results_displayed = true;
                 self.apply(vec![Action::DisplayResults], world);
             }
+        }
+        if let Some(Mode::Drag(_)) = &self.mode {
+            self.drag_frame(world, dt);
+            return;
         }
         if let Some(Mode::Drift(drift)) = &mut self.mode {
             // DriftMode::renderHUD

@@ -7,7 +7,7 @@
 # the kept one. The unpacked copies in target/proofs/fresh/rec are deleted once compared.
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
 # "hybrid <car>", "sus <car>", "collide spa", "collide-worlds", "rays <track> <layout>",
-# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "modes <seed>", "drive ta|drift", "ini <file>", "multi ...", "shm ...".
+# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "modes <seed>", "drive ta|drift|drag", "ini <file>", "multi ...", "shm ...".
 #   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm" (default: all of them)
 area=fresh
 . "$(dirname "$0")/lib.sh"
@@ -185,15 +185,23 @@ if part modes; then  # Task 45: special-event files and goals, hotlap, Time Atta
     # track (--drift-drive, a drift car, no aids, goals in race.ini) with drawn frames out of
     # step with physics (--drawn-frames: 5-40 ms); each drawn frame through the game's
     # TimeAttack::update and DriftMode::renderHUD (render_oracle drift_drive: pixels, draw calls,
-    # state with the goal messages), each drift step through DriftModeComponent::step
-    for mode in ta drift; do
+    # state with the goal messages), each drift step through DriftModeComponent::step.
+    # Task 45c: Drag at the drag strip (--drag-drive: AI drag drivers in both cars, goals of
+    # 1, 2, 3 wins) through DragMode's update, new session, finish line and resetMatch
+    for mode in ta drift drag; do
         keep "drive $mode" || continue
         cargo build --release --locked --quiet -p rustyac-game --bin rustyac || exit 2
         d=$root/drive_$mode; rm -rf "$d"; mkdir -p "$d/home"
+        layout=
         if [ $mode = ta ]; then
             car=ks_ferrari_f2004; track=spa; drive="--autodrive --duration 200"
             session='NAME=Time Attack
 TYPE=5'
+        elif [ $mode = drag ]; then
+            car=bmw_m3_e30; track=ks_drag; layout=drag400; drive="--drag-drive --duration 120"
+            session='NAME=Drag Race
+TYPE=7
+MATCHES=3'
         else
             car=bmw_m3_e92_drift; track=drift; drive="--drift-drive --duration 25"
             session='NAME=Drift
@@ -203,7 +211,7 @@ TYPE=6'
         cat > "$d/race.ini" <<EOF
 [RACE]
 TRACK=$track
-CONFIG_TRACK=
+CONFIG_TRACK=$layout
 MODEL=$car
 CARS=1
 [CAR_0]
@@ -213,12 +221,18 @@ SKIN=
 $session
 SPAWN_SET=START
 EOF
+        [ $mode = drag ] && sed -i 's/^CARS=1/CARS=2/' "$d/race.ini" && printf '%s\n' '[CAR_1]' MODEL=$car SKIN= '[SPECIAL_EVENT]' GUID=4545 '[CONDITION_0]' OBJECTIVE=1 '[CONDITION_1]' OBJECTIVE=2 '[CONDITION_2]' OBJECTIVE=3 >> "$d/race.ini"
         [ $mode = drift ] && printf '%s\n' '[SPECIAL_EVENT]' GUID=4545 '[CONDITION_0]' OBJECTIVE=3 '[CONDITION_1]' OBJECTIVE=50 '[CONDITION_2]' OBJECTIVE=70 '[CONDITION_3]' OBJECTIVE=1000 >> "$d/race.ini"
-        USERPROFILE=$(cygpath -w "$d/home") target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$d/race.ini" $drive --race-seed 28000 --drawn-frames 45 --out-dir "$d/out" --track $track --car $car > "$out/drive_$mode.txt" 2>&1
-        frames=$(grep -cE "^(ta|dr) " "$d/out/mode_frames.txt" 2>/dev/null)
+        USERPROFILE=$(cygpath -w "$d/home") target/release/rustyac.exe --headless --no-shm --no-audio --race-ini "$d/race.ini" $drive --race-seed 28000 --drawn-frames 45 --out-dir "$d/out" --track $track ${layout:+--layout $layout} --car $car > "$out/drive_$mode.txt" 2>&1
+        frames=$(grep -cE "^(ta|dr|dg) " "$d/out/mode_frames.txt" 2>/dev/null)
         r=$("$CO" mode-micro --root "$root/modes" --mode-frames "$(cygpath -am "$d/out/mode_frames.txt")" 2>&1 | tail -n 1)
         if [ $mode = ta ]; then
             case "$r" in *IDENTICAL*) verdict "drive ta" IDENTICAL "$r" ;; *) verdict "drive ta" DIFFERENT "$r" ;; esac
+            continue
+        fi
+        if [ $mode = drag ]; then
+            # (a drive that runs no match proves little)
+            case "$r" in *IDENTICAL*) case "$r" in *" (0 matches"*) verdict "drive drag" DIFFERENT "no match: $r" ;; *) verdict "drive drag" IDENTICAL "${r#*: }" ;; esac ;; *) verdict "drive drag" DIFFERENT "$r" ;; esac
             continue
         fi
         tool render_oracle

@@ -365,6 +365,28 @@ impl DragMode {
         }
     }
 
+    /// A proof's record of the mode after a drawn frame: everything but the constructor's
+    /// spline and the race.ini values that never change.
+    pub fn frame_state(&self) -> String {
+        format!(
+            "{:?} {:?} {:?} {} {:x} {:x} {} {} {:x} {:x} {:x} {:x} {:?} {}",
+            self.lap_times,
+            self.cars,
+            self.status,
+            self.match_number,
+            self.start_time.to_bits(),
+            self.null_counter.to_bits(),
+            self.semaphore,
+            self.disqualified_on,
+            self.custom_start.to_bits(),
+            self.player_perc.to_bits(),
+            self.ai_perc.to_bits(),
+            self.count_down.to_bits(),
+            self.base.conditions,
+            self.base.current_tier
+        )
+    }
+
     /// `SessionResultProcessor::processDragResults` @ 0x140166d70: the places (player first
     /// with more than half the matches) and every car's matches as laps.
     pub fn results(&self) -> (Vec<i32>, Vec<Vec<Lap>>) {

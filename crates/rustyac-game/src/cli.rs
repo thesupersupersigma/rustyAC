@@ -353,7 +353,7 @@ pub struct Options {
     /// track's grip, the wind, the grid's skins); without it the clock's milliseconds, as the
     /// game. The browser's drives name theirs, so a desktop run can draw the same.
     pub race_seed: Option<u32>,
-    /// `--drawn-frames <seed>` (a proof, `--headless`): Time Attack and Drift on drawn frames
+    /// `--drawn-frames <seed>` (a proof, `--headless`): Time Attack, Drift and Drag on drawn frames
     /// of uneven length, and each frame's inputs and the mode after it into `mode_frames.txt`
     pub drawn_frames: Option<u32>,
     /// `--stand-in-drivers`: race.ini's other cars with the line follower instead of the AI.
@@ -683,7 +683,7 @@ usage: rustyac [options]
   --race-seed <n>       what race.ini's draws start from (track grip, wind, grid skins;
                         default: the clock, as the game). --race-seed n with --ai-seed
                         n-28000 draws as a browser drive of seed n
-  --drawn-frames <seed> with --headless: Time Attack and Drift on drawn frames of uneven
+  --drawn-frames <seed> with --headless: Time Attack, Drift, Drag on drawn frames of uneven
                         length (5 to 40 ms, seeded), each frame into mode_frames.txt of --out-dir
   --stand-in-drivers    race.ini's other cars with rustyAC's line follower, not the AI
   --physics-threads <n> worker threads that step the cars (0: none; with 1 the game's split

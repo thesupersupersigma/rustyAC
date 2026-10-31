@@ -16,6 +16,7 @@
 //! * `DragMode` on made-up matches against `rustyac_physics::race::drag` (`modes/drag.rs`).
 
 mod drag;
+pub use drag::drag_drive;
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -928,7 +929,7 @@ pub unsafe fn extras(acs: &Acs, root: &Path, ac: &Path, seed: u32, kind: i32) ->
         }
         7 => {
             let mode = block(0x2f0, VA_DRAG_VTABLE_EXTRAS);
-            let mut host = drag::PortDragHost { rand: rustyac_physics::session::MsvcRand(seed), log: Vec::new() };
+            let mut host = drag::PortDragHost { rand: rustyac_physics::session::MsvcRand(seed), log: Vec::new(), ai: vec![false, true], fades: false };
             let mut drag = rustyac_physics::race::drag::DragMode::new(base.clone(), 5, [[0.0, 0.0, -2.0], [0.0, 0.0, 2.0]], [[400.0, 0.0, -3.0], [400.0, 0.0, 3.0]], &[[0.0, 0.0, -2.0], [0.0, 0.0, 2.0]], 0.0, &mut host);
             let cars = zeroed(0x90);
             for (i, car) in drag.cars.iter_mut().enumerate() {
