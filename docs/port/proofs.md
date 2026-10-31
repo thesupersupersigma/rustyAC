@@ -93,6 +93,49 @@ files included.
 kept under the key used before the oracle's lock file left the key. Nothing reads them, and they can
 be deleted (done in Task 38g: `re/gold/fresh/rec` is now 3.8 GB). Free disk: 27 GB at the start, 17 GB at the end.
 
+## M1: milestone on 0.45.1 (2026-10-30)
+
+`bash tools/proofs/run_all.sh --full` on v0.45.1 (c11f6b8), nothing changed. 15:21 to 22:20
+(6 h 58 min); `fresh` and `sound` then again alone (`run_all.sh --full fresh sound`, 3 h 35 min),
+because in the first pass the side lane's `browser` was running `target/release/rustyac.exe`
+while the game lane rebuilt it (`failed to remove file ... rustyac.exe: Access is denied. (os
+error 5)`): a clash of the two lanes in `run_all.sh`, not a difference.
+
+| area | cases | identical | different | time |
+|---|---|---|---|---|
+| physics | 113 | 107 | 6 | 39m39s |
+| fresh | 690 | 679 | 11 | 211m51s (alone) |
+| sound | 22 | 22 | 0 | 3m20s (alone) |
+| render | 129 | 129 | 0 | 78m53s |
+| gui | 147 | 147 | 0 | 93m07s |
+| python | 2 | 2 | 0 | 0m18s |
+| replays | 31 | 31 | 0 | 52m37s |
+| net | 80 | 80 | 0 | 21m52s |
+| browser | 226 | 225 | 1 | 72m10s |
+| ai_page | 9 | 9 | 0 | 32m16s |
+| shaders | 4 | 4 | 0 | 10m37s |
+| launcher | 12 | 12 | 0 | 6m16s |
+| dumps | 222 | 222 | 0 | 72m36s |
+| **all** | **1,687** | **1,669** | **18** | **6 h 58 min + 3 h 35 min** |
+
+Each difference ran alone twice more (scripts in the ignored `re/scratch/M1/`); the repeatable ones
+in the port were bisected from v0.38.5 (`git bisect run`, car_oracle built into
+`re/scratch/M1/tgt_bisect`).
+
+| case | repeatable | first bad | commits | cause |
+|---|---|---|---|---|
+| physics: `oracle/t34/{mp_1,mp_m1..mp_m5}/pit_mouse.mcrec` (6), `DIFFERENT at step 2 world.referee.lo` | yes | v0.43.0 | 418d2d5 (good) .. 9f3e9da (bad) | 9f3e9da fixed the oracle's stand-in for the mouse menu's parent; Task 43 recorded `mp_d` again (leftovers_43.md:328) but not these six, which still hold the old stand-in. All six identical at 418d2d5, different at 9f3e9da (0/1/8 workers). The fresh `pit_mouse` seeds 1-5 are identical. Recording them again should fix it. |
+| fresh: `multi ai_solo ks_vallelunga ks_ferrari_f2004 --layout extended_circuit` (multi_fresh.txt:37) | yes | v0.45.0 | 7b4c105 (good) .. 47c7781 (bad) | Task 45's Time Attack check (record.rs:728): the port's sector estimate `420f8239,422cb15f,4202b7f8` against the game's `420f7d2d,422cfca0,420271c3` on this layout (its AI line is version 6, rebuilt in memory). Before 47c7781 there was no such check and the run is identical. A port difference to look at. |
+| fresh: 8 recordings of `ks_ferrari_250_gto` (`t17_`, `t17_spa_`, `t17_col_`) | yes | not bisected | - | The game's recording differs from the kept bytes in one 2-byte word in every row (e.g. `pt_autoshift` byte 76889); two recordings made the same day are the same, the kept ones of 2026-10-22 and 2026-10-30 also differ. The port is bit-exact against every new recording. Game side. |
+| fresh: 2 recordings of `gt3_multilink` (`pt_autoshift`, `wc_stops`) | yes | not bisected | - | The header's `setup_changes` has a random `PACKER_RANGE_RR` (e.g. `0.0->0.120000005` against `0.0->0.035`); `wc_spirited` differed on one of the two tries. The port is bit-exact against every new recording. Game side. |
+| browser: `oracle/game/conditions_spa_setup_launch.ryin` | yes | not bisected | - | The drive names `re\scratch\task15\god_tc4.ini`, deleted since (the copy is `re/gold/fresh/god_tc4.ini`): "the setup file cannot be read" on desktop and wasm. A missing input, not the code (not run at v0.38.5). |
+
+Trap: `car_oracle multi-check` writes `<recording>.result.txt`, and `physics.sh` leaves out a
+recording whose result says DIFFERENT ("a development recording"), so the six `pit_mouse`
+recordings are now left out of later physics runs until they are recorded again.
+
+Free disk: 56 GB at the start, 39 GB at the end.
+
 ## Why
 
 The disk cleanups of 2026-10-15 (`re/scratch/task20` to `task33b`) and 2026-10-18 (`task34` to
