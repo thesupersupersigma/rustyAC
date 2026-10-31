@@ -13,6 +13,8 @@
 //   ?spawn=pit|hotlap|start             where the car starts
 //   ?go=1              start driving as soon as the content is there (no click)
 //   ?autodrive=1       a line follower drives (starts from the hot-lap point)
+//   ?dragdrive=1       a test mode (rustyac.exe --drag-drive): in a drag race of AC's launcher the
+//                      AI drag driver drives your car
 //   ?backend=auto      the debug view (WebGPU, else WebGL2)
 //   ?backend=webgl     the debug view on WebGL2
 //   ?backend=full      Full mode: AC's own renderer draws (WebGPU only; else the debug view)
@@ -1152,7 +1154,8 @@ async function drive(launch) {
       if (params.get('sessions')) rac.set_sessions(params.get('sessions'));
       // Task 42b: a drive at the keyboard begins in AC's ESC menu, as rustyac.exe's does (not
       // one nobody sits at: autodrive, ?guido=, a proof, a self test)
-      rac.set_esc_start(backend === 'full' && !autodrive && !params.has('guido') && !params.has('fullproof') && !params.has('selftest'));
+      rac.set_esc_start(backend === 'full' && !autodrive && !params.has('dragdrive') && !params.has('guido') && !params.has('fullproof') && !params.has('selftest'));
+      rac.set_drag_drive(params.get('dragdrive') === '1');
     };
     // (the game seeds its rand() with the clock's milliseconds; ?seed=<n>, a test hook: n,
     // as rustyac.exe --race-seed n --ai-seed n-28000)

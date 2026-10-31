@@ -45,6 +45,12 @@ pub fn set_esc_start(on: bool) {
     crate::session::ESC_START.with(|start| start.set(on && !disabled));
 }
 
+/// Task 45c: `?dragdrive=1`, the desktop's `--drag-drive` test mode for the launcher's drives.
+#[wasm_bindgen]
+pub fn set_drag_drive(on: bool) {
+    crate::session::DRAG_DRIVE.with(|drive| drive.set(on));
+}
+
 /// Task 28: the session list of the next [`Game::create`] (`p10,q5,r3`; empty: no referee).
 #[wasm_bindgen]
 pub fn set_sessions(list: String) {

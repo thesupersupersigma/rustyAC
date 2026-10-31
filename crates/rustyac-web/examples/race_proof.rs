@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `cargo run --release -p rustyac-web --example race_proof -- --race <race.ini> [--assists
-//! <assists.ini>] --seed <n> --tape <drive.ryin> [--out <folder>]`: a drive from the launcher's
+//! <assists.ini>] --seed <n> --tape <drive.ryin> [--out <folder>] [--drag-drive]`: a drive from the launcher's
 //! files as the page makes it (`rustyac_web::race::setup_of`), driven with the inputs of a drive
 //! the desktop recorded, step for step (`rustyac_web::race::replay_race`). Builds for the
 //! desktop and for `wasm32-wasip1`; the page runs the same function (`Game::race_proof`).
@@ -26,6 +26,8 @@ fn run() -> Result<(), String> {
             "--seed" => seed = Some(value()?.parse::<u32>().map_err(|e| format!("--seed: {e}"))?),
             "--tape" => tape = Some(value()?),
             "--out" => out = Some(value()?),
+            // rustyac.exe --drag-drive's drive (the page's ?dragdrive=1)
+            "--drag-drive" => rustyac_web::session::DRAG_DRIVE.with(|on| on.set(true)),
             other => return Err(format!("unknown option {other}")),
         }
     }

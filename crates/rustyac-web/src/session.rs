@@ -37,6 +37,9 @@ thread_local! {
     /// Task 42b: the next offline drive begins in AC's ESC menu, whose "Drive" frees the car
     /// (`rustyac.exe`'s `esc_start` at the wheel); taken by the next [`Session`] made.
     pub static ESC_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Task 45c: `rustyac.exe --drag-drive` (a test mode): the AI drag driver drives the player's
+    /// car in a drag session of the launcher's drives.
+    pub static DRAG_DRIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Steps of lying still on its roof or side before the car is put back on the road: 3 s.

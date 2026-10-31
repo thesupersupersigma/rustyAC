@@ -174,6 +174,11 @@ pub fn setup_of(race_text: &str, assists_text: Option<&str>, seed: u32) -> Resul
     let mut setup = crate::content::setup(&car, &track, &layout, false, "pit");
     let root = rustyac_content::install::ac_root().unwrap_or_else(|| std::path::PathBuf::from("ac"));
     let notes = apply(&mut setup, &race, assists.as_ref(), seed, &root);
+    if crate::session::DRAG_DRIVE.with(|on| on.get()) {
+        // conditions.rs's --drag-drive
+        setup.ai.player = true;
+        setup.ai.test_mode = true;
+    }
     Ok((setup, notes))
 }
 
