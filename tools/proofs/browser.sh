@@ -14,15 +14,17 @@ cargo build --release --locked --quiet -p rustyac-game --bin replay_hash || exit
 CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--sysroot $repo_w/target/wasm-sysroot" \
     cargo build --release --locked --quiet -p rustyac-game --bin replay_hash --target wasm32-wasip1 || exit 2
 docs="$USERPROFILE/Documents/Assetto Corsa"
+# conditions_spa_setup_launch names its setup under the deleted re/scratch/task15: the kept copy is in re/gold/fresh
+t15=$repo_w/re/scratch/task15
 for f in oracle/game/*.ryin; do
     keep "$f" || continue  # quick keys: oracle/game/<drive>.ryin
-    r=$(target/release/replay_hash.exe "$f" 2>&1)
+    r=$(target/release/replay_hash.exe "$f" --remap "$t15=$repo_w/re/gold/fresh" 2>&1)
     d=$(echo "$r" | grep -o "hash.*")
     s=$(echo "$r" | grep -o "^[0-9]* steps")
     # a drive with the user's setup names it under Documents: seen read-only as /docs
     w=$(MSYS_NO_PATHCONV=1 "$wt" run --env AC_ROOT=/ac --dir "$repo_w::/repo" --dir "$repo_w::." --dir "$ac::/ac" \
         --dir "$docs::/docs" target/wasm32-wasip1/release/replay_hash.wasm "/repo/$f" \
-        --remap "$ac=/ac" --remap "$(cygpath -m "$docs" 2>/dev/null || echo "$docs")=/docs" --remap "$repo_w=/repo" 2>&1 | grep -o "hash.*")
+        --remap "$ac=/ac" --remap "$t15=/repo/re/gold/fresh" --remap "$(cygpath -m "$docs" 2>/dev/null || echo "$docs")=/docs" --remap "$repo_w=/repo" 2>&1 | grep -o "hash.*")
     if [ -n "$d" ] && [ "$d" = "$w" ]; then verdict "$f" IDENTICAL "$s $d"; else verdict "$f" DIFFERENT "desktop [$d] wasm [$w]"; fi
 done
 if [ -n "$BROWSER_DIGEST" ]; then
