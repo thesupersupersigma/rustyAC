@@ -242,6 +242,10 @@ impl Track {
         let mut messages = Vec::new();
         let data = self.data_folder.join("data");
         spline::init_ai_spline(self, ai_folder, &data, &mut messages)?;
+        // the game adds the timing lines after the AI line, so the sectors are measured on this one
+        self.time_lines.clear();
+        self.sectors_normalized_positions.clear();
+        timing::init_time_lines(self, &mut messages);
         Ok(messages)
     }
 
