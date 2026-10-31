@@ -1,0 +1,38 @@
+# game args besides --headless --no-steam: --drag-drive --duration 700 --race-seed 28005 --ai-seed 5
+# Task 45c: Drive -> Special Events -> "SPECIAL_EVENT_7" (a drag race, 12 matches, goals 3/5/6 wins)
+# -> Start (the AI drag driver in the player's car: rustyac.exe --drag-drive, the page's ?dragdrive=1)
+# -> results; the theme's saved tiers sent as a uimessage (so the request list shows them); the list again.
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=drive]').length>0
+wait 3000
+js $('div.flag[data-mode=en]').click()
+wait 8000
+until 120000 window.jQuery&&!$('body').hasClass('loading')&&$('#menu li[data-panel=drive]').length>0
+wait 3000
+js try{UI.checkVideomode=false}catch(e){}
+log MARK
+click #menu li[data-panel=drive]
+wait 1500
+until 20000 $('.drive .tabs li[data-mode=specialevents]').length>0
+click .drive .tabs li[data-mode=specialevents]
+wait 3000
+until 60000 $('.specialevents .datalist .item').length>100
+shot out/se_list.png
+js $('.specialevents .datalist .item').filter(function(){return $(this).data('id')=='special_event_7'}).first().click()
+wait 2500
+shot out/se_event.png
+js var i=__AC.SpecialEvents['special_event_7'].info;$.ACCall("uimessage","msg=GOALS "+[0,1,2].map(function(n){return i['CONDITION_'+n].OBJECTIVE+':'+i['CONDITION_'+n].ACHIEVED}).join(','))
+js $('.summary .nav .button[data-mode=startrace], .drive .submenu .button[data-mode=startrace]').not('.inactive,.disabled').first().click()
+game-exit 1200000
+until 120000 !$('body').hasClass('ACactive')&&$('.summary .settings .results:not(.inactive):not(.disabled)').length>0
+wait 8000
+shot out/se_results.png
+js $.ACCall("uimessage","msg=TIERS "+Object.keys(localStorage).filter(function(k){return /^se_tier_|^specialevent_/.test(k)}).sort().map(function(k){return k+"="+localStorage.getItem(k)}).join(","))
+click #menu li[data-panel=drive]
+wait 1500
+click .drive .tabs li[data-mode=specialevents]
+wait 3000
+js $('.specialevents .datalist .item').filter(function(){return $(this).data('id')=='special_event_7'}).first().click()
+wait 2500
+shot out/se_event_after.png
+js var i=__AC.SpecialEvents['special_event_7'].info;$.ACCall("uimessage","msg=SHOWN "+i.EVENT.ACHIEVED+" "+[0,1,2].map(function(n){return i['CONDITION_'+n].ACHIEVED}).join(','))
+log END

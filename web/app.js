@@ -363,7 +363,8 @@ async function scanFolder(root, report) {
     report(`reading the folder: ${cars.size} cars, ${++done} tracks`);
   }
   const system = await children(top.get('system').handle);
-  if (system.has('data')) await walk(system.get('data').handle, 'system/data', 0, []);
+  // (and system/data/se: the official special events' own files)
+  if (system.has('data')) await walk(system.get('data').handle, 'system/data', 1, []);
   // the game's rules a drive from AC's launcher reads (system/cfg: the race's over time, the pits)
   if (system.has('cfg')) await walk(system.get('cfg').handle, 'system/cfg', 0, []);
   return files;
@@ -514,7 +515,7 @@ function listedPathWanted(parts) {
   // AC's launcher: its cfg, the themes (no videos), the weathers (web/launcher.js walkFolder)
   if (lower[0] === 'cfg') return parts.length <= 6;
   if (lower[0] === 'launcher') return lower[1] === 'themes' && parts.length <= 11 && !name.endsWith('.ogv');
-  if (lower[0] === 'system') return ((lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3) || (lower[1] === 'cfg' && parts.length === 4) || (lower[1] === 'shaders' && lower[2] === 'win' && parts.length === 4);
+  if (lower[0] === 'system') return ((lower[1] === 'data' || lower[1] === 'cfg') && parts.length === 3) || (lower[1] === 'data' && lower[2] === 'se' && parts.length === 4) || (lower[1] === 'cfg' && parts.length === 4) || (lower[1] === 'shaders' && lower[2] === 'win' && parts.length === 4);
   if (lower[0] !== 'content') return false;
   // (and what Full mode's renderer reads: the weathers, the sky's, the pits' and the drivers' files)
   if (lower[1] === 'weather') return parts.length <= 4;
@@ -1131,6 +1132,9 @@ async function drive(launch) {
       // what the session reads of the game's folder besides the car and the track
       // (src/race.rs: OVER_TIME_MULT, the pit stop's settings); without them the game's defaults
       await loadFiles(['system/cfg/assetto_corsa.ini', 'system/cfg/pitstop.ini'], () => {}).catch((error) => console.warn(error));
+      // an official special event: the game reads its own file in place of race.ini (decrypted in memory only)
+      const guid = launch.race ? raceKey(launch.race, 'GUID', 'SPECIAL_EVENT') : '';
+      if (/^\d+$/.test(guid)) await loadFiles([`system/data/se/SPECIAL_EVENT_${guid}.acd`], () => {}).catch((error) => console.warn(error));
     }
     // (DISABLE_SHOW_MODE: no ESC menu at the start; a pack may not have the file)
     if (picture.backend === 'full') await loadFiles(['system/cfg/options.ini'], () => {}).catch(() => {});
@@ -2953,8 +2957,8 @@ window.rustyac.fullProof = async () => {
 window.rustyac.driveRace = (race, assists) => freshCanvas() || drive({ car: raceKey(race, 'MODEL'), track: raceKey(race, 'TRACK'), layout: raceKey(race, 'CONFIG_TRACK'), race, assists });
 
 // a [RACE] key of a race.ini
-function raceKey(race, name) {
-  const part = race.split(/^\[/m).find((p) => /^RACE\]/i.test(p)) || '';
+function raceKey(race, name, section = 'RACE') {
+  const part = race.split(/^\[/m).find((p) => p.toUpperCase().startsWith(`${section}]`)) || '';
   return ((part.split(/\r?\n/).find((l) => l.split('=')[0].trim().toUpperCase() === name) || '=').split('=')[1] || '').trim();
 }
 
