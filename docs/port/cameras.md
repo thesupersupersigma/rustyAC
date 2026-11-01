@@ -90,9 +90,9 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | F1 drivable views (`CameraDrivableManager`), `chase_cam.ini` | F1, C | proven (step 2a) | the same; `chase_cam.ini` read as before |
 | F6 car cameras (`CameraCarManager`) | F6 | proven (step 2a) | the same |
 | Python `setCameraMode` 1/2/6, `freeCamera*` | apps | done, not proven | |
-| G-force head movement, shake (`CameraOnBoard::update`) | | math proven (step 2a) | settings from `camera_onboard.ini` not read yet (zero g, no shake) |
-| Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`, chase look) | look keys | math proven (step 2a) | the keys and the look-back points not wired yet |
-| FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
+| G-force head movement, shake (`CameraOnBoard::update`) | | proven (2a, 2b) | math frame by frame; `camera_onboard.ini` / `camera_manager.ini` / car `SHAKE_MUL` read (2b), page settings line IDENTICAL to the desktop's |
+| Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`, chase look) | `[GLANCELEFT]`/`[GLANCERIGHT]`/`[GLANCEBACK]`, wheel buttons | proven (2a, 2b) | look-back points: collider boxes IDENTICAL on 137 cars; keys desktop and page |
+| FOV (`setPlayerFov`), seat position | Ctrl+Numpad +/- | done (2b) | ±0.5, refused at ≥125 / ≤1, desktop and page; the game has no seat keys (Onboard settings app only) |
 | Fade-in (`fadeIn`) | F4, menus, race rules | done | F4's fade proven (`focus.rs`, sequence 18); the menus' fades were already drawn (`GameGui::post_gui`, Task 30; the audit's "does nothing" was the desktop's action loop, which leaves them to the GUI); the race rules' fades now too (Step 2c) |
 | F3 track cameras and sets (`CameraTrack`) | F3 | done + proven (2d) | desktop and page |
 | F2 random camera (`stepCameraRandom`) | F2 | done + proven (2e) | desktop and page |
