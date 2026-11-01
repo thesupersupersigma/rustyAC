@@ -32,6 +32,13 @@ release's rustyac.exe once per tag into `target/proofs/old_exe/<tag>/` and keeps
 drive in `re/gold/dumps/` (keyed on that exe's bytes, the drive and the install; `--rerecord`
 dumps again and holds it against the kept one).
 
+Kept results whose key today's sources no longer make (an older car oracle, an older install) are
+never compared again. `archive_kept.sh` lists them with their size (it asks `fresh.sh` for today's
+keys with `PROOF_LIST_KEYS`, nothing is built or run); `archive_kept.sh --move` sends them to the
+server (`ARCHIVE_DEST`, default `thesupersupersigma@10.0.0.140:/storage/rustyac-archive/kept/`, a
+folder per day; tar over ssh), checks every file's SHA-256 on both sides and only then removes them
+here. Today's keys stay, so `fresh` records nothing again after a move.
+
 Every program more than one area runs (the four oracles, rustyac.exe, replay_hash, track_survey,
 rustyac-launcher) is built once before any area starts, with 8 jobs, so no area relinks an exe
 another lane is running. Then four lanes run side by side, the areas of a lane one after the other:

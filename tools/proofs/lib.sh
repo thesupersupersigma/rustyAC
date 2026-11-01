@@ -27,6 +27,9 @@ CO=tools/car_oracle/target/release/car_oracle.exe
 CC=tools/chassis_compare/target/release/chassis_compare.exe
 RO=tools/render_oracle/target/release/render_oracle.exe
 AO=tools/audio_oracle/target/release/audio_oracle.exe
+# PROOF_LIST_KEYS=<file> (archive_kept.sh): each kept folder the run would read goes into <file>;
+# no oracle runs, nothing is built, recorded or unpacked
+[ -z "$PROOF_LIST_KEYS" ] || { CO=true; CC=true; PROOF_BUILT="car_oracle chassis_compare rustyac"; }
 
 # PROOF_QUICK=1 (run_all.sh --quick): only the cases whose key matches a whole line (a regex) of
 # tools/proofs/quick/<area>.txt run; each area says what its keys look like in that file
@@ -70,6 +73,7 @@ cache_key() {
 }
 # cache_get <dir> <into>: the kept recording into <into>; fails when there is none or when re-recording
 cache_get() {
+    [ -z "$PROOF_LIST_KEYS" ] || { echo "$1" >> "$PROOF_LIST_KEYS"; mkdir -p "$2"; return 0; }
     [ -z "$PROOF_RERECORD" ] && [ -f "$1/done" ] || return 1
     mkdir -p "$2"
     for f in "$1"/*.xz "$1"/*.gz; do
