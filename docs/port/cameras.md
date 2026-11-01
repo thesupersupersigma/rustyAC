@@ -19,7 +19,8 @@
   fade on the desktop and in the page.
 - Step 2e done: F2, the random camera: `ACCameraManager::update` / `stepCameraRandom` and the
   keys around it IDENTICAL against the game (`random_camera.tape`); desktop and page.
-- Next: quick proofs, report, v0.46.0.
+- Quick proofs done: `run_all.sh --quick` 167 of 167 cases IDENTICAL (below). Released as
+  v0.46.0. Next: Task 46b.
 
 ## Step 0: housekeeping
 
@@ -305,6 +306,29 @@ Page (Full mode), `tools/web_checks/task46/cams.sh`: after F2, six HUD reads 5 s
 shortcut: a track without camera sets draws nothing when the track mode is drawn (the game would
 index its empty list); fix if such a track ever shows F2. Not proven end to end: which draws a
 real session sees (the desktop's frame times are its own).
+
+## Quick proofs on this task's code
+
+`sh tools/proofs/run_all.sh --quick` (48 min wall clock), 0 skipped, 0 different:
+
+| area | cases | identical |
+|---|---|---|
+| physics | 9 | 9 |
+| fresh (with the `cameras` part) | 59 | 59 |
+| sound | 4 | 4 |
+| render | 14 | 14 |
+| gui | 29 | 29 |
+| python | 1 | 1 |
+| replays | 6 | 6 |
+| net | 16 | 16 |
+| browser | 9 | 9 |
+| ai_page | 9 | 9 |
+| shaders | 4 | 4 |
+| launcher | 1 | 1 |
+| dumps | 6 | 6 |
+
+The `cameras` part of `fresh.sh` in full (3 seeds: start, free, driving, track and random
+cameras, plus the collider boxes): 16 of 16 IDENTICAL.
 
 ## Not done
 
