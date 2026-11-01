@@ -12,6 +12,7 @@ rays magione ?
 survey ks_ferrari_f2004 magione ?
 crash bmw_m3_e30
 micro [0-7]/1
+cameras 1
 ini oracle/t28/golden/.*
 multi ai_pass_front magione .*
 multi rc_pass_front magione .*

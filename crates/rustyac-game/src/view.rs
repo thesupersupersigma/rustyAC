@@ -1042,6 +1042,7 @@ impl CarView {
             out.hubs[k] = lerp_pose(&a.hubs[k], &b.hubs[k], t);
         }
         out.speed_kmh = lerp(a.speed_kmh, b.speed_kmh, t);
+        out.speed_ms = lerp(a.speed_ms, b.speed_ms, t);
         out.rpm = lerp(a.rpm, b.rpm, t);
         out
     }

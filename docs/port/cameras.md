@@ -5,8 +5,11 @@
 - Step 0 done: pit_mouse crash fixed; the page's first start compared with a new desktop player;
   606 old kept results (36 GB) moved to the server, SHA-256 matched (below).
 - Step 1 done: the audit table below, sent to the user and the split agreed.
-- Next: step 2a, the per-frame camera-matrix compare for the views that already run (cockpit, chase,
-  chase 2, bonnet, bumper, dash, F6), then the missing ones in the order of the table.
+- Step 2a done: the cockpit, the five drivable views and F6 against the game frame by frame
+  (`driving_camera.tape`), with the g forces, shake and look keys in the same code; IDENTICAL.
+- Next: step 2b, the settings that drive them (`camera_onboard.ini`, `camera_drivable.ini`, the
+  car's look-back points) and the look keys, FOV and seat keys in the desktop and the page; then
+  fade-in, F3, F2.
 
 ## Step 0: housekeeping
 
@@ -16,7 +19,9 @@ The GUI oracle made the escape menu a plain `Control` (0x178 bytes, `gui_ac_hud.
 sequence reads `escMenu+0x1a8` (the menu's setup screen) and puts in its own only when it reads 0.
 That word was past the block, so heap garbage: the game followed it into
 `SetupScreen::isFixedFuel`. The block is now 0x400 zeroed bytes. GUI `pit_mouse` 10 runs: command
-log and pixels IDENTICAL in all 74 frames every time, no crash.
+log and pixels IDENTICAL in all 74 frames every time, no crash. The physics side, `car_oracle multi`
+on the five `pit_mouse` lines of `multi_fresh.txt` at 0, 1 and 8 threads, 10 runs each: 50 of 50
+IDENTICAL at every thread count, no crash.
 
 ### A new player's first start: page against desktop
 
@@ -70,12 +75,12 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | Rear mirror, virtual mirror | F11 | proven (pictures) | `renderer_scene.md` scene rows |
 | Camera editor, chase-cam editor, photo mode, eyes app | app windows | proven (GUI) | GUI sequences; the camera they move: Task 46b |
 | Replay camera spinner | replay bar | proven (GUI) | the camera it picks: Task 46b |
-| F1 cockpit (`CameraOnBoard`) | F1 | done, not proven | the render oracle gives both sides one fixed camera |
-| F1 drivable views (`CameraDrivableManager`), `chase_cam.ini` | F1, C | done, not proven | |
-| F6 car cameras (`CameraCarManager`) | F6 | done, not proven | |
+| F1 cockpit (`CameraOnBoard`) | F1 | proven (step 2a) | `driving_camera.tape` → `start_camera_check` |
+| F1 drivable views (`CameraDrivableManager`), `chase_cam.ini` | F1, C | proven (step 2a) | the same; `chase_cam.ini` read as before |
+| F6 car cameras (`CameraCarManager`) | F6 | proven (step 2a) | the same |
 | Python `setCameraMode` 1/2/6, `freeCamera*` | apps | done, not proven | |
-| G-force head movement, shake (`CameraOnBoard::update`) | | missing | |
-| Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`) | look keys | missing | |
+| G-force head movement, shake (`CameraOnBoard::update`) | | math proven (step 2a) | settings from `camera_onboard.ini` not read yet (zero g, no shake) |
+| Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`, chase look) | look keys | math proven (step 2a) | the keys and the look-back points not wired yet |
 | FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
 | Fade-in (`fadeIn`) | F4, menus | half | the focus change's fade is ported and proven (`focus.rs`, sequence 18); the menus' `SimAction::FadeIn` (restart) does nothing on desktop |
 | F3 track cameras and sets (`CameraTrack`) | F3 | missing | |
@@ -86,6 +91,41 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | Last camera (`loadPreviousSessionUserCamera`) | | missing → 46b | |
 | TrackIR | | missing → 47 | |
 | Page (Full mode) | F1, C, F4, F6, F7 | as desktop | F2, F3, F5, other cars' views missing |
+
+## Step 2a: the cameras that drive with the car, frame by frame
+
+`car_oracle start-camera-micro` now writes a third tape, `driving_camera.tape`: the game's own
+`CameraOnBoard::update`, `CameraDrivableManager::update` and `CameraCarManager::update` on a
+made-up car 0 (its 3D matrix from the game's `CarAvatar::makeBodyMatrix`, the body node set as
+`CarAvatar::update` does), a new car and new cameras every 300 frames, F1 at frames 100 and 200
+(`nextMode`, back to the cockpit after dash) or F6 (`nextCamera`). Each segment turns on, or not:
+the g forces (`gForceMix`, `gForceLagMix`, `accGXMul`, `accGZMul`, `chaseCamFilter`), the shake
+(`shakeMul`, `shakeFreq`, `shakeScale`, `stillCamera`, `rand()` from seed 1), the look keys (left,
+right, both = back, bit 9 = back; `headRotation*`, `rotation*`, the views' own yaw) and
+`IS_WORLD_ALIGNED`. Speeds under 2 km/h, upside-down cars, dt 0 and long frames are in it.
+
+`start_camera_check <start> <free> <driving>` plays it through the port's `DrivingCamera`:
+
+| seed | frames | matrix, field of view, near plane |
+|---|---|---|
+| 7 (20 000 steps) | 20 067 lines | IDENTICAL |
+| 1, 2, 3 (120 000 steps each) | 120 400 lines each | IDENTICAL |
+
+Every view saw look left/right, look back and world-aligned frames (counted from the tapes).
+`tools/proofs/fresh.sh` has it as the part `cameras` (seeds 1-3, 60 000 steps; `--quick`: seed 1).
+
+What the port changed to get there (`crates/rustyac-game/src/render/scene.rs`):
+- the cockpit's eye is `DRIVEREYES` through the 3D model's matrix; the head's g-force offset, the
+  shake (`SignalGenerator3D<SinSignalGenerator>`: three sines stepped in whole milliseconds by the
+  last frame's frequency, the CRT's `sinf`) and `lookLeftRight` / `lookBack` are ported;
+- the chase camera has no "first frame" snap of its own any more (the game keeps its offset across
+  modes and snaps on distance or under 2 km/h); its look keys turn it about the car, look back puts
+  it 2 m further back, both without the pitch, as in the game; `createTarget` is the exact one;
+- a car camera index past the last goes to 0, and the near plane is the last mode's (the game's
+  `CameraCarManager` never sets it);
+- the machine adds the shake up first and the g-force offset after (the pseudo-C said otherwise).
+
+Not compared: the far plane and the exposure the cameras set (the renderer has its own).
 
 ## Not done
 

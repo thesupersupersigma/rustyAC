@@ -7,13 +7,13 @@
 # the kept one. The unpacked copies in target/proofs/fresh/rec are deleted once compared.
 # Quick keys (tools/proofs/quick/fresh.txt): "car", "conditions <scenario>", "awd <car>",
 # "hybrid <car>", "sus <car>", "collide spa", "collide-worlds", "rays <track> <layout>",
-# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "modes <seed>", "drive ta|drift|drag", "ini <file>", "multi ...", "shm ...".
-#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm" (default: all of them)
+# "survey <car> <track> <layout>", "crash <car>", "micro <kind>/<seed>", "cameras <seed>", "modes <seed>", "drive ta|drift|drag", "ini <file>", "multi ...", "shm ...".
+#   FRESH_PARTS="car conditions awd hybrid sus collide rays survey crash micro cameras modes ini multi shm" (default: all of them)
 area=fresh
 . "$(dirname "$0")/lib.sh"
 tool car_oracle
 tool chassis_compare
-parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro modes ini multi shm"}
+parts=${FRESH_PARTS:-"car conditions awd hybrid sus collide rays survey crash micro cameras modes ini multi shm"}
 root=$out/root     # the scratch game folder the oracles build for themselves
 rec=$out/rec
 
@@ -167,6 +167,20 @@ if part micro; then  # Task 28: the game's referee on made-up drives, 25 seeds o
             cars=$(( 2 + (seed * 7 + kind) % 23 ))
             r=$("$CO" race-micro --seed "$seed" --kind "$kind" --count "$cars" --root "$root" 2>&1 | grep '^referee:')
             case "$r" in *IDENTICAL*) verdict "race-micro $kind/$seed/$cars" IDENTICAL ;; *) verdict "race-micro $kind/$seed/$cars" DIFFERENT "$r" ;; esac
+        done
+    done
+fi
+
+if part cameras; then  # Tasks 34 and 46: the game's start, free (F7), cockpit, drivable and car cameras on made-up cars, keys and look keys
+    for seed in 1 2 3; do
+        keep "cameras $seed" || continue
+        d=$root/cameras/$seed
+        mkdir -p "$d"
+        "$CO" start-camera-micro --seed "$seed" --steps 60000 --root "$d" > "$out/cameras_$seed.txt" 2>&1
+        cargo run --release --locked --quiet -p rustyac-game --example start_camera_check -- "$d/start_camera.tape" "$d/free_camera.tape" "$d/driving_camera.tape" >> "$out/cameras_$seed.txt" 2>&1
+        for what in "start camera" "free camera" "driving cameras"; do
+            r=$(grep "^$what: " "$out/cameras_$seed.txt")
+            case "$r" in *IDENTICAL*) verdict "cameras $seed $what" IDENTICAL ;; *) verdict "cameras $seed $what" DIFFERENT "${r:-no result}" ;; esac
         done
     done
 fi

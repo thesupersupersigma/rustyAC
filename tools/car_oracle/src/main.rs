@@ -544,9 +544,10 @@ fn steer_micro(args: &Args) -> Result<(), String> {
 }
 
 /// Task 34: `car_oracle start-camera-micro [--seed <n>] [--steps <frames>] [--root <dir>]`
-/// (tapes: `<root>/start_camera.tape`, `<root>/free_camera.tape`): the game's own
-/// session-start camera on made-up cars and F7's free camera on made-up keys and cursors, for
-/// the port's `start_camera_check` example.
+/// (tapes: `<root>/start_camera.tape`, `<root>/free_camera.tape`, `<root>/driving_camera.tape`):
+/// the game's own session-start camera on made-up cars, F7's free camera on made-up keys and
+/// cursors and (Task 46) the cockpit, drivable and car cameras, for the port's
+/// `start_camera_check` example.
 fn start_camera_micro(args: &Args) -> Result<(), String> {
     let root = std::path::absolute(&args.root).map_err(|e| e.to_string())?;
     if root.join("acs.exe").is_file() {
@@ -564,6 +565,10 @@ fn start_camera_micro(args: &Args) -> Result<(), String> {
     let tape = unsafe { game::camera::free_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
     std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("free camera: {} lines of the game into {}", tape.lines().count(), out.display());
+    let out = root.join("driving_camera.tape");
+    let tape = unsafe { game::camera::driving_micro(&acs, args.seed as u32, args.steps.unwrap_or(20_000))? };
+    std::fs::write(&out, &tape).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("driving cameras: {} lines of the game into {}", tape.lines().count(), out.display());
     Ok(())
 }
 

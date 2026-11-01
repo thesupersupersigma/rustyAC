@@ -219,6 +219,11 @@ pub struct CarShape {
     pub dash_pos: [f32; 3],
     /// The cameras of `cameras.ini` (F6).
     pub car_cameras: Vec<CarCamera>,
+    /// Where the look-back key puts the cockpit camera and the bonnet, bumper and dash views
+    /// (`lookBackPoints`, in the 3D model's frame), and the yaw of those three views.
+    pub look_back: [f32; 3],
+    pub drivable_look_back: [f32; 3],
+    pub drivable_yaw: f32,
 }
 
 fn three(text: &str) -> Option<[f32; 3]> {
@@ -244,6 +249,9 @@ impl CarShape {
             bumper_pitch: 0.0,
             dash_pos: [0.0, 0.6, 0.3],
             car_cameras: Vec::new(),
+            look_back: [0.0, 0.6, 0.0],
+            drivable_look_back: [0.0, 0.6, 0.0],
+            drivable_yaw: 0.0,
         }
     }
 
@@ -380,7 +388,10 @@ impl CarShape {
 pub fn model_matrix(body: &Mat, shape: &CarShape) -> Mat {
     let mut moved = *body;
     let origin = point(body, shape.graphics_offset);
-    moved[3] = [origin[0], origin[1], origin[2], 1.0];
+    moved[3] = [origin[0], origin[1], origin[2], body[3][3]];
+    if shape.graphics_pitch == 0.0 {
+        return moved;
+    }
     rotate_pitch(&moved, shape.graphics_pitch)
 }
 
@@ -433,6 +444,57 @@ pub struct CameraFrame {
     pub near: f32,
 }
 
+/// `CameraOnBoard` (ctor 0x1400c84e0): the cockpit camera's settings (`camera_onboard.ini`)
+/// and what it remembers from frame to frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CockpitCamera {
+    /// `gForceMix`, `gForceLagMix`: how far the head moves with the g forces, and its lag.
+    pub g_force_mix: [f32; 3],
+    pub g_force_lag_mix: f32,
+    /// `headRotationDegrees`, `headRotationSpeed`: the look keys' turn.
+    pub head_rotation_degrees: f32,
+    pub head_rotation_speed: f32,
+    /// `shakeMul` (of the g-force offset), `shakeFreq`, `shakeScale`, `stillCamera`.
+    pub shake_mul: f32,
+    pub shake_freq: [f32; 3],
+    pub shake_scale: [f32; 3],
+    pub still_camera: bool,
+    /// `IS_WORLD_ALIGNED`: the view stays level.
+    pub world_aligned: bool,
+    /// `customCameraSettings[car].yaw` (the pitch is [`CarShape::eye_pitch`]).
+    pub yaw: f32,
+    g_force_offset: [f32; 3],
+    head_animation: f32,
+    /// the shake's three `SinSignalGenerator`s: their times (ms) and frequencies
+    shake: [i32; 3],
+    shake_freq_now: [f32; 3],
+    /// the C library's `rand()` (the game's is the process's one)
+    pub rand: MsvcRand,
+}
+
+impl Default for CockpitCamera {
+    fn default() -> CockpitCamera {
+        CockpitCamera {
+            g_force_mix: [0.0; 3],
+            g_force_lag_mix: 0.0,
+            head_rotation_degrees: 60.0,
+            head_rotation_speed: 1.0,
+            shake_mul: 0.0,
+            shake_freq: [0.0; 3],
+            shake_scale: [0.0; 3],
+            still_camera: false,
+            world_aligned: false,
+            yaw: 0.0,
+            g_force_offset: [0.0; 3],
+            head_animation: 0.0,
+            // `SignalGenerator3D`'s ctor steps the first two by 0.5 s and 1.5 s
+            shake: [500, 1500, 0],
+            shake_freq_now: [1.0; 3],
+            rand: MsvcRand(1),
+        }
+    }
+}
+
 /// AC's cameras for the driven car, as far as a debug view wants them (no glance, no head
 /// shake, no fades): the cockpit (`CameraOnBoard::update` @ 0x1400c9ea0), the five drivable
 /// views (`CameraDrivableManager::update` @ 0x1400c6a30) and the car's own cameras
@@ -449,7 +511,21 @@ pub struct DrivingCamera {
     pub car_index: usize,
     /// The chase camera's place relative to the rear axle, lagging behind the g forces.
     current_offset: [f32; 3],
-    started: bool,
+    /// `actionsState` of the focused car: bit 0 look left, bit 1 look right, bit 9 look back.
+    pub actions: u32,
+    /// The camera's near plane as the last mode left it (a car camera keeps it).
+    pub near: f32,
+    /// `CameraOnBoard`: the cockpit's settings and what it remembers.
+    pub cockpit: CockpitCamera,
+    /// `CameraDrivableManager`: `accGXMul`, `accGZMul`, `chaseCamFilter`, `rotationDegrees`,
+    /// `rotationSpeed` (the look keys), and the turns the look keys have made.
+    pub acc_gx_mul: f32,
+    pub acc_gz_mul: f32,
+    pub chase_filter: f32,
+    pub rotation_degrees: f32,
+    pub rotation_speed: f32,
+    rotation_animation: f32,
+    rotation_chase: f32,
     /// `CameraDrivableManager::chaseCamData`: distance, height, pitch (radians) of the two chase
     /// cameras (the ChaseCam Editor changes the first one live)
     pub chase: [(f32, f32, f32); 2],
@@ -461,7 +537,24 @@ const CHASE: [(f32, f32, f32); 2] = [(3.0, 1.4, 0.034_906), (3.9, 1.9, -0.017_45
 impl DrivingCamera {
     /// The first chase view.
     pub fn chase() -> DrivingCamera {
-        DrivingCamera { mode: CameraMode::Drivable, drivable: Drivable::Chase, last_driving: CameraMode::Drivable, car_index: 0, current_offset: [0.0; 3], started: false, chase: CHASE }
+        DrivingCamera {
+            mode: CameraMode::Drivable,
+            drivable: Drivable::Chase,
+            last_driving: CameraMode::Drivable,
+            car_index: 0,
+            current_offset: [0.0; 3],
+            actions: 0,
+            near: 0.05,
+            cockpit: CockpitCamera::default(),
+            acc_gx_mul: 0.4,
+            acc_gz_mul: -0.2,
+            chase_filter: 3.0,
+            rotation_degrees: 60.0,
+            rotation_speed: 1.0,
+            rotation_animation: 0.0,
+            rotation_chase: 0.0,
+            chase: CHASE,
+        }
     }
 
     /// `CameraDrivableManager::initChaseCamFromINI` 0x1400c61c0: `CHASE_0` / `CHASE_1`'s
@@ -525,7 +618,6 @@ impl DrivingCamera {
             CameraMode::Car => self.last_driving,
         };
         self.last_driving = self.mode;
-        self.started = false;
     }
 
     /// `CameraDrivableManager::setCurrentCamera` 0x1400c6960: one of the five views (another
@@ -545,7 +637,6 @@ impl DrivingCamera {
             _ => return,
         };
         self.last_driving = self.mode;
-        self.started = false;
     }
 
     /// `setMode(eCar)` then `CameraCarManager::setCurrentCamera(index)`, as `ac.setCameraCar`
@@ -553,7 +644,6 @@ impl DrivingCamera {
     pub fn set_car_camera(&mut self, index: usize) {
         self.mode = CameraMode::Car;
         self.car_index = index;
-        self.started = false;
     }
 
     /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
@@ -586,7 +676,6 @@ impl DrivingCamera {
             self.mode = CameraMode::Car;
             self.car_index = self.car_index.min(count - 1);
         }
-        self.started = false;
     }
 
     /// The view's name, for the display.
@@ -598,67 +687,135 @@ impl DrivingCamera {
         }
     }
 
-    /// The camera for a car as it is drawn now; `dt` is the time since the last frame, `acc_g`
-    /// the car's acceleration in g (body axes).
+    /// The camera for a car as it is drawn now; `dt` is the time since the last frame (the
+    /// replay's time multiplier already in it), `acc_g` the car's acceleration in g (body axes).
     pub fn update(&mut self, view: &CarView, shape: &CarShape, acc_g: [f32; 3], dt: f32) -> CameraFrame {
-        // `CarAvatar::makeBodyMatrix`: the axes of the car's 3D model, which the cameras use
-        let body = &rotate_pitch(&view.body, shape.graphics_pitch);
-        // the whole matrix of the 3D model (`CarAvatar::bodyMatrix`): its origin is the
-        // centre of mass moved by `GRAPHICS_OFFSET`
+        // `CarAvatar::bodyMatrix` (`makeBodyMatrix`): the car's 3D model, which the cameras use
         let model = model_matrix(&view.body, shape);
         if self.mode == CameraMode::Car && shape.car_cameras.is_empty() {
             self.mode = self.last_driving;
         }
-        match (self.mode, self.drivable) {
-            (CameraMode::Cockpit, _) => {
-                // rolls and pitches with the car (`IS_WORLD_ALIGNED=0`)
-                let heading = normalized(row(body, 2));
-                let up = normalized(row(body, 1));
-                let eye = point(&view.body, shape.eye);
-                let matrix = rotate_pitch(&set_from_heading_up(heading, up, eye), shape.eye_pitch);
-                self.started = false;
-                return CameraFrame { matrix, fov: shape.onboard_fov, near: 0.05 };
-            }
-            (CameraMode::Car, _) => {
+        let frame = match self.mode {
+            CameraMode::Cockpit => self.cockpit(view, shape, &model, acc_g, dt),
+            CameraMode::Car => {
                 // CameraCarManager::update: the camera's own matrix in the frame of the model,
-                // with the camera's own field of view; bolted on, nothing moves it
-                self.car_index = self.car_index.min(shape.car_cameras.len() - 1);
+                // with its own field of view; the near plane is the last mode's
+                if self.car_index >= shape.car_cameras.len() {
+                    self.car_index = 0;
+                }
                 let camera = &shape.car_cameras[self.car_index];
                 let matrix = xm_matrix_multiply(&Mat44f { m: camera.matrix }, &Mat44f { m: model }).m;
-                self.started = false;
-                return CameraFrame { matrix, fov: camera.fov, near: 0.05 };
+                CameraFrame { matrix, fov: camera.fov, near: self.near }
             }
-            (CameraMode::Drivable, Drivable::Bonnet | Drivable::Bumper | Drivable::Dash) => {
-                // updateBonnet @ 0x1400c6ba0, updateBumper @ 0x1400c6df0, updateDash @ 0x1400c7b50.
-                // As in the game: the bonnet view is all on the physics body; the bumper view
-                // takes its axes from the model and its place from the body; the dash view
-                // the other way round, and it has the cockpit's field of view and no pitch.
-                let (axes, pitch, position, fov) = match self.drivable {
-                    Drivable::Bonnet => ((row(&view.body, 2), row(&view.body, 1)), shape.bonnet_pitch, point(&view.body, shape.bonnet_pos), 60.0),
-                    Drivable::Bumper => ((normalized(row(&model, 2)), normalized(row(&model, 1))), shape.bumper_pitch, point(&view.body, shape.bumper_pos), 60.0),
-                    _ => ((row(&view.body, 2), row(&view.body, 1)), 0.0, point(&model, shape.dash_pos), shape.onboard_fov),
-                };
-                let mut matrix = rotate_pitch(&set_from_heading_up(axes.0, axes.1, [0.0; 3]), pitch);
-                matrix[3] = [position[0], position[1], position[2], 1.0];
-                self.started = false;
-                return CameraFrame { matrix, fov, near: 0.05 };
+            CameraMode::Drivable => self.drivable_view(view, shape, &model, acc_g, dt),
+        };
+        self.near = frame.near;
+        frame
+    }
+
+    /// `CameraOnBoard::update` 0x1400c9ea0 (no TrackIR, no VR).
+    fn cockpit(&mut self, view: &CarView, shape: &CarShape, model: &Mat, acc_g: [f32; 3], dt: f32) -> CameraFrame {
+        let c = &mut self.cockpit;
+        let mut heading = normalized(row(model, 2));
+        let mut up = normalized(row(model, 1));
+        if c.world_aligned {
+            let length = (heading[2] * heading[2] + heading[0] * heading[0]).sqrt();
+            heading[1] = 0.0;
+            if length != 0.0 {
+                let k = 1.0 / length;
+                heading = [heading[0] * k, 0.0 * k, heading[2] * k];
             }
-            _ => {}
+            up = [0.0, 1.0, 0.0];
         }
+        let eye = point(model, shape.eye_model);
+        let m = model;
+        // the head moves with the g forces, lagging
+        let g = [c.g_force_mix[0] * acc_g[0], c.g_force_mix[1] * acc_g[1], c.g_force_mix[2] * acc_g[2]];
+        let target = [g[1] * m[1][0] + g[0] * m[0][0] + g[2] * m[2][0], g[1] * m[1][1] + g[0] * m[0][1] + g[2] * m[2][1], g[1] * m[1][2] + g[0] * m[0][2] + g[2] * m[2][2]];
+        for (offset, target) in c.g_force_offset.iter_mut().zip(target) {
+            *offset = target + (*offset - target) * c.g_force_lag_mix;
+        }
+        // and shakes with the speed (`SignalGenerator3D<SinSignalGenerator>`)
+        let k = if c.still_camera { 0.0 } else { clamp_to(view.speed_ms * 0.01, 0.0, 1.0) };
+        for i in 0..3 {
+            let step = ((c.rand.next() as f32 * RAND_UNIT * dt - dt) * 0.0 + dt) * 1000.0 * c.shake_freq_now[i];
+            c.shake[i] = c.shake[i].wrapping_add(if step > -2147483648.0 && step < 2147483648.0 { step as i32 } else { i32::MIN });
+            c.shake_freq_now[i] = k * c.shake_freq[i];
+        }
+        let s: Vec<f32> = (0..3).map(|i| rustyac_math::sinf(c.shake[i] as f32 * 0.001) * (k * c.shake_scale[i])).collect();
+        let fade = clamp_to(view.speed_ms * 0.3, 0.0, 1.0);
+        let o = c.g_force_offset;
+        // (the machine adds the shake up first, then the head's offset)
+        let shake: Vec<f32> = (0..3).map(|j| s[0] * m[0][j] + s[1] * m[1][j] + s[2] * m[2][j]).collect();
+        let position = [(c.shake_mul * o[0] + shake[0]) * fade + eye[0], (c.shake_mul * o[1] + shake[1]) * fade + eye[1], (c.shake_mul * o[2] + shake[2]) * fade + eye[2]];
+        let mut matrix = set_from_heading_up(heading, up, position);
+        let a = self.actions;
+        if a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0) {
+            // CameraOnBoard::lookBack 0x1400c9a60
+            let p = point(model, shape.look_back);
+            matrix[3] = [p[0], p[1], p[2], matrix[3][3]];
+            matrix = rotate_heading(&matrix, LOOK_BACK);
+        } else {
+            // lookLeftRight 0x1400c9b80
+            let direction = if a >> 1 & 1 != 0 { -1.0 } else if a & 1 != 0 { 1.0 } else { 0.0 };
+            c.head_animation = turn_head(c.head_animation, direction, c.head_rotation_degrees, dt * c.head_rotation_speed);
+            matrix = rotate_pitch(&rotate_heading(&matrix, c.yaw + c.head_animation), shape.eye_pitch);
+        }
+        CameraFrame { matrix, fov: shape.onboard_fov, near: 0.05 }
+    }
+
+    /// `CameraDrivableManager::update` 0x1400c6a30 and its views, then `updateLook` 0x1400c7de0.
+    fn drivable_view(&mut self, view: &CarView, shape: &CarShape, model: &Mat, acc_g: [f32; 3], dt: f32) -> CameraFrame {
+        let a = self.actions;
+        let back = a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0);
+        let (mut matrix, fov, near) = match self.drivable {
+            Drivable::Chase | Drivable::Chase2 => return self.chase_view(view, model, acc_g, dt),
+            // updateBonnet @ 0x1400c6ba0, updateBumper @ 0x1400c6df0, updateDash @ 0x1400c7b50:
+            // the bonnet view is all on the physics body; the bumper view takes its axes from
+            // the model and its place from the body; the dash view the other way round, with
+            // the cockpit's field of view and no pitch
+            Drivable::Bonnet => {
+                let mut m = rotate_pitch(&set_from_heading_up(row(&view.body, 2), row(&view.body, 1), [0.0; 3]), shape.bonnet_pitch);
+                let p = point(&view.body, shape.bonnet_pos);
+                m[3] = [p[0], p[1], p[2], 1.0];
+                (m, 60.0, 0.05)
+            }
+            Drivable::Bumper => {
+                let mut m = rotate_pitch(&set_from_heading_up(normalized(row(model, 2)), normalized(row(model, 1)), [0.0; 3]), shape.bumper_pitch);
+                let p = point(&view.body, shape.bumper_pos);
+                m[3] = [p[0], p[1], p[2], 1.0];
+                (m, 60.0, 0.05)
+            }
+            Drivable::Dash => (set_from_heading_up(row(&view.body, 2), row(&view.body, 1), point(model, shape.dash_pos)), shape.onboard_fov, 0.05),
+        };
+        if back {
+            // CameraDrivableManager::lookBack 0x1400c6660
+            let p = point(model, shape.drivable_look_back);
+            matrix[3] = [p[0], p[1], p[2], matrix[3][3]];
+            matrix = rotate_heading(&matrix, LOOK_BACK);
+        } else {
+            let direction = if a >> 1 & 1 != 0 { -1.0 } else if a & 1 != 0 { 1.0 } else { 0.0 };
+            self.rotation_animation = turn_head(self.rotation_animation, direction, self.rotation_degrees, dt * self.rotation_speed);
+            matrix = rotate_heading(&matrix, shape.drivable_yaw + self.rotation_animation);
+        }
+        CameraFrame { matrix, fov, near }
+    }
+
+    /// `CameraDrivableManager::updateChase` 0x1400c7120.
+    fn chase_view(&mut self, view: &CarView, body: &Mat, acc_g: [f32; 3], dt: f32) -> CameraFrame {
         let (distance, height, pitch) = self.chase[(self.drivable == Drivable::Chase2) as usize];
         // an upside-down car is looked at from below
-        let h = if 0.0 >= body[1][1] { -height } else { height };
-        let kmh = view.speed_kmh;
-        let k = (kmh * 0.1).clamp(0.0, 1.0);
-        let gx = (acc_g[0] * 0.4).clamp(-0.5, 0.5);
-        let gz = (acc_g[2] * -0.2).clamp(-0.5, 0.5);
-        let target = [gx * k, h, -distance + gz * k];
+        let h = if 0.0 < view.body[1][1] { height } else { -height };
+        let kmh = view.speed_ms * 3.6;
+        let k = clamp_to(kmh * 0.1, 0.0, 1.0);
+        let gx = clamp_to(acc_g[0] * self.acc_gx_mul, -0.5, 0.5);
+        let gz = clamp_to(acc_g[2] * self.acc_gz_mul, -0.5, 0.5);
+        let target = [0.0 + gx * k, h, -distance + gz * k];
         let e = sub(self.current_offset, target);
-        if !self.started || dot(e, e) >= 2.0 || kmh < 2.0 {
+        if 2.0 <= e[1] * e[1] + e[0] * e[0] + e[2] * e[2] || kmh < 2.0 {
             self.current_offset = target;
-            self.started = true;
         } else {
-            let f = (dt * 3.0).clamp(0.0, 1.0);
+            let f = clamp_to(dt * self.chase_filter, 0.0, 1.0);
             for (offset, target) in self.current_offset.iter_mut().zip(target) {
                 *offset += (target - *offset) * f;
             }
@@ -669,9 +826,93 @@ impl DrivingCamera {
         let eye = add(add(add(times(row(body, 0), o[0]), times(row(body, 1), o[1])), times(row(body, 2), o[2])), p);
         // a point 4 m ahead of the rear axle
         let look = add(p, times(row(body, 2), 4.0));
-        let matrix = rotate_pitch(&create_target(eye, look), pitch);
+        let mut matrix = rotate_pitch(&create_target_exact(eye, look), pitch);
+        // the look keys turn the camera about the car (and leave the pitch out)
+        let a = self.actions;
+        let step = dt * self.rotation_speed;
+        let (angle, z) = if a >> 9 & 1 != 0 || (a & 1 != 0 && a >> 1 & 1 != 0) {
+            (LOOK_BACK, -distance - 2.0)
+        } else {
+            let direction = if a & 1 != 0 { 1.0 } else if a >> 1 & 1 != 0 { -1.0 } else { 0.0 };
+            let r = self.rotation_chase;
+            if r == 0.0 && direction == 0.0 {
+                return CameraFrame { matrix, fov: 60.0, near: 1.0 };
+            }
+            if direction != 0.0 {
+                let turned = direction * step + r;
+                if turned.abs() < self.rotation_degrees * 0.017_453 {
+                    self.rotation_chase = turned;
+                }
+            } else if r.abs() <= step * 2.0 * 0.017_453 {
+                self.rotation_chase = 0.0;
+            } else {
+                self.rotation_chase = -(sign(r) * step) + r;
+                if sign(r) != sign(self.rotation_chase) {
+                    self.rotation_chase = 0.0;
+                }
+            }
+            (self.rotation_chase, -distance)
+        };
+        let turn = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), angle).m;
+        let at = point(&turn, [0.0, h, z]);
+        let ahead = point(&turn, times(row(body, 2), 4.0));
+        let position = point(body, at);
+        matrix = create_target_exact(position, add(row(body, 3), ahead));
         CameraFrame { matrix, fov: 60.0, near: 1.0 }
     }
+}
+
+/// `Camera::rotateHeading`'s look back: 3.14154 (not quite pi).
+const LOOK_BACK: f32 = f32::from_bits(0x4049_0efe);
+
+/// The game's `if (x <= hi) { if (x < lo) lo else x } else hi` (a NaN is `hi`).
+fn clamp_to(x: f32, lo: f32, hi: f32) -> f32 {
+    if x <= hi {
+        if x < lo {
+            lo
+        } else {
+            x
+        }
+    } else {
+        hi
+    }
+}
+
+/// The game's sign: 1, 0, -1 (a NaN is 1).
+fn sign(x: f32) -> f32 {
+    if x <= 0.0 {
+        if 0.0 <= x {
+            0.0
+        } else {
+            -1.0
+        }
+    } else {
+        1.0
+    }
+}
+
+/// `CameraOnBoard::lookLeftRight`'s and `CameraDrivableManager::updateLook`'s head turn: toward
+/// `direction` × `degrees` at `step` radians a frame, back to 0 the same way.
+fn turn_head(animation: f32, direction: f32, degrees: f32, step: f32) -> f32 {
+    let target = (direction * degrees).abs() * 0.017_453;
+    if step < target - animation.abs() {
+        return direction * step + animation;
+    }
+    if target != 0.0 && sign(direction) == sign(animation) {
+        return target * direction;
+    }
+    let back = (animation.abs() - step) * sign(animation);
+    if back.abs() - step < step {
+        0.0
+    } else {
+        back
+    }
+}
+
+/// `Camera::rotateHeading` 0x14020f9a0: a turn about the camera's own y axis.
+pub fn rotate_heading(camera: &Mat, angle: f32) -> Mat {
+    let turn = Mat44f::create_from_axis_angle(&Vec3f::new(0.0, 1.0, 0.0), angle);
+    xm_matrix_multiply(&turn, &Mat44f { m: *camera }).m
 }
 
 /// `CameraModeStart` (`eStart`, ctor 0x14005f940, `updateCar` 0x140060470): the camera of a
@@ -1065,6 +1306,7 @@ mod tests {
         let mut camera = DrivingCamera::chase();
         let mut view = standing();
         view.speed_kmh = 150.0;
+        view.speed_ms = 150.0 / 3.6;
         camera.update(&view, &CarShape::plain(), [0.0; 3], 0.016);
         // 2 g sideways: the target is 0.5 m to the side (the clamp), approached by dt * 3
         let frame = camera.update(&view, &CarShape::plain(), [2.0, 0.0, 0.0], 0.1);
@@ -1072,6 +1314,7 @@ mod tests {
         assert!((x - 0.15).abs() < 1e-4, "{x}");
         // standing still there is no lag at all
         view.speed_kmh = 0.0;
+        view.speed_ms = 0.0;
         assert_eq!(camera.update(&view, &CarShape::plain(), [2.0, 0.0, 0.0], 0.1).matrix[3][0], 0.0);
     }
 
