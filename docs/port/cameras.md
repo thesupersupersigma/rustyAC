@@ -46,7 +46,21 @@
   seeds 1 and 2 IDENTICAL (60,120 lines on seed 2: 2,665 spins, 2,832 editor buttons, 827
   photo starts, 412 backs, 1,510 loads). The page has no apps: only the spinner's set and the
   mode kept apply there (no AC replay either).
-- Next: steps 6-7.
+- Step 6: Python's camera calls proven on the game's code. `ac.setCameraMode` (0x14012d7d0)
+  is `randomMode = 0; setMode(v, false, false)`, or for 7 `setMode(eTrack)` then `randomMode =
+  1`: the random tape now calls it with 0..7 on the same manager (seed 2: 1,477 calls, every
+  mode), the port runs it as the desktop does (`camera.random &= mode == 7`, then
+  `onboard_free::set_mode`; before this the desktop kept the random camera's flag, so 0 from a
+  drivable view the random camera chose went to the last driving camera instead of cycling).
+  `ac.freeCamera*` move the scene camera (`CameraMouseControlBase::getCamera`) with
+  `Camera::moveForward` / `moveRight` / `moveUpWorld` / `rotatePitch` / `rotateHeading` /
+  `rotateRoll`: the free tape now mixes them with the free camera's steps (seed 2: 14,993 calls),
+  checked on the port's `MouseCamera`. Both seeds 1 and 2: all six tapes IDENTICAL.
+  `ac.getCameraMode` / `ac.isCameraOnBoard` now read this frame's camera manager mode and dash
+  view (they kept the mode Python last asked for, and the dash flag never changed); the free
+  camera counts as `eFree` (6) for them and the GUI. Shortcut kept: right after its own
+  `setCameraMode` an app reads the mode it asked until the next frame. The page runs no Python.
+- Next: step 7.
 
 ## Resume here
 

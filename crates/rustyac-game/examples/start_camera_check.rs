@@ -94,10 +94,26 @@ fn main() {
             }
             let (input, output) = line.split_once(" -> ").expect("a line of the tape");
             let v: Vec<&str> = input.split(' ').collect();
-            let keys = u32::from_str_radix(v[1], 16).expect("keys");
-            let held = |bit: u32| keys & (1 << bit) != 0;
-            let input = MouseCameraInput { shift: held(0), ctrl: held(1), up: held(2), down: held(3), left: held(4), right: held(5), look: held(6), cursor: (v[2].parse().expect("x"), v[3].parse().expect("y")) };
-            let frame = free.as_mut().expect("a free camera").update(&input, float(v[4]));
+            let camera = free.as_mut().expect("a free camera");
+            let frame = if v[0] == "py" {
+                // Python's ac.freeCameraMoveForward / MoveRight / MoveUpWorld / RotatePitch /
+                // RotateHeading / RotateRoll, as the desktop carries them out
+                let a = float(v[2]);
+                match v[1] {
+                    "0" => camera.move_forward(a),
+                    "1" => camera.move_right(a),
+                    "2" => camera.move_up_world(a),
+                    "3" => camera.rotate(0, a),
+                    "4" => camera.rotate(1, a),
+                    _ => camera.rotate(2, a),
+                }
+                camera.frame()
+            } else {
+                let keys = u32::from_str_radix(v[1], 16).expect("keys");
+                let held = |bit: u32| keys & (1 << bit) != 0;
+                let input = MouseCameraInput { shift: held(0), ctrl: held(1), up: held(2), down: held(3), left: held(4), right: held(5), look: held(6), cursor: (v[2].parse().expect("x"), v[3].parse().expect("y")) };
+                camera.update(&input, float(v[4]))
+            };
             let port: Vec<u32> = frame.matrix.iter().flatten().map(|x| x.to_bits()).collect();
             let game: Vec<u32> = output.split(' ').map(|x| float(x).to_bits()).collect();
             if port != game {
@@ -156,6 +172,7 @@ fn random(tape: &str, seed: u32) -> bool {
             camera.set_last_driving(if n[3] == 0 { CameraMode::Cockpit } else { CameraMode::Drivable });
             camera.car_index = n[5] as usize;
             track = TrackCameras { sets: vec![CameraSet::default(); n[0] as usize], current_set: n[6] as usize, ..TrackCameras::default() };
+            camera.track_sets = track.sets.len();
             camera.track_set = track.current_set;
             let t: Vec<f32> = w[7..10].iter().map(|x| float(x)).collect();
             random = RandomCamera { min_time: t[0], max_time: t[1], time: t[2], old_time: 0.0, probabilities: [0, 1, 2, 3].map(|i| w[10 + i].parse().unwrap()), last: 3 };
@@ -203,6 +220,12 @@ fn random(tape: &str, seed: u32) -> bool {
             }
             ("photo", _) => mode_to(6, &mut camera, &mut track, &mut free),
             ("photoback", v) => mode_to(v.parse().unwrap(), &mut camera, &mut track, &mut free),
+            // Python's ac.setCameraMode: randomMode off first (7: on after the track's cameras)
+            ("py", v) => {
+                let mode = v.parse().unwrap();
+                camera.random &= mode == 7;
+                mode_to(mode, &mut camera, &mut track, &mut free);
+            }
             ("load", _) => {
                 free = None;
                 if let Some(mode) = camera.load_previous() {
@@ -215,16 +238,10 @@ fn random(tape: &str, seed: u32) -> bool {
         if let Some(g) = camera.global_index().filter(|_| set_mode && free.is_none()) {
             global = g;
         }
-        let mode = match camera.mode {
-            _ if free.is_some() => 6,
-            CameraMode::Cockpit => 0,
-            CameraMode::Car => 1,
-            CameraMode::Drivable => 2,
-            CameraMode::Track => 3,
-        };
+        let mode = if free.is_some() { 6 } else { camera.manager_mode() };
         let last = if camera.last_driving() == CameraMode::Cockpit { 0 } else { 2 };
         let mut drivable = camera;
-        drivable.mode = CameraMode::Drivable;
+        (drivable.mode, drivable.shown) = (CameraMode::Drivable, None);
         let view = drivable.global_index().expect("a drivable view") - 1;
         let port = format!(
             "{mode} {last} {view} {} {} {} {} {:08x} {:08x} {:08x} {global} {} {}",

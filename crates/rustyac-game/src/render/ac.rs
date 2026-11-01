@@ -1637,6 +1637,7 @@ impl AcRenderer {
                 let camera = &self.camera.forward.base.camera;
                 let (matrix, view_matrix, perspective) = (camera.matrix, camera.get_view_matrix(), camera.get_perspective_matrix(&self.graphics));
                 let mode = driving.manager_mode();
+                gui.drivable_dash = driving.drivable == super::scene::Drivable::Dash;
                 gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
                 // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)

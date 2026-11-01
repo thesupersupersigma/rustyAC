@@ -276,9 +276,21 @@ pub unsafe fn free_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String, S
         CURSOR[0].store(x, Ordering::Relaxed);
         CURSOR[1].store(y, Ordering::Relaxed);
         let dt = if rng.next().is_multiple_of(20) { rng.float(0.0, 0.5) } else { rng.float(0.004, 0.034) };
-        update(base, dt);
-        write!(tape, "step {keys:x} {x} {y}").unwrap();
-        bits(&mut tape, &[dt]);
+        if rng.next().is_multiple_of(4) {
+            // Task 46b: Python's ac.freeCamera* on the same camera (ac_freeCameraMoveForward
+            // 0x140129040 ...: Camera::moveForward, moveRight, moveUpWorld, rotatePitch,
+            // rotateHeading, rotateRoll)
+            let op = (rng.next() % 6) as usize;
+            let v = if op < 3 { rng.float(-20.0, 20.0) } else { rng.float(-0.5, 0.5) };
+            let call: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va([0x1_4020_f0a0, 0x1_4020_f0f0, 0x1_4020_f130, 0x1_4020_fa80, 0x1_4020_f940, 0x1_4020_fb30][op]));
+            call(camera, v);
+            write!(tape, "py {op}").unwrap();
+            bits(&mut tape, &[v]);
+        } else {
+            update(base, dt);
+            write!(tape, "step {keys:x} {x} {y}").unwrap();
+            bits(&mut tape, &[dt]);
+        }
         tape.push_str(" ->");
         let matrix: Vec<f32> = (0..16).map(|i| rd(camera, 0x0c + 4 * i)).collect();
         bits(&mut tape, &matrix);
@@ -962,6 +974,20 @@ pub unsafe fn random_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String,
                         photo = None;
                         load_previous(manager);
                     }
+                }
+            } else if r == 10 {
+                // Python's ac.setCameraMode (ac_setCameraMode 0x14012d7d0)
+                let v = (rng.next() % 8) as i32;
+                // (the car's cameras on a car without any: as for F6 above)
+                let v = if cameras == 0 && v == 1 { 2 } else { v };
+                write!(tape, "py {v}").unwrap();
+                photo = None;
+                if v == 7 {
+                    set_mode(manager, 3, false, false);
+                    wr(manager, 0x108, 1u8);
+                } else {
+                    wr(manager, 0x108, 0u8);
+                    set_mode(manager, v, false, false);
                 }
             } else if r < 4 {
                 let key = [1, 2, 3, 6][r as usize];
