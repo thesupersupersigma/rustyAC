@@ -518,3 +518,249 @@ pub unsafe fn driving_micro(acs: &Acs, seed: u32, steps: usize) -> Result<String
     }
     Ok(tape)
 }
+
+const VA_CAMERA_MANAGER: usize = 0x1_401f_45f0;
+const VA_DISTANCE_RANGES: usize = 0x1_401f_48b0;
+const VA_SPLINE: usize = 0x1_401e_d180;
+const VA_SPLINE_LOAD_CSV: usize = 0x1_401e_e3c0;
+const VA_TRACK_UPDATE: usize = 0x1_400c_be30;
+const VA_TRACK_NEXT_SET: usize = 0x1_400c_bc90;
+const VA_FROM_AXIS_ANGLE: usize = 0x1_4005_71a0;
+const VA_SPLINE_APPLY_MATRIX: usize = 0x1_401e_d730;
+
+/// The body node's `getWorldMatrix` (vtable +0x40): the matrix the tape put at node + 8.
+extern "C" fn world_matrix(node: *const u8, out: *mut u8) -> *mut u8 {
+    unsafe { std::ptr::copy_nonoverlapping(node.add(8), out, 64) };
+    out
+}
+
+/// A `std::wstring` of the game's, as text.
+unsafe fn read_wstring(string: *const u8) -> String {
+    let len: usize = rd(string, 0x10);
+    let at = if rd::<usize>(string, 0x18) < 8 { string.cast::<u16>() } else { rd::<usize>(string, 0) as *const u16 };
+    String::from_utf16_lossy(std::slice::from_raw_parts(at, len))
+}
+
+/// The folders (relative to `ac`) whose `data/cameras.ini` the game reads as a track's TV
+/// cameras: every track and every layout.
+fn camera_folders(ac: &std::path::Path) -> Vec<String> {
+    let names = |dir: &std::path::Path| {
+        let mut v: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten().filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    };
+    let mut folders = Vec::new();
+    for track in names(&ac.join("content/tracks")) {
+        let base = format!("content/tracks/{track}");
+        if ac.join(&base).join("data/cameras.ini").is_file() {
+            folders.push(base.clone());
+        }
+        for layout in names(&ac.join(&base)) {
+            if layout != "data" && ac.join(&base).join(&layout).join("data/cameras.ini").is_file() {
+                folders.push(format!("{base}/{layout}"));
+            }
+        }
+    }
+    folders
+}
+
+/// Task 46: F3, the track's TV cameras. For every track and layout of the AC folder `ac`, the
+/// game's own `CameraManager` on each of its `cameras*.ini` (as `CameraTrack::loadSet` does:
+/// `cameras.ini`, `cameras_1.ini` ... to the first missing one, the cameras' paths through
+/// `Spline::loadFromCSV`) and `initCamerasDistanceRanges` on a made-up AI line around the
+/// cameras; then the game's `CameraTrack::update` on a made-up car going along that line,
+/// with F3 again (`nextSet`) now and then, the pause's still camera and a replay's speed.
+///
+/// Lines: `group <folder> <sets>`, `line <points xyz ...>`, `cfg <upward offset> <wobbling
+/// speed> <wobbling strength>`, per set `set <cameras> <SET_NAME>`, per camera `cam <name
+/// length> <fields ...> <dof manual> <fixed> <path name length> | <path points xyz ...>`, per
+/// frame `f <next set 0|1> <still 0|1> <in replay 0|1> <replay speed> <body 16> <steer 3>
+/// <lap place> <speed> <dt> -> <matrix 16> <fov> <near> <far> <min exposure> <max exposure>
+/// <dof factor> <dof focus> <dof range> <+0x19c>`.
+pub unsafe fn track_micro(acs: &Acs, ac: &std::path::Path, seed: u32, steps: usize) -> Result<String, String> {
+    acs.patch(acs.va(VA_SET_SHADOW_MAPS_SPLITS), &[0xc3]);
+    acs.patch(acs.va(VA_SET_LISTENER), &[0xc3]);
+    let manager_ctor: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_CAMERA_MANAGER));
+    let ranges: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_DISTANCE_RANGES));
+    let spline_ctor: extern "C" fn(*mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_SPLINE));
+    let load_csv: extern "C" fn(*mut u8, *mut u8) = std::mem::transmute(acs.va(VA_SPLINE_LOAD_CSV));
+    let update: extern "C" fn(*mut u8, f32) = std::mem::transmute(acs.va(VA_TRACK_UPDATE));
+    let next_set: extern "C" fn(*mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs.va(VA_TRACK_NEXT_SET));
+    let from_axis_angle: extern "C" fn(*mut u8, *const f32, f32) -> *mut u8 = std::mem::transmute(acs.va(VA_FROM_AXIS_ANGLE));
+    let apply_matrix: extern "C" fn(*mut u8, *const u8) = std::mem::transmute(acs.va(VA_SPLINE_APPLY_MATRIX));
+    let folders = camera_folders(ac);
+    if folders.is_empty() {
+        return Err(format!("{}: no track with data/cameras.ini", ac.display()));
+    }
+    let frames = (steps / folders.len()).max(50);
+    let mut tape = String::new();
+    let mut rng = Rng(seed as u64 ^ 0x7ac3);
+    let camera_vtable = acs.alloc(0x200);
+    for slot in 0..64 {
+        wr(camera_vtable, slot * 8, acs.va(VA_SET_LISTENER));
+    }
+    let node_vtable = acs.alloc(0x100);
+    wr(node_vtable, 0x40, world_matrix as *const () as usize);
+    let cams = |m: *mut u8| (rd::<usize>(m, 8), (rd::<usize>(m, 0x10) - rd::<usize>(m, 8)) / 0xf8);
+    for folder in &folders {
+        // the sets, as `loadSet` finds them
+        let data = ac.join(folder).join("data");
+        let mut managers = Vec::new();
+        for n in 0.. {
+            let file = data.join(if n == 0 { "cameras.ini".to_string() } else { format!("cameras_{n}.ini") });
+            if !file.is_file() {
+                break;
+            }
+            let manager = acs.alloc(0x48);
+            manager_ctor(manager, wstring(acs, &file.to_string_lossy()));
+            managers.push(manager);
+        }
+        writeln!(tape, "group {folder} {}", managers.len()).unwrap();
+        // a made-up AI line around the first set's cameras
+        let (first, count) = cams(managers[0]);
+        let n = 100 + (rng.next() % 3000) as usize;
+        let line = acs.alloc(0x28);
+        spline_ctor(line);
+        let points = vector(acs, line.add(8), 0x14, n);
+        let mut xyz = Vec::with_capacity(3 * n);
+        for i in 0..n {
+            let p = if count == 0 {
+                [0.0; 3]
+            } else {
+                let c = (first + 0xf8 * (rng.next() as usize % count)) as *const u8;
+                [rd::<f32>(c, 0x58), rd::<f32>(c, 0x5c), rd::<f32>(c, 0x60)]
+            };
+            let q = [p[0] + rng.float(-150.0, 150.0), p[1] + rng.float(-8.0, 2.0), p[2] + rng.float(-150.0, 150.0)];
+            put(points, 0x14 * i, &q, &mut xyz);
+        }
+        tape.push_str("line");
+        bits(&mut tape, &xyz);
+        tape.push('\n');
+        // the settings of system/cfg/camera_track.ini: AC's own, or made up
+        let cfg = if rng.next().is_multiple_of(2) { [0.0, 0.001, 0.08] } else { [rng.float(-1.0, 2.0), rng.float(0.0, 0.01), rng.float(0.0, 0.5)] };
+        tape.push_str("cfg");
+        bits(&mut tape, &cfg);
+        tape.push('\n');
+        for &manager in &managers {
+            ranges(manager, line);
+            let (first, count) = cams(manager);
+            writeln!(tape, "set {count} {}", read_wstring(manager.add(0x20))).unwrap();
+            for k in 0..count {
+                let c = (first + 0xf8 * k) as *mut u8;
+                let name = read_wstring(c.add(8));
+                let path_name = read_wstring(c.add(0xb8));
+                if !path_name.is_empty() {
+                    let file = data.join(&path_name);
+                    if file.is_file() {
+                        let spline = acs.alloc(0x28);
+                        spline_ctor(spline);
+                        load_csv(spline, wstring(acs, &file.to_string_lossy()));
+                        wr(c, 0xe0, spline as usize);
+                        // `ucomiss; je`: a turn that is not a number is no turn either
+                        let turn: f32 = rd(c, 0xd8);
+                        if turn != 0.0 && !turn.is_nan() {
+                            let m = acs.alloc(64);
+                            let axis = [0.0f32, 1.0, 0.0];
+                            from_axis_angle(m, axis.as_ptr(), turn * f32::from_bits(0x3c8e_f998));
+                            apply_matrix(spline, m);
+                        }
+                    }
+                }
+                write!(tape, "cam {}", name.encode_utf16().count()).unwrap();
+                let fields = [0x68, 0x6c, 0x70, 0x74, 0x7c, 0x80, 0x84, 0x8c, 0x90, 0x94, 0x98, 0x9c, 0xa0, 0xa4, 0xac, 0xb0, 0xd8, 0xe8, 0xf0];
+                let floats: Vec<f32> = (0..16).map(|i| rd(c, 0x28 + 4 * i)).chain(fields.map(|o| rd::<f32>(c, o))).collect();
+                bits(&mut tape, &floats);
+                write!(tape, " {} {} {} |", rd::<u8>(c, 0xa8), rd::<u8>(c, 0xf4), path_name.encode_utf16().count()).unwrap();
+                let spline: usize = rd(c, 0xe0);
+                if spline != 0 {
+                    let (at, end) = (rd::<usize>(spline as *const u8, 8), rd::<usize>(spline as *const u8, 0x10));
+                    let path: Vec<f32> = (0..(end - at) / 0x14).flat_map(|i| (0..3).map(move |j| *((at + 0x14 * i + 4 * j) as *const f32))).collect();
+                    bits(&mut tape, &path);
+                }
+                tape.push('\n');
+            }
+        }
+        // CameraTrack, its sim, the focused car and the scene camera
+        let sim = acs.alloc(0x400);
+        let car = acs.alloc(0x1200);
+        let car_list = acs.alloc(8);
+        wr(car_list, 0, car as usize);
+        wr(sim, 0x208, car_list as usize);
+        wr(sim, 0x210, car_list as usize + 8);
+        let replay = acs.alloc(0x200);
+        wr(sim, 0x1b0, replay as usize);
+        let node = acs.alloc(0x100);
+        wr(node, 0, node_vtable as usize);
+        wr(car, 0x1b8, node as usize);
+        let camera = acs.alloc(0x800);
+        wr(camera, 0, camera_vtable as usize);
+        for i in 0..4 {
+            wr(camera, 0x0c + 20 * i, 1.0f32);
+        }
+        wr(camera, 0x50 + 0x18, 7usize);
+        let track = acs.alloc(0x200);
+        wr(track, 8, acs.alloc(0x400) as usize);
+        wr(track, 0x90, sim as usize);
+        wr(track, 0x98, camera as usize);
+        let sets = vector(acs, track.add(0x78), 8, managers.len());
+        for (i, m) in managers.iter().enumerate() {
+            wr(sets, 8 * i, *m as usize);
+        }
+        wr(track, 0xb4, cfg[0]);
+        wr(track, 0xb8, cfg[1]);
+        wr(track, 0xbc, cfg[2]);
+        let (mut yaw, mut k) = (rng.float(-3.2, 3.2), rng.next() as usize % n);
+        let (mut still, mut in_replay, mut replay_speed) = (false, false, 1.0f32);
+        for frame in 0..frames {
+            if frame % 100 == 0 {
+                still = rng.next().is_multiple_of(6);
+                in_replay = rng.next().is_multiple_of(5);
+                replay_speed = [1.0, 0.5, 2.0, 0.25, 4.0, 0.0, rng.float(0.0, 4.0)][(rng.next() % 7) as usize];
+            }
+            let next = frame != 0 && rng.next().is_multiple_of(150);
+            if next {
+                next_set(track, acs.alloc(32));
+            }
+            wr(track, 0x70, still as u8);
+            wr(replay, 0x148, in_replay as u8);
+            wr(replay, 0x130, replay_speed);
+            k = (k + (rng.next() % (n as u64 / 100 + 2)) as usize) % n;
+            let place = match rng.next() % 40 {
+                0 => rng.float(-0.2, 1.2),
+                1 => rng.float(0.0, 1.0),
+                _ => k as f32 / n as f32 + rng.float(-0.002, 0.002),
+            };
+            yaw += rng.float(-0.05, 0.05);
+            let r = axes(yaw, rng.float(-0.1, 0.1), rng.float(-0.1, 0.1));
+            let p = [xyz[3 * k] + rng.float(-3.0, 3.0), xyz[3 * k + 1] + rng.float(0.0, 2.0), xyz[3 * k + 2] + rng.float(-3.0, 3.0)];
+            let body = [r[0], r[1], r[2], 0.0, r[3], r[4], r[5], 0.0, r[6], r[7], r[8], 0.0, p[0], p[1], p[2], 1.0];
+            for (i, v) in body.iter().enumerate() {
+                wr(node, 8 + 4 * i, *v);
+            }
+            let steer = [rng.float(-0.4, 0.4), rng.float(0.5, 1.0), rng.float(-0.6, 0.6)];
+            for (i, v) in steer.iter().enumerate() {
+                wr(car, 0x200 + 4 * i, *v);
+            }
+            let speed = if rng.next().is_multiple_of(6) { rng.float(0.0, 0.6) } else { rng.float(0.0, 80.0) };
+            wr(car, 0x984, place);
+            wr(car, 0x4d8, speed);
+            let dt = match rng.next() % 12 {
+                0 => 0.0,
+                1 => rng.float(0.05, 0.5),
+                _ => rng.float(0.004, 0.034),
+            };
+            update(track, dt);
+            write!(tape, "f {} {} {}", next as u8, still as u8, in_replay as u8).unwrap();
+            bits(&mut tape, &[replay_speed]);
+            bits(&mut tape, &body);
+            bits(&mut tape, &steer);
+            bits(&mut tape, &[place, speed, dt]);
+            tape.push_str(" ->");
+            let matrix: Vec<f32> = (0..16).map(|i| rd(camera, 0x0c + 4 * i)).collect();
+            bits(&mut tape, &matrix);
+            bits(&mut tape, &[0x08, 0x70, 0x74, 0x1a0, 0x1a4, 0x1b0, 0x1b4, 0x1b8, 0x19c].map(|o| rd::<f32>(camera, o)));
+            tape.push('\n');
+        }
+    }
+    Ok(tape)
+}

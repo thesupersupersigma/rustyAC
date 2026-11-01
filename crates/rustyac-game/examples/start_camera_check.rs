@@ -13,8 +13,15 @@
 //! game's `CameraOnBoard`, `CameraDrivableManager` and `CameraCarManager` against the port's
 //! `DrivingCamera` (matrix, field of view, near plane).
 //!
-//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape>]]`
+//! With a fourth (`track_camera.tape`) and the AC folder, F3's track cameras: every track's
+//! camera sets as the game's `CameraManager` reads them against the port's `TrackCameras::load`
+//! (every field, the distances to the AI line, the paths' points), and the game's
+//! `CameraTrack::update` against the port's (matrix, field of view, planes, exposures, depth
+//! of field).
+//!
+//! `cargo run --release -p rustyac-game --example start_camera_check -- <start_camera.tape> [<free_camera.tape> [<driving_camera.tape> [<track_camera.tape> <AC folder>]]]`
 
+use rustyac_game::render::track_camera::{TrackCamera, TrackCameras};
 use rustyac_game::render::scene::{CameraFrame, CameraMode, CarCamera, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::view::CarView;
 
@@ -103,6 +110,9 @@ fn main() {
     }
     if let Some(path) = std::env::args().nth(3) {
         failed |= !driving(&std::fs::read_to_string(&path).expect("the driving cameras' tape"));
+    }
+    if let (Some(path), Some(ac)) = (std::env::args().nth(4), std::env::args().nth(5)) {
+        failed |= !track(&std::fs::read_to_string(&path).expect("the track cameras' tape"), std::path::Path::new(&ac));
     }
     if failed {
         std::process::exit(1);
@@ -223,6 +233,111 @@ fn driving(tape: &str) -> bool {
             }
         }
         println!("driving cameras: DIFFERENT in {wrong} of {lines} lines");
+    }
+    wrong == 0
+}
+
+/// The fields of a track camera in the order of the tape's `cam` lines.
+fn camera_fields(c: &TrackCamera) -> Vec<u32> {
+    let mut v: Vec<f32> = c.matrix.iter().flatten().copied().collect();
+    v.extend([c.max_fov, c.min_fov, c.in_point, c.out_point]);
+    v.extend(c.shadow_splits);
+    v.extend([c.near, c.far, c.min_exposure, c.max_exposure, c.dof_factor, c.dof_focus, c.dof_range, c.far_distance, c.near_distance, c.spline_rotation, c.fov_gamma, c.spline_animation_length]);
+    let mut bits: Vec<u32> = v.iter().map(|x| x.to_bits()).collect();
+    bits.extend([c.dof_manual as u32, c.is_fixed as u32, c.spline_file.encode_utf16().count() as u32]);
+    if let Some(spline) = &c.spline {
+        bits.extend(spline.points.iter().flat_map(|p| p.point).map(|x| x.to_bits()));
+    }
+    bits
+}
+
+/// Task 46: F3's track cameras (`track_camera.tape`): the sets as loaded, then the frames.
+fn track(tape: &str, ac: &std::path::Path) -> bool {
+    use rustyac_physics::track::spline::{InterpolatingSpline, SplinePoint};
+    let (mut lines, mut wrong, mut frames, mut cameras) = (0usize, 0usize, 0usize, 0usize);
+    let mut port = TrackCameras::default();
+    let mut folder = String::new();
+    let (mut set, mut camera) = (0usize, 0usize);
+    let mut previous = rustyac_game::view::IDENTITY;
+    let complain = |what: String, wrong: &mut usize| {
+        *wrong += 1;
+        if *wrong <= 5 {
+            println!("DIFFERENT track {what}");
+        }
+    };
+    for text in tape.lines() {
+        lines += 1;
+        let (head, rest) = text.split_once(' ').unwrap_or((text, ""));
+        match head {
+            "group" => {
+                folder = rest.rsplit_once(' ').expect("group").0.to_string();
+                (set, camera) = (0, 0);
+                previous = rustyac_game::view::IDENTITY;
+            }
+            "line" => {
+                let v: Vec<f32> = rest.split(' ').map(float).collect();
+                let mut line = InterpolatingSpline::default();
+                line.points = v.chunks(3).map(|p| SplinePoint { point: [p[0], p[1], p[2]], point_length: 0.0, tag: 0 }).collect();
+                port = TrackCameras::load(&ac.join(&folder), &line, None).expect("the port's sets");
+            }
+            "cfg" => {
+                let v: Vec<f32> = rest.split(' ').map(float).collect();
+                (port.upward_offset, port.wobbling_speed, port.wobbling_strength) = (v[0], v[1], v[2]);
+            }
+            "set" => {
+                let (count, name) = rest.split_once(' ').unwrap_or((rest, ""));
+                let ours = port.sets.get(set);
+                if ours.map(|s| (s.cameras.len(), s.name.as_str())) != Some((count.parse().expect("count"), name)) {
+                    complain(format!("set {folder} #{set}: game {count} {name:?}, port {:?}", ours.map(|s| (s.cameras.len(), &s.name))), &mut wrong);
+                }
+                set += 1;
+                camera = 0;
+            }
+            "cam" => {
+                cameras += 1;
+                let (fields, path) = rest.split_once(" |").expect("cam");
+                let mut v: Vec<&str> = fields.split(' ').collect();
+                let name_length: usize = v.remove(0).parse().expect("name");
+                let mut game: Vec<u32> = v[..35].iter().map(|x| float(x).to_bits()).collect();
+                game.extend(v[35..].iter().map(|x| x.parse::<u32>().expect("flag")));
+                game.extend(path.split(' ').filter(|x| !x.is_empty()).map(|x| float(x).to_bits()));
+                let ours = port.sets.get(set - 1).and_then(|s| s.cameras.get(camera));
+                let same = ours.is_some_and(|c| camera_fields(c) == game && c.name.encode_utf16().count() == name_length);
+                if !same {
+                    complain(format!("camera {folder} set {} #{camera}:\n  game {game:08x?}\n  port {:08x?}", set - 1, ours.map(camera_fields)), &mut wrong);
+                }
+                camera += 1;
+            }
+            "f" => {
+                frames += 1;
+                let (input, output) = rest.split_once(" -> ").expect("a frame");
+                let v: Vec<&str> = input.split(' ').collect();
+                let f: Vec<f32> = v[3..].iter().map(|x| float(x)).collect();
+                if v[0] == "1" {
+                    port.next_set();
+                }
+                port.still = v[1] == "1";
+                let mut body = rustyac_game::view::IDENTITY;
+                for (i, value) in f[1..17].iter().enumerate() {
+                    body[i / 4][i % 4] = *value;
+                }
+                let dt = if v[2] == "1" { f[22] * f[0] } else { f[22] };
+                let frame = port.update(&previous, &body, [f[17], f[18], f[19]], f[20], f[21], dt).expect("a track camera");
+                previous = frame.matrix;
+                let mut ours: Vec<u32> = frame.matrix.iter().flatten().map(|x| x.to_bits()).collect();
+                ours.extend([frame.fov, frame.near, frame.far, frame.min_exposure, frame.max_exposure, frame.dof_factor, frame.dof_focus, frame.dof_range, 30.0].map(f32::to_bits));
+                let game: Vec<u32> = output.split(' ').map(|x| float(x).to_bits()).collect();
+                if ours != game {
+                    complain(format!("frame line {lines} ({folder}, set {}, {}):\n  game {game:08x?}\n  port {ours:08x?}", port.current_set, frame.name), &mut wrong);
+                }
+            }
+            _ => panic!("line {lines}: {head}?"),
+        }
+    }
+    if wrong == 0 {
+        println!("track cameras: IDENTICAL ({cameras} cameras of {} sets, {frames} frames)", tape.lines().filter(|l| l.starts_with("set ")).count());
+    } else {
+        println!("track cameras: DIFFERENT in {wrong} of {lines} lines");
     }
     wrong == 0
 }

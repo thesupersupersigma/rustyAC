@@ -666,7 +666,7 @@ pub fn newer_side_files(data: &Path, fast_lane: &Path) -> Option<(std::path::Pat
 /// `Spline::loadFromCSV` @ 0x1401ee3c0: a point per line, `x,y,z` (or with blanks when the
 /// first line has no comma). A file that ends with a line break gets its last point twice,
 /// as the game's reader reads one more, empty, line.
-fn spline_from_csv(text: &str) -> InterpolatingSpline {
+pub fn spline_from_csv(text: &str) -> InterpolatingSpline {
     let mut spline = InterpolatingSpline::default();
     let mut blanks = None;
     let mut values = [0.0f32; 3];

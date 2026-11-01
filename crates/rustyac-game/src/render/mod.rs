@@ -19,6 +19,7 @@ pub mod hud;
 pub mod models;
 pub mod picture;
 pub mod scene;
+pub mod track_camera;
 
 use windows::core::{Interface, PCSTR};
 use windows::Win32::Foundation::{HMODULE, HWND};
