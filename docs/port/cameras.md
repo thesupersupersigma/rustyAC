@@ -77,7 +77,7 @@ Proven = a game-against-port compare covers it. Before "missing", both the repo 
 | G-force head movement, shake (`CameraOnBoard::update`) | | missing | |
 | Look left / right / back (`lookLeftRight`, `lookBack`, `updateLook`) | look keys | missing | |
 | FOV (`setPlayerFov`), seat position | Numpad +/-, seat keys | missing | |
-| Fade-in (`fadeIn`) | | missing | |
+| Fade-in (`fadeIn`) | F4, menus | half | the focus change's fade is ported and proven (`focus.rs`, sequence 18); the menus' `SimAction::FadeIn` (restart) does nothing on desktop |
 | F3 track cameras and sets (`CameraTrack`) | F3 | missing | |
 | F2 random camera (`stepCameraRandom`) | F2 | missing | |
 | F5 onboard free (`CameraOnBoardFree`) | F5 | missing → 46b | |
