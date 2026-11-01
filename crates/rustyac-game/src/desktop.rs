@@ -19,6 +19,8 @@ use rustyac_game::audio::{AudioSink, Feed, GameAudio};
 use rustyac_game::physics_thread::{self, LoopConfig, Recorder, Shared, StepSink, Timing};
 use rustyac_game::render::hud::HudInfo;
 use rustyac_game::render::models::ModelOptions;
+use rustyac_game::render::onboard_free::{HelicopterCamera, OrbitInput, ShotCamera};
+use rustyac_game::render::track_camera::TrackCameras;
 use rustyac_game::render::scene::{free_camera, CameraFrame, CarShape, DrivingCamera, MouseCamera, MouseCameraInput, StartCamera};
 use rustyac_game::render::ac::{AcOptions, AcRenderer, GraphicsPreset};
 use rustyac_game::ac_replay::{ReplayKey, ReplayRig};
@@ -922,7 +924,7 @@ fn sinks(options: &Options, setup: &SimSetup, feed: &Option<Arc<Mutex<Feed>>>, r
 /// F1 (`setMode(eCockpit)`): from the free or the start camera back to the last driving view,
 /// otherwise the next one.
 fn camera_f1(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>) {
-    if start.take().is_some() | free.take().is_some() {
+    if start.take().is_some() | free.take().is_some() | camera.shown.take().is_some() {
         camera.back_to_driving();
     } else {
         camera.f1();
@@ -931,10 +933,81 @@ fn camera_f1(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: 
 
 /// F6 (`setMode(eCar)`, or the car's next camera when one shows already).
 fn camera_f6(camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, count: usize) {
-    if (start.take().is_some() | free.take().is_some()) && camera.mode == rustyac_game::render::scene::CameraMode::Car {
+    if (start.take().is_some() | free.take().is_some() | camera.shown.take().is_some()) && camera.mode == rustyac_game::render::scene::CameraMode::Car {
         return;
     }
     camera.f6(count);
+}
+
+/// `ACCameraManager::setMode(mode, false, false)` (F5 and F7, Python's `ac.setCameraMode`, the
+/// results' and the pit crew's on-board free camera) on the views rustyac.exe has: 4 the
+/// helicopter, 5 F5, 6 F7 (the cinematic camera when `video_editing.ini` turns it on), 7
+/// `ac_setCameraMode`'s track cameras in random mode. A camera shown anew starts from the
+/// scene camera as the last frame left it (`shot` is made then).
+#[allow(clippy::too_many_arguments)]
+fn set_camera_mode(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, shot: &mut Option<ShotCamera>, last: Option<&CameraFrame>, count: usize, cinematic: bool, track_cameras: &mut TrackCameras) {
+    match mode {
+        0 => camera_f1(camera, start, free),
+        1 if count > 0 => {
+            (*start, *free) = (None, None);
+            camera.set_car_camera(camera.car_index.min(count - 1));
+        }
+        2 => {
+            (*start, *free) = (None, None);
+            camera.set_mode_kept(2);
+        }
+        // setMode(eTrack): CameraTrack::nextSet when the track's cameras show already
+        3 | 7 => {
+            let overlay = start.take().is_some() | free.take().is_some() | camera.shown.take().is_some();
+            if camera.f3() && !overlay && !track_cameras.sets.is_empty() {
+                track_cameras.next_set();
+            }
+            camera.random = mode == 7;
+        }
+        4 | 5 => show_camera(mode, camera, start, free, shot),
+        6 if cinematic => show_camera(6, camera, start, free, shot),
+        6 => {
+            *start = None;
+            camera.shown = None;
+            camera.random = false;
+            if free.is_none() {
+                *free = last.map(MouseCamera::new);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn show_camera(mode: i32, camera: &mut DrivingCamera, start: &mut Option<StartCamera>, free: &mut Option<MouseCamera>, shot: &mut Option<ShotCamera>) {
+    (*start, *free) = (None, None);
+    camera.random = false;
+    if camera.shown != Some(mode) {
+        camera.shown = Some(mode);
+        *shot = None;
+    }
+}
+
+/// What the on-board free, the cinematic and the helicopter cameras read this frame: every
+/// key (none when the window is not in front), the cursor and the desktop's size.
+fn orbit_input(focused: bool) -> OrbitInput {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetDesktopWindow, GetSystemMetrics, GetWindowRect, SM_CYVIRTUALSCREEN};
+    let mut input = OrbitInput::default();
+    // SAFETY: plain calls.
+    unsafe {
+        if focused {
+            for (vk, held) in input.keys.iter_mut().enumerate() {
+                *held = GetAsyncKeyState(vk as i32) != 0;
+            }
+        }
+        let mut cursor = windows::Win32::Foundation::POINT::default();
+        let _ = GetCursorPos(&mut cursor);
+        let mut rect = windows::Win32::Foundation::RECT::default();
+        let _ = GetWindowRect(GetDesktopWindow(), &mut rect);
+        input.cursor = (cursor.x, cursor.y);
+        input.screen = (rect.right, GetSystemMetrics(SM_CYVIRTUALSCREEN));
+    }
+    input
 }
 
 fn esc_start(options: &Options) -> bool {
@@ -1496,6 +1569,13 @@ fn run_window(options: &Options) -> Result<(), String> {
         .and_then(|game| rustyac_physics::data::ini::IniReader::load(&game.join("system/cfg/assetto_corsa.ini")).ok())
         .is_some_and(|ini| ini.ready && ini.has_section("AC_APPS") && ini.get_int("CAMERA", "ALLOW_FREE_CAMERA").unwrap_or(0) > 0);
     let mut mouse_camera: Option<MouseCamera> = None;
+    // F5, the helicopter and (with video_editing.ini's [CINEMATIC_CAMERAS] ACTIVE) F7's
+    // cinematic camera, and the scene camera they move while one of them shows
+    let (mut onboard_free, mut cinematic) = rustyac_game::render::onboard_free::load(Some(&cfg_dir(options)), Some(&car_info.data_path));
+    // Sim::Sim: setIntroMode(false) unless the session begins in the ESC menu
+    onboard_free.esc_mode = start_camera.is_some();
+    let helicopter = HelicopterCamera::default();
+    let mut shot: Option<ShotCamera> = None;
     // the Photo mode's link as last filled, and its sun
     let mut photo_seen = rustyac_gui::app_photo_mode::PhotoLink::default();
     let mut photo_sun = None;
@@ -1512,6 +1592,7 @@ fn run_window(options: &Options) -> Result<(), String> {
     // F2: the random camera (ACCameraManager's, system/cfg/random_camera.ini), on the cockpit
     // shake's rand() (the game's one generator)
     let mut random_camera = rustyac_game::render::track_camera::RandomCamera::of_install(&mut camera.cockpit.rand);
+    camera.track_sets = track_cameras.sets.len();
     start_camera_editor(renderer.gui(), options, &car_names[0], &car_info.data_path, &shapes[0]);
     // Task 28c: one of AC's replays as the session: the file's frames into the manager, and the
     // replay shows from its first frame (the physics stands still for good)
@@ -1593,7 +1674,11 @@ fn run_window(options: &Options) -> Result<(), String> {
                                 mouse_hider.on_mouse_up(&mut gui.gui, now_ms);
                                 gui.mouse_up(x, y, button);
                             }
-                            MouseAction::Wheel(delta) => gui.mouse_wheel(x, y, delta as f32 / 120.0),
+                            MouseAction::Wheel(delta) => {
+                                // CameraOnBoardFree's OnMouseWheelMovedEvent handler, whatever shows
+                                onboard_free.wheel(delta);
+                                gui.mouse_wheel(x, y, delta as f32 / 120.0)
+                            }
                         }
                     }
                 }
@@ -1667,6 +1752,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                                 0x72 => focus.command(FocusCommand::TrackCamera, &world, &car_names),
                                 0x73 => focus.command(FocusCommand::Player, &world, &car_names),
                                 0x75 => camera_f6(&mut camera, &mut start_camera, &mut mouse_camera, shapes[focus.index].car_cameras.len()),
+                                0x74 if camera.shown != Some(5) => focus.command(FocusCommand::OnboardFreeCamera, &world, &car_names),
                                 _ => {}
                             }
                         }
@@ -1818,13 +1904,9 @@ fn run_window(options: &Options) -> Result<(), String> {
                             // F2: the random camera, from the track's cameras (through the fade)
                             0x71 => focus.command(FocusCommand::RandomCamera, &world, &car_names),
                             // F7: the free camera (`setMode(eFree)`; again: the same, kept)
-                            0x76 if allow_free_camera => {
-                                start_camera = None;
-                                camera.random = false;
-                                if mouse_camera.is_none() {
-                                    mouse_camera = last_frame.as_ref().map(MouseCamera::new);
-                                }
-                            }
+                            0x76 if allow_free_camera => set_camera_mode(6, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), 0, cinematic.is_some(), &mut track_cameras),
+                            // F5: the on-board free camera (through the fade; not again while it shows)
+                            0x74 if camera.shown != Some(5) => focus.command(FocusCommand::OnboardFreeCamera, &world, &car_names),
                             // F11: AC's virtual mirror
                             0x7a => match renderer.toggle_virtual_mirror() {
                                 Some(on) => println!("VIRTUAL MIRROR: {}", if on { "ON" } else { "OFF" }),
@@ -1932,21 +2014,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 use rustyac_python::Action;
                 let count = shapes[focus.index].car_cameras.len();
                 match asked {
-                    Action::SetCameraMode(0) => camera_f1(&mut camera, &mut start_camera, &mut mouse_camera),
-                    Action::SetCameraMode(1) if count > 0 => {
-                        (start_camera, mouse_camera) = (None, None);
-                        camera.set_car_camera(camera.car_index.min(count - 1));
-                    }
-                    Action::SetCameraMode(2) => {
-                        (start_camera, mouse_camera) = (None, None);
-                        camera.set_mode_kept(2);
-                    }
-                    Action::SetCameraMode(6) => {
-                        start_camera = None;
-                        if mouse_camera.is_none() {
-                            mouse_camera = last_frame.as_ref().map(MouseCamera::new);
-                        }
-                    }
+                    Action::SetCameraMode(mode) => set_camera_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras),
                     Action::SetCameraCar(index, _) if (index as usize) < count => {
                         (start_camera, mouse_camera) = (None, None);
                         camera.set_car_camera(index as usize);
@@ -1957,8 +2025,8 @@ fn run_window(options: &Options) -> Result<(), String> {
                     Action::FreeCameraRotatePitch(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(0, a)),
                     Action::FreeCameraRotateHeading(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(1, a)),
                     Action::FreeCameraRotateRoll(a) => mouse_camera.iter_mut().for_each(|free| free.rotate(2, a)),
-                    // shortcut: the track's, helicopter, on-board free and random cameras and the
-                    // free camera's clear colour are not ported; port them with those cameras
+                    // shortcut: the free camera's clear colour is not ported; port it with the
+                    // free camera's background
                     other => println!("Python: an app asked {other:?} (not carried out)"),
                 }
             }
@@ -1993,9 +2061,13 @@ fn run_window(options: &Options) -> Result<(), String> {
                         }
                     }
                     SimAction::SendVote { .. } => {}
-                    // (the results' camera and the lock of the controls are the referee's
-                    // already: Task 28)
-                    SimAction::SetCameraMode(_) | SimAction::SetIntroMode(_) => {}
+                    // the results' on-board free camera and back (the lock of the controls is
+                    // the referee's: Task 28), the ESC menu's slow turn
+                    SimAction::SetCameraMode(mode) => {
+                        let count = shapes[focus.index].car_cameras.len();
+                        set_camera_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras);
+                    }
+                    SimAction::SetIntroMode(on) => onboard_free.esc_mode = on,
                     // ESCMenu::render: the player's controls are locked while the menu of the
                     // pits shows (asked once, and again after a new session)
                     SimAction::SetControlsLock(true) => {
@@ -2176,6 +2248,7 @@ fn run_window(options: &Options) -> Result<(), String> {
                 "previous" => FocusCommand::Previous,
                 "track" => FocusCommand::TrackCamera,
                 "random" => FocusCommand::RandomCamera,
+                "onboard" => FocusCommand::OnboardFreeCamera,
                 _ => FocusCommand::Player,
             };
             println!("focus script at {at:.2} s: {name}");
@@ -2293,6 +2366,38 @@ fn run_window(options: &Options) -> Result<(), String> {
             } else {
                 free.frame()
             }
+        } else if let Some(mode) = camera.shown {
+            // ACCameraManager::update: the helicopter (4), F5 (5) or the cinematic F7 (6) on
+            // the scene camera
+            let shot = shot.get_or_insert_with(|| ShotCamera::new(last_frame.as_ref().unwrap_or(&CameraFrame { matrix: rustyac_game::view::IDENTITY, fov: 60.0, near: 0.1 })));
+            let input = orbit_input(shared.focused.load(Ordering::Relaxed));
+            let body = rustyac_game::render::scene::model_matrix(&view.body, &shapes[focus.index]);
+            let in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || replay.is_some();
+            let cursor = match (mode, cinematic.as_mut()) {
+                (4, _) => {
+                    helicopter.update(shot, &body);
+                    None
+                }
+                (6, Some(cinematic)) => {
+                    // Insert: loadSettingsFromINI again
+                    if input.held(0x2d) {
+                        let [video, track, _] = rustyac_game::render::onboard_free::settings(Some(&cfg_dir(options)));
+                        cinematic.read_settings(video.as_ref(), track.as_ref());
+                    }
+                    let (cursor, message) = cinematic.update(shot, &input, dt.as_secs_f32());
+                    if let Some(message) = message {
+                        println!("SYSTEM MESSAGE: {message}");
+                    }
+                    cursor
+                }
+                // (the sim's HDR levels set only the exposure's range, which the picture does not use)
+                _ => onboard_free.update(shot, &body, options.ac_replay.is_some() || replay.is_some(), in_replay, [0.0; 2], &input, dt.as_secs_f32()),
+            };
+            if let Some((x, y)) = cursor {
+                // SAFETY: a plain call.
+                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::SetCursorPos(x, y) };
+            }
+            shot.frame()
         } else if camera.mode == rustyac_game::render::scene::CameraMode::Track && !track_cameras.sets.is_empty() {
             // shortcut: a replay's slow motion does not slow the camera (CameraTrack::update times dt by the replay's speed), when replays show F3
             camera.track_set = track_cameras.current_set;
@@ -2316,7 +2421,7 @@ fn run_window(options: &Options) -> Result<(), String> {
             let p = &mut gui.gui.apps.photo;
             (p.matrix, p.fov) = (rustyac_physics::vecmath::Mat44f { m: frame.matrix }, frame.fov);
             p.end_pick = end_pick;
-            p.camera_mode = if mouse_camera.is_some() { 6 } else { 0 };
+            p.camera_mode = if mouse_camera.is_some() { 6 } else { camera.shown.unwrap_or(0) };
             p.in_replay = rig.as_ref().is_some_and(|rig| rig.lock().unwrap().in_replay_mode()) || transport.is_some() || replay.is_some();
             // SAFETY: plain calls.
             [p.right_button, p.middle_button] = [0x02, 0x04].map(|vk| shared.focused.load(Ordering::Relaxed) && unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) } != 0);
@@ -2434,8 +2539,19 @@ fn run_window(options: &Options) -> Result<(), String> {
         if let Some(link) = renderer.crew_link() {
             use rustyac_game::render::ac::CrewSound;
             let calls = std::mem::take(&mut link.sound);
-            // (the camera's part: see docs/port/replays.md, "Not done")
-            link.camera.clear();
+            // the crew's camera: F5 turned on the car, held still, and back at the stop's end
+            for asked in std::mem::take(&mut link.camera) {
+                use rustyac_game::render::ac::CrewCamera;
+                match asked {
+                    CrewCamera::SetMode(mode) => {
+                        let count = shapes[focus.index].car_cameras.len();
+                        set_camera_mode(mode, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras);
+                    }
+                    CrewCamera::ForceThetaPhi(theta, phi, radius) => onboard_free.force_theta_phi(theta, phi, radius),
+                    CrewCamera::Lock(locked) => onboard_free.locked = locked,
+                }
+            }
+            link.camera_mode = if mouse_camera.is_some() { 6 } else { camera.manager_mode() };
             if let Some(sound) = audio.as_mut() {
                 for call in calls {
                     match call {
@@ -2449,8 +2565,14 @@ fn run_window(options: &Options) -> Result<(), String> {
         focus.post_gui(dt.as_secs_f32(), &world, &car_names);
         // F3 at its black frame: setMode(eTrack), from the track's cameras CameraTrack::nextSet
         // (F2: and randomMode on)
+        if focus.camera_change == Some(FocusCommand::OnboardFreeCamera) {
+            focus.camera_change = None;
+            let count = shapes[focus.index].car_cameras.len();
+            set_camera_mode(5, &mut camera, &mut start_camera, &mut mouse_camera, &mut shot, last_frame.as_ref(), count, cinematic.is_some(), &mut track_cameras);
+            println!("ONBOARD FREE CAMERA");
+        }
         if let Some(change) = focus.camera_change.take() {
-            let overlay = start_camera.take().is_some() | mouse_camera.take().is_some();
+            let overlay = start_camera.take().is_some() | mouse_camera.take().is_some() | camera.shown.take().is_some();
             if camera.f3() && !overlay {
                 let name = track_cameras.next_set();
                 println!("TRACK CAMERAS: set {} {name}", track_cameras.current_set);

@@ -228,7 +228,7 @@ pub struct CarShape {
     pub shake_mul: f32,
 }
 
-fn three(text: &str) -> Option<[f32; 3]> {
+pub(crate) fn three(text: &str) -> Option<[f32; 3]> {
     let mut parts = text.split(',').map(|part| part.trim().parse::<f32>());
     let out = [parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?];
     Some(out)
@@ -589,6 +589,11 @@ pub struct DrivingCamera {
     /// `ACCameraManager::randomMode`: F2's random camera picks the cameras
     /// ([`RandomCamera`](super::track_camera::RandomCamera)); a key that sets a mode ends it.
     pub random: bool,
+    /// `ACCameraManager::mode` while a camera of
+    /// [`onboard_free`](super::onboard_free) shows: 4 the helicopter, 5 F5's onboard free
+    pub shown: Option<i32>,
+    /// `getCameraTrackCount`: the track's camera sets (F5's `currentGlobalCameraIndex`)
+    pub track_sets: usize,
 }
 
 /// `system/cfg/chase_cam.ini` as shipped: distance, height, pitch (radians) of the two chase cameras.
@@ -616,6 +621,8 @@ impl DrivingCamera {
             chase: CHASE,
             track_set: 0,
             random: false,
+            shown: None,
+            track_sets: 0,
         }
     }
 
@@ -724,6 +731,7 @@ impl DrivingCamera {
     /// cockpit, 2 the views that drive with the car, 3 the track's cameras.
     pub fn set_mode_kept(&mut self, mode: i32) {
         self.random = false;
+        self.shown = None;
         self.mode = match mode {
             0 => CameraMode::Cockpit,
             2 => CameraMode::Drivable,
@@ -739,6 +747,7 @@ impl DrivingCamera {
     /// asks (the index was checked against the car's cameras).
     pub fn set_car_camera(&mut self, index: usize) {
         self.random = false;
+        self.shown = None;
         self.mode = CameraMode::Car;
         self.car_index = index;
     }
@@ -746,6 +755,7 @@ impl DrivingCamera {
     /// F1 (or F6) from the free camera or the start camera: `setMode(eCockpit)` from a mode
     /// that is not a driving one is `lastDrivingMode`, without moving on.
     pub fn back_to_driving(&mut self) {
+        self.shown = None;
         if matches!(self.mode, CameraMode::Car | CameraMode::Track) {
             self.mode = self.last_driving;
         }
@@ -755,12 +765,27 @@ impl DrivingCamera {
     /// 5 the views that drive with the car, 6 on the track's camera sets; a camera of the car's
     /// own leaves it as it was.
     pub fn global_index(&self) -> Option<i32> {
+        match self.shown {
+            Some(5) => return Some(6 + self.track_sets as i32),
+            Some(_) => return None,
+            None => {}
+        }
         match self.mode {
             CameraMode::Cockpit => Some(0),
             CameraMode::Drivable => Some(1 + Drivable::ALL.iter().position(|d| *d == self.drivable).unwrap_or(0) as i32),
             CameraMode::Car => None,
             CameraMode::Track => Some(6 + self.track_set as i32),
         }
+    }
+
+    /// `ACCameraManager::mode`: 0 cockpit, 1 car, 2 drivable, 3 track, or [`shown`](Self::shown)'s.
+    pub fn manager_mode(&self) -> i32 {
+        self.shown.unwrap_or(match self.mode {
+            CameraMode::Cockpit => 0,
+            CameraMode::Car => 1,
+            CameraMode::Drivable => 2,
+            CameraMode::Track => 3,
+        })
     }
 
     /// F6: to the car's cameras, at the one last shown; pressed again, to the next one

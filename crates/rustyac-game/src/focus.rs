@@ -47,6 +47,8 @@ pub enum FocusCommand {
     Player,
     TrackCamera,
     RandomCamera,
+    /// F5: `setMode(eOnBoardFree)` at the black frame
+    OnboardFreeCamera,
 }
 
 /// The focused car (`Sim::focusedCarIndex`) and the fade a change of it goes through
@@ -78,14 +80,14 @@ impl Focus {
     }
 
     fn apply(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
-        if matches!(command, FocusCommand::TrackCamera | FocusCommand::RandomCamera) {
+        if matches!(command, FocusCommand::TrackCamera | FocusCommand::RandomCamera | FocusCommand::OnboardFreeCamera) {
             self.camera_change = Some(command);
             return;
         }
         self.index = match command {
             FocusCommand::Next => neighbour_car(world, self.index.min(world.len() - 1), true),
             FocusCommand::Previous => neighbour_car(world, self.index.min(world.len() - 1), false),
-            FocusCommand::Player | FocusCommand::TrackCamera | FocusCommand::RandomCamera => 0,
+            FocusCommand::Player | FocusCommand::TrackCamera | FocusCommand::RandomCamera | FocusCommand::OnboardFreeCamera => 0,
         };
         // (SystemMessage::addCarMessage: the game names the car on the screen)
         println!("FOCUSED CAR: {} ({})", self.index, names.get(self.index).map_or("", String::as_str));
@@ -94,7 +96,7 @@ impl Focus {
     /// A command: `ACCameraManager::registerToFadeInEvent` (a change that still waits for its
     /// black frame happens at once), then the fade begins.
     pub fn command(&mut self, command: FocusCommand, world: &[CarView], names: &[String]) {
-        if world.len() <= 1 && !matches!(command, FocusCommand::TrackCamera | FocusCommand::RandomCamera) {
+        if world.len() <= 1 && !matches!(command, FocusCommand::TrackCamera | FocusCommand::RandomCamera | FocusCommand::OnboardFreeCamera) {
             return;
         }
         if let Some(waiting) = self.pending.take() {

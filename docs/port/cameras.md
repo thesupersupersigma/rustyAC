@@ -9,7 +9,12 @@
   `CameraOnBoardFree::update`, `CinematicFreeCamera`'s moves and fov keys and
   `CameraHelicopter::update` against them frame by frame (`orbit_camera.tape`, new in
   `car_oracle start-camera-micro`): IDENTICAL on seeds 1 and 2 (60200 lines each).
-- Next: F5 and the helicopter on the desktop and in the page, then steps 3b-7.
+- Desktop: F5 through the fade (`--focus-script onboard@3`: `ONBOARD FREE CAMERA`, the car seen
+  from theta 75, phi -45, radius 5), the mouse wheel's radius, the ESC menu's and the results'
+  F5 (`SetIntroMode`, `SetCameraMode`), the pit crew's F5 (locked, theta/phi forced), Python's
+  `setCameraMode` 0-7 through one `setMode` (helicopter 4), F7 as the cinematic camera when
+  `video_editing.ini [CINEMATIC_CAMERAS] ACTIVE` (this PC has no such file).
+- Next: F5 and the helicopter in the page, then steps 3b-7.
 
 ## Resume here
 

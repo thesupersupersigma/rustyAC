@@ -10,7 +10,9 @@
 
 use rustyac_physics::vecmath::{xm_matrix_inverse, xm_matrix_multiply, Mat44f, Vec3f};
 
-use super::scene::{create_target_exact, mul, rotate_pitch, CameraFrame};
+use std::path::{Path, PathBuf};
+
+use super::scene::{create_target_exact, mul, rotate_pitch, three, CameraFrame};
 use crate::input::ini::ControlsIni;
 use crate::view::{Mat, IDENTITY};
 
@@ -373,6 +375,8 @@ pub struct OnboardFreeCamera {
     pub esc_mode: bool,
     pub esc_dof_factor: f32,
     pub rotation_speed: f32,
+    /// `lockCamera` (+0x130): the pit crew's stop holds the mouse's drag
+    pub locked: bool,
 }
 
 impl OnboardFreeCamera {
@@ -392,6 +396,7 @@ impl OnboardFreeCamera {
             esc_mode: true,
             esc_dof_factor: 1.0,
             rotation_speed: 0.1,
+            locked: false,
         };
         c.cinematic.dof_focus = 0.1;
         c.cinematic.dof_factor = 0.0;
@@ -432,6 +437,9 @@ impl OnboardFreeCamera {
     /// `updateSphericalCoord` 0x1401167e0: the left button drags theta and phi.
     fn spherical_place(&mut self, input: &OrbitInput, dt: f32) -> [f32; 3] {
         let s = dt * 20.0;
+        if self.locked {
+            return spherical(self.radius, self.theta.value, self.phi.value);
+        }
         let (x, y) = input.cursor;
         let down = input.held(0x01);
         let c = &mut self.cinematic;
@@ -502,6 +510,36 @@ impl OnboardFreeCamera {
         camera.matrix = mul(&self.matrix, body);
         cursor
     }
+}
+
+/// What `ACCameraManager`'s ctor 0x140031270 builds of these, read as the game reads them:
+/// F5's camera (its cinematic part's `video_editing.ini` from `own_cfg` else Documents' `cfg`,
+/// the game's `system/cfg/camera_track.ini` and `camera_onboard_free.ini` from `own_cfg`'s
+/// `system/cfg` else the install's), placed by `Sim::Sim` from the player's car's
+/// `escmode.ini`; and F7's cinematic camera when `video_editing.ini [CINEMATIC_CAMERAS]
+/// ACTIVE` asks for it instead of the mouse one.
+pub fn load(own_cfg: Option<&Path>, car_data: Option<&Path>) -> (OnboardFreeCamera, Option<CinematicCamera>) {
+    let [video, track, onboard] = settings(own_cfg);
+    // (the ctor leaves the fov to the ini; 60 stands in for the memory it was not given)
+    let cinematic = || {
+        let mut c = CinematicCamera::new(60.0);
+        c.read_settings(video.as_ref(), track.as_ref());
+        c
+    };
+    let position = car_data.and_then(|d| ControlsIni::load_car_data(&d.join("escmode.ini")).ok()).map(|ini| three(ini.get_string("SETTINGS", "POSITION")).unwrap_or([0.0; 3]));
+    let f5 = OnboardFreeCamera::new(cinematic(), onboard.as_ref(), position);
+    let f7 = video.as_ref().filter(|ini| ini.has_section("CINEMATIC_CAMERAS") && ini.get_int("CINEMATIC_CAMERAS", "ACTIVE") != 0).map(|_| cinematic());
+    (f5, f7)
+}
+
+/// `video_editing.ini`, `camera_track.ini` and `camera_onboard_free.ini` as `load` finds them
+/// (the first two: `CinematicFreeCamera::loadSettingsFromINI`'s, again on Insert).
+pub fn settings(own_cfg: Option<&Path>) -> [Option<ControlsIni>; 3] {
+    let documents = rustyac_content::install::documents().map(|d| d.join("cfg"));
+    let root = rustyac_content::install::ac_root();
+    let first = |paths: [Option<PathBuf>; 2]| paths.into_iter().flatten().find_map(|p| ControlsIni::load_car_data(&p).ok());
+    let system = |name: &str| first([own_cfg.map(|c| c.join("system/cfg").join(name)), root.as_ref().map(|r| r.join("system/cfg").join(name))]);
+    [first([own_cfg.map(|c| c.join("video_editing.ini")), documents.map(|d| d.join("video_editing.ini"))]), system("camera_track.ini"), system("camera_onboard_free.ini")]
 }
 
 /// `getSphericalCoord` 0x140115bb0: radius, theta and phi in degrees to a place.

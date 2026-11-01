@@ -149,7 +149,7 @@ pub struct Options {
     /// `--focus <n>`: the car the camera is on at the start (0: yours; `Sim::focusedCarIndex`).
     pub focus: usize,
     /// `--focus-script next@2,previous@4,player@6`: the focus keys by the clock (for unattended
-    /// checks; seconds since the window opened); `track@8`: F3, `random@8`: F2
+    /// checks; seconds since the window opened); `track@8`: F3, `random@8`: F2, `onboard@8`: F5
     pub focus_script: Vec<(f64, String)>,
     /// `--auto-shifter`: the automatic gearbox aid on at start.
     pub auto_shifter: bool,
@@ -989,8 +989,8 @@ impl Options {
                 "--focus-script" => {
                     for item in value("--focus-script")?.split(',').filter(|s| !s.is_empty()) {
                         let (name, at) = item.split_once('@').ok_or("--focus-script next@2,previous@4,player@6")?;
-                        if !matches!(name, "next" | "previous" | "player" | "track" | "random") {
-                            return Err(format!("--focus-script: {name:?} is not next, previous, player, track (F3) or random (F2)"));
+                        if !matches!(name, "next" | "previous" | "player" | "track" | "random" | "onboard") {
+                            return Err(format!("--focus-script: {name:?} is not next, previous, player, track (F3), random (F2) or onboard (F5)"));
                         }
                         o.focus_script.push((at.parse().map_err(|_| format!("--focus-script {name}@<seconds>"))?, name.to_string()));
                     }

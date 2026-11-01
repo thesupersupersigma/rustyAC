@@ -589,13 +589,9 @@ only moved when the file counts as many as rustyAC finds on the track; your Spa 
   ported from the listing only; the frames rustyac.exe records were not compared with the
   game's for the same drive (the recorder was, with the game's car; rustyac.exe hands it the
   same car state the picture gets).
-- **The camera's move out of the car during a pit stop.** The game does it in the crew's code:
-  `ACCameraManager::setMode(eOnBoardFree)`, `CameraOnBoardFree::forceThetaPhi(0.1, 0.1, 5)` and
-  `lockCamera`, and back to the old view at the stop's end. rustyAC has no free on-board camera
-  (`CameraOnBoardFree` 0x140115100 is not ported). The crew's code asks for it through
-  `CrewHost` (`set_camera_mode`, `force_theta_phi`, `lock_camera`), rustyac.exe collects the
-  requests (`CrewLink::camera`) and drops them: the view stays where it is. To see the crew,
-  use the chase view.
+- **The camera's move out of the car during a pit stop.** Done in Task 46b: rustyac.exe carries
+  out the crew's `CrewHost` requests (`setMode(eOnBoardFree)`, `forceThetaPhi(0.1, 0.1, 5)`,
+  `lockCamera`) on the ported `CameraOnBoardFree` (see docs/port/cameras.md, Task 46b).
 - **The replay's GUI** (`ReplayInterface`: the bar with its slider, the cut markers, the save
   box, photo mode): the UI phase. The cuts (`setCutInPerc` / `setCutOutPerc`) and photo mode are
   ported and proven but have no key.

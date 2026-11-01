@@ -498,6 +498,10 @@ fn save_generated_shadows(car: &str, car_folder: &std::path::Path, pictures: &[V
 
 /// The shadow ranges the game's camera of the moment asks for (`setShadowMapsSplits`).
 fn splits_of(camera: &DrivingCamera) -> [f32; 4] {
+    if camera.shown == Some(5) {
+        // CameraOnBoardFree::update 0x140115db0
+        return [10.0, 80.0, 300.0, 1500.0];
+    }
     match camera.mode {
         // CameraOnBoard::update 0x1400c9ea0
         CameraMode::Cockpit => [f32::from_bits(0x3fa6_6666), 80.0, 250.0, 500.0],
@@ -1348,29 +1352,14 @@ impl AcRenderer {
             crew.update(&mut self.scene, dt, pit_state, in_pit);
         }
         // ACCameraManager::mode and CameraDrivableManager::currentMode
-        let modes = match driving.mode {
-            CameraMode::Cockpit => (0, 0),
-            CameraMode::Drivable => (
-                2,
-                match driving.drivable {
-                    Drivable::Chase => 0,
-                    Drivable::Chase2 => 1,
-                    Drivable::Bonnet => 2,
-                    Drivable::Bumper => 3,
-                    Drivable::Dash => 4,
-                },
-            ),
-            // (eCar is 1: ACCameraManager::update's jump table)
-            CameraMode::Car => (1, 0),
-            CameraMode::Track => (3, 0),
+        let modes = match (driving.shown, driving.mode) {
+            (None, CameraMode::Drivable) => (2, driving.drivable as i32),
+            _ => (driving.manager_mode(), 0),
         };
         // ACCameraManager::setMode 0x1400340d0 / setDrivableCarIndex: currentGlobalCameraIndex
         // is 0 in the cockpit and the drivable view's number + 1; the car cameras leave it
-        match modes {
-            (0, _) => self.global_camera_index = 0,
-            (2, drivable) => self.global_camera_index = drivable + 1,
-            (3, _) => self.global_camera_index = 6 + driving.track_set as i32,
-            _ => {}
+        if let Some(index) = driving.global_index() {
+            self.global_camera_index = index;
         }
         // Sim::update 0x14019ef90: CarNodeSorter::sort, before the cars update
         if self.cars.len() > 1 {
@@ -1647,12 +1636,7 @@ impl AcRenderer {
             Some(gui) => {
                 let camera = &self.camera.forward.base.camera;
                 let (matrix, view_matrix, perspective) = (camera.matrix, camera.get_view_matrix(), camera.get_perspective_matrix(&self.graphics));
-                let mode = match driving.mode {
-                    super::scene::CameraMode::Cockpit => 0,
-                    super::scene::CameraMode::Car => 1,
-                    super::scene::CameraMode::Drivable => 2,
-                    super::scene::CameraMode::Track => 3,
-                };
+                let mode = driving.manager_mode();
                 gui.gui.sim.sun_angle = self.options.sun_angle;
                 gui.update(world, focus, info, (&matrix, &view_matrix, &perspective), mode, self.time_ms, dt);
                 // GPUProfilerApp: GPUProfiler::getResults, and its setActive(true)

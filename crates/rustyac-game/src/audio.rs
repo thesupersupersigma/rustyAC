@@ -29,7 +29,7 @@ use rustyac_physics::vecmath::xm_matrix_multiply;
 use crate::input_file::StepInput;
 #[cfg(windows)]
 use crate::physics_thread::StepSink;
-use crate::render::scene::{CameraMode, CarShape, DrivingCamera};
+use crate::render::scene::{CarShape, DrivingCamera};
 use crate::sim::GameSim;
 use crate::view::Mat;
 
@@ -591,12 +591,7 @@ impl GameAudio {
             return oracle.view();
         }
         CameraView {
-            mode: match camera.mode {
-                CameraMode::Cockpit => 0,
-                CameraMode::Car => 1,
-                CameraMode::Drivable => 2,
-                CameraMode::Track => 3,
-            },
+            mode: camera.manager_mode(),
             car_camera_index: camera.car_index as i32,
             drivable_mode: camera.drivable as i32,
             bonnet_external_sound: self.bonnet_external,
