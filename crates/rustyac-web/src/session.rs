@@ -370,7 +370,11 @@ sessions={}
 
     /// The camera for `view`, `seconds` after the last frame's.
     pub fn camera_frame(&mut self, view: &CarView, seconds: f64) -> CameraFrame {
-        let toggles = std::mem::take(&mut self.input.lock().unwrap().camera_toggles);
+        let (toggles, look) = {
+            let mut input = self.input.lock().unwrap();
+            (std::mem::take(&mut input.camera_toggles), input.look)
+        };
+        self.camera.actions = look;
         for _ in 0..toggles {
             self.camera.f1();
         }

@@ -4,7 +4,7 @@
 //! What the debug view draws and from where: the car's shape as boxes, AC's chase and
 //! cockpit cameras, and the little matrix arithmetic the picture needs. No Direct3D in here.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustyac_physics::session::MsvcRand;
 use rustyac_physics::vecmath::{xm_matrix_multiply, Mat44f, Vec3f};
@@ -262,17 +262,23 @@ impl CarShape {
     /// from AC's own `camera_onboard.ini` (read only) where that file exists.
     pub fn of(info: &crate::sim::CarInfo) -> CarShape {
         let mut shape = CarShape::load(&info.data_path, &info.wheel_positions, &info.tyre_width, &info.tyre_radius);
+        shape.read_documents_fov();
+        shape
+    }
+
+    /// The field of view of the player's `cfg/camera_onboard.ini` in AC's Documents (through
+    /// the content reader: the page reads its own), where that file has one.
+    pub fn read_documents_fov(&mut self) {
         if let Some(documents) = rustyac_content::install::documents() {
             let path = documents.join("cfg").join("camera_onboard.ini");
-            if let Ok(ini) = ControlsIni::load(&path) {
+            if let Ok(ini) = ControlsIni::load_car_data(&path) {
                 // `CameraOnBoard::CameraOnBoard`: a field of view of 0 means the default
                 let fov = ini.get_float("MODE", "FOV");
                 if fov > 0.0 && fov < 170.0 {
-                    shape.onboard_fov = fov;
+                    self.onboard_fov = fov;
                 }
             }
         }
-        shape
     }
 
     /// The eye point in the 3D model's frame (`driverEyesPosition`), and so in body axes.
@@ -490,7 +496,8 @@ pub struct CockpitCamera {
     /// `customCameraSettings[car].yaw` (the pitch is [`CarShape::eye_pitch`]).
     pub yaw: f32,
     g_force_offset: [f32; 3],
-    head_animation: f32,
+    /// The head's turn now (`headRotationAnimation`), 0 looking ahead.
+    pub head_animation: f32,
     /// the shake's three `SinSignalGenerator`s: their times (ms) and frequencies
     shake: [i32; 3],
     shake_freq_now: [f32; 3],
@@ -735,6 +742,29 @@ impl DrivingCamera {
     /// The cockpit or the dash view: the views `CameraOnBoard`'s field of view is for.
     pub fn on_board(&self) -> bool {
         self.mode == CameraMode::Cockpit || (self.mode == CameraMode::Drivable && self.drivable == Drivable::Dash)
+    }
+
+    /// The settings [`read_settings`](Self::read_settings) gave, on one line (the desktop
+    /// prints it, the page's HUD hook shows it: the two compare).
+    pub fn settings_line(&self) -> String {
+        let c = &self.cockpit;
+        format!(
+            "mix {:?} lag {:?} head {:?}/{:?} shake {:?} freq {:?} scale {:?} random {:?} aligned {} drivable g {:?}/{:?} rotation {:?}/{:?}",
+            c.g_force_mix, c.g_force_lag_mix, c.head_rotation_degrees, c.head_rotation_speed, c.shake_mul, c.shake_freq, c.shake_scale, c.random_blend, c.world_aligned, self.acc_gx_mul, self.acc_gz_mul, self.rotation_degrees, self.rotation_speed
+        )
+    }
+
+    /// [`read_settings`](Self::read_settings) from the files: the player's `camera_onboard.ini`
+    /// and `camera_manager.ini` from `own_cfg` (rustyAC's own cfg) else AC's Documents, the
+    /// game's `system/cfg/camera_drivable.ini` (rustyAC's own, else the install's). Through
+    /// the content reader, so the page reads its own files.
+    pub fn load_settings(&mut self, own_cfg: Option<&Path>, shake_mul: f32) {
+        let documents = rustyac_content::install::documents().map(|d| d.join("cfg"));
+        let root = rustyac_content::install::ac_root();
+        let first = |paths: [Option<PathBuf>; 2]| paths.into_iter().flatten().find_map(|p| ControlsIni::load_car_data(&p).ok());
+        let player = |name: &str| first([own_cfg.map(|c| c.join(name)), documents.as_ref().map(|d| d.join(name))]);
+        let drivable = first([own_cfg.map(|c| c.join("system/cfg/camera_drivable.ini")), root.map(|r| r.join("system/cfg/camera_drivable.ini"))]);
+        self.read_settings(player("camera_onboard.ini").as_ref(), player("camera_manager.ini").as_ref(), drivable.as_ref(), shake_mul);
     }
 
     /// The settings the game's `CameraOnBoard` (0x1400c84e0) and `CameraDrivableManager`

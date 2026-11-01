@@ -40,6 +40,8 @@ pub struct Input {
     pub rumble: [f32; 2],
     /// Presses of the pad's camera button since the page last looked.
     pub camera_toggles: u32,
+    /// Task 46: the look keys held in the last step (`actionsState` bits 0, 1, 9), for the camera.
+    pub look: u32,
     /// New settings from the page's Controls panel: the classes are built again from them
     /// before the next physics step.
     pub controls: Option<ControlsIni>,
@@ -133,7 +135,7 @@ impl WebSource {
     pub fn keys_used(&self) -> Vec<i32> {
         let beside = self.pad.buttons.iter().chain([&self.pad.clutch]).filter(|b| b.allow_keyboard_input).map(|b| b.key);
         let mut keys: Vec<i32> =
-            [self.keyboard.keys, self.keyboard.keys2].iter().flat_map(|k| k.named().map(|(_, code)| code)).chain(self.bindings.hybrid_keys.iter().flatten().copied()).chain(beside).filter(|code| *code > 0).collect();
+            [self.keyboard.keys, self.keyboard.keys2].iter().flat_map(|k| k.named().map(|(_, code)| code).into_iter().chain([k.glance_left, k.glance_right, k.glance_back])).chain(self.bindings.hybrid_keys.iter().flatten().copied()).chain(beside).filter(|code| *code > 0).collect();
         keys.sort_unstable();
         keys.dedup();
         keys
@@ -292,11 +294,11 @@ impl DriverSource for WebSource {
     fn headlights(&mut self) -> bool {
         let keys = self.input.lock().unwrap().keys.clone();
         let key_down: &dyn Fn(i32) -> bool = &|key| keys.contains(&key);
-        if self.active == DEVICE_PAD {
-            self.pad.get_action(4, key_down)
-        } else {
-            self.keyboard.get_action(4, key_down)
-        }
+        let action = |a: i32| if self.active == DEVICE_PAD { self.pad.get_action(a, key_down) } else { self.keyboard.get_action(a, key_down) };
+        // `Car::getPhysicsState` asks for the glances in the same step (actions 0, 1, 9)
+        let look = action(0) as u32 | (action(1) as u32) << 1 | (action(9) as u32) << 9;
+        self.input.lock().unwrap().look = look;
+        action(4)
     }
 
     fn send_ff(&mut self, _ff: f32, _damper: f32, _user_gain: f32) {

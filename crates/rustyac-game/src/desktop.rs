@@ -1485,13 +1485,8 @@ fn run_window(options: &Options) -> Result<(), String> {
     // Task 46: the cockpit's g forces, shake and look keys, the drivable views' look keys: the
     // player's camera_onboard.ini / camera_manager.ini (rustyAC's own cfg, else AC's Documents),
     // the game's camera_drivable.ini
-    {
-        let own_or_documents = |name: &str| [Some(cfg_dir(options).join(name)), rustyac_game::conditions::documents_folder().map(|d| d.join("cfg").join(name))].into_iter().flatten().find(|p| p.is_file());
-        let ini = |path: Option<PathBuf>| path.and_then(|p| rustyac_game::input::ini::ControlsIni::load(&p).ok());
-        let drivable = [cfg_dir(options).join("system/cfg/camera_drivable.ini"), rustyac_content::install::ac_root().unwrap_or_default().join("system/cfg/camera_drivable.ini")].into_iter().find(|p| p.is_file());
-        let shake_mul = shapes.last().map_or(1.0, |s| s.shake_mul);
-        camera.read_settings(ini(own_or_documents("camera_onboard.ini")).as_ref(), ini(own_or_documents("camera_manager.ini")).as_ref(), ini(drivable).as_ref(), shake_mul);
-    }
+    camera.load_settings(Some(&cfg_dir(options)), shapes.last().map_or(1.0, |s| s.shake_mul));
+    println!("camera settings: {}", camera.settings_line());
     // Task 34: a session that begins in the ESC menu shows AC's start camera until "Drive"
     // (without AC's GUI "Drive" is pressed at once, so there is none)
     let mut start_camera = (setup_esc_start && renderer.gui().is_some_and(|gui| gui.has_esc_menu()))

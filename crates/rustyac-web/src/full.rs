@@ -315,6 +315,17 @@ impl GuiLoop {
             _ if ctrl && !self.paused && key == bindings.key_driver_names => {
                 gui.toggle_driver_names();
             }
+            // Sim::onKeyDown, Ctrl+Numpad +/-: the cockpit's (and the dash view's) field of
+            // view, half a degree a press, up to 125 and down to 1 (as rustyac.exe)
+            0x6b | 0x6d if ctrl && !shift && self.start_camera.is_none() && self.free_camera.is_none() && session.camera.on_board() => {
+                let fov = session.shape.onboard_fov;
+                let new = if key == 0x6b { (fov < 125.0).then_some(fov + 0.5) } else { (fov > 1.0).then_some(fov - 0.5) };
+                if let Some(new) = new {
+                    session.shape.onboard_fov = new;
+                    session.remote_shapes.iter_mut().for_each(|shape| shape.onboard_fov = new);
+                    gui.add_message(&format!("FOV: {new:.1}"), "On Board Camera");
+                }
+            }
             _ if ctrl && !self.paused && key == bindings.key_show_damage => gui.show_damage(),
             _ if ctrl && !self.paused && key == bindings.key_hide_damage => {
                 gui.toggle_damage();

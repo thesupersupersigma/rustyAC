@@ -2667,6 +2667,11 @@ async function driveFromLauncher(api) {
     await joinServer();
     return;
   }
+  // the player's camera files (the cockpit's g forces, shake and head), where the game reads them
+  for (const name of ['cfg/camera_onboard.ini', 'cfg/camera_manager.ini']) {
+    const bytes = api.launcher.read_doc(name.replace(/\//g, '\\'));
+    if (bytes) rac.fs_put(`docs/${name}`, bytes);
+  }
   state.launch = { car: key('RACE', 'MODEL'), track: key('RACE', 'TRACK'), layout: key('RACE', 'CONFIG_TRACK'), race, assists: text('cfg/assists.ini') };
   await drive(state.launch);
 }

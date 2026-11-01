@@ -10,8 +10,9 @@
 - Step 2b done on the desktop: the camera settings files, the look-back points (collider box
   IDENTICAL on all 137 cars), the shake's random blend, the look keys and Ctrl+Numpad FOV keys.
   The game has no seat keys.
-- Next: step 2b in the page (look keys, FOV keys, settings from the page's Documents); then
-  fade-in, F3, F2.
+- Step 2b done in the page too (Full mode): the player's camera files from the launcher's
+  Documents, the look keys and Ctrl+Numpad FOV keys; settings line IDENTICAL to the desktop's.
+- Next: fade-in, then F3 (track cameras and sets), then F2.
 
 ## Step 0: housekeeping
 
@@ -163,6 +164,27 @@ Not compared: the far plane and the exposure the cameras set (the renderer has i
 - Not proven against the game: the ini reads themselves (by the game's names and order, not run
   through the game's constructors, which want a whole `Sim`), and the keys' path from the
   keyboard to the camera (the camera's answer to the bits is proven by the tape).
+
+### Step 2b in the page
+
+- The page's drive from AC's launcher now puts the player's `cfg/camera_onboard.ini` and
+  `cfg/camera_manager.ini` (the launcher's Documents) where the game reads them
+  (`web/app.js` `driveFromLauncher`); the camera reads them once Full mode has set its Documents
+  folder (`web.rs`), with the field of view of `camera_onboard.ini` (`CarShape::
+  read_documents_fov`, now through the content reader). A drive from the page's own menu has no
+  Documents: the game's constructor values, as the game without the files.
+- The page's look keys go the desktop's way (`WebSource::headlights` asks for actions 0, 1, 9;
+  the glance keys count as keys the layout uses, so the page passes them on). Ctrl+Numpad +/- in
+  Full mode's key handler (`full.rs`).
+- The HUD hook (`window.rustyac.hud`) has `camera_settings` (the line rustyac.exe prints as
+  `camera settings:`), `look`, `onboard_fov` and `head`.
+- Proof, `tools/web_checks/task46/cams.sh` (Full mode, AC's launcher Start, AC's `Default.ini`
+  controls preset loaded, real keys over CDP): F1 five times: chase, chase 2, bonnet, bumper,
+  dash, cockpit; Ctrl+Numpad +, +, -: field of view 56 (the file's) to 56.5; Q held: look 1,
+  head +1.0471799 (60 degrees), released 0; W held: look 2, head -1.0471799. Then
+  `cams_desk.sh`: rustyac.exe with the same Documents files, car and track: settings line
+  **IDENTICAL** to the page's (`mix [-0.0028000001, ...] ... shake 2.8 freq [150.0, 150.0,
+  100.0] ... rotation 90.0/20.0`).
 
 ## Not done
 

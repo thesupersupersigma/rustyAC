@@ -517,6 +517,11 @@ impl Game {
         if gpu.full {
             rustyac_content::install::set_documents(Some(PathBuf::from(mounted("docs"))));
         }
+        // Task 46: the camera files of the page's Documents (Full mode) and the game's folder
+        let shake_mul = session.remote_shapes.last().unwrap_or(&session.shape).shake_mul;
+        session.camera.load_settings(None, shake_mul);
+        session.shape.read_documents_fov();
+        session.remote_shapes.iter_mut().for_each(rustyac_game::render::scene::CarShape::read_documents_fov);
         let gui_setup = || crate::full::gui_setup(Path::new(ROOT), &PathBuf::from(mounted("rustyac/cfg")), &session);
         // the graphics page's video.ini, which the page puts here before a drive
         let video = PathBuf::from(mounted(VIDEO_INI));
@@ -977,7 +982,7 @@ impl Game {
              \"lap_ms\": {}, \"last_ms\": {}, \"best_ms\": {}, \"laps\": {}, \"valid\": {}, \"position\": {:.4}, \"in_pit_lane\": {}, \
              \"tc\": {}, \"abs\": {}, \"drs\": {}, \"auto_shifter\": {}, \"device\": {}, \"camera\": {}, \"seconds\": {:.2}, \"fuel\": {:.1}, \
              \"tc_text\": {}, \"abs_text\": {}, \"bias_text\": {}, \"tc_level\": {}, \"tc_levels\": {}, \"tc_fitted\": {}, \
-             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}}}",
+             \"abs_level\": {}, \"abs_levels\": {}, \"abs_fitted\": {}, \"brake_bias\": {:.6}, \"note\": {}, \"online\": {}, \"referee\": {}, \"camera_settings\": {}, \"look\": {}, \"onboard_fov\": {:?}, \"head\": {:?}}}",
             n(v.speed_kmh),
             v.gear,
             n(v.rpm),
@@ -1014,7 +1019,12 @@ impl Game {
             n(v.brake_bias),
             json_text(v.aid_note().unwrap_or("")),
             self.online_json(),
-            self.referee_json()
+            self.referee_json(),
+            // Task 46: the camera's settings, the look keys and the cockpit's field of view
+            json_text(&self.session.camera.settings_line()),
+            self.session.camera.actions,
+            self.session.shape.onboard_fov,
+            self.session.camera.cockpit.head_animation
         )
     }
 
