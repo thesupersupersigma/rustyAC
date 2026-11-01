@@ -147,6 +147,8 @@ The external D: drive was not connected during the task.
   `gui_ac_pit.rs` puts in its own setup screen only when `escMenu+0x1a8` reads 0; if that word is
   uninitialised heap, the game follows garbage. IDENTICAL in the two other full runs. Likely the
   same kind of uninitialised read as step 0's; not fixed here.
+  **Answered in Task 46** (`docs/port/cameras.md`, step 0): the GUI oracle made the escape menu a
+  plain `Control` of 0x178 bytes, so `+0x1a8` was past its end; it now gets 0x400 zeroed bytes.
 - `re/gold/fresh/rec/` grows by ~12 GB each time the car oracle's source changes; the rules forbid
   deleting under `re/gold/`, so old keys stay until the user prunes them.
 

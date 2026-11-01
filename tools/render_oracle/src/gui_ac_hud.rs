@@ -238,7 +238,9 @@ pub unsafe fn call(game: &Game, gui: *mut u8, screen: *mut u8, what: &str, numbe
         wr(sim, 0x8, game_block);
         wr(sim, 0x108, screen);
         let control = |name: &str| {
-            let object = acs_ref.alloc(0x178);
+            // a Control is 0x178 bytes; zeroed room past it for the ESC menu's fields the game
+            // reads (escMenu->setupScreen at +0x1a8, or a pit fuel button follows heap garbage)
+            let object = acs_ref.alloc(0x400);
             let ctor: extern "C" fn(*mut u8, *mut u8, *mut u8) -> *mut u8 = std::mem::transmute(acs_ref.va(0x1_4024_4150));
             ctor(object, wstring(acs_ref, name), gui);
             wr(object, 0x150, 0u8);
